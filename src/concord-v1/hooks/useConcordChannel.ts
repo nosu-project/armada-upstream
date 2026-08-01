@@ -24,6 +24,7 @@ import type { Channel, Community } from "@/concord-v1/lib/types";
 
 import { bytesToHex } from "@noble/hashes/utils.js";
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** Optimistic delivery status for a Concord message we sent, keyed by message id. */
 export type ConcordSendStatus = SendStatus;
@@ -137,7 +138,7 @@ function foldOpened(
  */
 async function openMessages(
   wire: ChannelWire,
-  events: NostrEvent[],
+  events: NostrRumor[],
   moderation?: ModerationContext,
   signal?: AbortSignal,
 ): Promise<{ messages: OpenedMessage[]; deletes: Map<string, Set<string>> }> {
@@ -147,7 +148,7 @@ async function openMessages(
 
 /**
  * Read a channel's sealed blobs back from the append-only local event store and
- * fold them into the timeline. The store (NIndexedDB, `armada-events`) mirrors
+ * fold them into the timeline. The store (the ArmadaDB `main` tenant) mirrors
  * every sealed outer the relays ever returned, so it is the complete local
  * source of truth — like Vector's SQLite. Reading + decoding from it (rather
  * than re-querying relays) is what makes a visited channel paint instantly and
@@ -161,7 +162,7 @@ async function openMessages(
  * the store likely holds older blobs past this window (`hasMore`).
  */
 async function readAndFold(
-  store: { query: (filters: NostrFilter[]) => Promise<NostrEvent[]> },
+  store: { query: (filters: NostrFilter[]) => Promise<NostrRumor[]> },
   wire: ChannelWire,
   limit: number,
   moderation?: ModerationContext,

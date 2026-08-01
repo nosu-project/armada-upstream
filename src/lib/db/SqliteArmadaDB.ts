@@ -1,25 +1,40 @@
 /**
- * The SQLite adapter for {@link ArmadaDB} — a port of Nostrify's `NSQLite`
- * (itself a port of strfry's LMDB query engine) with a `tenant` column
- * threaded through every table and index. See sqliteSchema.ts for the layout.
+ * The SQLite adapter for {@link ArmadaDB} — a port of Nostrify's `NSQLiteFTS`,
+ * with a `tenant` dimension threaded through every table and every index term.
+ * See sqliteSchema.ts for the layout and for why the tag index is an FTS5
+ * inverted index rather than a b-tree.
  *
  * One connection, one database: every tenant shares the `rumors` /
- * `rumor_tags` / `rumor_coords` tables, and the KV store is a fourth table.
+ * `rumor_tags_fts` / `rumor_coords` tables, and the KV store is a fourth.
  *
- * SQLite is used as a key/value store plus hand-maintained indexes — there are
- * no joins anywhere in this file. The planner here, not SQLite's, picks the
- * index a filter scans (`INDEXED BY` forces it), by the same priority cascade
- * strfry uses:
+ * Two things carry the whole design:
  *
- *   ids → most-selective #tag → pubkey+kind (<1000 combos) → pubkey → kind →
- *   full created_at scan
+ *  - **`seq`, the rowid, encodes time** (`created_at × 2²⁰ + n`). So `ORDER BY
+ *    seq DESC` is `ORDER BY created_at DESC` for the table, for every b-tree
+ *    index over it, and — the point of the exercise — for FTS5, which only
+ *    ever yields rows in rowid order. `since`/`until` become a rowid range
+ *    that FTS5 pushes down into its own backwards walk of the posting lists.
+ *  - **Tags are tokens.** A filter's tag terms, and its authors when a tag is
+ *    already driving, become one MATCH expression: groups of alternatives,
+ *    ANDed. FTS5 merges the groups' posting lists in C, so the cost is the
+ *    length of the shortest group rather than the product of them all, and one
+ *    rumor is one row of the index however many of its tags matched.
  *
- * Scanning is two-phase: read candidate keys from the chosen index (which
- * covers `(…, created_at DESC, id ASC)`, so no rumor bodies are touched), then
- * fetch those keys' values in one lookup. Conditions the index can't express
- * are matched in memory, and the scan pages by keyset until the filter's limit
- * is met, so memory stays bounded. A scan the SQL fully satisfies skips phase
- * two and reads the bodies straight off the covering scan.
+ * Everything the index doesn't carry — kinds, and authors without a tag — is
+ * tested on the `rumors` rows it finds, which costs a column read on a row
+ * that was going to be fetched anyway. Filters naming no tag and no keyword
+ * are driven by a b-tree instead, chosen by strfry's priority cascade:
+ *
+ *   ids → tags/search → pubkey+kind → pubkey → kind → the whole tenant
+ *
+ * Measured against the b-tree design this replaces (20k rumors, 3 tenants,
+ * node:sqlite): tag queries 1.5–5× faster, NIP-50 search 5× faster, and the
+ * b-tree plans unchanged within noise. Writes are the other side of the trade
+ * — a rumor with three indexed tags costs ~1.4× more, because the write needs
+ * a third statement to allocate its rowid, while a rumor with thirty costs
+ * ~1.25× LESS, because a rumor is one index row here whatever its tag count
+ * and was one b-tree insert per tag before. The two cross at about fifteen
+ * tags.
  *
  * Semantics, matching the IndexedDB adapter:
  *
@@ -36,37 +51,52 @@
  *    resolves only once that transaction has committed, and rejects if it
  *    failed.
  *
- * Deliberate divergences from `NSQLite`:
+ * Deliberate divergences from `NSQLiteFTS`:
  *
- *  - No deletion tombstone check on write. NSQLite refuses to re-admit an
- *    event a stored kind 5 already deleted, at the cost of an index seek per
- *    write; `NIndexedDB` (and so the IndexedDB adapter) has no such check, and
- *    the adapters have to agree.
+ *  - No deletion tombstone check on write, and so no `_d:`/`_c:` tokens.
+ *    NSQLiteFTS refuses to re-admit an event a stored kind 5 already deleted;
+ *    `NIndexedDB` (and so the IndexedDB adapter) has no such check, and the
+ *    adapters have to agree.
+ *  - Results are always re-sorted by `(created_at DESC, id ASC)` rather than
+ *    returned in `seq` order, since that ordering is part of ArmadaDB's
+ *    contract. Note the one place the two adapters can still disagree: WHICH
+ *    of several rumors sharing a `created_at` survives a `limit` that cuts
+ *    through them, since the scan takes the newest by `seq` (insertion order)
+ *    and only then sorts.
  *  - Reads and writes interleave on one connection inside `BEGIN IMMEDIATE`,
- *    so unlike the old `SqliteEventStore` this is NOT written as guarded,
- *    read-free SQL. A second writer on the same file (the Android
- *    notification service) is still safe — `BEGIN IMMEDIATE` takes the write
- *    lock for the whole transaction — but only if that writer is equally
- *    disciplined about transactions.
+ *    so this is NOT written as guarded, read-free SQL. A second writer on the
+ *    same file (the Android notification service) is still safe — `BEGIN
+ *    IMMEDIATE` takes the write lock for the whole transaction — but only if
+ *    that writer is equally disciplined about transactions.
  */
 import { NKinds } from "@nostrify/nostrify";
+import { utf8ToBytes } from "@noble/hashes/utils.js";
 
 import { ParsedFilter } from "./ParsedFilter";
 import { batch, memberOf, where } from "./sql";
 import { ARMADA_DB_FTS_SCHEMA, ARMADA_DB_SCHEMA } from "./sqliteSchema";
-import { defaultIndexTags } from "./types";
+import { defaultIndexTags, prefixUpperBound } from "./types";
 
 import type { NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { ArmadaSqlDriver, SqlRow, SqlValue } from "./driver";
-import type { TagFilter } from "./ParsedFilter";
 import type { ArmadaDB, ArmadaDBOpts, ArmadaKV, NRumorStore } from "./types";
 
+/** Bits of the rowid reserved for the per-second sequence number. */
+const SEQ_BITS = 20;
+
+/** Rowids per second: how many rumors may share one `created_at`. */
+const SEQ_SPACE = 2 ** SEQ_BITS;
+
 /**
- * How many candidate keys a paged scan fetches per round trip. Only scans that
- * need in-memory post-filtering (extra tag terms, NIP-50 keywords) page; a
- * scan that SQL fully satisfies reads exactly the rows it needs.
+ * Largest `created_at` the rowid encoding can carry (2106-02-07). Beyond this
+ * the timestamp is clamped, which keeps the rowid a safe integer at the cost
+ * of ordering *among* absurdly-dated rumors; plans touching such a rumor fall
+ * back to matching it in memory, so results stay correct either way.
  */
+const MAX_TIME = 0xffffffff;
+
+/** How many candidate rows a paged scan reads per round trip. */
 const CHUNK_SIZE = 512;
 
 /**
@@ -79,33 +109,35 @@ const MAX_PARAMS = 900;
 /** Upper bound on the rows one page of a scan may read, however large the limit. */
 const MAX_PAGE = 10_000;
 
-/** Longest `IN (…)` list driving a scan before it is split across statements. */
+/**
+ * Longest `IN (…)` list driving a scan over the rumors table before it is
+ * split across statements.
+ */
 const MAX_IN = 500;
 
 /**
- * Longest `IN (…)` list used to *filter* a scan. A longer one is matched in
- * memory instead, which keeps the statement's parameter count bounded.
+ * Most terms one MATCH expression may `OR` together. FTS5 opens an iterator
+ * per term, so a very long list is split across statements and merged instead.
+ */
+const MAX_OR = 500;
+
+/**
+ * Most authors worth folding into the MATCH alongside a tag, rather than
+ * testing on the rows the tag finds.
+ *
+ * Each author is one more posting list for FTS5 to merge, and an author's list
+ * is long — everything they ever wrote — while `pubkey` on a row already
+ * fetched is a column read. Measured crossover on a 20k store: one author in
+ * the index is 8× faster than the pushdown, sixteen is a wash, and a hundred
+ * is 5× slower.
+ */
+const MAX_AUTHOR_TERMS = 16;
+
+/**
+ * Longest value list used to *filter* (rather than drive) a scan. A longer one
+ * is matched in memory instead, which keeps the parameter count bounded.
  */
 const MAX_PUSHDOWN = 100;
-
-/**
- * Most ids a secondary tag term is materialized into before it's left to the
- * in-memory match instead.
- */
-const MAX_TAG_SET = 100_000;
-
-/**
- * How many full-text matches are worth driving a query with. A term matching
- * more than this is common enough that an ordinary indexed scan will run into
- * matches quickly, so it filters the scan instead of driving it.
- */
-const MAX_SEARCH_IDS = 1_000;
-
-/**
- * The share of rumors a keyword must match before the scan tests rows against
- * the index one at a time rather than collecting every match up front.
- */
-const DENSE_SEARCH = 0.25;
 
 export interface SqliteArmadaDBOpts extends ArmadaDBOpts {
   /**
@@ -115,8 +147,9 @@ export interface SqliteArmadaDBOpts extends ArmadaDBOpts {
    */
   migrate?: boolean;
   /**
-   * Whether to maintain the FTS5 index (@link ARMADA_DB_FTS_SCHEMA) that NIP-50
-   * `search` filters are resolved against. Default `true`.
+   * Whether to maintain the FTS5 content index ({@link ARMADA_DB_FTS_SCHEMA})
+   * that NIP-50 `search` filters are resolved against. Default `true`. The tag
+   * token index is not optional — it is how tags are queryable at all.
    *
    * Turning it off roughly halves the cost of a write, and leaves `search`
    * working but slow: keywords then post-filter an ordinary indexed scan in
@@ -130,9 +163,11 @@ export interface SqliteArmadaDBOpts extends ArmadaDBOpts {
 export class SqliteArmadaDB implements ArmadaDB {
   private readonly db: ArmadaSqlDriver;
   private readonly indexTags: (rumor: NostrRumor) => string[][];
-  /** Whether the FTS5 index is maintained, and so usable by `search`. */
+  /** Whether the content index is maintained, and so usable by `search`. */
   private readonly search: boolean;
   private readonly stores = new Map<string, SqliteRumorStore>();
+  /** Memoised {@link tenantOrd}s — one lookup per tenant, not per token. */
+  private readonly ords = new Map<string, number>();
 
   /** Rumors queued by `event()`, awaiting the next batched commit. */
   private pending: PendingWrite[] = [];
@@ -188,11 +223,21 @@ export class SqliteArmadaDB implements ArmadaDB {
   async wipe(): Promise<void> {
     await this.ready;
     await this.transaction(async () => {
-      await this.run(`DELETE FROM rumor_tags`);
-      await this.run(`DELETE FROM rumor_coords`);
+      // The triggers empty the index tables row by row; `delete-all` is FTS5's
+      // own reset, and settles any row a policy change or a crash orphaned.
       await this.run(`DELETE FROM rumors`);
+      await this.run(`INSERT INTO rumor_tags_fts (rumor_tags_fts) VALUES ('delete-all')`);
+      if (this.search) {
+        await this.run(`INSERT INTO rumors_fts (rumors_fts) VALUES ('delete-all')`);
+      }
+      await this.run(`DELETE FROM rumor_coords`);
+      await this.run(`DELETE FROM tenants`);
       await this.run(`DELETE FROM kv`);
     });
+
+    // Interned ids are reallocated from scratch after this, so a remembered
+    // one would name the wrong tenant.
+    this.ords.clear();
   }
 
   /** Close the underlying connection, if the driver has one to close. */
@@ -216,8 +261,14 @@ export class SqliteArmadaDB implements ArmadaDB {
   putRumor(tenant: string, rumor: NostrRumor): Promise<void> {
     if (NKinds.ephemeral(rumor.kind)) return Promise.resolve();
 
+    // `NostrRumor` has no `sig`, but a caller can hand over a full `NostrEvent`
+    // structurally, and the row is `JSON.stringify(rumor)` — so a signature
+    // would be persisted verbatim here while the IndexedDB adapter drops it.
+    // Strip it so the two agree that the store holds rumors, nothing else.
+    const { sig: _sig, ...stored } = rumor as NostrRumor & { sig?: string };
+
     return new Promise<void>((resolve, reject) => {
-      this.pending.push({ tenant, rumor, resolve, reject });
+      this.pending.push({ tenant, rumor: stored, resolve, reject });
       this.scheduleFlush();
     });
   }
@@ -257,11 +308,14 @@ export class SqliteArmadaDB implements ArmadaDB {
 
   /** Apply a single rumor's writes. Runs inside the batch transaction. */
   private async writeRumor(tenant: string, rumor: NostrRumor): Promise<void> {
+    const prefix = `t${await this.internTenant(tenant)}`;
+    let seq: number | undefined;
+
     if (NKinds.replaceable(rumor.kind) || NKinds.addressable(rumor.kind)) {
       const coord = getCoord(rumor);
 
       const [existing] = await this.all(
-        `SELECT id, created_at FROM rumor_coords WHERE tenant = ? AND coord = ?`,
+        `SELECT id, seq, created_at FROM rumor_coords WHERE tenant = ? AND coord = ?`,
         [tenant, coord],
       );
 
@@ -270,17 +324,20 @@ export class SqliteArmadaDB implements ArmadaDB {
         // Per NIP-01 the stored version wins ties, and an identical id is a
         // no-op, so only a strictly newer rumor replaces it.
         if (!isNewer(rumor, stored)) return;
-        await this.deleteRumors(tenant, [stored.id]);
+        await this.deleteRumors(tenant, [Number(existing.seq)]);
       }
 
-      await this.insertRumor(tenant, rumor);
+      seq = await this.insertRumor(tenant, prefix, rumor);
+      if (seq === undefined) return;
 
       await this.run(
-        `INSERT OR REPLACE INTO rumor_coords (tenant, coord, id, created_at) VALUES (?, ?, ?, ?)`,
-        [tenant, coord, rumor.id, rumor.created_at],
+        `INSERT OR REPLACE INTO rumor_coords (tenant, coord, id, seq, created_at)
+          VALUES (?, ?, ?, ?, ?)`,
+        [tenant, coord, rumor.id, seq, rumor.created_at],
       );
     } else {
-      await this.insertRumor(tenant, rumor);
+      seq = await this.insertRumor(tenant, prefix, rumor);
+      if (seq === undefined) return;
     }
 
     // Applied after the insert so a kind 5 arriving alongside its targets in
@@ -290,50 +347,133 @@ export class SqliteArmadaDB implements ArmadaDB {
     }
   }
 
-  /** Write the rumor row and its tag index rows. */
-  private async insertRumor(tenant: string, rumor: NostrRumor): Promise<void> {
-    // `OR IGNORE` makes a re-delivered rumor a no-op rather than an error.
-    await this.run(
-      `INSERT OR IGNORE INTO rumors (tenant, id, kind, pubkey, created_at, json)
-        VALUES (?, ?, ?, ?, ?, ?)`,
-      [tenant, rumor.id, rumor.kind, rumor.pubkey, rumor.created_at, JSON.stringify(rumor)],
+  /**
+   * Write the rumor row and its token index row, and return the rowid taken —
+   * or `undefined` if the rumor was already stored, which makes a re-delivery
+   * a no-op.
+   *
+   * Everything the write needs to know first — whether this rumor is already
+   * here, and which rowid is free at its timestamp — is one statement, since
+   * each is a scalar subquery over an index and neither depends on the other.
+   * The rowid is allocated by LOOKING rather than from a counter held in
+   * memory, so a second writer on the same file (the Android service) can't be
+   * handed the same one; the bucket spans tenants, since the rowid is global.
+   *
+   * Folding that lookup into the INSERT with `RETURNING` would make this one
+   * statement rather than two, and measured 2.7× SLOWER: an INSERT that
+   * returns rows gives up SQLite's fast path and pays a result set per write,
+   * which costs far more than the extra round trip saves.
+   */
+  private async insertRumor(
+    tenant: string,
+    prefix: string,
+    rumor: NostrRumor,
+  ): Promise<number | undefined> {
+    const base = bucket(rumor.created_at);
+
+    const [row] = await this.all(
+      `SELECT (SELECT seq FROM rumors WHERE tenant = ? AND id = ?) AS existing,
+        (SELECT MAX(seq) FROM rumors WHERE seq >= ? AND seq < ?) AS last`,
+      [tenant, rumor.id, base, base + SEQ_SPACE],
     );
 
-    const rows = this.tagRows(tenant, rumor);
-    if (rows.length === 0) return;
+    // Already stored: a re-delivered rumor is a no-op.
+    if (row?.existing !== null && row?.existing !== undefined) return undefined;
 
-    // 6 columns per row; batch as many as the parameter budget allows.
-    const perStatement = Math.floor(MAX_PARAMS / 6);
+    const seq = row?.last === null || row?.last === undefined ? base : Number(row.last) + 1;
 
-    for (const chunk of batch(rows, perStatement)) {
-      const values = chunk.map(() => "(?, ?, ?, ?, ?, ?)").join(", ");
-      await this.run(
-        `INSERT OR IGNORE INTO rumor_tags (tenant, name, value, created_at, id, kind)
-          VALUES ${values}`,
-        chunk.flat(),
-      );
+    // One second may hold 2²⁰ rumors. Anything that manages more of them at
+    // the same timestamp has outgrown this encoding, and silently reordering
+    // them — or spilling into the next second's rowids — would be worse than
+    // saying so.
+    if (seq >= base + SEQ_SPACE) {
+      throw new Error(`ArmadaDB: too many rumors at created_at ${rumor.created_at}`);
     }
+
+    await this.run(
+      `INSERT INTO rumors (seq, tenant, id, kind, pubkey, created_at, json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [seq, tenant, rumor.id, rumor.kind, rumor.pubkey, rumor.created_at, JSON.stringify(rumor)],
+    );
+
+    // The content index is written by a trigger, so this is the only index the
+    // write path maintains itself — one row, however many tags the rumor has.
+    await this.run(
+      `INSERT INTO rumor_tags_fts (rowid, tokens) VALUES (?, ?)`,
+      [seq, this.tagTokens(prefix, rumor)],
+    );
+
+    return seq;
   }
 
   /**
-   * The tag index rows for a rumor: one per distinct `(name, value)` pair the
-   * `indexTags` policy selects.
+   * A rumor's index terms as a single space-separated token string: its
+   * indexed tags, plus `<tenant>:_p:<pubkey>` so an author constraint can be
+   * merged into the same MATCH as the tags.
+   *
+   * The *kind* deliberately gets no token: there are only a handful of kinds
+   * in use, so `_k:1` would be a posting list covering a large share of the
+   * store, and intersecting one of those costs more than testing `kind` on the
+   * rows the tag already found.
    */
-  private tagRows(tenant: string, rumor: NostrRumor): SqlValue[][] {
-    const rows: SqlValue[][] = [];
+  private tagTokens(prefix: string, rumor: NostrRumor): string {
+    const tokens: string[] = [`${prefix}:_p:${part(rumor.pubkey)}`];
     const seen = new Set<string>();
 
     for (const [name, value] of this.indexTags(rumor)) {
       if (typeof name !== "string" || typeof value !== "string") continue;
-      // The NUL separator can't appear in either part, so distinct pairs never
-      // collide in the dedupe set.
-      const key = `${name}\u0000${value}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      rows.push([tenant, name, value, rumor.created_at, rumor.id, rumor.kind]);
+      const token = tagToken(prefix, name, value);
+      if (seen.has(token)) continue;
+      seen.add(token);
+      tokens.push(token);
     }
 
-    return rows;
+    return tokens.join(" ");
+  }
+
+  /**
+   * The integer a tenant's tokens name it by, or `undefined` if the tenant has
+   * never been written to — in which case it holds no rumors, and so no tokens
+   * either.
+   *
+   * Interned rather than derived from the id, so distinct tenants can't share
+   * a prefix. A hash could: truncated, by birthday over ids that are partly
+   * attacker-chosen (`c2:<community id>`), and sharing a prefix means sharing
+   * posting lists, which is a cross-tenant read. Untruncated it would put 64
+   * characters in front of every token in the index.
+   *
+   * One lookup per tenant per process — the answer is durable, so a second
+   * writer on the same file agrees with it.
+   */
+  private async tenantOrd(tenant: string): Promise<number | undefined> {
+    const cached = this.ords.get(tenant);
+    if (cached !== undefined) return cached;
+
+    const [row] = await this.all(`SELECT ord FROM tenants WHERE id = ?`, [tenant]);
+    if (!row) return undefined;
+
+    const ord = Number(row.ord);
+    this.ords.set(tenant, ord);
+    return ord;
+  }
+
+  /** The token prefix for a tenant, or `undefined` if it holds no rumors. */
+  private async tenantPrefix(tenant: string): Promise<string | undefined> {
+    const ord = await this.tenantOrd(tenant);
+    return ord === undefined ? undefined : `t${ord}`;
+  }
+
+  /** The same, allocating one for a tenant being written to for the first time. */
+  private async internTenant(tenant: string): Promise<number> {
+    const existing = await this.tenantOrd(tenant);
+    if (existing !== undefined) return existing;
+
+    await this.run(`INSERT OR IGNORE INTO tenants (id) VALUES (?)`, [tenant]);
+
+    const [row] = await this.all(`SELECT ord FROM tenants WHERE id = ?`, [tenant]);
+    const ord = Number(row.ord);
+    this.ords.set(tenant, ord);
+    return ord;
   }
 
   /**
@@ -350,17 +490,21 @@ export class SqliteArmadaDB implements ArmadaDB {
     );
     if (targets.length === 0) return;
 
-    const ids = new Set<string>();
+    const seqs = new Set<number>();
 
-    const eTags = targets.filter(([name]) => name === "e").map(([, value]) => value);
+    // A request can't delete itself, and a kind 5 occupies no coordinate, so
+    // dropping its own id from the `e` targets is the whole of that rule.
+    const eTags = targets
+      .filter(([name, value]) => name === "e" && value !== request.id)
+      .map(([, value]) => value);
     const aTags = targets.filter(([name]) => name === "a").map(([, value]) => value);
 
     for (const chunk of batch(eTags, MAX_PARAMS - 2)) {
       const rows = await this.all(
-        `SELECT id FROM rumors WHERE tenant = ? AND ${memberOf("id", chunk)} AND pubkey = ?`,
+        `SELECT seq FROM rumors WHERE tenant = ? AND ${memberOf("id", chunk)} AND pubkey = ?`,
         [tenant, ...chunk, request.pubkey],
       );
-      for (const row of rows) ids.add(String(row.id));
+      for (const row of rows) seqs.add(Number(row.seq));
     }
 
     // Only one version of a coordinate is ever stored, so an `a` tag resolves
@@ -369,69 +513,48 @@ export class SqliteArmadaDB implements ArmadaDB {
 
     for (const chunk of batch(owned, MAX_PARAMS - 2)) {
       const rows = await this.all(
-        `SELECT id FROM rumor_coords
+        `SELECT seq FROM rumor_coords
           WHERE tenant = ? AND ${memberOf("coord", chunk)} AND created_at <= ?`,
         [tenant, ...chunk, request.created_at],
       );
-      for (const row of rows) ids.add(String(row.id));
+      for (const row of rows) seqs.add(Number(row.seq));
     }
 
-    // The request can't delete itself.
-    ids.delete(request.id);
-
-    await this.deleteRumors(tenant, [...ids]);
+    await this.deleteRumors(tenant, [...seqs]);
   }
 
   /**
-   * Delete rumors by id, along with their tag index rows and any coordinate
-   * they occupy.
+   * Delete rumors by rowid, along with any coordinate they occupy. Their index
+   * rows go with them, dropped by the triggers — one statement, however many
+   * tags the rumor had.
    *
-   * Tag rows are removed by exact primary key, recomputed from the stored
-   * rumor, so the tag index needs no secondary index on `id` — which would
-   * otherwise cost a b-tree insert per tag on every write.
+   * Coordinates are removed by their primary key, recomputed from the stored
+   * rumor, so the coordinate table needs no secondary index on `seq`.
    */
-  private async deleteRumors(tenant: string, ids: string[]): Promise<void> {
-    if (ids.length === 0) return;
+  private async deleteRumors(tenant: string, seqs: number[]): Promise<void> {
+    if (seqs.length === 0) return;
 
-    const rumors: NostrRumor[] = [];
-    for (const chunk of batch(ids, MAX_PARAMS - 1)) {
+    for (const chunk of batch(seqs, MAX_PARAMS - 1)) {
       const rows = await this.all(
-        `SELECT json FROM rumors WHERE tenant = ? AND ${memberOf("id", chunk)}`,
-        [tenant, ...chunk],
+        `SELECT kind, json FROM rumors WHERE ${memberOf("seq", chunk)}`,
+        chunk,
       );
-      for (const row of rows) rumors.push(JSON.parse(String(row.json)));
-    }
-    if (rumors.length === 0) return;
 
-    // Deleted one row at a time, by full primary key, so each is a seek into
-    // the tag b-tree. A tuple `IN (VALUES …)` would be one statement but would
-    // scan the table.
-    for (const rumor of rumors) {
-      for (const [, name, value, created_at] of this.tagRows(tenant, rumor)) {
+      // Only a coordinate-bearing rumor needs its body parsed, to find the `d`
+      // tag its coordinate is built from.
+      const coords = rows
+        .filter((row) => NKinds.replaceable(Number(row.kind)) || NKinds.addressable(Number(row.kind)))
+        .map((row): NostrRumor => JSON.parse(String(row.json)))
+        .map((rumor) => getCoord(rumor));
+
+      for (const coordChunk of batch(coords, MAX_PARAMS - 1)) {
         await this.run(
-          `DELETE FROM rumor_tags
-            WHERE tenant = ? AND name = ? AND value = ? AND created_at = ? AND id = ?`,
-          [tenant, name, value, created_at, rumor.id],
+          `DELETE FROM rumor_coords WHERE tenant = ? AND ${memberOf("coord", coordChunk)}`,
+          [tenant, ...coordChunk],
         );
       }
-    }
 
-    const coords = rumors
-      .filter((rumor) => NKinds.replaceable(rumor.kind) || NKinds.addressable(rumor.kind))
-      .map((rumor) => getCoord(rumor));
-
-    for (const chunk of batch(coords, MAX_PARAMS - 1)) {
-      await this.run(
-        `DELETE FROM rumor_coords WHERE tenant = ? AND ${memberOf("coord", chunk)}`,
-        [tenant, ...chunk],
-      );
-    }
-
-    for (const chunk of batch(rumors.map((rumor) => rumor.id), MAX_PARAMS - 1)) {
-      await this.run(
-        `DELETE FROM rumors WHERE tenant = ? AND ${memberOf("id", chunk)}`,
-        [tenant, ...chunk],
-      );
+      await this.run(`DELETE FROM rumors WHERE ${memberOf("seq", chunk)}`, chunk);
     }
   }
 
@@ -449,11 +572,13 @@ export class SqliteArmadaDB implements ArmadaDB {
     await this.ready;
 
     const byId = new Map<string, NostrRumor>();
+    const prefix = await this.tenantPrefix(tenant);
 
     // Run sequentially: the driver holds a single connection, so concurrency
     // would buy nothing and could interleave badly.
     for (const filter of filters) {
-      for (const rumor of await this.queryFilter(tenant, new ParsedFilter(filter), opts?.signal)) {
+      const parsed = new ParsedFilter(filter);
+      for (const rumor of await this.queryFilter(tenant, prefix, parsed, opts?.signal)) {
         byId.set(rumor.id, rumor);
       }
     }
@@ -461,396 +586,297 @@ export class SqliteArmadaDB implements ArmadaDB {
     return [...byId.values()].sort(compareNewest);
   }
 
-  /**
-   * Run a single parsed filter through the planner cascade, returning matching
-   * rumors newest-first up to the filter's limit.
-   */
+  /** Run a single parsed filter through the planner. */
   private async queryFilter(
     tenant: string,
+    prefix: string | undefined,
     filter: ParsedFilter,
     signal?: AbortSignal,
   ): Promise<NostrRumor[]> {
     if (filter.neverMatch) return [];
+
+    // No prefix means the tenant has never been written to, so it holds no
+    // tokens — and a tag filter has nothing to match against.
+    if (filter.tags.length > 0 && prefix === undefined) return [];
 
     const limit = filter.limit ?? Infinity;
     if (limit <= 0) return [];
 
     signal?.throwIfAborted();
 
-    const search = await this.resolveSearch(filter);
-    if (search?.rowids?.length === 0) return [];
+    const plan = this.planScan(tenant, prefix, filter);
 
-    const plan = this.planScan(tenant, filter, search);
-    // FTS5 has applied the keywords already wherever the plan carries them.
-    const searched = plan.searchInSql;
-
-    // ids plans are primary-key lookups. Everything the rumors table can
-    // express goes into the query, so that when it expresses the whole filter
-    // the ordering and limit go in too — a selective search can resolve to
-    // thousands of ids, and deserializing all of them to return twenty would
-    // undo what the index just saved.
-    const keys: (string | number)[] | undefined = plan.ids ?? plan.rowids;
-
-    if (keys) {
-      const column = plan.ids ? "id" : "rowid";
-      const pushKinds = !filter.kinds || filter.kinds.length <= MAX_PUSHDOWN;
-      const pushAuthors = !filter.authors || filter.authors.length <= MAX_PUSHDOWN;
-      const complete = filter.tags.length === 0 && pushKinds && pushAuthors &&
-        (searched || !filter.searchKeywords);
-
-      const rumors: NostrRumor[] = [];
-
-      // Each part gets the full limit, so the merged result still holds the
-      // newest `limit` overall.
-      for (const chunk of batch(keys, MAX_PARAMS - 16)) {
-        const conditions = ["tenant = ?", memberOf(column, chunk)];
-        const params: SqlValue[] = [tenant, ...chunk];
-
-        if (filter.since !== undefined) {
-          conditions.push("created_at >= ?");
-          params.push(filter.since);
-        }
-        if (filter.until !== undefined) {
-          conditions.push("created_at <= ?");
-          params.push(filter.until);
-        }
-        if (filter.kinds && pushKinds) {
-          conditions.push(memberOf("kind", filter.kinds));
-          params.push(...filter.kinds);
-        }
-        if (filter.authors && pushAuthors) {
-          conditions.push(memberOf("pubkey", filter.authors));
-          params.push(...filter.authors);
-        }
-
-        let sql = `SELECT json FROM rumors${where(conditions)}`;
-
-        if (complete && limit !== Infinity) {
-          sql += " ORDER BY created_at DESC, id ASC LIMIT ?";
-          params.push(limit);
-        }
-
-        for (const row of await this.all(sql, params)) {
-          const rumor: NostrRumor = JSON.parse(String(row.json));
-          if (complete || filter.matches(rumor, searched)) rumors.push(rumor);
-        }
-      }
-
-      rumors.sort(compareNewest);
-      return rumors.length > limit ? rumors.slice(0, limit) : rumors;
+    // ids plans are lookups by key, not scans.
+    if (plan.ids) {
+      return await this.queryIds(tenant, plan.ids, filter, limit);
     }
 
-    // A single cursor that SQL fully satisfies needs no candidate phase: the
-    // rows the index scan yields are exactly the answer, so read their bodies
-    // straight from the covering scan instead of paying a second key lookup.
-    if (plan.sqlOnly && plan.cursors.length === 1 && plan.cursors[0].source === "rumors") {
-      const [cursor] = plan.cursors;
-      const params = [...cursor.params];
-      let sql = `SELECT json FROM ${cursor.from}${
-        where(cursor.where)
-      } ORDER BY created_at DESC, id ASC`;
-
-      if (limit !== Infinity) {
-        sql += " LIMIT ?";
-        params.push(limit);
-      }
-
-      const rows = await this.all(sql, params);
-      return rows.map((row) => JSON.parse(String(row.json)));
+    // A cursor yields only rows its conditions kept, and the limit is applied
+    // after them, so a single complete plan IS the answer: run it once and
+    // read the rumor bodies straight out of it.
+    if (plan.cursors.length === 1 && plan.sqlOnly) {
+      const rows = await this.readPage(
+        plan.cursors[0],
+        undefined,
+        limit === Infinity ? undefined : limit,
+        false,
+      );
+      const found = rows.map((row) => row.rumor);
+      found.sort(compareNewest);
+      return found;
     }
 
-    // Everything else: scan the index for candidate keys, fetch their values,
-    // and (when SQL couldn't express the whole filter) match in memory, paging
-    // by keyset until the limit is met or the scan is exhausted.
     const collected: NostrRumor[] = [];
     const seen = new Set<string>();
-    // When SQL expresses the whole filter, a page is the answer, so read the
-    // limit in one go; otherwise page in chunks so post-filtering a scan that
+
+    // A complete plan yields only matches, so a page need be no larger than
+    // what's still wanted; an incomplete one pages in chunks so a filter that
     // matches little doesn't materialize the whole range.
-    const pageSize = plan.sqlOnly && limit !== Infinity ? Math.min(limit, MAX_PAGE) : CHUNK_SIZE;
+    let pageSize = plan.sqlOnly ? Math.min(limit, MAX_PAGE) : CHUNK_SIZE;
 
-    // A single scan over `rumors` can read the bodies as it goes: the
-    // candidates are exactly the rows wanted, so a second lookup by id would
-    // re-seek rows the scan already visited. Splitting the phases still pays
-    // off for tag scans (the bodies live in another table) and for split scans
-    // (where each part over-reads by up to a page).
-    const inline = plan.cursors.length === 1 && plan.cursors[0].source === "rumors";
-
-    // Tag terms the scan doesn't drive on, resolved to id sets so candidates
-    // failing them are dropped before their bodies are ever read.
-    const tagSets = await this.tagIdSets(tenant, plan, filter);
-
-    // Each set is a necessary condition, so a candidate must appear in all of
-    // them. Collapsing them up front turns the per-candidate check into one
-    // lookup, and an empty intersection settles the whole filter.
-    let required: Set<string> | undefined;
-
-    if (tagSets.length > 0) {
-      required = tagSets[0];
-      for (const set of tagSets.slice(1)) {
-        required = new Set([...required].filter((id) => set.has(id)));
-      }
-      if (required.size === 0) return [];
-    }
-
-    let after: Keyset | undefined;
+    let before: number | undefined;
 
     while (collected.length < limit) {
       signal?.throwIfAborted();
 
-      const page = await this.scanCandidates(plan, after, pageSize, inline);
+      const page = await this.scanPage(plan, before, pageSize);
       if (page.length === 0) break;
 
-      after = page[page.length - 1];
+      before = page[page.length - 1].seq;
 
-      const candidates = required ? page.filter(({ id }) => required.has(id)) : page;
-
-      const values = inline || candidates.length === 0
-        ? undefined
-        : await this.fetchRumors(tenant, candidates.map(({ id }) => id));
-
-      for (const candidate of candidates) {
+      for (const { rumor } of page) {
         if (collected.length >= limit) break;
-        if (seen.has(candidate.id)) continue;
-        seen.add(candidate.id);
+        if (seen.has(rumor.id)) continue;
+        seen.add(rumor.id);
 
-        const rumor = candidate.rumor ?? values?.get(candidate.id);
-        // A tag row can outlive its rumor if the `indexTags` policy changed
-        // between the write and the delete; treat the key as a miss.
-        if (!rumor) continue;
-
-        if (plan.sqlOnly || filter.matches(rumor, searched)) collected.push(rumor);
+        if (plan.sqlOnly || filter.matches(rumor, plan.searched)) collected.push(rumor);
       }
 
       // A short page means the scan is exhausted.
       if (page.length < pageSize) break;
+
+      // Still short of the limit after a full page, so the conditions are
+      // rejecting more than they're keeping. Widening geometrically bounds the
+      // number of round trips a very selective filter costs.
+      pageSize = Math.min(pageSize * 4, MAX_PAGE);
     }
 
-    // Already newest-first, but merged pages can interleave `created_at` ties.
     collected.sort(compareNewest);
     return collected;
   }
 
-  /**
-   * Read one page of candidate keys, newest-first.
-   *
-   * Each cursor contributes a `LIMIT`-ed subquery over its own index range, so
-   * the page costs ~`pageSize` rows per cursor rather than every row in range.
-   * The scans are covering, so no rumor bodies are read here unless `inline`.
-   */
-  private async scanCandidates(
-    plan: ScanPlan,
-    after: Keyset | undefined,
-    pageSize: number,
-    inline: boolean,
-  ): Promise<Keyset[]> {
-    const merged: Keyset[] = [];
+  /** Fetch rumors by id, applying whatever else the filter asks for. */
+  private async queryIds(
+    tenant: string,
+    ids: string[],
+    filter: ParsedFilter,
+    limit: number,
+  ): Promise<NostrRumor[]> {
+    const rumors: NostrRumor[] = [];
 
-    for (const cursor of plan.cursors) {
-      const conditions = [...cursor.where];
-      const params = [...cursor.params];
+    for (const chunk of batch(ids, MAX_PARAMS - 16)) {
+      const conditions = ["tenant = ?", memberOf("id", chunk)];
+      const params: SqlValue[] = [tenant, ...chunk];
 
-      if (after) {
-        // Resume strictly after the last key of the previous page. The
-        // `created_at <= ?` term drives the index seek; the disjunction only
-        // breaks ties, and guarantees progress when a whole page shares one
-        // timestamp.
-        conditions.push("created_at <= ?", "(created_at < ? OR id > ?)");
-        params.push(after.created_at, after.created_at, after.id);
+      if (filter.since !== undefined) {
+        conditions.push("created_at >= ?");
+        params.push(filter.since);
+      }
+      if (filter.until !== undefined) {
+        conditions.push("created_at <= ?");
+        params.push(filter.until);
+      }
+      if (filter.kinds && filter.kinds.length <= MAX_PUSHDOWN) {
+        conditions.push(memberOf("kind", filter.kinds));
+        params.push(...filter.kinds);
+      }
+      if (filter.authors && filter.authors.length <= MAX_PUSHDOWN) {
+        conditions.push(memberOf("pubkey", filter.authors));
+        params.push(...filter.authors);
       }
 
-      params.push(pageSize);
-
-      const rows = await this.all(
-        `SELECT ${cursor.distinct ? "DISTINCT " : ""}created_at, id${
-          inline ? ", json" : ""
-        } FROM ${cursor.from}${where(conditions)} ORDER BY created_at DESC, id ASC LIMIT ?`,
-        params,
-      );
-
-      for (const row of rows) {
-        merged.push({
-          created_at: Number(row.created_at),
-          id: String(row.id),
-          rumor: inline ? JSON.parse(String(row.json)) : undefined,
-        });
+      for (const row of await this.all(`SELECT json FROM rumors${where(conditions)}`, params)) {
+        const rumor: NostrRumor = JSON.parse(String(row.json));
+        if (filter.matches(rumor)) rumors.push(rumor);
       }
     }
 
-    if (plan.cursors.length === 1) return merged;
+    rumors.sort(compareNewest);
+    return rumors.length > limit ? rumors.slice(0, limit) : rumors;
+  }
 
-    merged.sort(compareKeyset);
+  /** Read one page of rumors, newest-first, merging the plan's cursors. */
+  private async scanPage(
+    plan: ScanPlan,
+    before: number | undefined,
+    pageSize: number,
+  ): Promise<Candidate[]> {
+    if (plan.cursors.length === 1) {
+      return await this.readPage(plan.cursors[0], before, pageSize);
+    }
+
+    const merged: Candidate[] = [];
+
+    for (const cursor of plan.cursors) {
+      merged.push(...await this.readPage(cursor, before, pageSize));
+    }
+
+    merged.sort((a, b) => b.seq - a.seq);
     return merged.slice(0, pageSize);
   }
 
   /**
-   * Resolve the plan's non-driving tag terms to sets of matching rumor ids.
+   * Read one cursor's next rows, newest-first.
    *
-   * A filter like `{"#channel": [...], "#p": [...]}` can only be driven by one
-   * tag index. Reading each remaining term's ids — a covering scan of the tag
-   * index, no rumor bodies — turns the rest of the intersection into a Set
-   * lookup, so candidates that fail are discarded before anything is
-   * deserialized.
+   * Both kinds of cursor are read the same way, and the shape is the point:
+   * conditions first, `LIMIT` last. A full-text cursor joins the rows its
+   * index found to the rumors table and tests what the index couldn't carry
+   * THERE, before the limit — so SQLite walks the posting lists backwards and
+   * stops as soon as `limit` rows have survived everything. Applying the limit
+   * to the index scan instead would make a page come back short of what was
+   * asked for, and the shortfall would have to be chased in JavaScript.
+   *
+   * Either way, every row that comes back is a row the SQL kept, and the next
+   * page resumes strictly below the last of them.
+   *
+   * `CROSS JOIN` is load-bearing, and is the whole reason that works. It is
+   * SQLite's one way to fix a join order, and without it a condition on the
+   * rumors table is enough to make the planner drive from THERE instead —
+   * seeking the index by rowid once per row, which re-evaluates the MATCH
+   * every time, and then sorting the result through a temp b-tree. Measured on
+   * a 20k store that is 462ms against 0.16ms. See the plan test.
    */
-  private async tagIdSets(
-    tenant: string,
-    plan: ScanPlan,
-    filter: ParsedFilter,
-  ): Promise<Set<string>[]> {
-    if (!plan.extraTags?.length) return [];
+  private async readPage(
+    cursor: ScanCursor,
+    before: number | undefined,
+    limit: number | undefined,
+    keys = true,
+  ): Promise<Candidate[]> {
+    let sql: string;
+    const params: SqlValue[] = [];
 
-    const sets: Set<string>[] = [];
+    if (!("from" in cursor)) {
+      const scan = this.ftsScan(cursor, before);
+      params.push(...scan.params, ...(cursor.where ? cursor.params ?? [] : []));
 
-    for (const tag of plan.extraTags) {
-      const ids = new Set<string>();
-      let overflowed = false;
+      sql = `SELECT ${keys ? "r.seq, " : ""}r.json FROM ${scan.driver}
+        CROSS JOIN rumors r ON r.seq = ${scan.driver}.rowid${
+        where([...scan.conditions, ...(cursor.where ?? [])])
+      } ORDER BY ${scan.driver}.rowid DESC${limit === undefined ? "" : " LIMIT ?"}`;
+    } else {
+      const conditions = [...cursor.where];
+      params.push(...cursor.params);
 
-      for (const values of batch(tag.values, MAX_IN)) {
-        const conditions = ["tenant = ?", "name = ?", memberOf("value", values)];
-        const params: SqlValue[] = [tenant, tag.name, ...values];
-
-        // The time bounds apply to every term, so they narrow this set too.
-        if (filter.since !== undefined) {
-          conditions.push("created_at >= ?");
-          params.push(filter.since);
-        }
-        if (filter.until !== undefined) {
-          conditions.push("created_at <= ?");
-          params.push(filter.until);
-        }
-
-        params.push(MAX_TAG_SET + 1);
-
-        const rows = await this.all(
-          `SELECT id FROM rumor_tags${where(conditions)} LIMIT ?`,
-          params,
-        );
-
-        for (const row of rows) ids.add(String(row.id));
-
-        if (ids.size > MAX_TAG_SET) {
-          overflowed = true;
-          break;
-        }
+      if (before !== undefined) {
+        conditions.push("seq < ?");
+        params.push(before);
       }
 
-      if (!overflowed) sets.push(ids);
+      // The key is only read when a later page has to resume from it; a scan
+      // that answers the whole query in one go leaves the column out.
+      sql = `SELECT ${keys ? "seq, " : ""}json FROM ${cursor.from}${
+        where(conditions)
+      } ORDER BY seq DESC${limit === undefined ? "" : " LIMIT ?"}`;
     }
 
-    return sets;
+    if (limit !== undefined) params.push(limit);
+
+    const rows = await this.all(sql.replace(/\s+/g, " "), params);
+
+    return rows.map((row) => ({
+      seq: keys ? Number(row.seq) : 0,
+      rumor: JSON.parse(String(row.json)) as NostrRumor,
+    }));
   }
 
   /**
-   * Resolve a filter's NIP-50 keywords against the full-text index.
+   * The index scan behind a full-text cursor: which table drives it, and the
+   * conditions that bound it.
    *
-   * A selective term should *drive* the query: scanning `created_at` and
-   * testing each row would walk most of the store to find twenty matches. A
-   * common term should not: matches are dense enough that an ordinary indexed
-   * scan finds a page of them almost immediately, whereas driving from the
-   * index means fetching and sorting every hit.
-   *
-   * So the index is probed for one more id than is worth driving with. Coming
-   * back under that bound settles it — those ids are the whole match set.
-   * Going over means the term is common, and the probe stops early.
-   *
-   * The probe spans tenants (the FTS index has no tenant column); the tenant
-   * filter is applied when the matches are resolved back to rows, so the
-   * result is the same either way.
+   * Tokens drive whenever there are tokens, since the token index also carries
+   * the tenant, the time window and the ordering; a keyword-only filter drives
+   * the content index the same way. Keywords *alongside* tokens are a second
+   * index to intersect with, which FTS5 can't do across tables, so they are
+   * resolved to a set the driving scan tests against.
    */
-  private async resolveSearch(filter: ParsedFilter): Promise<SearchPlan | undefined> {
-    // Without the index there is nothing to resolve against: the keywords fall
-    // through to the in-memory match, which post-filters an ordinary scan.
-    if (!this.search || !filter.searchQuery) return undefined;
+  private ftsScan(
+    cursor: FtsCursor,
+    before: number | undefined,
+  ): { driver: string; conditions: string[]; params: SqlValue[] } {
+    const driver = cursor.match ? "rumor_tags_fts" : "rumors_fts";
+    const conditions = [`${driver} MATCH ?`];
+    const params: SqlValue[] = [cursor.match ?? cursor.search!];
 
-    // Probed against the index alone. Reaching through the rumors table here
-    // would defeat the `LIMIT`: SQLite materializes a `rowid IN (subquery)` in
-    // full before limiting it, so a common term would cost every one of its
-    // matches just to discover there are too many. FTS5 streams its own
-    // results, so this stops as soon as the bound is passed.
-    const probe = await this.all(
-      `SELECT rowid FROM rumors_fts WHERE rumors_fts MATCH ? LIMIT ?`,
-      [filter.searchQuery, MAX_SEARCH_IDS + 1],
-    );
-
-    if (probe.length > MAX_SEARCH_IDS) {
-      // Too many to drive with, so the keywords filter a scan instead — and
-      // which filter is cheaper depends on how thickly the matches are spread.
-      // FTS5 returns matches in rowid order, so how far the probe had to reach
-      // to collect its bound estimates that.
-      const first = Number(probe[0].rowid);
-      const last = Number(probe[probe.length - 1].rowid);
-      const density = probe.length / Math.max(1, last - first + 1);
-
-      return { match: filter.searchQuery, dense: density >= DENSE_SEARCH };
-    }
-
-    // Kept as rowids. Translating them to rumor ids would mean handing every
-    // match across the driver just to look it up again by another key.
-    return { rowids: probe.map((row) => Number(row.rowid)) };
-  }
-
-  /** Fetch rumor bodies by id. */
-  private async fetchRumors(tenant: string, ids: string[]): Promise<Map<string, NostrRumor>> {
-    const rumors = new Map<string, NostrRumor>();
-
-    for (const chunk of batch([...new Set(ids)], MAX_PARAMS - 1)) {
-      const rows = await this.all(
-        `SELECT json FROM rumors WHERE tenant = ? AND ${memberOf("id", chunk)}`,
-        [tenant, ...chunk],
-      );
-      for (const row of rows) {
-        const rumor: NostrRumor = JSON.parse(String(row.json));
-        rumors.set(rumor.id, rumor);
-      }
-    }
-
-    return rumors;
-  }
-
-  /**
-   * The query planner — a port of strfry's `DBScan` constructor. Picks exactly
-   * one index by a fixed priority cascade and forces it with `INDEXED BY`, so
-   * the plan never depends on SQLite's cost estimates. Whatever else the
-   * filter asks for is pushed into the scan's `WHERE` clause when the chosen
-   * index can carry it.
-   */
-  private planScan(tenant: string, filter: ParsedFilter, search?: SearchPlan): ScanPlan {
-    /**
-     * Apply the FTS5 match to a scan over the rumors table. Only reachable for
-     * a common term — a selective one drives the query as a rowid list instead
-     * — and only on the rumors table, since the tag index has no rowid to
-     * reach the full-text index by.
-     */
-    const addSearch = (
-      source: ScanCursor["source"],
-      conditions: string[],
-      params: SqlValue[],
-    ): void => {
-      if (source !== "rumors" || !search?.match) return;
-
-      // A dense term is tested row by row, which costs only the handful of
-      // rows the scan reads before it has enough matches. A sparse one is
-      // collected up front instead, since testing rows individually would mean
-      // reading far too many of them to find anything.
+    if (cursor.match && cursor.search) {
+      // The `+` is load-bearing. Without it SQLite hands the rowid list to the
+      // *token* index as a constraint, which turns one descending scan into
+      // one scan per keyword match; with it, the list stays an ordinary filter
+      // over a single scan, and SQLite builds a bloom filter for it.
       conditions.push(
-        search.dense
-          ? `EXISTS (SELECT 1 FROM rumors_fts WHERE rumors_fts.rowid = rumors.rowid AND rumors_fts MATCH ?)`
-          : `rumors.rowid IN (SELECT rowid FROM rumors_fts WHERE rumors_fts MATCH ?)`,
+        `+${driver}.rowid IN (SELECT rowid FROM rumors_fts WHERE rumors_fts MATCH ?)`,
       );
-      params.push(search.match);
-    };
+      params.push(cursor.search);
+    }
 
-    // Whether the filter's keywords end up applied by the query rather than in
-    // memory. A rowid set settles them for any plan; a match expression only
-    // works on the rumors table, so a tag-driven scan still has to check them
-    // itself. A rowid set can only drive the query when nothing else is: an
-    // `ids` filter is already a lookup, and combining two key lists in one
-    // statement isn't worth the chunking it would need.
-    const searchInIds = !filter.searchKeywords || (!!search?.rowids && !filter.ids);
-    const searchInSql = searchInIds || !!search?.match;
+    // Bounded on the driver's own rowid, not on the joined `r.seq`: the point
+    // is for FTS5 to receive the range and stop its walk, rather than for the
+    // rows to be discarded after it has walked them all.
+    if (cursor.min !== undefined) {
+      conditions.push(`${driver}.rowid >= ?`);
+      params.push(cursor.min);
+    }
 
-    /** Append the filter's `since`/`until` bounds to a cursor. */
+    // The paging bound and the filter's `until` are the same kind of
+    // constraint, so whichever is tighter is the one that's applied.
+    const max = before !== undefined ? before - 1 : cursor.max;
+
+    if (max !== undefined) {
+      conditions.push(`${driver}.rowid <= ?`);
+      params.push(max);
+    }
+
+    return { driver, conditions, params };
+  }
+
+  /**
+   * The query planner.
+   *
+   * A filter that names a tag or a keyword is driven by the index, which finds
+   * its rows newest-first and lets the rumors table test what's left. Anything
+   * else is driven by a b-tree, chosen by strfry's priority cascade — every
+   * one of those indexes leads with `tenant` and is ordered by time already,
+   * so each is read newest-first, within one namespace, with no sorter.
+   */
+  private planScan(tenant: string, prefix: string | undefined, filter: ParsedFilter): ScanPlan {
+    // 1. ids — the (tenant, id) unique index.
+    if (filter.ids) {
+      return { ids: filter.ids, cursors: [], sqlOnly: false, searched: false };
+    }
+
+    const { min, max, exact } = timeRange(filter);
+
+    // Without the content index there is nothing to resolve keywords against,
+    // so they fall through to the in-memory match instead.
+    const search = this.search ? filter.searchQuery : undefined;
+
+    // 2. tags, or a NIP-50 search: the index drives.
+    if (filter.tags.length > 0 || search) {
+      const plan = this.planFts(tenant, prefix, filter, search, min, max, exact);
+      if (plan) return plan;
+    }
+
+    /** Append the filter's time bounds to a rumors-table cursor. */
     const addTime = (conditions: string[], params: SqlValue[]): void => {
+      // The rowid bound is what stops the scan early; the `created_at` test is
+      // what makes it exact, for the timestamps the encoding has to clamp.
+      if (min !== undefined) {
+        conditions.push("seq >= ?");
+        params.push(min);
+      }
+      if (max !== undefined) {
+        conditions.push("seq <= ?");
+        params.push(max);
+      }
       if (filter.since !== undefined) {
         conditions.push("created_at >= ?");
         params.push(filter.since);
@@ -861,113 +887,47 @@ export class SqliteArmadaDB implements ArmadaDB {
       }
     };
 
-    /** Whether a value list is short enough to filter a scan with. */
-    const pushable = (values: unknown[] | undefined): boolean =>
-      !!values && values.length <= MAX_PUSHDOWN;
+    const searched = !filter.searchKeywords;
+    const pushKinds = !filter.kinds || filter.kinds.length <= MAX_PUSHDOWN;
 
-    // 1. ids — the (tenant, id) unique index. Fetched directly, no index scan.
-    //    A selective search resolves to a rowid set, the same kind of lookup.
-    if (filter.ids) {
-      return { ids: filter.ids, cursors: [], sqlOnly: false, searchInSql: searchInIds };
-    }
-    if (search?.rowids) {
-      return { rowids: search.rowids, cursors: [], sqlOnly: false, searchInSql: searchInIds };
-    }
-
-    // 2. tags — the most selective tag filter (fewest values). A rumor
-    //    carrying several of the sought values matches once per value, hence
-    //    the DISTINCT.
-    if (filter.tags.length > 0) {
-      const tag = filter.tags.reduce((a, b) => (b.values.length < a.values.length ? b : a));
-      // `kind` is denormalized onto the tag index, so kinds can filter the
-      // scan; authors fall to the in-memory match. The remaining tag terms are
-      // intersected against the scan by id — see `tagIdSets`.
-      const pushKinds = pushable(filter.kinds);
-      const extraTags = filter.tags.filter((other) => other !== tag);
-
-      const cursors = [...batch(tag.values, MAX_IN)].map((values): ScanCursor => {
-        const conditions = ["tenant = ?", "name = ?", memberOf("value", values)];
-        const params: SqlValue[] = [tenant, tag.name, ...values];
-
-        addTime(conditions, params);
-
-        if (pushKinds) {
-          conditions.push(memberOf("kind", filter.kinds!));
-          params.push(...filter.kinds!);
-        }
-
-        return {
-          source: "tags",
-          from: "rumor_tags",
-          where: conditions,
-          params,
-          distinct: values.length > 1,
-        };
-      });
-
-      return {
-        cursors,
-        extraTags,
-        // The tag index has no rowid to reach the full-text index by, so
-        // keywords on a tag-driven scan are still matched in memory.
-        searchInSql: searchInIds,
-        sqlOnly: !filter.searchKeywords && !filter.authors && filter.tags.length === 1 &&
-          (!filter.kinds || pushKinds),
-      };
-    }
-
-    // 3. authors + kinds. SQLite seeks the index once per combination, so this
-    //    is only worth it while the combinatorial product stays small; beyond
-    //    that, scanning by author alone and filtering on kind is cheaper.
-    if (
-      filter.authors && filter.kinds && pushable(filter.kinds) &&
-      filter.authors.length * filter.kinds.length < 1000
-    ) {
+    // 3. authors + kinds, from the composite index. The seeks land in an index
+    //    whose entries are (tenant, pubkey, kind, time) in that order, so each
+    //    walks straight to the newest rumors of a combination and stops.
+    if (filter.authors && filter.kinds && pushKinds) {
       const cursors = [...batch(filter.authors, MAX_IN)].map((authors): ScanCursor => {
-        const conditions = ["tenant = ?", memberOf("pubkey", authors), memberOf("kind", filter.kinds!)];
+        const conditions = [
+          "tenant = ?",
+          memberOf("pubkey", authors),
+          memberOf("kind", filter.kinds!),
+        ];
         const params: SqlValue[] = [tenant, ...authors, ...filter.kinds!];
 
         addTime(conditions, params);
-        addSearch("rumors", conditions, params);
 
-        return {
-          source: "rumors",
-          from: "rumors INDEXED BY rumors_pubkey_kind",
-          where: conditions,
-          params,
-        };
+        return { from: "rumors INDEXED BY rumors_pubkey_kind", where: conditions, params };
       });
 
-      return { cursors, searchInSql, sqlOnly: searchInSql };
+      return { cursors, sqlOnly: searched, searched };
     }
 
-    // 4. authors. When kinds is also present it filters the scan instead of
-    //    driving it.
+    // 4. authors alone, with kinds filtering the scan when there are few
+    //    enough of them to be worth binding.
     if (filter.authors) {
-      const pushKinds = pushable(filter.kinds);
-
       const cursors = [...batch(filter.authors, MAX_IN)].map((authors): ScanCursor => {
         const conditions = ["tenant = ?", memberOf("pubkey", authors)];
         const params: SqlValue[] = [tenant, ...authors];
 
         addTime(conditions, params);
 
-        if (pushKinds) {
-          conditions.push(memberOf("kind", filter.kinds!));
-          params.push(...filter.kinds!);
+        if (filter.kinds && pushKinds) {
+          conditions.push(memberOf("kind", filter.kinds));
+          params.push(...filter.kinds);
         }
 
-        addSearch("rumors", conditions, params);
-
-        return {
-          source: "rumors",
-          from: "rumors INDEXED BY rumors_pubkey",
-          where: conditions,
-          params,
-        };
+        return { from: "rumors INDEXED BY rumors_pubkey", where: conditions, params };
       });
 
-      return { cursors, searchInSql, sqlOnly: searchInSql && (!filter.kinds || pushKinds) };
+      return { cursors, sqlOnly: searched && pushKinds, searched };
     }
 
     // 5. kinds.
@@ -977,35 +937,124 @@ export class SqliteArmadaDB implements ArmadaDB {
         const params: SqlValue[] = [tenant, ...kinds];
 
         addTime(conditions, params);
-        addSearch("rumors", conditions, params);
 
-        return {
-          source: "rumors",
-          from: "rumors INDEXED BY rumors_kind",
-          where: conditions,
-          params,
-        };
+        return { from: "rumors INDEXED BY rumors_kind", where: conditions, params };
       });
 
-      return { cursors, searchInSql, sqlOnly: searchInSql };
+      return { cursors, sqlOnly: searched, searched };
     }
 
-    // 6. fallback — the whole tenant, newest-first.
+    // 6. fallback — the whole tenant, newest-first. `(tenant)` is `(tenant,
+    //    seq)`, so this is a backwards walk of one contiguous index range.
     const conditions = ["tenant = ?"];
     const params: SqlValue[] = [tenant];
     addTime(conditions, params);
-    addSearch("rumors", conditions, params);
 
     return {
-      cursors: [{
-        source: "rumors",
-        from: "rumors INDEXED BY rumors_created_at",
-        where: conditions,
-        params,
-      }],
-      searchInSql,
-      sqlOnly: searchInSql,
+      cursors: [{ from: "rumors INDEXED BY rumors_tenant", where: conditions, params }],
+      sqlOnly: searched,
+      searched,
     };
+  }
+
+  /**
+   * Plan a filter as one or more MATCH expressions, or `undefined` when the
+   * index can't drive it.
+   *
+   * Every constraint becomes a group of alternatives — the tag values, the
+   * authors — and the groups are ANDed. FTS5 evaluates that by merging the
+   * groups' doclists, so the cost is the length of the *shortest* group rather
+   * than the product of them all.
+   */
+  private planFts(
+    tenant: string,
+    prefix: string | undefined,
+    filter: ParsedFilter,
+    search: string | undefined,
+    min: number | undefined,
+    max: number | undefined,
+    exact: boolean,
+  ): ScanPlan | undefined {
+    const groups: string[][] = [];
+
+    for (const tag of filter.tags) {
+      groups.push(tag.values.map((value) => tagToken(prefix!, tag.name, value)));
+    }
+
+    // A search whose keywords are all negations has nothing for FTS5 to match
+    // against — there is no way to say "every row except these" — so it is
+    // left to the in-memory matcher, as is any search at all when the content
+    // index isn't maintained.
+    const searched = !filter.searchKeywords || !!search;
+
+    // Authors join the tags in the index, where they are one more posting list
+    // to intersect. Without a tag to intersect *with*, they are better served
+    // by their own b-tree, so they're only added here when there is one — and
+    // only while there are few enough of them to be worth merging.
+    const inIndex = groups.length > 0 && !!filter.authors &&
+      filter.authors.length <= MAX_AUTHOR_TERMS;
+
+    if (inIndex) {
+      groups.push(filter.authors!.map((pubkey) => `${prefix!}:_p:${part(pubkey)}`));
+    }
+
+    if (groups.length === 0 && !search) return undefined;
+
+    // Whatever the index isn't carrying is tested on the rows it finds, which
+    // is what the rumors table is for. Every condition still ends up in SQL —
+    // it just costs a column read on a row already fetched instead of a
+    // posting list intersection over the whole store.
+    const conditions: string[] = [];
+    const params: SqlValue[] = [];
+
+    // A token carries its tenant; the content index does not, so a
+    // keyword-only scan is the one that has to say so.
+    if (groups.length === 0) {
+      conditions.push("r.tenant = ?");
+      params.push(tenant);
+    }
+
+    if (filter.kinds && filter.kinds.length <= MAX_PUSHDOWN) {
+      conditions.push(memberOf("r.kind", filter.kinds));
+      params.push(...filter.kinds);
+    }
+
+    if (!inIndex && filter.authors && filter.authors.length <= MAX_PUSHDOWN) {
+      conditions.push(memberOf("r.pubkey", filter.authors));
+      params.push(...filter.authors);
+    }
+
+    // Timestamps the rowid encoding had to clamp are re-checked exactly here,
+    // rather than in memory.
+    if (!exact && filter.since !== undefined) {
+      conditions.push("r.created_at >= ?");
+      params.push(filter.since);
+    }
+    if (!exact && filter.until !== undefined) {
+      conditions.push("r.created_at <= ?");
+      params.push(filter.until);
+    }
+
+    const complete = (!filter.kinds || filter.kinds.length <= MAX_PUSHDOWN) &&
+      (inIndex || !filter.authors || filter.authors.length <= MAX_PUSHDOWN);
+
+    // The longest group is the one worth splitting: every cursor carries every
+    // other group in full, so splitting a short one would repeat more work.
+    const longest = groups.reduce((a, b) => (b.length > a.length ? b : a), groups[0] ?? []);
+    const chunks = longest.length > MAX_OR ? [...batch(longest, MAX_OR)] : [longest];
+
+    const cursors: ScanCursor[] = chunks.map((chunk): ScanCursor => ({
+      match: groups.length > 0
+        ? matchExpr(groups.map((group) => (group === longest ? chunk : group)))
+        : undefined,
+      search,
+      min,
+      max,
+      where: conditions,
+      params,
+    }));
+
+    return { cursors, sqlOnly: complete && searched, searched };
   }
 
   /** How many rumors in `tenant` match. */
@@ -1016,30 +1065,48 @@ export class SqliteArmadaDB implements ArmadaDB {
   ): Promise<{ count: number; approximate: boolean }> {
     await this.ready;
 
-    // Fast path: a single unlimited filter that one scan expresses completely
-    // is counted inside the index, with no rows returned and no rumor bodies
-    // read. (ids plans are excluded — they're key lookups, not scans. So are
-    // split scans, whose parts could both see the same rumor.)
+    // A single complete plan is counted inside the index: no rows returned, no
+    // rumor bodies read. One rumor is one row of the token index however many
+    // of its tags matched, so nothing has to be de-duplicated.
     if (filters.length === 1) {
       const filter = new ParsedFilter(filters[0]);
       if (filter.neverMatch) return { count: 0, approximate: false };
 
       if (filter.limit === undefined) {
-        const search = await this.resolveSearch(filter);
-        if (search?.rowids?.length === 0) return { count: 0, approximate: false };
+        const prefix = await this.tenantPrefix(tenant);
+        if (filter.tags.length > 0 && prefix === undefined) {
+          return { count: 0, approximate: false };
+        }
 
-        const plan = this.planScan(tenant, filter, search);
+        const plan = this.planScan(tenant, prefix, filter);
 
-        if (plan.sqlOnly && !plan.ids && !plan.rowids && plan.cursors.length === 1) {
+        if (plan.sqlOnly && !plan.ids && plan.cursors.length === 1) {
           const [cursor] = plan.cursors;
+          let sql: string;
+          const params: SqlValue[] = [];
 
-          const [row] = await this.all(
-            `SELECT COUNT(*) AS count FROM (SELECT ${
-              cursor.distinct ? "DISTINCT " : ""
-            }created_at, id FROM ${cursor.from}${where(cursor.where)})`,
-            cursor.params,
-          );
+          if (!("from" in cursor)) {
+            const scan = this.ftsScan(cursor, undefined);
+            params.push(...scan.params);
 
+            // With nothing left to test, the index knows the answer by itself.
+            // Otherwise the rows still have to be visited, but only their
+            // columns, never their bodies.
+            if (cursor.where?.length) {
+              params.push(...(cursor.params ?? []));
+              sql = `SELECT COUNT(*) AS count FROM ${scan.driver}
+                CROSS JOIN rumors r ON r.seq = ${scan.driver}.rowid${
+                where([...scan.conditions, ...cursor.where])
+              }`;
+            } else {
+              sql = `SELECT COUNT(*) AS count FROM ${scan.driver}${where(scan.conditions)}`;
+            }
+          } else {
+            sql = `SELECT COUNT(*) AS count FROM ${cursor.from}${where(cursor.where)}`;
+            params.push(...cursor.params);
+          }
+
+          const [row] = await this.all(sql.replace(/\s+/g, " "), params);
           return { count: Number(row?.count ?? 0), approximate: false };
         }
       }
@@ -1058,7 +1125,19 @@ export class SqliteArmadaDB implements ArmadaDB {
     const rumors = await this.queryTenant(tenant, filters, opts);
     if (rumors.length === 0) return;
 
-    await this.transaction(() => this.deleteRumors(tenant, rumors.map((rumor) => rumor.id)));
+    await this.transaction(async () => {
+      const seqs: number[] = [];
+
+      for (const chunk of batch(rumors.map((rumor) => rumor.id), MAX_PARAMS - 1)) {
+        const rows = await this.all(
+          `SELECT seq FROM rumors WHERE tenant = ? AND ${memberOf("id", chunk)}`,
+          [tenant, ...chunk],
+        );
+        for (const row of rows) seqs.push(Number(row.seq));
+      }
+
+      await this.deleteRumors(tenant, seqs);
+    });
   }
 
   // ── Driver plumbing ───────────────────────────────────────────────────────
@@ -1155,6 +1234,62 @@ class SqliteKV implements ArmadaKV {
       )
     );
   }
+
+  async delete(key: string): Promise<void> {
+    await this.db.ready;
+    await this.db.transaction(() => this.db.run(`DELETE FROM kv WHERE key = ?`, [key]));
+  }
+
+  async keys(prefix?: string): Promise<string[]> {
+    await this.db.ready;
+
+    let rows: SqlRow[];
+    if (!prefix) {
+      rows = await this.db.all(`SELECT key FROM kv ORDER BY key`);
+    } else {
+      const upper = prefixUpperBound(prefix);
+      rows = upper === undefined
+        ? await this.db.all(`SELECT key FROM kv WHERE key >= ? ORDER BY key`, [prefix])
+        : await this.db.all(
+          `SELECT key FROM kv WHERE key >= ? AND key < ? ORDER BY key`,
+          [prefix, upper],
+        );
+    }
+
+    const keys = rows.map((row) => String(row.key));
+    // The range is a scan hint, not the contract — see `prefixUpperBound`.
+    return prefix ? keys.filter((key) => key.startsWith(prefix)) : keys;
+  }
+}
+
+/** The first rowid belonging to a timestamp, clamped to the encodable range. */
+function bucket(created_at: number): number {
+  const time = Math.min(Math.max(Math.floor(created_at), 0), MAX_TIME);
+  return time * SEQ_SPACE;
+}
+
+/**
+ * The rowid window a filter's `since`/`until` bounds describe, and whether that
+ * window is exact — it isn't when a bound falls outside the range the rowid
+ * encoding can represent, in which case the rumors in the clamped bucket have
+ * to be re-checked against `created_at`.
+ */
+function timeRange(filter: ParsedFilter): { min?: number; max?: number; exact: boolean } {
+  let exact = true;
+  let min: number | undefined;
+  let max: number | undefined;
+
+  if (filter.since !== undefined) {
+    if (filter.since > MAX_TIME || filter.since < 0) exact = false;
+    min = bucket(filter.since);
+  }
+
+  if (filter.until !== undefined) {
+    if (filter.until > MAX_TIME || filter.until < 0) exact = false;
+    max = bucket(filter.until) + SEQ_SPACE - 1;
+  }
+
+  return { min, max, exact };
 }
 
 /** The `kind:pubkey:d` coordinate of a replaceable or addressable rumor. */
@@ -1184,10 +1319,65 @@ function compareNewest(a: NostrRumor, b: NostrRumor): number {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
-/** The same ordering, over bare candidate keys. */
-function compareKeyset(a: Keyset, b: Keyset): number {
-  if (a.created_at !== b.created_at) return b.created_at - a.created_at;
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+/**
+ * Tokens are only safe to embed verbatim when the tokenizer can't split or
+ * fold them: lowercase ASCII alphanumerics, and nothing else.
+ */
+const VERBATIM = /^[0-9a-z]+$/;
+
+/**
+ * Encode one part of a tag token.
+ *
+ * Verbatim where possible — rumor ids, pubkeys and Armada's tag names
+ * (`channel`, `stream`, `peer`) already qualify, and they're the values worth
+ * optimizing for. Anything else is hex-escaped, which no tokenizer will split
+ * and no case folding will alter. The two forms can't be confused: an escaped
+ * value starts with `_`, which a verbatim one can never contain.
+ */
+function part(value: string): string {
+  if (VERBATIM.test(value)) return value;
+
+  let hex = "_";
+  for (const byte of utf8ToBytes(value)) {
+    hex += byte.toString(16).padStart(2, "0");
+  }
+
+  return hex;
+}
+
+/**
+ * The index token for a tag within a tenant, e.g. `main:e:<id>` or
+ * `main:t:_c3a9`.
+ *
+ * The tenant prefix can never be mistaken for a tag name, and the reserved
+ * `_p:` author prefix can never be produced by a user's tag: an escaped name
+ * is `_` followed by an EVEN number of hex digits, and `p` is not a hex digit
+ * at all.
+ */
+function tagToken(prefix: string, name: string, value: string): string {
+  return `${prefix}:${part(name)}:${part(value)}`;
+}
+
+/**
+ * Build an FTS5 MATCH expression: each group's tokens are alternatives, and
+ * the groups are required together.
+ *
+ * A group with one member is written as a bare phrase rather than a
+ * parenthesized alternation, which is the same query with less for FTS5's
+ * parser to chew through — and single-value groups are the common case.
+ */
+function matchExpr(groups: string[][]): string {
+  return groups
+    .map((group) => (group.length === 1 ? phrase(group[0]) : `(${group.map(phrase).join(" OR ")})`))
+    .join(" AND ");
+}
+
+/**
+ * A token as an FTS5 phrase. Quoting is what keeps a keyword like `OR` or `(`
+ * from being read as query syntax; embedded quotes are doubled, per FTS5.
+ */
+function phrase(token: string): string {
+  return `"${token.replace(/"/g, '""')}"`;
 }
 
 /** A rumor queued for the next batched commit, with its caller's settlers. */
@@ -1198,61 +1388,55 @@ interface PendingWrite {
   reject(error: unknown): void;
 }
 
-/** A candidate key produced by an index scan, and the keyset paging position. */
-interface Keyset {
-  created_at: number;
-  id: string;
-  /** The rumor body, when the scan read it inline rather than by a later lookup. */
-  rumor?: NostrRumor;
-}
-
-/** One scan: a table (with a forced index) plus its conditions. */
-interface ScanCursor {
-  /** Which b-tree the scan reads, which decides what can be filtered on it. */
-  source: "rumors" | "tags";
-  /** The `FROM` clause, including any `INDEXED BY`. */
-  from: string;
-  where: string[];
-  params: SqlValue[];
-  /** Whether the scan can yield the same rumor more than once. */
-  distinct?: boolean;
-}
-
-/** A planned scan: how to fetch a single filter's candidate rumors. */
-interface ScanPlan {
-  /** For ids plans: fetch these keys directly instead of scanning. */
-  ids?: string[];
-  /** The same, for a search selective enough to be resolved to rowids. */
-  rowids?: number[];
-  /**
-   * Normally one scan. A filter whose driving value list is too long for a
-   * single statement is split into several, merged by the caller.
-   */
-  cursors: ScanCursor[];
-  /**
-   * Tag terms the scan doesn't drive on. Each is resolved to a set of ids and
-   * intersected with the candidates, so a candidate failing one never has its
-   * body read.
-   */
-  extraTags?: TagFilter[];
-  /**
-   * Whether the scans' `WHERE` clauses express the filter completely, so
-   * candidates need no in-memory re-check and the scan needs no paging.
-   */
-  sqlOnly: boolean;
-  /** Whether the plan applies the filter's NIP-50 keywords itself. */
-  searchInSql: boolean;
+/**
+ * A row a scan produced: the rumor, and its rowid, which is where a later page
+ * resumes from.
+ */
+interface Candidate {
+  seq: number;
+  rumor: NostrRumor;
 }
 
 /**
- * How a filter's NIP-50 keywords will be applied: as the rowids they match,
- * when selective enough to drive the query, or as a match expression filtering
- * the scan when they aren't.
+ * One scan: either a full-text match over a window of rowids, or a b-tree scan
+ * over the rumors table.
  */
-interface SearchPlan {
-  /** The rowids the keywords match, when few enough to drive the query. */
-  rowids?: number[];
+type ScanCursor = FtsCursor | TableCursor;
+
+/**
+ * A full-text scan, bounded by the filter's time range: a token expression, a
+ * NIP-50 keyword expression, or both, plus whatever conditions are left for
+ * the rumors rows it finds.
+ */
+interface FtsCursor {
   match?: string;
-  /** Whether the keywords match a large enough share of rumors to test row by row. */
-  dense?: boolean;
+  search?: string;
+  min?: number;
+  max?: number;
+  /** Conditions on the matched rumors, as `r.column …`. */
+  where?: string[];
+  params?: SqlValue[];
+}
+
+/** A scan of the rumors table with a forced index. */
+interface TableCursor {
+  from: string;
+  where: string[];
+  params: SqlValue[];
+}
+
+/** A planned scan: how to fetch a single filter's rumors. */
+interface ScanPlan {
+  /** For ids plans: fetch these keys directly instead of scanning. */
+  ids?: string[];
+  /**
+   * Normally one scan. A filter with a value list too long for a single MATCH
+   * — or for one statement's parameter budget — is split into several, merged
+   * by the caller.
+   */
+  cursors: ScanCursor[];
+  /** Whether the cursors express the filter completely. */
+  sqlOnly: boolean;
+  /** Whether the plan applies the filter's NIP-50 keywords itself. */
+  searched: boolean;
 }

@@ -22,7 +22,7 @@
  */
 import { tryNaddrEncode, tryNeventEncode, tryNpubEncode } from "@/lib/safeNip19";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 const DITTO_ORIGIN = "https://ditto.pub";
 
@@ -32,7 +32,7 @@ const DITTO_ORIGIN = "https://ditto.pub";
  * the author pubkey as a relay hint. Returns `undefined` if the event has
  * a malformed id/pubkey.
  */
-export function dittoEventUrl(event: NostrEvent): string | undefined {
+export function dittoEventUrl(event: NostrRumor): string | undefined {
   if (event.kind >= 30000 && event.kind < 40000) {
     const identifier = event.tags.find((t) => t[0] === "d")?.[1] ?? "";
     const naddr = tryNaddrEncode({

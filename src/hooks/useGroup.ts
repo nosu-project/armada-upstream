@@ -18,7 +18,7 @@ import {
   type Nip29Role,
 } from "@/lib/nip29";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 export interface GroupDetails {
   group: Nip29Group | undefined;
@@ -32,8 +32,8 @@ export interface GroupDetails {
 const GROUP_KINDS = [KIND_GROUP_METADATA, KIND_GROUP_ADMINS, KIND_GROUP_MEMBERS, KIND_GROUP_ROLES];
 
 /** Compose GroupDetails from a set of 39000-39003 events (newest per kind wins). */
-function composeGroupDetails(events: NostrEvent[], relayUrl: string): GroupDetails {
-  const newest = new Map<number, NostrEvent>();
+function composeGroupDetails(events: NostrRumor[], relayUrl: string): GroupDetails {
+  const newest = new Map<number, NostrRumor>();
   for (const event of events) {
     const existing = newest.get(event.kind);
     if (!existing || existing.created_at < event.created_at) {

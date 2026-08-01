@@ -30,7 +30,7 @@ import { guestbookGroups } from "@/concord-v2/lib/guestbook";
 import { KIND_WRAP } from "@/concord-v2/lib/kinds";
 import { openChatBatch } from "@/concord-v2/lib/chat";
 import { controlSweepTruncated, sweepControl, sweepGuestbook, whenAuthSettled } from "@/concord-v2/lib/planeSync";
-import { queryByStreams, writeRumors } from "@/concord-v2/lib/rumorStore";
+import { pruneControlSnapshots, queryPlane, writeRumors } from "@/concord-v2/lib/rumorStore";
 import { registerStreamKeys } from "@/concord-v2/lib/streamAuth";
 import { controlFoldKey } from "@/concord-v2/hooks/useControlPlane2";
 import { writeFolded } from "@/lib/foldedCache";
@@ -117,7 +117,10 @@ export async function warmupCommunities2(
     let totalChannels = 0;
     for (const c of communities) {
       try {
-        const stored = await queryByStreams(controlGroups(c).map((g) => g.pk));
+        // Once per session, drop the control-snapshot sets of epochs this
+        // community no longer holds keys for — nothing reads them again.
+        void pruneControlSnapshots(c.idHex, controlGroups(c).map((g) => g.pk));
+        const stored = await queryPlane(c.idHex, "control");
         const folded = foldControlState(openControlEditions(stored), c.id, c.owner);
         // A sweep we KNOW came up short must never become the durable
         // baseline. This fold ran with no floor and no snapshot to correct it,
@@ -214,7 +217,7 @@ export async function warmupCommunities2(
                 const opened = await openChatBatch(chWraps, ch);
                 if (opened.length > 0) {
                   // writeRumors rings `c2:<channel>` on the wire bus once committed.
-                  writeRumors(opened);
+                  writeRumors(community.idHex, opened);
                   result.messages += opened.length;
                 }
               }

@@ -252,12 +252,9 @@ const ChatMessage2 = memo(function ChatMessage2({
   // Concord V2 messages are unsigned rumors sealed at the channel's stream
   // address — there's no relay-addressable event id, so the "Copy message ID" /
   // "View on Ditto" off-ramps are nonsensical. Pass the rumor through so the
-  // context menu offers "View event JSON" instead. Drop the synthetic empty
-  // `sig` the transport adds for rendering (a rumor has no signature).
-  const rumor = useMemo(() => {
-    const { sig: _sig, ...rest } = event;
-    return rest;
-  }, [event]);
+  // context menu offers "View event JSON" instead.
+  // `ChatMsg` is already signature-less, so the message IS the rumor.
+  const rumor = event;
   return (
     <ChatMessage
       event={event}
@@ -555,10 +552,8 @@ const MentionMessage = memo(function MentionMessage({
   event: ChatMsg;
   onJump?: () => void;
 }) {
-  const rumor = useMemo(() => {
-    const { sig: _sig, ...rest } = event;
-    return rest;
-  }, [event]);
+  // `ChatMsg` is already signature-less, so the message IS the rumor.
+  const rumor = event;
   return (
     <div
       role={onJump ? "button" : undefined}
@@ -668,10 +663,8 @@ function ThreadsView({
 
 /** The thread root message, read-only (its click is handled by the row wrapper). */
 const ThreadRootPreview = memo(function ThreadRootPreview({ event }: { event: ChatMsg }) {
-  const rumor = useMemo(() => {
-    const { sig: _sig, ...rest } = event;
-    return rest;
-  }, [event]);
+  // `ChatMsg` is already signature-less, so the message IS the rumor.
+  const rumor = event;
   return (
     <div className="pointer-events-none">
       <ChatMessage event={event} rumor={rumor} canWrite={false} canModerate={false} />
@@ -749,7 +742,7 @@ export function ConcordV2Page() {
     () => [...gitAttachmentsByChannel.values()].some((list) => list.some((attachment) => attachment.detachedAt === undefined)),
     [gitAttachmentsByChannel],
   );
-  const { byChannel: unreadByChannel, markRead: markChannelRead } = useConcord2Unread(channels, communityGitActivity.byChannel);
+  const { byChannel: unreadByChannel, markRead: markChannelRead } = useConcord2Unread(community?.idHex, channels, communityGitActivity.byChannel);
 
   // "Mark all as read": stamp every unread channel to its newest unread
   // message (monotonic stamps, so already-read channels no-op).
@@ -783,7 +776,7 @@ export function ConcordV2Page() {
     hasNew: hasNewThreadReplies,
     markRead: markThreadRead,
     markAllRead: markAllThreadsRead,
-  } = useConcord2Threads(channels);
+  } = useConcord2Threads(community?.idHex, channels);
 
   // Authenticate the connection as this community's per-channel stream keys
   // (control/guestbook/dissolved keys are registered app-wide in MainLayout).
@@ -1373,7 +1366,11 @@ export function ConcordV2Page() {
     results: searchResults,
     isLoading: searchLoading,
     active: searching,
-  } = useConcordSearch2(allChannelIds, searchOpen ? searchFilters : EMPTY_SEARCH_FILTERS);
+  } = useConcordSearch2(
+    community?.idHex,
+    allChannelIds,
+    searchOpen ? searchFilters : EMPTY_SEARCH_FILTERS,
+  );
 
   // Fulfil a pending Threads-tab open: once its channel is active and the
   // transport has loaded the root, open the thread panel with the freshly
@@ -1439,7 +1436,13 @@ export function ConcordV2Page() {
     // A scroll-up page is one mixed operation. Both stores may prepend entries;
     // MessageTimeline owns the single scroll-height restoration around this
     // promise, so chat and Git cannot fight over the reader's anchor.
-    isLoading: baseTransport.isLoading || gitActivity.isLoading,
+    //
+    // `isLoading` is deliberately NOT merged: it is the timeline's skeleton
+    // gate, and the skeleton stands for the chat store read. Git activity is
+    // its own event domain read from the shared event store, so ORing it in
+    // held a fully-cached conversation behind a skeleton whenever a
+    // repo-attached channel's Git query was slow. Its rows simply appear when
+    // they resolve, like any other late entry.
     hasMore: Boolean(baseTransport.hasMore || gitActivity.hasMore),
     isLoadingOlder: Boolean(baseTransport.isLoadingOlder || gitActivity.isLoadingOlder),
     loadOlder: async () => {
@@ -2297,9 +2300,15 @@ export function ConcordV2Page() {
                     syncing={channelSyncing}
                     className="flex-1 min-h-0"
                     emptyState={
-                      <p className="px-2 py-8 text-center text-sm text-muted-foreground">
-                        No messages yet. Say something — only members can read it.
-                      </p>
+                      // Only once a channel has actually resolved. Before the
+                      // control fold names one there is no conversation to
+                      // call empty, and "say something" would be inviting the
+                      // reader to write into a channel that isn't there yet.
+                      channel ? (
+                        <p className="px-2 py-8 text-center text-sm text-muted-foreground">
+                          No messages yet. Say something — only members can read it.
+                        </p>
+                      ) : undefined
                     }
                     renderMessage={(msg, continuation) => {
                       const replyId = getQuoteReplyToId(msg);

@@ -24,6 +24,13 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- Surface the app's Documents directory (where saved images/files land via
+	     @capacitor/filesystem) as the "Armada" folder in the Files app, and let
+	     the user manage those files in place. -->
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>UIFileSharingEnabled</key>
+	<true/>
 	<!-- Voice/video rooms (LiveKit via getUserMedia) and voice messages. Also
 	     covers the WebView file input's "Take Photo or Video" option. -->
 	<key>NSCameraUsageDescription</key>

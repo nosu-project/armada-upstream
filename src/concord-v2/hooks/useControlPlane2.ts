@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 import { useDeferredFold } from "@/concord-v2/hooks/useDeferredFold2";
 import {
-  controlGroups,
+  controlFoldKey,
   currentControlGroup,
   foldControlState,
   isDissolvedOpened,
@@ -17,7 +17,7 @@ import { bytesToHex, dissolvedGroupKey, grantLocator, hex32 } from "@/concord-v2
 import type { AuthorityCitation } from "@/concord-v2/lib/edition";
 import { KIND_WRAP } from "@/concord-v2/lib/kinds";
 import { openPlaneWraps, mergeOpened, sweepControl } from "@/concord-v2/lib/planeSync";
-import { queryByStreams, writeOpened } from "@/concord-v2/lib/rumorStore";
+import { queryPlane, readControlSnapshot, writeOpened } from "@/concord-v2/lib/rumorStore";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import { openWrap, type OpenedEvent, type StreamSigner } from "@/concord-v2/lib/stream";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -27,12 +27,8 @@ import { onWireScopes } from "@/wire/bus";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
-/**
- * The persisted control-fold snapshot key for a community (see
- * {@link useDeferredFold}). Shared with the notification-subscription builder,
- * which reads the cached fold without mounting a per-community hook.
- */
-export const controlFoldKey = (idHex: string) => `concord2-fold:${idHex}`;
+/** Re-exported for the many call sites that reach it through this module. */
+export { controlFoldKey };
 
 /**
  * Fetch the community's Control Plane. Wraps are decrypted once into the
@@ -69,7 +65,7 @@ export function useControlEvents2(community: CommunityV2 | undefined, active = t
     let cancelled = false;
     const seed = async (merge: boolean) => {
       if (!merge && (queryClient.getQueryData<OpenedEvent[]>(queryKey)?.length ?? 0) > 0) return;
-      const cached = await queryByStreams(controlGroups(community).map((g) => g.pk));
+      const cached = await queryPlane(community.idHex, "control");
       if (cancelled) return;
       logSync(
         "control",
@@ -122,11 +118,48 @@ export function useControlEvents2(community: CommunityV2 | undefined, active = t
     enabled: Boolean(community) && active,
     staleTime: 15_000,
     queryFn: async () => {
-      const groups = controlGroups(community!);
-      const stored = await queryByStreams(groups.map((g) => g.pk));
+      const stored = await queryPlane(community!.idHex, "control");
       const prev = queryClient.getQueryData<OpenedEvent[]>(queryKey) ?? [];
       return mergeOpened(prev, stored);
     },
+  });
+}
+
+/**
+ * The rumor ids that arrived under the community's CURRENT control stream.
+ *
+ * The one thing about a control edition that is NOT in the edition: a
+ * compaction re-wraps editions VERBATIM under the new epoch's address (CORD-06
+ * §3), so the rumor — and its id — is byte-identical whether or not it is in
+ * the snapshot, and only the wrap it arrived in ever knew. `writeOpened`
+ * records it at ingest; this reads it back.
+ *
+ * Only a Refounded community has one. Refetched on the same `c2ctl:<id>` bus
+ * that re-seeds the editions, so a re-wrap arriving live anchors the next fold.
+ */
+function useControlSnapshot2(community: CommunityV2 | undefined, active: boolean) {
+  const queryClient = useQueryClient();
+  const cidHex = community?.idHex ?? null;
+  const curPk = community ? currentControlGroup(community).pk : "";
+  const refounded = Boolean(community && community.rootEpoch > 0n);
+  const queryKey = useMemo(
+    () => ["concord2", "control-snapshot", cidHex, curPk] as const,
+    [cidHex, curPk],
+  );
+
+  useEffect(() => {
+    if (!cidHex || !refounded) return;
+    const scope = `c2ctl:${cidHex}`;
+    return onWireScopes((scopes) => {
+      if (scopes.has(scope)) void queryClient.invalidateQueries({ queryKey });
+    });
+  }, [cidHex, refounded, queryClient, queryKey]);
+
+  return useQuery<string[]>({
+    queryKey,
+    enabled: refounded && active && Boolean(cidHex),
+    staleTime: 5_000,
+    queryFn: async () => [...((await readControlSnapshot(cidHex!, curPk)) ?? [])],
   });
 }
 
@@ -137,6 +170,8 @@ export function useControlEvents2(community: CommunityV2 | undefined, active = t
 export function useControlFold2(community: CommunityV2 | undefined, active = true) {
   const control = useControlEvents2(community, active);
   const events = control.data;
+  const refounded = Boolean(community && community.rootEpoch > 0n);
+  const snapIds = useControlSnapshot2(community, active).data;
 
   // Per-entity high-water floor (CORD-04 §1): the highest version we've ever
   // accepted for each entity, monotonic and never lowered. Feeding it back into
@@ -156,6 +191,10 @@ export function useControlFold2(community: CommunityV2 | undefined, active = tru
     community ? controlFoldKey(community.idHex) : null,
     () => {
       if (!community || !events) return undefined;
+      // A Refounded community anchors on its compaction snapshot, so wait for
+      // it rather than folding once by old-root contiguity and again correctly
+      // — the two disagree about which editions outrank which.
+      if (refounded && !snapIds) return undefined;
       // Folds whatever has arrived, on purpose. The control plane is
       // procedural: members process editions as they come and converge, and a
       // member who is one sweep behind reads and writes fine — they just don't
@@ -171,11 +210,7 @@ export function useControlFold2(community: CommunityV2 | undefined, active = tru
       // control group fold by version-anchored bootstrap (the compaction
       // snapshot outranks old-root fragments — see headCandidates). A
       // never-rotated community keeps full chain-contiguity semantics.
-      const curPk = currentControlGroup(community).pk;
-      const snapshotIds =
-        community.rootEpoch > 0n
-          ? new Set(events.filter((ev) => ev.streamPk === curPk).map((ev) => ev.rumorId))
-          : undefined;
+      const snapshotIds = refounded && snapIds ? new Set(snapIds) : undefined;
       const folded = foldControlState(editions, community.id, community.owner, floorRef.current.heads, snapshotIds);
       // Raise the high-water floor from this fold's accepted heads (upward only).
       for (const [eid, head] of folded.heads) {
@@ -188,7 +223,7 @@ export function useControlFold2(community: CommunityV2 | undefined, active = tru
       );
       return folded;
     },
-    [community, events],
+    [community, events, refounded, snapIds],
   );
 
   return { ...control, data } as typeof control & { data: FoldedControl | undefined };
@@ -283,7 +318,11 @@ export function useDissolved2(community: CommunityV2 | undefined, active = true)
       if (known !== undefined) return known;
 
       const group = dissolvedGroupKey(community!.id);
-      const cached = await queryByStreams([group.pk]);
+      // The grave marker is a control-kind rumor, so it reads back with the
+      // rest of the plane; `isDissolvedOpened` is what identifies it, and it
+      // authenticates on the SEAL SIGNER being the owner — which the address it
+      // arrived at never established anyway.
+      const cached = await queryPlane(community!.idHex, "control");
       const cachedGrave = cached.find((o) => isDissolvedOpened(o, community!.owner, community!.id));
       if (cachedGrave) {
         await rememberDissolved(community!.idHex, cachedGrave.ms);
@@ -301,7 +340,11 @@ export function useDissolved2(community: CommunityV2 | undefined, active = true)
         ),
       );
       const opened = openPlaneWraps(results.flat(), [group]);
-      if (opened.length > 0) writeOpened(opened);
+      if (opened.length > 0) {
+        writeOpened(community!.idHex, opened, "control", {
+          refounded: community!.rootEpoch > 0n,
+        });
+      }
       const grave = opened.find((o) => isDissolvedOpened(o, community!.owner, community!.id));
       if (!grave) return null;
       await rememberDissolved(community!.idHex, grave.ms);
@@ -336,8 +379,7 @@ export async function publishEdition2(
   // legitimate publish (matching Vector's `get_community_dissolved(…)
   // .unwrap_or(false)`).
   try {
-    const grave = dissolvedGroupKey(community.id);
-    const cached = await queryByStreams([grave.pk]);
+    const cached = await queryPlane(community.idHex, "control");
     if (cached.some((o) => isDissolvedOpened(o, community.owner, community.id))) {
       throw new DissolvedError();
     }
@@ -359,7 +401,9 @@ export async function publishEdition2(
   // `since` cursor would skip it). Without this, a promote can "succeed" with
   // no visible effect until a full resync.
   try {
-    writeOpened([openWrap(wrap, control)]);
+    writeOpened(community.idHex, [openWrap(wrap, control)], "control", {
+      refounded: community.rootEpoch > 0n,
+    });
   } catch {
     // best-effort — the relay echo remains the fallback
   }

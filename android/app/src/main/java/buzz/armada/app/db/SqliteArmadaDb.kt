@@ -1,0 +1,1250 @@
+package buzz.armada.app.db
+
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
+import org.json.JSONObject
+
+/**
+ * ArmadaDB's SQLite engine, in Kotlin — a port of `src/lib/db/SqliteArmadaDB.ts`,
+ * which carries the full rationale. See [ArmadaDbSchema] for the layout and for
+ * why the tag index is an FTS5 inverted index rather than a b-tree.
+ *
+ * This is the ONE implementation on Android: the notification service writes
+ * through it directly, and the WebView reaches the same instance over
+ * `ArmadaDbPlugin`. There is no second engine to keep in step and no format to
+ * agree on — the database logic is native, and the bridge is a transport.
+ *
+ * One connection, one database: every tenant shares the `rumors` /
+ * `rumor_tags_fts` / `rumor_coords` tables, and the KV store is a fourth.
+ *
+ * Two things carry the whole design:
+ *
+ *  - **`seq`, the rowid, encodes time** (`created_at × 2²⁰ + n`). So `ORDER BY
+ *    seq DESC` is `ORDER BY created_at DESC` for the table, for every b-tree
+ *    index over it, and — the point of the exercise — for FTS5, which only ever
+ *    yields rows in rowid order. `since`/`until` become a rowid range that FTS5
+ *    pushes down into its own backwards walk of the posting lists.
+ *  - **Tags are tokens.** A filter's tag terms, and its authors when a tag is
+ *    already driving, become one MATCH expression: groups of alternatives,
+ *    ANDed. FTS5 merges the groups' posting lists in C, so the cost is the
+ *    length of the shortest group rather than the product of them all, and one
+ *    rumor is one row of the index however many of its tags matched.
+ *
+ * Everything the index doesn't carry — kinds, and authors without a tag — is
+ * tested on the `rumors` rows it finds, which costs a column read on a row that
+ * was going to be fetched anyway. Filters naming no tag and no keyword are
+ * driven by a b-tree instead, chosen by strfry's priority cascade:
+ *
+ *   ids → tags/search → pubkey+kind → pubkey → kind → the whole tenant
+ *
+ * Semantics, matching the IndexedDB adapter the web build still uses:
+ *
+ *  - Ephemeral kinds (20000–29999) are never stored.
+ *  - Replaceable (0, 3, 10000–19999) and addressable (30000–39999) rumors
+ *    supersede older versions at the same (tenant, kind, pubkey, d) coordinate;
+ *    a stale write is skipped. NIP-01 tie-break: on equal created_at the smaller
+ *    id wins.
+ *  - NIP-09 kind-5 deletion requests are applied on write (`e` by id, `a` by
+ *    coordinate), only against the requester's own rumors in the same tenant;
+ *    the request itself is retained.
+ *  - A batch of rumors commits as ONE transaction, across all tenants.
+ *
+ * THREADING: every public method takes [lock] for its whole duration. The
+ * transactions here are plain `BEGIN IMMEDIATE` statements and SQLite has no
+ * nested ones, so a second caller interleaving statements would have its work
+ * swept into — and rolled back with — someone else's transaction. The lock is
+ * reentrant, so a public method may call another.
+ */
+class SqliteArmadaDb(
+    private val db: ArmadaSqlDriver,
+    /**
+     * Whether to maintain the FTS5 content index that NIP-50 `search` filters
+     * are resolved against. Turning it off roughly halves the cost of a write
+     * and leaves `search` working but slow: keywords then post-filter an
+     * ordinary indexed scan in memory, matching substrings rather than whole
+     * words. Must agree with what was migrated.
+     */
+    private val search: Boolean = true,
+    migrate: Boolean = true,
+    /**
+     * Which tags to index, as `[name, value]` rows — only these are queryable
+     * with a `#x` filter. Unlike relay policy this is NOT limited to
+     * single-letter tags: Armada's local planes query on multi-letter names
+     * (`#channel`, `#stream`, `#peer`).
+     */
+    private val indexTags: (Rumor) -> List<List<String?>> = ::defaultIndexTags,
+) : AutoCloseable {
+
+    /** Memoised tenant ordinals — one lookup per tenant, not per token. */
+    private val ords = HashMap<String, Int>()
+
+    private val lock = ReentrantLock()
+
+    init {
+        if (migrate) migrate()
+    }
+
+    /** A rumor and the tenant it belongs to, for a batched write. */
+    class Write(val tenant: String, val rumor: Rumor)
+
+    /** A count and whether it is an estimate (it never is here). */
+    class Count(val count: Long, val approximate: Boolean = false)
+
+    // ── Schema ────────────────────────────────────────────────────────────────
+
+    /** Create the tables, indexes and triggers, if they don't already exist. */
+    fun migrate() {
+        lock.withLock {
+            val schema = if (search) ArmadaDbSchema.BASE + ArmadaDbSchema.SEARCH else ArmadaDbSchema.BASE
+            for (statement in schema) db.run(statement.collapseWhitespace())
+        }
+    }
+
+    /** Empty every table (logout purge). Keeps the schema. */
+    fun wipe() {
+        lock.withLock {
+            transaction {
+                // The triggers empty the index tables row by row; `delete-all`
+                // is FTS5's own reset, and settles any row a policy change or a
+                // crash orphaned.
+                db.run("DELETE FROM rumors")
+                db.run("INSERT INTO rumor_tags_fts (rumor_tags_fts) VALUES ('delete-all')")
+                if (search) db.run("INSERT INTO rumors_fts (rumors_fts) VALUES ('delete-all')")
+                db.run("DELETE FROM rumor_coords")
+                db.run("DELETE FROM tenants")
+                db.run("DELETE FROM kv")
+            }
+            // Interned ids are reallocated from scratch after this, so a
+            // remembered one would name the wrong tenant.
+            ords.clear()
+        }
+    }
+
+    override fun close() {
+        lock.withLock { db.close() }
+    }
+
+    /** Every tenant that has ever been written to. */
+    fun tenantIds(): List<String> = lock.withLock {
+        db.query("SELECT id FROM tenants ORDER BY ord") { it.text(0) }
+    }
+
+    // ── Write path ────────────────────────────────────────────────────────────
+
+    /** Store one rumor. Committed when this returns. */
+    fun event(tenant: String, rumor: Rumor) = write(listOf(Write(tenant, rumor)))
+
+    /**
+     * Store a batch of rumors in ONE transaction, across all tenants. Rumors of
+     * ephemeral kinds are dropped rather than stored.
+     */
+    fun write(writes: List<Write>) {
+        val storable = writes.filter { !Kinds.ephemeral(it.rumor.kind) }
+        if (storable.isEmpty()) return
+
+        lock.withLock {
+            transaction {
+                for (write in storable) writeRumor(write.tenant, write.rumor)
+            }
+        }
+    }
+
+    /** Apply a single rumor's writes. Runs inside the batch transaction. */
+    private fun writeRumor(tenant: String, rumor: Rumor) {
+        val prefix = "t${internTenant(tenant)}"
+
+        if (Kinds.replaceable(rumor.kind) || Kinds.addressable(rumor.kind)) {
+            val coord = coordOf(rumor)
+
+            val existing = db.query(
+                "SELECT id, seq, created_at FROM rumor_coords WHERE tenant = ? AND coord = ?",
+                listOf(tenant, coord),
+            ) { Stored(it.text(0), it.long(1), it.long(2)) }.firstOrNull()
+
+            if (existing != null) {
+                // Per NIP-01 the stored version wins ties, and an identical id
+                // is a no-op, so only a strictly newer rumor replaces it.
+                if (!isNewer(rumor.id, rumor.createdAt, existing.id, existing.createdAt)) return
+                deleteRumors(tenant, listOf(existing.seq))
+            }
+
+            val seq = insertRumor(tenant, prefix, rumor) ?: return
+
+            db.run(
+                """INSERT OR REPLACE INTO rumor_coords (tenant, coord, id, seq, created_at)
+                    VALUES (?, ?, ?, ?, ?)""".collapseWhitespace(),
+                listOf(tenant, coord, rumor.id, seq, rumor.createdAt),
+            )
+        } else {
+            insertRumor(tenant, prefix, rumor) ?: return
+        }
+
+        // Applied after the insert so a kind 5 arriving alongside its targets in
+        // one batch still resolves. The request itself is retained.
+        if (rumor.kind == 5) applyDeletion(tenant, rumor)
+    }
+
+    /**
+     * Write the rumor row and its token index row, and return the rowid taken —
+     * or null if the rumor was already stored, which makes a re-delivery a
+     * no-op.
+     *
+     * Everything the write needs to know first — whether this rumor is already
+     * here, and which rowid is free at its timestamp — is one statement, since
+     * each is a scalar subquery over an index and neither depends on the other.
+     * The rowid is allocated by LOOKING rather than from a counter held in
+     * memory, so a second writer on the same file can't be handed the same one;
+     * the bucket spans tenants, since the rowid is global.
+     */
+    private fun insertRumor(tenant: String, prefix: String, rumor: Rumor): Long? {
+        val base = bucket(rumor.createdAt)
+
+        val row = db.query(
+            """SELECT (SELECT seq FROM rumors WHERE tenant = ? AND id = ?) AS existing,
+                (SELECT MAX(seq) FROM rumors WHERE seq >= ? AND seq < ?) AS last""".collapseWhitespace(),
+            listOf(tenant, rumor.id, base, base + SEQ_SPACE),
+        ) { Pair(it.longOrNull(0), it.longOrNull(1)) }.firstOrNull()
+
+        // Already stored: a re-delivered rumor is a no-op.
+        if (row?.first != null) return null
+
+        val last = row?.second
+        val seq = if (last == null) base else last + 1
+
+        // One second may hold 2²⁰ rumors. Anything that manages more of them at
+        // the same timestamp has outgrown this encoding, and silently reordering
+        // them — or spilling into the next second's rowids — would be worse than
+        // saying so.
+        check(seq < base + SEQ_SPACE) {
+            "ArmadaDB: too many rumors at created_at ${rumor.createdAt}"
+        }
+
+        db.run(
+            """INSERT INTO rumors (seq, tenant, id, kind, pubkey, created_at, json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""".collapseWhitespace(),
+            listOf(seq, tenant, rumor.id, rumor.kind, rumor.pubkey, rumor.createdAt, rumor.toJson()),
+        )
+
+        // The content index is written by a trigger, so this is the only index
+        // the write path maintains itself — one row, however many tags the rumor
+        // has.
+        db.run(
+            "INSERT INTO rumor_tags_fts (rowid, tokens) VALUES (?, ?)",
+            listOf(seq, tagTokens(prefix, rumor)),
+        )
+
+        return seq
+    }
+
+    /**
+     * A rumor's index terms as a single space-separated token string: its
+     * indexed tags, plus `<prefix>:_p:<pubkey>` so an author constraint can be
+     * merged into the same MATCH as the tags.
+     *
+     * The *kind* deliberately gets no token: there are only a handful of kinds
+     * in use, so `_k:1` would be a posting list covering a large share of the
+     * store, and intersecting one of those costs more than testing `kind` on the
+     * rows the tag already found.
+     */
+    private fun tagTokens(prefix: String, rumor: Rumor): String {
+        val tokens = LinkedHashSet<String>()
+        tokens.add("$prefix:_p:${part(rumor.pubkey)}")
+
+        for (row in indexTags(rumor)) {
+            val name = row.getOrNull(0) ?: continue
+            val value = row.getOrNull(1) ?: continue
+            tokens.add(tagToken(prefix, name, value))
+        }
+
+        return tokens.joinToString(" ")
+    }
+
+    /**
+     * The integer a tenant's tokens name it by, or null if the tenant has never
+     * been written to — in which case it holds no rumors, and so no tokens
+     * either.
+     *
+     * Interned rather than derived from the id, so distinct tenants can't share
+     * a prefix. A hash could: truncated, by birthday over ids that are partly
+     * attacker-chosen (`c2:<community id>`), and sharing a prefix means sharing
+     * posting lists, which is a cross-tenant read.
+     */
+    private fun tenantOrd(tenant: String): Int? {
+        ords[tenant]?.let { return it }
+
+        val ord = db.query("SELECT ord FROM tenants WHERE id = ?", listOf(tenant)) {
+            it.long(0).toInt()
+        }.firstOrNull() ?: return null
+
+        ords[tenant] = ord
+        return ord
+    }
+
+    /** The token prefix for a tenant, or null if it holds no rumors. */
+    private fun tenantPrefix(tenant: String): String? =
+        tenantOrd(tenant)?.let { "t$it" }
+
+    /** The same, allocating one for a tenant being written to for the first time. */
+    private fun internTenant(tenant: String): Int {
+        tenantOrd(tenant)?.let { return it }
+
+        db.run("INSERT OR IGNORE INTO tenants (id) VALUES (?)", listOf(tenant))
+
+        val ord = db.query("SELECT ord FROM tenants WHERE id = ?", listOf(tenant)) {
+            it.long(0).toInt()
+        }.first()
+        ords[tenant] = ord
+        return ord
+    }
+
+    /**
+     * NIP-09: delete the rumors a kind 5 request targets, within its tenant.
+     *
+     * A request can only delete its author's own rumors, so every target is
+     * checked against the request's `pubkey`. `a` tags additionally only delete
+     * versions at or before the request's `created_at`, so a newer replacement
+     * survives.
+     */
+    private fun applyDeletion(tenant: String, request: Rumor) {
+        val seqs = LinkedHashSet<Long>()
+
+        // A request can't delete itself, and a kind 5 occupies no coordinate, so
+        // dropping its own id from the `e` targets is the whole of that rule.
+        val eTags = request.tags.mapNotNull { row ->
+            val name = row.getOrNull(0)
+            val value = row.getOrNull(1)
+            if (name == "e" && !value.isNullOrEmpty() && value != request.id) value else null
+        }
+        val aTags = request.tags.mapNotNull { row ->
+            val name = row.getOrNull(0)
+            val value = row.getOrNull(1)
+            if (name == "a" && !value.isNullOrEmpty()) value else null
+        }
+        if (eTags.isEmpty() && aTags.isEmpty()) return
+
+        for (chunk in Sql.batch(eTags, MAX_PARAMS - 2)) {
+            val rows = db.query(
+                "SELECT seq FROM rumors WHERE tenant = ? AND ${Sql.memberOf("id", chunk)} AND pubkey = ?",
+                listOf(tenant) + chunk + listOf(request.pubkey),
+            ) { it.long(0) }
+            seqs.addAll(rows)
+        }
+
+        // Only one version of a coordinate is ever stored, so an `a` tag
+        // resolves to at most one rumor via a primary-key lookup.
+        val owned = aTags.filter { it.split(":").getOrNull(1) == request.pubkey }
+
+        for (chunk in Sql.batch(owned, MAX_PARAMS - 2)) {
+            val rows = db.query(
+                """SELECT seq FROM rumor_coords
+                    WHERE tenant = ? AND ${Sql.memberOf("coord", chunk)} AND created_at <= ?"""
+                    .collapseWhitespace(),
+                listOf(tenant) + chunk + listOf(request.createdAt),
+            ) { it.long(0) }
+            seqs.addAll(rows)
+        }
+
+        deleteRumors(tenant, seqs.toList())
+    }
+
+    /**
+     * Delete rumors by rowid, along with any coordinate they occupy. Their index
+     * rows go with them, dropped by the triggers — one statement, however many
+     * tags the rumor had.
+     *
+     * Coordinates are removed by their primary key, recomputed from the stored
+     * rumor, so the coordinate table needs no secondary index on `seq`.
+     */
+    private fun deleteRumors(tenant: String, seqs: List<Long>) {
+        if (seqs.isEmpty()) return
+
+        for (chunk in Sql.batch(seqs, MAX_PARAMS - 1)) {
+            val rows = db.query(
+                "SELECT kind, json FROM rumors WHERE ${Sql.memberOf("seq", chunk)}",
+                chunk,
+            ) { Pair(it.long(0).toInt(), it.text(1)) }
+
+            // Only a coordinate-bearing rumor needs its body parsed, to find the
+            // `d` tag its coordinate is built from.
+            val coords = rows
+                .filter { Kinds.replaceable(it.first) || Kinds.addressable(it.first) }
+                .map { Rumor.parse(it.second) ?: error("ArmadaDB: unparseable rumor row") }
+                .map { coordOf(it) }
+
+            for (coordChunk in Sql.batch(coords, MAX_PARAMS - 1)) {
+                db.run(
+                    "DELETE FROM rumor_coords WHERE tenant = ? AND ${Sql.memberOf("coord", coordChunk)}",
+                    listOf(tenant) + coordChunk,
+                )
+            }
+
+            db.run("DELETE FROM rumors WHERE ${Sql.memberOf("seq", chunk)}", chunk)
+        }
+    }
+
+    // ── Read path ─────────────────────────────────────────────────────────────
+
+    /**
+     * Rumors in [tenant] matching the filters (OR'd together), newest-first,
+     * de-duplicated by id, each filter's `limit` respected.
+     */
+    fun query(tenant: String, filters: List<JSONObject>): List<Rumor> = lock.withLock {
+        val byId = LinkedHashMap<String, Rumor>()
+        val prefix = tenantPrefix(tenant)
+
+        for (filter in filters) {
+            for (rumor in queryFilter(tenant, prefix, ParsedFilter(filter))) {
+                byId[rumor.id] = rumor
+            }
+        }
+
+        byId.values.sortedWith(NEWEST_FIRST)
+    }
+
+    /** Run a single parsed filter through the planner. */
+    private fun queryFilter(tenant: String, prefix: String?, filter: ParsedFilter): List<Rumor> {
+        if (filter.neverMatch) return emptyList()
+
+        // No prefix means the tenant has never been written to, so it holds no
+        // tokens — and a tag filter has nothing to match against.
+        if (filter.tags.isNotEmpty() && prefix == null) return emptyList()
+
+        val limit = filter.limit ?: Int.MAX_VALUE
+        if (limit <= 0) return emptyList()
+
+        val plan = planScan(tenant, prefix, filter)
+
+        // ids plans are lookups by key, not scans.
+        plan.ids?.let { return queryIds(tenant, it, filter, limit) }
+
+        // A cursor yields only rows its conditions kept, and the limit is
+        // applied after them, so a single complete plan IS the answer: run it
+        // once and read the rumor bodies straight out of it.
+        if (plan.cursors.size == 1 && plan.sqlOnly) {
+            val rows = readPage(
+                plan.cursors[0],
+                before = null,
+                limit = if (limit == Int.MAX_VALUE) null else limit,
+                keys = false,
+            )
+            return rows.map { it.rumor }.sortedWith(NEWEST_FIRST)
+        }
+
+        val collected = ArrayList<Rumor>()
+        val seen = HashSet<String>()
+
+        // A complete plan yields only matches, so a page need be no larger than
+        // what's still wanted; an incomplete one pages in chunks so a filter
+        // that matches little doesn't materialize the whole range.
+        var pageSize = if (plan.sqlOnly) minOf(limit, MAX_PAGE) else CHUNK_SIZE
+        var before: Long? = null
+
+        while (collected.size < limit) {
+            val page = scanPage(plan, before, pageSize)
+            if (page.isEmpty()) break
+
+            before = page.last().seq
+
+            for (candidate in page) {
+                if (collected.size >= limit) break
+                if (!seen.add(candidate.rumor.id)) continue
+                if (plan.sqlOnly || filter.matches(candidate.rumor, plan.searched)) {
+                    collected.add(candidate.rumor)
+                }
+            }
+
+            // A short page means the scan is exhausted.
+            if (page.size < pageSize) break
+
+            // Still short of the limit after a full page, so the conditions are
+            // rejecting more than they're keeping. Widening geometrically bounds
+            // the number of round trips a very selective filter costs.
+            pageSize = minOf(pageSize * 4, MAX_PAGE)
+        }
+
+        return collected.sortedWith(NEWEST_FIRST)
+    }
+
+    /** Fetch rumors by id, applying whatever else the filter asks for. */
+    private fun queryIds(
+        tenant: String,
+        ids: List<String>,
+        filter: ParsedFilter,
+        limit: Int,
+    ): List<Rumor> {
+        val rumors = ArrayList<Rumor>()
+
+        for (chunk in Sql.batch(ids, MAX_PARAMS - 16)) {
+            val conditions = arrayListOf("tenant = ?", Sql.memberOf("id", chunk))
+            val params = ArrayList<Any?>()
+            params.add(tenant)
+            params.addAll(chunk)
+
+            filter.since?.let {
+                conditions.add("created_at >= ?")
+                params.add(it)
+            }
+            filter.until?.let {
+                conditions.add("created_at <= ?")
+                params.add(it)
+            }
+            filter.kinds?.takeIf { it.size <= MAX_PUSHDOWN }?.let {
+                conditions.add(Sql.memberOf("kind", it))
+                params.addAll(it)
+            }
+            filter.authors?.takeIf { it.size <= MAX_PUSHDOWN }?.let {
+                conditions.add(Sql.memberOf("pubkey", it))
+                params.addAll(it)
+            }
+
+            val rows = db.query("SELECT json FROM rumors${Sql.where(conditions)}", params) { it.text(0) }
+            for (json in rows) {
+                // As in `readPage`: a stored row that won't parse is a corrupt
+                // store, not a row to quietly leave out of the answer.
+                val rumor = Rumor.parse(json) ?: error("ArmadaDB: unparseable rumor row")
+                if (filter.matches(rumor)) rumors.add(rumor)
+            }
+        }
+
+        val sorted = rumors.sortedWith(NEWEST_FIRST)
+        return if (sorted.size > limit) sorted.take(limit) else sorted
+    }
+
+    /** Read one page of rumors, newest-first, merging the plan's cursors. */
+    private fun scanPage(plan: ScanPlan, before: Long?, pageSize: Int): List<Candidate> {
+        if (plan.cursors.size == 1) return readPage(plan.cursors[0], before, pageSize)
+
+        val merged = ArrayList<Candidate>()
+        for (cursor in plan.cursors) merged.addAll(readPage(cursor, before, pageSize))
+
+        merged.sortByDescending { it.seq }
+        return merged.take(pageSize)
+    }
+
+    /**
+     * Read one cursor's next rows, newest-first.
+     *
+     * Both kinds of cursor are read the same way, and the shape is the point:
+     * conditions first, `LIMIT` last. A full-text cursor joins the rows its
+     * index found to the rumors table and tests what the index couldn't carry
+     * THERE, before the limit — so SQLite walks the posting lists backwards and
+     * stops as soon as `limit` rows have survived everything.
+     *
+     * `CROSS JOIN` is load-bearing, and is the whole reason that works. It is
+     * SQLite's one way to fix a join order, and without it a condition on the
+     * rumors table is enough to make the planner drive from THERE instead —
+     * seeking the index by rowid once per row, which re-evaluates the MATCH
+     * every time, and then sorting the result through a temp b-tree. Measured on
+     * a 20k store that is 462ms against 0.16ms.
+     */
+    private fun readPage(
+        cursor: ScanCursor,
+        before: Long?,
+        limit: Int?,
+        keys: Boolean = true,
+    ): List<Candidate> {
+        val params = ArrayList<Any?>()
+
+        val sql = when (cursor) {
+            is FtsCursor -> {
+                val scan = ftsScan(cursor, before)
+                params.addAll(scan.params)
+                params.addAll(cursor.params)
+
+                """SELECT ${if (keys) "r.seq, " else ""}r.json FROM ${scan.driver}
+                    CROSS JOIN rumors r ON r.seq = ${scan.driver}.rowid${
+                    Sql.where(scan.conditions + cursor.where)
+                } ORDER BY ${scan.driver}.rowid DESC${if (limit == null) "" else " LIMIT ?"}"""
+            }
+
+            is TableCursor -> {
+                val conditions = ArrayList(cursor.where)
+                params.addAll(cursor.params)
+
+                if (before != null) {
+                    conditions.add("seq < ?")
+                    params.add(before)
+                }
+
+                // The key is only read when a later page has to resume from it;
+                // a scan that answers the whole query in one go leaves the
+                // column out.
+                """SELECT ${if (keys) "seq, " else ""}json FROM ${cursor.from}${
+                    Sql.where(conditions)
+                } ORDER BY seq DESC${if (limit == null) "" else " LIMIT ?"}"""
+            }
+        }
+
+        if (limit != null) params.add(limit)
+
+        return db.query(sql.collapseWhitespace(), params) { row ->
+            val seq = if (keys) row.long(0) else 0L
+            val json = row.text(if (keys) 1 else 0)
+            // Throwing rather than skipping. A page whose size the caller reads
+            // as "the scan is exhausted" must not shrink for any reason other
+            // than the scan being exhausted: silently dropping a row would end
+            // the walk early and return a short answer as if it were complete.
+            // Every row here was written by `insertRumor` from a parsed rumor,
+            // so an unparseable one is a corrupt store, and saying so beats
+            // quietly serving part of it.
+            val rumor = Rumor.parse(json)
+                ?: error("ArmadaDB: unparseable rumor at seq $seq")
+            Candidate(seq, rumor)
+        }
+    }
+
+    /**
+     * The index scan behind a full-text cursor: which table drives it, and the
+     * conditions that bound it.
+     *
+     * Tokens drive whenever there are tokens, since the token index also carries
+     * the tenant, the time window and the ordering; a keyword-only filter drives
+     * the content index the same way. Keywords *alongside* tokens are a second
+     * index to intersect with, which FTS5 can't do across tables, so they are
+     * resolved to a set the driving scan tests against.
+     */
+    private fun ftsScan(cursor: FtsCursor, before: Long?): FtsScan {
+        val driver = if (cursor.match != null) "rumor_tags_fts" else "rumors_fts"
+        val conditions = arrayListOf("$driver MATCH ?")
+        val params = ArrayList<Any?>()
+        params.add(cursor.match ?: cursor.search!!)
+
+        if (cursor.match != null && cursor.search != null) {
+            // The `+` is load-bearing. Without it SQLite hands the rowid list to
+            // the *token* index as a constraint, which turns one descending scan
+            // into one scan per keyword match; with it, the list stays an
+            // ordinary filter over a single scan, and SQLite builds a bloom
+            // filter for it.
+            conditions.add("+$driver.rowid IN (SELECT rowid FROM rumors_fts WHERE rumors_fts MATCH ?)")
+            params.add(cursor.search)
+        }
+
+        // Bounded on the driver's own rowid, not on the joined `r.seq`: the
+        // point is for FTS5 to receive the range and stop its walk, rather than
+        // for the rows to be discarded after it has walked them all.
+        cursor.min?.let {
+            conditions.add("$driver.rowid >= ?")
+            params.add(it)
+        }
+
+        // The paging bound and the filter's `until` are the same kind of
+        // constraint, so whichever is tighter is the one that's applied.
+        val max = if (before != null) before - 1 else cursor.max
+        max?.let {
+            conditions.add("$driver.rowid <= ?")
+            params.add(it)
+        }
+
+        return FtsScan(driver, conditions, params)
+    }
+
+    /**
+     * The query planner.
+     *
+     * A filter that names a tag or a keyword is driven by the index, which finds
+     * its rows newest-first and lets the rumors table test what's left. Anything
+     * else is driven by a b-tree, chosen by strfry's priority cascade — every one
+     * of those indexes leads with `tenant` and is ordered by time already, so
+     * each is read newest-first, within one namespace, with no sorter.
+     */
+    private fun planScan(tenant: String, prefix: String?, filter: ParsedFilter): ScanPlan {
+        // 1. ids — the (tenant, id) unique index.
+        filter.ids?.let { return ScanPlan(ids = it, cursors = emptyList(), sqlOnly = false, searched = false) }
+
+        val time = timeRange(filter)
+
+        // Without the content index there is nothing to resolve keywords
+        // against, so they fall through to the in-memory match instead.
+        val search = if (this.search) filter.searchQuery else null
+
+        // 2. tags, or a NIP-50 search: the index drives.
+        if (filter.tags.isNotEmpty() || search != null) {
+            planFts(tenant, prefix, filter, search, time)?.let { return it }
+        }
+
+        /** Append the filter's time bounds to a rumors-table cursor. */
+        fun addTime(conditions: MutableList<String>, params: MutableList<Any?>) {
+            // The rowid bound is what stops the scan early; the `created_at`
+            // test is what makes it exact, for the timestamps the encoding has
+            // to clamp.
+            time.min?.let {
+                conditions.add("seq >= ?")
+                params.add(it)
+            }
+            time.max?.let {
+                conditions.add("seq <= ?")
+                params.add(it)
+            }
+            filter.since?.let {
+                conditions.add("created_at >= ?")
+                params.add(it)
+            }
+            filter.until?.let {
+                conditions.add("created_at <= ?")
+                params.add(it)
+            }
+        }
+
+        val searched = filter.searchKeywords == null
+        val kinds = filter.kinds
+        val authors = filter.authors
+        val pushKinds = kinds == null || kinds.size <= MAX_PUSHDOWN
+
+        // 3. authors + kinds, from the composite index. The seeks land in an
+        //    index whose entries are (tenant, pubkey, kind, time) in that order,
+        //    so each walks straight to the newest rumors of a combination and
+        //    stops.
+        if (authors != null && kinds != null && pushKinds) {
+            val cursors = Sql.batch(authors, MAX_IN).map { chunk ->
+                val conditions = arrayListOf(
+                    "tenant = ?",
+                    Sql.memberOf("pubkey", chunk),
+                    Sql.memberOf("kind", kinds),
+                )
+                val params = ArrayList<Any?>()
+                params.add(tenant)
+                params.addAll(chunk)
+                params.addAll(kinds)
+                addTime(conditions, params)
+                TableCursor("rumors INDEXED BY rumors_pubkey_kind", conditions, params)
+            }
+            return ScanPlan(null, cursors, sqlOnly = searched, searched = searched)
+        }
+
+        // 4. authors alone, with kinds filtering the scan when there are few
+        //    enough of them to be worth binding.
+        if (authors != null) {
+            val cursors = Sql.batch(authors, MAX_IN).map { chunk ->
+                val conditions = arrayListOf("tenant = ?", Sql.memberOf("pubkey", chunk))
+                val params = ArrayList<Any?>()
+                params.add(tenant)
+                params.addAll(chunk)
+                addTime(conditions, params)
+
+                if (kinds != null && pushKinds) {
+                    conditions.add(Sql.memberOf("kind", kinds))
+                    params.addAll(kinds)
+                }
+
+                TableCursor("rumors INDEXED BY rumors_pubkey", conditions, params)
+            }
+            return ScanPlan(null, cursors, sqlOnly = searched && pushKinds, searched = searched)
+        }
+
+        // 5. kinds.
+        if (kinds != null) {
+            val cursors = Sql.batch(kinds, MAX_IN).map { chunk ->
+                val conditions = arrayListOf("tenant = ?", Sql.memberOf("kind", chunk))
+                val params = ArrayList<Any?>()
+                params.add(tenant)
+                params.addAll(chunk)
+                addTime(conditions, params)
+                TableCursor("rumors INDEXED BY rumors_kind", conditions, params)
+            }
+            return ScanPlan(null, cursors, sqlOnly = searched, searched = searched)
+        }
+
+        // 6. fallback — the whole tenant, newest-first. `(tenant)` is `(tenant,
+        //    seq)`, so this is a backwards walk of one contiguous index range.
+        val conditions = arrayListOf("tenant = ?")
+        val params = ArrayList<Any?>()
+        params.add(tenant)
+        addTime(conditions, params)
+
+        return ScanPlan(
+            null,
+            listOf(TableCursor("rumors INDEXED BY rumors_tenant", conditions, params)),
+            sqlOnly = searched,
+            searched = searched,
+        )
+    }
+
+    /**
+     * Plan a filter as one or more MATCH expressions, or null when the index
+     * can't drive it.
+     *
+     * Every constraint becomes a group of alternatives — the tag values, the
+     * authors — and the groups are ANDed. FTS5 evaluates that by merging the
+     * groups' doclists, so the cost is the length of the *shortest* group rather
+     * than the product of them all.
+     */
+    private fun planFts(
+        tenant: String,
+        prefix: String?,
+        filter: ParsedFilter,
+        search: String?,
+        time: TimeRange,
+    ): ScanPlan? {
+        val groups = ArrayList<List<String>>()
+
+        for (tag in filter.tags) {
+            groups.add(tag.values.map { tagToken(prefix!!, tag.name, it) })
+        }
+
+        // A search whose keywords are all negations has nothing for FTS5 to
+        // match against — there is no way to say "every row except these" — so
+        // it is left to the in-memory matcher, as is any search at all when the
+        // content index isn't maintained.
+        val searched = filter.searchKeywords == null || search != null
+
+        val authors = filter.authors
+        // Authors join the tags in the index, where they are one more posting
+        // list to intersect. Without a tag to intersect *with*, they are better
+        // served by their own b-tree, so they're only added here when there is
+        // one — and only while there are few enough of them to be worth merging.
+        val inIndex = groups.isNotEmpty() && authors != null && authors.size <= MAX_AUTHOR_TERMS
+
+        if (inIndex) {
+            groups.add(authors!!.map { "${prefix!!}:_p:${part(it)}" })
+        }
+
+        if (groups.isEmpty() && search == null) return null
+
+        // Whatever the index isn't carrying is tested on the rows it finds,
+        // which is what the rumors table is for. Every condition still ends up
+        // in SQL — it just costs a column read on a row already fetched instead
+        // of a posting list intersection over the whole store.
+        val conditions = ArrayList<String>()
+        val params = ArrayList<Any?>()
+
+        // A token carries its tenant; the content index does not, so a
+        // keyword-only scan is the one that has to say so.
+        if (groups.isEmpty()) {
+            conditions.add("r.tenant = ?")
+            params.add(tenant)
+        }
+
+        val kinds = filter.kinds
+        if (kinds != null && kinds.size <= MAX_PUSHDOWN) {
+            conditions.add(Sql.memberOf("r.kind", kinds))
+            params.addAll(kinds)
+        }
+
+        if (!inIndex && authors != null && authors.size <= MAX_PUSHDOWN) {
+            conditions.add(Sql.memberOf("r.pubkey", authors))
+            params.addAll(authors)
+        }
+
+        // Timestamps the rowid encoding had to clamp are re-checked exactly
+        // here, rather than in memory.
+        if (!time.exact) {
+            filter.since?.let {
+                conditions.add("r.created_at >= ?")
+                params.add(it)
+            }
+            filter.until?.let {
+                conditions.add("r.created_at <= ?")
+                params.add(it)
+            }
+        }
+
+        val complete = (kinds == null || kinds.size <= MAX_PUSHDOWN) &&
+            (inIndex || authors == null || authors.size <= MAX_PUSHDOWN)
+
+        // The longest group is the one worth splitting: every cursor carries
+        // every other group in full, so splitting a short one would repeat more
+        // work.
+        val longest = groups.maxByOrNull { it.size } ?: emptyList()
+        val chunks = if (longest.size > MAX_OR) Sql.batch(longest, MAX_OR) else listOf(longest)
+
+        val cursors = chunks.map { chunk ->
+            FtsCursor(
+                match = if (groups.isEmpty()) {
+                    null
+                } else {
+                    matchExpr(groups.map { if (it === longest) chunk else it })
+                },
+                search = search,
+                min = time.min,
+                max = time.max,
+                where = conditions,
+                params = params,
+            )
+        }
+
+        return ScanPlan(null, cursors, sqlOnly = complete && searched, searched = searched)
+    }
+
+    /** How many rumors in [tenant] match. */
+    fun count(tenant: String, filters: List<JSONObject>): Count = lock.withLock {
+        // A single complete plan is counted inside the index: no rows returned,
+        // no rumor bodies read. One rumor is one row of the token index however
+        // many of its tags matched, so nothing has to be de-duplicated.
+        if (filters.size == 1) {
+            val filter = ParsedFilter(filters[0])
+            if (filter.neverMatch) return Count(0)
+
+            if (filter.limit == null) {
+                val prefix = tenantPrefix(tenant)
+                if (filter.tags.isNotEmpty() && prefix == null) return Count(0)
+
+                val plan = planScan(tenant, prefix, filter)
+
+                if (plan.sqlOnly && plan.ids == null && plan.cursors.size == 1) {
+                    val cursor = plan.cursors[0]
+                    val params = ArrayList<Any?>()
+
+                    val sql = when (cursor) {
+                        is FtsCursor -> {
+                            val scan = ftsScan(cursor, null)
+                            params.addAll(scan.params)
+
+                            // With nothing left to test, the index knows the
+                            // answer by itself. Otherwise the rows still have to
+                            // be visited, but only their columns, never their
+                            // bodies.
+                            if (cursor.where.isNotEmpty()) {
+                                params.addAll(cursor.params)
+                                """SELECT COUNT(*) AS count FROM ${scan.driver}
+                                    CROSS JOIN rumors r ON r.seq = ${scan.driver}.rowid${
+                                    Sql.where(scan.conditions + cursor.where)
+                                }"""
+                            } else {
+                                "SELECT COUNT(*) AS count FROM ${scan.driver}${Sql.where(scan.conditions)}"
+                            }
+                        }
+
+                        is TableCursor -> {
+                            params.addAll(cursor.params)
+                            "SELECT COUNT(*) AS count FROM ${cursor.from}${Sql.where(cursor.where)}"
+                        }
+                    }
+
+                    val count = db.query(sql.collapseWhitespace(), params) { it.long(0) }.firstOrNull() ?: 0L
+                    return Count(count)
+                }
+            }
+        }
+
+        Count(query(tenant, filters).size.toLong())
+    }
+
+    /** Remove every rumor in [tenant] matching the filters. */
+    fun remove(tenant: String, filters: List<JSONObject>) = lock.withLock {
+        val rumors = query(tenant, filters)
+        if (rumors.isEmpty()) return@withLock
+
+        transaction {
+            val seqs = ArrayList<Long>()
+
+            for (chunk in Sql.batch(rumors.map { it.id }, MAX_PARAMS - 1)) {
+                seqs.addAll(
+                    db.query(
+                        "SELECT seq FROM rumors WHERE tenant = ? AND ${Sql.memberOf("id", chunk)}",
+                        listOf(tenant) + chunk,
+                    ) { it.long(0) },
+                )
+            }
+
+            deleteRumors(tenant, seqs)
+        }
+    }
+
+    // ── KV ────────────────────────────────────────────────────────────────────
+    //
+    // A small key/value store for everything that isn't an event: sync cursors,
+    // folded state, settings. Values are opaque JSON TEXT here — the WebView
+    // serializes and parses them, so the bridge never has to agree with
+    // JavaScript about how a value round-trips.
+
+    /** The stored JSON text for [key], or null if the key was never set. */
+    fun kvGet(key: String): String? = lock.withLock {
+        db.query("SELECT value FROM kv WHERE key = ?", listOf(key)) { it.text(0) }.firstOrNull()
+    }
+
+    fun kvSet(key: String, json: String) = lock.withLock {
+        transaction {
+            db.run(
+                """INSERT INTO kv (key, value) VALUES (?, ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value""".collapseWhitespace(),
+                listOf(key, json),
+            )
+        }
+    }
+
+    fun kvDelete(key: String) = lock.withLock {
+        transaction { db.run("DELETE FROM kv WHERE key = ?", listOf(key)) }
+    }
+
+    /**
+     * Every key currently set, restricted to those starting with [prefix]. The
+     * order is SQLite's `BINARY` collation (UTF-8 bytes).
+     */
+    fun kvKeys(prefix: String?): List<String> = lock.withLock {
+        val keys = if (prefix.isNullOrEmpty()) {
+            db.query("SELECT key FROM kv ORDER BY key") { it.text(0) }
+        } else {
+            val upper = prefixUpperBound(prefix)
+            if (upper == null) {
+                db.query("SELECT key FROM kv WHERE key >= ? ORDER BY key", listOf(prefix)) { it.text(0) }
+            } else {
+                db.query(
+                    "SELECT key FROM kv WHERE key >= ? AND key < ? ORDER BY key",
+                    listOf(prefix, upper),
+                ) { it.text(0) }
+            }
+        }
+
+        // The range is a scan hint, not the contract: SQLite compares UTF-8
+        // bytes and the WebView's other adapter compares UTF-16 code units, so
+        // a range can admit a key that doesn't actually start with the prefix.
+        if (prefix.isNullOrEmpty()) keys else keys.filter { it.startsWith(prefix) }
+    }
+
+    // ── Driver plumbing ───────────────────────────────────────────────────────
+
+    /**
+     * Run [body] inside a transaction. Callers already hold [lock], which is
+     * what keeps a second writer from splicing statements into this one —
+     * SQLite has no nested transactions, so an interleaved write would be
+     * committed, or rolled back, with someone else's.
+     */
+    private inline fun <T> transaction(body: () -> T): T {
+        db.run("BEGIN IMMEDIATE")
+        return try {
+            val value = body()
+            db.run("COMMIT")
+            value
+        } catch (error: Throwable) {
+            runCatching { db.run("ROLLBACK") }
+            throw error
+        }
+    }
+
+    private class Stored(val id: String, val seq: Long, val createdAt: Long)
+
+    private class FtsScan(
+        val driver: String,
+        val conditions: List<String>,
+        val params: List<Any?>,
+    )
+
+    companion object {
+        /** Bits of the rowid reserved for the per-second sequence number. */
+        private const val SEQ_BITS = 20
+
+        /** Rowids per second: how many rumors may share one `created_at`. */
+        private const val SEQ_SPACE = 1L shl SEQ_BITS
+
+        /**
+         * Largest `created_at` the rowid encoding can carry (2106-02-07). Beyond
+         * this the timestamp is clamped, which keeps the rowid small at the cost
+         * of ordering *among* absurdly-dated rumors; plans touching such a rumor
+         * fall back to matching it in memory, so results stay correct either way.
+         */
+        private const val MAX_TIME = 0xffffffffL
+
+        /** How many candidate rows a paged scan reads per round trip. */
+        private const val CHUNK_SIZE = 512
+
+        /**
+         * Upper bound on bound parameters per statement. SQLite's own limit is
+         * 32766 on modern builds but only 999 on older ones, so statements are
+         * split well below the floor.
+         */
+        private const val MAX_PARAMS = 900
+
+        /** Upper bound on the rows one page of a scan may read. */
+        private const val MAX_PAGE = 10_000
+
+        /** Longest `IN (…)` list driving a scan before it is split. */
+        private const val MAX_IN = 500
+
+        /** Most terms one MATCH expression may `OR` together. */
+        private const val MAX_OR = 500
+
+        /**
+         * Most authors worth folding into the MATCH alongside a tag, rather than
+         * testing on the rows the tag finds. Measured crossover on a 20k store:
+         * one author in the index is 8× faster than the pushdown, sixteen is a
+         * wash, and a hundred is 5× slower.
+         */
+        private const val MAX_AUTHOR_TERMS = 16
+
+        /** Longest value list used to *filter* (rather than drive) a scan. */
+        private const val MAX_PUSHDOWN = 100
+
+        /** Newest-first; ties broken by smaller id first (NIP-01). */
+        private val NEWEST_FIRST = Comparator<Rumor> { a, b ->
+            if (a.createdAt != b.createdAt) b.createdAt.compareTo(a.createdAt) else a.id.compareTo(b.id)
+        }
+
+        /**
+         * Tokens are only safe to embed verbatim when the tokenizer can't split
+         * or fold them: lowercase ASCII alphanumerics, and nothing else.
+         */
+        private val VERBATIM = Regex("^[0-9a-z]+$")
+
+        /** Lowercase hex digits, so escaping never depends on the default locale. */
+        private val HEX = "0123456789abcdef".toCharArray()
+
+        /** The first rowid belonging to a timestamp, clamped to the encodable range. */
+        private fun bucket(createdAt: Long): Long =
+            createdAt.coerceIn(0L, MAX_TIME) * SEQ_SPACE
+
+        /**
+         * Per NIP-01, `a` is "newer" than `b` (same coordinate) when its
+         * created_at is greater, or — on a tie — its id is lexicographically
+         * smaller.
+         */
+        private fun isNewer(aId: String, aTime: Long, bId: String, bTime: Long): Boolean {
+            if (aTime > bTime) return true
+            if (aTime < bTime) return false
+            return aId < bId
+        }
+
+        /**
+         * Encode one part of a tag token.
+         *
+         * Verbatim where possible — rumor ids, pubkeys and Armada's tag names
+         * (`channel`, `stream`, `peer`) already qualify, and they're the values
+         * worth optimizing for. Anything else is hex-escaped, which no tokenizer
+         * will split and no case folding will alter. The two forms can't be
+         * confused: an escaped value starts with `_`, which a verbatim one can
+         * never contain.
+         */
+        internal fun part(value: String): String {
+            if (VERBATIM.matches(value)) return value
+
+            val hex = StringBuilder("_")
+            for (byte in value.toByteArray(Charsets.UTF_8)) {
+                val octet = byte.toInt() and 0xff
+                hex.append(HEX[octet ushr 4]).append(HEX[octet and 0x0f])
+            }
+            return hex.toString()
+        }
+
+        /**
+         * The index token for a tag within a tenant, e.g. `t1:e:<id>` or
+         * `t1:t:_c3a9`.
+         *
+         * The tenant prefix can never be mistaken for a tag name, and the
+         * reserved `_p:` author prefix can never be produced by a user's tag: an
+         * escaped name is `_` followed by an EVEN number of hex digits, and `p`
+         * is not a hex digit at all.
+         */
+        internal fun tagToken(prefix: String, name: String, value: String): String =
+            "$prefix:${part(name)}:${part(value)}"
+
+        /**
+         * Build an FTS5 MATCH expression: each group's tokens are alternatives,
+         * and the groups are required together.
+         *
+         * A group with one member is written as a bare phrase rather than a
+         * parenthesized alternation, which is the same query with less for
+         * FTS5's parser to chew through — and single-value groups are the common
+         * case.
+         */
+        private fun matchExpr(groups: List<List<String>>): String = groups.joinToString(" AND ") { group ->
+            if (group.size == 1) phrase(group[0]) else "(${group.joinToString(" OR ") { phrase(it) }})"
+        }
+
+        /**
+         * A token as an FTS5 phrase. Quoting is what keeps a keyword like `OR` or
+         * `(` from being read as query syntax; embedded quotes are doubled.
+         */
+        private fun phrase(token: String): String = "\"${token.replace("\"", "\"\"")}\""
+
+        /** The `kind:pubkey:d` coordinate of a replaceable or addressable rumor. */
+        internal fun coordOf(rumor: Rumor): String {
+            val d = if (Kinds.addressable(rumor.kind)) rumor.tagValue("d") ?: "" else ""
+            return "${rumor.kind}:${rumor.pubkey}:$d"
+        }
+
+        /**
+         * The exclusive upper bound of the key range starting with [prefix], or
+         * null when there isn't one — an empty prefix, or one ending in the
+         * maximal code unit, both of which are open-ended.
+         */
+        internal fun prefixUpperBound(prefix: String): String? {
+            if (prefix.isEmpty()) return null
+            val last = prefix[prefix.length - 1]
+            if (last.code == 0xffff) return null
+            return prefix.dropLast(1) + (last + 1)
+        }
+    }
+
+    /**
+     * The rowid window a filter's `since`/`until` bounds describe, and whether
+     * that window is exact — it isn't when a bound falls outside the range the
+     * rowid encoding can represent, in which case the rumors in the clamped
+     * bucket have to be re-checked against `created_at`.
+     */
+    private class TimeRange(val min: Long?, val max: Long?, val exact: Boolean)
+
+    private fun timeRange(filter: ParsedFilter): TimeRange {
+        var exact = true
+        var min: Long? = null
+        var max: Long? = null
+
+        filter.since?.let {
+            if (it > MAX_TIME || it < 0) exact = false
+            min = bucket(it)
+        }
+
+        filter.until?.let {
+            if (it > MAX_TIME || it < 0) exact = false
+            max = bucket(it) + SEQ_SPACE - 1
+        }
+
+        return TimeRange(min, max, exact)
+    }
+}
+
+/** A row a scan produced: the rumor, and the rowid a later page resumes from. */
+private class Candidate(val seq: Long, val rumor: Rumor)
+
+/**
+ * One scan: either a full-text match over a window of rowids, or a b-tree scan
+ * over the rumors table.
+ */
+private sealed class ScanCursor
+
+/**
+ * A full-text scan, bounded by the filter's time range: a token expression, a
+ * NIP-50 keyword expression, or both, plus whatever conditions are left for the
+ * rumors rows it finds.
+ */
+private class FtsCursor(
+    val match: String?,
+    val search: String?,
+    val min: Long?,
+    val max: Long?,
+    /** Conditions on the matched rumors, as `r.column …`. */
+    val where: List<String>,
+    val params: List<Any?>,
+) : ScanCursor()
+
+/** A scan of the rumors table with a forced index. */
+private class TableCursor(
+    val from: String,
+    val where: List<String>,
+    val params: List<Any?>,
+) : ScanCursor()
+
+/** A planned scan: how to fetch a single filter's rumors. */
+private class ScanPlan(
+    /** For ids plans: fetch these keys directly instead of scanning. */
+    val ids: List<String>?,
+    /**
+     * Normally one scan. A filter with a value list too long for a single MATCH
+     * — or for one statement's parameter budget — is split into several, merged
+     * by the caller.
+     */
+    val cursors: List<ScanCursor>,
+    /** Whether the cursors express the filter completely. */
+    val sqlOnly: Boolean,
+    /** Whether the plan applies the filter's NIP-50 keywords itself. */
+    val searched: Boolean,
+)
+
+/**
+ * Default tag index policy: index every tag with a short name and a non-empty
+ * value under 200 chars. The value length cap is what keeps blobs (a serialized
+ * seal, an embedded proof) out of the index.
+ */
+internal fun defaultIndexTags(rumor: Rumor): List<List<String?>> = rumor.tags.filter { row ->
+    val name = row.getOrNull(0)
+    val value = row.getOrNull(1)
+    !name.isNullOrEmpty() && name.length <= 20 && !value.isNullOrEmpty() && value.length < 200
+}

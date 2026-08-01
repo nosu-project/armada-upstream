@@ -23,6 +23,7 @@ import { isDmSynced, markDmSynced } from "@/lib/dmSynced";
 import { markOwnWebPushEvent } from "@/lib/webPushState";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** NIP-04 encrypted direct message kind. */
 export const KIND_DM = 4;
@@ -39,7 +40,7 @@ const PULL_MIN_INTERVAL_MS = 30_000;
 export const DM_PAGE_SIZE = 500;
 
 /** The other participant of a DM event, from the viewer's perspective. */
-export function dmCounterparty(event: NostrEvent, self: string): string | undefined {
+export function dmCounterparty(event: NostrRumor, self: string): string | undefined {
   if (event.pubkey !== self) return event.pubkey; // received: peer is the sender
   // sent: peer is the first `p` tag
   return event.tags.find(([name]) => name === "p")?.[1];
@@ -75,7 +76,7 @@ export type RelayCursors = Record<string, RelayCursor>;
  * timestamp can skip ranges on a dense relay when a sparse relay returns much
  * older events. Each relay advances independently.
  */
-export function nextDirectionCursor(events: NostrEvent[]): DirectionCursor {
+export function nextDirectionCursor(events: NostrRumor[]): DirectionCursor {
   if (events.length < DM_PAGE_SIZE) return null;
   const oldest = Math.min(...events.map((e) => e.created_at));
   return Number.isFinite(oldest) ? oldest - 1 : null;
@@ -172,8 +173,8 @@ export function useDMSupport(): boolean {
  * a flaky connection — that doesn't mean conversations are gone. kind-4 events
  * are immutable, so a re-seen id is identical and last-write is harmless.
  */
-export function mergeDmEvents(prev: NostrEvent[], incoming: NostrEvent[]): NostrEvent[] {
-  const byId = new Map<string, NostrEvent>();
+export function mergeDmEvents(prev: NostrRumor[], incoming: NostrRumor[]): NostrRumor[] {
+  const byId = new Map<string, NostrRumor>();
   for (const e of prev) byId.set(e.id, e);
   for (const e of incoming) byId.set(e.id, e);
   return [...byId.values()];
@@ -214,7 +215,7 @@ export function mergeDmThread(prev: DecryptedDM[], incoming: DecryptedDM[]): Dec
  *
  * Returned oldest-first (render order).
  */
-export function buildThreadPlaceholders(events: NostrEvent[]): DecryptedDM[] {
+export function buildThreadPlaceholders(events: NostrRumor[]): DecryptedDM[] {
   const rows: DecryptedDM[] = [];
   for (const event of events) {
     const base = { id: event.id, pubkey: event.pubkey, created_at: event.created_at };
@@ -259,7 +260,7 @@ function patchRow(
  * too (they're already plaintext from `buildThreadPlaceholders`).
  */
 export async function decryptThreadRows(
-  events: NostrEvent[],
+  events: NostrRumor[],
   self: string,
   peer: string,
   decrypt: DecryptFn,
@@ -322,7 +323,7 @@ export async function decryptThreadRows(
  * seed) or in tests. Returned oldest-first; failures stay placeholders.
  */
 export async function buildThreadRows(
-  events: NostrEvent[],
+  events: NostrRumor[],
   self: string,
   peer: string,
   decrypt: DecryptFn,
@@ -352,7 +353,7 @@ async function queryRelayDmPage(
   cursor: RelayCursor | undefined,
   follows: string[],
   signal: AbortSignal,
-): Promise<{ url: string; events: NostrEvent[]; cursor: RelayCursor }> {
+): Promise<{ url: string; events: NostrRumor[]; cursor: RelayCursor }> {
   const filters = buildDmFilters(self, cursor, follows);
   if (filters.length === 0) {
     return { url, events: [], cursor: { sent: null, received: null } };
@@ -388,8 +389,8 @@ async function queryRelaysDmPage(
   cursors: RelayCursors,
   follows: string[],
   signal: AbortSignal,
-): Promise<{ events: NostrEvent[]; cursors: RelayCursors }> {
-  const byId = new Map<string, NostrEvent>();
+): Promise<{ events: NostrRumor[]; cursors: RelayCursors }> {
+  const byId = new Map<string, NostrRumor>();
   const nextCursors: RelayCursors = {};
 
   const results = await Promise.allSettled(
@@ -429,8 +430,8 @@ async function queryRelaysMerged(
   relays: string[],
   filters: NostrFilter[],
   signal: AbortSignal,
-): Promise<NostrEvent[]> {
-  const byId = new Map<string, NostrEvent>();
+): Promise<NostrRumor[]> {
+  const byId = new Map<string, NostrRumor>();
   const results = await Promise.allSettled(
     relays.map((url) => nostr.relay(url).query(filters, { signal })),
   );
@@ -513,7 +514,7 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.pubkey, relayKey, followsKey, queryClient]);
 
-  const query = useQuery<NostrEvent[]>({
+  const query = useQuery<NostrRumor[]>({
     queryKey,
     enabled: !!user?.pubkey,
     queryFn: async ({ signal }) => {
@@ -535,7 +536,7 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
           ? [{ kinds: [KIND_DM], authors: scopedFollows, "#p": [pubkey], limit: DM_PAGE_SIZE }]
           : []),
       ]);
-      const prev = queryClient.getQueryData<NostrEvent[]>(queryKey) ?? [];
+      const prev = queryClient.getQueryData<NostrRumor[]>(queryKey) ?? [];
       const local = mergeDmEvents(prev, cachedEvents);
 
       // 2. THROTTLED BACKGROUND refresh: query EACH relay individually (not a
@@ -563,7 +564,7 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
           // relays hold, so later loads may trust it and render store-first.
           markDmSynced("nip04", pubkey);
           if (events.length === 0) return;
-          queryClient.setQueryData<NostrEvent[]>(queryKey, (old = []) => mergeDmEvents(old, events));
+          queryClient.setQueryData<NostrRumor[]>(queryKey, (old = []) => mergeDmEvents(old, events));
         } catch {
           // Best-effort; the local-first list already rendered. Deliberately
           // NOT marked synced — a timeout or offline start must not latch the
@@ -578,7 +579,7 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
       // the pre-pull `local` here would clobber that write.
       if (firstSync) {
         await pull;
-        return mergeDmEvents(local, queryClient.getQueryData<NostrEvent[]>(queryKey) ?? []);
+        return mergeDmEvents(local, queryClient.getQueryData<NostrRumor[]>(queryKey) ?? []);
       }
 
       return local;
@@ -626,7 +627,7 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
       setHasMore(more);
       if (events.length === 0) return 0;
       let added = 0;
-      queryClient.setQueryData<NostrEvent[]>(queryKey, (old = []) => {
+      queryClient.setQueryData<NostrRumor[]>(queryKey, (old = []) => {
         const merged = mergeDmEvents(old, events);
         added = merged.length - old.length;
         return merged;
@@ -662,7 +663,7 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
   // user; only a true cold start (no cache + network in flight) actually waits.
   const conversations = useMemo(() => {
     if (!muteReady) return [];
-    const byPeer = new Map<string, { peer: string; latest: NostrEvent; mine: boolean }>();
+    const byPeer = new Map<string, { peer: string; latest: NostrRumor; mine: boolean }>();
     for (const event of query.data ?? []) {
       const peer = dmCounterparty(event, self);
       if (!peer || mutedPubkeys.has(peer)) continue;

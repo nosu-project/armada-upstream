@@ -6,7 +6,7 @@ import { useCommunityEntry2, useUpdateCommunityList2 } from "@/concord-v2/hooks/
 import { citationFor, useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toJoinMaterial } from "@/concord-v2/lib/communityList";
-import { controlGroups, currentControlGroup, foldControlState, openControlEditions } from "@/concord-v2/lib/control";
+import { currentControlGroup, foldControlState, openControlEditions } from "@/concord-v2/lib/control";
 import { sweepControl } from "@/concord-v2/lib/planeSync";
 import { channelRekeyGroupKey, controlGroupKey, guestbookGroupKey } from "@/concord-v2/lib/derive";
 import {
@@ -38,8 +38,8 @@ import {
 } from "@/concord-v2/lib/rekey";
 import { citationSatisfied } from "@/concord-v2/lib/control";
 import { hasPermission, Permissions } from "@/concord-v2/lib/roles";
-import { queryByStreams, readStreamCursor, updateStreamCursor, writeOpened } from "@/concord-v2/lib/rumorStore";
-import { openWrap, rewrapSeal, sealRumor, wrapSeal, type OpenedEvent } from "@/concord-v2/lib/stream";
+import { queryPlane, queryRekeyRounds, readControlSnapshot, readStoredSeal, readStreamCursor, updateStreamCursor, writeOpened } from "@/concord-v2/lib/rumorStore";
+import { openWrap, rewrapSeal, sealRumor, wrapSeal, type OpenedEvent, type OpenedWireEvent } from "@/concord-v2/lib/stream";
 import { buildRefreshedBundleEvents, type InviteBundle } from "@/concord-v2/lib/invite";
 import { fetchInviteList } from "@/concord-v2/hooks/useInvites2";
 import { toast } from "@/hooks/useToast";
@@ -194,7 +194,7 @@ export function useRekeyWatch2(community: CommunityV2 | undefined): { stranded: 
       );
       // Decrypt the stream layer once (the inner blob stays pairwise-encrypted);
       // persist the opened events so a seen rekey round is never refetched.
-      const fresh: OpenedEvent[] = [];
+      const fresh: OpenedWireEvent[] = [];
       for (const wrap of results.flat()) {
         try {
           fresh.push(openWrap(wrap, address));
@@ -202,8 +202,14 @@ export function useRekeyWatch2(community: CommunityV2 | undefined): { stranded: 
           // not this address / malformed
         }
       }
-      if (fresh.length > 0) writeOpened(fresh);
-      const stored = await queryByStreams([address.pk]);
+      if (fresh.length > 0) writeOpened(community!.idHex, fresh, "rekey");
+      // The stored rounds for this rotation, named the way the ROUND names
+      // itself (`scope` + `newepoch`) rather than by the address it arrived
+      // at — which is `f(root, scope, epoch)` and so had to be stored to be
+      // matched. Both identify the same rounds; only one costs a stored field.
+      const stored = await queryRekeyRounds(community!.idHex, [
+        { scopeIdHex: bytesToHex(community!.id), newEpoch: nextEpoch },
+      ]);
       const byId = new Map<string, OpenedEvent>();
       for (const e of stored) byId.set(e.rumorId, e);
       for (const e of fresh) byId.set(e.rumorId, e);
@@ -522,7 +528,7 @@ export function useChannelRekeyWatch2(community: CommunityV2 | undefined) {
           }
         }),
       );
-      const fresh: OpenedEvent[] = [];
+      const fresh: OpenedWireEvent[] = [];
       for (const wrap of results.flat()) {
         const address = byPk.get(wrap.pubkey);
         if (!address) continue;
@@ -532,8 +538,17 @@ export function useChannelRekeyWatch2(community: CommunityV2 | undefined) {
           // not this address / malformed
         }
       }
-      if (fresh.length > 0) writeOpened(fresh);
-      const stored = await queryByStreams(authors);
+      if (fresh.length > 0) writeOpened(community!.idHex, fresh, "rekey");
+      // Per watched (channel, next-epoch) — the held-root dimension that
+      // multiplies the ADDRESSES collapses here, because a round's rumor names
+      // its scope and epoch but not the root it was sealed under.
+      const stored = await queryRekeyRounds(
+        community!.idHex,
+        community!.privateChannels.map((ch) => ({
+          scopeIdHex: bytesToHex(ch.id),
+          newEpoch: ch.epoch + 1n,
+        })),
+      );
       const byId = new Map<string, OpenedEvent>();
       for (const e of stored) byId.set(e.rumorId, e);
       for (const e of fresh) byId.set(e.rumorId, e);
@@ -718,10 +733,10 @@ export function useRefound2(community: CommunityV2 | undefined) {
       if (short) {
         throw new Error("This community's history is being flooded and couldn't be read in full; rotation aborted so nothing is lost.");
       }
-      const stored = await queryByStreams(controlGroups(community).map((g) => g.pk));
+      const stored = await queryPlane(community.idHex, "control");
       const verifySnap =
         community.rootEpoch > 0n
-          ? new Set(stored.filter((ev) => ev.streamPk === currentControlGroup(community).pk).map((ev) => ev.rumorId))
+          ? await readControlSnapshot(community.idHex, currentControlGroup(community).pk)
           : undefined;
       const folded = foldControlState(openControlEditions(stored), community.id, community.owner, rendered.heads, verifySnap);
       if (folded.incomplete.length > 0) {
@@ -815,9 +830,19 @@ export function useRefound2(community: CommunityV2 | undefined) {
       // orphaning them under a sibling key (§3 idempotency).
       const newControl = controlGroupKey(newRoot, community.id, newEpoch);
       for (const head of folded.headEditions.values()) {
+        // A head folded from the opened-event store carries no seal on the
+        // event itself (the store keeps seals in KV, not in the rumor), so
+        // fall back to a keyed read. A head we cannot re-wrap is a head that
+        // vanishes from the new epoch, which §3's fold-all-or-abort forbids —
+        // so a missing seal aborts rather than skipping the entity.
+        const seal =
+          head.opened.seal ?? (await readStoredSeal(community.idHex, head.opened.rumorId));
+        if (!seal) {
+          throw new Error("Missing the signed history needed to carry this community's state into the new epoch; nothing was lost, try again after a resync.");
+        }
         let rewrapped: NostrEvent;
         try {
-          rewrapped = rewrapSeal(head.opened.seal, newControl);
+          rewrapped = rewrapSeal(seal, newControl);
         } catch {
           // An encrypted-seal head can't re-wrap; control heads are plaintext
           // by construction, so this is defensive only.

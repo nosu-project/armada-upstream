@@ -167,6 +167,7 @@ describe("buildWireSpec", () => {
           relays: ["wss://c.relay"],
           idHex: "a".repeat(64),
           groups: [{ pk: "ctlA1" } as unknown as GroupKey, { pk: "ctlA2" } as unknown as GroupKey],
+          refounded: false,
         },
       ],
     });
@@ -187,7 +188,12 @@ describe("buildWireSpec", () => {
       concord1: [],
       concord2: [{ relays: ["wss://c.relay"], channel: chanA, communityIdHex: "commA" }],
       concord2Control: [
-        { relays: ["wss://c.relay"], idHex: "a".repeat(64), groups: [{ pk: "ctlA1" } as unknown as GroupKey] },
+        {
+          relays: ["wss://c.relay"],
+          idHex: "a".repeat(64),
+          groups: [{ pk: "ctlA1" } as unknown as GroupKey],
+          refounded: false,
+        },
       ],
     });
 

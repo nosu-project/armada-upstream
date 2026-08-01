@@ -1,9 +1,10 @@
 // @vitest-environment node
 /**
  * SQLite-specific tests: the parts of the adapter the shared conformance suite
- * (ArmadaDB.test.ts) can't see — the query planner's index choices, its paged
- * and split scans, the FTS5 search paths, and the invariant that no index row
- * (tag, coordinate or full-text) outlives the rumor it describes.
+ * (ArmadaDB.test.ts) can't see — the time-encoded rowid, the token index the
+ * planner drives tag queries off, its paged and split scans, the NIP-50 search
+ * paths, and the invariant that no index row (token, coordinate or full-text)
+ * outlives the rumor it describes.
  */
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
@@ -79,8 +80,46 @@ function rows(driver: RecordingDriver, sql: string): SqlRow[] {
   return driver.db.prepare(sql).all() as SqlRow[];
 }
 
+describe("SqliteArmadaDB — rowid encoding", () => {
+  it("stores rumors at a rowid that orders by created_at", async () => {
+    const { db, driver } = makeDb();
+    await db.tenant("t").event(rumor({ id: "older", created_at: 100 }));
+    await db.tenant("t").event(rumor({ id: "newer", created_at: 200 }));
+
+    const stored = rows(driver, "SELECT id, seq, created_at FROM rumors ORDER BY seq");
+
+    expect(stored.map((row) => row.id)).toEqual(["older", "newer"]);
+    // created_at × 2²⁰, so a scan of the table IS a scan by time.
+    expect(stored.map((row) => Number(row.seq))).toEqual([100 * 2 ** 20, 200 * 2 ** 20]);
+  });
+
+  it("gives rumors sharing a timestamp adjacent rowids", async () => {
+    const { db, driver } = makeDb();
+    const store = db.tenant("t");
+    await store.event(rumor({ id: "a", created_at: 100 }));
+    await store.event(rumor({ id: "b", created_at: 100 }));
+
+    expect(rows(driver, "SELECT seq FROM rumors ORDER BY seq").map((row) => Number(row.seq)))
+      .toEqual([100 * 2 ** 20, 100 * 2 ** 20 + 1]);
+  });
+
+  it("keeps time bounds exact for timestamps the encoding must clamp", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+    // Beyond 2106, so every such rumor lands in the same clamped bucket and
+    // only the `created_at` re-check can tell them apart.
+    const early = rumor({ id: "early", created_at: 0x100000000 });
+    const late = rumor({ id: "late", created_at: 0x200000000 });
+    await store.event(early);
+    await store.event(late);
+
+    expect(await store.query([{ since: 0x180000000 }])).toEqual([late]);
+    expect(await store.query([{ until: 0x180000000 }])).toEqual([early]);
+  });
+});
+
 describe("SqliteArmadaDB — query plans", () => {
-  it("drives a tag query off the tag index, never scanning rumors", async () => {
+  it("drives a tag query off the token index, never scanning rumors", async () => {
     const { db, driver } = makeDb();
     await db.tenant("t").event(rumor({ tags: [["channel", "c1"]] }));
 
@@ -88,8 +127,124 @@ describe("SqliteArmadaDB — query plans", () => {
     await db.tenant("t").query([{ "#channel": ["c1"], kinds: [1] }]);
 
     const plans = driver.plans();
-    expect(plans.some((detail) => detail.includes("rumor_tags"))).toBe(true);
-    expect(plans.some((detail) => /SCAN rumor/.test(detail))).toBe(false);
+    expect(plans.some((detail) => detail.includes("rumor_tags_fts"))).toBe(true);
+    // The rumors table is reached by rowid, one seek per match.
+    expect(plans.some((detail) => /SCAN r\b/.test(detail))).toBe(false);
+  });
+
+  it("keeps the index driving when conditions are left for the rumors table", async () => {
+    const { db, driver } = makeDb();
+    const store = db.tenant("t");
+    await store.event(rumor({ kind: 1, content: "treasure map", tags: [["channel", "c1"]] }));
+
+    for (const filters of [
+      [{ "#channel": ["c1"], kinds: [1], limit: 10 }],
+      [{ search: "treasure", limit: 10 }],
+    ]) {
+      driver.selects.length = 0;
+      await store.query(filters);
+
+      const plans = driver.plans();
+      // Left to itself, SQLite drives from `rumors` and probes the FTS index
+      // once per row — which re-runs the MATCH per probe and sorts the result.
+      // Measured at 20k rumors, that is ~2900× slower, so the join order is
+      // forced and this is what checks it stayed forced.
+      expect(plans.some((detail) => /SCAN (rumor_tags_fts|rumors_fts)/.test(detail))).toBe(true);
+      expect(plans.some((detail) => detail.includes("TEMP B-TREE"))).toBe(false);
+      expect(plans.some((detail) => /SEARCH r USING/.test(detail) && !detail.includes("INTEGER PRIMARY KEY")))
+        .toBe(false);
+    }
+  });
+
+  it("answers several tag terms with one index lookup", async () => {
+    const { db, driver } = makeDb();
+    const both = rumor({ tags: [["channel", "c1"], ["reply", "r1"]] });
+    await db.tenant("t").event(both);
+    await db.tenant("t").event(rumor({ tags: [["channel", "c1"]] }));
+
+    driver.selects.length = 0;
+    expect(await db.tenant("t").query([{ "#channel": ["c1"], "#reply": ["r1"] }])).toEqual([both]);
+
+    // One statement, one MATCH — the terms are intersected inside FTS5 rather
+    // than by driving on one and filtering by the other.
+    expect(driver.selects).toHaveLength(1);
+    expect(driver.selects[0].params[0]).toBe('"t1:channel:c1" AND "t1:reply:r1"');
+  });
+
+  it("folds an author constraint into the same match as the tags", async () => {
+    const { db, driver } = makeDb();
+    const mine = rumor({ pubkey: "alice", tags: [["channel", "c1"]] });
+    await db.tenant("t").event(mine);
+    await db.tenant("t").event(rumor({ pubkey: "bob", tags: [["channel", "c1"]] }));
+
+    driver.selects.length = 0;
+    expect(await db.tenant("t").query([{ "#channel": ["c1"], authors: ["alice"] }])).toEqual([mine]);
+
+    expect(driver.selects).toHaveLength(1);
+    expect(driver.selects[0].params[0]).toBe('"t1:channel:c1" AND "t1:_p:alice"');
+  });
+
+  it("scopes tokens to their tenant", async () => {
+    const { db, driver } = makeDb();
+    await db.tenant("a").event(rumor({ pubkey: "alice", tags: [["channel", "c1"]] }));
+    await db.tenant("b").event(rumor({ pubkey: "alice", tags: [["channel", "c1"]] }));
+
+    // The tenant leads every token, so no posting list is ever shared between
+    // two tenants — a query never walks past its own namespace.
+    expect(rows(driver, "SELECT ord, id FROM tenants")).toEqual([
+      { ord: 1, id: "a" },
+      { ord: 2, id: "b" },
+    ]);
+    expect(
+      rows(driver, `SELECT rowid FROM rumor_tags_fts WHERE rumor_tags_fts MATCH '"t1:channel:c1"'`),
+    ).toHaveLength(1);
+    expect(
+      rows(driver, `SELECT rowid FROM rumor_tags_fts WHERE rumor_tags_fts MATCH '"t2:channel:c1"'`),
+    ).toHaveLength(1);
+    expect(
+      rows(driver, `SELECT rowid FROM rumor_tags_fts WHERE rumor_tags_fts MATCH '"t3:channel:c1"'`),
+    ).toHaveLength(0);
+  });
+
+  it("names a tenant by an interned integer, not by its id", async () => {
+    const { db, driver } = makeDb();
+    // Two ids that a truncated hash could be ground into colliding, and that
+    // would be unwieldy to spell out in every token.
+    const one = `c2:${"ab".repeat(32)}`;
+    const two = `c2:${"cd".repeat(32)}`;
+    const hit = rumor({ tags: [["channel", "c1"]] });
+    await db.tenant(one).event(hit);
+    await db.tenant(two).event(rumor({ tags: [["channel", "c1"]] }));
+
+    expect(rows(driver, "SELECT ord, id FROM tenants")).toEqual([
+      { ord: 1, id: one },
+      { ord: 2, id: two },
+    ]);
+    expect(await db.tenant(one).query([{ "#channel": ["c1"] }])).toEqual([hit]);
+  });
+
+  it("finds nothing in a tenant that has never been written to", async () => {
+    const { db } = makeDb();
+    await db.tenant("a").event(rumor({ tags: [["channel", "c1"]] }));
+
+    expect(await db.tenant("unwritten").query([{ "#channel": ["c1"] }])).toEqual([]);
+    expect(await db.tenant("unwritten").count([{ "#channel": ["c1"] }])).toEqual({
+      count: 0,
+      approximate: false,
+    });
+  });
+
+  it("escapes a tag value the tokenizer would otherwise split or fold", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+    const hit = rumor({ tags: [["subject", "Hello, World!"]] });
+    await store.event(hit);
+    await store.event(rumor({ tags: [["subject", "hello"]] }));
+
+    // A verbatim token would be split on the punctuation and folded to
+    // lowercase, so `hello` would match both.
+    expect(await store.query([{ "#subject": ["Hello, World!"] }])).toEqual([hit]);
+    expect(await store.query([{ "#subject": ["hello, world!"] }])).toEqual([]);
   });
 
   it("forces the pubkey+kind index for an authors+kinds query", async () => {
@@ -102,14 +257,14 @@ describe("SqliteArmadaDB — query plans", () => {
     expect(driver.plans().some((detail) => detail.includes("rumors_pubkey_kind"))).toBe(true);
   });
 
-  it("forces the created_at index for an unconstrained query", async () => {
+  it("forces the tenant index for an unconstrained query", async () => {
     const { db, driver } = makeDb();
     await db.tenant("t").event(rumor());
 
     driver.selects.length = 0;
     await db.tenant("t").query([{ limit: 10 }]);
 
-    expect(driver.plans().some((detail) => detail.includes("rumors_created_at"))).toBe(true);
+    expect(driver.plans().some((detail) => detail.includes("rumors_tenant"))).toBe(true);
   });
 
   it("reads a single covered scan without a second key lookup", async () => {
@@ -126,32 +281,48 @@ describe("SqliteArmadaDB — query plans", () => {
 });
 
 describe("SqliteArmadaDB — scans", () => {
-  it("pages a scan that SQL can't fully express", async () => {
+  it("pages a scan whose conditions discard rows", async () => {
     const { db } = makeDb();
-    const store = db.tenant("t");
 
-    // `authors` can't filter a tag scan, so this post-filters in memory and
-    // pages by keyset — 600 candidates over a 512-row page.
+    // The content index carries no tenant, so a keyword-driven scan finds
+    // another tenant's rows and has to discard them — a page can come back
+    // short of the limit, and the scan must keep going.
     const writes: Promise<void>[] = [];
     for (let i = 0; i < 600; i++) {
-      writes.push(
-        store.event(
-          rumor({ pubkey: i % 2 === 0 ? "alice" : "bob", tags: [["channel", "c1"]] }),
-        ),
-      );
+      const store = db.tenant(i % 2 === 0 ? "mine" : "theirs");
+      writes.push(store.event(rumor({ content: `shared word ${i}` })));
     }
     await Promise.all(writes);
 
-    const got = await store.query([{ "#channel": ["c1"], authors: ["alice"] }]);
+    const got = await db.tenant("mine").query([{ search: "shared" }]);
 
     expect(got).toHaveLength(300);
-    expect(got.every((r) => r.pubkey === "alice")).toBe(true);
-    // Newest first, with no duplicates across pages.
     expect(new Set(got.map((r) => r.id)).size).toBe(300);
     expect(got[0].created_at).toBeGreaterThan(got[got.length - 1].created_at);
   });
 
-  it("merges a scan split across statements by a long value list", async () => {
+  it("pages a scan that SQL can't fully express", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+
+    // More kinds than are worth binding (MAX_PUSHDOWN), so the token scan
+    // can't carry them and they post-filter in memory, paging by rowid.
+    const writes: Promise<void>[] = [];
+    for (let i = 0; i < 600; i++) {
+      writes.push(store.event(rumor({ kind: i % 2 === 0 ? 1 : 7, tags: [["channel", "c1"]] })));
+    }
+    await Promise.all(writes);
+
+    const kinds = [1, ...Array.from({ length: 200 }, (_, i) => 1000 + i)];
+    const got = await store.query([{ "#channel": ["c1"], kinds }]);
+
+    expect(got).toHaveLength(300);
+    expect(got.every((r) => r.kind === 1)).toBe(true);
+    expect(new Set(got.map((r) => r.id)).size).toBe(300);
+    expect(got[0].created_at).toBeGreaterThan(got[got.length - 1].created_at);
+  });
+
+  it("merges a scan split across statements by a long kind list", async () => {
     const { db } = makeDb();
     const store = db.tenant("t");
 
@@ -167,20 +338,27 @@ describe("SqliteArmadaDB — scans", () => {
     expect(got.map((r) => r.id).sort()).toEqual(wanted.map((r) => r.id).sort());
   });
 
-  it("intersects several tag terms without reading non-matching bodies", async () => {
+  it("merges a match split across statements by a long tag value list", async () => {
     const { db } = makeDb();
     const store = db.tenant("t");
 
-    const both = rumor({ tags: [["channel", "c1"], ["reply", "r1"]] });
-    await store.event(both);
-    await store.event(rumor({ tags: [["channel", "c1"]] }));
-    await store.event(rumor({ tags: [["reply", "r1"]] }));
+    // One value in each half of the split.
+    const wanted = [
+      rumor({ tags: [["channel", "c1"]] }),
+      rumor({ tags: [["channel", "c600"]] }),
+    ];
+    await store.event(rumor({ tags: [["channel", "c900"]] }));
+    await Promise.all(wanted.map((r) => store.event(r)));
 
-    expect(await store.query([{ "#channel": ["c1"], "#reply": ["r1"] }])).toEqual([both]);
+    // 600 values > MAX_OR, so the MATCH is split into two and merged.
+    const values = Array.from({ length: 600 }, (_, i) => `c${i + 1}`);
+    const got = await store.query([{ "#channel": values }]);
+
+    expect(got.map((r) => r.id).sort()).toEqual(wanted.map((r) => r.id).sort());
   });
 
-  it("honors a limit on a paged scan", async () => {
-    const { db } = makeDb();
+  it("honors a limit on a tag scan", async () => {
+    const { db, driver } = makeDb();
     const store = db.tenant("t");
 
     await Promise.all(
@@ -188,10 +366,14 @@ describe("SqliteArmadaDB — scans", () => {
         store.event(rumor({ created_at: 5000 + i, tags: [["channel", "c1"]] }))),
     );
 
+    driver.selects.length = 0;
     const got = await store.query([{ "#channel": ["c1"], limit: 10 }]);
 
     expect(got).toHaveLength(10);
     expect(got[0].created_at).toBe(5049);
+    // The whole filter is in the index, so the limit is too: one statement,
+    // ten rows read.
+    expect(driver.selects).toHaveLength(1);
   });
 });
 
@@ -231,6 +413,17 @@ describe("SqliteArmadaDB — search", () => {
     expect(await store.query([{ search: "treasure", kinds: [7] }])).toEqual([]);
   });
 
+  it("intersects keywords with a tag-driven scan", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+    const hit = rumor({ content: "treasure map", tags: [["channel", "c1"]] });
+    await store.event(hit);
+    await store.event(rumor({ content: "treasure map", tags: [["channel", "c2"]] }));
+    await store.event(rumor({ content: "nothing here", tags: [["channel", "c1"]] }));
+
+    expect(await store.query([{ search: "treasure", "#channel": ["c1"] }])).toEqual([hit]);
+  });
+
   it("keeps search results inside their tenant", async () => {
     const { db } = makeDb();
     const mine = rumor({ content: "shared word" });
@@ -240,12 +433,10 @@ describe("SqliteArmadaDB — search", () => {
     expect(await db.tenant("a").query([{ search: "shared" }])).toEqual([mine]);
   });
 
-  it("filters a scan by a keyword too common to drive one", async () => {
+  it("counts matches without reading rumor bodies", async () => {
     const { db } = makeDb();
     const store = db.tenant("t");
 
-    // More matches than are worth driving a query with (MAX_SEARCH_IDS), so
-    // the keyword filters an ordinary indexed scan instead.
     await Promise.all(
       Array.from({ length: 1100 }, (_, i) =>
         store.event(rumor({ created_at: 5000 + i, content: `common message ${i}` }))),
@@ -271,10 +462,11 @@ describe("SqliteArmadaDB — search", () => {
 
     expect(await store.query([{ search: "BROWN" }])).toEqual([hit]);
     expect(await store.query([{ search: "quick -fox" }])).toEqual([]);
-    // No index to keep — that's the point.
+    // Tags stay queryable — only the content index is optional.
+    expect(rows(driver, "SELECT name FROM sqlite_master WHERE name = 'rumors_fts'")).toHaveLength(0);
     expect(
-      rows(driver, `SELECT name FROM sqlite_master WHERE name LIKE '%fts%'`),
-    ).toHaveLength(0);
+      rows(driver, "SELECT name FROM sqlite_master WHERE name = 'rumor_tags_fts'"),
+    ).toHaveLength(1);
   });
 
   it("stops finding a rumor once it is removed", async () => {
@@ -290,19 +482,34 @@ describe("SqliteArmadaDB — search", () => {
 });
 
 describe("SqliteArmadaDB — index upkeep", () => {
-  it("leaves no tag or coordinate rows behind when a version is superseded", async () => {
+  it("leaves no token or coordinate rows behind when a version is superseded", async () => {
     const { db, driver } = makeDb();
     const store = db.tenant("t");
 
     await store.event(
-      rumor({ id: "v1", kind: 30078, pubkey: "alice", created_at: 100, tags: [["d", "x"], ["channel", "c1"]] }),
+      rumor({
+        id: "v1",
+        kind: 30078,
+        pubkey: "alice",
+        created_at: 100,
+        tags: [["d", "x"], ["channel", "c1"]],
+      }),
     );
     await store.event(
-      rumor({ id: "v2", kind: 30078, pubkey: "alice", created_at: 200, tags: [["d", "x"], ["channel", "c2"]] }),
+      rumor({
+        id: "v2",
+        kind: 30078,
+        pubkey: "alice",
+        created_at: 200,
+        tags: [["d", "x"], ["channel", "c2"]],
+      }),
     );
 
     expect(rows(driver, "SELECT id FROM rumors").map((r) => r.id)).toEqual(["v2"]);
-    expect(rows(driver, "SELECT DISTINCT id FROM rumor_tags").map((r) => r.id)).toEqual(["v2"]);
+    expect(rows(driver, "SELECT rowid FROM rumor_tags_fts")).toHaveLength(1);
+    expect(
+      rows(driver, `SELECT rowid FROM rumor_tags_fts WHERE rumor_tags_fts MATCH '"t:channel:c1"'`),
+    ).toHaveLength(0);
     expect(rows(driver, "SELECT coord, id FROM rumor_coords")).toEqual([
       { coord: "30078:alice:x", id: "v2" },
     ]);
@@ -319,7 +526,7 @@ describe("SqliteArmadaDB — index upkeep", () => {
     await store.remove([{ ids: ["gone"] }]);
 
     expect(rows(driver, "SELECT id FROM rumors")).toHaveLength(0);
-    expect(rows(driver, "SELECT id FROM rumor_tags")).toHaveLength(0);
+    expect(rows(driver, "SELECT rowid FROM rumor_tags_fts")).toHaveLength(0);
     expect(rows(driver, "SELECT coord FROM rumor_coords")).toHaveLength(0);
     expect(rows(driver, "SELECT rowid FROM rumors_fts")).toHaveLength(0);
   });
@@ -333,6 +540,19 @@ describe("SqliteArmadaDB — index upkeep", () => {
 
     expect(rows(driver, "SELECT id FROM rumors").map((r) => r.id)).toEqual(["new"]);
     expect(rows(driver, "SELECT id FROM rumor_coords").map((r) => r.id)).toEqual(["new"]);
+  });
+
+  it("indexes a re-delivered rumor exactly once", async () => {
+    const { db, driver } = makeDb();
+    const store = db.tenant("t");
+    const again = rumor({ id: "twice", tags: [["channel", "c1"]] });
+
+    await store.event(again);
+    await store.event({ ...again });
+
+    expect(rows(driver, "SELECT id FROM rumors")).toHaveLength(1);
+    expect(rows(driver, "SELECT rowid FROM rumor_tags_fts")).toHaveLength(1);
+    expect(rows(driver, "SELECT rowid FROM rumors_fts")).toHaveLength(1);
   });
 
   it("commits a burst of writes as one transaction", async () => {
@@ -353,8 +573,11 @@ describe("SqliteArmadaDB — index upkeep", () => {
 
     await db.wipe();
 
-    for (const table of ["rumors", "rumor_tags", "rumor_coords", "rumors_fts", "kv"]) {
+    for (const table of ["rumors", "rumor_coords", "tenants", "kv"]) {
       expect(rows(driver, `SELECT * FROM ${table}`)).toHaveLength(0);
+    }
+    for (const table of ["rumor_tags_fts", "rumors_fts"]) {
+      expect(rows(driver, `SELECT rowid FROM ${table}`)).toHaveLength(0);
     }
   });
 
@@ -363,5 +586,228 @@ describe("SqliteArmadaDB — index upkeep", () => {
     driver.close();
 
     await expect(db.tenant("t").event(rumor())).rejects.toThrow();
+  });
+});
+
+describe("SqliteArmadaDB — injection", () => {
+  /** Payloads aimed at SQL, at FTS5's query language, and at the token encoding. */
+  const HOSTILE = [
+    `'; DROP TABLE rumors; --`,
+    `' OR '1'='1`,
+    `" OR "1"="1`,
+    `x" OR "y`,
+    `"`,
+    `""`,
+    `\\`,
+    `*`,
+    `^`,
+    `(a OR b)`,
+    `NEAR(a b, 5)`,
+    `a AND b`,
+    `{content}`,
+    `content:secret`,
+    `-negated`,
+    `a b`,
+    `tab\there`,
+    `new\nline`,
+    `nul\u0000byte`,
+    `emoji🏴‍☠️`,
+    `ÜPPER`,
+  ];
+
+  it("survives hostile tag values without matching anything else", async () => {
+    const { db, driver } = makeDb();
+    const store = db.tenant("t");
+
+    const planted = rumor({ id: "planted", tags: [["channel", "secret"]] });
+    await store.event(planted);
+
+    for (const [i, payload] of HOSTILE.entries()) {
+      const carrier = rumor({ id: `carrier-${i}`, tags: [["channel", payload]] });
+      await store.event(carrier);
+
+      // The value round-trips exactly...
+      expect(await store.query([{ "#channel": [payload] }])).toEqual([carrier]);
+      // ...and nothing it contains reaches the query as syntax.
+      expect(await store.query([{ "#channel": ["secret"] }])).toEqual([planted]);
+    }
+
+    expect(rows(driver, "SELECT count(*) AS c FROM rumors")[0].c).toBe(HOSTILE.length + 1);
+  });
+
+  it("survives hostile tag names, ids, pubkeys, content and tenant ids", async () => {
+    const { db, driver } = makeDb();
+
+    for (const [i, payload] of HOSTILE.entries()) {
+      const store = db.tenant(`tenant-${payload}`);
+      const r = rumor({
+        id: `id-${payload}-${i}`,
+        pubkey: `pk-${payload}`,
+        content: payload,
+        tags: [[payload.slice(0, 20), "value"]],
+      });
+      await store.event(r);
+
+      expect(await store.query([{ ids: [r.id] }])).toEqual([r]);
+      expect(await store.query([{ authors: [r.pubkey] }])).toEqual([r]);
+      expect(await store.query([{ [`#${payload.slice(0, 20)}`]: ["value"] }])).toEqual([r]);
+    }
+
+    // Every table is still there, with exactly what was written.
+    expect(rows(driver, "SELECT count(*) AS c FROM rumors")[0].c).toBe(HOSTILE.length);
+    expect(rows(driver, "SELECT count(*) AS c FROM tenants")[0].c).toBe(HOSTILE.length);
+  });
+
+  it("survives hostile search input", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+    const secret = rumor({ id: "secret", content: "classified fleet positions" });
+    await store.event(secret);
+
+    for (const payload of HOSTILE) {
+      const got = await store.query([{ search: payload }]);
+      // None of these name a word the rumor has, so the only ones it may
+      // answer are the pure negations — which ask for rumors LACKING a word.
+      expect(got).toEqual(payload.startsWith("-") ? [secret] : []);
+    }
+
+    // Still findable by its own words, so no index was damaged along the way.
+    expect(await store.query([{ search: "classified" }])).toEqual([secret]);
+  });
+
+  it("fails closed on a search that parses to no keywords", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+    const secret = rumor({ id: "secret", content: "classified fleet positions" });
+    await store.event(secret);
+
+    // Both are consumed entirely by the NIP-50 parse — the first is an
+    // extension this store doesn't implement, the second tokenizes to nothing.
+    // Dropping the constraint would answer a narrowing query with the whole
+    // tenant, so they match nothing instead.
+    expect(await store.query([{ search: "domain:example.com" }])).toEqual([]);
+    expect(await store.query([{ search: '""' }])).toEqual([]);
+    expect(await store.count([{ search: "domain:example.com" }]))
+      .toEqual({ count: 0, approximate: false });
+
+    // An absent or blank search asked for nothing, so it constrains nothing.
+    expect(await store.query([{ search: "" }])).toEqual([secret]);
+    expect(await store.query([{ search: "   " }])).toEqual([secret]);
+  });
+
+  it("cannot forge another rumor's author token through a tag", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+
+    // A space would end a token, so a value carrying one could append tokens of
+    // its own to the row — here, a claim to have been written by `victim`.
+    const forger = rumor({
+      id: "forger",
+      pubkey: "attacker",
+      tags: [["channel", "c1 t1:_p:victim"], ["_p", "victim"], ["p", "victim"]],
+    });
+    await store.event(forger);
+    const real = rumor({ id: "real", pubkey: "victim", tags: [["channel", "c1"]] });
+    await store.event(real);
+
+    expect(await store.query([{ authors: ["victim"] }])).toEqual([real]);
+    expect(await store.query([{ "#channel": ["c1"], authors: ["victim"] }])).toEqual([real]);
+    // The forged value is a value, not two tokens.
+    expect(await store.query([{ "#channel": ["c1"] }])).toEqual([real]);
+    expect(await store.query([{ "#channel": ["c1 t1:_p:victim"] }])).toEqual([forger]);
+  });
+
+  it("cannot reach another tenant by forging its token prefix", async () => {
+    const { db } = makeDb();
+    const mine = rumor({ id: "mine", tags: [["channel", "c1"]] });
+    await db.tenant("a").event(mine);
+
+    // `a` is interned as t1, so these are attempts to name it from outside.
+    const store = db.tenant("b");
+    await store.event(rumor({ id: "probe", tags: [["t1", "channel"], ["channel", "c1"]] }));
+
+    expect(await db.tenant("a").query([{ "#channel": ["c1"] }])).toEqual([mine]);
+    expect(await store.query([{ "#channel": ["c1"] }])).toHaveLength(1);
+    expect((await store.query([{ "#channel": ["c1"] }]))[0].id).toBe("probe");
+  });
+
+  it("cannot delete another author's rumors with a crafted a tag", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+
+    const victim = rumor({
+      id: "victim",
+      kind: 30078,
+      pubkey: "victim",
+      created_at: 100,
+      tags: [["d", "x"]],
+    });
+    await store.event(victim);
+
+    // The coordinate is spelled with `:`, so a request whose own pubkey is a
+    // prefix of the victim's, or which packs the victim's into a `d` tag, must
+    // still not resolve to the victim's coordinate.
+    await store.event(rumor({
+      id: "req",
+      kind: 5,
+      pubkey: "attacker",
+      created_at: 200,
+      tags: [
+        ["a", "30078:victim:x"],
+        ["a", "30078:attacker:x:30078:victim:x"],
+        ["e", "victim"],
+      ],
+    }));
+
+    expect(await store.query([{ kinds: [30078] }])).toEqual([victim]);
+  });
+
+  it("survives a NUL byte in a search, which FTS5 cannot be handed", async () => {
+    const { db } = makeDb();
+    const store = db.tenant("t");
+    const hit = rumor({ id: "hit", content: "hello world" });
+    await store.event(hit);
+
+    // FTS5's query parser is NUL-terminated, so a phrase containing one loses
+    // its closing quote and the query dies with `unterminated string`. Such
+    // keywords are matched in memory instead.
+    expect(await store.query([{ search: "hello\u0000" }])).toEqual([]);
+    expect(await store.query([{ search: "\u0000" }])).toEqual([]);
+    expect(await store.query([{ search: "hello" }])).toEqual([hit]);
+  });
+
+  it("survives every control character in every user-controlled string", async () => {
+    const { db } = makeDb();
+
+    for (let code = 0; code < 0x20; code++) {
+      const payload = `a${String.fromCharCode(code)}b`;
+      const store = db.tenant(`tenant${payload}`);
+
+      await store.event(rumor({
+        id: `id${payload}`,
+        pubkey: `pk${payload}`,
+        content: payload,
+        tags: [["channel", payload]],
+      }));
+
+      // Each of these puts the payload somewhere different: a bound
+      // parameter, a token, and an FTS5 query expression.
+      expect(await store.query([{ "#channel": [payload] }])).toHaveLength(1);
+      expect(await store.query([{ authors: [`pk${payload}`] }])).toHaveLength(1);
+      expect(await store.query([{ ids: [`id${payload}`] }])).toHaveLength(1);
+      await expect(store.query([{ search: payload }])).resolves.toBeInstanceOf(Array);
+    }
+  });
+
+  it("survives hostile kv keys", async () => {
+    const { db, driver } = makeDb();
+
+    for (const payload of HOSTILE) {
+      await db.kv.set(payload, { payload });
+      expect(await db.kv.get(payload)).toEqual({ payload });
+    }
+
+    expect(rows(driver, "SELECT count(*) AS c FROM kv")[0].c).toBe(HOSTILE.length);
+    expect(await db.kv.keys("'")).toEqual([`' OR '1'='1`, `'; DROP TABLE rumors; --`]);
   });
 });

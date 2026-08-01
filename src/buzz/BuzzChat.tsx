@@ -60,12 +60,14 @@ import { useEvent } from "@/hooks/useEvent";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { writeClipboardText } from "@/lib/clipboard";
 import { shortTimeAgo } from "@/lib/formatTime";
+import { withSignature } from "@/lib/publishOutbox";
 import { type SlashAction } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
 import { threadSummary } from "@/components/chat/transport";
 import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
 import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** Buzz reply context: fetch the replied-to event and render the shared chrome. */
 function ReplyContext({ eventId, relayUrl, onJump }: { eventId: string; relayUrl: string; onJump: (id: string) => void }) {
@@ -474,7 +476,7 @@ export function BuzzChat({
     (id: string) => setActiveId((cur) => (cur === id ? undefined : id)),
     [],
   );
-  const [threadRoot, setThreadRoot] = useState<NostrEvent | undefined>(undefined);
+  const [threadRoot, setThreadRoot] = useState<ChatMsg | undefined>(undefined);
 
   useActiveRoom(
     relayUrl && channelId ? `h:${relayUrl}|${channelId}` : undefined,
@@ -555,8 +557,8 @@ export function BuzzChat({
 
   const [threadAutoFocus, setThreadAutoFocus] = useState(false);
   const [threadExpanded, setThreadExpanded] = useState(false);
-  const [lastThreadRoot, setLastThreadRoot] = useState<NostrEvent | undefined>(undefined);
-  const [replyTo, setReplyTo] = useState<NostrEvent | undefined>(undefined);
+  const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);
+  const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
   const [editingId, setEditingId] = useState<string | undefined>(undefined);
   const timelineRef = useRef<MessageTimelineHandle | null>(null);
 
@@ -597,7 +599,7 @@ export function BuzzChat({
     timelineRef.current?.pinToBottom();
   }, []);
 
-  const openThread = useCallback((event: NostrEvent, focusReply = false) => {
+  const openThread = useCallback((event: ChatMsg, focusReply = false) => {
     setThreadAutoFocus(focusReply);
     setThreadRoot(event);
     // Backfill the full thread by `#e` reference — the loaded `#h` window may
@@ -628,7 +630,9 @@ export function BuzzChat({
     async (event: NostrEvent) => {
       markFailed(event.id);
       try {
-        await republish({ event, relay: relayUrl });
+        // The timeline copy may have come from the event store, which drops
+        // signatures; the outbox holds the signed one.
+        await republish({ event: await withSignature(event), relay: relayUrl });
         markSent(event.id);
       } catch {
         markFailed(event.id);
@@ -657,7 +661,7 @@ export function BuzzChat({
   }, [scrollToMessageRef]);
 
   const handleEditSubmit = useCallback(
-    async (original: NostrEvent, content: string) => {
+    async (original: NostrRumor, content: string) => {
       const trimmed = content.trim();
       if (!trimmed || trimmed === original.content.trim()) {
         setEditingId(undefined);
@@ -667,7 +671,7 @@ export function BuzzChat({
       try {
         const edit = await editMessage({ original, content: trimmed });
         // Fold the edit in immediately (the wire echo lands later).
-        if (edit.id !== original.id) mergeEvents([edit]);
+        if (edit && edit.id !== original.id) mergeEvents([edit]);
       } catch {
         toast({
           title: "Edit failed",

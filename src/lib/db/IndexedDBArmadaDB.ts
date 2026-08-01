@@ -16,7 +16,7 @@
 import { NIndexedDB } from "@nostrify/indexeddb";
 import { openDB } from "idb";
 
-import { defaultIndexTags } from "./types";
+import { defaultIndexTags, prefixUpperBound } from "./types";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 import type { DBSchema, IDBPDatabase } from "idb";
@@ -81,7 +81,14 @@ interface KVSchema extends DBSchema {
   tenants: { key: string; value: true };
 }
 
-/** Bumped when {@link KVSchema} gains a store. */
+/**
+ * Bumped when {@link KVSchema} gains a store.
+ *
+ * This is IndexedDB's own version — the STORE LAYOUT of this one database,
+ * upgraded by the transaction below. It is not the data-schema version: what
+ * the keys mean and what shape their values are in is `ARMADA_DB_VERSION` in
+ * `schema.ts`, which spans every database and both adapters.
+ */
 const KV_DB_VERSION = 2;
 
 /**
@@ -155,6 +162,30 @@ class IndexedDBKV implements ArmadaKV {
     // `undefined` is out of contract (it has no JSON form); normalize to null
     // so both adapters agree instead of one storing a hole.
     await db.put("kv", value === undefined ? null : value, key);
+  }
+
+  async delete(key: string): Promise<void> {
+    const db = await this.db;
+    if (!db) return;
+    await db.delete("kv", key);
+  }
+
+  async keys(prefix?: string): Promise<string[]> {
+    const db = await this.db;
+    if (!db) return [];
+    try {
+      const upper = prefix ? prefixUpperBound(prefix) : undefined;
+      const range = !prefix
+        ? undefined
+        : upper === undefined
+        ? IDBKeyRange.lowerBound(prefix)
+        : IDBKeyRange.bound(prefix, upper, false, true);
+      const keys = (await db.getAllKeys("kv", range)) as string[];
+      // The range is a scan hint, not the contract — see `prefixUpperBound`.
+      return prefix ? keys.filter((key) => key.startsWith(prefix)) : keys;
+    } catch {
+      return [];
+    }
   }
 
   async close(): Promise<void> {

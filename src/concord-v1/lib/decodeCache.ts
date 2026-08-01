@@ -2,8 +2,8 @@
  * Decode-once memo for Concord's sealed outer events.
  *
  * Opening a sealed outer is the expensive step: a NIP-44 decrypt, a JSON parse,
- * and a Schnorr `verifyEvent` per event. The local event store (NIndexedDB,
- * `armada-events`) is append-only and accumulates every sealed blob ever seen,
+ * and a Schnorr `verifyEvent` per event. The local event store (the ArmadaDB
+ * `main` tenant) is append-only and accumulates every sealed blob ever seen,
  * so the read path re-reads the same blobs on every load, poll, and reconnect —
  * and re-verifying them all, serially, on the main thread is what makes a busy
  * channel "sit forever" decrypting its whole queue.
@@ -24,7 +24,7 @@
 
 import { openMessageMulti, type OpenedMessage } from "@/concord-v1/lib/envelope";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** A successful open (`opened`) or a remembered failure (`undefined`). */
 type DecodeResult = OpenedMessage | undefined;
@@ -56,7 +56,7 @@ function yieldToEventLoop(): Promise<void> {
  * grows (a caught-up rekey), which the caller signals via {@link forgetSkips}.
  */
 export function openMemoized(
-  outer: NostrEvent,
+  outer: NostrRumor,
   channelId: Uint8Array,
   epochKeys: Array<{ epoch: bigint; key: Uint8Array }>,
 ): DecodeResult {
@@ -93,7 +93,7 @@ export function forgetSkips(): void {
  * was switched away). Returns successfully-opened messages only, in input order.
  */
 export async function openMemoizedBatch(
-  events: NostrEvent[],
+  events: NostrRumor[],
   channelId: Uint8Array,
   epochKeys: Array<{ epoch: bigint; key: Uint8Array }>,
   opts?: { signal?: AbortSignal; chunkSize?: number },

@@ -8,11 +8,9 @@ import { citationSatisfied, type FoldedControl } from "@/concord-v2/lib/control"
 import {
   coalesceGuestbook,
   completeMemberlist,
-  guestbookGroups,
 } from "@/concord-v2/lib/guestbook";
 import { canActOnMember, Permissions } from "@/concord-v2/lib/roles";
-import { queryByStreams } from "@/concord-v2/lib/rumorStore";
-import type { OpenedEvent } from "@/concord-v2/lib/stream";
+import { queryPlane } from "@/concord-v2/lib/rumorStore";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 import { readFolded } from "@/lib/foldedCache";
 
@@ -23,9 +21,7 @@ import { readFolded } from "@/lib/foldedCache";
  * PURELY LOCAL. The Guestbook Plane is persisted DECRYPTED in the rumor store
  * and the global `ControlPlaneSync` sweep already keeps it fresh for every
  * joined community (including ones never opened), so this is one indexed
- * IndexedDB read across every community's guestbook streams at once — no
- * network, no decrypt, no signer. Each opened event carries the stream address
- * it arrived on, so they sort back out per community without a query apiece.
+ * IndexedDB read per joined community — no network, no decrypt, no signer.
  *
  * COVERAGE IS PARTIAL, BY DESIGN OF THE PROTOCOLS — Concord v1 has no
  * membership plane at all (plain key-holders aren't enumerable), and NIP-29
@@ -73,25 +69,15 @@ export function useSharedCommunities(
     enabled: enabled && peers.length > 0 && communities.length > 0,
     staleTime: 60_000,
     queryFn: async () => {
-      const byStream = new Map<string, CommunityV2>();
-      for (const community of communities) {
-        for (const group of guestbookGroups(community)) byStream.set(group.pk, community);
-      }
-
-      const opened = await queryByStreams([...byStream.keys()]);
-      const grouped = new Map<string, OpenedEvent[]>();
-      for (const event of opened) {
-        const community = byStream.get(event.streamPk);
-        if (!community) continue;
-        const bucket = grouped.get(community.idHex);
-        if (bucket) bucket.push(event);
-        else grouped.set(community.idHex, [event]);
-      }
-
       const out: Record<string, string> = {};
       for (const community of communities) {
-        const events = grouped.get(community.idHex);
-        if (!events?.length) continue;
+        // One read per community, because each community's guestbook lives in
+        // its own rumor-store tenant. This used to be a single read across every
+        // community's streams at once, de-multiplexed afterwards by each event's
+        // own `stream` tag — cheaper, but it relied on that tag being honest
+        // about which community an event belonged to.
+        const events = await queryPlane(community.idHex, "guestbook");
+        if (!events.length) continue;
         // The persisted control fold supplies kick authority and the banlist.
         // On a miss we still coalesce, but no kick is honored and nobody is
         // banned — so an absent fold can only ever over-include. Acceptable

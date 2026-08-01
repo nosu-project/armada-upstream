@@ -15,6 +15,8 @@
  */
 
 import { bytesToHex, hex32, verifyCommunityId } from "@/concord-v2/lib/derive";
+
+import type { NostrRumor } from "@/lib/nostrRumor";
 import {
   MAX_LIST_MEMBERSHIPS,
   capRelays,
@@ -92,6 +94,23 @@ export interface CommunityList {
 }
 
 export const EMPTY_COMMUNITY_LIST: CommunityList = { entries: [], tombstones: [] };
+
+/**
+ * The locally cached, already-DECRYPTED community list for one viewer, as
+ * persisted in `foldedCache`.
+ *
+ * Defined here rather than beside the hook that maintains it because it is the
+ * only way to enumerate an account's communities without a signer or a relay,
+ * which is exactly what the rumor-store migration needs — and it must not have
+ * to import React to ask.
+ */
+export interface PersistedCommunityList {
+  event: NostrRumor | null;
+  list: CommunityList;
+}
+
+/** Where {@link PersistedCommunityList} is cached, per viewer pubkey. */
+export const communityListFoldKey = (pubkey: string) => `concord2-list:${pubkey}`;
 
 // ── Canonical JSON (the total-order tiebreak) ────────────────────────────────
 

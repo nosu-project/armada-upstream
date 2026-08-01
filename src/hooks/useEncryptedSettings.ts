@@ -2,12 +2,13 @@ import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
 
-import type { NostrEvent, NostrFilter, NostrSigner } from "@nostrify/nostrify";
+import type { NostrFilter, NostrSigner } from "@nostrify/nostrify";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { APP_NAME } from "@/lib/platform";
 import { EncryptedSettingsSchema, type EncryptedSettings } from "@/lib/schemas";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** NIP-78 application-data kind. */
 const SETTINGS_KIND = 30078;
@@ -23,7 +24,7 @@ function settingsFilter(pubkey: string): NostrFilter {
 async function decodeSettings(
   signer: NostrSigner,
   pubkey: string,
-  event: NostrEvent | undefined,
+  event: NostrRumor | undefined,
 ): Promise<EncryptedSettings | null> {
   if (!event?.content || !signer.nip44) return null;
   try {

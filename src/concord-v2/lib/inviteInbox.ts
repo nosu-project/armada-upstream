@@ -33,6 +33,7 @@ import { NIndexedDB } from "@nostrify/indexeddb";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 import { getArmadaDB } from "@/lib/db/armadaDB";
+import { skipLegacyDrain } from "@/lib/db/legacyDatabases";
 import type { NRumorStore } from "@/lib/db/types";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -44,14 +45,6 @@ const LEGACY_DB_NAME = "armada-concord-invites";
 
 /** NIP-59's outer-timestamp backdate window (the cursor rewinds this much). */
 export const WRAP_BACKDATE_SECS = 2 * 24 * 60 * 60;
-
-/** Synthetic provenance tags on the stored record (not part of the rumor). */
-const TAG_WRAP = "wrap";
-const TAG_SENDER = "sender";
-const TAG_WRAP_CREATED = "wrapts";
-/** Recipient scope — the account the wrap was addressed to. Single-letter so
- * NIndexedDB's tag index covers it (only single-letter tags are indexed). */
-const TAG_RECIPIENT = "p";
 
 /** The invite tenant for one account (opens in the background on first use). */
 export function inviteInbox(recipient: string): NRumorStore {
@@ -80,10 +73,21 @@ const LEGACY_MIGRATION_KEY = (recipient: string) => `invites:migrated:${recipien
 /** In-flight/settled drains, so concurrent reads share one pass. */
 const drains = new Map<string, Promise<void>>();
 
+/**
+ * Copy `recipient`'s invites out of the shared database. Idempotent, memoised,
+ * and REJECTS on failure — the startup gate deletes the shared database once
+ * every drain has resolved for every account, so a swallowed error here would
+ * read as a finished copy and take the invites with it.
+ */
 export function migrateLegacyInvites(recipient: string): Promise<void> {
   let drain = drains.get(recipient);
   if (!drain) {
-    drain = drainLegacyInvites(recipient);
+    drain = drainLegacyInvites(recipient).catch((err: unknown) => {
+      // Drop the memo so a later read retries: writes are keyed by wrap id, so
+      // recopying what already landed costs nothing.
+      drains.delete(recipient);
+      throw err;
+    });
     drains.set(recipient, drain);
   }
   return drain;
@@ -93,22 +97,21 @@ async function drainLegacyInvites(recipient: string): Promise<void> {
   const db = getArmadaDB();
   const key = LEGACY_MIGRATION_KEY(recipient);
   if (await db.kv.get<boolean>(key)) return;
+  // `NIndexedDB` CREATES the database on its first query, which would leave a
+  // device that never had one with the very database the startup gate scans
+  // for. See `skipLegacyDrain`.
+  if (await skipLegacyDrain(LEGACY_DB_NAME)) return;
 
+  const legacy = new NIndexedDB(LEGACY_DB_NAME);
   try {
-    const legacy = new NIndexedDB(LEGACY_DB_NAME);
     const events = await legacy.query([{ kinds: [KIND_DIRECT_INVITE], "#p": [recipient] }]);
     const tenant = db.tenant(`invites:${recipient}`);
     for (const event of events) {
       const { sig: _sig, ...rumor } = event;
       await tenant.event(rumor);
     }
-    await legacy.close();
-  } catch {
-    // Failed part-way, or IndexedDB is unavailable. Leave the flag unset and
-    // drop the memo so a later read retries: writes are keyed by wrap id, so
-    // recopying what already landed costs nothing.
-    drains.delete(recipient);
-    return;
+  } finally {
+    await legacy.close().catch(() => undefined);
   }
 
   await db.kv.set(key, true);
@@ -127,42 +130,37 @@ export interface StoredDirectInvite {
 }
 
 /**
- * Build the stored record for an unwrapped invite. The record `id` is the WRAP
- * id (the inbox dedup key), `pubkey` the sender, `kind`/`content`/`tags` the
- * inner rumor. The wrap's own `created_at` is stashed in a tag so the cursor
- * can advance by it.
+ * Build the stored record for an unwrapped invite.
  *
- * No recipient tag: the tenant already names the account, and records drained
- * from the pre-tenant database carry one that {@link storedToInvite} strips.
+ * The record is keyed by the WRAP id (the inbox's dedup key) and carries the
+ * verified sender as `pubkey` — which is the inner rumor's author too, since
+ * the seal's signer IS the author. Its kind, content and tags are the rumor's,
+ * untouched: those tags are the bytes the rumor's id commits to, and every
+ * value that used to be folded into them is either already a field of this
+ * record (the wrap id, the sender) or read by nothing (the wrap's own
+ * `created_at` — the inbox cursor advances from the wraps in hand, not from
+ * the store) or answered by the tenant (the recipient).
  */
 export function unwrappedToStored(wrap: NostrEvent, unwrapped: UnwrappedInvite): NostrRumor {
   return {
     id: wrap.id,
     kind: unwrapped.rumor.kind,
     content: unwrapped.rumor.content,
-    tags: [
-      ...unwrapped.rumor.tags,
-      [TAG_WRAP, wrap.id],
-      [TAG_SENDER, unwrapped.sender],
-      [TAG_WRAP_CREATED, String(wrap.created_at)],
-    ],
+    tags: unwrapped.rumor.tags,
     created_at: unwrapped.rumor.created_at,
     pubkey: unwrapped.sender,
   };
 }
 
-const PROVENANCE = new Set([TAG_RECIPIENT, TAG_WRAP, TAG_SENDER, TAG_WRAP_CREATED]);
-
 /** Reconstruct a StoredDirectInvite from a stored record. */
 export function storedToInvite(ev: NostrRumor): StoredDirectInvite {
-  const tags = ev.tags.filter((t) => !PROVENANCE.has(t[0]));
   return {
     wrapId: ev.id,
-    sender: ev.tags.find((t) => t[0] === TAG_SENDER)?.[1] ?? ev.pubkey,
+    sender: ev.pubkey,
     rumor: {
       kind: ev.kind,
       content: ev.content,
-      tags,
+      tags: ev.tags,
       created_at: ev.created_at,
       pubkey: ev.pubkey,
     },

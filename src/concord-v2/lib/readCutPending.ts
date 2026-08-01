@@ -12,9 +12,12 @@
  * whatever roster the retrying surface happens to hold — a cold page or a
  * roster-less view would rotate the community out from under its own members.
  *
- * Keyed per (account, community) in localStorage: this is the moderator's own
- * bookkeeping, not shared state.
+ * Keyed per (account, community): this is the moderator's own bookkeeping, not
+ * shared state. Held in ArmadaDB's KV, behind a synchronous cache — the retry
+ * path awaits {@link readCutPendingReady} first, so it never mistakes an
+ * unwarmed cache for "no cut owed".
  */
+import { KvPrefixCache } from "@/lib/db/kvCache";
 
 export interface ReadCutIntent {
   /** Pubkeys (hex) still owed a read-cut. */
@@ -23,44 +26,50 @@ export interface ReadCutIntent {
   keep: string[];
 }
 
-const key = (me: string, communityIdHex: string) => `concord2:read-cut-pending:${me}:${communityIdHex}`;
+const cache = new KvPrefixCache<ReadCutIntent>({ prefix: "read-cut-pending:" });
+
+const id = (me: string, communityIdHex: string) => `${me}:${communityIdHex}`;
+
+/** Load the persisted intents. Await before treating a miss as "nothing owed". */
+export function readCutPendingReady(): Promise<void> {
+  return cache.ready();
+}
 
 /** The pending intent, or undefined. */
 export function readCutPending(me: string, communityIdHex: string): ReadCutIntent | undefined {
-  try {
-    const raw = localStorage.getItem(key(me, communityIdHex));
-    if (!raw) return undefined;
-    const parsed = JSON.parse(raw) as unknown;
-    if (typeof parsed !== "object" || parsed === null) return undefined;
-    const targets = (parsed as ReadCutIntent).targets;
-    const keep = (parsed as ReadCutIntent).keep;
-    if (!Array.isArray(targets) || !Array.isArray(keep)) return undefined;
-    const strings = (a: unknown[]) => a.filter((p): p is string => typeof p === "string");
-    const cleaned = { targets: strings(targets), keep: strings(keep) };
-    return cleaned.targets.length > 0 ? cleaned : undefined;
-  } catch {
-    return undefined;
-  }
+  const parsed = cache.get(id(me, communityIdHex));
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+  const { targets, keep } = parsed;
+  if (!Array.isArray(targets) || !Array.isArray(keep)) return undefined;
+  const strings = (a: unknown[]) => a.filter((p): p is string => typeof p === "string");
+  const cleaned = { targets: strings(targets), keep: strings(keep) };
+  return cleaned.targets.length > 0 ? cleaned : undefined;
 }
 
-/** Add a target (idempotent); the freshest keep-list wins, minus all targets. */
-export function addReadCutPending(me: string, communityIdHex: string, target: string, keep: string[]): void {
-  try {
-    const prior = readCutPending(me, communityIdHex);
-    const targets = new Set(prior?.targets ?? []);
-    targets.add(target);
-    const nextKeep = keep.filter((pk) => !targets.has(pk));
-    localStorage.setItem(key(me, communityIdHex), JSON.stringify({ targets: [...targets], keep: nextKeep }));
-  } catch {
-    // Storage unavailable — the ban's own failure surface already informed the admin.
-  }
+/**
+ * Add a target (idempotent); the freshest keep-list wins, minus all targets.
+ *
+ * Async, and the await is load-bearing: this MERGES with what is already
+ * persisted, and an unwarmed cache reads as "nothing owed". Writing that back
+ * would replace a stored `{targets: [A, B]}` with `{targets: [C]}` and drop the
+ * read-cut for A and B — the exact failure this module exists to prevent, since
+ * nothing else remembers a rotation that never landed.
+ */
+export async function addReadCutPending(
+  me: string,
+  communityIdHex: string,
+  target: string,
+  keep: string[],
+): Promise<void> {
+  await cache.ready();
+  const prior = readCutPending(me, communityIdHex);
+  const targets = new Set(prior?.targets ?? []);
+  targets.add(target);
+  const nextKeep = keep.filter((pk) => !targets.has(pk));
+  cache.set(id(me, communityIdHex), { targets: [...targets], keep: nextKeep });
 }
 
 /** Clear the pending intent (cut landed, or went moot). */
 export function clearReadCutPending(me: string, communityIdHex: string): void {
-  try {
-    localStorage.removeItem(key(me, communityIdHex));
-  } catch {
-    // ignore
-  }
+  cache.delete(id(me, communityIdHex));
 }

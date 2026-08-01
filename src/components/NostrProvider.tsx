@@ -9,7 +9,7 @@ import { EventStoreContext, type EventStoreContextType } from "@/contexts/EventS
 import { userReadRelays, userWriteRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCachedNip29Servers } from "@/hooks/useCachedNip29Servers";
-import { appEventStore } from "@/lib/sqlite/eventStore";
+import { appEventStore } from "@/lib/db/mainEventStore";
 import { NostrBatcher } from "@/lib/NostrBatcher";
 import { AndroidNativeSigner } from "@/lib/androidNativeSigner";
 import { Nip46Signer } from "@/lib/nip46Signer";
@@ -29,7 +29,6 @@ import {
   signStreamAuthsChunked,
   streamPubkeysForRelay,
 } from "@/concord-v2/lib/streamAuth";
-import { warmRumorStore } from "@/concord-v2/lib/rumorStore";
 
 interface NostrProviderProps {
   children: React.ReactNode;
@@ -101,22 +100,21 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
 
   const pool = useRef<NPool | undefined>(undefined);
 
-  // Shared event cache (batcher writes results into it): the app-wide SQLite
-  // store — on Android the native database file the notification service also
-  // writes, on web/Electron SQLite-WASM over OPFS, degrading to NIndexedDB
-  // where neither is available. See src/lib/sqlite/eventStore.ts.
+  // Shared event cache (batcher writes results into it): the app-wide store,
+  // one ArmadaDB tenant (`main`) like every other subsystem. See
+  // src/lib/db/mainEventStore.ts.
   const eventStore = useRef<EventStoreContextType | undefined>(undefined);
   if (eventStore.current === undefined) {
     const store = appEventStore();
     // Warm up the connection immediately: the first query after launch pays
-    // the backend's one-time cold-open penalty (worker + wasm init, or the
-    // ~2.5s Android IndexedDB stall on the fallback); a throwaway query now
-    // means the first channel open reads a warm store instead.
+    // the backend's one-time cold-open penalty (on Android, a ~2.5s IndexedDB
+    // stall); a throwaway query now means the first channel open reads a warm
+    // store instead.
     void store.then((s) => s.query([{ kinds: [0], limit: 1 }])).catch(() => undefined);
     eventStore.current = store;
-    // Warm the Concord V2 rumor cache's IndexedDB connection too, so the first
-    // channel open reads a hot store instead of paying the cold-open penalty.
-    warmRumorStore();
+    // The Concord V2 rumor cache is NOT warmed here: it is one ArmadaDB tenant
+    // per community, and no community is known at provider mount. Each tenant's
+    // connection opens when its community is first read.
   }
 
   // Pool routes: app relays (non-NIP-29 traffic) + all servers

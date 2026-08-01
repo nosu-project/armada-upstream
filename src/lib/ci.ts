@@ -27,7 +27,7 @@
 
 import { parseGitRepositoryAddress, type GitRepositoryAddress } from "@/lib/gitActivity";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** Kind 9840 — maintainer-requested manual workflow trigger. */
 export const CI_MANUAL_TRIGGER_KIND = 9840;
@@ -57,7 +57,7 @@ export type CIConclusion = (typeof CI_CONCLUSIONS)[number];
 export type CIStatus = "queued" | "in_progress" | "concluded";
 
 export interface CIJobResult {
-  event: NostrEvent;
+  event: NostrRumor;
   id: string;
   /** The compute provider's key — the direct execution claim. */
   author: string;
@@ -81,7 +81,7 @@ export interface CIRunJob {
 
 export interface CIRun {
   /** The 9842 when one exists, else the newest 39842 for the attempt. */
-  event: NostrEvent;
+  event: NostrRumor;
   id: string;
   /** The coordinator that signed the run. Displayed, never trusted. */
   author: string;
@@ -100,7 +100,7 @@ export interface CIRun {
   createdAt: number;
 }
 
-function firstTagValue(event: NostrEvent, name: string): string | undefined {
+function firstTagValue(event: NostrRumor, name: string): string | undefined {
   return event.tags.find(([tagName]) => tagName === name)?.[1];
 }
 
@@ -108,7 +108,7 @@ function asConclusion(value: string | undefined): CIConclusion | undefined {
   return value && (CI_CONCLUSIONS as readonly string[]).includes(value) ? (value as CIConclusion) : undefined;
 }
 
-function repositoryAddressesOf(event: NostrEvent): GitRepositoryAddress[] {
+function repositoryAddressesOf(event: NostrRumor): GitRepositoryAddress[] {
   const seen = new Set<string>();
   const out: GitRepositoryAddress[] = [];
   for (const tag of event.tags) {
@@ -122,7 +122,7 @@ function repositoryAddressesOf(event: NostrEvent): GitRepositoryAddress[] {
 }
 
 /** Parse a kind-9841 Job Result. */
-export function parseCIJobResult(event: NostrEvent): CIJobResult | undefined {
+export function parseCIJobResult(event: NostrRumor): CIJobResult | undefined {
   if (event.kind !== CI_JOB_RESULT_KIND) return undefined;
   const job = firstTagValue(event, "job")?.trim();
   if (!job) return undefined;
@@ -144,7 +144,7 @@ export function parseCIJobResult(event: NostrEvent): CIJobResult | undefined {
  * recognized status is treated as in-progress rather than dropped, since the
  * marker's existence is itself the signal that something is running.
  */
-export function parseCIRun(event: NostrEvent): CIRun | undefined {
+export function parseCIRun(event: NostrRumor): CIRun | undefined {
   if (event.kind !== CI_RESULT_KIND && event.kind !== CI_PROGRESS_KIND) return undefined;
   const repositoryAddresses = repositoryAddressesOf(event);
   if (repositoryAddresses.length === 0) return undefined;
@@ -200,7 +200,7 @@ function runKey(run: CIRun): string {
  * ("clients SHOULD order attempts by created_at and treat the latest as
  * current").
  */
-export function assembleCIRuns(events: readonly NostrEvent[]): CIRun[] {
+export function assembleCIRuns(events: readonly NostrRumor[]): CIRun[] {
   const jobResults = new Map<string, CIJobResult>();
   for (const event of events) {
     const job = parseCIJobResult(event);
@@ -253,7 +253,7 @@ export function isCIEventKind(kind: number): boolean {
  * lookup, unlike NIP-22 comments and NIP-34 statuses.
  */
 export function matchCIEventRepository(
-  event: NostrEvent,
+  event: NostrRumor,
   known: { has(coordinate: string): boolean },
 ): GitRepositoryAddress | undefined {
   if (!isCIEventKind(event.kind)) return undefined;

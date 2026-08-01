@@ -10,6 +10,9 @@ const KIND_GROUP_METADATA = 39000;
 /** The relay/group handle shape we wrap for caching: query + req. */
 type NRelayLike = ReturnType<NPool['relay']>;
 
+/** The write half of the local cache; see {@link NostrBatcher.store}. */
+type EventSink = Promise<Pick<NStore, 'event'>>;
+
 /** Maximum number of items per batch to avoid hitting relay filter limits. */
 const MAX_BATCH_SIZE = 50;
 
@@ -801,10 +804,16 @@ export class NostrBatcher {
    * is written here so the rest of the app can read it back cache-first. The
    * store is a promise because IndexedDB opens asynchronously; we never block
    * a relay read on it.
+   *
+   * Write-only by type as well as by use: the batcher hands relay events TO
+   * the cache and never reads them back, which is what keeps its output signed.
+   * The cache drops signatures on the way in (`db/mainEventStore.ts`), so a
+   * batcher that also read from it could serve unsigned events to callers who
+   * have every reason to expect relay-fresh ones.
    */
-  private store?: Promise<NStore>;
+  private store?: EventSink;
 
-  constructor(private pool: NPool, store?: Promise<NStore>) {
+  constructor(private pool: NPool, store?: EventSink) {
     this.store = store;
     this.replaceableCollector = new ReplaceableCollector(pool);
     this.eventCollector = new BatchCollector((ids, signal) =>

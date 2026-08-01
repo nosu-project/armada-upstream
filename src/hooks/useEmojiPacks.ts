@@ -12,38 +12,29 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
+import { hasDurableEmojis } from "@/lib/emojiPalette";
 import { parseAddr } from "@/lib/parseAddr";
 import { KIND_USER_EMOJIS } from "@/lib/selfSyncKinds";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** NIP-30 emoji set (a shareable pack). */
 export const KIND_EMOJI_SET = 30030;
 
-/**
- * Whether a durable, reload-surviving palette exists for `pubkey`.
- *
- * `useCustomEmojis` owns `armada:custom-emojis:<pubkey>` in localStorage and
- * only writes it once a palette has actually resolved (never from a failed
- * read). It therefore answers "has this account ever had emojis?" across page
- * loads — the in-memory React Query caches are wiped on reload and are empty
- * exactly when a cold-start read is most likely to race out. The key is kept in
- * sync with `useCustomEmojis` by hand; we can't import it without a module
- * cycle (that hook already imports from here).
- */
-function hasDurableEmojis(pubkey: string): boolean {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(`armada:custom-emojis:${pubkey}`) ?? "");
-    return Array.isArray(parsed) && parsed.length > 0;
-  } catch {
-    return false;
-  }
-}
+// Whether a durable, reload-surviving palette exists for an account —
+// "has it ever had emojis?", across page loads, which the in-memory React Query
+// caches cannot answer since they are empty exactly when a cold-start read is
+// most likely to race out.
+//
+// `hasDurableEmojis` lives in `@/lib/emojiPalette` now, which owns the storage
+// both hooks read — it used to be a localStorage key written out here as well
+// and kept in sync with `useCustomEmojis` by hand, since that hook imports from
+// this one.
 
 /** The outcome of reading the user's kind-10030 list. */
 export interface EmojiListRead {
   /** Newest list from the relays or the local event store, if one was found. */
-  event: NostrEvent | null;
+  event: NostrRumor | null;
   /**
    * Whether the read reached an EOSE at all, rather than being aborted or
    * timing out. `NPool.req` only surfaces the merged EOSE once EVERY routed
@@ -109,7 +100,7 @@ export async function readEmojiList(
   const deadline = AbortSignal.timeout(EMOJI_LIST_READ_TIMEOUT_MS);
   const readSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
 
-  const relayEvents: NostrEvent[] = [];
+  const relayEvents: NostrRumor[] = [];
   let conclusive = false;
   try {
     for await (const msg of nostr.req([filter], {
@@ -127,7 +118,7 @@ export async function readEmojiList(
     // Aborted or relay error — `conclusive` stays false, which is the point.
   }
 
-  const cachedEvents = await store.query([filter]).catch(() => [] as NostrEvent[]);
+  const cachedEvents = await store.query([filter]).catch(() => [] as NostrRumor[]);
   const event = [...relayEvents, ...cachedEvents]
     .sort((a, b) => b.created_at - a.created_at)[0] ?? null;
 
@@ -339,7 +330,7 @@ export interface MyEmojiPack {
   /** Relay hint carried on the `a` tag, if any. */
   relay?: string;
   /** The resolved kind-30030 event, or null if it couldn't be fetched. */
-  event: NostrEvent | null;
+  event: NostrRumor | null;
 }
 
 /**
@@ -378,11 +369,11 @@ export function useMyEmojiPacks(): UseQueryResult<MyEmojiPack[]> {
         limit: 1,
       }));
       const [relay, cached] = await Promise.all([
-        nostr.query(filters, { signal }).catch(() => [] as NostrEvent[]),
-        store.query(filters).catch(() => [] as NostrEvent[]),
+        nostr.query(filters, { signal }).catch(() => [] as NostrRumor[]),
+        store.query(filters).catch(() => [] as NostrRumor[]),
       ]);
 
-      const byCoord = new Map<string, NostrEvent>();
+      const byCoord = new Map<string, NostrRumor>();
       for (const ev of [...relay, ...cached]) {
         const d = ev.tags.find(([n]) => n === "d")?.[1] ?? "";
         const coord = emojiPackCoord(ev.pubkey, d);
@@ -400,7 +391,7 @@ export function useMyEmojiPacks(): UseQueryResult<MyEmojiPack[]> {
 }
 
 /** Extract the `["emoji", shortcode, url]` mappings from a kind 30030 event. */
-export function emojiPackEntries(event: NostrEvent): { shortcode: string; url: string }[] {
+export function emojiPackEntries(event: NostrRumor): { shortcode: string; url: string }[] {
   return event.tags
     .filter((t) => t[0] === "emoji" && t[1] && t[2])
     .map((t) => ({ shortcode: t[1], url: t[2] }));
@@ -410,7 +401,7 @@ export function emojiPackEntries(event: NostrEvent): { shortcode: string; url: s
  * The pack's human name. Reads `title` and `name` (clients disagree on which
  * they emit — we publish both), falling back to the `d` identifier.
  */
-export function emojiPackName(event: NostrEvent): string {
+export function emojiPackName(event: NostrRumor): string {
   return (
     event.tags.find((t) => t[0] === "title")?.[1] ||
     event.tags.find((t) => t[0] === "name")?.[1] ||
@@ -420,12 +411,12 @@ export function emojiPackName(event: NostrEvent): string {
 }
 
 /** The pack's description (`about` tag), if any. */
-export function emojiPackAbout(event: NostrEvent): string | undefined {
+export function emojiPackAbout(event: NostrRumor): string | undefined {
   return event.tags.find((t) => t[0] === "about")?.[1] || undefined;
 }
 
 /** The pack's cover image (`image` or `picture` tag), if any. */
-export function emojiPackPicture(event: NostrEvent): string | undefined {
+export function emojiPackPicture(event: NostrRumor): string | undefined {
   return (
     event.tags.find((t) => t[0] === "image")?.[1] ||
     event.tags.find((t) => t[0] === "picture")?.[1] ||

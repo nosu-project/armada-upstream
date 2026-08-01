@@ -1,4 +1,4 @@
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
  * Plain data shapes for the shared Projects view. Buzz workspaces fill them
@@ -17,7 +17,7 @@ export interface ProjectRepo {
   contributors: string[];
   createdAt: number;
   /** The repository announcement, when one has been seen. */
-  event?: NostrEvent;
+  event?: NostrRumor;
   /** Optional origin label (e.g. the channel a repo is attached to). */
   subtitle?: string;
 }
@@ -34,7 +34,7 @@ export interface ProjectWorkItem {
   createdAt: number;
   repoCoord: string | null;
   status: ProjectWorkStatus;
-  event: NostrEvent;
+  event: NostrRumor;
   /** Lowercased `t` labels, when the source parses them. */
   labels?: string[];
   /** Known discussion size; hidden when the source doesn't count. */

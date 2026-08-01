@@ -20,7 +20,8 @@ import { useEventStore } from "@/hooks/useEventStore";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { isPublishQueuedError } from "@/lib/publishOutbox";
 
-import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
+import type { NostrFilter } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 const QUERY_KEY = "favorite-gifs-sync";
 const PUBLISH_DEBOUNCE_MS = 400;
@@ -33,12 +34,12 @@ function favoriteGifFilter(pubkey: string): NostrFilter {
   };
 }
 
-function dTag(event: NostrEvent): string | undefined {
+function dTag(event: NostrRumor): string | undefined {
   return event.tags.find((tag) => tag[0] === "d")?.[1];
 }
 
 /** NIP-01 addressable tie-break: newer timestamp, then lowest event id. */
-function eventWins(candidate: NostrEvent, current: NostrEvent | undefined): boolean {
+function eventWins(candidate: NostrRumor, current: NostrRumor | undefined): boolean {
   return !current
     || candidate.created_at > current.created_at
     || (candidate.created_at === current.created_at && candidate.id < current.id);
@@ -47,9 +48,9 @@ function eventWins(candidate: NostrEvent, current: NostrEvent | undefined): bool
 async function decodeShards(
   pubkey: string,
   decrypt: (pubkey: string, content: string) => Promise<string>,
-  events: NostrEvent[],
-): Promise<{ shards: FavoriteGifShard[]; ownEvents: Map<string, NostrEvent> }> {
-  const newest = new Map<string, NostrEvent>();
+  events: NostrRumor[],
+): Promise<{ shards: FavoriteGifShard[]; ownEvents: Map<string, NostrRumor> }> {
+  const newest = new Map<string, NostrRumor>();
   for (const event of events) {
     const identifier = dTag(event);
     if (!identifier?.startsWith(FAVORITE_GIFS_D_PREFIX)) continue;
@@ -69,7 +70,7 @@ async function decodeShards(
   }));
 
   const shards: FavoriteGifShard[] = [];
-  const ownEvents = new Map<string, NostrEvent>();
+  const ownEvents = new Map<string, NostrRumor>();
   for (const item of decoded) {
     if (!item) continue;
     shards.push(item.shard);
@@ -89,7 +90,7 @@ export function useFavoriteGifsSync(): void {
   const eventStore = useEventStore();
   const { mutateAsync: publishEvent } = useNostrPublish();
   const queryClient = useQueryClient();
-  const ownEventRef = useRef<NostrEvent | undefined>(undefined);
+  const ownEventRef = useRef<NostrRumor | undefined>(undefined);
   const lastCreatedAtRef = useRef(0);
   const migrationInFlight = useRef(false);
   const publishChain = useRef<Promise<void>>(Promise.resolve());
@@ -101,14 +102,14 @@ export function useFavoriteGifsSync(): void {
     queryKey,
     enabled: !!user?.pubkey && !!user.signer.nip44,
     queryFn: async ({ signal }) => {
-      if (!user?.signer.nip44) return { shards: [], ownEvents: new Map<string, NostrEvent>() };
+      if (!user?.signer.nip44) return { shards: [], ownEvents: new Map<string, NostrRumor>() };
       const filter = favoriteGifFilter(user.pubkey);
       const [remote, store] = await Promise.all([
         nostr.query([filter], { signal: AbortSignal.any([signal, AbortSignal.timeout(6000)]) }),
         eventStore,
       ]);
       const cached = await store.query([filter]);
-      const byId = new Map<string, NostrEvent>();
+      const byId = new Map<string, NostrRumor>();
       for (const event of [...cached, ...remote]) byId.set(event.id, event);
       return decodeShards(
         user.pubkey,

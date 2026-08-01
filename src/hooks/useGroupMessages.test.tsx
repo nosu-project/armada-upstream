@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ReactNode } from "react";
 
+import { isSigned } from "@/lib/nostrRumor";
 import { emitWireScopes, resetWireBus } from "@/wire/bus";
 
 import { useGroupMessages } from "./useGroupMessages";
@@ -151,6 +152,34 @@ describe("useGroupMessages (wire hydration)", () => {
       await new Promise((r) => setTimeout(r, 150));
     });
     await waitFor(() => expect(result.current.data?.some((e) => e.id === mine.id)).toBe(true));
+  });
+
+  it("keeps the SIGNATURE of an optimistic send when the store's unsigned copy lands", async () => {
+    const { wrapper } = setup();
+    const { result } = renderHook(() => useGroupMessages(RELAY, "g1"), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    // Signed locally and painted optimistically...
+    const sig = "f".repeat(128);
+    const mine = { ...msg("g1"), sig };
+    act(() => result.current.insertOptimistic(mine));
+    await waitFor(() => expect(result.current.data?.some((e) => e.id === mine.id)).toBe(true));
+
+    // ...then written to the local store, which drops `sig` (mainEventStore).
+    h.store.events.push({ ...mine, sig: "" });
+
+    await act(async () => {
+      emitWireScopes(["nip29:g1"]);
+      await new Promise((r) => setTimeout(r, 150));
+    });
+
+    // The store copy merges LAST. Without the signed-wins rule it overwrites
+    // the signed one, and "retry failed message" then republishes sig: "" —
+    // which every relay rejects, so the retry can never succeed.
+    await waitFor(() => {
+      const row = result.current.data?.find((e) => e.id === mine.id);
+      expect(row && isSigned(row) && row.sig).toBe(sig);
+    });
   });
 
   it("does not paint the previous channel's messages when switching channels on the same relay", async () => {

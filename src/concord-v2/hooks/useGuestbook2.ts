@@ -11,13 +11,12 @@ import {
   coalesceGuestbook,
   completeMemberlist,
   currentGuestbookGroup,
-  guestbookGroups,
   openGuestbookOpened,
   sealGuestbook,
   type CoalescedMember,
 } from "@/concord-v2/lib/guestbook";
 import { mergeOpened, sweepGuestbook } from "@/concord-v2/lib/planeSync";
-import { queryByStreams } from "@/concord-v2/lib/rumorStore";
+import { queryPlane } from "@/concord-v2/lib/rumorStore";
 import type { OpenedEvent } from "@/concord-v2/lib/stream";
 import { citationSatisfied } from "@/concord-v2/lib/control";
 import { canActOnMember, Permissions } from "@/concord-v2/lib/roles";
@@ -40,7 +39,7 @@ export function useGuestbook2(community: CommunityV2 | undefined) {
     refetchInterval: 60_000,
     queryFn: async () => {
       const fresh = await sweepGuestbook(nostr, community!);
-      const stored = await queryByStreams(guestbookGroups(community!).map((g) => g.pk));
+      const stored = await queryPlane(community!.idHex, "guestbook");
       return mergeOpened(stored, fresh);
     },
   });

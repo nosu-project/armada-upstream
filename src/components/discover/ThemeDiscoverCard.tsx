@@ -17,11 +17,11 @@ import { buildThemeDefinitionEvent, parseDittoTheme } from "@/lib/themeEvent";
 import { cn } from "@/lib/utils";
 import { coreToTokens } from "@/themes";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 interface ThemeDiscoverCardProps {
   /** A kind-36767 theme definition event. */
-  event: NostrEvent;
+  event: NostrRumor;
   className?: string;
 }
 

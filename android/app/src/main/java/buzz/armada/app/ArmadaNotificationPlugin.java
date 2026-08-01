@@ -22,6 +22,8 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 
+import buzz.armada.app.db.ServiceStore;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -84,8 +86,6 @@ public class ArmadaNotificationPlugin extends Plugin {
         return true;
     }
 
-    /** SharedPreferences file holding the WebView's drain cursor. */
-    static final String DRAIN_PREFS = "armada_drain";
     /** Max rows per drainEvents page (the JS side loops until empty). */
     private static final int DRAIN_PAGE = 500;
 
@@ -232,81 +232,44 @@ public class ArmadaNotificationPlugin extends Plugin {
     }
 
     /**
-     * Drain a page of service-received events from the shared database (rows
-     * after the persisted cursor). Returns { events: [json, …], cursor }; the
-     * JS layer routes them through wire ingest and then calls {@link #ackDrain}
-     * with the cursor — peek+ack, so a WebView crash mid-page replays instead
-     * of losing events, and a service restart loses nothing (the rows are
-     * durable). Concord decrypted inners are a SEPARATE buffer — see
-     * drainConcord.
+     * Drain a page of the events the service ingested, oldest first. Returns
+     * { events: [json, …], ids }; the JS layer routes them through wire ingest
+     * and then calls {@link #ackDrain} with those ids — peek+ack, so a WebView
+     * crash mid-page replays instead of losing events, and a service restart
+     * loses nothing (the queue is a durable ArmadaDB tenant). Concord decrypted
+     * inners are a SEPARATE buffer — see drainConcord.
+     *
+     * This is ROUTING, not storage: the events themselves are already in the
+     * tenants the WebView reads (the service wrote them there), and what a drain
+     * still buys is a pass through ingest — parking undecryptable wraps, ringing
+     * the scopes that repaint a timeline, feeding notification candidates.
      */
     @PluginMethod
     public void drainEvents(PluginCall call) {
-        SharedPreferences dp = getContext().getSharedPreferences(DRAIN_PREFS, Context.MODE_PRIVATE);
-        long cursor = dp.getLong("cursor", 0L);
-        JSArray arr = new JSArray();
-        long last = cursor;
-        try {
-            for (SharedEventDb.DrainRow row : SharedEventDb.get(getContext()).drainSince(cursor, DRAIN_PAGE)) {
-                arr.put(row.raw);
-                last = row.seq;
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "drainEvents failed", e);
-        }
+        ServiceStore.Page page = ServiceStore.drain(getContext(), DRAIN_PAGE);
+        JSArray events = new JSArray();
+        for (String event : page.getEvents()) events.put(event);
+        JSArray ids = new JSArray();
+        for (String id : page.getIds()) ids.put(id);
+
         JSObject ret = new JSObject();
-        ret.put("events", arr);
-        ret.put("cursor", last);
+        ret.put("events", events);
+        ret.put("ids", ids);
         call.resolve(ret);
     }
 
-    /** Advance the persisted drain cursor after a drained page was ingested. */
+    /** Drop an acknowledged page from the queue, once the JS layer has ingested it. */
     @PluginMethod
     public void ackDrain(PluginCall call) {
-        Double cursor = call.getDouble("cursor");
-        if (cursor != null) {
-            getContext().getSharedPreferences(DRAIN_PREFS, Context.MODE_PRIVATE)
-                    .edit()
-                    .putLong("cursor", cursor.longValue())
-                    .apply();
+        JSArray ids = call.getArray("ids");
+        if (ids != null) {
+            try {
+                ServiceStore.ackDrain(getContext(), ids.toList());
+            } catch (org.json.JSONException e) {
+                Log.w(TAG, "ackDrain failed", e);
+            }
         }
         call.resolve();
-    }
-
-    /**
-     * Execute the WebView event store's statements atomically against the
-     * shared database (the SqlDriver transport — see nativeDriver.ts).
-     */
-    @PluginMethod
-    public void dbRun(PluginCall call) {
-        JSArray statements = call.getArray("statements");
-        if (statements == null) {
-            call.resolve();
-            return;
-        }
-        try {
-            SharedEventDb.get(getContext()).runBatch(statements);
-            call.resolve();
-        } catch (Exception e) {
-            call.reject("dbRun failed: " + e.getMessage());
-        }
-    }
-
-    /** Run one SELECT for the WebView store; rows are positional arrays. */
-    @PluginMethod
-    public void dbQuery(PluginCall call) {
-        String sql = call.getString("sql");
-        if (sql == null) {
-            call.reject("dbQuery: sql required");
-            return;
-        }
-        try {
-            JSObject ret = new JSObject();
-            ret.put("rows", SharedEventDb.get(getContext()).queryRows(sql, call.getArray("params")));
-            call.resolve(ret);
-        } catch (Exception e) {
-            call.reject("dbQuery failed: " + e.getMessage());
-        }
     }
 
     /**

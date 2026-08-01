@@ -17,7 +17,8 @@ vi.mock("@/concord-v2/lib/planeSync", () => ({
   whenAuthSettled: async () => undefined,
 }));
 vi.mock("@/concord-v2/lib/rumorStore", () => ({
-  queryByStreams: async () => [],
+  pruneControlSnapshots: async () => undefined,
+  queryPlane: async () => [],
   writeRumors: async () => undefined,
 }));
 vi.mock("@/concord-v2/lib/streamAuth", () => ({ registerStreamKeys: () => undefined }));
@@ -30,6 +31,7 @@ vi.mock("@/concord-v2/lib/chat", () => ({ openChatBatch: async () => [] }));
 vi.mock("@/concord-v2/lib/community", () => ({ channelsView: () => [] }));
 vi.mock("@/concord-v2/lib/guestbook", () => ({ guestbookGroups: () => [] }));
 vi.mock("@/concord-v2/lib/control", () => ({
+  controlFoldKey: (idHex: string) => `concord2-fold:${idHex}`,
   controlGroups: () => [{ pk: "aa".repeat(32) }],
   openControlEditions: () => [],
   foldControlState: () => ({ channels: new Map(), banned: new Set(), heads: new Map(), incomplete: [] }),

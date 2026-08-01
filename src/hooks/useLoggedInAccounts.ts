@@ -2,19 +2,20 @@ import { useNostr } from '@nostrify/react';
 import { useNostrLogin } from '@nostrify/react/login';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
-import { NSchema as n, NostrEvent, NostrMetadata } from '@nostrify/nostrify';
+import { NSchema as n, NostrMetadata } from '@nostrify/nostrify';
 
 import { useEventStore } from '@/hooks/useEventStore';
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 export interface Account {
   id: string;
   pubkey: string;
-  event?: NostrEvent;
+  event?: NostrRumor;
   metadata: NostrMetadata;
 }
 
 /** Parse a kind-0 event's content into metadata (empty object on failure). */
-function parseMetadata(event: NostrEvent | undefined): NostrMetadata {
+function parseMetadata(event: NostrRumor | undefined): NostrMetadata {
   try {
     return n.json().pipe(n.metadata()).parse(event?.content);
   } catch {
@@ -41,9 +42,9 @@ interface LoginRef {
  */
 export async function mergeAccounts(
   logins: readonly LoginRef[],
-  freshEvents: NostrEvent[],
+  freshEvents: NostrRumor[],
   prev: Account[],
-  cachedFor: (pubkey: string) => Promise<NostrEvent | undefined>,
+  cachedFor: (pubkey: string) => Promise<NostrRumor | undefined>,
 ): Promise<Account[]> {
   return Promise.all(    logins.map(async ({ id, pubkey }): Promise<Account> => {
       const fresh = freshEvents.find((e) => e.pubkey === pubkey);

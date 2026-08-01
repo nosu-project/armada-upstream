@@ -1,7 +1,7 @@
 /**
  * ArmadaDB — the shape all Armada client data is meant to converge on, with
- * one adapter per platform storage engine (IndexedDB on web, SQLite on
- * native/OPFS).
+ * one adapter per platform storage engine (IndexedDB everywhere today, SQLite
+ * once a driver exists for it — see `armadaDB.ts`).
  *
  * Two ideas carry the whole surface:
  *
@@ -14,8 +14,21 @@
  *    authenticated* by the time it lands (a signature check, or gift-wrap
  *    decryption which authenticates by construction), so the store deals in
  *    signature-less rumors and never carries a `sig` it would have to lie
- *    about. Provenance that has no home in the rumor itself is folded into
- *    tags by the caller.
+ *    about.
+ *
+ * A stored rumor is normally the one its author wrote, byte for byte, so `id`
+ * is the NIP-01 hash of the row's own contents. Nothing here enforces that —
+ * `id` is just the key — and two callers deliberately use it otherwise, both
+ * because the row's identity is a DEDUP key rather than a content hash:
+ *
+ *  - the invite inbox (`inviteInbox.ts`) keys by the WRAP id, since the inbox
+ *    dedups on wraps and two wraps can carry the same invite;
+ *  - the parked-wrap tenant (`c2park`) stores wraps, whose id is their own.
+ *
+ * Anything else that stores a rumor stores it verbatim, and the reasons are in
+ * `concord-v2/lib/rumorStore.ts` and `nip17/dm17Store.ts`: a rumor's tags are
+ * the bytes its id commits to, so bookkeeping written into them makes the row
+ * something the sender never signed.
  */
 import type { NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -28,11 +41,21 @@ export interface NRumorStore {
   /**
    * Rumors matching any of the filters, newest first (ties: smaller id first).
    *
-   * One caveat on NIP-50 `search`, the only place the adapters don't agree
-   * exactly: SQLite resolves it against an FTS5 index, so keywords match whole
-   * **words** (case- and accent-insensitively), while IndexedDB scans content
-   * for **substrings**. `brown` finds "the quick brown fox" on both; `brow`
-   * finds it only on IndexedDB.
+   * NIP-50 `search` is the one place the adapters don't agree exactly:
+   *
+   *  - SQLite resolves it against an FTS5 index, so keywords match whole
+   *    **words** (case- and accent-insensitively), while IndexedDB scans
+   *    content for **substrings**. `brown` finds "the quick brown fox" on
+   *    both; `brow` finds it only on IndexedDB.
+   *  - SQLite parses the input per NIP-50 — several keywords all have to
+   *    match, `-keyword` excludes, and `key:value` extensions are ignored as
+   *    unsupported — while IndexedDB (via `NIndexedDB`) tests the raw string
+   *    as one substring. So `red -anchor` finds "red boat" only on SQLite.
+   *
+   * They do agree on failing CLOSED: a non-empty search that names nothing
+   * either can match (`domain:example.com`, `""`) matches nothing, rather than
+   * dropping the constraint and answering a narrowing query with everything.
+   * An absent or blank `search` asked for nothing and constrains nothing.
    */
   query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrRumor[]>;
   /** Store one rumor. Resolves once the write has committed. */
@@ -60,6 +83,23 @@ export interface ArmadaKV {
   /** The value, or `undefined` if the key was never set. */
   get<T>(key: string): Promise<T | undefined>;
   set<T>(key: string, value: T): Promise<void>;
+  /** Forget a key. Deleting one that was never set is a no-op, not an error. */
+  delete(key: string): Promise<void>;
+  /**
+   * Every key currently set, restricted to those starting with `prefix` when
+   * one is given (an empty prefix means all of them).
+   *
+   * The order is each adapter's native string collation — IndexedDB compares
+   * UTF-16 code units, SQLite's `BINARY` compares UTF-8 bytes — which agree on
+   * everything except astral-plane characters. Sort yourself if you need an
+   * order both adapters promise.
+   *
+   * This is how a subsystem gets enumeration out of a store that is otherwise
+   * addressed by exact key: give related entries a shared key prefix and scan
+   * it. Both adapters push the prefix down to a range scan, so the cost is in
+   * what matches, not in what's stored.
+   */
+  keys(prefix?: string): Promise<string[]>;
 }
 
 export interface ArmadaDB {
@@ -93,4 +133,22 @@ export function defaultIndexTags(rumor: NostrRumor): string[][] {
   return rumor.tags.filter(
     ([name, value]) => !!name && name.length <= 20 && !!value && value.length < 200,
   );
+}
+
+/**
+ * The exclusive upper bound of the key range starting with `prefix`, or
+ * `undefined` when there isn't one — an empty prefix, or a prefix ending in the
+ * maximal code unit, both of which are open-ended.
+ *
+ * Shared by the adapters' {@link ArmadaKV.keys} so they narrow their scans the
+ * same way. It is only ever a NARROWING: the two engines' collations disagree
+ * about astral-plane characters, so a range can admit a key that doesn't
+ * actually start with the prefix, and both adapters filter the result rather
+ * than trust the bound.
+ */
+export function prefixUpperBound(prefix: string): string | undefined {
+  if (!prefix) return undefined;
+  const last = prefix.charCodeAt(prefix.length - 1);
+  if (last === 0xffff) return undefined;
+  return prefix.slice(0, -1) + String.fromCharCode(last + 1);
 }

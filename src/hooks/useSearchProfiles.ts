@@ -8,12 +8,13 @@ import { useEventStore } from "@/hooks/useEventStore";
 import { useFollowList } from "@/hooks/useFollowList";
 import { seedAuthorCache } from "@/hooks/useAuthor";
 
-import type { NostrEvent, NostrMetadata } from "@nostrify/nostrify";
+import type { NostrMetadata } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 export interface SearchProfile {
   pubkey: string;
   metadata: NostrMetadata;
-  event: NostrEvent;
+  event: NostrRumor;
 }
 
 /**
@@ -54,7 +55,7 @@ function searchCachedProfiles(
   const cache = queryClient.getQueryCache().findAll({ queryKey: ["author"] });
 
   for (const entry of cache) {
-    const data = entry.state.data as { event?: NostrEvent; metadata?: NostrMetadata } | undefined;
+    const data = entry.state.data as { event?: NostrRumor; metadata?: NostrMetadata } | undefined;
     if (!data?.event || !data?.metadata) continue;
 
     const profile: SearchProfile = { pubkey: data.event.pubkey, metadata: data.metadata, event: data.event };
@@ -99,7 +100,7 @@ function useFollowProfiles(followedPubkeys: string[]) {
 
       // 1) Instant: whatever the local store already has.
       const cached = await store.query([{ kinds: [0], authors: followedPubkeys }]);
-      const byPubkey = new Map<string, NostrEvent>();
+      const byPubkey = new Map<string, NostrRumor>();
       for (const ev of cached) {
         const prev = byPubkey.get(ev.pubkey);
         if (!prev || ev.created_at > prev.created_at) byPubkey.set(ev.pubkey, ev);
@@ -267,12 +268,12 @@ export function useMemberProfiles(pubkeys: string[], query: string) {
         .getQueryCache()
         .find({ queryKey: ["author", pubkey] });
       const data = entry?.state.data as
-        | { event?: NostrEvent; metadata?: NostrMetadata }
+        | { event?: NostrRumor; metadata?: NostrMetadata }
         | undefined;
       return {
         pubkey,
         metadata: data?.metadata ?? {},
-        event: data?.event ?? ({ pubkey, tags: [], content: "", kind: 0, created_at: 0, id: "", sig: "" } as NostrEvent),
+        event: data?.event ?? ({ pubkey, tags: [], content: "", kind: 0, created_at: 0, id: "" } satisfies NostrRumor),
       };
     });
 

@@ -4,22 +4,17 @@
   <!-- Flat violet-black sea. No gradients. -->
   <rect width="1200" height="630" fill="#100b15"/>
 
-  <!-- The crest mark — flat fills, no glow. -->
-  <g transform="translate(110, 195) scale(1.0)">
-    <!-- Cut-corner vessel crest -->
-    <path d="M64 16 H232 a8 8 0 0 1 8 8 V192 L192 240 H24 a8 8 0 0 1 -8 -8 V64 Z" fill="#15101c"/>
-    <path d="M64 16 H232 a8 8 0 0 1 8 8 V192 L192 240 H24 a8 8 0 0 1 -8 -8 V64 Z" fill="none" stroke="#e8d4a8" stroke-opacity="0.28" stroke-width="2"/>
-    <!-- cyan wake -->
-    <g stroke="#19e6e6" stroke-linecap="round">
-      <path d="M84 182 H172" stroke-width="6" stroke-opacity="0.9"/>
-      <path d="M100 198 H156" stroke-width="4" stroke-opacity="0.5"/>
-      <path d="M114 210 H142" stroke-width="3" stroke-opacity="0.28"/>
+  <!-- The Armada mark — flat fills, no glow. Same geometry as public/logo.svg. -->
+  <g transform="translate(112, 179) scale(2.0)">
+    <!-- three cyan wave lines -->
+    <g fill="#19e6e6">
+      <path d="M95.4 104.865H32.59c-1.18 0-2.14-.96-2.14-2.14s.96-2.14 2.14-2.14H95.4c1.18 0 2.14.96 2.14 2.14s-.96 2.14-2.14 2.14z"/>
+      <path d="M83.98 115.565H44.01a1.43 1.43 0 1 1 0-2.86h39.97a1.43 1.43 0 1 1 0 2.86z"/>
+      <path d="M73.99 123.775H54.01a1.071 1.071 0 0 1 0-2.14h19.98a1.071 1.071 0 0 1 0 2.14z"/>
     </g>
-    <!-- the A / approaching ship -->
-    <path d="M128 96 L160 168 H96 Z" fill="#100b15"/>
-    <path d="M128 44 L184 168 H160 L128 96 L96 168 H72 Z" fill="#fb4d96"/>
-    <path d="M98 132 H158 L156 150 L128 168 L100 150 Z" fill="#100b15"/>
-    <path d="M110 148 L128 134 L146 148" fill="none" stroke="#fb4d96" stroke-opacity="0.7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- the rose sail / advancing A -->
+    <path d="M64 4.225l-39.97 88.5h17.13l2.31-5.2 2.76-6.22-2.22-1.43-1.42-12.84h9.99l4.89-11.01L64 41.335l11.42 25.7h9.99l-1.43 12.84-2.22 1.43 2.77 6.22 2.31 5.2h17.13z" fill="#fb4d96"/>
+    <path d="M76.84 79.165c-.15 0-.31-.05-.44-.15l-12.41-9.65-12.41 9.65c-.31.24-.76.19-1-.13a.706.706 0 0 1 .13-1l12.85-9.99c.26-.2.62-.2.88 0l12.85 9.99a.715.715 0 0 1-.43 1.28z" fill="#fb4d96"/>
   </g>
 
   <!-- Monospace wordmark + terminal-style tagline. -->

@@ -9,7 +9,7 @@ import { BUZZ_UNREAD_KINDS } from "@/buzz/kinds";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { useWireScopes } from "@/wire/useWireScopes";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** NIP-88 poll kind — counts toward channel activity like chat does. */
 const KIND_POLL = 1068;
@@ -75,7 +75,7 @@ export function useRelayUnread(
     [relayUrl, idsKey, user?.pubkey],
   );
 
-  const { data: activity } = useQuery<NostrEvent[]>({
+  const { data: activity } = useQuery<NostrRumor[]>({
     queryKey,
     queryFn: async () => {
       const store = await eventStore;

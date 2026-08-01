@@ -25,6 +25,7 @@ import {
 import type { Channel, Community } from "@/concord-v1/lib/types";
 
 import type { NostrFilter } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** The minimal signer surface the wire needs (matches @nostrify's NUser signer). */
 export interface WireSigner {
@@ -53,7 +54,7 @@ export interface ChannelWire {
    * thread). `kinds` (logical) post-filters the opened set.
    */
   openBatch(
-    events: NostrEvent[],
+    events: NostrRumor[],
     opts?: { signal?: AbortSignal; kinds?: number[] },
   ): Promise<OpenedMessage[]>;
   /** Sign + seal one append event at the CURRENT epoch. */

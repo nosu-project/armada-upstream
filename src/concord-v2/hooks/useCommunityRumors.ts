@@ -34,7 +34,10 @@ const PER_CHANNEL = 200;
  * the store; the read-dependent bits (is-unread, has-new) are derived downstream
  * as pure computation.
  */
-export function useCommunityRumors(channelIds: string[]): {
+export function useCommunityRumors(
+  communityIdHex: string | undefined,
+  channelIds: string[],
+): {
   byChannel: Map<string, OpenedChat[]>;
   isLoading: boolean;
 } {
@@ -44,12 +47,16 @@ export function useCommunityRumors(channelIds: string[]): {
   const channelSig = channelIds.join(",");
   const idSet = useMemo(() => new Set(channelIds), [channelSig]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const queryKey = useMemo(() => ["concord2-community-rumors", channelSig] as const, [channelSig]);
+  const queryKey = useMemo(
+    () => ["concord2-community-rumors", communityIdHex ?? null, channelSig] as const,
+    [communityIdHex, channelSig],
+  );
 
   const { data, isLoading } = useQuery<Map<string, OpenedChat[]>>({
     queryKey,
-    queryFn: ({ signal }) => queryRumorsByChannel(channelIds, { perChannel: PER_CHANNEL, signal }),
-    enabled: channelIds.length > 0,
+    queryFn: ({ signal }) =>
+      queryRumorsByChannel(communityIdHex!, channelIds, { perChannel: PER_CHANNEL, signal }),
+    enabled: !!communityIdHex && channelIds.length > 0,
     // The wire bus below is the live path (per-channel delta reads); this
     // interval is only a backstop for an announcement this tab never heard
     // (e.g. a write from another tab). It re-runs the FULL N-channel scan,
@@ -70,8 +77,8 @@ export function useCommunityRumors(channelIds: string[]): {
     for (const s of scopes) {
       if (s.startsWith("c2:") && idSet.has(s.slice(3))) changed.push(s.slice(3));
     }
-    if (changed.length === 0) return;
-    void queryRumorsByChannel(changed, { perChannel: PER_CHANNEL })
+    if (changed.length === 0 || !communityIdHex) return;
+    void queryRumorsByChannel(communityIdHex, changed, { perChannel: PER_CHANNEL })
       .then((delta) => {
         queryClient.setQueryData<Map<string, OpenedChat[]>>(queryKey, (old) => {
           // Until the initial full scan lands there is nothing to patch — and

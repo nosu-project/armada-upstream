@@ -10,6 +10,8 @@ import { useEventStore } from "./useEventStore";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
+import type { NostrRumor } from "@/lib/nostrRumor";
+
 /** Event template accepted by `useNostrPublish`. */
 export type EventTemplate = Omit<NostrEvent, "id" | "pubkey" | "sig" | "created_at"> & {
   created_at?: number;
@@ -17,7 +19,7 @@ export type EventTemplate = Omit<NostrEvent, "id" | "pubkey" | "sig" | "created_
    * The previous version of the event being replaced (for replaceable/addressable kinds).
    * When provided, `published_at` from the old event is preserved on the new one.
    */
-  prev?: NostrEvent;
+  prev?: NostrRumor;
   /**
    * When set, publish only to this relay (NIP-29 group traffic must stay on
    * the group's host server). When omitted, the event goes to all configured
@@ -91,7 +93,17 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
       // offline-created profiles/settings visible immediately and gives the
       // retry worker a durable copy if the app closes before relays recover.
       void eventStore.then((store) => store.event(event)).catch(() => undefined);
-      queueSignedEvent(event, relay);
+      // Awaited, unlike the store write: the queue and the `removeQueuedPublish`
+      // below are both async now, and a fire-and-forget queue could land AFTER
+      // the removal that a successful publish issues — leaving a delivered
+      // event queued forever.
+      //
+      // Awaited but not FATAL. The queue is the retry-after-restart safety net,
+      // and KV can genuinely fail (quota, an unavailable IndexedDB under iOS
+      // Lockdown Mode). Letting that throw here would abort a publish that was
+      // about to succeed — losing the send outright to protect its backup, and
+      // without even rendering it optimistically, since `onSigned` is below.
+      await queueSignedEvent(event, relay).catch(() => undefined);
 
       // Let callers optimistically render the event before the network call.
       onSigned?.(event);
@@ -106,10 +118,14 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
         } else {
           await nostr.event(event, { signal: AbortSignal.timeout(timeout) });
         }
-        removeQueuedPublish(event.id);
       } catch (error) {
         throw new PublishQueuedError(event, error);
       }
+
+      // Outside the try: the relay has accepted the event by now, so a failure
+      // to clear its queue entry must not be reported as a queued publish. The
+      // worst case is one redundant re-delivery, which relays dedup by id.
+      await removeQueuedPublish(event.id).catch(() => undefined);
 
       return event;
     },
@@ -135,6 +151,13 @@ export function useRepublish(): UseMutationResult<
 
   return useMutation({
     mutationFn: async ({ event, relay }) => {
+      // The local event store drops signatures, so an event read back from it
+      // carries `sig: ""` and every relay will reject it. Fail here instead: a
+      // silent rejection looks identical to a network failure, and the retry
+      // that produced it would loop forever against a relay that is fine.
+      if (!event.sig) {
+        throw new Error("Cannot re-publish an unsigned event (its signature was not preserved).");
+      }
       await markOwnWebPushEvent(event.id);
       const timeout = publishTimeoutMs(user?.method);
       if (relay) {

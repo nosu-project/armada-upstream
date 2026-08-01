@@ -44,10 +44,10 @@
 
 import { currentControlGroup } from "@/concord-v2/lib/control";
 import { guestbookGroups } from "@/concord-v2/lib/guestbook";
-import { KIND_WRAP } from "@/concord-v2/lib/kinds";
+import { KIND_WRAP, type Plane } from "@/concord-v2/lib/kinds";
 import { readStreamCursor, updateStreamCursor, writeOpened } from "@/concord-v2/lib/rumorStore";
 import { isStreamPubkey, streamAuthsSettled } from "@/concord-v2/lib/streamAuth";
-import { openWrap, type OpenedEvent } from "@/concord-v2/lib/stream";
+import { openWrap, type OpenedEvent, type OpenedWireEvent } from "@/concord-v2/lib/stream";
 import type { GroupKey } from "@/concord-v2/lib/derive";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
@@ -113,6 +113,31 @@ export async function whenAuthSettled(url: string, groupsOf: () => GroupKey[]): 
 export interface PlaneScope {
   /** The scope key: single-flight identity, and (forward mode) the persisted cursor key. */
   scope: string;
+  /**
+   * The community this plane belongs to — which rumor-store tenant its opened
+   * events are written to.
+   *
+   * A structured field rather than something parsed back out of {@link scope}:
+   * `scope` is also the cursor key and the single-flight identity, so its
+   * format is free to change, and getting a tenant wrong writes one community's
+   * plane into another's database. Set by the scope factories, which each
+   * already take the community.
+   */
+  communityIdHex: string;
+  /**
+   * Which plane this scope reads — the store's write-side check that a rumor
+   * arriving on these stream keys is one this plane may carry (see
+   * `writeOpened`). Set by the scope factories alongside `groups`, so the two
+   * cannot drift apart.
+   */
+  plane: Plane;
+  /**
+   * Whether this community has ever rotated its root. Only a Refounded one has
+   * a compaction snapshot to tell from old-root fragments, so only a Refounded
+   * one needs the store's per-address id set — see `noteControlSnapshot`.
+   * Read straight off the community by the scope factories.
+   */
+  refounded: boolean;
   /** The stream keys whose addresses this plane's wraps are authored by. */
   groups: GroupKey[];
   /**
@@ -176,6 +201,9 @@ export function controlScope(
 ): PlaneScope {
   return {
     scope: controlScopeKey(community, relayUrl),
+    communityIdHex: community.idHex,
+    plane: "control",
+    refounded: community.rootEpoch > 0n,
     groups: [currentControlGroup(community)],
     complete: true,
     onFresh,
@@ -195,6 +223,9 @@ export function guestbookScope(
 ): PlaneScope {
   return {
     scope: `guestbook:${community.idHex}@${community.rootEpoch}|${relayUrl}`,
+    communityIdHex: community.idHex,
+    plane: "guestbook",
+    refounded: community.rootEpoch > 0n,
     groups: guestbookGroups(community),
     onFresh,
   };
@@ -208,9 +239,9 @@ export function mergeOpened(...sets: OpenedEvent[][]): OpenedEvent[] {
 }
 
 /** Decrypt raw plane wraps under the held groups into opened events. */
-export function openPlaneWraps(wraps: NostrRumor[], groups: GroupKey[]): OpenedEvent[] {
+export function openPlaneWraps(wraps: NostrRumor[], groups: GroupKey[]): OpenedWireEvent[] {
   const byPk = new Map(groups.map((g) => [g.pk, g]));
-  const out: OpenedEvent[] = [];
+  const out: OpenedWireEvent[] = [];
   for (const wrap of wraps) {
     const group = byPk.get(wrap.pubkey);
     if (!group) continue;
@@ -234,9 +265,9 @@ const PLANE_DECODE_SLICE_MS = 5;
  * seals) — all synchronous noble crypto — so decoding a whole plane in one
  * unbroken loop freezes the UI for the duration on a phone.
  */
-export async function openPlaneWrapsChunked(wraps: NostrRumor[], groups: GroupKey[]): Promise<OpenedEvent[]> {
+export async function openPlaneWrapsChunked(wraps: NostrRumor[], groups: GroupKey[]): Promise<OpenedWireEvent[]> {
   const byPk = new Map(groups.map((g) => [g.pk, g]));
-  const out: OpenedEvent[] = [];
+  const out: OpenedWireEvent[] = [];
   let sliceStart = performance.now();
   for (let i = 0; i < wraps.length; i++) {
     const group = byPk.get(wraps[i].pubkey);
@@ -312,7 +343,7 @@ export function _configureSweepPagingForTests(cfg: Partial<typeof paging>): void
  * and the folds re-read the store, so a cold launch can skip re-decrypting
  * the whole plane. A session-only memo made every relaunch re-pay the full
  * NIP-44+Schnorr pass over thousands of control wraps — the main-thread stall
- * on startup. Wiped with the rest of `armada-concord-cache` on logout; an
+ * on startup. Wiped with the rest of the fold cache on logout; an
  * evicted or lost id merely re-decrypts once.
  */
 const seenCompleteWraps = new Set<string>();
@@ -784,14 +815,23 @@ async function runScopes(
             (unreadableScopes.get(s.scope) ?? 0) + page.filter((w) => junkWraps.has(w.id)).length,
           );
 
+          let stored = true;
           if (opened.length > 0) {
-            await writeOpened(opened);
+            stored = await writeOpened(s.communityIdHex, opened, s.plane, {
+              refounded: s.refounded,
+            });
             for (const e of opened) freshPerScope[i].push(e);
           }
           // Only the memo advances, and only once the rumors are durably
           // stored — every sweep re-asks for the whole plane, so nothing
           // received can ever become unreachable.
-          notePlaneWrapsSeen(page.map((w) => w.id));
+          //
+          // Which is exactly why the write's outcome is checked. The memo is
+          // what stops a later sweep re-decrypting these wraps, so advancing it
+          // over a failed write would leave rumors that never reached the store
+          // and are never opened again — the one way a completely-swept plane
+          // can lose an event.
+          if (stored) notePlaneWrapsSeen(page.map((w) => w.id));
         };
         const swept = await fetchCompleteScope(
           nostr,
@@ -808,16 +848,45 @@ async function runScopes(
       }
 
       // Forward scopes stay one batch — their `since` already narrowed them —
-      // then ONE store write and parallel cursor advances.
-      const forwardFresh: OpenedEvent[] = [];
+      // then one store write PER COMMUNITY and parallel cursor advances.
+      //
+      // Per community, not one write for the batch: a relay batch deliberately
+      // coalesces scopes from every community that shares this relay (see
+      // `enqueue`), so `forwardFresh` is a mixed bag and each community's
+      // events have to land in their own tenant. Bucketing keeps it at one
+      // write per community rather than one per scope — and a community's
+      // guestbook scopes for different relays are different batches anyway, so
+      // in practice that is still a single write.
+      //
+      // Bucketed per (community, PLANE): the write is the plane boundary, so a
+      // batch that coalesced two planes' scopes must not hand them to one call
+      // — the wrong plane's rules would decide what may be stored.
+      const forwardFresh = new Map<
+        string,
+        { communityIdHex: string; plane: Plane; refounded: boolean; fresh: OpenedWireEvent[] }
+      >();
       for (const [i, s] of scopes.entries()) {
         if (s.complete) continue;
         for (const e of await openPlaneWrapsChunked(perScope[i], s.groups)) {
           freshPerScope[i].push(e);
-          forwardFresh.push(e);
+          const key = `${s.communityIdHex}|${s.plane}`;
+          const bucket = forwardFresh.get(key);
+          if (bucket) bucket.fresh.push(e);
+          else {
+            forwardFresh.set(key, {
+              communityIdHex: s.communityIdHex,
+              plane: s.plane,
+              refounded: s.refounded,
+              fresh: [e],
+            });
+          }
         }
       }
-      if (forwardFresh.length > 0) await writeOpened(forwardFresh);
+      await Promise.all(
+        [...forwardFresh.values()].map(({ communityIdHex, plane, refounded, fresh }) =>
+          writeOpened(communityIdHex, fresh, plane, { refounded }),
+        ),
+      );
       await Promise.all(
         scopes.map((s, i) => {
           logSync(

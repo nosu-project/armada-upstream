@@ -25,6 +25,7 @@ import { readFolded, writeFolded } from "@/lib/foldedCache";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** The decrypted membership list persisted locally, with the event id it came from. */
 type PersistedList = { event: NostrEvent; list: ConcordList };
@@ -65,7 +66,7 @@ const listDecryptMemo = new Map<string, Promise<ReadConcordListResult>>();
 
 /** Decrypt and parse the list event's NIP-44 self-encrypted content (memoized by event id). */
 async function readConcordListEvent(
-  event: NostrEvent | null,
+  event: NostrRumor | null,
   signer: NUser["signer"] | undefined,
   selfPubkey: string,
 ): Promise<ReadConcordListResult> {
@@ -354,7 +355,7 @@ export interface ConcordScanResult {
 
 /** A read of one 30078 list blob into a {@link ConcordList} (best-effort). */
 async function decodeListBlob(
-  event: NostrEvent | null | undefined,
+  event: NostrRumor | null | undefined,
   signer: NUser["signer"],
   selfPubkey: string,
 ): Promise<ConcordList | null> {

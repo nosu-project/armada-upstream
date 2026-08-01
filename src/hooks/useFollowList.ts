@@ -6,11 +6,11 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { contactListPubkeys, fetchContactList } from "@/lib/contactList";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 export interface FollowListData {
   /** The raw kind 3 event (null if none found). */
-  event: NostrEvent | null;
+  event: NostrRumor | null;
   /** All pubkeys from `p` tags. */
   pubkeys: string[];
 }

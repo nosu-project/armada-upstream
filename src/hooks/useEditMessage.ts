@@ -4,6 +4,7 @@ import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { KIND_DELETE } from "@/lib/nip29";
 
 import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
  * Edit a message the current user authored, NIP-09 style: delete the original
@@ -18,11 +19,11 @@ import type { NostrEvent } from "@nostrify/nostrify";
 export function useEditMessage(relayUrl: string, groupId: string) {
   const { mutateAsync: publish } = useNostrPublish();
 
-  return useMutation<NostrEvent, Error, { original: NostrEvent; content: string }>({
+  return useMutation<NostrEvent | null, Error, { original: NostrRumor; content: string }>({
     mutationFn: async ({ original, content }) => {
       const trimmed = content.trim();
       if (!trimmed) throw new Error("Message cannot be empty");
-      if (trimmed === original.content.trim()) return original; // no-op
+      if (trimmed === original.content.trim()) return null; // no-op
 
       // 1. Delete the original (NIP-09). The `h` tag routes/scopes it to the
       //    group; `k` records the deleted kind per NIP-09.
@@ -65,7 +66,7 @@ export function useEditMessage(relayUrl: string, groupId: string) {
 export function useDeleteOwnMessage(relayUrl: string, groupId: string) {
   const { mutateAsync: publish } = useNostrPublish();
 
-  return useMutation<void, Error, { event: NostrEvent }>({
+  return useMutation<void, Error, { event: NostrRumor }>({
     mutationFn: async ({ event }) => {
       await publish({
         kind: KIND_DELETE,

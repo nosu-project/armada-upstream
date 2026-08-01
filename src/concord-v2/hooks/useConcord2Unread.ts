@@ -31,6 +31,7 @@ export interface Concord2Unread {
  * ts)` to advance a channel's read stamp, and a `getLastRead` accessor.
  */
 export function useConcord2Unread(
+  communityIdHex: string | undefined,
   channels: ChannelV2[],
   gitByChannel: ReadonlyMap<string, readonly GitTimelineActivity[]> = new Map(),
 ): {
@@ -50,7 +51,7 @@ export function useConcord2Unread(
   const channelIds = useMemo(() => channels.map((c) => c.idHex), [channelSig]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The one shared community read (see useCommunityRumors).
-  const { byChannel: rumorsByChannel } = useCommunityRumors(channelIds);
+  const { byChannel: rumorsByChannel } = useCommunityRumors(communityIdHex, channelIds);
 
   const byChannel = useMemo<Record<string, Concord2Unread>>(() => {
     const next: Record<string, Concord2Unread> = {};

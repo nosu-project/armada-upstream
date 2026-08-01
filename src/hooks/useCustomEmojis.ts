@@ -11,7 +11,8 @@ import { emojiPackCoord, emojiPackName, readEmojiList } from "@/hooks/useEmojiPa
 import { useEventStore } from "@/hooks/useEventStore";
 import { parseAddr } from "@/lib/parseAddr";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import { loadPalette, savePalette } from "@/lib/emojiPalette";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 export interface CustomEmoji {
   shortcode: string;
@@ -27,35 +28,13 @@ export interface CustomEmoji {
   packName?: string;
 }
 
-/**
- * Durable, per-user copy of the LAST resolved palette.
- *
- * This is the whole point of the hook's persistence: the React Query cache is
- * in-memory and wiped on every reload, so without a durable floor the picker
- * re-derives from a live two-hop relay read (10030 list → 30030 packs) on each
- * load and blanks whenever that read loses its race. localStorage is owned and
- * written here — not scavenged from the best-effort event cache — so a flaky
- * read can never lose emojis the user has already seen.
- */
-function loadPalette(pubkey: string): CustomEmoji[] {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(`armada:custom-emojis:${pubkey}`) ?? "");
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-function savePalette(pubkey: string, emojis: CustomEmoji[]): void {
-  try {
-    localStorage.setItem(`armada:custom-emojis:${pubkey}`, JSON.stringify(emojis));
-  } catch {
-    // localStorage full/unavailable — the in-memory result still stands.
-  }
-}
+// The durable, per-user copy of the LAST resolved palette lives in
+// `@/lib/emojiPalette`, shared with `useEmojiPacks` rather than duplicated
+// key-by-key across the two.
 
 /** Newest event per addressable coordinate (`kind:pubkey:d`). */
-function newestPerAddr(events: NostrEvent[]): NostrEvent[] {
-  const newest = new Map<string, NostrEvent>();
+function newestPerAddr(events: NostrRumor[]): NostrRumor[] {
+  const newest = new Map<string, NostrRumor>();
   for (const event of events) {
     const d = event.tags.find(([n]) => n === "d")?.[1] ?? "";
     const addr = `${event.kind}:${event.pubkey}:${d}`;
@@ -71,7 +50,7 @@ function newestPerAddr(events: NostrEvent[]): NostrEvent[] {
  * are merged; when the same shortcode maps to different URLs across packs it is
  * prefixed with the pack id so both stay reachable.
  */
-function paletteFrom(listEvent: NostrEvent, packEvents: NostrEvent[]): CustomEmoji[] {
+function paletteFrom(listEvent: NostrRumor, packEvents: NostrRumor[]): CustomEmoji[] {
   const raw: {
     shortcode: string;
     url: string;
@@ -149,7 +128,7 @@ export function useCustomEmojis() {
         .map((t) => parseAddr(t[1]))
         .filter((a): a is NonNullable<typeof a> => !!a && a.kind === 30030);
 
-      let packEvents: NostrEvent[] = [];
+      let packEvents: NostrRumor[] = [];
       if (packRefs.length > 0) {
         const filters = packRefs.map((r) => ({
           kinds: [30030],
@@ -158,8 +137,8 @@ export function useCustomEmojis() {
           limit: 1,
         }));
         const [relay, cached] = await Promise.all([
-          nostr.query(filters, { signal }).catch(() => [] as NostrEvent[]),
-          store.query(filters).catch(() => [] as NostrEvent[]),
+          nostr.query(filters, { signal }).catch(() => [] as NostrRumor[]),
+          store.query(filters).catch(() => [] as NostrRumor[]),
         ]);
         packEvents = newestPerAddr([...relay, ...cached]);
       }

@@ -9,7 +9,7 @@ import { BUZZ_UNREAD_KINDS } from "@/buzz/kinds";
 import { KIND_COMMENT, KIND_GROUP_CHAT } from "@/lib/nip29";
 import { useWireScopes } from "@/wire/useWireScopes";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** NIP-88 poll kind — counts as inbox activity like chat does. */
 const KIND_POLL = 1068;
@@ -29,7 +29,7 @@ const SCAN_LIMIT = 200;
 /** One inbox entry: a message elsewhere on this server that mentions you. */
 export interface InboxItem {
   /** The mentioning event. */
-  event: NostrEvent;
+  event: NostrRumor;
   /** The group (`h` tag) the event belongs to. */
   groupId: string;
   /** Whether you haven't yet read past it in that channel. */
@@ -74,7 +74,7 @@ export function useRelayInbox(
     [relayUrl, idsKey, user?.pubkey],
   );
 
-  const { data: mentions } = useQuery<NostrEvent[]>({
+  const { data: mentions } = useQuery<NostrRumor[]>({
     queryKey,
     queryFn: async ({ signal }) => {
       const store = await eventStore;
@@ -91,7 +91,7 @@ export function useRelayInbox(
           [{ kinds: MENTION_KINDS, "#p": [user!.pubkey], limit: SCAN_LIMIT }],
           { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
         );
-        const byId = new Map<string, NostrEvent>();
+        const byId = new Map<string, NostrRumor>();
         for (const ev of [...cached, ...fresh]) byId.set(ev.id, ev);
         return [...byId.values()];
       } catch {

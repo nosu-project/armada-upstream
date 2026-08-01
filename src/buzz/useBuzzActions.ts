@@ -12,6 +12,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 
 import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
  * Edit a Buzz stream message: publish a kind-40003 edit whose content is the
@@ -22,11 +23,11 @@ import type { NostrEvent } from "@nostrify/nostrify";
 export function useBuzzEditMessage(relayUrl: string, channelId: string) {
   const { mutateAsync: publish } = useNostrPublish();
 
-  return useMutation<NostrEvent, Error, { original: NostrEvent; content: string }>({
+  return useMutation<NostrEvent | null, Error, { original: NostrRumor; content: string }>({
     mutationFn: async ({ original, content }) => {
       const trimmed = content.trim();
       if (!trimmed) throw new Error("Message cannot be empty");
-      if (trimmed === original.content.trim()) return original; // no-op
+      if (trimmed === original.content.trim()) return null; // no-op
       return await publish({
         kind: KIND_STREAM_MESSAGE_EDIT,
         content: trimmed,
@@ -57,7 +58,7 @@ export function useSendBuzzThreadReply(
 ) {
   const { mutateAsync: publish } = useNostrPublish();
   return useCallback(
-    async (root: NostrEvent, content: string, composerTags: string[][] = []) => {
+    async (root: NostrRumor, content: string, composerTags: string[][] = []) => {
       // Replying "to a root" from the thread panel: the panel always replies
       // to the thread ROOT, so parent = root unless the root is itself a
       // broadcast reply belonging to a deeper thread.

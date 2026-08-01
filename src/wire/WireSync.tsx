@@ -24,6 +24,7 @@ import { useFollowList } from "@/hooks/useFollowList";
 import { useWireGitTicketRoots } from "@/hooks/useWireGitTicketRoots";
 import { hasNativeNotificationService } from "@/hooks/useNativeNotifications";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
+import { KvPrefixCache } from "@/lib/db/kvCache";
 import { onFoldedWrite, readFolded } from "@/lib/foldedCache";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
 import { onRelayReopened } from "@/lib/relayReopen";
@@ -88,33 +89,30 @@ const WATCHDOG_TICK_MS = 5_000;
  */
 const REPLAY_BATCH_MAX = 200;
 
-function cursorKey(relay: string): string {
-  return `armada:wire-cursor:${relay}`;
-}
+/**
+ * Per-relay resume cursors, in ArmadaDB's KV behind a synchronous cache.
+ *
+ * One entry per relay ever contacted, never evicted, which is what made this
+ * worth moving off localStorage. A read before {@link cursors.ready} resolves
+ * just resumes from the fresh lookback, so the relay loop awaits it once
+ * before its first round rather than re-reading the whole backlog.
+ */
+const cursors = new KvPrefixCache<number>({ prefix: "wire-cursor:" });
 
 function readCursor(relay: string): number | undefined {
-  try {
-    const raw = localStorage.getItem(cursorKey(relay));
-    const n = raw ? Number(raw) : NaN;
-    return Number.isFinite(n) && n > 0 ? n : undefined;
-  } catch {
-    return undefined;
-  }
+  const n = cursors.get(relay);
+  return typeof n === "number" && Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
 function writeCursor(relay: string, createdAt: number): void {
-  try {
-    // Clamp against the local clock: an event stamped in the future (a
-    // member's skewed clock, a hostile timestamp) must not drag the cursor
-    // past `now` — every later REQ would open with `since > now` and the wire
-    // would go deaf on this relay (persistently — the cursor is durable)
-    // while everyone else's correctly-stamped messages stop matching.
-    const next = Math.min(createdAt, Math.floor(Date.now() / 1000));
-    const prev = readCursor(relay) ?? 0;
-    if (next > prev) localStorage.setItem(cursorKey(relay), String(next));
-  } catch {
-    // localStorage unavailable — resume from the fresh lookback next launch.
-  }
+  // Clamp against the local clock: an event stamped in the future (a
+  // member's skewed clock, a hostile timestamp) must not drag the cursor
+  // past `now` — every later REQ would open with `since > now` and the wire
+  // would go deaf on this relay (persistently — the cursor is durable)
+  // while everyone else's correctly-stamped messages stop matching.
+  const next = Math.min(createdAt, Math.floor(Date.now() / 1000));
+  const prev = readCursor(relay) ?? 0;
+  if (next > prev) cursors.set(relay, next);
 }
 
 /**
@@ -231,18 +229,33 @@ function wireGitRepositories(
  * Every control stream key is registered for NIP-42 so the wire's kind-1059
  * control REQs pass auth-gating relays.
  */
-function useWireConcord2Control(): Array<{ relays: string[]; idHex: string; groups: GroupKey[] }> {
+function useWireConcord2Control(): Array<{
+  relays: string[];
+  idHex: string;
+  groups: GroupKey[];
+  refounded: boolean;
+}> {
   const { data } = useCommunityList2();
   const entries = useMemo(() => (data ? liveEntries(data.list) : []), [data]);
 
   return useMemo(() => {
-    const out: Array<{ relays: string[]; idHex: string; groups: GroupKey[] }> = [];
+    const out: Array<{
+      relays: string[];
+      idHex: string;
+      groups: GroupKey[];
+      refounded: boolean;
+    }> = [];
     for (const entry of entries) {
       const community = rehydrateCommunity(entry);
       if (!community || community.relays.length === 0) continue;
       const groups = controlGroups(community);
       if (groups.length === 0) continue;
-      out.push({ relays: community.relays, idHex: community.idHex, groups });
+      out.push({
+        relays: community.relays,
+        idHex: community.idHex,
+        groups,
+        refounded: community.rootEpoch > 0n,
+      });
       // Scoped per community: a relay's NIP-42 challenge only signs the control
       // stream keys it actually hosts (see streamAuth.ts).
       registerStreamKeys(groups, community.relays);
@@ -398,6 +411,10 @@ export function WireSync() {
             wakeSleep = finish;
             controller.signal.addEventListener("abort", finish);
           });
+        // The cursors are in KV now, so the first round has to wait for them.
+        // Reading an unwarmed cache would resume from the fresh lookback and
+        // re-ingest the backlog on every launch.
+        await cursors.ready();
         // Routine rotations are silent in the log; only the first round and
         // anomalies (swallowed REQ, reopen restart, early CLOSED) speak.
         let firstRound = true;
@@ -595,23 +612,24 @@ export function WireSync() {
       return Promise.resolve();
     };
 
-    // Drain what the service received while the WebView was down (open /
-    // resume). The service writes events durably into the shared native
-    // database; drainEvents pages rows after the persisted cursor, and the
-    // cursor is acked only AFTER ingest completes (parked wraps persisted,
-    // store writes flushed) so a webview crash mid-page replays instead of
-    // losing events. NOT live: the service already notified for these.
+    // Route what the service received while the WebView was down (open /
+    // resume). The events are already IN the store — service and WebView share
+    // one native ArmadaDB — so this is not how they become durable; it is how
+    // they get a pass through ingest (parked wraps, wire scopes, notification
+    // candidates). A page is acked only AFTER ingest completes, so a webview
+    // crash mid-page replays instead of dropping the routing. NOT live: the
+    // service already notified for these.
     let draining = false;
     const drain = async () => {
       if (draining) return; // resume + mount can overlap; pages are sequential
       draining = true;
       try {
         while (!cancelled) {
-          const { events, cursor } = await ArmadaNotification.drainEvents();
+          const { events, ids } = await ArmadaNotification.drainEvents();
           if (events.length === 0) break;
           await ingest(events, false);
           if (cancelled) break;
-          await ArmadaNotification.ackDrain({ cursor });
+          await ArmadaNotification.ackDrain({ ids });
         }
       } catch {
         // Bridge unavailable / mid-drain failure — the unacked page replays.
@@ -672,7 +690,10 @@ export function WireSync() {
           // Chat wraps → rumor store, grouped per owning channel.
           const byChannel = new Map<ChannelV2, NostrRumor[]>();
           // Control wraps → opened-event store, grouped per owning community.
-          const ctlByCommunity = new Map<string, { groups: GroupKey[]; wraps: NostrRumor[] }>();
+          const ctlByCommunity = new Map<
+            string,
+            { groups: GroupKey[]; refounded: boolean; wraps: NostrRumor[] }
+          >();
           for (const wrap of parked) {
             const channel = spec.v2ByPk.get(wrap.pubkey);
             if (channel) {
@@ -685,23 +706,37 @@ export function WireSync() {
             if (ctl) {
               const bucket = ctlByCommunity.get(ctl.idHex);
               if (bucket) bucket.wraps.push(wrap);
-              else ctlByCommunity.set(ctl.idHex, { groups: ctl.groups, wraps: [wrap] });
+              else {
+                ctlByCommunity.set(ctl.idHex, {
+                  groups: ctl.groups,
+                  refounded: ctl.refounded,
+                  wraps: [wrap],
+                });
+              }
             }
           }
 
           for (const [channel, wraps] of byChannel) {
+            // No community for this channel means no tenant to write to, so
+            // neither store nor ACK — the wraps stay parked for a later drain
+            // (a notified message must never be locally destructible).
+            const communityIdHex = spec.v2CommunityByChannel.get(channel.idHex);
+            if (!communityIdHex) continue;
             const opened = await openChatBatch(wraps, channel);
             if (opened.length === 0) continue;
-            writeRumors(opened);
+            // ACK only what actually landed: a wrap is deleted on the
+            // strength of its rumor being stored, and a notified message must
+            // never be locally destructible.
+            if (!(await writeRumors(communityIdHex, opened))) continue;
             scopes.add(`c2:${channel.idHex}`);
             const openedWrapIds = new Set(opened.map((o) => o.wrapId));
             acked.push(...wraps.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
           }
 
-          for (const [idHex, { groups, wraps }] of ctlByCommunity) {
+          for (const [idHex, { groups, refounded, wraps }] of ctlByCommunity) {
             const opened = await openPlaneWrapsChunked(wraps, groups);
             if (opened.length === 0) continue;
-            await writeOpened(opened);
+            if (!(await writeOpened(idHex, opened, "control", { refounded }))) continue;
             scopes.add(`c2ctl:${idHex}`);
             const openedWrapIds = new Set(opened.map((o) => o.wrapId));
             acked.push(...wraps.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));

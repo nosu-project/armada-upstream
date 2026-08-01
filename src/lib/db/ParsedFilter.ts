@@ -105,7 +105,6 @@ export class ParsedFilter {
     }
 
     this.tags = tags;
-    this.neverMatch = neverMatch;
 
     this.idSet = this.ids && new Set(this.ids);
     this.authorSet = this.authors && new Set(this.authors);
@@ -128,8 +127,21 @@ export class ParsedFilter {
       if (required.length > 0 || negated.length > 0) {
         this.searchKeywords = { required, negated };
         this.searchQuery = toFtsQuery(required, negated);
+      } else if (this.search.trim() !== "") {
+        // The caller asked for something, and every part of it was consumed by
+        // the parse: an extension nobody implements (`domain:example.com`), or
+        // punctuation that tokenizes to nothing (`""`). Falling through to "no
+        // keywords" would drop the constraint ENTIRELY and hand back the whole
+        // tenant — the opposite of what a narrowing query should do when it
+        // isn't understood — so it fails closed instead.
+        //
+        // An empty or blank `search` is different: nothing was asked for, so
+        // nothing is constrained, and the filter's other terms stand alone.
+        neverMatch = true;
       }
     }
+
+    this.neverMatch = neverMatch;
   }
 
   /**
@@ -177,12 +189,20 @@ export class ParsedFilter {
  * searches for that word rather than breaking the query. Embedded quotes are
  * doubled, per FTS5's escaping.
  *
- * Returns `undefined` when there are no required keywords: FTS5 rejects an
- * expression that is only negations, since there's nothing to subtract them
- * from.
+ * Returns `undefined` when the keywords can't be put to FTS5 at all, which
+ * leaves them to the in-memory matcher:
+ *
+ *  - Only negations. FTS5 rejects an expression that is nothing but `NOT`,
+ *    since there's nothing to subtract them from.
+ *  - A keyword containing a NUL. FTS5's query parser is NUL-terminated, so the
+ *    rest of the expression — including the quote that closes the phrase — is
+ *    invisible to it, and the query dies with `unterminated string` rather
+ *    than returning anything. Stripping the NUL instead would quietly search
+ *    for something else.
  */
 function toFtsQuery(required: string[], negated: string[]): string | undefined {
   if (required.length === 0) return undefined;
+  if ([...required, ...negated].some((keyword) => keyword.includes("\u0000"))) return undefined;
 
   const phrase = (keyword: string) => `"${keyword.replace(/"/g, '""')}"`;
 

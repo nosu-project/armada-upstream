@@ -2,7 +2,7 @@ import { hexToHslString, hslStringToHex, isValidHex } from "@/lib/colorUtils";
 
 import type { EventTemplate } from "@/hooks/useNostrPublish";
 import type { CoreThemeColors } from "@/themes";
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
  * Ditto theme events (interop). Ditto publishes a user's theme library and
@@ -45,7 +45,7 @@ export interface DittoTheme {
 }
 
 /** Parse a kind 36767 / 16767 event into a DittoTheme. Returns null if invalid. */
-export function parseDittoTheme(event: NostrEvent): DittoTheme | null {
+export function parseDittoTheme(event: NostrRumor): DittoTheme | null {
   if (event.kind !== THEME_DEFINITION_KIND && event.kind !== ACTIVE_THEME_KIND) return null;
 
   // New format: colors in `c` tags. Legacy: JSON (4-color or 19-token) in content.

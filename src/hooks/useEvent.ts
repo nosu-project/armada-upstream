@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEventStore } from "@/hooks/useEventStore";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
  * Extract write relay URLs from a NIP-65 (kind 10002) relay list event.
@@ -36,7 +37,7 @@ export function useEvent(eventId: string | undefined, relays?: string[], authorH
   const { nostr } = useNostr();
   const eventStore = useEventStore();
 
-  return useQuery<NostrEvent | null>({
+  return useQuery<NostrRumor | null>({
     queryKey: ["event", eventId ?? "", relays ?? [], authorHint ?? ""],
     queryFn: async () => {
       if (!eventId) return null;
@@ -105,7 +106,7 @@ export function useAddrEvent(addr: AddrCoords | undefined, relays?: string[]) {
   const { nostr } = useNostr();
   const eventStore = useEventStore();
 
-  return useQuery<NostrEvent | null>({
+  return useQuery<NostrRumor | null>({
     queryKey: ["addr-event", addr?.kind ?? 0, addr?.pubkey ?? "", addr?.identifier ?? ""],
     queryFn: async () => {
       if (!addr) return null;

@@ -1,4 +1,5 @@
-import type { NostrEvent, NostrFilter } from '@nostrify/nostrify';
+import type { NostrFilter } from '@nostrify/nostrify';
+import type { NostrRumor } from "@/lib/nostrRumor";
 import { type QueryKey, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 
@@ -13,12 +14,12 @@ interface CacheFirstSeedOptions<T> {
   /** Store filter used to read the cached event. The first match is used. */
   filter: NostrFilter;
   /** Map the cached event into the query's data shape. */
-  toData: (event: NostrEvent) => T;
+  toData: (event: NostrRumor) => T;
   /**
    * Pull the representative event out of existing query data so the seed can
    * avoid downgrading a newer event the network may have already written.
    */
-  getEvent: (data: T) => NostrEvent | undefined;
+  getEvent: (data: T) => NostrRumor | undefined;
 }
 
 /**

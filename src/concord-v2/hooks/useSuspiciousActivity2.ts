@@ -14,6 +14,7 @@ import {
 import { Permissions, isAuthorized } from "@/concord-v2/lib/roles";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { KvPrefixCache } from "@/lib/db/kvCache";
 
 /**
  * How far back the watchdog looks. The alert is about activity happening NOW,
@@ -46,24 +47,36 @@ interface Dismissal {
   flooded?: boolean;
 }
 
-const dismissKey = (me: string, idHex: string) => `armada:cp-watchdog:${me}:${idHex}`;
+const NO_DISMISSAL: Dismissal = { at: 0, unreadable: 0, flooded: false };
+
+/**
+ * Dismissal watermarks, per (account, community), in ArmadaDB's KV behind a
+ * synchronous cache — one entry per community the account has ever dismissed
+ * an alert in, never evicted.
+ *
+ * Reads before the warm lands report "never dismissed", so the hook re-reads
+ * once {@link dismissals.ready} resolves. The failure that costs is a banner
+ * briefly reappearing, never a suppressed alert.
+ */
+const dismissals = new KvPrefixCache<Partial<Dismissal> | number>({ prefix: "cp-watchdog:" });
+
+const dismissId = (me: string, idHex: string) => `${me}:${idHex}`;
 
 function readDismissal(me: string, idHex: string): Dismissal {
-  const none = { at: 0, unreadable: 0, flooded: false };
-  try {
-    const raw = localStorage.getItem(dismissKey(me, idHex));
-    if (!raw) return none;
-    // Older builds stored a bare timestamp.
-    if (/^\d+$/.test(raw)) return { at: Number(raw), unreadable: 0, flooded: false };
-    const parsed = JSON.parse(raw) as Partial<Dismissal>;
-    return {
-      at: Number(parsed.at) || 0,
-      unreadable: Number(parsed.unreadable) || 0,
-      flooded: parsed.flooded === true,
-    };
-  } catch {
-    return none;
-  }
+  const stored = dismissals.get(dismissId(me, idHex));
+  if (stored === undefined) return NO_DISMISSAL;
+  // Older builds stored a bare timestamp.
+  if (typeof stored === "number") return { at: stored, unreadable: 0, flooded: false };
+  if (typeof stored !== "object" || stored === null) return NO_DISMISSAL;
+  return {
+    at: Number(stored.at) || 0,
+    unreadable: Number(stored.unreadable) || 0,
+    flooded: stored.flooded === true,
+  };
+}
+
+function writeDismissal(me: string, idHex: string, next: Dismissal): void {
+  if (me && idHex) dismissals.set(dismissId(me, idHex), next);
 }
 
 /**
@@ -93,8 +106,27 @@ export function useSuspiciousActivity2(
   // community switch, so a lazy initializer would carry one community's
   // dismissal — and one account's — into the next, suppressing its alert.
   const [dismissed, setDismissed] = useState<Dismissal>(() =>
-    me && idHex ? readDismissal(me, idHex) : { at: 0, unreadable: 0, flooded: false },
+    me && idHex ? readDismissal(me, idHex) : NO_DISMISSAL,
   );
+
+  // The watermarks live in KV behind a synchronous cache, so a mount during
+  // boot reads "never dismissed". Re-read once the cache warms, and only adopt
+  // a stored value that is AHEAD — a dismissal the user made while the warm was
+  // in flight must not be rolled back by it.
+  useEffect(() => {
+    if (!me || !idHex) return;
+    let cancelled = false;
+    void dismissals.ready().then(() => {
+      if (cancelled) return;
+      const stored = readDismissal(me, idHex);
+      setDismissed((prev) =>
+        stored.at > prev.at || stored.unreadable > prev.unreadable ? stored : prev,
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [me, idHex]);
   // State, not a ref: React may start a render and throw it away, and a ref
   // mutation survives that while the setState does not — which would skip the
   // re-read and leave the previous community's watermark in place.
@@ -102,7 +134,7 @@ export function useSuspiciousActivity2(
   const [lastKey, setLastKey] = useState(watermarkKey);
   if (lastKey !== watermarkKey) {
     setLastKey(watermarkKey);
-    setDismissed(me && idHex ? readDismissal(me, idHex) : { at: 0, unreadable: 0, flooded: false });
+    setDismissed(me && idHex ? readDismissal(me, idHex) : NO_DISMISSAL);
   }
 
   const canAct = Boolean(
@@ -160,25 +192,13 @@ export function useSuspiciousActivity2(
   useEffect(() => {
     if (unreadable >= dismissed.unreadable && (flooded || !dismissed.flooded)) return;
     const next = { ...dismissed, unreadable: Math.min(unreadable, dismissed.unreadable), flooded };
-    if (me && idHex) {
-      try {
-        localStorage.setItem(dismissKey(me, idHex), JSON.stringify(next));
-      } catch {
-        // Private mode / quota — the watermark just won't outlive the session.
-      }
-    }
+    writeDismissal(me, idHex, next);
     setDismissed(next);
   }, [unreadable, flooded, dismissed, me, idHex]);
 
   const dismiss = useCallback(() => {
     const next: Dismissal = { at: Math.floor(Date.now() / 1000), unreadable, flooded };
-    if (me && idHex) {
-      try {
-        localStorage.setItem(dismissKey(me, idHex), JSON.stringify(next));
-      } catch {
-        // Private mode / quota — the dismissal just won't outlive the session.
-      }
-    }
+    writeDismissal(me, idHex, next);
     setDismissed(next);
   }, [me, idHex, unreadable, flooded]);
 

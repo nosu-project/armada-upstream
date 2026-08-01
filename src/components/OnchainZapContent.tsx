@@ -23,8 +23,8 @@ import {
   formatSats,
 } from '@/lib/bitcoin';
 import { ZAP_PRESETS } from '@/lib/zaps';
-import type { NostrEvent } from '@nostrify/nostrify';
 import type { BitcoinRecipientOverride } from '@/hooks/useOnchainZap';
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 const PRESETS = ZAP_PRESETS.slice(0, 5);
 
@@ -63,9 +63,9 @@ function getUniqueFeeSpeeds(
 }
 
 interface OnchainZapContentProps {
-  target: NostrEvent;
+  target: NostrRumor;
   bitcoinTarget?: BitcoinRecipientOverride;
-  sendOnchainZap?: (target: NostrEvent, announcement: { txid: string; amountSats: number; comment: string }) => Promise<void>;
+  sendOnchainZap?: (target: NostrRumor, announcement: { txid: string; amountSats: number; comment: string }) => Promise<void>;
   onSuccess?: (result: { txid: string; amountSats: number }) => void;
   onClose?: () => void;
 }

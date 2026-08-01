@@ -28,7 +28,7 @@ import {
   relayRejectionMessage,
 } from "@/lib/nip29";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 export { isUpcoming } from "@/lib/calendar";
 
@@ -67,7 +67,7 @@ export function useCalendarEvents(relayUrl: string | undefined, groupId: string 
   const events = query.data ?? [];
 
   const save = useMutation({
-    mutationFn: async ({ input, prev }: { input: CalendarEventInput; prev?: NostrEvent }) => {
+    mutationFn: async ({ input, prev }: { input: CalendarEventInput; prev?: NostrRumor }) => {
       return publishEvent({
         kind: input.kind,
         content: input.description ?? "",
@@ -117,7 +117,7 @@ export function useCalendarEvents(relayUrl: string | undefined, groupId: string 
     events,
     isLoading: query.isLoading,
     /** Create a new event, or update an existing one (pass its raw event as `prev`). */
-    save: (input: CalendarEventInput, prev?: NostrEvent) => save.mutateAsync({ input, prev }),
+    save: (input: CalendarEventInput, prev?: NostrRumor) => save.mutateAsync({ input, prev }),
     isSaving: save.isPending,
     /** Delete an event (NIP-09 kind 5, author/moderator only per the relay). */
     remove: (event: CalendarEvent) => remove.mutateAsync(event),

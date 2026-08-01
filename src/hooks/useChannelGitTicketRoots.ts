@@ -14,7 +14,7 @@ import { isGitAnnouncementDiscoveryRelay } from "@/lib/platform";
 import { emitWireScopes } from "@/wire/bus";
 import { useWireScopes } from "@/wire/useWireScopes";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 const PAGE_SIZE = 100;
 const PULL_TIMEOUT_MS = 8_000;
@@ -25,7 +25,7 @@ export interface ChannelGitAttachment extends GitRepositoryAttachment {
 }
 
 export interface ChannelGitTicketRoots {
-  roots: NostrEvent[];
+  roots: NostrRumor[];
   isLoading: boolean;
   isLoadingOlder: boolean;
   hasOlder: boolean;
@@ -37,8 +37,8 @@ function key(channelId: string | undefined, attachments: readonly ChannelGitAtta
 }
 
 /** Deterministic store-side interval filtering for attached Git work-item roots. */
-export function filterChannelGitTicketRoots(events: readonly NostrEvent[], attachments: readonly GitRepositoryAttachment[]): NostrEvent[] {
-  const byId = new Map<string, NostrEvent>();
+export function filterChannelGitTicketRoots(events: readonly NostrRumor[], attachments: readonly GitRepositoryAttachment[]): NostrRumor[] {
+  const byId = new Map<string, NostrRumor>();
   for (const event of events) {
     const ticket = parseGitTicket(event);
     if (!ticket?.repositoryAddress) continue;
@@ -49,7 +49,7 @@ export function filterChannelGitTicketRoots(events: readonly NostrEvent[], attac
 }
 
 /** Safe exclusive cursor: do not request before the earliest relevant attachment. */
-export function gitTicketOlderCursor(events: readonly NostrEvent[], attachments: readonly GitRepositoryAttachment[]): number | undefined {
+export function gitTicketOlderCursor(events: readonly NostrRumor[], attachments: readonly GitRepositoryAttachment[]): number | undefined {
   if (!events.length || !attachments.length) return undefined;
   const oldest = Math.min(...events.map((event) => event.created_at));
   const floor = Math.min(...attachments.map((attachment) => attachment.attachedAt));
@@ -74,7 +74,7 @@ export function useChannelGitTicketRoots(channelId: string | undefined, attachme
   const olderCursor = useRef<number | undefined>(undefined);
   const pulling = useRef(false);
 
-  const query = useQuery<NostrEvent[]>({
+  const query = useQuery<NostrRumor[]>({
     queryKey,
     enabled: Boolean(channelId && normalized.length),
     queryFn: async () => {
@@ -90,7 +90,7 @@ export function useChannelGitTicketRoots(channelId: string | undefined, attachme
   const pull = useCallback(async (until?: number): Promise<number> => {
     if (!channelId || !normalized.length) return 0;
     const store = await eventStore;
-    const received: NostrEvent[] = [];
+    const received: NostrRumor[] = [];
     await Promise.all(normalized.map(async (attachment) => {
       const upper = attachment.detachedAt === undefined ? until : Math.min(until ?? attachment.detachedAt - 1, attachment.detachedAt - 1);
       if (upper !== undefined && upper < attachment.attachedAt) return;
@@ -138,7 +138,7 @@ export function useChannelGitTicketRoots(channelId: string | undefined, attachme
     setIsLoadingOlder(true);
     try {
       const count = await pull(until);
-      const current = queryClient.getQueryData<NostrEvent[]>(queryKey) ?? [];
+      const current = queryClient.getQueryData<NostrRumor[]>(queryKey) ?? [];
       const next = filterChannelGitTicketRoots([...current], normalized);
       olderCursor.current = gitTicketOlderCursor(next, normalized);
       setHasOlder(count >= PAGE_SIZE && olderCursor.current !== undefined);

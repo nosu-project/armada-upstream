@@ -23,11 +23,12 @@ import { grantLocator } from "@/concord-v1/lib/derive";
 import { hex32, random32, type Community } from "@/concord-v1/lib/types";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** Merge two control-event sets by id (dedup), so a partial network round
  *  doesn't drop editions the cache/seed already held. */
-function mergeById(a: NostrEvent[], b: NostrEvent[]): NostrEvent[] {
-  const byId = new Map<string, NostrEvent>();
+function mergeById(a: NostrRumor[], b: NostrRumor[]): NostrRumor[] {
+  const byId = new Map<string, NostrRumor>();
   for (const e of a) byId.set(e.id, e);
   for (const e of b) byId.set(e.id, e);
   return [...byId.values()];
@@ -86,7 +87,7 @@ export function useConcordControlEvents(community: Community | undefined, active
     const store = await eventStore;
     const cached = await store.query([controlFilter(community)]);
     if (cached.length === 0) return;
-    queryClient.setQueryData<NostrEvent[]>(queryKey, (old) => mergeById(old ?? [], cached));
+    queryClient.setQueryData<NostrRumor[]>(queryKey, (old) => mergeById(old ?? [], cached));
   };
 
   // Seed from the local store before the network resolves, and re-read whenever
@@ -96,11 +97,11 @@ export function useConcordControlEvents(community: Community | undefined, active
     if (!community) return;
     let cancelled = false;
     void (async () => {
-      if ((queryClient.getQueryData<NostrEvent[]>(queryKey)?.length ?? 0) > 0) return;
+      if ((queryClient.getQueryData<NostrRumor[]>(queryKey)?.length ?? 0) > 0) return;
       const store = await eventStore;
       const cached = await store.query([controlFilter(community)]);
       if (cancelled || cached.length === 0) return;
-      queryClient.setQueryData<NostrEvent[]>(queryKey, (old) =>
+      queryClient.setQueryData<NostrRumor[]>(queryKey, (old) =>
         old && old.length > 0 ? old : cached,
       );
     })();
@@ -117,7 +118,7 @@ export function useConcordControlEvents(community: Community | undefined, active
   // Throttle the on-open network catch-up so it can't re-fan-out on every render.
   const lastPull = useRef(0);
 
-  return useQuery<NostrEvent[]>({
+  return useQuery<NostrRumor[]>({
     queryKey,
     enabled: Boolean(community) && active,
     staleTime: 15_000,
@@ -139,7 +140,7 @@ export function useConcordControlEvents(community: Community | undefined, active
                 .query([controlFilter(community!)], {
                   signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
                 })
-                .catch(() => [] as NostrEvent[]),
+                .catch(() => [] as NostrRumor[]),
             ),
           )
         : [];
@@ -147,7 +148,7 @@ export function useConcordControlEvents(community: Community | undefined, active
       // are append-only version chains, so a relay returning a partial page must
       // never drop editions we already hold — the fold picks the head per entity.
       const fetched = results.flat();
-      const prev = queryClient.getQueryData<NostrEvent[]>(queryKey) ?? [];
+      const prev = queryClient.getQueryData<NostrRumor[]>(queryKey) ?? [];
       return mergeById(prev, fetched);
     },
   });
@@ -176,7 +177,7 @@ export function useConcordRoster(community: Community | undefined, active = true
   );
 
   return { ...control, events, data } as typeof control & {
-    events: NostrEvent[] | undefined;
+    events: NostrRumor[] | undefined;
     data: FoldedRoster | undefined;
   };
 }

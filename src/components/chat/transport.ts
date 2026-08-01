@@ -19,17 +19,22 @@ import type { SendStatus } from "@/hooks/useGroupMessages";
 import type { CalendarEvent, RsvpStatus, RsvpTally } from "@/lib/calendar";
 import type { PollOption, PollTally, PollType } from "@/lib/polls";
 import type { ZapTally } from "@/lib/zaps";
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 export type { ReactInput, ReactionTally, SendStatus };
 
 /**
- * A chat message in the shared `NostrEvent` shape. NIP-29 messages already are
- * `NostrEvent`s (kind 9 / 1068); Concord messages are adapted from a decrypted
- * `OpenedMessage` into this shape (`openedToEvent`). Rendering never re-verifies
- * the signature, so a synthetic `sig: ""` is acceptable for adapted messages.
+ * A chat message in the shared event shape. NIP-29 messages are relay events
+ * (kind 9 / 1068); Concord messages are adapted from a decrypted
+ * `OpenedMessage` (`openedToEvent`); and either can be read back from the local
+ * store, which drops signatures.
+ *
+ * So the shape is a RUMOR, not a `NostrEvent`. Rendering never verifies a
+ * signature and does not need one — but a chat message is not a thing you can
+ * hand to a relay, and this is where that stopped being a comment. Use
+ * `isSigned` (or the publish outbox) where a real signature is required.
  */
-export type ChatMsg = NostrEvent & {
+export type ChatMsg = NostrRumor & {
   /**
    * Stable React key, when the message's `id` is not stable for its lifetime.
    *
@@ -73,7 +78,6 @@ export function toChatMsg(m: {
   kind: number;
   content: string;
   tags?: string[][];
-  sig?: string;
   renderKey?: string;
 }): ChatMsg {
   return {
@@ -83,7 +87,6 @@ export function toChatMsg(m: {
     kind: m.kind,
     content: m.content,
     tags: m.tags ?? [],
-    sig: m.sig ?? "",
     ...(m.renderKey ? { renderKey: m.renderKey } : {}),
   };
 }

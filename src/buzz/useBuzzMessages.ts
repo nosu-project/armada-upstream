@@ -15,9 +15,11 @@ import {
 import { foldBuzzTimeline, type BuzzFoldedTimeline } from "@/buzz/protocol";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useSendStatusMap, type SendStatusMap } from "@/hooks/useSendStatusMap";
+import { isSigned } from "@/lib/nostrRumor";
 import { useWireScopes } from "@/wire/useWireScopes";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** How many content rows to fetch per page (initial load and each backfill). */
 const PAGE_SIZE = 40;
@@ -38,15 +40,26 @@ function statusKey(relayUrl: string | undefined, channelId: string | undefined) 
   return ["buzz", "msg-status", relayUrl, channelId] as const;
 }
 
-/** Sort ascending and de-duplicate by id. */
-function sortDedupe(events: NostrEvent[]): NostrEvent[] {
-  const byId = new Map<string, NostrEvent>();
-  for (const e of events) byId.set(e.id, e);
+/**
+ * Sort ascending and de-duplicate by id.
+ *
+ * Later entries win, except that a signed copy is never replaced by an unsigned
+ * one — the local store drops `sig` and is merged last, so otherwise it would
+ * overwrite the signed copy of an event we just sent and leave retry publishing
+ * an empty signature (see `useGroupMessages`).
+ */
+function sortDedupe(events: NostrRumor[]): NostrRumor[] {
+  const byId = new Map<string, NostrRumor>();
+  for (const e of events) {
+    const prev = byId.get(e.id);
+    if (prev && isSigned(prev) && !isSigned(e)) continue;
+    byId.set(e.id, e);
+  }
   return [...byId.values()].sort((a, b) => a.created_at - b.created_at);
 }
 
 /** Gap-aware `until` cursor from a page of events (see useGroupMessages). */
-function paginationCursor(events: NostrEvent[]): number | undefined {
+function paginationCursor(events: NostrRumor[]): number | undefined {
   if (events.length === 0) return undefined;
   const ascending = [...events].sort((a, b) => a.created_at - b.created_at);
   const oldest = ascending[0].created_at;
@@ -57,7 +70,7 @@ function paginationCursor(events: NostrEvent[]): number | undefined {
 
 export interface BuzzMessages extends BuzzFoldedTimeline {
   /** RAW (unfolded) events currently loaded — content + aux mixed. */
-  raw: NostrEvent[];
+  raw: NostrRumor[];
   isLoading: boolean;
   status: SendStatusMap;
   insertOptimistic: (event: NostrEvent) => void;
@@ -70,11 +83,11 @@ export interface BuzzMessages extends BuzzFoldedTimeline {
   /** Threaded-reply count for a root id (from the loaded window). */
   replyCountFor: (id: string) => number;
   /** Ascending thread replies for a root id (from the loaded window). */
-  threadRepliesFor: (rootId: string) => NostrEvent[];
+  threadRepliesFor: (rootId: string) => NostrRumor[];
   /** Backfill a full thread by `#e` reference (called when a thread opens). */
   fetchThread: (rootId: string) => Promise<void>;
   /** Merge externally-fetched events (e.g. a search hit's context) into the window. */
-  mergeEvents: (events: NostrEvent[]) => void;
+  mergeEvents: (events: NostrRumor[]) => void;
 }
 
 /**
@@ -142,11 +155,11 @@ export function useBuzzMessages(
 
   const queryKey = buzzMessagesKey(relayUrl, channelId);
 
-  const query = useQuery<NostrEvent[]>({
+  const query = useQuery<NostrRumor[]>({
     queryKey,
     queryFn: async ({ signal }) => {
       const store = await eventStore;
-      const existing = queryClient.getQueryData<NostrEvent[]>(queryKey) ?? [];
+      const existing = queryClient.getQueryData<NostrRumor[]>(queryKey) ?? [];
 
       // Content + aux in parallel from the local store. The wire writes every
       // incoming Buzz event here before the bus asks us to re-read.
@@ -180,7 +193,7 @@ export function useBuzzMessages(
               cursorRef.current = cursor;
             }
             if (signal.aborted || events.length === 0) return;
-            queryClient.setQueryData<NostrEvent[]>(queryKey, (old = []) =>
+            queryClient.setQueryData<NostrRumor[]>(queryKey, (old = []) =>
               sortDedupe([...old, ...events]),
             );
           } catch {
@@ -220,9 +233,9 @@ export function useBuzzMessages(
   const { status, setStatus } = useSendStatusMap(statusKey(relayUrl, channelId));
 
   const mergeEvents = useCallback(
-    (events: NostrEvent[]) => {
+    (events: NostrRumor[]) => {
       if (events.length === 0) return;
-      queryClient.setQueryData<NostrEvent[]>(queryKey, (old = []) => sortDedupe([...old, ...events]));
+      queryClient.setQueryData<NostrRumor[]>(queryKey, (old = []) => sortDedupe([...old, ...events]));
     },
     // queryKey is derived from relayUrl + channelId.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -242,7 +255,7 @@ export function useBuzzMessages(
 
   const removeOptimistic = useCallback(
     (id: string) => {
-      queryClient.setQueryData<NostrEvent[]>(queryKey, (old = []) => old.filter((e) => e.id !== id));
+      queryClient.setQueryData<NostrRumor[]>(queryKey, (old = []) => old.filter((e) => e.id !== id));
       setStatus(id, undefined);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -267,7 +280,7 @@ export function useBuzzMessages(
       );
       const contentOnly = older.filter((e) => contentKinds.includes(e.kind));
 
-      const existing = queryClient.getQueryData<NostrEvent[]>(queryKey) ?? [];
+      const existing = queryClient.getQueryData<NostrRumor[]>(queryKey) ?? [];
       const existingIds = new Set(existing.map((e) => e.id));
       const fresh = older.filter((e) => !existingIds.has(e.id));
 
@@ -320,7 +333,7 @@ export function useBuzzMessages(
     [folded.repliesByRoot],
   );
   const threadRepliesFor = useCallback(
-    (rootId: string): NostrEvent[] => folded.repliesByRoot.get(rootId) ?? EMPTY_EVENTS,
+    (rootId: string): NostrRumor[] => folded.repliesByRoot.get(rootId) ?? EMPTY_EVENTS,
     [folded.repliesByRoot],
   );
 
@@ -347,4 +360,4 @@ export function useBuzzMessages(
   };
 }
 
-const EMPTY_EVENTS: NostrEvent[] = [];
+const EMPTY_EVENTS: NostrRumor[] = [];

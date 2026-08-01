@@ -33,14 +33,16 @@
  */
 
 import { NIndexedDB } from "@nostrify/indexeddb";
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
 import { getArmadaDB } from "@/lib/db/armadaDB";
+import { skipLegacyDrain } from "@/lib/db/legacyDatabases";
 import type { NRumorStore } from "@/lib/db/types";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import {
   DM_RUMOR_KINDS,
+  dmPeerOf,
   isExpired,
   KIND_DM_CHAT,
   KIND_DM_FILE,
@@ -52,10 +54,18 @@ import { emitWireScopes } from "@/wire/bus";
 /** The global pre-tenant database, drained into the tenants on first use. */
 const LEGACY_DB_NAME = "armada-dm17-rumors";
 
-/** Provenance tags injected onto the stored event (never part of the rumor). */
-const TAG_PEER = "peer";
-const TAG_WRAP = "wrap";
-const PROVENANCE = new Set([TAG_PEER, TAG_WRAP]);
+/**
+ * Tag names earlier builds INJECTED onto the stored event. Nothing writes them
+ * any more; they are dropped from anything copied out of the legacy database.
+ *
+ * A rumor's tags are the bytes its id commits to, so rewriting them to carry
+ * bookkeeping made the stored row something its sender never signed — and made
+ * the store's idea of a conversation forgeable by anyone who spelled `peer`
+ * themselves. Neither value needed a tag: NIP-17 requires the rumor to name its
+ * recipients in `p`, so the partner is always derivable ({@link dmPeerOf}), and
+ * nothing on this side of the store reads a wrap id.
+ */
+const PROVENANCE = new Set(["peer", "wrap"]);
 
 /**
  * The opened-DM store for one account. ArmadaDB's default tag policy indexes
@@ -83,18 +93,46 @@ export function dm17Store(self: string): NRumorStore {
 // would then match both. On the ordinary single-account install everything
 // qualifies either way.
 
-/** Records read from the legacy database in one drain (a bound, not a page). */
-const DRAIN_LIMIT = 50_000;
+/**
+ * Records read per page of the newest-first scan.
+ *
+ * The whole store is read, not a single capped query: attribution needs every
+ * record at once (a delete of a reaction of a message is only attributable
+ * once its target is), so pages are accumulated rather than processed one by
+ * one. This is a page size, not a ceiling on what is copied.
+ */
+export const DM17_DRAIN_PAGE = 500;
+
+/**
+ * Pages a single drain will walk. A store this deep is far past any real DM
+ * history; hitting the bound means something is wrong with the paging, and the
+ * drain FAILS rather than copying a prefix and letting the gate delete the
+ * rest.
+ */
+const DRAIN_MAX_PAGES = 2_000;
 
 const DRAIN_KEY = (self: string) => `dm17:migrated:${self}`;
 
 /** In-flight/settled drains, so concurrent reads share one pass. */
 const drains = new Map<string, Promise<void>>();
 
+/**
+ * Copy `self`'s share of the legacy database across. Idempotent and memoised.
+ *
+ * REJECTS on failure: the startup gate deletes the legacy database only once
+ * every drain has resolved for every account, so a drain that swallowed its
+ * error and resolved would have the gate delete DM history nobody copied.
+ * Every caller in this module already guards the call.
+ */
 export function migrateLegacyDms(self: string): Promise<void> {
   let drain = drains.get(self);
   if (!drain) {
-    drain = drainLegacyDms(self);
+    drain = drainLegacyDms(self).catch((err: unknown) => {
+      // Drop the memo so a later read retries: writes are keyed by rumor id,
+      // so recopying what already landed costs nothing.
+      drains.delete(self);
+      throw err;
+    });
     drains.set(self, drain);
   }
   return drain;
@@ -105,14 +143,46 @@ function namesSelf(ev: NostrEvent, self: string): boolean {
   return ev.pubkey === self || ev.tags.some(([name, value]) => name === "p" && value === self);
 }
 
+/** Every legacy record, newest first, paged so a deep history isn't truncated. */
+async function readLegacyDms(legacy: NIndexedDB): Promise<NostrEvent[]> {
+  const all: NostrEvent[] = [];
+  const seen = new Set<string>();
+  let until: number | undefined;
+
+  for (let page = 0; page < DRAIN_MAX_PAGES; page++) {
+    const filter: { kinds: number[]; limit: number; until?: number } = {
+      kinds: DM_RUMOR_KINDS,
+      limit: DM17_DRAIN_PAGE,
+    };
+    if (until !== undefined) filter.until = until;
+    const rows = await legacy.query([filter]);
+    // Ties on `created_at` make pages overlap, so progress is measured in NEW
+    // ids rather than in rows returned.
+    const fresh = rows.filter((ev) => !seen.has(ev.id));
+    if (fresh.length === 0) return all;
+    for (const ev of fresh) {
+      seen.add(ev.id);
+      all.push(ev);
+    }
+    if (rows.length < DM17_DRAIN_PAGE) return all;
+    until = Math.min(...rows.map((ev) => ev.created_at));
+  }
+
+  throw new Error("dm17 legacy drain exceeded its page bound");
+}
+
 async function drainLegacyDms(self: string): Promise<void> {
   const db = getArmadaDB();
   const key = DRAIN_KEY(self);
   if (await db.kv.get<boolean>(key)) return;
+  // `NIndexedDB` CREATES the database on its first query, which would leave a
+  // device that never had one with the very database the startup gate scans
+  // for. See `skipLegacyDrain`.
+  if (await skipLegacyDrain(LEGACY_DB_NAME)) return;
 
+  const legacy = new NIndexedDB(LEGACY_DB_NAME);
   try {
-    const legacy = new NIndexedDB(LEGACY_DB_NAME);
-    const all = await legacy.query([{ kinds: DM_RUMOR_KINDS, limit: DRAIN_LIMIT }]);
+    const all = await readLegacyDms(legacy);
 
     // Pass one: records that name `self` outright.
     const mine = new Set<string>();
@@ -139,15 +209,14 @@ async function drainLegacyDms(self: string): Promise<void> {
     for (const ev of all) {
       if (!mine.has(ev.id)) continue;
       const { sig: _sig, ...rumor } = ev;
-      await tenant.event(rumor);
+      // The legacy rows carry the tags that store injected. Dropping them is
+      // what makes every row this store holds the rumor its sender signed —
+      // and nothing is lost with them: attribution comes from `pubkey` and the
+      // `p` tags NIP-17 requires, which is what the passes above just used.
+      await tenant.event({ ...rumor, tags: rumor.tags.filter((t) => !PROVENANCE.has(t[0])) });
     }
-    await legacy.close();
-  } catch {
-    // Failed part-way, or IndexedDB is unavailable. Leave the flag unset and
-    // drop the memo so a later read retries: writes are keyed by rumor id, so
-    // recopying what already landed costs nothing.
-    drains.delete(self);
-    return;
+  } finally {
+    await legacy.close().catch(() => undefined);
   }
 
   await db.kv.set(key, true);
@@ -155,29 +224,36 @@ async function drainLegacyDms(self: string): Promise<void> {
 
 // ── Codec: OpenedDm ⇆ stored event ───────────────────────────────────────────
 
-/** Build the stored rumor for an opened DM. */
+/** Build the stored rumor for an opened DM: the rumor itself, unaltered. */
 export function dm17ToStored(opened: OpenedDm): NostrRumor {
   return {
     id: opened.rumorId,
     kind: opened.kind,
     content: opened.content,
-    tags: [...opened.tags, [TAG_PEER, opened.peer], [TAG_WRAP, opened.wrapId]],
+    tags: opened.tags,
     created_at: opened.createdAt,
     pubkey: opened.author,
   };
 }
 
-/** Reconstruct an OpenedDm from a stored rumor. */
-export function storedToDm17(ev: NostrRumor): OpenedDm {
+/**
+ * Reconstruct an OpenedDm from a stored rumor, as seen by `self`.
+ *
+ * The conversation partner is DERIVED from the rumor — see {@link dmPeerOf} —
+ * which is why nothing has to be injected on the way in. `wrapId` is not
+ * recoverable and nothing consumes it; the transport dedupes on wraps it holds
+ * in hand.
+ */
+export function storedToDm17(ev: NostrRumor, self: string): OpenedDm {
   return {
     rumorId: ev.id,
     author: ev.pubkey,
     kind: ev.kind,
     content: ev.content,
-    tags: ev.tags.filter((t) => !PROVENANCE.has(t[0])),
+    tags: ev.tags,
     createdAt: ev.created_at,
-    peer: ev.tags.find((t) => t[0] === TAG_PEER)?.[1] ?? "",
-    wrapId: ev.tags.find((t) => t[0] === TAG_WRAP)?.[1] ?? "",
+    peer: dmPeerOf(ev, self) ?? "",
+    wrapId: "",
   };
 }
 
@@ -218,14 +294,41 @@ export async function queryDm17Thread(
   opts: { limit: number; before?: number; signal?: AbortSignal },
 ): Promise<OpenedDm[]> {
   await migrateLegacyDms(self).catch(() => undefined);
-  const filter: { kinds: number[]; "#peer": string[]; limit: number; until?: number } = {
-    kinds: DM_RUMOR_KINDS,
-    "#peer": [peer],
-    limit: opts.limit,
-  };
-  if (opts.before !== undefined) filter.until = opts.before - 1;
-  const events = await dm17Store(self).query([filter], { signal: opts.signal });
-  return events.filter((ev) => !isExpired(ev.tags)).map(storedToDm17);
+  const events = await dm17Store(self).query(
+    conversationFilters(self, peer, { limit: opts.limit, before: opts.before }),
+    { signal: opts.signal },
+  );
+  return events
+    .filter((ev) => !isExpired(ev.tags))
+    .map((ev) => storedToDm17(ev, self))
+    .slice(0, opts.limit);
+}
+
+/**
+ * The filters selecting one conversation, from `self`'s side.
+ *
+ * A conversation is two directions and they are indexed differently: what the
+ * peer sent names them as the AUTHOR, what we sent names them in a `p` tag. The
+ * two are OR'd, so each is an ordinary indexed lookup — the author scan on
+ * `(tenant, pubkey)`, ours on the `p` tag token — and the store merges and
+ * de-duplicates them.
+ *
+ * Each filter carries the full limit, so the union can be up to twice it; the
+ * caller slices after the merge has put them in order.
+ */
+function conversationFilters(
+  self: string,
+  peer: string,
+  opts: { limit?: number; before?: number } = {},
+): NostrFilter[] {
+  const bounds: { limit?: number; until?: number } = {};
+  if (opts.limit !== undefined) bounds.limit = opts.limit;
+  if (opts.before !== undefined) bounds.until = opts.before - 1;
+
+  return [
+    { kinds: DM_RUMOR_KINDS, authors: [peer], ...bounds },
+    { kinds: DM_RUMOR_KINDS, authors: [self], "#p": [peer], ...bounds },
+  ];
 }
 
 /**
@@ -244,7 +347,7 @@ export async function queryDm17Timer(
 ): Promise<number | undefined> {
   await migrateLegacyDms(self).catch(() => undefined);
   const events = await dm17Store(self).query(
-    [{ kinds: [KIND_DM_TIMER], "#peer": [peer], limit: 1 }],
+    conversationFilters(self, peer, { limit: 1 }).map((f) => ({ ...f, kinds: [KIND_DM_TIMER] })),
     { signal: opts.signal },
   );
   const raw = events[0]?.tags.find((t) => t[0] === "timer")?.[1];
@@ -275,7 +378,7 @@ export async function queryDm17Conversations(
   const mine = new Set<string>();
   for (const ev of events) {
     if (isExpired(ev.tags)) continue;
-    const opened = storedToDm17(ev);
+    const opened = storedToDm17(ev, self);
     if (!opened.peer) continue;
     if (opened.author === self) mine.add(opened.peer);
     const cur = byPeer.get(opened.peer);
@@ -306,7 +409,7 @@ export async function searchDm17Rumors(
   );
   const matches = events
     .filter((ev) => !isExpired(ev.tags))
-    .map(storedToDm17)
+    .map((ev) => storedToDm17(ev, self))
     .filter((o) => o.peer && o.content.toLowerCase().includes(needle))
     .sort((a, b) => b.createdAt - a.createdAt);
   return matches.slice(0, opts.limit ?? 200);
@@ -414,7 +517,7 @@ export async function updateDm17Cursor(self: string, patch: Partial<Dm17Cursor>)
 // with only a session-scoped seen set every cold launch re-decrypted up to a
 // full inbox page — two NIP-44 opens per wrap — before the UI settled. An
 // Android WebView kill makes every resume a cold start, so the memo must be
-// durable. Wiped with `armada-concord-cache` on logout; a lost or evicted id
+// durable. Wiped with the rest of the fold cache on logout; a lost or evicted id
 // merely re-decrypts once.
 
 const seenWrapsKey = (self: string) => `dm17-seen:${self}`;

@@ -251,6 +251,14 @@ export function useChatModeration2(community: CommunityV2 | undefined): ChatMode
  * back with an ordinary `{ kinds, "#channel" }` query and no decrypt. A
  * per-channel sync cursor (persisted in the folded cache) lets a cold launch
  * resume where it left off instead of re-paging the newest window.
+ *
+ * LOCAL-FIRST IS THE LOADING CONTRACT. The queryFn resolves on the store read
+ * and returns; the park drain and every relay pass run behind that return and
+ * repaint through `setQueryData` as they land. So `isLoading` — the caller's
+ * skeleton — covers the ArmadaDB read alone, and network catch-up is reported
+ * on the sync-activity signal instead. Holding the skeleton until a relay
+ * round settled meant a conversation whose entire history was already on disk
+ * still opened on a placeholder for as long as the relays took.
  */
 export function useChannelTimeline2(community: CommunityV2 | undefined, channel: ChannelV2 | undefined) {
   const { nostr } = useNostr();
@@ -273,30 +281,6 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
   const cursor = useRef<Map<string, { newest?: number; oldest?: number; exhausted: boolean }>>(new Map());
   const initialLoadedRef = useRef<string | null>(null);
   const lastBackfillRef = useRef(0);
-  // Whether this channel's first load has settled — the store read AND (if the
-  // store was empty) the relay backfill that decrypts history. Until it flips,
-  // an empty timeline shows the skeleton, not "no messages". It flips in every
-  // queryFn branch (warm read, backfill-settled, and throttle-skip) so it can
-  // never deadlock the skeleton.
-  //
-  // Scoped to the channel it was set FOR, and reset SYNCHRONOUSLY during render
-  // on a channel switch — not in the effect below. A channel switch mounts a
-  // new query whose queryFn runs synchronously; on a cold channel it reads the
-  // store empty and returns `[]` immediately, before the reset effect has
-  // flushed. If `firstLoadDone` still carried the previous channel's `true`,
-  // the isLoading gate would open on that empty `[]` and flash "No messages
-  // yet" for a frame until the effect reset it. Reading it through the current
-  // channel makes a carried-over `true` read as false the instant the key
-  // changes, with no render-timing race.
-  const [firstLoadState, setFirstLoadDoneState] = useState<{ channel: string | null; done: boolean }>({
-    channel: channelIdHex,
-    done: false,
-  });
-  const firstLoadDone = firstLoadState.channel === channelIdHex && firstLoadState.done;
-  const setFirstLoadDone = useCallback(
-    (done: boolean) => setFirstLoadDoneState({ channel: channelIdHex, done }),
-    [channelIdHex],
-  );
 
   useEffect(() => {
     windowLimitRef.current = WINDOW_SIZE;
@@ -394,7 +378,10 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
         const parked = await peekPendingWraps(channel!.streams.map((s) => s.group.pk));
         if (parked.length === 0) return;
         const opened = await openChatBatch(parked, channel!);
-        writeRumors(opened);
+        // ACK only once the rumors are actually stored. The ack DELETES the
+        // parked wrap, so acking over a failed write destroys the only copy of
+        // a message the user was already notified about.
+        if (!(await writeRumors(community!.idHex, opened))) return;
         const openedWrapIds = new Set(opened.map((o) => o.wrapId));
         ackPendingWraps(parked.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
       };
@@ -405,7 +392,7 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
       };
 
       const composeFromStore = async (extra?: OpenedChat[]): Promise<OpenedChat[]> => {
-        const rumors = await queryChannelRumors(channelIdHex!, {
+        const rumors = await queryChannelRumors(community!.idHex, channelIdHex!, {
           limit: windowLimitRef.current,
           signal,
         });
@@ -448,13 +435,10 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
 
         const firstOpened = await openChatBatch(newest.events, channel!, { signal });
         if (signal.aborted) return;
-        writeRumors(firstOpened);
+        writeRumors(community!.idHex, firstOpened);
         synced += firstOpened.length;
         tick();
         queryClient.setQueryData<OpenedChat[]>(queryKey, await composeFromStore(firstOpened));
-        // Release the loading skeleton now — the newest history is on screen;
-        // older history streams in underneath as the passes below complete.
-        if (!signal.aborted) setFirstLoadDone(true);
 
         const saved = cursor.current.get(cursorKeyId);
 
@@ -490,7 +474,7 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
           channel!,
           { signal },
         );
-        writeRumors(opened);
+        writeRumors(community!.idHex, opened);
         synced += opened.length;
         tick();
 
@@ -530,16 +514,12 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
 
       // Relay backfill is throttled: a wire-bus invalidation re-reads the
       // store (cheap, instant) without re-paging relays on every message.
-      // `firstLoadDone` gates the loading skeleton — it must flip in EVERY
-      // branch (including the throttled skip, which means a backfill already
-      // ran this channel-session) so an empty channel can never hang on the
-      // skeleton forever.
+      // Nothing here gates the loading skeleton — the queryFn resolves on the
+      // store read below and the relay round runs behind it, announced on the
+      // sync-activity signal instead (see `beginSyncTask`).
       const dueForBackfill = Date.now() - lastBackfillRef.current >= BACKFILL_MIN_INTERVAL_MS;
       const maybeBackfill = () => {
-        if (!dueForBackfill) {
-          if (!signal.aborted) setFirstLoadDone(true);
-          return Promise.resolve();
-        }
+        if (!dueForBackfill) return Promise.resolve();
         lastBackfillRef.current = Date.now();
         // Report this relay round on the sync-activity signal, named after the
         // channel with a live decrypted-message count and scoped `c2:<id>` so
@@ -547,16 +527,12 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
         // background sync — cold opens and post-wake gap-bridging are exactly
         // the "silent minute" the in-chat status bar exists for.
         const task = beginSyncTask(`#${channel!.name}`, { scope: `c2:${channel!.idHex}` });
-        return backfillAndRefresh(task).finally(() => {
-          task.end();
-          if (!signal.aborted) setFirstLoadDone(true);
-        });
+        return backfillAndRefresh(task).finally(() => task.end());
       };
 
       if (existing && existing.length > 0) {
         // Warm: paint what we have; heal in the background.
         initialLoadedRef.current = channelIdHex;
-        setFirstLoadDone(true);
         void (async () => {
           if (signal.aborted) return;
           queryClient.setQueryData<OpenedChat[]>(queryKey, await composeFromStore());
@@ -566,13 +542,14 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
         return existing;
       }
 
+      // The store read is the whole of the first load. An empty result is NOT
+      // authoritative for V2 — history is decrypted by the backfill, not the
+      // wire's live `since` window — but that is a SYNC state, not a loading
+      // one: the park drain and the relay round below run behind this return,
+      // report themselves on the sync-activity signal, and repaint through
+      // `setQueryData` as they land.
       const local = await composeFromStore();
       initialLoadedRef.current = channelIdHex;
-      // If the store already had messages, we're done loading now. If it was
-      // empty, stay in the loading state until the backfill settles (below) —
-      // an empty store read is NOT authoritative for V2, since history is
-      // decrypted by the backfill, not the wire's live `since` window.
-      if (local.length > 0 && !signal.aborted) setFirstLoadDone(true);
       void drainParked().catch(() => undefined);
       void maybeBackfill().catch(() => undefined);
       return local;
@@ -588,7 +565,9 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
       // If the rumor cache still has more than the current window, just widen
       // the window (a re-read, no network, no decrypt). Otherwise the cache is
       // exhausted, so page deeper history from the relays directly.
-      const inCache = await queryChannelRumors(channelIdHex!, { limit: windowLimitRef.current + 1 });
+      const inCache = await queryChannelRumors(community!.idHex, channelIdHex!, {
+        limit: windowLimitRef.current + 1,
+      });
       const localHasMore = inCache.length > windowLimitRef.current;
 
       windowLimitRef.current += WINDOW_SIZE;
@@ -601,7 +580,7 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
           maxPages: LOAD_OLDER_MAX_PAGES,
         });
         const opened = await openChatBatch(older.events, channel!);
-        writeRumors(opened);
+        writeRumors(community!.idHex, opened);
 
         const c = cursor.current.get(cursorKeyId) ?? { exhausted: false };
         if (older.oldest !== undefined && (c.oldest === undefined || older.oldest < c.oldest)) {
@@ -653,19 +632,20 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
   return {
     /** The folded, moderated timeline + reaction tallies. */
     folded,
-    // Loading until the react-query load settles, OR (cold visit) the rumor
-    // store hydrated empty and the first relay backfill hasn't landed yet —
-    // keeps the skeleton up instead of a premature "no messages" empty state.
-    // Loading skeleton gate — see useConcordChannel for the full rationale.
-    // Hold the skeleton while empty AND a load is genuinely in progress (query
-    // fetching, or fetched-once with the backfill not yet settled). Never force
-    // it while the query is idle-and-never-fetched (channel not resolved), so
-    // we can't hang on a skeleton for a query that isn't running.
-    isLoading:
-      query.isLoading ||
-      ((query.data?.length ?? 0) === 0 &&
-        (query.isFetching || query.isFetched) &&
-        !firstLoadDone),
+    // Loading skeleton gate: the LOCAL read, and nothing else. `isPending` is
+    // true from the moment the query mounts until its queryFn resolves, and
+    // that queryFn resolves on the rumor-store read — so a channel whose
+    // history is already in ArmadaDB paints as soon as IndexedDB answers,
+    // rather than sitting behind a relay round it doesn't need. Everything
+    // after that read (park drain, backfill, gap bridge) is network catch-up
+    // and surfaces as sync activity (`beginSyncTask` → SyncStatusIndicator and
+    // the timeline's `syncing` affordance), not as a loading state.
+    //
+    // Gated on `channel` so a query that is merely DISABLED (the community's
+    // channels haven't folded yet, or never will) reads as not-loading instead
+    // of hanging on a skeleton forever — `isPending` alone stays true for a
+    // disabled query.
+    isLoading: Boolean(channel) && query.isPending,
     loadOlder,
     hasMore,
     isLoadingOlder,
@@ -836,7 +816,7 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
       queryClient.setQueryData<OpenedChat[]>(channelKey(channelIdHex), (old) => upsert(old, [sealed]));
       // Persist to the rumor cache so a refresh mid-flight keeps the message
       // (and a self-delete removes its target via the store's NIP-09).
-      writeRumors([sealed]);
+      writeRumors(community.idHex, [sealed]);
 
       void broadcast(wrap).catch(() => {
         if (isVisible) setStatus(rumor.id, "failed");

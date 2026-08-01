@@ -61,7 +61,7 @@ export function useGitWorkItemActions() {
 
     const store = await eventStore;
     await store.event(event).catch(() => undefined);
-    queueSignedEvent(event, relays[0]);
+    await queueSignedEvent(event, relays[0]);
     emitWireScopes(new Set(scopes));
 
     const timeout = publishTimeoutMs(user.method);
@@ -71,7 +71,7 @@ export function useGitWorkItemActions() {
     // The outbox entry targets relays[0]; only that relay's own ack clears
     // it, so a down primary keeps retrying even when a secondary delivered.
     if (results[0]?.status === "fulfilled") {
-      removeQueuedPublish(event.id);
+      await removeQueuedPublish(event.id).catch(() => undefined);
     }
     if (!results.some((result) => result.status === "fulfilled")) {
       toast({ title: "Delivery queued", description: "No repository relay answered. The post is saved and will retry." });

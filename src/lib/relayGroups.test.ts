@@ -1,14 +1,17 @@
 import { NIndexedDB } from "@nostrify/indexeddb";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { openDB } from "idb";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildRelayGroups,
   KIND_GROUP_METADATA,
   relayGroupCacheFilters,
 } from "@/lib/nip29";
+import { getArmadaDB, purgeArmadaDB } from "@/lib/db/armadaDB";
 import {
   __resetProvenanceForTests,
   eventIdsForRelay,
+  LEGACY_PROVENANCE_DB_NAME,
   recordRelayProvenanceBatch,
 } from "@/lib/relayProvenance";
 
@@ -249,18 +252,21 @@ describe("relay provenance (same-pubkey relays, e.g. zooid)", () => {
 
   afterEach(async () => {
     await store.close();
-    await __resetProvenanceForTests();
     for (const name of dbNames) {
       await new Promise<void>((resolve) => {
         const req = indexedDB.deleteDatabase(name);
         req.onsuccess = req.onerror = req.onblocked = () => resolve();
       });
     }
-    // Wipe the provenance DB between tests too.
+    // Provenance now lives in ArmadaDB's KV, so wiping it between tests means
+    // purging that. The legacy database goes too: reading provenance runs the
+    // drain, which re-creates it just by opening it.
+    await purgeArmadaDB();
     await new Promise<void>((resolve) => {
-      const req = indexedDB.deleteDatabase("armada-relay-provenance");
+      const req = indexedDB.deleteDatabase(LEGACY_PROVENANCE_DB_NAME);
       req.onsuccess = req.onerror = req.onblocked = () => resolve();
     });
+    await __resetProvenanceForTests();
     dbNames.length = 0;
   });
 
@@ -315,5 +321,68 @@ describe("relay provenance (same-pubkey relays, e.g. zooid)", () => {
     await recordRelayProvenanceBatch(["s1"], "wss://chat.soapbox.pub/");
     const ids = await eventIdsForRelay("wss://chat.soapbox.pub");
     expect(ids.has("s1")).toBe(true);
+  });
+
+  it("keeps relays apart when one URL is a prefix of another", async () => {
+    // The separator between relay and event id is what makes this work: without
+    // it, `wss://a.example`'s prefix scan would swallow `wss://a.example/eu`.
+    await recordRelayProvenanceBatch(["s1"], "wss://a.example");
+    await recordRelayProvenanceBatch(["s2"], "wss://a.example/eu");
+
+    expect([...(await eventIdsForRelay("wss://a.example"))]).toEqual(["s1"]);
+    expect([...(await eventIdsForRelay("wss://a.example/eu"))]).toEqual(["s2"]);
+  });
+
+  it("drains provenance recorded by the pre-ArmadaDB database", async () => {
+    // Written in the legacy shape: one row per pair, keyed `relay\0eventId`.
+    const legacy = await openDB(LEGACY_PROVENANCE_DB_NAME, 1, {
+      upgrade(db) {
+        const s = db.createObjectStore("provenance", { keyPath: "key" });
+        s.createIndex("by-relay", "relay");
+      },
+    });
+    await legacy.put("provenance", {
+      key: `${RELAY_1}\u0000${pad("s1")}`,
+      relay: RELAY_1,
+      eventId: pad("s1"),
+    });
+    legacy.close();
+
+    // The read path runs the drain, so no startup gate is needed here.
+    expect((await eventIdsForRelay(RELAY_1)).has(pad("s1"))).toBe(true);
+  });
+
+  it("expires provenance nothing has re-served, and keeps what is still served", async () => {
+    // Kind-39000 is addressable: every metadata edit mints a new id, and the
+    // superseded one is provenance nobody will ask about again. Left alone it
+    // accumulates per (relay, group, edit) forever.
+    const { kv } = getArmadaDB();
+    const day = Math.floor(Date.now() / 86_400_000);
+    const key = (d: number, id: string) =>
+      `provenance:${RELAY_1}\u0000${String(d).padStart(6, "0")}\u0000${pad(id)}`;
+
+    await kv.set(key(day - 90, "old"), 1);
+    await kv.set(key(day - 1, "fresh"), 1);
+
+    expect([...(await eventIdsForRelay(RELAY_1))].sort()).toEqual([pad("fresh")]);
+
+    // Swept from the store, not merely hidden from the read.
+    await vi.waitFor(async () => {
+      expect(await kv.keys(`provenance:${RELAY_1}\u0000`)).toHaveLength(1);
+    });
+  });
+
+  it("re-serving an event refreshes it, so a relay still in use never expires", async () => {
+    const { kv } = getArmadaDB();
+    const day = Math.floor(Date.now() / 86_400_000);
+    await kv.set(
+      `provenance:${RELAY_1}\u0000${String(day - 90).padStart(6, "0")}\u0000${pad("s1")}`,
+      1,
+    );
+
+    // The directory read that records it again stamps it with today.
+    await recordRelayProvenanceBatch([pad("s1")], RELAY_1);
+
+    expect((await eventIdsForRelay(RELAY_1)).has(pad("s1"))).toBe(true);
   });
 });

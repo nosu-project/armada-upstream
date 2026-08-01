@@ -8,7 +8,7 @@ import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { KIND_DELETE, KIND_REACTION } from "@/lib/nip29";
 
 import type { MessageReactions } from "@/components/chat/transport";
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
  * A NIP-25 reaction, identified by its display emoji. A `+` or empty content
@@ -58,7 +58,7 @@ export function customEmojiReactionTags(content: string, emojiUrl?: string): str
 }
 
 /** Normalize a kind 7 reaction's content into a display key. */
-export function reactionKey(event: NostrEvent): string {
+export function reactionKey(event: NostrRumor): string {
   return reactionContentKey(event.content);
 }
 
@@ -70,9 +70,9 @@ export function reactionContentKey(content: string): string {
 }
 
 /** Tally a flat list of reaction events into per-key tallies for one message. */
-function tallyReactions(reactions: NostrEvent[], userPubkey: string | undefined): ReactionTally[] {
+function tallyReactions(reactions: NostrRumor[], userPubkey: string | undefined): ReactionTally[] {
   // One reaction per (pubkey, key); the latest event wins.
-  const latest = new Map<string, NostrEvent>();
+  const latest = new Map<string, NostrRumor>();
   for (const reaction of reactions) {
     const key = `${reaction.pubkey}:${reactionKey(reaction)}`;
     const existing = latest.get(key);
@@ -157,7 +157,7 @@ export function useGroupReactions(
 
   // All reactions in this group, keyed by message id. A single query for the
   // whole visible window instead of one per message.
-  const reactionsQuery = useQuery<Map<string, NostrEvent[]>>({
+  const reactionsQuery = useQuery<Map<string, NostrRumor[]>>({
     queryKey,
     queryFn: async ({ signal }) => {
       const ids = idsSig ? idsSig.split(",") : [];
@@ -181,7 +181,7 @@ export function useGroupReactions(
             { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
           );
           if (signal.aborted || fresh.length === 0) return;
-          queryClient.setQueryData<Map<string, NostrEvent[]>>(queryKey, (old) =>
+          queryClient.setQueryData<Map<string, NostrRumor[]>>(queryKey, (old) =>
             mergeReactions(old, fresh),
           );
         } catch {
@@ -199,9 +199,9 @@ export function useGroupReactions(
       // here. So: a reaction older than the mirror grace has had time to reach
       // IndexedDB, and its absence there means deleted; a fresher one may
       // simply not be mirrored yet, so it's kept.
-      const prev = queryClient.getQueryData<Map<string, NostrEvent[]>>(queryKey);
+      const prev = queryClient.getQueryData<Map<string, NostrRumor[]>>(queryKey);
       const settledBefore = Math.floor(Date.now() / 1000) - MIRROR_GRACE_SECONDS;
-      const unmirrored: NostrEvent[] = [];
+      const unmirrored: NostrRumor[] = [];
       if (prev) {
         const cachedIds = new Set(cached.map((e) => e.id));
         for (const list of prev.values()) {
@@ -230,8 +230,8 @@ export function useGroupReactions(
           { signal: controller.signal },
         )) {
           if (msg[0] !== "EVENT") continue;
-          const event = msg[2] as NostrEvent;
-          queryClient.setQueryData<Map<string, NostrEvent[]>>(queryKey, (old) =>
+          const event = msg[2] as NostrRumor;
+          queryClient.setQueryData<Map<string, NostrRumor[]>>(queryKey, (old) =>
             mergeReactions(old, [event]),
           );
         }
@@ -249,11 +249,11 @@ export function useGroupReactions(
     // Removing a reaction has to drop it from the cache up front: the queryFn's
     // grace window would otherwise hold a just-added reaction on screen for the
     // whole window, since a NIP-09 delete registers only as an absence.
-    onMutate: ({ mineEventId }: { target: NostrEvent } & ReactInput) => {
+    onMutate: ({ mineEventId }: { target: NostrRumor } & ReactInput) => {
       if (!mineEventId) return;
-      queryClient.setQueryData<Map<string, NostrEvent[]>>(queryKey, (old) => {
+      queryClient.setQueryData<Map<string, NostrRumor[]>>(queryKey, (old) => {
         if (!old) return old;
-        const next = new Map<string, NostrEvent[]>();
+        const next = new Map<string, NostrRumor[]>();
         for (const [target, list] of old) {
           const kept = list.filter((e) => e.id !== mineEventId);
           if (kept.length > 0) next.set(target, kept);
@@ -261,7 +261,7 @@ export function useGroupReactions(
         return next;
       });
     },
-    mutationFn: async ({ target, content, emojiUrl, mineEventId }: { target: NostrEvent } & ReactInput) => {
+    mutationFn: async ({ target, content, emojiUrl, mineEventId }: { target: NostrRumor } & ReactInput) => {
       if (mineEventId) {
         // Removing: publish a NIP-09 kind-5 deletion of the user's prior
         // reaction event. The store self-applies NIP-09 (same-author delete),
@@ -324,7 +324,7 @@ export function useGroupReactions(
         // Resolve the target event from the messages cache lazily at click time.
         const reactFn = (input: ReactInput) => {
           const messages =
-            queryClient.getQueryData<NostrEvent[]>(messagesKey) ?? [];
+            queryClient.getQueryData<NostrRumor[]>(messagesKey) ?? [];
           const target = messages.find((m) => m.id === id);
           if (!target) return;
           reactRef.current({ target, ...input });
@@ -345,8 +345,8 @@ export function useGroupReactions(
 }
 
 /** Bucket a flat reaction list into `target id → reactions`. */
-function groupReactionsByTarget(reactions: NostrEvent[]): Map<string, NostrEvent[]> {
-  const out = new Map<string, NostrEvent[]>();
+function groupReactionsByTarget(reactions: NostrRumor[]): Map<string, NostrRumor[]> {
+  const out = new Map<string, NostrRumor[]>();
   for (const r of reactions) {
     const target = r.tags.find(([n]) => n === "e")?.[1];
     if (!target) continue;
@@ -359,10 +359,10 @@ function groupReactionsByTarget(reactions: NostrEvent[]): Map<string, NostrEvent
 
 /** Merge new reactions into an existing target→reactions map (de-duped by id). */
 function mergeReactions(
-  old: Map<string, NostrEvent[]> | undefined,
-  incoming: NostrEvent[],
-): Map<string, NostrEvent[]> {
-  const next = new Map<string, NostrEvent[]>();
+  old: Map<string, NostrRumor[]> | undefined,
+  incoming: NostrRumor[],
+): Map<string, NostrRumor[]> {
+  const next = new Map<string, NostrRumor[]>();
   if (old) for (const [k, v] of old) next.set(k, [...v]);
   for (const r of incoming) {
     const target = r.tags.find(([n]) => n === "e")?.[1];

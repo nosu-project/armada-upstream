@@ -18,7 +18,9 @@ client does not depend on it at build time.
 |--------------|-----------------------------------------------------------------|
 | `src/`       | React 19 + Vite web client (Tailwind + shadcn/ui + Nostrify)    |
 | `src/concord-v2/` | The Concord protocol implementation (CORD-01..07): stream, control, chat, invites, rekey, voice, crypto derivations |
+| `src/lib/db/` | ArmadaDB — the one local storage interface (tenants of rumors + a KV), its IndexedDB adapter, the Android bridge adapter, and the migrations |
 | `android/`   | Capacitor Android project (signed APK/AAB built in CI)          |
+| `android/…/app/db/` | ArmadaDB in Kotlin: the SQLite engine the Android build actually runs, shared by the WebView and the notification service |
 | `ios/`       | Capacitor iOS project (SwiftPM, no CocoaPods; built manually on a Mac — no CI) |
 | `electron/`  | Electron desktop shell (loads the bundled web build; Linux/Windows/macOS installers built in CI) |
 | `Dockerfile` + `nginx.conf` | nginx-served static build for web hosting        |
@@ -180,8 +182,7 @@ cd ios/App && xcodebuild -project App.xcodeproj -scheme App \
 Android-only pieces that are simply absent on iOS, and are gated so they don't
 surface dead UI or throw: the `ArmadaNotification` background relay service
 (use `hasNativeNotificationService()`, not `isNativeRuntime()`, for anything
-touching it), the shared native SQLite store (iOS falls back to SQLite-WASM on
-OPFS, then IndexedDB), NIP-55 external signers (Amber), the Bluetooth mesh, and
+touching it), NIP-55 external signers (Amber), the Bluetooth mesh, and
 the Credential Manager nsec export. **iOS therefore has no notifications at
 all** — no background service, and no Web Push in WKWebView; that needs APNs or
 a native iOS equivalent. Deep links are also unhandled: there is no
@@ -190,6 +191,87 @@ entitlement (the latter needs a paid team + `apple-app-site-association`), so
 `armada://` and armada.buzz universal links won't open the app yet. The JS
 layer (`deepLinkUrl.ts`, `coldLaunchDeepLink.ts`) is platform-agnostic and
 needs no change when they're added.
+
+## Local storage: ArmadaDB
+
+One interface (`src/lib/db/types.ts`) — tenants of rumors plus a KV — with a
+different engine per platform:
+
+| Platform | Engine |
+|----------|--------|
+| Web / desktop / iOS | `IndexedDBArmadaDB` (Nostrify's `NIndexedDB` per tenant) |
+| **Android** | `NativeArmadaDB` → `ArmadaDbPlugin` → **Kotlin** (`android/…/app/db/`) |
+
+On Android the query engine is native and there is exactly one database file.
+The background notification service writes an event into the same tenant the
+WebView reads it from, so a message received while the app was dead is simply
+*there* on open. `drainEvents`/`ackDrain` still exist but are ROUTING only — a
+pass through wire ingest (parking wraps, ringing scopes, notification
+candidates) — over a `svc` queue tenant, not the path by which anything becomes
+durable.
+
+Things to know before touching it:
+
+- **The Kotlin port must stay in step with `SqliteArmadaDB.ts`.** Same schema,
+  same `seq = created_at × 2²⁰ + n` rowid encoding, same tag-token escaping,
+  same planner. `ArmadaDbTest.kt` is the TS conformance suite ported over; run
+  it (`cd android && ./gradlew :app:testDebugUnitTest`) for any change to
+  either.
+- **SQLite is bundled, not borrowed.** The schema needs FTS5 with
+  `contentless_delete` (3.43+) and JSON1; Android's platform SQLite is 3.9 on
+  minSdk 24 and has neither. `androidx.sqlite:sqlite-bundled` ships 3.50.1 per
+  ABI (~1.2 MB each, ~5 MB on a universal APK) and the same build for the JVM,
+  which is what lets the conformance suite run the real engine as a plain unit
+  test.
+- **The adapter is chosen before anything reads.** The legacy drains in
+  `migrations.ts` write through `getArmadaDB()`, so on Android they land in the
+  native store directly — there is no IndexedDB ArmadaDB to move, and adding a
+  second hop would be a second chance to strand decrypted Concord and NIP-17
+  history that exists nowhere else.
+- **The service is a second writer, so it obeys the same store rules.** `Dm17.kt`
+  ports NIP-17's kind filter and NIP-40 expiry refusal;
+  `ServiceStore.storeConcord2Rumor` ports the chat plane's encrypted-seal rule.
+  A rule only one writer applies is a conversation the two disagree about — and
+  the rules are load-bearing precisely because nothing is stored beside the
+  rumor for a reader to re-check them against.
+- **Never inject a tag into a stored rumor, and don't store a row beside it
+  either.** Its tags are the bytes its id commits to, so bookkeeping written
+  into them makes the row something the sender never signed, and makes whatever
+  reads that tag forgeable by anyone who spells it. Derive instead: a DM's
+  partner comes from `pubkey` and the `p` tags NIP-17 requires (`dmPeerOf`), and
+  a thread is two ordinary indexed filters — `authors: [peer]` and
+  `authors: [self], "#p": [peer]`. A Concord plane is its KINDS
+  (`PLANE_RULES`/`queryPlane`), and a rekey round names its own scope and epoch
+  in the tags `parseRekey` reads — so neither the stream address, the carrier
+  wrap id nor the seal kind is stored at all. They are checked ONCE, at ingest
+  (`writeOpened`), against the stream keys that actually opened the wrap, and
+  wherever the seal form is still known in memory (`parseEdition` and friends —
+  freshly-swept events reach a fold without a store round-trip).
+- **The one exception is worth knowing, because it is the shape of a real
+  one.** A compaction re-wraps control editions VERBATIM under the new epoch's
+  address (CORD-06 §3), so whether an edition is in the current snapshot is
+  genuinely not in the rumor. It lives in KV as a set of rumor ids per control
+  stream address (`c2snap:<community>:<pk>`, `readControlSnapshot`) — the fact
+  itself, not an event-shaped row impersonating one.
+- **A drain converts to the CURRENT shape; it does not copy rows across.** The
+  pre-ArmadaDB store folded `stream`/`wrap`/`sealkind`/`seal` into the stored
+  event's tags and told the planes apart by the `stream` tag at read time, so
+  it enforced no kind or seal-form rule at write. Planes read back by kind now,
+  and that is sound only because `writeOpened` refuses, at ingest, a rumor whose
+  kind does not belong to the plane whose keys opened its wrap — so
+  `rumorMigration.ts` applies those same three refusals to every row it copies,
+  using the `stream` tag it is about to strip as proof of the arrival plane.
+  Copying verbatim would mint a control edition out of any guestbook
+  keyholder's rumor.
+- **The localStorage→KV move happens in the gate, and nowhere else.**
+  `LOCALSTORAGE_MOVES` in `db/schema.ts` is the only place the old key
+  spellings are written down; `KvPrefixCache` knows nothing about localStorage
+  and reads KV only. Don't put a "check localStorage on miss" fallback in a
+  cache or a hook — that is the drift the single table exists to prevent, and
+  it would re-run on every warm forever.
+- The bridge carries JSON **text**, not marshalled objects: Capacitor would
+  have to guess between an integer `kind` and a float, and a page of rumors is
+  far cheaper as one string.
 
 ## Conventions
 

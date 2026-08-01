@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { bytesToHex, controlGroupKey } from "@/concord-v2/lib/derive";
 import { KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
 import { _configureAuthWaitForTests } from "@/concord-v2/lib/planeSync";
-import { queryByStreams } from "@/concord-v2/lib/rumorStore";
+import { queryPlane } from "@/concord-v2/lib/rumorStore";
 import { buildRumor, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 
@@ -170,7 +170,7 @@ describe("syncControlPlane — batched V2 sweep", () => {
       // First sweep: E2 lands from relay A; relay B fails (its cursor stays put).
       const first = await syncControlPlane(nostr, queryClient, [], [community]);
       expect(first.v2Touched).toEqual(new Set([community.idHex]));
-      let stored = await queryByStreams([control.pk]);
+      let stored = await queryPlane(community.idHex, "control");
       expect(stored.map((e) => e.rumorId)).toContain(e2.rumorId);
       expect(stored.map((e) => e.rumorId)).not.toContain(e1.rumorId);
 
@@ -182,7 +182,7 @@ describe("syncControlPlane — batched V2 sweep", () => {
       // not skipped.
       const second = await syncControlPlane(nostr, queryClient, [], [community]);
       expect(second.v2Touched).toEqual(new Set([community.idHex]));
-      stored = await queryByStreams([control.pk]);
+      stored = await queryPlane(community.idHex, "control");
       expect(stored.map((e) => e.rumorId), "the late older edition E1 must eventually land").toContain(
         e1.rumorId,
       );

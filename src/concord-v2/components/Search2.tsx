@@ -281,10 +281,8 @@ const SearchRow = memo(function SearchRow({
   highlight?: string;
   onJump?: () => void;
 }) {
-  const rumor = useMemo(() => {
-    const { sig: _sig, ...rest } = event;
-    return rest;
-  }, [event]);
+  // `ChatMsg` is already signature-less, so the message IS the rumor.
+  const rumor = event;
   return (
     <div
       role={onJump ? "button" : undefined}

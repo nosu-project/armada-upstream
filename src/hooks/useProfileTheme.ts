@@ -6,9 +6,9 @@ import { useCacheFirstSeed } from "@/hooks/useCacheFirstSeed";
 import { useEventStore } from "@/hooks/useEventStore";
 import { ACTIVE_THEME_KIND, parseDittoTheme, type DittoTheme } from "@/lib/themeEvent";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
-export type ProfileThemeResult = { event?: NostrEvent; theme?: DittoTheme };
+export type ProfileThemeResult = { event?: NostrRumor; theme?: DittoTheme };
 
 /** The query key holding a pubkey's active Ditto theme (kind 16767). */
 export function profileThemeQueryKey(pubkey: string): [string, string] {
@@ -16,7 +16,7 @@ export function profileThemeQueryKey(pubkey: string): [string, string] {
 }
 
 /** Parse a kind-16767 event into { event, theme }, dropping the theme on parse failure. */
-function parseProfileThemeEvent(event: NostrEvent): ProfileThemeResult {
+function parseProfileThemeEvent(event: NostrRumor): ProfileThemeResult {
   return { event, theme: parseDittoTheme(event) ?? undefined };
 }
 

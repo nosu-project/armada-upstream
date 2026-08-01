@@ -4,8 +4,10 @@ import { getPublicKey, generateSecretKey } from "nostr-tools/pure";
 import { describe, expect, it } from "vitest";
 
 import {
+  DM17_DRAIN_PAGE,
   dm17Store,
   dm17ToStored,
+  migrateLegacyDms,
   queryDm17Conversations,
   queryDm17Thread,
   queryDm17Timer,
@@ -54,10 +56,17 @@ function opened(opts: { author: string; peer: string; kind?: number; content?: s
 }
 
 describe("dm17Store", () => {
-  it("round-trips the stored codec, stripping provenance tags", () => {
+  it("round-trips the stored codec without touching the rumor's tags", () => {
     const o = opened({ author: alice, peer: alice, content: "codec" });
-    const back = storedToDm17(dm17ToStored(o));
-    expect(back).toEqual(o);
+    const stored = dm17ToStored(o);
+    // Nothing is injected: the tags are the bytes the rumor's id commits to.
+    expect(stored.tags).toEqual(o.tags);
+
+    const back = storedToDm17(stored, self);
+    // The partner is derived from the rumor (NIP-17 names it in `p`), and the
+    // wrap id is transport provenance with no reader on this side of the store,
+    // so it is not persisted and comes back empty.
+    expect(back).toEqual({ ...o, wrapId: "" });
   });
 
   it("writes rumors and reads a thread scoped by peer", async () => {
@@ -223,13 +232,12 @@ describe("dm17Store legacy drain", () => {
     const anaGot = opened({ author: carla, peer: carla, content: "carla to ana", tags: dmChatTags(ana) });
     // Ben ↔ Carla, from the same device. Ana must never see these.
     const benSent = opened({ author: ben, peer: carla, content: "ben to carla", tags: dmChatTags(carla) });
-    // A reaction of Ana's carries no `p` — attributable only by conversation.
     const anaReacted = opened({
       author: ana,
       peer: carla,
       kind: KIND_DM_REACTION,
       content: "👍",
-      tags: [["e", anaGot.rumorId]],
+      tags: dmReactionTags(carla, anaGot.rumorId, KIND_DM_CHAT),
     });
     for (const o of [anaSent, anaGot, benSent, anaReacted]) {
       await legacy.event({ ...dm17ToStored(o), sig: "" });
@@ -243,4 +251,23 @@ describe("dm17Store legacy drain", () => {
     expect(ids.has(anaReacted.rumorId)).toBe(true);
     expect(ids.has(benSent.rumorId)).toBe(false);
   });
+
+  it("pages past the scan window instead of copying only the newest slice", async () => {
+    // The drain used to read the store with one `limit`-capped query. Anything
+    // past the cap was left behind — and then deleted with the database, since
+    // the drain resolved either way. Re-decrypting is not a recovery path: it
+    // needs gift wraps the relays have long since dropped.
+    const dana = getPublicKey(generateSecretKey());
+    const total = DM17_DRAIN_PAGE + 50;
+
+    const legacy = new NIndexedDB("armada-dm17-rumors");
+    for (let i = 0; i < total; i++) {
+      const o = opened({ author: dana, peer: carla, content: `msg-${i}`, tags: dmChatTags(carla) });
+      await legacy.event({ ...dm17ToStored(o), sig: "" });
+    }
+    await legacy.close();
+
+    await migrateLegacyDms(dana);
+    expect((await dm17Store(dana).count([{ kinds: [KIND_DM_CHAT] }])).count).toBe(total);
+  }, 60_000);
 });

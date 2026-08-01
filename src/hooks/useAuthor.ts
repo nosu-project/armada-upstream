@@ -1,11 +1,12 @@
-import { type NostrEvent, type NostrMetadata, NSchema as n } from '@nostrify/nostrify';
+import { type NostrMetadata, NSchema as n } from '@nostrify/nostrify';
 import { useNostr } from '@nostrify/react';
 import { type QueryClient, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { useCacheFirstSeed } from '@/hooks/useCacheFirstSeed';
 import { useEventStore } from '@/hooks/useEventStore';
+import type { NostrRumor } from "@/lib/nostrRumor";
 
-export type AuthorResult = { event?: NostrEvent; metadata?: NostrMetadata };
+export type AuthorResult = { event?: NostrRumor; metadata?: NostrMetadata };
 
 type Nostr = ReturnType<typeof useNostr>['nostr'];
 type EventStore = ReturnType<typeof useEventStore>;
@@ -84,7 +85,7 @@ export function authorQueryKey(pubkey: string): [string, string] {
 }
 
 /** Parse a kind-0 event into metadata + event, or return just the event on parse failure. */
-export function parseAuthorEvent(event: NostrEvent): { event: NostrEvent; metadata?: NostrMetadata } {
+export function parseAuthorEvent(event: NostrRumor): { event: NostrRumor; metadata?: NostrMetadata } {
   try {
     const metadata = n.json().pipe(n.metadata()).parse(event.content);
     return { metadata, event };
@@ -102,7 +103,7 @@ export function parseAuthorEvent(event: NostrEvent): { event: NostrEvent; metada
  * through here so newest-wins holds cache-wide, mirroring the store's
  * replaceable semantics and the `useCacheFirstSeed` guard.
  */
-export function seedAuthorCache(queryClient: QueryClient, pubkey: string, event: NostrEvent): void {
+export function seedAuthorCache(queryClient: QueryClient, pubkey: string, event: NostrRumor): void {
   const key = authorQueryKey(pubkey);
   const existing = queryClient.getQueryData<AuthorResult>(key);
   if (existing?.event && existing.event.created_at >= event.created_at) return;

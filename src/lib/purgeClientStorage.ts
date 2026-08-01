@@ -1,8 +1,8 @@
 import { clearRenderedPlaintext } from "@/hooks/dmRenderCache";
-import { DECRYPT_CACHE_DB_NAME } from "@/lib/AppSigner";
 import { ARMADA_DB_NAME, purgeArmadaDB } from "@/lib/db/armadaDB";
+import { resetKvCaches } from "@/lib/db/kvCache";
+import { legacyDatabaseNames } from "@/lib/db/migrations";
 import { resetDecryptConsent } from "@/lib/decryptConsent";
-import { purgeEventStore } from "@/lib/sqlite/eventStore";
 
 /**
  * localStorage keys that must survive a purge. `armada:login` is the nostrify
@@ -12,6 +12,21 @@ import { purgeEventStore } from "@/lib/sqlite/eventStore";
  */
 const PRESERVE_LOCAL_STORAGE_KEYS = new Set<string>(["armada:login"]);
 
+/**
+ * Remove the OPFS directory the retired SQLite-WASM event store used. Nothing
+ * writes it any more (the event cache is an ArmadaDB tenant), but a user
+ * upgrading across that change still has the bytes on disk, and a logout must
+ * not leave them.
+ */
+async function purgeOrphanedOpfs(): Promise<void> {
+  try {
+    const root = await navigator.storage?.getDirectory?.();
+    await root?.removeEntry(".armada-sqlite", { recursive: true });
+  } catch {
+    // best-effort — absent (the common case) or held open
+  }
+}
+
 /** Best-effort deletion of every IndexedDB database this origin owns. */
 async function purgeIndexedDB(): Promise<void> {
   if (typeof indexedDB === "undefined") return;
@@ -19,18 +34,14 @@ async function purgeIndexedDB(): Promise<void> {
     // `indexedDB.databases()` is unsupported on Firefox; fall back to the
     // known Armada database names so we still wipe the bulk of the data.
     const known = [
-      "armada-events",
-      "armada-concord-cache",
-      "armada-concord-rumors",
-      "armada-concord-pending",
-      "armada-concord-invites",
-      "armada-dm17-rumors",
-      "armada-relay-provenance",
       // ArmadaDB's KV database. Its tenant databases (`armada:t:<id>`) have
       // dynamic names, so `purgeArmadaDB` deletes those — it can enumerate
       // and, more importantly, close them first.
       `${ARMADA_DB_NAME}:kv`,
-      DECRYPT_CACHE_DB_NAME,
+      // Every pre-ArmadaDB database, from the migration catalogue rather than a
+      // second hand-maintained list: a purge has to delete them whether or not
+      // the migration has run yet.
+      ...legacyDatabaseNames(),
     ];
     const dbs =
       typeof indexedDB.databases === "function"
@@ -90,9 +101,17 @@ function purgeLocalStorage(): void {
 export async function purgeClientStorage(): Promise<void> {
   clearRenderedPlaintext();
   resetDecryptConsent();
+  // The KV-backed caches (drafts, relay info, emoji palettes, GIF shards) keep
+  // their own copy in memory. Deleting the database underneath them would
+  // leave the next account reading the previous one's data straight out of it.
+  resetKvCaches();
   purgeLocalStorage();
   // ArmadaDB first: `deleteDatabase` against an open connection is blocked,
   // not applied, so its databases have to be closed before the sweep runs.
   await purgeArmadaDB();
-  await Promise.all([purgeIndexedDB(), purgeCacheStorage(), purgeEventStore()]);
+  await Promise.all([purgeIndexedDB(), purgeCacheStorage(), purgeOrphanedOpfs()]);
+  // Again, afterwards. A cache warm already in flight when the first reset ran
+  // resolves against the OLD database and refills the map behind us; the reset
+  // is idempotent and costs nothing, and this is the last word.
+  resetKvCaches();
 }

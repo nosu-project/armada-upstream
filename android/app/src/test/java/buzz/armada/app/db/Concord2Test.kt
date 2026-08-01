@@ -1,0 +1,74 @@
+package buzz.armada.app.db
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * The Concord V2 chat-ingress rules the background service writes through,
+ * ported from `rumorStore.ts` / `kinds.ts` alongside the code.
+ *
+ * These are the rules that make a second writer safe. The WebView and the
+ * service both file chat rumors into `c2:<communityIdHex>`, and neither fact
+ * they turn on survives the write — the seal form is not stored, and every
+ * plane shares that one tenant — so a rule only one writer applies is a row the
+ * other's readers trust for something it never was.
+ */
+class Concord2Test {
+
+    private val community = "ab".repeat(32)
+
+    @Test
+    fun `stores an ordinary chat message`() {
+        assertTrue(Concord2.storable(community, Concord2.SEAL_ENCRYPTED, rumor(kind = 9)))
+    }
+
+    @Test
+    fun `keeps every chat kind, including ones the timeline does not read`() {
+        // A denylist, so kinds outside the timeline's own list still store —
+        // 3310 is the WebXDC signal, read by its own query.
+        for (kind in listOf(5, 7, 9, 1018, 1068, 1111, 3302, 3310, 8333, 9735, 31922, 31923, 31925)) {
+            assertTrue("kind $kind", Concord2.storable(community, Concord2.SEAL_ENCRYPTED, rumor(kind)))
+        }
+    }
+
+    @Test
+    fun `refuses a rumor whose kind belongs to another plane`() {
+        // The reverse splice: a member of ANY channel holds its stream key
+        // legitimately, so the channel binding proves nothing here. A plane is
+        // read back by kind, and a stored rumor keeps no seal for the fold to
+        // check the form of, so this is the only place it can be refused.
+        for (kind in listOf(3308, 3306, 3309, 3312, 3303)) {
+            assertFalse("kind $kind", Concord2.storable(community, Concord2.SEAL_ENCRYPTED, rumor(kind)))
+        }
+    }
+
+    @Test
+    fun `refuses a chat rumor that did not arrive under an encrypted seal`() {
+        // A plaintext seal would make the message a standalone signed artifact
+        // any relay could display (CORD-02 §5).
+        assertFalse(Concord2.storable(community, 20014, rumor(kind = 9)))
+    }
+
+    @Test
+    fun `refuses a rumor with no community to file it under`() {
+        assertFalse(Concord2.storable("", Concord2.SEAL_ENCRYPTED, rumor(kind = 9)))
+    }
+
+    @Test
+    fun `a channel tag cannot move a plane kind past the refusal`() {
+        val forged = rumor(kind = 3308, tags = listOf(listOf("channel", "cd".repeat(32)), listOf("epoch", "0")))
+        assertFalse(Concord2.storable(community, Concord2.SEAL_ENCRYPTED, forged))
+    }
+
+    @Test
+    fun `names the tenant per community`() {
+        assertEquals("c2:$community", Concord2.tenant(community))
+    }
+
+    private fun rumor(
+        kind: Int,
+        tags: List<List<String>> = emptyList(),
+    ): Rumor = Rumor.of("id-$kind", "alice", 1_000_000L, kind, tags, "hello")!!
+}

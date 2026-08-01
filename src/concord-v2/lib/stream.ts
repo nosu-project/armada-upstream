@@ -159,7 +159,16 @@ export function wrapSeal(
 
 // ── Opening ──────────────────────────────────────────────────────────────────
 
-/** A fully-opened, verified stream event. */
+/**
+ * A fully-opened, verified stream event.
+ *
+ * The ENVELOPE fields below are optional because they exist only while the wrap
+ * is in hand. Nothing about the wrap is persisted: the store holds the rumor its
+ * author signed and nothing else, so an event read back from it has the rumor
+ * fields and none of these. {@link OpenedWireEvent} is the variant straight off
+ * a wrap, where all of them are present — take that type wherever the envelope
+ * is actually required, and the compiler will keep a stored event out.
+ */
 export interface OpenedEvent {
   /** The rumor id — the message id / dedup / display key. */
   rumorId: string;
@@ -171,15 +180,31 @@ export interface OpenedEvent {
   /** Ordering timestamp (epoch ms): `created_at*1000 + ms`. */
   ms: number;
   createdAt: number;
-  /** The wrap's id (the relay-addressable carrier; the transport dedup key). */
-  wrapId: string;
-  /** The stream address (wrap author) this event was read from. */
-  streamPk: string;
-  /** Which seal form carried the rumor (20013 encrypted / 20014 plaintext). */
-  sealKind: number;
-  /** The verified seal event itself — needed to re-wrap plaintext seals (compaction). */
-  seal: NostrEvent;
+  /** WIRE ONLY. The wrap's id (the relay-addressable carrier; the transport dedup key). */
+  wrapId?: string;
+  /** WIRE ONLY. The stream address (wrap author) this event was read from. */
+  streamPk?: string;
+  /**
+   * WIRE ONLY. Which seal form carried the rumor (20013 encrypted / 20014
+   * plaintext). Checked at ingest against {@link PLANE_RULES}; afterwards the
+   * rumor's own kind implies it, so no reader needs it.
+   */
+  sealKind?: number;
+  /**
+   * WIRE ONLY. The verified seal event itself — needed to re-wrap plaintext
+   * seals (compaction). Plaintext seals are kept in KV beside the store
+   * (`readStoredSeal` fetches them).
+   */
+  seal?: NostrEvent;
 }
+
+/** An {@link OpenedEvent} straight off a wrap, whose envelope is always present. */
+export type OpenedWireEvent = OpenedEvent & {
+  wrapId: string;
+  streamPk: string;
+  sealKind: number;
+  seal: NostrEvent;
+};
 
 /**
  * Reconstruct the ms timestamp. A missing tag means offset 0; a malformed tag
@@ -220,7 +245,7 @@ export function resolveMs(createdAtSecs: number, tags: string[][]): number {
  *      claimed one) and that the rumor's pubkey equals the seal's signer (or a
  *      keyholder could re-seal another member's rumor under their own name).
  */
-export function openWrap(wrap: NostrRumor, stream: GroupKey): OpenedEvent {
+export function openWrap(wrap: NostrRumor, stream: GroupKey): OpenedWireEvent {
   if (wrap.kind !== KIND_WRAP && wrap.kind !== KIND_WRAP_EPHEMERAL) {
     throw new StreamError("bad-wrap-kind", `not a stream wrap: kind ${wrap.kind}`);
   }

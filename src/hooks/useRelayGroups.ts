@@ -14,7 +14,8 @@ import {
 } from "@/lib/nip29";
 import { eventIdsForRelay } from "@/lib/relayProvenance";
 
-import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
+import type { NostrFilter } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
  * How long the channel-list query waits for the NIP-11 doc (for the relay's
@@ -89,7 +90,7 @@ export function useRelayGroups(relayUrl: string | undefined) {
   // it has none yet (nothing fetched from this relay this install), we return
   // nothing from cache and let the live single-relay network read populate it —
   // the network read is correctly isolated, so this never shows bled channels.
-  async function readScopedCache(selfKey: string | undefined): Promise<NostrEvent[]> {
+  async function readScopedCache(selfKey: string | undefined): Promise<NostrRumor[]> {
     const filters = relayGroupCacheFilters(selfKey, rememberedIds);
     if (filters.length === 0) return [];
     const [store, provenance] = await Promise.all([eventStore, eventIdsForRelay(relayUrl!)]);

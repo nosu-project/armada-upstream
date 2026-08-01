@@ -1,4 +1,7 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
+
+import { KvPrefixCache } from '@/lib/db/kvCache';
 
 export interface RelayInfoDocument {
   name?: string;
@@ -45,29 +48,24 @@ function relayToHttpUrl(relayUrl: string): string | null {
 
 // A relay's NIP-11 doc (name, icon, banner, self key) is one of the most STABLE
 // things about a server — it changes almost never. So we persist the last
-// known-good doc to localStorage, keyed by relay URL, and seed the query with
-// it. That way a reload over a shaky/offline connection still shows the real
-// server name and avatar instead of collapsing to the bare host + a placeholder
-// logo while the NIP-11 fetch fails. (react-query's cache is memory-only and
-// vanishes on reload; this is the disk-backed last-known-good.)
-const STORAGE_PREFIX = 'armada:relay-info:';
+// known-good doc, keyed by relay URL, and seed the query with it. That way a
+// reload over a shaky/offline connection still shows the real server name and
+// avatar instead of collapsing to the bare host + a placeholder logo while the
+// NIP-11 fetch fails. (react-query's cache is memory-only and vanishes on
+// reload; this is the disk-backed last-known-good.)
+//
+// Held in ArmadaDB's KV: one entry per relay ever contacted, 1–3 KB each, never
+// evicted — an unbounded claim on a ~5 MB localStorage budget, and the write
+// already swallowed quota failures. The synchronous cache in front of it is
+// what lets `initialData` stay synchronous, which react-query requires.
+export const relayInfoCache = new KvPrefixCache<RelayInfoDocument>({ prefix: 'relay-info:' });
 
 function readCachedInfo(relayUrl: string | undefined): RelayInfoDocument | undefined {
-  if (!relayUrl) return undefined;
-  try {
-    const raw = localStorage.getItem(STORAGE_PREFIX + relayUrl);
-    return raw ? (JSON.parse(raw) as RelayInfoDocument) : undefined;
-  } catch {
-    return undefined;
-  }
+  return relayUrl ? relayInfoCache.get(relayUrl) : undefined;
 }
 
 function writeCachedInfo(relayUrl: string, info: RelayInfoDocument): void {
-  try {
-    localStorage.setItem(STORAGE_PREFIX + relayUrl, JSON.stringify(info));
-  } catch {
-    // localStorage full / unavailable — non-fatal, we just lose the seed.
-  }
+  relayInfoCache.set(relayUrl, info);
 }
 
 /**
@@ -107,6 +105,28 @@ export async function fetchRelayInfoDoc(
 
 export function useRelayInfo(relayUrl: string | undefined) {
   const httpUrl = relayUrl ? relayToHttpUrl(relayUrl) : null;
+  const queryClient = useQueryClient();
+
+  // The seed comes off disk asynchronously now, so a query mounted during boot
+  // reads an empty cache. Once the warm lands, hand the last-known-good doc to
+  // any query still without data — that is the offline reload this whole cache
+  // exists for, and `initialData` has already had its one chance to run.
+  useEffect(() => {
+    if (!relayUrl || !httpUrl) return;
+    let cancelled = false;
+    void relayInfoCache.ready().then(() => {
+      if (cancelled) return;
+      const cached = readCachedInfo(relayUrl);
+      if (!cached) return;
+      const key = ['relay-info', relayUrl];
+      if (queryClient.getQueryData<RelayInfoDocument>(key) === undefined) {
+        queryClient.setQueryData(key, cached);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [relayUrl, httpUrl, queryClient]);
 
   return useQuery<RelayInfoDocument>({
     queryKey: ['relay-info', relayUrl],
