@@ -47,25 +47,32 @@ export async function share(opts: {
   url?: string;
   dialogTitle?: string;
 }): Promise<boolean> {
-  try {
-    if (native) {
+  if (native) {
+    try {
       await Share.share({
         title: opts.title,
         text: opts.text,
         url: opts.url,
         dialogTitle: opts.dialogTitle ?? opts.title,
       });
-      return true;
+    } catch {
+      // Cancelled, or failed after the sheet was up — the plugin doesn't
+      // distinguish them, and falling back to a copy on a cancel would be
+      // worse than doing nothing.
     }
-    if (typeof navigator !== "undefined" && "share" in navigator) {
+    return true;
+  }
+  if (typeof navigator !== "undefined" && "share" in navigator) {
+    try {
       await navigator.share({ title: opts.title, text: opts.text, url: opts.url });
       return true;
+    } catch (e) {
+      // AbortError is the user closing a sheet that DID open. Anything else —
+      // NotAllowedError when an await upstream consumed the click's transient
+      // activation, TypeError on bad data — means no sheet was ever shown, so
+      // report false and let the caller fall back to copy instead of nothing.
+      return (e as Error | null)?.name === "AbortError";
     }
-  } catch {
-    // User cancelled or share failed — treat cancellation as handled, but a
-    // genuine failure should let the caller fall back. We can't easily tell
-    // them apart, so return true (the sheet was shown) and let copy be manual.
-    return true;
   }
   return false;
 }
@@ -142,10 +149,12 @@ export async function shareFile(
   if (!navigator.canShare({ files: [file] })) return false;
   try {
     await navigator.share({ files: [file], title: opts.title, text: opts.text });
-  } catch {
-    // Same cancellation ambiguity as above.
+    return true;
+  } catch (e) {
+    // Same distinction as `share`: AbortError = cancelled a sheet that opened;
+    // anything else = no sheet, so the caller should offer its fallback.
+    return (e as Error | null)?.name === "AbortError";
   }
-  return true;
 }
 
 /**
