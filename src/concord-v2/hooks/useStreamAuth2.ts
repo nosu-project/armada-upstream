@@ -14,7 +14,7 @@ import { useCommunity2, useLiveCommunities2 } from "@/concord-v2/hooks/useCommun
 import { rehydrateCommunity } from "@/concord-v2/lib/communityList";
 import { channelsView } from "@/concord-v2/lib/community";
 import type { FoldedControl } from "@/concord-v2/lib/control";
-import { readFolded } from "@/lib/foldedCache";
+import { onFoldedWrite, readFolded } from "@/lib/foldedCache";
 import { logSync } from "@/lib/syncLog";
 
 /**
@@ -103,11 +103,26 @@ export function useRegisterAllStreamKeys2(): void {
     };
 
     void register();
-    // Folds arrive out-of-band (control-plane sync); re-read periodically so a
-    // freshly-synced community's channel keys register without a full reload.
+    // Folds arrive out-of-band (control-plane sync), and a fold WRITE is the
+    // exact signal that a community's channel keys just became derivable — so
+    // re-register on it (debounced: a sweep writes several folds in a burst)
+    // instead of leaving a fresh fold to wait out the poll. Measured on a real
+    // boot the fold landed at +5s and the next poll tick registered its
+    // channel keys at +15s; every auth-gated catch-up page on the community's
+    // relays was held for that gap. The 20s tick stays as the backstop for
+    // key material that changes without a fold write.
+    const foldKeys = new Set(communities.map((c) => controlFoldKey(c.community_id)));
+    let foldDebounce: ReturnType<typeof setTimeout> | undefined;
+    const offFoldedWrite = onFoldedWrite((key) => {
+      if (!foldKeys.has(key)) return;
+      clearTimeout(foldDebounce);
+      foldDebounce = setTimeout(() => void register(), 250);
+    });
     const timer = setInterval(() => void register(), 20_000);
     return () => {
       cancelled = true;
+      offFoldedWrite();
+      clearTimeout(foldDebounce);
       clearInterval(timer);
     };
   }, [communities]);
