@@ -41,14 +41,6 @@ import { KIND_DIRECT_INVITE } from "@/concord-v2/lib/kinds";
 /** NIP-59's outer-timestamp backdate window (the cursor rewinds this much). */
 export const WRAP_BACKDATE_SECS = 2 * 24 * 60 * 60;
 
-/** Synthetic provenance tags on the stored record (not part of the rumor). */
-const TAG_WRAP = "wrap";
-const TAG_SENDER = "sender";
-const TAG_WRAP_CREATED = "wrapts";
-/** Recipient scope — the account the wrap was addressed to. Single-letter so
- * NIndexedDB's tag index covers it (only single-letter tags are indexed). */
-const TAG_RECIPIENT = "p";
-
 /** The invite tenant for one account (opens in the background on first use). */
 export function inviteInbox(recipient: string): NRumorStore {
   return getArmadaDB().tenant(`invites:${recipient}`);
@@ -67,42 +59,37 @@ export interface StoredDirectInvite {
 }
 
 /**
- * Build the stored record for an unwrapped invite. The record `id` is the WRAP
- * id (the inbox dedup key), `pubkey` the sender, `kind`/`content`/`tags` the
- * inner rumor. The wrap's own `created_at` is stashed in a tag so the cursor
- * can advance by it.
+ * Build the stored record for an unwrapped invite.
  *
- * No recipient tag: the tenant already names the account, and records drained
- * from the pre-tenant database carry one that {@link storedToInvite} strips.
+ * The record is keyed by the WRAP id (the inbox's dedup key) and carries the
+ * verified sender as `pubkey` — which is the inner rumor's author too, since
+ * the seal's signer IS the author. Its kind, content and tags are the rumor's,
+ * untouched: those tags are the bytes the rumor's id commits to, and every
+ * value that used to be folded into them is either already a field of this
+ * record (the wrap id, the sender) or read by nothing (the wrap's own
+ * `created_at` — the inbox cursor advances from the wraps in hand, not from
+ * the store) or answered by the tenant (the recipient).
  */
 export function unwrappedToStored(wrap: NostrEvent, unwrapped: UnwrappedInvite): NostrRumor {
   return {
     id: wrap.id,
     kind: unwrapped.rumor.kind,
     content: unwrapped.rumor.content,
-    tags: [
-      ...unwrapped.rumor.tags,
-      [TAG_WRAP, wrap.id],
-      [TAG_SENDER, unwrapped.sender],
-      [TAG_WRAP_CREATED, String(wrap.created_at)],
-    ],
+    tags: unwrapped.rumor.tags,
     created_at: unwrapped.rumor.created_at,
     pubkey: unwrapped.sender,
   };
 }
 
-const PROVENANCE = new Set([TAG_RECIPIENT, TAG_WRAP, TAG_SENDER, TAG_WRAP_CREATED]);
-
 /** Reconstruct a StoredDirectInvite from a stored record. */
 export function storedToInvite(ev: NostrRumor): StoredDirectInvite {
-  const tags = ev.tags.filter((t) => !PROVENANCE.has(t[0]));
   return {
     wrapId: ev.id,
-    sender: ev.tags.find((t) => t[0] === TAG_SENDER)?.[1] ?? ev.pubkey,
+    sender: ev.pubkey,
     rumor: {
       kind: ev.kind,
       content: ev.content,
-      tags,
+      tags: ev.tags,
       created_at: ev.created_at,
       pubkey: ev.pubkey,
     },

@@ -238,7 +238,11 @@ Things to know before touching it:
   sender never signed, and makes whatever reads that tag forgeable by anyone
   who spells it. Derive instead: a DM's partner comes from `pubkey` and the `p`
   tags NIP-17 requires (`dmPeerOf`), and a thread is two ordinary indexed
-  filters — `authors: [peer]` and `authors: [self], "#p": [peer]`.
+  filters — `authors: [peer]` and `authors: [self], "#p": [peer]`. What genuinely
+  belongs to the WRAP and not the rumor — a Concord stream address, the carrier
+  wrap id, the seal kind — goes in a sibling bookkeeping tenant
+  (`c2meta:<community>`), one row per rumor, keyed by rumor id with the stream
+  address as its `pubkey` so `queryByStreams` stays one indexed lookup.
 - The bridge carries JSON **text**, not marshalled objects: Capacitor would
   have to guess between an integer `kind` and a float, and a page of rumors is
   far cheaper as one string.

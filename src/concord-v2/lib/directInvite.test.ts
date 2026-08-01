@@ -173,20 +173,6 @@ describe("direct-invite inbox store", () => {
     ).toBe(false);
   });
 
-  it("strips the recipient tag a record drained from the shared store carries", () => {
-    // Pre-tenant records stamped `["p", recipient]` as their scope. They are
-    // copied across verbatim, so the read path still has to strip it.
-    const back = storedToInvite({
-      id: "wrap-id",
-      kind: KIND_DIRECT_INVITE,
-      content: "{}",
-      created_at: 1,
-      pubkey: "sender-pk",
-      tags: [["p", "recipient-pk"], ["wrap", "wrap-id"], ["sender", "sender-pk"]],
-    });
-    expect(back.rumor.tags).toEqual([]);
-  });
-
   it("persists and queries invites without re-decrypting", async () => {
     const { wrap, unwrapped, bundle, recipientPk } = await makeUnwrapped();
     writeStoredInvites(recipientPk, [{ wrap: wrap as NostrEvent, unwrapped }]);

@@ -191,7 +191,7 @@ describe("concord-v2 rumor store", () => {
 
     // The rumor is stored as its author wrote it: no seal folded into its tags.
     expect(openedToStored(opened).tags.some((t) => t[0] === "seal")).toBe(false);
-    expect(openedToStored(opened).tags).toEqual([...rumor.tags, ["stream", opened.streamPk], ["wrap", opened.wrapId], ["sealkind", String(KIND_SEAL_PLAINTEXT)]]);
+    expect(openedToStored(opened).tags).toEqual(rumor.tags);
 
     writeOpened(CID, [opened]);
     const [back] = await eventually(() => queryByStreams(CID, [control.pk]), (r) => r.length === 1);
@@ -218,9 +218,8 @@ describe("concord-v2 rumor store", () => {
     expect(await readStoredSeal(CID, rumor.id)).toBeUndefined();
   });
 
-  it("still reads a seal folded into the tags of a row written before the KV move", () => {
+  it("reads back the rumor verbatim, with the envelope absent unless supplied", () => {
     const alice = signer();
-    const control = channelGroupKey(new Uint8Array(32).fill(11), new Uint8Array(32).fill(1), 0);
     const rumor = buildRumor({
       kind: 3308,
       content: "{}",
@@ -228,28 +227,25 @@ describe("concord-v2 rumor store", () => {
       pubkey: alice.pubkey,
       ms: null,
     });
-    const seal = finalizeEvent({ kind: KIND_SEAL_PLAINTEXT, content: JSON.stringify(rumor), tags: [], created_at: rumor.created_at }, alice.sk);
-
-    const legacy: NostrRumor = {
-      ...openedToStored({
-        rumorId: rumor.id,
-        author: alice.pubkey,
-        kind: rumor.kind,
-        content: rumor.content,
-        tags: rumor.tags,
-        ms: rumor.created_at * 1000,
-        createdAt: rumor.created_at,
-        wrapId: "w",
-        streamPk: control.pk,
-        sealKind: KIND_SEAL_PLAINTEXT,
-      }),
-    };
-    legacy.tags = [...legacy.tags, ["seal", JSON.stringify(seal)]];
-
-    const back = storedToOpened(legacy);
-    expect(back.seal).toEqual(plain(seal));
-    // …and the tag never leaks into the reconstructed rumor.
-    expect(back.tags).toEqual(rumor.tags);
+    const stored = openedToStored({
+      rumorId: rumor.id,
+      author: alice.pubkey,
+      kind: rumor.kind,
+      content: rumor.content,
+      tags: rumor.tags,
+      ms: rumor.created_at * 1000,
+      createdAt: rumor.created_at,
+      wrapId: "w",
+      streamPk: "sp",
+      sealKind: KIND_SEAL_PLAINTEXT,
+    });
+    // Nothing about the wrap reaches the row…
+    expect(stored.tags).toEqual(rumor.tags);
+    // …so a row read without its bookkeeping row claims no provenance, rather
+    // than inheriting whatever the rumor's own tags happen to spell.
+    const bare = storedToOpened(stored);
+    expect(bare.tags).toEqual(rumor.tags);
+    expect([bare.streamPk, bare.wrapId, bare.sealKind]).toEqual(["", "", 0]);
   });
 
   it("parks, peeks (non-destructively), and acks raw wraps", async () => {
@@ -362,15 +358,15 @@ describe("concord-v2 rumor store", () => {
     expect(got.map((r) => r.content)).toEqual(["real"]);
   });
 
-  it("refuses a rumor forging the synthetic `stream` provenance tag", async () => {
+  it("ignores a rumor that spells a provenance tag itself", async () => {
     const alice = signer();
     const mallory = signer();
     const victimPlane = channelGroupKey(new Uint8Array(32).fill(10), new Uint8Array(32).fill(10), 0);
     const malloryPlane = channelGroupKey(new Uint8Array(32).fill(11), new Uint8Array(32).fill(11), 0);
 
-    // A rumor's own tags are spread BEFORE the synthetic ones, so a forged
-    // `stream` both lands in the index and wins the read-back lookup — writing
-    // into a plane whose key the author does not hold.
+    // Provenance is a bookkeeping row the store writes from the wrap it
+    // opened, so a `stream` tag in the rumor is inert: it cannot put the rumor
+    // on a plane whose key its author does not hold.
     const forged = buildRumor({
       kind: 3308,
       content: "{}",

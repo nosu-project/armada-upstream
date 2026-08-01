@@ -31,7 +31,8 @@ object ServiceStore {
     private const val TAG = "ArmadaDb"
 
     /** Provenance tags the Concord V2 rumor store synthesizes for itself. */
-    private val C2_PROVENANCE = setOf("stream", "seal", "wrap", "sealkind")
+    /** CORD-02 §5's encrypted seal — the only form a chat wrap may carry. */
+    private const val SEAL_ENCRYPTED = 20013
 
     /** How stale a queued event may get before it is dropped unrouted. */
     private const val QUEUE_MAX_AGE_SECS = 14L * 24 * 3600
@@ -140,16 +141,21 @@ object ServiceStore {
     }
 
     /**
-     * Store a Concord V2 rumor the service decrypted, in its community's
-     * opened-event tenant — the same rows, with the same synthetic provenance
-     * tags, that the WebView's `openedToStored` writes.
+     * Store a Concord V2 chat rumor the service decrypted, in its community's
+     * opened-event tenant — the same row, byte for byte, that the WebView's
+     * `openedToStored` writes.
      *
-     * A rumor whose own tags spell a provenance name is REFUSED rather than
-     * stripped. The rumor's tags are written first, so a forged `stream` would
-     * both land in the index and win the read-back's lookup, letting a keyholder
-     * publish a rumor that reads as belonging to a stream address they hold no
-     * key for. Stripping instead would rewrite the very bytes the rumor id
-     * commits to.
+     * The rumor is stored EXACTLY as its author wrote it. Nothing about the
+     * wrap is folded into its tags: a rumor's tags are the bytes its id commits
+     * to, and the chat plane asks for none of it back — a channel read is a
+     * `#channel` query, and that binding tag is the author's own. (The planes
+     * that DO need the stream address get it from a separate bookkeeping row
+     * the WebView writes; the service never opens a plane wrap.)
+     *
+     * Chat seals MUST be encrypted (CORD-02 §5). The WebView refuses a chat
+     * wrap sealed in plaintext, and reads every stored chat row back as
+     * encrypted-sealed on that strength — so a second writer filing one would
+     * plant a row the reader then mislabels.
      *
      * `openConcord2` has already checked what makes this safe to file under a
      * channel: the seal's signature, that the rumor's author IS the seal's
@@ -160,37 +166,18 @@ object ServiceStore {
     fun storeConcord2Rumor(
         context: Context,
         communityIdHex: String,
-        streamPk: String,
-        wrapId: String,
         sealKind: Int,
         rumor: JSONObject,
     ) {
         if (communityIdHex.isEmpty()) return
-        val opened = Rumor.parse(rumor) ?: return
-        if (opened.tags.any { it.getOrNull(0) in C2_PROVENANCE }) {
-            Log.w(TAG, "refusing a Concord rumor that forges provenance")
+        if (sealKind != SEAL_ENCRYPTED) {
+            Log.w(TAG, "refusing a Concord chat rumor whose seal was not encrypted")
             return
         }
-
-        val tags = ArrayList<List<String>>()
-        for (row in opened.tags) {
-            tags.add(row.map { it ?: "" })
-        }
-        tags.add(listOf("stream", streamPk))
-        tags.add(listOf("wrap", wrapId))
-        tags.add(listOf("sealkind", sealKind.toString()))
-
-        val stored = Rumor.of(
-            id = opened.id,
-            pubkey = opened.pubkey,
-            createdAt = opened.createdAt,
-            kind = opened.kind,
-            tags = tags,
-            content = opened.content,
-        ) ?: return
+        val opened = Rumor.parse(rumor) ?: return
 
         try {
-            ArmadaDb.get(context).event(ArmadaDb.communityTenant(communityIdHex), stored)
+            ArmadaDb.get(context).event(ArmadaDb.communityTenant(communityIdHex), opened)
         } catch (error: Throwable) {
             Log.w(TAG, "concord rumor write failed", error)
         }

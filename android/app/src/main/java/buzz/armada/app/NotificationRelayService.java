@@ -2535,16 +2535,16 @@ public class NotificationRelayService extends Service {
             JSONObject rumor = opened.rumor;
 
             // File the decrypted rumor in its community's opened-event tenant —
-            // the same rows, with the same synthetic provenance tags, that the
-            // WebView writes. This is what makes a notified Concord message
+            // the same row, byte for byte, that the WebView writes (the rumor
+            // as its author wrote it, nothing added). This is what makes a
+            // notified Concord message
             // present in the channel on open rather than something the WebView
             // has to decrypt again from a parked wrap. openConcord2 has already
             // proved the seal's signature, that the rumor's author IS the seal's
             // signer, and that the channel/epoch binding matches the stream key
             // that opened the wrap — the checks the WebView's write path makes
             // before it will file a rumor under a channel.
-            ServiceStore.storeConcord2Rumor(
-                    this, st.communityId, event.optString("pubkey"), id, opened.sealKind, rumor);
+            ServiceStore.storeConcord2Rumor(this, st.communityId, opened.sealKind, rumor);
 
             // Every chat-plane kind rides an identical wrap. Messages (kind 9),
             // thread replies (kind 1111), and reactions (kind 7) to YOUR own

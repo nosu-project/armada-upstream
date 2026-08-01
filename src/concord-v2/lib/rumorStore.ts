@@ -4,14 +4,11 @@
  * V2 traffic arrives as opaque kind-1059/21059 wraps (CORD-01). We never
  * persist those wraps anywhere: caching ciphertext is wasteful (every cold read
  * would re-run two NIP-44 opens and a Schnorr verify per event) and pollutes the
- * shared `armada-events` store. Instead we decrypt once on ingest and persist
- * the recovered {@link OpenedEvent} here — a rumor carrying its real kind /
- * author / content / tags, plus the few provenance values a plane must be able
- * to FILTER on — so every plane reads back with an ordinary Nostr filter and no
- * decrypt:
+ * shared event cache. Instead we decrypt once on ingest and persist the
+ * recovered rumor here — EXACTLY as its author wrote it — so the chat plane
+ * reads back with an ordinary Nostr filter and no decrypt:
  *
- *   chat:     store.query([{ kinds: [9], "#channel": [channelIdHex], limit }])
- *   control:  store.query([{ "#stream": [controlPk1, controlPk2, …] }])
+ *   chat: store.query([{ kinds: [9], "#channel": [channelIdHex], limit }])
  *
  * Backed by ArmadaDB, ONE TENANT PER COMMUNITY (`c2:<communityIdHex>`) — a
  * separate physical database each, and separate from `armada-events`, so each
@@ -58,7 +55,7 @@
 import type { NostrEvent } from "@nostrify/nostrify";
 
 import { readFolded, writeFolded } from "@/lib/foldedCache";
-import { KIND_SEAL_PLAINTEXT, KIND_WEBXDC } from "@/concord-v2/lib/kinds";
+import { KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT, KIND_WEBXDC } from "@/concord-v2/lib/kinds";
 import { resolveMs, type OpenedEvent } from "@/concord-v2/lib/stream";
 import { messageMatchesMedia, type SearchMedia2 } from "@/concord-v2/lib/search";
 import { emitWireScopes } from "@/wire/bus";
@@ -67,15 +64,6 @@ import type { NRumorStore } from "@/lib/db/types";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { OpenedChat } from "@/concord-v2/lib/chat";
 
-/** The legacy single-database store, kept only as the migration's source. */
-export const LEGACY_RUMOR_DB_NAME = "armada-concord-rumors";
-
-/** Provenance tags we inject onto the stored event (never part of the rumor). */
-const TAG_STREAM = "stream";
-const TAG_SEAL = "seal";
-const TAG_WRAP = "wrap";
-const TAG_SEALKIND = "sealkind";
-
 /** The chat plane's channel binding (CORD-03 §3) — the tag chat reads index. */
 const TAG_CHANNEL = "channel";
 
@@ -83,10 +71,8 @@ const TAG_CHANNEL = "channel";
  * The opened-event store for one community.
  *
  * `defaultIndexTags` indexes every tag with a short name and a value under 200
- * chars, which covers the multi-letter names the planes query (`channel`,
- * `stream`) as well as the single-letter ones (`e`, `p`, `i`, `k`, `q`). The
- * bulky {@link TAG_SEAL} blob is excluded by the value-length cap — a signed
- * seal's JSON is always far past it.
+ * chars, which covers the multi-letter `channel` the chat plane queries as well
+ * as the single-letter ones (`e`, `p`, `i`, `k`, `q`).
  */
 function rumorStore(communityIdHex: string): NRumorStore {
   return getArmadaDB().tenant(communityTenant(communityIdHex));
@@ -97,92 +83,134 @@ export function communityTenant(communityIdHex: string): string {
   return `c2:${communityIdHex}`;
 }
 
-
-// ── Codec: OpenedEvent ⇆ stored event ─────────────────────────────────────────
+// ── Envelope facts ────────────────────────────────────────────────────────────
 //
-// The stored event IS the recovered rumor (its `id` is the rumor id, the NIP-01
-// hash), `pubkey` the REAL author (so NIP-09 self-delete matches), and no `sig`.
-// Plane provenance rides synthetic tags: `stream` (the wrap author / stream
-// address — how non-chat planes query), `wrap`, and `sealkind`. These are
-// stripped on read so the reconstructed OpenedEvent's `tags` are byte-identical
-// to the rumor's.
+// Three things the non-chat planes need are properties of the WRAP, not of the
+// rumor: the stream address it was published to, the carrier wrap's id, and
+// which seal form carried it. None is recoverable from the rumor, and none may
+// be written INTO it — a rumor's tags are the bytes its id commits to, so
+// bookkeeping folded in there makes the row something its author never signed,
+// and makes provenance forgeable by whoever spells the tag first: the rumor's
+// own tags come first, so a keyholder on any plane could publish a rumor
+// claiming a stream address they hold no key for and have it read back as that
+// stream's.
 //
-// Only values that must be FILTERED on (`stream`) or read synchronously off a
-// store row (`wrap`, `sealkind` — the fold, the guestbook and the dissolution
-// check all branch on them per row) are injected here. The seal, which needs
-// neither, lives in KV instead; see {@link readStoredSeal}. `seal` stays in
-// {@link PROVENANCE} so rows written before that move — including everything
-// copied verbatim out of the legacy database — still strip it on read.
+// So they are kept BESIDE the rumor, as one bookkeeping row per stored rumor in
+// a second tenant: same id, the stream address as its `pubkey`, the rest in
+// tags. That leaves the stream queryable exactly the way an author is — one
+// indexed lookup — while the rumor tenant holds nothing but rumors. Nothing in
+// the bookkeeping tenant is a rumor, and nothing reads it as one.
 
-/** Synthetic provenance tag names, stripped when reconstructing the rumor. */
-const PROVENANCE = new Set([TAG_STREAM, TAG_SEAL, TAG_WRAP, TAG_SEALKIND]);
+/** The ArmadaDB tenant id holding a community's envelope facts. */
+export function communityMetaTenant(communityIdHex: string): string {
+  return `c2meta:${communityIdHex}`;
+}
 
-/** Build the stored event for an opened stream event (any plane). */
+/**
+ * Kind of a bookkeeping row.
+ *
+ * A plain regular kind, deliberately: the seal kinds are 20013/20014, and a
+ * row stored under an EPHEMERAL kind is dropped rather than kept. The seal
+ * kind rides a tag instead.
+ */
+const META_KIND = 1;
+
+/** Tags carrying the rest of the envelope on a bookkeeping row. */
+const META_WRAP = "wrap";
+const META_SEALKIND = "sealkind";
+
+/** What the wrap that carried a stored rumor was. */
+export interface StoredMeta {
+  /** The stream address (wrap author) the rumor was published to. */
+  streamPk: string;
+  /** The carrier wrap's id. */
+  wrapId: string;
+  /** Which seal form carried it (CORD-02 §5). */
+  sealKind: number;
+}
+
+/** The bookkeeping row for an opened event. */
+function metaRow(opened: OpenedEvent): NostrRumor {
+  return {
+    id: opened.rumorId,
+    kind: META_KIND,
+    content: "",
+    tags: [
+      [META_WRAP, opened.wrapId],
+      [META_SEALKIND, String(opened.sealKind)],
+    ],
+    created_at: opened.createdAt,
+    pubkey: opened.streamPk,
+  };
+}
+
+function metaOf(row: NostrRumor): StoredMeta {
+  return {
+    streamPk: row.pubkey,
+    wrapId: row.tags.find((t) => t[0] === META_WRAP)?.[1] ?? "",
+    sealKind: Number(row.tags.find((t) => t[0] === META_SEALKIND)?.[1] ?? "0"),
+  };
+}
+
+// ── Codec: OpenedEvent ⇆ stored rumor ────────────────────────────────────────
+//
+// The stored row IS the recovered rumor: `id` the rumor id (the NIP-01 hash),
+// `pubkey` the REAL author (so NIP-09 self-delete matches), `tags` the author's
+// own, and no `sig`. Everything the store knows ABOUT it is held elsewhere,
+// keyed by that id — the envelope facts above, and the signed seal in KV (see
+// {@link readStoredSeal}).
+
+/** Build the stored rumor for an opened stream event (any plane). */
 export function openedToStored(opened: OpenedEvent): NostrRumor {
-  const tags: string[][] = [
-    ...opened.tags,
-    [TAG_STREAM, opened.streamPk],
-    [TAG_WRAP, opened.wrapId],
-    [TAG_SEALKIND, String(opened.sealKind)],
-  ];
   return {
     id: opened.rumorId,
     kind: opened.kind,
     content: opened.content,
-    tags,
+    tags: opened.tags,
     created_at: opened.createdAt,
     pubkey: opened.author,
   };
 }
 
-/** Reconstruct an OpenedEvent from a stored event. */
-export function storedToOpened(ev: NostrRumor): OpenedEvent {
-  const tags = ev.tags.filter((t) => !PROVENANCE.has(t[0]));
-  const streamPk = ev.tags.find((t) => t[0] === TAG_STREAM)?.[1] ?? "";
-  const wrapId = ev.tags.find((t) => t[0] === TAG_WRAP)?.[1] ?? "";
-  const sealKind = Number(ev.tags.find((t) => t[0] === TAG_SEALKIND)?.[1] ?? "0");
-
-  // Rows written before the seal moved to KV still carry it as a tag; keep
-  // reading those so a compaction on an un-rewritten store still finds them.
-  // The blob is bulky and needed ONLY by the control-plane rekey path
-  // (rewrapSeal), NEVER to render a chat message, so the parse stays behind a
-  // lazy memoized getter — eagerly parsing it cost a JSON.parse per message in
-  // the window on every channel read (a real switch-latency tax on Android).
-  // Rows written since carry no tag and read back `undefined`; the seal comes
-  // from {@link readStoredSeal}.
-  const sealRaw = ev.tags.find((t) => t[0] === TAG_SEAL)?.[1];
-  let sealParsed: NostrEvent | undefined;
-
+/**
+ * Reconstruct an OpenedEvent from a stored rumor and its bookkeeping row.
+ *
+ * `meta` is absent for a chat rumor, which is read back by channel and never
+ * asks what carried it — see {@link storedToOpenedChat}.
+ */
+export function storedToOpened(ev: NostrRumor, meta?: StoredMeta): OpenedEvent {
   return {
     rumorId: ev.id,
     author: ev.pubkey,
     kind: ev.kind,
     content: ev.content,
-    tags,
-    ms: resolveMs(ev.created_at, tags),
+    tags: ev.tags,
+    ms: resolveMs(ev.created_at, ev.tags),
     createdAt: ev.created_at,
-    wrapId,
-    streamPk,
-    sealKind,
-    get seal(): NostrEvent | undefined {
-      if (sealRaw === undefined) return undefined;
-      if (sealParsed === undefined) {
-        try {
-          sealParsed = JSON.parse(sealRaw) as NostrEvent;
-        } catch {
-          return undefined;
-        }
-      }
-      return sealParsed;
-    },
+    wrapId: meta?.wrapId ?? "",
+    streamPk: meta?.streamPk ?? "",
+    sealKind: meta?.sealKind ?? 0,
   };
 }
 
-/** Reconstruct an OpenedChat (adds channel/epoch from the rumor's binding tags). */
+/**
+ * Reconstruct an OpenedChat (adds channel/epoch from the rumor's binding tags).
+ *
+ * A chat rumor keeps no bookkeeping row. Its seal kind is known without one —
+ * `openOne` refuses a chat wrap whose seal was plaintext, so an encrypted seal
+ * is the only thing that can be in the store — and its stream address and
+ * carrier wrap id are read by nothing: a channel read is a `#channel` query,
+ * and the transport dedupes on wraps it holds in hand.
+ */
 export function storedToOpenedChat(ev: NostrRumor, channelIdHex: string): OpenedChat {
   const opened = storedToOpened(ev);
   const epochTag = opened.tags.find((t) => t[0] === "epoch")?.[1];
-  return { ...opened, channelIdHex, epoch: epochTag ? BigInt(epochTag) : 0n };
+  return {
+    ...opened,
+    sealKind: KIND_SEAL_ENCRYPTED,
+    channelIdHex,
+    epoch: epochTag ? BigInt(epochTag) : 0n,
+  };
 }
 
 // ── Reads / writes ────────────────────────────────────────────────────────────
@@ -371,6 +399,12 @@ export async function searchRumors(
  * Read every cached opened event published to one of `streamPks` (a plane's
  * stream addresses across held epochs). Used by the control / guestbook / rekey
  * planes, which query by stream address rather than by channel tag.
+ *
+ * Two indexed reads: the bookkeeping rows for those stream addresses (an
+ * `authors` scan, newest-first), then the rumors they name. A bookkeeping row
+ * whose rumor is gone — a NIP-09 delete removed it — simply drops out of the
+ * join. Chat rumors keep no bookkeeping row, so they can never appear here,
+ * however they are tagged.
  */
 export async function queryByStreams(
   communityIdHex: string,
@@ -378,22 +412,21 @@ export async function queryByStreams(
   opts?: { limit?: number; signal?: AbortSignal },
 ): Promise<OpenedEvent[]> {
   if (streamPks.length === 0) return [];
-  const filter: { "#stream": string[]; limit?: number } = { "#stream": streamPks };
+  const db = getArmadaDB();
+  const filter: { authors: string[]; limit?: number } = { authors: streamPks };
   if (opts?.limit !== undefined) filter.limit = opts.limit;
-  const events = await rumorStore(communityIdHex).query([filter], { signal: opts?.signal });
-  return events.map(storedToOpened);
-}
 
-/**
- * True if the rumor carries a tag name the store synthesizes for itself. The
- * rumor's own tags are spread FIRST in {@link openedToStored}, so a forged
- * `stream` would both land in the index and win `storedToOpened`'s `find` —
- * letting any keyholder on any plane publish a rumor that reads back as
- * belonging to a stream address they hold no key for. No legitimate rumor on
- * any plane sets these names.
- */
-function forgesProvenance(opened: OpenedEvent): boolean {
-  return opened.tags.some((t) => PROVENANCE.has(t[0]));
+  const rows = await db
+    .tenant(communityMetaTenant(communityIdHex))
+    .query([filter], { signal: opts?.signal });
+  if (rows.length === 0) return [];
+
+  const meta = new Map(rows.map((row) => [row.id, metaOf(row)]));
+  const events = await rumorStore(communityIdHex).query(
+    [{ ids: [...meta.keys()], limit: meta.size }],
+    { signal: opts?.signal },
+  );
+  return events.map((ev) => storedToOpened(ev, meta.get(ev.id)));
 }
 
 // ── Seals ─────────────────────────────────────────────────────────────────────
@@ -432,18 +465,27 @@ export async function readStoredSeal(
   }
 }
 
-/** Store a batch verbatim in a community's tenant. Best-effort: failures are swallowed. */
-function writeStored(communityIdHex: string, opened: OpenedEvent[]): Promise<void> {
+/**
+ * Store a batch verbatim in a community's tenant, with (for the non-chat
+ * planes) a bookkeeping row each. Best-effort: failures are swallowed.
+ */
+function writeStored(
+  communityIdHex: string,
+  opened: OpenedEvent[],
+  withMeta: boolean,
+): Promise<void> {
   if (opened.length === 0 || !communityIdHex) return Promise.resolve();
   const db = getArmadaDB();
   const s = db.tenant(communityTenant(communityIdHex));
+  const m = withMeta ? db.tenant(communityMetaTenant(communityIdHex)) : undefined;
   return Promise.all(
     opened.flatMap((o) => {
-      const write = s.event(openedToStored(o));
-      const seal = o.seal;
-      return seal && o.sealKind === KIND_SEAL_PLAINTEXT
-        ? [write, db.kv.set(sealKey(communityIdHex, o.rumorId), seal)]
-        : [write];
+      const writes = [s.event(openedToStored(o))];
+      if (m) writes.push(m.event(metaRow(o)));
+      if (o.seal && o.sealKind === KIND_SEAL_PLAINTEXT) {
+        writes.push(db.kv.set(sealKey(communityIdHex, o.rumorId), o.seal));
+      }
+      return writes;
     }),
   )
     .then(() => undefined)
@@ -466,13 +508,14 @@ function writeStored(communityIdHex: string, opened: OpenedEvent[]): Promise<voi
  * channel id, and it would be indexed under `#channel` and served by
  * {@link queryChannelRumors} into that channel's timeline — including a private
  * channel, or a channel in another community, whose stream key they do not
- * hold. Reject rather than strip, so stored tags stay byte-identical to the
- * rumor's.
+ * hold. Reject rather than strip, so the stored row stays byte-identical to the
+ * rumor.
  */
 export function writeOpened(communityIdHex: string, opened: OpenedEvent[]): Promise<void> {
   return writeStored(
     communityIdHex,
-    opened.filter((o) => !forgesProvenance(o) && !o.tags.some((t) => t[0] === TAG_CHANNEL)),
+    opened.filter((o) => !o.tags.some((t) => t[0] === TAG_CHANNEL)),
+    true,
   );
 }
 
@@ -490,11 +533,9 @@ export function writeOpened(communityIdHex: string, opened: OpenedEvent[]): Prom
 export function writeRumors(communityIdHex: string, opened: OpenedChat[]): void {
   // The `channel` binding rides through: the chat decode path already proved it
   // equals the coordinate whose key opened the wrap (`checkChannelBinding`).
-  // Forged provenance still can't.
-  const safe = opened.filter((o) => !forgesProvenance(o));
-  if (safe.length === 0) return;
-  const channels = new Set(safe.map((o) => o.channelIdHex).filter(Boolean));
-  void writeStored(communityIdHex, safe).then(() => {
+  if (opened.length === 0) return;
+  const channels = new Set(opened.map((o) => o.channelIdHex).filter(Boolean));
+  void writeStored(communityIdHex, opened, false).then(() => {
     if (channels.size > 0) emitWireScopes([...channels].map((id) => `c2:${id}`));
   });
 }

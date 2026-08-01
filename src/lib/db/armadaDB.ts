@@ -11,9 +11,9 @@
  *    `SqliteArmadaDB.ts` passes the same conformance suite and would serve a
  *    SQLite-WASM worker too, but no driver for one exists yet.
  *
- * The choice is made once, before anything reads: the legacy drains in
- * `migrations.ts` write through `getArmadaDB()`, so on Android they land in the
- * native store directly and there is never an IndexedDB ArmadaDB to move.
+ * The choice is made once, before anything reads, and never revisited: an
+ * Android install never opens the IndexedDB adapter, so there is never a second
+ * store to reconcile against.
  *
  * Kept as a lazy singleton rather than being built in the provider so that
  * non-React code (sync loops, the wire bus, the logout purge) reaches the same
