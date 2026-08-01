@@ -188,7 +188,7 @@ function CommunityPicker({ onSelect }: { onSelect: (idHex: string) => void }) {
 
 function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
   const { community, folded, eligible, isLoading } = useCanShare(idHex);
-  const { createLink, myLinks, isPublic, refreshMyLinks } = useInviteActions2(community);
+  const { createLink, myLinks, isPublic, refreshMyLinks, linksLoading } = useInviteActions2(community);
   const { mutateAsync: publishEvent } = useNostrPublish();
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
@@ -278,7 +278,14 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
             : ""}
         </AlertDescription>
       </Alert>
-      <Button type="button" onClick={handleShare} disabled={busy} className="w-full clip-corner-lg">
+      <Button
+        type="button"
+        onClick={handleShare}
+        // Also parked while the Invite List loads: `reusable` is blind until
+        // then, and sharing early would mint a needless duplicate link.
+        disabled={busy || linksLoading}
+        className="w-full clip-corner-lg"
+      >
         {busy ? (
           <>
             <Loader2 className="mr-2 size-4 animate-spin" /> Sharing…

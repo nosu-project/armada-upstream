@@ -10,6 +10,7 @@ import { buildJoinRumor, currentGuestbookGroup, sealGuestbook } from "@/concord-
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { fetchCreatorDmRelays } from "@/lib/creatorRelays";
+import { getArmadaDB } from "@/lib/db/armadaDB";
 import { APP_RELAYS } from "@/lib/platform";
 import { preferPortableRelays, unusableRelaysReason } from "@/lib/relayUsability";
 import { toJoinMaterial, rehydrateCommunity, type CommunityListEntry, type JoinMaterial } from "@/concord-v2/lib/communityList";
@@ -119,17 +120,38 @@ export interface InvitePreview2 {
 }
 
 /**
- * The newest bundle event seen at each link coordinate this session. Any one
- * fetch races per-relay timeouts, and a relay that missed a refresh (or a
- * revocation) happily vends its older copy — so without a memory, a repeat
- * resolve can REGRESS to a bundle an earlier resolve already superseded
- * (previews flickering between fresh and stale metadata, joins landing on an
- * old epoch). Addressable-event semantics make newest-wins the truth, so
- * remember the newest raw event per coordinate and never accept an older one.
+ * The newest bundle event seen at each link coordinate, memory-cached and
+ * persisted in KV. Any one fetch races per-relay timeouts, and a relay that
+ * missed a refresh (or a revocation) happily vends its older copy — so
+ * without a memory, a repeat resolve can REGRESS to a bundle an earlier
+ * resolve already superseded (previews flickering between fresh and stale
+ * metadata, joins landing on an old epoch). Addressable-event semantics make
+ * newest-wins the truth, so remember the newest raw event per coordinate and
+ * never accept an older one — across reloads, hence KV, not a session map.
  * Tombstones are events too and sort the same way, so a seen revocation stays
- * terminal.
+ * terminal. Only signature-verified events enter (see the filter below), so a
+ * hostile relay can't pin a forgery here.
  */
+const BUNDLE_FLOOR_KV = "c2bundlehead:";
 const newestBundleEvents = new Map<string, NostrEvent>();
+
+async function readBundleFloor(linkSigner: string): Promise<NostrEvent | undefined> {
+  const mem = newestBundleEvents.get(linkSigner);
+  if (mem) return mem;
+  try {
+    const stored = await getArmadaDB().kv.get<NostrEvent>(BUNDLE_FLOOR_KV + linkSigner);
+    if (stored) newestBundleEvents.set(linkSigner, stored);
+    return stored;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeBundleFloor(linkSigner: string, event: NostrEvent): void {
+  newestBundleEvents.set(linkSigner, event);
+  // Best-effort: losing the persisted floor only re-exposes the relay race.
+  getArmadaDB().kv.set(BUNDLE_FLOOR_KV + linkSigner, event).catch(() => undefined);
+}
 
 /** Fetch + verify a V2 invite bundle from its bootstrap relays. */
 export async function resolveBundle(
@@ -163,14 +185,14 @@ export async function resolveBundle(
     )
     .sort((a, b) => b.created_at - a.created_at);
   // The newest event at the coordinate wins: a refresh replaces the bundle, a
-  // revocation tombstone replaces it terminally. The session memory keeps a
+  // revocation tombstone replaces it terminally. The persisted floor keeps a
   // flaky read (relays timing out, a laggard vending its stale copy) from
-  // un-replacing what a better read already saw.
-  const remembered = newestBundleEvents.get(invite.linkSigner);
+  // un-replacing what a better read already saw, on this or any earlier load.
+  const remembered = await readBundleFloor(invite.linkSigner);
   let best = flat[0] as NostrEvent | undefined;
   if (remembered && (!best || remembered.created_at > best.created_at)) best = remembered;
   if (!best) throw new Error("Couldn't find that invite on its relays.");
-  newestBundleEvents.set(invite.linkSigner, best);
+  if (best !== remembered) writeBundleFloor(invite.linkSigner, best);
   return parseBundleEvent(best, invite.linkSigner, invite.token, Date.now());
 }
 

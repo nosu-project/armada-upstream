@@ -446,6 +446,7 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
   const refreshMyLinks = async (): Promise<void> => {
     if (!community || myLinks.length === 0) return;
     const bundle = buildBundle();
+    let accepted = 0;
     await Promise.allSettled(
       myLinks.map(async (entry) => {
         const [event] = buildRefreshedBundleEvents(bundle, [entry]);
@@ -454,11 +455,15 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
           ...community.relays,
           ...(parseInviteLink(entry.url)?.bootstrapRelays ?? []),
         ]);
-        await Promise.allSettled(
+        const results = await Promise.allSettled(
           [...targets].map((url) => nostr.relay(url).event(event, { signal: AbortSignal.timeout(8000) })),
         );
+        accepted += results.filter((r) => r.status === "fulfilled").length;
       }),
     );
+    // Total rejection is a real failure the caller must hear about — swallow
+    // it and every coordinate keeps vending the stale bundle forever.
+    if (accepted === 0) throw new Error("No relay accepted the refreshed invite bundle.");
   };
 
   /**
@@ -482,6 +487,8 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
     sendDirectInvite: sendDirectInvite.mutateAsync,
     isSendingInvite: sendDirectInvite.isPending,
     myLinks,
+    /** True until the Invite List has loaded — `myLinks` is blind before then. */
+    linksLoading: inviteList.isLoading,
     refreshMyLinks,
     /** Whether ANY live public link exists — the community's Public/Private flag. */
     isPublic: (folded?.liveInviteLinks.size ?? 0) > 0,
@@ -506,6 +513,75 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
  * device or a relay gap folds nothing there. Requiring my grant HEAD present
  * (on a settled fold) distinguishes "demoted" from "not yet synced."
  */
+/**
+ * Self-healing link freshness: while a link creator is on their community
+ * page, check that the bundles their live links vend still match the
+ * community — preview metadata (name / icon / banner) and root epoch — and
+ * re-post them when they don't. A link's coordinate only updates when its
+ * creator refreshes it, so without this, a link minted before a metadata
+ * change keeps vending the old preview to Discover and to joiners forever,
+ * and no amount of re-sharing by the USER should be needed to fix that.
+ * At most one refresh attempt per community per session; a failed refresh
+ * retries on a later mount.
+ */
+export function useLinkFreshnessWatch2(community: CommunityV2 | undefined): void {
+  const { nostr } = useNostr();
+  const { user } = useCurrentUser();
+  const control = useControlFold2(community);
+  const folded = control.data;
+  const { myLinks, refreshMyLinks } = useInviteActions2(community);
+  const attempted = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (!user || !community || !folded || myLinks.length === 0) return;
+    if (control.isLoading || control.isFetching) return; // don't compare against a partial fold
+    // Only a creator still authorized to maintain links should re-post them.
+    if (
+      user.pubkey !== folded.ownerHex &&
+      !isAuthorized(folded.roster, user.pubkey, folded.ownerHex, Permissions.CREATE_INVITE)
+    ) {
+      return;
+    }
+    if (attempted.current.has(community.idHex)) return;
+    attempted.current.add(community.idHex);
+    let cancelled = false;
+    void (async () => {
+      const meta = folded.metadata;
+      const now = Math.floor(Date.now() / 1000);
+      let stale = false;
+      for (const entry of myLinks) {
+        if (entry.expires_at && entry.expires_at <= now) continue; // expired links don't vend
+        const parsed = parseInviteLink(entry.url);
+        if (!parsed) continue;
+        try {
+          const bundle = await resolveBundle(nostr, parsed, community.relays);
+          if (
+            bundle.root_epoch !== Number(community.rootEpoch) ||
+            bundle.name !== (meta?.name ?? community.name) ||
+            (bundle.icon?.hash ?? null) !== (meta?.icon?.hash ?? null) ||
+            (bundle.banner?.hash ?? null) !== (meta?.banner?.hash ?? null)
+          ) {
+            stale = true;
+            break;
+          }
+        } catch {
+          // Unresolvable (revoked / offline relays): nothing to compare, and
+          // re-posting blind could resurrect a tombstoned coordinate's URL in
+          // the UI, so leave it alone.
+        }
+      }
+      if (stale && !cancelled) {
+        await refreshMyLinks().catch(() => {
+          attempted.current.delete(community.idHex);
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, community, folded, control.isLoading, control.isFetching, myLinks, refreshMyLinks, nostr]);
+}
+
 export function useLinkAuthorityWatch2(community: CommunityV2 | undefined): void {
   const { user } = useCurrentUser();
   const control = useControlFold2(community);

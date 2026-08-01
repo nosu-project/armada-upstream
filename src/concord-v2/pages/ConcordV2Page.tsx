@@ -29,7 +29,7 @@ import { AuditLogView } from "@/concord-v2/components/AuditLogView2";
 import { BannedView } from "@/concord-v2/components/BannedView2";
 import { SuspiciousActivityBanner2 } from "@/concord-v2/components/SuspiciousActivityBanner2";
 import { useBanSelfRemove2 } from "@/concord-v2/hooks/useBanSelfRemove2";
-import { useLinkAuthorityWatch2 } from "@/concord-v2/hooks/useInvites2";
+import { useLinkAuthorityWatch2, useLinkFreshnessWatch2 } from "@/concord-v2/hooks/useInvites2";
 import { InvitesView } from "@/concord-v2/components/InvitesView2";
 import { DebugHealView } from "@/concord-v2/components/DebugHealView2";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
@@ -816,6 +816,10 @@ export function ConcordV2Page() {
   // Honest-client compliance: a stripped CREATE_INVITE means my own live
   // links must die — only my signer_sk can tombstone their bundles.
   useLinkAuthorityWatch2(baseCommunity);
+  // Keep my live links' bundles vending the CURRENT community (metadata +
+  // epoch): a stale coordinate otherwise serves old previews to Discover and
+  // old keys to joiners until its creator happens to re-mint.
+  useLinkFreshnessWatch2(baseCommunity);
   // Durable read-cut: finish a rotating ban's rotation that a relay outage
   // dropped, from the keep-list persisted at ban time. Mounted ONCE here.
   useReadCutRetry2(baseCommunity);
