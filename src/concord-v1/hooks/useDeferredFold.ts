@@ -3,6 +3,13 @@ import { useEffect, useRef, useState } from "react";
 import { encode, readFolded, writeFolded } from "@/lib/foldedCache";
 
 /**
+ * How long a fold may be deferred, measured from the moment it became owed —
+ * NOT from the latest reschedule. See {@link useDeferredFold}'s scheduling
+ * effect, and its V2 twin in `concord-v2/hooks/useDeferredFold2.ts`.
+ */
+const FOLD_DEADLINE_MS = 250;
+
+/**
  * Compute a heavy synchronous Concord fold (roster / metadata / banlist) WITHOUT
  * blocking the render-critical path, and persist/restore it across reloads.
  *
@@ -14,11 +21,15 @@ import { encode, readFolded, writeFolded } from "@/lib/foldedCache";
  * control plane.
  *
  * This hook moves the fold OFF the render path: it schedules the `compute` thunk
- * after paint (microtask / next tick) so React can commit and the browser can
- * paint the cached UI first, then the fold runs and updates state. Combined with
- * the persisted snapshot (painted immediately on reload), the heavy work never
- * gates the first frame. The decode/verify itself is already memoized per
- * edition id (see `control.ts`), so subsequent recomputes are cheap.
+ * after paint (idle callback, deadline-bounded) so React can commit and the
+ * browser can paint the cached UI first, then the fold runs and updates state.
+ * Combined with the persisted snapshot (painted immediately on reload), the
+ * heavy work never gates the first frame. The decode/verify itself is already
+ * memoized per edition id (see `control.ts`), so subsequent recomputes are cheap.
+ *
+ * Deferring is only ever a trade against a frame that is ALREADY PAINTED, and
+ * the scheduling effect below is what keeps it that trade instead of an
+ * open-ended delay.
  *
  * `key` namespaces the persisted snapshot (e.g. `roster:<cid>`). `compute`
  * returns the freshly-folded value (or `undefined` when inputs aren't ready).
@@ -37,6 +48,13 @@ export function useDeferredFold<T>(
   // Keep the latest `compute` without making it a scheduling dependency.
   const computeRef = useRef(compute);
   computeRef.current = compute;
+  // Whether there is anything on screen for a deferral to protect. Read (not
+  // depended on) by the scheduling effect.
+  const paintableRef = useRef(false);
+  paintableRef.current = live !== undefined || restored !== undefined;
+  // When the currently-owed fold is DUE. Set once per "fold is owed" period and
+  // deliberately NOT reset by a reschedule.
+  const deadlineRef = useRef<number | undefined>(undefined);
 
   // Reset synchronously (during render) the moment the key changes, so one
   // community's fold can NEVER render — or persist — under another community's
@@ -51,6 +69,7 @@ export function useDeferredFold<T>(
     setLive(undefined);
     setRestored(undefined);
     lastWritten.current = undefined;
+    deadlineRef.current = undefined;
   }
 
   // Restore the persisted snapshot once per key so the UI paints from cache.
@@ -68,20 +87,41 @@ export function useDeferredFold<T>(
     };
   }, [key]);
 
-  // Recompute the live fold AFTER paint, not during render. `requestIdleCallback`
-  // (falling back to a macrotask) lets React commit + the browser paint the
-  // cached UI before the verify-heavy fold runs. `key` is included so a key
-  // change always reschedules a compute even if the caller's deps happen to be
-  // referentially stable across the switch.
+  // Recompute the live fold AFTER commit, not during render — but never later
+  // than a deadline a dependency burst cannot move, and never at all when there
+  // is no painted frame to protect. `key` is included so a key change always
+  // reschedules a compute even if the caller's deps happen to be referentially
+  // stable across the switch.
+  //
+  // Cancelling on every dep change and re-arming an idle callback is unbounded
+  // in the case that needs it most: while the app is ingesting a burst, the fold
+  // is re-armed (its `timeout` reset with it) faster than an idle slot arrives,
+  // so it never runs and everything derived from it stays empty. See the V2
+  // twin's comment for the concrete symptom.
   useEffect(() => {
     let cancelled = false;
     const run = () => {
       if (cancelled) return;
+      deadlineRef.current = undefined;
       setLive(computeRef.current());
     };
+
+    // Nothing painted, so nothing to defer FOR — deferring work the whole view
+    // is blocked on only lengthens the empty frame.
+    if (!paintableRef.current) {
+      run();
+      return;
+    }
+
+    const now = Date.now();
+    deadlineRef.current ??= now + FOLD_DEADLINE_MS;
+    if (now >= deadlineRef.current) {
+      run();
+      return;
+    }
     const handle =
       typeof requestIdleCallback === "function"
-        ? requestIdleCallback(run, { timeout: 200 })
+        ? requestIdleCallback(run, { timeout: deadlineRef.current - now })
         : (setTimeout(run, 0) as unknown as number);
     return () => {
       cancelled = true;

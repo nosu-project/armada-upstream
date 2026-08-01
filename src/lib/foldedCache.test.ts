@@ -12,6 +12,7 @@ import { openDB } from "idb";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { purgeArmadaDB } from "@/lib/db/armadaDB";
+import { __resetLegacyMigrationsMemoForTests } from "@/lib/db/legacyDatabases";
 
 import {
   __resetFoldedForTests,
@@ -31,6 +32,9 @@ afterEach(async () => {
     req.onsuccess = req.onerror = req.onblocked = () => resolve();
   });
   __resetFoldedForTests();
+  // The purge wipes `migrations:complete`, so the drain's shared "already done"
+  // memo must go with it.
+  __resetLegacyMigrationsMemoForTests();
 });
 
 describe("onFoldedWrite", () => {

@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { queryRumorsByChannel } from "@/concord-v2/lib/rumorStore";
+import { STORE_READ } from "@/lib/storeQuery";
 import { useWireScopes } from "@/wire/useWireScopes";
 
 import type { OpenedChat } from "@/concord-v2/lib/chat";
@@ -53,6 +54,7 @@ export function useCommunityRumors(
   );
 
   const { data, isLoading } = useQuery<Map<string, OpenedChat[]>>({
+    ...STORE_READ,
     queryKey,
     queryFn: ({ signal }) =>
       queryRumorsByChannel(communityIdHex!, channelIds, { perChannel: PER_CHANNEL, signal }),

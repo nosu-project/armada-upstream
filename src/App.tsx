@@ -38,6 +38,19 @@ const queryClient = new QueryClient({
       refetchOnWindowFocus: false,
       staleTime: 60000, // 1 minute
       gcTime: 300000, // 5 minutes
+      // Most queries in this app read ArmadaDB, not a network — and the default
+      // `networkMode: "online"` PAUSES a query whenever `navigator.onLine` is
+      // false, holding it at `status: "pending"` (`fetchStatus: "paused"`) for
+      // as long as the browser says it's offline. Every skeleton gate in the app
+      // is a `isPending` read, so that default hangs a loading skeleton over
+      // data already on disk — indefinitely, not for a timeout. `navigator.onLine`
+      // is also unreliable in an Android WebView, and Armada has a genuinely
+      // offline mode (mesh) where local reads must still work.
+      //
+      // Relay-bound queries lose react-query's auto-resume-on-reconnect by this,
+      // which they didn't rely on: each is individually timeout-bounded and has
+      // its own refetch interval or sweep to catch up on.
+      networkMode: "always",
     },
   },
 });

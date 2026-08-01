@@ -19,6 +19,7 @@ import { KIND_WRAP } from "@/concord-v2/lib/kinds";
 import { openPlaneWraps, mergeOpened, sweepControl } from "@/concord-v2/lib/planeSync";
 import { queryPlane, readControlSnapshot, writeOpened } from "@/concord-v2/lib/rumorStore";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
+import { STORE_READ } from "@/lib/storeQuery";
 import { openWrap, type OpenedEvent, type StreamSigner } from "@/concord-v2/lib/stream";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
@@ -115,6 +116,8 @@ export function useControlEvents2(community: CommunityV2 | undefined, active = t
 
   return useQuery<OpenedEvent[]>({
     queryKey,
+    // A pure store read (the network is the sweep effect above, not this).
+    ...STORE_READ,
     enabled: Boolean(community) && active,
     staleTime: 15_000,
     queryFn: async () => {
@@ -157,6 +160,9 @@ function useControlSnapshot2(community: CommunityV2 | undefined, active: boolean
 
   return useQuery<string[]>({
     queryKey,
+    // A KV read. It gates the fold for a Refounded community, so a paused or
+    // backing-off one is an empty channel list.
+    ...STORE_READ,
     enabled: refounded && active && Boolean(cidHex),
     staleTime: 5_000,
     queryFn: async () => [...((await readControlSnapshot(cidHex!, curPk)) ?? [])],

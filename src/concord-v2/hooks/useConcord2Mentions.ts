@@ -6,6 +6,7 @@ import { queryMentionRumors } from "@/concord-v2/lib/rumorStore";
 import { openedToChatMsg } from "@/concord-v2/hooks/useTransport2";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 import type { ChatMsg } from "@/components/chat/transport";
+import { STORE_READ } from "@/lib/storeQuery";
 import { useWireScopes } from "@/wire/useWireScopes";
 import { concord2MentionReadKey, useReadState } from "@/hooks/useReadState";
 
@@ -57,6 +58,7 @@ export function useConcord2Mentions(channels: ChannelV2[], communityIdHex: strin
   const channelIds = useMemo(() => channels.map((c) => c.idHex), [channelSig]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const { data: mentions = [], isLoading } = useQuery<ChatMsg[]>({
+    ...STORE_READ,
     queryKey: ["concord2-mentions", communityIdHex ?? null, pubkey, channelSig],
     queryFn: async ({ signal }) => {
       const rumors = await queryMentionRumors(communityIdHex!, channelIds, pubkey!, {

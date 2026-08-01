@@ -15,6 +15,16 @@ import { encode, readFolded, writeFolded } from "@/lib/foldedCache";
 const memCache = new Map<string, unknown>();
 
 /**
+ * How long a fold may be deferred, measured from the moment it became owed —
+ * NOT from the latest reschedule.
+ *
+ * Deferring is a trade against a frame that is already painted, so it has to be
+ * bounded by something a dependency burst cannot push back. See the scheduling
+ * effect for what happens when it isn't.
+ */
+const FOLD_DEADLINE_MS = 250;
+
+/**
  * Compute a heavy synchronous Concord fold (roster / metadata / banlist) WITHOUT
  * blocking the render-critical path, and persist/restore it across reloads.
  *
@@ -26,11 +36,15 @@ const memCache = new Map<string, unknown>();
  * control plane.
  *
  * This hook moves the fold OFF the render path: it schedules the `compute` thunk
- * after paint (microtask / next tick) so React can commit and the browser can
- * paint the cached UI first, then the fold runs and updates state. Combined with
- * the persisted snapshot (painted immediately on reload), the heavy work never
- * gates the first frame. The decode/verify itself is already memoized per
- * edition id (see `control.ts`), so subsequent recomputes are cheap.
+ * after paint (idle callback, deadline-bounded) so React can commit and the
+ * browser can paint the cached UI first, then the fold runs and updates state.
+ * Combined with the persisted snapshot (painted immediately on reload), the
+ * heavy work never gates the first frame. The decode/verify itself is already
+ * memoized per edition id (see `control.ts`), so subsequent recomputes are cheap.
+ *
+ * Deferring is only ever a trade against a frame that is ALREADY PAINTED, and
+ * the two rules below are what keep it that trade instead of an open-ended
+ * delay — see the scheduling effect.
  *
  * `key` namespaces the persisted snapshot (e.g. `roster:<cid>`). `compute`
  * returns the freshly-folded value (or `undefined` when inputs aren't ready).
@@ -54,6 +68,14 @@ export function useDeferredFold<T>(
   // Keep the latest `compute` without making it a scheduling dependency.
   const computeRef = useRef(compute);
   computeRef.current = compute;
+  // Whether there is anything on screen for a deferral to protect. Read (not
+  // depended on) by the scheduling effect, so a `live`/`restored` change never
+  // by itself reschedules a fold.
+  const paintableRef = useRef(false);
+  paintableRef.current = live !== undefined || restored !== undefined;
+  // When the currently-owed fold is DUE. Set once per "fold is owed" period and
+  // deliberately NOT reset by a reschedule.
+  const deadlineRef = useRef<number | undefined>(undefined);
 
   // Reset synchronously (during render) the moment the key changes, so one
   // community's fold can NEVER render — or persist — under another community's
@@ -72,6 +94,7 @@ export function useDeferredFold<T>(
     setLive(undefined);
     setRestored(key ? (memCache.get(key) as T | undefined) : undefined);
     lastWritten.current = undefined;
+    deadlineRef.current = undefined;
   }
 
   // Restore the persisted snapshot once per key so the UI paints from cache.
@@ -89,20 +112,48 @@ export function useDeferredFold<T>(
     };
   }, [key]);
 
-  // Recompute the live fold AFTER paint, not during render. `requestIdleCallback`
-  // (falling back to a macrotask) lets React commit + the browser paint the
-  // cached UI before the verify-heavy fold runs. `key` is included so a key
-  // change always reschedules a compute even if the caller's deps happen to be
-  // referentially stable across the switch.
+  // Recompute the live fold AFTER commit, not during render — but never later
+  // than a deadline a dependency burst cannot move, and never at all when there
+  // is no painted frame to protect. `key` is included so a key change always
+  // reschedules a compute even if the caller's deps happen to be referentially
+  // stable across the switch.
+  //
+  // Both bounds exist because the plain "cancel on every dep change, re-arm an
+  // idle callback" schedule is unbounded in exactly the case that needs it most.
+  // A cold boot ingests a replay over the wire, whose `c2ctl:<id>` bus ring
+  // (coalesced at 50ms) re-seeds the control events; each re-seed cancelled the
+  // pending idle callback — its own `timeout` and all — and armed a fresh one,
+  // so the fold was re-armed faster than any idle slot arrived and did not run
+  // for the length of the burst. Downstream that is `channels === []`, hence no
+  // ChannelV2, hence a channel timeline query that stays DISABLED: an empty chat
+  // pane for as long as the wire is busy, with the messages already on disk.
   useEffect(() => {
     let cancelled = false;
     const run = () => {
       if (cancelled) return;
+      deadlineRef.current = undefined;
       setLive(computeRef.current());
     };
+
+    // Nothing is painted, so there is nothing to defer FOR: on a first-ever open
+    // there is no persisted snapshot and no memo entry, and everything
+    // downstream is blocked on this fold. Deferring work the whole view waits on
+    // only lengthens the empty frame. Run it here — still post-commit, so the
+    // shell has been handed to the browser first.
+    if (!paintableRef.current) {
+      run();
+      return;
+    }
+
+    const now = Date.now();
+    deadlineRef.current ??= now + FOLD_DEADLINE_MS;
+    if (now >= deadlineRef.current) {
+      run();
+      return;
+    }
     const handle =
       typeof requestIdleCallback === "function"
-        ? requestIdleCallback(run, { timeout: 200 })
+        ? requestIdleCallback(run, { timeout: deadlineRef.current - now })
         : (setTimeout(run, 0) as unknown as number);
     return () => {
       cancelled = true;

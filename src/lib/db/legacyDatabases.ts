@@ -39,13 +39,52 @@ export class MigrationDeferredError extends Error {
   }
 }
 
+/**
+ * Memo for {@link legacyMigrationsComplete}.
+ *
+ * Everything that asks shares ONE read: the startup gate's probe, every drain's
+ * `skipLegacyDrain`, and the lazy fold-cache drain that sits in front of every
+ * `readFolded`/`writeFolded`. Uncached, each of those paid its own KV round trip
+ * (a Capacitor bridge round trip on Android) serially AHEAD of the read it was
+ * guarding — so the first fold read of a session, which is on the boot critical
+ * path, cost two sequential reads to answer one question.
+ *
+ * Only `true` is cached, and it is cached for the process: the flag is set once
+ * by the gate and never cleared, whereas a cached `false` would pin every drain
+ * to "not done" for the rest of a session in which the gate then finished. While
+ * a read is in flight the promise itself is the memo, so concurrent askers join
+ * it rather than issuing their own.
+ */
+let complete = false;
+let completeInFlight: Promise<boolean> | undefined;
+
 /** Whether the startup gate has already finished every drain. */
 export async function legacyMigrationsComplete(): Promise<boolean> {
-  try {
-    return (await getArmadaDB().kv.get<boolean>(MIGRATIONS_COMPLETE_KEY)) === true;
-  } catch {
-    return false;
-  }
+  if (complete) return true;
+  completeInFlight ??= (async () => {
+    try {
+      return (await getArmadaDB().kv.get<boolean>(MIGRATIONS_COMPLETE_KEY)) === true;
+    } catch {
+      return false;
+    }
+  })().then(
+    (value) => {
+      complete = value;
+      completeInFlight = undefined;
+      return value;
+    },
+    () => {
+      completeInFlight = undefined;
+      return false;
+    },
+  );
+  return completeInFlight;
+}
+
+/** Test seam: forget the memoised completion flag. */
+export function __resetLegacyMigrationsMemoForTests(): void {
+  complete = false;
+  completeInFlight = undefined;
 }
 
 /**

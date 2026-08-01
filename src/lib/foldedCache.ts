@@ -17,7 +17,7 @@
 import { openDB } from "idb";
 
 import { getArmadaDB } from "@/lib/db/armadaDB";
-import { skipLegacyDrain } from "@/lib/db/legacyDatabases";
+import { legacyMigrationsComplete, skipLegacyDrain } from "@/lib/db/legacyDatabases";
 
 /** Legacy standalone database, drained by {@link migrateLegacyFolded}. */
 export const LEGACY_FOLDED_DB_NAME = "armada-concord-cache";
@@ -163,6 +163,13 @@ export function migrateLegacyFolded(): Promise<void> {
 }
 
 async function drainLegacyFolded(): Promise<void> {
+  // Ask the SHARED flag before this drain's own marker. `migrations:complete` is
+  // strictly stronger ("every drain finished and the legacy databases are gone")
+  // and is memoised process-wide, so on a warm boot this whole function costs
+  // nothing rather than one KV read per session in front of the first — and
+  // therefore boot-critical — fold read. `skipLegacyDrain` consults it first
+  // anyway; this only stops the private marker from being read ahead of it.
+  if (await legacyMigrationsComplete()) return;
   const db = getArmadaDB();
   if (await db.kv.get<boolean>(DONE_KEY)) return;
   if (typeof indexedDB === "undefined") return;

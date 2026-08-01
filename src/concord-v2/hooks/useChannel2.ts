@@ -34,6 +34,7 @@ import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 import { publishTimeoutMs } from "@/lib/publishTimeout";
 import { beginSyncTask, type SyncTaskHandle } from "@/lib/syncActivity";
 import { logSync, sinceMs } from "@/lib/syncLog";
+import { STORE_READ } from "@/lib/storeQuery";
 import { markOwnWebPushEvent } from "@/lib/webPushState";
 import { useWireScopes } from "@/wire/useWireScopes";
 
@@ -344,6 +345,11 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
 
   const query = useQuery<OpenedChat[]>({
     queryKey,
+    // The queryFn resolves on the ArmadaDB read (see its comment), so this is a
+    // store read and takes the store-read policy: no pausing while the browser
+    // claims to be offline, no backoff ladder held at `isPending` — both of
+    // which this query's `isLoading` is a skeleton over.
+    ...STORE_READ,
     enabled: Boolean(community && channel),
     staleTime: 10_000,
     // Keep the previous render's messages painted ONLY when they belong to
