@@ -1,4 +1,4 @@
-import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, FolderGit2, Hash, Headphones, HeartPulse, Link as LinkIcon, Loader2, Lock, LogOut, MessagesSquare, MoreVertical, Phone, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Trash2, UserPlus, Users, X } from "lucide-react";
+import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, FolderGit2, Hash, Headphones, HeartPulse, Link as LinkIcon, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Phone, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Trash2, UserPlus, Users, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -23,6 +23,7 @@ import { VoiceParticipantList } from "@/components/VoicePresence";
 import { CommunityInfoDialog2 } from "@/concord-v2/components/CommunityInfoDialog2";
 import { ImageLightbox2 } from "@/concord-v2/components/ImageLightbox2";
 import { InviteDialog2 } from "@/concord-v2/components/InviteDialog2";
+import { ShareToDiscoverDialog } from "@/concord-v2/components/ShareToDiscoverDialog";
 import { RolesDialog2 } from "@/concord-v2/components/RolesDialog2";
 import { AuditLogView } from "@/concord-v2/components/AuditLogView2";
 import { BannedView } from "@/concord-v2/components/BannedView2";
@@ -1232,6 +1233,7 @@ export function ConcordV2Page() {
   }, [communityId]);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [shareDiscoverOpen, setShareDiscoverOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);
   const [banTarget, setBanTarget] = useState<string | null>(null);
   // The community-name header menu (Discord-style): expands inline below the
@@ -1689,6 +1691,17 @@ export function ConcordV2Page() {
                     icon: <UserPlus className="size-4" />,
                     label: "Invite people",
                     onClick: () => setInviteOpen(true),
+                  },
+                  {
+                    // Listing publishes an invite link (secret included), so
+                    // only the owner or an admin may put the community on
+                    // Discover — the same gate the share dialog enforces.
+                    show:
+                      !!user && !dissolved &&
+                      (iAmOwner || (roster ? badgeOf(roster, user!.pubkey) === "admin" : false)),
+                    icon: <Megaphone className="size-4" />,
+                    label: "Share to Discover",
+                    onClick: () => setShareDiscoverOpen(true),
                   },
                   {
                     show: canManageChannels && !dissolved,
@@ -2599,6 +2612,11 @@ export function ConcordV2Page() {
       </SwipeReveal>
 
       <InviteDialog2 community={community} open={inviteOpen} onOpenChange={setInviteOpen} />
+      <ShareToDiscoverDialog
+        open={shareDiscoverOpen}
+        onOpenChange={setShareDiscoverOpen}
+        communityId={community?.idHex}
+      />
       <BanMemberDialog
         target={banTarget}
         willRotate={banWillRotate}

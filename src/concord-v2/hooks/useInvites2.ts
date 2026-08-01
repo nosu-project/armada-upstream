@@ -27,7 +27,7 @@ import {
   type InviteList,
 } from "@/concord-v2/lib/invite";
 import { KIND_INVITE_LIST } from "@/concord-v2/lib/kinds";
-import { buildInviteAnnouncementNote } from "@/concord-v2/lib/inviteDiscovery";
+import { buildCommunityAnnouncement } from "@/concord-v2/lib/inviteDiscovery";
 import { inviteDeliveryRelays, recipientInboxRelays } from "@/concord-v2/lib/inviteRelays";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { toast } from "@/hooks/useToast";
@@ -232,6 +232,7 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
       relays: src.relays,
       name: folded?.metadata?.name ?? src.name,
       ...(folded?.metadata?.icon ? { icon: folded.metadata.icon } : {}),
+      ...(folded?.metadata?.banner ? { banner: folded.metadata.banner } : {}),
       ...(opts?.expiresAtMs ? { expires_at: opts.expiresAtMs } : {}),
       creator_npub: user.pubkey,
       ...(opts?.label ? { label: opts.label } : {}),
@@ -282,10 +283,10 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
       expiresAtMs?: number;
       label?: string;
       /**
-       * Opt-in: also announce this community in a PUBLIC note carrying the full
-       * shareable link (fragment included), so Discover — which mines notes for
-       * invite links — can find it. This deliberately trades the link's secrecy
-       * for discoverability; only ever set from an explicit user action.
+       * Opt-in: also publish a PUBLIC community announcement (kind 33302)
+       * carrying the full shareable link (fragment included), so Discover can
+       * list it. This deliberately trades the link's secrecy for
+       * discoverability; only ever set from an explicit user action.
        */
       listPublicly?: { description?: string; topics?: string[] };
     }
@@ -346,15 +347,17 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
       mine.add(link.pk);
       await publishRegistry([...mine]);
 
-      // Opt-in public announcement note (best-effort — a failed post must not
+      // Opt-in public announcement (best-effort — a failed post must not
       // fail the mint; the link itself is already live).
       if (listPublicly) {
-        const note = buildInviteAnnouncementNote({
+        const announcement = buildCommunityAnnouncement({
+          communityId: community.idHex,
           inviteUrl: url,
+          name: folded?.metadata?.name ?? community.name,
           description: listPublicly.description,
           topics: listPublicly.topics,
         });
-        if (note) await publishEvent(note).catch(() => undefined);
+        if (announcement) await publishEvent(announcement).catch(() => undefined);
       }
 
       return url;

@@ -1,0 +1,285 @@
+import { ChevronRight, Loader2, Megaphone } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+
+import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
+import { useCommunity2, useLiveCommunities2 } from "@/concord-v2/hooks/useCommunityList2";
+import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
+import { useInviteActions2 } from "@/concord-v2/hooks/useInvites2";
+import { buildCommunityAnnouncement } from "@/concord-v2/lib/inviteDiscovery";
+import { badgeOf } from "@/concord-v2/lib/roles";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useNostrPublish } from "@/hooks/useNostrPublish";
+import { toast } from "@/hooks/useToast";
+
+import type { ImagePointer } from "@/concord-v2/lib/types";
+
+/**
+ * Share a community to Discover: publish a kind-33302 community announcement
+ * carrying a live invite link (secret included), so the Discover page can list
+ * it. Only communities the user OWNS or ADMINS are offered — the picker checks
+ * each community's Control fold and hides the rest. Opened either from the
+ * Discover page ("Add your community", with the picker) or from a community's
+ * own menu (preselected via `communityId`).
+ */
+export function ShareToDiscoverDialog({
+  open,
+  onOpenChange,
+  communityId,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Preselect this community and skip the picker (the community-page entry). */
+  communityId?: string;
+}) {
+  const [selectedId, setSelectedId] = useState<string | undefined>(communityId);
+
+  // Re-open starts fresh: back to the preselect (or the picker).
+  useEffect(() => {
+    if (open) setSelectedId(communityId);
+  }, [open, communityId]);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <ChromeDialogContent title="Share to Discover">
+        <div className="flex flex-col items-center gap-6">
+          <div className="flex flex-col items-center gap-3 text-center">
+            <ArmadaCrest size={72} />
+            <div className="space-y-1">
+              <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
+                share to discover
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                List a community publicly so anyone browsing Discover can find and join it.
+              </p>
+            </div>
+          </div>
+          {selectedId ? (
+            <ShareForm idHex={selectedId} onDone={() => onOpenChange(false)} />
+          ) : (
+            <CommunityPicker onSelect={setSelectedId} />
+          )}
+        </div>
+        <ArmadaCrestKeyframes />
+      </ChromeDialogContent>
+    </Dialog>
+  );
+}
+
+/** Whether this member may list the community: its owner, or an admin. */
+function useCanShare(idHex: string | undefined) {
+  const { user } = useCurrentUser();
+  const community = useCommunity2(idHex);
+  const fold = useControlFold2(community);
+  const folded = fold.data;
+  const eligible = Boolean(
+    user &&
+      folded &&
+      (user.pubkey === folded.ownerHex || badgeOf(folded.roster, user.pubkey) === "admin"),
+  );
+  return { community, folded, eligible, isLoading: fold.isLoading };
+}
+
+function OptionIcon({ icon, name }: { icon: ImagePointer | undefined; name: string | undefined }) {
+  const url = useDecryptedImage2(icon);
+  if (url) return <img src={url} alt="" className="size-8 shrink-0 rounded object-cover" />;
+  return (
+    <span className="flex size-8 shrink-0 items-center justify-center rounded bg-muted text-sm font-semibold uppercase text-muted-foreground">
+      {name?.trim()?.[0] ?? "#"}
+    </span>
+  );
+}
+
+/**
+ * One pickable community. Renders nothing until its Control fold proves the
+ * viewer owns or admins it — the ineligible majority silently disappears —
+ * and reports its verdict up so the picker can tell "still checking" from
+ * "nothing to offer".
+ */
+function CommunityOption({
+  idHex,
+  onSelect,
+  onEligibility,
+}: {
+  idHex: string;
+  onSelect: (idHex: string) => void;
+  onEligibility: (idHex: string, eligible: boolean) => void;
+}) {
+  const { community, folded, eligible, isLoading } = useCanShare(idHex);
+
+  useEffect(() => {
+    if (isLoading) return;
+    onEligibility(idHex, eligible);
+  }, [isLoading, eligible, idHex, onEligibility]);
+
+  if (!eligible) return null;
+  const name = folded?.metadata?.name ?? community?.name ?? "…";
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(idHex)}
+      className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm transition-colors clip-corner-lg hover:bg-foreground/10"
+    >
+      <OptionIcon icon={folded?.metadata?.icon} name={name} />
+      <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
+      <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+    </button>
+  );
+}
+
+function CommunityPicker({ onSelect }: { onSelect: (idHex: string) => void }) {
+  const entries = useLiveCommunities2();
+  const [eligibility, setEligibility] = useState<Record<string, boolean>>({});
+  const report = useCallback(
+    (idHex: string, eligible: boolean) =>
+      setEligibility((prev) => (prev[idHex] === eligible ? prev : { ...prev, [idHex]: eligible })),
+    [],
+  );
+
+  const allChecked = entries.every((e) => e.community_id in eligibility);
+  const noneEligible =
+    entries.length === 0 || (allChecked && entries.every((e) => !eligibility[e.community_id]));
+
+  return (
+    <div className="w-full space-y-2">
+      <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        <Megaphone className="size-3.5" />
+        Pick a community you own or admin
+      </div>
+      <div className="max-h-64 space-y-0.5 overflow-y-auto p-1 clip-corner-lg bg-secondary">
+        {entries.map((e) => (
+          <CommunityOption
+            key={e.community_id}
+            idHex={e.community_id}
+            onSelect={onSelect}
+            onEligibility={report}
+          />
+        ))}
+        {!allChecked && (
+          <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" />
+            Checking your communities…
+          </div>
+        )}
+        {noneEligible && allChecked && (
+          <p className="px-3 py-2 text-sm text-muted-foreground">
+            None of your communities can be shared: only a community's owner or an admin can list
+            it here.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
+  const { community, folded, eligible, isLoading } = useCanShare(idHex);
+  const { createLink, isCreatingLink, myLinks, isPublic } = useInviteActions2(community);
+  const { mutateAsync: publishEvent, isPending: isPublishing } = useNostrPublish();
+  const [description, setDescription] = useState("");
+  const [topics, setTopics] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const name = folded?.metadata?.name ?? community?.name ?? "this community";
+
+  // Reuse a live link of mine rather than minting one per share: an
+  // announcement republished under the same `d` replaces the previous listing,
+  // and one public link is one revocation away from un-listing.
+  const now = Math.floor(Date.now() / 1000);
+  const reusable = myLinks.find((e) => !e.expires_at || e.expires_at > now);
+  const willMint = !reusable;
+  const busy = isCreatingLink || isPublishing;
+
+  const handleShare = async () => {
+    setError(null);
+    if (!community || !eligible) return;
+    try {
+      const url = reusable?.url ?? (await createLink({}));
+      const announcement = buildCommunityAnnouncement({
+        communityId: community.idHex,
+        inviteUrl: url,
+        name: folded?.metadata?.name ?? community.name,
+        description: description.trim() || undefined,
+        topics: topics
+          .split(/[,\s]+/)
+          .map((t) => t.trim())
+          .filter(Boolean),
+      });
+      if (!announcement) throw new Error("Couldn't build the listing.");
+      await publishEvent(announcement);
+      toast({
+        title: "Shared to Discover",
+        description: `${name} is now publicly listed.`,
+      });
+      onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't share the community.");
+    }
+  };
+
+  if (!eligible) {
+    return isLoading ? (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="size-4 animate-spin" />
+        Checking permissions…
+      </div>
+    ) : (
+      <Alert>
+        <AlertDescription>
+          Only this community's owner or an admin can share it to Discover.
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  return (
+    <div className="w-full space-y-3">
+      <p className="text-sm">
+        Listing <span className="font-medium text-foreground">{name}</span> publicly.
+      </p>
+      <Textarea
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+        placeholder="Short description (optional)"
+        className="min-h-16 text-sm"
+        maxLength={280}
+        aria-label="Listing description"
+      />
+      <Input
+        value={topics}
+        onChange={(e) => setTopics(e.target.value)}
+        placeholder="Topics, comma-separated (optional)"
+        className="text-sm"
+        aria-label="Listing topics"
+      />
+      <Alert>
+        <AlertDescription>
+          Sharing publishes an invite link from your account — including its secret — so anyone
+          can find and join.
+          {willMint && !isPublic
+            ? " It also creates this community's first invite link, making the community public until every link is revoked."
+            : ""}
+        </AlertDescription>
+      </Alert>
+      <Button type="button" onClick={handleShare} disabled={busy} className="w-full clip-corner-lg">
+        {busy ? (
+          <>
+            <Loader2 className="mr-2 size-4 animate-spin" /> Sharing…
+          </>
+        ) : (
+          "Share publicly"
+        )}
+      </Button>
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+    </div>
+  );
+}

@@ -54,7 +54,8 @@ export function CommunityListingCard({ invite, className }: CommunityListingCard
   });
 
   const iconUrl = useDecryptedImage2(bundle?.icon);
-  const name = bundle?.name?.trim() || "Encrypted community";
+  const bannerUrl = useDecryptedImage2(bundle?.banner);
+  const name = bundle?.name?.trim() || invite.name || "Encrypted community";
   const initial = name.charAt(0).toUpperCase() || "·";
   const channelCount = Array.isArray(bundle?.channels) ? bundle!.channels.length : 0;
 
@@ -71,6 +72,14 @@ export function CommunityListingCard({ invite, className }: CommunityListingCard
         className,
       )}
     >
+      {/* Banner (from the bundle preview, decrypted with the link's secret).
+          Absent on older bundles or bannerless communities — the card simply
+          starts at the header row. */}
+      {bannerUrl && (
+        <div className="h-24 w-full shrink-0 overflow-hidden">
+          <img src={bannerUrl} alt="" className="size-full object-cover" />
+        </div>
+      )}
       <div className="px-3.5 py-3 flex flex-col flex-1 gap-2.5">
         {/* Header: icon + name */}
         <div className="flex items-center gap-2.5 min-w-0">

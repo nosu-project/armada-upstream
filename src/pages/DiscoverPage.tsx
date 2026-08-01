@@ -20,6 +20,12 @@ const EmojiPackDialog = lazy(() =>
   import("@/components/discover/EmojiPackDialog").then((m) => ({ default: m.EmojiPackDialog })),
 );
 
+const ShareToDiscoverDialog = lazy(() =>
+  import("@/concord-v2/components/ShareToDiscoverDialog").then((m) => ({
+    default: m.ShareToDiscoverDialog,
+  })),
+);
+
 type DiscoverTab = "communities" | "emojis" | "themes";
 
 const TABS: { id: DiscoverTab; label: string; icon: typeof Users; placeholder: string }[] = [
@@ -44,6 +50,7 @@ export function DiscoverPage() {
     themes: "",
   });
   const [createOpen, setCreateOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const query = queries[tab];
   const setQuery = (v: string) => setQueries((prev) => ({ ...prev, [tab]: v }));
   const active = TABS.find((t) => t.id === tab)!;
@@ -129,6 +136,16 @@ export function DiscoverPage() {
 
             {/* Lives beside the search, not in the header, so it survives the
                 header being dropped on a phone. */}
+            {tab === "communities" && user && (
+              <Button
+                className="h-9 touch:h-11 shrink-0 clip-corner-lg"
+                onClick={() => setShareOpen(true)}
+              >
+                <Plus className="size-4" />
+                <span className="hidden sm:inline">Add your community</span>
+                <span className="sr-only sm:hidden">Add your community</span>
+              </Button>
+            )}
             {tab === "emojis" && user && (
               <Button
                 className="h-9 touch:h-11 shrink-0 clip-corner-lg"
@@ -153,6 +170,12 @@ export function DiscoverPage() {
       {createOpen && (
         <Suspense fallback={null}>
           <EmojiPackDialog open={createOpen} onOpenChange={setCreateOpen} />
+        </Suspense>
+      )}
+
+      {shareOpen && (
+        <Suspense fallback={null}>
+          <ShareToDiscoverDialog open={shareOpen} onOpenChange={setShareOpen} />
         </Suspense>
       )}
     </>
@@ -197,14 +220,14 @@ function CommunitiesTab({ query }: { query: string }) {
       <TabState icon={Users}>
         {query.trim()
           ? "No public communities matched your search."
-          : "No public communities found yet. Share an invite link in a note (or from the invite dialog) to list one here."}
+          : "No public communities found yet. Use \"Add your community\" to list one you own or admin."}
       </TabState>
     );
   }
   return (
     <div className={GRID}>
       {data.map((invite) => (
-        <CommunityListingCard key={invite.linkSigner} invite={invite} />
+        <CommunityListingCard key={invite.communityId} invite={invite} />
       ))}
     </div>
   );

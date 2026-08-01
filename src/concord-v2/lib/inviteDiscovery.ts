@@ -1,40 +1,48 @@
 /**
- * Invite discovery — finding public Concord communities WITHOUT inventing any
- * new event kind.
+ * Invite discovery — the community announcement event.
  *
  * CORD-05 invites are private by construction: the unlock token lives only in a
  * URL `#fragment`, and the kind-33301 bundle is NIP-44-encrypted with a key
  * derived from it. Nothing an invite touches is searchable on its own.
  *
- * But people already make communities discoverable the plain Nostr way — they
- * post the full shareable link (`https://…/invite/naddr1…#fragment`) in an
- * ordinary note. Those links carry the secret, so anyone who finds the note can
- * join. Discovery therefore just NIP-50-searches notes for invite links and
- * pulls them out; "share to Discover" is nothing more than publishing such a
- * note. No bespoke directory kind, no new convention.
+ * "Share to Discover" publishes a community announcement: an addressable
+ * kind-33302 event, signed by the sharer's real key, whose `d` tag is the
+ * community id and whose content carries the full shareable invite link
+ * (`https://…/invite/naddr1…#fragment`, secret included) plus an optional
+ * blurb. Addressability means re-sharing REPLACES the sharer's previous
+ * listing for that community instead of piling up notes, and un-listing is a
+ * future replace. The link carries the secret, so anyone who finds the
+ * announcement can join — publishing one is always an explicit user action.
+ *
+ * This is an Armada client convention, not a CORD kind: the event is bare
+ * (never wrapped) and carries no Concord key material beyond what the shared
+ * link itself already discloses. It lives here, not in the frozen CORD-02
+ * registry.
  */
 
 import { parseInviteLink } from "@/concord-v2/lib/invite";
 
 import type { EventTemplate } from "@/hooks/useNostrPublish";
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
-/**
- * The NIP-50 anchor Discovery searches for: the default share origin baked into
- * every hosted/native build (`shareOrigin()` → armada.buzz). The overwhelming
- * majority of shared links contain it, and searching a concrete string keeps
- * the query tight instead of drowning in unrelated notes.
- */
-export const SHARE_MARKER = "armada.buzz/invite";
+/** Community announcement: addressable, `d` = community id (hex). */
+export const KIND_COMMUNITY_ANNOUNCEMENT = 33302;
 
-/** An invite link mined from a public event. */
+/** A community id as it appears in a `d` tag: 32 bytes of lowercase hex. */
+const COMMUNITY_ID_RE = /^[0-9a-f]{64}$/;
+
+/** An invite link mined from a community announcement. */
 export interface DiscoveredInvite {
   /** The full shareable invite URL (fragment included). */
   inviteUrl: string;
-  /** The link-signer pubkey — the de-duplication key across notes. */
+  /** The link-signer pubkey — the invite's coordinate author. */
   linkSigner: string;
-  /** The event that carried the link (a note, usually). */
-  source: NostrEvent;
+  /** The announced community's id (the announcement's `d` tag, hex). */
+  communityId: string;
+  /** The plaintext name the sharer chose to list under, if any. */
+  name?: string;
+  /** The announcement event that carried the link. */
+  source: NostrRumor;
 }
 
 /** Normalize a topic to a bare, lowercase hashtag body. */
@@ -68,22 +76,33 @@ export function extractInviteUrls(text: string): string[] {
   return out;
 }
 
-/** Pull the discoverable invites out of one event's content. */
-export function invitesFromEvent(event: NostrEvent): DiscoveredInvite[] {
-  const out: DiscoveredInvite[] = [];
-  for (const url of extractInviteUrls(event.content)) {
-    const parsed = parseInviteLink(url);
-    if (!parsed) continue;
-    out.push({ inviteUrl: url, linkSigner: parsed.linkSigner, source: event });
-  }
-  return out;
+/**
+ * Read one community announcement event into a {@link DiscoveredInvite}, or
+ * null when it isn't usable: the `d` tag must be a community id and the
+ * content must carry a valid, secret-carrying invite link.
+ */
+export function announcementFromEvent(event: NostrRumor): DiscoveredInvite | null {
+  const d = event.tags.find(([n]) => n === "d")?.[1] ?? "";
+  if (!COMMUNITY_ID_RE.test(d)) return null;
+  const [url] = extractInviteUrls(event.content);
+  if (!url) return null;
+  const parsed = parseInviteLink(url);
+  if (!parsed) return null;
+  const name = event.tags.find(([n]) => n === "name")?.[1]?.trim();
+  return {
+    inviteUrl: url,
+    linkSigner: parsed.linkSigner,
+    communityId: d,
+    ...(name ? { name } : {}),
+    source: event,
+  };
 }
 
 /**
- * The event content minus any invite URLs — a human blurb for the card (e.g.
- * "Created a Bitcoin community, join the party"). Collapses whitespace.
+ * The announcement's content minus the invite URL — the sharer's blurb for the
+ * card (e.g. "A place to talk sailing"). Collapses whitespace.
  */
-export function inviteSourceBlurb(event: NostrEvent): string {
+export function inviteSourceBlurb(event: NostrRumor): string {
   return event.content
     .replace(INVITE_URL_RE, "")
     .replace(/\s+/g, " ")
@@ -91,23 +110,38 @@ export function inviteSourceBlurb(event: NostrEvent): string {
 }
 
 /**
- * Build the note that "share to Discover" publishes: an ordinary kind-1 post
- * carrying the invite link (so the NIP-50 search finds it), an optional blurb,
- * and topic hashtags. Returns null if the URL isn't a valid invite link.
+ * Build the community announcement "share to Discover" publishes. The invite
+ * URL rides in the content (where NIP-50 search indexes it), the community id
+ * is the `d` tag (so a re-share replaces the sharer's previous listing), and
+ * the community name rides in a `name` tag so the listing is searchable
+ * without decrypting the bundle. Returns null if the URL isn't a valid invite
+ * link or the id isn't a community id.
  */
-export function buildInviteAnnouncementNote(input: {
+export function buildCommunityAnnouncement(input: {
+  communityId: string;
   inviteUrl: string;
+  name?: string;
   description?: string;
   topics?: string[];
 }): EventTemplate | null {
+  const communityId = input.communityId.toLowerCase();
+  if (!COMMUNITY_ID_RE.test(communityId)) return null;
   if (!parseInviteLink(input.inviteUrl)) return null;
   const topics = (input.topics ?? [])
     .map(normalizeTopic)
     .filter((t) => t.length > 0 && t.length <= 64);
   const blurb = input.description?.trim();
-  const hashtags = topics.map((t) => `#${t}`).join(" ");
-  const content = [blurb, input.inviteUrl.trim(), hashtags].filter(Boolean).join("\n\n");
-  return { kind: 1, content, tags: topics.map((t) => ["t", t]) };
+  const name = input.name?.trim();
+  const content = [blurb, input.inviteUrl.trim()].filter(Boolean).join("\n\n");
+  return {
+    kind: KIND_COMMUNITY_ANNOUNCEMENT,
+    content,
+    tags: [
+      ["d", communityId],
+      ...(name ? [["name", name]] : []),
+      ...topics.map((t) => ["t", t]),
+    ],
+  };
 }
 
 /**

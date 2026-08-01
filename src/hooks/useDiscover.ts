@@ -9,8 +9,8 @@ import { useDebounce } from "@/hooks/useDebounce";
 import { useFollowList } from "@/hooks/useFollowList";
 import { KIND_EMOJI_SET, emojiPackEntries, emojiPackName } from "@/hooks/useEmojiPacks";
 import {
-  SHARE_MARKER,
-  invitesFromEvent,
+  KIND_COMMUNITY_ANNOUNCEMENT,
+  announcementFromEvent,
   type DiscoveredInvite,
 } from "@/concord-v2/lib/inviteDiscovery";
 import { isNostrId } from "@/lib/nostrId";
@@ -180,10 +180,10 @@ export function useDiscoverAuthors(): {
 }
 
 /**
- * Public Concord communities — mined from ordinary notes that share a full
- * invite link. NIP-50-searches notes for the invite-URL marker (ANDed with the
- * user's query), extracts the links, and de-duplicates by link-signer keeping
- * the newest sharing note.
+ * Public Concord communities — kind-33302 community announcements, each an
+ * addressable event whose `d` tag is the community id and whose content
+ * carries a full shareable invite link. De-duplicated by community id keeping
+ * the newest announcement, so one community listed by two people is one card.
  */
 export function useDiscoverCommunities(query: string) {
   const { nostr } = useNostr();
@@ -194,28 +194,35 @@ export function useDiscoverCommunities(query: string) {
   const authorFilter = unrestricted ? undefined : authors;
 
   const result = useQuery<DiscoveredInvite[]>({
-    queryKey: ["discover", "communities", relays, authorFilter ?? "all", debounced.trim()],
+    queryKey: ["discover", "community-announcements", relays, authorFilter ?? "all", debounced.trim()],
     enabled: relays.length > 0 && !authorsLoading && (unrestricted || authors.length > 0),
     staleTime: 30_000,
     placeholderData: (prev) => prev,
     queryFn: async ({ signal }) => {
       const q = debounced.trim();
-      const search = q ? `${q} ${SHARE_MARKER}` : SHARE_MARKER;
-      const filter: NostrFilter = { kinds: [1], search, limit: FETCH_LIMIT };
-      if (authorFilter) filter.authors = authorFilter;
-      const events = await nostr.group(relays).query(
-        [filter],
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) },
+      // Newest announcement per (sharer, community) coordinate, newest first.
+      const events = await fetchDiscover(
+        nostr,
+        relays,
+        KIND_COMMUNITY_ANNOUNCEMENT,
+        q,
+        authorFilter,
+        signal,
       );
-      // Newest note wins for a given link.
-      events.sort((a, b) => b.created_at - a.created_at);
-      const byLinkSigner = new Map<string, DiscoveredInvite>();
+      const byCommunity = new Map<string, DiscoveredInvite>();
       for (const event of events) {
-        for (const invite of invitesFromEvent(event)) {
-          if (!byLinkSigner.has(invite.linkSigner)) byLinkSigner.set(invite.linkSigner, invite);
-        }
+        const invite = announcementFromEvent(event);
+        if (!invite) continue;
+        if (!byCommunity.has(invite.communityId)) byCommunity.set(invite.communityId, invite);
       }
-      return [...byLinkSigner.values()];
+      const all = [...byCommunity.values()];
+      if (!q) return all;
+      // Client-side filter so relays without NIP-50 still answer the search:
+      // the listed name and the announcement's blurb are the plaintext there is.
+      const needle = q.toLowerCase();
+      return all.filter((invite) =>
+        `${invite.name ?? ""} ${invite.source.content}`.toLowerCase().includes(needle),
+      );
     },
   });
 
