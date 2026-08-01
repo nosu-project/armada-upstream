@@ -335,31 +335,45 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
           })
         : null;
 
-      // Four independent writes on four different coordinates. Awaiting them in
-      // series made the mint the SUM of four round trips (each with its own 8s
-      // ceiling) when they only ever needed the slowest one.
-      await Promise.all([
-        publishToAnyRelay(nostr, community.relays, bundleEvent, "No relay accepted the invite bundle."),
-        // The creator's private bookkeeping (the merge key is the token). This
-        // one is not optional: `signer_sk` exists nowhere else, and without it
-        // the link that just went live can never be revoked.
-        updateInviteList({
-          entries: [
-            {
-              token: bytesToHex(token),
-              signer_sk: bytesToHex(link.sk),
-              community_id: community.idHex,
-              url,
-              ...(label ? { label } : {}),
-              created_at: Math.floor(Date.now() / 1000),
-              ...(expiresAtMs ? { expires_at: Math.floor(expiresAtMs / 1000) } : {}),
-            },
-          ],
-          tombstones: [],
-        }),
-        publishRegistry([...mine]),
-        note ? publishEvent(note).catch(() => undefined) : Promise.resolve(),
-      ]);
+      // The bundle is the ONLY write that makes the link joinable, so it is the
+      // only one the caller waits on. Awaiting the other three in series made
+      // the mint the sum of four round trips (each with its own 8s ceiling)
+      // before the user could be handed a URL that had been valid since the
+      // first one landed.
+      await publishToAnyRelay(nostr, community.relays, bundleEvent, "No relay accepted the invite bundle.");
+
+      // The creator's private bookkeeping (the merge key is the token).
+      // `signer_sk` exists nowhere else, so losing this write costs the ability
+      // to revoke — but it is optimistically cached before it publishes, so the
+      // secret is on this device either way, and a failure here used to be
+      // reported as "couldn't create the link" for a link that was already
+      // live, which invites minting a second one.
+      void updateInviteList({
+        entries: [
+          {
+            token: bytesToHex(token),
+            signer_sk: bytesToHex(link.sk),
+            community_id: community.idHex,
+            url,
+            ...(label ? { label } : {}),
+            created_at: Math.floor(Date.now() / 1000),
+            ...(expiresAtMs ? { expires_at: Math.floor(expiresAtMs / 1000) } : {}),
+          },
+        ],
+        tombstones: [],
+      }).catch(() => {
+        toast({
+          title: "Invite link created, but not synced",
+          description:
+            "Its revocation secret didn't reach your relays, so your other devices won't be able to revoke this link.",
+          variant: "destructive",
+        });
+      });
+
+      // The member-facing Registry (swallows its own errors) and the opt-in
+      // announcement note: neither gates the link working.
+      void publishRegistry([...mine]);
+      if (note) void publishEvent(note).catch(() => undefined);
 
       return url;
     },

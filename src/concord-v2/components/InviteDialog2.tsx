@@ -85,10 +85,9 @@ export function InviteDialog2({
 }
 
 function InviteBody({ community }: { community: CommunityV2 | undefined }) {
-  const { createLink, isCreatingLink, revokeLink, myLinks, sendDirectInvite, isSendingInvite, isPublic, revokeWouldPrivatize } =
+  const { createLink, revokeLink, myLinks, sendDirectInvite, isSendingInvite, isPublic, revokeWouldPrivatize } =
     useInviteActions2(community);
-  const [link, setLink] = useState<string | null>(null);
-  const [mintingNew, setMintingNew] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const [expiryDays, setExpiryDays] = useState<number>(0); // 0 = never
   const [label, setLabel] = useState("");
@@ -118,8 +117,22 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
     }
   };
 
-  const handleGenerate = async () => {
-    setError(null);
+  /**
+   * My newest link that can still be joined. "Invite" reuses it instead of
+   * minting one per tap: every extra live link is another door to revoke later
+   * and they all lead to the same community.
+   */
+  const liveLink = (() => {
+    const now = Math.floor(Date.now() / 1000);
+    return (
+      [...myLinks]
+        .filter((e) => !e.expires_at || e.expires_at > now)
+        .sort((a, b) => b.created_at - a.created_at)[0]?.url ?? null
+    );
+  })();
+
+  /** Mint a link with the options as set, confirming the two lines it crosses. */
+  const mintLink = async (): Promise<string> => {
     // The first live link flips the derived mode Public (CORD-05 §5). Whether
     // bans still rotate is per-banner (foreign links gate rotations, own links
     // don't) — the ban dialog's step list tells that truth case by case.
@@ -129,7 +142,7 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
         "Creating an invite link makes this community public: anyone with the link can join. Revoking every link makes it private again.",
       )
     ) {
-      return;
+      throw new Error("Cancelled");
     }
     // Announcing publishes the full link (secret included) as a public note —
     // a real privacy step, so confirm it explicitly.
@@ -139,26 +152,48 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
         "Sharing to Discover posts a public note from your account with this invite link — including its secret — so anyone can find and join. Only do this for a community you want strangers to join.",
       )
     ) {
-      return;
+      throw new Error("Cancelled");
     }
+    return createLink({
+      expiresAtMs: expiryDays > 0 ? Date.now() + expiryDays * 86400_000 : undefined,
+      label: label.trim() || undefined,
+      listPublicly: listPublicly
+        ? {
+            description: listingDescription.trim() || undefined,
+            topics: listingTopics
+              .split(/[,\s]+/)
+              .map((t) => t.trim())
+              .filter(Boolean),
+          }
+        : undefined,
+    });
+  };
+
+  /**
+   * One tap: hand a live link straight to the system share sheet, minting one
+   * first ONLY when there is none to reuse. Reusing skips the relay round trip
+   * entirely — which is also what keeps the click's user activation alive, since
+   * `navigator.share` refuses to open once an await has swallowed it.
+   */
+  const handleInvite = async (forceNew = false) => {
+    setError(null);
+    setSharing(true);
     try {
-      const expiresAtMs = expiryDays > 0 ? Date.now() + expiryDays * 86400_000 : undefined;
-      const topics = listingTopics
-        .split(/[,\s]+/)
-        .map((t) => t.trim())
-        .filter(Boolean);
-      setLink(
-        await createLink({
-          expiresAtMs,
-          label: label.trim() || undefined,
-          listPublicly: listPublicly
-            ? { description: listingDescription.trim() || undefined, topics }
-            : undefined,
-        }),
-      );
-      setMintingNew(false);
+      const url = forceNew || !liveLink ? await mintLink() : liveLink;
+      const shared = await share({
+        title: community?.name ? `Join ${community.name}` : "Join my community",
+        url,
+        dialogTitle: "Share invite link",
+      });
+      if (!shared) {
+        await handleCopy(url);
+        toast({ title: "Invite link copied", description: "It's on your clipboard, ready to paste." });
+      }
     } catch (e) {
+      if (e instanceof Error && e.message === "Cancelled") return;
       setError(e instanceof Error ? e.message : "Couldn't create the link.");
+    } finally {
+      setSharing(false);
     }
   };
 
@@ -176,7 +211,6 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
     setRevoking(url);
     try {
       await revokeLink({ url });
-      if (link === url) setLink(null);
       toast({
         title: "Invite link revoked",
         description: privatizes
@@ -199,28 +233,6 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
       toast({ title: "Copy failed", variant: "destructive" });
     }
   };
-
-  const handleShare = async (url: string) => {
-    const shared = await share({
-      title: community?.name ? `Join ${community.name}` : "Join my community",
-      url,
-      dialogTitle: "Share invite link",
-    });
-    if (!shared) await handleCopy(url);
-  };
-
-  const now = Math.floor(Date.now() / 1000);
-  /**
-   * The newest link that can still be joined, shown straight away rather than
-   * minting on open. A mint is four relay writes and another door to revoke
-   * later, and every link leads to the same community — so re-inviting reuses
-   * this one unless the user explicitly asks for a fresh one.
-   */
-  const newestLive =
-    [...myLinks].filter((e) => !e.expires_at || e.expires_at > now).sort((a, b) => b.created_at - a.created_at)[0] ??
-    null;
-  const shownLink = link ?? (mintingNew ? null : (newestLive?.url ?? null));
-  const existing = myLinks.filter((e) => e.url !== shownLink);
 
   return (
     <div className="flex flex-col items-center gap-6">
@@ -276,137 +288,122 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
             </PopoverContent>
           </Popover>
         </div>
-        {shownLink ? (
-          <>
-            <div className="flex items-center gap-2">
-              <Input readOnly value={shownLink} className="min-w-0 font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
-              {canShare() && (
-                <Button type="button" size="icon" variant="outline" className="shrink-0" onClick={() => handleShare(shownLink)} aria-label="Share link">
-                  <Share2 className="size-4" />
-                </Button>
-              )}
-              <Button type="button" size="icon" variant="outline" className="shrink-0" onClick={() => handleCopy(shownLink)} aria-label="Copy link">
-                {copied === shownLink ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
-              </Button>
+        {/* One button, one job, one shape: it hands a link to the share sheet.
+            It does not become a link row afterwards — the minted link is
+            already listed under "Your live links" below, and swapping the
+            control out from under the tap that just succeeded means the next
+            invite needs a different gesture than the last one. */}
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={() => void handleInvite()}
+          disabled={sharing || !community}
+          className="w-full clip-corner-lg"
+        >
+          {sharing ? (
+            <Loader2 className="size-4 mr-2 animate-spin" />
+          ) : canShare() ? (
+            <Share2 className="size-4 mr-2" />
+          ) : (
+            <Copy className="size-4 mr-2" />
+          )}
+          Invite
+        </Button>
+        <Collapsible open={optionsOpen} onOpenChange={setOptionsOpen}>
+          <CollapsibleTrigger className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground">
+            <ChevronRight className={cn("size-3.5 transition-transform", optionsOpen && "rotate-90")} />
+            Link options
+            {!optionsOpen && (expiryDays > 0 || label.trim()) && (
+              <span className="text-foreground/70">
+                {" · "}
+                {[expiryDays > 0 ? `expires in ${expiryDays} day${expiryDays > 1 ? "s" : ""}` : null, label.trim() ? `"${label.trim()}"` : null]
+                  .filter(Boolean)
+                  .join(", ")}
+              </span>
+            )}
+          </CollapsibleTrigger>
+          <CollapsibleContent className="pt-2">
+            <div className="flex gap-2">
+              <Select value={String(expiryDays)} onValueChange={(v) => setExpiryDays(Number(v))}>
+                <SelectTrigger className="w-40 shrink-0" aria-label="Link expiry">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0">Never expires</SelectItem>
+                  <SelectItem value="1">Expires in 1 day</SelectItem>
+                  <SelectItem value="7">Expires in 7 days</SelectItem>
+                  <SelectItem value="30">Expires in 30 days</SelectItem>
+                </SelectContent>
+              </Select>
+              <Input
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                placeholder="Label (optional)"
+                className="min-w-0 text-sm"
+                aria-label="Invite label"
+              />
             </div>
-            <div className="flex items-center gap-2">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => handleRevoke(shownLink)}
-                disabled={revoking === shownLink}
-                className="text-destructive hover:text-destructive"
+
+            {/* Opt-in public directory listing. */}
+            <div className="mt-3 rounded-lg border border-chrome p-3 space-y-2.5">
+              <Label
+                htmlFor="list-publicly"
+                className="flex items-start justify-between gap-3 cursor-pointer"
               >
-                {revoking === shownLink ? <><Loader2 className="size-3.5 mr-1.5 animate-spin" /> Revoking...</> : "Revoke this link"}
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="ml-auto text-muted-foreground"
-                onClick={() => {
-                  setLink(null);
-                  setMintingNew(true);
-                }}
-              >
-                New link
-              </Button>
-            </div>
-          </>
-        ) : (
-          <>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={handleGenerate}
-              disabled={isCreatingLink || !community}
-              className="w-full clip-corner-lg"
-            >
-              {isCreatingLink ? <><Loader2 className="size-4 mr-2 animate-spin" /> Creating...</> : "Invite"}
-            </Button>
-            <Collapsible open={optionsOpen} onOpenChange={setOptionsOpen}>
-              <CollapsibleTrigger className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground">
-                <ChevronRight className={cn("size-3.5 transition-transform", optionsOpen && "rotate-90")} />
-                Link options
-                {!optionsOpen && (expiryDays > 0 || label.trim()) && (
-                  <span className="text-foreground/70">
-                    {" · "}
-                    {[expiryDays > 0 ? `expires in ${expiryDays} day${expiryDays > 1 ? "s" : ""}` : null, label.trim() ? `"${label.trim()}"` : null]
-                      .filter(Boolean)
-                      .join(", ")}
+                <span className="space-y-0.5">
+                  <span className="block text-sm font-medium normal-case tracking-normal">
+                    Share to Discover
                   </span>
-                )}
-              </CollapsibleTrigger>
-              <CollapsibleContent className="pt-2">
-                <div className="flex gap-2">
-                  <Select value={String(expiryDays)} onValueChange={(v) => setExpiryDays(Number(v))}>
-                    <SelectTrigger className="w-40 shrink-0" aria-label="Link expiry">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="0">Never expires</SelectItem>
-                      <SelectItem value="1">Expires in 1 day</SelectItem>
-                      <SelectItem value="7">Expires in 7 days</SelectItem>
-                      <SelectItem value="30">Expires in 30 days</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <span className="block text-xs font-normal normal-case tracking-normal text-muted-foreground">
+                    Post this link in a public note so anyone can find and join the community.
+                    The link's secret becomes public.
+                  </span>
+                </span>
+                <Switch id="list-publicly" checked={listPublicly} onCheckedChange={setListPublicly} />
+              </Label>
+              {listPublicly && (
+                <div className="space-y-2 pt-1">
+                  <Textarea
+                    value={listingDescription}
+                    onChange={(e) => setListingDescription(e.target.value)}
+                    placeholder="Short description (optional)"
+                    className="min-h-16 text-sm"
+                    maxLength={280}
+                    aria-label="Listing description"
+                  />
                   <Input
-                    value={label}
-                    onChange={(e) => setLabel(e.target.value)}
-                    placeholder="Label (optional)"
-                    className="min-w-0 text-sm"
-                    aria-label="Invite label"
+                    value={listingTopics}
+                    onChange={(e) => setListingTopics(e.target.value)}
+                    placeholder="Topics, comma-separated (optional)"
+                    className="text-sm"
+                    aria-label="Listing topics"
                   />
                 </div>
+              )}
+            </div>
 
-                {/* Opt-in public directory listing. */}
-                <div className="mt-3 rounded-lg border border-chrome p-3 space-y-2.5">
-                  <Label
-                    htmlFor="list-publicly"
-                    className="flex items-start justify-between gap-3 cursor-pointer"
-                  >
-                    <span className="space-y-0.5">
-                      <span className="block text-sm font-medium normal-case tracking-normal">
-                        Share to Discover
-                      </span>
-                      <span className="block text-xs font-normal normal-case tracking-normal text-muted-foreground">
-                        Post this link in a public note so anyone can find and join the community.
-                        The link's secret becomes public.
-                      </span>
-                    </span>
-                    <Switch id="list-publicly" checked={listPublicly} onCheckedChange={setListPublicly} />
-                  </Label>
-                  {listPublicly && (
-                    <div className="space-y-2 pt-1">
-                      <Textarea
-                        value={listingDescription}
-                        onChange={(e) => setListingDescription(e.target.value)}
-                        placeholder="Short description (optional)"
-                        className="min-h-16 text-sm"
-                        maxLength={280}
-                        aria-label="Listing description"
-                      />
-                      <Input
-                        value={listingTopics}
-                        onChange={(e) => setListingTopics(e.target.value)}
-                        placeholder="Topics, comma-separated (optional)"
-                        className="text-sm"
-                        aria-label="Listing topics"
-                      />
-                    </div>
-                  )}
-                </div>
-              </CollapsibleContent>
-            </Collapsible>
-          </>
-        )}
+            {/* "Invite" reuses the newest live link; these options only mean
+                anything for a link that doesn't exist yet, so they get their
+                own action rather than silently changing what the tap above
+                does. */}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="mt-3 w-full text-muted-foreground"
+              onClick={() => void handleInvite(true)}
+              disabled={sharing || !community}
+            >
+              Create a new link with these options
+            </Button>
+          </CollapsibleContent>
+        </Collapsible>
       </div>
 
-      {existing.length > 0 && (
+      {myLinks.length > 0 && (
         <div className="w-full space-y-1.5 border-t border-chrome pt-4">
           <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Your live links</div>
-          {existing.map((e) => (
+          {myLinks.map((e) => (
             <div key={e.token} className="flex items-center gap-2">
               <Input readOnly value={e.url} className="min-w-0 font-mono text-[0.65rem]" onFocus={(ev) => ev.currentTarget.select()} />
               <Button type="button" size="icon" variant="outline" className="shrink-0" aria-label="Copy link" onClick={() => handleCopy(e.url)}>
