@@ -207,11 +207,26 @@ The background notification service writes an event into the same tenant the
 WebView reads it from, so a message received while the app was dead is simply
 *there* on open. `drainEvents`/`ackDrain` still exist but are ROUTING only — a
 pass through wire ingest (parking wraps, ringing scopes, notification
-candidates) — over a `svc` queue tenant, not the path by which anything becomes
-durable.
+candidates) — over the `svc:<relay>` queue tenants, not the path by which
+anything becomes durable.
 
 Things to know before touching it:
 
+- **Scope by what the data IS, and for NIP-29 that includes its relay.** A group
+  is named by an `h`/`d` value that means nothing on its own: the same id on two
+  relays is two unrelated groups, and relay software that ships a SHARED signing
+  identity (zooid) defeats scoping by author too — with kind 39000 addressable,
+  two servers' metadata then *replace* one another rather than merely mix. So
+  NIP-29 lives in `nip29:<normalized relay url>`, one tenant per relay, and the
+  isolation is structural rather than a side-table of provenance that a read has
+  to remember to consult. `relayScope.ts` (+ `RelayScope.kt`) is the only place
+  the rule lives: an `h` tag or a relay-signed 39000-39005/13534 is relay-scoped,
+  everything else is `main`. Corollary: an event whose source relay is unknown (a
+  pool-wide `.query()`, a `group(urls)` read) is NOT stored rather than filed
+  under a guess — every NIP-29 read path uses `nostr.relay(url)` and knows its
+  relay, and a dropped cache row is refetchable from the one relay that has it.
+  Don't relay-scope global data (profiles, the user's own lists, git): that forks
+  one identity into a copy per relay.
 - **The Kotlin port must stay in step with `SqliteArmadaDB.ts`.** Same schema,
   same `seq = created_at × 2²⁰ + n` rowid encoding, same tag-token escaping,
   same planner. `ArmadaDbTest.kt` is the TS conformance suite ported over; run
@@ -230,10 +245,13 @@ Things to know before touching it:
   history that exists nowhere else.
 - **The service is a second writer, so it obeys the same store rules.** `Dm17.kt`
   ports NIP-17's kind filter and NIP-40 expiry refusal;
-  `ServiceStore.storeConcord2Rumor` ports the chat plane's encrypted-seal rule.
-  A rule only one writer applies is a conversation the two disagree about — and
-  the rules are load-bearing precisely because nothing is stored beside the
-  rumor for a reader to re-check them against.
+  `ServiceStore.storeConcord2Rumor` ports the chat plane's encrypted-seal rule;
+  `RelayScope.kt` ports the tenant routing. A rule only one writer applies is a
+  conversation the two disagree about — for routing, literally a message stored
+  where the timeline never reads — and the rules are load-bearing precisely
+  because nothing is stored beside the rumor for a reader to re-check them
+  against. Relay-URL normalization stays JS-side (the service is configured with
+  already-normalized URLs) so there is one spelling of a tenant id, not two.
 - **Never inject a tag into a stored rumor, and don't store a row beside it
   either.** Its tags are the bytes its id commits to, so bookkeeping written
   into them makes the row something the sender never signed, and makes whatever

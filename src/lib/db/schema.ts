@@ -15,7 +15,8 @@
  * to cope with two shapes. Add a {@link SchemaMigration}, bump
  * {@link ARMADA_DB_VERSION}, and let the gate convert the data once.
  */
-import { getArmadaDB } from "./armadaDB";
+import { ARMADA_TENANTS, getArmadaDB } from "./armadaDB";
+import { isRelayScoped, RELAY_STATE_KINDS } from "./relayScope";
 
 /**
  * The shape this build writes and expects.
@@ -27,8 +28,14 @@ import { getArmadaDB } from "./armadaDB";
  *     `KvPrefixCache`: composer drafts, NIP-11 relay info, favorite-GIF
  *     shards, wire cursors, control-plane watchdog dismissals, and pending
  *     read cuts.
+ * 3 — NIP-29 moves out of `main` into a tenant per relay (`nip29:<url>`), and
+ *     the `provenance:` KV space that used to reconstruct which relay served
+ *     each directory event goes away with it. See `relayScope.ts`.
  */
-export const ARMADA_DB_VERSION = 2;
+export const ARMADA_DB_VERSION = 3;
+
+/** The retired relay-provenance KV space, dropped by version 3. */
+const PROVENANCE_PREFIX = "provenance:";
 
 /** KV key holding the version of the data actually on disk. */
 export const SCHEMA_VERSION_KEY = "db:version";
@@ -118,6 +125,26 @@ function parseLegacy(raw: string): unknown {
   }
 }
 
+/**
+ * Kinds that MIGHT be relay-scoped, so the version-3 sweep has a bounded set of
+ * rows to look at instead of walking all of `main`.
+ *
+ * A superset on purpose, and filtered by {@link isRelayScoped} per row: kinds 5,
+ * 7 and 1111 double as ordinary global deletes, reactions and comments, and those
+ * belong in `main` and must survive. Anything group-scoped this list misses is
+ * left behind as dead weight, not as a bug — no reader queries `main` for
+ * relay-scoped data any more, so a leftover row is unreachable rather than wrong.
+ */
+const RELAY_SCOPED_CANDIDATE_KINDS = [
+  5, 7, 9, 11, 12, 1068, 1111, 9450,
+  9000, 9001, 9002, 9005, 9007, 9008, 9009, 9010, 9021, 9022,
+  31922, 31923, 31925,
+  ...RELAY_STATE_KINDS,
+];
+
+/** One page of `main` rows to examine per sweep pass. */
+const SWEEP_PAGE = 500;
+
 /** Ordered by `to`, ascending. */
 export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
   {
@@ -164,6 +191,64 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       // the maps makes the next read re-warm and notifies live subscribers.
       const { resetKvCaches } = await import("./kvCache");
       resetKvCaches();
+    },
+  },
+  {
+    to: 3,
+    label: "Separating servers' channels",
+    /**
+     * Anything relay-scoped still sitting in `main` is orphaned, because nothing
+     * reads `main` for it now — the readers ask a relay's own tenant. Reclaim the
+     * space, and drop the provenance side-table the relay tenants replace.
+     *
+     * Nothing is MOVED, and that is the point: these rows are exactly the ones
+     * whose source relay was never recorded, which is the whole reason they had
+     * to leave `main`. There is no honest tenant to move them to — inventing one
+     * would re-file another server's channel under this one and reintroduce the
+     * bleed. They are also the cheapest possible loss: a NIP-29 event is
+     * refetchable from the single relay that hosts it, and the timelines re-read
+     * from the relay on mount anyway.
+     */
+    needed: async () => {
+      try {
+        const main = getArmadaDB().tenant(ARMADA_TENANTS.main);
+        const { count } = await main.count([
+          { kinds: RELAY_SCOPED_CANDIDATE_KINDS, limit: 1 },
+        ]);
+        if (count > 0) return true;
+        return (await getArmadaDB().kv.keys(PROVENANCE_PREFIX)).length > 0;
+      } catch {
+        return false;
+      }
+    },
+    async run() {
+      const db = getArmadaDB();
+      const main = db.tenant(ARMADA_TENANTS.main);
+
+      // Walk newest-first in pages, stepping `until` past each page. Deleting
+      // only SOME of a page is why the cursor is needed at all: a page whose
+      // rows all belong in `main` would otherwise be re-read forever.
+      let until: number | undefined;
+      for (;;) {
+        const page = await main.query([
+          { kinds: RELAY_SCOPED_CANDIDATE_KINDS, limit: SWEEP_PAGE, ...(until ? { until } : {}) },
+        ]);
+        if (page.length === 0) break;
+        const ids = page.filter((rumor) => isRelayScoped(rumor)).map((rumor) => rumor.id);
+        if (ids.length > 0) await main.remove([{ ids }]);
+        const oldest = Math.min(...page.map((rumor) => rumor.created_at));
+        // A page entirely within one second can't be stepped past by timestamp;
+        // if everything in it was deleted the next pass makes progress anyway,
+        // and if none of it was there is nothing left to find below it.
+        if (page.length < SWEEP_PAGE) break;
+        if (until !== undefined && oldest >= until) break;
+        until = oldest;
+      }
+
+      // The provenance space: (relay, day, event id) keys and its drain marker.
+      for (const key of await db.kv.keys(PROVENANCE_PREFIX)) {
+        await db.kv.delete(key).catch(() => undefined);
+      }
     },
   },
 ];

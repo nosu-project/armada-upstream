@@ -79,7 +79,9 @@ export function useRelayUnread(
     queryKey,
     queryFn: async () => {
       const store = await eventStore;
-      return store.query([{ kinds: ACTIVITY_KINDS, "#h": idsKey.split(","), limit: SCAN_LIMIT }]);
+      return store.query([{ kinds: ACTIVITY_KINDS, "#h": idsKey.split(","), limit: SCAN_LIMIT }], {
+        relay: relayUrl,
+      });
     },
     enabled: Boolean(relayUrl && groupIds.length > 0 && user),
     staleTime: 5_000,

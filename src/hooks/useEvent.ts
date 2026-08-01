@@ -44,6 +44,10 @@ export function useEvent(eventId: string | undefined, relays?: string[], authorH
       const filter: NostrFilter[] = [{ ids: [eventId], limit: 1 }];
 
       const store = await eventStore;
+      // The global cache. A NIP-29 event lives in its relay's own tenant instead,
+      // and an id alone doesn't say which relay that is — so a quoted group
+      // message misses here and is resolved from the relay below, which is the
+      // only place it authoritatively exists anyway.
       const [cached] = await store.query(filter);
       if (cached) return cached;
 
@@ -54,6 +58,10 @@ export function useEvent(eventId: string | undefined, relays?: string[], authorH
         try {
           const hintEvents = await nostr.group(relays).query(filter, { signal: AbortSignal.timeout(5000) });
           if (hintEvents.length > 0) {
+            // A `group()` read has N candidate relays for one event, so it can't
+            // attribute a group-scoped result; the store drops those rather than
+            // file them under a guess (see db/relayScope.ts). Global kinds — the
+            // usual case for a quoted event — still cache.
             void store.event(hintEvents[0]);
             return hintEvents[0];
           }

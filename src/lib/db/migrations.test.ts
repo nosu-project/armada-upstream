@@ -252,11 +252,9 @@ describe("schema version", { timeout: 30_000 }, () => {
 
     // Now exercise the lazy drain paths the app hits during an ordinary session.
     const { readFolded } = await import("@/lib/foldedCache");
-    const { eventIdsForRelay } = await import("@/lib/relayProvenance");
     const { queryDm17Conversations } = await import("@/lib/nip17/dm17Store");
     const { queryStoredInvites } = await import("@/concord-v2/lib/inviteInbox");
     await readFolded("anything");
-    await eventIdsForRelay("wss://relay.example");
     await queryDm17Conversations(A);
     await queryStoredInvites(A);
 
@@ -360,5 +358,99 @@ describe("the localStorage move", { timeout: 30_000 }, () => {
 
     await mod.runMigrations([A]);
     expect((await mod.pendingUpgrades()).schema).toEqual([]);
+  });
+});
+
+/**
+ * Version 3: NIP-29 leaves `main` for a tenant per relay.
+ *
+ * Nothing is MOVED, and that is the point — these are exactly the rows whose
+ * source relay was never recorded, which is why they had to leave. There is no
+ * honest tenant to move them to, and inventing one would re-file another
+ * server's channel under this one. What the sweep must not do is take anything
+ * with them: `main` still holds the global kinds, including the kind-5 deletes,
+ * reactions and comments that only LOOK like NIP-29 traffic.
+ */
+describe("the NIP-29 relay-tenant split", { timeout: 30_000 }, () => {
+  beforeEach(() => {
+    (globalThis as unknown as { indexedDB: IDBFactory }).indexedDB = new IDBFactory();
+    localStorage.clear();
+  });
+
+  /**
+   * A fresh module graph, then the ArmadaDB singleton bound to THIS test's
+   * origin. Order matters: `armadaDB.ts` memoizes its instance, so seeding
+   * through a graph carried over from an earlier test would write into that
+   * test's (already replaced) IDBFactory and the migration would run against an
+   * empty origin.
+   */
+  async function freshDb() {
+    const mod = await freshModules();
+    const { getArmadaDB } = await import("./armadaDB");
+    return { ...mod, db: getArmadaDB() };
+  }
+
+  /** Seed `main` the way the pre-split build did: everything in one tenant. */
+  async function seedMain(
+    db: Awaited<ReturnType<typeof freshDb>>["db"],
+    events: Array<{ id: string; kind: number; tags?: string[][] }>,
+  ) {
+    const main = db.tenant("main");
+    for (const e of events) {
+      await main.event({
+        id: e.id.padEnd(64, "0").slice(0, 64),
+        pubkey: A,
+        created_at: 1_000,
+        kind: e.kind,
+        tags: e.tags ?? [],
+        content: "",
+      });
+    }
+  }
+
+  async function mainIds(db: Awaited<ReturnType<typeof freshDb>>["db"]): Promise<string[]> {
+    const rows = await db.tenant("main").query([{ limit: 100 }]);
+    return rows.map((r) => r.id.replace(/0+$/, "")).sort();
+  }
+
+  it("reclaims orphaned group-scoped rows and keeps the global ones", async () => {
+    const { runMigrations, db } = await freshDb();
+    await seedMain(db, [
+      { id: "chat", kind: 9, tags: [["h", "general"]] },
+      { id: "meta", kind: 39000, tags: [["d", "general"]] },
+      { id: "modq", kind: 9000, tags: [["h", "general"]] },
+      { id: "gdel", kind: 5, tags: [["h", "general"], ["e", "x"]] },
+      // Must SURVIVE: same kinds, no group scope.
+      { id: "prof", kind: 0 },
+      { id: "note", kind: 1 },
+      { id: "del", kind: 5, tags: [["e", "x"]] },
+      { id: "react", kind: 7, tags: [["e", "x"]] },
+      { id: "list", kind: 10009 },
+    ]);
+
+    await runMigrations([A]);
+
+    expect(await mainIds(db)).toEqual(["del", "list", "note", "prof", "react"]);
+  });
+
+  it("drops the provenance KV space the relay tenants replace", async () => {
+    const { runMigrations, db } = await freshDb();
+    await db.kv.set("provenance:wss://r.example\u0000000001\u0000abc", 1);
+    await db.kv.set("provenance:migrated", true);
+    await db.kv.set("draft:keep", { content: "mine" });
+
+    await runMigrations([A]);
+
+    expect(await db.kv.keys("provenance:")).toEqual([]);
+    expect(await db.kv.get("draft:keep")).toEqual({ content: "mine" });
+  });
+
+  it("stamps the version and leaves a fresh install untouched", async () => {
+    const { runMigrations, db } = await freshDb();
+    await runMigrations([A]);
+
+    const { ARMADA_DB_VERSION, SCHEMA_VERSION_KEY } = await import("./schema");
+    expect(await db.kv.get(SCHEMA_VERSION_KEY)).toBe(ARMADA_DB_VERSION);
+    expect(await mainIds(db)).toEqual([]);
   });
 });

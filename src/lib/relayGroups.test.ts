@@ -1,6 +1,5 @@
 import { NIndexedDB } from "@nostrify/indexeddb";
-import { openDB } from "idb";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   buildRelayGroups,
@@ -8,13 +7,6 @@ import {
   relayGroupCacheFilters,
 } from "@/lib/nip29";
 import { getArmadaDB, purgeArmadaDB } from "@/lib/db/armadaDB";
-import {
-  __resetProvenanceForTests,
-  eventIdsForRelay,
-  LEGACY_PROVENANCE_DB_NAME,
-  recordRelayProvenanceBatch,
-} from "@/lib/relayProvenance";
-
 import type { NostrEvent } from "@nostrify/nostrify";
 
 // Regression tests for the two channel-list offline bugs:
@@ -233,156 +225,134 @@ describe("integration: scoped reads against @nostrify/indexeddb", () => {
   });
 });
 
-describe("relay provenance (same-pubkey relays, e.g. zooid)", () => {
-  let store: NIndexedDB;
-  const dbNames: string[] = [];
-
+describe("per-relay tenants (same-pubkey relays, e.g. zooid)", () => {
   // Two DIFFERENT relays that share ONE signing key — the real zooid case where
   // chat.shakespeare.diy and chat.soapbox.pub both advertise pubkey fc78….
   const SHARED_KEY = "f".repeat(64);
   const RELAY_1 = "wss://chat.shakespeare.diy";
   const RELAY_2 = "wss://chat.soapbox.pub";
 
-  beforeEach(async () => {
-    await __resetProvenanceForTests();
-    const name = `provenance-test-${Date.now()}-${counter++}`;
-    dbNames.push(name);
-    store = new NIndexedDB(name);
-  });
-
   afterEach(async () => {
-    await store.close();
-    for (const name of dbNames) {
-      await new Promise<void>((resolve) => {
-        const req = indexedDB.deleteDatabase(name);
-        req.onsuccess = req.onerror = req.onblocked = () => resolve();
-      });
-    }
-    // Provenance now lives in ArmadaDB's KV, so wiping it between tests means
-    // purging that. The legacy database goes too: reading provenance runs the
-    // drain, which re-creates it just by opening it.
     await purgeArmadaDB();
-    await new Promise<void>((resolve) => {
-      const req = indexedDB.deleteDatabase(LEGACY_PROVENANCE_DB_NAME);
-      req.onsuccess = req.onerror = req.onblocked = () => resolve();
-    });
-    await __resetProvenanceForTests();
-    dbNames.length = 0;
   });
 
-  async function persist(...events: NostrEvent[]): Promise<void> {
-    await Promise.all(events.map((e) => store.event(e)));
+  /** The real router: writes go where `relayScope` sends them. */
+  async function store() {
+    const { appEventStore } = await import("@/lib/db/mainEventStore");
+    return appEventStore();
   }
 
-  // metadataEvent pads ids to 64 chars; provenance must record the SAME id.
-  const pad = (id: string) => id.padEnd(64, "0").slice(0, 64);
-
   it("author-scoping ALONE bleeds across same-key relays (the bug)", async () => {
-    // Both relays sign with SHARED_KEY, so an author-scoped read can't tell them
-    // apart — it returns both relays' channels. This is the phantom-rooms bug.
-    await persist(
+    // Both relays sign with SHARED_KEY, so an author-scoped read of ONE shared
+    // cache can't tell them apart — it returns both relays' channels. This is
+    // the phantom-rooms bug, reproduced against the tenant the events would
+    // have shared before this change.
+    const unscoped = getArmadaDB().tenant("bleed-repro");
+    for (const e of [
       metadataEvent({ id: "s1", pubkey: SHARED_KEY, groupId: "shake-general", name: "Shakespeare" }),
       metadataEvent({ id: "s2", pubkey: SHARED_KEY, groupId: "soap-general", name: "Soapbox" }),
-    );
+    ]) {
+      const { sig: _sig, ...rumor } = e;
+      await unscoped.event(rumor);
+    }
 
-    const cached = await store.query(relayGroupCacheFilters(SHARED_KEY, []));
-    // BUG: relay 1 author-scoped read sees relay 2's channel too.
+    const cached = await unscoped.query(relayGroupCacheFilters(SHARED_KEY, []));
     expect(buildRelayGroups(cached, RELAY_1).map((g) => g.id).sort()).toEqual([
       "shake-general",
       "soap-general",
     ]);
   });
 
-  it("provenance isolates same-key relays (the fix)", async () => {
-    await persist(
+  it("the relay's tenant isolates same-key relays (the fix)", async () => {
+    const s = await store();
+    await s.event(
       metadataEvent({ id: "s1", pubkey: SHARED_KEY, groupId: "shake-general", name: "Shakespeare" }),
-      metadataEvent({ id: "s2", pubkey: SHARED_KEY, groupId: "soap-general", name: "Soapbox" }),
+      { relay: RELAY_1 },
     );
-    // Record which relay actually served each event (as NostrBatcher does).
-    await recordRelayProvenanceBatch([pad("s1")], RELAY_1);
-    await recordRelayProvenanceBatch([pad("s2")], RELAY_2);
+    await s.event(
+      metadataEvent({ id: "s2", pubkey: SHARED_KEY, groupId: "soap-general", name: "Soapbox" }),
+      { relay: RELAY_2 },
+    );
 
-    const candidates = await store.query(relayGroupCacheFilters(SHARED_KEY, []));
-
-    const idsForRelay1 = await eventIdsForRelay(RELAY_1);
-    const scoped1 = candidates.filter((e) => idsForRelay1.has(e.id));
-    expect(buildRelayGroups(scoped1, RELAY_1).map((g) => g.id)).toEqual(["shake-general"]);
-
-    const idsForRelay2 = await eventIdsForRelay(RELAY_2);
-    const scoped2 = candidates.filter((e) => idsForRelay2.has(e.id));
-    expect(buildRelayGroups(scoped2, RELAY_2).map((g) => g.id)).toEqual(["soap-general"]);
+    const filters = relayGroupCacheFilters(SHARED_KEY, []);
+    expect(buildRelayGroups(await s.query(filters, { relay: RELAY_1 }), RELAY_1).map((g) => g.id))
+      .toEqual(["shake-general"]);
+    expect(buildRelayGroups(await s.query(filters, { relay: RELAY_2 }), RELAY_2).map((g) => g.id))
+      .toEqual(["soap-general"]);
   });
 
-  it("eventIdsForRelay is empty before anything is recorded", async () => {
-    expect((await eventIdsForRelay(RELAY_1)).size).toBe(0);
+  it("keeps the SAME group id on two relays apart", async () => {
+    // The plainest statement of why the pair (relay, id) is the identity: an
+    // addressable kind 39000 with the same pubkey AND the same `d` is ONE row by
+    // NIP-01 replacement, so sharing a tenant doesn't mix these two — it destroys
+    // one of them.
+    const s = await store();
+    await s.event(
+      metadataEvent({ id: "s1", pubkey: SHARED_KEY, groupId: "general", name: "Shakespeare" }),
+      { relay: RELAY_1 },
+    );
+    await s.event(
+      metadataEvent({ id: "s2", pubkey: SHARED_KEY, groupId: "general", name: "Soapbox", createdAt: 2000 }),
+      { relay: RELAY_2 },
+    );
+
+    const filters = relayGroupCacheFilters(SHARED_KEY, []);
+    expect(buildRelayGroups(await s.query(filters, { relay: RELAY_1 }), RELAY_1).map((g) => g.name))
+      .toEqual(["Shakespeare"]);
+    expect(buildRelayGroups(await s.query(filters, { relay: RELAY_2 }), RELAY_2).map((g) => g.name))
+      .toEqual(["Soapbox"]);
   });
 
-  it("normalizes relay URLs so record and read agree", async () => {
-    await recordRelayProvenanceBatch(["s1"], "wss://chat.soapbox.pub/");
-    const ids = await eventIdsForRelay("wss://chat.soapbox.pub");
-    expect(ids.has("s1")).toBe(true);
+  it("reads nothing for a relay it was never told about", async () => {
+    const s = await store();
+    await s.event(
+      metadataEvent({ id: "s1", pubkey: SHARED_KEY, groupId: "shake-general", name: "Shakespeare" }),
+      { relay: RELAY_1 },
+    );
+    expect(await s.query(relayGroupCacheFilters(SHARED_KEY, []), { relay: RELAY_2 })).toEqual([]);
+  });
+
+  it("normalizes relay URLs so the write and the read agree", async () => {
+    const s = await store();
+    await s.event(
+      metadataEvent({ id: "s1", pubkey: SHARED_KEY, groupId: "general", name: "Soapbox" }),
+      { relay: "wss://chat.soapbox.pub/" },
+    );
+    const found = await s.query(relayGroupCacheFilters(SHARED_KEY, []), {
+      relay: "wss://chat.soapbox.pub",
+    });
+    expect(found).toHaveLength(1);
   });
 
   it("keeps relays apart when one URL is a prefix of another", async () => {
-    // The separator between relay and event id is what makes this work: without
-    // it, `wss://a.example`'s prefix scan would swallow `wss://a.example/eu`.
-    await recordRelayProvenanceBatch(["s1"], "wss://a.example");
-    await recordRelayProvenanceBatch(["s2"], "wss://a.example/eu");
-
-    expect([...(await eventIdsForRelay("wss://a.example"))]).toEqual(["s1"]);
-    expect([...(await eventIdsForRelay("wss://a.example/eu"))]).toEqual(["s2"]);
-  });
-
-  it("drains provenance recorded by the pre-ArmadaDB database", async () => {
-    // Written in the legacy shape: one row per pair, keyed `relay\0eventId`.
-    const legacy = await openDB(LEGACY_PROVENANCE_DB_NAME, 1, {
-      upgrade(db) {
-        const s = db.createObjectStore("provenance", { keyPath: "key" });
-        s.createIndex("by-relay", "relay");
-      },
-    });
-    await legacy.put("provenance", {
-      key: `${RELAY_1}\u0000${pad("s1")}`,
-      relay: RELAY_1,
-      eventId: pad("s1"),
-    });
-    legacy.close();
-
-    // The read path runs the drain, so no startup gate is needed here.
-    expect((await eventIdsForRelay(RELAY_1)).has(pad("s1"))).toBe(true);
-  });
-
-  it("expires provenance nothing has re-served, and keeps what is still served", async () => {
-    // Kind-39000 is addressable: every metadata edit mints a new id, and the
-    // superseded one is provenance nobody will ask about again. Left alone it
-    // accumulates per (relay, group, edit) forever.
-    const { kv } = getArmadaDB();
-    const day = Math.floor(Date.now() / 86_400_000);
-    const key = (d: number, id: string) =>
-      `provenance:${RELAY_1}\u0000${String(d).padStart(6, "0")}\u0000${pad(id)}`;
-
-    await kv.set(key(day - 90, "old"), 1);
-    await kv.set(key(day - 1, "fresh"), 1);
-
-    expect([...(await eventIdsForRelay(RELAY_1))].sort()).toEqual([pad("fresh")]);
-
-    // Swept from the store, not merely hidden from the read.
-    await vi.waitFor(async () => {
-      expect(await kv.keys(`provenance:${RELAY_1}\u0000`)).toHaveLength(1);
-    });
-  });
-
-  it("re-serving an event refreshes it, so a relay still in use never expires", async () => {
-    const { kv } = getArmadaDB();
-    const day = Math.floor(Date.now() / 86_400_000);
-    await kv.set(
-      `provenance:${RELAY_1}\u0000${String(day - 90).padStart(6, "0")}\u0000${pad("s1")}`,
-      1,
+    const s = await store();
+    await s.event(
+      metadataEvent({ id: "s1", pubkey: SHARED_KEY, groupId: "one", name: "Root" }),
+      { relay: "wss://a.example" },
+    );
+    await s.event(
+      metadataEvent({ id: "s2", pubkey: SHARED_KEY, groupId: "two", name: "EU" }),
+      { relay: "wss://a.example/eu" },
     );
 
-    // The directory read that records it again stamps it with today.
-    await recordRelayProvenanceBatch([pad("s1")], RELAY_1);
+    const filters = relayGroupCacheFilters(SHARED_KEY, []);
+    expect((await s.query(filters, { relay: "wss://a.example" })).map((e) => e.id[0])).toEqual(["s"]);
+    expect(buildRelayGroups(await s.query(filters, { relay: "wss://a.example" }), "wss://a.example")
+      .map((g) => g.id)).toEqual(["one"]);
+    expect(buildRelayGroups(await s.query(filters, { relay: "wss://a.example/eu" }), "wss://a.example/eu")
+      .map((g) => g.id)).toEqual(["two"]);
+  });
 
-    expect((await eventIdsForRelay(RELAY_1)).has(pad("s1"))).toBe(true);
+  it("drops relay-scoped events that arrive with no relay, rather than sharing them", async () => {
+    // A pool-wide or group(urls) read can't say which relay served an event. The
+    // store refuses it instead of filing it under a guess — the cache loses a row
+    // that is refetchable from its host relay, and no server inherits another's
+    // channel.
+    const s = await store();
+    await s.event(
+      metadataEvent({ id: "s1", pubkey: SHARED_KEY, groupId: "general", name: "Nowhere" }),
+    );
+    expect(await s.query(relayGroupCacheFilters(SHARED_KEY, []), { relay: RELAY_1 })).toEqual([]);
+    expect(await s.query(relayGroupCacheFilters(SHARED_KEY, []))).toEqual([]);
   });
 });

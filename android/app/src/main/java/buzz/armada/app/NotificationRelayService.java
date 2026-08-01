@@ -1655,8 +1655,11 @@ public class NotificationRelayService extends Service {
                     groupPictureCache.put(gid, pic);
                 }
                 // Cached so the WebView reads the group's metadata rather than
-                // refetching what we just fetched.
-                ServiceStore.cache(this, event);
+                // refetching what we just fetched — in THIS relay's tenant,
+                // which is where the channel list looks for it (a group id names
+                // nothing without its relay, and relay identities can be shared
+                // between servers, so metadata is stored per relay).
+                ServiceStore.cache(this, event, relayUrl);
                 resolveGroupName(gid, parseGroupName(event));
                 return;
             }
@@ -2278,7 +2281,7 @@ public class NotificationRelayService extends Service {
         long timestamp = event.optLong("created_at", 0);
         if (timestamp <= 0 || notifiedIds.contains(id)) return;
         notifiedIds.add(id);
-        ArmadaNotificationPlugin.feedRelayEvent("git:" + address, event.toString());
+        ArmadaNotificationPlugin.feedRelayEvent("git:" + address, event.toString(), relayUrl);
         for (GitAttachment attachment : repository.attachments) {
             if (!attachment.activeAt(timestamp)) continue;
             String url = "/c/" + uriEncode(attachment.communityId) + "/" + uriEncode(attachment.channelId)
@@ -2408,8 +2411,13 @@ public class NotificationRelayService extends Service {
         boolean storedBefore = false;
         switch (kind) {
             case 9: case 1068: case 7: case 1111: case 5: case 3300: case 1059: case 4:
-                storedBefore = ServiceStore.ingest(this, event);
-                ArmadaNotificationPlugin.feedRelayEvent(roomKeyFor(event, kind), event.toString());
+                // The relay is passed through because it decides the tenant for
+                // NIP-29 kinds (see RelayScope) and which handoff queue carries
+                // the event, so the WebView's ingest can route it to the same
+                // place. Without it a group-scoped event would have nowhere
+                // honest to go and would be dropped.
+                storedBefore = ServiceStore.ingest(this, event, relayUrl);
+                ArmadaNotificationPlugin.feedRelayEvent(roomKeyFor(event, kind), event.toString(), relayUrl);
                 break;
             default:
                 break;

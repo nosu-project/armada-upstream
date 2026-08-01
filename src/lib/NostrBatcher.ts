@@ -1,17 +1,20 @@
 import type { NostrEvent, NostrFilter } from '@nostrify/types';
-import type { NPool, NStore } from '@nostrify/nostrify';
+import type { NPool } from '@nostrify/nostrify';
+import type { ArmadaEventStore } from '@/contexts/EventStoreContext';
 
-import { recordRelayProvenanceBatch } from '@/lib/relayProvenance';
 import { logNostrReq } from '@/lib/nostrQueryLog';
-
-/** kind 39000 — NIP-29 group metadata, the channel-directory event. */
-const KIND_GROUP_METADATA = 39000;
 
 /** The relay/group handle shape we wrap for caching: query + req. */
 type NRelayLike = ReturnType<NPool['relay']>;
 
-/** The write half of the local cache; see {@link NostrBatcher.store}. */
-type EventSink = Promise<Pick<NStore, 'event'>>;
+/**
+ * The write half of the local cache; see {@link NostrBatcher.store}.
+ *
+ * Deliberately the ArmadaDB store's `event()` rather than `NStore`'s: the extra
+ * `relay` is how a NIP-29 event reaches the tenant for the relay that served it
+ * instead of a shared cache where two servers' channels collide.
+ */
+type EventSink = Promise<Pick<ArmadaEventStore, 'event'>>;
 
 /** Maximum number of items per batch to avoid hitting relay filter limits. */
 const MAX_BATCH_SIZE = 50;
@@ -826,21 +829,28 @@ export class NostrBatcher {
    * event that flows out of `.query()` and `.req()`, so the cache mirrors
    * whatever the relays return without any caller having to opt in.
    *
+   * `sourceUrl` is the relay that actually served them, known only on the
+   * single-relay `relay(url)` path. The store needs it to file relay-relative
+   * data (NIP-29) under the right relay, and DROPS such data when it is absent
+   * rather than filing it under a guess — so a pool-wide or `group(urls)` read
+   * caches the global kinds and skips the group-scoped ones. That is the
+   * intended behaviour, not a gap: see `db/relayScope.ts`.
+   *
    * Gift-wrap kinds (1059/21059) are NEVER cached: they are opaque ciphertext,
-   * a waste of space in the shared `armada-events` store, and every Concord/DM
-   * consumer that needs them persists the DECRYPTED rumor in its own store
-   * instead. This is the single chokepoint every caching path flows through, so
-   * blocking here guarantees no wrap can leak into the cache from any read.
+   * a waste of space in the shared `main` store, and every Concord/DM consumer
+   * that needs them persists the DECRYPTED rumor in its own store instead. This
+   * is the single chokepoint every caching path flows through, so blocking here
+   * guarantees no wrap can leak into the cache from any read.
    *
    * Failures are swallowed: the cache is a best-effort mirror, never on the
    * critical path of a relay read.
    */
-  private cacheEvents(events: NostrEvent[]): void {
+  private cacheEvents(events: NostrEvent[], sourceUrl?: string): void {
     if (!this.store) return;
     const cacheable = events.filter((event) => event.kind !== 1059 && event.kind !== 21059);
     if (cacheable.length === 0) return;
     void this.store
-      .then((store) => Promise.all(cacheable.map((event) => store.event(event))))
+      .then((store) => Promise.all(cacheable.map((event) => store.event(event, { relay: sourceUrl }))))
       .catch(() => {
         // Best-effort cache; ignore write failures.
       });
@@ -1023,36 +1033,21 @@ export class NostrBatcher {
   }
 
   /**
-   * Record which relay served the channel-directory (kind-39000) events, so the
-   * directory cache can be scoped by relay URL. This is the only reliable way to
-   * isolate relays that share a signing key (e.g. zooid's shared relay identity,
-   * where two servers advertise the same NIP-11 `self`/`pubkey`). No-op unless
-   * the events came from a single known relay (`relay(url)`, not `group()`).
-   */
-  private recordDirectoryProvenance(events: NostrEvent[], sourceUrl: string | undefined): void {
-    if (!sourceUrl) return;
-    const ids = events.filter((e) => e.kind === KIND_GROUP_METADATA).map((e) => e.id);
-    if (ids.length === 0) return;
-    void recordRelayProvenanceBatch(ids, sourceUrl).catch(() => {
-      // best-effort
-    });
-  }
-
-  /**
    * Wrap a relay/group handle so its `.query()` and `.req()` output is mirrored
    * into the local cache, exactly like the pool-level `.query()`/`.req()` above.
    *
    * Group-scoped traffic (NIP-29 via `relay(url)`, DMs/Concord via `group()`)
    * bypasses the pool, so without this wrapper those events would never be
-   * persisted — and chat history could not be read back from IndexedDB after a
-   * refresh. The wrapper is transparent: callers see the same NRelay interface
-   * and the same results; caching is fire-and-forget on the side.
+   * persisted — and chat history could not be read back after a refresh. The
+   * wrapper is transparent: callers see the same NRelay interface and the same
+   * results; caching is fire-and-forget on the side.
    *
-   * When `sourceUrl` is given (the single-relay `relay(url)` path), directory
-   * events are additionally tagged with that relay's provenance. When
-   * `groupUrls` is given (the `group(urls)` path), it's the actual relay set the
-   * group fans out to — used only for the query log so `group` REQs report their
-   * real relay count instead of "0 relays".
+   * `sourceUrl` (the single-relay `relay(url)` path) is the relay events are
+   * FILED UNDER, which is what puts NIP-29 data in its own relay's tenant
+   * instead of a shared bucket where two servers' identically-named channels
+   * would merge. `groupUrls` (the `group(urls)` path) names N relays and so
+   * attributes nothing — it is used only for the query log, so `group` REQs
+   * report their real relay count instead of "0 relays".
    */
   private wrapCaching<R extends NRelayLike>(relay: R, sourceUrl?: string, groupUrls?: string[]): R {
     // How this handle is scoped, for the query log ("relay(url)" vs "group(N)").
@@ -1106,8 +1101,7 @@ export class NostrBatcher {
       shared = target
         .query(filters, { signal: AbortSignal.timeout(SHARED_QUERY_DEADLINE_MS) })
         .then((events) => {
-          this.cacheEvents(events);
-          this.recordDirectoryProvenance(events, sourceUrl);
+          this.cacheEvents(events, sourceUrl);
           return events;
         })
         .finally(() => {
@@ -1165,8 +1159,7 @@ export class NostrBatcher {
         },
         (msg) => {
           if (msg[0] === 'EVENT') {
-            this.cacheEvents([msg[2]]);
-            this.recordDirectoryProvenance([msg[2]], sourceUrl);
+            this.cacheEvents([msg[2]], sourceUrl);
           }
         },
       );

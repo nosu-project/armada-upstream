@@ -50,10 +50,16 @@ export interface ChannelEntry {
   route: string;
   /**
    * Concord only: the owning community's id hex — which rumor-store tenant this
-   * channel's messages are in. Undefined for NIP-29, whose messages live in the
-   * shared relay event store.
+   * channel's messages are in. Undefined for NIP-29.
    */
   communityIdHex?: string;
+  /**
+   * NIP-29 only: the relay hosting this channel — which event-store tenant its
+   * messages are in. The symmetric field to {@link communityIdHex}, and needed
+   * for the same reason: a group id is only meaningful on its own relay, so
+   * NIP-29 messages are stored per relay and a search has to say which one.
+   */
+  relayUrl?: string;
 }
 
 /** Everything the palette lists, in rail order. */
@@ -128,6 +134,7 @@ const nip29Transport: Transport = {
         name: g.name,
         spaceName,
         route: `/s/${relayToRouteParam(key)}/${encodeURIComponent(g.id)}`,
+        relayUrl: key,
       })),
     );
   },
@@ -362,13 +369,33 @@ async function searchNip29Messages(
   eventStore: EventStoreContextType,
   signal?: AbortSignal,
 ): Promise<MessageEntry[]> {
-  const ids = [...byId.keys()];
-  if (ids.length === 0) return [];
+  if (byId.size === 0) return [];
   const store = await eventStore;
-  const events = await store.query(
-    [{ kinds: NIP29_MESSAGE_KINDS, "#h": ids, limit: NIP29_SCAN_LIMIT }],
-    { signal },
-  );
+
+  // One scan per relay, for the same reason Concord scans per community: each
+  // relay's messages live in their own tenant, because a group id is only
+  // meaningful on the relay hosting it. `NIP29_SCAN_LIMIT` therefore caps the
+  // scan per RELAY rather than across all of NIP-29 — the caller's merged
+  // newest-first slice is what bounds the final list either way.
+  const byRelay = new Map<string, string[]>();
+  for (const ch of byId.values()) {
+    if (!ch.relayUrl) continue;
+    const bucket = byRelay.get(ch.relayUrl);
+    if (bucket) bucket.push(ch.id);
+    else byRelay.set(ch.relayUrl, [ch.id]);
+  }
+
+  const events = (
+    await Promise.all(
+      [...byRelay].map(([relay, ids]) =>
+        store.query([{ kinds: NIP29_MESSAGE_KINDS, "#h": ids, limit: NIP29_SCAN_LIMIT }], {
+          signal,
+          relay,
+        }),
+      ),
+    )
+  ).flat();
+
   const out: MessageEntry[] = [];
   for (const ev of events) {
     if (!ev.content.toLowerCase().includes(needle)) continue;

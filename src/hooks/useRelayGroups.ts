@@ -12,7 +12,6 @@ import {
   KIND_PUT_USER,
   relayGroupCacheFilters,
 } from "@/lib/nip29";
-import { eventIdsForRelay } from "@/lib/relayProvenance";
 
 import type { NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -78,31 +77,27 @@ export function useRelayGroups(relayUrl: string | undefined) {
 
   const queryKey = ["nip29", "groups", relayUrl, selfPubkey ?? null];
 
-  // Read THIS relay's cached kind-39000 metadata from the local event store,
-  // scoped by relay PROVENANCE (which relay actually served each event), not
-  // just by signing key. Author-scoping alone can't isolate relays that share a
-  // key — e.g. zooid ships a shared relay identity, so two servers advertise the
-  // same NIP-11 pubkey and their channels would otherwise bleed into each other
-  // (phantom rooms that "don't exist" when opened). Provenance is recorded by
-  // NostrBatcher when it serves directory events from a specific relay.
+  // Read THIS relay's cached kind-39000 metadata out of THIS relay's tenant.
   //
-  // If provenance has entries for this relay, ONLY those events are returned. If
-  // it has none yet (nothing fetched from this relay this install), we return
-  // nothing from cache and let the live single-relay network read populate it —
-  // the network read is correctly isolated, so this never shows bled channels.
+  // The scope is the tenant, and that is the whole point: author-scoping cannot
+  // isolate relays that share a signing key — zooid ships a shared relay
+  // identity, so two servers advertise the same NIP-11 pubkey and their channels
+  // would otherwise bleed into each other (phantom rooms that "don't exist" when
+  // opened), while kind 39000 being addressable meant their metadata replaced
+  // one another outright. Storing per relay makes the isolation structural, so
+  // this is an ordinary read with no side-table of provenance to consult and no
+  // post-filter that can silently return nothing when that table is cold.
   async function readScopedCache(selfKey: string | undefined): Promise<NostrRumor[]> {
     const filters = relayGroupCacheFilters(selfKey, rememberedIds);
     if (filters.length === 0) return [];
-    const [store, provenance] = await Promise.all([eventStore, eventIdsForRelay(relayUrl!)]);
-    if (provenance.size === 0) return [];
-    const candidates = await store.query(filters);
-    return candidates.filter((e) => provenance.has(e.id));
+    const store = await eventStore;
+    return store.query(filters, { relay: relayUrl });
   }
 
-  // Cache-first seed: hydrate the channel list from IndexedDB (where the relay's
+  // Cache-first seed: hydrate the channel list from the store (where the relay's
   // kind-39000 metadata is persisted by NostrBatcher) so it renders instantly on
   // a fresh mount/reload instead of going blank while the relay round-trips.
-  // Reads are scoped to THIS relay by provenance so one server's channels never
+  // Reads come from THIS relay's tenant, so one server's channels can never
   // bleed into another's — even when relays share a signing key.
   useEffect(() => {
     if (!relayUrl) return;
@@ -188,11 +183,11 @@ export function useRelayGroups(relayUrl: string | undefined) {
             .catch(() => [])
         : [];
 
-      // Merge with the relay's PROVENANCE-scoped cached metadata so a sparse or
-      // empty relay read never DROPS channels we already knew about — without
-      // re-introducing the cross-relay bleed for same-key relays. The fresh
-      // network events (correctly isolated to this relay) also get their
-      // provenance recorded by NostrBatcher, so subsequent reads stay scoped.
+      // Merge with this relay's cached metadata so a sparse or empty relay read
+      // never DROPS channels we already knew about — without re-introducing the
+      // cross-relay bleed for same-key relays, since the cache being read is
+      // this relay's own tenant. The fresh network events land in that same
+      // tenant on the way through NostrBatcher.
       const cached = await readScopedCache(selfKey);
       return buildRelayGroups([...cached, ...events, ...memberMeta], relayUrl!);
     },

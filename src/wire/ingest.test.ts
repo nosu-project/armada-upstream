@@ -69,8 +69,12 @@ async function wrapChat(channel: ChannelV2, s: ReturnType<typeof signer>, conten
 
 class FakeStore implements WireEventStore {
   events: NostrEvent[] = [];
-  async event(ev: NostrEvent): Promise<void> {
-    if (!this.events.some((e) => e.id === ev.id)) this.events.push(ev);
+  /** The relay each write was attributed to — what the real store routes on. */
+  relays: Array<string | undefined> = [];
+  async event(ev: NostrEvent, opts?: { relay?: string }): Promise<void> {
+    if (this.events.some((e) => e.id === ev.id)) return;
+    this.events.push(ev);
+    this.relays.push(opts?.relay);
   }
 }
 
@@ -122,10 +126,21 @@ describe("ingestWireEvents", () => {
     const { store, sinks } = makeSinks({});
     const ev = plainEvent(9, [["h", "g1"]]);
 
-    const scopes = await collectScopes(() => ingestWireEvents(sinks, [ev]));
+    const scopes = await collectScopes(() =>
+      ingestWireEvents(sinks, [ev], { relay: "wss://r.example" }),
+    );
 
     expect(store.events).toHaveLength(1);
     expect(scopes.has("nip29:g1")).toBe(true);
+  });
+
+  it("attributes each write to the relay the batch came from", async () => {
+    // The store files NIP-29 data under its relay and DROPS it when the relay is
+    // unknown, so every transport has to carry the relay this far or a message
+    // received natively (or replayed from the service queue) is never stored.
+    const { store, sinks } = makeSinks({});
+    await ingestWireEvents(sinks, [plainEvent(9, [["h", "g1"]])], { relay: "wss://r.example" });
+    expect(store.relays).toEqual(["wss://r.example"]);
   });
 
   it("routes kind-4 DMs to the store under the dm scope", async () => {

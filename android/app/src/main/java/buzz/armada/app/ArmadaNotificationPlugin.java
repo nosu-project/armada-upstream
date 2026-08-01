@@ -185,14 +185,18 @@ public class ArmadaNotificationPlugin extends Plugin {
      *
      * @param roomKey per-room cache key ("h:<groupId>" / "z:<z>" / "dm"), or
      *                null to skip the room cache.
+     * @param relayUrl the relay it arrived from, which the WebView's ingest needs
+     *                 to file a NIP-29 event under the right server (see
+     *                 RelayScope). May be null for events with no relay scope.
      */
-    static void feedRelayEvent(String roomKey, String eventJson) {
+    static void feedRelayEvent(String roomKey, String eventJson, String relayUrl) {
         if (eventJson == null) return;
         recordRoomEvent(roomKey, eventJson);
         ArmadaNotificationPlugin p = instance;
         if (p != null) {
             JSObject data = new JSObject();
             data.put("event", eventJson);
+            if (relayUrl != null) data.put("relay", relayUrl);
             p.notifyListeners("relayEvent", data);
         }
     }
@@ -233,11 +237,16 @@ public class ArmadaNotificationPlugin extends Plugin {
 
     /**
      * Drain a page of the events the service ingested, oldest first. Returns
-     * { events: [json, …], ids }; the JS layer routes them through wire ingest
-     * and then calls {@link #ackDrain} with those ids — peek+ack, so a WebView
-     * crash mid-page replays instead of losing events, and a service restart
-     * loses nothing (the queue is a durable ArmadaDB tenant). Concord decrypted
-     * inners are a SEPARATE buffer — see drainConcord.
+     * { events: [json, …], ids, relay }; the JS layer routes them through wire
+     * ingest and then calls {@link #ackDrain} with those ids AND that relay —
+     * peek+ack, so a WebView crash mid-page replays instead of losing events, and
+     * a service restart loses nothing (the queue is a durable ArmadaDB tenant).
+     * Concord decrypted inners are a SEPARATE buffer — see drainConcord.
+     *
+     * A page is one relay's worth, and `relay` names it, because the WebView
+     * routes NIP-29 events into the tenant for the relay that served them and a
+     * rumor carries no record of that. The queues are per relay so the fact lives
+     * in a tenant id, where a sender cannot forge it by spelling a tag.
      *
      * This is ROUTING, not storage: the events themselves are already in the
      * tenants the WebView reads (the service wrote them there), and what a drain
@@ -255,16 +264,21 @@ public class ArmadaNotificationPlugin extends Plugin {
         JSObject ret = new JSObject();
         ret.put("events", events);
         ret.put("ids", ids);
+        if (page.getRelay() != null) ret.put("relay", page.getRelay());
         call.resolve(ret);
     }
 
-    /** Drop an acknowledged page from the queue, once the JS layer has ingested it. */
+    /**
+     * Drop an acknowledged page from the queue, once the JS layer has ingested it.
+     * `relay` selects the queue: it must be the value the page was drained with,
+     * or the ids would be removed from a queue that never held them.
+     */
     @PluginMethod
     public void ackDrain(PluginCall call) {
         JSArray ids = call.getArray("ids");
         if (ids != null) {
             try {
-                ServiceStore.ackDrain(getContext(), ids.toList());
+                ServiceStore.ackDrain(getContext(), ids.toList(), call.getString("relay"));
             } catch (org.json.JSONException e) {
                 Log.w(TAG, "ackDrain failed", e);
             }

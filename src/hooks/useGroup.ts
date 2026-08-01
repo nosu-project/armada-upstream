@@ -75,7 +75,13 @@ export function useGroup(relayUrl: string | undefined, groupId: string | undefin
       const store = await eventStore;
 
       // 1. LOCAL-FIRST: cached 39000-39003 for this group → instant roster.
-      const cached = await store.query([{ kinds: GROUP_KINDS, "#d": [groupId!] }]);
+      // Scoped to THIS relay's tenant. Group state is relay-signed and
+      // addressable on the group id, and some relay software shares one identity
+      // across servers — so kind+pubkey+`d` is not unique across relays, and an
+      // unscoped read would let two servers' metadata replace one another.
+      const cached = await store.query([{ kinds: GROUP_KINDS, "#d": [groupId!] }], {
+        relay: relayUrl,
+      });
       const local = composeGroupDetails(cached, relayUrl!);
 
       // 2. BACKGROUND refresh from the host relay (mirrored back into the store).

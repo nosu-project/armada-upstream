@@ -26,7 +26,6 @@ import { DECRYPT_CACHE_DB_NAME } from "@/lib/AppSigner";
 import { LEGACY_RUMOR_DB_NAME, migrateLegacyRumors } from "@/concord-v2/lib/rumorMigration";
 import { migrateLegacyDms } from "@/lib/nip17/dm17Store";
 import { migrateLegacyDecryptCache } from "@/lib/decryptCacheMigration";
-import { LEGACY_PROVENANCE_DB_NAME, migrateLegacyProvenance } from "@/lib/relayProvenance";
 import { LEGACY_FOLDED_DB_NAME, migrateLegacyFolded } from "@/lib/foldedCache";
 
 import { getArmadaDB } from "./armadaDB";
@@ -105,11 +104,16 @@ export const MIGRATIONS: Migration[] = [
     run: () => migrateLegacyEvents(),
   },
   {
+    // Nothing to copy: relay provenance was a KV side-table reconstructing which
+    // relay served each kind-39000, and NIP-29 events are now stored in a tenant
+    // per relay, so the fact is the tenant id. Listed so the abandoned database
+    // is deleted rather than lingering forever; the KV space it was drained into
+    // is dropped by schema migration 3.
     id: "provenance",
-    label: "Moving relay provenance",
-    legacy: [LEGACY_PROVENANCE_DB_NAME],
+    label: "Clearing relay provenance",
+    legacy: ["armada-relay-provenance"],
     perAccount: false,
-    run: () => migrateLegacyProvenance(),
+    run: () => Promise.resolve(),
   },
   {
     // Nothing to copy: the parked-wrap store moved to the `c2park` tenant, and

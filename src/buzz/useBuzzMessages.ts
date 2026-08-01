@@ -163,11 +163,16 @@ export function useBuzzMessages(
 
       // Content + aux in parallel from the local store. The wire writes every
       // incoming Buzz event here before the bus asks us to re-read.
+      //
+      // Scoped to THIS relay: Buzz channels are `h`-scoped like any NIP-29 group,
+      // so a channel id names nothing without the relay hosting it and the store
+      // keeps each relay's events in its own tenant.
       const [content, aux] = await Promise.all([
-        store.query([
-          { kinds: contentKinds, "#h": [channelId!], limit: Math.max(PAGE_SIZE * 2, existing.length) },
-        ]),
-        store.query([{ kinds: auxKinds, "#h": [channelId!], limit: AUX_LIMIT }]),
+        store.query(
+          [{ kinds: contentKinds, "#h": [channelId!], limit: Math.max(PAGE_SIZE * 2, existing.length) }],
+          { relay: relayUrl },
+        ),
+        store.query([{ kinds: auxKinds, "#h": [channelId!], limit: AUX_LIMIT }], { relay: relayUrl }),
       ]);
       const local = sortDedupe([...existing, ...content, ...aux]);
 

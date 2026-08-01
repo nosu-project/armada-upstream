@@ -15,12 +15,17 @@ import org.json.JSONObject
  * a message received while the app was dead is simply THERE on open — no replay,
  * no second copy, no format to keep in step.
  *
+ * "The same tenant" is why [RelayScope] exists here as well as in the WebView:
+ * NIP-29 data is stored per relay, and a rule only one of the two writers applies
+ * is a disagreement about where a message lives.
+ *
  * The drain survives, but only as ROUTING. Storing a message and acting on it
  * are different jobs: wire ingest is what parks undecryptable wraps, rings the
  * scopes that repaint a timeline, and feeds notification candidates. So every
- * event also lands in [ArmadaDb.TENANT_SERVICE_QUEUE], which the WebView reads
- * and empties on open/resume (peek+ack: a page is only removed once ingest has
- * committed, so a crash mid-drain replays rather than loses).
+ * event also lands in a per-relay handoff queue
+ * ([ArmadaDb.serviceQueueTenant]), which the WebView reads and empties on
+ * open/resume (peek+ack: a page is only removed once ingest has committed, so a
+ * crash mid-drain replays rather than loses).
  *
  * Failures are logged and swallowed throughout. A notification that arrives
  * without its event having been persisted is a degraded notification; a service
@@ -39,25 +44,32 @@ object ServiceStore {
     private var writesSincePrune = 0
 
     /**
-     * Store a raw relay event in the general cache and queue it for wire ingest,
-     * returning whether the cache ALREADY held it.
+     * Store a raw relay event in the tenant it belongs to and queue it for wire
+     * ingest, returning whether that tenant ALREADY held it.
      *
      * That return is the durable dedupe floor for NIP-17 gift wraps, whose outer
      * timestamps are backdated by up to two days and so can't be gated on time:
      * a wrap either side ever stored — a previous service incarnation, the
      * WebView's inbox sync, or our own just-published self-copy — must not
      * re-notify.
+     *
+     * [relayUrl] is the relay the event arrived from, and it decides where NIP-29
+     * data lands ([RelayScope]) as well as which queue carries it. Relay-relative
+     * data with no relay is not stored at all rather than filed under a guess; the
+     * service always has one, since it holds a socket per relay.
      */
     @JvmStatic
-    fun ingest(context: Context, event: JSONObject): Boolean {
+    @JvmOverloads
+    fun ingest(context: Context, event: JSONObject, relayUrl: String? = null): Boolean {
         val rumor = Rumor.parse(event) ?: return false
+        val tenant = RelayScope.tenantFor(rumor, relayUrl) ?: return false
         return try {
             val db = ArmadaDb.get(context)
-            val stored = db.count(ArmadaDb.TENANT_MAIN, listOf(idFilter(rumor.id))).count > 0
+            val stored = db.count(tenant, listOf(idFilter(rumor.id))).count > 0
             db.write(
                 listOf(
-                    SqliteArmadaDb.Write(ArmadaDb.TENANT_MAIN, rumor),
-                    SqliteArmadaDb.Write(ArmadaDb.TENANT_SERVICE_QUEUE, rumor),
+                    SqliteArmadaDb.Write(tenant, rumor),
+                    SqliteArmadaDb.Write(ArmadaDb.serviceQueueTenant(relayUrl), rumor),
                 ),
             )
             pruneQueue(db)
@@ -69,7 +81,8 @@ object ServiceStore {
     }
 
     /**
-     * Drop queue entries older than [QUEUE_MAX_AGE_SECS].
+     * Drop queue entries older than [QUEUE_MAX_AGE_SECS], across every relay's
+     * queue.
      *
      * The queue is emptied on every app open or resume, so it only grows on an
      * install whose service runs for weeks without the app being opened — and
@@ -87,21 +100,37 @@ object ServiceStore {
         writesSincePrune = 0
 
         val cutoff = System.currentTimeMillis() / 1000 - QUEUE_MAX_AGE_SECS
-        db.remove(ArmadaDb.TENANT_SERVICE_QUEUE, listOf(JSONObject().put("until", cutoff)))
+        val filter = listOf(JSONObject().put("until", cutoff))
+        for (tenant in queueTenants(db)) db.remove(tenant, filter)
     }
 
     /**
-     * Store an event in the general cache WITHOUT queueing it for ingest —
-     * for what the service fetched for its own use (a kind-0 profile, a
-     * kind-39000 group name) or acted on itself (NIP-34 git activity). The
-     * WebView reads all of it out of the cache like any other cached event; it
-     * just has nothing to route.
+     * Every handoff queue: one per relay, plus the retired unscoped queue so a
+     * backlog left by the previous build is still drained and pruned.
+     */
+    private fun queueTenants(db: SqliteArmadaDb): List<String> =
+        db.tenantIds().filter {
+            it == ArmadaDb.TENANT_SERVICE_QUEUE || it.startsWith(ArmadaDb.TENANT_SERVICE_QUEUE_PREFIX)
+        }
+
+    /**
+     * Store an event WITHOUT queueing it for ingest — for what the service
+     * fetched for its own use (a kind-0 profile, a kind-39000 group name) or
+     * acted on itself (NIP-34 git activity). The WebView reads all of it out of
+     * the store like any other cached event; it just has nothing to route.
+     *
+     * Routed by the same rule as [ingest], so the kind-39000 metadata the service
+     * fetches to title a notification lands in the tenant the channel list reads
+     * — which means [relayUrl] is required for it, and a group-scoped event
+     * offered without one is dropped rather than misfiled.
      */
     @JvmStatic
-    fun cache(context: Context, event: JSONObject) {
+    @JvmOverloads
+    fun cache(context: Context, event: JSONObject, relayUrl: String? = null) {
         val rumor = Rumor.parse(event) ?: return
+        val tenant = RelayScope.tenantFor(rumor, relayUrl) ?: return
         try {
-            ArmadaDb.get(context).event(ArmadaDb.TENANT_MAIN, rumor)
+            ArmadaDb.get(context).event(tenant, rumor)
         } catch (error: Throwable) {
             Log.w(TAG, "cache write failed", error)
         }
@@ -223,8 +252,15 @@ object ServiceStore {
 
     // ── The service → WebView routing queue ──────────────────────────────────
 
-    /** One page of queued events, and the ids that acknowledge it. */
-    class Page(val events: List<String>, val ids: List<String>)
+    /**
+     * One page of queued events, the ids that acknowledge it, and the relay it
+     * came from (null only for the retired unscoped queue).
+     *
+     * A page is ONE relay's worth because the WebView's ingest routes NIP-29
+     * events into the tenant for the relay that served them, and a rumor carries
+     * no record of that — the queue tenant's id is where the fact lives.
+     */
+    class Page(val events: List<String>, val ids: List<String>, val relay: String?)
 
     /**
      * A page of queued events, oldest first WITHIN the page. Nothing is
@@ -245,22 +281,36 @@ object ServiceStore {
      */
     @JvmStatic
     fun drain(context: Context, limit: Int): Page = try {
-        val rumors = ArmadaDb.get(context)
-            .query(ArmadaDb.TENANT_SERVICE_QUEUE, listOf(JSONObject().put("limit", limit)))
-            .asReversed()
-        Page(rumors.map { it.toJson() }, rumors.map { it.id })
+        val db = ArmadaDb.get(context)
+        val filter = listOf(JSONObject().put("limit", limit))
+        // One relay's queue per page — the first with anything in it. The JS side
+        // loops until a page comes back empty, so every relay is drained; taking
+        // them one at a time is what lets a page name its relay.
+        var page = Page(emptyList(), emptyList(), null)
+        for (tenant in queueTenants(db)) {
+            val rumors = db.query(tenant, filter).asReversed()
+            if (rumors.isEmpty()) continue
+            page = Page(rumors.map { it.toJson() }, rumors.map { it.id }, ArmadaDb.queueTenantRelay(tenant))
+            break
+        }
+        page
     } catch (error: Throwable) {
         Log.w(TAG, "drain failed", error)
-        Page(emptyList(), emptyList())
+        Page(emptyList(), emptyList(), null)
     }
 
-    /** Drop an acknowledged page from the queue. */
+    /**
+     * Drop an acknowledged page from one relay's queue. [relayUrl] must be the
+     * one [drain] returned with the page, or the ids would be removed from a
+     * queue that never held them and the page would replay forever.
+     */
     @JvmStatic
-    fun ackDrain(context: Context, ids: List<String>) {
+    @JvmOverloads
+    fun ackDrain(context: Context, ids: List<String>, relayUrl: String? = null) {
         if (ids.isEmpty()) return
         try {
             val filter = JSONObject().put("ids", JSONArray(ids))
-            ArmadaDb.get(context).remove(ArmadaDb.TENANT_SERVICE_QUEUE, listOf(filter))
+            ArmadaDb.get(context).remove(ArmadaDb.serviceQueueTenant(relayUrl), listOf(filter))
         } catch (error: Throwable) {
             Log.w(TAG, "drain ack failed", error)
         }

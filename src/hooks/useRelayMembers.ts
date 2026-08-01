@@ -42,9 +42,14 @@ export function useRelayMembers(relayUrl: string | undefined) {
     queryFn: async ({ signal }) => {
       const store = await eventStore;
 
-      // 1. LOCAL-FIRST: the newest cached snapshot for THIS relay's key.
+      // 1. LOCAL-FIRST: the newest cached snapshot from THIS relay's tenant.
+      // The relay scope is what isolates servers that share a signing key; the
+      // author filter is kept on top of it, where the key is known, so a rogue
+      // 13534 from a non-relay pubkey can't win the `limit: 1`.
       const cached = relaySelf
-        ? await store.query([{ kinds: [KIND_RELAY_MEMBERS], authors: [relaySelf], limit: 1 }])
+        ? await store.query([{ kinds: [KIND_RELAY_MEMBERS], authors: [relaySelf], limit: 1 }], {
+            relay: relayUrl,
+          })
         : [];
       const local = composeRelayMembers(cached);
 

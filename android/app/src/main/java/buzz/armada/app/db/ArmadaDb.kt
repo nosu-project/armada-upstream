@@ -17,8 +17,11 @@ import android.content.Context
 object ArmadaDb {
 
     /**
-     * The general event cache: events fetched from relays (profiles, NIP-29
-     * timelines, gift wraps, git activity). The WebView's `mainEventStore`.
+     * The general event cache: events whose meaning doesn't depend on who served
+     * them (profiles, git activity, gift wraps, sealed Concord outers). The
+     * WebView's `mainEventStore`.
+     *
+     * NIP-29 is deliberately NOT here — see [nip29Tenant].
      */
     const val TENANT_MAIN = "main"
 
@@ -35,8 +38,58 @@ object ArmadaDb {
      * feeds notification candidates). Storing the message is not the same as
      * routing it, so this exists alongside the tenants the content itself lands
      * in. Drained and emptied on open/resume.
+     *
+     * Retired in favour of [serviceQueueTenant]'s per-relay queues, and kept only
+     * so a queue written by the previous build still drains. Never written now.
      */
     const val TENANT_SERVICE_QUEUE = "svc"
+
+    /** Prefix of the per-relay queues [serviceQueueTenant] hands out. */
+    const val TENANT_SERVICE_QUEUE_PREFIX = "svc:"
+
+    /**
+     * One relay's NIP-29 data. MUST match `nip29Tenant()` in
+     * `src/lib/db/relayScope.ts`, which is the tenant the WebView reads.
+     *
+     * A NIP-29 group is named by an `h`/`d` value that means nothing on its own:
+     * the same id on two relays is two unrelated groups, and relay software that
+     * ships a SHARED signing identity (zooid) defeats scoping by author too. So
+     * the relay goes in the tenant id and the isolation is structural.
+     *
+     * `relayUrl` is expected ALREADY NORMALIZED, because it is the URL the
+     * WebView configured this service with (`useNativeNotifications` runs every
+     * relay through `normalizeRelayUrl` before `configure`). Normalization stays
+     * a JS-side concern on purpose: a second implementation here is a second
+     * spelling waiting to happen, and a tenant spelled differently by the two
+     * writers would strand every message the service received while the app was
+     * dead. Only a trailing slash is trimmed, so the id is stable if a caller
+     * hands over a URL that skipped the JS path.
+     */
+    @JvmStatic
+    fun nip29Tenant(relayUrl: String): String = "nip29:${relayUrl.trimEnd('/')}"
+
+    /**
+     * The handoff queue for one relay, or the unscoped queue when the relay is
+     * unknown.
+     *
+     * Per relay because a drained page has to say which relay it came from: the
+     * WebView routes NIP-29 events into [nip29Tenant], and a rumor carries no
+     * record of its source relay — nor may one be injected into its tags, which
+     * are the bytes its id commits to and would make the fact forgeable by any
+     * sender that spelled the tag. The tenant id is the one place that can hold
+     * it unforgeably.
+     */
+    @JvmStatic
+    fun serviceQueueTenant(relayUrl: String?): String =
+        if (relayUrl.isNullOrEmpty()) TENANT_SERVICE_QUEUE
+        else "$TENANT_SERVICE_QUEUE_PREFIX${relayUrl.trimEnd('/')}"
+
+    /** The relay a per-relay queue tenant belongs to, or null for the unscoped one. */
+    @JvmStatic
+    fun queueTenantRelay(tenant: String): String? =
+        if (tenant.startsWith(TENANT_SERVICE_QUEUE_PREFIX))
+            tenant.substring(TENANT_SERVICE_QUEUE_PREFIX.length)
+        else null
 
     /** The opened-event store for one Concord V2 community. */
     fun communityTenant(communityIdHex: String): String = "c2:$communityIdHex"

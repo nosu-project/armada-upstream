@@ -92,7 +92,12 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
       // Store the signed event locally before any network work. This makes
       // offline-created profiles/settings visible immediately and gives the
       // retry worker a durable copy if the app closes before relays recover.
-      void eventStore.then((store) => store.event(event)).catch(() => undefined);
+      //
+      // Filed under the relay it is being published TO, which for a NIP-29 send
+      // is the only relay the message exists on — the same tenant the timeline
+      // reads back. (The durable copy for RETRY is the publish outbox below, not
+      // this one: the store drops `sig`.)
+      void eventStore.then((store) => store.event(event, { relay })).catch(() => undefined);
       // Awaited, unlike the store write: the queue and the `removeQueuedPublish`
       // below are both async now, and a fire-and-forget queue could land AFTER
       // the removal that a successful publish issues — leaving a delivered

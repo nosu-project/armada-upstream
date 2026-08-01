@@ -7,9 +7,12 @@
  *
  *  - **Tenants.** A tenant is an isolated event namespace addressed by an
  *    opaque string id, e.g. `c2:${concordId}` for a Concord community,
- *    `dm17:${pubkey}` for a DM inbox, `relay` for the relay cache. Ids never
- *    collide across tenants: the same rumor id can be stored in two tenants
- *    independently, and a query in one never sees the other.
+ *    `dm17:${pubkey}` for a DM inbox, `nip29:${relayUrl}` for one relay's
+ *    NIP-29 data, `main` for the global event cache. Ids never collide across
+ *    tenants: the same rumor id can be stored in two tenants independently, and
+ *    a query in one never sees the other — which is how two servers' channels
+ *    are kept apart when they share a group id or even a signing key (see
+ *    `relayScope.ts`).
  *  - **Rumors, not events.** Everything Armada stores locally is *already
  *    authenticated* by the time it lands (a signature check, or gift-wrap
  *    decryption which authenticates by construction), so the store deals in

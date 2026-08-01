@@ -56,10 +56,22 @@ export interface ArmadaNotificationPlugin {
    * the same tenants the app reads. What a drain still buys is a pass through
    * ingest: parking undecryptable wraps, ringing the scopes that repaint a
    * timeline, feeding notification candidates.
+   *
+   * A page is ONE RELAY's worth, and `relay` names it. The queue is a tenant per
+   * relay precisely so this can be answered: the WebView's ingest routes NIP-29
+   * events into the tenant for the relay that served them, and a rumor carries
+   * no record of that (nor may one be injected into it — its tags are the bytes
+   * its id commits to, and a `relay` tag would be forgeable by any sender). The
+   * queue tenant's own id is the unforgeable place that fact can live. `relay` is
+   * absent only for a page drained from the pre-upgrade unscoped queue.
    */
-  drainEvents(): Promise<{ events: string[]; ids: string[] }>;
-  /** Drop an acknowledged page from the queue, once it has been ingested. */
-  ackDrain(options: { ids: string[] }): Promise<void>;
+  drainEvents(): Promise<{ events: string[]; ids: string[]; relay?: string }>;
+  /**
+   * Drop an acknowledged page from the queue, once it has been ingested. `relay`
+   * must be the value {@link drainEvents} returned with the page: it selects the
+   * queue tenant the ids are removed from.
+   */
+  ackDrain(options: { ids: string[]; relay?: string }): Promise<void>;
   /**
    * Drain Concord inner events the service already decrypted (it holds the
    * channel key for the notification), each with the outer `z` pseudonym and
@@ -106,10 +118,13 @@ export interface ArmadaNotificationPlugin {
    * V2 kind-1059 wrap) while the WebView is up. The JS layer writes it
    * straight into its event store, so the live timeline shows it with zero
    * relay latency — the same message the notification was about.
+   *
+   * `relay` is the relay it arrived from, which the store needs to file a
+   * group-scoped event under the right server (see `db/relayScope.ts`).
    */
   addListener(
     eventName: "relayEvent",
-    listener: (data: { event: string }) => void,
+    listener: (data: { event: string; relay?: string }) => void,
   ): Promise<PluginListenerHandle>;
   /**
    * Fired when the background service receives AND decrypts a Concord message

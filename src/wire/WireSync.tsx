@@ -481,7 +481,7 @@ export function WireSync() {
             if (replay.length === 0) return;
             const batch = replay;
             replay = [];
-            await ingestWireEvents(sinksRef.current, batch, { live: false });
+            await ingestWireEvents(sinksRef.current, batch, { live: false, relay });
             ingested += batch.length;
             writeCursor(relay, Math.max(...batch.map((e) => e.created_at)));
           };
@@ -504,7 +504,7 @@ export function WireSync() {
                   backoff = 1_000;
                   const event = msg[2] as NostrEvent;
                   if (eosed) {
-                    await ingestWireEvents(sinksRef.current, [event], { live: true });
+                    await ingestWireEvents(sinksRef.current, [event], { live: true, relay });
                     ingested += 1;
                     writeCursor(relay, event.created_at);
                   } else {
@@ -597,7 +597,9 @@ export function WireSync() {
     if (!hasNativeNotificationService()) return;
     let cancelled = false;
 
-    const ingest = (raw: string[], live: boolean): Promise<void> => {
+    // One relay's worth of events per call: the store files NIP-29 data under
+    // the relay that served it, so a batch spanning relays could not be routed.
+    const ingest = (raw: string[], live: boolean, relay: string | undefined): Promise<void> => {
       const events: NostrEvent[] = [];
       for (const json of raw) {
         try {
@@ -607,7 +609,7 @@ export function WireSync() {
         }
       }
       if (events.length > 0 && !cancelled) {
-        return ingestWireEvents(sinksRef.current, events, { live });
+        return ingestWireEvents(sinksRef.current, events, { live, relay });
       }
       return Promise.resolve();
     };
@@ -625,11 +627,11 @@ export function WireSync() {
       draining = true;
       try {
         while (!cancelled) {
-          const { events, ids } = await ArmadaNotification.drainEvents();
+          const { events, ids, relay } = await ArmadaNotification.drainEvents();
           if (events.length === 0) break;
-          await ingest(events, false);
+          await ingest(events, false, relay);
           if (cancelled) break;
-          await ArmadaNotification.ackDrain({ ids });
+          await ArmadaNotification.ackDrain({ ids, relay });
         }
       } catch {
         // Bridge unavailable / mid-drain failure — the unacked page replays.
@@ -650,8 +652,8 @@ export function WireSync() {
       .catch(() => undefined);
 
     let liveHandle: { remove: () => void } | undefined;
-    ArmadaNotification.addListener("relayEvent", ({ event }) => {
-      void ingest([event], true);
+    ArmadaNotification.addListener("relayEvent", ({ event, relay }) => {
+      void ingest([event], true, relay);
     })
       .then((h) => {
         if (cancelled) h.remove();

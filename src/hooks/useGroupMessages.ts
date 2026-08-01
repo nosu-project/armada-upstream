@@ -148,14 +148,18 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
       // event here before the bus asks us to re-read. Read the timeline and
       // the group's deletions in parallel so the local paint isn't gated on
       // two sequential IndexedDB round-trips.
+      // Scoped to THIS relay: a group id is only meaningful on the relay that
+      // hosts it, and the same id on another server is an unrelated channel, so
+      // the read is aimed at that relay's tenant rather than a shared cache.
       const [cached, deletes] = await Promise.all([
-        store.query([
-          { kinds: TIMELINE_KINDS, "#h": [groupId!], limit: Math.max(PAGE_SIZE, existing.length) },
-        ]),
+        store.query(
+          [{ kinds: TIMELINE_KINDS, "#h": [groupId!], limit: Math.max(PAGE_SIZE, existing.length) }],
+          { relay: relayUrl },
+        ),
         // Deletions: the store self-applies NIP-09 for same-author deletes, but
         // NIP-29 moderators delete others' messages — hide anything referenced
         // by a kind-5 in this group.
-        store.query([{ kinds: [KIND_DELETE], "#h": [groupId!], limit: 200 }]),
+        store.query([{ kinds: [KIND_DELETE], "#h": [groupId!], limit: 200 }], { relay: relayUrl }),
       ]);
       const deletedIds = new Set(
         deletes.flatMap((d) => d.tags.filter(([n, v]) => n === "e" && v).map(([, v]) => v)),

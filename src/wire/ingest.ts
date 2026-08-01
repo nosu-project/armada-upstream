@@ -37,13 +37,21 @@ function preview(text: string | undefined): string | undefined {
   return t.length > PREVIEW_MAX ? `${t.slice(0, PREVIEW_MAX - 1)}\u2026` : t;
 }
 
-/** The minimal store surface the wire writes to (armada-events). */
+/**
+ * The minimal store surface the wire writes to.
+ *
+ * `relay` is the relay the event arrived from. NIP-29 data is stored per-relay
+ * (a group id names nothing without its relay), so an ingest that cannot say
+ * where an event came from cannot store its group-scoped events at all — which
+ * is why every transport below carries the relay through (see
+ * `db/relayScope.ts`).
+ */
 export interface WireEventStore {
-  event(event: NostrEvent, opts?: { signal?: AbortSignal }): Promise<void>;
+  event(event: NostrEvent, opts?: { signal?: AbortSignal; relay?: string }): Promise<void>;
 }
 
 export interface WireSinks {
-  /** The shared plaintext event store (armada-events IndexedDB). */
+  /** The shared plaintext event store (ArmadaDB `main` + per-relay tenants). */
   eventStore: Promise<WireEventStore>;
   /** The current spec (decrypt map + scope naming). */
   getSpec: () => WireSpec | undefined;
@@ -98,21 +106,28 @@ function scopeOf(ev: NostrEvent, spec: WireSpec | undefined): string | undefined
  *   - Concord V2 wraps whose stream key we hold → decrypt → rumor store.
  *   - V2 wraps we can't open yet (control/invite planes, key not derived yet)
  *     → parked pending store, drained later by whoever holds the key.
- *   - Everything else (NIP-29 kinds, DMs, sealed V1 outers) → armada-events.
- *     The store applies NIP-09 deletions itself.
+ *   - Everything else (NIP-29 kinds, DMs, sealed V1 outers) → the event store,
+ *     which routes by scope: NIP-29 to `opts.relay`'s own tenant, the rest to
+ *     the shared cache. The store applies NIP-09 deletions itself.
  *
  * After the store write, the affected conversation scopes are announced on the
  * wire bus; hooks re-read the store. Writes are idempotent (stores dedupe by
  * id), so overlapping transports are harmless.
  *
- * `_opts.live` (STREAMED live post-EOSE vs a round's stored replay) is accepted
+ * `opts.relay` is the relay this batch arrived from, and every transport is
+ * expected to supply it: without it the store has nowhere honest to put a
+ * group-scoped event and drops it (see `db/relayScope.ts`). The batch is one
+ * relay's worth for exactly that reason — callers with events from several
+ * relays must call once per relay.
+ *
+ * `opts.live` (STREAMED live post-EOSE vs a round's stored replay) is accepted
  * for transport parity but not acted on: the notifier's own session-floor and
  * per-room high-water mark suppress replayed re-alerts.
  */
 export async function ingestWireEvents(
   sinks: WireSinks,
   events: NostrEvent[],
-  _opts?: { live?: boolean },
+  opts?: { live?: boolean; relay?: string },
 ): Promise<void> {
   if (events.length === 0) return;
   const spec = sinks.getSpec();
@@ -268,7 +283,7 @@ export async function ingestWireEvents(
     );
     const writes = storable.map((ev) =>
       Promise.resolve()
-        .then(() => store.event(ev))
+        .then(() => store.event(ev, { relay: opts?.relay }))
         .catch(() => {
           // Duplicate or rejected — either way the store's state is authoritative.
         })

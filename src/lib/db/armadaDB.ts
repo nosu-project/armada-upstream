@@ -36,8 +36,12 @@ export const ARMADA_DB_NAME = "armada";
  */
 export const ARMADA_TENANTS = {
   /**
-   * The general event cache: signed events fetched from relays (profiles,
-   * NIP-29 timelines, gift wraps, git activity). See `mainEventStore.ts`.
+   * The general event cache: events whose meaning doesn't depend on who served
+   * them (profiles, the user's own lists, git activity, sealed Concord outers).
+   * See `mainEventStore.ts`.
+   *
+   * NIP-29 is deliberately NOT here: a group id means nothing without its relay,
+   * so it lives in one tenant per relay (`nip29:<url>`, see `relayScope.ts`).
    */
   main: "main",
   /** Concord V2 wraps parked by the native service for WebView decryption. */

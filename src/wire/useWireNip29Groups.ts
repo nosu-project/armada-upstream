@@ -74,10 +74,15 @@ export function useWireNip29Groups(): Array<{ id: string; relay: string; buzz?: 
             selfKey = undefined;
           }
 
-          // Cache-first from the store (scoped by the relay's key so channels
-          // from same-key relays don't bleed). Then a bounded live read.
+          // Cache-first from THIS relay's own tenant, so channels from same-key
+          // relays cannot bleed. The author filter stays on top of the relay
+          // scope where the key is known, so a non-relay publisher's forged
+          // metadata doesn't mint a phantom channel; without the key we still
+          // read nothing rather than trust every publisher the relay served.
           const cached = selfKey
-            ? await store.query([{ kinds: [KIND_GROUP_METADATA], authors: [selfKey], limit: 500 }])
+            ? await store.query([{ kinds: [KIND_GROUP_METADATA], authors: [selfKey], limit: 500 }], {
+                relay,
+              })
             : [];
           let live: NostrEvent[] = [];
           try {
