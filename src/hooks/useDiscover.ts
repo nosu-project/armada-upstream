@@ -181,10 +181,10 @@ export function useDiscoverAuthors(): {
 
 /**
  * Public Concord communities — kind-3314 community announcements, each a
- * regular event that is nothing but a reference: an `i` tag naming the
- * community id and a full shareable invite link as the content. De-duplicated
- * by community id keeping the newest announcement, so one community listed by
- * two people is one card.
+ * regular event whose content is a full shareable invite link and nothing
+ * else. De-duplicated here by link-signer keeping the newest announcement;
+ * two DIFFERENT links to one community can only be recognized as duplicates
+ * once their bundles resolve, so that fold happens in the Communities tab.
  *
  * No search filter is sent: the announcement deliberately carries no metadata
  * (the card resolves name/icon/banner live from the invite bundle), so there
@@ -210,15 +210,15 @@ export function useDiscoverCommunities() {
         [filter],
         { signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) },
       );
-      // Newest announcement wins for a given community.
+      // Newest announcement wins for a given link.
       events.sort((a, b) => b.created_at - a.created_at);
-      const byCommunity = new Map<string, DiscoveredInvite>();
+      const byLinkSigner = new Map<string, DiscoveredInvite>();
       for (const event of events) {
         const invite = announcementFromEvent(event);
         if (!invite) continue;
-        if (!byCommunity.has(invite.communityId)) byCommunity.set(invite.communityId, invite);
+        if (!byLinkSigner.has(invite.linkSigner)) byLinkSigner.set(invite.linkSigner, invite);
       }
-      return [...byCommunity.values()];
+      return [...byLinkSigner.values()];
     },
   });
 

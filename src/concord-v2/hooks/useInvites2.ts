@@ -350,10 +350,7 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
       // Opt-in public announcement (best-effort — a failed post must not
       // fail the mint; the link itself is already live).
       if (listPublicly) {
-        const announcement = buildCommunityAnnouncement({
-          communityId: community.idHex,
-          inviteUrl: url,
-        });
+        const announcement = buildCommunityAnnouncement({ inviteUrl: url });
         if (announcement) await publishEvent(announcement).catch(() => undefined);
       }
 

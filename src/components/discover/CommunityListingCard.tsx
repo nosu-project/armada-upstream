@@ -1,7 +1,7 @@
 import { useNostr } from "@nostrify/react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Check, ShieldCheck } from "lucide-react";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { DisplayName } from "@/components/DisplayName";
@@ -30,6 +30,14 @@ interface CommunityListingCardProps {
    * here, after the bundle decrypts. A non-matching card renders nothing.
    */
   filter?: string;
+  /**
+   * Reports the bundle's self-certified `community_id` once it resolves, so
+   * the grid can fold two different links to the SAME community into one
+   * card. The announcement carries no community identity of its own — a tag
+   * would be an unverifiable claim — so this resolution is the only place a
+   * duplicate becomes knowable.
+   */
+  onResolved?: (linkSigner: string, communityId: string) => void;
 }
 
 /**
@@ -39,7 +47,7 @@ interface CommunityListingCardProps {
  * the person who shared it, and a Join button that routes to the invite
  * (which resolves + joins, prompting sign-in).
  */
-export function CommunityListingCard({ invite, className, filter }: CommunityListingCardProps) {
+export function CommunityListingCard({ invite, className, filter, onResolved }: CommunityListingCardProps) {
   const navigate = useNavigate();
   const { nostr } = useNostr();
   const parsed = useMemo(() => parseInviteLink(invite.inviteUrl), [invite.inviteUrl]);
@@ -66,6 +74,10 @@ export function CommunityListingCard({ invite, className, filter }: CommunityLis
 
   const memberEntry = useCommunityEntry2(bundle?.community_id);
   const isMember = !!memberEntry;
+
+  useEffect(() => {
+    if (bundle?.community_id) onResolved?.(invite.linkSigner, bundle.community_id);
+  }, [bundle?.community_id, invite.linkSigner, onResolved]);
 
   const onJoin = () => navigate(inviteUrlToLocalRoute(invite.inviteUrl));
   const onOpen = () => navigate(`/c/${encodeURIComponent(bundle!.community_id)}`);

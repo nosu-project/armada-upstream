@@ -196,13 +196,10 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
     if (!community || !eligible) return;
     try {
       const url = reusable?.url ?? (await createLink({}));
-      // The announcement is just a reference: the community id and the link.
-      // Name, icon and banner are resolved live from the link's bundle by
+      // The announcement is just the link. Name, icon and banner — and even
+      // which community it is — are resolved live from the link's bundle by
       // every viewer, so the listing tracks the community as it changes.
-      const announcement = buildCommunityAnnouncement({
-        communityId: community.idHex,
-        inviteUrl: url,
-      });
+      const announcement = buildCommunityAnnouncement({ inviteUrl: url });
       if (!announcement) throw new Error("Couldn't build the listing.");
       await publishEvent(announcement);
       toast({

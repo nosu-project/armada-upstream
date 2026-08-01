@@ -1,5 +1,5 @@
 import { Compass, Palette, Plus, Search, Smile, Users, X } from "lucide-react";
-import { lazy, Suspense, useState, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useMemo, useState, type ReactNode } from "react";
 
 import { CommunityListingCard } from "@/components/discover/CommunityListingCard";
 import { ThemeDiscoverCard } from "@/components/discover/ThemeDiscoverCard";
@@ -213,6 +213,31 @@ function TabState({ icon: Icon, children }: { icon: typeof Users; children: Reac
 function CommunitiesTab({ query }: { query: string }) {
   const { data, isLoading, isError } = useDiscoverCommunities();
 
+  // Cross-link de-duplication: an announcement names no community (only its
+  // resolved bundle does, verifiably), so each card reports its bundle's
+  // community_id as it lands, and every link AFTER the first — in the hook's
+  // newest-first order — that resolves to an already-seen community is
+  // dropped. Until a bundle resolves its card simply shows.
+  const [resolved, setResolved] = useState<Record<string, string>>({});
+  const onResolved = useCallback(
+    (linkSigner: string, communityId: string) =>
+      setResolved((prev) =>
+        prev[linkSigner] === communityId ? prev : { ...prev, [linkSigner]: communityId },
+      ),
+    [],
+  );
+  const duplicates = useMemo(() => {
+    const seen = new Set<string>();
+    const dup = new Set<string>();
+    for (const invite of data ?? []) {
+      const communityId = resolved[invite.linkSigner];
+      if (!communityId) continue;
+      if (seen.has(communityId)) dup.add(invite.linkSigner);
+      else seen.add(communityId);
+    }
+    return dup;
+  }, [data, resolved]);
+
   if (isLoading && !data) return <TabSkeleton />;
   if (isError) return <TabState icon={Users}>Couldn't reach the relays. Try again.</TabState>;
   if (!data || data.length === 0) {
@@ -226,9 +251,16 @@ function CommunitiesTab({ query }: { query: string }) {
     <div className={GRID}>
       {/* The announcement is metadata-free, so the search matches each card's
           RESOLVED community name: non-matching cards render nothing. */}
-      {data.map((invite) => (
-        <CommunityListingCard key={invite.communityId} invite={invite} filter={query} />
-      ))}
+      {data
+        .filter((invite) => !duplicates.has(invite.linkSigner))
+        .map((invite) => (
+          <CommunityListingCard
+            key={invite.linkSigner}
+            invite={invite}
+            filter={query}
+            onResolved={onResolved}
+          />
+        ))}
     </div>
   );
 }
