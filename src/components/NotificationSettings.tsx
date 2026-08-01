@@ -10,6 +10,7 @@ import {
   isIgnoringBatteryOptimizations,
   requestIgnoreBatteryOptimizations,
 } from "@/lib/nativeNotifications";
+import { isIOS, isStandalonePwa } from "@/lib/platform";
 
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -127,6 +128,14 @@ function WebPushSettings() {
   // off, or no configured push gateway) still get FOREGROUND OS notifications
   // while Armada is open. Surface those controls instead of a dead end.
   if (!supported) {
+    // iOS exposes Web Push (and even the Notification API) only to a
+    // Home-Screen web app on iOS 16.4+, and every iOS browser is WKWebView
+    // underneath — so the "use Chrome/Firefox/Android app" advice in the
+    // foreground fallback is impossible here, and the foreground notifier is
+    // just as unavailable. Show iOS-specific guidance instead.
+    if (isIOS()) {
+      return <IosNotificationHint standalone={isStandalonePwa()} />;
+    }
     return <ForegroundOnlySettings />;
   }
 
@@ -142,6 +151,69 @@ function WebPushSettings() {
       onToggle={(v) => (v ? enable() : disable())}
       onSetPrefs={(p) => setPrefs(p).catch(() => {})}
     />
+  );
+}
+
+/**
+ * iOS notification guidance, shown whenever Web Push is unavailable on iOS.
+ *
+ * iOS delivers Web Push only to a Home-Screen web app on iOS 16.4+, and every
+ * iOS browser is WKWebView — so the generic "use Chrome/Firefox/Android app"
+ * fallback is wrong here. The copy adapts:
+ *  - Service Worker API absent → the substrate for Web Push is switched off at
+ *    the device level, which on iOS is what Lockdown Mode does (content
+ *    blockers can too). Reinstalling won't help.
+ *  - Not installed → guide to Add to Home Screen.
+ *  - Installed but still no push → iOS 16.4+ / re-add guidance.
+ */
+function IosNotificationHint({ standalone }: { standalone: boolean }) {
+  // No Service Worker API at all — Web Push is built on it, so nothing here can
+  // enable notifications until the device-level block is lifted. On iOS this is
+  // the signature of Lockdown Mode (which disables service workers and Web
+  // Push); a content blocker or a disabled WebKit feature flag can do the same.
+  if (!("serviceWorker" in navigator)) {
+    return (
+      <div className="space-y-2">
+        <p className="text-sm text-muted-foreground">
+          Notifications need service workers, which are switched off on this device.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          If <strong>Lockdown Mode</strong> is on (Settings → Privacy &amp; Security → Lockdown
+          Mode), it disables web notifications — turn it off, or exclude Armada under its
+          &ldquo;Configure Web Browsing&rdquo; / Safari exceptions, to use them. A content blocker
+          can have the same effect.
+        </p>
+      </div>
+    );
+  }
+
+  if (!standalone) {
+    return (
+      <div className="space-y-2">
+        <p className="text-sm text-muted-foreground">
+          To get notifications on iPhone or iPad, add Armada to your Home Screen: in Safari, tap
+          the Share button, choose <strong>Add to Home Screen</strong>, then open Armada from the
+          new icon.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          iOS only delivers notifications to apps installed on the Home Screen, not to sites open
+          in a browser tab.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-2">
+      <p className="text-sm text-muted-foreground">
+        Notifications on iPhone and iPad need iOS 16.4 or later. If you recently updated Armada,
+        remove it from your Home Screen and add it again so iOS re-registers it as an app, then
+        reopen it from the new icon.
+      </p>
+      <p className="text-xs text-muted-foreground">
+        If they still don&rsquo;t turn on after that, your iOS version doesn&rsquo;t support them
+        yet.
+      </p>
+    </div>
   );
 }
 

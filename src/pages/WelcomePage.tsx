@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { Check, Copy, Eye, EyeOff } from "lucide-react";
 import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { suppressNextSyncGate } from "@/hooks/useFreshLogin";
+import { setOnboardingActive } from "@/hooks/useOnboarding";
 import { useLoginActions } from "@/hooks/useLoginActions";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
@@ -92,6 +93,11 @@ export function WelcomePage() {
   const [copied, setCopied] = useState(false);
   // True while the OS keyring sheet is up (Continue is saving the key).
   const [saving, setSaving] = useState(false);
+
+  // Whatever exit the wizard takes (finish, skip, or navigating onto a
+  // community), it unmounts — so clear the onboarding flag here. Setting it is
+  // done synchronously at login (see handleContinue) to beat the race.
+  useEffect(() => () => setOnboardingActive(false), []);
 
   const handleGenerate = () => {
     setNsec(nip19.nsecEncode(generateSecretKey()));
@@ -180,6 +186,11 @@ export function WelcomePage() {
       // wizard steps (SyncGate is z-100, the wizard z-50) while a network-bound
       // sync runs — on a slow phone that looks like onboarding was skipped.
       suppressNextSyncGate(pubkey);
+      // Mark onboarding in progress BEFORE login so it's already true on the
+      // commit that first exposes the user — otherwise the headless web-push
+      // opt-in (and the native notification step) would enqueue and paint over
+      // the profile step. Cleared when this wizard unmounts.
+      setOnboardingActive(true);
       login.nsec(nsec);
       setStep("profile");
     } finally {

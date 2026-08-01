@@ -16,7 +16,10 @@
          home-screen layout path and sizes the standalone webview to
          screen-minus-status-bar while anchoring it at the top, leaving a
          dead ~62pt letterbox band below the page that no in-page CSS can
-         remove. Manifest-only (Ditto's config) sizes the window correctly. -->
+         remove. Manifest-only (Ditto's config) sizes the window correctly.
+         apple-mobile-web-app-capable was also tried as a fix for iOS Web Push
+         being unavailable in the installed PWA (window.Notification undefined);
+         it made no difference on iOS 26.2.1, so it stays out. -->
     <title>Armada</title>
     <!-- Stamped per build (armada-build-stamp Vite plugin); lets a device's
          running bundle be identified when debugging stale-PWA issues. -->

@@ -53,6 +53,33 @@ export function routeParamToRelay(param: string): string | undefined {
 export const APP_NAME: string = import.meta.env.VITE_APP_NAME || "Armada";
 
 /**
+ * Whether the client is running on iOS / iPadOS.
+ *
+ * iPadOS 13+ reports a desktop-Safari user agent, so a Mac-like UA with more
+ * than one touch point is treated as iOS too. Matters for Web Push: iOS only
+ * exposes the Push API (and even the Notification API) to a Home-Screen PWA,
+ * never to a Safari tab, and every iOS browser is WKWebView underneath — so the
+ * usual "use Chrome/Firefox" fallback advice is wrong there.
+ */
+export function isIOS(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  if (/iPad|iPhone|iPod/.test(ua)) return true;
+  return /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;
+}
+
+/** Whether the client is running as an installed, standalone PWA. */
+export function isStandalonePwa(): boolean {
+  if (typeof window === "undefined") return false;
+  const displayMode = window.matchMedia?.(
+    "(display-mode: standalone), (display-mode: fullscreen)",
+  ).matches;
+  const iosStandalone =
+    (navigator as unknown as { standalone?: boolean }).standalone === true;
+  return Boolean(displayMode) || iosStandalone;
+}
+
+/**
  * Platform (deployment-infrastructure) relays.
  *
  * `VITE_PLATFORM_RELAYS` is set only by a *hosted* deployment (the operator
