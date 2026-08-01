@@ -9,6 +9,7 @@ import { EventStoreContext, type EventStoreContextType } from "@/contexts/EventS
 import { userReadRelays, userWriteRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCachedNip29Servers } from "@/hooks/useCachedNip29Servers";
+import { poolReqTargets } from "@/lib/poolRouting";
 import { verifyEventOnce } from "@/lib/verifyCache";
 import { appEventStore } from "@/lib/db/mainEventStore";
 import { NostrBatcher } from "@/lib/NostrBatcher";
@@ -91,11 +92,12 @@ function verifyEventSkippingWraps(event: NostrEvent): boolean {
  *   login's signer.
  * - Queries are batched (NostrBatcher) and cached in IndexedDB.
  *
- * Routing is Armada-specific: generic pool traffic (kind 0 profiles, kind
- * 10009 lists, anything not group-scoped) goes to the configurable app
- * relays (Ditto-style, default relay.ditto.pub + relay.dreamith.to) plus all
- * configured servers. Group-scoped traffic should use
- * `nostr.relay(serverUrl)` directly so it stays on that server.
+ * Routing is Armada-specific: generic pool traffic (kind 0 profiles, statuses,
+ * anything not group-scoped) goes to the GENERAL relays — the configurable app
+ * relays (Ditto-style), platform pins, and the user's NIP-65 set — and NOT to
+ * every joined server; see `poolReqTargets` for the rule and its exceptions.
+ * Group-scoped traffic should use `nostr.relay(serverUrl)` directly so it
+ * stays on that server.
  */
 const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   const { children } = props;
@@ -185,6 +187,32 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   useEffect(() => {
     poolWriteRelaysRef.current = poolWriteRelays;
   }, [poolWriteRelays]);
+
+  // The GENERAL read set: the base pool WITHOUT the joined servers. Generic
+  // pool REQs route here (see reqRouter / poolReqTargets); group-scoped
+  // traffic reaches a server through `nostr.relay(url)` and never needed the
+  // pool-wide fan-out that was multiplying every generic event into a copy
+  // per relay.
+  const poolGeneralRelays = useMemo(() => {
+    const urls = new Set<string>();
+    if (config.useAppRelays) {
+      for (const url of config.appRelays) {
+        const normalized = normalizeRelayUrl(url);
+        if (normalized) urls.add(normalized);
+      }
+    }
+    for (const url of PLATFORM_RELAYS) urls.add(url);
+    for (const url of userReadRelays(config)) {
+      const normalized = normalizeRelayUrl(url);
+      if (normalized) urls.add(normalized);
+    }
+    return [...urls];
+  }, [config]);
+
+  const poolGeneralRelaysRef = useRef(poolGeneralRelays);
+  useEffect(() => {
+    poolGeneralRelaysRef.current = poolGeneralRelays;
+  }, [poolGeneralRelays]);
 
   // Search relays (NIP-50). `search` filters route here instead of fanning
   // out to every server. Falls back to the pool relays when none configured.
@@ -497,7 +525,17 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
           logNostrReq([...routed.keys()], filters, "search");
           return routed;
         }
-        const routed = new Map(poolReadRelaysRef.current.map((url) => [url, filters]));
+        // Generic traffic prefers the general relays. Fanning every
+        // profile/status/DM REQ to the joined servers too multiplied every
+        // event into a copy per relay — a measured boot received ~11k copies
+        // for a store that gained no rows — so servers now see a pool-wide
+        // REQ only when the filter genuinely concerns them (poolReqTargets).
+        const targets = poolReqTargets(
+          filters,
+          poolGeneralRelaysRef.current,
+          poolReadRelaysRef.current,
+        );
+        const routed = new Map(targets.map((url) => [url, filters]));
         logNostrReq([...routed.keys()], filters, "pool");
         return routed;
       },
