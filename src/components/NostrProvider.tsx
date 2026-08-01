@@ -18,6 +18,7 @@ import { Nip46Signer } from "@/lib/nip46Signer";
 import { getNip46Transport } from "@/lib/nip46Transport";
 import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
 import { logNostrEvent, logNostrReq } from "@/lib/nostrQueryLog";
+import { logRelayOpen } from "@/lib/relayConnectionLog";
 import { emitRelayReopened } from "@/lib/relayReopen";
 import { logSync } from "@/lib/syncLog";
 import {
@@ -395,6 +396,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   if (!pool.current) {
     pool.current = new NPool({
       open(url: string) {
+        logRelayOpen(url);
         const relay: NRelay1 = new NRelay1(url, {
           // Gift-wrap (1059/21059) outer signatures are redundant on the client
           // (see verifyEventSkippingWraps); skip them, verify everything else.
