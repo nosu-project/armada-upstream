@@ -1,5 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { verifyEvent } from "nostr-tools/pure";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useCommunityEntry2, useUpdateCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
@@ -117,6 +118,19 @@ export interface InvitePreview2 {
   bundle: InviteBundle;
 }
 
+/**
+ * The newest bundle event seen at each link coordinate this session. Any one
+ * fetch races per-relay timeouts, and a relay that missed a refresh (or a
+ * revocation) happily vends its older copy — so without a memory, a repeat
+ * resolve can REGRESS to a bundle an earlier resolve already superseded
+ * (previews flickering between fresh and stale metadata, joins landing on an
+ * old epoch). Addressable-event semantics make newest-wins the truth, so
+ * remember the newest raw event per coordinate and never accept an older one.
+ * Tombstones are events too and sort the same way, so a seen revocation stays
+ * terminal.
+ */
+const newestBundleEvents = new Map<string, NostrEvent>();
+
 /** Fetch + verify a V2 invite bundle from its bootstrap relays. */
 export async function resolveBundle(
   nostr: ReturnType<typeof useNostr>["nostr"],
@@ -135,11 +149,29 @@ export async function resolveBundle(
         .catch(() => [] as NostrEvent[]),
     ),
   );
-  const flat = results.flat().sort((a, b) => b.created_at - a.created_at);
-  if (flat.length === 0) throw new Error("Couldn't find that invite on its relays.");
+  // Only link-signer-authored, signature-valid events may enter the memory:
+  // a hostile relay answering with a forged far-future event must not pin the
+  // coordinate for the session (parseBundleEvent re-checks all of this, but
+  // by then the memory would already be poisoned).
+  const flat = results
+    .flat()
+    .filter(
+      (e) =>
+        e.kind === KIND_INVITE_BUNDLE &&
+        e.pubkey === invite.linkSigner &&
+        verifyEvent(e as Parameters<typeof verifyEvent>[0]),
+    )
+    .sort((a, b) => b.created_at - a.created_at);
   // The newest event at the coordinate wins: a refresh replaces the bundle, a
-  // revocation tombstone replaces it terminally.
-  return parseBundleEvent(flat[0], invite.linkSigner, invite.token, Date.now());
+  // revocation tombstone replaces it terminally. The session memory keeps a
+  // flaky read (relays timing out, a laggard vending its stale copy) from
+  // un-replacing what a better read already saw.
+  const remembered = newestBundleEvents.get(invite.linkSigner);
+  let best = flat[0] as NostrEvent | undefined;
+  if (remembered && (!best || remembered.created_at > best.created_at)) best = remembered;
+  if (!best) throw new Error("Couldn't find that invite on its relays.");
+  newestBundleEvents.set(invite.linkSigner, best);
+  return parseBundleEvent(best, invite.linkSigner, invite.token, Date.now());
 }
 
 /** Turn a verified bundle into the membership-list join material + entry. */
