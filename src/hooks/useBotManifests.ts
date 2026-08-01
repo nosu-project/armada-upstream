@@ -8,25 +8,6 @@ import { BOT_MANIFEST_KIND, parseBotManifest, type BotCommandEntry } from "@/lib
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
-/**
- * Widely-indexed relays queried for manifests alongside the conversation's own
- * and the app's.
- *
- * Neither end of that union is sufficient alone. A conversation's relay may drop
- * events from non-members, and in practice it also lags: a bot that republishes
- * its interface can land on the indexers while its community relay still serves
- * the retired one. But a bot may equally publish its manifest ONLY to the
- * community it serves, and no indexer would ever see it. Reading the union and
- * taking the newest per author resolves the manifest whichever way it was
- * published, and whichever relay is behind.
- */
-export const BOT_DISCOVERY_RELAYS = [
-  "wss://relay.damus.io",
-  "wss://nos.lol",
-  "wss://purplepag.es",
-  "wss://relay.nostr.band",
-];
-
 /** Relays cap how many authors one filter may name; stay well inside that. */
 const AUTHOR_CHUNK = 50;
 
@@ -107,9 +88,10 @@ function newestPerAuthor(events: NostrEvent[], asked: Set<string>, kind: number)
  * conversation with no roster (a plain DM) fetches nothing.
  *
  * `conversationRelays` are the relays this conversation's own traffic uses (a
- * community's relays, a NIP-29 host). They are searched alongside the app's and
- * the public indexers, because a bot may have published its manifest to only one
- * of the three.
+ * community's relays, a NIP-29 host). They are searched alongside the user's app
+ * relays, because a bot may have published its manifest to only one of the two:
+ * a bot serving one community may publish only there, while a bot that
+ * republishes its interface may land on the app relays first.
  */
 export function useBotManifests(
   memberPubkeys: string[] | undefined,
@@ -128,14 +110,13 @@ export function useBotManifests(
   const membersKey = members.join(",");
 
   // Both sweeps search the same union: the conversation's own relays (a Concord
-  // bot's profile AND manifest live on its community relay), the app relays, and
-  // the public indexers. Bot detection has to look where the bot actually is —
-  // querying only the pool misses a bot whose kind-0 never reached it, even
-  // though its member row shows a Bot pill (the pill reads the local cache,
-  // filled from the community relay on join).
+  // bot's profile AND manifest live on its community relay) and the user's app
+  // relays. Bot detection has to look where the bot actually is — querying only
+  // the pool misses a bot whose kind-0 never reached it, even though its member
+  // row shows a Bot pill (the pill reads the local cache, filled from the
+  // community relay on join).
   const relays = useMemo(
-    () =>
-      [...new Set([...(conversationRelays ?? []), ...config.appRelays, ...BOT_DISCOVERY_RELAYS])].sort(),
+    () => [...new Set([...(conversationRelays ?? []), ...config.appRelays])].sort(),
     [conversationRelays, config.appRelays],
   );
   const relayKey = relays.join(",");

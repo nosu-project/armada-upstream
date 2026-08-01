@@ -196,14 +196,14 @@ describe("useBotManifests", () => {
     expect(result.current.entries[0].command.name).toBe("new");
   });
 
-  it("searches the conversation's own relays alongside the app + indexer set", async () => {
+  it("searches the conversation's own relays alongside the app relays, and nothing else", async () => {
     h.pool = [kind0(BOT_A, { bot: true, name: "Alice" }), manifest(BOT_A, [{ name: "ping" }])];
     const { result } = render([BOT_A], [COMMUNITY_RELAY]);
     await waitFor(() => expect(result.current.entries.length).toBe(1));
-    // A bot may publish its manifest ONLY to its community relay — it must be queried.
-    expect(h.capturedManifestRelays).toContain(COMMUNITY_RELAY);
-    expect(h.capturedManifestRelays).toContain("wss://app.example");
-    expect(h.capturedManifestRelays).toContain("wss://relay.damus.io");
+    // A bot may publish its manifest ONLY to its community relay — it must be
+    // queried. Exact equality: discovery must never connect to a relay the user
+    // has not configured and the conversation does not use.
+    expect(h.capturedManifestRelays).toEqual(["wss://app.example", COMMUNITY_RELAY]);
   });
 
   it("does nothing without a roster (a plain DM)", async () => {
