@@ -1,6 +1,11 @@
+import { useEffect } from "react";
+
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { useNostrPush } from "@/hooks/useNostrPush";
+import { useOnboardingActive } from "@/hooks/useOnboarding";
 import { usePushNotifications } from "@/hooks/usePushNotifications";
+import { requestWebPushOptIn, setWebPushEnable } from "@/lib/webPushPrompt";
 
 /**
  * Headless mount that keeps the web-push registration alive app-wide.
@@ -23,7 +28,32 @@ export function WebPushNotifications() {
 }
 
 function WebPushBridge() {
-  usePushNotifications();
-  useNostrPush();
+  const legacy = usePushNotifications();
+  const nostrPush = useNostrPush();
+  const { user } = useCurrentUser();
+  const onboarding = useOnboardingActive();
+
+  // Whichever path is active for this build (see the file header).
+  const active = nostrPush.supported ? nostrPush : legacy;
+
+  // Keep the post-login opt-in step's action pointed at the live hook, so the
+  // step's tap runs the current `enable` (fresh prefs/watch set), not a stale
+  // closure captured when the step was queued.
+  useEffect(() => {
+    setWebPushEnable(active.enable);
+    return () => setWebPushEnable(null);
+  }, [active.enable]);
+
+  // Offer a one-time opt-in once a logged-in user could receive web push but
+  // hasn't been asked at OS level yet (permission still "default"). Held while
+  // the signup wizard runs so it doesn't paint over profile creation; the
+  // onboarding dep re-fires this the moment the wizard finishes. The module
+  // guards against re-offering across loads; the wizard surfaces it after sync.
+  useEffect(() => {
+    if (onboarding) return;
+    if (!user || !active.supported || active.permission !== "default") return;
+    requestWebPushOptIn();
+  }, [onboarding, user, active.supported, active.permission]);
+
   return null;
 }

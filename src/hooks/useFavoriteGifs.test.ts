@@ -1,6 +1,8 @@
+import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  useFavoriteGifs,
   claimLegacyFavoriteGifs,
   completeLegacyFavoriteGifMigration,
   favoriteGifsDeviceId,
@@ -16,6 +18,10 @@ import {
   type FavoriteGifShard,
 } from "@/hooks/useFavoriteGifs";
 import type { GifResult } from "@/hooks/useGifSearch";
+
+vi.mock("@/hooks/useCurrentUser", () => ({
+  useCurrentUser: () => ({ user: { pubkey: "a".repeat(64) } }),
+}));
 
 const SELF = "a".repeat(64);
 
@@ -156,5 +162,27 @@ describe("local favorite GIF operations", () => {
     expect(parseFavoriteGifShard(valid)).toEqual(valid);
     expect(parseFavoriteGifShard({ ...valid, version: 2 })).toBeNull();
     expect(parseFavoriteGifShard({ ...valid, records: [{ nope: true }] })?.records).toEqual([]);
+  });
+
+  it("settles after the KV stores warm rather than re-rendering forever", async () => {
+    let renders = 0;
+    const { unmount } = renderHook(() => {
+      renders++;
+      return useFavoriteGifs();
+    });
+
+    // Let the warm land and any notify cascade play out.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    });
+    const settled = renders;
+
+    // A mounted picker doing nothing must not keep re-rendering: the warm's
+    // memo drop may fire once, but a miss after it must not re-arm it.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    });
+    expect(renders).toBe(settled);
+    unmount();
   });
 });

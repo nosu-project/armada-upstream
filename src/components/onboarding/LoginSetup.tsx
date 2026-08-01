@@ -6,6 +6,7 @@ import { WizardShell, WizardStepBody } from "@/components/onboarding/WizardShell
 import { useSyncGateActive } from "@/components/SyncGate";
 import { Button } from "@/components/ui/button";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useOnboardingActive } from "@/hooks/useOnboarding";
 import {
   enableNativeNotifications,
   hasNativeNotificationService,
@@ -21,6 +22,11 @@ import {
   isIgnoringBatteryOptimizations,
   requestIgnoreBatteryOptimizations,
 } from "@/lib/nativeNotifications";
+import {
+  markWebPushPromptShown,
+  registerWebPushOptInOpener,
+  runWebPushEnable,
+} from "@/lib/webPushPrompt";
 
 /**
  * The post-login setup flow.
@@ -40,7 +46,7 @@ import {
  */
 
 /** Steps, in the order they're offered. */
-type StepId = "notifications" | "battery" | "decrypt";
+type StepId = "notifications" | "webpush" | "battery" | "decrypt";
 
 /**
  * Set once the notification step has been shown. Unlike the old launch-time OS
@@ -91,6 +97,10 @@ async function batteryStepApplies(): Promise<boolean> {
 export function LoginSetup() {
   const { user } = useCurrentUser();
   const syncing = useSyncGateActive();
+  // Signup logs the user in before the profile/create-join steps render (and
+  // suppresses the sync gate), so hold every step until the wizard is done —
+  // otherwise a queued step paints over profile creation at z-[260].
+  const onboarding = useOnboardingActive();
 
   const [queue, setQueue] = useState<StepId[]>([]);
   const [completed, setCompleted] = useState(0);
@@ -110,6 +120,12 @@ export function LoginSetup() {
   // other steps are done. Either way it joins the same queue.
   useEffect(() => registerConsentPromptOpener(() => enqueue("decrypt")), [enqueue]);
 
+  // The web-push opt-in is driven by the app-wide push bridge
+  // (WebPushNotifications), which knows when a fresh user could receive push.
+  // It asks us to surface the step here — parallel to the native
+  // `NotificationsStep`, but for web/PWA.
+  useEffect(() => registerWebPushOptInOpener(() => enqueue("webpush")), [enqueue]);
+
   // If this unmounts with a decrypt prompt still queued, the callers awaiting
   // that decision would hang forever. Release them as "not now" (unpersisted,
   // so they're asked again next time).
@@ -120,7 +136,7 @@ export function LoginSetup() {
   // Probe the native permission steps once the user is in and the sync overlay
   // is gone.
   useEffect(() => {
-    if (!user || syncing) return;
+    if (!user || syncing || onboarding) return;
     if (!hasNativeNotificationService()) return;
     let cancelled = false;
     (async () => {
@@ -142,7 +158,7 @@ export function LoginSetup() {
     return () => {
       cancelled = true;
     };
-  }, [user, syncing, enqueue]);
+  }, [user, syncing, onboarding, enqueue]);
 
   const step = queue[0];
 
@@ -150,10 +166,11 @@ export function LoginSetup() {
   // mid-flow isn't asked the same thing on every launch.
   useEffect(() => {
     if (step === "notifications") write(NOTIF_PROMPT_KEY, "1");
+    if (step === "webpush") markWebPushPromptShown();
     if (step === "battery") write(BATTERY_NUDGE_KEY, String(Date.now()));
   }, [step]);
 
-  if (!step || syncing) return null;
+  if (!step || syncing || onboarding) return null;
 
   const total = completed + queue.length;
 
@@ -169,6 +186,7 @@ export function LoginSetup() {
           }}
         />
       )}
+      {step === "webpush" && <WebPushStep onDone={advance} />}
       {step === "battery" && <BatteryStep onDone={advance} />}
       {step === "decrypt" && <DecryptStep onDone={advance} />}
     </WizardShell>
@@ -221,6 +239,60 @@ function NotificationsStep({ onDone }: { onDone: (granted: boolean) => void }) {
           variant="ghost"
           className="w-full text-muted-foreground"
           onClick={() => onDone(false)}
+          disabled={busy}
+        >
+          Not now
+        </Button>
+      </div>
+    </WizardStepBody>
+  );
+}
+
+/**
+ * The web/PWA counterpart to `NotificationsStep`. Unlike the native path, this
+ * uses Web Push (a push service is involved), so the copy stays honest about
+ * that rather than claiming nothing leaves the device.
+ */
+function WebPushStep({ onDone }: { onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+
+  const enable = async () => {
+    setBusy(true);
+    try {
+      // Runs the live hook's enable() — this click is the gesture that grants
+      // Notification permission.
+      await runWebPushEnable();
+    } catch {
+      // Permission denied or subscribe failed — the Settings toggle remains.
+    } finally {
+      setBusy(false);
+      onDone();
+    }
+  };
+
+  return (
+    <WizardStepBody
+      glyph={
+        <StepGlyph>
+          <Bell className="size-9" />
+        </StepGlyph>
+      }
+      title="stay in the loop"
+      description="Armada can notify you about direct messages, mentions and replies even while it's closed. Delivery goes through your browser's push service; the notification carries no message content — Armada fetches and decrypts it on your device."
+    >
+      <div className="w-full space-y-3">
+        <Button
+          size="lg"
+          className="h-12 w-full clip-corner-lg text-base font-medium"
+          onClick={enable}
+          disabled={busy}
+        >
+          Enable notifications
+        </Button>
+        <Button
+          variant="ghost"
+          className="w-full text-muted-foreground"
+          onClick={() => onDone()}
           disabled={busy}
         >
           Not now
