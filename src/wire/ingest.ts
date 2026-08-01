@@ -196,15 +196,24 @@ export async function ingestWireEvents(
   // channel edition surfaces in the sidebar promptly, without waiting for the
   // slow control-plane sweep or a first message on the channel.
   if (ctlWraps.length > 0 && spec) {
-    const byCommunity = new Map<string, { groups: GroupKey[]; wraps: NostrEvent[] }>();
+    const byCommunity = new Map<
+      string,
+      { groups: GroupKey[]; refounded: boolean; wraps: NostrEvent[] }
+    >();
     for (const ev of ctlWraps) {
       const entry = spec.v2CtlByPk.get(ev.pubkey);
       if (!entry) continue;
       const bucket = byCommunity.get(entry.idHex);
       if (bucket) bucket.wraps.push(ev);
-      else byCommunity.set(entry.idHex, { groups: entry.groups, wraps: [ev] });
+      else {
+        byCommunity.set(entry.idHex, {
+          groups: entry.groups,
+          refounded: entry.refounded,
+          wraps: [ev],
+        });
+      }
     }
-    for (const [idHex, { groups, wraps }] of byCommunity) {
+    for (const [idHex, { groups, refounded, wraps }] of byCommunity) {
       // Skip wraps already processed (the persisted plane memo, shared with
       // the sweep): rotated rounds replay recent control wraps every time, and
       // on the APK the native service delivers the same wraps a second time —
@@ -212,15 +221,18 @@ export async function ingestWireEvents(
       const unseen = await unseenPlaneWraps(wraps);
       if (unseen.length === 0) continue;
       const opened = await openPlaneWrapsChunked(unseen, groups);
+      let stored = true;
       if (opened.length > 0) {
-        await writeOpened(idHex, opened, "control");
+        stored = await writeOpened(idHex, opened, "control", { refounded });
         scopes.add(`c2ctl:${idHex}`);
       }
       // Record the junk before memoing it: the memo stops the sweep ever
       // re-attempting these, so this is the only chance to count them.
       const openedIds = new Set(opened.map((e) => e.wrapId));
       notePlaneWrapsJunk(unseen.filter((w) => !openedIds.has(w.id)).map((w) => w.id));
-      notePlaneWrapsSeen(unseen.map((w) => w.id));
+      // Not memoised over a failed write: the memo is what stops these wraps
+      // ever being decrypted again, so it must not outrun the store.
+      if (stored) notePlaneWrapsSeen(unseen.map((w) => w.id));
     }
   }
   // Wraps for streams we hold no key for (control plane, invites, or a

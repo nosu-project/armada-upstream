@@ -79,21 +79,38 @@ internal class ParsedFilter(filter: JSONObject) {
         var search: String? = null
         val tags = ArrayList<TagFilter>()
 
+        // A constraint whose values all failed to decode — `{"kinds":["1"]}`, a
+        // `#e` given a bare string — is an empty set, exactly like the literal
+        // `[]` below, and means the same thing: nothing can match. Saying so is
+        // also what keeps the planner honest, since it emits `Sql.memberOf` for
+        // any non-null list and `IN ()` is not valid SQL. The WebView coerces
+        // instead, but both agree the filter is junk; failing closed is the
+        // direction that can't answer a narrowing query with a whole tenant.
+        fun <T> constraint(decoded: List<T>): List<T>? {
+            if (decoded.isEmpty()) {
+                never = true
+                return null
+            }
+            return decoded
+        }
+
         val keys = filter.keys()
         while (keys.hasNext()) {
             val key = keys.next()
             val value = filter.opt(key)
 
-            // Empty array constraints can never match (NIP-01).
+            // Empty array constraints can never match (NIP-01). Checked up
+            // front so it covers the scalar keys too, which never reach
+            // `constraint`.
             if (value is JSONArray && value.length() == 0) {
                 never = true
                 continue
             }
 
             when {
-                key == "ids" -> ids = sortUnique(strings(value))
-                key == "authors" -> authors = sortUnique(strings(value))
-                key == "kinds" -> kinds = numbers(value).distinct().sorted()
+                key == "ids" -> ids = constraint(sortUnique(strings(value)))
+                key == "authors" -> authors = constraint(sortUnique(strings(value)))
+                key == "kinds" -> kinds = constraint(numbers(value).distinct().sorted())
                 key == "since" -> since = optLong(value)
                 key == "until" -> until = optLong(value)
                 key == "limit" -> limit = optLong(value)?.toInt()
@@ -104,7 +121,8 @@ internal class ParsedFilter(filter: JSONObject) {
                     // Whether such a tag is actually queryable depends on the
                     // store's tag index policy — a filter on a non-indexed tag
                     // simply matches nothing.
-                    tags.add(TagFilter(key.substring(1), sortUnique(strings(value))))
+                    val values = constraint(sortUnique(strings(value)))
+                    if (values != null) tags.add(TagFilter(key.substring(1), values))
                 }
                 // Unrecognized keys are ignored (treated as no constraint).
             }

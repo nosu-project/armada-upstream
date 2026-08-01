@@ -14,8 +14,21 @@
  *    authenticated* by the time it lands (a signature check, or gift-wrap
  *    decryption which authenticates by construction), so the store deals in
  *    signature-less rumors and never carries a `sig` it would have to lie
- *    about. Provenance that has no home in the rumor itself is folded into
- *    tags by the caller.
+ *    about.
+ *
+ * A stored rumor is normally the one its author wrote, byte for byte, so `id`
+ * is the NIP-01 hash of the row's own contents. Nothing here enforces that —
+ * `id` is just the key — and two callers deliberately use it otherwise, both
+ * because the row's identity is a DEDUP key rather than a content hash:
+ *
+ *  - the invite inbox (`inviteInbox.ts`) keys by the WRAP id, since the inbox
+ *    dedups on wraps and two wraps can carry the same invite;
+ *  - the parked-wrap tenant (`c2park`) stores wraps, whose id is their own.
+ *
+ * Anything else that stores a rumor stores it verbatim, and the reasons are in
+ * `concord-v2/lib/rumorStore.ts` and `nip17/dm17Store.ts`: a rumor's tags are
+ * the bytes its id commits to, so bookkeeping written into them makes the row
+ * something the sender never signed.
  */
 import type { NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";

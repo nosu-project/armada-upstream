@@ -30,10 +30,6 @@ object ServiceStore {
 
     private const val TAG = "ArmadaDb"
 
-    /** Provenance tags the Concord V2 rumor store synthesizes for itself. */
-    /** CORD-02 §5's encrypted seal — the only form a chat wrap may carry. */
-    private const val SEAL_ENCRYPTED = 20013
-
     /** How stale a queued event may get before it is dropped unrouted. */
     private const val QUEUE_MAX_AGE_SECS = 14L * 24 * 3600
 
@@ -153,11 +149,12 @@ object ServiceStore {
      * plane wrap, and the one wrap-derived fact the WebView does keep (which
      * control stream an edition arrived on) belongs to a plane it never sees.
      *
-     * Chat seals MUST be encrypted (CORD-02 §5), and this is where that holds
-     * for rows the service writes: the seal form is not stored, so no reader
-     * downstream can re-derive it — the WebView refuses a plaintext-sealed chat
-     * wrap at ingest, and a second writer must apply the same rule or it would
-     * plant a row every reader then treats as encrypted-sealed.
+     * What may be stored is [Concord2.storable]'s to decide, and it applies the
+     * WebView's two chat-ingress rules: the seal must have been encrypted
+     * (CORD-02 §5), and the kind must not be one another plane is read back by.
+     * Neither fact survives the write — the seal form is not stored, and the
+     * planes share this tenant — so a second writer that skipped either would
+     * plant a row every reader downstream then trusts.
      *
      * `openConcord2` has already checked what makes this safe to file under a
      * channel: the seal's signature, that the rumor's author IS the seal's
@@ -171,15 +168,14 @@ object ServiceStore {
         sealKind: Int,
         rumor: JSONObject,
     ) {
-        if (communityIdHex.isEmpty()) return
-        if (sealKind != SEAL_ENCRYPTED) {
-            Log.w(TAG, "refusing a Concord chat rumor whose seal was not encrypted")
+        val opened = Rumor.parse(rumor) ?: return
+        if (!Concord2.storable(communityIdHex, sealKind, opened)) {
+            Log.w(TAG, "refusing a Concord chat rumor the chat plane may not carry")
             return
         }
-        val opened = Rumor.parse(rumor) ?: return
 
         try {
-            ArmadaDb.get(context).event(ArmadaDb.communityTenant(communityIdHex), opened)
+            ArmadaDb.get(context).event(Concord2.tenant(communityIdHex), opened)
         } catch (error: Throwable) {
             Log.w(TAG, "concord rumor write failed", error)
         }
@@ -231,15 +227,27 @@ object ServiceStore {
     class Page(val events: List<String>, val ids: List<String>)
 
     /**
-     * A page of queued events, oldest first. Nothing is removed: the WebView
-     * acknowledges with [ackDrain] only once ingest has committed, so a page
-     * interrupted by a crash is handed out again rather than lost.
+     * A page of queued events, oldest first WITHIN the page. Nothing is
+     * removed: the WebView acknowledges with [ackDrain] only once ingest has
+     * committed, so a page interrupted by a crash is handed out again rather
+     * than lost.
+     *
+     * ACROSS pages the walk is newest-first — the store answers newest-first,
+     * and taking the oldest page instead would mean reading past the whole
+     * backlog to reach its tail, once per page, which is quadratic in exactly
+     * the case that made the backlog deep. It costs nothing to allow, because
+     * a drain is not how any of this becomes durable: the events are already in
+     * the tenants the WebView reads, and what a pass through ingest still does
+     * — parking a wrap, ringing a scope, offering a notification candidate — is
+     * idempotent and order-independent. (Candidates raise nothing here anyway:
+     * the WebView ingests a drained page as NOT live, because the service has
+     * already notified for it.)
      */
     @JvmStatic
     fun drain(context: Context, limit: Int): Page = try {
         val rumors = ArmadaDb.get(context)
             .query(ArmadaDb.TENANT_SERVICE_QUEUE, listOf(JSONObject().put("limit", limit)))
-            .reversed()
+            .asReversed()
         Page(rumors.map { it.toJson() }, rumors.map { it.id })
     } catch (error: Throwable) {
         Log.w(TAG, "drain failed", error)

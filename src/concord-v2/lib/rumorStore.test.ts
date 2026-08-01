@@ -18,6 +18,7 @@ import {
   queryMentionRumors,
   queryPlane,
   queryRumorsByChannel,
+  queryWebxdcRumors,
   readControlSnapshot,
   readStoredSeal,
   storedToOpened,
@@ -412,6 +413,69 @@ describe("concord-v2 rumor store", () => {
     expect(got.some((e) => e.rumorId === forged.id)).toBe(false);
   });
 
+  it("refuses a CHAT rumor whose kind belongs to another plane (the reverse splice)", async () => {
+    const { channel, idHex } = makeChannel();
+    const alice = signer();
+    const mallory = signer();
+
+    // Mallory is an ordinary member of this channel — she holds its stream key
+    // legitimately, and `checkChannelBinding` has nothing to object to. What she
+    // wraps is a CONTROL edition, correctly bound to the channel. The plane read
+    // is a kind query, and a stored rumor keeps no seal, so `parseEdition` has
+    // no seal form left to reject it by: the refusal has to happen at the chat
+    // ingress, or this is a control edition anyone in any channel can mint.
+    const forged = chatRumor(idHex, mallory, 3308, "{}", 9000, [
+      ["vsk", "0"],
+      ["eid", "cd".repeat(32)],
+      ["ev", "1"],
+    ]);
+    writeRumors(CID, await openChatBatch([await wrapChat(forged, channel, mallory)], channel));
+
+    // An honest edition on the real control plane, written after, as the
+    // barrier proving the read ran late enough to have seen the forgery.
+    const control = channelGroupKey(new Uint8Array(32).fill(13), new Uint8Array(32).fill(13), 0);
+    const honest = buildRumor({
+      kind: 3308,
+      content: "{}",
+      tags: [["vsk", "0"], ["eid", "dc".repeat(32)], ["ev", "1"]],
+      pubkey: alice.pubkey,
+      ms: null,
+    });
+    await writeOpened(
+      CID,
+      [openWrap(wrapSeal(await sealRumor(honest, KIND_SEAL_PLAINTEXT, control, alice), control), control)],
+      "control",
+    );
+
+    const got = await eventually(
+      () => queryPlane(CID, "control"),
+      (r) => r.some((e) => e.rumorId === honest.id),
+    );
+    expect(got.some((e) => e.rumorId === honest.id)).toBe(true);
+    expect(got.some((e) => e.rumorId === forged.id)).toBe(false);
+
+    // Nor does it reach the timeline it was bound to — refused, not relocated.
+    const timeline = await queryChannelRumors(CID, idHex, { limit: 100 });
+    expect(timeline.some((r) => r.rumorId === forged.id)).toBe(false);
+  });
+
+  it("keeps chat kinds the plane sets don't claim, including ones added later", async () => {
+    const { channel, idHex } = makeChannel();
+    const alice = signer();
+
+    // The refusal is a denylist of the plane kinds, so a chat kind outside
+    // CHAT_KINDS (3310, the WebXDC signal — stored but never in the timeline)
+    // still stores. An allowlist would have dropped it.
+    const webxdc = chatRumor(idHex, alice, 3310, "state", 1000, [["i", "uuid-1"]]);
+    writeRumors(CID, await openChatBatch([await wrapChat(webxdc, channel, alice)], channel));
+
+    const got = await eventually(
+      () => queryWebxdcRumors(CID, idHex, "uuid-1"),
+      (r) => r.length === 1,
+    );
+    expect(got.map((r) => r.rumorId)).toEqual([webxdc.id]);
+  });
+
   it("refuses a control edition that did not arrive under a plaintext seal", async () => {
     const alice = signer();
     const mallory = signer();
@@ -484,5 +548,35 @@ describe("concord-v2 rumor store", () => {
       (s) => Boolean(s?.has(rumor.id)),
     );
     expect(afterRewrap?.has(rumor.id)).toBe(true);
+  });
+
+  it("keeps no snapshot for a community that has never rotated its root", async () => {
+    // Nothing reads the set for such a community — there is no compaction to
+    // tell from old-root fragments — so writing one was an id list growing per
+    // edition, forever, for nobody.
+    const alice = signer();
+    const control = channelGroupKey(new Uint8Array(32).fill(14), new Uint8Array(32).fill(14), 0);
+    const rumor = buildRumor({
+      kind: 3308,
+      content: "{}",
+      tags: [["vsk", "0"], ["eid", "fe".repeat(32)], ["ev", "1"]],
+      pubkey: alice.pubkey,
+      ms: null,
+    });
+    const opened = openWrap(
+      wrapSeal(await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, alice), control),
+      control,
+    );
+
+    await writeOpened(CID, [opened], "control", { refounded: false });
+
+    // The edition itself is stored exactly as before — only the bookkeeping is
+    // skipped.
+    const back = await eventually(
+      () => queryPlane(CID, "control"),
+      (r) => r.some((e) => e.rumorId === rumor.id),
+    );
+    expect(back.some((e) => e.rumorId === rumor.id)).toBe(true);
+    expect(await readControlSnapshot(CID, control.pk)).toBeUndefined();
   });
 });

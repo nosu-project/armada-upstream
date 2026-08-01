@@ -229,18 +229,33 @@ function wireGitRepositories(
  * Every control stream key is registered for NIP-42 so the wire's kind-1059
  * control REQs pass auth-gating relays.
  */
-function useWireConcord2Control(): Array<{ relays: string[]; idHex: string; groups: GroupKey[] }> {
+function useWireConcord2Control(): Array<{
+  relays: string[];
+  idHex: string;
+  groups: GroupKey[];
+  refounded: boolean;
+}> {
   const { data } = useCommunityList2();
   const entries = useMemo(() => (data ? liveEntries(data.list) : []), [data]);
 
   return useMemo(() => {
-    const out: Array<{ relays: string[]; idHex: string; groups: GroupKey[] }> = [];
+    const out: Array<{
+      relays: string[];
+      idHex: string;
+      groups: GroupKey[];
+      refounded: boolean;
+    }> = [];
     for (const entry of entries) {
       const community = rehydrateCommunity(entry);
       if (!community || community.relays.length === 0) continue;
       const groups = controlGroups(community);
       if (groups.length === 0) continue;
-      out.push({ relays: community.relays, idHex: community.idHex, groups });
+      out.push({
+        relays: community.relays,
+        idHex: community.idHex,
+        groups,
+        refounded: community.rootEpoch > 0n,
+      });
       // Scoped per community: a relay's NIP-42 challenge only signs the control
       // stream keys it actually hosts (see streamAuth.ts).
       registerStreamKeys(groups, community.relays);
@@ -675,7 +690,10 @@ export function WireSync() {
           // Chat wraps → rumor store, grouped per owning channel.
           const byChannel = new Map<ChannelV2, NostrRumor[]>();
           // Control wraps → opened-event store, grouped per owning community.
-          const ctlByCommunity = new Map<string, { groups: GroupKey[]; wraps: NostrRumor[] }>();
+          const ctlByCommunity = new Map<
+            string,
+            { groups: GroupKey[]; refounded: boolean; wraps: NostrRumor[] }
+          >();
           for (const wrap of parked) {
             const channel = spec.v2ByPk.get(wrap.pubkey);
             if (channel) {
@@ -688,7 +706,13 @@ export function WireSync() {
             if (ctl) {
               const bucket = ctlByCommunity.get(ctl.idHex);
               if (bucket) bucket.wraps.push(wrap);
-              else ctlByCommunity.set(ctl.idHex, { groups: ctl.groups, wraps: [wrap] });
+              else {
+                ctlByCommunity.set(ctl.idHex, {
+                  groups: ctl.groups,
+                  refounded: ctl.refounded,
+                  wraps: [wrap],
+                });
+              }
             }
           }
 
@@ -700,16 +724,19 @@ export function WireSync() {
             if (!communityIdHex) continue;
             const opened = await openChatBatch(wraps, channel);
             if (opened.length === 0) continue;
-            writeRumors(communityIdHex, opened);
+            // ACK only what actually landed: a wrap is deleted on the
+            // strength of its rumor being stored, and a notified message must
+            // never be locally destructible.
+            if (!(await writeRumors(communityIdHex, opened))) continue;
             scopes.add(`c2:${channel.idHex}`);
             const openedWrapIds = new Set(opened.map((o) => o.wrapId));
             acked.push(...wraps.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
           }
 
-          for (const [idHex, { groups, wraps }] of ctlByCommunity) {
+          for (const [idHex, { groups, refounded, wraps }] of ctlByCommunity) {
             const opened = await openPlaneWrapsChunked(wraps, groups);
             if (opened.length === 0) continue;
-            await writeOpened(idHex, opened, "control");
+            if (!(await writeOpened(idHex, opened, "control", { refounded }))) continue;
             scopes.add(`c2ctl:${idHex}`);
             const openedWrapIds = new Set(opened.map((o) => o.wrapId));
             acked.push(...wraps.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));

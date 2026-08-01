@@ -1,13 +1,13 @@
 import { NIndexedDB } from "@nostrify/indexeddb";
 import { openDB } from "idb";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildRelayGroups,
   KIND_GROUP_METADATA,
   relayGroupCacheFilters,
 } from "@/lib/nip29";
-import { purgeArmadaDB } from "@/lib/db/armadaDB";
+import { getArmadaDB, purgeArmadaDB } from "@/lib/db/armadaDB";
 import {
   __resetProvenanceForTests,
   eventIdsForRelay,
@@ -349,6 +349,40 @@ describe("relay provenance (same-pubkey relays, e.g. zooid)", () => {
     legacy.close();
 
     // The read path runs the drain, so no startup gate is needed here.
+    expect((await eventIdsForRelay(RELAY_1)).has(pad("s1"))).toBe(true);
+  });
+
+  it("expires provenance nothing has re-served, and keeps what is still served", async () => {
+    // Kind-39000 is addressable: every metadata edit mints a new id, and the
+    // superseded one is provenance nobody will ask about again. Left alone it
+    // accumulates per (relay, group, edit) forever.
+    const { kv } = getArmadaDB();
+    const day = Math.floor(Date.now() / 86_400_000);
+    const key = (d: number, id: string) =>
+      `provenance:${RELAY_1}\u0000${String(d).padStart(6, "0")}\u0000${pad(id)}`;
+
+    await kv.set(key(day - 90, "old"), 1);
+    await kv.set(key(day - 1, "fresh"), 1);
+
+    expect([...(await eventIdsForRelay(RELAY_1))].sort()).toEqual([pad("fresh")]);
+
+    // Swept from the store, not merely hidden from the read.
+    await vi.waitFor(async () => {
+      expect(await kv.keys(`provenance:${RELAY_1}\u0000`)).toHaveLength(1);
+    });
+  });
+
+  it("re-serving an event refreshes it, so a relay still in use never expires", async () => {
+    const { kv } = getArmadaDB();
+    const day = Math.floor(Date.now() / 86_400_000);
+    await kv.set(
+      `provenance:${RELAY_1}\u0000${String(day - 90).padStart(6, "0")}\u0000${pad("s1")}`,
+      1,
+    );
+
+    // The directory read that records it again stamps it with today.
+    await recordRelayProvenanceBatch([pad("s1")], RELAY_1);
+
     expect((await eventIdsForRelay(RELAY_1)).has(pad("s1"))).toBe(true);
   });
 });

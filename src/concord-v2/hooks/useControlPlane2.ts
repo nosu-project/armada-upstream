@@ -340,7 +340,11 @@ export function useDissolved2(community: CommunityV2 | undefined, active = true)
         ),
       );
       const opened = openPlaneWraps(results.flat(), [group]);
-      if (opened.length > 0) writeOpened(community!.idHex, opened, "control");
+      if (opened.length > 0) {
+        writeOpened(community!.idHex, opened, "control", {
+          refounded: community!.rootEpoch > 0n,
+        });
+      }
       const grave = opened.find((o) => isDissolvedOpened(o, community!.owner, community!.id));
       if (!grave) return null;
       await rememberDissolved(community!.idHex, grave.ms);
@@ -397,7 +401,9 @@ export async function publishEdition2(
   // `since` cursor would skip it). Without this, a promote can "succeed" with
   // no visible effect until a full resync.
   try {
-    writeOpened(community.idHex, [openWrap(wrap, control)], "control");
+    writeOpened(community.idHex, [openWrap(wrap, control)], "control", {
+      refounded: community.rootEpoch > 0n,
+    });
   } catch {
     // best-effort — the relay echo remains the fallback
   }

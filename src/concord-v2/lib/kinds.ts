@@ -159,3 +159,20 @@ export const PLANE_RULES: Record<Plane, { kinds: number[]; sealKind: number }> =
   guestbook: { kinds: [KIND_JOIN_LEAVE, KIND_KICK, KIND_SNAPSHOT], sealKind: KIND_SEAL_ENCRYPTED },
   rekey: { kinds: [KIND_REKEY], sealKind: KIND_SEAL_ENCRYPTED },
 };
+
+/**
+ * Every kind claimed by a non-chat plane — the set the CHAT ingress refuses.
+ *
+ * The mirror of {@link PLANE_RULES}' use in `writeOpened`, and the other half
+ * of the same boundary. A community's planes share one tenant, and a plane is
+ * read back by kind, so the two ingresses have to fence each other: a plane
+ * write refuses a `channel` tag (which would put it in a timeline), and a chat
+ * write refuses these kinds (which would put it in a plane). Without this a
+ * holder of any ONE channel's stream key could wrap a kind-3308 rumor carrying
+ * a valid channel binding and have `queryPlane` serve it as a control edition —
+ * and nothing downstream would catch it, since a stored rumor has no seal for
+ * `parseEdition` to check the form of.
+ */
+export const PLANE_KINDS: ReadonlySet<number> = new Set(
+  Object.values(PLANE_RULES).flatMap((rule) => rule.kinds),
+);

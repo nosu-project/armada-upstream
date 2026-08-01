@@ -97,7 +97,13 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
       // below are both async now, and a fire-and-forget queue could land AFTER
       // the removal that a successful publish issues — leaving a delivered
       // event queued forever.
-      await queueSignedEvent(event, relay);
+      //
+      // Awaited but not FATAL. The queue is the retry-after-restart safety net,
+      // and KV can genuinely fail (quota, an unavailable IndexedDB under iOS
+      // Lockdown Mode). Letting that throw here would abort a publish that was
+      // about to succeed — losing the send outright to protect its backup, and
+      // without even rendering it optimistically, since `onSigned` is below.
+      await queueSignedEvent(event, relay).catch(() => undefined);
 
       // Let callers optimistically render the event before the network call.
       onSigned?.(event);

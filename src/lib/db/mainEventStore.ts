@@ -10,7 +10,7 @@
  * exactly one database interface in the app and swapping its backing engine is
  * a decision made once, in `armadaDB.ts`, for everything at once.
  *
- * TWO KNOWN REGRESSIONS, accepted deliberately and tracked as follow-ups:
+ * ONE KNOWN REGRESSION, accepted deliberately:
  *
  *  - **Signatures are dropped.** ArmadaDB stores rumors, and these events
  *    arrive signed. Every signature CHECK in the app runs on the relay ingest
@@ -24,12 +24,12 @@
  *    re-published the result — an empty signature every relay rejects. The
  *    merges now keep the signed copy (`useGroupMessages`, `useBuzzMessages`)
  *    and `useRepublish` refuses an unsigned event outright.
- *  - **The Android notification service's buffer is stranded.** The service
- *    writes into its own SQLite file, which the WebView no longer reads, so
- *    events it received while the app was down are not visible here. Concord V2
- *    is unaffected (its wraps go through the `c2park` tenant), but NIP-29 and
- *    DM traffic buffered by the service is not picked up until the service
- *    hands off through an ArmadaDB-backed path.
+ *
+ * The Android notification service used to be a second regression here — it
+ * wrote into a private SQLite file the WebView didn't read, so NIP-29 and DM
+ * traffic it received while the app was down stayed invisible. That is what the
+ * Kotlin port fixed: the service writes through the same `main` tenant this
+ * store reads, so those events are simply here on open (see `armadaDB.ts`).
  */
 import { NKinds } from "@nostrify/nostrify";
 

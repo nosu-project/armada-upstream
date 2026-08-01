@@ -210,7 +210,7 @@ describe("ingestWireEvents", () => {
     });
     const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, owner), control) as NostrEvent;
     const { store, sinks } = makeSinks({
-      v2CtlByPk: new Map([[wrap.pubkey, { idHex, groups: [control] }]]),
+      v2CtlByPk: new Map([[wrap.pubkey, { idHex, groups: [control], refounded: false }]]),
     });
 
     const scopes = await collectScopes(() => ingestWireEvents(sinks, [wrap]));

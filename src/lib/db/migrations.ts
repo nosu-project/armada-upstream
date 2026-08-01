@@ -267,9 +267,8 @@ export async function runMigrations(
     ),
   ];
   const schemaJobs = schema.map((m) => ({
-    to: m.to,
-    label: m.label,
-    selves: m.perAccount ? accounts : [undefined],
+    migration: m,
+    selves: m.perAccount ? accounts : [undefined as string | undefined],
   }));
 
   const total = jobs.length + schemaJobs.reduce((n, s) => n + s.selves.length, 0);
@@ -299,12 +298,11 @@ export async function runMigrations(
   // that is still sitting in a database the next launch has yet to drain.
   if (failed) return;
 
-  for (const [i, step] of schemaJobs.entries()) {
-    const m = schema[i];
-    for (const self of step.selves) {
-      onProgress?.({ label: step.label, done, total });
+  for (const { migration, selves } of schemaJobs) {
+    for (const self of selves) {
+      onProgress?.({ label: migration.label, done, total });
       try {
-        await m.run(self);
+        await migration.run(self);
       } catch {
         // Stop at the first failure: versions are applied in order, and
         // skipping one to run the next hands it data in a shape it was never
@@ -316,7 +314,7 @@ export async function runMigrations(
     // Stamped once the step has run for EVERY account, and per step rather than
     // once at the end, so a run interrupted half way down the list resumes at
     // the next step instead of starting over.
-    await stampSchemaVersion(step.to);
+    await stampSchemaVersion(migration.to);
   }
 
   await stampCurrentVersion();

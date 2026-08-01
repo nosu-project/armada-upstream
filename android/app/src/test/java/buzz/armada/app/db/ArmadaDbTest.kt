@@ -134,6 +134,24 @@ class ArmadaDbTest {
     }
 
     @Test
+    fun `a constraint whose values all fail to decode matches nothing`() {
+        // Same thing as `[]` once decoded, and the same answer: a narrowing
+        // query that isn't understood must not come back with the tenant. It is
+        // also what keeps the planner from emitting `IN ()`, which is not SQL.
+        val db = open()
+        db.event("t", rumor(id = "a", kind = 1))
+
+        assertEquals(emptyList<String>(), db.query("t", filters("{\"kinds\":[\"1\"]}")).map { it.id })
+        assertEquals(emptyList<String>(), db.query("t", filters("{\"authors\":[7]}")).map { it.id })
+        assertEquals(emptyList<String>(), db.query("t", filters("{\"ids\":[null]}")).map { it.id })
+        assertEquals(emptyList<String>(), db.query("t", filters("{\"#e\":\"a\"}")).map { it.id })
+
+        // And it is the CONSTRAINT that fails, not the whole query: a filter
+        // with no such key is unaffected.
+        assertEquals(listOf("a"), db.query("t", filters("{\"kinds\":[1]}")).map { it.id })
+    }
+
+    @Test
     fun `honours ids, authors, kinds and the time window`() {
         val db = open()
         db.event("t", rumor(id = "a", pubkey = "alice", kind = 1, createdAt = 100))

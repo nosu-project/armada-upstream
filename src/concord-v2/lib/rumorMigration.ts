@@ -71,7 +71,7 @@ import {
 import { controlFoldKey, controlGroups } from "@/concord-v2/lib/control";
 import { dissolvedGroupKey } from "@/concord-v2/lib/derive";
 import { guestbookGroups } from "@/concord-v2/lib/guestbook";
-import { KIND_SEAL_PLAINTEXT, PLANE_RULES, type Plane } from "@/concord-v2/lib/kinds";
+import { KIND_SEAL_PLAINTEXT, PLANE_KINDS, PLANE_RULES, type Plane } from "@/concord-v2/lib/kinds";
 import { mirrorGroups } from "@/concord-v2/lib/relayMirror";
 import {
   communityTenant,
@@ -97,9 +97,6 @@ const TAG_WRAP = "wrap";
 const TAG_SEALKIND = "sealkind";
 const TAG_CHANNEL = "channel";
 const INJECTED = new Set([TAG_STREAM, TAG_SEAL, TAG_WRAP, TAG_SEALKIND]);
-
-/** Every kind claimed by a non-chat plane, so chat can refuse one riding a channel tag. */
-const PLANE_KINDS = new Set(Object.values(PLANE_RULES).flatMap((r) => r.kinds));
 
 /** Per-viewer flag, so a second account still drains its own share. */
 const doneKey = (self: string) => `c2rumors:migrated:${self}`;
@@ -282,8 +279,8 @@ function injected(row: NostrEvent, name: string): string | undefined {
  * channel id came out of this community's own control fold, so the row is this
  * community's. The kind is still checked: a rumor of a non-chat plane's kind
  * carrying a `channel` tag would be indexed here and then served by
- * {@link queryPlane} as that plane's — exactly what {@link writeOpened}'s
- * channel-tag refusal prevents on the live path.
+ * {@link queryPlane} as that plane's — the same refusal {@link writeRumors}
+ * applies to every chat rumor on the live path.
  */
 function convertChat(row: NostrEvent, channelIds: string[]): NostrRumor | undefined {
   if (PLANE_KINDS.has(row.kind)) return undefined;

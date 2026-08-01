@@ -368,7 +368,7 @@ class SqliteArmadaDb(
             // `d` tag its coordinate is built from.
             val coords = rows
                 .filter { Kinds.replaceable(it.first) || Kinds.addressable(it.first) }
-                .mapNotNull { Rumor.parse(it.second) }
+                .map { Rumor.parse(it.second) ?: error("ArmadaDB: unparseable rumor row") }
                 .map { coordOf(it) }
 
             for (coordChunk in Sql.batch(coords, MAX_PARAMS - 1)) {
@@ -499,7 +499,9 @@ class SqliteArmadaDb(
 
             val rows = db.query("SELECT json FROM rumors${Sql.where(conditions)}", params) { it.text(0) }
             for (json in rows) {
-                val rumor = Rumor.parse(json) ?: continue
+                // As in `readPage`: a stored row that won't parse is a corrupt
+                // store, not a row to quietly leave out of the answer.
+                val rumor = Rumor.parse(json) ?: error("ArmadaDB: unparseable rumor row")
                 if (filter.matches(rumor)) rumors.add(rumor)
             }
         }
@@ -577,9 +579,17 @@ class SqliteArmadaDb(
 
         return db.query(sql.collapseWhitespace(), params) { row ->
             val seq = if (keys) row.long(0) else 0L
-            Pair(seq, row.text(if (keys) 1 else 0))
-        }.mapNotNull { (seq, json) ->
-            Rumor.parse(json)?.let { Candidate(seq, it) }
+            val json = row.text(if (keys) 1 else 0)
+            // Throwing rather than skipping. A page whose size the caller reads
+            // as "the scan is exhausted" must not shrink for any reason other
+            // than the scan being exhausted: silently dropping a row would end
+            // the walk early and return a short answer as if it were complete.
+            // Every row here was written by `insertRumor` from a parsed rumor,
+            // so an unparseable one is a corrupt store, and saying so beats
+            // quietly serving part of it.
+            val rumor = Rumor.parse(json)
+                ?: error("ArmadaDB: unparseable rumor at seq $seq")
+            Candidate(seq, rumor)
         }
     }
 

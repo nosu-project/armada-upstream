@@ -46,8 +46,22 @@ export function readCutPending(me: string, communityIdHex: string): ReadCutInten
   return cleaned.targets.length > 0 ? cleaned : undefined;
 }
 
-/** Add a target (idempotent); the freshest keep-list wins, minus all targets. */
-export function addReadCutPending(me: string, communityIdHex: string, target: string, keep: string[]): void {
+/**
+ * Add a target (idempotent); the freshest keep-list wins, minus all targets.
+ *
+ * Async, and the await is load-bearing: this MERGES with what is already
+ * persisted, and an unwarmed cache reads as "nothing owed". Writing that back
+ * would replace a stored `{targets: [A, B]}` with `{targets: [C]}` and drop the
+ * read-cut for A and B — the exact failure this module exists to prevent, since
+ * nothing else remembers a rotation that never landed.
+ */
+export async function addReadCutPending(
+  me: string,
+  communityIdHex: string,
+  target: string,
+  keep: string[],
+): Promise<void> {
+  await cache.ready();
   const prior = readCutPending(me, communityIdHex);
   const targets = new Set(prior?.targets ?? []);
   targets.add(target);

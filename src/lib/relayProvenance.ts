@@ -23,12 +23,21 @@ import { normalizeRelayUrl } from "@/lib/platform";
 // This module records, per directory event, which relay URL(s) returned it, so
 // the directory cache can be scoped by relay URL instead of by signing key.
 //
-// Stored in ArmadaDB's KV, one entry per (relay, event) pair keyed
-// `provenance:<relay>\0<eventId>`. The pair belongs in the KEY rather than in a
-// per-relay array value because writes are fire-and-forget and concurrent — a
-// read-modify-write on a shared array would silently lose batches. Recovering
-// the ids is then a prefix scan, and the NUL separator is what stops
-// `wss://a.example` from matching `wss://a.example/eu`.
+// Stored in ArmadaDB's KV, one entry per (relay, day, event) triple keyed
+// `provenance:<relay>\0<day>\0<eventId>`. The pair belongs in the KEY rather
+// than in a per-relay array value because writes are fire-and-forget and
+// concurrent — a read-modify-write on a shared array would silently lose
+// batches. Recovering the ids is then a prefix scan, and the NUL separators are
+// what stop `wss://a.example` from matching `wss://a.example/eu`.
+//
+// THE DAY IS IN THE KEY so the space can be bounded without reading any values.
+// Kind-39000 metadata is addressable: every edit mints a new event id, and the
+// superseded one is provenance nothing will ever ask about again — so left
+// alone this grows with (groups × edits × relays), forever, with no eviction.
+// A relay still serving its directory re-records the same ids under today's
+// day, so live entries never age out; only ids nobody serves any more do. The
+// sweep is then a key scan and some deletes, with no value reads — which
+// matters on Android, where each one is a bridge round trip.
 //
 // Deliberately NOT stored in a tenant alongside the events themselves: the
 // event store keys by event id (a hash of the event) and must never be mutated
@@ -42,14 +51,46 @@ export const LEGACY_PROVENANCE_DB_NAME = "armada-relay-provenance";
 const KEY_PREFIX = "provenance:";
 const DONE_KEY = "provenance:migrated";
 
-/** Key prefix covering every event id recorded for `relay`. */
+/**
+ * How long an unrefreshed (relay, event) record survives. Comfortably longer
+ * than any session, so a relay the user still visits keeps its whole directory
+ * — the only thing that expires is provenance for events that stopped being
+ * served.
+ */
+const RETENTION_DAYS = 60;
+
+/** How often a read may pay for a sweep. */
+const SWEEP_INTERVAL_MS = 60 * 60_000;
+
+/** Today, as the number of whole days since the epoch. */
+function today(): number {
+  return Math.floor(Date.now() / 86_400_000);
+}
+
+/** Fixed width, so the day sorts lexicographically alongside its neighbours. */
+function dayStamp(day: number): string {
+  return String(day).padStart(6, "0");
+}
+
+/** Key prefix covering every event id recorded for `relay`, on any day. */
 function relayPrefix(relay: string): string {
   return `${KEY_PREFIX}${relay}\u0000`;
 }
 
-/** KV key for a (relay, event) pair. */
-function rowKey(relay: string, eventId: string): string {
-  return `${relayPrefix(relay)}${eventId}`;
+/** KV key for a (relay, day, event) triple. */
+function rowKey(relay: string, eventId: string, day = today()): string {
+  return `${relayPrefix(relay)}${dayStamp(day)}\u0000${eventId}`;
+}
+
+/** The day and event id a key carries, or undefined if it isn't one of ours. */
+function parseRow(key: string, prefix: string): { day: number; eventId: string } | undefined {
+  const rest = key.slice(prefix.length);
+  const split = rest.indexOf("\u0000");
+  if (split < 0) return undefined;
+  const day = Number(rest.slice(0, split));
+  const eventId = rest.slice(split + 1);
+  if (!Number.isInteger(day) || !eventId) return undefined;
+  return { day, eventId };
 }
 
 /**
@@ -82,6 +123,10 @@ export async function recordRelayProvenanceBatch(
  * The set of event ids known to have been served by `relayUrl`. Returns an
  * empty set when storage is unavailable or nothing is recorded yet — callers
  * treat an empty set as "no provenance info" and fall back accordingly.
+ *
+ * Also where the retention sweep happens, throttled: this is the only read, so
+ * it is the only place that knows a relay is still in use, and it has the key
+ * list in hand already.
  */
 export async function eventIdsForRelay(relayUrl: string): Promise<Set<string>> {
   const relay = normalizeRelayUrl(relayUrl) ?? relayUrl;
@@ -91,9 +136,47 @@ export async function eventIdsForRelay(relayUrl: string): Promise<Set<string>> {
     await migrateLegacyProvenance();
     const prefix = relayPrefix(relay);
     const keys = await getArmadaDB().kv.keys(prefix);
-    return new Set(keys.map((key) => key.slice(prefix.length)));
+
+    const now = today();
+    const cutoff = now - RETENTION_DAYS;
+    const ids = new Set<string>();
+    const stale: string[] = [];
+
+    for (const key of keys) {
+      const row = parseRow(key, prefix);
+      // A key that doesn't parse predates the day-stamped format. Provenance is
+      // derived — the next directory read records it again — so it is swept
+      // rather than read, which keeps this function knowing exactly one shape.
+      if (!row) {
+        stale.push(key);
+        continue;
+      }
+      if (row.day < cutoff) {
+        stale.push(key);
+        continue;
+      }
+      ids.add(row.eventId);
+    }
+
+    if (stale.length > 0) void sweep(stale);
+    return ids;
   } catch {
     return new Set();
+  }
+}
+
+let lastSweepAt = 0;
+
+/** Drop expired and unparseable rows, at most once every {@link SWEEP_INTERVAL_MS}. */
+async function sweep(keys: string[]): Promise<void> {
+  const now = Date.now();
+  if (now - lastSweepAt < SWEEP_INTERVAL_MS) return;
+  lastSweepAt = now;
+  try {
+    const kv = getArmadaDB().kv;
+    await Promise.all(keys.map((key) => kv.delete(key).catch(() => undefined)));
+  } catch {
+    // best-effort: the rows are re-swept on the next read
   }
 }
 
@@ -113,6 +196,12 @@ let drain: Promise<void> | undefined;
  * empty provenance set makes `useRelayGroups` render nothing from cache until
  * the network read lands, i.e. a blank channel list on the first reload after
  * upgrading.
+ *
+ * Copied rows are stamped with TODAY rather than the day they were originally
+ * recorded, which the legacy database never kept. That is the right direction:
+ * a relay still in use refreshes them on its next directory read, and one that
+ * isn't lets them expire {@link RETENTION_DAYS} from the upgrade instead of
+ * immediately.
  */
 export function migrateLegacyProvenance(): Promise<void> {
   drain ??= drainLegacyProvenance().catch((err: unknown) => {
@@ -152,7 +241,8 @@ async function drainLegacyProvenance(): Promise<void> {
   await db.kv.set(DONE_KEY, true);
 }
 
-/** Test seam: forget the memoised drain so the next read runs it again. */
+/** Test seam: forget the memoised drain and the sweep throttle. */
 export async function __resetProvenanceForTests(): Promise<void> {
   drain = undefined;
+  lastSweepAt = 0;
 }

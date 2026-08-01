@@ -110,4 +110,8 @@ export async function purgeClientStorage(): Promise<void> {
   // not applied, so its databases have to be closed before the sweep runs.
   await purgeArmadaDB();
   await Promise.all([purgeIndexedDB(), purgeCacheStorage(), purgeOrphanedOpfs()]);
+  // Again, afterwards. A cache warm already in flight when the first reset ran
+  // resolves against the OLD database and refills the map behind us; the reset
+  // is idempotent and costs nothing, and this is the last word.
+  resetKvCaches();
 }

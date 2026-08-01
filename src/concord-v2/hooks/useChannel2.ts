@@ -394,7 +394,10 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
         const parked = await peekPendingWraps(channel!.streams.map((s) => s.group.pk));
         if (parked.length === 0) return;
         const opened = await openChatBatch(parked, channel!);
-        writeRumors(community!.idHex, opened);
+        // ACK only once the rumors are actually stored. The ack DELETES the
+        // parked wrap, so acking over a failed write destroys the only copy of
+        // a message the user was already notified about.
+        if (!(await writeRumors(community!.idHex, opened))) return;
         const openedWrapIds = new Set(opened.map((o) => o.wrapId));
         ackPendingWraps(parked.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
       };

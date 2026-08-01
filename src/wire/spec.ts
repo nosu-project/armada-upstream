@@ -105,7 +105,13 @@ export interface WireInputs {
    * the sidebar without waiting for the slow background sweep (or for someone
    * to post the first message).
    */
-  concord2Control?: Array<{ relays: string[]; idHex: string; groups: GroupKey[] }>;
+  concord2Control?: Array<{
+    relays: string[];
+    idHex: string;
+    groups: GroupKey[];
+    /** Whether the community has ever rotated its root (see `noteControlSnapshot`). */
+    refounded: boolean;
+  }>;
   /** Repository activity planes attached through folded Concord V2 channel metadata. */
   gitRepositories?: GitRepositoryWireInput[];
   /** Cache/history-discovered NIP-34 issue and PR roots for dynamic child filters. */
@@ -135,7 +141,7 @@ export interface WireSpec {
   /** V2 channel id hex → its owning community id hex (for notification routing). */
   v2CommunityByChannel: Map<string, string>;
   /** V2 CONTROL stream address (wrap author) → its community, for decrypt + fold wake. */
-  v2CtlByPk: Map<string, { idHex: string; groups: GroupKey[] }>;
+  v2CtlByPk: Map<string, { idHex: string; groups: GroupKey[]; refounded: boolean }>;
   /** V1 `#z` pseudonym → channel id hex, for scope naming. */
   v1ByZ: Map<string, string>;
   /** V1 CONTROL `#z` pseudonym → its community id hex, for the fold-wake scope. */
@@ -276,10 +282,10 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
   // control-stream keys (not any channel's) and wake the fold rather than a
   // chat timeline (see ingest.ts). Filters coalesce with the chat-wrap filter
   // on the same relay via the shared KIND_WRAP `add` merge — one round trip.
-  const v2CtlByPk = new Map<string, { idHex: string; groups: GroupKey[] }>();
+  const v2CtlByPk = new Map<string, { idHex: string; groups: GroupKey[]; refounded: boolean }>();
   const ctlPksByRelay = new Map<string, Set<string>>();
-  for (const { relays, idHex, groups } of inputs.concord2Control ?? []) {
-    for (const g of groups) v2CtlByPk.set(g.pk, { idHex, groups });
+  for (const { relays, idHex, groups, refounded } of inputs.concord2Control ?? []) {
+    for (const g of groups) v2CtlByPk.set(g.pk, { idHex, groups, refounded });
     for (const url of relays) {
       const relay = normalizeRelayUrl(url);
       if (!relay) continue;

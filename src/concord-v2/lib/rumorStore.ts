@@ -55,7 +55,13 @@
 import type { NostrEvent } from "@nostrify/nostrify";
 
 import { readFolded, writeFolded } from "@/lib/foldedCache";
-import { KIND_SEAL_PLAINTEXT, KIND_WEBXDC, PLANE_RULES, type Plane } from "@/concord-v2/lib/kinds";
+import {
+  KIND_SEAL_PLAINTEXT,
+  KIND_WEBXDC,
+  PLANE_KINDS,
+  PLANE_RULES,
+  type Plane,
+} from "@/concord-v2/lib/kinds";
 import { resolveMs, type OpenedEvent, type OpenedWireEvent } from "@/concord-v2/lib/stream";
 import { messageMatchesMedia, type SearchMedia2 } from "@/concord-v2/lib/search";
 import { emitWireScopes } from "@/wire/bus";
@@ -137,6 +143,14 @@ export async function readControlSnapshot(
  * Read-modify-write per address, last-writer-wins under concurrency: a lost
  * update costs nothing, because the control plane is swept in COMPLETE mode and
  * the next sweep re-offers the whole plane.
+ *
+ * ONLY WORTH KEEPING FOR A REFOUNDED COMMUNITY. The set exists to tell a
+ * compaction snapshot from old-root fragments, and a community that has never
+ * rotated its root has no compaction to distinguish — `useControlSnapshot2`
+ * doesn't even ask. Writing it anyway meant one KV value per community growing
+ * by an id per control edition forever, re-serialized on every sweep, read by
+ * nothing. So {@link writeOpened} takes `refounded` and skips this when it is
+ * false; a caller that can't tell still writes it (see there).
  *
  * Exported for the legacy drain, which recovers the same fact from the old
  * store's `stream` tag. It takes the two fields it actually reads rather than a
@@ -535,15 +549,23 @@ export async function writeStoredSeal(
 }
 
 /**
- * Store a batch verbatim in a community's tenant. Best-effort: failures are
- * swallowed. `plane` is absent for chat (see {@link writeRumors}).
+ * Store a batch verbatim in a community's tenant. `plane` is absent for chat
+ * (see {@link writeRumors}).
+ *
+ * Resolves to whether the batch actually committed. It never REJECTS — most
+ * callers fire and forget, and a rejection there would be an unhandled one —
+ * but the outcome has to be legible to the callers that act on it: the sweep
+ * memoises a wrap as processed once its rumor is stored, and a memo advanced
+ * over a failed write would leave that rumor absent from the store and never
+ * decrypted again.
  */
 function writeStored(
   communityIdHex: string,
   opened: OpenedEvent[],
   plane?: Plane,
-): Promise<void> {
-  if (opened.length === 0 || !communityIdHex) return Promise.resolve();
+  snapshot = true,
+): Promise<boolean> {
+  if (opened.length === 0 || !communityIdHex) return Promise.resolve(true);
   const db = getArmadaDB();
   const s = db.tenant(communityTenant(communityIdHex));
   const writes: Promise<unknown>[] = [];
@@ -553,17 +575,19 @@ function writeStored(
       writes.push(db.kv.set(sealKey(communityIdHex, o.rumorId), o.seal));
     }
   }
-  if (plane === "control") writes.push(noteControlSnapshot(communityIdHex, opened));
+  if (plane === "control" && snapshot) {
+    writes.push(noteControlSnapshot(communityIdHex, opened));
+  }
   return Promise.all(writes)
-    .then(() => undefined)
-    .catch(() => undefined);
+    .then(() => true)
+    .catch(() => false);
 }
 
 /**
  * Persist opened stream events for one plane (chat has its own door — see
- * {@link writeRumors}). Best-effort: failures are swallowed. Resolves once the
- * batched write commits, so callers that need to act on the durable result
- * (e.g. ring the bus) can await it; most fire and forget.
+ * {@link writeRumors}). Resolves once the batched write commits, to WHETHER it
+ * committed — a caller that memoises these wraps as processed must not do so
+ * over a failed write. Never rejects; most callers fire and forget.
  *
  * THIS IS THE PLANE BOUNDARY. `plane` is the plane whose stream keys actually
  * opened these wraps, and a rumor is stored only if it is one of that plane's
@@ -588,12 +612,20 @@ function writeStored(
  * Note kind 5 is NOT among any plane's kinds: NIP-09 deletes are a chat-plane
  * affair (authorized against the roster in `useChannel2`, stored through
  * {@link writeRumors}), and no non-chat plane publishes one.
+ *
+ * `refounded` says whether this community has ever rotated its root, i.e.
+ * whether {@link readControlSnapshot} will ever be asked about it. It gates the
+ * snapshot bookkeeping, which is otherwise a growing id list nothing reads —
+ * see {@link noteControlSnapshot}. It DEFAULTS TO TRUE on purpose: a caller
+ * that doesn't know gets today's behavior (a set that costs something and is
+ * correct) rather than a missing one (a fold that anchors on nothing).
  */
 export function writeOpened(
   communityIdHex: string,
   opened: OpenedWireEvent[],
   plane: Plane,
-): Promise<void> {
+  opts: { refounded?: boolean } = {},
+): Promise<boolean> {
   const rule = PLANE_RULES[plane];
   return writeStored(
     communityIdHex,
@@ -604,6 +636,7 @@ export function writeOpened(
         !o.tags.some((t) => t[0] === TAG_CHANNEL),
     ),
     plane,
+    opts.refounded ?? true,
   );
 }
 
@@ -617,14 +650,36 @@ export function writeOpened(
  *
  * The emit is deferred until the write commits, so the re-read it triggers sees
  * the just-written rows.
+ *
+ * Resolves to whether the batch committed, for the callers that ACKNOWLEDGE
+ * something on the strength of it — the parked-wrap drains delete a wrap once
+ * its rumor is stored, and a notified message must never be locally
+ * destructible (issue #19). Never rejects; most callers fire and forget.
  */
-export function writeRumors(communityIdHex: string, opened: OpenedChat[]): void {
+export function writeRumors(communityIdHex: string, opened: OpenedChat[]): Promise<boolean> {
   // The `channel` binding rides through: the chat decode path already proved it
   // equals the coordinate whose key opened the wrap (`checkChannelBinding`).
-  if (opened.length === 0) return;
-  const channels = new Set(opened.map((o) => o.channelIdHex).filter(Boolean));
-  void writeStored(communityIdHex, opened).then(() => {
-    if (channels.size > 0) emitWireScopes([...channels].map((id) => `c2:${id}`));
+  //
+  // THIS IS THE OTHER HALF OF THE PLANE BOUNDARY. `writeOpened` refuses a plane
+  // rumor carrying a channel tag; this refuses a chat rumor carrying a plane's
+  // kind. The two fence each other because the planes share one tenant and a
+  // plane is read back BY KIND: without this, a holder of any one channel's
+  // stream key could wrap a kind-3308 rumor with a valid channel/epoch binding
+  // and have {@link queryPlane} serve it as a control edition. Nothing
+  // downstream would catch it — a stored rumor has no seal, so `parseEdition`
+  // has no seal form left to reject.
+  //
+  // A denylist rather than an allowlist, deliberately: the chat plane carries
+  // whatever inner kind its members send (see {@link CHAT_KINDS}, plus
+  // {@link KIND_WEBXDC} and anything added later), so enumerating what may pass
+  // would silently drop new kinds. What must NOT pass is exactly, and only, the
+  // set another plane is read back by.
+  const chat = opened.filter((o) => !PLANE_KINDS.has(o.kind));
+  if (chat.length === 0) return Promise.resolve(true);
+  const channels = new Set(chat.map((o) => o.channelIdHex).filter(Boolean));
+  return writeStored(communityIdHex, chat).then((stored) => {
+    if (stored && channels.size > 0) emitWireScopes([...channels].map((id) => `c2:${id}`));
+    return stored;
   });
 }
 

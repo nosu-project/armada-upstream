@@ -131,6 +131,13 @@ export interface PlaneScope {
    * cannot drift apart.
    */
   plane: Plane;
+  /**
+   * Whether this community has ever rotated its root. Only a Refounded one has
+   * a compaction snapshot to tell from old-root fragments, so only a Refounded
+   * one needs the store's per-address id set — see `noteControlSnapshot`.
+   * Read straight off the community by the scope factories.
+   */
+  refounded: boolean;
   /** The stream keys whose addresses this plane's wraps are authored by. */
   groups: GroupKey[];
   /**
@@ -196,6 +203,7 @@ export function controlScope(
     scope: controlScopeKey(community, relayUrl),
     communityIdHex: community.idHex,
     plane: "control",
+    refounded: community.rootEpoch > 0n,
     groups: [currentControlGroup(community)],
     complete: true,
     onFresh,
@@ -217,6 +225,7 @@ export function guestbookScope(
     scope: `guestbook:${community.idHex}@${community.rootEpoch}|${relayUrl}`,
     communityIdHex: community.idHex,
     plane: "guestbook",
+    refounded: community.rootEpoch > 0n,
     groups: guestbookGroups(community),
     onFresh,
   };
@@ -806,14 +815,23 @@ async function runScopes(
             (unreadableScopes.get(s.scope) ?? 0) + page.filter((w) => junkWraps.has(w.id)).length,
           );
 
+          let stored = true;
           if (opened.length > 0) {
-            await writeOpened(s.communityIdHex, opened, s.plane);
+            stored = await writeOpened(s.communityIdHex, opened, s.plane, {
+              refounded: s.refounded,
+            });
             for (const e of opened) freshPerScope[i].push(e);
           }
           // Only the memo advances, and only once the rumors are durably
           // stored — every sweep re-asks for the whole plane, so nothing
           // received can ever become unreachable.
-          notePlaneWrapsSeen(page.map((w) => w.id));
+          //
+          // Which is exactly why the write's outcome is checked. The memo is
+          // what stops a later sweep re-decrypting these wraps, so advancing it
+          // over a failed write would leave rumors that never reached the store
+          // and are never opened again — the one way a completely-swept plane
+          // can lose an event.
+          if (stored) notePlaneWrapsSeen(page.map((w) => w.id));
         };
         const swept = await fetchCompleteScope(
           nostr,
@@ -845,7 +863,7 @@ async function runScopes(
       // — the wrong plane's rules would decide what may be stored.
       const forwardFresh = new Map<
         string,
-        { communityIdHex: string; plane: Plane; fresh: OpenedWireEvent[] }
+        { communityIdHex: string; plane: Plane; refounded: boolean; fresh: OpenedWireEvent[] }
       >();
       for (const [i, s] of scopes.entries()) {
         if (s.complete) continue;
@@ -854,12 +872,19 @@ async function runScopes(
           const key = `${s.communityIdHex}|${s.plane}`;
           const bucket = forwardFresh.get(key);
           if (bucket) bucket.fresh.push(e);
-          else forwardFresh.set(key, { communityIdHex: s.communityIdHex, plane: s.plane, fresh: [e] });
+          else {
+            forwardFresh.set(key, {
+              communityIdHex: s.communityIdHex,
+              plane: s.plane,
+              refounded: s.refounded,
+              fresh: [e],
+            });
+          }
         }
       }
       await Promise.all(
-        [...forwardFresh.values()].map(({ communityIdHex, plane, fresh }) =>
-          writeOpened(communityIdHex, fresh, plane),
+        [...forwardFresh.values()].map(({ communityIdHex, plane, refounded, fresh }) =>
+          writeOpened(communityIdHex, fresh, plane, { refounded }),
         ),
       );
       await Promise.all(

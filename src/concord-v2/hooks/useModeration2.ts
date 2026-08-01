@@ -153,7 +153,7 @@ export function useModeration2(community: CommunityV2 | undefined, recipients: s
       // success — a rotation lost to a relay outage is retried on the next
       // visit from this persisted list, never a cold surface's roster.
       const keep = recipients.filter((pk) => pk !== target);
-      addReadCutPending(user.pubkey, community.idHex, target, keep);
+      await addReadCutPending(user.pubkey, community.idHex, target, keep);
       try {
         await refound({ keep, exclude: [target] });
         clearReadCutPending(user.pubkey, community.idHex);

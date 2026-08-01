@@ -55,6 +55,12 @@ export class KvPrefixCache<T> {
   private readonly entries = new Map<string, T>();
   private readonly listeners = new Set<() => void>();
   private warming?: Promise<void>;
+  /**
+   * Bumped by every warm, and by anything that empties the map. A warm whose
+   * generation is stale when its reads come back does not apply them — see
+   * {@link clear}.
+   */
+  private generation = 0;
 
   /** Whether the memory map has been filled from KV yet. */
   warmed = false;
@@ -94,7 +100,7 @@ export class KvPrefixCache<T> {
 
   /** Fill the memory map from KV. Idempotent, and shared by concurrent callers. */
   ready(): Promise<void> {
-    this.warming ??= this.warm().catch(() => {
+    this.warming ??= this.warm(++this.generation).catch(() => {
       // Retry on the next call rather than caching a rejection. A cache that
       // never warms degrades to a permanent miss, not to wrong answers.
       this.warming = undefined;
@@ -102,11 +108,23 @@ export class KvPrefixCache<T> {
     return this.warming;
   }
 
-  private async warm(): Promise<void> {
+  private async warm(generation: number): Promise<void> {
     const { kv } = getArmadaDB();
     const keys = await kv.keys(this.prefix);
-    for (const key of keys) {
-      const value = await kv.get<T>(key);
+
+    // Read in parallel rather than one await at a time. Each `get` is a round
+    // trip — a bridge call on Android — and a prefix holds one entry per relay
+    // contacted or channel typed in, so a sequential warm is that many round
+    // trips before the first synchronous read can answer anything.
+    const values = await Promise.all(keys.map((key) => kv.get<T>(key)));
+
+    // A `clear()` or `reset()` that landed mid-warm moved the generation on.
+    // Its whole point is that the map is now empty, so filling it from a scan
+    // that started before it would put the cleared entries straight back.
+    if (generation !== this.generation) return;
+
+    for (const [i, key] of keys.entries()) {
+      const value = values[i];
       if (value === undefined || value === null) continue;
       const id = key.slice(this.prefix.length);
       // A write that happened while the warm was in flight is newer than what
@@ -152,6 +170,9 @@ export class KvPrefixCache<T> {
     const keys = await kv.keys(this.prefix).catch(() => [] as string[]);
     await Promise.all(keys.map((key) => kv.delete(key).catch(() => undefined)));
     this.entries.clear();
+    // Retires any warm still in flight, whose reads were taken before the
+    // delete and would otherwise repopulate what was just cleared.
+    this.generation++;
     this.warming = Promise.resolve();
     this.warmed = true;
     this.notify();
@@ -160,6 +181,7 @@ export class KvPrefixCache<T> {
   /** Drop everything held in memory, and warm again on the next `ready()`. */
   reset(): void {
     this.entries.clear();
+    this.generation++;
     this.warming = undefined;
     this.warmed = false;
     this.notify();
