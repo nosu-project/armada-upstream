@@ -23,15 +23,13 @@ const DEVICE_ID_PREFIX = "armada:favorite-gifs:device-id:";
  * The shards themselves are in ArmadaDB's KV — unbounded with the number of
  * favorites, tens of KB each, and both writes swallowed quota failures.
  *
- * Two caches rather than one over `armada:favorite-gifs:`, so the drain cannot
- * reach `device-id:` and delete the localStorage copy the id must keep.
+ * Two caches rather than one over `armada:favorite-gifs:`, so the localStorage
+ * move (`LOCALSTORAGE_MOVES`) names the shard and merge spaces exactly and
+ * cannot reach `device-id:`, whose localStorage copy must stay put — a shard
+ * key embeds it, so an async miss would fork the shard.
  */
-const shardStore = new KvPrefixCache<unknown>({
-  prefix: "favorite-gifs-shard:",
-});
-const mergedStore = new KvPrefixCache<unknown>({
-  prefix: "favorite-gifs-merged:",
-});
+const shardStore = new KvPrefixCache<unknown>({ prefix: "favorite-gifs-shard:" });
+const mergedStore = new KvPrefixCache<unknown>({ prefix: "favorite-gifs-merged:" });
 
 /**
  * Load both stores, then drop the derived memos below and re-render: they may

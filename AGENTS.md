@@ -223,11 +223,11 @@ Things to know before touching it:
   ABI (~1.2 MB each, ~5 MB on a universal APK) and the same build for the JVM,
   which is what lets the conformance suite run the real engine as a plain unit
   test.
-- **ArmadaDB is a clean break — there are no legacy drains.** Data written by a
-  build older than it stays in that build; `legacyDatabases.ts` names those
-  IndexedDB databases only so the bytes are deleted at startup rather than left
-  on disk. Don't reintroduce a migration path, a startup gate, or a reader that
-  copes with a pre-ArmadaDB shape.
+- **The adapter is chosen before anything reads.** The legacy drains in
+  `migrations.ts` write through `getArmadaDB()`, so on Android they land in the
+  native store directly — there is no IndexedDB ArmadaDB to move, and adding a
+  second hop would be a second chance to strand decrypted Concord and NIP-17
+  history that exists nowhere else.
 - **The service is a second writer, so it obeys the same store rules.** `Dm17.kt`
   ports NIP-17's kind filter and NIP-40 expiry refusal;
   `ServiceStore.storeConcord2Rumor` ports the chat plane's encrypted-seal rule.
@@ -253,6 +253,22 @@ Things to know before touching it:
   genuinely not in the rumor. It lives in KV as a set of rumor ids per control
   stream address (`c2snap:<community>:<pk>`, `readControlSnapshot`) — the fact
   itself, not an event-shaped row impersonating one.
+- **A drain converts to the CURRENT shape; it does not copy rows across.** The
+  pre-ArmadaDB store folded `stream`/`wrap`/`sealkind`/`seal` into the stored
+  event's tags and told the planes apart by the `stream` tag at read time, so
+  it enforced no kind or seal-form rule at write. Planes read back by kind now,
+  and that is sound only because `writeOpened` refuses, at ingest, a rumor whose
+  kind does not belong to the plane whose keys opened its wrap — so
+  `rumorMigration.ts` applies those same three refusals to every row it copies,
+  using the `stream` tag it is about to strip as proof of the arrival plane.
+  Copying verbatim would mint a control edition out of any guestbook
+  keyholder's rumor.
+- **The localStorage→KV move happens in the gate, and nowhere else.**
+  `LOCALSTORAGE_MOVES` in `db/schema.ts` is the only place the old key
+  spellings are written down; `KvPrefixCache` knows nothing about localStorage
+  and reads KV only. Don't put a "check localStorage on miss" fallback in a
+  cache or a hook — that is the drift the single table exists to prevent, and
+  it would re-run on every warm forever.
 - The bridge carries JSON **text**, not marshalled objects: Capacitor would
   have to guess between an integer `kind` and a float, and a page of rumors is
   far cheaper as one string.

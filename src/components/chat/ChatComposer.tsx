@@ -152,9 +152,7 @@ const EMPTY_DRAFT: Draft = { content: "", attachments: [] };
  * Tolerates the legacy plain-string format (older builds stored just the text)
  * by treating a non-object value as the content.
  */
-const draftCache = new KvPrefixCache<Partial<Draft> | string>({
-  prefix: "draft:",
-});
+const draftCache = new KvPrefixCache<Partial<Draft> | string>({ prefix: "draft:" });
 
 function readDraft(key: string): Draft {
   const stored = draftCache.get(key);
@@ -457,9 +455,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     return caps;
   }, [sendOverride, pollsEnabled, onPollSubmit, onSlashAction, canModerate]);
 
-  // The `chat-draft:` prefix is the CACHE's now, not part of the id — it is
-  // what the legacy localStorage keys are drained under, so an id that carried
-  // the prefix too would look up `draft:chat-draft:…` and never find them.
+  // The prefix is the CACHE's now, not part of the id — the localStorage move
+  // rewrites `chat-draft:<id>` to `draft:<id>`, so an id that carried a prefix
+  // itself would look up `draft:chat-draft:…` and never find a migrated draft.
   const draftKey = `${relayUrl}:${groupId}${draftScope ? `:${draftScope}` : ""}`;
 
   const [content, setContent] = useState(() => readDraft(draftKey).content);

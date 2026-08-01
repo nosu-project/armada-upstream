@@ -137,8 +137,15 @@ export async function readControlSnapshot(
  * Read-modify-write per address, last-writer-wins under concurrency: a lost
  * update costs nothing, because the control plane is swept in COMPLETE mode and
  * the next sweep re-offers the whole plane.
+ *
+ * Exported for the legacy drain, which recovers the same fact from the old
+ * store's `stream` tag. It takes the two fields it actually reads rather than a
+ * whole {@link OpenedEvent}, so a copied row need not be reconstituted into one.
  */
-async function noteControlSnapshot(communityIdHex: string, opened: OpenedEvent[]): Promise<void> {
+export async function noteControlSnapshot(
+  communityIdHex: string,
+  opened: Array<{ streamPk?: string; rumorId: string }>,
+): Promise<void> {
   const byPk = new Map<string, string[]>();
   for (const o of opened) {
     if (!o.streamPk) continue;
@@ -511,6 +518,20 @@ export async function readStoredSeal(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Keep the seal a stored rumor arrived in.
+ *
+ * Exported for the legacy drain: the old store folded the seal into a `seal`
+ * tag, and moving it here is what lets the copied row be the bare rumor.
+ */
+export async function writeStoredSeal(
+  communityIdHex: string,
+  rumorId: string,
+  seal: NostrEvent,
+): Promise<void> {
+  await getArmadaDB().kv.set(sealKey(communityIdHex, rumorId), seal);
 }
 
 /**

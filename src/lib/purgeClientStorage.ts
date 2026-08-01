@@ -1,7 +1,7 @@
 import { clearRenderedPlaintext } from "@/hooks/dmRenderCache";
 import { ARMADA_DB_NAME, purgeArmadaDB } from "@/lib/db/armadaDB";
 import { resetKvCaches } from "@/lib/db/kvCache";
-import { LEGACY_DATABASE_NAMES } from "@/lib/db/legacyDatabases";
+import { legacyDatabaseNames } from "@/lib/db/migrations";
 import { resetDecryptConsent } from "@/lib/decryptConsent";
 
 /**
@@ -38,9 +38,10 @@ async function purgeIndexedDB(): Promise<void> {
       // dynamic names, so `purgeArmadaDB` deletes those — it can enumerate
       // and, more importantly, close them first.
       `${ARMADA_DB_NAME}:kv`,
-      // Every pre-ArmadaDB database: nothing reads them any more, but a purge
-      // still has to remove whatever an older build left behind.
-      ...LEGACY_DATABASE_NAMES,
+      // Every pre-ArmadaDB database, from the migration catalogue rather than a
+      // second hand-maintained list: a purge has to delete them whether or not
+      // the migration has run yet.
+      ...legacyDatabaseNames(),
     ];
     const dbs =
       typeof indexedDB.databases === "function"

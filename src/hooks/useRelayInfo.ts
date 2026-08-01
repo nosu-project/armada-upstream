@@ -58,9 +58,7 @@ function relayToHttpUrl(relayUrl: string): string | null {
 // evicted — an unbounded claim on a ~5 MB localStorage budget, and the write
 // already swallowed quota failures. The synchronous cache in front of it is
 // what lets `initialData` stay synchronous, which react-query requires.
-export const relayInfoCache = new KvPrefixCache<RelayInfoDocument>({
-  prefix: 'relay-info:',
-});
+export const relayInfoCache = new KvPrefixCache<RelayInfoDocument>({ prefix: 'relay-info:' });
 
 function readCachedInfo(relayUrl: string | undefined): RelayInfoDocument | undefined {
   return relayUrl ? relayInfoCache.get(relayUrl) : undefined;

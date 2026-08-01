@@ -1,15 +1,11 @@
 // @vitest-environment node
 /**
- * The synchronous-view-over-async-KV cache, and the localStorage drain built
- * into it.
+ * The synchronous-view-over-async-KV cache.
  *
- * Two things have to hold, and both are about the gap between construction and
- * the warm landing:
- *
- *  - a legacy value is never dropped before its KV copy is confirmed readable,
- *    since one of these holds unsent message drafts, and
- *  - a write made during that gap wins over what the warm reads, because the
- *    write is the newer fact.
+ * The thing to hold is the gap between construction and the warm landing: a
+ * write made during it wins over what the warm reads, because the write is the
+ * newer fact. The cache reads KV and nothing else — the one-time copy out of
+ * localStorage is a schema migration, covered in `migrations.test.ts`.
  */
 import { IDBFactory } from "fake-indexeddb";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -43,9 +39,6 @@ describe("KvPrefixCache", () => {
     expect(reloaded.get("room-a")).toEqual({ text: "hello" });
   });
 
-
-
-
   it("lets a write during the warm win over what the warm reads", async () => {
     const { KvPrefixCache } = await freshModule();
     const seed = new KvPrefixCache<string>({ prefix: "draft:" });
@@ -77,7 +70,6 @@ describe("KvPrefixCache", () => {
     expect(listener).toHaveBeenCalled();
     expect(cache.warmed).toBe(true);
   });
-
 
   it("drops everything on reset, so a logout can't leak into the next account", async () => {
     const { KvPrefixCache, resetKvCaches } = await freshModule();

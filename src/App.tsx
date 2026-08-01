@@ -9,6 +9,7 @@ import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-
 import { ensureAndroidBackListener } from "@/hooks/useAndroidBack";
 import { AppProvider } from "@/components/AppProvider";
 import { ArmadaDBProvider } from "@/components/ArmadaDBProvider";
+import { DBMigrationGate } from "@/components/DBMigrationGate";
 import { ControlPlaneSync } from "@/components/ControlPlaneSync";
 import { DeepLinkWarmup } from "@/components/DeepLinkWarmup";
 import { DesktopBadge } from "@/components/DesktopBadge";
@@ -70,6 +71,7 @@ export function App() {
                       <NostrSync />
                       <PublishOutbox />
                       <SyncGate />
+                    <DBMigrationGate />
                       <DeepLinkWarmup />
                       <DesktopBadge />
                       <NativeNotifications />

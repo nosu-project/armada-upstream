@@ -97,9 +97,7 @@ const REPLAY_BATCH_MAX = 200;
  * just resumes from the fresh lookback, so the relay loop awaits it once
  * before its first round rather than re-reading the whole backlog.
  */
-const cursors = new KvPrefixCache<number>({
-  prefix: "wire-cursor:",
-});
+const cursors = new KvPrefixCache<number>({ prefix: "wire-cursor:" });
 
 function readCursor(relay: string): number | undefined {
   const n = cursors.get(relay);

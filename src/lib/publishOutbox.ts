@@ -27,6 +27,9 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** Key prefix for one queued publish; the suffix is the event id. */
 const KEY_PREFIX = "outbox:";
+/** Pre-ArmadaDB localStorage key, drained by {@link migrateLegacyOutbox}. */
+const LEGACY_KEY = "armada:publish-outbox";
+const DONE_KEY = "outbox:migrated";
 
 export interface QueuedPublish {
   id: string;
@@ -96,6 +99,7 @@ function replaceableKey(event: NostrEvent, relay?: string): string | null {
 
 /** Every queued publish, oldest first (the order the flush should deliver in). */
 export async function getQueuedPublishes(): Promise<QueuedPublish[]> {
+  await migrateLegacyOutbox();
   const { kv } = getArmadaDB();
   const keys = await kv.keys(KEY_PREFIX);
   const items = await Promise.all(keys.map((key) => kv.get<QueuedPublish>(key)));
@@ -108,6 +112,7 @@ export async function getQueuedPublishes(): Promise<QueuedPublish[]> {
 /** Queue a signed event for delivery. A repeat of the same id is a no-op. */
 export async function queueSignedEvent(event: NostrEvent, relay?: string): Promise<void> {
   const { kv } = getArmadaDB();
+  await migrateLegacyOutbox();
 
   if (await kv.get(itemKey(event.id))) return;
 
@@ -147,6 +152,7 @@ export async function queueSignedEvent(event: NostrEvent, relay?: string): Promi
  */
 export async function withSignature(rumor: NostrRumor): Promise<NostrEvent> {
   if (isSigned(rumor)) return rumor;
+  await migrateLegacyOutbox();
   const item = await getArmadaDB().kv.get<QueuedPublish>(itemKey(rumor.id));
   if (isQueuedPublish(item)) return item.event;
   throw new Error("This message can no longer be sent: its signature was not kept.");
@@ -176,4 +182,53 @@ export async function clearPublishOutbox(): Promise<void> {
   const { kv } = getArmadaDB();
   const keys = await kv.keys(KEY_PREFIX);
   await Promise.all(keys.map((key) => kv.delete(key)));
+}
+
+// ── migration ─────────────────────────────────────────────────────────────────
+
+let drain: Promise<void> | undefined;
+
+/**
+ * Copy the pre-ArmadaDB localStorage queue into KV. Idempotent; runs at most
+ * once per session, and is awaited by every accessor rather than driven by the
+ * startup migration gate — that catalogue deletes IndexedDB *databases*, and
+ * this legacy store is a localStorage key.
+ *
+ * The legacy key is removed only after the copy is confirmed readable. KV
+ * degrades to a silent no-op when IndexedDB is unavailable, so deleting on the
+ * strength of an unverified write would discard undelivered messages on exactly
+ * the devices least able to spare them.
+ */
+export function migrateLegacyOutbox(): Promise<void> {
+  drain ??= drainLegacyOutbox();
+  return drain;
+}
+
+async function drainLegacyOutbox(): Promise<void> {
+  if (typeof localStorage === "undefined") return;
+  const { kv } = getArmadaDB();
+
+  try {
+    if (await kv.get<boolean>(DONE_KEY)) return;
+
+    const raw = localStorage.getItem(LEGACY_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    if (Array.isArray(parsed)) {
+      for (const item of parsed.filter(isQueuedPublish)) {
+        await kv.set(itemKey(item.id), item);
+      }
+    }
+
+    await kv.set(DONE_KEY, true);
+    // Confirm the write actually landed before dropping the only other copy.
+    if (await kv.get<boolean>(DONE_KEY)) localStorage.removeItem(LEGACY_KEY);
+  } catch {
+    // Retry next launch rather than marking a partial copy done.
+    drain = undefined;
+  }
+}
+
+/** Test seam: forget the memoised drain so the next access runs it again. */
+export function __resetOutboxForTests(): void {
+  drain = undefined;
 }

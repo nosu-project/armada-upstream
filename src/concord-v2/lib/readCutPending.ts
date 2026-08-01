@@ -26,9 +26,7 @@ export interface ReadCutIntent {
   keep: string[];
 }
 
-const cache = new KvPrefixCache<ReadCutIntent>({
-  prefix: "read-cut-pending:",
-});
+const cache = new KvPrefixCache<ReadCutIntent>({ prefix: "read-cut-pending:" });
 
 const id = (me: string, communityIdHex: string) => `${me}:${communityIdHex}`;
 

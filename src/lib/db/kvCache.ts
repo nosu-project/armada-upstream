@@ -23,10 +23,16 @@
  * ## Why move at all
  *
  * localStorage is ~5 MB per origin and `setItem` throws when it fills. The key
- * spaces held here are the unbounded ones — one entry per relay ever
+ * spaces moved here are the unbounded ones — one entry per relay ever
  * contacted, per channel ever typed in — with no eviction, so they were the
  * ones pushing every other writer toward that ceiling. Several already
  * swallowed quota failures silently.
+ *
+ * A cache knows nothing about where its key space used to live. The one-time
+ * copy out of localStorage is a schema migration the startup gate runs (see
+ * `LOCALSTORAGE_MOVES` in `db/schema.ts`), so there is exactly one place that
+ * holds the old-to-new key mapping, it runs once rather than on every warm,
+ * and a read here is only ever a read of KV.
  */
 import { getArmadaDB } from "./armadaDB";
 
@@ -161,7 +167,8 @@ export class KvPrefixCache<T> {
 }
 
 /**
- * Drop every cache's memory map (logout).
+ * Drop every cache's memory map (logout, and after the localStorage migration
+ * writes underneath one).
  *
  * `purgeArmadaDB` deletes the KV database, but these hold their own copy —
  * without this, the next account would read the previous one's drafts and

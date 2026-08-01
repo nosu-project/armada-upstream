@@ -29,14 +29,19 @@
  * device-trust level as the folded caches already in use. Wiped on logout.
  */
 
+import { NIndexedDB } from "@nostrify/indexeddb";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 import { getArmadaDB } from "@/lib/db/armadaDB";
+import { skipLegacyDrain } from "@/lib/db/legacyDatabases";
 import type { NRumorStore } from "@/lib/db/types";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { UnwrappedInvite } from "@/concord-v2/lib/directInvite";
 import { KIND_DIRECT_INVITE } from "@/concord-v2/lib/kinds";
+
+/** The shared pre-tenant database, drained into the tenants on first read. */
+const LEGACY_DB_NAME = "armada-concord-invites";
 
 /** NIP-59's outer-timestamp backdate window (the cursor rewinds this much). */
 export const WRAP_BACKDATE_SECS = 2 * 24 * 60 * 60;
@@ -44,6 +49,72 @@ export const WRAP_BACKDATE_SECS = 2 * 24 * 60 * 60;
 /** The invite tenant for one account (opens in the background on first use). */
 export function inviteInbox(recipient: string): NRumorStore {
   return getArmadaDB().tenant(`invites:${recipient}`);
+}
+
+/**
+ * Warm an account's invite tenant so the first inbox read hits a hot store,
+ * and drain anything the pre-tenant shared database still holds for it.
+ */
+export function warmInviteInbox(recipient: string): void {
+  void migrateLegacyInvites(recipient).catch(() => undefined);
+}
+
+// ── Legacy drain ────────────────────────────────────────────────────────────
+//
+// Invites used to live in one shared database scoped by an `#p` tag. Dropping
+// it on upgrade would empty the invite list for good: the sync cursor is
+// already past those wraps, so nothing would refetch them. So the first read
+// per account copies that account's records across, once, and records that it
+// did in ArmadaDB's KV. The legacy database is left in place (it is small, and
+// another account may not have migrated yet); logout deletes it either way.
+
+const LEGACY_MIGRATION_KEY = (recipient: string) => `invites:migrated:${recipient}`;
+
+/** In-flight/settled drains, so concurrent reads share one pass. */
+const drains = new Map<string, Promise<void>>();
+
+/**
+ * Copy `recipient`'s invites out of the shared database. Idempotent, memoised,
+ * and REJECTS on failure — the startup gate deletes the shared database once
+ * every drain has resolved for every account, so a swallowed error here would
+ * read as a finished copy and take the invites with it.
+ */
+export function migrateLegacyInvites(recipient: string): Promise<void> {
+  let drain = drains.get(recipient);
+  if (!drain) {
+    drain = drainLegacyInvites(recipient).catch((err: unknown) => {
+      // Drop the memo so a later read retries: writes are keyed by wrap id, so
+      // recopying what already landed costs nothing.
+      drains.delete(recipient);
+      throw err;
+    });
+    drains.set(recipient, drain);
+  }
+  return drain;
+}
+
+async function drainLegacyInvites(recipient: string): Promise<void> {
+  const db = getArmadaDB();
+  const key = LEGACY_MIGRATION_KEY(recipient);
+  if (await db.kv.get<boolean>(key)) return;
+  // `NIndexedDB` CREATES the database on its first query, which would leave a
+  // device that never had one with the very database the startup gate scans
+  // for. See `skipLegacyDrain`.
+  if (await skipLegacyDrain(LEGACY_DB_NAME)) return;
+
+  const legacy = new NIndexedDB(LEGACY_DB_NAME);
+  try {
+    const events = await legacy.query([{ kinds: [KIND_DIRECT_INVITE], "#p": [recipient] }]);
+    const tenant = db.tenant(`invites:${recipient}`);
+    for (const event of events) {
+      const { sig: _sig, ...rumor } = event;
+      await tenant.event(rumor);
+    }
+  } finally {
+    await legacy.close().catch(() => undefined);
+  }
+
+  await db.kv.set(key, true);
 }
 
 // ── Codec ─────────────────────────────────────────────────────────────────────
@@ -107,6 +178,7 @@ export async function queryStoredInvites(
   recipient: string,
   opts?: { signal?: AbortSignal },
 ): Promise<StoredDirectInvite[]> {
+  await migrateLegacyInvites(recipient).catch(() => undefined);
   const rumors = await inviteInbox(recipient).query([{ kinds: [KIND_DIRECT_INVITE] }], {
     signal: opts?.signal,
   });

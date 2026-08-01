@@ -58,9 +58,7 @@ const NO_DISMISSAL: Dismissal = { at: 0, unreadable: 0, flooded: false };
  * once {@link dismissals.ready} resolves. The failure that costs is a banner
  * briefly reappearing, never a suppressed alert.
  */
-const dismissals = new KvPrefixCache<Partial<Dismissal> | number>({
-  prefix: "cp-watchdog:",
-});
+const dismissals = new KvPrefixCache<Partial<Dismissal> | number>({ prefix: "cp-watchdog:" });
 
 const dismissId = (me: string, idHex: string) => `${me}:${idHex}`;
 
