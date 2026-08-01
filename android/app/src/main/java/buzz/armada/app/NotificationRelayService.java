@@ -2061,6 +2061,11 @@ public class NotificationRelayService extends Service {
         if (!isMentioned(wrap, userPubkey)) return;
         notifiedIds.add(id);
         if (storedBefore) return;
+        // NIP-40: a disappearing message whose deadline has already passed is
+        // not delivered at all — neither notified nor stored. Mirrors
+        // openDmWrap, which refuses an expired envelope before it decrypts
+        // anything.
+        if (ServiceStore.isExpired(wrap)) return;
         if (!prefBool("directMessages", true)) return;
 
         NativeSigner signer = nativeSigner;
@@ -2086,6 +2091,9 @@ public class NotificationRelayService extends Service {
                 // The seal is signed by the sender's identity key (NIP-17);
                 // verify it so a relay-supplied forgery can't misattribute a DM.
                 if (!NostrCrypto.verifyEvent(seal)) return;
+                // The seal carries the rumor's deadline too, so a reader learns
+                // it without having to trust the relay-visible wrap.
+                if (ServiceStore.isExpired(seal)) return;
                 final String peer = seal.optString("pubkey", "");
                 if (peer.length() != 64) return;
                 if (peer.equals(userPubkey)) return; // our own sent copy
@@ -2097,6 +2105,16 @@ public class NotificationRelayService extends Service {
                     try {
                         JSONObject rumor = new JSONObject(rumorJson);
                         if (!peer.equals(rumor.optString("pubkey"))) return;
+                        // Recompute the id before anything is filed under it:
+                        // it is what the store keys the rumor by and what a
+                        // NIP-09 delete matches, so a sender-chosen one is
+                        // never taken on trust.
+                        if (!stampRumorId(rumor)) return;
+                        // Store EVERY DM-plane kind, not just the ones that
+                        // notify: reactions, deletes and timer changes are part
+                        // of the conversation the app reads back. The store
+                        // applies the rest of the rules (kind, expiry, peer).
+                        ServiceStore.storeDm17Rumor(this, userPubkey, rumor);
                         // Chat/file messages only — reactions (7), deletes (5)
                         // and foreign rumor kinds (Concord invites) stay
                         // silent, matching the WebView's DM rumor kinds.
@@ -2126,6 +2144,44 @@ public class NotificationRelayService extends Service {
                 // Malformed seal JSON — silent.
             }
         });
+    }
+
+    /** Reject rumors claiming to be from further in the future than this. */
+    private static final long MAX_FUTURE_SKEW_SECS = 3600;
+
+    /**
+     * Verify a decrypted rumor's NIP-01 id — filling it in when the payload
+     * omitted one — and reject a rumor dated too far ahead. Mirrors the checks
+     * openDmWrap makes before it hands a rumor to the store.
+     *
+     * The id matters more here than it looks: it is the key the store holds the
+     * rumor under and the thing a NIP-09 delete names, so a sender who could
+     * choose it could make their message collide with — or delete — something
+     * else in the conversation.
+     */
+    private static boolean stampRumorId(JSONObject rumor) {
+        String pubkey = rumor.optString("pubkey", "");
+        JSONArray tags = rumor.optJSONArray("tags");
+        if (pubkey.isEmpty() || tags == null) return false;
+        if (!(rumor.opt("kind") instanceof Number)) return false;
+        if (!(rumor.opt("created_at") instanceof Number)) return false;
+        if (!(rumor.opt("content") instanceof String)) return false;
+
+        int kind = rumor.optInt("kind", -1);
+        long createdAt = rumor.optLong("created_at", -1);
+        if (kind < 0 || createdAt < 0) return false;
+        if (createdAt > System.currentTimeMillis() / 1000 + MAX_FUTURE_SKEW_SECS) return false;
+
+        String computed = NostrCrypto.eventId(pubkey, createdAt, kind, tags, rumor.optString("content"));
+        String claimed = rumor.optString("id", "");
+        if (!claimed.isEmpty() && !claimed.equals(computed)) return false;
+
+        try {
+            rumor.put("id", computed);
+        } catch (JSONException e) {
+            return false;
+        }
+        return true;
     }
 
     /**

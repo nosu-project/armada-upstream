@@ -196,6 +196,46 @@ object ServiceStore {
         }
     }
 
+    /**
+     * File a decrypted NIP-17 rumor in the viewer's opened-DM tenant, under the
+     * same rules the WebView's `writeDm17Rumors` applies — see [Dm17].
+     *
+     * The service decrypts DM wraps for its notifications regardless; storing
+     * the result is what stops the app having to open the same wrap a second
+     * time on launch, and is why a DM received overnight is in its thread
+     * immediately. A kind-5 delete stored here triggers the store's self-only
+     * NIP-09 pass, exactly as it does when the WebView writes one.
+     *
+     * The caller owns the crypto: that the seal's signature is good, that the
+     * rumor's author IS the seal's signer, and that the rumor's id is the NIP-01
+     * hash of its own contents rather than one the sender chose.
+     */
+    @JvmStatic
+    fun storeDm17Rumor(context: Context, self: String, rumor: JSONObject) {
+        val opened = Rumor.parse(rumor) ?: return
+        val stored = Dm17.stored(self, opened, System.currentTimeMillis() / 1000) ?: return
+
+        try {
+            ArmadaDb.get(context).event(Dm17.tenant(self), stored)
+        } catch (error: Throwable) {
+            Log.w(TAG, "dm rumor write failed", error)
+        }
+    }
+
+    /**
+     * Whether an event carries a NIP-40 deadline that has already passed.
+     *
+     * Used on the gift wrap and the seal before either is opened: a disappearing
+     * message whose deadline is behind us is not delivered at all, matching the
+     * WebView's `openDmWrap`, which refuses an expired envelope before it
+     * decrypts anything.
+     */
+    @JvmStatic
+    fun isExpired(event: JSONObject): Boolean {
+        val parsed = Rumor.parse(event) ?: return false
+        return Dm17.isExpired(parsed.tags, System.currentTimeMillis() / 1000)
+    }
+
     // ── The service → WebView routing queue ──────────────────────────────────
 
     /** One page of queued events, and the ids that acknowledge it. */

@@ -11,13 +11,8 @@ import type { SyncLogLine } from "@/hooks/useInitialSync";
 /**
  * Full-screen storage-upgrade overlay.
  *
- * Runs three kinds of upgrade, in this order:
+ * Runs two kinds of upgrade, in this order:
  *
- *  - **The native store move** (Android only). The whole IndexedDB ArmadaDB is
- *    copied into the native one, which the background service shares. It goes
- *    first because everything below reads `getArmadaDB()` — by then the native
- *    store — and because the legacy drains' own completion flags are among what
- *    is being moved.
  *  - **Legacy drains.** Armada's per-subsystem IndexedDB databases were folded
  *    into ArmadaDB. The data in them can't be dropped — decrypted messages,
  *    invites the sync cursor has passed, a decrypt cache worth a bunker prompt
@@ -64,7 +59,7 @@ export function DBMigrationGate() {
       // marker backwards, so the whole gate stands down.
       if (pending.future) return;
 
-      if (!pending.nativeDb && pending.legacy.length === 0 && pending.schema.length === 0) {
+      if (pending.legacy.length === 0 && pending.schema.length === 0) {
         // Nothing to do — a fresh install, or any launch after the upgrade.
         // Stamping is not bookkeeping for its own sake: the completion flag is
         // what stops the drains ever opening a legacy database, and opening one

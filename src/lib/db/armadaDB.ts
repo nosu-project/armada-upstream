@@ -11,9 +11,9 @@
  *    `SqliteArmadaDB.ts` passes the same conformance suite and would serve a
  *    SQLite-WASM worker too, but no driver for one exists yet.
  *
- * Data written before an Android install upgraded into the native store is not
- * abandoned: `nativeDbMigration.ts` drains the IndexedDB adapter across first,
- * gated at startup like every other migration.
+ * The choice is made once, before anything reads: the legacy drains in
+ * `migrations.ts` write through `getArmadaDB()`, so on Android they land in the
+ * native store directly and there is never an IndexedDB ArmadaDB to move.
  *
  * Kept as a lazy singleton rather than being built in the provider so that
  * non-React code (sync loops, the wire bus, the logout purge) reaches the same
@@ -58,34 +58,6 @@ export function getArmadaDB(): ArmadaDB {
   return instance;
 }
 
-let indexedDBInstance: IndexedDBArmadaDB | undefined;
-
-/**
- * The IndexedDB adapter, whether or not it is the app-wide one.
- *
- * Only the native migration and the purge want this: on Android the IndexedDB
- * store is the SOURCE the drain reads and the thing the purge deletes, and
- * asking `getArmadaDB()` for it would hand back the destination.
- *
- * Memoised for the same reason `getArmadaDB` is, and for one more: a second
- * instance is a second open connection, and `deleteDatabase` against an open
- * connection is blocked rather than applied — so a caller that opened its own
- * would quietly keep the databases it was trying to be rid of.
- */
-export function openIndexedDBArmadaDB(): IndexedDBArmadaDB {
-  if (instance instanceof IndexedDBArmadaDB) return instance;
-  indexedDBInstance ??= new IndexedDBArmadaDB(ARMADA_DB_NAME);
-  return indexedDBInstance;
-}
-
-/** Close the IndexedDB adapter's connections, so its databases can be deleted. */
-export async function closeIndexedDBArmadaDB(): Promise<void> {
-  const db = indexedDBInstance ?? (instance instanceof IndexedDBArmadaDB ? instance : undefined);
-  indexedDBInstance = undefined;
-  if (instance instanceof IndexedDBArmadaDB) instance = undefined;
-  await db?.close().catch(() => undefined);
-}
-
 /**
  * Close and delete every database the app-wide instance owns (logout purge).
  *
@@ -97,24 +69,25 @@ export async function closeIndexedDBArmadaDB(): Promise<void> {
  * an open connection is blocked, not applied.
  */
 export async function purgeArmadaDB(): Promise<void> {
-  // The native store is one file with one connection, shared with a background
-  // service that goes on writing to it — so it is emptied rather than deleted,
-  // and the connection stays open. The IndexedDB databases are still deleted
-  // below, since an install that migrated left them behind.
+  // The native store is one file on one connection, shared with a background
+  // service that goes on writing to it, so it is EMPTIED rather than deleted
+  // and the connection stays open. Nothing else to sweep: an Android install
+  // never opens the IndexedDB adapter, so there are no databases to delete.
   if (instance instanceof NativeArmadaDB) {
     await instance.wipe().catch(() => undefined);
+    return;
   }
 
   if (typeof indexedDB === "undefined") {
-    if (!(instance instanceof NativeArmadaDB)) instance = undefined;
+    instance = undefined;
     return;
   }
 
   // Opened if it wasn't already: the registry is on disk, so a logout in a
   // session that never touched the database still has tenants to delete.
-  const db = openIndexedDBArmadaDB();
+  const db = (instance ??= new IndexedDBArmadaDB(ARMADA_DB_NAME));
   const tenantIds = await db.tenantIds().catch(() => [] as string[]);
-  await closeIndexedDBArmadaDB();
+  await db.close().catch(() => undefined);
   instance = undefined;
 
   const names = new Set<string>([

@@ -223,11 +223,16 @@ Things to know before touching it:
   ABI (~1.2 MB each, ~5 MB on a universal APK) and the same build for the JVM,
   which is what lets the conformance suite run the real engine as a plain unit
   test.
-- **Switching a platform's engine strands its data.** `nativeDbMigration.ts`
-  drains IndexedDB into the native store, KV first (every other drain's
-  completion flag lives in it) and deleting nothing until everything is copied.
-  Decrypted Concord and NIP-17 history exists nowhere else once relays drop the
-  wraps that carried it.
+- **The adapter is chosen before anything reads.** The legacy drains in
+  `migrations.ts` write through `getArmadaDB()`, so on Android they land in the
+  native store directly — there is no IndexedDB ArmadaDB to move, and adding a
+  second hop would be a second chance to strand decrypted Concord and NIP-17
+  history that exists nowhere else.
+- **The service is a second writer, so it obeys the same store rules.** `Dm17.kt`
+  ports NIP-17's kind filter, NIP-40 expiry refusal and `peer` attribution;
+  `ServiceStore.storeConcord2Rumor` ports the Concord provenance tags and the
+  refusal of a rumor that forges them. A rule only one writer applies is a
+  conversation the two disagree about.
 - The bridge carries JSON **text**, not marshalled objects: Capacitor would
   have to guess between an integer `kind` and a float, and a page of rumors is
   far cheaper as one string.
