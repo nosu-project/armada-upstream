@@ -26,13 +26,14 @@
  */
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
-import { perfMark, perfTime } from "@/lib/perf";
+import { perfCount, perfMark, perfTime } from "@/lib/perf";
 
 import type { NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { ArmadaDB, ArmadaKV, NRumorStore } from "./types";
 
 import { tenantClass } from "./types";
+import { WrittenIds } from "./writtenIds";
 
 /** The native surface, as `ArmadaDbPlugin.kt` exposes it. */
 export interface ArmadaDBPlugin {
@@ -121,6 +122,8 @@ class NativeRumorStore implements NRumorStore {
 
   /** Profiler label — the tenant's class, see {@link tenantClass}. */
   private readonly label: string;
+  /** Ids already committed, so the relay cache's re-writes cost nothing. */
+  private readonly written = new WrittenIds();
 
   constructor(private readonly id: string) {
     this.label = tenantClass(id);
@@ -144,6 +147,14 @@ class NativeRumorStore implements NRumorStore {
   }
 
   event(event: NostrRumor): Promise<void> {
+    // See `writtenIds.ts`: an id is a hash of the event, so a re-write stores
+    // nothing new. Worth more here than on the web — a skipped write is also a
+    // JSON payload not serialized, a hop off the single Capacitor plugin thread
+    // not taken, and a turn of the native store's global lock not waited for.
+    if (this.written.has(event.id)) {
+      perfCount(`db.write ${this.label} (skipped)`, 0, 1, "events");
+      return Promise.resolve();
+    }
     // The native store drops a `sig` itself, but stripping here keeps the
     // request small on a bridge that serializes everything it carries.
     const { sig: _sig, ...rumor } = event as NostrRumor & { sig?: string };
@@ -167,6 +178,9 @@ class NativeRumorStore implements NRumorStore {
 
   async remove(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<void> {
     opts?.signal?.throwIfAborted();
+    // A removed event has to be storable again, and this class cannot evaluate
+    // the filter that removed it.
+    this.written.forget();
     await perfTime(`db.remove ${this.label}`, () =>
       ArmadaDBBridge().remove({ tenant: this.id, filters: JSON.stringify(filters) }),
     );
@@ -203,8 +217,12 @@ class NativeRumorStore implements NRumorStore {
       return;
     }
 
-    // Settled only after the native commit, so resolving means durable.
-    for (const write of writes) write.resolve();
+    // Settled only after the native commit, so resolving means durable — which
+    // is also why the ids are recorded here and not at `event()`.
+    for (const write of writes) {
+      this.written.add(write.rumor.id);
+      write.resolve();
+    }
   }
 
   [Symbol.toStringTag] = "NativeRumorStore";

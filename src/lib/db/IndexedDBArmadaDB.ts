@@ -19,6 +19,7 @@ import { openDB } from "idb";
 import { perfCount, perfMark, perfTime } from "@/lib/perf";
 
 import { defaultIndexTags, prefixUpperBound, tenantClass } from "./types";
+import { WrittenIds } from "./writtenIds";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 import type { DBSchema, IDBPDatabase } from "idb";
@@ -81,6 +82,8 @@ class IndexedDBRumorStore implements NRumorStore {
    * once one has resolved.
    */
   private opened = false;
+  /** Ids already committed, so the relay cache's re-writes cost nothing. */
+  private readonly written = new WrittenIds();
 
   constructor(name: string, indexTags: (rumor: NostrRumor) => string[][], label: string) {
     this.store = new NIndexedDB(name, { indexTags: (event) => indexTags(event) });
@@ -117,6 +120,14 @@ class IndexedDBRumorStore implements NRumorStore {
   }
 
   event(event: NostrRumor, opts?: { signal?: AbortSignal }): Promise<void> {
+    // An id is a hash of the event, so a re-write can store nothing new. The
+    // relay cache re-writes heavily (every event out of every query and req),
+    // and each skipped write is a batch entry, a promise, a tag-index extraction
+    // and a share of a transaction not paid.
+    if (this.written.has(event.id)) {
+      perfCount(`db.write ${this.label} (skipped)`, 0, 1, "events");
+      return Promise.resolve();
+    }
     // Index entries, not events: Armada replaces Nostrify's single-letter tag
     // policy with `defaultIndexTags`, which indexes EVERY tag under 20 chars —
     // and the tag index is `multiEntry`, so one row is written per entry. A
@@ -124,7 +135,12 @@ class IndexedDBRumorStore implements NRumorStore {
     // index rows dressed as a write of one event, and the count is the only way
     // to see that in a total.
     perfCount("db.index entries", 0, this.indexTags(event).length, "entries");
-    return perfTime(this.op("write"), () => this.settled(this.store.event(toEvent(event), opts)));
+    return perfTime(this.op("write"), async () => {
+      await this.settled(this.store.event(toEvent(event), opts));
+      // AFTER the commit: `resolved` means durable to every caller, and one of
+      // them ACKs (destroys) a parked wrap on the strength of it.
+      this.written.add(event.id);
+    });
   }
 
   async count(
@@ -138,6 +154,9 @@ class IndexedDBRumorStore implements NRumorStore {
   }
 
   remove(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<void> {
+    // A removed event has to be storable again, and this class cannot evaluate
+    // the filter that removed it.
+    this.written.forget();
     return perfTime(this.op("remove"), () => this.settled(this.store.remove(filters, opts)));
   }
 
