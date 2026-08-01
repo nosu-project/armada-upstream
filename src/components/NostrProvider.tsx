@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef } from "react";
 import { NostrEvent, NostrFilter, NPool, NRelay1, NSecSigner } from "@nostrify/nostrify";
-import { nip19, verifyEvent } from "nostr-tools";
+import { nip19 } from "nostr-tools";
 import { NostrContext } from "@nostrify/react";
 import { NUser, useNostrLogin } from "@nostrify/react/login";
 import type { NostrSigner } from "@nostrify/types";
@@ -9,6 +9,7 @@ import { EventStoreContext, type EventStoreContextType } from "@/contexts/EventS
 import { userReadRelays, userWriteRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCachedNip29Servers } from "@/hooks/useCachedNip29Servers";
+import { verifyEventOnce } from "@/lib/verifyCache";
 import { appEventStore } from "@/lib/db/mainEventStore";
 import { NostrBatcher } from "@/lib/NostrBatcher";
 import { AndroidNativeSigner } from "@/lib/androidNativeSigner";
@@ -75,7 +76,10 @@ const WRAP_KINDS = new Set([1059, 21059]);
  */
 function verifyEventSkippingWraps(event: NostrEvent): boolean {
   if (WRAP_KINDS.has(event.kind)) return true;
-  return verifyEvent(event);
+  // Once per id, not per copy: every relay's duplicate of the same event used
+  // to pay a fresh main-thread Schnorr verify (see verifyCache for the memo's
+  // soundness argument).
+  return verifyEventOnce(event);
 }
 
 /**

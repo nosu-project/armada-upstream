@@ -1,0 +1,74 @@
+/**
+ * The boot paint gate: background ingest waits for the first local paint.
+ *
+ * Everything at boot shares one thread. The profiler showed the local reads the
+ * first paint is made of (community list, control fold, channel timeline —
+ * ~100ms of actual work) queueing for SECONDS behind boot network ingest:
+ * relay replays, list fetches, and their per-event parse/verify/store, all
+ * kicked off the moment the providers mounted. The deferral is lossless for
+ * the drivers gated on this: they are cursor- and staleTime-driven catch-up,
+ * so starting late means starting from a marginally deeper cursor, not
+ * missing anything.
+ *
+ * The gate opens on the FIRST of:
+ *  - {@link markBootPainted} — the timeline painted its first rows, or a fresh
+ *    login raised SyncGate (nothing local to paint; sync IS the boot);
+ *  - a short timeout, so a route that never calls it (an empty channel, the
+ *    welcome screen, the DMs landing) cannot hold ingest hostage.
+ *
+ * One-way: once open it never closes, so a gated component mounts exactly once
+ * and its own effects take over from there.
+ */
+import { useSyncExternalStore } from "react";
+
+/** How long ingest can be held waiting for a first paint that never comes. */
+const BOOT_GATE_TIMEOUT_MS = 2500;
+
+let open = false;
+const listeners = new Set<() => void>();
+
+function notify(): void {
+  for (const listener of [...listeners]) listener();
+}
+
+/** Open the gate: the first local paint has committed (or never will exist). */
+export function markBootPainted(): void {
+  if (open) return;
+  open = true;
+  notify();
+}
+
+/** Whether the gate is open (non-reactive read). */
+export function isBootGateOpen(): boolean {
+  return open;
+}
+
+/** Reactive gate state, for mounting the deferred ingest drivers. */
+export function useBootGateOpen(): boolean {
+  return useSyncExternalStore(
+    (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    () => open,
+    () => open,
+  );
+}
+
+// Under vitest the gate starts open: the suites mount the ingest components
+// directly and assert on their immediate behaviour; the gate's own tests use
+// the seam below. In the app the timer arms at module load — imports evaluate
+// before the first render, so this reads as "N ms after the bundle evaluated".
+if (import.meta.env?.MODE === "test") {
+  open = true;
+} else {
+  setTimeout(markBootPainted, BOOT_GATE_TIMEOUT_MS);
+}
+
+/** Test seam: force the gate state (and notify subscribers). */
+export function _setBootGateForTests(value: boolean): void {
+  open = value;
+  notify();
+}

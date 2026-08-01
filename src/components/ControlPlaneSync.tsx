@@ -3,6 +3,8 @@ import { useNostr } from "@nostrify/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 
+import { useBootGateOpen } from "@/lib/bootGate";
+
 import { useConcordList } from "@/concord-v1/hooks/useConcordList";
 import { acceptInvite, type CommunityInvite } from "@/concord-v1/lib/invite";
 import { capRelays, type Community } from "@/concord-v1/lib/types";
@@ -113,11 +115,17 @@ function useControlPlaneSync(): void {
   }, [queryClient]);
 }
 
-/**
- * Headless mount that syncs every Concord community's control plane on pageload
- * (see {@link useControlPlaneSync}). No UI.
- */
-export function ControlPlaneSync() {
+function ControlPlaneSyncInner() {
   useControlPlaneSync();
   return null;
+}
+
+/**
+ * Headless mount that syncs every Concord community's control plane
+ * (see {@link useControlPlaneSync}). No UI. Boot-gated: the sweep is
+ * cursor-driven catch-up, so it waits for the first local paint rather than
+ * competing with it (see bootGate).
+ */
+export function ControlPlaneSync() {
+  return useBootGateOpen() ? <ControlPlaneSyncInner /> : null;
 }

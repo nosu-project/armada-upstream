@@ -9,6 +9,7 @@ import {
   WINDOW_STEP,
 } from "@/components/chat/timelineWindow";
 import { Skeleton } from "@/components/ui/skeleton";
+import { markBootPainted } from "@/lib/bootGate";
 import { usePerfMilestone } from "@/hooks/usePerfMilestone";
 import { cn } from "@/lib/utils";
 
@@ -360,7 +361,13 @@ export function MessageTimeline({
 
   // THE number the user is complaining about: when the skeleton came down. Every
   // other milestone on the timeline is only interesting relative to this one.
-  usePerfMilestone("timeline.first rows", !isLoading && messages.length > 0);
+  const firstRowsPainted = !isLoading && messages.length > 0;
+  usePerfMilestone("timeline.first rows", firstRowsPainted);
+  // The first painted rows are the boot gate's cue: background ingest may have
+  // the thread now. (An empty channel opens the gate via its timeout instead.)
+  useEffect(() => {
+    if (firstRowsPainted) markBootPainted();
+  }, [firstRowsPainted]);
 
   // The row stream, generalized: callers that pass `entries` interleave non-chat
   // rows (Git activity) chronologically; everyone else gets the chat-only view.

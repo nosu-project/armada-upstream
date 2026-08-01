@@ -2,6 +2,8 @@ import { useNostr } from "@nostrify/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
+import { useBootGateOpen } from "@/lib/bootGate";
+
 import { setBuzzMediaSigner } from "@/buzz/media";
 import { SYNCED_CONFIG_KEYS, type AppConfig, type RelayMetadata } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
@@ -131,6 +133,15 @@ function syncedSubset(config: AppConfig): Partial<EncryptedSettings> {
  * Renders nothing.
  */
 export function NostrSync() {
+  // Boot-gated: everything here is network catch-up (settings, lists, relay
+  // discovery) that used to fan out the moment the providers mounted and
+  // compete with the first paint's local reads. Starting after the gate opens
+  // loses nothing — every fetch here is a full read, not a delta.
+  const bootGateOpen = useBootGateOpen();
+  return bootGateOpen ? <NostrSyncInner /> : null;
+}
+
+function NostrSyncInner() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { config, updateConfig } = useAppContext();

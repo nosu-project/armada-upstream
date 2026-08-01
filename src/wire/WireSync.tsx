@@ -3,6 +3,8 @@ import { useNostr } from "@nostrify/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 
+import { useBootGateOpen } from "@/lib/bootGate";
+
 import { useConcordList } from "@/concord-v1/hooks/useConcordList";
 import { buildConcordSubs, buildConcordControlSubs } from "@/concord-v1/lib/concordNotifications";
 import { useCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
@@ -282,6 +284,17 @@ function useWireConcord2Control(): Array<{
  * stores; none of them hold their own sockets.
  */
 export function WireSync() {
+  // Boot sequencing: the wire is the highest-volume ingest driver, and its
+  // replay used to start the moment the providers mounted — competing, on the
+  // one main thread, with the local reads the first paint is made of. The
+  // funnel mounts only once the boot gate opens (first local paint, a fresh
+  // login, or the gate's short timeout); the durable cursors make the later
+  // start lossless.
+  const bootGateOpen = useBootGateOpen();
+  return bootGateOpen ? <WireSyncInner /> : null;
+}
+
+function WireSyncInner() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { config } = useAppContext();

@@ -3,6 +3,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { BrandMark } from "@/components/brand/BrandMark";
 import { TerminalProgress } from "@/components/brand/TerminalProgress";
+import { markBootPainted } from "@/lib/bootGate";
 import { useFreshLogin } from "@/hooks/useFreshLogin";
 import { useInitialSync } from "@/hooks/useInitialSync";
 
@@ -63,6 +64,9 @@ function SyncOverlay({ pubkey, onDone }: { pubkey: string; onDone: () => void })
 
   useEffect(() => {
     setGateActive(true);
+    // A fresh login has no local data for a first paint — the initial sync IS
+    // the boot. Open the boot gate so the deferred ingest drivers mount now.
+    markBootPainted();
     return () => setGateActive(false);
   }, []);
 
