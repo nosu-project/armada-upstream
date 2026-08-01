@@ -819,7 +819,18 @@ export function ConcordV2Page() {
   // composer is swapped for a banner). Cleared automatically if re-included.
   const excluded = useIsExcluded2(communityId);
 
-  const [channelIdHex, setChannelIdHex] = useState<string | null>(routeChannelId ?? null);
+  // Seeded from the route when it names a channel, else from the persisted
+  // last-open channel for this community — synchronously available from app
+  // config. Knowing the channel id at FIRST render is what lets the timeline
+  // snapshot prewarm and paint before the control fold has resolved anything
+  // (a community-only URL previously had no id until the fold, so the
+  // snapshot never engaged and the chat pane sat on a skeleton).
+  // `pickDefaultChannel` prefers this same stored id once channels resolve,
+  // and a stale id (channel since deleted) falls back exactly as before:
+  // `channels.find(...) ?? channels[0]`.
+  const [channelIdHex, setChannelIdHex] = useState<string | null>(
+    () => routeChannelId ?? (lastChannelKey ? config.lastChannelByServer[lastChannelKey] ?? null : null),
+  );
   useEffect(() => {
     if (routeChannelId) setChannelIdHex(routeChannelId);
   }, [routeChannelId]);
