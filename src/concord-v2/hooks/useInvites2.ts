@@ -158,6 +158,19 @@ function useUpdateInviteList2() {
     scope: { id: "concord2-invite-list" },
     mutationFn: async (patch: InviteList) => {
       if (!user?.signer.nip44) throw new Error("NIP-44 unsupported.");
+      // Fold the patch into the local cache before anything that can fail: for
+      // a mint the patch carries the ONLY copy of `signer_sk`, and createLink
+      // no longer blocks on this write — so the cache, not the publish, is
+      // what keeps a just-shared link revocable from this device when the
+      // read-merge below can't reach the relays. Merge is idempotent by token,
+      // so re-merging the patch into `next` is harmless.
+      queryClient.setQueryData(
+        inviteListKey(user.pubkey),
+        mergeInviteLists(
+          queryClient.getQueryData<InviteList>(inviteListKey(user.pubkey)) ?? EMPTY_INVITE_LIST,
+          patch,
+        ),
+      );
       const { list: remote, newestCreatedAt } = await fetchInviteList(nostr, user);
       const cached = queryClient.getQueryData<InviteList>(inviteListKey(user.pubkey)) ?? EMPTY_INVITE_LIST;
       const next = mergeInviteLists(mergeInviteLists(remote, cached), patch);
@@ -370,9 +383,10 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
         });
       });
 
-      // The member-facing Registry (swallows its own errors) and the opt-in
-      // announcement note: neither gates the link working.
-      void publishRegistry([...mine]);
+      // The member-facing Registry (swallows its own publish errors; the catch
+      // covers a throw before it) and the opt-in announcement note: neither
+      // gates the link working.
+      void publishRegistry([...mine]).catch(() => undefined);
       if (note) void publishEvent(note).catch(() => undefined);
 
       return url;
