@@ -34,13 +34,24 @@ const mergedStore = new KvPrefixCache<unknown>({ prefix: "favorite-gifs-merged:"
 /**
  * Load both stores, then drop the derived memos below and re-render: they may
  * hold results computed while the stores still read empty.
+ *
+ * The drop-and-notify fires once, on the cold→warm transition only. This is
+ * called from every `loadMerged`/`loadOwnFavoriteGifShard` miss — which the
+ * notify itself causes, via the re-render recomputing its snapshot — so
+ * re-arming it per call would clear the memos that re-render just refilled
+ * and loop forever, pinning the main thread.
  */
+let warmDrop: Promise<void> | undefined;
+
 function warmFavoriteGifStores(): Promise<void> {
-  return Promise.all([shardStore.ready(), mergedStore.ready()]).then(() => {
+  if (storesWarm()) return warmDrop ?? Promise.resolve();
+  warmDrop ??= Promise.all([shardStore.ready(), mergedStore.ready()]).then(() => {
+    warmDrop = undefined;
     mergedCache.clear();
     ownShardCache.clear();
     notify();
   });
+  return warmDrop;
 }
 
 /** Whether both stores have loaded, i.e. whether a miss means "nothing". */
