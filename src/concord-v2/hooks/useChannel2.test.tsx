@@ -43,6 +43,7 @@ import {
   writeRumors,
 } from "@/concord-v2/lib/rumorStore";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
+import { getSyncTasks } from "@/lib/syncActivity";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
@@ -429,7 +430,7 @@ describe("useChannelTimeline2 — issue #19 (notified but never rendered)", () =
     );
   });
 
-  it("keeps the skeleton up (never flashes 'no messages') while a cold channel backfills", async () => {
+  it("reports a cold channel's backfill as sync activity, never as a bare empty timeline", async () => {
     const chanA = makeChannel();
     const chanB = makeChannel();
     const alice = signer();
@@ -451,16 +452,22 @@ describe("useChannelTimeline2 — issue #19 (notified but never rendered)", () =
     h.pool = makePool({ [RELAY]: relay });
     const community = { idHex: CID, relays: [RELAY] } as unknown as CommunityV2;
 
-    // Record EVERY render's (isLoading, message-count) so a single transient
-    // "loaded + empty" frame — the flash — can't slip between polls.
-    const frames: Array<{ loading: boolean; count: number; channel: string }> = [];
+    // Record EVERY render's (isLoading, message-count, in-flight sync scope) so
+    // a single transient uncovered "loaded + empty" frame can't slip between
+    // polls.
+    const frames: Array<{ loading: boolean; count: number; syncing: boolean; channel: string }> = [];
     let watched = chanA.idHex;
 
     const { wrapper } = makeWrapper();
     const { result, rerender } = renderHook(
       ({ channel }: { channel: ChannelV2 }) => {
         const t = useChannelTimeline2(community, channel);
-        frames.push({ loading: t.isLoading, count: t.folded.messages.length, channel: watched });
+        frames.push({
+          loading: t.isLoading,
+          count: t.folded.messages.length,
+          syncing: getSyncTasks().some((task) => task.scope === `c2:${watched}`),
+          channel: watched,
+        });
         return t;
       },
       { wrapper, initialProps: { channel: chanA.channel } },
@@ -480,14 +487,17 @@ describe("useChannelTimeline2 — issue #19 (notified but never rendered)", () =
       { timeout: 8_000 },
     );
 
-    // The invariant: while B was cold-loading, NO render may be simultaneously
-    // not-loading AND empty — that pairing is the "No messages yet" flash.
-    // (Regression: on the switch render `firstLoadDone` still carried channel
-    // A's `true`, and the reset lived in a post-commit effect that raced B's
-    // synchronous queryFn, so B's empty store read opened the isLoading gate
-    // for a frame before the effect reset it.)
-    const flashFrame = frames.find((f) => !f.loading && f.count === 0);
-    expect(flashFrame).toBeUndefined();
+    // The invariant: a render that is not-loading AND empty must never be
+    // UNACCOUNTED FOR — that pairing is what paints "No messages yet".
+    //
+    // `isLoading` covers the local store read only, so on a cold channel it
+    // clears the moment ArmadaDB answers empty (that is the point: a channel
+    // whose history IS cached must not wait on relays). What keeps the empty
+    // frame from reading as a verdict is the sync-activity task the backfill
+    // registers under this channel's scope — the timeline renders "Catching
+    // up…" from it and shows its empty state only once it ends.
+    const uncovered = frames.find((f) => !f.loading && f.count === 0 && !f.syncing);
+    expect(uncovered).toBeUndefined();
     expect(result.current.folded.messages.map((m) => m.content)).toContain("b-msg");
   });
 });

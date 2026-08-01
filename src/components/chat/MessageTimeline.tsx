@@ -223,8 +223,13 @@ interface MessageTimelineProps {
   newDividerId?: string;
   /**
    * True while a background catch-up for THIS conversation is in flight (a
-   * sync-activity task scoped to it). An empty timeline then keeps the
-   * skeleton up instead of declaring "no messages" — the verdict isn't in yet.
+   * sync-activity task scoped to it). An empty timeline then says so — "no
+   * messages" is a verdict, and it isn't in until the catch-up settles.
+   *
+   * Deliberately NOT part of the skeleton gate: the skeleton stands for the
+   * LOCAL read, which is over in milliseconds, while a relay round can take
+   * seconds. Dressing network latency up as a load left a fully-cached
+   * conversation behind a skeleton for as long as its backfill ran.
    */
   syncing?: boolean;
   className?: string;
@@ -724,10 +729,24 @@ export function MessageTimeline({
 
   return (
     <div className={cn("relative flex flex-col", className)}>
-      {isLoading || transientEmpty || (syncing && timelineEntries.length === 0) ? (
+      {isLoading || transientEmpty ? (
         <TimelineSkeleton />
       ) : timelineEntries.length === 0 ? (
-        <div className="flex-1 min-h-0 overflow-y-auto px-3 py-4">{emptyState ?? null}</div>
+        <div className="flex-1 min-h-0 overflow-y-auto px-3 py-4">
+          {/* An empty conversation with a catch-up still running hasn't been
+              judged yet, so it must not read as "no messages" — but it isn't
+              LOADING either (the local read is done and it was empty). Say
+              which of the two it is, rather than holding a skeleton that
+              claims history is about to appear from disk. */}
+          {syncing ? (
+            <p className="flex items-center justify-center gap-2 px-2 py-8 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin shrink-0" />
+              Catching up…
+            </p>
+          ) : (
+            emptyState ?? null
+          )}
+        </div>
       ) : (
         <>
           <div

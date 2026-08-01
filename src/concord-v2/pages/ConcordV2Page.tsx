@@ -1436,7 +1436,13 @@ export function ConcordV2Page() {
     // A scroll-up page is one mixed operation. Both stores may prepend entries;
     // MessageTimeline owns the single scroll-height restoration around this
     // promise, so chat and Git cannot fight over the reader's anchor.
-    isLoading: baseTransport.isLoading || gitActivity.isLoading,
+    //
+    // `isLoading` is deliberately NOT merged: it is the timeline's skeleton
+    // gate, and the skeleton stands for the chat store read. Git activity is
+    // its own event domain read from the shared event store, so ORing it in
+    // held a fully-cached conversation behind a skeleton whenever a
+    // repo-attached channel's Git query was slow. Its rows simply appear when
+    // they resolve, like any other late entry.
     hasMore: Boolean(baseTransport.hasMore || gitActivity.hasMore),
     isLoadingOlder: Boolean(baseTransport.isLoadingOlder || gitActivity.isLoadingOlder),
     loadOlder: async () => {
@@ -2294,9 +2300,15 @@ export function ConcordV2Page() {
                     syncing={channelSyncing}
                     className="flex-1 min-h-0"
                     emptyState={
-                      <p className="px-2 py-8 text-center text-sm text-muted-foreground">
-                        No messages yet. Say something — only members can read it.
-                      </p>
+                      // Only once a channel has actually resolved. Before the
+                      // control fold names one there is no conversation to
+                      // call empty, and "say something" would be inviting the
+                      // reader to write into a channel that isn't there yet.
+                      channel ? (
+                        <p className="px-2 py-8 text-center text-sm text-muted-foreground">
+                          No messages yet. Say something — only members can read it.
+                        </p>
+                      ) : undefined
                     }
                     renderMessage={(msg, continuation) => {
                       const replyId = getQuoteReplyToId(msg);
