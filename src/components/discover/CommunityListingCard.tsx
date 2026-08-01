@@ -53,7 +53,7 @@ export function CommunityListingCardSkeleton({ className }: { className?: string
       )}
       aria-hidden
     >
-      <Skeleton className="h-24 w-full rounded-none" />
+      <Skeleton className="aspect-[3/1] w-full rounded-none" />
       <div className="px-3.5 py-3 flex flex-col flex-1 gap-2.5">
         <div className="flex items-center gap-2.5">
           <Skeleton className="size-10 shrink-0 rounded-lg" />
@@ -81,9 +81,6 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
   const navigate = useNavigate();
   const { nostr } = useNostr();
   const parsed = useMemo(() => parseInviteLink(invite.inviteUrl), [invite.inviteUrl]);
-  const author = useAuthor(invite.source.pubkey);
-  const metadata = author.data?.metadata;
-  const displayName = getDisplayName(metadata, invite.source.pubkey);
   const [copied, setCopied] = useState(false);
 
   // Resolve the community name from its bundle (the link carries the secret, so
@@ -96,6 +93,16 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
     retry: false,
     queryFn: () => resolveBundle(nostr, parsed!, parsed!.bootstrapRelays),
   });
+
+  // Attribute the community to its OWNER — the bundle's `owner` is verified
+  // (the self-certifying community_id must reproduce from it), unlike the
+  // announcement's author, who is merely whoever shared it. Fall back to the
+  // sharer only when the bundle can't resolve at all.
+  const attributedPubkey = bundle?.owner ?? invite.source.pubkey;
+  const attributionLabel = bundle?.owner ? "owned by" : "shared by";
+  const author = useAuthor(attributedPubkey);
+  const metadata = author.data?.metadata;
+  const displayName = getDisplayName(metadata, attributedPubkey);
 
   const iconUrl = useDecryptedImage2(bundle?.icon);
   const bannerUrl = useDecryptedImage2(bundle?.banner);
@@ -136,29 +143,56 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
         className,
       )}
     >
-      {/* Banner (from the bundle preview, decrypted with the link's secret).
-          A bannerless community still gets the strip: the icon blown up as a
+      {/* Banner (from the bundle preview, decrypted with the link's secret),
+          at the community sidebar's desktop ratio (240×80 → 3:1). A
+          bannerless community still gets the strip: the icon blown up as a
           blurred backdrop, or a faint oversized initial — so the grid keeps
-          one rhythm instead of mixing two card heights. */}
-      <div className="relative h-24 w-full shrink-0 overflow-hidden bg-secondary">
-        {bannerUrl ? (
+          one rhythm instead of mixing two card heights. For a member the
+          strip doubles as an "open" affordance. */}
+      {(() => {
+        const bannerContent = bannerUrl ? (
           <img src={bannerUrl} alt="" className="size-full object-cover" />
-        ) : iconUrl ? (
-          <img
-            src={iconUrl}
-            alt=""
-            aria-hidden
-            className="size-full scale-125 object-cover opacity-50 blur-2xl"
-          />
         ) : (
-          <span
-            aria-hidden
-            className="flex size-full items-center justify-center text-6xl font-bold uppercase text-foreground/10"
+          <>
+            {iconUrl ? (
+              <img
+                src={iconUrl}
+                alt=""
+                aria-hidden
+                className="size-full scale-125 object-cover opacity-50 blur-2xl"
+              />
+            ) : (
+              <span
+                aria-hidden
+                className="flex size-full items-center justify-center text-7xl font-bold uppercase text-foreground/10"
+              >
+                {initial}
+              </span>
+            )}
+            {/* The placeholder carries the name as words, like the sidebar's
+                title-over-banner treatment. */}
+            <span className="absolute inset-0 flex items-center justify-center px-4">
+              <span className="min-w-0 truncate text-lg font-bold text-foreground/90 drop-shadow-sm">
+                {name}
+              </span>
+            </span>
+          </>
+        );
+        return isMember ? (
+          <button
+            type="button"
+            onClick={onOpen}
+            aria-label={`Open ${name}`}
+            className="relative aspect-[3/1] w-full shrink-0 overflow-hidden bg-secondary"
           >
-            {initial}
-          </span>
-        )}
-      </div>
+            {bannerContent}
+          </button>
+        ) : (
+          <div className="relative aspect-[3/1] w-full shrink-0 overflow-hidden bg-secondary">
+            {bannerContent}
+          </div>
+        );
+      })()}
       <div className="px-3.5 py-3 flex flex-col flex-1 gap-2.5">
         {/* Header: icon + name */}
         <div className="flex items-center gap-2.5 min-w-0">
@@ -170,7 +204,17 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
             )}
           </span>
           <div className="min-w-0 flex-1">
-            <p className="font-semibold truncate leading-tight">{name}</p>
+            {isMember ? (
+              <button
+                type="button"
+                onClick={onOpen}
+                className="block max-w-full truncate text-left font-semibold leading-tight hover:underline"
+              >
+                {name}
+              </button>
+            ) : (
+              <p className="font-semibold truncate leading-tight">{name}</p>
+            )}
             <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
               <ShieldCheck className="size-3 shrink-0" />
               Encrypted community
@@ -179,8 +223,8 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
           </div>
         </div>
 
-        {/* Who shared it */}
-        <ProfilePreviewCard pubkey={invite.source.pubkey}>
+        {/* Whose community it is */}
+        <ProfilePreviewCard pubkey={attributedPubkey}>
           <button
             type="button"
             className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground min-w-0"
@@ -192,7 +236,7 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
               </AvatarFallback>
             </Avatar>
             <span className="truncate">
-              shared by <DisplayName pubkey={invite.source.pubkey} name={displayName} />
+              {attributionLabel} <DisplayName pubkey={attributedPubkey} name={displayName} />
             </span>
           </button>
         </ProfilePreviewCard>
