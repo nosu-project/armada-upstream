@@ -1,7 +1,10 @@
 import { Compass, Palette, Plus, Search, Smile, Users, X } from "lucide-react";
 import { lazy, Suspense, useCallback, useMemo, useState, type ReactNode } from "react";
 
-import { CommunityListingCard } from "@/components/discover/CommunityListingCard";
+import {
+  CommunityListingCard,
+  CommunityListingCardSkeleton,
+} from "@/components/discover/CommunityListingCard";
 import { ThemeDiscoverCard } from "@/components/discover/ThemeDiscoverCard";
 import { EmojiPackCard } from "@/components/chat/EmojiPackCard";
 import { ServerRail } from "@/components/layout/ServerRail";
@@ -238,7 +241,16 @@ function CommunitiesTab({ query }: { query: string }) {
     return dup;
   }, [data, resolved]);
 
-  if (isLoading && !data) return <TabSkeleton />;
+  if (isLoading && !data) {
+    // Card-shaped placeholders, enough of them to fill a desktop viewport.
+    return (
+      <div className={GRID} aria-hidden>
+        {Array.from({ length: 12 }, (_, i) => (
+          <CommunityListingCardSkeleton key={i} />
+        ))}
+      </div>
+    );
+  }
   if (isError) return <TabState icon={Users}>Couldn't reach the relays. Try again.</TabState>;
   if (!data || data.length === 0) {
     return (

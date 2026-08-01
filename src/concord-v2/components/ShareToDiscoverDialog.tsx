@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Loader2, Megaphone } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
@@ -187,8 +188,10 @@ function CommunityPicker({ onSelect }: { onSelect: (idHex: string) => void }) {
 
 function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
   const { community, folded, eligible, isLoading } = useCanShare(idHex);
-  const { createLink, isCreatingLink, myLinks, isPublic } = useInviteActions2(community);
-  const { mutateAsync: publishEvent, isPending: isPublishing } = useNostrPublish();
+  const { createLink, myLinks, isPublic, refreshMyLinks } = useInviteActions2(community);
+  const { mutateAsync: publishEvent } = useNostrPublish();
+  const queryClient = useQueryClient();
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const name = folded?.metadata?.name ?? community?.name ?? "this community";
@@ -199,19 +202,32 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
   const now = Math.floor(Date.now() / 1000);
   const reusable = myLinks.find((e) => !e.expires_at || e.expires_at > now);
   const willMint = !reusable;
-  const busy = isCreatingLink || isPublishing;
 
   const handleShare = async () => {
     setError(null);
     if (!community || !eligible) return;
+    setBusy(true);
     try {
-      const url = reusable?.url ?? (await createLink({}));
+      let url: string;
+      if (reusable) {
+        url = reusable.url;
+        // The listing shows whatever this link's bundle vends, and a link
+        // minted before the community's current name/icon/banner keeps
+        // serving the old preview — re-post the CURRENT bundle at its
+        // coordinate so the card renders today's community.
+        await refreshMyLinks().catch(() => undefined);
+      } else {
+        url = await createLink({});
+      }
       // The announcement is just the link. Name, icon and banner — and even
       // which community it is — are resolved live from the link's bundle by
       // every viewer, so the listing tracks the community as it changes.
       const announcement = buildCommunityAnnouncement({ inviteUrl: url });
       if (!announcement) throw new Error("Couldn't build the listing.");
       await publishEvent(announcement);
+      // Drop cached listing previews so the sharer's own Discover tab picks
+      // up the just-refreshed bundle instead of a stale decrypt.
+      queryClient.invalidateQueries({ queryKey: ["discover", "invite-bundle"] });
       toast({
         title: "Shared to Discover",
         description: `${name} is now publicly listed.`,
@@ -219,6 +235,8 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
       onDone();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't share the community.");
+    } finally {
+      setBusy(false);
     }
   };
 

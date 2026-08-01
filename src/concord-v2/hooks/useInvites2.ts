@@ -17,6 +17,7 @@ import {
 import {
   buildBundleEvent,
   buildInviteUrl,
+  buildRefreshedBundleEvents,
   buildRevocationEvent,
   EMPTY_INVITE_LIST,
   mergeInviteLists,
@@ -429,6 +430,25 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
   const myLinks = (inviteList.data?.entries ?? []).filter((e) => e.community_id === community?.idHex);
 
   /**
+   * Re-post the CURRENT bundle at every live link coordinate I hold for this
+   * community (CORD-05 §2). A link's coordinate vends whatever was posted
+   * last, so a link minted before the community's metadata (or keys) changed
+   * keeps serving the stale preview until its creator refreshes it — this is
+   * that refresh, run e.g. when re-sharing an existing link to Discover.
+   * Best-effort per relay; malformed entries are skipped by the builder.
+   */
+  const refreshMyLinks = async (): Promise<void> => {
+    if (!community || myLinks.length === 0) return;
+    const bundle = buildBundle();
+    const events = buildRefreshedBundleEvents(bundle, myLinks);
+    await Promise.allSettled(
+      events.flatMap((ev) =>
+        community.relays.map((url) => nostr.relay(url).event(ev, { signal: AbortSignal.timeout(8000) })),
+      ),
+    );
+  };
+
+  /**
    * Whether revoking this link would empty the aggregate live-link set,
    * flipping the community Private (CORD-05 §2): the caller should warn
    * before crossing that line, since bans start rotating keys past it.
@@ -449,6 +469,7 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
     sendDirectInvite: sendDirectInvite.mutateAsync,
     isSendingInvite: sendDirectInvite.isPending,
     myLinks,
+    refreshMyLinks,
     /** Whether ANY live public link exists — the community's Public/Private flag. */
     isPublic: (folded?.liveInviteLinks.size ?? 0) > 0,
     revokeWouldPrivatize,
