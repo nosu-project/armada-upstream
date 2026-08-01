@@ -657,7 +657,10 @@ export function foldControlState(
   // snapshotIds is part of the key: attribution can change (a re-wrap arriving)
   // without the edition set changing, and must not serve a stale fold.
   const snapSig = snapshotIds ? [...snapshotIds].sort().join(",") : "";
-  const memoKey = `${cidHex}:${ownerHex}:${floorSig}:${snapSig}:${editions.map((e) => e.opened.wrapId).sort().join(",")}`;
+  // Identified by RUMOR id, not the carrier wrap's: the one thing a re-wrap
+  // changes without changing the edition set is attribution, and `snapSig`
+  // above already covers that.
+  const memoKey = `${cidHex}:${ownerHex}:${floorSig}:${snapSig}:${editions.map((e) => e.opened.rumorId).sort().join(",")}`;
   const hit = foldMemo.get(memoKey);
   if (hit) return hit;
 
@@ -1088,8 +1091,12 @@ export function isDissolved(wraps: NostrEvent[], communityId: Uint8Array, ownerH
  * permanently with no recovery.
  */
 export function isDissolvedOpened(opened: OpenedEvent, ownerHex: string, communityId: Uint8Array): boolean {
+  // Authenticated by the SEAL SIGNER being the owner — the stream it arrived at
+  // is not an authority claim, since only the owner can sign this wherever it
+  // was published. The seal FORM (plaintext, CORD-02 §5) is checked while known;
+  // a stored rumor has no envelope and passed at ingest — see parseEdition.
   if (opened.author !== ownerHex) return false;
-  if (opened.sealKind !== KIND_SEAL_PLAINTEXT) return false; // control-family seals are plaintext (CORD-02 §5)
+  if (opened.sealKind !== undefined && opened.sealKind !== KIND_SEAL_PLAINTEXT) return false;
   const vsk = opened.tags.find((t) => t[0] === "vsk")?.[1];
   const eid = opened.tags.find((t) => t[0] === "eid")?.[1];
   return opened.kind === 3308 && vsk === VSK_DISSOLVED && eid === bytesToHex(communityId);

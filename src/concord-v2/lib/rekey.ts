@@ -147,7 +147,6 @@ export interface ParsedRekey {
   blobs: RekeyBlob[];
   /** ms of the rumor (ordering / correlation aid). */
   ms: number;
-  wrapId: string;
   /** The CORD-04 §5 citation the rotator acts under (absent when the owner acts). */
   authority?: AuthorityCitation;
 }
@@ -155,7 +154,11 @@ export interface ParsedRekey {
 /** Parse an opened rekey stream event into its rotation fields. */
 export function parseRekey(opened: OpenedEvent): ParsedRekey {
   if (opened.kind !== KIND_REKEY) throw new Error("not a rekey rumor");
-  if (opened.sealKind !== KIND_SEAL_ENCRYPTED) throw new Error("rekey seals must be encrypted (CORD-02 §5)");
+  // Checked while the seal form is known (an event still holding its wrap); a
+  // stored rumor has no envelope and passed this at ingest — see parseEdition.
+  if (opened.sealKind !== undefined && opened.sealKind !== KIND_SEAL_ENCRYPTED) {
+    throw new Error("rekey seals must be encrypted (CORD-02 §5)");
+  }
   const get = (name: string) => opened.tags.find((t) => t[0] === name);
   const scope = get("scope")?.[1];
   const newEpoch = get("newepoch")?.[1];
@@ -193,7 +196,6 @@ export function parseRekey(opened: OpenedEvent): ParsedRekey {
     chunkCount,
     blobs,
     ms: opened.ms,
-    wrapId: opened.wrapId,
     authority: citationFromTags(opened.tags),
   };
 }

@@ -148,14 +148,16 @@ object ServiceStore {
      * The rumor is stored EXACTLY as its author wrote it. Nothing about the
      * wrap is folded into its tags: a rumor's tags are the bytes its id commits
      * to, and the chat plane asks for none of it back — a channel read is a
-     * `#channel` query, and that binding tag is the author's own. (The planes
-     * that DO need the stream address get it from a separate bookkeeping row
-     * the WebView writes; the service never opens a plane wrap.)
+     * `#channel` query, and that binding tag is the author's own. Nothing about
+     * the wrap is stored BESIDE the rumor either; the service never opens a
+     * plane wrap, and the one wrap-derived fact the WebView does keep (which
+     * control stream an edition arrived on) belongs to a plane it never sees.
      *
-     * Chat seals MUST be encrypted (CORD-02 §5). The WebView refuses a chat
-     * wrap sealed in plaintext, and reads every stored chat row back as
-     * encrypted-sealed on that strength — so a second writer filing one would
-     * plant a row the reader then mislabels.
+     * Chat seals MUST be encrypted (CORD-02 §5), and this is where that holds
+     * for rows the service writes: the seal form is not stored, so no reader
+     * downstream can re-derive it — the WebView refuses a plaintext-sealed chat
+     * wrap at ingest, and a second writer must apply the same rule or it would
+     * plant a row every reader then treats as encrypted-sealed.
      *
      * `openConcord2` has already checked what makes this safe to file under a
      * channel: the seal's signature, that the rumor's author IS the seal's

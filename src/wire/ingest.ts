@@ -213,7 +213,7 @@ export async function ingestWireEvents(
       if (unseen.length === 0) continue;
       const opened = await openPlaneWrapsChunked(unseen, groups);
       if (opened.length > 0) {
-        await writeOpened(idHex, opened);
+        await writeOpened(idHex, opened, "control");
         scopes.add(`c2ctl:${idHex}`);
       }
       // Record the junk before memoing it: the memo stops the sweep ever

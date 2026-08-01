@@ -196,7 +196,9 @@ export function coalesceGuestbook(
 
   for (const ev of opened) {
     if (ev.ms > opts.nowMs + GUESTBOOK_MAX_FUTURE_MS) continue;
-    if (ev.sealKind !== KIND_SEAL_ENCRYPTED) continue;
+    // Encrypted-seal (CORD-02 §5), while the seal form is known; a stored
+    // rumor has no envelope and passed this at ingest — see parseEdition.
+    if (ev.sealKind !== undefined && ev.sealKind !== KIND_SEAL_ENCRYPTED) continue;
     if (opts.banned?.has(ev.author)) continue;
 
     if (ev.kind === KIND_JOIN_LEAVE) {

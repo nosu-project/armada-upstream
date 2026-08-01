@@ -133,7 +133,15 @@ export function parseEdition(opened: OpenedEvent): ParsedEdition {
   // Control seals MUST be plaintext (CORD-02 §5) — an encrypted-seal edition
   // could never survive a compaction re-wrap, so honoring it would mint state
   // that silently vanishes for every fresh joiner at the next Refounding.
-  if (opened.sealKind !== KIND_SEAL_PLAINTEXT) throw new EditionError("bad-field", "seal-kind");
+  //
+  // Checked whenever the seal form is KNOWN, which is any event still holding
+  // its wrap — including the freshly-swept ones that reach a fold in memory
+  // without being read back from the store. A STORED rumor has no envelope at
+  // all, and needs none: `writeOpened` applied this same rule before it could
+  // be stored.
+  if (opened.sealKind !== undefined && opened.sealKind !== KIND_SEAL_PLAINTEXT) {
+    throw new EditionError("bad-field", "seal-kind");
+  }
 
   for (const name of [TAG_SUBKIND, TAG_ENTITY, TAG_EVERSION, TAG_EPREV, TAG_CITATION]) {
     if (opened.tags.filter((t) => t[0] === name).length > 1) {

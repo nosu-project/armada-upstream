@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { bytesToHex, channelGroupKey, controlGroupKey, voiceGroupKey, voiceMediaKey } from "@/concord-v2/lib/derive";
 import { KIND_CONTROL, KIND_MESSAGE, KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
-import { peekPendingWraps, queryByStreams, queryChannelRumors } from "@/concord-v2/lib/rumorStore";
+import { peekPendingWraps, queryPlane, queryChannelRumors } from "@/concord-v2/lib/rumorStore";
 import { drainLiveDmWraps, resetLiveDmWraps } from "@/lib/nip17/dm17Store";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
@@ -217,7 +217,7 @@ describe("ingestWireEvents", () => {
 
     expect(store.events).toHaveLength(0); // wraps never land in armada-events
     expect(scopes.has(`c2ctl:${idHex}`)).toBe(true);
-    const opened = await queryByStreams(idHex, [control.pk]);
+    const opened = await queryPlane(idHex, "control");
     expect(opened.some((o) => o.content === "edition")).toBe(true);
   });
 

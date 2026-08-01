@@ -14,10 +14,11 @@ import {
   openedToStored,
   parkPendingWraps,
   peekPendingWraps,
-  queryByStreams,
   queryChannelRumors,
   queryMentionRumors,
+  queryPlane,
   queryRumorsByChannel,
+  readControlSnapshot,
   readStoredSeal,
   storedToOpened,
   storedToOpenedChat,
@@ -193,12 +194,18 @@ describe("concord-v2 rumor store", () => {
     expect(openedToStored(opened).tags.some((t) => t[0] === "seal")).toBe(false);
     expect(openedToStored(opened).tags).toEqual(rumor.tags);
 
-    writeOpened(CID, [opened]);
-    const [back] = await eventually(() => queryByStreams(CID, [control.pk]), (r) => r.length === 1);
-    expect(back.rumorId).toBe(opened.rumorId);
-    expect(back.author).toBe(alice.pubkey);
-    expect(back.sealKind).toBe(KIND_SEAL_PLAINTEXT);
-    expect(back.seal).toBeUndefined();
+    writeOpened(CID, [opened], "control");
+    const back = await eventually(
+      () => queryPlane(CID, "control").then((r) => r.find((e) => e.rumorId === opened.rumorId)),
+      (e) => !!e,
+    );
+    expect(back!.author).toBe(alice.pubkey);
+    // The envelope is not stored at all: the seal form is implied by the kind
+    // and was checked once, at ingest.
+    expect(back!.sealKind).toBeUndefined();
+    expect(back!.wrapId).toBeUndefined();
+    expect(back!.streamPk).toBeUndefined();
+    expect(back!.seal).toBeUndefined();
 
     // The seal read back out of KV is byte-identical and re-wrappable.
     const stored = await eventually(() => readStoredSeal(CID, opened.rumorId), (s) => !!s);
@@ -241,11 +248,12 @@ describe("concord-v2 rumor store", () => {
     });
     // Nothing about the wrap reaches the row…
     expect(stored.tags).toEqual(rumor.tags);
-    // …so a row read without its bookkeeping row claims no provenance, rather
-    // than inheriting whatever the rumor's own tags happen to spell.
+    // …so a row read back claims no envelope AT ALL, rather than inheriting
+    // whatever the rumor's own tags happen to spell — or a blank that reads
+    // like a real, empty stream address.
     const bare = storedToOpened(stored);
     expect(bare.tags).toEqual(rumor.tags);
-    expect([bare.streamPk, bare.wrapId, bare.sealKind]).toEqual(["", "", 0]);
+    expect([bare.streamPk, bare.wrapId, bare.sealKind]).toEqual([undefined, undefined, undefined]);
   });
 
   it("parks, peeks (non-destructively), and acks raw wraps", async () => {
@@ -352,32 +360,37 @@ describe("concord-v2 rumor store", () => {
       ms: 9000,
     });
     const wrap = wrapSeal(await sealRumor(spliced, KIND_SEAL_PLAINTEXT, plane, mallory), plane);
-    await writeOpened(CID, [openWrap(wrap, plane)]);
+    await writeOpened(CID, [openWrap(wrap, plane)], "control");
 
     const got = await eventually(() => queryChannelRumors(CID, idHex, { limit: 100 }), (r) => r.length > 1);
     expect(got.map((r) => r.content)).toEqual(["real"]);
   });
 
-  it("ignores a rumor that spells a provenance tag itself", async () => {
+  it("refuses a rumor whose kind is not one the plane it arrived on may carry", async () => {
     const alice = signer();
     const mallory = signer();
-    const victimPlane = channelGroupKey(new Uint8Array(32).fill(10), new Uint8Array(32).fill(10), 0);
-    const malloryPlane = channelGroupKey(new Uint8Array(32).fill(11), new Uint8Array(32).fill(11), 0);
+    const control = channelGroupKey(new Uint8Array(32).fill(10), new Uint8Array(32).fill(10), 0);
+    const guestbook = channelGroupKey(new Uint8Array(32).fill(11), new Uint8Array(32).fill(11), 0);
 
-    // Provenance is a bookkeeping row the store writes from the wrap it
-    // opened, so a `stream` tag in the rumor is inert: it cannot put the rumor
-    // on a plane whose key its author does not hold.
+    // Mallory holds the GUESTBOOK stream key and wraps a CONTROL edition on it.
+    // The read side is a kind query, so nothing downstream could tell the
+    // difference: the refusal has to happen here, against the keys that
+    // actually opened the wrap.
     const forged = buildRumor({
       kind: 3308,
       content: "{}",
-      tags: [["vsk", "0"], ["eid", "ab".repeat(32)], ["ev", "1"], ["stream", victimPlane.pk]],
+      tags: [["vsk", "0"], ["eid", "ab".repeat(32)], ["ev", "1"]],
       pubkey: mallory.pubkey,
       ms: null,
     });
-    const wrap = wrapSeal(await sealRumor(forged, KIND_SEAL_PLAINTEXT, malloryPlane, mallory), malloryPlane);
-    await writeOpened(CID, [openWrap(wrap, malloryPlane)]);
+    await writeOpened(
+      CID,
+      [openWrap(wrapSeal(await sealRumor(forged, KIND_SEAL_PLAINTEXT, guestbook, mallory), guestbook), guestbook)],
+      "guestbook",
+    );
 
-    // And one honest edition on the victim's plane, so the query isn't vacuous.
+    // An honest edition on the control plane, written after, as the barrier
+    // that proves the read ran late enough to have seen the forgery.
     const honest = buildRumor({
       kind: 3308,
       content: "{}",
@@ -385,9 +398,91 @@ describe("concord-v2 rumor store", () => {
       pubkey: alice.pubkey,
       ms: null,
     });
-    await writeOpened(CID, [openWrap(wrapSeal(await sealRumor(honest, KIND_SEAL_PLAINTEXT, victimPlane, alice), victimPlane), victimPlane)]);
+    await writeOpened(
+      CID,
+      [openWrap(wrapSeal(await sealRumor(honest, KIND_SEAL_PLAINTEXT, control, alice), control), control)],
+      "control",
+    );
 
-    const got = await eventually(() => queryByStreams(CID, [victimPlane.pk]), (r) => r.length > 1);
-    expect(got.map((e) => e.rumorId)).toEqual([honest.id]);
+    const got = await eventually(
+      () => queryPlane(CID, "control"),
+      (r) => r.some((e) => e.rumorId === honest.id),
+    );
+    expect(got.some((e) => e.rumorId === honest.id)).toBe(true);
+    expect(got.some((e) => e.rumorId === forged.id)).toBe(false);
+  });
+
+  it("refuses a control edition that did not arrive under a plaintext seal", async () => {
+    const alice = signer();
+    const mallory = signer();
+    const control = channelGroupKey(new Uint8Array(32).fill(12), new Uint8Array(32).fill(12), 0);
+
+    // CORD-02 §5: an encrypted-seal edition could never survive a compaction
+    // re-wrap, so honoring it would mint state that vanishes for every fresh
+    // joiner at the next Refounding.
+    const sealedWrong = buildRumor({
+      kind: 3308,
+      content: "{}",
+      tags: [["vsk", "0"], ["eid", "cd".repeat(32)], ["ev", "1"]],
+      pubkey: mallory.pubkey,
+      ms: null,
+    });
+    await writeOpened(
+      CID,
+      [openWrap(wrapSeal(await sealRumor(sealedWrong, KIND_SEAL_ENCRYPTED, control, mallory), control), control)],
+      "control",
+    );
+
+    const honest = buildRumor({
+      kind: 3308,
+      content: "{}",
+      tags: [["vsk", "0"], ["eid", "dc".repeat(32)], ["ev", "1"]],
+      pubkey: alice.pubkey,
+      ms: null,
+    });
+    await writeOpened(
+      CID,
+      [openWrap(wrapSeal(await sealRumor(honest, KIND_SEAL_PLAINTEXT, control, alice), control), control)],
+      "control",
+    );
+
+    const got = await eventually(
+      () => queryPlane(CID, "control"),
+      (r) => r.some((e) => e.rumorId === honest.id),
+    );
+    expect(got.some((e) => e.rumorId === sealedWrong.id)).toBe(false);
+  });
+
+  it("records which control stream an edition arrived on, so a re-wrap is attributable", async () => {
+    const alice = signer();
+    const oldEpoch = channelGroupKey(new Uint8Array(32).fill(13), new Uint8Array(32).fill(13), 0);
+    const newEpoch = channelGroupKey(new Uint8Array(32).fill(13), new Uint8Array(32).fill(13), 1);
+
+    // The SAME rumor, re-wrapped verbatim under the new epoch's address — the
+    // one fact a stored rumor can never carry, because both wraps carry
+    // identical bytes.
+    const rumor = buildRumor({
+      kind: 3308,
+      content: "{}",
+      tags: [["vsk", "0"], ["eid", "ef".repeat(32)], ["ev", "1"]],
+      pubkey: alice.pubkey,
+      ms: null,
+    });
+    const plainSeal = await sealRumor(rumor, KIND_SEAL_PLAINTEXT, oldEpoch, alice);
+    await writeOpened(CID, [openWrap(wrapSeal(plainSeal, oldEpoch), oldEpoch)], "control");
+
+    const beforeRewrap = await eventually(
+      () => readControlSnapshot(CID, oldEpoch.pk),
+      (s) => Boolean(s?.has(rumor.id)),
+    );
+    expect(beforeRewrap?.has(rumor.id)).toBe(true);
+    expect(await readControlSnapshot(CID, newEpoch.pk)).toBeUndefined();
+
+    await writeOpened(CID, [openWrap(rewrapSeal(plain(plainSeal), newEpoch), newEpoch)], "control");
+    const afterRewrap = await eventually(
+      () => readControlSnapshot(CID, newEpoch.pk),
+      (s) => Boolean(s?.has(rumor.id)),
+    );
+    expect(afterRewrap?.has(rumor.id)).toBe(true);
   });
 });

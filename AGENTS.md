@@ -229,20 +229,30 @@ Things to know before touching it:
   on disk. Don't reintroduce a migration path, a startup gate, or a reader that
   copes with a pre-ArmadaDB shape.
 - **The service is a second writer, so it obeys the same store rules.** `Dm17.kt`
-  ports NIP-17's kind filter, NIP-40 expiry refusal and `peer` attribution;
-  `ServiceStore.storeConcord2Rumor` ports the Concord provenance tags and the
-  refusal of a rumor that forges them. A rule only one writer applies is a
-  conversation the two disagree about.
-- **Never inject a tag into a stored rumor.** Its tags are the bytes its id
-  commits to, so bookkeeping written into them makes the row something the
-  sender never signed, and makes whatever reads that tag forgeable by anyone
-  who spells it. Derive instead: a DM's partner comes from `pubkey` and the `p`
-  tags NIP-17 requires (`dmPeerOf`), and a thread is two ordinary indexed
-  filters — `authors: [peer]` and `authors: [self], "#p": [peer]`. What genuinely
-  belongs to the WRAP and not the rumor — a Concord stream address, the carrier
-  wrap id, the seal kind — goes in a sibling bookkeeping tenant
-  (`c2meta:<community>`), one row per rumor, keyed by rumor id with the stream
-  address as its `pubkey` so `queryByStreams` stays one indexed lookup.
+  ports NIP-17's kind filter and NIP-40 expiry refusal;
+  `ServiceStore.storeConcord2Rumor` ports the chat plane's encrypted-seal rule.
+  A rule only one writer applies is a conversation the two disagree about — and
+  the rules are load-bearing precisely because nothing is stored beside the
+  rumor for a reader to re-check them against.
+- **Never inject a tag into a stored rumor, and don't store a row beside it
+  either.** Its tags are the bytes its id commits to, so bookkeeping written
+  into them makes the row something the sender never signed, and makes whatever
+  reads that tag forgeable by anyone who spells it. Derive instead: a DM's
+  partner comes from `pubkey` and the `p` tags NIP-17 requires (`dmPeerOf`), and
+  a thread is two ordinary indexed filters — `authors: [peer]` and
+  `authors: [self], "#p": [peer]`. A Concord plane is its KINDS
+  (`PLANE_RULES`/`queryPlane`), and a rekey round names its own scope and epoch
+  in the tags `parseRekey` reads — so neither the stream address, the carrier
+  wrap id nor the seal kind is stored at all. They are checked ONCE, at ingest
+  (`writeOpened`), against the stream keys that actually opened the wrap, and
+  wherever the seal form is still known in memory (`parseEdition` and friends —
+  freshly-swept events reach a fold without a store round-trip).
+- **The one exception is worth knowing, because it is the shape of a real
+  one.** A compaction re-wraps control editions VERBATIM under the new epoch's
+  address (CORD-06 §3), so whether an edition is in the current snapshot is
+  genuinely not in the rumor. It lives in KV as a set of rumor ids per control
+  stream address (`c2snap:<community>:<pk>`, `readControlSnapshot`) — the fact
+  itself, not an event-shaped row impersonating one.
 - The bridge carries JSON **text**, not marshalled objects: Capacitor would
   have to guess between an integer `kind` and a float, and a page of rumors is
   far cheaper as one string.

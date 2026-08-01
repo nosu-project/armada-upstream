@@ -8,10 +8,9 @@ import { citationSatisfied, type FoldedControl } from "@/concord-v2/lib/control"
 import {
   coalesceGuestbook,
   completeMemberlist,
-  guestbookGroups,
 } from "@/concord-v2/lib/guestbook";
 import { canActOnMember, Permissions } from "@/concord-v2/lib/roles";
-import { queryByStreams } from "@/concord-v2/lib/rumorStore";
+import { queryPlane } from "@/concord-v2/lib/rumorStore";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 import { readFolded } from "@/lib/foldedCache";
 
@@ -77,10 +76,7 @@ export function useSharedCommunities(
         // community's streams at once, de-multiplexed afterwards by each event's
         // own `stream` tag — cheaper, but it relied on that tag being honest
         // about which community an event belonged to.
-        const events = await queryByStreams(
-          community.idHex,
-          guestbookGroups(community).map((g) => g.pk),
-        );
+        const events = await queryPlane(community.idHex, "guestbook");
         if (!events.length) continue;
         // The persisted control fold supplies kick authority and the banlist.
         // On a miss we still coalesce, but no kick is honored and nobody is

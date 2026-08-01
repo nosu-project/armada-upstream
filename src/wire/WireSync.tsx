@@ -711,7 +711,7 @@ export function WireSync() {
           for (const [idHex, { groups, wraps }] of ctlByCommunity) {
             const opened = await openPlaneWrapsChunked(wraps, groups);
             if (opened.length === 0) continue;
-            await writeOpened(idHex, opened);
+            await writeOpened(idHex, opened, "control");
             scopes.add(`c2ctl:${idHex}`);
             const openedWrapIds = new Set(opened.map((o) => o.wrapId));
             acked.push(...wraps.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));

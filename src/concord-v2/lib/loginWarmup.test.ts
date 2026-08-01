@@ -17,7 +17,8 @@ vi.mock("@/concord-v2/lib/planeSync", () => ({
   whenAuthSettled: async () => undefined,
 }));
 vi.mock("@/concord-v2/lib/rumorStore", () => ({
-  queryByStreams: async () => [],
+  pruneControlSnapshots: async () => undefined,
+  queryPlane: async () => [],
   writeRumors: async () => undefined,
 }));
 vi.mock("@/concord-v2/lib/streamAuth", () => ({ registerStreamKeys: () => undefined }));

@@ -44,10 +44,10 @@
 
 import { currentControlGroup } from "@/concord-v2/lib/control";
 import { guestbookGroups } from "@/concord-v2/lib/guestbook";
-import { KIND_WRAP } from "@/concord-v2/lib/kinds";
+import { KIND_WRAP, type Plane } from "@/concord-v2/lib/kinds";
 import { readStreamCursor, updateStreamCursor, writeOpened } from "@/concord-v2/lib/rumorStore";
 import { isStreamPubkey, streamAuthsSettled } from "@/concord-v2/lib/streamAuth";
-import { openWrap, type OpenedEvent } from "@/concord-v2/lib/stream";
+import { openWrap, type OpenedEvent, type OpenedWireEvent } from "@/concord-v2/lib/stream";
 import type { GroupKey } from "@/concord-v2/lib/derive";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
@@ -124,6 +124,13 @@ export interface PlaneScope {
    * already take the community.
    */
   communityIdHex: string;
+  /**
+   * Which plane this scope reads — the store's write-side check that a rumor
+   * arriving on these stream keys is one this plane may carry (see
+   * `writeOpened`). Set by the scope factories alongside `groups`, so the two
+   * cannot drift apart.
+   */
+  plane: Plane;
   /** The stream keys whose addresses this plane's wraps are authored by. */
   groups: GroupKey[];
   /**
@@ -188,6 +195,7 @@ export function controlScope(
   return {
     scope: controlScopeKey(community, relayUrl),
     communityIdHex: community.idHex,
+    plane: "control",
     groups: [currentControlGroup(community)],
     complete: true,
     onFresh,
@@ -208,6 +216,7 @@ export function guestbookScope(
   return {
     scope: `guestbook:${community.idHex}@${community.rootEpoch}|${relayUrl}`,
     communityIdHex: community.idHex,
+    plane: "guestbook",
     groups: guestbookGroups(community),
     onFresh,
   };
@@ -221,9 +230,9 @@ export function mergeOpened(...sets: OpenedEvent[][]): OpenedEvent[] {
 }
 
 /** Decrypt raw plane wraps under the held groups into opened events. */
-export function openPlaneWraps(wraps: NostrRumor[], groups: GroupKey[]): OpenedEvent[] {
+export function openPlaneWraps(wraps: NostrRumor[], groups: GroupKey[]): OpenedWireEvent[] {
   const byPk = new Map(groups.map((g) => [g.pk, g]));
-  const out: OpenedEvent[] = [];
+  const out: OpenedWireEvent[] = [];
   for (const wrap of wraps) {
     const group = byPk.get(wrap.pubkey);
     if (!group) continue;
@@ -247,9 +256,9 @@ const PLANE_DECODE_SLICE_MS = 5;
  * seals) — all synchronous noble crypto — so decoding a whole plane in one
  * unbroken loop freezes the UI for the duration on a phone.
  */
-export async function openPlaneWrapsChunked(wraps: NostrRumor[], groups: GroupKey[]): Promise<OpenedEvent[]> {
+export async function openPlaneWrapsChunked(wraps: NostrRumor[], groups: GroupKey[]): Promise<OpenedWireEvent[]> {
   const byPk = new Map(groups.map((g) => [g.pk, g]));
-  const out: OpenedEvent[] = [];
+  const out: OpenedWireEvent[] = [];
   let sliceStart = performance.now();
   for (let i = 0; i < wraps.length; i++) {
     const group = byPk.get(wraps[i].pubkey);
@@ -798,7 +807,7 @@ async function runScopes(
           );
 
           if (opened.length > 0) {
-            await writeOpened(s.communityIdHex, opened);
+            await writeOpened(s.communityIdHex, opened, s.plane);
             for (const e of opened) freshPerScope[i].push(e);
           }
           // Only the memo advances, and only once the rumors are durably
@@ -830,18 +839,28 @@ async function runScopes(
       // write per community rather than one per scope — and a community's
       // guestbook scopes for different relays are different batches anyway, so
       // in practice that is still a single write.
-      const forwardFresh = new Map<string, OpenedEvent[]>();
+      //
+      // Bucketed per (community, PLANE): the write is the plane boundary, so a
+      // batch that coalesced two planes' scopes must not hand them to one call
+      // — the wrong plane's rules would decide what may be stored.
+      const forwardFresh = new Map<
+        string,
+        { communityIdHex: string; plane: Plane; fresh: OpenedWireEvent[] }
+      >();
       for (const [i, s] of scopes.entries()) {
         if (s.complete) continue;
         for (const e of await openPlaneWrapsChunked(perScope[i], s.groups)) {
           freshPerScope[i].push(e);
-          const bucket = forwardFresh.get(s.communityIdHex);
-          if (bucket) bucket.push(e);
-          else forwardFresh.set(s.communityIdHex, [e]);
+          const key = `${s.communityIdHex}|${s.plane}`;
+          const bucket = forwardFresh.get(key);
+          if (bucket) bucket.fresh.push(e);
+          else forwardFresh.set(key, { communityIdHex: s.communityIdHex, plane: s.plane, fresh: [e] });
         }
       }
       await Promise.all(
-        [...forwardFresh].map(([communityIdHex, fresh]) => writeOpened(communityIdHex, fresh)),
+        [...forwardFresh.values()].map(({ communityIdHex, plane, fresh }) =>
+          writeOpened(communityIdHex, fresh, plane),
+        ),
       );
       await Promise.all(
         scopes.map((s, i) => {
