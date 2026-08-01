@@ -155,3 +155,17 @@ export function prefixUpperBound(prefix: string): string | undefined {
   if (last === 0xffff) return undefined;
   return prefix.slice(0, -1) + String.fromCharCode(last + 1);
 }
+
+/**
+ * The profiler label for a tenant: its CLASS (`c2:*`, `nip29:*`, `main`), not
+ * its id.
+ *
+ * A per-id label would mint one bucket per community and per relay, scattering
+ * the very total the profile exists to show — and a fix acts on the class
+ * anyway ("the control planes cost 3s", not "this one did"). Shared by both
+ * adapters so a web profile and a phone profile can be read side by side.
+ */
+export function tenantClass(id: string): string {
+  const head = id.split(":", 1)[0];
+  return head === id ? id : `${head}:*`;
+}

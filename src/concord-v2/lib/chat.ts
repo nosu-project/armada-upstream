@@ -12,6 +12,8 @@
  * store costs near-nothing after the first pass.
  */
 
+import { perfCount } from "@/lib/perf";
+
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 import { KIND_CALENDAR_DATE, KIND_CALENDAR_RSVP, KIND_CALENDAR_TIME, KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_ONCHAIN_ZAP, KIND_POLL, KIND_POLL_VOTE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_ZAP } from "@/concord-v2/lib/kinds";
@@ -92,9 +94,18 @@ export async function openChatBatch(
 ): Promise<OpenedChat[]> {
   const out: OpenedChat[] = [];
   let sliceStart = performance.now();
+  // Crypto time only — the yields between slices are deliberately NOT counted,
+  // so this reads as "main thread spent decrypting" rather than wall clock. Both
+  // numbers matter and they are very different: `setTimeout(0)` is clamped to
+  // ~4ms once nesting passes 5, so a thousand wraps at a 5ms slice adds seconds
+  // of wall clock the CPU total will not show. Compare against the wall-clock
+  // mark the caller records.
+  let cryptoMs = 0;
   for (let i = 0; i < wraps.length; i++) {
     if (opts?.signal?.aborted) break;
+    const openStart = performance.now();
     const opened = openOne(wraps[i], channel);
+    cryptoMs += performance.now() - openStart;
     if (opened) out.push(opened);
     // Yield once this slice has run long enough (and more work remains), so the
     // main thread stays responsive during a large backfill decode.
@@ -103,6 +114,7 @@ export async function openChatBatch(
       sliceStart = performance.now();
     }
   }
+  perfCount("crypto.openChatBatch", cryptoMs, wraps.length, "wraps");
   return out;
 }
 

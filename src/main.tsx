@@ -4,6 +4,11 @@ import { createRoot } from "react-dom/client";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { clearChunkReloadGuard, tryChunkReload } from "@/lib/chunkReload";
 import { signalWebReady } from "@/lib/webReady";
+import { perfMark } from "@/lib/perf";
+// Side-effect import: installs `window.__armadaDbCensus()`, the read-only store
+// census. Diagnostics have to be reachable from a console on the device that's
+// slow, not only from a dev build.
+import "@/lib/db/dbCensus";
 
 import App from "./App.tsx";
 import "./index.css";
@@ -40,6 +45,8 @@ if (!Capacitor.isNativePlatform() && navigator.storage?.persist) {
     .catch(() => {});
 }
 
+perfMark("react render() called");
+
 createRoot(document.getElementById("root")!).render(
   <ErrorBoundary>
     <App />
@@ -49,6 +56,11 @@ createRoot(document.getElementById("root")!).render(
 // Tell the native launch splash the web layer has painted, so it lifts onto
 // real content instead of a blank WebView frame (Android only; no-op elsewhere).
 signalWebReady();
+
+// After render() returns, so the inline boot splash in index.html has been
+// replaced. Everything between this and the first timeline paint is React,
+// storage and crypto — which is the window the profile exists to explain.
+perfMark("react mounted");
 
 // The tree mounted without a stale-chunk crash: clear the one-time reload guard
 // so a LATER deploy in this same session can recover again.

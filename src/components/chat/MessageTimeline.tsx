@@ -9,6 +9,7 @@ import {
   WINDOW_STEP,
 } from "@/components/chat/timelineWindow";
 import { Skeleton } from "@/components/ui/skeleton";
+import { usePerfMilestone } from "@/hooks/usePerfMilestone";
 import { cn } from "@/lib/utils";
 
 import { isGitContinuation, type ChannelTimelineEntry } from "@/components/chat/channelTimeline";
@@ -356,6 +357,10 @@ export function MessageTimeline({
   className,
 }: MessageTimelineProps) {
   const { messages, isLoading, loadOlder, hasMore, isLoadingOlder } = transport;
+
+  // THE number the user is complaining about: when the skeleton came down. Every
+  // other milestone on the timeline is only interesting relative to this one.
+  usePerfMilestone("timeline.first rows", !isLoading && messages.length > 0);
 
   // The row stream, generalized: callers that pass `entries` interleave non-chat
   // rows (Git activity) chronologically; everyone else gets the chat-only view.

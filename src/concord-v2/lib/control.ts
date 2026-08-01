@@ -60,6 +60,7 @@ import {
 } from "@/concord-v2/lib/roles";
 import { buildRumor, openWrap, sealRumor, wrapSeal, type OpenedEvent, type StreamSigner } from "@/concord-v2/lib/stream";
 import type { NostrRumor } from "@/lib/nostrRumor";
+import { perfCount } from "@/lib/perf";
 import {
   utf8Len,
   DESCRIPTION_MAX_BYTES,
@@ -132,6 +133,7 @@ export function openControlWraps(wraps: NostrEvent[], groups: GroupKey[]): Parse
  * extracts the edition machinery. Memoized per rumor id, so re-folds are cheap.
  */
 export function openControlEditions(opened: OpenedEvent[]): ParsedEdition[] {
+  const start = performance.now();
   const out: ParsedEdition[] = [];
   for (const ev of opened) {
     const cached = parsedEditionMemo.get(ev.rumorId);
@@ -148,6 +150,7 @@ export function openControlEditions(opened: OpenedEvent[]): ParsedEdition[] {
     parsedEditionMemo.set(ev.rumorId, parsed);
     if (parsed) out.push(parsed);
   }
+  perfCount("fold.openControlEditions", performance.now() - start, opened.length, "editions");
   return out;
 }
 
@@ -650,6 +653,7 @@ export function foldControlState(
   priorHeads?: Map<string, EntityHead>,
   snapshotIds?: Set<string>,
 ): FoldedControl {
+  const start = performance.now();
   const cidHex = bytesToHex(communityId);
   const floorSig = priorHeads
     ? [...priorHeads.entries()].map(([k, v]) => `${k}@${v.version}`).sort().join(",")
@@ -662,7 +666,14 @@ export function foldControlState(
   // above already covers that.
   const memoKey = `${cidHex}:${ownerHex}:${floorSig}:${snapSig}:${editions.map((e) => e.opened.rumorId).sort().join(",")}`;
   const hit = foldMemo.get(memoKey);
-  if (hit) return hit;
+  // A memo HIT is not free: the key above sorts and joins every edition id in the
+  // plane, so a large plane pays O(n log n) of string work per call just to
+  // discover it already has the answer. Counted separately so that cost is
+  // visible instead of hiding inside the miss.
+  if (hit) {
+    perfCount("fold.controlState (memo hit)", performance.now() - start, editions.length, "editions");
+    return hit;
+  }
 
   const first = foldOnce(editions, communityId, ownerHex, priorHeads, snapshotIds);
   let result = first;
@@ -682,6 +693,7 @@ export function foldControlState(
   // Single-entry-per-community cache so the memo doesn't grow unbounded.
   for (const k of foldMemo.keys()) if (k.startsWith(`${cidHex}:`)) foldMemo.delete(k);
   foldMemo.set(memoKey, result);
+  perfCount("fold.controlState", performance.now() - start, editions.length, "editions");
   return result;
 }
 

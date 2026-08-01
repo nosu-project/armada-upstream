@@ -26,9 +26,13 @@
  */
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
+import { perfMark, perfTime } from "@/lib/perf";
+
 import type { NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { ArmadaDB, ArmadaKV, NRumorStore } from "./types";
+
+import { tenantClass } from "./types";
 
 /** The native surface, as `ArmadaDbPlugin.kt` exposes it. */
 export interface ArmadaDBPlugin {
@@ -78,6 +82,7 @@ export class NativeArmadaDB implements ArmadaDB {
   tenant(id: string): NRumorStore {
     let store = this.stores.get(id);
     if (!store) {
+      perfMark("db.tenant open", id);
       store = new NativeRumorStore(id);
       this.stores.set(id, store);
     }
@@ -114,16 +119,28 @@ class NativeRumorStore implements NRumorStore {
   private pending: PendingWrite[] = [];
   private flushScheduled = false;
 
-  constructor(private readonly id: string) {}
+  /** Profiler label — the tenant's class, see {@link tenantClass}. */
+  private readonly label: string;
+
+  constructor(private readonly id: string) {
+    this.label = tenantClass(id);
+  }
 
   async query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrRumor[]> {
     opts?.signal?.throwIfAborted();
-    const { rumors } = await ArmadaDBBridge().query({
-      tenant: this.id,
-      filters: JSON.stringify(filters),
-    });
+    // Every bridge call is a hop onto Capacitor's single plugin thread and then
+    // a lock held for the whole native method, so these serialize against each
+    // other AND against the notification service. The call count matters as much
+    // as the total.
+    const { rumors } = await perfTime(`db.query ${this.label}`, () =>
+      ArmadaDBBridge().query({ tenant: this.id, filters: JSON.stringify(filters) }),
+    );
     opts?.signal?.throwIfAborted();
-    return JSON.parse(rumors) as NostrRumor[];
+    return perfTime(
+      `db.parse ${this.label}`,
+      async () => JSON.parse(rumors) as NostrRumor[],
+      (rows) => rows.length,
+    );
   }
 
   event(event: NostrRumor): Promise<void> {
@@ -142,16 +159,17 @@ class NativeRumorStore implements NRumorStore {
     opts?: { signal?: AbortSignal },
   ): Promise<{ count: number; approximate: boolean }> {
     opts?.signal?.throwIfAborted();
-    const result = await ArmadaDBBridge().count({
-      tenant: this.id,
-      filters: JSON.stringify(filters),
-    });
+    const result = await perfTime(`db.count ${this.label}`, () =>
+      ArmadaDBBridge().count({ tenant: this.id, filters: JSON.stringify(filters) }),
+    );
     return { count: result.count, approximate: result.approximate ?? false };
   }
 
   async remove(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<void> {
     opts?.signal?.throwIfAborted();
-    await ArmadaDBBridge().remove({ tenant: this.id, filters: JSON.stringify(filters) });
+    await perfTime(`db.remove ${this.label}`, () =>
+      ArmadaDBBridge().remove({ tenant: this.id, filters: JSON.stringify(filters) }),
+    );
   }
 
   private scheduleFlush(): void {
@@ -171,10 +189,15 @@ class NativeRumorStore implements NRumorStore {
     this.pending = [];
 
     try {
-      await ArmadaDBBridge().event({
-        tenant: this.id,
-        rumors: JSON.stringify(writes.map((write) => write.rumor)),
-      });
+      await perfTime(
+        `db.write ${this.label}`,
+        () =>
+          ArmadaDBBridge().event({
+            tenant: this.id,
+            rumors: JSON.stringify(writes.map((write) => write.rumor)),
+          }),
+        () => writes.length,
+      );
     } catch (error) {
       for (const write of writes) write.reject(error);
       return;
@@ -195,7 +218,7 @@ class NativeRumorStore implements NRumorStore {
  */
 class NativeKV implements ArmadaKV {
   async get<T>(key: string): Promise<T | undefined> {
-    const { value } = await ArmadaDBBridge().kvGet({ key });
+    const { value } = await perfTime("kv.get", () => ArmadaDBBridge().kvGet({ key }));
     if (typeof value !== "string") return undefined;
     return JSON.parse(value) as T;
   }
@@ -203,15 +226,17 @@ class NativeKV implements ArmadaKV {
   async set<T>(key: string, value: T): Promise<void> {
     // `undefined` (and anything else without a JSON form) is out of contract;
     // normalized to null so the adapters agree instead of throwing here.
-    await ArmadaDBBridge().kvSet({ key, value: JSON.stringify(value) ?? "null" });
+    await perfTime("kv.set", () =>
+      ArmadaDBBridge().kvSet({ key, value: JSON.stringify(value) ?? "null" }),
+    );
   }
 
   async delete(key: string): Promise<void> {
-    await ArmadaDBBridge().kvDelete({ key });
+    await perfTime("kv.delete", () => ArmadaDBBridge().kvDelete({ key }));
   }
 
   async keys(prefix?: string): Promise<string[]> {
-    const { keys } = await ArmadaDBBridge().kvKeys({ prefix });
+    const { keys } = await perfTime("kv.keys", () => ArmadaDBBridge().kvKeys({ prefix }));
     return JSON.parse(keys) as string[];
   }
 }

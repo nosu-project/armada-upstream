@@ -29,6 +29,7 @@ import { onFoldedWrite, readFolded } from "@/lib/foldedCache";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
 import { onRelayReopened } from "@/lib/relayReopen";
 import { logSync } from "@/lib/syncLog";
+import { perfCount, perfMark } from "@/lib/perf";
 import { emitWireScopes } from "@/wire/bus";
 import { useWireNip29Groups } from "@/wire/useWireNip29Groups";
 import { ingestWireEvents } from "@/wire/ingest";
@@ -683,9 +684,16 @@ export function WireSync() {
     // concurrently, monopolising the main thread before the UI is interactive.
     const timer = setTimeout(() => {
       void (async () => {
+        const drainStart = performance.now();
         try {
           const parked = await peekPendingWraps([...spec.v2ByPk.keys(), ...spec.v2CtlByPk.keys()]);
           if (parked.length === 0 || cancelled) return;
+          // WALL CLOCK for the whole drain, against `crypto.openChatBatch`'s
+          // CPU-only total. The gap between the two is the slicing overhead:
+          // `setTimeout(0)` is clamped to ~4ms past nesting depth 5, so a
+          // thousand wraps at a 5ms slice can spend more time yielding than
+          // decrypting. `peekPendingWraps` reads up to 1000 (rumorStore).
+          perfMark("wire.parked drain start", `${parked.length} wrap(s)`);
           const scopes = new Set<string>();
           const acked: string[] = [];
 
@@ -748,6 +756,8 @@ export function WireSync() {
           if (scopes.size > 0) emitWireScopes(scopes);
         } catch {
           // Best-effort — wraps stay parked for the next pass.
+        } finally {
+          perfCount("wire.parked drain (wall)", performance.now() - drainStart);
         }
       })();
     }, 300);

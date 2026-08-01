@@ -16,7 +16,9 @@
 import { NIndexedDB } from "@nostrify/indexeddb";
 import { openDB } from "idb";
 
-import { defaultIndexTags, prefixUpperBound } from "./types";
+import { perfMark, perfTime } from "@/lib/perf";
+
+import { defaultIndexTags, prefixUpperBound, tenantClass } from "./types";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 import type { DBSchema, IDBPDatabase } from "idb";
@@ -36,30 +38,42 @@ function toEvent(rumor: NostrRumor): NostrEvent {
 
 class IndexedDBRumorStore implements NRumorStore {
   private readonly store: NIndexedDB;
+  /** Profiler label — the tenant's class, see {@link tenantClass}. */
+  private readonly label: string;
 
-  constructor(name: string, indexTags: (rumor: NostrRumor) => string[][]) {
+  constructor(name: string, indexTags: (rumor: NostrRumor) => string[][], label: string) {
     this.store = new NIndexedDB(name, { indexTags: (event) => indexTags(event) });
+    this.label = label;
   }
 
   async query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrRumor[]> {
-    const events = await this.store.query(filters, opts);
+    // Rows RETURNED, not rows walked — the planner walks more than it yields
+    // (an under-filled `limit` walks its whole index range), so a high mean with
+    // a low row count is the signature of a scan and worth reading as one.
+    const events = await perfTime(
+      `db.query ${this.label}`,
+      () => this.store.query(filters, opts),
+      (rows) => rows.length,
+    );
     return events.map(toRumor);
   }
 
   event(event: NostrRumor, opts?: { signal?: AbortSignal }): Promise<void> {
-    return this.store.event(toEvent(event), opts);
+    return perfTime(`db.write ${this.label}`, () => this.store.event(toEvent(event), opts));
   }
 
   async count(
     filters: NostrFilter[],
     opts?: { signal?: AbortSignal },
   ): Promise<{ count: number; approximate: boolean }> {
-    const { count, approximate } = await this.store.count(filters, opts);
+    const { count, approximate } = await perfTime(`db.count ${this.label}`, () =>
+      this.store.count(filters, opts),
+    );
     return { count, approximate: approximate ?? false };
   }
 
   remove(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<void> {
-    return this.store.remove(filters, opts);
+    return perfTime(`db.remove ${this.label}`, () => this.store.remove(filters, opts));
   }
 
   close(): Promise<void> {
@@ -110,14 +124,18 @@ class IndexedDBKV implements ArmadaKV {
   private static async open(name: string): Promise<IDBPDatabase<KVSchema> | null> {
     if (typeof indexedDB === "undefined") return null;
     try {
-      return await openDB<KVSchema>(name, KV_DB_VERSION, {
-        upgrade(db) {
-          // Idempotent: an upgrade from v1 already has `kv`, a fresh open has
-          // neither.
-          if (!db.objectStoreNames.contains("kv")) db.createObjectStore("kv");
-          if (!db.objectStoreNames.contains("tenants")) db.createObjectStore("tenants");
-        },
-      });
+      // The cold open is its own milestone: it is the first IndexedDB work of
+      // the session and every KV read queues behind it.
+      return await perfTime("db.open kv", () =>
+        openDB<KVSchema>(name, KV_DB_VERSION, {
+          upgrade(db) {
+            // Idempotent: an upgrade from v1 already has `kv`, a fresh open has
+            // neither.
+            if (!db.objectStoreNames.contains("kv")) db.createObjectStore("kv");
+            if (!db.objectStoreNames.contains("tenants")) db.createObjectStore("tenants");
+          },
+        }),
+      );
     } catch {
       return null;
     }
@@ -150,7 +168,10 @@ class IndexedDBKV implements ArmadaKV {
     const db = await this.db;
     if (!db) return undefined;
     try {
-      return (await db.get("kv", key)) as T | undefined;
+      // Every get is its own transaction (idb's shortcut opens one per call), so
+      // the CALL COUNT here is as interesting as the total: a boot that issues
+      // 150 of them in await chains pays 150 round trips to read a few KB.
+      return (await perfTime("kv.get", () => db.get("kv", key))) as T | undefined;
     } catch {
       return undefined;
     }
@@ -161,13 +182,13 @@ class IndexedDBKV implements ArmadaKV {
     if (!db) return;
     // `undefined` is out of contract (it has no JSON form); normalize to null
     // so both adapters agree instead of one storing a hole.
-    await db.put("kv", value === undefined ? null : value, key);
+    await perfTime("kv.set", () => db.put("kv", value === undefined ? null : value, key));
   }
 
   async delete(key: string): Promise<void> {
     const db = await this.db;
     if (!db) return;
-    await db.delete("kv", key);
+    await perfTime("kv.delete", () => db.delete("kv", key));
   }
 
   async keys(prefix?: string): Promise<string[]> {
@@ -180,7 +201,12 @@ class IndexedDBKV implements ArmadaKV {
         : upper === undefined
         ? IDBKeyRange.lowerBound(prefix)
         : IDBKeyRange.bound(prefix, upper, false, true);
-      const keys = (await db.getAllKeys("kv", range)) as string[];
+      const keys = (await perfTime(
+        "kv.keys",
+        () => db.getAllKeys("kv", range) as Promise<string[]>,
+        (k) => k.length,
+        "keys",
+      )) as string[];
       // The range is a scan hint, not the contract — see `prefixUpperBound`.
       return prefix ? keys.filter((key) => key.startsWith(prefix)) : keys;
     } catch {
@@ -213,7 +239,16 @@ export class IndexedDBArmadaDB implements ArmadaDB {
   tenant(id: string): NRumorStore {
     let store = this.stores.get(id);
     if (!store) {
-      store = new IndexedDBRumorStore(IndexedDBArmadaDB.databaseName(this.name, id), this.indexTags);
+      // One IndexedDB database per tenant, so each of these is a distinct
+      // `openDB` (and a `versionchange` upgrade creating five indexes the first
+      // time). The mark counts them: a boot that opens a dozen is paying a dozen
+      // cold opens.
+      perfMark("db.tenant open", id);
+      store = new IndexedDBRumorStore(
+        IndexedDBArmadaDB.databaseName(this.name, id),
+        this.indexTags,
+        tenantClass(id),
+      );
       this.stores.set(id, store);
       // Registered on open, not on first write: an empty tenant still has a
       // database, and a purge has to delete that too.

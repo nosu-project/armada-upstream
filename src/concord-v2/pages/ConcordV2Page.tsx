@@ -55,6 +55,7 @@ import { ChatScopeContext } from "@/contexts/ChatScopeContext";
 import type { AppScope } from "@/contexts/AppsContext";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
 import { useAppContext } from "@/hooks/useAppContext";
+import { usePerfMilestone } from "@/hooks/usePerfMilestone";
 import { useActiveRoom } from "@/hooks/useActiveRoom";
 import { useCall } from "@/hooks/useCall";
 import { useChannelNavValue } from "@/hooks/useChannelNav";
@@ -724,6 +725,14 @@ export function ConcordV2Page() {
     return { ...baseCommunity, name: folded.metadata.name || baseCommunity.name };
   }, [baseCommunity, folded]);
   const channels = useChannels2(baseCommunity);
+  // The serial gate in front of the timeline: the community has to rehydrate from
+  // the list, the control plane has to be read and folded, and only then does a
+  // ChannelV2 (with its derived stream keys) exist for the timeline query to be
+  // ENABLED on. Each step gets a milestone so a profile shows which one the user
+  // was actually waiting on, rather than one undifferentiated "slow".
+  usePerfMilestone("page.community resolved", Boolean(baseCommunity));
+  usePerfMilestone("page.control folded", Boolean(folded));
+  usePerfMilestone("page.channels resolved", channels.length > 0);
   // Only show channel skeletons if there's nothing to render yet AND that has
   // lasted long enough to be worth a placeholder. On a cache hit the bundle
   // resolves within a frame or two, so the skeleton would otherwise flash for a

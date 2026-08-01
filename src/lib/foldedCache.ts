@@ -18,6 +18,7 @@ import { openDB } from "idb";
 
 import { getArmadaDB } from "@/lib/db/armadaDB";
 import { legacyMigrationsComplete, skipLegacyDrain } from "@/lib/db/legacyDatabases";
+import { perfTime } from "@/lib/perf";
 
 /** Legacy standalone database, drained by {@link migrateLegacyFolded}. */
 export const LEGACY_FOLDED_DB_NAME = "armada-concord-cache";
@@ -89,7 +90,11 @@ export async function readFolded<T>(key: string): Promise<T | undefined> {
     const json = await getArmadaDB().kv.get<string>(foldedKey(key));
     // A non-string is a value written as `undefined` (KV normalizes that to
     // null), which reads back as a miss — the pre-KV behavior.
-    return typeof json === "string" ? decode<T>(json) : undefined;
+    // Counted apart from the KV read: the reviver rebuilds Map/Set/Uint8Array
+    // from a string that, for a control fold, can be megabytes.
+    return typeof json === "string"
+      ? await perfTime("fold.decode", async () => decode<T>(json), () => json.length, "chars")
+      : undefined;
   } catch {
     return undefined;
   }
