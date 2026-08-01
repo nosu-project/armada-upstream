@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { clearChunkReloadGuard, tryChunkReload } from "@/lib/chunkReload";
 import { signalWebReady } from "@/lib/webReady";
-import { perfMark } from "@/lib/perf";
+import { perfMark, startLoopLagSampler } from "@/lib/perf";
 // Side-effect import: installs `window.__armadaDbCensus()`, the read-only store
 // census. Diagnostics have to be reachable from a console on the device that's
 // slow, not only from a dev build.
@@ -44,6 +44,10 @@ if (!Capacitor.isNativePlatform() && navigator.storage?.persist) {
     .then((already) => (already ? undefined : navigator.storage.persist()))
     .catch(() => {});
 }
+
+// Started before render so the sampler covers the mount itself: if the loop is
+// blocked, every storage latency in the report is inflated by exactly this.
+startLoopLagSampler();
 
 perfMark("react render() called");
 

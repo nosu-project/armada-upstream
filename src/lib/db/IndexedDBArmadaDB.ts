@@ -16,7 +16,7 @@
 import { NIndexedDB } from "@nostrify/indexeddb";
 import { openDB } from "idb";
 
-import { perfMark, perfTime } from "@/lib/perf";
+import { perfCount, perfMark, perfTime } from "@/lib/perf";
 
 import { defaultIndexTags, prefixUpperBound, tenantClass } from "./types";
 
@@ -36,14 +36,69 @@ function toEvent(rumor: NostrRumor): NostrEvent {
   return { ...rumor, sig: "" };
 }
 
+/**
+ * A compact, LOW-CARDINALITY description of what a read asked for, for the
+ * profiler.
+ *
+ * "533 reads of `main` returned 1072 rows" says the reads are tiny and
+ * repetitive, but not who is issuing them or whether they could have been one
+ * read. The kinds plus which fields were present is enough to recognise the
+ * caller (`k0` is a profile lookup, `k9+#channel` a channel timeline) without
+ * minting a bucket per pubkey — so ids, authors and tag VALUES are counted, never
+ * spelled.
+ */
+function filterShape(filters: NostrFilter[]): string {
+  const parts = filters.map((f) => {
+    const bits: string[] = [];
+    if (f.kinds?.length) bits.push(`k${[...f.kinds].sort((a, b) => a - b).join(",")}`);
+    if (f.ids?.length) bits.push(`ids×${f.ids.length}`);
+    if (f.authors?.length) bits.push(`authors×${f.authors.length}`);
+    for (const key of Object.keys(f)) if (key.startsWith("#")) bits.push(key);
+    if (f.search) bits.push("search");
+    if (f.since !== undefined || f.until !== undefined) bits.push("time");
+    bits.push(f.limit === undefined ? "NO-LIMIT" : `limit${f.limit}`);
+    return bits.join("+");
+  });
+  // One bucket per distinct shape, and a multi-filter read reports as one.
+  const unique = [...new Set(parts)].sort();
+  return unique.length > 3 ? `${unique.slice(0, 3).join(" | ")} | +${unique.length - 3} more` : unique.join(" | ");
+}
+
 class IndexedDBRumorStore implements NRumorStore {
   private readonly store: NIndexedDB;
   /** Profiler label — the tenant's class, see {@link tenantClass}. */
   private readonly label: string;
+  private readonly indexTags: (rumor: NostrRumor) => string[][];
+  /**
+   * Whether this store's connection is known open.
+   *
+   * `NIndexedDB` is constructed synchronously and every method awaits the open
+   * internally, so a call issued before the connection settles reports the
+   * OPEN's cost, not the operation's. Charging both to one label makes a fast
+   * store with a slow open indistinguishable from a uniformly slow one — and
+   * since a boot opens a database per tenant, that difference is the whole
+   * question. The first operation per store is labelled apart; `opened` flips
+   * once one has resolved.
+   */
+  private opened = false;
 
   constructor(name: string, indexTags: (rumor: NostrRumor) => string[][], label: string) {
     this.store = new NIndexedDB(name, { indexTags: (event) => indexTags(event) });
     this.label = label;
+    this.indexTags = indexTags;
+  }
+
+  /** `db.<op> <class>` once the connection is up, `db.<op> <class> (cold)` before. */
+  private op(name: string): string {
+    return this.opened ? `db.${name} ${this.label}` : `db.${name} ${this.label} (cold)`;
+  }
+
+  private async settled<T>(promise: Promise<T>): Promise<T> {
+    try {
+      return await promise;
+    } finally {
+      this.opened = true;
+    }
   }
 
   async query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrRumor[]> {
@@ -51,29 +106,39 @@ class IndexedDBRumorStore implements NRumorStore {
     // (an under-filled `limit` walks its whole index range), so a high mean with
     // a low row count is the signature of a scan and worth reading as one.
     const events = await perfTime(
-      `db.query ${this.label}`,
-      () => this.store.query(filters, opts),
+      this.op("query"),
+      () => this.settled(this.store.query(filters, opts)),
       (rows) => rows.length,
     );
+    // Same elapsed time, bucketed by what was asked instead of by tenant — so a
+    // total can be attributed to a caller rather than only to a store.
+    perfCount(`shape ${this.label} ${filterShape(filters)}`, 0, events.length);
     return events.map(toRumor);
   }
 
   event(event: NostrRumor, opts?: { signal?: AbortSignal }): Promise<void> {
-    return perfTime(`db.write ${this.label}`, () => this.store.event(toEvent(event), opts));
+    // Index entries, not events: Armada replaces Nostrify's single-letter tag
+    // policy with `defaultIndexTags`, which indexes EVERY tag under 20 chars —
+    // and the tag index is `multiEntry`, so one row is written per entry. A
+    // follow list or a big `p`-tagged event is therefore a write of hundreds of
+    // index rows dressed as a write of one event, and the count is the only way
+    // to see that in a total.
+    perfCount("db.index entries", 0, this.indexTags(event).length, "entries");
+    return perfTime(this.op("write"), () => this.settled(this.store.event(toEvent(event), opts)));
   }
 
   async count(
     filters: NostrFilter[],
     opts?: { signal?: AbortSignal },
   ): Promise<{ count: number; approximate: boolean }> {
-    const { count, approximate } = await perfTime(`db.count ${this.label}`, () =>
-      this.store.count(filters, opts),
+    const { count, approximate } = await perfTime(this.op("count"), () =>
+      this.settled(this.store.count(filters, opts)),
     );
     return { count, approximate: approximate ?? false };
   }
 
   remove(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<void> {
-    return perfTime(`db.remove ${this.label}`, () => this.store.remove(filters, opts));
+    return perfTime(this.op("remove"), () => this.settled(this.store.remove(filters, opts)));
   }
 
   close(): Promise<void> {

@@ -170,6 +170,39 @@ export function perfReset(): void {
   buckets.clear();
 }
 
+/**
+ * Sample event-loop lag: schedule a 0ms timer every `intervalMs` and record how
+ * late it actually fires.
+ *
+ * This is the one number that separates "storage is slow" from "the main thread
+ * is busy", and they demand opposite fixes. Every IndexedDB result is delivered
+ * by a task on the event loop, so a saturated loop inflates the measured latency
+ * of a read that the database itself answered instantly — and a profile without
+ * this number cannot tell the two apart. A `max` in the seconds means the loop
+ * was blocked that long, and every storage figure in the report is an upper
+ * bound rather than a cost.
+ *
+ * Returns a stop function. Sampling is a timer per interval; the sampler is
+ * exactly the thing being measured, so it cannot lie in the cheap direction.
+ */
+export function startLoopLagSampler(intervalMs = 250): () => void {
+  let stopped = false;
+  const tick = () => {
+    if (stopped) return;
+    const scheduled = now();
+    setTimeout(() => {
+      if (stopped) return;
+      // Everything past `intervalMs` is the loop failing to get to us.
+      perfCount("loop lag", Math.max(0, now() - scheduled - intervalMs));
+      tick();
+    }, intervalMs);
+  };
+  tick();
+  return () => {
+    stopped = true;
+  };
+}
+
 /** Test seam: drop everything, including the timeline. */
 export function __resetPerfForTests(): void {
   buckets.clear();
