@@ -435,6 +435,8 @@ interface ProfileSettingsProps {
   saveLabel?: string;
   /** Center the save button (onboarding); defaults to left-aligned. */
   centerSave?: boolean;
+  /** Hide the NIP-05 username field on the profile card (onboarding). */
+  showNip05?: boolean;
 }
 
 /**
@@ -442,7 +444,7 @@ interface ProfileSettingsProps {
  * edits in place, plus a typed custom-fields section (presets for media,
  * wallets, links, etc.). Publishes a kind-0 metadata event on save.
  */
-export function ProfileSettings({ onSaved, saveLabel, centerSave }: ProfileSettingsProps = {}) {
+export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = true }: ProfileSettingsProps = {}) {
   const { user, metadata, event } = useCurrentUser();
   const queryClient = useQueryClient();
   const { mutateAsync: publishEvent, isPending } = useNostrPublish();
@@ -715,6 +717,7 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave }: ProfileSetti
             onPickImage={handlePickImage}
             onAvatarShape={(shape) => form.setValue('shape', shape, { shouldDirty: true })}
             onRemoveAvatar={() => form.setValue('picture', '', { shouldDirty: true })}
+            showNip05={showNip05}
           />
 
           {isUploading && (

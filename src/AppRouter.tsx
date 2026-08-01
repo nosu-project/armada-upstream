@@ -1,4 +1,4 @@
-import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { useNotificationNavigation } from "@/hooks/useNotificationNavigation";
@@ -8,7 +8,7 @@ import {
   consumeColdLaunchDeepLink,
   onColdLaunchResolved,
 } from "@/lib/coldLaunchDeepLink";
-import { BootSplash } from "@/components/brand/BootSplash";
+import { BlankSplash, BootSplash } from "@/components/brand/BootSplash";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { VersionCheck } from "@/components/VersionCheck";
 import { Toaster } from "@/components/ui/toaster";
@@ -28,7 +28,6 @@ import { lazyWithReload } from "@/lib/chunkReload";
 // Each import is wrapped with lazyWithReload so a stale-chunk fetch after a
 // deploy (an open tab referencing pruned hashes) triggers a one-time reload to
 // a consistent build instead of surfacing as a crash.
-const AboutPage = lazy(lazyWithReload(() => import("@/pages/AboutPage").then((m) => ({ default: m.AboutPage }))));
 const ConcordPage = lazy(lazyWithReload(() => import("@/concord-v1/pages/ConcordPage").then((m) => ({ default: m.ConcordPage }))));
 const ConcordV2Page = lazy(lazyWithReload(() => import("@/concord-v2/pages/ConcordV2Page").then((m) => ({ default: m.ConcordV2Page }))));
 const DiscoverPage = lazy(lazyWithReload(() => import("@/pages/DiscoverPage").then((m) => ({ default: m.DiscoverPage }))));
@@ -131,8 +130,9 @@ function HomeRedirect() {
     // Launch URL not yet known — committing to a default destination here
     // would lose the race against the deep link, so hold the redirect. Show
     // the branded splash rather than a blank frame (this wait can reach the
-    // 1.5s bridge-guard timeout on a slow cold start).
-    return <BootSplash />;
+    // 1.5s bridge-guard timeout on a slow cold start) — unless we're signed
+    // out, in which case this lands on /welcome, which draws the crest itself.
+    return user ? <BootSplash /> : <BlankSplash />;
   }
   if (state.deepLink) {
     return <Navigate to={state.deepLink} replace />;
@@ -185,6 +185,16 @@ function RequireAuth({ children }: { children: ReactNode }) {
     return <Navigate to="/welcome" replace />;
   }
   return <>{children}</>;
+}
+
+/**
+ * The Suspense fallback for lazy route chunks: the branded splash, except on
+ * the way to /welcome, which paints its own crest and so would otherwise show
+ * a draw that gets cut off the moment the chunk lands.
+ */
+function RouteFallback() {
+  const { pathname } = useLocation();
+  return pathname === "/welcome" ? <BlankSplash /> : <BootSplash />;
 }
 
 /**
@@ -248,7 +258,7 @@ export function AppRouter() {
         <Toaster />
         {/* Lazy route chunks paint the branded splash while they load, never a
             blank frame. */}
-      <Suspense fallback={<BootSplash />}>
+      <Suspense fallback={<RouteFallback />}>
         <Routes>
           <Route element={<MainLayout />}>
             <Route path="/" element={<HomeRedirect />} />
@@ -269,7 +279,6 @@ export function AppRouter() {
                 dotted HMAC token, never an naddr), dispatched by InviteRoute. */}
             <Route path="/invite" element={<InvitePage />} />
             <Route path="/invite/:naddr" element={<InviteRoute />} />
-            <Route path="/about" element={<AboutPage />} />
             <Route path="/changelog" element={<ChangelogPage />} />
             <Route path="/privacy" element={<PrivacyPolicyPage />} />
             <Route path="/terms" element={<TermsPage />} />
