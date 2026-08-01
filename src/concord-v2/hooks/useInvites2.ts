@@ -20,6 +20,7 @@ import {
   buildRefreshedBundleEvents,
   buildRevocationEvent,
   EMPTY_INVITE_LIST,
+  InviteError,
   mergeInviteLists,
   mintLinkSigner,
   mintToken,
@@ -434,27 +435,48 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
    * community (CORD-05 §2). A link's coordinate vends whatever was posted
    * last, so a link minted before the community's metadata (or keys) changed
    * keeps serving the stale preview until its creator refreshes it — this is
-   * that refresh, run e.g. when re-sharing an existing link to Discover.
+   * that refresh, run on the community page (freshness watcher) and when
+   * re-sharing a link to Discover.
+   *
+   * VERSION-FENCED, because the control fold is incremental: a fold can hold
+   * an OLDER metadata edition than the coordinate already vends (icon swept
+   * in, the banner edition not yet), and a refresh built from it would
+   * DOWNGRADE the public preview — this exact path overwrote live
+   * banner-carrying bundles in the wild. Every re-posted bundle records the
+   * metadata version it previewed (`meta_v`), and a refresh skips any link
+   * whose current bundle records a newer one than this fold holds. The
+   * metadata entity's eid is the community id itself.
    *
    * Each link's refresh targets the community relays UNIONED with the
    * BOOTSTRAP relays frozen into that link's URL fragment: a resolver reads
-   * from the bootstrap set, takes the newest copy any relay returns, and a
-   * bootstrap relay the refresh never reached keeps vending the old bundle —
-   * which is a coin-flip stale preview whenever the sets have drifted apart.
-   * Best-effort per relay; malformed entries are skipped by the builder.
+   * from the bootstrap set, and a bootstrap relay the refresh never reached
+   * keeps vending the old bundle. Best-effort per relay.
    */
   const refreshMyLinks = async (): Promise<void> => {
     if (!community || myLinks.length === 0) return;
-    const bundle = buildBundle();
+    const metaV = Number(folded?.heads.get(community.idHex)?.version ?? 0n);
+    const bundle: InviteBundle = { ...buildBundle(), meta_v: metaV };
+    const now = Math.floor(Date.now() / 1000);
     let accepted = 0;
+    let attempted = 0;
     await Promise.allSettled(
       myLinks.map(async (entry) => {
+        if (entry.expires_at && entry.expires_at <= now) return; // can't be joined; don't touch
+        const parsed = parseInviteLink(entry.url);
+        if (!parsed) return;
+        // What the coordinate currently vends. Unreachable → refresh anyway
+        // (a re-post can't be worse than nothing); revoked → never resurrect.
+        try {
+          const current = await resolveBundle(nostr, parsed, community.relays);
+          const currentMetaV = typeof current.meta_v === "number" ? current.meta_v : 0;
+          if (currentMetaV > metaV) return; // our fold is behind — refusing to downgrade
+        } catch (e) {
+          if (e instanceof InviteError && e.code === "revoked") return;
+        }
         const [event] = buildRefreshedBundleEvents(bundle, [entry]);
         if (!event) return;
-        const targets = new Set<string>([
-          ...community.relays,
-          ...(parseInviteLink(entry.url)?.bootstrapRelays ?? []),
-        ]);
+        attempted++;
+        const targets = new Set<string>([...community.relays, ...parsed.bootstrapRelays]);
         const results = await Promise.allSettled(
           [...targets].map((url) => nostr.relay(url).event(event, { signal: AbortSignal.timeout(8000) })),
         );
@@ -463,7 +485,7 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
     );
     // Total rejection is a real failure the caller must hear about — swallow
     // it and every coordinate keeps vending the stale bundle forever.
-    if (accepted === 0) throw new Error("No relay accepted the refreshed invite bundle.");
+    if (attempted > 0 && accepted === 0) throw new Error("No relay accepted the refreshed invite bundle.");
   };
 
   /**
