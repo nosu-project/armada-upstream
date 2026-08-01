@@ -6,7 +6,6 @@ import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
 import { ArmadaIdentity, ArmadaKey } from "@/components/brand/ArmadaCrest";
 import { LandingPage } from "@/components/landing/LandingPage";
 import LoginDialog from "@/components/auth/LoginDialog";
-import { AddBody } from "@/components/dialogs/AddDialog";
 import { WizardShell } from "@/components/onboarding/WizardShell";
 import { ProfileSettings } from "@/components/ProfileSettings";
 import { Button } from "@/components/ui/button";
@@ -41,17 +40,17 @@ import { flattenLayout, mergeLayout, railKeyToRoute } from "@/lib/railLayout";
  *   3. profile  — the same WYSIWYG {@link ProfileSettings} editor used in
  *      Settings, so a new user sets their name/avatar before entering any
  *      community. Skippable.
- *   4. add      — the Add wizard body ({@link AddBody}) inline: start an
- *      encrypted community, or paste an invite link / server URL. Skippable
- *      straight to DMs.
+ *
+ * The wizard exits onto /discover: a new user browses live communities first
+ * (and the Discover grid leads with a create-your-own tile), rather than
+ * being pushed straight into founding a community of one.
  *
  * Nothing blocks a new user: every step past key-save is skippable. An
  * existing account logging in skips the wizard entirely — with a server they
- * are redirected onto it; with none they get the create/join step in the
- * normal app layout.
+ * are redirected onto it; with none they land in the normal app layout.
  */
 
-const WIZARD_STEPS = ["generate", "download", "profile", "add"] as const;
+const WIZARD_STEPS = ["generate", "download", "profile"] as const;
 type WizardStep = (typeof WIZARD_STEPS)[number];
 
 /** The shared wizard chrome, positioned within this wizard's step sequence. */
@@ -120,12 +119,13 @@ export function WelcomePage() {
     }
   };
 
-  // "Skip for now": leave the create/join step for DMs. Nothing to persist —
-  // the create/join takeover only ever shows mid-signup (the wizard drives it
-  // in-session), never on a later relaunch (see the guard below and
-  // HomeRedirect), so there's no relaunch nag to suppress.
-  const skipOnboarding = () => {
-    navigate("/dms");
+  // The wizard's exit: land the new user on Discover, where they can browse
+  // live communities before committing to anything — the create-your-own tile
+  // there is the first thing in the grid, so founding a community stays one
+  // click away. Seeing the network beats being asked to build one from a
+  // blank form (the classic dead-first-server trap).
+  const finishOnboarding = () => {
+    navigate("/discover");
   };
 
   // Continue IS the backup: save the key to the OS keyring / password manager
@@ -225,10 +225,9 @@ export function WelcomePage() {
   if (user && firstRoute) {
     return <Navigate to={firstRoute} replace />;
   }
-  // Signed in, no community, and NOT mid-signup: don't show the create/join
-  // takeover. This page is only the onboarding surface during the active
-  // account-creation wizard (`step` walks generate → download → profile →
-  // add). A signed-in, community-less user who lands here any other way — a
+  // Signed in and NOT mid-signup: this page is only the onboarding surface
+  // during the active account-creation wizard (`step` walks generate →
+  // download → profile). A signed-in user who lands here any other way — a
   // relaunch, a manual /welcome, a redirect — is not creating an account, so
   // send them to DMs rather than re-forcing getting-started. Onboarding only
   // happens on account creation.
@@ -360,32 +359,12 @@ export function WelcomePage() {
           </p>
         </div>
 
-        <ProfileSettings saveLabel="Continue" centerSave showNip05={false} onSaved={() => setStep("add")} />
+        <ProfileSettings saveLabel="Continue" centerSave showNip05={false} onSaved={finishOnboarding} />
 
         <Button
           variant="ghost"
           className="mx-auto text-muted-foreground"
-          onClick={() => setStep("add")}
-        >
-          Skip for now
-        </Button>
-      </SignupShell>
-    );
-  }
-
-  // ── Wizard step 4: create/join ──────────────────────────────────────────
-  if (user && step === "add") {
-    return (
-      <SignupShell step="add" maxWidth="max-w-md">
-        {/* Inline Add wizard: create an encrypted community, or paste an
-            invite link / server URL. On success it navigates itself (or the
-            added server triggers the redirect above). */}
-        <AddBody onDone={() => undefined} />
-
-        <Button
-          variant="ghost"
-          className="mx-auto text-muted-foreground"
-          onClick={skipOnboarding}
+          onClick={finishOnboarding}
         >
           Skip for now
         </Button>

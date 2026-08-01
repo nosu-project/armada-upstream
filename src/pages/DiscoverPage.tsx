@@ -5,6 +5,7 @@ import {
   CommunityListingCard,
   CommunityListingCardSkeleton,
 } from "@/components/discover/CommunityListingCard";
+import { CreateCommunityCard } from "@/components/discover/CreateCommunityCard";
 import { ThemeDiscoverCard } from "@/components/discover/ThemeDiscoverCard";
 import { EmojiPackCard } from "@/components/chat/EmojiPackCard";
 import { ServerRail } from "@/components/layout/ServerRail";
@@ -243,9 +244,11 @@ function CommunitiesTab({ query }: { query: string }) {
 
   if (isLoading && !data) {
     // Card-shaped placeholders, enough of them to fill a desktop viewport.
+    // The create tile is real content and never waits on the network.
     return (
-      <div className={GRID} aria-hidden>
-        {Array.from({ length: 12 }, (_, i) => (
+      <div className={GRID}>
+        <CreateCommunityCard />
+        {Array.from({ length: 11 }, (_, i) => (
           <CommunityListingCardSkeleton key={i} />
         ))}
       </div>
@@ -254,13 +257,20 @@ function CommunitiesTab({ query }: { query: string }) {
   if (isError) return <TabState icon={Users}>Couldn't reach the relays. Try again.</TabState>;
   if (!data || data.length === 0) {
     return (
-      <TabState icon={Users}>
-        No public communities found yet. Use "Add your community" to list one you own or admin.
-      </TabState>
+      <div className="space-y-4">
+        <div className={GRID}>
+          <CreateCommunityCard />
+        </div>
+        <TabState icon={Users}>
+          No public communities listed yet. Yours could be the first.
+        </TabState>
+      </div>
     );
   }
   return (
     <div className={GRID}>
+      {/* Founding a community is always the first vessel in the fleet. */}
+      <CreateCommunityCard />
       {/* The announcement is metadata-free, so the search matches each card's
           RESOLVED community name: non-matching cards render nothing. */}
       {data
