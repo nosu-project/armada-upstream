@@ -5,19 +5,20 @@
  * URL `#fragment`, and the kind-33301 bundle is NIP-44-encrypted with a key
  * derived from it. Nothing an invite touches is searchable on its own.
  *
- * "Share to Discover" publishes a community announcement: an addressable
- * kind-33302 event, signed by the sharer's real key, whose `d` tag is the
- * community id and whose content carries the full shareable invite link
- * (`https://…/invite/naddr1…#fragment`, secret included) plus an optional
- * blurb. Addressability means re-sharing REPLACES the sharer's previous
- * listing for that community instead of piling up notes, and un-listing is a
- * future replace. The link carries the secret, so anyone who finds the
- * announcement can join — publishing one is always an explicit user action.
+ * "Share to Discover" publishes a community announcement: a REGULAR kind-3314
+ * event, signed by the sharer's real key, that is nothing but a reference — an
+ * `i` tag naming the community id, and the full shareable invite link
+ * (`https://…/invite/naddr1…#fragment`, secret included) as the content. It
+ * deliberately carries NO metadata: name, icon, banner and channels all come
+ * from the invite bundle the link resolves to, which the creator refreshes as
+ * the community changes — so a listing never goes stale, it just tracks the
+ * bundle. The link carries the secret, so anyone who finds the announcement
+ * can join — publishing one is always an explicit user action.
  *
  * This is an Armada client convention, not a CORD kind: the event is bare
  * (never wrapped) and carries no Concord key material beyond what the shared
  * link itself already discloses. It lives here, not in the frozen CORD-02
- * registry.
+ * registry (which ends at 3313).
  */
 
 import { parseInviteLink } from "@/concord-v2/lib/invite";
@@ -25,10 +26,10 @@ import { parseInviteLink } from "@/concord-v2/lib/invite";
 import type { EventTemplate } from "@/hooks/useNostrPublish";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-/** Community announcement: addressable, `d` = community id (hex). */
-export const KIND_COMMUNITY_ANNOUNCEMENT = 33302;
+/** Community announcement: regular event, `i` = community id (hex). */
+export const KIND_COMMUNITY_ANNOUNCEMENT = 3314;
 
-/** A community id as it appears in a `d` tag: 32 bytes of lowercase hex. */
+/** A community id as it appears in an `i` tag: 32 bytes of lowercase hex. */
 const COMMUNITY_ID_RE = /^[0-9a-f]{64}$/;
 
 /** An invite link mined from a community announcement. */
@@ -37,17 +38,10 @@ export interface DiscoveredInvite {
   inviteUrl: string;
   /** The link-signer pubkey — the invite's coordinate author. */
   linkSigner: string;
-  /** The announced community's id (the announcement's `d` tag, hex). */
+  /** The announced community's id (the announcement's `i` tag, hex). */
   communityId: string;
-  /** The plaintext name the sharer chose to list under, if any. */
-  name?: string;
   /** The announcement event that carried the link. */
   source: NostrRumor;
-}
-
-/** Normalize a topic to a bare, lowercase hashtag body. */
-function normalizeTopic(topic: string): string {
-  return topic.trim().replace(/^#+/, "").toLowerCase();
 }
 
 /**
@@ -78,69 +72,37 @@ export function extractInviteUrls(text: string): string[] {
 
 /**
  * Read one community announcement event into a {@link DiscoveredInvite}, or
- * null when it isn't usable: the `d` tag must be a community id and the
+ * null when it isn't usable: the `i` tag must be a community id and the
  * content must carry a valid, secret-carrying invite link.
  */
 export function announcementFromEvent(event: NostrRumor): DiscoveredInvite | null {
-  const d = event.tags.find(([n]) => n === "d")?.[1] ?? "";
-  if (!COMMUNITY_ID_RE.test(d)) return null;
+  const communityId = event.tags.find(([n]) => n === "i")?.[1] ?? "";
+  if (!COMMUNITY_ID_RE.test(communityId)) return null;
   const [url] = extractInviteUrls(event.content);
   if (!url) return null;
   const parsed = parseInviteLink(url);
   if (!parsed) return null;
-  const name = event.tags.find(([n]) => n === "name")?.[1]?.trim();
-  return {
-    inviteUrl: url,
-    linkSigner: parsed.linkSigner,
-    communityId: d,
-    ...(name ? { name } : {}),
-    source: event,
-  };
+  return { inviteUrl: url, linkSigner: parsed.linkSigner, communityId, source: event };
 }
 
 /**
- * The announcement's content minus the invite URL — the sharer's blurb for the
- * card (e.g. "A place to talk sailing"). Collapses whitespace.
- */
-export function inviteSourceBlurb(event: NostrRumor): string {
-  return event.content
-    .replace(INVITE_URL_RE, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-/**
- * Build the community announcement "share to Discover" publishes. The invite
- * URL rides in the content (where NIP-50 search indexes it), the community id
- * is the `d` tag (so a re-share replaces the sharer's previous listing), and
- * the community name rides in a `name` tag so the listing is searchable
- * without decrypting the bundle. Returns null if the URL isn't a valid invite
- * link or the id isn't a community id.
+ * Build the community announcement "share to Discover" publishes: the invite
+ * URL as the content, the community id as an `i` tag (what Discover
+ * de-duplicates listings by), and nothing else — all display metadata is
+ * resolved live from the link's bundle. Returns null if the URL isn't a valid
+ * invite link or the id isn't a community id.
  */
 export function buildCommunityAnnouncement(input: {
   communityId: string;
   inviteUrl: string;
-  name?: string;
-  description?: string;
-  topics?: string[];
 }): EventTemplate | null {
   const communityId = input.communityId.toLowerCase();
   if (!COMMUNITY_ID_RE.test(communityId)) return null;
   if (!parseInviteLink(input.inviteUrl)) return null;
-  const topics = (input.topics ?? [])
-    .map(normalizeTopic)
-    .filter((t) => t.length > 0 && t.length <= 64);
-  const blurb = input.description?.trim();
-  const name = input.name?.trim();
-  const content = [blurb, input.inviteUrl.trim()].filter(Boolean).join("\n\n");
   return {
     kind: KIND_COMMUNITY_ANNOUNCEMENT,
-    content,
-    tags: [
-      ["d", communityId],
-      ...(name ? [["name", name]] : []),
-      ...topics.map((t) => ["t", t]),
-    ],
+    content: input.inviteUrl.trim(),
+    tags: [["i", communityId]],
   };
 }
 

@@ -12,7 +12,6 @@ import { resolveBundle } from "@/concord-v2/hooks/useCommunityActions2";
 import { useCommunityEntry2 } from "@/concord-v2/hooks/useCommunityList2";
 import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
 import {
-  inviteSourceBlurb,
   inviteUrlToLocalRoute,
   type DiscoveredInvite,
 } from "@/concord-v2/lib/inviteDiscovery";
@@ -25,22 +24,28 @@ import { cn } from "@/lib/utils";
 interface CommunityListingCardProps {
   invite: DiscoveredInvite;
   className?: string;
+  /**
+   * A search needle to match against the RESOLVED community name — the
+   * announcement itself carries no metadata, so filtering can only happen
+   * here, after the bundle decrypts. A non-matching card renders nothing.
+   */
+  filter?: string;
 }
 
 /**
- * A public Concord community discovered from a shared invite link, rendered as a
- * card: the resolved community name (fetched from the invite bundle using the
- * link's own secret), the person who shared it, their note blurb, and a Join
- * button that routes to the invite (which resolves + joins, prompting sign-in).
+ * A public Concord community discovered from an announcement, rendered as a
+ * card: the resolved banner, icon and name (fetched from the invite bundle
+ * using the link's own secret, so they track the community as it changes),
+ * the person who shared it, and a Join button that routes to the invite
+ * (which resolves + joins, prompting sign-in).
  */
-export function CommunityListingCard({ invite, className }: CommunityListingCardProps) {
+export function CommunityListingCard({ invite, className, filter }: CommunityListingCardProps) {
   const navigate = useNavigate();
   const { nostr } = useNostr();
   const parsed = useMemo(() => parseInviteLink(invite.inviteUrl), [invite.inviteUrl]);
   const author = useAuthor(invite.source.pubkey);
   const metadata = author.data?.metadata;
   const displayName = getDisplayName(metadata, invite.source.pubkey);
-  const blurb = useMemo(() => inviteSourceBlurb(invite.source), [invite.source]);
 
   // Resolve the community name from its bundle (the link carries the secret, so
   // we can decrypt the preview). Best-effort: a revoked/unreachable link falls
@@ -55,7 +60,7 @@ export function CommunityListingCard({ invite, className }: CommunityListingCard
 
   const iconUrl = useDecryptedImage2(bundle?.icon);
   const bannerUrl = useDecryptedImage2(bundle?.banner);
-  const name = bundle?.name?.trim() || invite.name || "Encrypted community";
+  const name = bundle?.name?.trim() || "Encrypted community";
   const initial = name.charAt(0).toUpperCase() || "·";
   const channelCount = Array.isArray(bundle?.channels) ? bundle!.channels.length : 0;
 
@@ -64,6 +69,9 @@ export function CommunityListingCard({ invite, className }: CommunityListingCard
 
   const onJoin = () => navigate(inviteUrlToLocalRoute(invite.inviteUrl));
   const onOpen = () => navigate(`/c/${encodeURIComponent(bundle!.community_id)}`);
+
+  const needle = filter?.trim().toLowerCase();
+  if (needle && !name.toLowerCase().includes(needle)) return null;
 
   return (
     <div
@@ -99,8 +107,6 @@ export function CommunityListingCard({ invite, className }: CommunityListingCard
             </span>
           </div>
         </div>
-
-        {blurb && <p className="text-sm text-muted-foreground line-clamp-3">{blurb}</p>}
 
         {/* Who shared it */}
         <ProfilePreviewCard pubkey={invite.source.pubkey}>

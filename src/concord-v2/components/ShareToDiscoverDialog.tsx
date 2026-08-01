@@ -5,8 +5,6 @@ import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCres
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useCommunity2, useLiveCommunities2 } from "@/concord-v2/hooks/useCommunityList2";
 import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
@@ -181,8 +179,6 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
   const { community, folded, eligible, isLoading } = useCanShare(idHex);
   const { createLink, isCreatingLink, myLinks, isPublic } = useInviteActions2(community);
   const { mutateAsync: publishEvent, isPending: isPublishing } = useNostrPublish();
-  const [description, setDescription] = useState("");
-  const [topics, setTopics] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const name = folded?.metadata?.name ?? community?.name ?? "this community";
@@ -200,15 +196,12 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
     if (!community || !eligible) return;
     try {
       const url = reusable?.url ?? (await createLink({}));
+      // The announcement is just a reference: the community id and the link.
+      // Name, icon and banner are resolved live from the link's bundle by
+      // every viewer, so the listing tracks the community as it changes.
       const announcement = buildCommunityAnnouncement({
         communityId: community.idHex,
         inviteUrl: url,
-        name: folded?.metadata?.name ?? community.name,
-        description: description.trim() || undefined,
-        topics: topics
-          .split(/[,\s]+/)
-          .map((t) => t.trim())
-          .filter(Boolean),
       });
       if (!announcement) throw new Error("Couldn't build the listing.");
       await publishEvent(announcement);
@@ -240,23 +233,9 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
   return (
     <div className="w-full space-y-3">
       <p className="text-sm">
-        Listing <span className="font-medium text-foreground">{name}</span> publicly.
+        Listing <span className="font-medium text-foreground">{name}</span> publicly. Its name and
+        images come from the community itself, so the listing stays current as they change.
       </p>
-      <Textarea
-        value={description}
-        onChange={(e) => setDescription(e.target.value)}
-        placeholder="Short description (optional)"
-        className="min-h-16 text-sm"
-        maxLength={280}
-        aria-label="Listing description"
-      />
-      <Input
-        value={topics}
-        onChange={(e) => setTopics(e.target.value)}
-        placeholder="Topics, comma-separated (optional)"
-        className="text-sm"
-        aria-label="Listing topics"
-      />
       <Alert>
         <AlertDescription>
           Sharing publishes an invite link from your account — including its secret — so anyone

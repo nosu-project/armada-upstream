@@ -180,49 +180,45 @@ export function useDiscoverAuthors(): {
 }
 
 /**
- * Public Concord communities — kind-33302 community announcements, each an
- * addressable event whose `d` tag is the community id and whose content
- * carries a full shareable invite link. De-duplicated by community id keeping
- * the newest announcement, so one community listed by two people is one card.
+ * Public Concord communities — kind-3314 community announcements, each a
+ * regular event that is nothing but a reference: an `i` tag naming the
+ * community id and a full shareable invite link as the content. De-duplicated
+ * by community id keeping the newest announcement, so one community listed by
+ * two people is one card.
+ *
+ * No search filter is sent: the announcement deliberately carries no metadata
+ * (the card resolves name/icon/banner live from the invite bundle), so there
+ * is nothing server-side to match. The Communities tab filters the rendered
+ * cards against their RESOLVED names instead.
  */
-export function useDiscoverCommunities(query: string) {
+export function useDiscoverCommunities() {
   const { nostr } = useNostr();
   const relays = useDiscoverRelays();
   const { authors, unrestricted, isLoading: authorsLoading } = useDiscoverAuthors();
-  const debounced = useDebounce(query, 300);
 
   const authorFilter = unrestricted ? undefined : authors;
 
   const result = useQuery<DiscoveredInvite[]>({
-    queryKey: ["discover", "community-announcements", relays, authorFilter ?? "all", debounced.trim()],
+    queryKey: ["discover", "community-announcements", relays, authorFilter ?? "all"],
     enabled: relays.length > 0 && !authorsLoading && (unrestricted || authors.length > 0),
     staleTime: 30_000,
     placeholderData: (prev) => prev,
     queryFn: async ({ signal }) => {
-      const q = debounced.trim();
-      // Newest announcement per (sharer, community) coordinate, newest first.
-      const events = await fetchDiscover(
-        nostr,
-        relays,
-        KIND_COMMUNITY_ANNOUNCEMENT,
-        q,
-        authorFilter,
-        signal,
+      const filter: NostrFilter = { kinds: [KIND_COMMUNITY_ANNOUNCEMENT], limit: FETCH_LIMIT };
+      if (authorFilter) filter.authors = authorFilter;
+      const events = await nostr.group(relays).query(
+        [filter],
+        { signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) },
       );
+      // Newest announcement wins for a given community.
+      events.sort((a, b) => b.created_at - a.created_at);
       const byCommunity = new Map<string, DiscoveredInvite>();
       for (const event of events) {
         const invite = announcementFromEvent(event);
         if (!invite) continue;
         if (!byCommunity.has(invite.communityId)) byCommunity.set(invite.communityId, invite);
       }
-      const all = [...byCommunity.values()];
-      if (!q) return all;
-      // Client-side filter so relays without NIP-50 still answer the search:
-      // the listed name and the announcement's blurb are the plaintext there is.
-      const needle = q.toLowerCase();
-      return all.filter((invite) =>
-        `${invite.name ?? ""} ${invite.source.content}`.toLowerCase().includes(needle),
-      );
+      return [...byCommunity.values()];
     },
   });
 

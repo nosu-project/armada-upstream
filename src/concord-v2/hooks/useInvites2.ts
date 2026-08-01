@@ -283,12 +283,12 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
       expiresAtMs?: number;
       label?: string;
       /**
-       * Opt-in: also publish a PUBLIC community announcement (kind 33302)
+       * Opt-in: also publish a PUBLIC community announcement (kind 3314)
        * carrying the full shareable link (fragment included), so Discover can
        * list it. This deliberately trades the link's secrecy for
        * discoverability; only ever set from an explicit user action.
        */
-      listPublicly?: { description?: string; topics?: string[] };
+      listPublicly?: boolean;
     }
   >({
     mutationFn: async ({ expiresAtMs, label, listPublicly }) => {
@@ -353,9 +353,6 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
         const announcement = buildCommunityAnnouncement({
           communityId: community.idHex,
           inviteUrl: url,
-          name: folded?.metadata?.name ?? community.name,
-          description: listPublicly.description,
-          topics: listPublicly.topics,
         });
         if (announcement) await publishEvent(announcement).catch(() => undefined);
       }

@@ -11,7 +11,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useInviteActions2 } from "@/concord-v2/hooks/useInvites2";
 import { toast } from "@/hooks/useToast";
@@ -55,8 +54,6 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
   const [expiryDays, setExpiryDays] = useState<number>(0); // 0 = never
   const [label, setLabel] = useState("");
   const [listPublicly, setListPublicly] = useState(false);
-  const [listingDescription, setListingDescription] = useState("");
-  const [listingTopics, setListingTopics] = useState("");
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
   const [sentPubkey, setSentPubkey] = useState<string | null>(null);
@@ -105,17 +102,11 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
     }
     try {
       const expiresAtMs = expiryDays > 0 ? Date.now() + expiryDays * 86400_000 : undefined;
-      const topics = listingTopics
-        .split(/[,\s]+/)
-        .map((t) => t.trim())
-        .filter(Boolean);
       setLink(
         await createLink({
           expiresAtMs,
           label: label.trim() || undefined,
-          listPublicly: listPublicly
-            ? { description: listingDescription.trim() || undefined, topics }
-            : undefined,
+          listPublicly: listPublicly || undefined,
         }),
       );
     } catch (e) {
@@ -297,25 +288,6 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
                     </span>
                     <Switch id="list-publicly" checked={listPublicly} onCheckedChange={setListPublicly} />
                   </Label>
-                  {listPublicly && (
-                    <div className="space-y-2 pt-1">
-                      <Textarea
-                        value={listingDescription}
-                        onChange={(e) => setListingDescription(e.target.value)}
-                        placeholder="Short description (optional)"
-                        className="min-h-16 text-sm"
-                        maxLength={280}
-                        aria-label="Listing description"
-                      />
-                      <Input
-                        value={listingTopics}
-                        onChange={(e) => setListingTopics(e.target.value)}
-                        placeholder="Topics, comma-separated (optional)"
-                        className="text-sm"
-                        aria-label="Listing topics"
-                      />
-                    </div>
-                  )}
                 </div>
               </CollapsibleContent>
             </Collapsible>

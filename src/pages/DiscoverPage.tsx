@@ -211,23 +211,23 @@ function TabState({ icon: Icon, children }: { icon: typeof Users; children: Reac
 }
 
 function CommunitiesTab({ query }: { query: string }) {
-  const { data, isLoading, isError } = useDiscoverCommunities(query);
+  const { data, isLoading, isError } = useDiscoverCommunities();
 
   if (isLoading && !data) return <TabSkeleton />;
   if (isError) return <TabState icon={Users}>Couldn't reach the relays. Try again.</TabState>;
   if (!data || data.length === 0) {
     return (
       <TabState icon={Users}>
-        {query.trim()
-          ? "No public communities matched your search."
-          : "No public communities found yet. Use \"Add your community\" to list one you own or admin."}
+        No public communities found yet. Use "Add your community" to list one you own or admin.
       </TabState>
     );
   }
   return (
     <div className={GRID}>
+      {/* The announcement is metadata-free, so the search matches each card's
+          RESOLVED community name: non-matching cards render nothing. */}
       {data.map((invite) => (
-        <CommunityListingCard key={invite.communityId} invite={invite} />
+        <CommunityListingCard key={invite.communityId} invite={invite} filter={query} />
       ))}
     </div>
   );
