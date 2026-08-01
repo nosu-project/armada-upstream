@@ -52,12 +52,14 @@ import { useGroupReactions } from "@/hooks/useReactions";
 import { useZapReceipts } from "@/hooks/useZapReceipts";
 import { useNostrPublish, useRepublish } from "@/hooks/useNostrPublish";
 import { useActiveRoom } from "@/hooks/useActiveRoom";
+import { useMessagePermalink } from "@/hooks/useMessagePermalink";
 import { useNewMessagesDivider } from "@/hooks/useNewMessagesDivider";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { toast } from "@/hooks/useToast";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useEvent } from "@/hooks/useEvent";
 import { getAvatarShape } from "@/lib/avatarShape";
+import { relayToRouteParam } from "@/lib/platform";
 import { writeClipboardText } from "@/lib/clipboard";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { withSignature } from "@/lib/publishOutbox";
@@ -113,6 +115,8 @@ interface BuzzChatMessageProps {
   onVote?: (event: ChatMsg, value: "+" | "-") => void;
   /** Whether the author holds the `bot` role in this channel (agent badge). */
   isAgent?: boolean;
+  /** Channel route for "Copy message link" (see ChatMessage.permalink). */
+  permalink?: string;
 }
 
 /**
@@ -137,6 +141,7 @@ function BuzzChatMessage({
   votes,
   onVote,
   isAgent,
+  permalink,
 }: BuzzChatMessageProps) {
   const { config } = useAppContext();
   const threadInfo = threadSummary(transport.threadRepliesFor?.(event.id) ?? []);
@@ -145,6 +150,7 @@ function BuzzChatMessage({
     <div>
       <ChatMessage
         event={event}
+        permalink={permalink}
         canWrite={transport.canWrite}
         canModerate={transport.canModerate}
         reactions={transport.reactionsFor?.(event.id)}
@@ -566,6 +572,24 @@ export function BuzzChat({
     timelineRef.current?.scrollToMessage(id);
   }, []);
 
+  // Message permalinks (`?m=<id>` — notification taps, copied links).
+  const channelRoute = useMemo(
+    () => `/s/${relayToRouteParam(relayUrl)}/${encodeURIComponent(channelId)}`,
+    [relayUrl, channelId],
+  );
+  const permalinkScroll = useCallback(
+    (id: string) => timelineRef.current?.scrollToMessage(id, true) ?? false,
+    [],
+  );
+  useMessagePermalink({
+    messages: timeline,
+    isLoading,
+    hasMore,
+    loadOlder,
+    scrollTo: permalinkScroll,
+    enabled: !searching,
+  });
+
   // Keep the thread panel content mounted through its slide-out animation.
   useEffect(() => {
     if (threadRoot) {
@@ -798,6 +822,7 @@ export function BuzzChat({
           onReply={setReplyTo}
           votes={votes ? { up: votes.up, down: votes.down, mine: votes.mine?.value } : undefined}
           onVote={forum ? handleVote : undefined}
+          permalink={channelRoute}
         />
       );
     },
@@ -814,6 +839,7 @@ export function BuzzChat({
       handleEditSubmit,
       jumpToReply,
       handleVote,
+      channelRoute,
     ],
   );
 

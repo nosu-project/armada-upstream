@@ -23,9 +23,22 @@ public class WebReadyPlugin extends Plugin {
     /** Set true once the web layer reports its first painted frame. */
     static volatile boolean webPainted = false;
 
+    /**
+     * Bumped each time the web layer reports it has handled (navigated and
+     * painted for) a warm deep link. MainActivity's deep-link gate polls this
+     * to lift the crest overlay it threw over the WebView in onNewIntent.
+     */
+    static volatile long deepLinkNavCount = 0;
+
     @PluginMethod
     public void signalReady(PluginCall call) {
         webPainted = true;
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void signalDeepLinkNavigated(PluginCall call) {
+        deepLinkNavCount++;
         call.resolve();
     }
 }

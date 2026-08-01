@@ -10,6 +10,7 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
  */
 interface WebReadyPlugin {
   signalReady(): Promise<void>;
+  signalDeepLinkNavigated(): Promise<void>;
 }
 
 const WebReady = registerPlugin<WebReadyPlugin>("WebReady");
@@ -30,6 +31,22 @@ export function signalWebReady(): void {
       WebReady.signalReady().catch(() => {
         // Missing native method / bridge down — native timeout covers it.
       });
+    });
+  });
+}
+
+/**
+ * Tell native the SPA has handled a warm deep link, so MainActivity can lift
+ * the crest gate it threw over the WebView on the tap's onNewIntent. Waits
+ * two animation frames so the destination route (or its splash fallback) is
+ * actually painted when the gate lifts. Fails soft — the native gate has its
+ * own timeout.
+ */
+export function signalDeepLinkNavigated(): void {
+  if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== "android") return;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      WebReady.signalDeepLinkNavigated().catch(() => undefined);
     });
   });
 }

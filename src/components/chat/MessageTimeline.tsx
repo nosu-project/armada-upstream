@@ -179,8 +179,10 @@ export interface MessageTimelineHandle {
   /**
    * Reveal and center a loaded message. Returns false when the id is not part
    * of this timeline (for example, a reply that belongs in a thread panel).
+   * `focus` marks the row as a permalink target: the highlight wash lasts
+   * longer and a primary-colored bar sits beside the row while it fades.
    */
-  scrollToMessage: (id: string) => boolean;
+  scrollToMessage: (id: string, focus?: boolean) => boolean;
   /** Re-anchor to the bottom and resume auto-scroll (e.g. after sending). */
   pinToBottom: () => void;
   /**
@@ -414,8 +416,8 @@ export function MessageTimeline({
   const loadingOlderRef = useRef(false);
   // The next layout should pin to the bottom (first paint, conversation switch).
   const pinBottomRef = useRef(true);
-  // A message id to reveal-and-jump-to once it's in the rendered window.
-  const pendingJumpRef = useRef<string | null>(null);
+  // A message to reveal-and-jump-to once it's in the rendered window.
+  const pendingJumpRef = useRef<{ id: string; focus: boolean } | null>(null);
   const anchorRef = useRef<ScrollAnchor | null>(null);
   // Previous scroll offset, to tell a reader moving up from this component's
   // own downward scrolls (see `handleScroll`).
@@ -549,7 +551,7 @@ export function MessageTimeline({
   }, []);
 
   /** Center a mounted row and flash a highlight over it. */
-  const jumpToRow = useCallback((id: string) => {
+  const jumpToRow = useCallback((id: string, focus = false) => {
     const el = scrollRef.current;
     const row = contentRef.current?.querySelector<HTMLElement>(`[data-event-id="${id}"]`);
     if (!el || !row) return;
@@ -564,11 +566,17 @@ export function MessageTimeline({
     });
     distanceRef.current = el.scrollHeight - el.scrollTop - el.clientHeight;
     row.classList.add("bg-primary/10", "transition-colors", "duration-1000", "rounded-md");
-    setTimeout(() => row.classList.remove("bg-primary/10"), 1200);
-    setTimeout(
-      () => row.classList.remove("transition-colors", "duration-1000", "rounded-md"),
-      2200,
-    );
+    // A permalink target additionally gets a primary bar beside the row (an
+    // inset shadow, so nothing shifts) that outlives the background wash —
+    // the arriving reader needs "this exact message" to survive the first
+    // moment, where an in-channel jump only needs a flash.
+    const indicator = "shadow-[inset_3px_0_0_0_hsl(var(--primary))]";
+    if (focus) row.classList.add(indicator);
+    const washMs = focus ? 2200 : 1200;
+    setTimeout(() => row.classList.remove("bg-primary/10"), washMs);
+    setTimeout(() => {
+      row.classList.remove("transition-colors", "duration-1000", "rounded-md", indicator);
+    }, washMs + 1000);
   }, []);
 
   // The one place scroll position is adjusted for a rendered-slice change.
@@ -592,7 +600,7 @@ export function MessageTimeline({
       pendingJumpRef.current = null;
       anchorRef.current = null;
       pinBottomRef.current = false;
-      jumpToRow(jump);
+      jumpToRow(jump.id, jump.focus);
       return;
     }
     if (pinBottomRef.current) {
@@ -709,18 +717,18 @@ export function MessageTimeline({
   // the loaded history; if it's older than the rendered window, the window is
   // extended to cover it first and the jump happens in the same commit.
   const scrollToMessage = useCallback(
-    (id: string) => {
+    (id: string, focus = false) => {
       // Indexes and the window anchor are entry-space; the row key stays the
       // message id, which is what callers jump by.
       const all = entriesRef.current;
       const index = all.findIndex((entry) => entry.type === "chat" && entry.message.id === id);
       if (index === -1) return false;
       if (index < startIndexRef.current) {
-        pendingJumpRef.current = id;
+        pendingJumpRef.current = { id, focus };
         setWindowStart(all[Math.max(0, index - JUMP_CONTEXT)].id);
         return true;
       }
-      jumpToRow(id);
+      jumpToRow(id, focus);
       return true;
     },
     [jumpToRow, setWindowStart],

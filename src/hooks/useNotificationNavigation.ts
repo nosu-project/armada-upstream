@@ -3,7 +3,9 @@ import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
+import { onLateColdLaunchDeepLink } from "@/lib/coldLaunchDeepLink";
 import { pathFromDeepLinkUrl } from "@/lib/deepLinkUrl";
+import { signalDeepLinkNavigated } from "@/lib/webReady";
 
 /**
  * Route WARM deep links (app already running) to the in-app chat via
@@ -37,6 +39,11 @@ export function useNotificationNavigation(): void {
     CapacitorApp.addListener("appUrlOpen", ({ url }) => {
       const path = pathFromDeepLinkUrl(url);
       if (!cancelled && path) navigate(path);
+      // MainActivity throws the native crest gate over the WebView on a warm
+      // deep-link intent (it can't see when the SPA has moved on its own);
+      // release it once this commit has painted. Signalled even when the URL
+      // parsed to nothing, so the gate never sits out its full timeout.
+      signalDeepLinkNavigated();
     })
       .then((h) => {
         if (cancelled) h.remove();
@@ -44,8 +51,16 @@ export function useNotificationNavigation(): void {
       })
       .catch(() => undefined);
 
+    // A cold-launch URL that resolved only after the 1.5s guard had released
+    // HomeRedirect to the default route: apply it like a warm deep link
+    // instead of dropping the tap on the floor.
+    const offLate = onLateColdLaunchDeepLink((path) => {
+      if (!cancelled) navigate(path);
+    });
+
     return () => {
       cancelled = true;
+      offLate();
       handle?.remove();
     };
   }, [navigate]);

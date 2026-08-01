@@ -1,11 +1,20 @@
 package buzz.armada.app;
 
+import android.content.Intent;
+import android.graphics.drawable.Animatable;
+import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
 import android.webkit.WebView;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
 
 import androidx.activity.EdgeToEdge;
+import androidx.core.content.ContextCompat;
 import androidx.core.splashscreen.SplashScreen;
 
 import com.getcapacitor.BridgeActivity;
@@ -32,6 +41,21 @@ public class MainActivity extends BridgeActivity {
 
     // How often to check WebReadyPlugin.webPainted (ms).
     private static final long SPLASH_POLL_MS = 16;
+
+    // The WARM deep-link gate: a native crest overlay thrown over the WebView
+    // the moment a notification-tap intent arrives while the app is already
+    // running. The resumed WebView frame still shows whatever was on screen
+    // when the app went to background — Capacitor only delivers `appUrlOpen`
+    // to JS a beat after onResume, so without this the user sees the WRONG
+    // room for a few hundred ms before the router moves. The gate is the same
+    // branded frame as the launch splash; it lifts when the web layer signals
+    // it has navigated and painted (WebReadyPlugin.signalDeepLinkNavigated),
+    // with a hard cap so a frozen WebView can't pin it. (The transition
+    // snapshot Android itself animates in is out of app control and may still
+    // show the old frame for the system animation's duration.)
+    private View deepLinkGate;
+    private static final long GATE_MAX_MS = 2500;
+    private static final long GATE_POLL_MS = 16;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -100,6 +124,65 @@ public class MainActivity extends BridgeActivity {
     // a soft navigation, never a `window.location.href` document reload (which
     // would cold-boot the whole app: re-mount providers, re-open IndexedDB and
     // pay its multi-second WebView warm-up, re-run sync, re-subscribe relays).
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        // Gate only genuine deep links (ACTION_VIEW + data URI: notification
+        // taps' armada://open<path> and verified https App Links). The plain
+        // "open the app" tap on the foreground-service notification carries
+        // neither, and resuming to the previous screen is exactly right there.
+        if (Intent.ACTION_VIEW.equals(intent.getAction()) && intent.getData() != null) {
+            showDeepLinkGate();
+        }
+        // BridgeActivity forwards the intent to @capacitor/app (appUrlOpen).
+        super.onNewIntent(intent);
+    }
+
+    /**
+     * Cover the WebView with the branded crest (same background + mark as the
+     * launch splash) until the web layer reports it has navigated for the
+     * deep link, or GATE_MAX_MS passes. Added before super.onNewIntent so it
+     * is part of the first resumed frame this activity draws.
+     */
+    private void showDeepLinkGate() {
+        if (deepLinkGate == null) {
+            FrameLayout gate = new FrameLayout(this);
+            gate.setBackgroundColor(ContextCompat.getColor(this, R.color.armadaBackground));
+            // Eat touches so taps meant for the destination can't land on the
+            // stale frame underneath.
+            gate.setClickable(true);
+            ImageView crest = new ImageView(this);
+            crest.setImageResource(R.drawable.splash_logo_anim);
+            int size = Math.round(getResources().getDisplayMetrics().density * 180);
+            gate.addView(crest, new FrameLayout.LayoutParams(size, size, Gravity.CENTER));
+            addContentView(gate, new ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            Drawable mark = crest.getDrawable();
+            if (mark instanceof Animatable) ((Animatable) mark).start();
+            deepLinkGate = gate;
+        }
+        // Poll for the web layer's "navigated" signal, mirroring the splash's
+        // webPainted poll. Re-showing while up just extends the deadline.
+        final long seen = WebReadyPlugin.deepLinkNavCount;
+        final long deadline = System.currentTimeMillis() + GATE_MAX_MS;
+        final Handler handler = new Handler(Looper.getMainLooper());
+        handler.post(
+            new Runnable() {
+                @Override
+                public void run() {
+                    View gate = deepLinkGate;
+                    if (gate == null) return;
+                    if (WebReadyPlugin.deepLinkNavCount > seen || System.currentTimeMillis() >= deadline) {
+                        ViewGroup parent = (ViewGroup) gate.getParent();
+                        if (parent != null) parent.removeView(gate);
+                        deepLinkGate = null;
+                    } else {
+                        handler.postDelayed(this, GATE_POLL_MS);
+                    }
+                }
+            }
+        );
+    }
 
     // Recover from the WebView getting STUCK reporting `document.visibilityState
     // === "hidden"` while the app is actually foreground. On some background→

@@ -2141,7 +2141,8 @@ public class NotificationRelayService extends Service {
                             // thread is on screen (the peer isn't known until
                             // decrypt, so enqueueRoomMessage's active-room gate
                             // does it here rather than a synchronous pre-check).
-                            enqueueRoomMessage(/*community=*/null, "dm:" + peer, name, "/dms/" + peer,
+                            enqueueRoomMessage(/*community=*/null, "dm:" + peer, name,
+                                    appendMessageParam("/dms/" + peer, rumor.optString("id", "")),
                                     peer, name, picture, line, fTs, /*mention=*/false);
                         });
                     } catch (Exception ignored) {
@@ -2582,6 +2583,8 @@ public class NotificationRelayService extends Service {
                 final String reactionLine = "Reacted " + reactionEmoji(rumor) + " to your message";
                 final long rtsR = rumor.optLong("created_at", 0);
                 final long fTsR = (rtsR > 0 ? rtsR * 1000L : System.currentTimeMillis());
+                // Land on YOUR message the reaction points at (its `e` tag).
+                final String reactTarget = tagValue(rumor, "e");
                 // A reaction is always directed at you (mention=true), so it
                 // breaks through active-room suppression like a mention.
                 if (isActivelyViewed("c2:" + fStR.channelId, null, /*mention=*/true)) {
@@ -2592,7 +2595,8 @@ public class NotificationRelayService extends Service {
                     String picture = profile != null ? profile.picture : null;
                     if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord2 reaction: " + fStR.name + " / " + name);
                     enqueueRoomMessage(
-                            fStR.community, "c2:" + fStR.channelId, fStR.name, fStR.url,
+                            fStR.community, "c2:" + fStR.channelId, fStR.name,
+                            appendMessageParam(fStR.url, reactTarget),
                             author2, name, picture, reactionLine, fTsR, /*mention=*/true);
                 });
                 return;
@@ -2616,6 +2620,10 @@ public class NotificationRelayService extends Service {
             // uppercase `E` tag. Append it to the deep-link so the WebView can
             // open the thread panel on tap instead of just the channel.
             final String threadRoot2 = innerKindCommentRoot(rumor);
+            // Top-level messages deep-link to the message row itself; thread
+            // replies keep the thread param (the panel is the destination —
+            // the reply isn't a timeline row the permalink jump can land on).
+            final String msgId2 = threadRoot2 == null ? rumor.optString("id", "") : null;
             // SYNCHRONOUS active-room suppression: check before the async profile
             // fetch so the decision is immediate (no race with the Capacitor
             // bridge). A mention always breaks through.
@@ -2629,7 +2637,7 @@ public class NotificationRelayService extends Service {
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord2: " + fSt.name + " / " + name);
                 enqueueRoomMessage(
                         fSt.community, "c2:" + fSt.channelId, fSt.name,
-                        appendThreadParam(fSt.url, threadRoot2),
+                        appendMessageParam(appendThreadParam(fSt.url, threadRoot2), msgId2),
                         author2, name, picture, text, fTs2, fMention2);
             });
             return;
@@ -2685,6 +2693,8 @@ public class NotificationRelayService extends Service {
                     url = nip29GroupId != null
                             ? "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(nip29GroupId)
                             : "/";
+                    // Land on the message itself, not just its channel.
+                    url = appendMessageParam(url, id);
                     break;
                 }
                 case 7: {
@@ -2692,6 +2702,8 @@ public class NotificationRelayService extends Service {
                     url = nip29GroupId != null
                             ? "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(nip29GroupId)
                             : "/";
+                    // Land on YOUR message the reaction points at (its `e` tag).
+                    url = appendMessageParam(url, tagValue(event, "e"));
                     break;
                 }
                 case 1111: {
@@ -2707,7 +2719,7 @@ public class NotificationRelayService extends Service {
                 case 4:
                     // kind-4 DMs are NIP-04 encrypted; the service has no key.
                     line = "Sent you a direct message";
-                    url = "/dms/" + author;
+                    url = appendMessageParam("/dms/" + author, id);
                     break;
                 default:
                     return;
@@ -3811,6 +3823,19 @@ public class NotificationRelayService extends Service {
         if (rootId == null || rootId.isEmpty()) return url;
         String sep = url.indexOf('?') >= 0 ? "&" : "?";
         return url + sep + "thread=" + uriEncode(rootId);
+    }
+
+    /**
+     * Append {@code ?m=<eventId>} — the message the notification is about —
+     * to a deep-link url, so a tap lands ON that message: the web client's
+     * useMessagePermalink scrolls the timeline to it and marks it. No-op when
+     * there's no id to point at.
+     */
+    private static String appendMessageParam(String url, String eventId) {
+        if (url == null) return null;
+        if (eventId == null || eventId.isEmpty()) return url;
+        String sep = url.indexOf('?') >= 0 ? "&" : "?";
+        return url + sep + "m=" + uriEncode(eventId);
     }
 
     private static String truncate(String s) {

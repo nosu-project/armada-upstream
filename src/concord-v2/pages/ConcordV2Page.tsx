@@ -11,6 +11,7 @@ import { LoginArea } from "@/components/auth/LoginArea";
 import { JoinButton } from "@/components/auth/JoinButton";
 import { MemberList } from "@/components/chat/MemberList";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
+import { useMessagePermalink } from "@/hooks/useMessagePermalink";
 import { CalendarEventsBar } from "@/components/chat/CalendarEventsBar";
 import { CreateEventDialog } from "@/components/dialogs/CreateEventDialog";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
@@ -178,6 +179,8 @@ function ReplyContext2({ parent, onJump }: { parent: ChatMsg | undefined; onJump
 }
 
 interface ChatMessage2Props {
+  /** Channel route for "Copy message link" (see ChatMessage.permalink). */
+  permalink?: string;
   event: ChatMsg;
   reactions: MessageReactions;
   zaps: MessageZaps | undefined;
@@ -245,6 +248,7 @@ const ChatMessage2 = memo(function ChatMessage2({
   onEdit,
   onEditSubmit,
   onEditCancel,
+  permalink,
 }: ChatMessage2Props) {
   const threadInfo = threadSummary(replies);
   const replyContext = replyToId ? (
@@ -286,6 +290,7 @@ const ChatMessage2 = memo(function ChatMessage2({
       onEdit={onEdit}
       onEditSubmit={onEditSubmit}
       onEditCancel={onEditCancel}
+      permalink={permalink}
     />
   );
 });
@@ -1471,6 +1476,22 @@ export function ConcordV2Page() {
     },
     openThread,
   }), [baseTransport, gitActivity, openThread]);
+
+  // Message permalinks (`?m=<id>` — notification taps, copied links): scroll
+  // to the target with the focus indicator once it's loaded, pulling older
+  // pages when it's further back than the loaded history.
+  const permalinkScroll = useCallback(
+    (id: string) => timelineRef.current?.scrollToMessage(id, true) ?? false,
+    [],
+  );
+  useMessagePermalink({
+    messages: allMessages,
+    isLoading: Boolean(baseTransport.isLoading),
+    hasMore: transport.hasMore,
+    loadOlder: transport.loadOlder,
+    scrollTo: permalinkScroll,
+    enabled: view === "channel",
+  });
   // Recently-active members, for a bot command's `user`-argument picker. Concord
   // hands its timeline to ChatComposer as `messages: []`, so it must supply this.
   const recentAuthors = useMemo(() => authorsByRecency(transport.messages), [transport.messages]);
@@ -2336,6 +2357,7 @@ export function ConcordV2Page() {
                       <ChatMessage2
                         key={msg.id}
                         event={msg}
+                        permalink={communityId && channel ? `/c/${encodeURIComponent(communityId)}/${channel.idHex}` : undefined}
                         reactions={reactionsFor(msg.id)}
                         zaps={transport.zapsFor?.(msg.id)}
                         onSendZap={config.zapsEnabled ? transport.sendZap : undefined}

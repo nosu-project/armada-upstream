@@ -1,4 +1,4 @@
-import { AlertCircle, Braces, Copy, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, Zap } from "lucide-react";
+import { AlertCircle, Braces, Copy, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
@@ -49,6 +49,7 @@ import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { getComposerCollisionPadding, useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { writeClipboardText } from "@/lib/clipboard";
+import { shareOrigin } from "@/lib/shareOrigin";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { expirationOf } from "@/lib/nip17/protocol";
 import { parseProxyTag } from "@/lib/nip48";
@@ -369,6 +370,15 @@ export interface ChatMessageProps {
    */
   nameBadge?: ReactNode;
   /**
+   * The channel route this message lives at (e.g. `/s/<relay>/<group>`). When
+   * present, the menu offers "Copy message link": a shareable
+   * `<shareOrigin()><permalink>?m=<id>` URL, consumed on open by
+   * useMessagePermalink (scroll to the message + focus indicator). Omitted on
+   * surfaces where the row isn't addressable that way (thread panels, the
+   * inbox digest, mesh).
+   */
+  permalink?: string;
+  /**
    * When set, this message is an unsigned rumor (e.g. a Concord V2 sealed chat
    * event) rather than a relay-addressable signed event. "View event JSON" then
    * shows this object (pretty-printed); the "Copy message ID" off-ramp, which
@@ -441,6 +451,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   continuation = false,
   mentionHighlight = true,
   nameBadge,
+  permalink,
   rumor,
   knownCommands,
 }: ChatMessageProps) {
@@ -579,6 +590,17 @@ const ChatMessageInner = memo(function ChatMessageInner({
       label: "Copy message ID",
       icon: Link2,
       onSelect: copyMessageId,
+    });
+  }
+  // Not while unconfirmed: an optimistic row's id can still change when the
+  // signed event adopts its final id, and a copied link must not go stale.
+  if (permalink && !isPending && !isFailed) {
+    menuActions.push({
+      id: "copy-link",
+      label: "Copy message link",
+      icon: Link,
+      onSelect: () =>
+        writeClipboardText(`${shareOrigin()}${permalink}?m=${event.id}`).catch(() => undefined),
     });
   }
   menuActions.push({

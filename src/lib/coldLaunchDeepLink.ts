@@ -29,6 +29,7 @@ let deepLinkPath: string | null = null;
 /** The launch deep link, retained past consumption (for non-navigation uses). */
 let launchDeepLinkPath: string | null = null;
 const waiters = new Set<() => void>();
+const lateWaiters = new Set<(path: string) => void>();
 
 function settle(path: string | null): void {
   deepLinkPath = path;
@@ -44,8 +45,21 @@ if (isNativeRuntime()) {
   const timeout = setTimeout(() => settle(null), 1500);
   CapacitorApp.getLaunchUrl()
     .then((res) => {
-      clearTimeout(timeout);
-      settle(pathFromDeepLinkUrl(res?.url));
+      const path = pathFromDeepLinkUrl(res?.url);
+      if (!resolved) {
+        clearTimeout(timeout);
+        settle(path);
+        return;
+      }
+      // The guard already fired and HomeRedirect committed to the default
+      // route — this launch URL used to be silently dropped here, which is a
+      // notification tap that "didn't work". Hand it to the late listeners
+      // (useNotificationNavigation) instead: a second navigation moments
+      // after boot beats none.
+      if (path) {
+        launchDeepLinkPath = path;
+        for (const w of lateWaiters) w(path);
+      }
     })
     .catch(() => {
       clearTimeout(timeout);
@@ -86,4 +100,15 @@ export function onColdLaunchResolved(cb: () => void): () => void {
   }
   waiters.add(cb);
   return () => waiters.delete(cb);
+}
+
+/**
+ * Run `cb` if the launch URL resolves to a deep link AFTER the 1.5s guard has
+ * already released HomeRedirect (which then owns no navigation any more —
+ * it's unmounted). The subscriber applies the path as an ordinary in-router
+ * navigation, exactly once per process (the read itself is once-only).
+ */
+export function onLateColdLaunchDeepLink(cb: (path: string) => void): () => void {
+  lateWaiters.add(cb);
+  return () => lateWaiters.delete(cb);
 }

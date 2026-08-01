@@ -10,6 +10,7 @@ import { ChatMessage, ReplyContextLine, ReplyPreview, ReplyThumbnail } from "@/c
 import { firstImageRef, getQuoteReplyToId } from "@/components/chat/messageHelpers";
 import { MessageRow } from "@/components/chat/MessageRow";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
+import { useMessagePermalink } from "@/hooks/useMessagePermalink";
 import { TypingIndicator } from "@/components/chat/TypingIndicator";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { ServerRail } from "@/components/layout/ServerRail";
@@ -710,6 +711,19 @@ function Conversation({
     timelineRef.current?.scrollToMessage(id);
   }, []);
 
+  // Message permalinks (`?m=<id>` — notification taps, copied links).
+  const permalinkScroll = useCallback(
+    (id: string) => timelineRef.current?.scrollToMessage(id, true) ?? false,
+    [],
+  );
+  useMessagePermalink({
+    messages,
+    isLoading: transport.isLoading,
+    hasMore: transport.hasMore,
+    loadOlder: transport.loadOlder,
+    scrollTo: permalinkScroll,
+  });
+
   // The loaded thread by id, for resolving quoted parents locally (NIP-17
   // rumors aren't relay-fetchable).
   const messagesById = useMemo(() => {
@@ -1261,6 +1275,7 @@ function Conversation({
               <ChatMessage
                 key={msg.id}
                 event={msg}
+                permalink={`/dms/${peer}`}
                 canWrite={transport.canWrite}
                 canModerate={transport.canModerate}
                 sendStatus={transport.sendStatusFor?.(msg.id)}

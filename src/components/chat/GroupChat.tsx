@@ -27,10 +27,12 @@ import { useZapReceipts } from "@/hooks/useZapReceipts";
 import { useGroupThreads, useSendThreadReply } from "@/hooks/useThread";
 import { useRepublish } from "@/hooks/useNostrPublish";
 import { useActiveRoom } from "@/hooks/useActiveRoom";
+import { useMessagePermalink } from "@/hooks/useMessagePermalink";
 import { useNewMessagesDivider } from "@/hooks/useNewMessagesDivider";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { toast } from "@/hooks/useToast";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
+import { relayToRouteParam } from "@/lib/platform";
 import { withSignature } from "@/lib/publishOutbox";
 import { type SlashAction } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
@@ -134,10 +136,15 @@ function Nip29ChatMessage({
       ) : undefined,
     [replyToId, relayUrl, onJumpToReply],
   );
+  const permalink = useMemo(
+    () => `/s/${relayToRouteParam(relayUrl)}/${encodeURIComponent(groupId)}`,
+    [relayUrl, groupId],
+  );
 
   return (
     <ChatMessage
       event={event}
+      permalink={permalink}
       canWrite={transport.canWrite}
       canModerate={transport.canModerate}
       pollContext={pollContext}
@@ -356,6 +363,23 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
   const jumpToReply = useCallback((id: string) => {
     timelineRef.current?.scrollToMessage(id);
   }, []);
+
+  // Message permalinks (`?m=<id>` — notification taps, copied links): scroll
+  // to the target with the focus indicator once it's loaded, pulling older
+  // pages when it's further back than the loaded history.
+  const permalinkScroll = useCallback(
+    (id: string) => timelineRef.current?.scrollToMessage(id, true) ?? false,
+    [],
+  );
+  useMessagePermalink({
+    messages,
+    isLoading,
+    hasMore,
+    loadOlder,
+    scrollTo: permalinkScroll,
+    // While search results replace the timeline there is nothing to jump.
+    enabled: !searching,
+  });
 
   // Stable identities so an unchanged row's props don't churn (React.memo).
   const startEditing = useCallback((e: ChatMsg) => setEditingId(e.id), []);
