@@ -95,13 +95,21 @@ function serveChangelog(): Plugin {
  *    shell, making deploys appear to fail).
  *  - sw.js: rotates the SW cache name every build, so a new deploy changes the
  *    SW bytes (forcing a SW update) and drops the previous shell cache.
+ *
+ * Also stamps `__PUBLIC_ORIGIN__` into index.html's Open Graph tags. Those have
+ * to be absolute (crawlers don't resolve relative ones), which means a
+ * hardcoded host makes every build's link preview depend on THAT host being
+ * reachable rather than the one it was deployed to — and an unfetchable
+ * og:image degrades to the platform's generic placeholder, which is
+ * indistinguishable from having no card at all.
  */
 function buildStamp(): Plugin {
   const stamp = new Date().toISOString().slice(0, 19).replace("T", " ") + "Z";
+  const origin = (process.env.VITE_PUBLIC_WEB_ORIGIN || "https://armada.buzz").replace(/\/$/, "");
   return {
     name: "armada-build-stamp",
     transformIndexHtml(html) {
-      return html.replaceAll("__BUILD_STAMP__", stamp);
+      return html.replaceAll("__BUILD_STAMP__", stamp).replaceAll("__PUBLIC_ORIGIN__", origin);
     },
     closeBundle() {
       // sw.js is copied verbatim from public/ during the bundle write; stamp

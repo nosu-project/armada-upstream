@@ -8,7 +8,6 @@ import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import { toast } from "@/hooks/useToast";
 import { downloadUrl } from "@/lib/downloadFile";
-import { filenameFromUrl } from "@/lib/fileBytes";
 import { canShareFiles, shareFile } from "@/lib/share";
 import { cn } from "@/lib/utils";
 
@@ -455,9 +454,8 @@ function LightboxShareButton({ image }: { image: EncryptedRef }) {
       if (sharing || resolved.status !== "ready") return;
       setSharing(true);
       try {
-        const shared = await shareFile({
-          src: resolved.src,
-          filename: filenameFromUrl(image.url, image.mime),
+        const shared = await shareFile(resolved.src, {
+          nameHint: image.url,
           mime: image.mime,
           dialogTitle: "Share image",
         });

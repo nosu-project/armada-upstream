@@ -30,6 +30,8 @@ export function extForMime(mime: string | undefined): string {
       return ".webp";
     case "image/avif":
       return ".avif";
+    case "image/heic":
+      return ".heic";
     case "image/svg+xml":
       return ".svg";
     case "video/mp4":
@@ -43,6 +45,32 @@ export function extForMime(mime: string | undefined): string {
     default:
       return "";
   }
+}
+
+/**
+ * Identify a bitmap from its leading bytes.
+ *
+ * The DECLARED type is routinely absent here: an `imeta` often carries no `m`
+ * tag, a Blossom URL is a bare hash with no extension, and a decrypted
+ * attachment's Blob inherits that same nothing as `application/octet-stream`
+ * (see `encryptedMedia.ts`). A file handed to a share sheet untyped and
+ * extensionless previews as a generic document rather than a thumbnail, and
+ * some targets refuse it outright — so where the metadata is silent, ask the
+ * bytes, which are already in memory by then.
+ */
+export function sniffImageMime(bytes: Uint8Array): string | undefined {
+  const ascii = (start: number, len: number) =>
+    String.fromCharCode(...bytes.subarray(start, start + len));
+  if (bytes.length >= 8 && bytes[0] === 0x89 && ascii(1, 3) === "PNG") return "image/png";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes.length >= 6 && ascii(0, 4) === "GIF8") return "image/gif";
+  if (bytes.length >= 12 && ascii(0, 4) === "RIFF" && ascii(8, 4) === "WEBP") return "image/webp";
+  if (bytes.length >= 12 && ascii(4, 4) === "ftyp") {
+    const brand = ascii(8, 4);
+    if (brand === "avif" || brand === "avis") return "image/avif";
+    if (brand === "heic" || brand === "heix" || brand === "mif1") return "image/heic";
+  }
+  return undefined;
 }
 
 /**

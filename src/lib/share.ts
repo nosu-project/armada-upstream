@@ -10,7 +10,7 @@
 import { Capacitor } from "@capacitor/core";
 import { Share } from "@capacitor/share";
 
-import { bytesToBase64 } from "@/lib/fileBytes";
+import { bytesToBase64, filenameFromUrl, sniffImageMime } from "@/lib/fileBytes";
 
 const native = Capacitor.isNativePlatform();
 
@@ -88,22 +88,26 @@ export async function share(opts: {
  * read, so callers can fall back instead of silently doing nothing. A
  * user-cancelled share counts as presented (true), matching {@link share}.
  */
-export async function shareFile(opts: {
-  src: string;
-  filename: string;
-  mime?: string;
-  title?: string;
-  text?: string;
-  dialogTitle?: string;
-}): Promise<boolean> {
+export async function shareFile(
+  src: string,
+  opts: { nameHint?: string; mime?: string; title?: string; text?: string; dialogTitle?: string } = {},
+): Promise<boolean> {
   let bytes: Uint8Array;
+  let mime = opts.mime;
   try {
-    const res = await fetch(opts.src);
+    const res = await fetch(src);
     if (!res.ok) throw new Error(`Failed to fetch: ${res.status}`);
     bytes = new Uint8Array(await res.arrayBuffer());
+    // Type and extension are what make the sheet render a thumbnail instead of
+    // a blank document, and both are frequently missing upstream — so fall
+    // back to the transport's claim, then to the bytes themselves.
+    const declared = res.headers.get("content-type")?.split(";")[0].trim();
+    mime = mime || (declared && declared !== "application/octet-stream" ? declared : undefined) ||
+      sniffImageMime(bytes);
   } catch {
     return false;
   }
+  const filename = filenameFromUrl(opts.nameHint ?? src, mime);
 
   if (native) {
     let uri: string;
@@ -112,7 +116,7 @@ export async function shareFile(opts: {
       // Cache, not Documents: this copy exists only to feed the share sheet and
       // the OS may reclaim it. Keeping a copy is what the download button does.
       ({ uri } = await Filesystem.writeFile({
-        path: opts.filename,
+        path: filename,
         data: bytesToBase64(bytes),
         directory: Directory.Cache,
       }));
@@ -133,9 +137,7 @@ export async function shareFile(opts: {
     return true;
   }
 
-  const file = new File([bytes as BlobPart], opts.filename, {
-    type: opts.mime || "application/octet-stream",
-  });
+  const file = new File([bytes as BlobPart], filename, { type: mime || "application/octet-stream" });
   if (typeof navigator === "undefined" || typeof navigator.canShare !== "function") return false;
   if (!navigator.canShare({ files: [file] })) return false;
   try {
