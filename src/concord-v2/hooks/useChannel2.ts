@@ -3,6 +3,7 @@ import { hashKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { citationFor, dissolvedAt, useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPlane2";
+import { persistTimelineSnapshot, prewarmTimelineSnapshot } from "@/concord-v2/hooks/timelineSnapshot";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useSendStatusMap, useSendStatusMapValue, type SendStatusMap } from "@/hooks/useSendStatusMap";
 import {
@@ -261,14 +262,32 @@ export function useChatModeration2(community: CommunityV2 | undefined): ChatMode
  * round settled meant a conversation whose entire history was already on disk
  * still opened on a placeholder for as long as the relays took.
  */
-export function useChannelTimeline2(community: CommunityV2 | undefined, channel: ChannelV2 | undefined) {
+export function useChannelTimeline2(
+  community: CommunityV2 | undefined,
+  channel: ChannelV2 | undefined,
+  /**
+   * The channel id the CALLER already knows (the URL names it on the first
+   * render), so the persisted last-painted window can seed the cache before
+   * the key-derivation chain produces a {@link ChannelV2}. Only ever used for
+   * the cache key and the snapshot; the query stays disabled until `channel`.
+   */
+  routeChannelIdHex?: string | null,
+) {
   const { nostr } = useNostr();
   const queryClient = useQueryClient();
   const moderation = useChatModeration2(community);
 
-  const channelIdHex = channel?.idHex ?? null;
+  const channelIdHex = channel?.idHex ?? routeChannelIdHex ?? null;
   const epochSig = channel?.streams.map((s) => s.epoch.toString()).join(",") ?? "";
   const queryKey = channelKey(channelIdHex);
+
+  // Seed the cache from the persisted last-painted window the moment the
+  // channel id is known — before the fold chain resolves a ChannelV2 — so a
+  // warm reload paints messages instead of a skeleton. Stale-seeded, so the
+  // real store read still runs and replaces it (see timelineSnapshot).
+  useEffect(() => {
+    if (channelIdHex) void prewarmTimelineSnapshot(queryClient, channelIdHex, channelKey(channelIdHex));
+  }, [channelIdHex, queryClient]);
 
   const windowLimitRef = useRef(WINDOW_SIZE);
   const [hasMore, setHasMore] = useState(true);
@@ -561,6 +580,14 @@ export function useChannelTimeline2(community: CommunityV2 | undefined, channel:
       return local;
     },
   });
+
+  // Keep the persisted window current. Content-compared inside, so repaint
+  // churn does not rewrite it.
+  useEffect(() => {
+    if (channelIdHex && query.data && query.data.length > 0) {
+      void persistTimelineSnapshot(channelIdHex, query.data);
+    }
+  }, [channelIdHex, query.data]);
 
   const loadOlder = useCallback(async (): Promise<number> => {
     if (!hasMore || isLoadingOlder) return 0;

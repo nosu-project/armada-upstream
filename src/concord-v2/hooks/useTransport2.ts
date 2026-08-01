@@ -62,6 +62,8 @@ export function useTransport2(
   channel: ChannelV2 | undefined,
   canWrite: boolean,
   canModerate: boolean,
+  /** The route's channel id, for the pre-fold snapshot seed (see useChannelTimeline2). */
+  routeChannelIdHex?: string | null,
 ): {
   transport: ChatTransport;
   reactionsFor: (id: string) => MessageReactions;
@@ -72,7 +74,7 @@ export function useTransport2(
 } {
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
-  const { folded, isLoading, loadOlder, hasMore, isLoadingOlder } = useChannelTimeline2(community, channel);
+  const { folded, isLoading, loadOlder, hasMore, isLoadingOlder } = useChannelTimeline2(community, channel, routeChannelIdHex);
   const { mutateAsync: send } = useSendMessage2(community, channel);
   const { retry, discard, deleteMessage } = useMessageActions2(community, channel);
   const sendStatus = useSendStatus2(channel);

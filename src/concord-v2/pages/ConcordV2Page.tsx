@@ -999,7 +999,7 @@ export function ConcordV2Page() {
   const { data: dissolved } = useDissolved2(community);
   const canWrite = Boolean(user && channel && !dissolved && !excluded && !stranded);
 
-  const { transport: baseTransport, reactionsFor, allMessages, calendar } = useTransport2(community, channel, canWrite, canModerateMessages);
+  const { transport: baseTransport, reactionsFor, allMessages, calendar } = useTransport2(community, channel, canWrite, canModerateMessages, channelIdHex);
   // Git activity remains its own event domain. The store-first channel hook
   // supplies attached repository activity; this page only merges its display
   // order with decrypted chat rumors.
