@@ -2300,7 +2300,7 @@ export function ConcordV2Page() {
                     onDelete={(event) => { void calendar.remove(event); }}
                   />
                   <MessageTimeline
-                    key={channel?.idHex ?? "none"}
+                    key={channel?.idHex ?? channelIdHex ?? "none"}
                     transport={transport}
                     entries={mixedEntries}
                     newDividerId={newDividerId}

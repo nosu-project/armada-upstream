@@ -31,6 +31,7 @@
  * lives in the same ArmadaDB KV, so logout purges it with everything else.
  */
 import { encode, readFolded, writeFolded } from "@/lib/foldedCache";
+import { perfMark } from "@/lib/perf";
 
 import type { QueryClient } from "@tanstack/react-query";
 import type { OpenedChat } from "@/concord-v2/lib/chat";
@@ -60,7 +61,10 @@ export async function prewarmTimelineSnapshot(
   prewarmed.add(channelIdHex);
   if ((queryClient.getQueryData<OpenedChat[]>(queryKey)?.length ?? 0) > 0) return;
   const snap = await readFolded<OpenedChat[]>(snapKey(channelIdHex));
-  if (!snap || snap.length === 0) return;
+  if (!snap || snap.length === 0) {
+    perfMark("snap.prewarm", `${channelIdHex.slice(0, 8)} miss`);
+    return;
+  }
   const own = snap.filter((m) => m.channelIdHex === channelIdHex);
   if (own.length === 0) return;
   // Re-check after the await: the real store read may have landed meanwhile,
@@ -69,6 +73,7 @@ export async function prewarmTimelineSnapshot(
   // Stale on arrival, so the query's mount still runs the store read and its
   // background catch-up — the snapshot is a first frame, never an answer.
   queryClient.setQueryData<OpenedChat[]>(queryKey, own, { updatedAt: Date.now() - 60_000 });
+  perfMark("snap.prewarm", `${channelIdHex.slice(0, 8)} seeded ${own.length} row(s)`);
 }
 
 /** Persist the newest {@link SNAP_WINDOW} rows of `window` for `channelIdHex`. */
@@ -77,7 +82,9 @@ export function persistTimelineSnapshot(channelIdHex: string, window: OpenedChat
   const newest = [...window].sort((a, b) => b.ms - a.ms).slice(0, SNAP_WINDOW);
   const serialized = encode(newest);
   if (lastWritten.get(channelIdHex) === serialized) return Promise.resolve();
+  const firstWrite = !lastWritten.has(channelIdHex);
   lastWritten.set(channelIdHex, serialized);
+  if (firstWrite) perfMark("snap.persist", `${channelIdHex.slice(0, 8)} ${newest.length} row(s)`);
   return writeFolded(snapKey(channelIdHex), newest);
 }
 
