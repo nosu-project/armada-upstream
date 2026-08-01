@@ -1,5 +1,5 @@
 import { useNostr } from "@nostrify/react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 import { useDeferredFold } from "@/concord-v2/hooks/useDeferredFold2";
 import {
@@ -49,6 +49,75 @@ export { controlFoldKey };
  * `queryFn` is a pure store read — it exists so react-query invalidation (e.g.
  * after publishing an edition) re-folds from the store.
  */
+interface ControlSeedEntry {
+  refs: number;
+  teardown: () => void;
+}
+
+/**
+ * One live store-seed per (queryClient, community, epochSig) — see the effect
+ * in {@link useControlEvents2} for why. WeakMap-keyed by the QueryClient so a
+ * test's throwaway client can never share (or leak) a real one's runners.
+ */
+const controlSeedRegistries = new WeakMap<QueryClient, Map<string, ControlSeedEntry>>();
+
+function acquireControlSeed(
+  queryClient: QueryClient,
+  community: CommunityV2,
+  epochSig: string,
+  queryKey: readonly unknown[],
+): () => void {
+  let registry = controlSeedRegistries.get(queryClient);
+  if (!registry) {
+    registry = new Map();
+    controlSeedRegistries.set(queryClient, registry);
+  }
+  const key = `${community.idHex}|${epochSig}`;
+  const existing = registry.get(key);
+  if (existing) {
+    existing.refs++;
+    return () => releaseControlSeed(registry, key);
+  }
+
+  let cancelled = false;
+  const seed = async (merge: boolean) => {
+    if (!merge && (queryClient.getQueryData<OpenedEvent[]>(queryKey)?.length ?? 0) > 0) return;
+    const cached = await queryPlane(community.idHex, "control");
+    if (cancelled) return;
+    logSync(
+      "control",
+      `${community.idHex.slice(0, 8)} store seed${merge ? " (bus re-seed)" : ""}: ${cached.length} opened edition(s)`,
+    );
+    if (cached.length === 0) return;
+    queryClient.setQueryData<OpenedEvent[]>(queryKey, (old) =>
+      merge ? mergeOpened(old ?? [], cached) : old && old.length > 0 ? old : cached,
+    );
+  };
+  void seed(false);
+  const scope = `c2ctl:${community.idHex}`;
+  const unsubscribe = onWireScopes((scopes) => {
+    if (scopes.has(scope)) void seed(true);
+  });
+  registry.set(key, {
+    refs: 1,
+    teardown: () => {
+      cancelled = true;
+      unsubscribe();
+    },
+  });
+  return () => releaseControlSeed(registry, key);
+}
+
+function releaseControlSeed(registry: Map<string, ControlSeedEntry>, key: string): void {
+  const entry = registry.get(key);
+  if (!entry) return;
+  entry.refs--;
+  if (entry.refs <= 0) {
+    entry.teardown();
+    registry.delete(key);
+  }
+}
+
 export function useControlEvents2(community: CommunityV2 | undefined, active = true) {
   const { nostr } = useNostr();
   const queryClient = useQueryClient();
@@ -61,31 +130,17 @@ export function useControlEvents2(community: CommunityV2 | undefined, active = t
   // Re-seeds on the `c2ctl:<id>` wire bus when the wire's live subscription (or
   // the background sweep) stores new editions — a rail button with active=false
   // can't be reached by invalidation, so the bus is its only wake-up.
+  //
+  // Refcounted, ONE runner per (queryClient, community, epochSig): ~36 call
+  // sites reach this hook through useControlFold2/useChannels2, so opening a
+  // community mounts ~20 copies — and every copy used to run its own full
+  // queryPlane("control") read on mount and again on every bus ring (a
+  // measured boot ran the identical 86-edition read 22 times in 20ms). All
+  // copies write the same react-query key, so the first mount does the work
+  // and the rest share it; the last unmount tears the listener down.
   useEffect(() => {
     if (!community) return;
-    let cancelled = false;
-    const seed = async (merge: boolean) => {
-      if (!merge && (queryClient.getQueryData<OpenedEvent[]>(queryKey)?.length ?? 0) > 0) return;
-      const cached = await queryPlane(community.idHex, "control");
-      if (cancelled) return;
-      logSync(
-        "control",
-        `${community.idHex.slice(0, 8)} store seed${merge ? " (bus re-seed)" : ""}: ${cached.length} opened edition(s)`,
-      );
-      if (cached.length === 0) return;
-      queryClient.setQueryData<OpenedEvent[]>(queryKey, (old) =>
-        merge ? mergeOpened(old ?? [], cached) : old && old.length > 0 ? old : cached,
-      );
-    };
-    void seed(false);
-    const scope = `c2ctl:${community.idHex}`;
-    const unsubscribe = onWireScopes((scopes) => {
-      if (scopes.has(scope)) void seed(true);
-    });
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
+    return acquireControlSeed(queryClient, community, epochSig, queryKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cidHex, epochSig, queryClient]);
 
