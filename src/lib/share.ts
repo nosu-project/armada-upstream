@@ -10,12 +10,30 @@
 import { Capacitor } from "@capacitor/core";
 import { Share } from "@capacitor/share";
 
+import { bytesToBase64 } from "@/lib/fileBytes";
+
 const native = Capacitor.isNativePlatform();
 
 /** True when the native share sheet / Web Share API can be used. */
 export function canShare(): boolean {
   if (native) return true;
   return typeof navigator !== "undefined" && "share" in navigator;
+}
+
+/**
+ * True when the share sheet can carry a FILE, not just a link. Narrower than
+ * {@link canShare}: Web Share Level 2 is missing on desktop Firefox and older
+ * Safari, so the caller must be able to hide the affordance rather than offer
+ * one that does nothing.
+ */
+export function canShareFiles(): boolean {
+  if (native) return true;
+  if (typeof navigator === "undefined" || typeof navigator.canShare !== "function") return false;
+  try {
+    return navigator.canShare({ files: [new File([], "probe.png", { type: "image/png" })] });
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -50,6 +68,82 @@ export async function share(opts: {
     return true;
   }
   return false;
+}
+
+/**
+ * Share the CONTENTS of a media `src` — the file itself, not a link to it.
+ *
+ * A link is the wrong thing to hand over for most attachments here: an
+ * encrypted one's `url` names ciphertext on a Blossom host and the decryption
+ * key never leaves the client, so the recipient gets bytes they can't read; and
+ * a `blob:` src has no meaning outside this document at all. The bytes are
+ * already local by the time a lightbox can offer this, so sending them is both
+ * correct and cheap.
+ *
+ * Native writes a transient copy to the cache directory and hands the system
+ * sheet its file URI — Capacitor's Share plugin takes paths, not blobs. Web
+ * uses `navigator.share({ files })`.
+ *
+ * Resolves false when no file-capable sheet exists or the bytes couldn't be
+ * read, so callers can fall back instead of silently doing nothing. A
+ * user-cancelled share counts as presented (true), matching {@link share}.
+ */
+export async function shareFile(opts: {
+  src: string;
+  filename: string;
+  mime?: string;
+  title?: string;
+  text?: string;
+  dialogTitle?: string;
+}): Promise<boolean> {
+  let bytes: Uint8Array;
+  try {
+    const res = await fetch(opts.src);
+    if (!res.ok) throw new Error(`Failed to fetch: ${res.status}`);
+    bytes = new Uint8Array(await res.arrayBuffer());
+  } catch {
+    return false;
+  }
+
+  if (native) {
+    let uri: string;
+    try {
+      const { Filesystem, Directory } = await import("@capacitor/filesystem");
+      // Cache, not Documents: this copy exists only to feed the share sheet and
+      // the OS may reclaim it. Keeping a copy is what the download button does.
+      ({ uri } = await Filesystem.writeFile({
+        path: opts.filename,
+        data: bytesToBase64(bytes),
+        directory: Directory.Cache,
+      }));
+    } catch {
+      return false;
+    }
+    try {
+      await Share.share({
+        title: opts.title,
+        text: opts.text,
+        files: [uri],
+        dialogTitle: opts.dialogTitle ?? opts.title,
+      });
+    } catch {
+      // Cancelled, or failed after the sheet was up — indistinguishable, and
+      // falling back to a download on a cancel would be worse than doing nothing.
+    }
+    return true;
+  }
+
+  const file = new File([bytes as BlobPart], opts.filename, {
+    type: opts.mime || "application/octet-stream",
+  });
+  if (typeof navigator === "undefined" || typeof navigator.canShare !== "function") return false;
+  if (!navigator.canShare({ files: [file] })) return false;
+  try {
+    await navigator.share({ files: [file], title: opts.title, text: opts.text });
+  } catch {
+    // Same cancellation ambiguity as above.
+  }
+  return true;
 }
 
 /**

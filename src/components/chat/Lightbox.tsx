@@ -1,5 +1,5 @@
 import { Capacitor } from "@capacitor/core";
-import { ChevronLeft, ChevronRight, Download, Loader2, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, Loader2, Share2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -8,6 +8,8 @@ import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import { toast } from "@/hooks/useToast";
 import { downloadUrl } from "@/lib/downloadFile";
+import { filenameFromUrl } from "@/lib/fileBytes";
+import { canShareFiles, shareFile } from "@/lib/share";
 import { cn } from "@/lib/utils";
 
 import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
@@ -273,6 +275,7 @@ export function Lightbox({ images, currentIndex, onClose, onNext, onPrev }: Ligh
             <span />
           )}
           <div className="flex items-center gap-1">
+            <LightboxShareButton image={images[currentIndex]} />
             <LightboxDownloadButton image={images[currentIndex]} />
             <button
               type="button"
@@ -427,6 +430,62 @@ function LightboxDownloadButton({ image }: { image: EncryptedRef }) {
       onClick={handleDownload}
     >
       {downloading ? <Loader2 className="size-5 animate-spin" /> : <Download className="size-5" />}
+    </button>
+  );
+}
+
+/**
+ * Top-bar button that hands the current image to the system share sheet.
+ *
+ * Shares the FILE, never the URL: an encrypted attachment's `url` points at
+ * ciphertext whose key never leaves this client, and the resolved `blob:` src
+ * means nothing outside this document — either way a link would give the
+ * recipient something they can't open. Hidden entirely where the platform's
+ * share sheet can't carry a file (desktop Firefox, older Safari), since the
+ * download button already covers that case.
+ */
+function LightboxShareButton({ image }: { image: EncryptedRef }) {
+  const resolved = useResolvedMediaSrc(image);
+  const [sharing, setSharing] = useState(false);
+
+  const handleShare = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (sharing || resolved.status !== "ready") return;
+      setSharing(true);
+      try {
+        const shared = await shareFile({
+          src: resolved.src,
+          filename: filenameFromUrl(image.url, image.mime),
+          mime: image.mime,
+          dialogTitle: "Share image",
+        });
+        if (!shared) {
+          toast({
+            title: "Couldn't share this image",
+            description: "Try downloading it instead.",
+            variant: "destructive",
+          });
+        }
+      } finally {
+        setSharing(false);
+      }
+    },
+    [sharing, resolved, image.url, image.mime],
+  );
+
+  if (resolved.status !== "ready" || !canShareFiles()) return null;
+  return (
+    <button
+      type="button"
+      aria-label="Share image"
+      title="Share"
+      disabled={sharing}
+      className="p-2.5 rounded-full text-white/70 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-60 disabled:cursor-wait"
+      onClick={handleShare}
+    >
+      {sharing ? <Loader2 className="size-5 animate-spin" /> : <Share2 className="size-5" />}
     </button>
   );
 }
