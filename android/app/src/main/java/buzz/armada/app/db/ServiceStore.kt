@@ -213,10 +213,10 @@ object ServiceStore {
     @JvmStatic
     fun storeDm17Rumor(context: Context, self: String, rumor: JSONObject) {
         val opened = Rumor.parse(rumor) ?: return
-        val stored = Dm17.stored(self, opened, System.currentTimeMillis() / 1000) ?: return
+        if (!Dm17.storable(self, opened, System.currentTimeMillis() / 1000)) return
 
         try {
-            ArmadaDb.get(context).event(Dm17.tenant(self), stored)
+            ArmadaDb.get(context).event(Dm17.tenant(self), opened)
         } catch (error: Throwable) {
             Log.w(TAG, "dm rumor write failed", error)
         }

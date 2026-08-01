@@ -56,16 +56,16 @@ function opened(opts: { author: string; peer: string; kind?: number; content?: s
 }
 
 describe("dm17Store", () => {
-  it("round-trips the stored codec, stripping provenance tags", () => {
+  it("round-trips the stored codec without touching the rumor's tags", () => {
     const o = opened({ author: alice, peer: alice, content: "codec" });
     const stored = dm17ToStored(o);
-    // `peer` is the conversation index and the ONLY tag injected; the rumor's
-    // own tags are otherwise stored exactly as its author wrote them.
-    expect(stored.tags).toEqual([...o.tags, ["peer", alice]]);
+    // Nothing is injected: the tags are the bytes the rumor's id commits to.
+    expect(stored.tags).toEqual(o.tags);
 
-    const back = storedToDm17(stored);
-    // The wrap id is transport provenance with no reader on this side of the
-    // store, so it is not persisted and comes back empty.
+    const back = storedToDm17(stored, self);
+    // The partner is derived from the rumor (NIP-17 names it in `p`), and the
+    // wrap id is transport provenance with no reader on this side of the store,
+    // so it is not persisted and comes back empty.
     expect(back).toEqual({ ...o, wrapId: "" });
   });
 
@@ -232,13 +232,12 @@ describe("dm17Store legacy drain", () => {
     const anaGot = opened({ author: carla, peer: carla, content: "carla to ana", tags: dmChatTags(ana) });
     // Ben ↔ Carla, from the same device. Ana must never see these.
     const benSent = opened({ author: ben, peer: carla, content: "ben to carla", tags: dmChatTags(carla) });
-    // A reaction of Ana's carries no `p` — attributable only by conversation.
     const anaReacted = opened({
       author: ana,
       peer: carla,
       kind: KIND_DM_REACTION,
       content: "👍",
-      tags: [["e", anaGot.rumorId]],
+      tags: dmReactionTags(carla, anaGot.rumorId, KIND_DM_CHAT),
     });
     for (const o of [anaSent, anaGot, benSent, anaReacted]) {
       await legacy.event({ ...dm17ToStored(o), sig: "" });

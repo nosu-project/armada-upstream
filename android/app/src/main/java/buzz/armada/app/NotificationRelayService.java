@@ -2066,11 +2066,10 @@ public class NotificationRelayService extends Service {
         // openDmWrap, which refuses an expired envelope before it decrypts
         // anything.
         if (ServiceStore.isExpired(wrap)) return;
-        if (!prefBool("directMessages", true)) return;
 
         NativeSigner signer = nativeSigner;
         if (signer == null) {
-            notifyOpaqueDm17();
+            if (prefBool("directMessages", true)) notifyOpaqueDm17();
             return;
         }
         // Open the wrap with the user's signer (async — Amber/bunker are RPC).
@@ -2082,7 +2081,7 @@ public class NotificationRelayService extends Service {
                 // Crypto says no → not a readable DM (foreign protocol,
                 // garbage): silent. Signer unreachable → still tell the user
                 // SOMETHING arrived.
-                if (unavailable) notifyOpaqueDm17();
+                if (unavailable && prefBool("directMessages", true)) notifyOpaqueDm17();
                 return;
             }
             try {
@@ -2099,7 +2098,7 @@ public class NotificationRelayService extends Service {
                 if (peer.equals(userPubkey)) return; // our own sent copy
                 signer.decrypt44(peer, seal.optString("content", ""), (rumorJson, unavailable2) -> {
                     if (rumorJson == null) {
-                        if (unavailable2) notifyOpaqueDm17();
+                        if (unavailable2 && prefBool("directMessages", true)) notifyOpaqueDm17();
                         return;
                     }
                     try {
@@ -2115,6 +2114,12 @@ public class NotificationRelayService extends Service {
                         // of the conversation the app reads back. The store
                         // applies the rest of the rules (kind, expiry, peer).
                         ServiceStore.storeDm17Rumor(this, userPubkey, rumor);
+                        // Everything above is the STORE's business and happens
+                        // whatever the notification prefs say — the wrap was
+                        // subscribed for, received and opened, and dropping the
+                        // plaintext would only make the app decrypt it again.
+                        // The pref decides one thing: whether to interrupt.
+                        if (!prefBool("directMessages", true)) return;
                         // Chat/file messages only — reactions (7), deletes (5)
                         // and foreign rumor kinds (Concord invites) stay
                         // silent, matching the WebView's DM rumor kinds.

@@ -33,7 +33,7 @@
  */
 
 import { NIndexedDB } from "@nostrify/indexeddb";
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
 import { getArmadaDB } from "@/lib/db/armadaDB";
 import { skipLegacyDrain } from "@/lib/db/legacyDatabases";
@@ -42,6 +42,7 @@ import { readFolded, writeFolded } from "@/lib/foldedCache";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import {
   DM_RUMOR_KINDS,
+  dmPeerOf,
   isExpired,
   KIND_DM_CHAT,
   KIND_DM_FILE,
@@ -54,18 +55,17 @@ import { emitWireScopes } from "@/wire/bus";
 const LEGACY_DB_NAME = "armada-dm17-rumors";
 
 /**
- * Provenance tags injected onto the stored event (never part of the rumor).
+ * Tag names earlier builds INJECTED onto the stored event. Nothing writes them
+ * any more; they are dropped from anything copied out of the legacy database.
  *
- * Only `peer` is written: it is the conversation index every read filters on,
- * and there is nowhere else to put it. `wrap` is read but no longer written —
- * nothing consumes an {@link OpenedDm}'s `wrapId` once it comes back out of the
- * store (the transport dedupes on wraps it holds in hand), so injecting it only
- * rewrote a rumor's tags for no reader. Kept in {@link PROVENANCE} so rows
- * written before that still strip it.
+ * A rumor's tags are the bytes its id commits to, so rewriting them to carry
+ * bookkeeping made the stored row something its sender never signed — and made
+ * the store's idea of a conversation forgeable by anyone who spelled `peer`
+ * themselves. Neither value needed a tag: NIP-17 requires the rumor to name its
+ * recipients in `p`, so the partner is always derivable ({@link dmPeerOf}), and
+ * nothing on this side of the store reads a wrap id.
  */
-const TAG_PEER = "peer";
-const TAG_WRAP = "wrap";
-const PROVENANCE = new Set([TAG_PEER, TAG_WRAP]);
+const PROVENANCE = new Set(["peer", "wrap"]);
 
 /**
  * The opened-DM store for one account. ArmadaDB's default tag policy indexes
@@ -209,7 +209,11 @@ async function drainLegacyDms(self: string): Promise<void> {
     for (const ev of all) {
       if (!mine.has(ev.id)) continue;
       const { sig: _sig, ...rumor } = ev;
-      await tenant.event(rumor);
+      // The legacy rows carry the tags that store injected. Dropping them is
+      // what makes every row this store holds the rumor its sender signed —
+      // and nothing is lost with them: attribution comes from `pubkey` and the
+      // `p` tags NIP-17 requires, which is what the passes above just used.
+      await tenant.event({ ...rumor, tags: rumor.tags.filter((t) => !PROVENANCE.has(t[0])) });
     }
   } finally {
     await legacy.close().catch(() => undefined);
@@ -220,29 +224,36 @@ async function drainLegacyDms(self: string): Promise<void> {
 
 // ── Codec: OpenedDm ⇆ stored event ───────────────────────────────────────────
 
-/** Build the stored rumor for an opened DM. */
+/** Build the stored rumor for an opened DM: the rumor itself, unaltered. */
 export function dm17ToStored(opened: OpenedDm): NostrRumor {
   return {
     id: opened.rumorId,
     kind: opened.kind,
     content: opened.content,
-    tags: [...opened.tags, [TAG_PEER, opened.peer]],
+    tags: opened.tags,
     created_at: opened.createdAt,
     pubkey: opened.author,
   };
 }
 
-/** Reconstruct an OpenedDm from a stored rumor. */
-export function storedToDm17(ev: NostrRumor): OpenedDm {
+/**
+ * Reconstruct an OpenedDm from a stored rumor, as seen by `self`.
+ *
+ * The conversation partner is DERIVED from the rumor — see {@link dmPeerOf} —
+ * which is why nothing has to be injected on the way in. `wrapId` is not
+ * recoverable and nothing consumes it; the transport dedupes on wraps it holds
+ * in hand.
+ */
+export function storedToDm17(ev: NostrRumor, self: string): OpenedDm {
   return {
     rumorId: ev.id,
     author: ev.pubkey,
     kind: ev.kind,
     content: ev.content,
-    tags: ev.tags.filter((t) => !PROVENANCE.has(t[0])),
+    tags: ev.tags,
     createdAt: ev.created_at,
-    peer: ev.tags.find((t) => t[0] === TAG_PEER)?.[1] ?? "",
-    wrapId: ev.tags.find((t) => t[0] === TAG_WRAP)?.[1] ?? "",
+    peer: dmPeerOf(ev, self) ?? "",
+    wrapId: "",
   };
 }
 
@@ -283,14 +294,41 @@ export async function queryDm17Thread(
   opts: { limit: number; before?: number; signal?: AbortSignal },
 ): Promise<OpenedDm[]> {
   await migrateLegacyDms(self).catch(() => undefined);
-  const filter: { kinds: number[]; "#peer": string[]; limit: number; until?: number } = {
-    kinds: DM_RUMOR_KINDS,
-    "#peer": [peer],
-    limit: opts.limit,
-  };
-  if (opts.before !== undefined) filter.until = opts.before - 1;
-  const events = await dm17Store(self).query([filter], { signal: opts.signal });
-  return events.filter((ev) => !isExpired(ev.tags)).map(storedToDm17);
+  const events = await dm17Store(self).query(
+    conversationFilters(self, peer, { limit: opts.limit, before: opts.before }),
+    { signal: opts.signal },
+  );
+  return events
+    .filter((ev) => !isExpired(ev.tags))
+    .map((ev) => storedToDm17(ev, self))
+    .slice(0, opts.limit);
+}
+
+/**
+ * The filters selecting one conversation, from `self`'s side.
+ *
+ * A conversation is two directions and they are indexed differently: what the
+ * peer sent names them as the AUTHOR, what we sent names them in a `p` tag. The
+ * two are OR'd, so each is an ordinary indexed lookup — the author scan on
+ * `(tenant, pubkey)`, ours on the `p` tag token — and the store merges and
+ * de-duplicates them.
+ *
+ * Each filter carries the full limit, so the union can be up to twice it; the
+ * caller slices after the merge has put them in order.
+ */
+function conversationFilters(
+  self: string,
+  peer: string,
+  opts: { limit?: number; before?: number } = {},
+): NostrFilter[] {
+  const bounds: { limit?: number; until?: number } = {};
+  if (opts.limit !== undefined) bounds.limit = opts.limit;
+  if (opts.before !== undefined) bounds.until = opts.before - 1;
+
+  return [
+    { kinds: DM_RUMOR_KINDS, authors: [peer], ...bounds },
+    { kinds: DM_RUMOR_KINDS, authors: [self], "#p": [peer], ...bounds },
+  ];
 }
 
 /**
@@ -309,7 +347,7 @@ export async function queryDm17Timer(
 ): Promise<number | undefined> {
   await migrateLegacyDms(self).catch(() => undefined);
   const events = await dm17Store(self).query(
-    [{ kinds: [KIND_DM_TIMER], "#peer": [peer], limit: 1 }],
+    conversationFilters(self, peer, { limit: 1 }).map((f) => ({ ...f, kinds: [KIND_DM_TIMER] })),
     { signal: opts.signal },
   );
   const raw = events[0]?.tags.find((t) => t[0] === "timer")?.[1];
@@ -340,7 +378,7 @@ export async function queryDm17Conversations(
   const mine = new Set<string>();
   for (const ev of events) {
     if (isExpired(ev.tags)) continue;
-    const opened = storedToDm17(ev);
+    const opened = storedToDm17(ev, self);
     if (!opened.peer) continue;
     if (opened.author === self) mine.add(opened.peer);
     const cur = byPeer.get(opened.peer);
@@ -371,7 +409,7 @@ export async function searchDm17Rumors(
   );
   const matches = events
     .filter((ev) => !isExpired(ev.tags))
-    .map(storedToDm17)
+    .map((ev) => storedToDm17(ev, self))
     .filter((o) => o.peer && o.content.toLowerCase().includes(needle))
     .sort((a, b) => b.createdAt - a.createdAt);
   return matches.slice(0, opts.limit ?? 200);

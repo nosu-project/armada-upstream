@@ -25,9 +25,6 @@ internal object Dm17 {
      */
     val KINDS = setOf(5, 7, 14, 15, 1740)
 
-    /** Provenance tag names the store synthesizes for itself. */
-    private val PROVENANCE = setOf("peer", "wrap")
-
     /** The ArmadaDB tenant holding one viewer's opened DMs. */
     fun tenant(self: String): String = "dm17:$self"
 
@@ -60,7 +57,14 @@ internal object Dm17 {
     }
 
     /**
-     * The stored form of an opened DM rumor, or null if it must not be stored.
+     * Whether an opened DM rumor may be stored.
+     *
+     * What IS stored is the rumor, untouched — nothing is injected on the way
+     * in. A rumor's tags are the bytes its id commits to, so bookkeeping
+     * written into them makes the stored row something its sender never signed,
+     * and makes the store's own idea of a conversation forgeable by anyone who
+     * spells that tag themselves. The partner is derived on read instead, from
+     * the author and `p` tags ([peerOf]).
      *
      * Refused when:
      *
@@ -70,30 +74,13 @@ internal object Dm17 {
      *    writer goes through, which is why the check lives here and not only at
      *    the point of decryption: a disappearing message that arrives late is
      *    simply never stored;
-     *  - it has no attributable conversation partner;
-     *  - it carries a tag named like the store's own provenance. The rumor's
-     *    tags are written first, so a forged `peer` would win the read-back and
-     *    file a message in someone else's conversation. Refused rather than
-     *    stripped, so stored tags stay byte-identical to the rumor's — the id
-     *    commits to them.
+     *  - it has no attributable conversation partner, so no read could ever
+     *    surface it in a thread.
      */
-    fun stored(self: String, rumor: Rumor, now: Long): Rumor? {
-        if (self.isEmpty()) return null
-        if (rumor.kind !in KINDS) return null
-        if (isExpired(rumor.tags, now)) return null
-        if (rumor.tags.any { it.getOrNull(0) in PROVENANCE }) return null
-
-        val peer = peerOf(rumor, self) ?: return null
-
-        val tags = rumor.tags.map { row -> row.map { it ?: "" } } + listOf(listOf("peer", peer))
-
-        return Rumor.of(
-            id = rumor.id,
-            pubkey = rumor.pubkey,
-            createdAt = rumor.createdAt,
-            kind = rumor.kind,
-            tags = tags,
-            content = rumor.content,
-        )
+    fun storable(self: String, rumor: Rumor, now: Long): Boolean {
+        if (self.isEmpty()) return false
+        if (rumor.kind !in KINDS) return false
+        if (isExpired(rumor.tags, now)) return false
+        return peerOf(rumor, self) != null
     }
 }

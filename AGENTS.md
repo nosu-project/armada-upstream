@@ -233,6 +233,12 @@ Things to know before touching it:
   `ServiceStore.storeConcord2Rumor` ports the Concord provenance tags and the
   refusal of a rumor that forges them. A rule only one writer applies is a
   conversation the two disagree about.
+- **Never inject a tag into a stored rumor.** Its tags are the bytes its id
+  commits to, so bookkeeping written into them makes the row something the
+  sender never signed, and makes whatever reads that tag forgeable by anyone
+  who spells it. Derive instead: a DM's partner comes from `pubkey` and the `p`
+  tags NIP-17 requires (`dmPeerOf`), and a thread is two ordinary indexed
+  filters — `authors: [peer]` and `authors: [self], "#p": [peer]`.
 - The bridge carries JSON **text**, not marshalled objects: Capacitor would
   have to guess between an integer `kind` and a float, and a page of rumors is
   far cheaper as one string.
