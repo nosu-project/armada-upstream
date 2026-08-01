@@ -435,16 +435,29 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
    * last, so a link minted before the community's metadata (or keys) changed
    * keeps serving the stale preview until its creator refreshes it — this is
    * that refresh, run e.g. when re-sharing an existing link to Discover.
+   *
+   * Each link's refresh targets the community relays UNIONED with the
+   * BOOTSTRAP relays frozen into that link's URL fragment: a resolver reads
+   * from the bootstrap set, takes the newest copy any relay returns, and a
+   * bootstrap relay the refresh never reached keeps vending the old bundle —
+   * which is a coin-flip stale preview whenever the sets have drifted apart.
    * Best-effort per relay; malformed entries are skipped by the builder.
    */
   const refreshMyLinks = async (): Promise<void> => {
     if (!community || myLinks.length === 0) return;
     const bundle = buildBundle();
-    const events = buildRefreshedBundleEvents(bundle, myLinks);
     await Promise.allSettled(
-      events.flatMap((ev) =>
-        community.relays.map((url) => nostr.relay(url).event(ev, { signal: AbortSignal.timeout(8000) })),
-      ),
+      myLinks.map(async (entry) => {
+        const [event] = buildRefreshedBundleEvents(bundle, [entry]);
+        if (!event) return;
+        const targets = new Set<string>([
+          ...community.relays,
+          ...(parseInviteLink(entry.url)?.bootstrapRelays ?? []),
+        ]);
+        await Promise.allSettled(
+          [...targets].map((url) => nostr.relay(url).event(event, { signal: AbortSignal.timeout(8000) })),
+        );
+      }),
     );
   };
 
