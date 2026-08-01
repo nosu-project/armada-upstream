@@ -28,11 +28,9 @@ const DEVICE_ID_PREFIX = "armada:favorite-gifs:device-id:";
  */
 const shardStore = new KvPrefixCache<unknown>({
   prefix: "favorite-gifs-shard:",
-  legacyPrefix: "armada:favorite-gifs:shard:",
 });
 const mergedStore = new KvPrefixCache<unknown>({
   prefix: "favorite-gifs-merged:",
-  legacyPrefix: "armada:favorite-gifs:merged:",
 });
 
 /**

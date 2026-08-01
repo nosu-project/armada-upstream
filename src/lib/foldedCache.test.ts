@@ -8,14 +8,11 @@
  * its own two-minute poll, so the write itself has to be observable.
  */
 
-import { openDB } from "idb";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { purgeArmadaDB } from "@/lib/db/armadaDB";
 
 import {
-  __resetFoldedForTests,
-  LEGACY_FOLDED_DB_NAME,
   onFoldedWrite,
   readFolded,
   writeFolded,
@@ -26,11 +23,6 @@ import {
 // instead.
 afterEach(async () => {
   await purgeArmadaDB();
-  await new Promise<void>((resolve) => {
-    const req = indexedDB.deleteDatabase(LEGACY_FOLDED_DB_NAME);
-    req.onsuccess = req.onerror = req.onblocked = () => resolve();
-  });
-  __resetFoldedForTests();
 });
 
 describe("onFoldedWrite", () => {
@@ -102,33 +94,5 @@ describe("readFolded / writeFolded", () => {
 
     expect(await getArmadaDB().kv.get("provenance:x")).toBe("not a fold");
     expect(await readFolded("provenance:x")).toEqual({ mine: true });
-  });
-});
-
-describe("migrateLegacyFolded", () => {
-  /** Seed the pre-ArmadaDB database with an already-encoded value. */
-  async function seedLegacy(key: string, encoded: string): Promise<void> {
-    const legacy = await openDB(LEGACY_FOLDED_DB_NAME, 1, {
-      upgrade(db) {
-        db.createObjectStore("kv");
-      },
-    });
-    await legacy.put("kv", encoded, key);
-    legacy.close();
-  }
-
-  it("drains on first read, tagged values included", async () => {
-    await seedLegacy("fold:old", '{"epoch":{"__t":"bigint","v":"7"}}');
-
-    expect(await readFolded("fold:old")).toEqual({ epoch: 7n });
-  });
-
-  it("a write cannot be clobbered by a later drain", async () => {
-    // The drain has not run yet, and the legacy database holds an older value
-    // for the same key. The write must win.
-    await seedLegacy("fold:raced", '{"stale":true}');
-    await writeFolded("fold:raced", { stale: false });
-
-    expect(await readFolded("fold:raced")).toEqual({ stale: false });
   });
 });

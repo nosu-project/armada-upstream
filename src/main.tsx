@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { clearChunkReloadGuard, tryChunkReload } from "@/lib/chunkReload";
+import { deleteLegacyDatabases } from "@/lib/db/legacyDatabases";
 import { signalWebReady } from "@/lib/webReady";
 
 import App from "./App.tsx";
@@ -29,7 +30,7 @@ if (document.documentElement.classList.contains("standalone")) {
 // Ask the browser to keep our site storage DURABLE. Without a persistence
 // grant, WebKit (notably iOS home-screen PWAs) treats IndexedDB as best-effort
 // and may evict it when the app is terminated — silently dropping the decrypted
-// NIP-17 rumor store (armada-dm17-rumors) and the kind-4 snapshots. A received
+// NIP-17 rumor store and the kind-4 snapshots. A received
 // conversation then reads fine in-session but vanishes on the next cold launch.
 // Installed PWAs are typically granted automatically; this is a no-op on the
 // native (Capacitor) runtime, whose storage already survives across launches.
@@ -49,6 +50,11 @@ createRoot(document.getElementById("root")!).render(
 // Tell the native launch splash the web layer has painted, so it lifts onto
 // real content instead of a blank WebView frame (Android only; no-op elsewhere).
 signalWebReady();
+
+// Nothing reads the pre-ArmadaDB databases, so drop them rather than leave a
+// build's worth of decrypted messages on disk unreachable. After the render, so
+// it never sits in front of the first paint.
+void deleteLegacyDatabases();
 
 // The tree mounted without a stale-chunk crash: clear the one-time reload guard
 // so a LATER deploy in this same session can recover again.

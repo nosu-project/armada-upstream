@@ -1,7 +1,4 @@
-import { openDB } from "idb";
-
 import { getArmadaDB } from "@/lib/db/armadaDB";
-import { skipLegacyDrain } from "@/lib/db/legacyDatabases";
 import { normalizeRelayUrl } from "@/lib/platform";
 
 // ============================================================================
@@ -36,11 +33,7 @@ import { normalizeRelayUrl } from "@/lib/platform";
 // from several relays). Degrades to a no-op when storage is unavailable.
 // ============================================================================
 
-/** Legacy standalone database, drained by {@link migrateLegacyProvenance}. */
-export const LEGACY_PROVENANCE_DB_NAME = "armada-relay-provenance";
-
 const KEY_PREFIX = "provenance:";
-const DONE_KEY = "provenance:migrated";
 
 /** Key prefix covering every event id recorded for `relay`. */
 function relayPrefix(relay: string): string {
@@ -86,73 +79,10 @@ export async function recordRelayProvenanceBatch(
 export async function eventIdsForRelay(relayUrl: string): Promise<Set<string>> {
   const relay = normalizeRelayUrl(relayUrl) ?? relayUrl;
   try {
-    // Lazily, so a relay opened before the startup gate has run still sees the
-    // provenance recorded by previous versions.
-    await migrateLegacyProvenance();
     const prefix = relayPrefix(relay);
     const keys = await getArmadaDB().kv.keys(prefix);
     return new Set(keys.map((key) => key.slice(prefix.length)));
   } catch {
     return new Set();
   }
-}
-
-// ── migration ─────────────────────────────────────────────────────────────────
-
-const LEGACY_STORE = "provenance";
-
-let drain: Promise<void> | undefined;
-
-/**
- * Copy the standalone provenance database into KV. Idempotent; runs at most
- * once per session.
- *
- * Unlike the other drains this data COULD be dropped — it is derived, and a
- * relay re-serving its directory records it again. Copying it anyway is cheap
- * (a bounded number of kind-39000 ids per relay) and avoids the alternative: an
- * empty provenance set makes `useRelayGroups` render nothing from cache until
- * the network read lands, i.e. a blank channel list on the first reload after
- * upgrading.
- */
-export function migrateLegacyProvenance(): Promise<void> {
-  drain ??= drainLegacyProvenance().catch((err: unknown) => {
-    // Retry next launch rather than marking a partial copy done. Re-reported
-    // so the startup gate doesn't delete the source of an unfinished copy.
-    drain = undefined;
-    throw err;
-  });
-  return drain;
-}
-
-async function drainLegacyProvenance(): Promise<void> {
-  const db = getArmadaDB();
-  if (await db.kv.get<boolean>(DONE_KEY)) return;
-  if (typeof indexedDB === "undefined") return;
-  // `openDB` CREATES the database when it is absent; see `skipLegacyDrain`.
-  if (await skipLegacyDrain(LEGACY_PROVENANCE_DB_NAME)) return;
-
-  const legacy = await openDB(LEGACY_PROVENANCE_DB_NAME, 1, {
-    upgrade(d) {
-      if (!d.objectStoreNames.contains(LEGACY_STORE)) {
-        d.createObjectStore(LEGACY_STORE, { keyPath: "key" });
-      }
-    },
-  });
-  try {
-    const rows = (await legacy.getAll(LEGACY_STORE)) as Array<{ relay: string; eventId: string }>;
-    for (const { relay, eventId } of rows) {
-      if (typeof relay === "string" && typeof eventId === "string") {
-        await db.kv.set(rowKey(relay, eventId), 1);
-      }
-    }
-  } finally {
-    legacy.close();
-  }
-
-  await db.kv.set(DONE_KEY, true);
-}
-
-/** Test seam: forget the memoised drain so the next read runs it again. */
-export async function __resetProvenanceForTests(): Promise<void> {
-  drain = undefined;
 }

@@ -223,11 +223,11 @@ Things to know before touching it:
   ABI (~1.2 MB each, ~5 MB on a universal APK) and the same build for the JVM,
   which is what lets the conformance suite run the real engine as a plain unit
   test.
-- **The adapter is chosen before anything reads.** The legacy drains in
-  `migrations.ts` write through `getArmadaDB()`, so on Android they land in the
-  native store directly — there is no IndexedDB ArmadaDB to move, and adding a
-  second hop would be a second chance to strand decrypted Concord and NIP-17
-  history that exists nowhere else.
+- **ArmadaDB is a clean break — there are no legacy drains.** Data written by a
+  build older than it stays in that build; `legacyDatabases.ts` names those
+  IndexedDB databases only so the bytes are deleted at startup rather than left
+  on disk. Don't reintroduce a migration path, a startup gate, or a reader that
+  copes with a pre-ArmadaDB shape.
 - **The service is a second writer, so it obeys the same store rules.** `Dm17.kt`
   ports NIP-17's kind filter, NIP-40 expiry refusal and `peer` attribution;
   `ServiceStore.storeConcord2Rumor` ports the Concord provenance tags and the

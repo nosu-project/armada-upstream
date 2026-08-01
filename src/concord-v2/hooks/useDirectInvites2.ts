@@ -14,7 +14,6 @@ import {
   advanceInviteInboxCursor,
   inviteInboxSince,
   queryStoredInvites,
-  warmInviteInbox,
   writeStoredInvites,
 } from "@/concord-v2/lib/inviteInbox";
 import { liveEntries, rehydrateCommunity } from "@/concord-v2/lib/communityList";
@@ -96,11 +95,6 @@ export function useDirectInvites2() {
     refetchIntervalInBackground: false,
     queryFn: async ({ signal }) => {
       const pubkey = user!.pubkey;
-
-      // Open this account's invite tenant now, so its cold-open (and the
-      // one-time drain of the pre-tenant database) overlaps the relay scan
-      // below instead of landing in front of the read that needs it.
-      warmInviteInbox(pubkey);
 
       // Fetch only wraps newer than the cursor (rewound by NIP-59's backdate
       // window — direct-invite wraps DO tweak their timestamps into the past).

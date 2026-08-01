@@ -14,17 +14,9 @@
  * device-trust level as the raw community keys already in the event store /
  * membership list — anyone with local storage access already has the keys.
  */
-import { openDB } from "idb";
-
 import { getArmadaDB } from "@/lib/db/armadaDB";
-import { skipLegacyDrain } from "@/lib/db/legacyDatabases";
 
-/** Legacy standalone database, drained by {@link migrateLegacyFolded}. */
-export const LEGACY_FOLDED_DB_NAME = "armada-concord-cache";
-
-const STORE = "kv";
 const KEY_PREFIX = "folded:";
-const DONE_KEY = "folded:migrated";
 
 /** Namespace a caller's key inside the shared KV keyspace. */
 function foldedKey(key: string): string {
@@ -85,7 +77,6 @@ export function decode<T>(json: string): T | undefined {
 /** Read a cached folded value by key, or undefined on miss / error. */
 export async function readFolded<T>(key: string): Promise<T | undefined> {
   try {
-    await migrateLegacyFolded();
     const json = await getArmadaDB().kv.get<string>(foldedKey(key));
     // A non-string is a value written as `undefined` (KV normalizes that to
     // null), which reads back as a miss — the pre-KV behavior.
@@ -115,9 +106,6 @@ export function onFoldedWrite(listener: FoldedWriteListener): () => void {
 /** Persist a folded value by key (best-effort; failures are swallowed). */
 export async function writeFolded(key: string, value: unknown): Promise<void> {
   try {
-    // Before the write, not just before reads: a write that landed first would
-    // be clobbered by the drain copying the stale legacy value over it.
-    await migrateLegacyFolded();
     await getArmadaDB().kv.set(foldedKey(key), encode(value));
     for (const listener of foldedWriteListeners) {
       try {
@@ -130,73 +118,4 @@ export async function writeFolded(key: string, value: unknown): Promise<void> {
   } catch {
     // Best-effort cache.
   }
-}
-
-// ── migration ─────────────────────────────────────────────────────────────────
-
-let drain: Promise<void> | undefined;
-
-/**
- * Copy the standalone fold cache into KV. Idempotent; runs at most once per
- * session.
- *
- * Awaited by BOTH accessors above rather than left to the startup gate, which
- * is what keeps the drain ordering honest: `rumorMigration`'s own drain reads
- * folds (the cached community list and control fold are how it attributes
- * rumors to communities), and it reaches them only through `readFolded`. So it
- * cannot observe a pre-drain state no matter which drain the gate runs first,
- * or whether it was triggered lazily outside the gate at all.
- *
- * REJECTS when the copy fails. The startup gate deletes the legacy databases
- * only if every drain resolved, so a drain that swallowed its own error and
- * resolved anyway would hand the gate a green light to delete data it never
- * copied. Both accessors above already guard the call.
- */
-export function migrateLegacyFolded(): Promise<void> {
-  drain ??= drainLegacyFolded().catch((err: unknown) => {
-    // Retry next call rather than caching the rejection, then re-report so the
-    // gate keeps its hands off the legacy database.
-    drain = undefined;
-    throw err;
-  });
-  return drain;
-}
-
-async function drainLegacyFolded(): Promise<void> {
-  const db = getArmadaDB();
-  if (await db.kv.get<boolean>(DONE_KEY)) return;
-  if (typeof indexedDB === "undefined") return;
-  // `openDB` CREATES the database when it is absent, so a device that never
-  // had one would end up with an empty database named exactly like the thing
-  // the startup gate looks for.
-  if (await skipLegacyDrain(LEGACY_FOLDED_DB_NAME)) return;
-
-  const legacy = await openDB(LEGACY_FOLDED_DB_NAME, 1, {
-    upgrade(d) {
-      if (!d.objectStoreNames.contains(STORE)) d.createObjectStore(STORE);
-    },
-  });
-  try {
-    // The legacy store held the SAME encoded strings, so this is a copy, not a
-    // re-encode: nothing is decoded and re-serialized on the way through.
-    const [keys, values] = await Promise.all([
-      legacy.getAllKeys(STORE),
-      legacy.getAll(STORE),
-    ]);
-    for (const [i, key] of keys.entries()) {
-      const value: unknown = values[i];
-      if (typeof key === "string" && typeof value === "string") {
-        await db.kv.set(foldedKey(key), value);
-      }
-    }
-  } finally {
-    legacy.close();
-  }
-
-  await db.kv.set(DONE_KEY, true);
-}
-
-/** Test seam: forget the memoised drain so the next access runs it again. */
-export function __resetFoldedForTests(): void {
-  drain = undefined;
 }

@@ -154,7 +154,6 @@ const EMPTY_DRAFT: Draft = { content: "", attachments: [] };
  */
 const draftCache = new KvPrefixCache<Partial<Draft> | string>({
   prefix: "draft:",
-  legacyPrefix: "chat-draft:",
 });
 
 function readDraft(key: string): Draft {

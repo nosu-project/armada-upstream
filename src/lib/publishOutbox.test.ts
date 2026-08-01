@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { purgeArmadaDB } from "@/lib/db/armadaDB";
 import {
-  __resetOutboxForTests,
   clearPublishOutbox,
   getQueuedPublishes,
   markQueuedPublishFailure,
@@ -34,8 +33,6 @@ function event(overrides: Partial<NostrEvent> = {}): NostrEvent {
 // so isolation means purging it rather than swapping the IndexedDB factory.
 afterEach(async () => {
   await purgeArmadaDB();
-  localStorage.removeItem("armada:publish-outbox");
-  __resetOutboxForTests();
 });
 
 describe("publish outbox", () => {
@@ -135,26 +132,6 @@ describe("publish outbox", () => {
       // caller is told rather than handed an event that is certain to bounce.
       const orphan = { ...event({ created_at: 9 }), sig: "" };
       await expect(withSignature(orphan)).rejects.toThrow(/signature was not kept/);
-    });
-  });
-
-  describe("migration from localStorage", () => {
-    it("drains the legacy queue on first access and clears the old key", async () => {
-      const ev = event();
-      localStorage.setItem(
-        "armada:publish-outbox",
-        JSON.stringify([{ id: ev.id, event: ev, enqueuedAt: 5, attempts: 0 }]),
-      );
-
-      const queued = await getQueuedPublishes();
-      expect(queued.map((i) => i.id)).toEqual([ev.id]);
-      expect(queued[0].event.sig).toBe(ev.sig);
-      expect(localStorage.getItem("armada:publish-outbox")).toBeNull();
-    });
-
-    it("survives a malformed legacy payload", async () => {
-      localStorage.setItem("armada:publish-outbox", "not json");
-      expect(await getQueuedPublishes()).toEqual([]);
     });
   });
 });

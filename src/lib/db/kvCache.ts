@@ -23,7 +23,7 @@
  * ## Why move at all
  *
  * localStorage is ~5 MB per origin and `setItem` throws when it fills. The key
- * spaces moved here are the unbounded ones — one entry per relay ever
+ * spaces held here are the unbounded ones — one entry per relay ever
  * contacted, per channel ever typed in — with no eviction, so they were the
  * ones pushing every other writer toward that ceiling. Several already
  * swallowed quota failures silently.
@@ -39,26 +39,13 @@ interface RegisteredCache {
 /** Every cache built, so a logout can drop what they hold in memory. */
 const registry = new Set<RegisteredCache>();
 
-export interface KvPrefixCacheOpts<T> {
+export interface KvPrefixCacheOpts {
   /** KV key prefix this cache owns. Entry keys are `prefix + id`. */
   prefix: string;
-  /**
-   * localStorage prefix holding the same key space before the move, drained on
-   * warm. Ids must line up: `legacyPrefix + id` is the same entry as
-   * `prefix + id`.
-   */
-  legacyPrefix?: string;
-  /**
-   * Read a legacy localStorage value. Defaults to `JSON.parse`, which also
-   * covers values that were written as bare numbers or strings.
-   */
-  parseLegacy?(raw: string): T | undefined;
 }
 
 export class KvPrefixCache<T> {
   private readonly prefix: string;
-  private readonly legacyPrefix?: string;
-  private readonly parseLegacy: (raw: string) => T | undefined;
   private readonly entries = new Map<string, T>();
   private readonly listeners = new Set<() => void>();
   private warming?: Promise<void>;
@@ -66,10 +53,8 @@ export class KvPrefixCache<T> {
   /** Whether the memory map has been filled from KV yet. */
   warmed = false;
 
-  constructor(opts: KvPrefixCacheOpts<T>) {
+  constructor(opts: KvPrefixCacheOpts) {
     this.prefix = opts.prefix;
-    this.legacyPrefix = opts.legacyPrefix;
-    this.parseLegacy = opts.parseLegacy ?? defaultParseLegacy;
     registry.add(this);
   }
 
@@ -101,10 +86,7 @@ export class KvPrefixCache<T> {
     void getArmadaDB().kv.delete(this.prefix + id).catch(() => undefined);
   }
 
-  /**
-   * Fill the memory map from KV, draining any legacy localStorage entries on
-   * the way. Idempotent, and shared by concurrent callers.
-   */
+  /** Fill the memory map from KV. Idempotent, and shared by concurrent callers. */
   ready(): Promise<void> {
     this.warming ??= this.warm().catch(() => {
       // Retry on the next call rather than caching a rejection. A cache that
@@ -115,8 +97,6 @@ export class KvPrefixCache<T> {
   }
 
   private async warm(): Promise<void> {
-    await this.drainLegacy();
-
     const { kv } = getArmadaDB();
     const keys = await kv.keys(this.prefix);
     for (const key of keys) {
@@ -130,55 +110,6 @@ export class KvPrefixCache<T> {
 
     this.warmed = true;
     this.notify();
-  }
-
-  /**
-   * Copy this prefix's localStorage entries into KV, then remove them.
-   *
-   * The localStorage entry is dropped only after the KV write is confirmed
-   * readable. KV degrades to a silent no-op where IndexedDB is unavailable
-   * (iOS Lockdown Mode, some private-browsing contexts), so deleting on the
-   * strength of an unverified write would discard the data on exactly the
-   * devices least able to spare it.
-   */
-  private async drainLegacy(): Promise<void> {
-    if (!this.legacyPrefix || typeof localStorage === "undefined") return;
-
-    let legacyKeys: string[];
-    try {
-      legacyKeys = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key?.startsWith(this.legacyPrefix)) legacyKeys.push(key);
-      }
-    } catch {
-      return;
-    }
-    if (legacyKeys.length === 0) return;
-
-    const { kv } = getArmadaDB();
-    for (const legacyKey of legacyKeys) {
-      const id = legacyKey.slice(this.legacyPrefix.length);
-      const key = this.prefix + id;
-      try {
-        const raw = localStorage.getItem(legacyKey);
-        const value = raw === null ? undefined : this.parseLegacy(raw);
-        if (value !== undefined) {
-          // Into memory either way, before anything about KV is known: where
-          // KV is a no-op the value is still the user's, and hiding it for the
-          // session would look exactly like losing it.
-          if (!this.entries.has(id)) this.entries.set(id, value);
-          if ((await kv.get(key)) === undefined) {
-            await kv.set(key, value);
-            // Confirm the write landed before dropping the only other copy.
-            if ((await kv.get(key)) === undefined) continue;
-          }
-        }
-        localStorage.removeItem(legacyKey);
-      } catch {
-        // Leave this entry for the next warm; the rest still move.
-      }
-    }
   }
 
   /**
@@ -229,16 +160,6 @@ export class KvPrefixCache<T> {
   }
 }
 
-/** Legacy values were `JSON.stringify`d, or written as bare number strings. */
-function defaultParseLegacy<T>(raw: string): T | undefined {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    // Not JSON at all — a plain string value. Keep it rather than drop it.
-    return raw as unknown as T;
-  }
-}
-
 /**
  * Drop every cache's memory map (logout).
  *
@@ -248,9 +169,4 @@ function defaultParseLegacy<T>(raw: string): T | undefined {
  */
 export function resetKvCaches(): void {
   for (const cache of registry) cache.reset();
-}
-
-/** Warm every cache, which is also what finishes their localStorage drains. */
-export async function warmKvCaches(): Promise<void> {
-  await Promise.all([...registry].map((cache) => cache.ready()));
 }

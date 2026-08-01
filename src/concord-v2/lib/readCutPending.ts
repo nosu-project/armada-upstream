@@ -28,7 +28,6 @@ export interface ReadCutIntent {
 
 const cache = new KvPrefixCache<ReadCutIntent>({
   prefix: "read-cut-pending:",
-  legacyPrefix: "concord2:read-cut-pending:",
 });
 
 const id = (me: string, communityIdHex: string) => `${me}:${communityIdHex}`;

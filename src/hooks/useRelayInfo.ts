@@ -60,7 +60,6 @@ function relayToHttpUrl(relayUrl: string): string | null {
 // what lets `initialData` stay synchronous, which react-query requires.
 export const relayInfoCache = new KvPrefixCache<RelayInfoDocument>({
   prefix: 'relay-info:',
-  legacyPrefix: 'armada:relay-info:',
 });
 
 function readCachedInfo(relayUrl: string | undefined): RelayInfoDocument | undefined {

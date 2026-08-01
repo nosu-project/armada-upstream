@@ -60,7 +60,6 @@ const NO_DISMISSAL: Dismissal = { at: 0, unreadable: 0, flooded: false };
  */
 const dismissals = new KvPrefixCache<Partial<Dismissal> | number>({
   prefix: "cp-watchdog:",
-  legacyPrefix: "armada:cp-watchdog:",
 });
 
 const dismissId = (me: string, idHex: string) => `${me}:${idHex}`;

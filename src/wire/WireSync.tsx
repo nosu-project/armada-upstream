@@ -99,7 +99,6 @@ const REPLAY_BATCH_MAX = 200;
  */
 const cursors = new KvPrefixCache<number>({
   prefix: "wire-cursor:",
-  legacyPrefix: "armada:wire-cursor:",
 });
 
 function readCursor(relay: string): number | undefined {

@@ -1,4 +1,3 @@
-import { NIndexedDB } from "@nostrify/indexeddb";
 import { IDBFactory } from "fake-indexeddb";
 import { getConversationKey, decrypt as nip44Decrypt, encrypt as nip44Encrypt } from "nostr-tools/nip44";
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
@@ -197,27 +196,6 @@ describe("direct-invite inbox store", () => {
     );
     const mine = got.find((i) => i.wrapId === wrap.id)!;
     expect(JSON.parse(mine.rumor.content).community_id).toBe(bundle.community_id);
-  });
-
-  it("recovers invites left in the pre-tenant shared database", async () => {
-    const { wrap, unwrapped, recipientPk } = await makeUnwrapped();
-
-    // A record written the old way: the shared database, scoped by `#p`. The
-    // sync cursor is already past this wrap, so if the migration drops it the
-    // invite is gone for good — nothing would ever refetch it.
-    const legacy = new NIndexedDB("armada-concord-invites");
-    await legacy.event({
-      ...unwrappedToStored(wrap as NostrEvent, unwrapped),
-      tags: [...unwrappedToStored(wrap as NostrEvent, unwrapped).tags, ["p", recipientPk]],
-      sig: "",
-    });
-    await legacy.close();
-
-    const got = await eventually(
-      () => queryStoredInvites(recipientPk),
-      (r) => r.some((i) => i.wrapId === wrap.id),
-    );
-    expect(got.find((i) => i.wrapId === wrap.id)!.sender).toBe(unwrapped.sender);
   });
 
   it("scopes reads to the recipient — another account never sees the invite", async () => {
