@@ -29,6 +29,7 @@ import {
 import { KIND_INVITE_LIST } from "@/concord-v2/lib/kinds";
 import { buildInviteAnnouncementNote } from "@/concord-v2/lib/inviteDiscovery";
 import { inviteDeliveryRelays, recipientInboxRelays } from "@/concord-v2/lib/inviteRelays";
+import { publishToAnyRelay } from "@/concord-v2/lib/relayPublish";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { toast } from "@/hooks/useToast";
 import { shareOrigin } from "@/lib/shareOrigin";
@@ -314,48 +315,51 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
       const token = mintToken();
       const link = mintLinkSigner();
       const bundle = buildBundle({ expiresAtMs, label });
-
       const bundleEvent = buildBundleEvent(bundle, token, link.sk);
-      const results = await Promise.allSettled(
-        community.relays.map((url) => nostr.relay(url).event(bundleEvent, { signal: AbortSignal.timeout(8000) })),
-      );
-      if (!results.some((r) => r.status === "fulfilled")) {
-        throw new Error("No relay accepted the invite bundle.");
-      }
-
+      // The URL is decided LOCALLY — the naddr names the freshly minted signer
+      // and the fragment carries the freshly minted token, so no write below
+      // feeds into it. That is what lets the writes run concurrently.
       const url = buildInviteUrl(shareOrigin(), link.pk, token, community.relays);
-
-      // The creator's private bookkeeping (the merge key is the token).
-      await updateInviteList({
-        entries: [
-          {
-            token: bytesToHex(token),
-            signer_sk: bytesToHex(link.sk),
-            community_id: community.idHex,
-            url,
-            ...(label ? { label } : {}),
-            created_at: Math.floor(Date.now() / 1000),
-            ...(expiresAtMs ? { expires_at: Math.floor(expiresAtMs / 1000) } : {}),
-          },
-        ],
-        tombstones: [],
-      });
 
       // The member-facing Registry: this creator's live coordinates.
       const mine = new Set(folded?.registriesByCreator.get(user.pubkey) ?? []);
       mine.add(link.pk);
-      await publishRegistry([...mine]);
 
       // Opt-in public announcement note (best-effort — a failed post must not
       // fail the mint; the link itself is already live).
-      if (listPublicly) {
-        const note = buildInviteAnnouncementNote({
-          inviteUrl: url,
-          description: listPublicly.description,
-          topics: listPublicly.topics,
-        });
-        if (note) await publishEvent(note).catch(() => undefined);
-      }
+      const note = listPublicly
+        ? buildInviteAnnouncementNote({
+            inviteUrl: url,
+            description: listPublicly.description,
+            topics: listPublicly.topics,
+          })
+        : null;
+
+      // Four independent writes on four different coordinates. Awaiting them in
+      // series made the mint the SUM of four round trips (each with its own 8s
+      // ceiling) when they only ever needed the slowest one.
+      await Promise.all([
+        publishToAnyRelay(nostr, community.relays, bundleEvent, "No relay accepted the invite bundle."),
+        // The creator's private bookkeeping (the merge key is the token). This
+        // one is not optional: `signer_sk` exists nowhere else, and without it
+        // the link that just went live can never be revoked.
+        updateInviteList({
+          entries: [
+            {
+              token: bytesToHex(token),
+              signer_sk: bytesToHex(link.sk),
+              community_id: community.idHex,
+              url,
+              ...(label ? { label } : {}),
+              created_at: Math.floor(Date.now() / 1000),
+              ...(expiresAtMs ? { expires_at: Math.floor(expiresAtMs / 1000) } : {}),
+            },
+          ],
+          tombstones: [],
+        }),
+        publishRegistry([...mine]),
+        note ? publishEvent(note).catch(() => undefined) : Promise.resolve(),
+      ]);
 
       return url;
     },
@@ -374,12 +378,7 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
       if (!entry) throw new Error("This device doesn't hold that link's signing secret.");
 
       const tomb = buildRevocationEvent(hexToBytes(entry.signer_sk));
-      const results = await Promise.allSettled(
-        community.relays.map((relay) => nostr.relay(relay).event(tomb, { signal: AbortSignal.timeout(8000) })),
-      );
-      if (!results.some((r) => r.status === "fulfilled")) {
-        throw new Error("No relay accepted the revocation.");
-      }
+      await publishToAnyRelay(nostr, community.relays, tomb, "No relay accepted the revocation.");
 
       await updateInviteList({
         entries: [],
@@ -419,12 +418,7 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
       // success). Fail loudly so the user retries once the network settles.
       if (inbox === null) throw new Error("Couldn't reach the network to send the invite. Please try again.");
       const relays = inviteDeliveryRelays(inbox);
-      const results = await Promise.allSettled(
-        relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
-      );
-      if (!results.some((r) => r.status === "fulfilled")) {
-        throw new Error("No relay accepted the invite.");
-      }
+      await publishToAnyRelay(nostr, relays, wrap, "No relay accepted the invite.");
     },
   });
 

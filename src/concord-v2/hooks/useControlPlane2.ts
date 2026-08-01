@@ -17,6 +17,7 @@ import { bytesToHex, dissolvedGroupKey, grantLocator, hex32 } from "@/concord-v2
 import type { AuthorityCitation } from "@/concord-v2/lib/edition";
 import { KIND_WRAP } from "@/concord-v2/lib/kinds";
 import { openPlaneWraps, mergeOpened, sweepControl } from "@/concord-v2/lib/planeSync";
+import { publishToAnyRelay } from "@/concord-v2/lib/relayPublish";
 import { queryPlane, readControlSnapshot, writeOpened } from "@/concord-v2/lib/rumorStore";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import { STORE_READ } from "@/lib/storeQuery";
@@ -450,12 +451,7 @@ export async function publishEdition2(
   const control = currentControlGroup(community);
   const wrap = await sealEdition(rumor, control, signer);
   const urls = opts?.relays ?? community.relays;
-  const results = await Promise.allSettled(
-    urls.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
-  );
-  if (!results.some((r) => r.status === "fulfilled")) {
-    throw new Error("No relay accepted the change.");
-  }
+  await publishToAnyRelay(nostr, urls, wrap, "No relay accepted the change.");
   // Write our own edition to the local opened-event store immediately: the
   // refetch after invalidation unions the store, so the publisher's fold picks
   // the change up even if no relay echoes the wrap back (or the persisted
