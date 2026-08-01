@@ -83,11 +83,21 @@ function useCanShare(idHex: string | undefined) {
   return { community, folded, eligible, isLoading: fold.isLoading };
 }
 
-function OptionIcon({ icon, name }: { icon: ImagePointer | undefined; name: string | undefined }) {
+function OptionIcon({
+  icon,
+  name,
+  className = "size-8",
+}: {
+  icon: ImagePointer | undefined;
+  name: string | undefined;
+  className?: string;
+}) {
   const url = useDecryptedImage2(icon);
-  if (url) return <img src={url} alt="" className="size-8 shrink-0 rounded object-cover" />;
+  if (url) return <img src={url} alt="" className={`${className} shrink-0 rounded object-cover`} />;
   return (
-    <span className="flex size-8 shrink-0 items-center justify-center rounded bg-muted text-sm font-semibold uppercase text-muted-foreground">
+    <span
+      className={`${className} flex shrink-0 items-center justify-center rounded bg-muted text-sm font-semibold uppercase text-muted-foreground`}
+    >
       {name?.trim()?.[0] ?? "#"}
     </span>
   );
@@ -183,9 +193,9 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
 
   const name = folded?.metadata?.name ?? community?.name ?? "this community";
 
-  // Reuse a live link of mine rather than minting one per share: an
-  // announcement republished under the same `d` replaces the previous listing,
-  // and one public link is one revocation away from un-listing.
+  // Reuse a live link of mine rather than minting one per share: repeat
+  // shares of one link fold to one listing, and one public link is one
+  // revocation away from un-listing.
   const now = Math.floor(Date.now() / 1000);
   const reusable = myLinks.find((e) => !e.expires_at || e.expires_at > now);
   const willMint = !reusable;
@@ -229,9 +239,17 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
 
   return (
     <div className="w-full space-y-3">
-      <p className="text-sm">
-        Listing <span className="font-medium text-foreground">{name}</span> publicly. Its name and
-        images come from the community itself, so the listing stays current as they change.
+      {/* Which community am I about to make public? Show it, don't tell it. */}
+      <div className="flex items-center gap-3 px-3 py-2.5 clip-corner-lg bg-secondary">
+        <OptionIcon icon={folded?.metadata?.icon} name={name} className="size-10" />
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-medium leading-tight">{name}</p>
+          <p className="text-xs text-muted-foreground">will be listed publicly on Discover</p>
+        </div>
+      </div>
+      <p className="text-sm text-muted-foreground">
+        Its name and images come from the community itself, so the listing stays current as they
+        change.
       </p>
       <Alert>
         <AlertDescription>
