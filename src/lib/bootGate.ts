@@ -21,8 +21,18 @@
  */
 import { useSyncExternalStore } from "react";
 
-/** How long ingest can be held waiting for a first paint that never comes. */
-const BOOT_GATE_TIMEOUT_MS = 2500;
+/**
+ * How long ingest can be held waiting for a first paint that never comes.
+ *
+ * Sized ABOVE the measured production warm-boot paint (~4s to first rows):
+ * at 2500ms the gate opened after the channels resolved but before the
+ * timeline's store read finished, so the read competed with the ingest flood
+ * it existed to be protected from (measured: a 4s c2 store read landing right
+ * on the first-rows timestamp). The cost of the margin is only ever paid on a
+ * route that never marks a paint (an empty channel, the DMs landing), where
+ * sync starts this much later.
+ */
+const BOOT_GATE_TIMEOUT_MS = 5000;
 
 let open = false;
 const listeners = new Set<() => void>();
