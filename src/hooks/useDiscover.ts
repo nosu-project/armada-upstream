@@ -105,7 +105,7 @@ async function fetchDiscover(
 }
 
 /** The app relays Discover reads from (de-duplicated). */
-function useDiscoverRelays(): string[] {
+export function useDiscoverRelays(): string[] {
   const { config } = useAppContext();
   return useMemo(() => {
     const urls = new Set<string>();
@@ -210,10 +210,33 @@ export function useDiscoverCommunities() {
         [filter],
         { signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) },
       );
+      // Honor un-publishes: a NIP-09 delete by the ANNOUNCEMENT'S OWN author
+      // removes the listing (anyone else's delete is ignored).
+      const deleted = new Set<string>();
+      if (events.length > 0) {
+        const dels = await nostr
+          .group(relays)
+          .query(
+            [{
+              kinds: [5],
+              authors: [...new Set(events.map((e) => e.pubkey))],
+              "#e": events.map((e) => e.id),
+            }],
+            { signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) },
+          )
+          .catch(() => []);
+        const byId = new Map(events.map((e) => [e.id, e.pubkey]));
+        for (const del of dels) {
+          for (const [n, id] of del.tags) {
+            if (n === "e" && byId.get(id) === del.pubkey) deleted.add(id);
+          }
+        }
+      }
       // Newest announcement wins for a given link.
       events.sort((a, b) => b.created_at - a.created_at);
       const byLinkSigner = new Map<string, DiscoveredInvite>();
       for (const event of events) {
+        if (deleted.has(event.id)) continue;
         const invite = announcementFromEvent(event);
         if (!invite) continue;
         if (!byLinkSigner.has(invite.linkSigner)) byLinkSigner.set(invite.linkSigner, invite);

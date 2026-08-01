@@ -84,10 +84,9 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
   const parsed = useMemo(() => parseInviteLink(invite.inviteUrl), [invite.inviteUrl]);
   const [copied, setCopied] = useState(false);
 
-  // Resolve the community name from its bundle (the link carries the secret, so
-  // we can decrypt the preview). Best-effort: a revoked/unreachable link falls
-  // back to a generic name rather than hiding the card.
-  const { data: bundle, isLoading: bundleLoading } = useQuery({
+  // Resolve the community from its bundle (the link carries the secret, so we
+  // can decrypt the preview).
+  const { data: bundle, isLoading: bundleLoading, isError: bundleError } = useQuery({
     queryKey: ["discover", "invite-bundle", invite.linkSigner],
     enabled: !!parsed,
     staleTime: 5 * 60_000,
@@ -145,6 +144,11 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
   // No real name to show until the bundle settles — hold the card's shape
   // instead of flashing the "Encrypted community" fallback.
   if (bundleLoading) return <CommunityListingCardSkeleton className={className} />;
+
+  // A link that doesn't resolve (revoked, expired, dead relays) is not a
+  // joinable community — hide it rather than list a junk placeholder card.
+  // This is also what makes revoking a shared link an effective un-listing.
+  if (bundleError || !parsed || !bundle) return null;
 
   const needle = filter?.trim().toLowerCase();
   if (needle && !name.toLowerCase().includes(needle)) return null;

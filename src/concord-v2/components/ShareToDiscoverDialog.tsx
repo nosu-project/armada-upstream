@@ -1,6 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { useNostr } from "@nostrify/react";
+import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, Loader2, Megaphone } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -10,9 +12,15 @@ import { useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useCommunity2, useLiveCommunities2 } from "@/concord-v2/hooks/useCommunityList2";
 import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
 import { useInviteActions2 } from "@/concord-v2/hooks/useInvites2";
-import { buildCommunityAnnouncement } from "@/concord-v2/lib/inviteDiscovery";
+import {
+  KIND_COMMUNITY_ANNOUNCEMENT,
+  buildCommunityAnnouncement,
+  extractInviteUrls,
+} from "@/concord-v2/lib/inviteDiscovery";
+import { parseInviteLink } from "@/concord-v2/lib/invite";
 import { badgeOf } from "@/concord-v2/lib/roles";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useDiscoverRelays } from "@/hooks/useDiscover";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { toast } from "@/hooks/useToast";
 
@@ -186,6 +194,36 @@ function CommunityPicker({ onSelect }: { onSelect: (idHex: string) => void }) {
   );
 }
 
+/**
+ * MY current Discover listings of this community: kind-3314 announcements I
+ * authored whose invite link is one of MY links for it. These are what
+ * "Unpublish" can delete — a NIP-09 delete only works on one's own events, so
+ * another sharer's listing is theirs to remove.
+ */
+function useMyAnnouncements(idHex: string, myLinkSigners: string[]) {
+  const { nostr } = useNostr();
+  const { user } = useCurrentUser();
+  const relays = useDiscoverRelays();
+  const signers = useMemo(() => new Set(myLinkSigners), [myLinkSigners]);
+
+  return useQuery({
+    queryKey: ["discover", "my-announcements", user?.pubkey, idHex, [...signers].sort()],
+    enabled: Boolean(user) && relays.length > 0,
+    staleTime: 30_000,
+    queryFn: async ({ signal }) => {
+      const events = await nostr.group(relays).query(
+        [{ kinds: [KIND_COMMUNITY_ANNOUNCEMENT], authors: [user!.pubkey], limit: 100 }],
+        { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
+      );
+      return events.filter((e) => {
+        const [url] = extractInviteUrls(e.content);
+        const signer = url ? parseInviteLink(url)?.linkSigner : undefined;
+        return !!signer && signers.has(signer);
+      });
+    },
+  });
+}
+
 function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
   const { community, folded, eligible, isLoading } = useCanShare(idHex);
   const { createLink, myLinks, isPublic, refreshMyLinks, linksLoading } = useInviteActions2(community);
@@ -202,6 +240,43 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
   const now = Math.floor(Date.now() / 1000);
   const reusable = myLinks.find((e) => !e.expires_at || e.expires_at > now);
   const willMint = !reusable;
+
+  const myLinkSigners = useMemo(
+    () =>
+      myLinks
+        .map((e) => parseInviteLink(e.url)?.linkSigner)
+        .filter((s): s is string => !!s),
+    [myLinks],
+  );
+  const myAnnouncements = useMyAnnouncements(idHex, myLinkSigners);
+  const listed = (myAnnouncements.data?.length ?? 0) > 0;
+
+  const handleUnpublish = async () => {
+    setError(null);
+    const targets = myAnnouncements.data ?? [];
+    if (targets.length === 0) return;
+    setBusy(true);
+    try {
+      // NIP-09: ask relays to drop MY announcement events. The Discover feed
+      // also honors these client-side for relays that keep them.
+      await publishEvent({
+        kind: 5,
+        content: "",
+        tags: [...targets.map((e) => ["e", e.id]), ["k", String(KIND_COMMUNITY_ANNOUNCEMENT)]],
+      });
+      queryClient.invalidateQueries({ queryKey: ["discover", "community-announcements"] });
+      queryClient.invalidateQueries({ queryKey: ["discover", "my-announcements"] });
+      toast({
+        title: "Unpublished from Discover",
+        description: `${name} is no longer listed by you.`,
+      });
+      onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't unpublish the listing.");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const handleShare = async () => {
     setError(null);
@@ -262,38 +337,56 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
         <OptionIcon icon={folded?.metadata?.icon} name={name} className="size-10" />
         <div className="min-w-0 flex-1">
           <p className="truncate font-medium leading-tight">{name}</p>
-          <p className="text-xs text-muted-foreground">will be listed publicly on Discover</p>
+          <p className="text-xs text-muted-foreground">
+            {listed ? "is listed publicly on Discover" : "will be listed publicly on Discover"}
+          </p>
         </div>
       </div>
       <p className="text-sm text-muted-foreground">
         Its name and images come from the community itself, so the listing stays current as they
         change.
       </p>
-      <Alert>
-        <AlertDescription>
-          Sharing publishes an invite link from your account — including its secret — so anyone
-          can find and join.
-          {willMint && !isPublic
-            ? " It also creates this community's first invite link, making the community public until every link is revoked."
-            : ""}
-        </AlertDescription>
-      </Alert>
+      {!listed && (
+        <Alert>
+          <AlertDescription>
+            Sharing publishes an invite link from your account — including its secret — so anyone
+            can find and join.
+            {willMint && !isPublic
+              ? " It also creates this community's first invite link, making the community public until every link is revoked."
+              : ""}
+          </AlertDescription>
+        </Alert>
+      )}
       <Button
         type="button"
         onClick={handleShare}
         // Also parked while the Invite List loads: `reusable` is blind until
         // then, and sharing early would mint a needless duplicate link.
-        disabled={busy || linksLoading}
+        disabled={busy || linksLoading || myAnnouncements.isLoading}
+        variant={listed ? "secondary" : "default"}
         className="w-full clip-corner-lg"
       >
         {busy ? (
           <>
-            <Loader2 className="mr-2 size-4 animate-spin" /> Sharing…
+            <Loader2 className="mr-2 size-4 animate-spin" /> Working…
           </>
+        ) : listed ? (
+          "Update listing"
         ) : (
           "Share publicly"
         )}
       </Button>
+      {listed && (
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={handleUnpublish}
+          disabled={busy}
+          className="w-full clip-corner-lg text-destructive hover:text-destructive"
+        >
+          Unpublish from Discover
+        </Button>
+      )}
       {error && (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
