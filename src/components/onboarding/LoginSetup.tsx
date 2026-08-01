@@ -303,13 +303,21 @@ function WebPushStep({ onDone }: { onDone: () => void }) {
 }
 
 function BatteryStep({ onDone }: { onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+
   const allow = async () => {
+    setBusy(true);
     try {
       await requestIgnoreBatteryOptimizations();
     } catch {
       // The OS dialog may be unavailable; the settings warning remains.
+    } finally {
+      // The step advances either way: an OS that declined to show the dialog
+      // (already exempt, OEM without the intent) is indistinguishable from one
+      // that showed it, and a step that stays put reads as a dead button.
+      setBusy(false);
+      onDone();
     }
-    onDone();
   };
 
   return (
@@ -327,10 +335,16 @@ function BatteryStep({ onDone }: { onDone: () => void }) {
           size="lg"
           className="h-12 w-full clip-corner-lg text-base font-medium"
           onClick={allow}
+          disabled={busy}
         >
           Allow background usage
         </Button>
-        <Button variant="ghost" className="w-full text-muted-foreground" onClick={onDone}>
+        <Button
+          variant="ghost"
+          className="w-full text-muted-foreground"
+          onClick={onDone}
+          disabled={busy}
+        >
           Not now
         </Button>
       </div>
