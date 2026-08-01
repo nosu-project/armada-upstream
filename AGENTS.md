@@ -18,8 +18,9 @@ client does not depend on it at build time.
 |--------------|-----------------------------------------------------------------|
 | `src/`       | React 19 + Vite web client (Tailwind + shadcn/ui + Nostrify)    |
 | `src/concord-v2/` | The Concord protocol implementation (CORD-01..07): stream, control, chat, invites, rekey, voice, crypto derivations |
-| `src/lib/db/` | ArmadaDB — the one local storage interface (tenants of rumors + a KV), its IndexedDB adapter, and the legacy-database migrations |
+| `src/lib/db/` | ArmadaDB — the one local storage interface (tenants of rumors + a KV), its IndexedDB adapter, the Android bridge adapter, and the migrations |
 | `android/`   | Capacitor Android project (signed APK/AAB built in CI)          |
+| `android/…/app/db/` | ArmadaDB in Kotlin: the SQLite engine the Android build actually runs, shared by the WebView and the notification service |
 | `ios/`       | Capacitor iOS project (SwiftPM, no CocoaPods; built manually on a Mac — no CI) |
 | `electron/`  | Electron desktop shell (loads the bundled web build; Linux/Windows/macOS installers built in CI) |
 | `Dockerfile` + `nginx.conf` | nginx-served static build for web hosting        |
@@ -190,6 +191,46 @@ entitlement (the latter needs a paid team + `apple-app-site-association`), so
 `armada://` and armada.buzz universal links won't open the app yet. The JS
 layer (`deepLinkUrl.ts`, `coldLaunchDeepLink.ts`) is platform-agnostic and
 needs no change when they're added.
+
+## Local storage: ArmadaDB
+
+One interface (`src/lib/db/types.ts`) — tenants of rumors plus a KV — with a
+different engine per platform:
+
+| Platform | Engine |
+|----------|--------|
+| Web / desktop / iOS | `IndexedDBArmadaDB` (Nostrify's `NIndexedDB` per tenant) |
+| **Android** | `NativeArmadaDB` → `ArmadaDbPlugin` → **Kotlin** (`android/…/app/db/`) |
+
+On Android the query engine is native and there is exactly one database file.
+The background notification service writes an event into the same tenant the
+WebView reads it from, so a message received while the app was dead is simply
+*there* on open. `drainEvents`/`ackDrain` still exist but are ROUTING only — a
+pass through wire ingest (parking wraps, ringing scopes, notification
+candidates) — over a `svc` queue tenant, not the path by which anything becomes
+durable.
+
+Things to know before touching it:
+
+- **The Kotlin port must stay in step with `SqliteArmadaDB.ts`.** Same schema,
+  same `seq = created_at × 2²⁰ + n` rowid encoding, same tag-token escaping,
+  same planner. `ArmadaDbTest.kt` is the TS conformance suite ported over; run
+  it (`cd android && ./gradlew :app:testDebugUnitTest`) for any change to
+  either.
+- **SQLite is bundled, not borrowed.** The schema needs FTS5 with
+  `contentless_delete` (3.43+) and JSON1; Android's platform SQLite is 3.9 on
+  minSdk 24 and has neither. `androidx.sqlite:sqlite-bundled` ships 3.50.1 per
+  ABI (~1.2 MB each, ~5 MB on a universal APK) and the same build for the JVM,
+  which is what lets the conformance suite run the real engine as a plain unit
+  test.
+- **Switching a platform's engine strands its data.** `nativeDbMigration.ts`
+  drains IndexedDB into the native store, KV first (every other drain's
+  completion flag lives in it) and deleting nothing until everything is copied.
+  Decrypted Concord and NIP-17 history exists nowhere else once relays drop the
+  wraps that carried it.
+- The bridge carries JSON **text**, not marshalled objects: Capacitor would
+  have to guess between an integer `kind` and a float, and a page of rumors is
+  far cheaper as one string.
 
 ## Conventions
 

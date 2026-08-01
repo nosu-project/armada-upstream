@@ -45,17 +45,21 @@ export interface ArmadaNotificationPlugin {
   /** Hand a signed NIP-42 kind-22242 event back to the service for a relay. */
   submitAuth(options: { relayUrl: string; event: NostrEvent }): Promise<void>;
   /**
-   * Drain raw outer wire events the background service received (it writes
-   * them durably into its own native SQLite database). Reads a page of
-   * service-received rows after the persisted drain cursor; the JS
-   * layer routes each through wire ingest, then calls {@link ackDrain} with
-   * the returned cursor so the page isn't replayed. Loss-proof across service
-   * restarts and webview crashes (peek+ack, database-backed). Concord
-   * decrypted inners are drained separately via {@link drainConcord}.
+   * Drain raw outer wire events the background service received, oldest first.
+   * The JS layer routes each through wire ingest, then calls {@link ackDrain}
+   * with the returned ids so the page isn't replayed. Loss-proof across service
+   * restarts and webview crashes (peek+ack, database-backed). Concord decrypted
+   * inners are drained separately via {@link drainConcord}.
+   *
+   * This is ROUTING, not storage. The events themselves are already in ArmadaDB
+   * — the service and the WebView share one native store, so it wrote them into
+   * the same tenants the app reads. What a drain still buys is a pass through
+   * ingest: parking undecryptable wraps, ringing the scopes that repaint a
+   * timeline, feeding notification candidates.
    */
-  drainEvents(): Promise<{ events: string[]; cursor: number }>;
-  /** Advance the persisted drain cursor after a drained page was ingested. */
-  ackDrain(options: { cursor: number }): Promise<void>;
+  drainEvents(): Promise<{ events: string[]; ids: string[] }>;
+  /** Drop an acknowledged page from the queue, once it has been ingested. */
+  ackDrain(options: { ids: string[] }): Promise<void>;
   /**
    * Drain Concord inner events the service already decrypted (it holds the
    * channel key for the notification), each with the outer `z` pseudonym and

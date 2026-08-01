@@ -1,16 +1,26 @@
 /**
- * The app-wide {@link ArmadaDB} instance.
+ * The app-wide {@link ArmadaDB} instance, and which adapter backs it.
  *
- * The IndexedDB adapter is used unconditionally for now. The SQLite adapter
- * exists and passes the same conformance suite, but selecting it needs a
- * driver for each transport (SQLite-WASM worker, the Capacitor bridge) that
- * can run interleaved statements on one connection — see `db/driver.ts`.
+ *  - **Android** uses the native store: one SQLite file, with the query engine
+ *    in Kotlin (`buzz.armada.app.db`), shared with the background notification
+ *    service. That sharing is why it exists — the service writes an event into
+ *    the tenant the app reads it from, so a message received while the app was
+ *    dead is simply there on open, rather than being replayed out of a private
+ *    database the service kept to itself.
+ *  - **Everywhere else** uses IndexedDB. The SQLite adapter in
+ *    `SqliteArmadaDB.ts` passes the same conformance suite and would serve a
+ *    SQLite-WASM worker too, but no driver for one exists yet.
+ *
+ * Data written before an Android install upgraded into the native store is not
+ * abandoned: `nativeDbMigration.ts` drains the IndexedDB adapter across first,
+ * gated at startup like every other migration.
  *
  * Kept as a lazy singleton rather than being built in the provider so that
  * non-React code (sync loops, the wire bus, the logout purge) reaches the same
  * connections, and so React StrictMode's double-render can't open two.
  */
 import { IndexedDBArmadaDB } from "./IndexedDBArmadaDB";
+import { hasNativeArmadaDB, NativeArmadaDB } from "./NativeArmadaDB";
 
 import type { ArmadaDB } from "./types";
 
@@ -32,14 +42,48 @@ export const ARMADA_TENANTS = {
   main: "main",
   /** Concord V2 wraps parked by the native service for WebView decryption. */
   c2Park: "c2park",
+  /**
+   * The native service's handoff queue: events it ingested, awaiting a pass
+   * through wire ingest. Written only by the Android service, drained and
+   * emptied by `WireSync`. Mirrors `ArmadaDb.TENANT_SERVICE_QUEUE` in Kotlin.
+   */
+  serviceQueue: "svc",
 } as const;
 
-let instance: IndexedDBArmadaDB | undefined;
+let instance: IndexedDBArmadaDB | NativeArmadaDB | undefined;
 
 /** The app-wide database, opened on first use. */
 export function getArmadaDB(): ArmadaDB {
-  instance ??= new IndexedDBArmadaDB(ARMADA_DB_NAME);
+  instance ??= hasNativeArmadaDB() ? new NativeArmadaDB() : new IndexedDBArmadaDB(ARMADA_DB_NAME);
   return instance;
+}
+
+let indexedDBInstance: IndexedDBArmadaDB | undefined;
+
+/**
+ * The IndexedDB adapter, whether or not it is the app-wide one.
+ *
+ * Only the native migration and the purge want this: on Android the IndexedDB
+ * store is the SOURCE the drain reads and the thing the purge deletes, and
+ * asking `getArmadaDB()` for it would hand back the destination.
+ *
+ * Memoised for the same reason `getArmadaDB` is, and for one more: a second
+ * instance is a second open connection, and `deleteDatabase` against an open
+ * connection is blocked rather than applied — so a caller that opened its own
+ * would quietly keep the databases it was trying to be rid of.
+ */
+export function openIndexedDBArmadaDB(): IndexedDBArmadaDB {
+  if (instance instanceof IndexedDBArmadaDB) return instance;
+  indexedDBInstance ??= new IndexedDBArmadaDB(ARMADA_DB_NAME);
+  return indexedDBInstance;
+}
+
+/** Close the IndexedDB adapter's connections, so its databases can be deleted. */
+export async function closeIndexedDBArmadaDB(): Promise<void> {
+  const db = indexedDBInstance ?? (instance instanceof IndexedDBArmadaDB ? instance : undefined);
+  indexedDBInstance = undefined;
+  if (instance instanceof IndexedDBArmadaDB) instance = undefined;
+  await db?.close().catch(() => undefined);
 }
 
 /**
@@ -53,16 +97,24 @@ export function getArmadaDB(): ArmadaDB {
  * an open connection is blocked, not applied.
  */
 export async function purgeArmadaDB(): Promise<void> {
+  // The native store is one file with one connection, shared with a background
+  // service that goes on writing to it — so it is emptied rather than deleted,
+  // and the connection stays open. The IndexedDB databases are still deleted
+  // below, since an install that migrated left them behind.
+  if (instance instanceof NativeArmadaDB) {
+    await instance.wipe().catch(() => undefined);
+  }
+
   if (typeof indexedDB === "undefined") {
-    instance = undefined;
+    if (!(instance instanceof NativeArmadaDB)) instance = undefined;
     return;
   }
 
   // Opened if it wasn't already: the registry is on disk, so a logout in a
   // session that never touched the database still has tenants to delete.
-  const db = (instance ??= new IndexedDBArmadaDB(ARMADA_DB_NAME));
+  const db = openIndexedDBArmadaDB();
   const tenantIds = await db.tenantIds().catch(() => [] as string[]);
-  await db.close().catch(() => undefined);
+  await closeIndexedDBArmadaDB();
   instance = undefined;
 
   const names = new Set<string>([

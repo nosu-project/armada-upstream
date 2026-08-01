@@ -61,6 +61,47 @@ repositories {
     }
 }
 
+// ArmadaDbTest runs the bundled SQLite for real rather than against a stand-in,
+// which is the only way to test the FTS5 features the schema needs. The android
+// artifact's loader expects its .so to come out of the APK, so for a plain JVM
+// unit test the host-native build is unpacked from the -jvm artifact of the same
+// version and put on java.library.path, where System.loadLibrary finds it.
+def sqliteNativesDir = layout.buildDirectory.dir("sqlite-host-natives")
+
+// A DETACHED configuration: one fixed artifact, wanted only by this task, and
+// never part of any variant. It also keeps AGP's dependency-resolution check
+// out of it — a named configuration resolved while the project is still being
+// configured is flagged, and a Sync task's sources are read as it is configured.
+def sqliteHostNatives = configurations.detachedConfiguration(
+        dependencies.create("androidx.sqlite:sqlite-bundled-jvm:$androidxSqliteVersion"))
+sqliteHostNatives.transitive = false
+
+tasks.register('extractSqliteNatives', Sync) {
+    from({ sqliteHostNatives.collect { zipTree(it) } }) {
+        include 'natives/**'
+    }
+    into sqliteNativesDir
+}
+
+/** The `natives/<platform>` directory this machine's JVM can load. */
+def sqliteHostPlatform = {
+    def os = System.getProperty('os.name').toLowerCase()
+    def arch = System.getProperty('os.arch').toLowerCase()
+    def platform = os.contains('mac') || os.contains('darwin') ? 'osx'
+            : os.contains('windows') ? 'windows' : 'linux'
+    def cpu = arch in ['aarch64', 'arm64'] ? 'arm64' : 'x64'
+    return "${platform}_${cpu}"
+}
+
+tasks.withType(Test).configureEach {
+    dependsOn 'extractSqliteNatives'
+    doFirst {
+        def natives = sqliteNativesDir.get().dir("natives/${sqliteHostPlatform()}").asFile
+        systemProperty 'java.library.path',
+                [natives.absolutePath, System.getProperty('java.library.path')].join(File.pathSeparator)
+    }
+}
+
 dependencies {
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
@@ -91,6 +132,15 @@ dependencies {
     // native so the pure-JVM unit tests (NostrCryptoTest) can exercise it.
     implementation "fr.acinq.secp256k1:secp256k1-kmp-jni-android:0.23.0"
     testImplementation "fr.acinq.secp256k1:secp256k1-kmp-jni-jvm:0.23.0"
+    // ArmadaDB (buzz.armada.app.db) needs a SQLite with FTS5 that supports
+    // `contentless_delete` (3.43+) and JSON1. The platform's
+    // android.database.sqlite is 3.9 on minSdk 24 and has neither, so the
+    // engine is bundled instead of borrowed: sqlite-bundled ships SQLite
+    // 3.50.1 per ABI and is the same artifact on the JVM, which is what lets
+    // ArmadaDbConformanceTest run the real engine as an ordinary unit test.
+    implementation "androidx.sqlite:sqlite:$androidxSqliteVersion"
+    implementation "androidx.sqlite:sqlite-bundled:$androidxSqliteVersion"
+    testImplementation "androidx.sqlite:sqlite-bundled:$androidxSqliteVersion"
     testImplementation "junit:junit:$junitVersion"
     // org.json on the JVM, for unit-testing pure-Java classes (ProfileStore)
     // that use the Android-bundled org.json at runtime.

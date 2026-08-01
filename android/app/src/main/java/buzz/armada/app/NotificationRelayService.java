@@ -36,6 +36,8 @@ import androidx.core.content.pm.ShortcutManagerCompat;
 import androidx.core.app.ServiceCompat;
 import androidx.core.graphics.drawable.IconCompat;
 
+import buzz.armada.app.db.ServiceStore;
+
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -365,15 +367,17 @@ public class NotificationRelayService extends Service {
      * own stream pubkey and conversation key.
      */
     private static final class Concord2Stream {
-        final byte[] convKey;    // raw 32-byte NIP-44 conversation key
-        final String channelId;  // hex; the rumor's `channel` tag must match
-        final String epoch;      // decimal string; the rumor's `epoch` tag must match
-        final String name;       // "Community / #channel" display name
-        final String url;        // in-app deep link (/c/<communityId>/<channelId>)
+        final byte[] convKey;     // raw 32-byte NIP-44 conversation key
+        final String communityId; // hex; names the ArmadaDB tenant opened rumors are filed in
+        final String channelId;   // hex; the rumor's `channel` tag must match
+        final String epoch;       // decimal string; the rumor's `epoch` tag must match
+        final String name;        // "Community / #channel" display name
+        final String url;         // in-app deep link (/c/<communityId>/<channelId>)
         final CommunityRef community; // the community this stream's channel belongs to
-        Concord2Stream(byte[] convKey, String channelId, String epoch, String name,
-                       String url, CommunityRef community) {
+        Concord2Stream(byte[] convKey, String communityId, String channelId, String epoch,
+                       String name, String url, CommunityRef community) {
             this.convKey = convKey;
+            this.communityId = communityId;
             this.channelId = channelId;
             this.epoch = epoch;
             this.name = name;
@@ -1055,7 +1059,8 @@ public class NotificationRelayService extends Service {
                     if (pk == null || pk.isEmpty() || convKey == null || convKey.length != 32) continue;
                     pkList.add(pk);
                     pkToStream2.put(pk, new Concord2Stream(
-                            convKey, channelId, s.optString("epoch", ""), name, url, ref));
+                            convKey, communityId, channelId, s.optString("epoch", ""),
+                            name, url, ref));
                 }
                 for (int j = 0; j < relays.length(); j++) {
                     String relay = relays.optString(j);
@@ -1615,14 +1620,11 @@ public class NotificationRelayService extends Service {
                     resolveProfile(pk, bestProfile.get(pk));
                     return;
                 }
-                // Store the raw kind-0 in the SHARED database too (supersession
+                // Store the raw kind-0 in ArmadaDB's `main` tenant (supersession
                 // keeps the newest), so the WebView's useAuthor reads it from
-                // the cache instead of re-fetching what we just fetched.
-                try {
-                    SharedEventDb.get(this).insertEvent(event, SharedEventDb.SRC_SERVICE);
-                } catch (Exception e) {
-                    Log.w(TAG, "profile db write failed", e);
-                }
+                // the cache instead of re-fetching what we just fetched. Not
+                // queued for ingest: there is nothing to route, only to cache.
+                ServiceStore.cache(this, event);
                 Profile parsed = parseProfile(event);
                 Profile prev = bestProfile.get(pk);
                 if (prev == null || parsed.ts >= prev.ts) {
@@ -1652,6 +1654,9 @@ public class NotificationRelayService extends Service {
                 if (pic != null && !pic.isEmpty()) {
                     groupPictureCache.put(gid, pic);
                 }
+                // Cached so the WebView reads the group's metadata rather than
+                // refetching what we just fetched.
+                ServiceStore.cache(this, event);
                 resolveGroupName(gid, parseGroupName(event));
                 return;
             }
@@ -1714,13 +1719,14 @@ public class NotificationRelayService extends Service {
             }
             return;
         }
-        // The SHARED database next: the WebView may already hold this author's
-        // kind-0 (its own fetches land in the same store). Checked BEFORE the
-        // negative cache so a profile the webview fetched after our miss still
-        // resolves. A hit seeds the profile store, so subsequent lookups (and
-        // stale-while-revalidate bookkeeping) work as usual.
+        // The shared database next: the WebView may already hold this author's
+        // kind-0 (its own fetches land in the same store — literally the same
+        // store now, not a mirror of it). Checked BEFORE the negative cache so a
+        // profile the webview fetched after our miss still resolves. A hit seeds
+        // the profile store, so subsequent lookups (and stale-while-revalidate
+        // bookkeeping) work as usual.
         try {
-            String raw = SharedEventDb.get(this).getProfileRaw(pubkey);
+            String raw = ServiceStore.profileRaw(this, pubkey);
             if (raw != null) {
                 Profile fromDb = parseProfile(new JSONObject(raw));
                 profileStore.put(pubkey, fromDb.name, fromDb.picture, fromDb.nip05,
@@ -1971,7 +1977,7 @@ public class NotificationRelayService extends Service {
      * if the seal signature is bad or the rumor's author/channel/epoch binding
      * doesn't match (a spliced/foreign payload).
      */
-    private static JSONObject openConcord2(JSONObject wrap, Concord2Stream st) {
+    private static Concord2Open openConcord2(JSONObject wrap, Concord2Stream st) {
         try {
             String payload = wrap.optString("content", "");
             if (payload.isEmpty()) return null;
@@ -2011,9 +2017,24 @@ public class NotificationRelayService extends Service {
             String ep = tagValue(rumor, "epoch");
             if (ch == null || !st.channelId.equals(ch)) return null;
             if (ep == null || (!st.epoch.isEmpty() && !st.epoch.equals(ep))) return null;
-            return rumor;
+            return new Concord2Open(rumor, sealKind);
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    /**
+     * A recovered Concord V2 rumor and the kind of the seal it arrived in. The
+     * seal kind is provenance the opened-event store records alongside the
+     * rumor (the fold and the dissolution check branch on it per row), so it has
+     * to survive the open.
+     */
+    private static final class Concord2Open {
+        final JSONObject rumor;
+        final int sealKind;
+        Concord2Open(JSONObject rumor, int sealKind) {
+            this.rumor = rumor;
+            this.sealKind = sealKind;
         }
     }
 
@@ -2295,36 +2316,38 @@ public class NotificationRelayService extends Service {
         // After the security gate, so a git event is filter-checked and
         // signature-verified before it is acted on.
         if (kind == 1618 || kind == 1621 || (kind >= 1630 && kind <= 1633)) {
+            // Cached like any other relay event so the repository views read it
+            // from the store rather than refetching it; the service handles the
+            // notification itself, so there is nothing for wire ingest to route.
+            ServiceStore.cache(this, event);
             handleGitActivity(event, relayUrl, id, kind);
             return;
         }
 
-        // Write the raw outer event into the SHARED database (durable, src
-        // 'svc' so the WebView's cursor drain replays it on open/resume) and
-        // feed it live over the bridge when the WebView is up — so a message
-        // the service already received is in the app's store the instant it
-        // opens, no relay round-trip, no "wait for the chat to catch up".
+        // Write the raw outer event into ArmadaDB — the SAME database the
+        // WebView reads, not a mirror of it — and queue it for wire ingest, so
+        // the WebView still gets to route it (park undecryptable wraps, ring the
+        // scopes that repaint a timeline, raise unread counts) on open/resume.
+        // Also feed it live over the bridge when the WebView is up, so a message
+        // the service already received renders with no relay round-trip and no
+        // "wait for the chat to catch up".
+        //
         // Covers the timeline kinds the WebView renders: NIP-29 chat/polls/
-        // reactions/replies/deletes, Concord V1 sealed outers (kind 3300) and
-        // V2 wraps (kind 1059, both decrypted in the WebView) and DMs (kind 4
-        // — ciphertext; the WebView holds the NIP-04 keys). Each is also
-        // recorded in the plugin's per-room rolling cache (see getRoomEvents)
-        // so opening a room can pull its natively-received history directly.
-        // Whether a kind-1059 wrap was in the shared DB BEFORE this insert
-        // records it — the durable dedupe floor for DM wraps (their outer
-        // timestamps are backdated, so time-based gating can't apply): a wrap
-        // either side ever stored (a previous service incarnation, the
-        // WebView, or our own published self-copy) must not re-notify.
+        // reactions/replies/deletes, Concord V1 sealed outers (kind 3300) and V2
+        // wraps (kind 1059, both decrypted below or in the WebView) and DMs
+        // (kind 4 — ciphertext; the WebView holds the NIP-04 keys). Each is also
+        // recorded in the plugin's per-room rolling cache (see getRoomEvents) so
+        // opening a room can pull its natively-received history directly.
+        //
+        // Whether the store held a kind-1059 wrap BEFORE this write is the
+        // durable dedupe floor for DM wraps (their outer timestamps are
+        // backdated, so time-based gating can't apply): a wrap either side ever
+        // stored (a previous service incarnation, the WebView, or our own
+        // published self-copy) must not re-notify.
         boolean storedBefore = false;
         switch (kind) {
             case 9: case 1068: case 7: case 1111: case 5: case 3300: case 1059: case 4:
-                try {
-                    SharedEventDb db = SharedEventDb.get(this);
-                    if (kind == 1059) storedBefore = db.hasEvent(id);
-                    db.insertEvent(event, SharedEventDb.SRC_SERVICE);
-                } catch (Exception e) {
-                    Log.w(TAG, "event db write failed", e);
-                }
+                storedBefore = ServiceStore.ingest(this, event);
                 ArmadaNotificationPlugin.feedRelayEvent(roomKeyFor(event, kind), event.toString());
                 break;
             default:
@@ -2429,10 +2452,16 @@ public class NotificationRelayService extends Service {
             if (cts + 1 > sinceSec) sinceSec = cts + 1;
             notifiedIds.add(id);
 
-            JSONObject rumor = openConcord2(event, st);
-            if (rumor == null) {
-                // Couldn't decrypt — still tell the user something arrived,
-                // and where. (Generic body, but a real room title.)
+            Concord2Open opened = openConcord2(event, st);
+            if (opened == null) {
+                // Couldn't decrypt — a rekey epoch whose key we don't hold, or
+                // a foreign payload. PARK the wrap for the WebView, which holds
+                // the community's full key history: peek+ack there means a
+                // notified message is never locally destroyed, and this is the
+                // one path by which a wrap we can't read still reaches its
+                // channel. Then still tell the user something arrived, and
+                // where. (Generic body, but a real room title.)
+                ServiceStore.parkConcord2Wrap(this, event);
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord2 (opaque): " + st.name);
                 if (!prefBool("allGroupMessages", true)) return;
                 enqueueRoomMessage(
@@ -2441,6 +2470,20 @@ public class NotificationRelayService extends Service {
                         "New message", System.currentTimeMillis(), /*mention=*/false);
                 return;
             }
+
+            JSONObject rumor = opened.rumor;
+
+            // File the decrypted rumor in its community's opened-event tenant —
+            // the same rows, with the same synthetic provenance tags, that the
+            // WebView writes. This is what makes a notified Concord message
+            // present in the channel on open rather than something the WebView
+            // has to decrypt again from a parked wrap. openConcord2 has already
+            // proved the seal's signature, that the rumor's author IS the seal's
+            // signer, and that the channel/epoch binding matches the stream key
+            // that opened the wrap — the checks the WebView's write path makes
+            // before it will file a rumor under a channel.
+            ServiceStore.storeConcord2Rumor(
+                    this, st.communityId, event.optString("pubkey"), id, opened.sealKind, rumor);
 
             // Every chat-plane kind rides an identical wrap. Messages (kind 9),
             // thread replies (kind 1111), and reactions (kind 7) to YOUR own
@@ -2702,7 +2745,7 @@ public class NotificationRelayService extends Service {
         ProfileStore.Entry held = profileStore.get(pubkey);
         if (held != null) return new Profile(held.name, held.picture, held.nip05, held.ts);
         try {
-            String raw = SharedEventDb.get(this).getProfileRaw(pubkey);
+            String raw = ServiceStore.profileRaw(this, pubkey);
             if (raw != null) return parseProfile(new JSONObject(raw));
         } catch (Exception ignored) {
             // Unreadable row — treat as unknown (short-id fallback).

@@ -600,23 +600,24 @@ export function WireSync() {
       return Promise.resolve();
     };
 
-    // Drain what the service received while the WebView was down (open /
-    // resume). The service writes events durably into the shared native
-    // database; drainEvents pages rows after the persisted cursor, and the
-    // cursor is acked only AFTER ingest completes (parked wraps persisted,
-    // store writes flushed) so a webview crash mid-page replays instead of
-    // losing events. NOT live: the service already notified for these.
+    // Route what the service received while the WebView was down (open /
+    // resume). The events are already IN the store — service and WebView share
+    // one native ArmadaDB — so this is not how they become durable; it is how
+    // they get a pass through ingest (parked wraps, wire scopes, notification
+    // candidates). A page is acked only AFTER ingest completes, so a webview
+    // crash mid-page replays instead of dropping the routing. NOT live: the
+    // service already notified for these.
     let draining = false;
     const drain = async () => {
       if (draining) return; // resume + mount can overlap; pages are sequential
       draining = true;
       try {
         while (!cancelled) {
-          const { events, cursor } = await ArmadaNotification.drainEvents();
+          const { events, ids } = await ArmadaNotification.drainEvents();
           if (events.length === 0) break;
           await ingest(events, false);
           if (cancelled) break;
-          await ArmadaNotification.ackDrain({ cursor });
+          await ArmadaNotification.ackDrain({ ids });
         }
       } catch {
         // Bridge unavailable / mid-drain failure — the unacked page replays.

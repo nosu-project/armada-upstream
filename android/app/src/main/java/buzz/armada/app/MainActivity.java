@@ -28,6 +28,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         // Register native plugins before super.onCreate.
         registerPlugin(ArmadaNotificationPlugin.class);
+        registerPlugin(buzz.armada.app.db.ArmadaDbPlugin.class);
         registerPlugin(ArmadaCredentialPlugin.class);
         registerPlugin(BluetoothMeshPlugin.class);
         registerPlugin(WebReadyPlugin.class);

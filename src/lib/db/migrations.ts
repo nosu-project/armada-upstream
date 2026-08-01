@@ -34,6 +34,11 @@ import { getArmadaDB } from "./armadaDB";
 import { LEGACY_EVENT_DB_NAME, migrateLegacyEvents } from "./eventStoreMigration";
 import { MIGRATIONS_COMPLETE_KEY } from "./legacyDatabases";
 import {
+  migrateToNativeDb,
+  NATIVE_DB_MIGRATION_LABEL,
+  nativeDbMigrationPending,
+} from "./nativeDbMigration";
+import {
   ARMADA_DB_VERSION,
   isFutureVersion,
   pendingSchemaMigrations,
@@ -174,6 +179,11 @@ export async function pendingLegacyDatabases(): Promise<string[]> {
 
 /** Everything the startup gate has to do before the app can read its data. */
 export interface PendingUpgrades {
+  /**
+   * Whether the whole IndexedDB store has to move into the native one first
+   * (Android only — see `nativeDbMigration.ts`).
+   */
+  nativeDb: boolean;
   /** Legacy databases still holding data (see {@link pendingLegacyDatabases}). */
   legacy: string[];
   /** Schema conversions owed for the version on disk. */
@@ -185,8 +195,13 @@ export interface PendingUpgrades {
 /** What {@link runMigrations} would actually do, without doing any of it. */
 export async function pendingUpgrades(): Promise<PendingUpgrades> {
   const version = await readSchemaVersion();
+  const nativeDb = await nativeDbMigrationPending();
   return {
-    legacy: await pendingLegacyDatabases(),
+    nativeDb,
+    // A store still sitting in IndexedDB hasn't been looked at yet, so the
+    // legacy flags that would answer this question are over there too. Report
+    // the drains as pending rather than reading an empty native KV as "done".
+    legacy: nativeDb ? legacyDatabaseNames() : await pendingLegacyDatabases(),
     schema: await pendingSchemaMigrations(version),
     future: isFutureVersion(version),
   };
@@ -260,6 +275,7 @@ export async function runMigrations(
   if (isFutureVersion(version)) return;
 
   const schema = await pendingSchemaMigrations(version);
+  const nativeDb = await nativeDbMigrationPending();
   const jobs = [
     ...MIGRATIONS.flatMap<{ label: string; run: () => Promise<void> }>((m) =>
       m.perAccount
@@ -273,9 +289,26 @@ export async function runMigrations(
     selves: m.perAccount ? accounts : [undefined],
   }));
 
-  const total = jobs.length + schemaJobs.reduce((n, s) => n + s.selves.length, 0);
+  const total = jobs.length + (nativeDb ? 1 : 0) +
+    schemaJobs.reduce((n, s) => n + s.selves.length, 0);
   let done = 0;
   let failed = false;
+
+  // First, alone, and blocking: on Android everything below reads and writes
+  // `getArmadaDB()`, which is the NATIVE store, while an install that hasn't
+  // moved yet still has its data — and every drain's completion flag — in
+  // IndexedDB. Running the rest against an empty native KV would re-run every
+  // legacy drain and recreate the databases they consumed. A failure here stops
+  // the round rather than proceeding on half-moved data.
+  if (nativeDb) {
+    onProgress?.({ label: NATIVE_DB_MIGRATION_LABEL, done, total });
+    try {
+      await migrateToNativeDb();
+    } catch {
+      return;
+    }
+    done++;
+  }
 
   for (const job of jobs) {
     onProgress?.({ label: job.label, done, total });
