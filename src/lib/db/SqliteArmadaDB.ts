@@ -63,6 +63,11 @@
  *    of several rumors sharing a `created_at` survives a `limit` that cuts
  *    through them, since the scan takes the newest by `seq` (insertion order)
  *    and only then sorts.
+ *  - A rumor is stored as its six NIP-01 fields, one column each, and a read
+ *    reassembles it — so an extra top-level field a caller hands over
+ *    structurally is dropped, where the IndexedDB adapter would round-trip it.
+ *    The id commits to exactly the six stored fields, so nothing
+ *    authenticated is affected.
  *  - Reads and writes interleave on one connection inside `BEGIN IMMEDIATE`,
  *    so this is NOT written as guarded, read-free SQL. A second writer on the
  *    same file (the Android notification service) is still safe — `BEGIN
@@ -74,7 +79,12 @@ import { utf8ToBytes } from "@noble/hashes/utils.js";
 
 import { ParsedFilter } from "./ParsedFilter";
 import { batch, memberOf, where } from "./sql";
-import { ARMADA_DB_FTS_SCHEMA, ARMADA_DB_SCHEMA } from "./sqliteSchema";
+import {
+  ARMADA_DB_FTS_SCHEMA,
+  ARMADA_DB_REBUILD_V1,
+  ARMADA_DB_SCHEMA,
+  ARMADA_DB_VERSION,
+} from "./sqliteSchema";
 import { defaultIndexTags, prefixUpperBound } from "./types";
 
 import type { NostrFilter } from "@nostrify/nostrify";
@@ -138,6 +148,12 @@ const MAX_AUTHOR_TERMS = 16;
  * is matched in memory instead, which keeps the parameter count bounded.
  */
 const MAX_PUSHDOWN = 100;
+
+/** The columns a stored rumor is reassembled from. */
+const RUMOR_COLUMNS = "id, kind, pubkey, created_at, tags, content";
+
+/** The same columns read through the `r` alias of a joined scan. */
+const R_RUMOR_COLUMNS = "r.id, r.kind, r.pubkey, r.created_at, r.tags, r.content";
 
 export interface SqliteArmadaDBOpts extends ArmadaDBOpts {
   /**
@@ -207,9 +223,39 @@ export class SqliteArmadaDB implements ArmadaDB {
 
   /**
    * Create the tables, indexes and triggers this adapter needs, if they don't
-   * already exist. Run from the constructor unless `migrate: false`.
+   * already exist — upgrading a file laid out by an older schema version
+   * first. Run from the constructor unless `migrate: false`.
    */
   async migrate(): Promise<void> {
+    const [version] = await this.all(`PRAGMA user_version`);
+
+    if (Number(version?.user_version ?? 0) < ARMADA_DB_VERSION) {
+      // v0 predates versioning, so it is recognized by its layout: only v0
+      // has the `json` column. A fresh file has no `rumors` table at all and
+      // needs no rebuild.
+      const [legacy] = await this.all(
+        `SELECT 1 AS legacy FROM pragma_table_info('rumors') WHERE name = 'json'`,
+      );
+
+      if (legacy) {
+        await this.transaction(async () => {
+          for (const statement of ARMADA_DB_REBUILD_V1) {
+            await this.run(statement.trim().replace(/\s+/g, " "));
+          }
+        });
+
+        // Give the freed pages back to the filesystem. Outside the rebuild's
+        // transaction — VACUUM can't run inside one — and advisory: the
+        // rebuild is already durable, and a driver that can't VACUUM just
+        // keeps the slack.
+        try {
+          await this.run(`VACUUM`);
+        } catch {
+          // keep the slack
+        }
+      }
+    }
+
     const schema = this.search
       ? [...ARMADA_DB_SCHEMA, ...ARMADA_DB_FTS_SCHEMA]
       : ARMADA_DB_SCHEMA;
@@ -217,6 +263,8 @@ export class SqliteArmadaDB implements ArmadaDB {
     for (const statement of schema) {
       await this.run(statement.trim().replace(/\s+/g, " "));
     }
+
+    await this.run(`PRAGMA user_version = ${ARMADA_DB_VERSION}`);
   }
 
   /** Empty every table (logout purge). Keeps the schema. */
@@ -261,14 +309,11 @@ export class SqliteArmadaDB implements ArmadaDB {
   putRumor(tenant: string, rumor: NostrRumor): Promise<void> {
     if (NKinds.ephemeral(rumor.kind)) return Promise.resolve();
 
-    // `NostrRumor` has no `sig`, but a caller can hand over a full `NostrEvent`
-    // structurally, and the row is `JSON.stringify(rumor)` — so a signature
-    // would be persisted verbatim here while the IndexedDB adapter drops it.
-    // Strip it so the two agree that the store holds rumors, nothing else.
-    const { sig: _sig, ...stored } = rumor as NostrRumor & { sig?: string };
-
+    // The row is the rumor's six NIP-01 fields, one column each — so a `sig`
+    // (or anything else a caller hands over structurally) is never stored,
+    // and the adapters agree that the store holds rumors, nothing else.
     return new Promise<void>((resolve, reject) => {
-      this.pending.push({ tenant, rumor: stored, resolve, reject });
+      this.pending.push({ tenant, rumor, resolve, reject });
       this.scheduleFlush();
     });
   }
@@ -308,7 +353,8 @@ export class SqliteArmadaDB implements ArmadaDB {
 
   /** Apply a single rumor's writes. Runs inside the batch transaction. */
   private async writeRumor(tenant: string, rumor: NostrRumor): Promise<void> {
-    const prefix = `t${await this.internTenant(tenant)}`;
+    const ord = await this.internTenant(tenant);
+    const prefix = `t${ord}`;
     let seq: number | undefined;
 
     if (NKinds.replaceable(rumor.kind) || NKinds.addressable(rumor.kind)) {
@@ -316,7 +362,7 @@ export class SqliteArmadaDB implements ArmadaDB {
 
       const [existing] = await this.all(
         `SELECT id, seq, created_at FROM rumor_coords WHERE tenant = ? AND coord = ?`,
-        [tenant, coord],
+        [ord, coord],
       );
 
       if (existing) {
@@ -324,26 +370,26 @@ export class SqliteArmadaDB implements ArmadaDB {
         // Per NIP-01 the stored version wins ties, and an identical id is a
         // no-op, so only a strictly newer rumor replaces it.
         if (!isNewer(rumor, stored)) return;
-        await this.deleteRumors(tenant, [Number(existing.seq)]);
+        await this.deleteRumors(ord, [Number(existing.seq)]);
       }
 
-      seq = await this.insertRumor(tenant, prefix, rumor);
+      seq = await this.insertRumor(ord, prefix, rumor);
       if (seq === undefined) return;
 
       await this.run(
         `INSERT OR REPLACE INTO rumor_coords (tenant, coord, id, seq, created_at)
           VALUES (?, ?, ?, ?, ?)`,
-        [tenant, coord, rumor.id, seq, rumor.created_at],
+        [ord, coord, rumor.id, seq, rumor.created_at],
       );
     } else {
-      seq = await this.insertRumor(tenant, prefix, rumor);
+      seq = await this.insertRumor(ord, prefix, rumor);
       if (seq === undefined) return;
     }
 
     // Applied after the insert so a kind 5 arriving alongside its targets in
     // one batch still resolves. The request itself is retained.
     if (rumor.kind === 5) {
-      await this.applyDeletion(tenant, rumor);
+      await this.applyDeletion(ord, rumor);
     }
   }
 
@@ -365,7 +411,7 @@ export class SqliteArmadaDB implements ArmadaDB {
    * which costs far more than the extra round trip saves.
    */
   private async insertRumor(
-    tenant: string,
+    ord: number,
     prefix: string,
     rumor: NostrRumor,
   ): Promise<number | undefined> {
@@ -374,7 +420,7 @@ export class SqliteArmadaDB implements ArmadaDB {
     const [row] = await this.all(
       `SELECT (SELECT seq FROM rumors WHERE tenant = ? AND id = ?) AS existing,
         (SELECT MAX(seq) FROM rumors WHERE seq >= ? AND seq < ?) AS last`,
-      [tenant, rumor.id, base, base + SEQ_SPACE],
+      [ord, rumor.id, base, base + SEQ_SPACE],
     );
 
     // Already stored: a re-delivered rumor is a no-op.
@@ -391,9 +437,18 @@ export class SqliteArmadaDB implements ArmadaDB {
     }
 
     await this.run(
-      `INSERT INTO rumors (seq, tenant, id, kind, pubkey, created_at, json)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [seq, tenant, rumor.id, rumor.kind, rumor.pubkey, rumor.created_at, JSON.stringify(rumor)],
+      `INSERT INTO rumors (seq, tenant, id, kind, pubkey, created_at, tags, content)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        seq,
+        ord,
+        rumor.id,
+        rumor.kind,
+        rumor.pubkey,
+        rumor.created_at,
+        JSON.stringify(rumor.tags),
+        rumor.content,
+      ],
     );
 
     // The content index is written by a trigger, so this is the only index the
@@ -457,12 +512,6 @@ export class SqliteArmadaDB implements ArmadaDB {
     return ord;
   }
 
-  /** The token prefix for a tenant, or `undefined` if it holds no rumors. */
-  private async tenantPrefix(tenant: string): Promise<string | undefined> {
-    const ord = await this.tenantOrd(tenant);
-    return ord === undefined ? undefined : `t${ord}`;
-  }
-
   /** The same, allocating one for a tenant being written to for the first time. */
   private async internTenant(tenant: string): Promise<number> {
     const existing = await this.tenantOrd(tenant);
@@ -484,7 +533,7 @@ export class SqliteArmadaDB implements ArmadaDB {
    * versions at or before the request's `created_at`, so a newer replacement
    * survives.
    */
-  private async applyDeletion(tenant: string, request: NostrRumor): Promise<void> {
+  private async applyDeletion(ord: number, request: NostrRumor): Promise<void> {
     const targets = request.tags.filter(
       ([name, value]) => (name === "e" || name === "a") && !!value,
     );
@@ -502,7 +551,7 @@ export class SqliteArmadaDB implements ArmadaDB {
     for (const chunk of batch(eTags, MAX_PARAMS - 2)) {
       const rows = await this.all(
         `SELECT seq FROM rumors WHERE tenant = ? AND ${memberOf("id", chunk)} AND pubkey = ?`,
-        [tenant, ...chunk, request.pubkey],
+        [ord, ...chunk, request.pubkey],
       );
       for (const row of rows) seqs.add(Number(row.seq));
     }
@@ -515,12 +564,12 @@ export class SqliteArmadaDB implements ArmadaDB {
       const rows = await this.all(
         `SELECT seq FROM rumor_coords
           WHERE tenant = ? AND ${memberOf("coord", chunk)} AND created_at <= ?`,
-        [tenant, ...chunk, request.created_at],
+        [ord, ...chunk, request.created_at],
       );
       for (const row of rows) seqs.add(Number(row.seq));
     }
 
-    await this.deleteRumors(tenant, [...seqs]);
+    await this.deleteRumors(ord, [...seqs]);
   }
 
   /**
@@ -531,26 +580,31 @@ export class SqliteArmadaDB implements ArmadaDB {
    * Coordinates are removed by their primary key, recomputed from the stored
    * rumor, so the coordinate table needs no secondary index on `seq`.
    */
-  private async deleteRumors(tenant: string, seqs: number[]): Promise<void> {
+  private async deleteRumors(ord: number, seqs: number[]): Promise<void> {
     if (seqs.length === 0) return;
 
     for (const chunk of batch(seqs, MAX_PARAMS - 1)) {
       const rows = await this.all(
-        `SELECT kind, json FROM rumors WHERE ${memberOf("seq", chunk)}`,
+        `SELECT kind, pubkey, tags FROM rumors WHERE ${memberOf("seq", chunk)}`,
         chunk,
       );
 
-      // Only a coordinate-bearing rumor needs its body parsed, to find the `d`
-      // tag its coordinate is built from.
+      // Only a coordinate-bearing rumor needs its tags parsed, to find the
+      // `d` tag its coordinate is built from.
       const coords = rows
         .filter((row) => NKinds.replaceable(Number(row.kind)) || NKinds.addressable(Number(row.kind)))
-        .map((row): NostrRumor => JSON.parse(String(row.json)))
-        .map((rumor) => getCoord(rumor));
+        .map((row) =>
+          getCoord({
+            kind: Number(row.kind),
+            pubkey: String(row.pubkey),
+            tags: JSON.parse(String(row.tags)) as string[][],
+          })
+        );
 
       for (const coordChunk of batch(coords, MAX_PARAMS - 1)) {
         await this.run(
           `DELETE FROM rumor_coords WHERE tenant = ? AND ${memberOf("coord", coordChunk)}`,
-          [tenant, ...coordChunk],
+          [ord, ...coordChunk],
         );
       }
 
@@ -571,14 +625,18 @@ export class SqliteArmadaDB implements ArmadaDB {
   ): Promise<NostrRumor[]> {
     await this.ready;
 
+    // A tenant that was never written to holds nothing, whatever the filters.
+    const ord = await this.tenantOrd(tenant);
+    if (ord === undefined) return [];
+
     const byId = new Map<string, NostrRumor>();
-    const prefix = await this.tenantPrefix(tenant);
+    const prefix = `t${ord}`;
 
     // Run sequentially: the driver holds a single connection, so concurrency
     // would buy nothing and could interleave badly.
     for (const filter of filters) {
       const parsed = new ParsedFilter(filter);
-      for (const rumor of await this.queryFilter(tenant, prefix, parsed, opts?.signal)) {
+      for (const rumor of await this.queryFilter(ord, prefix, parsed, opts?.signal)) {
         byId.set(rumor.id, rumor);
       }
     }
@@ -588,27 +646,23 @@ export class SqliteArmadaDB implements ArmadaDB {
 
   /** Run a single parsed filter through the planner. */
   private async queryFilter(
-    tenant: string,
-    prefix: string | undefined,
+    ord: number,
+    prefix: string,
     filter: ParsedFilter,
     signal?: AbortSignal,
   ): Promise<NostrRumor[]> {
     if (filter.neverMatch) return [];
-
-    // No prefix means the tenant has never been written to, so it holds no
-    // tokens — and a tag filter has nothing to match against.
-    if (filter.tags.length > 0 && prefix === undefined) return [];
 
     const limit = filter.limit ?? Infinity;
     if (limit <= 0) return [];
 
     signal?.throwIfAborted();
 
-    const plan = this.planScan(tenant, prefix, filter);
+    const plan = this.planScan(ord, prefix, filter);
 
     // ids plans are lookups by key, not scans.
     if (plan.ids) {
-      return await this.queryIds(tenant, plan.ids, filter, limit);
+      return await this.queryIds(ord, plan.ids, filter, limit);
     }
 
     // A cursor yields only rows its conditions kept, and the limit is applied
@@ -667,7 +721,7 @@ export class SqliteArmadaDB implements ArmadaDB {
 
   /** Fetch rumors by id, applying whatever else the filter asks for. */
   private async queryIds(
-    tenant: string,
+    ord: number,
     ids: string[],
     filter: ParsedFilter,
     limit: number,
@@ -676,7 +730,7 @@ export class SqliteArmadaDB implements ArmadaDB {
 
     for (const chunk of batch(ids, MAX_PARAMS - 16)) {
       const conditions = ["tenant = ?", memberOf("id", chunk)];
-      const params: SqlValue[] = [tenant, ...chunk];
+      const params: SqlValue[] = [ord, ...chunk];
 
       if (filter.since !== undefined) {
         conditions.push("created_at >= ?");
@@ -695,9 +749,12 @@ export class SqliteArmadaDB implements ArmadaDB {
         params.push(...filter.authors);
       }
 
-      for (const row of await this.all(`SELECT json FROM rumors${where(conditions)}`, params)) {
-        const rumor: NostrRumor = JSON.parse(String(row.json));
-        if (filter.matches(rumor)) rumors.push(rumor);
+      for (
+        const row of await this.all(`SELECT ${RUMOR_COLUMNS} FROM rumors${where(conditions)}`, params)
+      ) {
+        const rumor = rowRumor(row);
+        // The SQL already applied the ids byte-exactly; see `matches`.
+        if (filter.matches(rumor, false, true)) rumors.push(rumor);
       }
     }
 
@@ -759,7 +816,7 @@ export class SqliteArmadaDB implements ArmadaDB {
       const scan = this.ftsScan(cursor, before);
       params.push(...scan.params, ...(cursor.where ? cursor.params ?? [] : []));
 
-      sql = `SELECT ${keys ? "r.seq, " : ""}r.json FROM ${scan.driver}
+      sql = `SELECT ${keys ? "r.seq, " : ""}${R_RUMOR_COLUMNS} FROM ${scan.driver}
         CROSS JOIN rumors r ON r.seq = ${scan.driver}.rowid${
         where([...scan.conditions, ...(cursor.where ?? [])])
       } ORDER BY ${scan.driver}.rowid DESC${limit === undefined ? "" : " LIMIT ?"}`;
@@ -774,7 +831,7 @@ export class SqliteArmadaDB implements ArmadaDB {
 
       // The key is only read when a later page has to resume from it; a scan
       // that answers the whole query in one go leaves the column out.
-      sql = `SELECT ${keys ? "seq, " : ""}json FROM ${cursor.from}${
+      sql = `SELECT ${keys ? "seq, " : ""}${RUMOR_COLUMNS} FROM ${cursor.from}${
         where(conditions)
       } ORDER BY seq DESC${limit === undefined ? "" : " LIMIT ?"}`;
     }
@@ -785,7 +842,7 @@ export class SqliteArmadaDB implements ArmadaDB {
 
     return rows.map((row) => ({
       seq: keys ? Number(row.seq) : 0,
-      rumor: JSON.parse(String(row.json)) as NostrRumor,
+      rumor: rowRumor(row),
     }));
   }
 
@@ -847,7 +904,7 @@ export class SqliteArmadaDB implements ArmadaDB {
    * one of those indexes leads with `tenant` and is ordered by time already,
    * so each is read newest-first, within one namespace, with no sorter.
    */
-  private planScan(tenant: string, prefix: string | undefined, filter: ParsedFilter): ScanPlan {
+  private planScan(ord: number, prefix: string, filter: ParsedFilter): ScanPlan {
     // 1. ids — the (tenant, id) unique index.
     if (filter.ids) {
       return { ids: filter.ids, cursors: [], sqlOnly: false, searched: false };
@@ -861,7 +918,7 @@ export class SqliteArmadaDB implements ArmadaDB {
 
     // 2. tags, or a NIP-50 search: the index drives.
     if (filter.tags.length > 0 || search) {
-      const plan = this.planFts(tenant, prefix, filter, search, min, max, exact);
+      const plan = this.planFts(ord, prefix, filter, search, min, max, exact);
       if (plan) return plan;
     }
 
@@ -900,7 +957,7 @@ export class SqliteArmadaDB implements ArmadaDB {
           memberOf("pubkey", authors),
           memberOf("kind", filter.kinds!),
         ];
-        const params: SqlValue[] = [tenant, ...authors, ...filter.kinds!];
+        const params: SqlValue[] = [ord, ...authors, ...filter.kinds!];
 
         addTime(conditions, params);
 
@@ -915,7 +972,7 @@ export class SqliteArmadaDB implements ArmadaDB {
     if (filter.authors) {
       const cursors = [...batch(filter.authors, MAX_IN)].map((authors): ScanCursor => {
         const conditions = ["tenant = ?", memberOf("pubkey", authors)];
-        const params: SqlValue[] = [tenant, ...authors];
+        const params: SqlValue[] = [ord, ...authors];
 
         addTime(conditions, params);
 
@@ -934,7 +991,7 @@ export class SqliteArmadaDB implements ArmadaDB {
     if (filter.kinds) {
       const cursors = [...batch(filter.kinds, MAX_IN)].map((kinds): ScanCursor => {
         const conditions = ["tenant = ?", memberOf("kind", kinds)];
-        const params: SqlValue[] = [tenant, ...kinds];
+        const params: SqlValue[] = [ord, ...kinds];
 
         addTime(conditions, params);
 
@@ -947,7 +1004,7 @@ export class SqliteArmadaDB implements ArmadaDB {
     // 6. fallback — the whole tenant, newest-first. `(tenant)` is `(tenant,
     //    seq)`, so this is a backwards walk of one contiguous index range.
     const conditions = ["tenant = ?"];
-    const params: SqlValue[] = [tenant];
+    const params: SqlValue[] = [ord];
     addTime(conditions, params);
 
     return {
@@ -967,8 +1024,8 @@ export class SqliteArmadaDB implements ArmadaDB {
    * than the product of them all.
    */
   private planFts(
-    tenant: string,
-    prefix: string | undefined,
+    ord: number,
+    prefix: string,
     filter: ParsedFilter,
     search: string | undefined,
     min: number | undefined,
@@ -978,7 +1035,7 @@ export class SqliteArmadaDB implements ArmadaDB {
     const groups: string[][] = [];
 
     for (const tag of filter.tags) {
-      groups.push(tag.values.map((value) => tagToken(prefix!, tag.name, value)));
+      groups.push(tag.values.map((value) => tagToken(prefix, tag.name, value)));
     }
 
     // A search whose keywords are all negations has nothing for FTS5 to match
@@ -995,7 +1052,7 @@ export class SqliteArmadaDB implements ArmadaDB {
       filter.authors.length <= MAX_AUTHOR_TERMS;
 
     if (inIndex) {
-      groups.push(filter.authors!.map((pubkey) => `${prefix!}:_p:${part(pubkey)}`));
+      groups.push(filter.authors!.map((pubkey) => `${prefix}:_p:${part(pubkey)}`));
     }
 
     if (groups.length === 0 && !search) return undefined;
@@ -1011,7 +1068,7 @@ export class SqliteArmadaDB implements ArmadaDB {
     // keyword-only scan is the one that has to say so.
     if (groups.length === 0) {
       conditions.push("r.tenant = ?");
-      params.push(tenant);
+      params.push(ord);
     }
 
     if (filter.kinds && filter.kinds.length <= MAX_PUSHDOWN) {
@@ -1073,12 +1130,11 @@ export class SqliteArmadaDB implements ArmadaDB {
       if (filter.neverMatch) return { count: 0, approximate: false };
 
       if (filter.limit === undefined) {
-        const prefix = await this.tenantPrefix(tenant);
-        if (filter.tags.length > 0 && prefix === undefined) {
-          return { count: 0, approximate: false };
-        }
+        // A tenant that was never written to holds nothing to count.
+        const ord = await this.tenantOrd(tenant);
+        if (ord === undefined) return { count: 0, approximate: false };
 
-        const plan = this.planScan(tenant, prefix, filter);
+        const plan = this.planScan(ord, `t${ord}`, filter);
 
         if (plan.sqlOnly && !plan.ids && plan.cursors.length === 1) {
           const [cursor] = plan.cursors;
@@ -1125,18 +1181,23 @@ export class SqliteArmadaDB implements ArmadaDB {
     const rumors = await this.queryTenant(tenant, filters, opts);
     if (rumors.length === 0) return;
 
+    // Non-empty results mean the tenant has been written to, so it has an
+    // ordinal.
+    const ord = await this.tenantOrd(tenant);
+    if (ord === undefined) return;
+
     await this.transaction(async () => {
       const seqs: number[] = [];
 
       for (const chunk of batch(rumors.map((rumor) => rumor.id), MAX_PARAMS - 1)) {
         const rows = await this.all(
           `SELECT seq FROM rumors WHERE tenant = ? AND ${memberOf("id", chunk)}`,
-          [tenant, ...chunk],
+          [ord, ...chunk],
         );
         for (const row of rows) seqs.push(Number(row.seq));
       }
 
-      await this.deleteRumors(tenant, seqs);
+      await this.deleteRumors(ord, seqs);
     });
   }
 
@@ -1293,7 +1354,7 @@ function timeRange(filter: ParsedFilter): { min?: number; max?: number; exact: b
 }
 
 /** The `kind:pubkey:d` coordinate of a replaceable or addressable rumor. */
-function getCoord(rumor: NostrRumor): string {
+function getCoord(rumor: Pick<NostrRumor, "kind" | "pubkey" | "tags">): string {
   const d = NKinds.addressable(rumor.kind)
     ? rumor.tags.find(([name]) => name === "d")?.[1] ?? ""
     : "";
@@ -1311,6 +1372,18 @@ function isNewer(
   if (a.created_at > b.created_at) return true;
   if (a.created_at < b.created_at) return false;
   return a.id < b.id;
+}
+
+/** Reassemble a rumor from its row ({@link RUMOR_COLUMNS}). */
+function rowRumor(row: SqlRow): NostrRumor {
+  return {
+    id: String(row.id),
+    pubkey: String(row.pubkey),
+    created_at: Number(row.created_at),
+    kind: Number(row.kind),
+    tags: JSON.parse(String(row.tags)) as string[][],
+    content: String(row.content),
+  };
 }
 
 /** Newest-first; ties broken by smaller id first (NIP-01). */

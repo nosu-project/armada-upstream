@@ -4,10 +4,10 @@
  * every index term.
  *
  * The tag index is **an FTS5 inverted index, not a b-tree**. An event's tags
- * are flattened into a string of opaque tokens — `main:e:<id>`,
- * `main:channel:<id>` — and handed to FTS5 with a tokenizer configured so each
+ * are flattened into a string of opaque tokens — `t1:e:<id>`,
+ * `t1:channel:<id>` — and handed to FTS5 with a tokenizer configured so each
  * one is a single indivisible token. `{"#channel": [id]}` is then a full-text
- * match for the word `<tenant>:channel:<id>`.
+ * match for the word `t<ord>:channel:<id>`.
  *
  * The bet, measured against the b-tree design this replaces:
  *
@@ -53,16 +53,18 @@
  * tenant-exact, rather than being one more enormous list to intersect or a
  * condition that discards rows after the fact.
  *
- *   rumors         the value store, keyed by the time-encoded `seq` rowid.
- *                  `tenant`, `kind`, `pubkey` and `created_at` are duplicated
- *                  out of the JSON so they can be indexed and filtered without
- *                  deserializing.
+ *   rumors         the value store, keyed by the time-encoded `seq` rowid. A
+ *                  rumor is its six NIP-01 fields, one column each — nothing
+ *                  is stored twice, and a read reassembles the rumor from the
+ *                  row. `tenant` is the interned `tenants.ord`, so the ~50-byte
+ *                  tenant id isn't repeated per row and per index entry.
  *   rumor_tags_fts one row per rumor: its tag tokens, plus a `_p:` token for
  *                  its author so a filter naming both a tag and an author is
  *                  still one index lookup. Contentless and `detail=none`,
  *                  which reduces FTS5 to a bare inverted index — no positions,
  *                  no column tags, no copy of the text.
- *   tenants        tenant id → the small integer its tokens name it by.
+ *   tenants        tenant id → the small integer the other tables and the
+ *                  index tokens name it by.
  *   rumors_fts     NIP-50 search over `content` (see
  *                  {@link ARMADA_DB_FTS_SCHEMA}), tokenized for prose.
  *   rumor_coords   replaceable/addressable coordinates (`kind:pubkey:d`) → the
@@ -70,23 +72,41 @@
  *                  primary-key lookup rather than a scan.
  *   kv             the {@link ArmadaKV} store: JSON text by key.
  *
- * REQUIREMENTS: the JSON1 extension (the search trigger's `json_extract`) and
- * FTS5 of at least 3.43 (2023), for contentless tables that support deletion.
- * Both hold for SQLite-WASM and `node:sqlite`. A native transport that owns
- * its own file (Android) must be checked against these before this schema is
- * pointed at it, and must mirror the statements.
+ * REQUIREMENTS: FTS5 of at least 3.43 (2023), for contentless tables that
+ * support deletion, and the JSON1 extension (the v0→v1 rebuild's
+ * `json_extract`). Both hold for SQLite-WASM and `node:sqlite`. A native
+ * transport that owns its own file (Android) must be checked against these
+ * before this schema is pointed at it, and must mirror the statements.
  */
+
+/**
+ * The schema version, stored in `PRAGMA user_version`. A file below it is
+ * upgraded before the `CREATE IF NOT EXISTS` statements run.
+ *
+ *   0  the pre-versioning layout: `rumors.tenant` / `rumor_coords.tenant` were
+ *      the tenant id TEXT, and `rumors.json` held the whole serialized rumor —
+ *      so the id, kind, pubkey and created_at columns were stored twice, and
+ *      the tenant id was repeated in every row of the table and of its five
+ *      indexes.
+ *   1  the current layout below.
+ */
+export const ARMADA_DB_VERSION = 1;
+
 export const ARMADA_DB_SCHEMA: readonly string[] = [
   // `seq` is the rowid and encodes `created_at`, so the table is stored in
-  // time order and needs no separate index to be read newest-first.
+  // time order and needs no separate index to be read newest-first. The six
+  // NIP-01 fields are one column each — `tags` as JSON array text — and a read
+  // reassembles the rumor from them, so no field is stored twice and nothing a
+  // caller adds beyond them is stored at all.
   `CREATE TABLE IF NOT EXISTS rumors (
     seq INTEGER PRIMARY KEY,
-    tenant TEXT NOT NULL,
+    tenant INTEGER NOT NULL,
     id TEXT NOT NULL,
     kind INTEGER NOT NULL,
     pubkey TEXT NOT NULL,
     created_at INTEGER NOT NULL,
-    json TEXT NOT NULL
+    tags TEXT NOT NULL,
+    content TEXT NOT NULL
   )`,
   // The lookup path: fetching bodies by id, and the uniqueness that makes a
   // re-delivered rumor a no-op.
@@ -99,7 +119,7 @@ export const ARMADA_DB_SCHEMA: readonly string[] = [
   `CREATE INDEX IF NOT EXISTS rumors_pubkey ON rumors (tenant, pubkey)`,
   `CREATE INDEX IF NOT EXISTS rumors_pubkey_kind ON rumors (tenant, pubkey, kind)`,
   // The tag index. `tokenchars ':_'` is what makes a tag token indivisible:
-  // without it the tokenizer would split `main:e:<id>` into three words, and a
+  // without it the tokenizer would split `t1:e:<id>` into three words, and a
   // `#e` filter would match any rumor mentioning that id in any tag at all.
   //
   // `detail=none` strips everything FTS5 keeps for *text*: no positions, no
@@ -131,15 +151,16 @@ export const ARMADA_DB_SCHEMA: readonly string[] = [
   // `seq` rides along so superseding a coordinate needs no second lookup to
   // find the row to delete.
   `CREATE TABLE IF NOT EXISTS rumor_coords (
-    tenant TEXT NOT NULL,
+    tenant INTEGER NOT NULL,
     coord TEXT NOT NULL,
     id TEXT NOT NULL,
     seq INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
     PRIMARY KEY (tenant, coord)
   ) WITHOUT ROWID`,
-  // Tenants, interned to a small integer so a token can name one in a couple
-  // of characters. `ord` is the rowid, so it is allocated by the insert.
+  // Tenants, interned to a small integer so a token — and now every row and
+  // index entry that names a tenant — can name one in a couple of bytes. `ord`
+  // is the rowid, so it is allocated by the insert.
   //
   // Interning rather than hashing the tenant id is a correctness decision, not
   // a size one: two tenants that collided would SHARE posting lists, which is
@@ -166,13 +187,12 @@ export const ARMADA_DB_SCHEMA: readonly string[] = [
  * diacritic stripping and positions for phrases, none of which a tag token has
  * any use for.
  *
- * Its content is a field of the rumor, so it is maintained entirely by
- * triggers — SQLite reads it out of the stored JSON without a round trip, and
- * no write path can forget it, including a second writer (the Android service)
- * that knows nothing about search. That upkeep is the single most expensive
- * thing about a write: measured over 50k rumors, tokenizing and indexing
- * content is roughly half of total write time, which buys a search two orders
- * of magnitude faster than scanning content.
+ * Its content is a column of the rumor row, so it is maintained entirely by
+ * triggers — no write path can forget it, including a second writer (the
+ * Android service) that knows nothing about search. That upkeep is the single
+ * most expensive thing about a write: measured over 50k rumors, tokenizing and
+ * indexing content is roughly half of total write time, which buys a search
+ * two orders of magnitude faster than scanning content.
  *
  * `unicode61` case-folds and strips diacritics, so matching is case- and
  * accent-insensitive. The index spans tenants (rowid is global); the tenant
@@ -189,9 +209,61 @@ export const ARMADA_DB_FTS_SCHEMA: readonly string[] = [
   // Rumors are only ever inserted or deleted, never updated, so those are the
   // only two triggers needed.
   `CREATE TRIGGER IF NOT EXISTS rumors_fts_insert AFTER INSERT ON rumors BEGIN
-    INSERT INTO rumors_fts (rowid, content) VALUES (new.seq, json_extract(new.json, '$.content'));
+    INSERT INTO rumors_fts (rowid, content) VALUES (new.seq, new.content);
   END`,
   `CREATE TRIGGER IF NOT EXISTS rumors_fts_delete AFTER DELETE ON rumors BEGIN
     DELETE FROM rumors_fts WHERE rowid = old.seq;
   END`,
+];
+
+/**
+ * The v0 → v1 rebuild: split `json` into `tags` + `content` columns and turn
+ * the tenant TEXT into the interned `tenants.ord`, in `rumors` and
+ * `rumor_coords` both. Run inside one transaction, before the
+ * {@link ARMADA_DB_SCHEMA} statements recreate the indexes and triggers
+ * against the new tables.
+ *
+ * Rowids are preserved, which is what keeps the rebuild away from the FTS
+ * tables: their rows are keyed by `seq` and stay valid as-is. Dropping the old
+ * tables drops their triggers WITHOUT firing them — SQLite's implicit
+ * drop-time DELETE fires no triggers — so no index row is lost with them.
+ *
+ * The tenant interning inserts are belt and braces: every stored rumor's
+ * tenant was interned when it was written, so the joins below should never
+ * drop a row — but a row whose tenant somehow wasn't interned would otherwise
+ * vanish silently, and `INSERT OR IGNORE` makes that impossible instead.
+ */
+export const ARMADA_DB_REBUILD_V1: readonly string[] = [
+  `INSERT OR IGNORE INTO tenants (id) SELECT DISTINCT tenant FROM rumors`,
+  `INSERT OR IGNORE INTO tenants (id) SELECT DISTINCT tenant FROM rumor_coords`,
+  `CREATE TABLE rumors_v1 (
+    seq INTEGER PRIMARY KEY,
+    tenant INTEGER NOT NULL,
+    id TEXT NOT NULL,
+    kind INTEGER NOT NULL,
+    pubkey TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    tags TEXT NOT NULL,
+    content TEXT NOT NULL
+  )`,
+  `INSERT INTO rumors_v1 (seq, tenant, id, kind, pubkey, created_at, tags, content)
+    SELECT r.seq, t.ord, r.id, r.kind, r.pubkey, r.created_at,
+      COALESCE(json_extract(r.json, '$.tags'), '[]'),
+      COALESCE(json_extract(r.json, '$.content'), '')
+    FROM rumors r JOIN tenants t ON t.id = r.tenant`,
+  `DROP TABLE rumors`,
+  `ALTER TABLE rumors_v1 RENAME TO rumors`,
+  `CREATE TABLE rumor_coords_v1 (
+    tenant INTEGER NOT NULL,
+    coord TEXT NOT NULL,
+    id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (tenant, coord)
+  ) WITHOUT ROWID`,
+  `INSERT INTO rumor_coords_v1 (tenant, coord, id, seq, created_at)
+    SELECT t.ord, c.coord, c.id, c.seq, c.created_at
+    FROM rumor_coords c JOIN tenants t ON t.id = c.tenant`,
+  `DROP TABLE rumor_coords`,
+  `ALTER TABLE rumor_coords_v1 RENAME TO rumor_coords`,
 ];

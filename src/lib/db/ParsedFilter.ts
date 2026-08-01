@@ -151,14 +151,20 @@ export class ParsedFilter {
    * them here would be worse than redundant: FTS5 matches whole words and this
    * matches substrings, so a phrase FTS5 accepted could be rejected on
    * whitespace alone.
+   *
+   * Pass `skipIds` when SQL has already applied the ids (`id IN (…)`, which
+   * compares bytes). Re-checking here compares the id read BACK from the row,
+   * and a driver that can't read a NUL-containing TEXT column intact
+   * (node:sqlite truncates at the NUL) would then drop a row the store really
+   * holds.
    */
-  matches(rumor: NostrRumor, skipSearch = false): boolean {
+  matches(rumor: NostrRumor, skipSearch = false, skipIds = false): boolean {
     if (this.neverMatch) return false;
 
     if (this.since !== undefined && rumor.created_at < this.since) return false;
     if (this.until !== undefined && rumor.created_at > this.until) return false;
 
-    if (this.idSet && !this.idSet.has(rumor.id)) return false;
+    if (!skipIds && this.idSet && !this.idSet.has(rumor.id)) return false;
     if (this.authorSet && !this.authorSet.has(rumor.pubkey)) return false;
     if (this.kindSet && !this.kindSet.has(rumor.kind)) return false;
 

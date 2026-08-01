@@ -189,14 +189,19 @@ internal class ParsedFilter(filter: JSONObject) {
      * them here would be worse than redundant: FTS5 matches whole words and this
      * matches substrings, so a phrase FTS5 accepted could be rejected on
      * whitespace alone.
+     *
+     * Pass [skipIds] when SQL has already applied the ids (`id IN (…)`, which
+     * compares bytes). Re-checking here compares the id read BACK from the row,
+     * and a driver that can't read every string back intact would then drop a
+     * row the store really holds.
      */
-    fun matches(rumor: Rumor, skipSearch: Boolean = false): Boolean {
+    fun matches(rumor: Rumor, skipSearch: Boolean = false, skipIds: Boolean = false): Boolean {
         if (neverMatch) return false
 
         if (since != null && rumor.createdAt < since) return false
         if (until != null && rumor.createdAt > until) return false
 
-        if (idSet != null && rumor.id !in idSet) return false
+        if (!skipIds && idSet != null && rumor.id !in idSet) return false
         if (authorSet != null && rumor.pubkey !in authorSet) return false
         if (kindSet != null && rumor.kind !in kindSet) return false
 

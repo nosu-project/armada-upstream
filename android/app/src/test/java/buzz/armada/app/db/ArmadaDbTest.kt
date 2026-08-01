@@ -467,7 +467,7 @@ class ArmadaDbTest {
         db.event("t", rumor(id = "a", tags = listOf(listOf("channel", "c1"))))
 
         driver!!.record { assertEquals(1L, db.count("t", filters("{\"#channel\":[\"c1\"]}")).count) }
-        assertTrue(driver!!.selects.none { it.first.contains("json") })
+        assertTrue(driver!!.selects.none { it.first.contains("content") })
     }
 
     // ── Index upkeep ──────────────────────────────────────────────────────────
@@ -644,6 +644,86 @@ class ArmadaDbTest {
         // affected — no tenant id, cursor key or cache key is built from
         // noncharacters — but a future key space must not assume otherwise.
         assertEquals(listOf("x\ufffd1", "y"), db.kvKeys(null))
+    }
+
+    // ── Schema migration ──────────────────────────────────────────────────────
+
+    @Test
+    fun `rebuilds a v0 file into the v1 layout, preserving everything`() {
+        val raw = BundledSqlDriver(":memory:")
+
+        // The v0 layout, as shipped before schema versioning.
+        val v0Schema = listOf(
+            "CREATE TABLE rumors ( seq INTEGER PRIMARY KEY, tenant TEXT NOT NULL, id TEXT NOT NULL, kind INTEGER NOT NULL, pubkey TEXT NOT NULL, created_at INTEGER NOT NULL, json TEXT NOT NULL )",
+            "CREATE UNIQUE INDEX rumors_id ON rumors (tenant, id)",
+            "CREATE INDEX rumors_tenant ON rumors (tenant)",
+            "CREATE INDEX rumors_kind ON rumors (tenant, kind)",
+            "CREATE INDEX rumors_pubkey ON rumors (tenant, pubkey)",
+            "CREATE INDEX rumors_pubkey_kind ON rumors (tenant, pubkey, kind)",
+            "CREATE VIRTUAL TABLE rumor_tags_fts USING fts5( tokens, tokenize = 'ascii tokenchars '':_''', content = '', contentless_delete = 1, detail = none )",
+            "CREATE TRIGGER rumors_tags_delete AFTER DELETE ON rumors BEGIN DELETE FROM rumor_tags_fts WHERE rowid = old.seq; END",
+            "CREATE TABLE rumor_coords ( tenant TEXT NOT NULL, coord TEXT NOT NULL, id TEXT NOT NULL, seq INTEGER NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (tenant, coord) ) WITHOUT ROWID",
+            "CREATE TABLE tenants ( ord INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE )",
+            "CREATE TABLE kv ( key TEXT PRIMARY KEY, value TEXT NOT NULL ) WITHOUT ROWID",
+            "CREATE VIRTUAL TABLE rumors_fts USING fts5( content, tokenize = 'unicode61 remove_diacritics 2', content = '', contentless_delete = 1 )",
+            "CREATE TRIGGER rumors_fts_insert AFTER INSERT ON rumors BEGIN INSERT INTO rumors_fts (rowid, content) VALUES (new.seq, json_extract(new.json, '\$.content')); END",
+            "CREATE TRIGGER rumors_fts_delete AFTER DELETE ON rumors BEGIN DELETE FROM rumors_fts WHERE rowid = old.seq; END",
+        )
+        for (statement in v0Schema) raw.run(statement)
+
+        // Write the way the v0 engine did: a json row plus a token row.
+        fun v0Write(tenant: String, r: Rumor) {
+            raw.run("INSERT OR IGNORE INTO tenants (id) VALUES (?)", listOf(tenant))
+            val ord = raw.query("SELECT ord FROM tenants WHERE id = ?", listOf(tenant)) { it.long(0) }.first()
+            val seq = r.createdAt * (1L shl 20)
+
+            raw.run(
+                "INSERT INTO rumors (seq, tenant, id, kind, pubkey, created_at, json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                listOf(seq, tenant, r.id, r.kind, r.pubkey, r.createdAt, r.toJson()),
+            )
+
+            val tokens = StringBuilder("t$ord:_p:${r.pubkey}")
+            for (tag in r.tags) {
+                if (tag.size >= 2) tokens.append(" t$ord:${tag[0]}:${tag[1]}")
+            }
+            raw.run("INSERT INTO rumor_tags_fts (rowid, tokens) VALUES (?, ?)", listOf(seq, tokens.toString()))
+        }
+
+        // Two tenants, so each row must follow its own tenant's ordinal.
+        v0Write("main", rumor(id = "plain", createdAt = 100, tags = listOf(listOf("e", "aa")), content = "hello alpes"))
+        v0Write("c2:abc", rumor(id = "other", pubkey = "bob", createdAt = 150, content = ""))
+
+        // A replaceable, occupying a coordinate.
+        v0Write("main", rumor(id = "prof1", createdAt = 200, kind = 0, content = ""))
+        raw.run(
+            "INSERT INTO rumor_coords (tenant, coord, id, seq, created_at) VALUES (?, ?, ?, ?, ?)",
+            listOf("main", "0:alice:", "prof1", 200L * (1L shl 20), 200L),
+        )
+        raw.run("INSERT INTO kv (key, value) VALUES (?, ?)", listOf("k", "\"v\""))
+
+        val recording = RecordingDriver(raw)
+        driver = recording
+        val db = SqliteArmadaDb(recording).also { store = it }
+
+        // The layout moved...
+        val columns = recording.query("SELECT name FROM pragma_table_info('rumors')") { it.text(0) }
+        assertEquals(listOf("seq", "tenant", "id", "kind", "pubkey", "created_at", "tags", "content"), columns)
+        assertEquals(1L, recording.query("PRAGMA user_version") { it.long(0) }.first())
+
+        // ...and nothing else did: bodies, the tag index, the search index,
+        // the coordinate and the KV all survive, with their old rowids.
+        val plain = db.query("main", filters("{\"ids\":[\"plain\"]}"))
+        assertEquals(listOf("plain"), plain.map { it.id })
+        assertEquals("hello alpes", plain[0].content)
+        assertEquals(listOf(listOf<String?>("e", "aa")), plain[0].tags)
+        assertEquals(listOf("plain"), db.query("main", filters("{\"#e\":[\"aa\"]}")).map { it.id })
+        assertEquals(listOf("other"), db.query("c2:abc", filters("{}")).map { it.id })
+        assertEquals(listOf("plain"), db.query("main", filters("{\"search\":\"alpes\"}")).map { it.id })
+        assertEquals("\"v\"", db.kvGet("k"))
+
+        // The rebuilt coordinate still supersedes.
+        db.event("main", rumor(id = "prof2", createdAt = 300, kind = 0))
+        assertEquals(listOf("prof2"), db.query("main", filters("{\"kinds\":[0]}")).map { it.id })
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

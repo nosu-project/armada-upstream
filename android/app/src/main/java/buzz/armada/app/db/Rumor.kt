@@ -9,10 +9,11 @@ import org.json.JSONObject
  * by construction), so the store deals in signature-less rumors and never
  * carries a `sig` it would have to lie about.
  *
- * The original JSON is kept verbatim (minus `sig`) rather than re-serialized
- * from the parsed fields, so a caller's own additions survive a round trip
- * through the store instead of being silently dropped by this model's idea of
- * what a rumor has.
+ * The body JSON rides along with the parsed fields so `toJson` is a
+ * serialization, not a re-derivation. The store itself persists only the six
+ * NIP-01 fields — one column each — so nothing a caller adds beyond them
+ * survives a trip through it; the id commits to exactly those six fields, so
+ * nothing authenticated is affected.
  */
 class Rumor private constructor(
     val id: String,
@@ -33,6 +34,9 @@ class Rumor private constructor(
     fun toJson(): String = body.toString()
 
     fun toJsonObject(): JSONObject = body
+
+    /** The tag rows as JSON array text — the stored column form. */
+    fun tagsJson(): String = body.optJSONArray("tags")?.toString() ?: "[]"
 
     /** The first value of the first tag named [name], or null. */
     fun tagValue(name: String): String? =
@@ -109,6 +113,31 @@ class Rumor private constructor(
                 array.put(row)
             }
             body.put("tags", array)
+            return parse(body)
+        }
+
+        /**
+         * Reassemble a rumor from its stored columns. The store persists only
+         * the six NIP-01 fields, so the body is rebuilt from them, with tags
+         * parsed back out of their JSON array text. Null if the tags text
+         * isn't a JSON array.
+         */
+        fun fromRow(
+            id: String,
+            kind: Int,
+            pubkey: String,
+            createdAt: Long,
+            tagsJson: String,
+            content: String,
+        ): Rumor? {
+            val tags = runCatching { JSONArray(tagsJson) }.getOrNull() ?: return null
+            val body = JSONObject()
+            body.put("id", id)
+            body.put("pubkey", pubkey)
+            body.put("created_at", createdAt)
+            body.put("kind", kind)
+            body.put("tags", tags)
+            body.put("content", content)
             return parse(body)
         }
 

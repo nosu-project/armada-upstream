@@ -2,6 +2,7 @@ package buzz.armada.app.db
 
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -92,11 +93,39 @@ class SqliteArmadaDb(
 
     // ── Schema ────────────────────────────────────────────────────────────────
 
-    /** Create the tables, indexes and triggers, if they don't already exist. */
+    /**
+     * Create the tables, indexes and triggers, if they don't already exist —
+     * upgrading a file laid out by an older schema version first.
+     */
     fun migrate() {
         lock.withLock {
+            val version = db.query("PRAGMA user_version") { it.long(0) }.firstOrNull() ?: 0L
+
+            if (version < ArmadaDbSchema.VERSION) {
+                // v0 predates versioning, so it is recognized by its layout:
+                // only v0 has the `json` column. A fresh file has no `rumors`
+                // table at all and needs no rebuild.
+                val legacy = db.query(
+                    "SELECT 1 FROM pragma_table_info('rumors') WHERE name = 'json'",
+                ) { it.long(0) }.isNotEmpty()
+
+                if (legacy) {
+                    transaction {
+                        for (statement in ArmadaDbSchema.REBUILD_V1) {
+                            db.run(statement.collapseWhitespace())
+                        }
+                    }
+                    // Give the freed pages back to the filesystem. Outside the
+                    // rebuild's transaction — VACUUM can't run inside one — and
+                    // advisory: the rebuild is already durable.
+                    runCatching { db.run("VACUUM") }
+                }
+            }
+
             val schema = if (search) ArmadaDbSchema.BASE + ArmadaDbSchema.SEARCH else ArmadaDbSchema.BASE
             for (statement in schema) db.run(statement.collapseWhitespace())
+
+            db.run("PRAGMA user_version = ${ArmadaDbSchema.VERSION}")
         }
     }
 
@@ -151,37 +180,38 @@ class SqliteArmadaDb(
 
     /** Apply a single rumor's writes. Runs inside the batch transaction. */
     private fun writeRumor(tenant: String, rumor: Rumor) {
-        val prefix = "t${internTenant(tenant)}"
+        val ord = internTenant(tenant)
+        val prefix = "t$ord"
 
         if (Kinds.replaceable(rumor.kind) || Kinds.addressable(rumor.kind)) {
             val coord = coordOf(rumor)
 
             val existing = db.query(
                 "SELECT id, seq, created_at FROM rumor_coords WHERE tenant = ? AND coord = ?",
-                listOf(tenant, coord),
+                listOf(ord, coord),
             ) { Stored(it.text(0), it.long(1), it.long(2)) }.firstOrNull()
 
             if (existing != null) {
                 // Per NIP-01 the stored version wins ties, and an identical id
                 // is a no-op, so only a strictly newer rumor replaces it.
                 if (!isNewer(rumor.id, rumor.createdAt, existing.id, existing.createdAt)) return
-                deleteRumors(tenant, listOf(existing.seq))
+                deleteRumors(ord, listOf(existing.seq))
             }
 
-            val seq = insertRumor(tenant, prefix, rumor) ?: return
+            val seq = insertRumor(ord, prefix, rumor) ?: return
 
             db.run(
                 """INSERT OR REPLACE INTO rumor_coords (tenant, coord, id, seq, created_at)
                     VALUES (?, ?, ?, ?, ?)""".collapseWhitespace(),
-                listOf(tenant, coord, rumor.id, seq, rumor.createdAt),
+                listOf(ord, coord, rumor.id, seq, rumor.createdAt),
             )
         } else {
-            insertRumor(tenant, prefix, rumor) ?: return
+            insertRumor(ord, prefix, rumor) ?: return
         }
 
         // Applied after the insert so a kind 5 arriving alongside its targets in
         // one batch still resolves. The request itself is retained.
-        if (rumor.kind == 5) applyDeletion(tenant, rumor)
+        if (rumor.kind == 5) applyDeletion(ord, rumor)
     }
 
     /**
@@ -196,13 +226,13 @@ class SqliteArmadaDb(
      * memory, so a second writer on the same file can't be handed the same one;
      * the bucket spans tenants, since the rowid is global.
      */
-    private fun insertRumor(tenant: String, prefix: String, rumor: Rumor): Long? {
+    private fun insertRumor(ord: Int, prefix: String, rumor: Rumor): Long? {
         val base = bucket(rumor.createdAt)
 
         val row = db.query(
             """SELECT (SELECT seq FROM rumors WHERE tenant = ? AND id = ?) AS existing,
                 (SELECT MAX(seq) FROM rumors WHERE seq >= ? AND seq < ?) AS last""".collapseWhitespace(),
-            listOf(tenant, rumor.id, base, base + SEQ_SPACE),
+            listOf(ord, rumor.id, base, base + SEQ_SPACE),
         ) { Pair(it.longOrNull(0), it.longOrNull(1)) }.firstOrNull()
 
         // Already stored: a re-delivered rumor is a no-op.
@@ -220,9 +250,9 @@ class SqliteArmadaDb(
         }
 
         db.run(
-            """INSERT INTO rumors (seq, tenant, id, kind, pubkey, created_at, json)
-                VALUES (?, ?, ?, ?, ?, ?, ?)""".collapseWhitespace(),
-            listOf(seq, tenant, rumor.id, rumor.kind, rumor.pubkey, rumor.createdAt, rumor.toJson()),
+            """INSERT INTO rumors (seq, tenant, id, kind, pubkey, created_at, tags, content)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""".collapseWhitespace(),
+            listOf(seq, ord, rumor.id, rumor.kind, rumor.pubkey, rumor.createdAt, rumor.tagsJson(), rumor.content),
         )
 
         // The content index is written by a trigger, so this is the only index
@@ -280,10 +310,6 @@ class SqliteArmadaDb(
         return ord
     }
 
-    /** The token prefix for a tenant, or null if it holds no rumors. */
-    private fun tenantPrefix(tenant: String): String? =
-        tenantOrd(tenant)?.let { "t$it" }
-
     /** The same, allocating one for a tenant being written to for the first time. */
     private fun internTenant(tenant: String): Int {
         tenantOrd(tenant)?.let { return it }
@@ -305,7 +331,7 @@ class SqliteArmadaDb(
      * versions at or before the request's `created_at`, so a newer replacement
      * survives.
      */
-    private fun applyDeletion(tenant: String, request: Rumor) {
+    private fun applyDeletion(ord: Int, request: Rumor) {
         val seqs = LinkedHashSet<Long>()
 
         // A request can't delete itself, and a kind 5 occupies no coordinate, so
@@ -325,7 +351,7 @@ class SqliteArmadaDb(
         for (chunk in Sql.batch(eTags, MAX_PARAMS - 2)) {
             val rows = db.query(
                 "SELECT seq FROM rumors WHERE tenant = ? AND ${Sql.memberOf("id", chunk)} AND pubkey = ?",
-                listOf(tenant) + chunk + listOf(request.pubkey),
+                listOf(ord) + chunk + listOf(request.pubkey),
             ) { it.long(0) }
             seqs.addAll(rows)
         }
@@ -339,12 +365,12 @@ class SqliteArmadaDb(
                 """SELECT seq FROM rumor_coords
                     WHERE tenant = ? AND ${Sql.memberOf("coord", chunk)} AND created_at <= ?"""
                     .collapseWhitespace(),
-                listOf(tenant) + chunk + listOf(request.createdAt),
+                listOf(ord) + chunk + listOf(request.createdAt),
             ) { it.long(0) }
             seqs.addAll(rows)
         }
 
-        deleteRumors(tenant, seqs.toList())
+        deleteRumors(ord, seqs.toList())
     }
 
     /**
@@ -355,26 +381,25 @@ class SqliteArmadaDb(
      * Coordinates are removed by their primary key, recomputed from the stored
      * rumor, so the coordinate table needs no secondary index on `seq`.
      */
-    private fun deleteRumors(tenant: String, seqs: List<Long>) {
+    private fun deleteRumors(ord: Int, seqs: List<Long>) {
         if (seqs.isEmpty()) return
 
         for (chunk in Sql.batch(seqs, MAX_PARAMS - 1)) {
             val rows = db.query(
-                "SELECT kind, json FROM rumors WHERE ${Sql.memberOf("seq", chunk)}",
+                "SELECT kind, pubkey, tags FROM rumors WHERE ${Sql.memberOf("seq", chunk)}",
                 chunk,
-            ) { Pair(it.long(0).toInt(), it.text(1)) }
+            ) { Triple(it.long(0).toInt(), it.text(1), it.text(2)) }
 
-            // Only a coordinate-bearing rumor needs its body parsed, to find the
-            // `d` tag its coordinate is built from.
+            // Only a coordinate-bearing rumor needs its tags parsed, to find
+            // the `d` tag its coordinate is built from.
             val coords = rows
                 .filter { Kinds.replaceable(it.first) || Kinds.addressable(it.first) }
-                .map { Rumor.parse(it.second) ?: error("ArmadaDB: unparseable rumor row") }
-                .map { coordOf(it) }
+                .map { (kind, pubkey, tagsJson) -> coordOf(kind, pubkey, tagsJson) }
 
             for (coordChunk in Sql.batch(coords, MAX_PARAMS - 1)) {
                 db.run(
                     "DELETE FROM rumor_coords WHERE tenant = ? AND ${Sql.memberOf("coord", coordChunk)}",
-                    listOf(tenant) + coordChunk,
+                    listOf(ord) + coordChunk,
                 )
             }
 
@@ -389,11 +414,15 @@ class SqliteArmadaDb(
      * de-duplicated by id, each filter's `limit` respected.
      */
     fun query(tenant: String, filters: List<JSONObject>): List<Rumor> = lock.withLock {
+        // A tenant that was never written to holds nothing, whatever the
+        // filters.
+        val ord = tenantOrd(tenant) ?: return@withLock emptyList()
+        val prefix = "t$ord"
+
         val byId = LinkedHashMap<String, Rumor>()
-        val prefix = tenantPrefix(tenant)
 
         for (filter in filters) {
-            for (rumor in queryFilter(tenant, prefix, ParsedFilter(filter))) {
+            for (rumor in queryFilter(ord, prefix, ParsedFilter(filter))) {
                 byId[rumor.id] = rumor
             }
         }
@@ -402,20 +431,16 @@ class SqliteArmadaDb(
     }
 
     /** Run a single parsed filter through the planner. */
-    private fun queryFilter(tenant: String, prefix: String?, filter: ParsedFilter): List<Rumor> {
+    private fun queryFilter(ord: Int, prefix: String, filter: ParsedFilter): List<Rumor> {
         if (filter.neverMatch) return emptyList()
-
-        // No prefix means the tenant has never been written to, so it holds no
-        // tokens — and a tag filter has nothing to match against.
-        if (filter.tags.isNotEmpty() && prefix == null) return emptyList()
 
         val limit = filter.limit ?: Int.MAX_VALUE
         if (limit <= 0) return emptyList()
 
-        val plan = planScan(tenant, prefix, filter)
+        val plan = planScan(ord, prefix, filter)
 
         // ids plans are lookups by key, not scans.
-        plan.ids?.let { return queryIds(tenant, it, filter, limit) }
+        plan.ids?.let { return queryIds(ord, it, filter, limit) }
 
         // A cursor yields only rows its conditions kept, and the limit is
         // applied after them, so a single complete plan IS the answer: run it
@@ -467,7 +492,7 @@ class SqliteArmadaDb(
 
     /** Fetch rumors by id, applying whatever else the filter asks for. */
     private fun queryIds(
-        tenant: String,
+        ord: Int,
         ids: List<String>,
         filter: ParsedFilter,
         limit: Int,
@@ -477,7 +502,7 @@ class SqliteArmadaDb(
         for (chunk in Sql.batch(ids, MAX_PARAMS - 16)) {
             val conditions = arrayListOf("tenant = ?", Sql.memberOf("id", chunk))
             val params = ArrayList<Any?>()
-            params.add(tenant)
+            params.add(ord)
             params.addAll(chunk)
 
             filter.since?.let {
@@ -497,12 +522,12 @@ class SqliteArmadaDb(
                 params.addAll(it)
             }
 
-            val rows = db.query("SELECT json FROM rumors${Sql.where(conditions)}", params) { it.text(0) }
-            for (json in rows) {
-                // As in `readPage`: a stored row that won't parse is a corrupt
-                // store, not a row to quietly leave out of the answer.
-                val rumor = Rumor.parse(json) ?: error("ArmadaDB: unparseable rumor row")
-                if (filter.matches(rumor)) rumors.add(rumor)
+            val rows = db.query("SELECT $RUMOR_COLUMNS FROM rumors${Sql.where(conditions)}", params) {
+                rumorFromRow(it, 0)
+            }
+            for (rumor in rows) {
+                // The SQL already applied the ids byte-exactly; see `matches`.
+                if (filter.matches(rumor, skipSearch = false, skipIds = true)) rumors.add(rumor)
             }
         }
 
@@ -551,7 +576,7 @@ class SqliteArmadaDb(
                 params.addAll(scan.params)
                 params.addAll(cursor.params)
 
-                """SELECT ${if (keys) "r.seq, " else ""}r.json FROM ${scan.driver}
+                """SELECT ${if (keys) "r.seq, " else ""}$R_RUMOR_COLUMNS FROM ${scan.driver}
                     CROSS JOIN rumors r ON r.seq = ${scan.driver}.rowid${
                     Sql.where(scan.conditions + cursor.where)
                 } ORDER BY ${scan.driver}.rowid DESC${if (limit == null) "" else " LIMIT ?"}"""
@@ -569,7 +594,7 @@ class SqliteArmadaDb(
                 // The key is only read when a later page has to resume from it;
                 // a scan that answers the whole query in one go leaves the
                 // column out.
-                """SELECT ${if (keys) "seq, " else ""}json FROM ${cursor.from}${
+                """SELECT ${if (keys) "seq, " else ""}$RUMOR_COLUMNS FROM ${cursor.from}${
                     Sql.where(conditions)
                 } ORDER BY seq DESC${if (limit == null) "" else " LIMIT ?"}"""
             }
@@ -579,19 +604,28 @@ class SqliteArmadaDb(
 
         return db.query(sql.collapseWhitespace(), params) { row ->
             val seq = if (keys) row.long(0) else 0L
-            val json = row.text(if (keys) 1 else 0)
-            // Throwing rather than skipping. A page whose size the caller reads
-            // as "the scan is exhausted" must not shrink for any reason other
-            // than the scan being exhausted: silently dropping a row would end
-            // the walk early and return a short answer as if it were complete.
-            // Every row here was written by `insertRumor` from a parsed rumor,
-            // so an unparseable one is a corrupt store, and saying so beats
-            // quietly serving part of it.
-            val rumor = Rumor.parse(json)
-                ?: error("ArmadaDB: unparseable rumor at seq $seq")
-            Candidate(seq, rumor)
+            Candidate(seq, rumorFromRow(row, if (keys) 1 else 0))
         }
     }
+
+    /**
+     * Reassemble a rumor from a row's [RUMOR_COLUMNS], starting at [offset].
+     *
+     * Throwing rather than skipping. A page whose size the caller reads as
+     * "the scan is exhausted" must not shrink for any reason other than the
+     * scan being exhausted: silently dropping a row would end the walk early
+     * and return a short answer as if it were complete. Every row here was
+     * written by `insertRumor` from a parsed rumor, so an unparseable one is a
+     * corrupt store, and saying so beats quietly serving part of it.
+     */
+    private fun rumorFromRow(row: SqlRow, offset: Int): Rumor = Rumor.fromRow(
+        id = row.text(offset),
+        kind = row.long(offset + 1).toInt(),
+        pubkey = row.text(offset + 2),
+        createdAt = row.long(offset + 3),
+        tagsJson = row.text(offset + 4),
+        content = row.text(offset + 5),
+    ) ?: error("ArmadaDB: unparseable rumor row")
 
     /**
      * The index scan behind a full-text cursor: which table drives it, and the
@@ -647,7 +681,7 @@ class SqliteArmadaDb(
      * of those indexes leads with `tenant` and is ordered by time already, so
      * each is read newest-first, within one namespace, with no sorter.
      */
-    private fun planScan(tenant: String, prefix: String?, filter: ParsedFilter): ScanPlan {
+    private fun planScan(ord: Int, prefix: String, filter: ParsedFilter): ScanPlan {
         // 1. ids — the (tenant, id) unique index.
         filter.ids?.let { return ScanPlan(ids = it, cursors = emptyList(), sqlOnly = false, searched = false) }
 
@@ -659,7 +693,7 @@ class SqliteArmadaDb(
 
         // 2. tags, or a NIP-50 search: the index drives.
         if (filter.tags.isNotEmpty() || search != null) {
-            planFts(tenant, prefix, filter, search, time)?.let { return it }
+            planFts(ord, prefix, filter, search, time)?.let { return it }
         }
 
         /** Append the filter's time bounds to a rumors-table cursor. */
@@ -702,7 +736,7 @@ class SqliteArmadaDb(
                     Sql.memberOf("kind", kinds),
                 )
                 val params = ArrayList<Any?>()
-                params.add(tenant)
+                params.add(ord)
                 params.addAll(chunk)
                 params.addAll(kinds)
                 addTime(conditions, params)
@@ -717,7 +751,7 @@ class SqliteArmadaDb(
             val cursors = Sql.batch(authors, MAX_IN).map { chunk ->
                 val conditions = arrayListOf("tenant = ?", Sql.memberOf("pubkey", chunk))
                 val params = ArrayList<Any?>()
-                params.add(tenant)
+                params.add(ord)
                 params.addAll(chunk)
                 addTime(conditions, params)
 
@@ -736,7 +770,7 @@ class SqliteArmadaDb(
             val cursors = Sql.batch(kinds, MAX_IN).map { chunk ->
                 val conditions = arrayListOf("tenant = ?", Sql.memberOf("kind", chunk))
                 val params = ArrayList<Any?>()
-                params.add(tenant)
+                params.add(ord)
                 params.addAll(chunk)
                 addTime(conditions, params)
                 TableCursor("rumors INDEXED BY rumors_kind", conditions, params)
@@ -748,7 +782,7 @@ class SqliteArmadaDb(
         //    seq)`, so this is a backwards walk of one contiguous index range.
         val conditions = arrayListOf("tenant = ?")
         val params = ArrayList<Any?>()
-        params.add(tenant)
+        params.add(ord)
         addTime(conditions, params)
 
         return ScanPlan(
@@ -769,8 +803,8 @@ class SqliteArmadaDb(
      * than the product of them all.
      */
     private fun planFts(
-        tenant: String,
-        prefix: String?,
+        ord: Int,
+        prefix: String,
         filter: ParsedFilter,
         search: String?,
         time: TimeRange,
@@ -778,7 +812,7 @@ class SqliteArmadaDb(
         val groups = ArrayList<List<String>>()
 
         for (tag in filter.tags) {
-            groups.add(tag.values.map { tagToken(prefix!!, tag.name, it) })
+            groups.add(tag.values.map { tagToken(prefix, tag.name, it) })
         }
 
         // A search whose keywords are all negations has nothing for FTS5 to
@@ -795,7 +829,7 @@ class SqliteArmadaDb(
         val inIndex = groups.isNotEmpty() && authors != null && authors.size <= MAX_AUTHOR_TERMS
 
         if (inIndex) {
-            groups.add(authors!!.map { "${prefix!!}:_p:${part(it)}" })
+            groups.add(authors!!.map { "$prefix:_p:${part(it)}" })
         }
 
         if (groups.isEmpty() && search == null) return null
@@ -811,7 +845,7 @@ class SqliteArmadaDb(
         // keyword-only scan is the one that has to say so.
         if (groups.isEmpty()) {
             conditions.add("r.tenant = ?")
-            params.add(tenant)
+            params.add(ord)
         }
 
         val kinds = filter.kinds
@@ -875,10 +909,10 @@ class SqliteArmadaDb(
             if (filter.neverMatch) return Count(0)
 
             if (filter.limit == null) {
-                val prefix = tenantPrefix(tenant)
-                if (filter.tags.isNotEmpty() && prefix == null) return Count(0)
+                // A tenant that was never written to holds nothing to count.
+                val ord = tenantOrd(tenant) ?: return Count(0)
 
-                val plan = planScan(tenant, prefix, filter)
+                val plan = planScan(ord, "t$ord", filter)
 
                 if (plan.sqlOnly && plan.ids == null && plan.cursors.size == 1) {
                     val cursor = plan.cursors[0]
@@ -924,6 +958,10 @@ class SqliteArmadaDb(
         val rumors = query(tenant, filters)
         if (rumors.isEmpty()) return@withLock
 
+        // Non-empty results mean the tenant has been written to, so it has an
+        // ordinal.
+        val ord = tenantOrd(tenant) ?: return@withLock
+
         transaction {
             val seqs = ArrayList<Long>()
 
@@ -931,12 +969,12 @@ class SqliteArmadaDb(
                 seqs.addAll(
                     db.query(
                         "SELECT seq FROM rumors WHERE tenant = ? AND ${Sql.memberOf("id", chunk)}",
-                        listOf(tenant) + chunk,
+                        listOf(ord) + chunk,
                     ) { it.long(0) },
                 )
             }
 
-            deleteRumors(tenant, seqs)
+            deleteRumors(ord, seqs)
         }
     }
 
@@ -1064,6 +1102,12 @@ class SqliteArmadaDb(
         /** Longest value list used to *filter* (rather than drive) a scan. */
         private const val MAX_PUSHDOWN = 100
 
+        /** The columns a stored rumor is reassembled from. */
+        private const val RUMOR_COLUMNS = "id, kind, pubkey, created_at, tags, content"
+
+        /** The same columns read through the `r` alias of a joined scan. */
+        private const val R_RUMOR_COLUMNS = "r.id, r.kind, r.pubkey, r.created_at, r.tags, r.content"
+
         /** Newest-first; ties broken by smaller id first (NIP-01). */
         private val NEWEST_FIRST = Comparator<Rumor> { a, b ->
             if (a.createdAt != b.createdAt) b.createdAt.compareTo(a.createdAt) else a.id.compareTo(b.id)
@@ -1149,6 +1193,24 @@ class SqliteArmadaDb(
         internal fun coordOf(rumor: Rumor): String {
             val d = if (Kinds.addressable(rumor.kind)) rumor.tagValue("d") ?: "" else ""
             return "${rumor.kind}:${rumor.pubkey}:$d"
+        }
+
+        /** The same coordinate, recomputed from stored columns without a full parse. */
+        internal fun coordOf(kind: Int, pubkey: String, tagsJson: String): String {
+            var d = ""
+            if (Kinds.addressable(kind)) {
+                val tags = runCatching { JSONArray(tagsJson) }.getOrNull()
+                if (tags != null) {
+                    for (i in 0 until tags.length()) {
+                        val tag = tags.optJSONArray(i) ?: continue
+                        if (tag.length() >= 2 && tag.opt(0) == "d") {
+                            d = tag.opt(1) as? String ?: ""
+                            break
+                        }
+                    }
+                }
+            }
+            return "$kind:$pubkey:$d"
         }
 
         /**

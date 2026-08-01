@@ -21,25 +21,42 @@ package buzz.armada.app.db
  * b-tree over it, and for the index, and turns `since`/`until` into a rowid
  * range FTS5 pushes down into its own backwards walk.
  *
- * REQUIREMENTS: the JSON1 extension (the search trigger's `json_extract`) and
- * FTS5 of at least 3.43 (2023), for contentless tables that support deletion.
- * Android's platform SQLite has neither on the versions Armada supports, which
- * is why [BundledSqlDriver] brings its own engine.
+ * REQUIREMENTS: FTS5 of at least 3.43 (2023), for contentless tables that
+ * support deletion, and the JSON1 extension (the v0→v1 rebuild's
+ * `json_extract`). Android's platform SQLite has neither on the versions Armada
+ * supports, which is why [BundledSqlDriver] brings its own engine.
  */
 internal object ArmadaDbSchema {
+
+    /**
+     * The schema version, stored in `PRAGMA user_version`. A file below it is
+     * upgraded before the `CREATE IF NOT EXISTS` statements run.
+     *
+     *   0  the pre-versioning layout: `rumors.tenant` / `rumor_coords.tenant`
+     *      were the tenant id TEXT, and `rumors.json` held the whole serialized
+     *      rumor — so the id, kind, pubkey and created_at columns were stored
+     *      twice, and the tenant id was repeated in every row of the table and
+     *      of its five indexes.
+     *   1  the current layout below.
+     */
+    const val VERSION = 1L
 
     /** The tables, indexes and triggers every ArmadaDB file has. */
     val BASE: List<String> = listOf(
         // `seq` is the rowid and encodes `created_at`, so the table is stored in
-        // time order and needs no separate index to be read newest-first.
+        // time order and needs no separate index to be read newest-first. The
+        // six NIP-01 fields are one column each — `tags` as JSON array text —
+        // and a read reassembles the rumor from them, so no field is stored
+        // twice and nothing a caller adds beyond them is stored at all.
         """CREATE TABLE IF NOT EXISTS rumors (
             seq INTEGER PRIMARY KEY,
-            tenant TEXT NOT NULL,
+            tenant INTEGER NOT NULL,
             id TEXT NOT NULL,
             kind INTEGER NOT NULL,
             pubkey TEXT NOT NULL,
             created_at INTEGER NOT NULL,
-            json TEXT NOT NULL
+            tags TEXT NOT NULL,
+            content TEXT NOT NULL
         )""",
         // The lookup path: fetching bodies by id, and the uniqueness that makes
         // a re-delivered rumor a no-op.
@@ -83,17 +100,18 @@ internal object ArmadaDbSchema {
         // `seq` rides along so superseding a coordinate needs no second lookup
         // to find the row to delete.
         """CREATE TABLE IF NOT EXISTS rumor_coords (
-            tenant TEXT NOT NULL,
+            tenant INTEGER NOT NULL,
             coord TEXT NOT NULL,
             id TEXT NOT NULL,
             seq INTEGER NOT NULL,
             created_at INTEGER NOT NULL,
             PRIMARY KEY (tenant, coord)
         ) WITHOUT ROWID""",
-        // Tenants, interned to a small integer so a token can name one in a
-        // couple of characters. Interning rather than hashing is a correctness
-        // decision: two tenants that collided would SHARE posting lists, which
-        // is a cross-tenant read, and community ids are partly attacker-chosen.
+        // Tenants, interned to a small integer so a token — and every row and
+        // index entry that names a tenant — can name one in a couple of bytes.
+        // Interning rather than hashing is a correctness decision: two tenants
+        // that collided would SHARE posting lists, which is a cross-tenant
+        // read, and community ids are partly attacker-chosen.
         """CREATE TABLE IF NOT EXISTS tenants (
             ord INTEGER PRIMARY KEY,
             id TEXT NOT NULL UNIQUE
@@ -107,9 +125,8 @@ internal object ArmadaDbSchema {
     /**
      * The NIP-50 search index, installed on top of [BASE].
      *
-     * Its content is a field of the rumor, so it is maintained entirely by
-     * triggers — SQLite reads it out of the stored JSON without a round trip,
-     * and no write path can forget it. `unicode61` case-folds and strips
+     * Its content is a column of the rumor row, so it is maintained entirely by
+     * triggers — no write path can forget it. `unicode61` case-folds and strips
      * diacritics, so matching is case- and accent-insensitive. The index spans
      * tenants (rowid is global); the tenant filter is applied when its matches
      * are resolved back to rows.
@@ -125,10 +142,62 @@ internal object ArmadaDbSchema {
         // Rumors are only ever inserted or deleted, never updated, so those are
         // the only two triggers needed.
         """CREATE TRIGGER IF NOT EXISTS rumors_fts_insert AFTER INSERT ON rumors BEGIN
-            INSERT INTO rumors_fts (rowid, content) VALUES (new.seq, json_extract(new.json, '$.content'));
+            INSERT INTO rumors_fts (rowid, content) VALUES (new.seq, new.content);
         END""",
         """CREATE TRIGGER IF NOT EXISTS rumors_fts_delete AFTER DELETE ON rumors BEGIN
             DELETE FROM rumors_fts WHERE rowid = old.seq;
         END""",
+    )
+
+    /**
+     * The v0 → v1 rebuild: split `json` into `tags` + `content` columns and
+     * turn the tenant TEXT into the interned `tenants.ord`, in `rumors` and
+     * `rumor_coords` both. Run inside one transaction, before the [BASE]
+     * statements recreate the indexes and triggers against the new tables.
+     *
+     * Rowids are preserved, which is what keeps the rebuild away from the FTS
+     * tables: their rows are keyed by `seq` and stay valid as-is. Dropping the
+     * old tables drops their triggers WITHOUT firing them — SQLite's implicit
+     * drop-time DELETE fires no triggers — so no index row is lost with them.
+     *
+     * The tenant interning inserts are belt and braces: every stored rumor's
+     * tenant was interned when it was written, so the joins below should never
+     * drop a row — but a row whose tenant somehow wasn't interned would
+     * otherwise vanish silently, and `INSERT OR IGNORE` makes that impossible
+     * instead.
+     */
+    val REBUILD_V1: List<String> = listOf(
+        "INSERT OR IGNORE INTO tenants (id) SELECT DISTINCT tenant FROM rumors",
+        "INSERT OR IGNORE INTO tenants (id) SELECT DISTINCT tenant FROM rumor_coords",
+        """CREATE TABLE rumors_v1 (
+            seq INTEGER PRIMARY KEY,
+            tenant INTEGER NOT NULL,
+            id TEXT NOT NULL,
+            kind INTEGER NOT NULL,
+            pubkey TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            tags TEXT NOT NULL,
+            content TEXT NOT NULL
+        )""",
+        """INSERT INTO rumors_v1 (seq, tenant, id, kind, pubkey, created_at, tags, content)
+            SELECT r.seq, t.ord, r.id, r.kind, r.pubkey, r.created_at,
+                COALESCE(json_extract(r.json, '${'$'}.tags'), '[]'),
+                COALESCE(json_extract(r.json, '${'$'}.content'), '')
+            FROM rumors r JOIN tenants t ON t.id = r.tenant""",
+        "DROP TABLE rumors",
+        "ALTER TABLE rumors_v1 RENAME TO rumors",
+        """CREATE TABLE rumor_coords_v1 (
+            tenant INTEGER NOT NULL,
+            coord TEXT NOT NULL,
+            id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (tenant, coord)
+        ) WITHOUT ROWID""",
+        """INSERT INTO rumor_coords_v1 (tenant, coord, id, seq, created_at)
+            SELECT t.ord, c.coord, c.id, c.seq, c.created_at
+            FROM rumor_coords c JOIN tenants t ON t.id = c.tenant""",
+        "DROP TABLE rumor_coords",
+        "ALTER TABLE rumor_coords_v1 RENAME TO rumor_coords",
     )
 }

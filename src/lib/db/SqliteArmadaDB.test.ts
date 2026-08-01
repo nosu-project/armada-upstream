@@ -276,7 +276,9 @@ describe("SqliteArmadaDB — query plans", () => {
 
     // One statement, and it reads the bodies inline.
     expect(driver.selects).toHaveLength(1);
-    expect(driver.selects[0].sql).toContain("SELECT json FROM rumors INDEXED BY rumors_kind");
+    expect(driver.selects[0].sql).toContain(
+      "SELECT id, kind, pubkey, created_at, tags, content FROM rumors INDEXED BY rumors_kind",
+    );
   });
 });
 
@@ -638,6 +640,13 @@ describe("SqliteArmadaDB — injection", () => {
   it("survives hostile tag names, ids, pubkeys, content and tenant ids", async () => {
     const { db, driver } = makeDb();
 
+    // ENGINE NOTE (node:sqlite): a TEXT column holding a NUL is stored and
+    // compared byte-exactly, but reads back truncated AT the NUL — so the id,
+    // pubkey and content of the one NUL payload come back cut short, while
+    // tags (stored as JSON text, where a NUL is escaped) round-trip in full.
+    // The IndexedDB adapter and Android's engine return the full string.
+    const trunc = (s: string) => s.split("\u0000")[0];
+
     for (const [i, payload] of HOSTILE.entries()) {
       const store = db.tenant(`tenant-${payload}`);
       const r = rumor({
@@ -648,9 +657,11 @@ describe("SqliteArmadaDB — injection", () => {
       });
       await store.event(r);
 
-      expect(await store.query([{ ids: [r.id] }])).toEqual([r]);
-      expect(await store.query([{ authors: [r.pubkey] }])).toEqual([r]);
-      expect(await store.query([{ [`#${payload.slice(0, 20)}`]: ["value"] }])).toEqual([r]);
+      const stored = { ...r, id: trunc(r.id), pubkey: trunc(r.pubkey), content: trunc(r.content) };
+
+      expect(await store.query([{ ids: [r.id] }])).toEqual([stored]);
+      expect(await store.query([{ authors: [r.pubkey] }])).toEqual([stored]);
+      expect(await store.query([{ [`#${payload.slice(0, 20)}`]: ["value"] }])).toEqual([stored]);
     }
 
     // Every table is still there, with exactly what was written.
@@ -809,5 +820,93 @@ describe("SqliteArmadaDB — injection", () => {
 
     expect(rows(driver, "SELECT count(*) AS c FROM kv")[0].c).toBe(HOSTILE.length);
     expect(await db.kv.keys("'")).toEqual([`' OR '1'='1`, `'; DROP TABLE rumors; --`]);
+  });
+});
+
+describe("SqliteArmadaDB — v0 migration", () => {
+  /** The v0 layout, as shipped before schema versioning. */
+  const V0_SCHEMA = [
+    `CREATE TABLE rumors ( seq INTEGER PRIMARY KEY, tenant TEXT NOT NULL, id TEXT NOT NULL, kind INTEGER NOT NULL, pubkey TEXT NOT NULL, created_at INTEGER NOT NULL, json TEXT NOT NULL )`,
+    `CREATE UNIQUE INDEX rumors_id ON rumors (tenant, id)`,
+    `CREATE INDEX rumors_tenant ON rumors (tenant)`,
+    `CREATE INDEX rumors_kind ON rumors (tenant, kind)`,
+    `CREATE INDEX rumors_pubkey ON rumors (tenant, pubkey)`,
+    `CREATE INDEX rumors_pubkey_kind ON rumors (tenant, pubkey, kind)`,
+    `CREATE VIRTUAL TABLE rumor_tags_fts USING fts5( tokens, tokenize = 'ascii tokenchars '':_''', content = '', contentless_delete = 1, detail = none )`,
+    `CREATE TRIGGER rumors_tags_delete AFTER DELETE ON rumors BEGIN DELETE FROM rumor_tags_fts WHERE rowid = old.seq; END`,
+    `CREATE TABLE rumor_coords ( tenant TEXT NOT NULL, coord TEXT NOT NULL, id TEXT NOT NULL, seq INTEGER NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (tenant, coord) ) WITHOUT ROWID`,
+    `CREATE TABLE tenants ( ord INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE )`,
+    `CREATE TABLE kv ( key TEXT PRIMARY KEY, value TEXT NOT NULL ) WITHOUT ROWID`,
+    `CREATE VIRTUAL TABLE rumors_fts USING fts5( content, tokenize = 'unicode61 remove_diacritics 2', content = '', contentless_delete = 1 )`,
+    `CREATE TRIGGER rumors_fts_insert AFTER INSERT ON rumors BEGIN INSERT INTO rumors_fts (rowid, content) VALUES (new.seq, json_extract(new.json, '$.content')); END`,
+    `CREATE TRIGGER rumors_fts_delete AFTER DELETE ON rumors BEGIN DELETE FROM rumors_fts WHERE rowid = old.seq; END`,
+  ];
+
+  /** Write a rumor the way the v0 adapter did: a json row plus a token row. */
+  function v0Write(driver: RecordingDriver, tenant: string, event: NostrRumor): void {
+    driver.run(`INSERT OR IGNORE INTO tenants (id) VALUES (?)`, [tenant]);
+    const [{ ord }] = driver.all(`SELECT ord FROM tenants WHERE id = ?`, [tenant]);
+    const seq = event.created_at * 2 ** 20;
+
+    driver.run(
+      `INSERT INTO rumors (seq, tenant, id, kind, pubkey, created_at, json) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [seq, tenant, event.id, event.kind, event.pubkey, event.created_at, JSON.stringify(event)],
+    );
+
+    const tokens = [`t${ord}:_p:${event.pubkey}`]
+      .concat(event.tags.map(([name, value]) => `t${ord}:${name}:${value}`))
+      .join(" ");
+    driver.run(`INSERT INTO rumor_tags_fts (rowid, tokens) VALUES (?, ?)`, [seq, tokens]);
+  }
+
+  it("rebuilds a v0 file into the v1 layout, preserving everything", async () => {
+    const driver = new RecordingDriver();
+    drivers.push(driver);
+    for (const statement of V0_SCHEMA) driver.run(statement);
+
+    // Two tenants, so each row must follow its own tenant's ordinal.
+    const plain = rumor({
+      id: "plain",
+      pubkey: "alice",
+      created_at: 100,
+      content: "hello alpes",
+      tags: [["e", "aa"]],
+    });
+    v0Write(driver, "main", plain);
+    v0Write(driver, "c2:abc", rumor({ id: "other", pubkey: "bob", created_at: 150 }));
+
+    // A replaceable, occupying a coordinate.
+    v0Write(driver, "main", rumor({ id: "prof1", pubkey: "alice", kind: 0, created_at: 200 }));
+    driver.run(
+      `INSERT INTO rumor_coords (tenant, coord, id, seq, created_at) VALUES (?, ?, ?, ?, ?)`,
+      ["main", "0:alice:", "prof1", 200 * 2 ** 20, 200],
+    );
+    driver.run(`INSERT INTO kv (key, value) VALUES (?, ?)`, ["k", '"v"']);
+
+    const db = new SqliteArmadaDB(driver);
+    await db.ready;
+
+    // The layout moved...
+    const columns = rows(driver, `SELECT name FROM pragma_table_info('rumors')`)
+      .map((row) => row.name);
+    expect(columns).toEqual(["seq", "tenant", "id", "kind", "pubkey", "created_at", "tags", "content"]);
+    expect(Number(rows(driver, `PRAGMA user_version`)[0].user_version)).toBe(1);
+
+    // ...and nothing else did: bodies, the tag index, the search index, the
+    // coordinate and the KV all survive, with their old rowids.
+    expect(await db.tenant("main").query([{ ids: ["plain"] }])).toEqual([plain]);
+    expect((await db.tenant("main").query([{ "#e": ["aa"] }])).map((r) => r.id)).toEqual(["plain"]);
+    expect((await db.tenant("c2:abc").query([{}])).map((r) => r.id)).toEqual(["other"]);
+    expect((await db.tenant("main").query([{ search: "alpes" }])).map((r) => r.id)).toEqual(["plain"]);
+    expect(await db.kv.get("k")).toBe("v");
+
+    // The rebuilt coordinate still supersedes.
+    await db.tenant("main").event(rumor({ id: "prof2", pubkey: "alice", kind: 0, created_at: 300 }));
+    expect((await db.tenant("main").query([{ kinds: [0] }])).map((r) => r.id)).toEqual(["prof2"]);
+
+    // A second open of the migrated file is a no-op.
+    const again = new SqliteArmadaDB(driver);
+    await again.ready;
+    expect((await again.tenant("main").query([{ ids: ["plain"] }])).map((r) => r.id)).toEqual(["plain"]);
   });
 });
