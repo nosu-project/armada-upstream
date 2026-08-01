@@ -515,17 +515,18 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
  */
 /**
  * Self-healing link freshness: while a link creator is on their community
- * page, check that the bundles their live links vend still match the
- * community — preview metadata (name / icon / banner) and root epoch — and
- * re-post them when they don't. A link's coordinate only updates when its
- * creator refreshes it, so without this, a link minted before a metadata
- * change keeps vending the old preview to Discover and to joiners forever,
- * and no amount of re-sharing by the USER should be needed to fix that.
- * At most one refresh attempt per community per session; a failed refresh
- * retries on a later mount.
+ * page, re-post the CURRENT bundle at each of their live link coordinates
+ * (once per community per session; a failure retries on a later mount).
+ *
+ * Unconditional by design. A staleness check would have to ask what the
+ * relays vend — but resolveBundle answers through the persisted newest-copy
+ * floor, which HIDES relay staleness exactly when it matters (the floor is
+ * fresh, the laggard relay is not, and a non-member reading that relay sees
+ * the old preview). Rather than build a floor-bypassing probe of every relay,
+ * just re-post: the write is one addressable event to a handful of relays,
+ * replaces itself, and converges every copy to the current community.
  */
 export function useLinkFreshnessWatch2(community: CommunityV2 | undefined): void {
-  const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const control = useControlFold2(community);
   const folded = control.data;
@@ -534,7 +535,7 @@ export function useLinkFreshnessWatch2(community: CommunityV2 | undefined): void
 
   useEffect(() => {
     if (!user || !community || !folded || myLinks.length === 0) return;
-    if (control.isLoading || control.isFetching) return; // don't compare against a partial fold
+    if (control.isLoading || control.isFetching) return; // don't publish from a partial fold
     // Only a creator still authorized to maintain links should re-post them.
     if (
       user.pubkey !== folded.ownerHex &&
@@ -544,42 +545,10 @@ export function useLinkFreshnessWatch2(community: CommunityV2 | undefined): void
     }
     if (attempted.current.has(community.idHex)) return;
     attempted.current.add(community.idHex);
-    let cancelled = false;
-    void (async () => {
-      const meta = folded.metadata;
-      const now = Math.floor(Date.now() / 1000);
-      let stale = false;
-      for (const entry of myLinks) {
-        if (entry.expires_at && entry.expires_at <= now) continue; // expired links don't vend
-        const parsed = parseInviteLink(entry.url);
-        if (!parsed) continue;
-        try {
-          const bundle = await resolveBundle(nostr, parsed, community.relays);
-          if (
-            bundle.root_epoch !== Number(community.rootEpoch) ||
-            bundle.name !== (meta?.name ?? community.name) ||
-            (bundle.icon?.hash ?? null) !== (meta?.icon?.hash ?? null) ||
-            (bundle.banner?.hash ?? null) !== (meta?.banner?.hash ?? null)
-          ) {
-            stale = true;
-            break;
-          }
-        } catch {
-          // Unresolvable (revoked / offline relays): nothing to compare, and
-          // re-posting blind could resurrect a tombstoned coordinate's URL in
-          // the UI, so leave it alone.
-        }
-      }
-      if (stale && !cancelled) {
-        await refreshMyLinks().catch(() => {
-          attempted.current.delete(community.idHex);
-        });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [user, community, folded, control.isLoading, control.isFetching, myLinks, refreshMyLinks, nostr]);
+    refreshMyLinks().catch(() => {
+      attempted.current.delete(community.idHex); // retry on a later mount
+    });
+  }, [user, community, folded, control.isLoading, control.isFetching, myLinks, refreshMyLinks]);
 }
 
 export function useLinkAuthorityWatch2(community: CommunityV2 | undefined): void {

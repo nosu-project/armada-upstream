@@ -24,13 +24,14 @@ import {
 import { bytesToHex, hex32, random32 } from "@/concord-v2/lib/derive";
 import {
   encodeFragment,
+  InviteError,
   parseBundleEvent,
   parseInviteLink,
   STOCK_RELAYS,
   type InviteBundle,
   type ParsedInviteLink,
 } from "@/concord-v2/lib/invite";
-import { KIND_INVITE_BUNDLE } from "@/concord-v2/lib/kinds";
+import { KIND_INVITE_BUNDLE, VSK_INVITE_REVOKED } from "@/concord-v2/lib/kinds";
 import {
   capRelays,
   channelGitRepositoryAttachments,
@@ -153,15 +154,14 @@ function writeBundleFloor(linkSigner: string, event: NostrEvent): void {
   getArmadaDB().kv.set(BUNDLE_FLOOR_KV + linkSigner, event).catch(() => undefined);
 }
 
-/** Fetch + verify a V2 invite bundle from its bootstrap relays. */
-export async function resolveBundle(
+/** Query one relay set for a link's bundle coordinate, verified events only. */
+async function queryBundleCoordinate(
   nostr: ReturnType<typeof useNostr>["nostr"],
   invite: ParsedInviteLink,
-  fallbackRelays: string[],
-): Promise<InviteBundle> {
-  const pool = invite.bootstrapRelays.length ? invite.bootstrapRelays : fallbackRelays;
+  relays: string[],
+): Promise<NostrEvent[]> {
   const results = await Promise.all(
-    pool.map((url) =>
+    relays.map((url) =>
       nostr
         .relay(url)
         .query(
@@ -171,11 +171,10 @@ export async function resolveBundle(
         .catch(() => [] as NostrEvent[]),
     ),
   );
-  // Only link-signer-authored, signature-valid events may enter the memory:
-  // a hostile relay answering with a forged far-future event must not pin the
-  // coordinate for the session (parseBundleEvent re-checks all of this, but
-  // by then the memory would already be poisoned).
-  const flat = results
+  // Only link-signer-authored, signature-valid events count: a hostile relay
+  // answering with a forged far-future event must not pin the coordinate
+  // (parseBundleEvent re-checks, but by then the floor would be poisoned).
+  return results
     .flat()
     .filter(
       (e) =>
@@ -184,6 +183,16 @@ export async function resolveBundle(
         verifyEvent(e as Parameters<typeof verifyEvent>[0]),
     )
     .sort((a, b) => b.created_at - a.created_at);
+}
+
+/** Fetch + verify a V2 invite bundle from its bootstrap relays. */
+export async function resolveBundle(
+  nostr: ReturnType<typeof useNostr>["nostr"],
+  invite: ParsedInviteLink,
+  fallbackRelays: string[],
+): Promise<InviteBundle> {
+  const pool = invite.bootstrapRelays.length ? invite.bootstrapRelays : fallbackRelays;
+  const flat = await queryBundleCoordinate(nostr, invite, pool);
   // The newest event at the coordinate wins: a refresh replaces the bundle, a
   // revocation tombstone replaces it terminally. The persisted floor keeps a
   // flaky read (relays timing out, a laggard vending its stale copy) from
@@ -192,8 +201,33 @@ export async function resolveBundle(
   let best = flat[0] as NostrEvent | undefined;
   if (remembered && (!best || remembered.created_at > best.created_at)) best = remembered;
   if (!best) throw new Error("Couldn't find that invite on its relays.");
+
+  let bundle = parseBundleEvent(best, invite.linkSigner, invite.token, Date.now());
+
+  // Second hop: the decrypted bundle names the community's HOME relays, and a
+  // refresh always lands there even when a frozen bootstrap relay rejected or
+  // missed it — so a reader stuck on a stale bootstrap copy would otherwise
+  // serve stale previews (and stale keys!) forever. Ask the home relays the
+  // pool didn't cover and adopt a newer copy if one exists. Best-effort: the
+  // first-hop bundle already in hand is the floor, never the ceiling.
+  const covered = new Set(pool);
+  const home = (Array.isArray(bundle.relays) ? bundle.relays : []).filter((r) => !covered.has(r));
+  if (home.length > 0) {
+    const [newer] = await queryBundleCoordinate(nostr, invite, home).catch(() => [] as NostrEvent[]);
+    if (newer && newer.created_at > best.created_at) {
+      try {
+        bundle = parseBundleEvent(newer, invite.linkSigner, invite.token, Date.now());
+        best = newer;
+      } catch {
+        // A newer tombstone still terminates the link honestly; anything else
+        // malformed keeps the first-hop bundle.
+        if (newer.tags.some((t) => t[0] === "vsk" && t[1] === VSK_INVITE_REVOKED)) throw new InviteError("revoked", "this invite link has been revoked");
+      }
+    }
+  }
+
   if (best !== remembered) writeBundleFloor(invite.linkSigner, best);
-  return parseBundleEvent(best, invite.linkSigner, invite.token, Date.now());
+  return bundle;
 }
 
 /** Turn a verified bundle into the membership-list join material + entry. */
