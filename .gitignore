@@ -19,3 +19,7 @@ electron/release/
 
 # Local diagnostic scratch (may hold invite secrets) — never commit.
 scratch/
+
+# Local deploy script (personal hosts/paths); CI deploys via
+# .ngit/act/workflows/deploy-web.yml.
+deploy.sh
