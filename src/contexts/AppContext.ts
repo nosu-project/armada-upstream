@@ -267,6 +267,22 @@ export interface AppConfig {
    */
   acceptedDms: string[];
   /**
+   * DM peers the user deliberately opened a conversation with before any
+   * message exists, as hex pubkeys — currently written by the `/<user>` chat
+   * link landing, where accepting the invitation IS the whole point of the
+   * visit.
+   *
+   * The DM list is otherwise derived entirely from stored messages, so an
+   * empty thread lives only as long as it's the open route. That's right for
+   * an idle click-through and wrong for a link somebody sent you to talk to
+   * them: navigate away once and the person you came here for is gone. This is
+   * the small set of peers whose row is kept regardless. Closing the row hides
+   * it the ordinary way (`closedDms`), and once a real message lands the row
+   * comes from the message instead. Capped at {@link MAX_STARTED_DMS}, newest
+   * kept. Synced across devices.
+   */
+  startedDms: string[];
+  /**
    * Whether unknown-sender DMs are surfaced in the request tier. ON by default.
    * When off, conversations with people the user neither follows nor has
    * written to are hidden from the DM list entirely — the "Requests" entry
@@ -316,6 +332,14 @@ export interface AppConfig {
   zapsEnabled: boolean;
 }
 
+/**
+ * How many message-less DM rows {@link AppConfig.startedDms} keeps. These rows
+ * are seeded by a user action and only ever removed by closing them, so the
+ * list needs a ceiling; it rides in the synced settings blob, and a person who
+ * opens a lot of chat links shouldn't grow it without bound.
+ */
+export const MAX_STARTED_DMS = 50;
+
 export interface AppContextType {
   config: AppConfig;
   /** Merge a partial config and persist. */
@@ -355,6 +379,7 @@ export const SYNCED_CONFIG_KEYS = [
   "pinnedDms",
   "closedDms",
   "acceptedDms",
+  "startedDms",
   "showDmRequests",
   "discoverAllContent",
   "defaultZapAmount",
@@ -388,6 +413,7 @@ export const defaultConfig: AppConfig = {
   pinnedDms: [],
   closedDms: {},
   acceptedDms: [],
+  startedDms: [],
   showDmRequests: true,
   discoverAllContent: false,
   meshIncognito: true,

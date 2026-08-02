@@ -101,6 +101,7 @@ export const AppConfigSchema = z.object({
   pinnedDms: z.array(z.string()).catch([]),
   closedDms: z.record(z.string(), ClosedDmMarkerSchema).catch({}),
   acceptedDms: z.array(z.string()).catch([]),
+  startedDms: z.array(z.string()).catch([]),
   discoverAllContent: z.boolean().catch(defaultConfig.discoverAllContent),
   meshIncognito: z.boolean().catch(defaultConfig.meshIncognito),
   meshEnabled: z.boolean().catch(defaultConfig.meshEnabled),
@@ -158,6 +159,8 @@ export const EncryptedSettingsSchema = z.looseObject({
   closedDms: z.record(z.string(), ClosedDmMarkerSchema).optional(),
   /** DM peers accepted out of the request tier (hex pubkeys) — see AppConfig. */
   acceptedDms: z.array(z.string()).optional(),
+  /** DM peers with a kept row but no messages yet (hex pubkeys) — see AppConfig. */
+  startedDms: z.array(z.string()).optional(),
   /** Whether unknown-sender DMs are surfaced in the request tier — see AppConfig. */
   showDmRequests: z.boolean().optional(),
   /** Whether Discover shows the unfiltered firehose vs the allow-list (see AppConfig). */

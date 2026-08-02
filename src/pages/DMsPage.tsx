@@ -78,6 +78,7 @@ import { usePinnedDms } from "@/hooks/usePinnedDms";
 import { useAcceptedDms } from "@/hooks/useAcceptedDms";
 import { useClosedDms } from "@/hooks/useClosedDms";
 import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
+import { useStartedDms } from "@/hooks/useStartedDms";
 import { useSharedCommunities } from "@/hooks/useSharedCommunities";
 import { useToast } from "@/hooks/useToast";
 import { effectiveDmRelays } from "@/contexts/AppContext";
@@ -89,6 +90,7 @@ import { getDisplayName } from "@/lib/getDisplayName";
 import { DISAPPEARING_PRESETS, disappearingNotice, formatDisappearingDuration } from "@/lib/nip17/disappearing";
 import { expirationOf, KIND_DM_CHAT, KIND_DM_FILE } from "@/lib/nip17/protocol";
 import { pickEmojiTags, readDmListSnapshot, writeDmListSnapshot } from "@/lib/dmListSnapshot";
+import { resolvePubkey } from "@/lib/resolvePubkey";
 import { buildEmojiMap } from "@/lib/customEmoji";
 import { emojify } from "@/components/chat/emojify";
 import { DM_VOICE_RELAYS } from "@/lib/platform";
@@ -97,20 +99,6 @@ import { cn } from "@/lib/utils";
 import { preferredDmVoiceRelay } from "@/lib/voiceDevices";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
-
-/** Resolve a typed npub/nprofile/hex string to a hex pubkey, or undefined. */
-function resolvePubkey(input: string): string | undefined {
-  const value = input.trim();
-  if (/^[0-9a-f]{64}$/i.test(value)) return value.toLowerCase();
-  try {
-    const decoded = nip19.decode(value);
-    if (decoded.type === "npub") return decoded.data;
-    if (decoded.type === "nprofile") return decoded.data.pubkey;
-  } catch {
-    // not bech32
-  }
-  return undefined;
-}
 
 /**
  * Highlight every case-insensitive occurrence of `query` within `text`, with
@@ -2165,6 +2153,7 @@ export function DMsPage() {
   useAdoptDmInbox();
   const { isKnown, isLoading: followsLoading } = useKnownDmPeers();
   const { accept } = useAcceptedDms();
+  const { started: startedPeers } = useStartedDms();
   const { close: closeDm, reopen: reopenDm, reopenForNewMessages, isClosed: isDmClosed } = useClosedDms();
   const [composing, setComposing] = useState(false);
   const [listView, setListView] = useState<DmListView>("inbox");
@@ -2248,6 +2237,15 @@ export function DMsPage() {
     const known: typeof sorted = [];
     const requests: typeof sorted = [];
     for (const c of sorted) (isKnown(c.peer, c.mine) ? known : requests).push(c);
+    // Threads seeded by following someone's chat link (`/<npub>`): message-less
+    // like the active peer below, but kept after we navigate away — the whole
+    // point of the link was to put this person in the list. Oldest-started
+    // first, so the newest lands nearest the top.
+    for (const peer of startedPeers) {
+      if (peer === activePeer) continue; // the rule below already places it
+      if (sorted.some((c) => c.peer === peer)) continue; // it has real messages
+      known.unshift({ peer, latest: undefined as unknown as NostrRumor, mine: false });
+    }
     // A peer with no messages at all that we've navigated to is a thread the
     // user deliberately started: it belongs in the inbox, not the request pile.
     // (An EXISTING stranger conversation opened by deep link stays a request —
@@ -2256,7 +2254,7 @@ export function DMsPage() {
       known.unshift({ peer: activePeer, latest: undefined as unknown as NostrRumor, mine: false });
     }
     return [known, requests];
-  }, [conversations, dm17Conversations, activePeer, isKnown]);
+  }, [conversations, dm17Conversations, activePeer, isKnown, startedPeers]);
 
   // A closed row is only a dismissal of the current latest message. As soon as
   // either participant sends another message, it becomes visible immediately;

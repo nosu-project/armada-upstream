@@ -47,6 +47,7 @@ const ServerPage = lazy(lazyWithReload(() => import("@/pages/ServerPage").then((
 const SettingsPage = lazy(lazyWithReload(() => import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage }))));
 const SharePage = lazy(lazyWithReload(() => import("@/pages/SharePage").then((m) => ({ default: m.SharePage }))));
 const TermsPage = lazy(lazyWithReload(() => import("@/pages/TermsPage").then((m) => ({ default: m.TermsPage }))));
+const UserPage = lazy(lazyWithReload(() => import("@/pages/UserPage").then((m) => ({ default: m.UserPage }))));
 const WelcomePage = lazy(lazyWithReload(() => import("@/pages/WelcomePage").then((m) => ({ default: m.WelcomePage }))));
 
 /**
@@ -293,6 +294,12 @@ export function AppRouter() {
             <Route path="/dms" element={<RequireAuth><DMsPage /></RequireAuth>} />
             <Route path="/dms/:peer" element={<RequireAuth><DMsPage /></RequireAuth>} />
             <Route path="/settings" element={<RequireAuth><SettingsPage /></RequireAuth>} />
+            {/* A person's public chat link: `/<npub>`, `/<name@domain>` or
+                `/<domain>`. Declared last for readability only — React Router
+                ranks every static segment above a dynamic one regardless of
+                order — but it DOES outrank the `*` route below, so UserPage
+                renders the 404 itself for a segment that names nobody. */}
+            <Route path="/:user" element={<UserPage />} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>

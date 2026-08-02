@@ -9,21 +9,8 @@ import { Input } from "@/components/ui/input";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
 import { getAvatarShape } from "@/lib/avatarShape";
+import { resolvePubkey } from "@/lib/resolvePubkey";
 import { cn } from "@/lib/utils";
-
-/** Resolve a typed npub/nprofile/hex string to a hex pubkey, or undefined. */
-function resolvePubkey(input: string): string | undefined {
-  const value = input.trim();
-  if (/^[0-9a-f]{64}$/i.test(value)) return value.toLowerCase();
-  try {
-    const decoded = nip19.decode(value);
-    if (decoded.type === "npub") return decoded.data;
-    if (decoded.type === "nprofile") return decoded.data.pubkey;
-  } catch {
-    // not bech32
-  }
-  return undefined;
-}
 
 /**
  * A name/nip05 user picker built on the NIP-50 profile search (routed to the
