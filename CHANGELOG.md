@@ -4,6 +4,40 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.45.0] - 2026-08-02
+
+Concord communities gain roles and serious moderation: build a role hierarchy with colours and ranks, gate private channels behind roles, and work through a searchable Members tab with mass ban and kick. Onboarding is now a guided full-screen wizard with a real key-backup step, and a new landing page greets first-time visitors. Under the hood, local storage moves to ArmadaDB for faster boots and steadier sync.
+
+### Added
+- Community roles in Concord: create, rename, colour, drag to reorder, and revoke, with rank-based permissions
+- Private channels gated behind roles
+- A Members tab with a searchable, sortable member directory, range selection, and mass ban or kick
+- Message permalinks, so notification taps land on the message itself
+- Unpublish a community from Discover
+- A post-login opt-in for web push, with guidance for iOS notifications
+- Save lightbox images to the device; on iOS, saved downloads appear in the Files app
+
+### Changed
+- Onboarding is a full-screen wizard: strictly linear steps, a key step gated on a real backup, key export through a file dialog, and a landing on Discover
+- A new landing page: a scrolling deck over an ASCII sea
+- Consolidated app iconography and a reworked animated boot mark; the Android splash holds until the crest animation finishes
+- Discover listings use community announcement events instead of mined kind-1 notes
+- Local storage is rebuilt on ArmadaDB, shared with the Android notification service, for faster boots and lower memory use
+- Sync runs through a topic scheduler with durable freshness stamps and priority lanes
+- Voice messages record at a speech-tuned bitrate
+- Bot discovery queries only the conversation and app relays
+
+### Fixed
+- Channels restore their last-open selection and last painted window, so switching no longer flashes empty
+- Relay sockets reconnect when switching accounts
+- A DM opens on its last page instead of jumping to the top of the thread
+- Link previews no longer downgrade when a slower fold finishes late
+- Non-relay URLs are rejected when opening the pool, and embed relay hints are sanitized
+- Media-only notifications name the kind of media
+
+### Removed
+- The build-time platform relay pin and the legacy relay push gateway
+
 ## [0.44.1] - 2026-07-30
 
 A maintenance release with no changes to the app itself. It restores automatic publishing to Google Play, delivering the 0.44.0 release — webxdc games in the composer, synced favorite GIFs, and curated Discover feeds — to Play Store users.
