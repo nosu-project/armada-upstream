@@ -3,7 +3,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { KIND_SEAL_ENCRYPTED, KIND_WEBXDC, KIND_WRAP_EPHEMERAL } from "@/concord-v2/lib/kinds";
+import { KIND_SEAL_ENCRYPTED, KIND_WEBXDC } from "@/concord-v2/lib/kinds";
+import { subscribeEphemeral } from "@/concord-v2/lib/ephemeralSub";
 import {
   buildRumor,
   channelBindingTags,
@@ -187,42 +188,31 @@ export function useConcord2AppSync(
 
   useEffect(() => {
     if (!enabled || !community || !channel || !channelIdHex || !currentPk) return;
-    const controller = new AbortController();
     const group = channel.current.group;
     const epoch = channel.current.epoch;
 
-    for (const url of community.relays) {
-      void (async () => {
-        try {
-          for await (const msg of nostr.relay(url).req(
-            [{ kinds: [KIND_WRAP_EPHEMERAL], authors: [currentPk] }],
-            { signal: controller.signal },
-          )) {
-            if (msg[0] !== "EVENT") {
-              if (msg[0] === "CLOSED") break;
-              continue;
-            }
-            try {
-              const ev = openWrap(msg[2] as NostrEvent, group);
-              if (ev.kind !== KIND_WEBXDC) continue;
-              checkChannelBinding(ev, channelIdHex, epoch);
-              if (tagValue(ev.tags, "i") !== uuid) continue;
-              if (tagValue(ev.tags, "rt") !== "1") continue;
-              // Skip our own echoes — realtime is for OTHER participants.
-              if (ev.author === selfPubkey) continue;
-              const bytes = base64ToBytes(ev.content);
-              for (const cb of listenersRef.current) cb(bytes);
-            } catch {
-              // not ours / malformed
-            }
-          }
-        } catch {
-          // subscription ended (abort/error)
-        }
-      })();
-    }
+    const apply = (event: NostrEvent) => {
+      try {
+        const ev = openWrap(event, group);
+        if (ev.kind !== KIND_WEBXDC) return;
+        checkChannelBinding(ev, channelIdHex, epoch);
+        if (tagValue(ev.tags, "i") !== uuid) return;
+        if (tagValue(ev.tags, "rt") !== "1") return;
+        // Skip our own echoes — realtime is for OTHER participants.
+        if (ev.author === selfPubkey) return;
+        const bytes = base64ToBytes(ev.content);
+        for (const cb of listenersRef.current) cb(bytes);
+      } catch {
+        // not ours / malformed
+      }
+    };
 
-    return () => controller.abort();
+    // One shared 21059 REQ per relay across every mounted channel — see
+    // `ephemeralSub.ts`.
+    const unsubs = community.relays.map((url) => subscribeEphemeral(nostr, url, currentPk, apply));
+    return () => {
+      for (const unsub of unsubs) unsub();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, nostr, community?.idHex, channelIdHex, currentPk, uuid, selfPubkey]);
 

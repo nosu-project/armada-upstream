@@ -26,7 +26,7 @@ import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 import { logSync } from "@/lib/syncLog";
 import { onWireScopes } from "@/wire/bus";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
 /** Re-exported for the many call sites that reach it through this module. */
 export { controlFoldKey };
@@ -362,6 +362,63 @@ export function _forgetDissolvedMemoForTests(): void {
   dissolvedMemo.clear();
 }
 
+/** What the dissolved probe needs of the Nostr client. */
+interface ProbeNostr {
+  relay(url: string): {
+    query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrEvent[]>;
+  };
+}
+
+/**
+ * Pending dissolved-address probes, per relay: every community's `useDissolved2`
+ * fires its probe in the same boot burst, and each community's dissolved
+ * address is a distinct derived pubkey no batcher can merge — so a measured
+ * boot paid one `kinds[1059] authors×1 limit10` REQ per (community, relay).
+ * Collecting for one window and sending one multi-filter REQ per relay keeps
+ * the per-address `limit` isolation while paying one socket round; results
+ * demux by wrap author (the dissolved address signs its own tombstone wrap).
+ */
+const dissolvedProbes = new Map<string, Map<string, Array<(events: NostrEvent[]) => void>>>();
+const dissolvedProbeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function probeDissolved(nostr: ProbeNostr, url: string, pk: string): Promise<NostrEvent[]> {
+  return new Promise((resolve) => {
+    let byPk = dissolvedProbes.get(url);
+    if (!byPk) {
+      byPk = new Map();
+      dissolvedProbes.set(url, byPk);
+    }
+    const waiters = byPk.get(pk) ?? [];
+    waiters.push(resolve);
+    byPk.set(pk, waiters);
+    if (!dissolvedProbeTimers.has(url)) {
+      dissolvedProbeTimers.set(url, setTimeout(() => void flushDissolvedProbes(nostr, url), 50));
+    }
+  });
+}
+
+async function flushDissolvedProbes(nostr: ProbeNostr, url: string): Promise<void> {
+  dissolvedProbeTimers.delete(url);
+  const byPk = dissolvedProbes.get(url);
+  dissolvedProbes.delete(url);
+  if (!byPk) return;
+
+  let events: NostrEvent[] = [];
+  try {
+    events = await nostr.relay(url).query(
+      [...byPk.keys()].map((pk) => ({ kinds: [KIND_WRAP], authors: [pk], limit: 10 })),
+      { signal: AbortSignal.timeout(8000) },
+    );
+  } catch {
+    // A failed round answers every waiter empty — the callers' own catch/poll
+    // semantics, unchanged.
+  }
+  for (const [pk, waiters] of byPk) {
+    const mine = events.filter((event) => event.pubkey === pk);
+    for (const resolve of waiters) resolve(mine);
+  }
+}
+
 /**
  * The tombstone ms for a community we have EVER seen dissolved, or undefined.
  * Local only — no network, no re-derivation. Used by the wire to drop a dead
@@ -406,7 +463,7 @@ export function useDissolved2(community: CommunityV2 | undefined, active = true)
     // network again. A slow, foreground-only poll is plenty to notice one.
     refetchInterval: active ? 5 * 60_000 : false,
     refetchIntervalInBackground: false,
-    queryFn: async ({ signal }) => {
+    queryFn: async () => {
       // Known dead → done. Never re-derived, so nothing can undo it.
       const known = await dissolvedAt(community!.idHex);
       if (known !== undefined) return known;
@@ -423,14 +480,11 @@ export function useDissolved2(community: CommunityV2 | undefined, active = true)
         return cachedGrave.ms;
       }
 
+      // Through the shared per-relay collector: one multi-filter REQ per relay
+      // per burst instead of one REQ per community (see `probeDissolved`).
       const results = await Promise.all(
         community!.relays.map((url) =>
-          nostr
-            .relay(url)
-            .query([{ kinds: [KIND_WRAP], authors: [group.pk], limit: 10 }], {
-              signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
-            })
-            .catch(() => [] as NostrEvent[]),
+          probeDissolved(nostr, url, group.pk).catch(() => [] as NostrEvent[]),
         ),
       );
       const opened = openPlaneWraps(results.flat(), [group]);

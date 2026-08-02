@@ -3,7 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { KIND_SEAL_ENCRYPTED, KIND_VOICE_PRESENCE, KIND_WRAP_EPHEMERAL } from "@/concord-v2/lib/kinds";
+import { KIND_SEAL_ENCRYPTED, KIND_VOICE_PRESENCE } from "@/concord-v2/lib/kinds";
+import { subscribeEphemeral } from "@/concord-v2/lib/ephemeralSub";
 import {
   buildRumor,
   channelBindingTags,
@@ -87,7 +88,6 @@ export function useVoicePresence2(
     // Seed from the shared per-channel memory (see `sharedLatest`) so a
     // freshly-mounted subscriber starts from everything already learned.
     latest.current = latestFor(currentPk);
-    const controller = new AbortController();
     const group = channel.current.group;
     const epoch = channel.current.epoch;
 
@@ -140,25 +140,14 @@ export function useVoicePresence2(
     // event to fold what the shared memory already knows.
     recompute();
 
-    for (const url of community.relays) {
-      void (async () => {
-        try {
-          for await (const msg of nostr.relay(url).req(
-            [{ kinds: [KIND_WRAP_EPHEMERAL], authors: [currentPk] }],
-            { signal: controller.signal },
-          )) {
-            if (msg[0] === "EVENT") apply(msg[2] as NostrEvent);
-          }
-        } catch {
-          // subscription ended
-        }
-      })();
-    }
+    // One shared 21059 REQ per relay across every mounted channel — see
+    // `ephemeralSub.ts`.
+    const unsubs = community.relays.map((url) => subscribeEphemeral(nostr, url, currentPk, apply));
 
     // Staleness decay: three missed heartbeats age a participant out.
     const decay = setInterval(recompute, VOICE_STALE_MS / 6);
     return () => {
-      controller.abort();
+      for (const unsub of unsubs) unsub();
       clearInterval(decay);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -301,7 +290,6 @@ export function useVoiceReactions2(
     seen.current = new Set();
     setReactions([]);
     if (!community || !channel || !channelIdHex || !currentPk) return;
-    const controller = new AbortController();
     const group = channel.current.group;
     const epoch = channel.current.epoch;
 
@@ -334,24 +322,13 @@ export function useVoiceReactions2(
       }
     };
 
-    for (const url of community.relays) {
-      void (async () => {
-        try {
-          for await (const msg of nostr.relay(url).req(
-            [{ kinds: [KIND_WRAP_EPHEMERAL], authors: [currentPk] }],
-            { signal: controller.signal },
-          )) {
-            if (msg[0] === "EVENT") apply(msg[2] as NostrEvent);
-          }
-        } catch {
-          // subscription ended
-        }
-      })();
-    }
+    // Shares the presence hook's per-relay 21059 REQ — same relay, same
+    // author — so reactions cost no extra subscription (see `ephemeralSub.ts`).
+    const unsubs = community.relays.map((url) => subscribeEphemeral(nostr, url, currentPk, apply));
 
     const timer = setInterval(decay, REACTION_TTL_MS / 2);
     return () => {
-      controller.abort();
+      for (const unsub of unsubs) unsub();
       clearInterval(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

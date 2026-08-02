@@ -2,7 +2,8 @@ import { useNostr } from "@nostrify/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { KIND_SEAL_ENCRYPTED, KIND_TYPING, KIND_WRAP_EPHEMERAL } from "@/concord-v2/lib/kinds";
+import { KIND_SEAL_ENCRYPTED, KIND_TYPING } from "@/concord-v2/lib/kinds";
+import { subscribeEphemeral } from "@/concord-v2/lib/ephemeralSub";
 import { buildRumor, channelBindingTags, checkChannelBinding, openWrap, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 
@@ -32,7 +33,6 @@ export function useTyping2(community: CommunityV2 | undefined, channel: ChannelV
     seen.current = new Map();
     setTypers([]);
     if (!community || !channel || !channelIdHex || !currentPk) return;
-    const controller = new AbortController();
     const group = channel.current.group;
     const epoch = channel.current.epoch;
 
@@ -63,24 +63,13 @@ export function useTyping2(community: CommunityV2 | undefined, channel: ChannelV
       }
     };
 
-    for (const url of community.relays) {
-      void (async () => {
-        try {
-          for await (const msg of nostr.relay(url).req(
-            [{ kinds: [KIND_WRAP_EPHEMERAL], authors: [currentPk] }],
-            { signal: controller.signal },
-          )) {
-            if (msg[0] === "EVENT") apply(msg[2] as NostrEvent);
-          }
-        } catch {
-          // subscription ended
-        }
-      })();
-    }
+    // One shared 21059 REQ per relay across every mounted channel — see
+    // `ephemeralSub.ts`.
+    const unsubs = community.relays.map((url) => subscribeEphemeral(nostr, url, currentPk, apply));
 
     const decay = setInterval(recompute, TYPING_WINDOW_MS / 2);
     return () => {
-      controller.abort();
+      for (const unsub of unsubs) unsub();
       clearInterval(decay);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
