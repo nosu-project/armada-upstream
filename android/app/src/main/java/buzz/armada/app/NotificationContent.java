@@ -34,24 +34,21 @@ final class NotificationContent {
     // Media extensions, kept in sync with src/lib/mediaUrls.ts (image + video +
     // audio + webxdc). A URL ending in one of these is rendered inline in the
     // UI, so it carries no textual meaning in a notification and is stripped.
+    private static final String IMAGE_EXTS = "jpg|jpeg|png|gif|webp|svg|avif";
+    private static final String VIDEO_EXTS = "mp4|webm|mov|qt|avi|mkv|flv";
+    private static final String AUDIO_EXTS = "mp3|mpga|wav|ogg|oga|flac|m4a|aac|opus|weba";
     private static final String MEDIA_EXTS =
-            // image
-            "jpg|jpeg|png|gif|webp|svg|avif|"
-            // video
-            + "mp4|webm|mov|qt|avi|mkv|flv|"
-            // audio
-            + "mp3|mpga|wav|ogg|oga|flac|m4a|aac|opus|weba|"
-            // webxdc
-            + "xdc";
+            IMAGE_EXTS + "|" + VIDEO_EXTS + "|" + AUDIO_EXTS + "|xdc";
 
     /**
      * A media URL plus any whitespace immediately before it, so stripping it
      * from the middle of a sentence ("a <url> b") doesn't leave a double space.
      * {@code \S+} up to a media extension with an optional query string mirrors
-     * {@code IMETA_MEDIA_URL_REGEX}.
+     * {@code IMETA_MEDIA_URL_REGEX}. Group 1 captures the extension so a
+     * media-only message can still be labeled by kind.
      */
     private static final Pattern MEDIA_URL = Pattern.compile(
-            "\\s*https?://\\S+\\.(?:" + MEDIA_EXTS + ")(?:\\?\\S*)?",
+            "\\s*https?://\\S+\\.(" + MEDIA_EXTS + ")(?:\\?\\S*)?",
             Pattern.CASE_INSENSITIVE);
 
     /** A {@code nostr:npub…}/{@code nostr:nprofile…} (or bare) mention. */
@@ -69,6 +66,53 @@ final class NotificationContent {
         String out = MEDIA_URL.matcher(content).replaceAll("");
         out = resolveMentions(out, resolver);
         return out.trim();
+    }
+
+    /**
+     * Human label for the media a message carries — {@code "an image"},
+     * {@code "a GIF"}, {@code "a video"}, {@code "a voice message"} or
+     * {@code "a game"} — so a media-only body (empty once {@link #clean}
+     * strips the URLs) can read "Sent an image" instead of "Sent a message".
+     *
+     * The imeta {@code m} MIME wins over the URL extension when given: an
+     * encrypted (Concord/DM) attachment's blob URL carries no media extension
+     * at all, and a voice message recorded into {@code .webm}/{@code .mp4}
+     * containers is only distinguishable from video by its {@code audio/*}
+     * MIME. Null when neither the MIME nor any URL in the content names a
+     * media kind.
+     */
+    static String mediaLabel(String imetaMime, String content) {
+        String byMime = labelForMime(imetaMime);
+        if (byMime != null) return byMime;
+        if (content == null || content.isEmpty()) return null;
+        Matcher m = MEDIA_URL.matcher(content);
+        if (!m.find()) return null;
+        return labelForExt(m.group(1).toLowerCase(Locale.ROOT));
+    }
+
+    private static String labelForMime(String mime) {
+        if (mime == null) return null;
+        mime = mime.toLowerCase(Locale.ROOT);
+        if (mime.equals("image/gif")) return "a GIF";
+        if (mime.startsWith("image/")) return "an image";
+        if (mime.startsWith("video/")) return "a video";
+        if (mime.startsWith("audio/")) return "a voice message";
+        if (mime.equals("application/x-webxdc")) return "a game";
+        return null;
+    }
+
+    private static String labelForExt(String ext) {
+        if (ext.equals("gif")) return "a GIF";
+        if (extIn(IMAGE_EXTS, ext)) return "an image";
+        if (extIn(VIDEO_EXTS, ext)) return "a video";
+        if (extIn(AUDIO_EXTS, ext)) return "a voice message";
+        if (ext.equals("xdc")) return "a game";
+        return null;
+    }
+
+    /** Whether {@code ext} is one of the {@code |}-separated alternatives. */
+    private static boolean extIn(String alternation, String ext) {
+        return ("|" + alternation + "|").contains("|" + ext + "|");
     }
 
     private static String resolveMentions(String s, MentionResolver resolver) {

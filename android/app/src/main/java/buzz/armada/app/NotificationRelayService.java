@@ -2128,8 +2128,8 @@ public class NotificationRelayService extends Service {
                         // silent, matching the WebView's DM rumor kinds.
                         final int rumorKind = rumor.optInt("kind", -1);
                         if (rumorKind != 14 && rumorKind != 15) return;
-                        final String preview = truncate(
-                                rumorKind == 15 ? "Sent a file" : cleanContent(rumor.optString("content")));
+                        final String preview =
+                                rumorKind == 15 ? "Sent a file" : messagePreview(rumor);
                         final long rts = rumor.optLong("created_at", 0);
                         final long fTs = (rts > 0 ? rts * 1000L : System.currentTimeMillis());
                         resolveAuthor(peer, relayUrl, profile -> {
@@ -2481,7 +2481,7 @@ public class NotificationRelayService extends Service {
             final String fRoom = room;
             final String fUrl = url != null ? url : "/";
             final boolean fMention = mentionsMe;
-            final String preview = truncate(cleanContent(inner.optString("content")));
+            final String preview = messagePreview(inner);
             final long fTs = (cts > 0 ? cts * 1000L : System.currentTimeMillis());
             // A kind-1111 comment (threaded reply) carries its thread root in the
             // uppercase `E` tag. Append it to the deep-link so the WebView can
@@ -2613,7 +2613,7 @@ public class NotificationRelayService extends Service {
             }
             final Concord2Stream fSt = st;
             final boolean fMention2 = mentionsMe2;
-            final String preview2 = truncate(cleanContent(rumor.optString("content")));
+            final String preview2 = messagePreview(rumor);
             final long rts = rumor.optLong("created_at", 0);
             final long fTs2 = (rts > 0 ? rts * 1000L : System.currentTimeMillis());
             // A kind-1111 comment (threaded reply) carries its thread root in the
@@ -2687,7 +2687,7 @@ public class NotificationRelayService extends Service {
             String url;
             switch (kind) {
                 case 9: {
-                    line = truncate(cleanContent(event.optString("content")));
+                    line = messagePreview(event);
                     if (line.isEmpty()) line = "Sent a message";
                     if (mention) line = "@you " + line;
                     url = nip29GroupId != null
@@ -2707,7 +2707,7 @@ public class NotificationRelayService extends Service {
                     break;
                 }
                 case 1111: {
-                    line = buildMessageText(truncate(cleanContent(event.optString("content"))), mention, true);
+                    line = buildMessageText(messagePreview(event), mention, true);
                     url = nip29GroupId != null
                             ? "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(nip29GroupId)
                             : "/";
@@ -2809,6 +2809,41 @@ public class NotificationRelayService extends Service {
      */
     private String cleanContent(String content) {
         return NotificationContent.clean(content, this::mentionName);
+    }
+
+    /**
+     * Notification body for a message event/rumor: the cleaned content, or —
+     * when stripping media URLs left nothing — a "Sent an image"-style line
+     * naming the media kind. The kind comes from the imeta {@code m} MIME
+     * first (an encrypted attachment's blob URL has no media extension, and
+     * the URL of a Concord/DM attachment lives ONLY in the imeta), falling
+     * back to the first media URL's extension. Empty only when the message
+     * has neither text nor recognizable media.
+     */
+    private String messagePreview(JSONObject event) {
+        String content = event.optString("content");
+        String preview = truncate(cleanContent(content));
+        if (!preview.isEmpty()) return preview;
+        String label = NotificationContent.mediaLabel(firstImetaMime(event), content);
+        return label != null ? "Sent " + label : "";
+    }
+
+    /** The {@code m <mime>} field of the event's first imeta tag carrying one, or null. */
+    private static String firstImetaMime(JSONObject event) {
+        JSONArray tags = event.optJSONArray("tags");
+        if (tags == null) return null;
+        for (int i = 0; i < tags.length(); i++) {
+            JSONArray tag = tags.optJSONArray(i);
+            if (tag == null || tag.length() < 2 || !"imeta".equals(tag.optString(0))) continue;
+            for (int j = 1; j < tag.length(); j++) {
+                String field = tag.optString(j, "");
+                if (field.startsWith("m ")) {
+                    String mime = field.substring(2).trim();
+                    if (!mime.isEmpty()) return mime;
+                }
+            }
+        }
+        return null;
     }
 
     /**

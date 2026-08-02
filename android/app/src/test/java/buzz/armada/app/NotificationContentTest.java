@@ -155,6 +155,50 @@ public class NotificationContentTest {
                         "see https://reddit.com https://x/a.jpg", null));
     }
 
+    // ── media-only labels ────────────────────────────────────────────────────
+
+    @Test
+    public void labelsMediaByImetaMime() {
+        assertEquals("an image", NotificationContent.mediaLabel("image/png", ""));
+        assertEquals("a GIF", NotificationContent.mediaLabel("image/gif", ""));
+        assertEquals("a video", NotificationContent.mediaLabel("video/mp4", ""));
+        assertEquals("a voice message", NotificationContent.mediaLabel("audio/mp4", ""));
+        assertEquals("a game", NotificationContent.mediaLabel("application/x-webxdc", ""));
+    }
+
+    @Test
+    public void imetaMimeWinsOverExtension() {
+        // A voice message recorded into a .webm container: the extension list
+        // calls it video, the audio/* MIME knows better.
+        assertEquals("a voice message",
+                NotificationContent.mediaLabel("audio/webm;codecs=opus", "https://x/a.webm"));
+    }
+
+    @Test
+    public void labelsEncryptedAttachmentWithExtensionlessUrl() {
+        // Concord/DM ciphertext blobs carry no media extension; only the imeta
+        // MIME names the kind.
+        assertEquals("an image",
+                NotificationContent.mediaLabel("image/jpeg", "https://blossom.example/abcd1234"));
+    }
+
+    @Test
+    public void labelsMediaByUrlExtensionWithoutImeta() {
+        assertEquals("an image", NotificationContent.mediaLabel(null, "https://x/a.jpg"));
+        assertEquals("a GIF", NotificationContent.mediaLabel(null, "https://x/a.GIF"));
+        assertEquals("a video", NotificationContent.mediaLabel(null, "https://x/a.mp4?t=1"));
+        assertEquals("a voice message", NotificationContent.mediaLabel(null, "https://x/a.opus"));
+        assertEquals("a game", NotificationContent.mediaLabel(null, "https://x/chess.xdc"));
+    }
+
+    @Test
+    public void noLabelWithoutRecognizableMedia() {
+        assertNull(NotificationContent.mediaLabel(null, "just text https://reddit.com"));
+        assertNull(NotificationContent.mediaLabel(null, ""));
+        assertNull(NotificationContent.mediaLabel(null, null));
+        assertNull(NotificationContent.mediaLabel("application/pdf", "no urls here"));
+    }
+
     // ── combined + edge cases ────────────────────────────────────────────────
 
     @Test
