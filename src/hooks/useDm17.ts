@@ -81,6 +81,7 @@ import {
   writeDm17Rumors,
   writeDm17SeenWrapIds,
 } from "@/lib/nip17/dm17Store";
+import { persistDm17ThreadSnapshot, prewarmDm17ThreadSnapshot } from "@/lib/nip17/threadSnapshot";
 import { useWireScopes } from "@/wire/useWireScopes";
 import { dm17NotifyCandidates, feedNotifyCandidates } from "@/wire/notify";
 
@@ -654,6 +655,15 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
 
   const queryKey = useMemo(() => ["dm17", "thread", self, peer, consent] as const, [self, peer, consent]);
 
+  // Paint the last window from KV while the store read runs. The read is
+  // enabled on this very render, but it awaits the legacy drain and merges two
+  // 300-row filters; the snapshot is one KV row, so it lands first and the real
+  // data replaces it (seeded stale — see threadSnapshot).
+  useEffect(() => {
+    if (!self || !peer || !support) return;
+    void prewarmDm17ThreadSnapshot(queryClient, self, peer, queryKey);
+  }, [queryClient, self, peer, support, queryKey]);
+
   const query = useQuery<OpenedDm[]>({
     queryKey,
     enabled: !!self && !!peer && support,
@@ -824,6 +834,16 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       return next ?? old;
     });
   }, [query.data]);
+
+  // Persist the newest window for the next cold open. The STORE rows only:
+  // optimistic rows are not in the store, and a failed send must not come back
+  // from a snapshot looking confirmed.
+  useEffect(() => {
+    if (!self || !peer) return;
+    const rows = query.data;
+    if (!rows || rows.length === 0) return;
+    void persistDm17ThreadSnapshot(self, peer, rows);
+  }, [self, peer, query.data]);
 
   /**
    * Seal + wrap + publish one rumor: the peer's copy to their kind-10050
