@@ -1,11 +1,21 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useNostr } from "@nostrify/react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, Loader2, Megaphone } from "lucide-react";
+import { ChevronRight, AlertTriangle, Loader2, Megaphone } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
@@ -231,6 +241,7 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const name = folded?.metadata?.name ?? community?.name ?? "this community";
 
@@ -278,6 +289,10 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
     }
   };
 
+  // Whether this share is the step that makes the community public: it has no
+  // live invite link yet, so sharing mints its first one.
+  const makesPublic = willMint && !isPublic;
+
   const handleShare = async () => {
     setError(null);
     if (!community || !eligible) return;
@@ -315,6 +330,17 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
     }
   };
 
+  // A first listing publishes the link's secret, and possibly mints the
+  // community's first link too, so it routes through an in-app confirm.
+  // Updating an existing listing just re-posts what is already public.
+  const handleShareClick = () => {
+    if (!listed) {
+      setConfirmOpen(true);
+      return;
+    }
+    void handleShare();
+  };
+
   if (!eligible) {
     return isLoading ? (
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -346,20 +372,29 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
         Its name and images come from the community itself, so the listing stays current as they
         change.
       </p>
+      {/* The consequence is shown up front, before the click, when this share
+          would mint the community's first invite link. */}
+      {!listed && makesPublic && (
+        <Alert variant="destructive">
+          <AlertTriangle className="size-4" />
+          <AlertTitle>Invite links make communities public</AlertTitle>
+          <AlertDescription>
+            Anyone who gets the link can read every message sent up to this point in the
+            community's public channels.
+          </AlertDescription>
+        </Alert>
+      )}
       {!listed && (
         <Alert>
           <AlertDescription>
-            Sharing publishes an invite link from your account — including its secret — so anyone
+            Sharing publishes an invite link from your account, including its secret, so anyone
             can find and join.
-            {willMint && !isPublic
-              ? " It also creates this community's first invite link, making the community public until every link is revoked."
-              : ""}
           </AlertDescription>
         </Alert>
       )}
       <Button
         type="button"
-        onClick={handleShare}
+        onClick={handleShareClick}
         // Also parked while the Invite List loads: `reusable` is blind until
         // then, and sharing early would mint a needless duplicate link.
         disabled={busy || linksLoading || myAnnouncements.isLoading}
@@ -392,6 +427,28 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
+
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {makesPublic
+                ? "Are you sure you want to make this community\u00A0public?"
+                : "Share this community to Discover?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              The listing publishes the invite link, including its secret, from your account, so
+              anyone can find and join.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void handleShare()}>
+              {makesPublic ? "Make Room Public and Share" : "Share Publicly"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

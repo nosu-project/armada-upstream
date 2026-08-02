@@ -422,6 +422,8 @@ export function ConcordPage() {
   const canManageMetadata = Boolean(
     user && roster && isAuthorized(roster.roster, user.pubkey, ownerHex, Permissions.MANAGE_METADATA),
   );
+  // Only the owner and admins see the invite entry point; a plain member does not.
+  const iAmAdminOrOwner = Boolean(user && (iAmOwner || (roster ? rosterIsAdmin(roster.roster, user.pubkey) : false)));
   const canKickAny = Boolean(
     user && roster && isAuthorized(roster.roster, user.pubkey, ownerHex, Permissions.KICK),
   );
@@ -769,7 +771,7 @@ export function ConcordPage() {
                     onClick: markAllChannelsRead,
                   },
                   {
-                    show: !!user,
+                    show: iAmAdminOrOwner,
                     icon: <UserPlus className="size-4" />,
                     label: "Invite people",
                     onClick: () => setInviteOpen(true),
@@ -950,7 +952,7 @@ export function ConcordPage() {
           <Hash className="size-5 text-muted-foreground shrink-0" />
           <h1 className="font-semibold truncate leading-tight">{channel?.name ?? "…"}</h1>
           <div className="ml-auto flex items-center gap-0.5">
-            {user && (
+            {iAmAdminOrOwner && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button variant="ghost" size="icon" className="size-8 touch:size-11" aria-label="Invite people" onClick={() => setInviteOpen(true)}>
