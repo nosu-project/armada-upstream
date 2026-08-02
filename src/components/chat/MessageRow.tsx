@@ -131,7 +131,11 @@ interface MessageRowProps {
    * Absent on messages that weren't bridged.
    */
   proxy?: ProxyInfo | null;
-  /** Extra controls rendered right-aligned on the header row (action toolbar). */
+  /**
+   * Extra controls rendered right-aligned on the header row (action toolbar).
+   * Mounted lazily — the node is only rendered once the row is first hovered or
+   * focused, so passing it costs nothing on rows the reader never touches.
+   */
   actions?: ReactNode;
   /** Extra content rendered above the body (e.g. a reply-context line). */
   beforeBody?: ReactNode;
@@ -189,6 +193,14 @@ export const MessageRow = memo(function MessageRow({
   onLongPress,
 }: MessageRowProps) {
   const longPress = useLongPress(onLongPress);
+  // The floated action toolbar is invisible until the row is hovered or
+  // focused, but mounting it costs a reaction picker, an overflow menu and half
+  // a dozen tooltip roots — per row, times every row in the window. So it is
+  // not built until the pointer (or focus) actually arrives. Latched on: once a
+  // row has been visited, keeping its toolbar mounted is cheaper than
+  // rebuilding it every time the pointer passes back over.
+  const [actionsArmed, setActionsArmed] = useState(false);
+  const armActions = actions ? () => setActionsArmed(true) : undefined;
   // Mesh authors carry an explicit identity; skip the Nostr author/profile
   // lookups entirely for them (the pubkey is a mesh peer id, not a real key).
   const author = useAuthor(identityOverride ? undefined : pubkey);
@@ -224,6 +236,14 @@ export const MessageRow = memo(function MessageRow({
       {...containerProps}
       {...(onSwipeReply ? swipe.touchHandlers : undefined)}
       {...longPress}
+      onPointerEnter={(e) => {
+        armActions?.();
+        containerProps?.onPointerEnter?.(e);
+      }}
+      onFocusCapture={(e) => {
+        armActions?.();
+        containerProps?.onFocusCapture?.(e);
+      }}
       className={cn(
         "group relative flex items-start gap-3 px-2.5 rounded hover:bg-secondary/40 transition-colors hover:z-10 focus-within:z-10",
         continuation ? "py-0.5" : "py-1.5",
@@ -363,7 +383,7 @@ export const MessageRow = memo(function MessageRow({
             )}
           </div>
         )}
-        {actions && (
+        {actions && actionsArmed && (
           // Float the action toolbar above the top-right edge of the row rather
           // than inline on the header. Inline, a long name/title would get
           // crushed by the buttons; floating keeps the full name visible and the

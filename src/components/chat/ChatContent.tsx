@@ -1,5 +1,5 @@
 import { nip19 } from "nostr-tools";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { BlurhashCanvas } from "@/components/BlurhashCanvas";
@@ -317,7 +317,33 @@ function cacheTokens(id: string, content: string, tokens: ContentToken[]): Conte
   return tokens;
 }
 
-export function ChatContent({ event, className, disableNoteEmbeds = false, highlight, contentOverride, noMentionAtPrefix = false, clampLines, documentMarkdown = false }: ChatContentProps) {
+/**
+ * The body tokenizer's alternation: markdown image | BOLT11 invoice | URL |
+ * `nostr:`-prefixed NIP-19 id | bare/`@`-prefixed NIP-19 id | hashtag | Cashu
+ * token. Built once — it was being recompiled for every plain-text segment of
+ * every message, which on a channel open is thousands of identical
+ * `new RegExp` compilations of a ~400-character pattern.
+ *
+ * Shared, so it carries `lastIndex` between uses: {@link tokenizeSegment}
+ * resets it before scanning. Safe because the scan is synchronous and never
+ * re-enters itself (the markdown pass calls it, not the other way round).
+ */
+const SEGMENT_RE = new RegExp(
+  // Markdown image `![alt](url)` (Buzz posts use it) — captured first so
+  // the `![alt](` / `)` wrapper is consumed rather than left as stray text.
+  "!\\[[^\\]]*\\]\\((https?:\\/\\/[^\\s)]+)\\)" +
+  "|(?:lightning:)?(ln(?:bc|tb|bcrt|tbs)\\d*[munp]?1[023456789acdefghjklmnpqrstuvwxyz]+)" +
+  "|((?:https?|wss?):\\/\\/[^\\s]+)" +
+  "|nostr:(npub1|note1|nprofile1|nevent1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)" +
+  "|@?(npub1|note1|nprofile1|nevent1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)" +
+  `|(${HASHTAG_PATTERN})` +
+  // Cashu ecash token. Appended last so the group numbers above are
+  // untouched; nothing else in the alternation starts with `cashu`.
+  `|(${CASHU_TOKEN_PATTERN})`,
+  "giu",
+);
+
+function ChatContentInner({ event, className, disableNoteEmbeds = false, highlight, contentOverride, noMentionAtPrefix = false, clampLines, documentMarkdown = false }: ChatContentProps) {
   const rawTokens = useMemo(() => {
     const text = contentOverride ?? event.content;
     // The dialect is part of the identity: the same event tokenizes
@@ -370,20 +396,8 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
     // BOLT11 invoices | URLs | nostr:-prefixed NIP-19 ids | @-prefixed or
     // bare NIP-19 ids | hashtags | Cashu tokens.
     const tokenizeSegment = (segment: string): ContentToken[] => {
-      const regex = new RegExp(
-        // Markdown image `![alt](url)` (Buzz posts use it) — captured first so
-        // the `![alt](` / `)` wrapper is consumed rather than left as stray text.
-        "!\\[[^\\]]*\\]\\((https?:\\/\\/[^\\s)]+)\\)" +
-        "|(?:lightning:)?(ln(?:bc|tb|bcrt|tbs)\\d*[munp]?1[023456789acdefghjklmnpqrstuvwxyz]+)" +
-        "|((?:https?|wss?):\\/\\/[^\\s]+)" +
-        "|nostr:(npub1|note1|nprofile1|nevent1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)" +
-        "|@?(npub1|note1|nprofile1|nevent1|naddr1)([023456789acdefghjklmnpqrstuvwxyz]+)" +
-        `|(${HASHTAG_PATTERN})` +
-        // Cashu ecash token. Appended last so the group numbers above are
-        // untouched; nothing else in the alternation starts with `cashu`.
-        `|(${CASHU_TOKEN_PATTERN})`,
-        "giu",
-      );
+      const regex = SEGMENT_RE;
+      regex.lastIndex = 0;
 
       const out: ContentToken[] = [];
       let lastIndex = 0;
@@ -1192,6 +1206,14 @@ export function ChatContent({ event, className, disableNoteEmbeds = false, highl
 
   return <CollapsibleContent>{body}</CollapsibleContent>;
 }
+
+/**
+ * Memoized: a message row re-renders for reasons that have nothing to do with
+ * its body (a reaction lands, the row goes active, a local dialog opens), and
+ * re-running the body means re-walking six token memos and re-reconciling the
+ * mention profile queries for every mounted row in the window.
+ */
+export const ChatContent = memo(ChatContentInner);
 
 /**
  * Wraps a rendered message body, clamping it to a fixed height with a

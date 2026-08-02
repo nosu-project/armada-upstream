@@ -889,6 +889,10 @@ const ChatMessageInner = memo(function ChatMessageInner({
         reactions={canWrite && !isEditing && reactions ? reactions : undefined}
       />
     )}
+    {/* Mounted only while open, like the zap dialog below: a Radix dialog root
+        per message row is pure weight on a long timeline, and neither of these
+        is reachable without first opening a menu. */}
+    {confirmDelete && (
     <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
       <AlertDialogContent>
         <AlertDialogHeader>
@@ -908,9 +912,11 @@ const ChatMessageInner = memo(function ChatMessageInner({
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+    )}
     {zapOpen && (
       <ZapDialog open={zapOpen} onOpenChange={setZapOpen} target={event} sendZap={onSendZap} sendOnchainZap={onSendOnchainZap} />
     )}
+    {jsonOpen && (
     <Dialog open={jsonOpen} onOpenChange={setJsonOpen}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
@@ -935,6 +941,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
         </div>
       </DialogContent>
     </Dialog>
+    )}
     </>
   );
 });
