@@ -206,6 +206,17 @@ export function eTargetOf(ev: { tags: string[][] }): string | undefined {
 export interface ChatModeration {
   /** Banned author pubkeys — every event from them is dropped (CORD-04 §4). */
   banned: Set<string>;
+  /** Epochs (decimal strings) whose keys are retired — sealed history. */
+  retiredEpochs?: ReadonlySet<string>;
+  /**
+   * Identity-anchored authors permitted to appear in retired epochs (see
+   * historicalAuthors.ts). Undefined = no anchor available: fail OPEN and
+   * display everything, exactly as before the allow-list existed. When set,
+   * a retired-epoch event from an author outside it is dropped — an ejected
+   * keyholder can forge any timestamp, but not their presence in a
+   * refounder-signed snapshot, the roster, or a rotation's blob locators.
+   */
+  historicalAuthors?: ReadonlySet<string>;
   /**
    * Whether `deleter` may delete a message by `author` (MANAGE_MESSAGES).
    *
@@ -315,6 +326,16 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
 
   for (const ev of opened) {
     if (moderation?.banned.has(ev.author)) continue;
+    // Retired-epoch history admits only identity-anchored authors (see
+    // ChatModeration.historicalAuthors). Current-epoch events never touch
+    // this — the live epoch keeps CORD-02 §5's unsuppressable self-attestation.
+    if (
+      moderation?.historicalAuthors &&
+      moderation.retiredEpochs?.has(ev.epoch.toString()) &&
+      !moderation.historicalAuthors.has(ev.author)
+    ) {
+      continue;
+    }
 
     if (ev.kind === KIND_DELETE) {
       // NIP-09 shape: possibly several `e` targets.

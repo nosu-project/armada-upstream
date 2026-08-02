@@ -46,9 +46,10 @@ export interface JoinMaterial {
    * Armada extension: retained prior roots `[{epoch, key}]` (current excluded).
    * `retired_at` (epoch-seconds the superseding rotation published) is the
    * hard read cutoff for that epoch; absent for epochs retired before this
-   * client recorded cutoffs.
+   * client recorded cutoffs. `refounder` names the npub whose Refounding
+   * minted that epoch — its Guestbook's snapshot authority (CORD-02 §5).
    */
-  held_roots?: Array<{ epoch: number; key: string; retired_at?: number }>;
+  held_roots?: Array<{ epoch: number; key: string; retired_at?: number; refounder?: string }>;
   /** Armada extension: the npub whose Refounding minted `root_epoch`. */
   refounder?: string;
   [k: string]: unknown;
@@ -516,7 +517,14 @@ export function rehydrateCommunity(entry: CommunityListEntry, extraRelays: strin
     const root = hex32(jm.community_root);
     const rootEpoch = BigInt(jm.root_epoch);
 
-    const heldRoots: HeldRoot[] = [{ epoch: rootEpoch, key: root }];
+    const asRefounder = (v: unknown): string | undefined =>
+      typeof v === "string" && /^[0-9a-f]{64}$/i.test(v) ? v.toLowerCase() : undefined;
+    // The current head's refounder is the top-level `refounder` field; retained
+    // roots carry their own, so historical snapshot authority survives the walk.
+    const currentRefounder = asRefounder(jm.refounder);
+    const heldRoots: HeldRoot[] = [
+      { epoch: rootEpoch, key: root, ...(currentRefounder ? { refounder: currentRefounder } : {}) },
+    ];
     for (const hr of jm.held_roots ?? []) {
       try {
         const epoch = BigInt(hr.epoch);
@@ -525,7 +533,13 @@ export function rehydrateCommunity(entry: CommunityListEntry, extraRelays: strin
           typeof hr.retired_at === "number" && Number.isFinite(hr.retired_at) && hr.retired_at > 0
             ? Math.floor(hr.retired_at)
             : undefined;
-        heldRoots.push({ epoch, key: hex32(hr.key), ...(retiredAt !== undefined ? { retiredAt } : {}) });
+        const refounder = asRefounder(hr.refounder);
+        heldRoots.push({
+          epoch,
+          key: hex32(hr.key),
+          ...(retiredAt !== undefined ? { retiredAt } : {}),
+          ...(refounder ? { refounder } : {}),
+        });
       } catch {
         // skip malformed retained roots
       }
@@ -660,6 +674,7 @@ export function toJoinMaterial(c: CommunityV2, opts?: { relays?: string[]; prior
       epoch: Number(r.epoch),
       key: bytesToHex(r.key),
       ...(r.retiredAt !== undefined ? { retired_at: r.retiredAt } : {}),
+      ...(r.refounder ? { refounder: r.refounder } : {}),
     }));
   return {
     // Round-trip unknown fields from the prior snapshot (CORD-02 §6/§8).

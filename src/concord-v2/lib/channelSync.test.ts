@@ -222,3 +222,33 @@ describe("channelSync — the c2: topic handler", () => {
     release();
   });
 });
+
+describe("channelFilters (retired-epoch fetch policy)", () => {
+  it("until-caps retired streams and drops them from the author set once frozen", async () => {
+    const m = await freshModules();
+    const channel = makeChannel(m);
+    const oldGroup = m.channelGroupKey(root, channel.id, 5);
+    const withRetired: ChannelV2 = {
+      ...channel,
+      streams: [channel.current, { epoch: 5n, group: oldGroup, retiredAt: 500 }],
+    };
+
+    // Live stream pages normally; the retired stream is `until`-capped at its
+    // cutoff (+ skew slack) — a lazy-spam trim, not a boundary (timestamps are
+    // forgeable; the decode/fold cutoffs are the enforcement).
+    const both = m.channelFilters(withRetired, { limit: 50 });
+    expect(both).toEqual([
+      { kinds: [1059], authors: [channel.current.group.pk], limit: 50 },
+      { kinds: [1059], authors: [oldGroup.pk], limit: 50, until: 500 + 3600 },
+    ]);
+
+    // A paging cursor below the cap tightens it further.
+    const paged = m.channelFilters(withRetired, { limit: 50, cursor: 300 });
+    expect(paged[1].until).toBe(300);
+
+    // FROZEN (history swept to exhaustion): the retired address leaves the
+    // author set entirely — the only spam-proof filter dimension is not asking.
+    const frozen = m.channelFilters(withRetired, { limit: 50, freezeRetired: true });
+    expect(frozen).toEqual([{ kinds: [1059], authors: [channel.current.group.pk], limit: 50 }]);
+  });
+});

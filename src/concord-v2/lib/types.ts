@@ -236,6 +236,15 @@ export interface HeldRoot {
    * Absent on the current root, and on roots retired before cutoffs existed.
    */
   retiredAt?: number;
+  /**
+   * The npub whose Refounding minted this epoch (x-only hex) — the snapshot
+   * authority for ITS Guestbook (CORD-02 §5: a snapshot "is honored only from
+   * the npub whose Refounding minted that epoch"). Recorded so historical
+   * epochs' snapshots stay verifiable after the rotator's rank (or the
+   * `refounder` field, which only names the CURRENT epoch's) has moved on.
+   * Absent at genesis (the owner) and on epochs adopted before this existed.
+   */
+  refounder?: string;
 }
 
 /**

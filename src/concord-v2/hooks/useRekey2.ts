@@ -334,7 +334,9 @@ export function useRekeyWatch2(community: CommunityV2 | undefined): { stranded: 
         // sealed under it is ever read again (see `HeldRoot.retiredAt`).
         const retiredAt = Math.floor(adopted.publishedAtMs / 1000);
         const heldRoots: HeldRoot[] = [
-          { epoch: nextEpoch, key: adopted.key },
+          // The rotator is this epoch's snapshot authority (CORD-02 §5),
+          // recorded per root so it survives later rotations.
+          { epoch: nextEpoch, key: adopted.key, refounder: adopted.rotator },
           ...community.heldRoots.map((r) =>
             r.epoch === community.rootEpoch && r.retiredAt === undefined ? { ...r, retiredAt } : r,
           ),
@@ -1184,7 +1186,7 @@ export function useRefound2(community: CommunityV2 | undefined) {
             ...community,
             root: newRoot,
             rootEpoch: newEpoch,
-            heldRoots: [{ epoch: newEpoch, key: newRoot }, ...retiredPriorRoots],
+            heldRoots: [{ epoch: newEpoch, key: newRoot, refounder: user.pubkey }, ...retiredPriorRoots],
             refounder: user.pubkey,
           },
           { prior: entry?.current, relays: entry?.current.relays },
@@ -1360,7 +1362,7 @@ export function useRefound2(community: CommunityV2 | undefined) {
         ...community,
         root: newRoot,
         rootEpoch: newEpoch,
-        heldRoots: [{ epoch: newEpoch, key: newRoot }, ...retiredPriorRoots],
+        heldRoots: [{ epoch: newEpoch, key: newRoot, refounder: user.pubkey }, ...retiredPriorRoots],
         privateChannels: rotatedChannels,
         refounder: user.pubkey,
       };

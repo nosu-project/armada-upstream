@@ -389,6 +389,44 @@ describe("chat plane (CORD-03)", () => {
     expect(filterEpochCutoff(rows, uncapped)).toBe(rows);
   });
 
+  it("retired-epoch history admits only allow-listed authors; the live epoch is untouched", () => {
+    const anchored = "aa".repeat(32);
+    const throwaway = "bb".repeat(32);
+    const mk = (content: string, author: string, epoch: bigint, ms: number) => ({
+      rumorId: content,
+      author,
+      kind: KIND_MESSAGE,
+      content,
+      tags: [],
+      ms,
+      createdAt: Math.floor(ms / 1000),
+      channelIdHex,
+      epoch,
+    });
+    const rows = [
+      mk("legit-old", anchored, 0n, 1000),
+      // An old keyholder can seal this with any timestamp — but not forge the
+      // author into a snapshot/roster/rotation, which is what the list encodes.
+      mk("forged-old", throwaway, 0n, 1100),
+      mk("live", throwaway, 1n, 1200),
+    ];
+    const gated = foldTimeline(rows, {
+      banned: new Set(),
+      canDelete: () => false,
+      retiredEpochs: new Set(["0"]),
+      historicalAuthors: new Set([anchored]),
+    });
+    expect(gated.messages.map((m) => m.content)).toEqual(["legit-old", "live"]);
+
+    // No anchor available → fail OPEN (display hardening, not consensus).
+    const open = foldTimeline(rows, {
+      banned: new Set(),
+      canDelete: () => false,
+      retiredEpochs: new Set(["0"]),
+    });
+    expect(open.messages).toHaveLength(3);
+  });
+
   it("silently skips wraps from epochs we don't hold", async () => {
     const channel = makeChannel();
     const alice = signer();
