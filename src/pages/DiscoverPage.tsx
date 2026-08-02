@@ -20,6 +20,10 @@ const EmojiPackDialog = lazy(() =>
   import("@/components/discover/EmojiPackDialog").then((m) => ({ default: m.EmojiPackDialog })),
 );
 
+const ThemeCreatorDialog = lazy(() =>
+  import("@/components/discover/ThemeCreatorDialog").then((m) => ({ default: m.ThemeCreatorDialog })),
+);
+
 type DiscoverTab = "communities" | "emojis" | "themes";
 
 const TABS: { id: DiscoverTab; label: string; icon: typeof Users; placeholder: string }[] = [
@@ -44,6 +48,7 @@ export function DiscoverPage() {
     themes: "",
   });
   const [createOpen, setCreateOpen] = useState(false);
+  const [themeCreateOpen, setThemeCreateOpen] = useState(false);
   const query = queries[tab];
   const setQuery = (v: string) => setQueries((prev) => ({ ...prev, [tab]: v }));
   const active = TABS.find((t) => t.id === tab)!;
@@ -139,6 +144,18 @@ export function DiscoverPage() {
                 <span className="sr-only sm:hidden">Create emoji pack</span>
               </Button>
             )}
+
+            {/* Second tenant of the same slot — the two never co-render. */}
+            {tab === "themes" && user && (
+              <Button
+                className="h-9 touch:h-11 shrink-0 clip-corner-lg"
+                onClick={() => setThemeCreateOpen(true)}
+              >
+                <Plus className="size-4" />
+                <span className="hidden sm:inline">New theme</span>
+                <span className="sr-only sm:hidden">Create theme</span>
+              </Button>
+            )}
           </div>
         </div>
 
@@ -153,6 +170,12 @@ export function DiscoverPage() {
       {createOpen && (
         <Suspense fallback={null}>
           <EmojiPackDialog open={createOpen} onOpenChange={setCreateOpen} />
+        </Suspense>
+      )}
+
+      {themeCreateOpen && (
+        <Suspense fallback={null}>
+          <ThemeCreatorDialog open={themeCreateOpen} onOpenChange={setThemeCreateOpen} />
         </Suspense>
       )}
     </>
@@ -243,7 +266,7 @@ function ThemesTab({ query }: { query: string }) {
       <TabState icon={Palette}>
         {query.trim()
           ? "No themes matched your search."
-          : "No shared themes found. Share one from Settings → Appearance."}
+          : "No shared themes found. Publish one with New theme and it'll show up here."}
       </TabState>
     );
   }

@@ -1,20 +1,18 @@
 import { Check, Loader2, Palette, Share2 } from "lucide-react";
 import { useState } from "react";
 
+import { ThemeBuilderFields } from "@/components/ThemeBuilderFields";
 import { Button } from "@/components/ui/button";
-import { ColorPicker } from "@/components/ui/color-picker";
 import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { useTheme } from "@/hooks/useTheme";
 import { useUserThemes } from "@/hooks/useUserThemes";
 import { toast } from "@/hooks/useToast";
 import { buildThemeDefinitionEvent } from "@/lib/themeEvent";
-import { hexToHslString, hslStringToHex } from "@/lib/colorUtils";
 import { cn } from "@/lib/utils";
 import {
+  builderStarterColors,
   builtinThemes,
   coreToTokens,
   themePresets,
@@ -220,16 +218,9 @@ interface BuilderProps {
   onApply: (config: ThemeConfig) => void;
 }
 
-const STARTER: CoreThemeColors = { background: "222 18% 9%", text: "220 14% 92%", primary: "235 80% 68%" };
-
 function ThemeBuilderDialog({ open, onOpenChange, initial, onApply }: BuilderProps) {
-  const [colors, setColors] = useState<CoreThemeColors>(initial?.colors ?? STARTER);
+  const [colors, setColors] = useState<CoreThemeColors>(initial?.colors ?? builderStarterColors);
   const [title, setTitle] = useState(initial?.title ?? "My theme");
-
-  const update = (channel: keyof CoreThemeColors) => (hex: string) =>
-    setColors((c) => ({ ...c, [channel]: hexToHslString(hex) }));
-
-  const tokens = coreToTokens(colors);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -247,43 +238,12 @@ function ThemeBuilderDialog({ open, onOpenChange, initial, onApply }: BuilderPro
         </div>
 
         <div className="mt-6 space-y-5">
-          {/* Live preview */}
-          <div
-            className="clip-corner-lg p-4 space-y-3"
-            style={{ backgroundColor: `hsl(${tokens.background})`, color: `hsl(${tokens.foreground})` }}
-          >
-            <div className="flex items-center gap-2">
-              <span className="size-8 rounded-full" style={{ backgroundColor: `hsl(${tokens.primary})` }} />
-              <div className="flex-1">
-                <div className="text-sm font-semibold">{title || "Preview"}</div>
-                <div className="text-xs" style={{ color: `hsl(${tokens.mutedForeground})` }}>
-                  The quick brown fox.
-                </div>
-              </div>
-              <span
-                className="clip-corner-lg px-2 py-1 text-xs font-medium"
-                style={{ backgroundColor: `hsl(${tokens.primary})`, color: `hsl(${tokens.primaryForeground})` }}
-              >
-                Button
-              </span>
-            </div>
-            <div className="rounded-md p-2 text-xs" style={{ backgroundColor: `hsl(${tokens.secondary})` }}>
-              A muted surface row.
-            </div>
-          </div>
-
-          <div className="flex items-start justify-around">
-            <ColorPicker label="Background" value={hslStringToHex(colors.background)} onChange={update("background")} />
-            <ColorPicker label="Text" value={hslStringToHex(colors.text)} onChange={update("text")} />
-            <ColorPicker label="Primary" value={hslStringToHex(colors.primary)} onChange={update("primary")} />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="theme-title" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Name
-            </Label>
-            <Input id="theme-title" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={40} />
-          </div>
+          <ThemeBuilderFields
+            colors={colors}
+            onColorsChange={setColors}
+            title={title}
+            onTitleChange={setTitle}
+          />
 
           <div className="flex gap-2 pt-1">
             <Button type="button" variant="ghost" className="flex-1 clip-corner-lg" onClick={() => onOpenChange(false)}>

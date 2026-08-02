@@ -101,6 +101,13 @@ export const builtinThemes: Record<"light" | "dark", CoreThemeColors> = {
   },
 };
 
+/** The colors a fresh custom theme starts from in the builder. */
+export const builderStarterColors: CoreThemeColors = {
+  background: "222 18% 9%",
+  text: "220 14% 92%",
+  primary: "235 80% 68%",
+};
+
 /** Metadata for a theme preset. */
 export interface ThemePreset {
   /** Display label. */
