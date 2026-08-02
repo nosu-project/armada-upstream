@@ -313,8 +313,10 @@ export function useCreateRelayCandidates2(enabled = true) {
 /**
  * Create / preview / join for Concord V2 communities. Creating publishes the
  * genesis Control Plane — EXACTLY two owner-signed editions, the metadata and
- * one public `#general` (CORD-02 §1) — plus the creator's own Guestbook Join,
- * and records the keys in the Community List (the only durable record).
+ * one public `#general` (CORD-02 §1) — records the keys in the Community List
+ * (the only durable record), announces the creator's own Guestbook Join, and
+ * follows up with one private `#private` starter room so a fresh community
+ * shows both channel shapes.
  */
 export function useCommunityActions2() {
   const { nostr } = useNostr();
@@ -375,12 +377,68 @@ export function useCommunityActions2() {
         ),
       );
 
+      // The second starter room: a private #private, born the way any private
+      // channel is (see createChannel): its key goes into the vault entry
+      // below BEFORE its edition publishes — a lost list write would
+      // otherwise orphan the only copy of the key behind a live channel
+      // definition, unreadable forever.
+      const privateStarter: PrivateChannelKey = { id: random32(), key: random32(), epoch: 0n, name: "private" };
+      community.privateChannels = [privateStarter];
+
       // Record membership FIRST (the vault), then announce presence.
       const jm = toJoinMaterial(community, { relays: community.relays });
       await updateList({
         type: "add",
         entry: { community_id: community.idHex, seed: jm, current: jm, added_at: Date.now() },
       });
+
+      // The private starter room's access role, then its channel edition (the
+      // createChannel ordering: a role scoped to a channel that never
+      // appeared is inert, a channel whose role mint failed is a visible
+      // room with no access list). Best-effort past this point: genesis
+      // landed and membership is recorded, so failing the create here would
+      // strand a working community behind an error and invite a duplicate
+      // retry — roll the unused key back out and ship #general alone.
+      try {
+        // The owner's rank needs no fold (supremacy comes from the
+        // community_id commitment), so this resolves before anything is
+        // readable back; the throw is unreachable for the creator.
+        const position = accessRolePosition(undefined, user.pubkey, community.owner);
+        if (position === undefined) throw new Error("No resolvable rank for the access role.");
+        await publishEdition2(
+          nostr,
+          community,
+          user.signer,
+          buildRoleEdition(
+            {
+              roleId: bytesToHex(random32()),
+              name: "private",
+              position,
+              permissions: 0n,
+              scope: { kind: "channel", channelId: bytesToHex(privateStarter.id) },
+              color: 0,
+            },
+            { actorPubkey: user.pubkey, version: 1n },
+          ),
+        );
+        await publishEdition2(
+          nostr,
+          community,
+          user.signer,
+          buildChannelEdition(
+            privateStarter.id,
+            { name: "private", private: true },
+            { actorPubkey: user.pubkey, version: 1n },
+          ),
+        );
+      } catch {
+        community.privateChannels = [];
+        await updateList({
+          type: "refresh-channels",
+          communityId: community.idHex,
+          channels: channelKeysToWire([]),
+        }).catch(() => undefined);
+      }
 
       // Best-effort founder Join, so the member list has a firsthand entry.
       void (async () => {
