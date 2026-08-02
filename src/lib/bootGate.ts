@@ -53,6 +53,27 @@ export function isBootGateOpen(): boolean {
   return open;
 }
 
+/**
+ * Run `listener` once, when the gate opens (immediately if it already has).
+ * Returns a cancel. The non-React seam: the sync scheduler is a plain module,
+ * not a component, and needs the same "wait for first paint" deferral as the
+ * mounted ingest drivers.
+ */
+export function onBootGateOpen(listener: () => void): () => void {
+  if (open) {
+    listener();
+    return () => undefined;
+  }
+  const once = (): void => {
+    listeners.delete(once);
+    listener();
+  };
+  listeners.add(once);
+  return () => {
+    listeners.delete(once);
+  };
+}
+
 /** Reactive gate state, for mounting the deferred ingest drivers. */
 export function useBootGateOpen(): boolean {
   return useSyncExternalStore(
