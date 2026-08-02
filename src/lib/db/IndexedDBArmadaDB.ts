@@ -119,28 +119,105 @@ class IndexedDBRumorStore implements NRumorStore {
     return events.map(toRumor);
   }
 
+  /**
+   * Writes queued for the on-disk existence check, keyed by id. Duplicate
+   * `event()` calls for one id inside a window collapse onto one entry.
+   */
+  private gate = new Map<
+    string,
+    {
+      rumor: NostrRumor;
+      opts?: { signal?: AbortSignal };
+      settlers: Array<{ resolve: () => void; reject: (error: unknown) => void }>;
+    }
+  >();
+  /** Whether a gate flush is already scheduled for the current burst. */
+  private gateScheduled = false;
+
   event(event: NostrRumor, opts?: { signal?: AbortSignal }): Promise<void> {
-    // An id is a hash of the event, so a re-write can store nothing new. The
-    // relay cache re-writes heavily (every event out of every query and req),
-    // and each skipped write is a batch entry, a promise, a tag-index extraction
-    // and a share of a transaction not paid.
+    // An id is a hash of the event, so a re-write can store nothing new. Two
+    // dedupe layers, cheapest first: `written` remembers what THIS session
+    // committed (or proved on disk), free but empty at boot — and the gate
+    // below asks the database itself about everything else, which is what
+    // stops a warm boot from re-writing its whole downloaded corpus. Measured
+    // before the gate existed: 1587 writes into `main` on one warm boot with
+    // sweeps reporting "0 new", each write a share of a readwrite transaction
+    // that starved the boot's reads (a profile lookup averaged 21.9s).
     if (this.written.has(event.id)) {
       perfCount(`db.write ${this.label} (skipped)`, 0, 1, "events");
       return Promise.resolve();
     }
-    // Index entries, not events: Armada replaces Nostrify's single-letter tag
-    // policy with `defaultIndexTags`, which indexes EVERY tag under 20 chars —
-    // and the tag index is `multiEntry`, so one row is written per entry. A
-    // follow list or a big `p`-tagged event is therefore a write of hundreds of
-    // index rows dressed as a write of one event, and the count is the only way
-    // to see that in a total.
-    perfCount("db.index entries", 0, this.indexTags(event).length, "entries");
-    return perfTime(this.op("write"), async () => {
-      await this.settled(this.store.event(toEvent(event), opts));
-      // AFTER the commit: `resolved` means durable to every caller, and one of
-      // them ACKs (destroys) a parked wrap on the strength of it.
-      this.written.add(event.id);
+    return new Promise((resolve, reject) => {
+      const pending = this.gate.get(event.id);
+      if (pending) {
+        pending.settlers.push({ resolve, reject });
+        return;
+      }
+      this.gate.set(event.id, { rumor: event, opts, settlers: [{ resolve, reject }] });
+      if (!this.gateScheduled) {
+        this.gateScheduled = true;
+        // One macrotask captures a whole burst (the relay cache writes a
+        // message's events synchronously), so one readonly check serves it.
+        setTimeout(() => void this.flushGate(), 0);
+      }
     });
+  }
+
+  /**
+   * Resolve the queued batch: ONE ids query (pipelined primary-key gets in a
+   * readonly transaction — it does not contend with readers the way a
+   * readwrite does) splits the batch into rows the store already holds and
+   * rows it doesn't. Holds resolve immediately — the store having the row IS
+   * the durability every caller is owed, including the one that ACKs a parked
+   * wrap on it. Misses proceed to the write path exactly as before.
+   */
+  private async flushGate(): Promise<void> {
+    this.gateScheduled = false;
+    const batch = this.gate;
+    this.gate = new Map();
+    if (batch.size === 0) return;
+
+    let existing = new Set<string>();
+    try {
+      const rows = await perfTime(
+        this.op("precheck"),
+        () => this.settled(this.store.query([{ ids: [...batch.keys()] }])),
+        (found) => found.length,
+      );
+      existing = new Set(rows.map((row) => row.id));
+    } catch {
+      // An unanswerable check means every row is treated as missing — the
+      // write path re-writes some rows, which is the pre-gate behaviour.
+    }
+
+    for (const [id, entry] of batch) {
+      if (existing.has(id)) {
+        this.written.add(id);
+        perfCount(`db.write ${this.label} (on disk)`, 0, 1, "events");
+        for (const settler of entry.settlers) settler.resolve();
+        continue;
+      }
+      // Index entries, not events: Armada replaces Nostrify's single-letter tag
+      // policy with `defaultIndexTags`, which indexes EVERY tag under 20 chars —
+      // and the tag index is `multiEntry`, so one row is written per entry. A
+      // follow list or a big `p`-tagged event is therefore a write of hundreds of
+      // index rows dressed as a write of one event, and the count is the only way
+      // to see that in a total.
+      perfCount("db.index entries", 0, this.indexTags(entry.rumor).length, "entries");
+      void perfTime(this.op("write"), async () => {
+        await this.settled(this.store.event(toEvent(entry.rumor), entry.opts));
+        // AFTER the commit: `resolved` means durable to every caller, and one of
+        // them ACKs (destroys) a parked wrap on the strength of it.
+        this.written.add(id);
+      }).then(
+        () => {
+          for (const settler of entry.settlers) settler.resolve();
+        },
+        (error: unknown) => {
+          for (const settler of entry.settlers) settler.reject(error);
+        },
+      );
+    }
   }
 
   async count(
