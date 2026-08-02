@@ -21,6 +21,7 @@ import { isGitTimelineEntry, mergeChannelTimeline } from "@/components/chat/chan
 import { TypingIndicator } from "@/components/chat/TypingIndicator";
 import { VoiceParticipantList } from "@/components/VoicePresence";
 import { CommunityInfoDialog2 } from "@/concord-v2/components/CommunityInfoDialog2";
+import { AddChannelMembersDialog } from "@/concord-v2/components/AddChannelMembersDialog2";
 import { ImageLightbox2 } from "@/concord-v2/components/ImageLightbox2";
 import { InviteDialog2 } from "@/concord-v2/components/InviteDialog2";
 import { ShareToDiscoverDialog } from "@/concord-v2/components/ShareToDiscoverDialog";
@@ -1248,6 +1249,7 @@ export function ConcordV2Page() {
     setCommunityMenuOpen(false);
   }, [communityId]);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [addMembersOpen, setAddMembersOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [shareDiscoverOpen, setShareDiscoverOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);
@@ -1510,6 +1512,23 @@ export function ConcordV2Page() {
     () => roleSections?.map((s) => ({ ...s, members: s.members.filter(entitledHere) })).filter((s) => s.members.length > 0),
     [roleSections, entitledHere],
   );
+
+  // "Add members" to a private channel = grant one of its scoped Roles (the
+  // grant vends the key, handleToggleRole). The panel affordance exists only
+  // when the viewer can actually grant one: MANAGE_ROLES alone doesn't cover
+  // a role whose position the viewer doesn't outrank.
+  const addableChannelRoles = useMemo(() => {
+    if (!channel?.isPrivate) return [];
+    const assignable = new Set((roleCatalog ?? []).filter((r) => r.assignable).map((r) => r.id));
+    return (channelRoleCatalog.get(channel.idHex) ?? []).filter((r) => assignable.has(r.id));
+  }, [channel, channelRoleCatalog, roleCatalog]);
+  const addMemberCandidates = useMemo(
+    () => (channel?.isPrivate ? memberPubkeys.filter((pk) => !entitledHere(pk)) : []),
+    [channel, memberPubkeys, entitledHere],
+  );
+
+  // The dialog is about ONE channel's access; switching rooms closes it.
+  useEffect(() => setAddMembersOpen(false), [channel?.idHex]);
 
   const handleCreateTextChannel = useCallback(async (name: string, opts?: { isPrivate?: boolean }) => {
     const { channelIdHex: created } = await createChannel({ name, isPrivate: opts?.isPrivate });
@@ -2915,6 +2934,11 @@ export function ConcordV2Page() {
                   }
                   onUnban={canBanAny ? (pk) => moderation.unban({ target: pk }).catch(() => {}) : undefined}
                   bannedPubkeys={moderation.banned}
+                  onAddMembers={
+                    channel?.isPrivate && addableChannelRoles.length > 0
+                      ? () => setAddMembersOpen(true)
+                      : undefined
+                  }
                   onClose={() => setMembersOpen(false)}
                 />
               </div>
@@ -2925,6 +2949,19 @@ export function ConcordV2Page() {
       </SwipeReveal>
 
       <InviteDialog2 community={community} open={inviteOpen} onOpenChange={setInviteOpen} />
+      {channel?.isPrivate && (
+        <AddChannelMembersDialog
+          open={addMembersOpen}
+          onOpenChange={setAddMembersOpen}
+          channelName={channel.name}
+          candidates={addMemberCandidates}
+          roles={addableChannelRoles}
+          onAdd={(pk, roleId) => handleToggleRole(pk, roleId, true)}
+          isAdding={roleIntent.isPending}
+          hasRole={(pk, roleId) => roleIntent.rolesFor(pk).includes(roleId)}
+          holdsKey={privateChannelsHere.some((c) => c.idHex === channel.idHex && c.heldByMe)}
+        />
+      )}
       <ShareToDiscoverDialog
         open={shareDiscoverOpen}
         onOpenChange={setShareDiscoverOpen}

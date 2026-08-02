@@ -1,4 +1,4 @@
-import { AtSign, Ban, Bot, Copy, Crown, IdCard, MessageSquareText, MoreVertical, Music, Shield, ShieldOff, Smile, UserCog, UserMinus, X } from "lucide-react";
+import { AtSign, Ban, Bot, Copy, Crown, IdCard, MessageSquareText, MoreVertical, Music, Shield, ShieldOff, Smile, UserCog, UserMinus, UserPlus, X } from "lucide-react";
 
 import { useState } from "react";
 
@@ -520,6 +520,12 @@ interface MemberListProps {
    * groups below (a member appears exactly once).
    */
   roleSections?: Array<{ id: string; name: string; color: number; members: string[] }>;
+  /**
+   * Concord: open the add-members flow for the active private channel. Set
+   * only when the viewer may grant the channel's access role, so the panel
+   * carries the affordance exactly where the access it changes is shown.
+   */
+  onAddMembers?: () => void;
   /** Override the default desktop panel chrome (e.g. for the mobile drawer). */
   className?: string;
 }
@@ -549,6 +555,7 @@ export function MemberList({
   onToggleRole,
   isRoleToggling,
   roleSections,
+  onAddMembers,
   className,
 }: MemberListProps) {
   const adminMap = new Map(admins.map((a) => [a.pubkey, a.roles] as const));
@@ -594,6 +601,18 @@ export function MemberList({
             <X className="size-4" />
           </Button>
         </div>
+      )}
+      {onAddMembers && (
+        <button
+          type="button"
+          onClick={onAddMembers}
+          className="flex w-full shrink-0 items-center gap-2.5 pl-3 pr-2 py-2 mb-1 clip-corner-lg text-left text-sm text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+        >
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+            <UserPlus className="size-4" aria-hidden />
+          </span>
+          Add members
+        </button>
       )}
       {visibleAdmins.length > 0 && (
         <>
