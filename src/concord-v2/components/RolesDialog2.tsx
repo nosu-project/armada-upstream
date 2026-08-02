@@ -1,5 +1,5 @@
 import { GripVertical, Hash, Loader2, Plus, Shield, ShieldOff } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { DisplayName } from "@/components/DisplayName";
@@ -93,7 +93,9 @@ function RolesBody({ community }: { community: CommunityV2 }) {
   const [editing, setEditing] = useState<Role | null>(null);
   const [confirmRevoke, setConfirmRevoke] = useState<Role | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
+  const [dragOver, setDragOver] = useState<number | null>(null);
   /**
    * A refused order, held as role ids rather than Roles: the fold can advance
    * between the refusal and the click, and a plan computed against the old
@@ -311,10 +313,49 @@ function RolesBody({ community }: { community: CommunityV2 }) {
     await applyMoves(moved);
   };
 
-  const onDrop = (to: number) => {
+  /*
+   * Reordering is driven by POINTER events, not HTML5 drag-and-drop.
+   * `draggable` + `dragstart`/`drop` never fire on touch, so a drag-only list
+   * is simply unreorderable on Android and iOS — both first-class targets.
+   * Pointer events cover mouse, touch and pen in one path, which is the same
+   * reason `ServerRail` drives its rail reorder from `pointerdown`.
+   *
+   * The grip captures the pointer, so every move and the release retarget to
+   * it; `touch-none` on the grip stops the browser claiming the gesture as a
+   * scroll before the first move lands.
+   */
+
+  /** The row index under `clientY`, or null when the pointer is off the list. */
+  const rowIndexAt = (clientY: number): number | null => {
+    const rows = listRef.current?.children;
+    if (!rows) return null;
+    for (let i = 0; i < rows.length; i++) {
+      const box = rows[i].getBoundingClientRect();
+      if (clientY >= box.top && clientY <= box.bottom) return i;
+    }
+    return null;
+  };
+
+  const startDrag = (index: number) => (e: React.PointerEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setDragFrom(index);
+    setDragOver(index);
+  };
+
+  const moveDrag = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (dragFrom === null) return;
+    const over = rowIndexAt(e.clientY);
+    if (over !== null) setDragOver(over);
+  };
+
+  const endDrag = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
     const from = dragFrom;
+    const to = dragOver;
     setDragFrom(null);
-    if (from === null || from === to) return;
+    setDragOver(null);
+    if (from === null || to === null || from === to) return;
     const next = [...roles];
     const [picked] = next.splice(from, 1);
     next.splice(to, 0, picked);
@@ -345,7 +386,11 @@ function RolesBody({ community }: { community: CommunityV2 }) {
         await setMemberRoles({ member: g.member, roleIds: g.roleIds.filter((r) => r !== role.roleId) });
         stripped++;
       }
-      await saveRole({ role: { ...role, permissions: 0n } });
+      // `display` goes with the permissions. A hoisted section only vanishes
+      // once nobody holds the role, and a revoke cannot strip the holders it
+      // does not outrank (the owner, most of all) — so leaving the flag set
+      // keeps a named member-list section for a role that now confers nothing.
+      await saveRole({ role: { ...role, permissions: 0n, display: undefined } });
       // Same split as the confirm screen: `canActOnMember` refuses the owner as
       // a target outright, which is not "you don't outrank them" — and reads as
       // nonsense when the owner is the one revoking their own role.
@@ -505,7 +550,7 @@ function RolesBody({ community }: { community: CommunityV2 }) {
         </Alert>
       )}
 
-      <div className="w-full space-y-1 rounded-lg bg-secondary/40 p-1">
+      <div ref={listRef} className="w-full space-y-1 rounded-lg bg-secondary/40 p-1">
         {roles.length === 0 ? (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">No roles yet.</div>
         ) : (
@@ -515,25 +560,27 @@ function RolesBody({ community }: { community: CommunityV2 }) {
             return (
               <div
                 key={r.roleId}
-                draggable={movable}
-                onDragStart={() => setDragFrom(i)}
-                onDragEnd={() => setDragFrom(null)}
-                onDragOver={(e) => {
-                  if (dragFrom !== null) e.preventDefault();
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  onDrop(i);
-                }}
                 className={cn(
                   "flex items-center gap-2 rounded-md px-1 transition-colors hover:bg-secondary/70",
                   dragFrom === i && "opacity-50",
+                  dragFrom !== null && dragOver === i && dragOver !== dragFrom && "ring-1 ring-primary",
                 )}
               >
-                <GripVertical
-                  className={cn("size-4 shrink-0 text-muted-foreground", movable ? "cursor-grab" : "opacity-30")}
-                  aria-hidden
-                />
+                <button
+                  type="button"
+                  aria-label={`Reorder ${r.name}`}
+                  disabled={!movable}
+                  onPointerDown={startDrag(i)}
+                  onPointerMove={moveDrag}
+                  onPointerUp={endDrag}
+                  onPointerCancel={endDrag}
+                  className={cn(
+                    "shrink-0 touch-none rounded p-1 touch:p-2 text-muted-foreground",
+                    movable ? "cursor-grab active:cursor-grabbing" : "opacity-30",
+                  )}
+                >
+                  <GripVertical className="size-4" aria-hidden />
+                </button>
                 <button
                   type="button"
                   onClick={() => {
