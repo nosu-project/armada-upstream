@@ -1,4 +1,4 @@
-import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, FolderGit2, Hash, Headphones, HeartPulse, Link as LinkIcon, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Phone, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Trash2, UserPlus, Users, X } from "lucide-react";
+import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, FolderGit2, Hash, Headphones, Link as LinkIcon, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Phone, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Trash2, UserPlus, Users, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -31,7 +31,7 @@ import { SuspiciousActivityBanner2 } from "@/concord-v2/components/SuspiciousAct
 import { useBanSelfRemove2 } from "@/concord-v2/hooks/useBanSelfRemove2";
 import { useLinkAuthorityWatch2, useLinkFreshnessWatch2 } from "@/concord-v2/hooks/useInvites2";
 import { InvitesView } from "@/concord-v2/components/InvitesView2";
-import { DebugHealView } from "@/concord-v2/components/DebugHealView2";
+import { MembersView } from "@/concord-v2/components/MembersView2";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
@@ -854,7 +854,7 @@ export function ConcordV2Page() {
   // Which pane the main area shows: the selected channel's chat, the
   // community-wide "@ Mentions" list, the "Threads" list, or the "Projects"
   // view. Selecting a channel returns to chat.
-  const [view, setView] = useState<"channel" | "mentions" | "threads" | "projects" | "audit" | "invites" | "banned" | "health">("channel");
+  const [view, setView] = useState<"channel" | "mentions" | "threads" | "projects" | "audit" | "invites" | "banned" | "members">("channel");
   useEffect(() => {
     if (routeChannelId) setView("channel");
   }, [routeChannelId]);
@@ -1940,8 +1940,8 @@ export function ConcordV2Page() {
     banTarget !== null && !!folded && !!user && !hasForeignLiveLinks(folded, user.pubkey, banTarget) &&
     moderation.canRekey;
 
-  const runBan = async (target: string, onPhase: (phase: BanPhase) => void) => {
-    const { rekeyed, publicBan } = await moderation.ban({ target, onPhase });
+  const runBan = async (targets: string[], onPhase: (phase: BanPhase) => void) => {
+    const { rekeyed, publicBan } = await moderation.banMany({ targets, onPhase });
     if (rekeyed || publicBan) {
       toast({ title: "Member banned", description: "They are silenced for everyone in this community." });
     } else {
@@ -2051,10 +2051,10 @@ export function ConcordV2Page() {
                   },
                   {
                     show: canManageRoles || canKickAny || canBanAny || canCreateInvite,
-                    icon: <HeartPulse className="size-4" />,
-                    label: "Member health",
+                    icon: <Users className="size-4" />,
+                    label: "Members",
                     onClick: () => {
-                      setView("health");
+                      setView("members");
                       setChannelsOpen(false);
                     },
                   },
@@ -2297,10 +2297,10 @@ export function ConcordV2Page() {
                   <Ban className="size-5 text-muted-foreground shrink-0" />
                   <h1 className="font-semibold truncate leading-tight">Banned members</h1>
                 </>
-              ) : view === "health" ? (
+              ) : view === "members" ? (
                 <>
-                  <HeartPulse className="size-5 text-muted-foreground shrink-0" />
-                  <h1 className="font-semibold truncate leading-tight">Member health</h1>
+                  <Users className="size-5 text-muted-foreground shrink-0" />
+                  <h1 className="font-semibold truncate leading-tight">Members</h1>
                 </>
               ) : view === "threads" ? (
                 <>
@@ -2363,10 +2363,10 @@ export function ConcordV2Page() {
                       <Ban className="size-3 shrink-0" />
                       Banned members
                     </>
-                  ) : view === "health" ? (
+                  ) : view === "members" ? (
                     <>
-                      <HeartPulse className="size-3 shrink-0" />
-                      Member health
+                      <Users className="size-3 shrink-0" />
+                      Members
                     </>
                   ) : view === "threads" ? (
                     <>
@@ -2591,12 +2591,13 @@ export function ConcordV2Page() {
                 <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable pb-safe">
                   {community && <BannedView community={community} />}
                 </div>
-              ) : view === "health" ? (
+              ) : view === "members" ? (
                 <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
                   {community && (
-                    <DebugHealView
+                    <MembersView
                       community={community}
-                      canHeal={canManageRoles || canKickAny || canBanAny || canCreateInvite}
+                      memberPubkeys={memberPubkeys}
+                      canModerate={canKickAny || canBanAny}
                     />
                   )}
                 </div>
@@ -2930,7 +2931,7 @@ export function ConcordV2Page() {
         communityId={community?.idHex}
       />
       <BanMemberDialog
-        target={banTarget}
+        targets={banTarget ? [banTarget] : null}
         willRotate={banWillRotate}
         onClose={() => setBanTarget(null)}
         onConfirm={runBan}

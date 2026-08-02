@@ -6,7 +6,7 @@ import { useControlFold2, citationFor, invalidateControl2, publishEdition2 } fro
 import { useGuestbookPublisher2 } from "@/concord-v2/hooks/useGuestbook2";
 import { useRefound2 } from "@/concord-v2/hooks/useRekey2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { banShouldRotate, buildBanlistEdition, buildGrantEdition, hasForeignLiveLinks } from "@/concord-v2/lib/control";
+import { banShouldRotateMany, buildBanlistEdition, buildGrantEdition, hasForeignLiveLinks } from "@/concord-v2/lib/control";
 import { banlistLocator, bytesToHex, grantLocator, hex32 } from "@/concord-v2/lib/derive";
 import {
   addReadCutPending,
@@ -102,14 +102,28 @@ export function useModeration2(community: CommunityV2 | undefined, recipients: s
     ).catch(() => undefined);
   };
 
-  const ban = useMutation<
-    { rekeyed: boolean; publicBan: boolean },
+  const banMany = useMutation<
+    { rekeyed: boolean; publicBan: boolean; banned: string[]; skipped: string[] },
     Error,
-    { target: string; onPhase?: (phase: BanPhase) => void; forceRotate?: boolean }
+    {
+      targets: string[];
+      onPhase?: (phase: BanPhase) => void;
+      onStripProgress?: (done: number, total: number) => void;
+      forceRotate?: boolean;
+    }
   >({
-    mutationFn: async ({ target, onPhase, forceRotate }) => {
+    mutationFn: async ({ targets, onPhase, onStripProgress, forceRotate }) => {
       if (!user || !community) throw new Error("Not ready.");
-      if (!canActOn(target, Permissions.BAN)) throw new Error("You don't have permission to ban this member.");
+      const unique = [...new Set(targets)];
+      const eligible = unique.filter((t) => canActOn(t, Permissions.BAN));
+      const skipped = unique.filter((t) => !canActOn(t, Permissions.BAN));
+      if (eligible.length === 0) {
+        throw new Error(
+          unique.length === 1
+            ? "You don't have permission to ban this member."
+            : "You don't have permission to ban any of these members.",
+        );
+      }
 
       // Fail-fast BEFORE publishing anything: a rotating ban must read-cut, and
       // a rotation needs a NIP-44 signer. Publishing the banlist first would
@@ -120,46 +134,54 @@ export function useModeration2(community: CommunityV2 | undefined, recipients: s
       // alone never does — and that outweighs the cost it normally avoids
       // (foreign live links pointing at a dead epoch until their creators next
       // open the app and republish their bundles).
-      const willRotate = banShouldRotate(folded, user.pubkey, target, forceRotate);
+      const willRotate = banShouldRotateMany(folded, user.pubkey, eligible, forceRotate);
       if (willRotate && !canRefound) {
         throw new Error(
           "Banning from a private community rotates the community keys, which your signer can't do. Ask an admin whose signer supports encryption to carry out the ban.",
         );
       }
 
-      // 1. Banlist first: silencing is instant and free.
+      // 1. Banlist first: silencing is instant and free — and the list replaces
+      // entire (CORD-04 §4), so the whole group rides ONE edition.
       onPhase?.("silence");
       const next = new Set(folded?.banned ?? []);
-      next.add(target);
+      for (const t of eligible) next.add(t);
       await publishBanlist([...next]);
 
-      // 2. Role removal alongside.
+      // 2. Role removal alongside — per-member entities, so per-member editions.
       onPhase?.("roles");
-      await stripRoles(target);
+      let stripped = 0;
+      for (const t of eligible) {
+        await stripRoles(t);
+        stripped += 1;
+        onStripProgress?.(stripped, eligible.length);
+      }
 
       // 3. The Refounding last: the cryptographic severance — but never while
       // a FOREIGN live link exists (only its creator's signer_sk can refresh
       // its bundle, so a rotation would strand its future joiners on a dead
       // epoch). My own links rotate safely: the refound refreshes their
-      // bundles behind the same URLs. Judged as-of after this ban: the
-      // target's registry dies with their authority.
-      if (folded && !banShouldRotate(folded, user.pubkey, target, forceRotate)) {
-        return { rekeyed: false, publicBan: true };
+      // bundles behind the same URLs. Judged as-of after this ban, for the
+      // GROUP: every target's registry dies with their authority, and all of
+      // them ride one rotation — never one rotation per target.
+      if (folded && !banShouldRotateMany(folded, user.pubkey, eligible, forceRotate)) {
+        return { rekeyed: false, publicBan: true, banned: eligible, skipped };
       }
-      if (!canRefound) return { rekeyed: false, publicBan: false };
+      if (!canRefound) return { rekeyed: false, publicBan: false, banned: eligible, skipped };
       onPhase?.("rekey");
       // Durable intent: mark BEFORE the attempt (with the keep-list captured
       // NOW, while the roster is warm and user-initiated), clear only on
       // success — a rotation lost to a relay outage is retried on the next
       // visit from this persisted list, never a cold surface's roster.
-      const keep = recipients.filter((pk) => pk !== target);
-      await addReadCutPending(user.pubkey, community.idHex, target, keep);
+      const excluded = new Set(eligible);
+      const keep = recipients.filter((pk) => !excluded.has(pk));
+      for (const t of eligible) await addReadCutPending(user.pubkey, community.idHex, t, keep);
       try {
-        await refound({ keep, exclude: [target] });
+        await refound({ keep, exclude: eligible });
         clearReadCutPending(user.pubkey, community.idHex);
-        return { rekeyed: true, publicBan: false };
+        return { rekeyed: true, publicBan: false, banned: eligible, skipped };
       } catch {
-        return { rekeyed: false, publicBan: false };
+        return { rekeyed: false, publicBan: false, banned: eligible, skipped };
       }
     },
     onSuccess: invalidate,
@@ -175,32 +197,66 @@ export function useModeration2(community: CommunityV2 | undefined, recipients: s
     onSuccess: invalidate,
   });
 
-  const kick = useMutation<void, Error, { target: string }>({
-    mutationFn: async ({ target }) => {
+  const kickMany = useMutation<
+    { kicked: string[]; failed: { target: string; message: string }[]; skipped: string[] },
+    Error,
+    { targets: string[]; onProgress?: (done: number, total: number) => void }
+  >({
+    mutationFn: async ({ targets, onProgress }) => {
       if (!community || !user) throw new Error("Not ready.");
-      if (!canActOn(target, Permissions.KICK)) throw new Error("You don't have permission to kick this member.");
-      // Strip first, so the target's rank is gone before the departure lands.
-      await stripRoles(target);
+      const unique = [...new Set(targets)];
+      const eligible = unique.filter((t) => canActOn(t, Permissions.KICK));
+      const skipped = unique.filter((t) => !canActOn(t, Permissions.KICK));
+      if (eligible.length === 0) {
+        throw new Error(
+          unique.length === 1
+            ? "You don't have permission to kick this member."
+            : "You don't have permission to kick any of these members.",
+        );
+      }
+      // One actor, one fold — the citation is the same for every directive.
       const citation = citationFor(community, folded, user.pubkey);
-      await guestbook.mutateAsync({
-        type: "kick",
-        target,
-        vac: citation
-          ? { eid: bytesToHex(citation.entityId), version: citation.version, hash: bytesToHex(citation.editionHash) }
-          : undefined,
-      });
+      const vac = citation
+        ? { eid: bytesToHex(citation.entityId), version: citation.version, hash: bytesToHex(citation.editionHash) }
+        : undefined;
+      const kicked: string[] = [];
+      const failed: { target: string; message: string }[] = [];
+      let done = 0;
+      for (const target of eligible) {
+        try {
+          // Strip first, so the target's rank is gone before the departure lands.
+          await stripRoles(target);
+          await guestbook.mutateAsync({ type: "kick", target, vac });
+          kicked.push(target);
+        } catch (e) {
+          // Keep going: a mass kick landing 9 of 10 beats aborting at #2.
+          failed.push({ target, message: e instanceof Error ? e.message : "Kick failed." });
+        }
+        done += 1;
+        onProgress?.(done, eligible.length);
+      }
+      if (kicked.length === 0) throw new Error(failed[0]?.message ?? "Kick failed.");
+      return { kicked, failed, skipped };
     },
-    onSuccess: invalidate,
+    // Settled, not success: a partial batch still moved the guestbook.
+    onSettled: invalidate,
   });
 
   return {
     banned: folded?.banned ?? new Set<string>(),
     canRekey: canRefound,
-    ban: ban.mutateAsync,
-    isBanning: ban.isPending,
+    /** Single-target delegate of {@link banMany} — one code path. */
+    ban: (input: { target: string; onPhase?: (phase: BanPhase) => void; forceRotate?: boolean }) =>
+      banMany.mutateAsync({ targets: [input.target], onPhase: input.onPhase, forceRotate: input.forceRotate }),
+    banMany: banMany.mutateAsync,
+    isBanning: banMany.isPending,
     unban: unban.mutateAsync,
-    kick: kick.mutateAsync,
-    isKicking: kick.isPending,
+    /** Single-target delegate of {@link kickMany}. */
+    kick: async (input: { target: string }) => {
+      await kickMany.mutateAsync({ targets: [input.target] });
+    },
+    kickMany: kickMany.mutateAsync,
+    isKicking: kickMany.isPending,
     canBan: (target: string) => canActOn(target, Permissions.BAN),
     canKick: (target: string) => canActOn(target, Permissions.KICK),
   };

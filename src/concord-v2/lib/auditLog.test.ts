@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  INVITE_ALERT_THRESHOLD,
   UNRECOGNISED_BURST,
   classifyEditions,
   describeAttempts,
@@ -13,7 +14,7 @@ import {
 import type { FoldedControl } from "@/concord-v2/lib/control";
 import type { ParsedEdition } from "@/concord-v2/lib/edition";
 import { bytesToHex, grantLocator, hex32 } from "@/concord-v2/lib/derive";
-import { VSK_BANLIST, VSK_CHANNEL, VSK_GRANT, VSK_METADATA, VSK_ROLE } from "@/concord-v2/lib/kinds";
+import { VSK_BANLIST, VSK_CHANNEL, VSK_GRANT, VSK_INVITE_REGISTRY, VSK_METADATA, VSK_ROLE } from "@/concord-v2/lib/kinds";
 import { Permissions, type CommunityRoles } from "@/concord-v2/lib/roles";
 
 const CID = new Uint8Array(32).fill(0xc1);
@@ -305,3 +306,32 @@ describe("suspiciousActivity", () => {
   });
 });
 
+
+describe("invite-registry headroom", () => {
+  const registryEditions = (n: number) =>
+    Array.from({ length: n }, (_, i) =>
+      edition({ rumorId: bytes(0x30 + i), vsk: VSK_INVITE_REGISTRY, createdAt: 1_000 + i }),
+    );
+
+  it("stays silent below the threshold — buggy clients mint registries, flooders mint twenty", () => {
+    expect(suspiciousActivity(registryEditions(INVITE_ALERT_THRESHOLD - 1), fold(), CID)).toEqual([]);
+  });
+
+  it("accuses alone at the threshold", () => {
+    const [actor, ...rest] = suspiciousActivity(registryEditions(INVITE_ALERT_THRESHOLD), fold(), CID);
+    expect(rest).toHaveLength(0);
+    expect(actor.author).toBe(JIM);
+    expect(actor.total).toBe(INVITE_ALERT_THRESHOLD);
+    expect(actor.attempts.get(VSK_INVITE_REGISTRY)).toBe(INVITE_ALERT_THRESHOLD);
+  });
+
+  it("corroborates below the threshold once something real flagged the actor", () => {
+    const editions = [edition({ rumorId: bytes(0x01), vsk: VSK_BANLIST }), ...registryEditions(2)];
+    const [actor, ...rest] = suspiciousActivity(editions, fold(), CID);
+    expect(rest).toHaveLength(0);
+    expect(actor.total).toBe(3);
+    expect(actor.attempts.get(VSK_BANLIST)).toBe(1);
+    expect(actor.attempts.get(VSK_INVITE_REGISTRY)).toBe(2);
+    expect(describeAttempts(actor.attempts)).toBe("2 invite link changes, 1 ban");
+  });
+});

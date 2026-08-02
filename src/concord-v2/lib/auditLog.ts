@@ -127,6 +127,17 @@ export const UNRECOGNISED = "unrecognised";
 export const UNRECOGNISED_BURST = 20;
 export const UNRECOGNISED_WINDOW = 5 * 60;
 
+/**
+ * Unauthorized invite-registry editions tolerated before they alone flag an
+ * author. Registries are the least sensitive entity on the plane: clients
+ * sometimes mint one wrongly (a bundle refresh racing a revoked grant), the
+ * fold refuses it, and nothing in the community changes. What separates a
+ * buggy client from a flooder is volume — nobody's honest refresh loop
+ * publishes twenty refused registry editions. They still join the tally of an
+ * actor already flagged for something real: there they corroborate, not accuse.
+ */
+export const INVITE_ALERT_THRESHOLD = 20;
+
 /** Whether any {@link UNRECOGNISED_WINDOW} contains {@link UNRECOGNISED_BURST} of `times`. */
 function hasBurst(times: number[]): boolean {
   if (times.length < UNRECOGNISED_BURST) return false;
@@ -163,6 +174,7 @@ export function suspiciousActivity(
   const opened = opts.opened ?? [];
   const validity = classifyEditions(editions, folded);
   const byAuthor = new Map<string, SuspiciousActor>();
+  const inviteBy = new Map<string, number[]>();
 
   /**
    * When this member's standing last changed, as far as the fold can tell.
@@ -220,6 +232,15 @@ export function suspiciousActivity(
     // full knowledge of having none.
     if (e.createdAt <= standingChangedAt(author)) continue;
 
+    // Registry editions ride a side tally: alone they only count past
+    // INVITE_ALERT_THRESHOLD, merged below once the rest of the verdict is in.
+    if (e.vsk === VSK_INVITE_REGISTRY) {
+      const times = inviteBy.get(author);
+      if (times) times.push(e.createdAt);
+      else inviteBy.set(author, [e.createdAt]);
+      continue;
+    }
+
     const banned = folded.banned.has(author);
     const actor = byAuthor.get(author) ?? {
       author,
@@ -265,6 +286,26 @@ export function suspiciousActivity(
       banned: folded.banned.has(author),
     };
     actor.attempts.set(UNRECOGNISED, (actor.attempts.get(UNRECOGNISED) ?? 0) + times.length);
+    actor.total += times.length;
+    actor.firstAt = Math.min(actor.firstAt, ...times);
+    actor.lastAt = Math.max(actor.lastAt, ...times);
+    byAuthor.set(author, actor);
+  }
+
+  // Invite registries, last: below the threshold they only corroborate an
+  // actor someone else's evidence already flagged; at it, they accuse alone.
+  for (const [author, times] of inviteBy) {
+    const existing = byAuthor.get(author);
+    if (!existing && times.length < INVITE_ALERT_THRESHOLD) continue;
+    const actor = existing ?? {
+      author,
+      attempts: new Map<string, number>(),
+      total: 0,
+      firstAt: Math.min(...times),
+      lastAt: Math.max(...times),
+      banned: folded.banned.has(author),
+    };
+    actor.attempts.set(VSK_INVITE_REGISTRY, (actor.attempts.get(VSK_INVITE_REGISTRY) ?? 0) + times.length);
     actor.total += times.length;
     actor.firstAt = Math.min(actor.firstAt, ...times);
     actor.lastAt = Math.max(actor.lastAt, ...times);
