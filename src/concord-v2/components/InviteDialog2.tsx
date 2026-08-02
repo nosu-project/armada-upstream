@@ -356,7 +356,7 @@ function InviteBody({ community, canCreateLink }: { community: CommunityV2 | und
           <AlertDialogHeader>
             <AlertDialogTitle>
               {!isPublic
-                ? "Are you sure you want to make this community public?"
+                ? "Are you sure you want to make this community\u00A0public?"
                 : "Share this link to Discover?"}
             </AlertDialogTitle>
             <AlertDialogDescription className="space-y-2">
