@@ -51,7 +51,7 @@ import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { CONCORD_ENABLED } from "@/concord-v1/lib/concord";
 import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
 import { effectiveDmRelays } from "@/contexts/AppContext";
-import { APP_RELAYS, DM_RELAYS, PINNED_RAIL_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
+import { APP_RELAYS, DM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
 import {
   getAudioProcessing,
   setAudioProcessing,
@@ -367,7 +367,6 @@ export function SettingsPage() {
             </SettingsRow>
             <SettingsRow>
               <RelayListEditor
-                pinned={PINNED_RAIL_RELAYS}
                 relays={servers}
                 onChange={setAddedRelays}
                 emptyText="No extra servers added. Use the + button in the server rail to add one."

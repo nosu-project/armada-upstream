@@ -21,7 +21,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useServerActions } from "@/hooks/useServerActions";
 import { useIsBuzzRelay } from "@/buzz/detect";
-import { PINNED_RAIL_RELAYS, relayToRouteParam, routeParamToRelay } from "@/lib/platform";
+import { relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 
 /**
  * Server home (drill-down level 1). On mobile the server rail + channel list
@@ -50,8 +50,6 @@ export function ServerPage() {
   if (!relayUrl) {
     return <Navigate to="/" replace />;
   }
-
-  const isPinned = PINNED_RAIL_RELAYS.includes(relayUrl);
 
   return (
     <ServerScopeProvider relayUrl={relayUrl}>
@@ -87,7 +85,6 @@ export function ServerPage() {
                 <p className="mt-2 text-sm text-muted-foreground">{relayInfo.description}</p>
               )}
               <div className="mt-2 flex flex-wrap gap-1.5">
-                {isPinned && <Badge variant="secondary">Pinned</Badge>}
                 {relayInfo?.limitation?.auth_required && <Badge variant="secondary">NIP-42 AUTH</Badge>}
                 {isBuzz ? (
                   <Badge variant="secondary">Buzz workspace</Badge>

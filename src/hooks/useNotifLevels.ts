@@ -2,7 +2,7 @@ import { useCallback, useMemo } from "react";
 
 import { channelReadKey } from "@/contexts/ReadStateContext";
 import { useAppContext } from "@/hooks/useAppContext";
-import { DEFAULT_PUSH_PREFS, type PushPrefs } from "@/hooks/usePushNotifications";
+import { DEFAULT_PUSH_PREFS, type PushPrefs } from "@/lib/pushPrefs";
 import { normalizeRelayUrl } from "@/lib/platform";
 
 /**

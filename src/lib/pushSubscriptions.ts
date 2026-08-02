@@ -25,7 +25,7 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
-import type { PushPrefs } from "@/hooks/usePushNotifications";
+import type { PushPrefs } from "@/lib/pushPrefs";
 import type { NostrFilter } from "@nostrify/types";
 import type { ConcordSub } from "@/concord-v1/lib/concordNotifications";
 import type { Concord2Sub } from "@/concord-v2/lib/concordNotifications2";

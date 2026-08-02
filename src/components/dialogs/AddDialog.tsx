@@ -30,7 +30,7 @@ import { claimBuzzInvite, fetchBuzzJoinPolicy, parseBuzzInviteUrl, type BuzzInvi
 import { classifyAddInput, type ConcordInvite } from "@/concord-v1/lib/concord";
 import { parseInviteLink, type ParsedInviteLink } from "@/concord-v2/lib/invite";
 import { parseGroupNaddr } from "@/lib/nip29";
-import { normalizeRelayUrl, PINNED_RAIL_RELAYS, relayToHttpUrl, relayToRouteParam } from "@/lib/platform";
+import { normalizeRelayUrl, relayToHttpUrl, relayToRouteParam } from "@/lib/platform";
 
 import { cn } from "@/lib/utils";
 
@@ -365,7 +365,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
           });
         } else if (classified.kind === "nip29") {
           const relay = classified.relay;
-          if (PINNED_RAIL_RELAYS.includes(relay) || servers.includes(relay)) {
+          if (servers.includes(relay)) {
             throw new Error("That server is already in your list.");
           }
           // The NIP-11 document is only a preview of the server's name and

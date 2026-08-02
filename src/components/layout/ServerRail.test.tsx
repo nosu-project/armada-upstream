@@ -34,8 +34,8 @@ vi.mock("@/hooks/useRelayUnread", () => ({
 vi.mock("@/hooks/useUserGroupList", () => ({
   useUpdateUserGroupList: () => ({ mutateAsync: vi.fn(async () => undefined) }),
 }));
-// The rail's NIP-29 half now comes from the kind 10009 list. `extraServers`
-// lets a suite add members beyond the three pinned ones.
+// The rail's NIP-29 half comes from the kind 10009 list. `extraServers` lets a
+// suite add members beyond the three base ones.
 vi.mock("@/hooks/useNip29Servers", () => ({
   useNip29Servers: () => [
     "wss://a.example/",
@@ -82,7 +82,6 @@ vi.mock("@/lib/platform", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/platform")>();
   return {
     ...actual,
-    PINNED_RAIL_RELAYS: ["wss://a.example/", "wss://b.example/", "wss://c.example/"],
     normalizeRelayUrl: (u: string) => u,
     relayToRouteParam: (u: string) => encodeURIComponent(u),
   };
@@ -90,7 +89,7 @@ vi.mock("@/lib/platform", async (importOriginal) => {
 
 // Mutable config store backing the mocked AppContext.
 let config: AppConfig;
-// Servers beyond the three pinned ones, as if they were in the 10009 list.
+// Servers beyond the three base ones, as if they were in the 10009 list.
 let extraServers: string[] = [];
 vi.mock("@/hooks/useAppContext", () => ({
   useAppContext: () => ({

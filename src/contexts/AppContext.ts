@@ -1,6 +1,6 @@
 import { createContext } from "react";
 
-import { APP_RELAYS, DM_RELAYS, normalizeRelayUrl, PLATFORM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
+import { APP_RELAYS, DM_RELAYS, normalizeRelayUrl, SEARCH_RELAYS } from "@/lib/platform";
 
 import type { BlossomServerMetadata } from "@/lib/blossom";
 import type { RailLayoutNode } from "@/lib/railLayout";
@@ -32,9 +32,7 @@ export interface RelayMetadata {
  *
  * Note this holds no server list: the user's NIP-29 servers live in their kind
  * 10009 event (see `useNip29Servers`), added by the "+" flow or by joining a
- * channel. A deployment's platform relay (VITE_PLATFORM_RELAYS) is
- * infrastructure, not an auto-joined community — it enters the rail the same
- * way, unless an operator opts into pinning it (VITE_PIN_PLATFORM_RELAYS).
+ * channel. No build-time relay is ever added on the user's behalf.
  */
 export interface AppConfig {
   /** Display theme mode. */
@@ -113,8 +111,8 @@ export interface AppConfig {
    * relays, no joined servers, and no NIP-65 relays enabled, the pool is empty
    * and account data (profile, lists, emoji packs) can't load or sync, and
    * this client can't even read the kind-10002 that populates `relayMetadata`.
-   * The platform-pinned relays (`PLATFORM_RELAYS`) and joined NIP-29 servers
-   * are NOT gated by this, so an air-gapped deployment still works with it off.
+   * The joined NIP-29 servers are NOT gated by this, so an air-gapped
+   * deployment still works with it off.
    */
   useAppRelays: boolean;
   /**
@@ -477,7 +475,6 @@ export function accountDataRelays(config: AppConfig): string[] {
       if (normalized) urls.add(normalized);
     }
   }
-  for (const url of PLATFORM_RELAYS) urls.add(url);
   for (const url of userReadRelays(config)) {
     const normalized = normalizeRelayUrl(url);
     if (normalized) urls.add(normalized);

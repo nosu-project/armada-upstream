@@ -5,7 +5,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useForegroundNotificationSettings } from "@/hooks/useForegroundNotificationSettings";
 import { useNativeNotifications } from "@/hooks/useNativeNotifications";
 import { useNostrPush } from "@/hooks/useNostrPush";
-import { usePushNotifications, type PushPrefs } from "@/hooks/usePushNotifications";
+import { type PushPrefs } from "@/lib/pushPrefs";
 import {
   isIgnoringBatteryOptimizations,
   requestIgnoreBatteryOptimizations,
@@ -22,8 +22,8 @@ import { Switch } from "@/components/ui/switch";
  *  - Native APK: a foreground service holds a persistent relay connection and
  *    fires local notifications instantly (no FCM/Google). See
  *    useNativeNotifications.
- *  - Web / PWA: Web Push via the Armada relay's VAPID gateway. See
- *    usePushNotifications.
+ *  - Web / PWA: Web Push via a content-blind nostr-push gateway. See
+ *    useNostrPush.
  *
  * Both expose the same Discord-style per-type toggles.
  */
@@ -117,12 +117,10 @@ function BatteryOptimizationWarning() {
 }
 
 function WebPushSettings() {
-  // Both web-push hooks self-gate on `supported`; use whichever is active — the
-  // content-blind nostr-push path when configured, else the legacy gateway.
-  const legacy = usePushNotifications();
-  const nostrPush = useNostrPush();
+  // The content-blind nostr-push path, which self-gates on `supported` when no
+  // push server is configured for this build.
   const { supported, permission, enabled, busy, prefs, enable, disable, setPrefs } =
-    nostrPush.supported ? nostrPush : legacy;
+    useNostrPush();
 
   // Browsers where Web Push is unavailable (Brave with Google push services
   // off, or no configured push gateway) still get FOREGROUND OS notifications

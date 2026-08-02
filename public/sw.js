@@ -328,7 +328,7 @@ self.addEventListener("pushsubscriptionchange", (event) => {
   // server key so a live subscription exists again, then tell open pages to
   // re-register it — the registration PUT needs a NIP-98 signature that only
   // the page's signer can produce. With no page open, the page-load sync in
-  // usePushNotifications re-registers on the next visit.
+  // useNostrPush re-registers on the next visit.
   const key = event.oldSubscription?.options?.applicationServerKey;
   event.waitUntil(
     (async () => {

@@ -4,7 +4,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMutes } from "@/hooks/useMutes";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
-import { PINNED_RAIL_RELAYS, relayToRouteParam } from "@/lib/platform";
+import { relayToRouteParam } from "@/lib/platform";
 import { writeClipboardText } from "@/lib/clipboard";
 import { isPublishQueuedError } from "@/lib/publishOutbox";
 import { shareOrigin } from "@/lib/shareOrigin";
@@ -14,9 +14,7 @@ export interface UseServerActionsReturn {
   serverMuted: boolean;
   /**
    * Whether the server can be removed. Removal means deleting it from the
-   * user's kind 10009 list, so it needs a logged-in user; opt-in build-time
-   * pinned relays (`VITE_PIN_PLATFORM_RELAYS`, off by default) are never
-   * removable.
+   * user's kind 10009 list, so it needs a logged-in user.
    */
   isRemovable: boolean;
   /** Toggle the server's muted state. */
@@ -39,10 +37,10 @@ export function useServerActions(relayUrl: string): UseServerActionsReturn {
   const { isCommunityMuted, toggleCommunityMute } = useMutes();
 
   const serverMuted = isCommunityMuted(relayUrl);
-  // Any non-pinned server the user can navigate to is removable — including
-  // one whose relay is now offline, since removal only edits the user's own
-  // list. Logged out there is no list, so there is nothing to remove.
-  const isRemovable = Boolean(user) && !PINNED_RAIL_RELAYS.includes(relayUrl);
+  // Any server the user can navigate to is removable — including one whose
+  // relay is now offline, since removal only edits the user's own list. Logged
+  // out there is no list, so there is nothing to remove.
+  const isRemovable = Boolean(user);
 
   const toggleMute = () => toggleCommunityMute(relayUrl);
 

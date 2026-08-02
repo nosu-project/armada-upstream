@@ -53,7 +53,7 @@ export interface RelayListEditorProps {
   relays: string[];
   /** Persist a new relay list. Omit (with `readOnly`) for a display-only list. */
   onChange?: (relays: string[]) => void;
-  /** Read-only, non-removable relays shown first (e.g. pinned platform relays). */
+  /** Read-only, non-removable relays shown first (e.g. the app defaults). */
   pinned?: string[];
   /** Trailing label on pinned rows. */
   pinnedLabel?: string;

@@ -9,8 +9,8 @@
  * Settings toggle. On iOS this is the *only* way in: the Push API exists solely
  * for a Home-Screen PWA, and it likewise needs the tap.
  *
- * The heavy push hooks (`usePushNotifications` / `useNostrPush`) are already
- * mounted once, app-wide, by `WebPushNotifications`. Rather than mount a second
+ * The heavy push hook (`useNostrPush`) is already mounted once, app-wide, by
+ * `WebPushNotifications`. Rather than mount a second
  * copy inside the wizard (doubling every subscribe/register), that single
  * instance drives this module: it keeps the live `enable` action current
  * (`setWebPushEnable`) and, when a fresh logged-in user could receive push,

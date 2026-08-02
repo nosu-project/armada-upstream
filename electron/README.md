@@ -4,9 +4,8 @@ A **standalone, sovereign** Armada client. It bundles the web build (`dist/`,
 copied in by CI) and serves it over a custom **secure** scheme (`app://armada/…`)
 rather than loading a hosted URL. Consequences:
 
-- **Not tied to any domain.** The bundled web build is compiled with **empty
-  platform relays** (`VITE_PLATFORM_RELAYS=""`), so nothing is baked in — the
-  user adds whatever servers they want. Clients are rogue.
+- **Not tied to any domain.** The bundled web build bakes in no servers at all —
+  the user adds whatever servers they want. Clients are rogue.
 - A custom *secure* scheme is still a secure context, so the **service worker**
   and **Web Push** work, and per-relay push subscriptions (whose endpoints are
   the relays' own HTTPS origins) keep working — unlike a plain `file://` bundle,
@@ -28,9 +27,9 @@ every integration no-ops.
 ## Local build / run
 
 ```sh
-# 1. Build the standalone web bundle (no pinned relays) and stage it.
+# 1. Build the standalone web bundle and stage it.
 cd client
-VITE_PLATFORM_RELAYS="" npx vite build
+npx vite build
 rm -rf electron/dist && cp -r dist electron/dist
 
 # 2. Build / run the desktop app.

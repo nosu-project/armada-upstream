@@ -91,7 +91,7 @@ import { expirationOf, KIND_DM_CHAT, KIND_DM_FILE } from "@/lib/nip17/protocol";
 import { pickEmojiTags, readDmListSnapshot, writeDmListSnapshot } from "@/lib/dmListSnapshot";
 import { buildEmojiMap } from "@/lib/customEmoji";
 import { emojify } from "@/components/chat/emojify";
-import { DM_VOICE_RELAYS, PLATFORM_RELAYS } from "@/lib/platform";
+import { DM_VOICE_RELAYS } from "@/lib/platform";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 import { preferredDmVoiceRelay } from "@/lib/voiceDevices";
@@ -774,7 +774,7 @@ function Conversation({
 
   // Voice: derive the shared DM room id and find a LiveKit-capable relay to
   // host the call. DMs are stored on general app relays (which usually don't
-  // run LiveKit); explicit/platform/fallback voice relays are tried before the
+  // run LiveKit); the explicit/fallback voice relays are tried before the
   // general DM set so unsupported cross-origin endpoints aren't probed first.
   const roomId = user ? deriveDmRoomId(user.pubkey, peer) : undefined;
   const dmRelays = useMemo(() => effectiveDmRelays(config), [config]);
@@ -783,12 +783,7 @@ function Conversation({
       // The user's Settings -> Voice server (when set) wins, then configured
       // LiveKit-capable relays, with general DM relays as a last resort.
       const preferred = preferredDmVoiceRelay();
-      const ordered = [
-        ...(preferred ? [preferred] : []),
-        ...PLATFORM_RELAYS,
-        ...DM_VOICE_RELAYS,
-        ...dmRelays,
-      ];
+      const ordered = [...(preferred ? [preferred] : []), ...DM_VOICE_RELAYS, ...dmRelays];
       return ordered.filter((r, i) => ordered.indexOf(r) === i);
     },
     [dmRelays],
@@ -1828,7 +1823,7 @@ function ConversationList({
   }, []);
 
   // The shared DM voice relay (same derivation as the open conversation): a
-  // LiveKit-capable relay from the platform list, then the user's DM relays.
+  // LiveKit-capable voice relay, then the user's DM relays.
   // Computed once here so each row can query its peer's voice presence without
   // re-resolving the relay per row.
   const dmRelays = useMemo(() => effectiveDmRelays(config), [config]);
@@ -1837,12 +1832,7 @@ function ConversationList({
       // Match the conversation header's capability order: known voice relays
       // first, general-purpose DM relays only as a fallback.
       const preferred = preferredDmVoiceRelay();
-      const ordered = [
-        ...(preferred ? [preferred] : []),
-        ...PLATFORM_RELAYS,
-        ...DM_VOICE_RELAYS,
-        ...dmRelays,
-      ];
+      const ordered = [...(preferred ? [preferred] : []), ...DM_VOICE_RELAYS, ...dmRelays];
       return ordered.filter((r, i) => ordered.indexOf(r) === i);
     },
     [dmRelays],

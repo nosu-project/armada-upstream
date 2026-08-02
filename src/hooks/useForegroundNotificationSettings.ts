@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { DEFAULT_PUSH_PREFS, type PushPrefs } from "@/hooks/usePushNotifications";
+import { DEFAULT_PUSH_PREFS, type PushPrefs } from "@/lib/pushPrefs";
 
 /**
  * Foreground (in-page) notification enablement.

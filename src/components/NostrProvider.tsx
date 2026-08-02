@@ -16,7 +16,7 @@ import { NostrBatcher } from "@/lib/NostrBatcher";
 import { AndroidNativeSigner } from "@/lib/androidNativeSigner";
 import { Nip46Signer } from "@/lib/nip46Signer";
 import { getNip46Transport } from "@/lib/nip46Transport";
-import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
+import { normalizeRelayUrl } from "@/lib/platform";
 import { logNostrEvent, logNostrReq } from "@/lib/nostrQueryLog";
 import { logRelayOpen } from "@/lib/relayConnectionLog";
 import { emitRelayReopened } from "@/lib/relayReopen";
@@ -124,9 +124,9 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     // connection opens when its community is first read.
   }
 
-  // Pool routes: app relays (non-NIP-29 traffic) + all servers
-  // (platform-pinned + user-added). The internal servers stay in the set so
-  // a fully air-gapped deployment keeps working with zero app relays.
+  // Pool routes: app relays (non-NIP-29 traffic) + the user's servers. The
+  // servers stay in the set so a fully air-gapped deployment keeps working
+  // with zero app relays.
   //
   // The user's servers come from the folded kind 10009 snapshot rather than a
   // config field: this component provides the Nostrify context, so it can't
@@ -135,10 +135,10 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   const cachedServers = useCachedNip29Servers(logins[0]?.pubkey);
 
   // The base pool, shared by reads and writes: app relays (unless the user has
-  // switched them off) + platform-pinned relays + joined NIP-29 servers. The
-  // platform pins and servers are never gated, so an air-gapped deployment
-  // keeps working even with app relays off — but a user who empties everything
-  // is left with an empty pool, by their own choice.
+  // switched them off) + joined NIP-29 servers. The servers are never gated, so
+  // an air-gapped deployment keeps working even with app relays off — but a
+  // user who empties everything is left with an empty pool, by their own
+  // choice.
   const basePoolRelays = useMemo(() => {
     const urls = new Set<string>();
     if (config.useAppRelays) {
@@ -147,7 +147,6 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         if (normalized) urls.add(normalized);
       }
     }
-    for (const url of PLATFORM_RELAYS) urls.add(url);
     for (const url of cachedServers) {
       const normalized = normalizeRelayUrl(url);
       if (normalized) urls.add(normalized);
@@ -202,7 +201,6 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         if (normalized) urls.add(normalized);
       }
     }
-    for (const url of PLATFORM_RELAYS) urls.add(url);
     for (const url of userReadRelays(config)) {
       const normalized = normalizeRelayUrl(url);
       if (normalized) urls.add(normalized);

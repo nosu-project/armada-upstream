@@ -50,7 +50,7 @@ import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { impact } from "@/lib/haptics";
-import { PINNED_RAIL_RELAYS, relayToRouteParam } from "@/lib/platform";
+import { relayToRouteParam } from "@/lib/platform";
 import {
   applyDrop,
   dissolveFolder,
@@ -1188,9 +1188,8 @@ export function ServerRail({
   const concord2 = useLiveCommunities2();
   const [addOpen, setAddOpen] = useState(false);
 
-  // The NIP-29 half of the rail: any opt-in pinned relays + the servers in the
-  // user's kind 10009 list. By default `PINNED_RAIL_RELAYS` is empty, so the
-  // rail shows only servers the user actually added or joined.
+  // The NIP-29 half of the rail: the servers in the user's kind 10009 list, so
+  // the rail shows only servers the user actually added or joined.
   // Order/grouping is applied by the layout below.
   const servers = useNip29Servers();
 
@@ -1297,10 +1296,7 @@ export function ServerRail({
 
       // Also sync the relative order of user-added relays to the kind 10009
       // list (the cross-device source of truth for the added-server set).
-      const pinnedSet = new Set(PINNED_RAIL_RELAYS);
-      const addedOrder = keys.filter(
-        (k) => !k.startsWith("c1:") && !k.startsWith("c2:") && !pinnedSet.has(k),
-      );
+      const addedOrder = keys.filter((k) => !k.startsWith("c1:") && !k.startsWith("c2:"));
       if (user && addedOrder.length > 0) {
         updateList({ type: "reorder-servers", urls: addedOrder }).catch((err) =>
           console.warn("Failed to persist server order:", err),

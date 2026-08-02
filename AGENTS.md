@@ -65,7 +65,7 @@ Notes specific to ngit-ci (vs the old GitLab pipeline):
   no `GITHUB_TOKEN`. Required secrets: `ANDROID_KEYSTORE_BASE64`,
   `KEYSTORE_PASSWORD`, `KEY_PASSWORD`, `ZAPSTORE_BUNKER_URL`,
   `ZAPSTORE_CLIENT_KEY`, and for web deploy `DEPLOY_SSH_KEY_BASE64`
-  (+ optional `DEPLOY_SSH_CONFIG_BASE64`, `DEPLOY_TARGET`, `VITE_PLATFORM_RELAYS`).
+  (+ optional `DEPLOY_SSH_CONFIG_BASE64`, `DEPLOY_TARGET`).
   Optional: `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` (base64 of the Play Console
   service-account JSON for `buzz.armada.app`; unprovisioned skips the Play
   publish); `KLIPY_API_KEY` (switches GIF search from the keyless GIFverse
@@ -114,9 +114,11 @@ never a compiled-in server address:
 - Concord voice (CORD-07) fetches LiveKit tokens from a blind AV broker,
   defaulting to `VITE_CONCORD_AV_SERVERS` (public `https://armada.buzz`).
 
-`VITE_PLATFORM_RELAYS` is **empty** in the shipped APK/desktop/dev builds — a
-fresh client has no baked-in servers and the user adds their own. Never pin
-`ws://localhost` (meaningless on a phone).
+There is **no build-time relay pin at all** — every build, hosted included, has
+no baked-in servers, and the user adds their own. Don't reintroduce one: a pin
+is a WebSocket the client dials on boot whether or not that origin speaks Nostr
+(the hosted `wss://armada.buzz` pin dialed the SPA's own origin, which serves
+HTML and never upgrades), and `ws://localhost` is meaningless on a phone.
 
 ## Voice / LiveKit (client side)
 

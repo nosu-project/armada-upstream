@@ -14,7 +14,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { clearRenderedPlaintext } from "@/hooks/dmRenderCache";
 import { Nip46Signer } from "@/lib/nip46Signer";
 import { Nip46Transport } from "@/lib/nip46Transport";
-import { normalizeRelayUrl, PLATFORM_RELAYS } from "@/lib/platform";
+import { normalizeRelayUrl } from "@/lib/platform";
 import { purgeClientStorage } from "@/lib/purgeClientStorage";
 import { clearWalletStorage } from "@/lib/walletStorage";
 import { clearEsploraStorage } from "@/lib/esploraStorage";
@@ -213,9 +213,8 @@ export function useLoginActions() {
         transport.close();
       }
     },
-    // Relay URLs used for NIP-46 nostrconnect communication. App relays come
-    // first (remote signers are usually reachable through public relays),
-    // then the platform relays as fallback rendezvous points.
+    // Relay URLs used for NIP-46 nostrconnect communication: the app relays
+    // (remote signers are usually reachable through public relays).
     //
     // The user's own NIP-29 servers are deliberately NOT consulted: they live
     // in the kind 10009 list, which can only be read once someone is logged
@@ -228,7 +227,7 @@ export function useLoginActions() {
       const appRelays = config.appRelays
         .map(normalizeRelayUrl)
         .filter((url): url is string => Boolean(url));
-      const all = [...new Set([...appRelays, ...PLATFORM_RELAYS])];
+      const all = [...new Set(appRelays)];
       const usable = all.filter(usableRendezvousRelay);
       // Never hand back an empty list: a loopback-only dev config still needs
       // SOME rendezvous attempt (and the QR shows the user what's wrong).

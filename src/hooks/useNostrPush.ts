@@ -12,7 +12,7 @@ import {
   DEFAULT_PUSH_PREFS,
   type PushPrefs,
   type UsePushNotificationsReturn,
-} from "@/hooks/usePushNotifications";
+} from "@/lib/pushPrefs";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { useConcordList } from "@/concord-v1/hooks/useConcordList";
 import { buildConcordSubs, type ConcordSub } from "@/concord-v1/lib/concordNotifications";
@@ -47,8 +47,8 @@ import {
  * It self-gates: `supported` is false unless a nostr-push server is configured
  * for this build and the signer can NIP-44.
  *
- * Exposes the same interface as `usePushNotifications` so the settings UI can
- * pick whichever path is active.
+ * Exposes the shared `UsePushNotificationsReturn` interface the settings UI
+ * drives.
  */
 
 const PREFS_KEY = "armada:push-prefs";

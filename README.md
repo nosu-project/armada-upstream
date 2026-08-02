@@ -66,10 +66,6 @@ the box; other hostnames need HTTPS.
   integration, it is embedded in the compiled client bundle; keeping it in a
   secret keeps it out of source/history, not out of browser developer tools.
   Configure any available platform restrictions in KLIPY's partner panel.
-- `VITE_PLATFORM_RELAYS` — comma-separated pinned relay URLs. **Empty by
-  default** (and in the shipped APK/desktop builds): a fresh client starts with
-  no baked-in servers and the user adds their own. Never pin `ws://localhost`
-  here — it's meaningless on a phone.
 - `VITE_APP_RELAYS` — default app relays for non-community traffic — profiles
   (kind 0), group lists (kind 10009) — in the style of Ditto's app relays
   (default `wss://relay.ditto.pub,wss://relay.dreamith.to`); users can edit the

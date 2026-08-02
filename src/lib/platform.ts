@@ -1,8 +1,6 @@
 /**
  * Platform (build-time pinned) configuration for internal infrastructure.
  *
- * - `VITE_PLATFORM_RELAYS` — comma-separated relay websocket URLs. These are
- *   always part of the server list and cannot be removed by the user.
  * - `VITE_APP_RELAYS` — comma-separated default app relays used for
  *   non-NIP-29 traffic (profiles, lists). User-overridable in Settings.
  * - `VITE_APP_NAME` — display name of the deployment.
@@ -80,58 +78,6 @@ export function isStandalonePwa(): boolean {
 }
 
 /**
- * Platform (deployment-infrastructure) relays.
- *
- * `VITE_PLATFORM_RELAYS` is set only by a *hosted* deployment (the operator
- * names their own relay). Every other build — the Android APK, the Electron
- * desktop app, and local `npm run dev` — leaves it unset/empty. This is
- * deliberate: a baked-in `ws://localhost:5577` is meaningless (and actively
- * confusing) on a phone or a sovereign desktop client, so we never default to
- * one. For local dev against a relay, set `VITE_PLATFORM_RELAYS` yourself
- * (e.g. `VITE_PLATFORM_RELAYS=ws://localhost:5577 npm run dev`).
- *
- * These relays are used as deployment *infrastructure*: the connection pool
- * always includes them, and they seed the AV-broker / DM-voice / NIP-46
- * rendezvous fallbacks below. They are NOT auto-pinned into the server rail —
- * see `PINNED_RAIL_RELAYS` for why, and how to opt back in.
- *
- * Unset (`undefined`) and empty (`""`) are treated identically — both mean "no
- * platform relays".
- */
-const RAW_PLATFORM_RELAYS: string = import.meta.env.VITE_PLATFORM_RELAYS ?? "";
-export const PLATFORM_RELAYS: string[] = RAW_PLATFORM_RELAYS
-  .split(",")
-  .map((url: string) => normalizeRelayUrl(url))
-  .filter((url: string | undefined): url is string => Boolean(url));
-
-/**
- * Relays that are auto-pinned into the server rail and auto-dived-into on
- * login, WITHOUT the user ever joining/being invited.
- *
- * Historically this was `PLATFORM_RELAYS`: a hosted deployment's own relay was
- * force-shown in every user's rail and every fresh sign-in landed straight in
- * its channel list — even though the user never joined it. That conflated two
- * separate things: the relay as *deployment infrastructure* (AV/DM-voice/pool
- * fallback, below — still driven by `PLATFORM_RELAYS`) versus the relay as a
- * *community the user belongs to*. A relay-based (NIP-29) community should be
- * entered the same way any other is: by explicitly adding it or joining a
- * channel on it, which writes it to the user's kind 10009 list — not by
- * build-time fiat.
- *
- * So the default is now **empty** — the platform relay is NOT auto-pinned; it
- * appears in the rail only once the user visits its invite/server link. An
- * operator who genuinely wants the old always-pinned behaviour (e.g. a
- * single-community deployment where every user should land in it) can opt back
- * in with `VITE_PIN_PLATFORM_RELAYS=true`.
- */
-export const PINNED_RAIL_RELAYS: string[] = envBool(
-  import.meta.env.VITE_PIN_PLATFORM_RELAYS,
-  false,
-)
-  ? PLATFORM_RELAYS
-  : [];
-
-/**
  * Default app relays (Ditto's "app relays" concept): general-purpose relays
  * used for non-NIP-29 events — kind 0 profiles, kind 10009 group lists, and
  * any other plain Nostr traffic. Group-scoped events never go here; they are
@@ -177,20 +123,13 @@ export function isGitAnnouncementDiscoveryRelay(url: string): boolean {
  * broker authorizes by channel-key-possession proof, not membership, so it
  * learns nothing about the community.
  *
- * Resolution order when `VITE_CONCORD_AV_SERVERS` is unset:
- *   - Hosted build (PLATFORM_RELAYS non-empty): armada's own relay hosts the
- *     broker endpoint, so the platform relays' HTTP origins are the default.
- *   - Non-hosted build (APK / Electron / dev): no platform relay hosts one, so
- *     default to the public Armada instance.
- * Operators can override with `VITE_CONCORD_AV_SERVERS` (comma-separated https
- * origins) or set it empty to disable Concord voice.
+ * Unset ⇒ the public Armada instance. Operators can override with
+ * `VITE_CONCORD_AV_SERVERS` (comma-separated https origins) or set it empty to
+ * disable Concord voice.
  */
 const DEFAULT_PUBLIC_AV_SERVER = "https://armada.buzz";
 export const CONCORD_AV_SERVERS: string[] = (
-  import.meta.env.VITE_CONCORD_AV_SERVERS ??
-  (PLATFORM_RELAYS.length > 0
-    ? PLATFORM_RELAYS.map((url) => relayToHttpUrl(url)).join(",")
-    : DEFAULT_PUBLIC_AV_SERVER)
+  import.meta.env.VITE_CONCORD_AV_SERVERS ?? DEFAULT_PUBLIC_AV_SERVER
 )
   .split(",")
   .map((s: string) => s.trim())
@@ -198,21 +137,17 @@ export const CONCORD_AV_SERVERS: string[] = (
 
 /**
  * Default LiveKit-capable NIP-29 relay(s) to host **DM** voice rooms, when none
- * of the user's own DM/platform relays speak the NIP-29 LiveKit extension.
+ * of the user's own DM relays speak the NIP-29 LiveKit extension.
  *
- * DM voice runs over a relay's NIP-29 LiveKit
- * token endpoint. On a hosted build the platform relay already hosts it; on a
- * non-hosted build (APK / Electron / dev, `PLATFORM_RELAYS` empty) there's no
- * such relay among the default app relays, so
- * default to the public Armada instance (`wss://armada.buzz`)
- * so 1:1 calls work out of the box. Operators can override with
- * `VITE_DM_VOICE_RELAYS` (comma-separated ws/wss URLs) or set it empty to
- * disable the fallback.
+ * DM voice runs over a relay's NIP-29 LiveKit token endpoint, which none of the
+ * default app relays host — so this defaults to the public Armada instance
+ * (`wss://armada.buzz`) so 1:1 calls work out of the box. Operators can
+ * override with `VITE_DM_VOICE_RELAYS` (comma-separated ws/wss URLs) or set it
+ * empty to disable the fallback.
  */
 const DEFAULT_PUBLIC_DM_VOICE_RELAY = "wss://armada.buzz";
 export const DM_VOICE_RELAYS: string[] = (
-  import.meta.env.VITE_DM_VOICE_RELAYS ??
-  (PLATFORM_RELAYS.length > 0 ? PLATFORM_RELAYS.join(",") : DEFAULT_PUBLIC_DM_VOICE_RELAY)
+  import.meta.env.VITE_DM_VOICE_RELAYS ?? DEFAULT_PUBLIC_DM_VOICE_RELAY
 )
   .split(",")
   .map((url: string) => normalizeRelayUrl(url))
@@ -329,9 +264,9 @@ export function linkPreviewUrl(url: string): string | null {
 /**
  * Privacy-friendly analytics (Plausible), configured at build time.
  *
- * OFF by default: like `VITE_PLATFORM_RELAYS`, analytics is deployment
- * infrastructure, not something baked into every build. `VITE_PLAUSIBLE_DOMAIN`
- * is set only by a *hosted* deployment (the operator names the site they
+ * OFF by default: analytics is deployment infrastructure, not something baked
+ * into every build. `VITE_PLAUSIBLE_DOMAIN` is set only by a *hosted*
+ * deployment (the operator names the site they
  * registered in Plausible, e.g. `armada.buzz`). Every other build — the Android
  * APK, the Electron desktop app, and local `npm run dev` — leaves it empty, so
  * `PlausibleProvider` never loads the tracker and no telemetry is sent. This is
@@ -348,7 +283,7 @@ export const PLAUSIBLE_DOMAIN: string = (import.meta.env.VITE_PLAUSIBLE_DOMAIN ?
 export const PLAUSIBLE_ENDPOINT: string = (import.meta.env.VITE_PLAUSIBLE_ENDPOINT ?? "").trim();
 
 /**
- * nostr-push web-push server (the NIP-PUSH gateway that replaces the deprecated
+ * nostr-push web-push server (the NIP-PUSH gateway that replaced the removed
  * armada-relay push endpoint).
  *
  * - `VITE_NOSTR_PUSH_PUBKEY` — the push server's Nostr identity (npub or hex).
@@ -357,11 +292,10 @@ export const PLAUSIBLE_ENDPOINT: string = (import.meta.env.VITE_PLAUSIBLE_ENDPOI
  *   published to / listened for the reply on (comma-separated ws/wss). The
  *   server must read these relays too.
  *
- * Both empty ⇒ nostr-push is not configured and the client falls back to the
- * legacy relay push gateway (usePushNotifications). Unlike the legacy gateway
- * (whose URL is derived from `PLATFORM_RELAYS`), nostr-push is content-blind
- * and can serve any deployment, so it is configured explicitly and works even
- * when `PLATFORM_RELAYS` is empty.
+ * Both empty ⇒ nostr-push is not configured and the client has no web-push path
+ * at all (the Android build still has its native background service). Being
+ * content-blind, the server can serve any deployment, so it is named explicitly
+ * rather than derived from a relay the deployment happens to own.
  */
 function decodePushPubkey(raw: string): string | undefined {
   const value = raw.trim();

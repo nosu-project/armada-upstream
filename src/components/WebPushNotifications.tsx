@@ -4,7 +4,6 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { useNostrPush } from "@/hooks/useNostrPush";
 import { useOnboardingActive } from "@/hooks/useOnboarding";
-import { usePushNotifications } from "@/hooks/usePushNotifications";
 import { requestWebPushOptIn, setWebPushEnable } from "@/lib/webPushPrompt";
 
 /**
@@ -18,9 +17,8 @@ import { requestWebPushOptIn, setWebPushEnable } from "@/lib/webPushPrompt";
  * in the native APK (which uses the foreground service path instead — see
  * NativeNotifications).
  *
- * Both web-push hooks are mounted and self-gate on `supported`: the
- * content-blind nostr-push path when a server is configured for this build,
- * otherwise the legacy relay-gateway path. Exactly one is ever active.
+ * The content-blind nostr-push hook self-gates on `supported`, so this is also
+ * inert when no nostr-push server is configured for this build.
  */
 export function WebPushNotifications() {
   if (isNativeRuntime()) return null;
@@ -28,13 +26,9 @@ export function WebPushNotifications() {
 }
 
 function WebPushBridge() {
-  const legacy = usePushNotifications();
-  const nostrPush = useNostrPush();
+  const active = useNostrPush();
   const { user } = useCurrentUser();
   const onboarding = useOnboardingActive();
-
-  // Whichever path is active for this build (see the file header).
-  const active = nostrPush.supported ? nostrPush : legacy;
 
   // Keep the post-login opt-in step's action pointed at the live hook, so the
   // step's tap runs the current `enable` (fresh prefs/watch set), not a stale

@@ -5,7 +5,7 @@ import {
   scopePushSubscriptionId,
   type PushSubscriptionInput,
 } from "@/lib/pushSubscriptions";
-import { DEFAULT_PUSH_PREFS } from "@/hooks/usePushNotifications";
+import { DEFAULT_PUSH_PREFS } from "@/lib/pushPrefs";
 
 const ME = "me".padEnd(64, "0");
 

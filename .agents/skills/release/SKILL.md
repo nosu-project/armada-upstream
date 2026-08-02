@@ -278,7 +278,6 @@ Optional (web deploy on push to `main`, ngit-ci `deploy-web.yml`):
 | `DEPLOY_SSH_KEY_BASE64` | base64 (one line) of the rrsync-jailed deploy user's private key |
 | `DEPLOY_SSH_CONFIG_BASE64` | (optional) base64 of an ssh_config written to `~/.ssh/config` |
 | `DEPLOY_TARGET` | (optional) rsync destination; defaults to `web` |
-| `VITE_PLATFORM_RELAYS` | `wss://armada.buzz` — pins the platform relay in the HOSTED build only |
 
 Optional (GitLab mirror / macOS):
 

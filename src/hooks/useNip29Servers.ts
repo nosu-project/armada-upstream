@@ -1,12 +1,11 @@
 import { useMemo } from "react";
 
 import { useUserGroupList } from "@/hooks/useUserGroupList";
-import { normalizeRelayUrl, PINNED_RAIL_RELAYS } from "@/lib/platform";
+import { normalizeRelayUrl } from "@/lib/platform";
 
 /**
- * The user's NIP-29 servers as stable rail keys: any opt-in build-time pinned
- * relays followed by the servers in their kind 10009 list, normalized and
- * de-duplicated, first occurrence winning.
+ * The user's NIP-29 servers as stable rail keys: the servers in their kind
+ * 10009 list, normalized and de-duplicated, first occurrence winning.
  *
  * This is THE source for "which NIP-29 communities exist" — the rail, the
  * quick switcher and the landing redirect all read it, so they can't drift.
@@ -20,7 +19,7 @@ export function useNip29Servers(): string[] {
   return useMemo(() => {
     const out: string[] = [];
     const seen = new Set<string>();
-    for (const url of [...PINNED_RAIL_RELAYS, ...(listServers ?? [])]) {
+    for (const url of listServers ?? []) {
       const normalized = normalizeRelayUrl(url);
       if (normalized && !seen.has(normalized)) {
         seen.add(normalized);

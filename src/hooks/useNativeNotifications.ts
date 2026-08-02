@@ -14,7 +14,7 @@ import { useConcordList } from "@/concord-v1/hooks/useConcordList";
 import {
   DEFAULT_PUSH_PREFS,
   type PushPrefs,
-} from "@/hooks/usePushNotifications";
+} from "@/lib/pushPrefs";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
 import { buildConcordSubs, type ConcordSub } from "@/concord-v1/lib/concordNotifications";
 import { useConcord2Subs } from "@/concord-v2/hooks/useConcord2Subs";
@@ -158,7 +158,7 @@ export interface UseNativeNotificationsReturn {
  * prefs, and re-configures it whenever any of those change.
  *
  * On web/PWA this hook is inert (`supported === false`); the web-push path
- * (usePushNotifications) handles those. It is also inert on iOS, which has no
+ * (useNostrPush) handles those. It is also inert on iOS, which has no
  * equivalent service yet (and no Web Push in WKWebView) — see
  * {@link hasNativeNotificationService}.
  */
@@ -179,9 +179,8 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
 
   // The relays to hold open. A standalone Armada client has no host, so the
   // source of truth is the user's own kind 10009 list: the relays that host
-  // their joined groups, plus any servers they've added. We deliberately do
-  // NOT use PLATFORM_RELAYS here — that's a hosted-deployment / dev pin (it
-  // defaults to ws://localhost), which is meaningless on a hostless device.
+  // their joined groups, plus any servers they've added. No build-time relay is
+  // added here — a hostless device has no host to fall back to.
   const relayUrls = useMemo(() => {
     const set = new Set<string>();
     for (const g of groupList?.groups ?? []) {
