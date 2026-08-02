@@ -1,9 +1,10 @@
 import { useNostr } from '@nostrify/react';
 import { useQueries, useQueryClient } from '@tanstack/react-query';
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 
 import { type AuthorResult, authorQueryOptions } from '@/hooks/useAuthor';
 import { useEventStore } from '@/hooks/useEventStore';
+import { demandProfiles } from '@/sync/profileSync';
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 
@@ -94,8 +95,19 @@ export function useMentionNameMap(event: NostrRumor): MentionNameMap {
     return [...set];
   }, [event.tags]);
 
+  // The store-first author queries below only READ; the profile sync topic
+  // owns fetching. Declare the tagged pubkeys for the life of the mount so
+  // never-seen mention targets resolve too.
+  const pubkeysKey = pubkeys.join(' ');
+  useEffect(() => {
+    if (pubkeys.length === 0) return;
+    return demandProfiles(pubkeys, { nostr, queryClient });
+    // `pubkeysKey` captures the list by value.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pubkeysKey, nostr, queryClient]);
+
   const results = useQueries({
-    queries: pubkeys.map((pk) => authorQueryOptions(nostr, queryClient, eventStore, pk)),
+    queries: pubkeys.map((pk) => authorQueryOptions(queryClient, eventStore, pk)),
   });
 
   // Stable serialization of resolved aliases: the returned map/regex identity

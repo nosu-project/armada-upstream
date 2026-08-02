@@ -1,113 +1,63 @@
-import { type NostrMetadata, NSchema as n } from '@nostrify/nostrify';
 import { useNostr } from '@nostrify/react';
 import { type QueryClient, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
 
-import { useCacheFirstSeed } from '@/hooks/useCacheFirstSeed';
 import { useEventStore } from '@/hooks/useEventStore';
-import type { NostrRumor } from "@/lib/nostrRumor";
+import { authorQueryKey, parseAuthorEvent, type AuthorResult } from '@/lib/authorCache';
+import { demandProfiles } from '@/sync/profileSync';
 
-export type AuthorResult = { event?: NostrRumor; metadata?: NostrMetadata };
+// Re-exported for the existing import sites; the implementations moved to
+// `lib/authorCache.ts` so the profile sync layer can use them too.
+export { authorQueryKey, parseAuthorEvent, seedAuthorCache } from '@/lib/authorCache';
+export type { AuthorResult } from '@/lib/authorCache';
 
-type Nostr = ReturnType<typeof useNostr>['nostr'];
 type EventStore = ReturnType<typeof useEventStore>;
 
 /**
  * The shared TanStack Query options for resolving a pubkey's kind-0 profile.
  * Extracted so both {@link useAuthor} (single) and batched resolvers
- * ({@link useQueries}) hit the exact same `['author', pubkey]` cache with
- * identical fetch/retry semantics — newest-wins, event-store fallback on miss,
- * relaxed background re-check while a profile is missing.
+ * ({@link useQueries}) hit the exact same `['author', pubkey]` cache.
+ *
+ * STORE-FIRST: the query reads ArmadaDB only, so a known profile paints from
+ * disk without a network round-trip on the path. The network side lives in
+ * the `profiles` sync topic (`src/sync/profileSync.ts`) — callers declare
+ * demand ({@link demandProfiles}), and resolved profiles land here through
+ * `seedAuthorCache` (newest-wins), which is also why there is no polling: an
+ * update is pushed into the cache, not pulled by staleness.
  */
 export function authorQueryOptions(
-  nostr: Nostr,
   queryClient: QueryClient,
   eventStore: EventStore,
   pubkey: string | undefined,
 ) {
   return {
-    queryKey: ['author', pubkey ?? ''] as [string, string],
-    queryFn: async ({ signal }: { signal: AbortSignal }): Promise<AuthorResult> => {
+    queryKey: authorQueryKey(pubkey ?? ''),
+    queryFn: async (): Promise<AuthorResult> => {
       if (!pubkey) {
         return {};
       }
 
       const store = await eventStore;
+      const [cached] = await store.query([{ kinds: [0], authors: [pubkey] }]);
 
-      const [event] = await nostr.query(
-        [{ kinds: [0], authors: [pubkey], limit: 1 }],
-        { signal },
-      );
-
-      if (!event) {
-        // Relay returned nothing — a kind-0 miss is almost always transient
-        // (the relay didn't have it, or the query timed out). Never discard a
-        // profile we already have: fall back to the locally cached event so a
-        // name/avatar already on screen doesn't blank out.
-        const existing = queryClient.getQueryData<AuthorResult>(['author', pubkey]);
-        if (existing?.event) {
-          return existing;
-        }
-        const [cached] = await store.query([{ kinds: [0], authors: [pubkey] }]);
-        if (cached) {
-          return parseAuthorEvent(cached);
-        }
-        return {};
+      // Never downgrade: the sync layer may have seeded a fresher profile
+      // between this query starting and the (slower) store read landing.
+      const existing = queryClient.getQueryData<AuthorResult>(authorQueryKey(pubkey));
+      if (existing?.event && (!cached || existing.event.created_at >= cached.created_at)) {
+        return existing;
       }
-
-      // Persist the fresh event to the local store (fire-and-forget).
-      void store.event(event);
-
-      return parseAuthorEvent(event);
+      return cached ? parseAuthorEvent(cached) : {};
     },
     enabled: !!pubkey,
-    // A FOUND profile is cached long (5 min); a MISS is kept only briefly so a
-    // profile that was cut off by the relay EOSE race (or simply hadn't synced
-    // yet) is re-checked soon instead of staying blank for 5 minutes. Authors
-    // with no kind 0 at all just re-check cheaply (batched) on the next access
-    // and keep showing their fallback — no spinner, no tight retry loop.
-    staleTime: (query: { state: { data?: AuthorResult } }) =>
-      query.state.data?.event ? 5 * 60 * 1000 : 30 * 1000,
+    // The local store is the source of truth and pushes updates in via
+    // `seedAuthorCache`; re-running this queryFn on staleness would only
+    // re-read the same rows. `invalidateQueries(['author', pk])` still forces
+    // a store re-read (profile edits use it).
+    staleTime: Infinity,
     gcTime: 10 * 60 * 1000,
-    // While a profile is missing AND the component is mounted, retry in the
-    // background at a relaxed cadence so it fills in without a manual reload.
-    // Found profiles never poll. Bounded + batched, so a profileless author is
-    // a cheap periodic no-op, not a hammer.
-    refetchInterval: (query: { state: { data?: AuthorResult } }) =>
-      query.state.data?.event ? false : 60 * 1000,
     refetchOnWindowFocus: false,
-    retry: 1,
+    retry: false,
   };
-}
-
-/** The TanStack Query key holding a pubkey's parsed kind-0 profile. */
-export function authorQueryKey(pubkey: string): [string, string] {
-  return ['author', pubkey];
-}
-
-/** Parse a kind-0 event into metadata + event, or return just the event on parse failure. */
-export function parseAuthorEvent(event: NostrRumor): { event: NostrRumor; metadata?: NostrMetadata } {
-  try {
-    const metadata = n.json().pipe(n.metadata()).parse(event.content);
-    return { metadata, event };
-  } catch {
-    return { event };
-  }
-}
-
-/**
- * Write a kind-0 event into the shared `['author', pubkey]` cache, but only if
- * it's newer than whatever is already there. Kind 0 is replaceable, so a plain
- * `setQueryData` from a background query (follow-profiles, notifications) can
- * clobber a fresher profile another path already resolved — the profile then
- * "flips" back to older metadata. Everyone seeding the author cache must go
- * through here so newest-wins holds cache-wide, mirroring the store's
- * replaceable semantics and the `useCacheFirstSeed` guard.
- */
-export function seedAuthorCache(queryClient: QueryClient, pubkey: string, event: NostrRumor): void {
-  const key = authorQueryKey(pubkey);
-  const existing = queryClient.getQueryData<AuthorResult>(key);
-  if (existing?.event && existing.event.created_at >= event.created_at) return;
-  queryClient.setQueryData<AuthorResult>(key, parseAuthorEvent(event));
 }
 
 export function useAuthor(pubkey: string | undefined) {
@@ -115,15 +65,13 @@ export function useAuthor(pubkey: string | undefined) {
   const queryClient = useQueryClient();
   const eventStore = useEventStore();
 
-  // Seed the query from the local event store so a known profile renders
-  // immediately, without waiting on the network. The network query below
-  // stays authoritative and overwrites this when it resolves.
-  useCacheFirstSeed<AuthorResult>({
-    queryKey: pubkey ? ['author', pubkey] : undefined,
-    filter: { kinds: [0], authors: pubkey ? [pubkey] : [] },
-    toData: parseAuthorEvent,
-    getEvent: (data) => data.event,
-  });
+  // The network half: declare this pubkey to the profile sync topic for the
+  // life of the mount. The scheduler batches all mounted demands into one
+  // relay round and seeds the query cache when profiles resolve.
+  useEffect(() => {
+    if (!pubkey) return;
+    return demandProfiles([pubkey], { nostr, queryClient });
+  }, [pubkey, nostr, queryClient]);
 
-  return useQuery<AuthorResult>(authorQueryOptions(nostr, queryClient, eventStore, pubkey));
+  return useQuery<AuthorResult>(authorQueryOptions(queryClient, eventStore, pubkey));
 }

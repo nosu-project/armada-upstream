@@ -10,6 +10,7 @@ import { firstImageRef, getQuoteReplyToId } from "@/components/chat/messageHelpe
 import { LoginArea } from "@/components/auth/LoginArea";
 import { JoinButton } from "@/components/auth/JoinButton";
 import { MemberList } from "@/components/chat/MemberList";
+import { ProfileRelayHints } from "@/components/ProfileRelayHints";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { useMessagePermalink } from "@/hooks/useMessagePermalink";
 import { CalendarEventsBar } from "@/components/chat/CalendarEventsBar";
@@ -1917,6 +1918,9 @@ export function ConcordV2Page() {
 
   return (
     <ChannelNavContext.Provider value={channelNav}>
+      {/* Member kind-0s often live only on the community's own relays, which
+          the pool's general routing never asks. */}
+      <ProfileRelayHints relays={community?.relays} />
       <SwipeReveal
         open={channelsOpen}
         onReveal={() => setChannelsOpen(true)}

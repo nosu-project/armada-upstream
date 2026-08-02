@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ProfileRelayHints } from "@/components/ProfileRelayHints";
 import { ServerScopeProvider } from "@/components/ServerScopeProvider";
 import { ChannelNavContext } from "@/contexts/ChannelNavContext";
 import { ChatScopeContext } from "@/contexts/ChatScopeContext";
@@ -397,6 +398,9 @@ export function GroupPage() {
 
   return (
     <ServerScopeProvider relayUrl={relayUrl}>
+      {/* Member kind-0s often live only on the server's own relay, which the
+          pool's general routing never asks. */}
+      <ProfileRelayHints relays={relayUrl ? [relayUrl] : undefined} />
       <SwipeReveal
         open={channelsOpen}
         onReveal={() => setChannelsOpen(true)}
