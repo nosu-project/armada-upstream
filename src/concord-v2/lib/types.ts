@@ -210,6 +210,14 @@ export interface PrivateChannelKey {
   epoch: bigint;
   /** Join-time preview name; the ChannelMetadata fold is the authority. */
   name: string;
+  /**
+   * Superseded keys for this channel, retained so HISTORY stays readable
+   * across rotations. A rotation re-keys the channel forward; without the
+   * priors, every message sealed under an earlier epoch becomes undecryptable
+   * to a member who is still fully entitled — the conversation would appear
+   * to start over on every revoke. Read-only: never used to write.
+   */
+  priors?: Array<{ key: Uint8Array; epoch: bigint }>;
 }
 
 /** A held root-key epoch (the current one plus retained priors for history). */

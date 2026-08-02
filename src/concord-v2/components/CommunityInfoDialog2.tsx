@@ -66,6 +66,9 @@ export function CommunityInfoDialog2({
   memberCount,
   canManageMetadata,
   canManageChannels,
+  channelRoles,
+  onPrivatiseChannel,
+  onRotateChannelKey,
   open,
   onOpenChange,
 }: {
@@ -75,6 +78,12 @@ export function CommunityInfoDialog2({
   memberCount: number;
   canManageMetadata: boolean;
   canManageChannels: boolean;
+  /** Per channel id, the Roles scoped to it — its access list (CORD-04 §2). */
+  channelRoles?: ReadonlyMap<string, Array<{ id: string; name: string }>>;
+  /** Convert a public channel to private (CORD-03 §2). */
+  onPrivatiseChannel?: (channelIdHex: string) => Promise<void>;
+  /** Re-key a private channel to exactly its entitled members. */
+  onRotateChannelKey?: (channelIdHex: string) => Promise<void>;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -91,6 +100,9 @@ export function CommunityInfoDialog2({
               memberCount={memberCount}
               canManageMetadata={canManageMetadata}
               canManageChannels={canManageChannels}
+              channelRoles={channelRoles}
+              onPrivatiseChannel={onPrivatiseChannel}
+              onRotateChannelKey={onRotateChannelKey}
             />
           )}
         </div>
@@ -106,6 +118,9 @@ function InfoBody({
   memberCount,
   canManageMetadata,
   canManageChannels,
+  channelRoles,
+  onPrivatiseChannel,
+  onRotateChannelKey,
 }: {
   community: CommunityV2;
   metadata: CommunityMetadata | undefined;
@@ -113,6 +128,9 @@ function InfoBody({
   memberCount: number;
   canManageMetadata: boolean;
   canManageChannels: boolean;
+  channelRoles?: ReadonlyMap<string, Array<{ id: string; name: string }>>;
+  onPrivatiseChannel?: (channelIdHex: string) => Promise<void>;
+  onRotateChannelKey?: (channelIdHex: string) => Promise<void>;
 }) {
   const { updateMetadata, isUpdating } = useMetadataActions2(community);
   const { mutateAsync: uploadFile } = useUploadFile();
@@ -335,7 +353,7 @@ function InfoBody({
           </div>
         </div>
 
-        <ChannelsSection community={community} canManage={canManageChannels} />
+        <ChannelsSection community={community} canManage={canManageChannels} channelRoles={channelRoles} onPrivatiseChannel={onPrivatiseChannel} onRotateChannelKey={onRotateChannelKey} />
 
         <ConnectedRepositoriesSection community={community} canManage={canManageChannels} />
 
@@ -700,9 +718,15 @@ function OwnerRow({ pubkey }: { pubkey: string }) {
 function ChannelsSection({
   community,
   canManage,
+  channelRoles,
+  onPrivatiseChannel,
+  onRotateChannelKey,
 }: {
   community: CommunityV2;
   canManage: boolean;
+  channelRoles?: ReadonlyMap<string, Array<{ id: string; name: string }>>;
+  onPrivatiseChannel?: (channelIdHex: string) => Promise<void>;
+  onRotateChannelKey?: (channelIdHex: string) => Promise<void>;
 }) {
   const channels = useChannels2(community);
   const { renameChannel, isRenaming, deleteChannel, createChannel, isAddingChannel } =
@@ -753,6 +777,9 @@ function ChannelsSection({
             canManage={canManage}
             disabled={isRenaming}
             onRename={(name) => renameChannel({ channelIdHex: ch.idHex, name })}
+            accessRoles={channelRoles?.get(ch.idHex) ?? []}
+            onPrivatise={onPrivatiseChannel ? () => onPrivatiseChannel(ch.idHex) : undefined}
+            onRotateKey={onRotateChannelKey ? () => onRotateChannelKey(ch.idHex) : undefined}
             onDelete={
               canManage && channels.length > 1
                 ? async () => {
@@ -817,19 +844,41 @@ function ChannelRow({
   disabled,
   onRename,
   onDelete,
+  accessRoles,
+  onPrivatise,
+  onRotateKey,
 }: {
   channel: ChannelV2;
   canManage: boolean;
   disabled: boolean;
   onRename: (name: string) => Promise<void>;
   onDelete?: () => void;
+  /** The Roles scoped to this channel — who may read it (CORD-03/04 §2). */
+  accessRoles?: Array<{ id: string; name: string }>;
+  /** Convert a public channel to private (CORD-03 §2). */
+  onPrivatise?: () => Promise<void>;
+  /** Re-key to exactly the currently-entitled members (drift/leak repair). */
+  onRotateKey?: () => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(channel.name);
+  const [accessOpen, setAccessOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     setValue(channel.name);
   }, [channel.name]);
+
+  const run = async (fn: () => Promise<void>, failTitle: string) => {
+    setBusy(true);
+    try {
+      await fn();
+    } catch (e) {
+      toast({ title: failTitle, description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const commit = async () => {
     const trimmed = value.trim();
@@ -850,8 +899,12 @@ function ChannelRow({
   };
 
   const Icon = channel.isPrivate ? Lock : Hash;
+  // Offered on every channel a manager can edit: a private one shows who may
+  // read it, a public one offers the conversion that gives it a key.
+  const showAccessButton = canManage && Boolean(onPrivatise || (channel.isPrivate && onRotateKey));
   return (
-    <div className="flex items-center gap-2 px-1">
+    <div className="px-1">
+    <div className="flex items-center gap-2">
       <Icon className="size-3.5 shrink-0 text-muted-foreground" />
       {editing ? (
         <form
@@ -882,6 +935,19 @@ function ChannelRow({
       ) : (
         <>
           <span className="flex-1 truncate text-sm">{channel.name}</span>
+          {showAccessButton && (
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className={cn("size-7 shrink-0 text-muted-foreground", accessOpen && "text-foreground")}
+              aria-label="Channel access"
+              aria-expanded={accessOpen}
+              onClick={() => setAccessOpen((v) => !v)}
+            >
+              <Shield className="size-3.5" />
+            </Button>
+          )}
           {canManage && (
             <Button
               type="button"
@@ -908,6 +974,85 @@ function ChannelRow({
           )}
         </>
       )}
+    </div>
+
+    {accessOpen && (
+      <div className="mb-1 ml-5 mt-1 space-y-1.5 rounded-lg bg-secondary/40 p-2.5">
+        {channel.isPrivate ? (
+          <>
+            {/* CORD-03: a Private Channel is "readable only by granted
+                role-holders", and CORD-04 §2's channel-scoped Role is what
+                names them. Access is edited by granting those Roles, in the
+                member list or the Roles dialog — not here. */}
+            <p className="text-xs text-muted-foreground">
+              Readable by holders of {accessRoles?.length ? "these roles" : "no role yet"}:
+            </p>
+            {accessRoles?.length ? (
+              <ul className="space-y-0.5">
+                {accessRoles.map((role) => (
+                  <li key={role.id} className="flex items-center gap-1.5 text-sm">
+                    <Shield className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+                    <span className="truncate">{role.name}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                No role is scoped to this channel, so only the owner and existing key holders can
+                read it. Create one in Roles, scoped to #{channel.name}.
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Grant one of these roles to give a member access; revoking it rotates the key away.
+            </p>
+          </>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Readable by every member — a public channel's key comes from the community root.
+          </p>
+        )}
+        <div className="flex items-center justify-end gap-2 pt-1">
+          {!channel.isPrivate && onPrivatise && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="mr-auto text-muted-foreground"
+              disabled={busy}
+              onClick={() => run(async () => { await onPrivatise(); setAccessOpen(false); }, "Couldn't make the channel private")}
+            >
+              {busy ? <Loader2 className="size-3.5 animate-spin" /> : "Make private"}
+            </Button>
+          )}
+          {channel.isPrivate && onRotateKey && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="mr-auto text-muted-foreground"
+              disabled={busy}
+              title="Mint a fresh key for exactly the members entitled today. Anyone else loses access from here on."
+              onClick={() => {
+                if (!confirm(
+                  `Rotate #${channel.name}'s key?\n\n` +
+                  "It gets a fresh key delivered only to members who hold one of its roles right now. " +
+                  "Anyone else — including someone who kept a key from an earlier setting — loses access to what's said next.",
+                )) return;
+                void run(async () => {
+                  await onRotateKey();
+                  toast({ title: "Channel key rotated" });
+                }, "Couldn't rotate the key");
+              }}
+            >
+              Rotate key
+            </Button>
+          )}
+          <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => setAccessOpen(false)}>
+            Close
+          </Button>
+        </div>
+      </div>
+    )}
     </div>
   );
 }

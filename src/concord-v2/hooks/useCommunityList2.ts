@@ -202,7 +202,13 @@ export type CommunityListAction =
   | { type: "remove"; communityId: string; removedAt?: number }
   | { type: "exclude"; communityId: string; epoch: number }
   | { type: "refresh-current"; current: JoinMaterial }
-  | { type: "refresh-channels"; communityId: string; channels: JoinMaterial["channels"] }
+  | {
+      type: "refresh-channels";
+      communityId: string;
+      channels: JoinMaterial["channels"];
+      /** Channels a rotation cut me out of, with the epoch that did it. */
+      cuts?: CommunityListEntry["channel_cuts"];
+    }
   | { type: "refresh-relays"; communityId: string; relays: string[] };
 
 function applyAction(list: CommunityList, action: CommunityListAction): CommunityList {
@@ -216,7 +222,7 @@ function applyAction(list: CommunityList, action: CommunityListAction): Communit
     case "refresh-current":
       return refreshCurrent(list, action.current);
     case "refresh-channels":
-      return refreshChannels(list, action.communityId, action.channels);
+      return refreshChannels(list, action.communityId, action.channels, action.cuts);
     case "refresh-relays":
       return refreshRelays(list, action.communityId, action.relays);
   }

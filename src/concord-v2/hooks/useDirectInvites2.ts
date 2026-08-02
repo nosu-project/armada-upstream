@@ -6,8 +6,10 @@ import { useCommunityList2, useUpdateCommunityList2 } from "@/concord-v2/hooks/u
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
   directInviteExpired,
+  isCatchUpBundle,
   parseDirectInviteRumor,
   unwrapDirectInvite,
+  type HeldMembership,
 } from "@/concord-v2/lib/directInvite";
 import { buildJoinRumor, currentGuestbookGroup, sealGuestbook } from "@/concord-v2/lib/guestbook";
 import {
@@ -164,13 +166,22 @@ export function useDirectInvites2() {
         }
       }
 
-      // The epoch each already-joined community currently holds, so a fresher
-      // bundle (an admin healing a stranded member: CORD-05 §6 re-handoff) is
-      // recognised as a CATCH-UP rather than skipped as "already a member".
-      const heldEpoch = new Map<string, number>();
+      // What each already-joined community currently holds (root epoch + the
+      // private-channel keys), so a fresher bundle — an admin healing a
+      // stranded member (CORD-05 §6 re-handoff), or a role-gate key vend
+      // carrying a channel key we lack (CORD.md) — is recognised as a
+      // CATCH-UP rather than skipped as "already a member".
+      const heldByCommunity = new Map<string, HeldMembership>();
       if (list) {
         for (const e of liveEntries(list.list)) {
-          heldEpoch.set(e.community_id, e.current.root_epoch);
+          heldByCommunity.set(e.community_id, {
+            rootEpoch: e.current.root_epoch,
+            // Lowercase keys: isCatchUpBundle normalizes the bundle side the
+            // same way, so one channel is one entry whatever a foreign list
+            // copy's spelling was.
+            channelEpochs: new Map(e.current.channels.map((c) => [c.id.toLowerCase(), c.epoch])),
+            channelCuts: new Map((e.channel_cuts ?? []).map((c) => [c.id.toLowerCase(), c.epoch])),
+          });
         }
       }
 
@@ -189,11 +200,10 @@ export function useDirectInvites2() {
         // gate is anti-nag, not authority).
         const buriedAt = tombstonedAt.get(bundle.community_id);
         if (buriedAt !== undefined && record.rumor.created_at * 1000 <= buriedAt) continue;
-        const held = heldEpoch.get(bundle.community_id);
-        const catchUp = held !== undefined && bundle.root_epoch > held;
-        // Skip an already-joined community UNLESS the bundle is strictly fresher
-        // (higher epoch) — that's a key catch-up for a stranded member, and the
-        // accept path merges it forward (never backward).
+        // A stranded-member heal (fresher root) or a role-gate key vend (a
+        // channel key we lack) both park as catch-ups; anything else for an
+        // already-joined community is noise and skips.
+        const catchUp = isCatchUpBundle(heldByCommunity.get(bundle.community_id), bundle);
         if (known.has(bundle.community_id) && !catchUp) continue;
         parked.set(record.wrapId, {
           wrapId: record.wrapId,

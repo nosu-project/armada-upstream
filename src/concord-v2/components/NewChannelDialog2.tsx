@@ -1,8 +1,9 @@
-import { ArrowLeft, FolderGit2, Hash, Loader2 } from "lucide-react";
+import { ArrowLeft, FolderGit2, Hash, Loader2, Lock } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { OwnerAvatar, OwnerSlashRepo, RepositoryPicker, type PickedRepository } from "@/components/projects/RepositoryPicker";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/useToast";
@@ -48,7 +49,7 @@ export function NewChannelDialog2({ open, onOpenChange, connectedCoordinates, on
   open: boolean;
   onOpenChange: (open: boolean) => void;
   connectedCoordinates: ReadonlySet<string>;
-  onCreateText: (name: string) => Promise<unknown>;
+  onCreateText: (name: string, opts?: { isPrivate?: boolean }) => Promise<unknown>;
   onCreateRepository: (name: string, repository: PickedRepository) => Promise<unknown>;
 }) {
   const [step, setStep] = useState<Step>("type");
@@ -56,6 +57,7 @@ export function NewChannelDialog2({ open, onOpenChange, connectedCoordinates, on
   const [selected, setSelected] = useState<PickedRepository | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isPrivate, setIsPrivate] = useState(false);
 
   // Fresh wizard every time it opens.
   useEffect(() => {
@@ -65,6 +67,7 @@ export function NewChannelDialog2({ open, onOpenChange, connectedCoordinates, on
     setSelected(null);
     setCreating(false);
     setError(null);
+    setIsPrivate(false);
   }, [open]);
 
   const choose = useCallback((repository: PickedRepository) => {
@@ -84,8 +87,8 @@ export function NewChannelDialog2({ open, onOpenChange, connectedCoordinates, on
         await onCreateRepository(channelName, selected);
         toast({ title: "Repository channel created", description: `#${channelName} · ${selected.displayName}` });
       } else {
-        await onCreateText(channelName);
-        toast({ title: "Channel created", description: `#${channelName}` });
+        await onCreateText(channelName, isPrivate ? { isPrivate: true } : undefined);
+        toast({ title: isPrivate ? "Private channel created" : "Channel created", description: `#${channelName}` });
       }
       onOpenChange(false);
     } catch (e) {
@@ -93,7 +96,7 @@ export function NewChannelDialog2({ open, onOpenChange, connectedCoordinates, on
     } finally {
       setCreating(false);
     }
-  }, [name, creating, step, selected, onCreateRepository, onCreateText, onOpenChange]);
+  }, [name, creating, step, selected, isPrivate, onCreateRepository, onCreateText, onOpenChange]);
 
   const back = step === "text" || step === "repo" ? () => setStep("type") : step === "confirm" ? () => setStep("repo") : undefined;
 
@@ -145,6 +148,32 @@ export function NewChannelDialog2({ open, onOpenChange, connectedCoordinates, on
               autoFocus
               disabled={creating}
             />
+
+            <label htmlFor="channel2-private" className="flex items-start gap-3 cursor-pointer">
+              <Checkbox
+                id="channel2-private"
+                checked={isPrivate}
+                onCheckedChange={(c) => setIsPrivate(c === true)}
+                disabled={creating}
+                className="mt-0.5"
+              />
+              <span className="min-w-0">
+                <span className="flex items-center gap-1.5 text-sm font-medium">
+                  <Lock className="size-3.5" /> Private channel
+                </span>
+                <span className="block text-xs text-muted-foreground">
+                  Gets its own key — only members granted its role can read it, in any client.
+                </span>
+              </span>
+            </label>
+
+            {isPrivate && (
+              <p className="text-xs text-muted-foreground">
+                A role of the same name is created alongside it and decides who may read it —
+                grant that role to give a member access.
+              </p>
+            )}
+
             {error && <p className="text-xs text-destructive">{error}</p>}
             <div className="flex justify-end">
               <Button type="submit" size="sm" disabled={creating || !name.trim()}>

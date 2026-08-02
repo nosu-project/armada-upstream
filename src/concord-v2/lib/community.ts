@@ -85,34 +85,47 @@ export function channelsView(community: CommunityV2, folded: FoldedControl | und
     seen.add(def.channelIdHex);
     const id = hex32(def.channelIdHex);
 
+    // History is not one key. A channel accumulates streams: one per held
+    // ROOT epoch (what it wrote while public) and one per held CHANNEL key,
+    // current and retained priors (what it wrote under each private epoch).
+    // Rendering only the current one is why converting a channel — or simply
+    // rotating its key — appeared to erase the conversation before it.
+    const rootStreams = community.heldRoots.map((r) => ({
+      epoch: r.epoch,
+      group: channelGroupKey(r.key, id, r.epoch),
+    }));
+    const held = privateKeysById.get(def.channelIdHex);
+    const channelStreams = held
+      ? [
+          { epoch: held.epoch, group: channelGroupKey(held.key, id, held.epoch) },
+          ...(held.priors ?? []).map((p) => ({ epoch: p.epoch, group: channelGroupKey(p.key, id, p.epoch) })),
+        ]
+      : [];
+
     if (!def.isPrivate) {
-      const streams = community.heldRoots.map((r) => ({
-        epoch: r.epoch,
-        group: channelGroupKey(r.key, id, r.epoch),
-      }));
       out.push({
         id,
         idHex: def.channelIdHex,
         name: def.name,
         isPrivate: false,
         voice: voiceKeys(community.root, id, community.rootEpoch),
-        streams,
-        current: streams[0],
+        // Writes go to the root stream; private-era streams stay readable.
+        streams: [...rootStreams, ...channelStreams],
+        current: rootStreams[0],
       });
       continue;
     }
 
-    const held = privateKeysById.get(def.channelIdHex);
     if (!held) continue; // no key → cannot read; omit rather than tease
-    const stream = { epoch: held.epoch, group: channelGroupKey(held.key, id, held.epoch) };
     out.push({
       id,
       idHex: def.channelIdHex,
       name: def.name,
       isPrivate: true,
       voice: voiceKeys(held.key, id, held.epoch),
-      streams: [stream],
-      current: stream,
+      // Writes go to the current channel key; public-era history stays readable.
+      streams: [...channelStreams, ...rootStreams],
+      current: channelStreams[0],
     });
   }
 
@@ -123,13 +136,17 @@ export function channelsView(community: CommunityV2, folded: FoldedControl | und
     const idHex = bytesToHex(held.id);
     if (seen.has(idHex)) continue;
     const stream = { epoch: held.epoch, group: channelGroupKey(held.key, held.id, held.epoch) };
+    const priorStreams = (held.priors ?? []).map((p) => ({
+      epoch: p.epoch,
+      group: channelGroupKey(p.key, held.id, p.epoch),
+    }));
     out.push({
       id: held.id,
       idHex,
       name: held.name || idHex.slice(0, 8),
       isPrivate: true,
       voice: voiceKeys(held.key, held.id, held.epoch),
-      streams: [stream],
+      streams: [stream, ...priorStreams],
       current: stream,
     });
   }

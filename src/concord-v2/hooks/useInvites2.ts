@@ -7,6 +7,7 @@ import { useCommunity2 } from "@/concord-v2/hooks/useCommunityList2";
 import { resolveBundle } from "@/concord-v2/hooks/useCommunityActions2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { buildRegistryEdition } from "@/concord-v2/lib/control";
+import { vendableChannels, type VendAudience } from "@/concord-v2/lib/channelAccess";
 import { isAuthorized, Permissions } from "@/concord-v2/lib/roles";
 import { bytesToHex, grantLocator, hexToBytes, inviteLinksLocator, hex32 } from "@/concord-v2/lib/derive";
 import {
@@ -214,18 +215,39 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
     return fresh.rootEpoch > community.rootEpoch ? fresh : community;
   };
 
-  /** The §1 CommunityInvite bundle: everything membership is (link + direct alike). */
-  const buildBundle = (opts?: { expiresAtMs?: number; label?: string }): InviteBundle => {
+  /**
+   * The §1 CommunityInvite bundle: everything membership is (link + direct
+   * alike).
+   *
+   * `audience` is required rather than defaulted, because the default is the
+   * whole defect: a bundle built without asking who it is for carries every
+   * Private Channel key the creator holds to whoever opens it, which makes
+   * CORD-03 §1's "readable only by granted role-holders" false. A link is
+   * entitled to nothing; a member is entitled to what their Roles scope them
+   * to (CORD-04 §2).
+   */
+  const buildBundle = (
+    audience: VendAudience,
+    opts?: {
+      expiresAtMs?: number;
+      label?: string;
+      /** Narrow the grant further (a role-grant vend hands over just that role's channels). */
+      onlyChannelIdHexes?: ReadonlySet<string>;
+    },
+  ): InviteBundle => {
     if (!user) throw new Error("Not ready.");
     const src = bundleSource();
     if (!src) throw new Error("Not ready.");
+    const vendable = vendableChannels(src.privateChannels, audience, {
+      only: opts?.onlyChannelIdHexes,
+    });
     return {
       community_id: src.idHex,
       owner: src.owner,
       owner_salt: bytesToHex(src.ownerSalt),
       community_root: bytesToHex(src.root),
       root_epoch: Number(src.rootEpoch),
-      channels: src.privateChannels.map((ch) => ({
+      channels: vendable.map((ch) => ({
         id: bytesToHex(ch.id),
         key: bytesToHex(ch.key),
         epoch: Number(ch.epoch),
@@ -316,7 +338,11 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
 
       const token = mintToken();
       const link = mintLinkSigner();
-      const bundle = buildBundle({ expiresAtMs, label });
+      // A link's audience is whoever the URL reaches (CORD-05 §2), who holds
+      // no Role and is therefore entitled to no Private Channel. Access to one
+      // is handed out by granting its scoped Role, which vends the key by
+      // Direct Invite.
+      const bundle = buildBundle({ kind: "link" }, { expiresAtMs, label });
 
       const bundleEvent = buildBundleEvent(bundle, token, link.sk);
       const results = await Promise.allSettled(
@@ -399,12 +425,37 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
    * Invite never flips the community Public, which is what lets a Private
    * community grow one npub at a time. Unrevocable once landed.
    */
-  const sendDirectInvite = useMutation<void, Error, { recipientPubkey: string; expiresAtMs?: number }>({
-    mutationFn: async ({ recipientPubkey, expiresAtMs }) => {
+  const sendDirectInvite = useMutation<
+    void,
+    Error,
+    {
+      recipientPubkey: string;
+      expiresAtMs?: number;
+      onlyChannelIdHexes?: ReadonlySet<string>;
+      /**
+       * Judge entitlement with a Grant this client just published overlaid —
+       * the control fold lags its own publish, so a grant-driven vend would
+       * otherwise find the recipient still unentitled and hand over nothing.
+       */
+      entitlementOverlay?: { withRoleIds?: string[]; withoutRoleIds?: string[] };
+    }
+  >({
+    mutationFn: async ({ recipientPubkey, expiresAtMs, onlyChannelIdHexes, entitlementOverlay }) => {
       if (!user || !community) throw new Error("Not ready.");
       if (!user.signer.nip44) throw new Error("This signer can't send direct invites (NIP-44 unsupported).");
 
-      const bundle = buildBundle({ expiresAtMs });
+      // The recipient is a known npub, so the bundle carries exactly the
+      // Private Channels they are a granted role-holder of (CORD-03 §1).
+      const bundle = buildBundle(
+        {
+          kind: "member",
+          roster: folded?.roster,
+          ownerHex: folded?.ownerHex ?? community.owner,
+          memberHex: recipientPubkey,
+          overlay: entitlementOverlay,
+        },
+        { expiresAtMs, onlyChannelIdHexes },
+      );
       const rumor = buildDirectInviteRumor(bundle, user.pubkey);
       const seal = await sealDirectInvite(rumor, recipientPubkey, user.signer);
       const wrap = wrapDirectInvite(seal, recipientPubkey, { expiresAtMs });
@@ -455,7 +506,7 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
   const refreshMyLinks = async (): Promise<void> => {
     if (!community || myLinks.length === 0) return;
     const metaV = Number(folded?.heads.get(community.idHex)?.version ?? 0n);
-    const bundle: InviteBundle = { ...buildBundle(), meta_v: metaV };
+    const bundle: InviteBundle = { ...buildBundle({ kind: "link" }), meta_v: metaV };
     const now = Math.floor(Date.now() / 1000);
     let accepted = 0;
     let attempted = 0;

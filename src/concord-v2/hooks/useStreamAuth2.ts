@@ -2,11 +2,13 @@ import { useEffect } from "react";
 
 import {
   baseRekeyGroupKey,
+  channelRekeyGroupKey,
   controlGroupKey,
   dissolvedGroupKey,
   guestbookGroupKey,
   type GroupKey,
 } from "@/concord-v2/lib/derive";
+import { CHANNEL_REKEY_LOOKAHEAD } from "@/concord-v2/lib/rekey";
 import { registerStreamKeys } from "@/concord-v2/lib/streamAuth";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 import { useChannels2, controlFoldKey } from "@/concord-v2/hooks/useControlPlane2";
@@ -37,6 +39,21 @@ function communityCoreKeys(community: CommunityV2): GroupKey[] {
   }
   keys.push(dissolvedGroupKey(community.id));
   keys.push(baseRekeyGroupKey(community.root, community.id, community.rootEpoch + 1n));
+  // Each held Private Channel's NEXT-epoch rekey address, under every held
+  // root (a refound seals channel rekeys under the PRIOR root, CORD-06 §3).
+  // Without these, an auth-gating relay answers useChannelRekeyWatch2's REQ
+  // with nothing — a member rotated AWAY from a channel would never see the
+  // rotation, so the removal (or a rekey adoption) never lands.
+  for (const r of community.heldRoots) {
+    for (const ch of community.privateChannels) {
+      // The same WINDOW useChannelRekeyWatch2 polls: a member who missed a
+      // rotation must be able to authenticate for the later epochs too, or
+      // an auth-gating relay answers their catch-up with nothing.
+      for (let ahead = 1n; ahead <= BigInt(CHANNEL_REKEY_LOOKAHEAD); ahead++) {
+        keys.push(channelRekeyGroupKey(r.key, ch.id, ch.epoch + ahead));
+      }
+    }
+  }
   return keys;
 }
 

@@ -39,7 +39,7 @@ export interface JoinMaterial {
   community_root: string;
   root_epoch: number;
   /** The PRIVATE channels held (public ones derive from the root — CORD-03). */
-  channels: Array<{ id: string; key: string; epoch: number; name: string }>;
+  channels: Array<{ id: string; key: string; epoch: number; name: string; priors?: Array<{ key: string; epoch: number }> }>;
   relays: string[];
   name: string;
   /** Armada extension: retained prior roots `[{epoch, key}]` (current excluded). */
@@ -66,6 +66,17 @@ export interface CommunityListEntry {
    * Only the user's own Leave or the owner's Dissolve ever removes an icon.
    */
   excluded_at_epoch?: number;
+  /**
+   * Armada extension: per Private Channel, the CHANNEL epoch whose rotation
+   * cut me out (channelAccess.ts revoke, CORD-06 §2). Removal must be monotonic:
+   * dropping the key from `current.channels` alone is not enough, because the
+   * union merge is additive — an older invite bundle still sitting in my inbox
+   * (e.g. from when the channel was ungated and vended to everyone) carries
+   * the pre-rotation key and would silently RESTORE access. A cut floors the
+   * channel: only a key at or above the cut epoch — a genuine re-admission —
+   * is ever accepted again. Max wins on merge; never rolls back.
+   */
+  channel_cuts?: Array<{ id: string; epoch: number }>;
   /**
    * Armada extension: the invite link this membership was joined through, in
    * the domain-agnostic bare form `<naddr>#<fragment>` (CORD-05 §2/§3). The
@@ -145,8 +156,110 @@ function earliest(a: JoinMaterial, b: JoinMaterial): JoinMaterial {
   return canonicalJson(a) <= canonicalJson(b) ? a : b;
 }
 
+/**
+ * Union two private-channel key sets by channel id — higher channel epoch
+ * wins, tie broken by canonical bytes. Channel epochs advance independently
+ * of the root, so a key vended alongside an older root is still current for
+ * its channel; the union means a partial vend (one channel's key, e.g. a
+ * role-gate grant) can never displace the keys a member already holds.
+ * Deterministic, commutative, idempotent — safe inside the list CRDT.
+ */
+export function unionChannelKeys(
+  a: JoinMaterial["channels"],
+  b: JoinMaterial["channels"],
+): JoinMaterial["channels"] {
+  const byId = new Map<string, JoinMaterial["channels"][number]>();
+  for (const raw of [...a, ...b]) {
+    if (!raw || typeof raw.id !== "string") continue;
+    // CORD-01: hex is lowercase — but a merge is fed by other clients'
+    // documents, so the spelling is normalized here rather than trusted. Two
+    // spellings of one channel must fold to ONE entry, or the copies drift
+    // apart forever (and a cut floor keyed on the other spelling never bites).
+    const ch = { ...raw, id: raw.id.toLowerCase() };
+    const prev = byId.get(ch.id);
+    if (!prev) {
+      byId.set(ch.id, ch);
+      continue;
+    }
+    if (ch.epoch !== prev.epoch) {
+      // The superseded side is KEPT as a prior: it is the key that reads the
+      // history written before the rotation, and dropping it here would make
+      // a merge silently truncate the conversation.
+      const [winner, loser] = ch.epoch > prev.epoch ? [ch, prev] : [prev, ch];
+      byId.set(ch.id, withPriorKey(winner, loser));
+      continue;
+    }
+    // Two rotations raced to one channel epoch. CORD-06 converges on a
+    // deterministic winner but RETAINS both forks' keys, so whatever was
+    // written into the losing branch stays readable — the loser becomes a
+    // prior at its own epoch, exactly as a superseded key does.
+    if (canonicalJson(ch) < canonicalJson(prev)) byId.set(ch.id, withPriorKey(ch, prev));
+    else byId.set(ch.id, withPriorKey(prev, ch));
+  }
+  return [...byId.values()].sort((p, q) => p.id.localeCompare(q.id));
+}
+
+type ChannelKeyEntry = JoinMaterial["channels"][number];
+type PriorKey = { key: string; epoch: number };
+
+/** Priors of both, plus the loser's own key, deduped by (epoch, key). */
+function withPriorKey(winner: ChannelKeyEntry, loser: ChannelKeyEntry): ChannelKeyEntry {
+  return attachPriors(winner, [...(loser.priors ?? []), { key: loser.key, epoch: loser.epoch }, ...(winner.priors ?? [])]);
+}
+
+function attachPriors(entry: ChannelKeyEntry, priors: PriorKey[]): ChannelKeyEntry {
+  const seen = new Set<string>();
+  const kept: PriorKey[] = [];
+  for (const p of priors) {
+    if (!p || typeof p.key !== "string" || typeof p.epoch !== "number") continue;
+    if (p.epoch >= entry.epoch && p.key === entry.key) continue; // the current key is not a prior
+    const id = `${p.epoch}:${p.key}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    kept.push(p);
+  }
+  kept.sort((x, y) => y.epoch - x.epoch || x.key.localeCompare(y.key));
+  return kept.length > 0 ? { ...entry, priors: kept } : entry;
+}
+
+/** Per-channel cut floors, max wins — a removal never rolls back. */
+export function mergeChannelCuts(
+  a: CommunityListEntry["channel_cuts"],
+  b: CommunityListEntry["channel_cuts"],
+): CommunityListEntry["channel_cuts"] {
+  if (!a?.length && !b?.length) return undefined;
+  const byId = new Map<string, number>();
+  for (const cut of [...(a ?? []), ...(b ?? [])]) {
+    if (!cut || typeof cut.id !== "string" || typeof cut.epoch !== "number") continue;
+    const id = cut.id.toLowerCase(); // one spelling per channel (CORD-01)
+    const prev = byId.get(id);
+    if (prev === undefined || cut.epoch > prev) byId.set(id, cut.epoch);
+  }
+  if (byId.size === 0) return undefined;
+  return [...byId.entries()].map(([id, epoch]) => ({ id, epoch })).sort((p, q) => p.id.localeCompare(q.id));
+}
+
+/** Drop channel keys a cut has floored out (epoch below the cut). */
+export function applyChannelCuts(
+  channels: JoinMaterial["channels"],
+  cuts: CommunityListEntry["channel_cuts"],
+): JoinMaterial["channels"] {
+  if (!cuts?.length) return channels;
+  const floor = new Map(cuts.map((c) => [c.id.toLowerCase(), c.epoch]));
+  return channels.filter((ch) => {
+    const cut = floor.get(ch.id.toLowerCase());
+    return cut === undefined || ch.epoch >= cut;
+  });
+}
+
 function mergeEntry(x: CommunityListEntry, y: CommunityListEntry): CommunityListEntry {
-  const current = freshest(x.current, y.current);
+  const channelCuts = mergeChannelCuts(x.channel_cuts, y.channel_cuts);
+  const current = {
+    ...freshest(x.current, y.current),
+    // Union first, then floor: a stale bundle can add a key back only if it
+    // is at or above the epoch that cut me out.
+    channels: applyChannelCuts(unionChannelKeys(x.current.channels, y.current.channels), channelCuts),
+  };
   // The higher exclusion epoch wins the merge, but an exclusion only bites
   // while it names an epoch BEYOND what `current` holds: holding the marked
   // epoch's own root is re-inclusion (a later Refounding or a fresh invite
@@ -161,6 +274,8 @@ function mergeEntry(x: CommunityListEntry, y: CommunityListEntry): CommunityList
     // The newest add wins liveness races against a tombstone, so keep the max.
     added_at: Math.max(x.added_at, y.added_at),
   };
+  if (channelCuts) merged.channel_cuts = channelCuts;
+  else delete merged.channel_cuts;
   if (excludedAt !== undefined && excludedAt > current.root_epoch) {
     merged.excluded_at_epoch = excludedAt;
   } else {
@@ -317,10 +432,25 @@ export function refreshChannels(
   list: CommunityList,
   communityId: string,
   channels: JoinMaterial["channels"],
+  /**
+   * Channels this update REMOVES because a rotation cut me out, with the
+   * channel epoch that did it. Recorded as a floor so no later merge of an
+   * older bundle can restore the revoked key (see `channel_cuts`).
+   */
+  cuts?: CommunityListEntry["channel_cuts"],
 ): CommunityList {
   const idx = list.entries.findIndex((e) => e.community_id === communityId);
   if (idx === -1) return list;
-  const entries = list.entries.map((e, i) => (i === idx ? { ...e, current: { ...e.current, channels } } : e));
+  const entries = list.entries.map((e, i) => {
+    if (i !== idx) return e;
+    const channelCuts = mergeChannelCuts(e.channel_cuts, cuts);
+    const next: CommunityListEntry = {
+      ...e,
+      current: { ...e.current, channels: applyChannelCuts(channels, channelCuts) },
+    };
+    if (channelCuts) next.channel_cuts = channelCuts;
+    return next;
+  });
   return { ...list, entries };
 }
 
@@ -399,11 +529,20 @@ export function rehydrateCommunity(entry: CommunityListEntry, extraRelays: strin
     const privateChannels: PrivateChannelKey[] = [];
     for (const ch of Array.isArray(jm.channels) ? jm.channels : []) {
       try {
+        const priors: PrivateChannelKey["priors"] = [];
+        for (const prior of Array.isArray(ch.priors) ? ch.priors : []) {
+          try {
+            priors.push({ key: hex32(prior.key), epoch: BigInt(prior.epoch) });
+          } catch {
+            // skip a malformed prior; the current key still stands
+          }
+        }
         privateChannels.push({
           id: hex32(ch.id),
           key: hex32(ch.key),
           epoch: BigInt(ch.epoch),
           name: typeof ch.name === "string" ? ch.name : "",
+          ...(priors.length > 0 ? { priors } : {}),
         });
       } catch {
         // skip malformed channel entries
@@ -428,6 +567,60 @@ export function rehydrateCommunity(entry: CommunityListEntry, extraRelays: strin
   }
 }
 
+/**
+ * Serialize held private-channel keys for a `refresh-channels` list write.
+ *
+ * `priors` ride along deliberately: CORD-03 §3 has a client query every epoch
+ * pubkey it holds so history spanning a rekey stays continuous, and
+ * `refreshChannels` REPLACES the stored array. Dropping them here would take
+ * every other channel's pre-rotation history dark as a side effect of touching
+ * one channel.
+ */
+export function channelKeysToWire(chs: PrivateChannelKey[]): JoinMaterial["channels"] {
+  return chs.map((c) => ({
+    id: bytesToHex(c.id),
+    key: bytesToHex(c.key),
+    epoch: Number(c.epoch),
+    name: c.name,
+    ...(c.priors?.length
+      ? { priors: c.priors.map((p) => ({ key: bytesToHex(p.key), epoch: Number(p.epoch) })) }
+      : {}),
+  }));
+}
+
+/**
+ * The channel epoch a privatisation must mint at (CORD-03 §2): one past the
+ * highest generation the channel has EVER used, and 1 when it has never been
+ * private. Monotonic and never resetting, so privatise -> publish -> privatise
+ * leaves each generation at its own epoch — a stale key is always a LOWER one
+ * and can never share a coordinate with the current key, which is what lets
+ * the merge (epoch-max) and a `channel_cuts` floor (epoch-min) tell the
+ * generations apart at all.
+ *
+ * `observedFloor` is the highest epoch a rotation was actually seen at
+ * (`highestRotatedEpoch`, read off the CORD-06 §2 rekey addresses that derive
+ * from the community root alone). It matters because the keys in hand are not
+ * the channel's history: whoever privatises a public channel need never have
+ * held an earlier generation — they joined after it was published, were never
+ * granted its Role, or were rotated out and the `channel_cuts` floor dropped
+ * the key from their list. Their empty keyring is not evidence that no
+ * generation existed, so the higher of the two bounds wins.
+ */
+export function nextChannelEpoch(
+  held: PrivateChannelKey[],
+  channelIdHex: string,
+  observedFloor = 0n,
+): bigint {
+  const wanted = channelIdHex.toLowerCase();
+  let highest = observedFloor;
+  const mine = held.find((c) => bytesToHex(c.id) === wanted);
+  if (mine) {
+    if (mine.epoch > highest) highest = mine.epoch;
+    for (const p of mine.priors ?? []) if (p.epoch > highest) highest = p.epoch;
+  }
+  return highest + 1n;
+}
+
 /** Snapshot a runtime community back into join material (for `current`). */
 export function toJoinMaterial(c: CommunityV2, opts?: { relays?: string[]; prior?: JoinMaterial }): JoinMaterial {
   const heldRoots = c.heldRoots
@@ -446,6 +639,9 @@ export function toJoinMaterial(c: CommunityV2, opts?: { relays?: string[]; prior
       key: bytesToHex(ch.key),
       epoch: Number(ch.epoch),
       name: ch.name,
+      ...(ch.priors?.length
+        ? { priors: ch.priors.map((p) => ({ key: bytesToHex(p.key), epoch: Number(p.epoch) })) }
+        : {}),
     })),
     relays: opts?.relays ?? (opts?.prior?.relays as string[] | undefined) ?? [],
     name: c.name,
