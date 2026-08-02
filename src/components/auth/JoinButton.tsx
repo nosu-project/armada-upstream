@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import LoginDialog from "@/components/auth/LoginDialog";
+import LoginScreen from "@/components/auth/LoginScreen";
 import SignupDialog from "@/components/auth/SignupDialog";
 import { Button } from "@/components/ui/button";
 
@@ -27,7 +27,7 @@ export function JoinButton({
       <Button size={size} className={className} onClick={() => setJoinOpen(true)}>
         {children}
       </Button>
-      <LoginDialog
+      <LoginScreen
         isOpen={joinOpen}
         onClose={() => setJoinOpen(false)}
         onLogin={() => setJoinOpen(false)}

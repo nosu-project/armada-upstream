@@ -7,7 +7,7 @@ import { ChatMessage, ReplyContextLine, ReplyPreview, ReplyThumbnail } from "@/c
 import { firstImageRef, getReplyToId } from "@/components/chat/messageHelpers";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
-import LoginDialog from "@/components/auth/LoginDialog";
+import LoginScreen from "@/components/auth/LoginScreen";
 import SignupDialog from "@/components/auth/SignupDialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -731,7 +731,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
           </div>
         )}
 
-        <LoginDialog
+        <LoginScreen
           isOpen={joinDialogOpen}
           onClose={() => setJoinDialogOpen(false)}
           onLogin={() => setJoinDialogOpen(false)}

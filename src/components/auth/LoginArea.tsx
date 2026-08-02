@@ -3,7 +3,7 @@
 
 import { useState } from 'react';
 import { Button } from '@/components/ui/button.tsx';
-import LoginDialog from './LoginDialog';
+import LoginScreen from './LoginScreen';
 import SignupDialog from './SignupDialog';
 import { useLoggedInAccounts } from '@/hooks/useLoggedInAccounts';
 import { AccountSwitcher } from './AccountSwitcher';
@@ -15,7 +15,7 @@ export interface LoginAreaProps {
 
 export function LoginArea({ className }: LoginAreaProps) {
   const { currentUser } = useLoggedInAccounts();
-  const [loginDialogOpen, setLoginDialogOpen] = useState(false);
+  const [loginOpen, setLoginDialogOpen] = useState(false);
   const [signupDialogOpen, setSignupDialogOpen] = useState(false);
 
   const handleLogin = () => {
@@ -43,8 +43,8 @@ export function LoginArea({ className }: LoginAreaProps) {
         </div>
       )}
 
-      <LoginDialog
-        isOpen={loginDialogOpen}
+      <LoginScreen
+        isOpen={loginOpen}
         onClose={() => setLoginDialogOpen(false)}
         onLogin={handleLogin}
         onSignupClick={() => setSignupDialogOpen(true)}

@@ -5,7 +5,7 @@ import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
 
 import { ArmadaIdentity, ArmadaKey } from "@/components/brand/ArmadaCrest";
 import { LandingPage } from "@/components/landing/LandingPage";
-import LoginDialog from "@/components/auth/LoginDialog";
+import LoginScreen from "@/components/auth/LoginScreen";
 import { WizardShell } from "@/components/onboarding/WizardShell";
 import { ProfileSettings } from "@/components/ProfileSettings";
 import { Button } from "@/components/ui/button";
@@ -420,7 +420,7 @@ export function WelcomePage() {
     <main ref={landingScrollRef} className="relative flex-1 min-w-0 overflow-y-auto">
       <LandingPage onJoin={() => setJoinOpen(true)} scrollRef={landingScrollRef} />
 
-      <LoginDialog
+      <LoginScreen
         isOpen={joinOpen}
         onClose={() => setJoinOpen(false)}
         onLogin={() => setJoinOpen(false)}

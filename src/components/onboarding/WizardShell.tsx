@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { ArrowLeft, X } from "lucide-react";
 
 import { ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
@@ -28,6 +28,7 @@ export function WizardShell({
   children,
 }: {
   index: number;
+  /** Number of steps in the flow. `0` means single-screen: no progress bar. */
   total: number;
   stepKey: string;
   /** Column width cap (a `max-w-*` class). Text-heavy steps go a size up. */
@@ -44,6 +45,17 @@ export function WizardShell({
   onClose?: () => void;
   children: ReactNode;
 }) {
+  // Escape closes, matching the dialog chrome this replaced. Only bound when
+  // there's a close to run, so a flow that can't be abandoned stays put.
+  useEffect(() => {
+    if (!onClose) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   const pct = total > 0 ? ((index + 1) / total) * 100 : 100;
   return (
     <div className={cn("fixed inset-0 flex flex-col bg-background", zClassName)}>
@@ -55,12 +67,14 @@ export function WizardShell({
       */}
       <AsciiSea />
 
-      <div className="relative z-10 h-1 shrink-0 bg-muted">
-        <div
-          className="h-full bg-primary transition-all duration-500 ease-out"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
+      {total > 0 && (
+        <div className="relative z-10 h-1 shrink-0 bg-muted">
+          <div
+            className="h-full bg-primary transition-all duration-500 ease-out"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      )}
 
       {/* Back top-left, close top-right, on every step — the slots hold their
           width even when empty so the row never reflows between steps. */}

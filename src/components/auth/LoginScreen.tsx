@@ -2,10 +2,11 @@
 // It is important that all functionality in this file is preserved, and should only be modified if explicitly requested.
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { AlertTriangle, ChevronDown, ExternalLink, FileUp, KeyRound, Loader2, QrCode } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ExternalLink, FileUp, Loader2, QrCode } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
+import { ArmadaKey } from '@/components/brand/ArmadaCrest';
+import { WizardShell } from '@/components/onboarding/WizardShell';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   DropdownMenu,
@@ -27,7 +28,7 @@ import { APP_NAME } from '@/lib/platform';
 import { shareOrigin } from '@/lib/shareOrigin';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
-interface LoginDialogProps {
+interface LoginScreenProps {
   isOpen: boolean;
   onClose: () => void;
   onLogin: () => void;
@@ -54,13 +55,21 @@ const connectStatusLabel = (status: NostrConnectStatus | null): string => {
 };
 
 /**
- * The login options box, in the single-smart-input format: one field that
- * accepts an nsec or a bunker:// URI, with the secondary methods (key file,
- * remote signer via QR/deeplink) tucked into a dropdown embedded at the
+ * Log in — a full-screen takeover in the signup wizard's chrome
+ * ({@link WizardShell}: ASCII sea, close top-right, no back since there's no
+ * step before this one), rather than a modal.
+ *
+ * The login options themselves are the single-smart-input format: one field
+ * that accepts an nsec or a bunker:// URI, with the secondary methods (key
+ * file, remote signer via QR/deeplink) tucked into a dropdown embedded at the
  * input's right edge. The remote-signer handshake swaps the form for a
- * QR / progress / error view inside the same dialog.
+ * QR / progress / error view on the same screen.
+ *
+ * Still driven by `isOpen` rather than being mounted conditionally: the
+ * handshake subscription and its cleanup live in effects here, so the
+ * component has to stay mounted across a close to abort cleanly.
  */
-const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose, onLogin, onSignupClick }) => {
+const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onSignupClick }) => {
   // The nostrconnect callback the signer app redirects back to. On the web
   // that's this deployment; on the APK the WebView's own origin is unreachable
   // from the signer's browser, so use the public deployment — its verified App
@@ -346,21 +355,28 @@ const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose, onLogin, onS
     (isMobile && hasOpenedSigner)
   );
 
-  return (
-    <Dialog open={isOpen} onOpenChange={onClose}>
-      <ChromeDialogContent title="Log in" className="max-w-[95vw] sm:max-w-sm" contentClassName="max-h-[90dvh] overflow-y-auto">
-        <div className="flex flex-col items-center gap-2 text-center">
-          <div className="flex size-12 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
-            <KeyRound className="size-6" />
-          </div>
-          <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-            log in
-          </h2>
-        </div>
+  if (!isOpen) return null;
 
-        <div className='mt-6 space-y-4 overflow-y-auto'>
-          {onSignupClick && !connectError && !showProgressView && !showQr && (
-            <p className="text-center text-sm text-muted-foreground">
+  // Which of the four views is up. Doubles as the shell's step key, so moving
+  // between them replays the enter animation the wizard steps use.
+  const view = connectError ? 'error' : showProgressView ? 'progress' : showQr ? 'qr' : 'form';
+
+  return (
+    // No back arrow: this is where the flow starts, so there is no step behind
+    // it. `total={0}` drops the progress bar — a single screen has no progress.
+    // z-[255] clears Radix dialogs (z-[250]) for the call sites that open this
+    // from inside one, while staying under dropdown content (z-[260]) so the
+    // form's own "more options" menu still renders above it.
+    <WizardShell index={0} total={0} stepKey={view} zClassName="z-[255]" onClose={onClose}>
+      <div className="flex flex-col items-center gap-8 text-center">
+        <ArmadaKey size={110} />
+
+        <div className="space-y-2.5">
+          <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
+            log in
+          </h1>
+          {onSignupClick && view === 'form' && (
+            <p className="text-sm text-muted-foreground">
               New here?{' '}
               <button
                 type="button"
@@ -371,7 +387,9 @@ const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose, onLogin, onS
               </button>
             </p>
           )}
+        </div>
 
+        <div className='w-full space-y-4 text-left'>
           {connectError ? (
             <div className='flex flex-col items-center space-y-3 py-4'>
               <p className='text-sm text-destructive text-center'>{connectError}</p>
@@ -456,7 +474,7 @@ const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose, onLogin, onS
                     }}
                     placeholder='nsec1… or bunker://…'
                     autoComplete='off'
-                    className={`pr-12 clip-corner-lg bg-background/40 border-transparent ${
+                    className={`pr-12 clip-corner-lg bg-background border-transparent ${
                       loginError ? 'border-destructive focus-visible:ring-destructive' : ''
                     }`}
                   />
@@ -523,9 +541,9 @@ const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose, onLogin, onS
             </>
           )}
         </div>
-      </ChromeDialogContent>
-    </Dialog>
+      </div>
+    </WizardShell>
   );
 };
 
-export default LoginDialog;
+export default LoginScreen;
