@@ -9,6 +9,16 @@ const WAVEFORM_SAMPLES = 100;
 /** Sampling interval in ms for waveform amplitude capture. */
 const SAMPLE_INTERVAL_MS = 100;
 
+/**
+ * Speech-tuned encoder bitrate. Browsers default to ~128 kbps, which is music
+ * quality — a voice message is transparent well below that, and every listener
+ * downloads the difference. Opus stays clean for speech at 32 kbps; AAC-LC
+ * (the Safari/mp4 path) degrades harder at low rates, so it gets 64 kbps.
+ */
+function audioBitsPerSecond(mimeType: string): number {
+  return mimeType.includes('opus') ? 32_000 : 64_000;
+}
+
 export interface VoiceRecording {
   /** The recorded audio blob. */
   blob: Blob;
@@ -129,7 +139,7 @@ export function useVoiceRecorder(): UseVoiceRecorderReturn {
 
     // Set up MediaRecorder
     const mimeType = getRecordingMimeType();
-    const recorder = new MediaRecorder(stream, { mimeType });
+    const recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: audioBitsPerSecond(mimeType) });
     mediaRecorderRef.current = recorder;
     chunksRef.current = [];
     waveformRef.current = [];

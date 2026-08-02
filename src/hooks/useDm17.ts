@@ -10,7 +10,9 @@
  *     viewer's DM relays. Every new wrap is opened once (consent-gated for
  *     prompting signers — two nip44 decrypts per wrap) and the rumor is
  *     stored decrypted; the ciphertext is never persisted. The scan is
- *     since-scoped with a 2-day slack window (NIP-59 backdating).
+ *     since-scoped: the 2-day slack window (NIP-59 backdating) is paid on the
+ *     session's first pass and periodically after; routine polls between use a
+ *     narrow overlap (the wire's standing sub owns live delivery).
  *   - THREAD: local-first store read + the shared inbox sync; per-thread
  *     older-history backfill pages the global `#p` gift-wrap stream with
  *     `until`, decrypting each wrap to sort it into its conversation.
@@ -87,8 +89,24 @@ import type { NostrEvent, NostrFilter, NostrSigner } from "@nostrify/nostrify";
 
 /** Minimum interval between inbox relay scans (wire-bus invalidations stay local). */
 const SYNC_MIN_INTERVAL_MS = 30_000;
-/** Wraps are backdated ≤ 2 days; re-scan this far behind the cursor. */
+/** Wraps are backdated ≤ 2 days; a FULL scan re-reads this far behind the cursor. */
 const RESYNC_SLACK_SECS = MAX_WRAP_BACKDATE_SECS + 3600;
+/**
+ * Slack for the routine polls BETWEEN full scans. The full backdate window
+ * exists because a wrap's `created_at` lies up to 2 days in the past — but
+ * re-fetching that whole window every 30-60s re-transferred the same
+ * ciphertext page over and over (the seen-memo only skips the re-decrypt).
+ * Live delivery is the wire's standing sub (whose own `since` rewinds the full
+ * window); the narrow poll only needs to cover the cursor-advance races around
+ * it. A backdated wrap that arrived while the wire was deaf is recovered by
+ * the next FULL scan, at most {@link FULL_SCAN_INTERVAL_MS} away.
+ */
+const NARROW_RESYNC_SLACK_SECS = 10 * 60;
+/** How often an inbox pass pays the full backdate window again. */
+const FULL_SCAN_INTERVAL_MS = 15 * 60_000;
+/** Per-viewer time of the last COMPLETED full-window scan (session-only, so
+ *  every session opens with a full scan). */
+const lastFullScanAt = new Map<string, number>();
 /** Newest wraps fetched per inbox scan / backfill page. */
 const INBOX_PAGE = 500;
 /** Wraps decrypted per wave in openAndStore (yields between waves). */
@@ -433,7 +451,12 @@ async function runInboxSync(
 ): Promise<boolean> {
   try {
     const [cursor] = await Promise.all([readDm17Cursor(ctx.self), loadSeenWraps(ctx.self)]);
-    const since = cursor?.newest ? Math.max(0, cursor.newest - RESYNC_SLACK_SECS) : undefined;
+    // Two-tier window: the first pass of a session (and every
+    // FULL_SCAN_INTERVAL_MS after) rewinds the full backdate window; routine
+    // polls in between use the narrow overlap (see NARROW_RESYNC_SLACK_SECS).
+    const fullScan = now - (lastFullScanAt.get(ctx.self) ?? 0) >= FULL_SCAN_INTERVAL_MS;
+    const slack = fullScan ? RESYNC_SLACK_SECS : NARROW_RESYNC_SLACK_SECS;
+    const since = cursor?.newest ? Math.max(0, cursor.newest - slack) : undefined;
     const filter: { kinds: number[]; "#p": string[]; limit: number; since?: number } = {
       kinds: [1059],
       "#p": [ctx.self],
@@ -446,6 +469,9 @@ async function runInboxSync(
     const fresh = wraps.filter((w) => !seen.has(w.id));
 
     if (!(await openAndStore(ctx, fresh, opts?.interactive ?? false))) return false; // deferred: retry later
+    // Only a CONSUMED pass counts as the full scan (a deferral or throw must
+    // not push the next full window out by another interval).
+    if (fullScan) lastFullScanAt.set(ctx.self, now);
 
     if (wraps.length > 0) {
       const newest = Math.max(...wraps.map((w) => w.created_at));

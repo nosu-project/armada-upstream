@@ -14,6 +14,7 @@ import { guestbookGroups } from "@/concord-v2/lib/guestbook";
 import { KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
 import {
   _configureAuthWaitForTests,
+  _configureSweepCadenceForTests,
   _configureSweepPagingForTests,
   _resetPlaneSweepMemoForTests,
   controlScope,
@@ -23,6 +24,7 @@ import {
   controlSweepReach,
   controlSweepUnreadable,
   guestbookScope,
+  markControlPlaneStale,
   sweepControl,
   sweepGuestbook,
   sweepRelayScopes,
@@ -152,6 +154,7 @@ beforeEach(() => {
   _resetStreamAuthRegistry();
   _resetPlaneSweepMemoForTests();
   _configureSweepPagingForTests({ pageLimit: 500, maxEvents: 15_000, wallPage: 10_000, queryTimeoutMs: 25_000 });
+  _configureSweepCadenceForTests({ fullSweepIntervalMs: 6 * 60 * 60_000, deltaOverlapSecs: 3600 });
   // Most tests exercise the fetch discipline, not the auth gate — let sweeps
   // proceed immediately (maxWaitMs 0 = the cap expires at once).
   _configureAuthWaitForTests({ maxWaitMs: 0 });
@@ -490,8 +493,8 @@ describe("sweepRelayScopes — one REQ per relay, per-scope filters", () => {
   });
 });
 
-describe("control completeness — the whole plane, every sweep", () => {
-  it("never cursor-gates: repeat sweeps re-ask in full, announcing only session-new wraps", async () => {
+describe("control completeness — whole-plane reads with a session delta", () => {
+  it("never trusts a persisted cursor: the session opens whole, repeats ride a short-overlap delta", async () => {
     const owner = signer();
     const community = communityOf(80, owner.pubkey);
     const control = controlGroupKey(community.root, community.id, 0);
@@ -506,8 +509,13 @@ describe("control completeness — the whole plane, every sweep", () => {
     const second = await sweepControl(nostr, community);
 
     expect(openingCalls(relay)).toBe(2);
-    expect(relay.calls[0][0].since, "control must not trust a forward cursor").toBeUndefined();
-    expect(relay.calls[1][0].since, "…on ANY sweep, not just the first").toBeUndefined();
+    expect(relay.calls[0][0].since, "the session's first sweep is a whole-plane read").toBeUndefined();
+    // A clean full read licenses a short-overlap delta for the repeats — the
+    // whole-plane re-fetch every background tick was pure duplicate ciphertext
+    // (the seen-memo only ever skipped the re-decrypt, not the transfer).
+    expect(relay.calls[1][0].since, "a repeat sweep is delta-gated off the full read").toBe(
+      e1.wrap.created_at - 3600,
+    );
     expect(first.map((e) => e.rumorId)).toContain(e1.rumor.id);
     expect(second, "a re-received wrap is not fresh — the session memo keeps repeats quiet").toEqual([]);
 
@@ -516,6 +524,52 @@ describe("control completeness — the whole plane, every sweep", () => {
     relay.events.push(e2.wrap);
     const third = await sweepControl(nostr, community);
     expect(third.map((e) => e.rumorId)).toEqual([e2.rumor.id]);
+  });
+
+  it("an aged delta floor re-asks the whole plane", async () => {
+    _configureSweepCadenceForTests({ fullSweepIntervalMs: 0 });
+    const owner = signer();
+    const community = communityOf(81, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const e1 = await wrapAt(control, owner, "ab".repeat(32), now - 100);
+
+    const relay = new FakeRelay();
+    relay.events = [e1.wrap];
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    await sweepControl(nostr, community);
+    await sweepControl(nostr, community);
+
+    expect(openingCalls(relay)).toBe(2);
+    expect(relay.calls[1][0].since, "a floor past its interval licenses nothing").toBeUndefined();
+  });
+
+  it("markControlPlaneStale drops the floor, so a below-floor edition is recovered by the next sweep", async () => {
+    const owner = signer();
+    const community = communityOf(82, owner.pubkey);
+    const control = controlGroupKey(community.root, community.id, 0);
+    const now = Math.floor(Date.now() / 1000);
+    const e1 = await wrapAt(control, owner, "ab".repeat(32), now - 100);
+
+    const relay = new FakeRelay();
+    relay.events = [e1.wrap];
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    await sweepControl(nostr, community);
+
+    // An edition BELOW the delta floor lands on the relay (the shape of an
+    // unban recovered on rejoin): a delta sweep's `since` can never see it.
+    const buried = await wrapAt(control, owner, "cd".repeat(32), now - 10_000);
+    relay.events.push(buried.wrap);
+    const missed = await sweepControl(nostr, community);
+    expect(missed, "the delta window cannot reach below the floor").toEqual([]);
+
+    // The fold's `incomplete` verdict calls this, forcing the next sweep whole.
+    markControlPlaneStale(community);
+    const healed = await sweepControl(nostr, community);
+    expect(relay.calls.at(-1)?.[0].since, "a stale plane re-asks whole").toBeUndefined();
+    expect(healed.map((e) => e.rumorId)).toContain(buried.rumor.id);
   });
 
   it("a stale persisted cursor (pre-fix state) cannot starve the control fold", async () => {
