@@ -101,6 +101,12 @@ export function buildThemeDefinitionEvent(
       ["c", hslStringToHex(colors.background), "background"],
       ["c", hslStringToHex(colors.text), "text"],
       ["c", hslStringToHex(colors.primary), "primary"],
+      // NIP-31 fallback text and the topic tag, matching what Ditto emits
+      // (ditto/src/lib/themeEvent.ts buildThemeDefinitionTags). Neither Ditto's
+      // theme feed nor Armada's Discover filters on `t` — it is for clients and
+      // relays that index by topic.
+      ["alt", `Custom theme: ${name}`],
+      ["t", "theme"],
     ],
   };
 }
