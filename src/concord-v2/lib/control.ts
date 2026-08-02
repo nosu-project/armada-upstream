@@ -756,28 +756,24 @@ export function isCommunityPublic(folded: FoldedControl, excludingCreator?: stri
  * when every live link is its own — even though the community still reads
  * Public (the CORD-05 §5 flag is unchanged by this).
  *
- * `excludingCreator` drops one more registry from the view — the target of an
- * in-flight ban, whose links die with their authority.
+ * `excludingCreators` drops further registries from the view — the target(s)
+ * of an in-flight ban, whose links die with their authority.
  */
-export function hasForeignLiveLinks(folded: FoldedControl, viewer: string, excludingCreator?: string): boolean {
+export function hasForeignLiveLinks(
+  folded: FoldedControl,
+  viewer: string,
+  excludingCreators?: string | string[],
+): boolean {
+  const excluded = new Set(
+    typeof excludingCreators === "string" ? [excludingCreators] : excludingCreators ?? [],
+  );
   for (const [creator, signers] of folded.registriesByCreator) {
-    if (creator === viewer || creator === excludingCreator) continue;
+    if (creator === viewer || excluded.has(creator)) continue;
     if (signers.length > 0) return true;
   }
   return false;
 }
 
-/**
- * Whether banning `target` should also rotate the keys.
- *
- * Ordinarily no, while a foreign live link exists — see
- * {@link hasForeignLiveLinks}. `force` overrides that, and exists for a ban
- * answering control-plane abuse: there the rotation IS the remedy, because a
- * banlist silences a flooder but leaves them holding the root they mint junk
- * with. Stranding a foreign link (until its creator next opens the app and
- * republishes its bundle) is the lesser harm against an attack that otherwise
- * continues indefinitely.
- */
 /**
  * Whether an actor's `vac` satisfies the CORD-04 §5 sync floor against a folded
  * control plane — the read-side half of an authority action taken OUTSIDE the
@@ -822,14 +818,39 @@ export function citationSatisfied(
   return false;
 }
 
+/**
+ * Whether banning `targets` should also rotate the keys — judged ONCE for the
+ * whole group, because the rotation is: a mass ban excludes every target from
+ * a single Refounding, never one rotation per target (each rotation forces
+ * every member through another adoption round).
+ *
+ * Ordinarily no rotation while a foreign live link exists — see
+ * {@link hasForeignLiveLinks}; every target's own registry is excluded from
+ * that view, since their links die with their authority. `force` overrides,
+ * and exists for a ban answering control-plane abuse: there the rotation IS
+ * the remedy, because a banlist silences a flooder but leaves them holding the
+ * root they mint junk with. Stranding a foreign link (until its creator next
+ * opens the app and republishes its bundle) is the lesser harm against an
+ * attack that otherwise continues indefinitely.
+ */
+export function banShouldRotateMany(
+  folded: FoldedControl | undefined,
+  viewer: string,
+  targets: string[],
+  force = false,
+): boolean {
+  if (!folded) return false;
+  return force || !hasForeignLiveLinks(folded, viewer, targets);
+}
+
+/** Single-target {@link banShouldRotateMany}. */
 export function banShouldRotate(
   folded: FoldedControl | undefined,
   viewer: string,
   target: string,
   force = false,
 ): boolean {
-  if (!folded) return false;
-  return force || !hasForeignLiveLinks(folded, viewer, target);
+  return banShouldRotateMany(folded, viewer, [target], force);
 }
 
 function foldOnce(

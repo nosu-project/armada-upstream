@@ -24,7 +24,7 @@ export interface SearchProfile {
  * it matches regardless of word order, across fields (query "sillie bear" hits
  * name="sillie", display_name="bear"), and tolerates extra/trailing spaces.
  */
-function profileMatches(p: SearchProfile, query: string): boolean {
+export function profileMatches(p: SearchProfile, query: string): boolean {
   const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return false;
   const haystack = [

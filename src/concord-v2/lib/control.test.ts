@@ -11,6 +11,7 @@ import {
   buildRoleEdition,
   foldControlState,
   banShouldRotate,
+  banShouldRotateMany,
   hasForeignLiveLinks,
   isCommunityPublic,
   citationSatisfied,
@@ -1096,6 +1097,72 @@ describe("control plane fold (CORD-04)", () => {
       "a forced rotation accepts that cost",
     ).toBe(true);
     expect(banShouldRotate(undefined, otherAdmin, bystander, true), "no fold, nothing to rotate from").toBe(false);
+  });
+
+  it("banShouldRotateMany: judged once for the group, excluding every target's own links", async () => {
+    // Two admins each hold a live link. Banning ONE of them still leaves the
+    // other's link to strand, so no rotation; banning BOTH removes every
+    // foreign registry from the view and the single group rotation may run.
+    const { owner, communityId, control } = await makeCommunity();
+    const adminA = signer();
+    const adminB = signer();
+    const adm = adminRole(bytesToHex(random32()));
+    const authorityWraps = [
+      await sealEdition(buildRoleEdition(adm, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      await sealEdition(
+        buildGrantEdition(communityId, { member: adminA.pubkey, roleIds: [adm.roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
+        control,
+        owner,
+      ),
+      await sealEdition(
+        buildGrantEdition(communityId, { member: adminB.pubkey, roleIds: [adm.roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
+        control,
+        owner,
+      ),
+    ];
+    // Non-owner registry editions must cite their own grant (vac).
+    const heads = foldControlState(openControlWraps(authorityWraps, [control]), communityId, owner.pubkey).heads;
+    const cite = (adminPubkey: string) => {
+      const eid = grantLocator(communityId, hex32(adminPubkey));
+      const head = heads.get(bytesToHex(eid))!;
+      return { entityId: eid, version: head.version, editionHash: head.hash };
+    };
+    const wraps = [
+      ...authorityWraps,
+      await sealEdition(
+        buildRegistryEdition(communityId, adminA.pubkey, [bytesToHex(random32())], {
+          actorPubkey: adminA.pubkey,
+          version: 1n,
+          authority: cite(adminA.pubkey),
+        }),
+        control,
+        adminA,
+      ),
+      await sealEdition(
+        buildRegistryEdition(communityId, adminB.pubkey, [bytesToHex(random32())], {
+          actorPubkey: adminB.pubkey,
+          version: 1n,
+          authority: cite(adminB.pubkey),
+        }),
+        control,
+        adminB,
+      ),
+    ];
+    const folded = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
+    expect(folded.registriesByCreator.size, "both admins' registries must actually fold").toBe(2);
+
+    expect(hasForeignLiveLinks(folded, owner.pubkey, [adminA.pubkey])).toBe(true);
+    expect(hasForeignLiveLinks(folded, owner.pubkey, [adminA.pubkey, adminB.pubkey])).toBe(false);
+
+    expect(banShouldRotateMany(folded, owner.pubkey, [adminA.pubkey]), "B's link would strand").toBe(false);
+    expect(banShouldRotateMany(folded, owner.pubkey, [adminA.pubkey, adminB.pubkey]), "no foreign links survive the group ban").toBe(true);
+    expect(banShouldRotateMany(folded, owner.pubkey, [adminA.pubkey], true), "force overrides").toBe(true);
+    expect(banShouldRotateMany(undefined, owner.pubkey, [adminA.pubkey], true), "no fold, nothing to rotate from").toBe(false);
+
+    // The single-target form is the [target] delegate — identical verdicts.
+    expect(banShouldRotate(folded, owner.pubkey, adminA.pubkey)).toBe(
+      banShouldRotateMany(folded, owner.pubkey, [adminA.pubkey]),
+    );
   });
 
   it("a compaction re-wrap folds for a fresh joiner despite the dangling prev", async () => {
