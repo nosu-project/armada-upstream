@@ -24,8 +24,19 @@ const KIND_GIFT_WRAP = 1059;
 
 /** Slack added behind the NIP-59 backdate window (clock skew, borderline wraps). */
 const WRAP_SINCE_SLACK_SECS = 3600;
-/** Stored-replay cap for the DM gift-wrap filter on each fresh REQ round. */
+/** Stored-replay cap for the DM gift-wrap filter on a session's FIRST round. */
 const DM_WRAP_REPLAY_LIMIT = 100;
+/**
+ * Stored-replay cap once a relay's round has EOSEd this session. The wrap
+ * filter's `since` rewinds the full backdate window every round (it must, for
+ * LIVE delivery — see {@link stampRoundSince}), so each routine 90s quiet
+ * rotation replayed the newest {@link DM_WRAP_REPLAY_LIMIT} wraps of a 2-day
+ * window as pure duplicate ciphertext (~100-150 KB per rotation per DM relay).
+ * After the first EOSE the store already holds that window; the small cap
+ * keeps a short-gap overlap, and anything deeper (a burst missed while the
+ * device slept) is recovered by the DM inbox poll's periodic full scan.
+ */
+const DM_WRAP_REPLAY_LIMIT_STEADY = 10;
 /** Conservative relay-filter cardinality: keeps REQ frames comfortably small. */
 export const GIT_ROOT_FILTER_CHUNK_SIZE = 100;
 
@@ -58,11 +69,12 @@ function isDmWrapInboxFilter(f: NostrFilter): boolean {
  * (newest-first), and ingest dedupes re-deliveries by wrap id — deeper catch-up
  * is the DM inbox poll's job (which already rewinds the same window).
  */
-export function stampRoundSince(filters: NostrFilter[], since: number, now: number, preserveExplicitSince = false): NostrFilter[] {
+export function stampRoundSince(filters: NostrFilter[], since: number, now: number, preserveExplicitSince = false, wrapReplayDone = false): NostrFilter[] {
   const wrapSince = Math.min(since, now - MAX_WRAP_BACKDATE_SECS - WRAP_SINCE_SLACK_SECS);
+  const wrapLimit = wrapReplayDone ? DM_WRAP_REPLAY_LIMIT_STEADY : DM_WRAP_REPLAY_LIMIT;
   return filters.map((f) =>
     isDmWrapInboxFilter(f)
-      ? { ...f, since: wrapSince, limit: DM_WRAP_REPLAY_LIMIT }
+      ? { ...f, since: wrapSince, limit: wrapLimit }
       : { ...f, since: preserveExplicitSince && f.since !== undefined ? f.since : since },
   );
 }
