@@ -176,7 +176,7 @@ function writeBundleFloor(linkSigner: string, event: NostrEvent): void {
  * regresses, and resolveBundle's second hop re-asks the community's home
  * relays for a newer copy.
  */
-const BUNDLE_GRACE_MS = 600;
+const BUNDLE_GRACE_MS = 250;
 const BUNDLE_RELAY_TIMEOUT_MS = 8000;
 
 /** Query one relay set for a link's bundle coordinate, verified events only. */
