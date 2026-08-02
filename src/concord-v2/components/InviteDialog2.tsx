@@ -26,6 +26,7 @@ import { useInviteActions2 } from "@/concord-v2/hooks/useInvites2";
 import { toast } from "@/hooks/useToast";
 import type { SearchProfile } from "@/hooks/useSearchProfiles";
 import { writeClipboardText } from "@/lib/clipboard";
+import { shareOrigin } from "@/lib/shareOrigin";
 import { cn } from "@/lib/utils";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 
@@ -92,11 +93,11 @@ function InviteBody({ community, canCreateLink }: { community: CommunityV2 | und
     }
   };
 
-  // The first live link flips the community Public (CORD-05 §5), and every
-  // recipient then keeps read access to the whole history for good (bans don't
-  // rotate keys while public). Announcing to Discover publishes the secret too.
-  // Both are consequential and irreversible, so a click routes through an in-app
-  // confirm rather than firing straight away.
+  // The first live link flips the community Public (CORD-05 §5): anyone with the
+  // link can then read the public-channel history up to that point, and revoking
+  // the link or removing them later doesn't take that back. Announcing to
+  // Discover publishes the secret too. Both are consequential, so a click routes
+  // through an in-app confirm rather than firing straight away.
   const needsConfirm = !isPublic || listPublicly;
 
   const doGenerate = async () => {
@@ -243,11 +244,11 @@ function InviteBody({ community, canCreateLink }: { community: CommunityV2 | und
             {!isPublic && (
               <Alert variant="destructive" className="normal-case tracking-normal">
                 <AlertTriangle className="size-4" />
-                <AlertTitle>Anyone with the link can read everything</AlertTitle>
+                <AlertTitle>Anyone with the link can read public-channel history</AlertTitle>
                 <AlertDescription>
                   Creating a link makes this community public. Anyone who gets it can read every
-                  message, past and future, and keeps that access permanently, even if you later
-                  revoke the link or remove them from the community.
+                  message sent up to this point in the community's public channels, and keeps that
+                  access even if you later revoke the link or remove them from the community.
                 </AlertDescription>
               </Alert>
             )}
@@ -354,14 +355,16 @@ function InviteBody({ community, canCreateLink }: { community: CommunityV2 | und
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {!isPublic ? "Make this community public?" : "Share this link to Discover?"}
+              {!isPublic
+                ? "Are you sure you want to make this community public?"
+                : "Share this link to Discover?"}
             </AlertDialogTitle>
             <AlertDialogDescription className="space-y-2">
               {!isPublic && (
                 <span className="block">
-                  Creating an invite link makes this community public. Anyone who gets the link can
-                  read every message, past and future, and keeps that access permanently, even if you
-                  later revoke the link or remove them from the community.
+                  Creating an invite link makes this community public. If you want to keep the room
+                  private, you can still invite users individually. Invite them to create an account
+                  at {shareOrigin()}.
                 </span>
               )}
               {listPublicly && (
@@ -374,7 +377,9 @@ function InviteBody({ community, canCreateLink }: { community: CommunityV2 | und
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void doGenerate()}>Create link</AlertDialogAction>
+            <AlertDialogAction onClick={() => void doGenerate()}>
+              {!isPublic ? "Make Room Public and Create Link" : "Create Link"}
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
