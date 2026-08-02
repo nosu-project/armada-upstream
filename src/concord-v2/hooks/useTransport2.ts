@@ -109,20 +109,34 @@ export function useTransport2(
   // shows a tombstone for the missing root. When the root eventually loads
   // (backfill / decode), the reply stays bucketed under it and the tombstone
   // is replaced by the real root message.
+  const replyBucketCache = useRef(new Map<string, ChatMsg[]>());
   const { topLevel, repliesByRoot } = useMemo(() => {
     const topLevel: ChatMsg[] = [];
-    const repliesByRoot = new Map<string, ChatMsg[]>();
+    const buckets = new Map<string, ChatMsg[]>();
     for (const m of messages) {
       const root = replyRootOf(m);
       if (root) {
-        const list = repliesByRoot.get(root) ?? [];
+        const list = buckets.get(root) ?? [];
         list.push(m);
-        repliesByRoot.set(root, list);
+        buckets.set(root, list);
       } else {
         topLevel.push(m);
       }
     }
-    for (const list of repliesByRoot.values()) list.sort((a, b) => a.created_at - b.created_at);
+    // A bucket whose contents didn't change keeps its previous array identity:
+    // these go straight to memoized rows as the `replies` prop, and a fresh
+    // array per fold re-rendered every row that has a thread on every arriving
+    // message. Element-wise compare is sound because `messages` entries are
+    // themselves identity-cached above.
+    const cache = replyBucketCache.current;
+    const repliesByRoot = new Map<string, ChatMsg[]>();
+    for (const [root, list] of buckets) {
+      list.sort((a, b) => a.created_at - b.created_at);
+      const prev = cache.get(root);
+      const unchanged = prev && prev.length === list.length && prev.every((m, i) => m === list[i]);
+      repliesByRoot.set(root, unchanged ? prev : list);
+    }
+    replyBucketCache.current = repliesByRoot;
     return { topLevel, repliesByRoot };
   }, [messages]);
 

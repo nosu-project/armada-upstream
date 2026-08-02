@@ -1044,15 +1044,19 @@ export function ConcordV2Page() {
   );
   const gitActivity = useChannelGitActivity(channel?.idHex, gitAttachments);
   const mixedEntries = useMemo(() => mergeChannelTimeline(baseTransport.messages, gitActivity.activities), [baseTransport.messages, gitActivity.activities]);
-  const newDividerId = useNewMessagesDivider(
-    channel?.idHex ?? "",
-    mixedEntries.map((entry) => ({
-      id: entry.id,
-      createdAt: entry.createdAt,
-      author: entry.type === "chat" ? entry.message.pubkey : entry.type === "dm-timer" ? entry.author : entry.type === "git-ticket-opened" ? entry.activity.ticket.author : entry.type === "git-comment" ? entry.activity.comment.author : entry.type === "git-ci-run" ? entry.activity.run.author : entry.activity.status.author,
-    })),
-    user?.pubkey,
+  // Memoized: this parallel array feeds a hook that settles once, and
+  // rebuilding it on every page render was a full-timeline allocation per
+  // keystroke/hover anywhere on the page.
+  const dividerEntries = useMemo(
+    () =>
+      mixedEntries.map((entry) => ({
+        id: entry.id,
+        createdAt: entry.createdAt,
+        author: entry.type === "chat" ? entry.message.pubkey : entry.type === "dm-timer" ? entry.author : entry.type === "git-ticket-opened" ? entry.activity.ticket.author : entry.type === "git-comment" ? entry.activity.comment.author : entry.type === "git-ci-run" ? entry.activity.run.author : entry.activity.status.author,
+      })),
+    [mixedEntries],
   );
+  const newDividerId = useNewMessagesDivider(channel?.idHex ?? "", dividerEntries, user?.pubkey);
   const openProjectItem = useCallback((item: ProjectWorkItem) => {
     const ticket = projects.ticketsById.get(item.id);
     if (!ticket) return;
@@ -1464,6 +1468,11 @@ export function ConcordV2Page() {
     if (user && !banned.has(user.pubkey)) set.add(user.pubkey);
     return [...set];
   }, [coalesced, allMessages, roster, ownerHex, user, folded]);
+
+  // One Set identity per member-list change, shared by the git timeline rows
+  // and the ticket side panel — building a fresh Set inside render handed
+  // their memoized components a new prop every time the page rendered.
+  const memberSet = useMemo(() => new Set(memberPubkeys), [memberPubkeys]);
 
   // Hoisted role sections (Role.display): position order, a member files under
   // their highest hoisted role only. The owner included — a self-granted
@@ -2660,7 +2669,7 @@ export function ConcordV2Page() {
                     transport={transport}
                     entries={mixedEntries}
                     newDividerId={newDividerId}
-                    renderEntry={(entry, relatedEntries) => isGitTimelineEntry(entry) ? <GitTimelineRow entry={entry} members={new Set(memberPubkeys)} onOpen={(ticket) => { setOpenTicket(ticket); void gitActivity.refreshTicket(ticket); }} commentEntries={entry.type === "git-comment" ? relatedEntries as Extract<typeof entry, { type: "git-comment" }>[] : undefined} activities={gitActivity.activities} /> : null}
+                    renderEntry={(entry, relatedEntries) => isGitTimelineEntry(entry) ? <GitTimelineRow entry={entry} members={memberSet} onOpen={(ticket) => { setOpenTicket(ticket); void gitActivity.refreshTicket(ticket); }} commentEntries={entry.type === "git-comment" ? relatedEntries as Extract<typeof entry, { type: "git-comment" }>[] : undefined} activities={gitActivity.activities} /> : null}
                     handleRef={timelineRef}
                     syncing={channelSyncing}
                     className="flex-1 min-h-0"
@@ -2802,7 +2811,7 @@ export function ConcordV2Page() {
               )}
             </div>
 
-            <TicketSidePanel ticket={openTicket} members={new Set(memberPubkeys)} activities={panelActivities} onClose={() => setOpenTicket(undefined)} actions={ticketActions} />
+            <TicketSidePanel ticket={openTicket} members={memberSet} activities={panelActivities} onClose={() => setOpenTicket(undefined)} actions={ticketActions} />
             <NewChannelDialog2
               open={creatingChannel}
               onOpenChange={setCreatingChannel}
