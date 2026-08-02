@@ -1,4 +1,4 @@
-import { ChevronDown, Loader2 } from "lucide-react";
+import { ChevronDown, KeyRound, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -101,10 +101,37 @@ function NewMessagesDivider() {
   );
 }
 
+/**
+ * Key-rotation boundary (Concord): everything ABOVE this line was sealed under
+ * a previous key. The transport marks the first message of each newer epoch
+ * (`rotationDividerIds`); the warning tone is deliberate — pre-rotation
+ * history is readable, but it belongs to a key set the community moved off.
+ */
+function KeyRotationDivider() {
+  return (
+    <div
+      className="flex items-center gap-3 px-2 py-1 select-none"
+      role="separator"
+      aria-label="Key rotated — earlier messages use a previous key"
+    >
+      <div className="h-px flex-1 bg-amber-500/50" />
+      <span
+        className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-500"
+        title="The community's encryption key was rotated here. Messages above were sealed under a previous key."
+      >
+        <KeyRound className="size-3" aria-hidden />
+        Key rotated
+      </span>
+      <div className="h-px flex-1 bg-amber-500/50" />
+    </div>
+  );
+}
+
 /** One rendered row: a message, a day separator, or the unread "NEW" divider. */
 type TimelineItem =
   | { type: "date"; ts: number; key: string }
   | { type: "unread"; key: string }
+  | { type: "rotation"; key: string }
   | { type: "message"; msg: ChatMsg; continuation: boolean; key: string }
   | { type: "entry"; entry: NonChatEntry; related?: readonly NonChatEntry[]; key: string };
 
@@ -359,7 +386,7 @@ export function MessageTimeline({
   syncing = false,
   className,
 }: MessageTimelineProps) {
-  const { messages, isLoading, loadOlder, hasMore, isLoadingOlder } = transport;
+  const { messages, isLoading, loadOlder, hasMore, isLoadingOlder, rotationDividerIds } = transport;
 
   // THE number the user is complaining about: when the skeleton came down. Every
   // other milestone on the timeline is only interesting relative to this one.
@@ -484,6 +511,9 @@ export function MessageTimeline({
       const rowKey = entry.type === "chat" ? entry.message.renderKey ?? entry.message.id : entry.id;
       if (newDay) out.push({ type: "date", ts: entry.createdAt, key: `date-${rowKey}` });
       if (entry.type === "chat") {
+        if (rotationDividerIds?.has(entry.message.id)) {
+          out.push({ type: "rotation", key: `rotation-${rowKey}` });
+        }
         if (newDividerId === entry.message.id) out.push({ type: "unread", key: "unread-divider" });
         const continuation =
           !!prev &&
@@ -503,7 +533,7 @@ export function MessageTimeline({
       }
     }
     return out;
-  }, [timelineEntries, startIndex, newDividerId]);
+  }, [timelineEntries, startIndex, newDividerId, rotationDividerIds]);
 
   // Rows are about to change at the top of the slice (a revealed batch, a
   // backfill prepend, a trim). Measure the reader's anchor row NOW, while the
@@ -790,6 +820,8 @@ export function MessageTimeline({
                     <DateSeparator ts={item.ts} />
                   ) : item.type === "unread" ? (
                     <NewMessagesDivider />
+                  ) : item.type === "rotation" ? (
+                    <KeyRotationDivider />
                   ) : item.type === "entry" ? (
                     renderEntry?.(item.entry, item.related)
                   ) : (

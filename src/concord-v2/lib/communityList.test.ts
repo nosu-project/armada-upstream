@@ -318,6 +318,43 @@ describe("rehydration", () => {
     expect(rehydrateCommunity(entryOf(corrupt))).toBeUndefined();
   });
 
+  it("round-trips epoch retirement cutoffs on held roots and channel priors", () => {
+    const ownerPk = bytesToHex(random32());
+    const salt = random32();
+    const cid = communityIdOf(
+      Uint8Array.from(ownerPk.match(/.{2}/g)!.map((b) => parseInt(b, 16))),
+      salt,
+    );
+    const jm = makeJoinMaterial({
+      community_id: bytesToHex(cid),
+      owner: ownerPk,
+      owner_salt: bytesToHex(salt),
+      root_epoch: 2,
+      held_roots: [
+        { epoch: 1, key: bytesToHex(random32()), retired_at: 1_700_000_000 },
+        { epoch: 0, key: bytesToHex(random32()) }, // pre-cutoff data: stays uncapped
+      ],
+      channels: [
+        {
+          id: bytesToHex(random32()),
+          key: bytesToHex(random32()),
+          epoch: 2,
+          name: "secret",
+          priors: [{ key: bytesToHex(random32()), epoch: 1, retired_at: 1_700_000_100 }],
+        },
+      ],
+    });
+    const community = rehydrateCommunity(entryOf(jm))!;
+    expect(community.heldRoots.find((r) => r.epoch === 1n)?.retiredAt).toBe(1_700_000_000);
+    expect(community.heldRoots.find((r) => r.epoch === 0n)?.retiredAt).toBeUndefined();
+    expect(community.privateChannels[0].priors?.[0].retiredAt).toBe(1_700_000_100);
+
+    const back = toJoinMaterial(community, { prior: jm, relays: jm.relays });
+    expect(back.held_roots?.find((r) => r.epoch === 1)?.retired_at).toBe(1_700_000_000);
+    expect(back.held_roots?.find((r) => r.epoch === 0)?.retired_at).toBeUndefined();
+    expect(back.channels[0].priors?.[0].retired_at).toBe(1_700_000_100);
+  });
+
   it("snapshots back to join material, preserving unknown fields", () => {
     const ownerPk = bytesToHex(random32());
     const salt = random32();

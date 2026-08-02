@@ -215,6 +215,13 @@ export interface ChatTransport {
 
   // ── Optional capabilities (control hidden when undefined) ────────────────
 
+  /**
+   * Ids of messages that open a NEW key epoch (Concord): the timeline renders
+   * a "key rotated" divider directly above each, marking everything earlier as
+   * sealed under a previous key. Undefined for transports without rotations.
+   */
+  rotationDividerIds?: ReadonlySet<string>;
+
   /** Backfill older history; resolves to the number of messages prepended. */
   loadOlder?: () => Promise<number>;
   /** Whether more history remains to backfill. */

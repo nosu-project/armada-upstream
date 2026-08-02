@@ -8,6 +8,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useSendStatusMap, useSendStatusMapValue, type SendStatusMap } from "@/hooks/useSendStatusMap";
 import {
   buildV2CommentTags,
+  filterEpochCutoff,
   foldTimeline,
   forgetChatSkips,
   openChatBatch,
@@ -142,7 +143,9 @@ export function useChannelTimeline2(
   const moderation = useChatModeration2(community);
 
   const channelIdHex = channel?.idHex ?? routeChannelIdHex ?? null;
-  const epochSig = channel?.streams.map((s) => s.epoch.toString()).join(",") ?? "";
+  // Cutoffs ride the signature too: a merge can teach this device an epoch's
+  // retirement without changing the epoch set, and the store must re-read.
+  const epochSig = channel?.streams.map((s) => `${s.epoch}:${s.retiredAt ?? ""}`).join(",") ?? "";
   const queryKey = channelKey(channelIdHex);
 
   // Seed the cache from the persisted last-painted window the moment the
@@ -272,8 +275,9 @@ export function useChannelTimeline2(
           (m) => m.channelIdHex === channelIdHex,
         );
         // Fold in freshly-decrypted events directly rather than racing the
-        // fire-and-forget rumor write.
-        return upsert(prev, extra ? upsert(rumors, extra) : rumors);
+        // fire-and-forget rumor write. The epoch-cutoff filter re-applies the
+        // ingest rule to rows persisted before the rotation was known locally.
+        return filterEpochCutoff(upsert(prev, extra ? upsert(rumors, extra) : rumors), channel!);
       };
 
       const existing = queryClient.getQueryData<OpenedChat[]>(queryKey);

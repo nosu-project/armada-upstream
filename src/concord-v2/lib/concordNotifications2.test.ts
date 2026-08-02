@@ -73,6 +73,31 @@ describe("buildConcord2Subs", () => {
     ]);
   });
 
+  it("listens only on the current epoch, while every held epoch registers for stream auth", () => {
+    const { community, generalId } = mint();
+    // The community rotated 0 → 1: the retired root is held for history…
+    const newRoot = random32();
+    community.heldRoots = [{ epoch: 1n, key: newRoot }, { ...community.heldRoots[0], retiredAt: 5 }];
+    community.root = newRoot;
+    community.rootEpoch = 1n;
+    const folded = foldedWith([
+      { channelIdHex: bytesToHex(generalId), name: "general", isPrivate: false, deleted: false, metadata: { name: "general", private: false } },
+    ]);
+
+    const { subs, streamKeys } = buildConcord2Subs(community, folded);
+    const current = channelGroupKey(newRoot, generalId, 1n);
+    // …but the native service must not hold the retired address open live: a
+    // retired epoch is read-cutoff history and nothing on it may notify.
+    expect(subs[0].streams).toEqual([
+      { pk: current.pk, convKey: bytesToHex(current.convKey), epoch: "1" },
+    ]);
+    // Backfill still reads the retired epoch from auth-gating relays, so both
+    // epochs' keys register for NIP-42.
+    expect(streamKeys.map((k) => k.pk).sort()).toEqual(
+      [current.pk, channelGroupKey(community.heldRoots[1].key, generalId, 0n).pk].sort(),
+    );
+  });
+
   it("skips deleted channels and communities without relays", () => {
     const { community, generalId } = mint();
     const folded = foldedWith([

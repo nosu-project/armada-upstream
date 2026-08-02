@@ -2,7 +2,7 @@ import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure
 import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
 import { describe, expect, it, vi } from "vitest";
 
-import { buildV2CommentTags, foldTimeline, openChatBatch, replyTargetOf } from "@/concord-v2/lib/chat";
+import { buildV2CommentTags, filterEpochCutoff, foldTimeline, openChatBatch, replyTargetOf } from "@/concord-v2/lib/chat";
 import { bytesToHex, channelGroupKey, voiceGroupKey, voiceMediaKey } from "@/concord-v2/lib/derive";
 import { KIND_CALENDAR_RSVP, KIND_CALENDAR_TIME, KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_POLL, KIND_POLL_VOTE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_ZAP } from "@/concord-v2/lib/kinds";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
@@ -319,6 +319,74 @@ describe("chat plane (CORD-03)", () => {
     ]);
     const folded2 = foldTimeline(await openChatBatch(wraps2, channel));
     expect(folded2.reactions.get(msg.id)).toBeUndefined();
+  });
+
+  it("refuses a message sealed under a retired epoch but dated after its rotation", async () => {
+    // The community rotated 0 → 1 at t=5s. Epoch 0's key still opens its
+    // wraps (history), but an ejected keyholder can mint valid wraps under it
+    // forever — so anything dated after the rotation is refused, everywhere.
+    const alice = signer();
+    const oldGroup = channelGroupKey(root, channelId, 0);
+    const newGroup = channelGroupKey(root, channelId, 1);
+    const newStream = { epoch: 1n, group: newGroup };
+    const channel: ChannelV2 = {
+      id: channelId,
+      idHex: channelIdHex,
+      name: "general",
+      isPrivate: false,
+      voice: { room: voiceGroupKey(root, channelId, 1), mediaKey: voiceMediaKey(root, channelId, 1) },
+      streams: [newStream, { epoch: 0n, group: oldGroup, retiredAt: 5 }],
+      current: newStream,
+    };
+
+    const mk = (content: string, ms: number) =>
+      buildRumor({ kind: KIND_MESSAGE, content, tags: channelBindingTags(channelIdHex, 0n), pubkey: alice.pubkey, ms });
+    // created_at 3 ≤ 5: legitimate pre-rotation history.
+    const before = mk("history", 3_000);
+    // created_at 10 > 5: minted after the community moved on — refused.
+    const after = mk("injected", 10_000);
+    const wraps = await Promise.all([
+      wrapSeal(await sealRumor(before, KIND_SEAL_ENCRYPTED, oldGroup, alice), oldGroup),
+      wrapSeal(await sealRumor(after, KIND_SEAL_ENCRYPTED, oldGroup, alice), oldGroup),
+    ]);
+
+    const opened = await openChatBatch(wraps, channel);
+    expect(opened.map((m) => m.content)).toEqual(["history"]);
+  });
+
+  it("filterEpochCutoff re-applies the cutoff to stored rows (and is a no-op without one)", () => {
+    const group = channelGroupKey(root, channelId, 0);
+    const mkStored = (content: string, epoch: bigint, createdAt: number) => ({
+      rumorId: content,
+      author: "a".repeat(64),
+      kind: KIND_MESSAGE,
+      content,
+      tags: [],
+      ms: createdAt * 1000,
+      createdAt,
+      channelIdHex,
+      epoch,
+    });
+    const rows = [
+      mkStored("old-ok", 0n, 4),
+      mkStored("old-injected", 0n, 9),
+      mkStored("current", 1n, 9),
+    ];
+    const newStream = { epoch: 1n, group: channelGroupKey(root, channelId, 1) };
+    const channel: ChannelV2 = {
+      id: channelId,
+      idHex: channelIdHex,
+      name: "general",
+      isPrivate: false,
+      voice: { room: voiceGroupKey(root, channelId, 1), mediaKey: voiceMediaKey(root, channelId, 1) },
+      streams: [newStream, { epoch: 0n, group, retiredAt: 5 }],
+      current: newStream,
+    };
+    expect(filterEpochCutoff(rows, channel).map((m) => m.content)).toEqual(["old-ok", "current"]);
+
+    // No cutoffs recorded → the SAME array back (no per-read copy).
+    const uncapped: ChannelV2 = { ...channel, streams: [newStream, { epoch: 0n, group }] };
+    expect(filterEpochCutoff(rows, uncapped)).toBe(rows);
   });
 
   it("silently skips wraps from epochs we don't hold", async () => {

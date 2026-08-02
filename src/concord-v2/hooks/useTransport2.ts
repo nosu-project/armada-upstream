@@ -438,6 +438,26 @@ export function useTransport2(
     );
   }, [topLevel, calendarMsgs]);
 
+  // Key-rotation boundaries: the first timeline row of each epoch RUN gets a
+  // divider above it, so a rekey is a visible line in the conversation and
+  // everything above it reads as sealed under a previous key. Epochs come from
+  // the fold (the coordinate whose key decrypted each message), not the
+  // adapted ChatMsg, which deliberately doesn't carry them.
+  const rotationDividerIds = useMemo<ReadonlySet<string> | undefined>(() => {
+    const epochById = new Map<string, bigint>();
+    for (const m of folded.messages) epochById.set(m.rumorId, m.epoch);
+    for (const c of folded.calendarEvents) epochById.set(c.rumorId, c.epoch);
+    let prev: bigint | undefined;
+    let ids: Set<string> | undefined;
+    for (const m of timeline) {
+      const epoch = epochById.get(m.id);
+      if (epoch === undefined) continue;
+      if (prev !== undefined && epoch !== prev) (ids ??= new Set()).add(m.id);
+      prev = epoch;
+    }
+    return ids;
+  }, [timeline, folded.messages, folded.calendarEvents]);
+
   // Per-event RSVP binding for the inline card, mirroring `pollFor`. Recomputed
   // when the event set or RSVP fold changes; identity-stable in between so an
   // unchanged calendar row keeps its `calendar` prop (React.memo).
@@ -489,6 +509,7 @@ export function useTransport2(
       canWrite,
       canModerate,
       isRumor: true,
+      rotationDividerIds,
       loadOlder,
       hasMore,
       isLoadingOlder,
@@ -508,7 +529,7 @@ export function useTransport2(
       threadRepliesFor,
       sendThreadReply,
     }),
-    [timeline, isLoading, canWrite, canModerate, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, calendarFor, threadRepliesFor, sendThreadReply],
+    [timeline, isLoading, canWrite, canModerate, rotationDividerIds, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, calendarFor, threadRepliesFor, sendThreadReply],
   );
 
   return { transport, reactionsFor, allMessages: messages, calendar };
