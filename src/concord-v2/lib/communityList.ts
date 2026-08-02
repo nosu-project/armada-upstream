@@ -113,6 +113,23 @@ export interface CommunityList {
 export const EMPTY_COMMUNITY_LIST: CommunityList = { entries: [], tombstones: [] };
 
 /**
+ * The Private Channel keys a join-material snapshot holds.
+ *
+ * `channels` is required by the shape, but the list is a CROSS-CLIENT document
+ * (CORD-02 §8) and Private Channels are optional (CORD-03) — a client that
+ * vends no keys omits the field. Every reader goes through here so that fact
+ * lives in ONE place: read `.channels` off the object and the type promises an
+ * array while the wire promises nothing. That matters most in the merge, which
+ * is the read-modify-write step of every list write — a throw there fails
+ * create, join and leave alike, for as long as the entry sits in the vault.
+ */
+export function heldChannelKeys(
+  channels: JoinMaterial["channels"] | undefined,
+): JoinMaterial["channels"] {
+  return Array.isArray(channels) ? channels : [];
+}
+
+/**
  * The locally cached, already-DECRYPTED community list for one viewer, as
  * persisted in `foldedCache`.
  *
@@ -169,13 +186,15 @@ function earliest(a: JoinMaterial, b: JoinMaterial): JoinMaterial {
  * its channel; the union means a partial vend (one channel's key, e.g. a
  * role-gate grant) can never displace the keys a member already holds.
  * Deterministic, commutative, idempotent — safe inside the list CRDT.
+ *
+ * Either side may be absent: see {@link heldChannelKeys}.
  */
 export function unionChannelKeys(
-  a: JoinMaterial["channels"],
-  b: JoinMaterial["channels"],
+  a: JoinMaterial["channels"] | undefined,
+  b: JoinMaterial["channels"] | undefined,
 ): JoinMaterial["channels"] {
   const byId = new Map<string, JoinMaterial["channels"][number]>();
-  for (const raw of [...a, ...b]) {
+  for (const raw of [...heldChannelKeys(a), ...heldChannelKeys(b)]) {
     if (!raw || typeof raw.id !== "string") continue;
     // CORD-01: hex is lowercase — but a merge is fed by other clients'
     // documents, so the spelling is normalized here rather than trusted. Two
@@ -255,12 +274,13 @@ export function mergeChannelCuts(
 
 /** Drop channel keys a cut has floored out (epoch below the cut). */
 export function applyChannelCuts(
-  channels: JoinMaterial["channels"],
+  channels: JoinMaterial["channels"] | undefined,
   cuts: CommunityListEntry["channel_cuts"],
 ): JoinMaterial["channels"] {
-  if (!cuts?.length) return channels;
+  const held = heldChannelKeys(channels);
+  if (!cuts?.length) return held;
   const floor = new Map(cuts.map((c) => [c.id.toLowerCase(), c.epoch]));
-  return channels.filter((ch) => {
+  return held.filter((ch) => {
     const cut = floor.get(ch.id.toLowerCase());
     return cut === undefined || ch.epoch >= cut;
   });
@@ -558,7 +578,7 @@ export function rehydrateCommunity(entry: CommunityListEntry, extraRelays: strin
     heldRoots.sort((a, b) => (a.epoch > b.epoch ? -1 : a.epoch < b.epoch ? 1 : 0));
 
     const privateChannels: PrivateChannelKey[] = [];
-    for (const ch of Array.isArray(jm.channels) ? jm.channels : []) {
+    for (const ch of heldChannelKeys(jm.channels)) {
       try {
         const priors: PrivateChannelKey["priors"] = [];
         for (const prior of Array.isArray(ch.priors) ? ch.priors : []) {

@@ -19,7 +19,7 @@ import {
   warmInviteInbox,
   writeStoredInvites,
 } from "@/concord-v2/lib/inviteInbox";
-import { liveEntries, rehydrateCommunity } from "@/concord-v2/lib/communityList";
+import { heldChannelKeys, liveEntries, rehydrateCommunity } from "@/concord-v2/lib/communityList";
 import { inviteDeliveryRelays, recipientInboxRelays } from "@/concord-v2/lib/inviteRelays";
 import { getDecryptConsent } from "@/lib/decryptConsent";
 import { signerNeedsApproval } from "@/lib/bulkDecryptGate";
@@ -179,7 +179,7 @@ export function useDirectInvites2() {
             // Lowercase keys: isCatchUpBundle normalizes the bundle side the
             // same way, so one channel is one entry whatever a foreign list
             // copy's spelling was.
-            channelEpochs: new Map(e.current.channels.map((c) => [c.id.toLowerCase(), c.epoch])),
+            channelEpochs: new Map(heldChannelKeys(e.current.channels).map((c) => [c.id.toLowerCase(), c.epoch])),
             channelCuts: new Map((e.channel_cuts ?? []).map((c) => [c.id.toLowerCase(), c.epoch])),
           });
         }

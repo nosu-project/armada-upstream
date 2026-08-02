@@ -3,7 +3,7 @@ import { useMemo } from "react";
 
 import { controlFoldKey } from "@/concord-v2/hooks/useControlPlane2";
 import { useCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
-import { rehydrateCommunity, liveEntries } from "@/concord-v2/lib/communityList";
+import { heldChannelKeys, rehydrateCommunity, liveEntries } from "@/concord-v2/lib/communityList";
 import { buildConcord2Subs, type Concord2Sub } from "@/concord-v2/lib/concordNotifications2";
 import type { FoldedControl } from "@/concord-v2/lib/control";
 import { registerStreamKeys } from "@/concord-v2/lib/streamAuth";
@@ -34,7 +34,7 @@ export function useConcord2Subs(): Concord2Sub[] {
   const listSig = useMemo(
     () =>
       entries
-        .map((e) => `${e.community_id}:${e.current.root_epoch}:${(e.current.channels ?? []).length}`)
+        .map((e) => `${e.community_id}:${e.current.root_epoch}:${heldChannelKeys(e.current.channels).length}`)
         .sort()
         .join(","),
     [entries],

@@ -177,6 +177,29 @@ describe("channel-key union on merge (role-gate vends, CORD.md)", () => {
       expect(ch.priors).toEqual([{ key: "b".repeat(64), epoch: 3 }]);
     }
   });
+
+  it("merges an entry that carries no `channels` at all", () => {
+    // The list is a cross-client document (CORD-02 §8) and Private Channels are
+    // optional (CORD-03), so a client that vends no keys omits the field. The
+    // merge is the read-modify-write step of EVERY list write, so a throw here
+    // fails create, join and leave alike.
+    const mine = makeJoinMaterial({ channels: [chan("aa", 0)] });
+    const foreign = { ...mine } as JoinMaterial;
+    delete (foreign as Partial<JoinMaterial>).channels;
+    for (const [x, y] of [[mine, foreign], [foreign, mine]] as const) {
+      const merged = mergeCommunityLists(
+        { entries: [entryOf(x)], tombstones: [] },
+        { entries: [entryOf(y)], tombstones: [] },
+      );
+      expect(merged.entries[0].current.channels.map((c) => c.id)).toEqual(["aa"]);
+    }
+    // Both sides bare: the union is empty, not a throw.
+    const bare = mergeCommunityLists(
+      { entries: [entryOf(foreign)], tombstones: [] },
+      { entries: [entryOf({ ...foreign, name: "renamed" })], tombstones: [] },
+    );
+    expect(bare.entries[0].current.channels).toEqual([]);
+  });
 });
 
 describe("channel cuts (a revoke is monotonic)", () => {

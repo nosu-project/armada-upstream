@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { useCommunityEntry2, useUpdateCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
 import { citationFor, useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { channelKeysToWire, toJoinMaterial } from "@/concord-v2/lib/communityList";
+import { channelKeysToWire, heldChannelKeys, toJoinMaterial } from "@/concord-v2/lib/communityList";
 import { currentControlGroup, foldControlState, openControlEditions } from "@/concord-v2/lib/control";
 import { sweepControl } from "@/concord-v2/lib/planeSync";
 import { channelRekeyGroupKey, controlGroupKey, guestbookGroupKey } from "@/concord-v2/lib/derive";
@@ -623,7 +623,7 @@ export function useChannelRekeyWatch2(community: CommunityV2 | undefined) {
       const joinedAt = entry?.added_at ?? 0;
 
       // Walk each held channel independently; accumulate one channels update.
-      let nextChannels = entry.current.channels.map((c) => ({ ...c }));
+      let nextChannels = heldChannelKeys(entry.current.channels).map((c) => ({ ...c }));
       const cuts: Array<{ id: string; epoch: number }> = [];
       // What this pass claimed as handled, so a failed write can release it —
       // the guard exists to stop the same list update being re-issued while it

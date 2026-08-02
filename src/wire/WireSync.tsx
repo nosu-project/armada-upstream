@@ -12,7 +12,7 @@ import { controlFoldKey, dissolvedAt } from "@/concord-v2/hooks/useControlPlane2
 import { openChatBatch } from "@/concord-v2/lib/chat";
 import { channelsView } from "@/concord-v2/lib/community";
 import { channelGitRepositoryAttachments } from "@/concord-v2/lib/types";
-import { liveEntries, rehydrateCommunity } from "@/concord-v2/lib/communityList";
+import { heldChannelKeys, liveEntries, rehydrateCommunity } from "@/concord-v2/lib/communityList";
 import { controlGroups } from "@/concord-v2/lib/control";
 import { openPlaneWrapsChunked } from "@/concord-v2/lib/planeSync";
 import { ackPendingWraps, peekPendingWraps, writeOpened, writeRumors } from "@/concord-v2/lib/rumorStore";
@@ -131,7 +131,7 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
   const listSig = useMemo(
     () =>
       entries
-        .map((e) => `${e.community_id}:${e.current.root_epoch}:${(e.current.channels ?? []).length}`)
+        .map((e) => `${e.community_id}:${e.current.root_epoch}:${heldChannelKeys(e.current.channels).length}`)
         .sort()
         .join(","),
     [entries],
