@@ -5,7 +5,7 @@
 Discord without the company. **No host required.** Your keys, your people.
 
 Armada is an end-to-end encrypted community chat app built on
-[Nostr](https://nostr.com) — servers, channels, threads, voice, and moderation,
+[Nostr](https://github.com/nostr-protocol/nostr) — servers, channels, threads, voice, and moderation,
 everything you expect from a chat app. Nobody can read your messages, sell your
 data, or shut your community down.
 
