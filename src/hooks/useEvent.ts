@@ -2,9 +2,22 @@ import { useNostr } from "@nostrify/react";
 import { useQuery } from "@tanstack/react-query";
 
 import { useEventStore } from "@/hooks/useEventStore";
+import { normalizeRelayUrl } from "@/lib/platform";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
+
+/**
+ * Sanitize relay hints from untrusted content (nevent TLVs, q tags). Since the
+ * WHATWG change, `new WebSocket("/")` resolves against the page URL instead of
+ * throwing, so an empty/relative hint would otherwise open a socket to the
+ * app's own origin.
+ */
+function sanitizeRelayHints(relays: string[] | undefined): string[] {
+  return (relays ?? [])
+    .map(normalizeRelayUrl)
+    .filter((url): url is string => !!url);
+}
 
 /**
  * Extract write relay URLs from a NIP-65 (kind 10002) relay list event.
@@ -54,9 +67,10 @@ export function useEvent(eventId: string | undefined, relays?: string[], authorH
       const events = await nostr.query(filter, { signal: AbortSignal.timeout(5000) });
       if (events.length > 0) return events[0];
 
-      if (relays && relays.length > 0) {
+      const hintRelays = sanitizeRelayHints(relays);
+      if (hintRelays.length > 0) {
         try {
-          const hintEvents = await nostr.group(relays).query(filter, { signal: AbortSignal.timeout(5000) });
+          const hintEvents = await nostr.group(hintRelays).query(filter, { signal: AbortSignal.timeout(5000) });
           if (hintEvents.length > 0) {
             // A `group()` read has N candidate relays for one event, so it can't
             // attribute a group-scoped result; the store drops those rather than
@@ -127,9 +141,10 @@ export function useAddrEvent(addr: AddrCoords | undefined, relays?: string[]) {
       const events = await nostr.query(filter, { signal: AbortSignal.timeout(5000) });
       if (events.length > 0) return events[0];
 
-      if (relays && relays.length > 0) {
+      const hintRelays = sanitizeRelayHints(relays);
+      if (hintRelays.length > 0) {
         try {
-          const hintEvents = await nostr.group(relays).query(filter, { signal: AbortSignal.timeout(5000) });
+          const hintEvents = await nostr.group(hintRelays).query(filter, { signal: AbortSignal.timeout(5000) });
           if (hintEvents.length > 0) return hintEvents[0];
         } catch {
           // fall through

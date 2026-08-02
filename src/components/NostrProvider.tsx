@@ -396,6 +396,13 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   if (!pool.current) {
     pool.current = new NPool({
       open(url: string) {
+        // Every pool connection passes through here. Since the WHATWG change,
+        // `new WebSocket("/")` resolves against the page URL instead of
+        // throwing, so an empty/relative relay string (e.g. a junk hint from
+        // an nevent TLV) would silently open a socket to the app's own origin.
+        if (!/^wss?:\/\/[^/]/i.test(url)) {
+          throw new TypeError(`Refusing to open non-relay URL: ${JSON.stringify(url)}`);
+        }
         logRelayOpen(url);
         const relay: NRelay1 = new NRelay1(url, {
           // Gift-wrap (1059/21059) outer signatures are redundant on the client
