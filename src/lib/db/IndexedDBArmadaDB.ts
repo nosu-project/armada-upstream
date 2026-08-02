@@ -325,54 +325,137 @@ class IndexedDBKV implements ArmadaKV {
     }
   }
 
-  async get<T>(key: string): Promise<T | undefined> {
+  /**
+   * Operations queued for the next shared transaction, in arrival order.
+   *
+   * idb's `db.get`/`db.put` shortcuts open one transaction PER CALL — three
+   * event-loop tasks each (open, request, complete) — and the callers that
+   * matter issue them in bursts (a `KvPrefixCache` warm is `keys()` then a
+   * `Promise.all` of one get per key). On a congested boot loop that priced a
+   * few-KB read at seconds of queueing: 149 gets averaged 1.6s each, measured.
+   * One transaction per burst pays the task overhead once; executing the ops
+   * in arrival order inside it keeps read-your-writes exactly as sequential
+   * transactions had it.
+   */
+  private pendingOps: Array<
+    | { op: "get"; key: string; resolve: (value: unknown) => void }
+    | { op: "set"; key: string; value: unknown; resolve: () => void; reject: (error: unknown) => void }
+    | { op: "delete"; key: string; resolve: () => void; reject: (error: unknown) => void }
+    | { op: "keys"; prefix?: string; resolve: (keys: string[]) => void }
+  > = [];
+  /** Whether a flush is already scheduled for the current burst. */
+  private opsScheduled = false;
+
+  private scheduleOps(): void {
+    if (this.opsScheduled) return;
+    this.opsScheduled = true;
+    setTimeout(() => void this.flushOps(), 0);
+  }
+
+  private async flushOps(): Promise<void> {
+    this.opsScheduled = false;
+    const ops = this.pendingOps;
+    this.pendingOps = [];
+    if (ops.length === 0) return;
+
     const db = await this.db;
-    if (!db) return undefined;
+    if (!db) {
+      // Degraded (no IndexedDB): reads answer their miss value, writes no-op.
+      for (const op of ops) {
+        if (op.op === "keys") op.resolve([]);
+        else if (op.op === "get") op.resolve(undefined);
+        else op.resolve();
+      }
+      return;
+    }
+
+    const mode = ops.some((op) => op.op === "set" || op.op === "delete") ? "readwrite" : "readonly";
     try {
-      // Every get is its own transaction (idb's shortcut opens one per call), so
-      // the CALL COUNT here is as interesting as the total: a boot that issues
-      // 150 of them in await chains pays 150 round trips to read a few KB.
-      return (await perfTime("kv.get", () => db.get("kv", key))) as T | undefined;
-    } catch {
-      return undefined;
+      const tx = db.transaction("kv", mode as "readwrite");
+      // The cast above narrows the union so `put`/`delete` typecheck; a
+      // read-only burst really does open readonly, and never calls them.
+      const store = tx.store;
+      const results = await Promise.all(
+        ops.map((op) =>
+          op.op === "get"
+            ? store.get(op.key)
+            : op.op === "keys"
+            ? store.getAllKeys(IndexedDBKV.keyRange(op.prefix))
+            : op.op === "set"
+            ? store.put(op.value, op.key)
+            : store.delete(op.key),
+        ),
+      );
+      await tx.done;
+      for (const [i, op] of ops.entries()) {
+        if (op.op === "get") op.resolve(results[i] as never);
+        else if (op.op === "keys") {
+          // The range is a scan hint, not the contract — see `prefixUpperBound`.
+          const keys = results[i] as string[];
+          op.resolve(op.prefix ? keys.filter((key) => key.startsWith(op.prefix!)) : keys);
+        } else op.resolve();
+      }
+    } catch (error) {
+      // Match the per-op contracts from the unbatched days: a failed read is
+      // a miss, a failed write rejects to the caller's catch.
+      for (const op of ops) {
+        if (op.op === "get") op.resolve(undefined);
+        else if (op.op === "keys") op.resolve([]);
+        else op.reject(error);
+      }
     }
   }
 
-  async set<T>(key: string, value: T): Promise<void> {
-    const db = await this.db;
-    if (!db) return;
-    // `undefined` is out of contract (it has no JSON form); normalize to null
-    // so both adapters agree instead of one storing a hole.
-    await perfTime("kv.set", () => db.put("kv", value === undefined ? null : value, key));
+  /** The key range covering `prefix` (or everything, without one). */
+  private static keyRange(prefix?: string): IDBKeyRange | undefined {
+    if (!prefix) return undefined;
+    const upper = prefixUpperBound(prefix);
+    return upper === undefined
+      ? IDBKeyRange.lowerBound(prefix)
+      : IDBKeyRange.bound(prefix, upper, false, true);
   }
 
-  async delete(key: string): Promise<void> {
-    const db = await this.db;
-    if (!db) return;
-    await perfTime("kv.delete", () => db.delete("kv", key));
+  get<T>(key: string): Promise<T | undefined> {
+    return perfTime("kv.get", () =>
+      new Promise<T | undefined>((resolve) => {
+        this.pendingOps.push({ op: "get", key, resolve: resolve as (value: unknown) => void });
+        this.scheduleOps();
+      }));
   }
 
-  async keys(prefix?: string): Promise<string[]> {
-    const db = await this.db;
-    if (!db) return [];
-    try {
-      const upper = prefix ? prefixUpperBound(prefix) : undefined;
-      const range = !prefix
-        ? undefined
-        : upper === undefined
-        ? IDBKeyRange.lowerBound(prefix)
-        : IDBKeyRange.bound(prefix, upper, false, true);
-      const keys = (await perfTime(
-        "kv.keys",
-        () => db.getAllKeys("kv", range) as Promise<string[]>,
-        (k) => k.length,
-        "keys",
-      )) as string[];
-      // The range is a scan hint, not the contract — see `prefixUpperBound`.
-      return prefix ? keys.filter((key) => key.startsWith(prefix)) : keys;
-    } catch {
-      return [];
-    }
+  set<T>(key: string, value: T): Promise<void> {
+    return perfTime("kv.set", () =>
+      new Promise<void>((resolve, reject) => {
+        // `undefined` is out of contract (it has no JSON form); normalize to
+        // null so both adapters agree instead of one storing a hole.
+        this.pendingOps.push({ op: "set", key, value: value === undefined ? null : value, resolve, reject });
+        this.scheduleOps();
+      }));
+  }
+
+  delete(key: string): Promise<void> {
+    return perfTime("kv.delete", () =>
+      new Promise<void>((resolve, reject) => {
+        this.pendingOps.push({ op: "delete", key, resolve, reject });
+        this.scheduleOps();
+      }));
+  }
+
+  keys(prefix?: string): Promise<string[]> {
+    // Through the same queue as get/set/delete: a `keys()` racing a queued
+    // write must observe it (the KvPrefixCache warm is exactly a keys() after
+    // fire-and-forget sets), and arrival order inside one transaction is the
+    // ordering separate transactions used to provide.
+    return perfTime(
+      "kv.keys",
+      () =>
+        new Promise<string[]>((resolve) => {
+          this.pendingOps.push({ op: "keys", prefix, resolve });
+          this.scheduleOps();
+        }),
+      (k) => k.length,
+      "keys",
+    );
   }
 
   async close(): Promise<void> {
