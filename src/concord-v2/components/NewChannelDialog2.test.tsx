@@ -27,24 +27,24 @@ const typeName = (value: string) =>
 const submit = () => fireEvent.click(screen.getByRole("button", { name: "Create channel" }));
 
 describe("NewChannelDialog2 — privacy controls reach the create call", () => {
-  it("creates a PRIVATE channel when the box is ticked AFTER the name is typed", async () => {
-    // The natural order of operations: name first, then decide it's private.
-    // A submit handler closed over a stale `isPrivate` silently creates a
-    // PUBLIC channel while reporting success — a privacy control failing open.
+  it("creates a PRIVATE channel by default when the box is left alone", async () => {
     const { onCreateText } = setup();
 
     typeName("secrets");
-    fireEvent.click(screen.getByRole("checkbox", { name: /Private channel/i }));
     submit();
 
     await waitFor(() => expect(onCreateText).toHaveBeenCalled());
     expect(onCreateText).toHaveBeenCalledWith("secrets", { isPrivate: true });
   });
 
-  it("still creates a public channel when the box is left alone", async () => {
+  it("creates a public channel when the box is unticked AFTER the name is typed", async () => {
+    // The natural order of operations: name first, then decide it's public.
+    // A submit handler closed over a stale `isPrivate` would ignore the
+    // untick and mint a private key + role for a channel meant to be open.
     const { onCreateText } = setup();
 
     typeName("general");
+    fireEvent.click(screen.getByRole("checkbox", { name: /Private channel/i }));
     submit();
 
     await waitFor(() => expect(onCreateText).toHaveBeenCalled());

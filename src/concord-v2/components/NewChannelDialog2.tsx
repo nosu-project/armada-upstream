@@ -57,7 +57,7 @@ export function NewChannelDialog2({ open, onOpenChange, connectedCoordinates, on
   const [selected, setSelected] = useState<PickedRepository | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isPrivate, setIsPrivate] = useState(false);
+  const [isPrivate, setIsPrivate] = useState(true);
 
   // Fresh wizard every time it opens.
   useEffect(() => {
@@ -67,7 +67,7 @@ export function NewChannelDialog2({ open, onOpenChange, connectedCoordinates, on
     setSelected(null);
     setCreating(false);
     setError(null);
-    setIsPrivate(false);
+    setIsPrivate(true);
   }, [open]);
 
   const choose = useCallback((repository: PickedRepository) => {
