@@ -4,7 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ThemeCreatorDialog } from "./ThemeCreatorDialog";
 import { THEME_DEFINITION_KIND } from "@/lib/themeEvent";
+import { PublishQueuedError } from "@/lib/publishOutbox";
 
+import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 const h = vi.hoisted(() => ({
@@ -124,6 +126,10 @@ describe("ThemeCreatorDialog", () => {
         expect.objectContaining({ title: "Sunset" }),
       ),
     );
+    expect(h.toast).toHaveBeenCalledWith({
+      title: "Theme published",
+      description: "Sunset — applied as your theme",
+    });
 
     vi.clearAllMocks();
     h.publishEvent.mockResolvedValue(PUBLISHED);
@@ -132,6 +138,35 @@ describe("ThemeCreatorDialog", () => {
 
     await waitFor(() => expect(h.publishEvent).toHaveBeenCalled());
     expect(h.applyCustomTheme).not.toHaveBeenCalled();
+  });
+
+  it("treats a queued offline publish as success, so the user does not retry into a second theme", async () => {
+    const onOpenChange = vi.fn();
+    // Signed and durably stored; the retry worker lands it. Retrying would
+    // re-roll the random `d` suffix and publish a second theme.
+    h.publishEvent.mockRejectedValue(new PublishQueuedError(PUBLISHED as NostrEvent, new Error("offline")));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(BROWSE_KEY, [{ id: "existing-theme" } as NostrRumor]);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ThemeCreatorDialog open onOpenChange={onOpenChange} />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.change(nameField(), { target: { value: "Sunset" } });
+    fireEvent.click(publishButton());
+
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(h.toast).toHaveBeenCalledWith({
+      title: "Theme published",
+      description: "Sunset — applied as your theme (syncing when the network is back)",
+    });
+    expect(h.applyCustomTheme).toHaveBeenCalledWith(expect.objectContaining({ title: "Sunset" }));
+    // Seeded from the signed event the error carries, exactly as on a live publish.
+    expect(queryClient.getQueryData<NostrRumor[]>(BROWSE_KEY)).toEqual([
+      PUBLISHED,
+      { id: "existing-theme" },
+    ]);
   });
 
   it("leaves the dialog open and applies nothing when publishing fails", async () => {

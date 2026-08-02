@@ -10,9 +10,11 @@ import { Label } from "@/components/ui/label";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { useTheme } from "@/hooks/useTheme";
 import { toast } from "@/hooks/useToast";
+import { isPublishQueuedError } from "@/lib/publishOutbox";
 import { buildThemeDefinitionEvent } from "@/lib/themeEvent";
 
 import { builderStarterColors, type CoreThemeColors } from "@/themes";
+import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
@@ -57,37 +59,48 @@ function ThemeCreatorForm({ onDone }: { onDone: () => void }) {
   const publish = async () => {
     if (!canPublish) return;
     const title = name.trim();
+
+    let event: NostrEvent;
+    let queued = false;
     try {
-      const event = await publishEvent(buildThemeDefinitionEvent(title, colors));
-
-      // Show the new theme by seeding the cache rather than refetching. An
-      // immediate refetch races relay indexing on a 6s budget, so it can come
-      // back with LESS than is already on screen — the grid appearing to empty
-      // itself the moment you publish. The stale mark (without a refetch) lets
-      // the next natural fetch reconcile with the relays. Only the unsearched
-      // query is seeded; a search result has its own server-side criteria.
-      queryClient.setQueriesData<NostrRumor[]>(
-        { queryKey: ["discover", "themes"], predicate: (q) => q.queryKey[4] === "" },
-        (prev) => (prev ? [event, ...prev.filter((e) => e.id !== event.id)] : prev),
-      );
-      void queryClient.invalidateQueries({ queryKey: ["discover", "themes"], refetchType: "none" });
-      // The same theme belongs in the Settings → Appearance library.
-      void queryClient.invalidateQueries({ queryKey: ["user-themes"] });
-
-      if (applyToMine) {
-        applyCustomTheme({ title, colors });
-        toast({ title: "Theme published", description: `${title} — applied as your theme` });
-      } else {
-        toast({ title: "Theme published", description: title });
-      }
-      onDone();
+      event = await publishEvent(buildThemeDefinitionEvent(title, colors));
     } catch (e) {
-      toast({
-        title: "Couldn't publish theme",
-        description: e instanceof Error ? e.message : "Publishing failed.",
-        variant: "destructive",
-      });
+      // A queued publish is already signed and durably stored; the retry worker
+      // lands it. Reporting it as a failure would leave the dialog open, and a
+      // retry re-rolls the random `d` suffix in buildThemeDefinitionEvent —
+      // giving the user two themes for one intent.
+      if (!isPublishQueuedError(e)) {
+        toast({
+          title: "Couldn't publish theme",
+          description: e instanceof Error ? e.message : "Publishing failed.",
+          variant: "destructive",
+        });
+        return;
+      }
+      event = e.event;
+      queued = true;
     }
+
+    // Show the new theme by seeding the cache rather than refetching. An
+    // immediate refetch races relay indexing on a 6s budget, so it can come
+    // back with LESS than is already on screen — the grid appearing to empty
+    // itself the moment you publish. The stale mark (without a refetch) lets
+    // the next natural fetch reconcile with the relays. Only the unsearched
+    // query is seeded; a search result has its own server-side criteria.
+    queryClient.setQueriesData<NostrRumor[]>(
+      { queryKey: ["discover", "themes"], predicate: (q) => q.queryKey[4] === "" },
+      (prev) => (prev ? [event, ...prev.filter((e) => e.id !== event.id)] : prev),
+    );
+    void queryClient.invalidateQueries({ queryKey: ["discover", "themes"], refetchType: "none" });
+    // The same theme belongs in the Settings → Appearance library.
+    void queryClient.invalidateQueries({ queryKey: ["user-themes"] });
+
+    if (applyToMine) applyCustomTheme({ title, colors });
+
+    const applied = applyToMine ? " — applied as your theme" : "";
+    const syncing = queued ? " (syncing when the network is back)" : "";
+    toast({ title: "Theme published", description: `${title}${applied}${syncing}` });
+    onDone();
   };
 
   return (
