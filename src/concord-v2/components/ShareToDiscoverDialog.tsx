@@ -436,16 +436,9 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
                 ? "Are you sure you want to make this community\u00A0public?"
                 : "Share this community to Discover?"}
             </AlertDialogTitle>
-            <AlertDialogDescription className="space-y-2">
-              {makesPublic && (
-                <span className="block">
-                  Listing on Discover creates an invite link, which makes this community public.
-                </span>
-              )}
-              <span className="block">
-                The listing publishes the invite link, including its secret, from your account, so
-                anyone can find and join.
-              </span>
+            <AlertDialogDescription>
+              The listing publishes the invite link, including its secret, from your account, so
+              anyone can find and join.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
