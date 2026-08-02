@@ -31,22 +31,26 @@ export function InviteDialog2({
   community,
   open,
   onOpenChange,
+  canCreateLink,
 }: {
   community: CommunityV2 | undefined;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Owner/admin only. Members still invite people one by one, but the shareable
+      link section (mint/revoke/live links) is hidden from them. */
+  canCreateLink: boolean;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <ChromeDialogContent title="Invite people">
-        <InviteBody community={community} />
+        <InviteBody community={community} canCreateLink={canCreateLink} />
         <ArmadaCrestKeyframes />
       </ChromeDialogContent>
     </Dialog>
   );
 }
 
-function InviteBody({ community }: { community: CommunityV2 | undefined }) {
+function InviteBody({ community, canCreateLink }: { community: CommunityV2 | undefined; canCreateLink: boolean }) {
   const { createLink, isCreatingLink, revokeLink, myLinks, sendDirectInvite, isSendingInvite, isPublic, revokeWouldPrivatize } =
     useInviteActions2(community);
   const [link, setLink] = useState<string | null>(null);
@@ -189,7 +193,9 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
         )}
       </div>
 
-      {/* Public link — the escape hatch / share-anywhere path. */}
+      {/* Public link — the escape hatch / share-anywhere path. Owner/admin only;
+          a plain member invites people one by one above. */}
+      {canCreateLink && (
       <div className="w-full space-y-2 border-t border-chrome pt-5">
         <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
           <LinkIcon className="size-3.5" />
@@ -294,8 +300,9 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
           </>
         )}
       </div>
+      )}
 
-      {existing.length > 0 && (
+      {canCreateLink && existing.length > 0 && (
         <div className="w-full space-y-1.5 border-t border-chrome pt-4">
           <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Your live links</div>
           {existing.map((e) => (
