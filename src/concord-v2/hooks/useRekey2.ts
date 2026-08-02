@@ -272,7 +272,9 @@ export function useRekeyWatch2(community: CommunityV2 | undefined): { stranded: 
       const joinedAt = entry?.added_at ?? 0;
 
       // Try to adopt: my blob, decrypted under the rotator↔me pairwise key.
-      let adopted: { key: Uint8Array; rotator: string } | undefined;
+      // `publishedAtMs` is the adopted rotation's publish time — recorded on
+      // the superseded root as its hard read cutoff (`retiredAt`).
+      let adopted: { key: Uint8Array; rotator: string; publishedAtMs: number } | undefined;
       // A complete rotation counts toward removal only if it could have carried
       // a blob for me — i.e. it was published at/after I joined.
       let sawExcludingRotation = false;
@@ -315,7 +317,7 @@ export function useRekeyWatch2(community: CommunityV2 | undefined): { stranded: 
           const newKey = decodeWrappedKey(base64ToBytes(plainB64), ZERO_SCOPE, set.newEpoch);
           // Racing rotations converge on the lexicographically lowest new key.
           if (!adopted || lowerKeyWins(adopted.key, newKey) === newKey) {
-            adopted = { key: newKey, rotator: set.rotator };
+            adopted = { key: newKey, rotator: set.rotator, publishedAtMs: rotationPublishedAtMs(set) };
           }
         } catch {
           // undecryptable blob at my locator — treat as absent
@@ -327,9 +329,17 @@ export function useRekeyWatch2(community: CommunityV2 | undefined): { stranded: 
       if (adopted) {
         handled.current.add(key);
         setStranded(false);
+        // The root this rotation steps off is RETIRED at the rotation's own
+        // publish time: that timestamp is the hard cutoff past which nothing
+        // sealed under it is ever read again (see `HeldRoot.retiredAt`).
+        const retiredAt = Math.floor(adopted.publishedAtMs / 1000);
         const heldRoots: HeldRoot[] = [
-          { epoch: nextEpoch, key: adopted.key },
-          ...community.heldRoots,
+          // The rotator is this epoch's snapshot authority (CORD-02 §5),
+          // recorded per root so it survives later rotations.
+          { epoch: nextEpoch, key: adopted.key, refounder: adopted.rotator },
+          ...community.heldRoots.map((r) =>
+            r.epoch === community.rootEpoch && r.retiredAt === undefined ? { ...r, retiredAt } : r,
+          ),
         ];
         const rotated: CommunityV2 = {
           ...community,
@@ -698,12 +708,14 @@ export function useChannelRekeyWatch2(community: CommunityV2 | undefined) {
         // Every key the walk steps OFF, newest first. Catching up across a gap
         // opens each intermediate epoch's key on the way past, and each one
         // reads the history written under it — so they are retained as priors
-        // rather than thrown away with the step (CORD-03 §3).
-        const steppedOver: Array<{ key: Uint8Array; epoch: bigint }> = [];
+        // rather than thrown away with the step (CORD-03 §3). Each carries the
+        // superseding rotation's publish time as its hard read cutoff.
+        const steppedOver: Array<{ key: Uint8Array; epoch: bigint; retiredAt?: number }> = [];
 
         for (const epoch of epochsAscending) {
           const candidates = byEpoch.get(epoch)!;
           let keyHere: Uint8Array | undefined;
+          let publishedHereMs: number | undefined;
           let addressedHere = false;
 
           for (const set of candidates) {
@@ -720,6 +732,10 @@ export function useChannelRekeyWatch2(community: CommunityV2 | undefined) {
               const newKey = decodeWrappedKey(base64ToBytes(plainB64), ch.id, epoch);
               // Two rotators racing to one epoch converge on the lower key.
               keyHere = keyHere ? lowerKeyWins(keyHere, newKey) : newKey;
+              // Retirement is the EARLIEST honored rotation at this epoch —
+              // the moment the channel verifiably moved on.
+              const at = rotationPublishedAtMs(set);
+              publishedHereMs = publishedHereMs === undefined ? at : Math.min(publishedHereMs, at);
             } catch {
               // Undecryptable at my locator — not a key I can carry forward.
             }
@@ -727,7 +743,11 @@ export function useChannelRekeyWatch2(community: CommunityV2 | undefined) {
           if (cancelled) return releaseClaims();
 
           if (keyHere) {
-            steppedOver.unshift({ key: chainKey, epoch: chainEpoch });
+            steppedOver.unshift({
+              key: chainKey,
+              epoch: chainEpoch,
+              ...(publishedHereMs !== undefined ? { retiredAt: Math.floor(publishedHereMs / 1000) } : {}),
+            });
             adopted = { key: keyHere, epoch };
             chainEpoch = epoch;
             chainKey = keyHere;
@@ -778,7 +798,11 @@ export function useChannelRekeyWatch2(community: CommunityV2 | undefined) {
                   // rule), so dropping them would trade a rotation for a hole
                   // in the conversation.
                   priors: [
-                    ...steppedOver.map((p) => ({ key: bytesToHex(p.key), epoch: Number(p.epoch) })),
+                    ...steppedOver.map((p) => ({
+                      key: bytesToHex(p.key),
+                      epoch: Number(p.epoch),
+                      ...(p.retiredAt !== undefined ? { retired_at: p.retiredAt } : {}),
+                    })),
                     ...(c.priors ?? []),
                   ],
                 }
@@ -914,11 +938,15 @@ export function useChannelRekey2(community: CommunityV2 | undefined) {
         chBlobs.push({ locator: myLocator(user.pubkey, pk, channelIdHex, chEpoch), wrapped: await nip44.encrypt(pk, chPlain) });
       }
       const chAddress = channelRekeyGroupKey(community.root, ch.id, chEpoch);
+      // The rotation's publish time doubles as the severed key's hard read
+      // cutoff (`retiredAt`) — the same value every adopter derives from the
+      // rumors' own timestamps.
+      const rotatedAtMs = Date.now();
       const chRumors = buildRekeyRumors(
         user.pubkey,
         { scope: { kind: "channel", channelId: ch.id }, newEpoch: chEpoch, prevEpoch: ch.epoch, prevCommit: chPrevCommit },
         chBlobs,
-        Date.now(),
+        rotatedAtMs,
         // A rotation is an authority action, so it cites the Grant it acts
         // under (CORD-06 §Authority / CORD-04 §5). Without it every receiver's
         // `citationSatisfied` fails closed for a non-owner rotator: the
@@ -940,7 +968,15 @@ export function useChannelRekey2(community: CommunityV2 | undefined) {
       // but the rotator must never keep writing under the severed key).
       const rotated = community.privateChannels.map((c) =>
         bytesToHex(c.id) === channelIdHex
-          ? { ...c, key: chKey, epoch: chEpoch, priors: [{ key: c.key, epoch: c.epoch }, ...(c.priors ?? [])] }
+          ? {
+              ...c,
+              key: chKey,
+              epoch: chEpoch,
+              priors: [
+                { key: c.key, epoch: c.epoch, retiredAt: Math.floor(rotatedAtMs / 1000) },
+                ...(c.priors ?? []),
+              ],
+            }
           : c,
       );
       await updateList({
@@ -1107,11 +1143,14 @@ export function useRefound2(community: CommunityV2 | undefined) {
       // the spec chose: existing members already hold the new root and keep
       // their old Control fold, so only a fresh joiner waits on the re-anchor.
       const address = baseRekeyGroupKey(community.root, community.id, newEpoch);
+      // The roll's publish time is the retired root's hard read cutoff — the
+      // same value every adopter derives from the rekey rumors' timestamps.
+      const rotatedAtMs = Date.now();
       const rumors = buildRekeyRumors(
         user.pubkey,
         { scope: { kind: "root" }, newEpoch, prevEpoch: community.rootEpoch, prevCommit },
         blobs,
-        Date.now(),
+        rotatedAtMs,
         citationFor(community, folded, user.pubkey),
       );
       for (const rumor of rumors) {
@@ -1135,6 +1174,11 @@ export function useRefound2(community: CommunityV2 | undefined) {
       // attempt one. Advancing here makes the retry a genuine next rotation.
       // Private channels stay as they are: they have not rotated yet, and
       // §3 addresses their rekeys under the PRIOR root, which is captured.
+      const retiredPriorRoots: HeldRoot[] = community.heldRoots.map((r) =>
+        r.epoch === community.rootEpoch && r.retiredAt === undefined
+          ? { ...r, retiredAt: Math.floor(rotatedAtMs / 1000) }
+          : r,
+      );
       await updateList({
         type: "refresh-current",
         current: toJoinMaterial(
@@ -1142,7 +1186,7 @@ export function useRefound2(community: CommunityV2 | undefined) {
             ...community,
             root: newRoot,
             rootEpoch: newEpoch,
-            heldRoots: [{ epoch: newEpoch, key: newRoot }, ...community.heldRoots],
+            heldRoots: [{ epoch: newEpoch, key: newRoot, refounder: user.pubkey }, ...retiredPriorRoots],
             refounder: user.pubkey,
           },
           { prior: entry?.current, relays: entry?.current.relays },
@@ -1213,6 +1257,7 @@ export function useRefound2(community: CommunityV2 | undefined) {
           chBlobs.push({ locator: myLocator(user.pubkey, pk, chIdHex, chEpoch), wrapped: await nip44.encrypt(pk, chPlain) });
         }
         const chAddress = channelRekeyGroupKey(community.root, ch.id, chEpoch);
+        const chRotatedAtMs = Date.now();
         const chRumors = buildRekeyRumors(
           user.pubkey,
           {
@@ -1222,7 +1267,7 @@ export function useRefound2(community: CommunityV2 | undefined) {
             prevCommit: chPrevCommit,
           },
           chBlobs,
-          Date.now(),
+          chRotatedAtMs,
           citationFor(community, folded, user.pubkey),
         );
         for (const rumor of chRumors) {
@@ -1246,7 +1291,10 @@ export function useRefound2(community: CommunityV2 | undefined) {
           ...ch,
           key: chKey,
           epoch: chEpoch,
-          priors: [{ key: ch.key, epoch: ch.epoch }, ...(ch.priors ?? [])],
+          priors: [
+            { key: ch.key, epoch: ch.epoch, retiredAt: Math.floor(chRotatedAtMs / 1000) },
+            ...(ch.priors ?? []),
+          ],
         });
       }
 
@@ -1314,7 +1362,7 @@ export function useRefound2(community: CommunityV2 | undefined) {
         ...community,
         root: newRoot,
         rootEpoch: newEpoch,
-        heldRoots: [{ epoch: newEpoch, key: newRoot }, ...community.heldRoots],
+        heldRoots: [{ epoch: newEpoch, key: newRoot, refounder: user.pubkey }, ...retiredPriorRoots],
         privateChannels: rotatedChannels,
         refounder: user.pubkey,
       };

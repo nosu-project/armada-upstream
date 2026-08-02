@@ -271,6 +271,14 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
   }
 
   // ── Concord V2: merged wrap-author filter per community relay ────────────
+  // The STANDING subscription carries only each channel's CURRENT epoch: a
+  // retired epoch is sealed history with a hard read cutoff (its rotation's
+  // publish time), so nothing legitimate ever arrives there live — holding
+  // every old address open forever was a permanent writable side-channel for
+  // any ejected keyholder, plus unbounded filter growth. History still reaches
+  // the store through the scheduler's backfill, and `v2ByPk` keeps EVERY held
+  // epoch so a straggler wrap already in flight (or parked) still decodes —
+  // the decode path enforces the cutoff either way.
   const v2ByPk = new Map<string, ChannelV2>();
   const v2CommunityByChannel = new Map<string, string>();
   const pksByRelay = new Map<string, Set<string>>();
@@ -282,7 +290,7 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
       if (!relay) continue;
       let set = pksByRelay.get(relay);
       if (!set) pksByRelay.set(relay, (set = new Set()));
-      for (const s of channel.streams) set.add(s.group.pk);
+      set.add(channel.current.group.pk);
     }
   }
   for (const [relay, pks] of pksByRelay) {

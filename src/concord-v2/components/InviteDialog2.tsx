@@ -1,9 +1,19 @@
-import { Check, ChevronRight, Copy, Info, Link as LinkIcon, Loader2, UserPlus } from "lucide-react";
+import { AlertTriangle, Check, ChevronRight, Copy, Info, Link as LinkIcon, Loader2, UserPlus } from "lucide-react";
 import { useState } from "react";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { ProfileSearchSelect } from "@/components/chat/ProfileSearchSelect";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
@@ -16,6 +26,7 @@ import { useInviteActions2 } from "@/concord-v2/hooks/useInvites2";
 import { toast } from "@/hooks/useToast";
 import type { SearchProfile } from "@/hooks/useSearchProfiles";
 import { writeClipboardText } from "@/lib/clipboard";
+import { shareOrigin } from "@/lib/shareOrigin";
 import { cn } from "@/lib/utils";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 
@@ -31,22 +42,26 @@ export function InviteDialog2({
   community,
   open,
   onOpenChange,
+  canCreateLink,
 }: {
   community: CommunityV2 | undefined;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Owner/admin only. Members still invite people one by one, but the shareable
+      link section (mint/revoke/live links) is hidden from them. */
+  canCreateLink: boolean;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <ChromeDialogContent title="Invite people">
-        <InviteBody community={community} />
+        <InviteBody community={community} canCreateLink={canCreateLink} />
         <ArmadaCrestKeyframes />
       </ChromeDialogContent>
     </Dialog>
   );
 }
 
-function InviteBody({ community }: { community: CommunityV2 | undefined }) {
+function InviteBody({ community, canCreateLink }: { community: CommunityV2 | undefined; canCreateLink: boolean }) {
   const { createLink, isCreatingLink, revokeLink, myLinks, sendDirectInvite, isSendingInvite, isPublic, revokeWouldPrivatize } =
     useInviteActions2(community);
   const [link, setLink] = useState<string | null>(null);
@@ -59,6 +74,7 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
   const [sentPubkey, setSentPubkey] = useState<string | null>(null);
   const [pendingPubkey, setPendingPubkey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const handleSelect = async (profile: SearchProfile) => {
     setError(null);
@@ -77,29 +93,15 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
     }
   };
 
-  const handleGenerate = async () => {
+  // The first live link flips the community Public (CORD-05 §5): anyone with the
+  // link can then read the public-channel history up to that point, and revoking
+  // the link or removing them later doesn't take that back. Announcing to
+  // Discover publishes the secret too. Both are consequential, so a click routes
+  // through an in-app confirm rather than firing straight away.
+  const needsConfirm = !isPublic || listPublicly;
+
+  const doGenerate = async () => {
     setError(null);
-    // The first live link flips the derived mode Public (CORD-05 §5). Whether
-    // bans still rotate is per-banner (foreign links gate rotations, own links
-    // don't) — the ban dialog's step list tells that truth case by case.
-    if (
-      !isPublic &&
-      !confirm(
-        "Creating an invite link makes this community public: anyone with the link can join. Revoking every link makes it private again.",
-      )
-    ) {
-      return;
-    }
-    // Announcing publishes the full link (secret included) in a public
-    // listing — a real privacy step, so confirm it explicitly.
-    if (
-      listPublicly &&
-      !confirm(
-        "Sharing to Discover publishes this invite link from your account — including its secret — so anyone can find and join. Only do this for a community you want strangers to join.",
-      )
-    ) {
-      return;
-    }
     try {
       const expiresAtMs = expiryDays > 0 ? Date.now() + expiryDays * 86400_000 : undefined;
       setLink(
@@ -112,6 +114,14 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't create the link.");
     }
+  };
+
+  const handleGenerateClick = () => {
+    if (needsConfirm) {
+      setConfirmOpen(true);
+      return;
+    }
+    void doGenerate();
   };
 
   const handleRevoke = async (url: string) => {
@@ -189,7 +199,9 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
         )}
       </div>
 
-      {/* Public link — the escape hatch / share-anywhere path. */}
+      {/* Public link — the escape hatch / share-anywhere path. Owner/admin only;
+          a plain member invites people one by one above. */}
+      {canCreateLink && (
       <div className="w-full space-y-2 border-t border-chrome pt-5">
         <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
           <LinkIcon className="size-3.5" />
@@ -227,10 +239,22 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
           </>
         ) : (
           <>
+            {/* The consequence is shown up front, before the click — not sprung
+                in a popup after — the first time a link would make this public. */}
+            {!isPublic && (
+              <Alert variant="destructive" className="normal-case tracking-normal">
+                <AlertTriangle className="size-4" />
+                <AlertTitle>Invite links make communities public</AlertTitle>
+                <AlertDescription>
+                  Anyone who gets the link can read every message sent up to this point in the
+                  community's public channels.
+                </AlertDescription>
+              </Alert>
+            )}
             <Button
               type="button"
               variant="secondary"
-              onClick={handleGenerate}
+              onClick={handleGenerateClick}
               disabled={isCreatingLink || !community}
               className="w-full clip-corner-lg"
             >
@@ -294,8 +318,9 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
           </>
         )}
       </div>
+      )}
 
-      {existing.length > 0 && (
+      {canCreateLink && existing.length > 0 && (
         <div className="w-full space-y-1.5 border-t border-chrome pt-4">
           <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Your live links</div>
           {existing.map((e) => (
@@ -324,6 +349,39 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
+
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {!isPublic
+                ? "Are you sure you want to make this community\u00A0public?"
+                : "Share this link to Discover?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              {!isPublic && (
+                <span className="block">
+                  Creating an invite link makes this community public. If you want to keep the room
+                  private, you can still invite users individually. Invite them to create an account
+                  at {shareOrigin()}.
+                </span>
+              )}
+              {listPublicly && (
+                <span className="block">
+                  Sharing to Discover publishes this link, including its secret, from your account, so
+                  anyone can find and join.
+                </span>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void doGenerate()}>
+              {!isPublic ? "Make Room Public and Create Link" : "Create Link"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

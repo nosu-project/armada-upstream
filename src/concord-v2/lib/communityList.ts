@@ -39,11 +39,17 @@ export interface JoinMaterial {
   community_root: string;
   root_epoch: number;
   /** The PRIVATE channels held (public ones derive from the root — CORD-03). */
-  channels: Array<{ id: string; key: string; epoch: number; name: string; priors?: Array<{ key: string; epoch: number }> }>;
+  channels: Array<{ id: string; key: string; epoch: number; name: string; priors?: Array<{ key: string; epoch: number; retired_at?: number }> }>;
   relays: string[];
   name: string;
-  /** Armada extension: retained prior roots `[{epoch, key}]` (current excluded). */
-  held_roots?: Array<{ epoch: number; key: string }>;
+  /**
+   * Armada extension: retained prior roots `[{epoch, key}]` (current excluded).
+   * `retired_at` (epoch-seconds the superseding rotation published) is the
+   * hard read cutoff for that epoch; absent for epochs retired before this
+   * client recorded cutoffs. `refounder` names the npub whose Refounding
+   * minted that epoch — its Guestbook's snapshot authority (CORD-02 §5).
+   */
+  held_roots?: Array<{ epoch: number; key: string; retired_at?: number; refounder?: string }>;
   /** Armada extension: the npub whose Refounding minted `root_epoch`. */
   refounder?: string;
   [k: string]: unknown;
@@ -200,7 +206,7 @@ export function unionChannelKeys(
 }
 
 type ChannelKeyEntry = JoinMaterial["channels"][number];
-type PriorKey = { key: string; epoch: number };
+type PriorKey = { key: string; epoch: number; retired_at?: number };
 
 /** Priors of both, plus the loser's own key, deduped by (epoch, key). */
 function withPriorKey(winner: ChannelKeyEntry, loser: ChannelKeyEntry): ChannelKeyEntry {
@@ -208,15 +214,23 @@ function withPriorKey(winner: ChannelKeyEntry, loser: ChannelKeyEntry): ChannelK
 }
 
 function attachPriors(entry: ChannelKeyEntry, priors: PriorKey[]): ChannelKeyEntry {
-  const seen = new Set<string>();
+  const byId = new Map<string, PriorKey>();
   const kept: PriorKey[] = [];
   for (const p of priors) {
     if (!p || typeof p.key !== "string" || typeof p.epoch !== "number") continue;
     if (p.epoch >= entry.epoch && p.key === entry.key) continue; // the current key is not a prior
     const id = `${p.epoch}:${p.key}`;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    kept.push(p);
+    const prev = byId.get(id);
+    if (prev) {
+      // Same key from two documents, only one of which recorded when it was
+      // retired: keep the cutoff (dropping it would reopen the epoch for
+      // writes on the device that merges the cutoff-less copy).
+      if (prev.retired_at === undefined && typeof p.retired_at === "number") prev.retired_at = p.retired_at;
+      continue;
+    }
+    const copy = { ...p };
+    byId.set(id, copy);
+    kept.push(copy);
   }
   kept.sort((x, y) => y.epoch - x.epoch || x.key.localeCompare(y.key));
   return kept.length > 0 ? { ...entry, priors: kept } : entry;
@@ -503,12 +517,29 @@ export function rehydrateCommunity(entry: CommunityListEntry, extraRelays: strin
     const root = hex32(jm.community_root);
     const rootEpoch = BigInt(jm.root_epoch);
 
-    const heldRoots: HeldRoot[] = [{ epoch: rootEpoch, key: root }];
+    const asRefounder = (v: unknown): string | undefined =>
+      typeof v === "string" && /^[0-9a-f]{64}$/i.test(v) ? v.toLowerCase() : undefined;
+    // The current head's refounder is the top-level `refounder` field; retained
+    // roots carry their own, so historical snapshot authority survives the walk.
+    const currentRefounder = asRefounder(jm.refounder);
+    const heldRoots: HeldRoot[] = [
+      { epoch: rootEpoch, key: root, ...(currentRefounder ? { refounder: currentRefounder } : {}) },
+    ];
     for (const hr of jm.held_roots ?? []) {
       try {
         const epoch = BigInt(hr.epoch);
         if (epoch === rootEpoch) continue;
-        heldRoots.push({ epoch, key: hex32(hr.key) });
+        const retiredAt =
+          typeof hr.retired_at === "number" && Number.isFinite(hr.retired_at) && hr.retired_at > 0
+            ? Math.floor(hr.retired_at)
+            : undefined;
+        const refounder = asRefounder(hr.refounder);
+        heldRoots.push({
+          epoch,
+          key: hex32(hr.key),
+          ...(retiredAt !== undefined ? { retiredAt } : {}),
+          ...(refounder ? { refounder } : {}),
+        });
       } catch {
         // skip malformed retained roots
       }
@@ -532,7 +563,15 @@ export function rehydrateCommunity(entry: CommunityListEntry, extraRelays: strin
         const priors: PrivateChannelKey["priors"] = [];
         for (const prior of Array.isArray(ch.priors) ? ch.priors : []) {
           try {
-            priors.push({ key: hex32(prior.key), epoch: BigInt(prior.epoch) });
+            const retiredAt =
+              typeof prior.retired_at === "number" && Number.isFinite(prior.retired_at) && prior.retired_at > 0
+                ? Math.floor(prior.retired_at)
+                : undefined;
+            priors.push({
+              key: hex32(prior.key),
+              epoch: BigInt(prior.epoch),
+              ...(retiredAt !== undefined ? { retiredAt } : {}),
+            });
           } catch {
             // skip a malformed prior; the current key still stands
           }
@@ -583,7 +622,13 @@ export function channelKeysToWire(chs: PrivateChannelKey[]): JoinMaterial["chann
     epoch: Number(c.epoch),
     name: c.name,
     ...(c.priors?.length
-      ? { priors: c.priors.map((p) => ({ key: bytesToHex(p.key), epoch: Number(p.epoch) })) }
+      ? {
+          priors: c.priors.map((p) => ({
+            key: bytesToHex(p.key),
+            epoch: Number(p.epoch),
+            ...(p.retiredAt !== undefined ? { retired_at: p.retiredAt } : {}),
+          })),
+        }
       : {}),
   }));
 }
@@ -625,7 +670,12 @@ export function nextChannelEpoch(
 export function toJoinMaterial(c: CommunityV2, opts?: { relays?: string[]; prior?: JoinMaterial }): JoinMaterial {
   const heldRoots = c.heldRoots
     .filter((r) => r.epoch !== c.rootEpoch)
-    .map((r) => ({ epoch: Number(r.epoch), key: bytesToHex(r.key) }));
+    .map((r) => ({
+      epoch: Number(r.epoch),
+      key: bytesToHex(r.key),
+      ...(r.retiredAt !== undefined ? { retired_at: r.retiredAt } : {}),
+      ...(r.refounder ? { refounder: r.refounder } : {}),
+    }));
   return {
     // Round-trip unknown fields from the prior snapshot (CORD-02 §6/§8).
     ...(opts?.prior ?? {}),
@@ -634,15 +684,7 @@ export function toJoinMaterial(c: CommunityV2, opts?: { relays?: string[]; prior
     owner_salt: bytesToHex(c.ownerSalt),
     community_root: bytesToHex(c.root),
     root_epoch: Number(c.rootEpoch),
-    channels: c.privateChannels.map((ch) => ({
-      id: bytesToHex(ch.id),
-      key: bytesToHex(ch.key),
-      epoch: Number(ch.epoch),
-      name: ch.name,
-      ...(ch.priors?.length
-        ? { priors: ch.priors.map((p) => ({ key: bytesToHex(p.key), epoch: Number(p.epoch) })) }
-        : {}),
-    })),
+    channels: channelKeysToWire(c.privateChannels),
     relays: opts?.relays ?? (opts?.prior?.relays as string[] | undefined) ?? [],
     name: c.name,
     ...(heldRoots.length > 0 ? { held_roots: heldRoots } : {}),

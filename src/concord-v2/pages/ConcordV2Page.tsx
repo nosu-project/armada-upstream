@@ -1014,6 +1014,11 @@ export function ConcordV2Page() {
   const canManageMetadata = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.MANAGE_METADATA));
   const canManageChannels = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.MANAGE_CHANNELS));
   const canCreateInvite = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.CREATE_INVITE));
+  // Only the owner and admins may mint a shareable invite link. A plain member
+  // still opens the invite dialog and invites people one by one (direct key
+  // handoff); the link section is hidden from them. Same owner-or-admin gate the
+  // Discover share below uses.
+  const iAmAdminOrOwner = Boolean(user && (iAmOwner || (roster ? badgeOf(roster, user.pubkey) === "admin" : false)));
   const canKickAny = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.KICK));
   const canBanAny = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.BAN));
   // Channel-targeted authority honors role scope: a Role scoped to one channel
@@ -2001,9 +2006,7 @@ export function ConcordV2Page() {
                     // Listing publishes an invite link (secret included), so
                     // only the owner or an admin may put the community on
                     // Discover — the same gate the share dialog enforces.
-                    show:
-                      !!user && !dissolved &&
-                      (iAmOwner || (roster ? badgeOf(roster, user!.pubkey) === "admin" : false)),
+                    show: iAmAdminOrOwner && !dissolved,
                     icon: <Megaphone className="size-4" />,
                     label: "Share to Discover",
                     onClick: () => setShareDiscoverOpen(true),
@@ -2924,7 +2927,7 @@ export function ConcordV2Page() {
         </main>
       </SwipeReveal>
 
-      <InviteDialog2 community={community} open={inviteOpen} onOpenChange={setInviteOpen} />
+      <InviteDialog2 community={community} open={inviteOpen} onOpenChange={setInviteOpen} canCreateLink={iAmAdminOrOwner} />
       <ShareToDiscoverDialog
         open={shareDiscoverOpen}
         onOpenChange={setShareDiscoverOpen}

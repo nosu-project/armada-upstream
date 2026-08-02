@@ -63,12 +63,41 @@ function openOne(wrap: NostrRumor, channel: ChannelV2): OpenedChat | null {
     // the message a standalone signed artifact any relay could display.
     if (ev.sealKind !== KIND_SEAL_ENCRYPTED) throw new Error("chat seal must be encrypted");
     checkChannelBinding(ev, channel.idHex, stream.epoch);
+    // A retired epoch is sealed history, not a live channel: the superseding
+    // rotation's publish time is a hard cutoff, and anything sealed under the
+    // old key but dated after it is refused. Key possession alone must not
+    // keep an ejected member writing into epochs the community rotated away
+    // from — the roster/banlist can't drop what it can't attribute in time.
+    if (stream.retiredAt !== undefined && ev.createdAt > stream.retiredAt) {
+      throw new Error("sealed under a retired epoch after its rotation");
+    }
     opened = { ...ev, channelIdHex: channel.idHex, epoch: stream.epoch };
   } catch {
     opened = null;
   }
   decodeMemo.set(memoKey, opened);
   return opened;
+}
+
+/**
+ * Drop stored events that violate their epoch's retirement cutoff. The decode
+ * path ({@link openOne}) refuses these at ingest, but rows written before the
+ * rotation was adopted locally (or by a client that predates cutoffs) are
+ * already in the store — the read side applies the same rule so a retired
+ * epoch is history everywhere, not just for freshly-arriving wraps.
+ */
+export function filterEpochCutoff(events: OpenedChat[], channel: ChannelV2): OpenedChat[] {
+  let cutoffs: Map<string, number> | undefined;
+  for (const s of channel.streams) {
+    if (s.retiredAt === undefined) continue;
+    (cutoffs ??= new Map()).set(s.epoch.toString(), s.retiredAt);
+  }
+  if (!cutoffs) return events;
+  const caps = cutoffs;
+  return events.filter((ev) => {
+    const cap = caps.get(ev.epoch.toString());
+    return cap === undefined || ev.createdAt <= cap;
+  });
 }
 
 /** Max unbroken main-thread time (ms) to spend decoding before yielding.
@@ -175,7 +204,17 @@ export function eTargetOf(ev: { tags: string[][] }): string | undefined {
 
 /** Moderation context the read path applies while folding. */
 export interface ChatModeration {
-  /** Banned author pubkeys — every event from them is dropped (CORD-04 §4). */
+  /**
+   * Banned author pubkeys — every event from them is dropped (CORD-04 §4).
+   *
+   * This is the ONLY author-identity drop an honest client performs. Nothing
+   * here filters on epoch: a retired epoch's key is held by everyone who ever
+   * had it, but CORD-02 §5 makes an author seen publishing *observably
+   * present* and a self-signed Join unsuppressable, and CORD-04 §6 makes the
+   * Banlist (plus its Refounding) the removal that enforces. An allow-list
+   * gate over retired-epoch history would invert both — and would hide real
+   * history from exactly the clients whose local anchors are thinnest.
+   */
   banned: Set<string>;
   /**
    * Whether `deleter` may delete a message by `author` (MANAGE_MESSAGES).

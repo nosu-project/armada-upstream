@@ -130,7 +130,7 @@ describe("buildWireSpec", () => {
     expect(spec.v1CtlByZ.get("ctlZ2")).toBe("comm2");
   });
 
-  it("merges Concord V2 stream authors per community relay and maps pk → channel", () => {
+  it("subscribes only the CURRENT epoch's stream live, but maps every held epoch's pk → channel", () => {
     const chanA = v2Channel(1, ["pkA1", "pkA2"]);
     const chanB = v2Channel(2, ["pkB1"]);
 
@@ -147,9 +147,12 @@ describe("buildWireSpec", () => {
     });
 
     expect(spec.subs).toHaveLength(1);
+    // A retired epoch ("pkA2") is read-cutoff history: nothing legitimate ever
+    // arrives there live, so it must not stay open as a standing filter.
     expect(spec.subs[0].filters).toEqual([
-      { kinds: [1059], authors: ["pkA1", "pkA2", "pkB1"] },
+      { kinds: [1059], authors: ["pkA1", "pkB1"] },
     ]);
+    // …but its wraps still decode if one arrives (in-flight straggler / park).
     expect(spec.v2ByPk.get("pkA2")).toBe(chanA);
     expect(spec.v2ByPk.get("pkB1")).toBe(chanB);
   });

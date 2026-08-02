@@ -93,12 +93,17 @@ export function channelsView(community: CommunityV2, folded: FoldedControl | und
     const rootStreams = community.heldRoots.map((r) => ({
       epoch: r.epoch,
       group: channelGroupKey(r.key, id, r.epoch),
+      ...(r.retiredAt !== undefined ? { retiredAt: r.retiredAt } : {}),
     }));
     const held = privateKeysById.get(def.channelIdHex);
     const channelStreams = held
       ? [
           { epoch: held.epoch, group: channelGroupKey(held.key, id, held.epoch) },
-          ...(held.priors ?? []).map((p) => ({ epoch: p.epoch, group: channelGroupKey(p.key, id, p.epoch) })),
+          ...(held.priors ?? []).map((p) => ({
+            epoch: p.epoch,
+            group: channelGroupKey(p.key, id, p.epoch),
+            ...(p.retiredAt !== undefined ? { retiredAt: p.retiredAt } : {}),
+          })),
         ]
       : [];
 
@@ -139,6 +144,7 @@ export function channelsView(community: CommunityV2, folded: FoldedControl | und
     const priorStreams = (held.priors ?? []).map((p) => ({
       epoch: p.epoch,
       group: channelGroupKey(p.key, held.id, p.epoch),
+      ...(p.retiredAt !== undefined ? { retiredAt: p.retiredAt } : {}),
     }));
     out.push({
       id: held.id,

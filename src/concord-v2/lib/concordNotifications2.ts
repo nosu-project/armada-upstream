@@ -38,7 +38,7 @@ export interface Concord2Sub {
   /** Channel id (hex): deep-link segment + the rumor's `channel` binding tag. */
   channelId: string;
   channelName: string;
-  /** Every held epoch's stream (newest first). */
+  /** The CURRENT epoch's stream only — retired epochs are read-cutoff history and never notify. */
   streams: Concord2Stream[];
   /**
    * The community's encrypted icon pointer (CORD-02 §6), for the native
@@ -75,6 +75,8 @@ export function buildConcord2Subs(
     : undefined;
   for (const channel of channelsView(community, folded)) {
     if (channel.streams.length === 0) continue;
+    // EVERY held epoch registers for NIP-42 stream auth (backfill still reads
+    // retired epochs from auth-gating relays)…
     streamKeys.push(...channel.streams.map((s) => s.group));
     subs.push({
       relays: community.relays,
@@ -82,11 +84,16 @@ export function buildConcord2Subs(
       communityName,
       channelId: channel.idHex,
       channelName: channel.name,
-      streams: channel.streams.map((s) => ({
-        pk: s.group.pk,
-        convKey: bytesToHex(s.group.convKey),
-        epoch: s.epoch.toString(),
-      })),
+      // …but the native service only ever LISTENS on the current epoch: a
+      // retired epoch is read-cutoff history — nothing on it may notify, and
+      // its address must not stay open as a live socket filter.
+      streams: [
+        {
+          pk: channel.current.group.pk,
+          convKey: bytesToHex(channel.current.group.convKey),
+          epoch: channel.current.epoch.toString(),
+        },
+      ],
       communityImage,
       gitAttachments: channelGitRepositoryAttachments(folded?.channels.get(channel.idHex)?.metadata ?? { name: channel.name, private: channel.isPrivate }),
     });

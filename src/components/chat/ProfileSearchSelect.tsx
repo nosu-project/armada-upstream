@@ -6,6 +6,7 @@ import { BotPill } from "@/components/BotPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
 import { getAvatarShape } from "@/lib/avatarShape";
@@ -42,53 +43,63 @@ export function ProfileSearchSelect({
   const results = trimmed.length >= 1 ? profiles ?? [] : [];
 
   return (
-    <div className="space-y-2">
-      <div className="relative">
-        <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={placeholder}
-          aria-label="Search people"
-          autoComplete="off"
-          autoCapitalize="off"
-          autoCorrect="off"
-          spellCheck={false}
-          autoFocus={autoFocus}
-          className="pl-9 pr-9"
-        />
-        {isFetching && (
-          <Loader2 className="absolute right-3 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground" />
-        )}
-      </div>
-
-      {trimmed.length >= 1 && (
-        <div className="max-h-60 overflow-y-auto rounded-lg bg-secondary/40 p-1">
-          {pastedPubkey ? (
-            <PastedPubkeyRow
-              pubkey={pastedPubkey}
-              isFollowed={followedPubkeys.has(pastedPubkey)}
-              isBusy={busyPubkey === pastedPubkey}
-              onSelect={onSelect}
-            />
-          ) : results.length === 0 ? (
-            <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-              {isFetching ? "Searching…" : "No one found. Try a different name, or paste an npub."}
-            </div>
-          ) : (
-            results.map((profile) => (
-              <ProfileRow
-                key={profile.pubkey}
-                profile={profile}
-                isFollowed={followedPubkeys.has(profile.pubkey)}
-                isBusy={busyPubkey === profile.pubkey}
-                onClick={() => onSelect(profile)}
-              />
-            ))
+    // Results live in a portaled popover anchored to the input, so the dialog
+    // keeps its resting height instead of growing (or scrolling) as you type.
+    // It dismisses only when the query clears or on Escape; outside clicks are
+    // ignored so clicking back into the input doesn't wipe the search.
+    <Popover open={trimmed.length >= 1} onOpenChange={(o) => { if (!o) setQuery(""); }}>
+      <PopoverAnchor asChild>
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={placeholder}
+            aria-label="Search people"
+            autoComplete="off"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            autoFocus={autoFocus}
+            className="pl-9 pr-9"
+          />
+          {isFetching && (
+            <Loader2 className="absolute right-3 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground" />
           )}
         </div>
-      )}
-    </div>
+      </PopoverAnchor>
+
+      <PopoverContent
+        align="start"
+        sideOffset={6}
+        onOpenAutoFocus={(e) => e.preventDefault()}
+        onInteractOutside={(e) => e.preventDefault()}
+        className="w-[var(--radix-popover-trigger-width)] max-h-60 overflow-y-auto p-1"
+      >
+        {pastedPubkey ? (
+          <PastedPubkeyRow
+            pubkey={pastedPubkey}
+            isFollowed={followedPubkeys.has(pastedPubkey)}
+            isBusy={busyPubkey === pastedPubkey}
+            onSelect={onSelect}
+          />
+        ) : results.length === 0 ? (
+          <div className="px-3 py-6 text-center text-xs text-muted-foreground">
+            {isFetching ? "Searching…" : "No one found. Try a different name, or paste an npub."}
+          </div>
+        ) : (
+          results.map((profile) => (
+            <ProfileRow
+              key={profile.pubkey}
+              profile={profile}
+              isFollowed={followedPubkeys.has(profile.pubkey)}
+              isBusy={busyPubkey === profile.pubkey}
+              onClick={() => onSelect(profile)}
+            />
+          ))
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }
 

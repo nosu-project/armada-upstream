@@ -66,8 +66,39 @@ export const LOAD_OLDER_MAX_PAGES = 6;
 export const CHANNEL_SYNC_MIN_INTERVAL_MS = 30_000;
 export const CHANNEL_SYNC_STALE_AFTER_MS = 5 * 60_000;
 
-function channelFilter(channel: ChannelV2, extra?: Partial<NostrFilter>): NostrFilter {
-  return { kinds: [KIND_WRAP], authors: channel.streams.map((s) => s.group.pk), ...extra };
+/**
+ * The relay filter for one channel page — ONE filter, so the caller's single
+ * per-relay `until` cursor stays a sound frontier.
+ *
+ * `authors` is the only relay-side dimension an adversary can't forge (the
+ * wrap must be signed by the stream key), so it is the whole control surface:
+ * a retired stream is asked for until this channel's history has verifiably
+ * been swept to the bottom, and from then on (`freezeRetired`) its address
+ * leaves the author set entirely — never asked for again, whatever timestamps
+ * are pumped at it. The local store is the archive from that point, which is
+ * what keeps CORD-03 §3's continuity across a rekey satisfied from disk.
+ *
+ * Deliberately NOT split into a live filter plus an `until`-capped retired
+ * one. Capping retired streams at their cutoff only trims spam lazy enough
+ * not to backdate (the decode/fold cutoffs are what actually refuse content),
+ * and it costs correctness: two filters share one cursor here, so when both
+ * return a full page the frontier jumps to the older filter's floor and the
+ * newer filter's unread region is skipped and then persisted as covered.
+ */
+export function channelFilters(
+  channel: ChannelV2,
+  opts: { limit: number; cursor?: number; since?: number; freezeRetired?: boolean },
+): NostrFilter[] {
+  const authors: string[] = [];
+  for (const s of channel.streams) {
+    if (s.retiredAt !== undefined && opts.freezeRetired) continue;
+    authors.push(s.group.pk);
+  }
+  if (authors.length === 0) return [];
+  const f: NostrFilter = { kinds: [KIND_WRAP], authors, limit: opts.limit };
+  if (opts.cursor !== undefined) f.until = opts.cursor;
+  if (opts.since !== undefined) f.since = opts.since;
+  return [f];
 }
 
 /**
@@ -92,7 +123,7 @@ export async function backfillStore(
   relays: string[],
   channel: ChannelV2,
   signal: AbortSignal,
-  opts: { until?: number; since?: number; maxPages?: number; beforeRelay?: (url: string) => Promise<void> } = {},
+  opts: { until?: number; since?: number; maxPages?: number; freezeRetired?: boolean; beforeRelay?: (url: string) => Promise<void> } = {},
 ): Promise<{ oldest?: number; newest?: number; events: NostrEvent[]; exhausted: boolean; failed: boolean }> {
   const maxPages = opts.maxPages ?? BACKFILL_MAX_PAGES;
   let oldest: number | undefined;
@@ -112,9 +143,13 @@ export async function backfillStore(
 
     const results = await Promise.all(
       active.map(async (relay) => {
-        const filter = channelFilter(channel, { limit: BACKFILL_PAGE });
-        if (relay.cursor !== undefined) filter.until = relay.cursor;
-        if (opts.since !== undefined) filter.since = opts.since;
+        const filters = channelFilters(channel, {
+          limit: BACKFILL_PAGE,
+          cursor: relay.cursor,
+          since: opts.since,
+          freezeRetired: opts.freezeRetired,
+        });
+        if (filters.length === 0) return { relay, events: [] as NostrEvent[], ok: true };
         try {
           // Per-relay auth gate (see syncChannelRound): each relay's page
           // waits only for ITS OWN stream AUTHs to settle, never for the
@@ -123,7 +158,7 @@ export async function backfillStore(
           if (pageSignal.aborted) return { relay, events: [] as NostrEvent[], ok: false };
           const events = await nostr
             .relay(relay.url)
-            .query([filter], {
+            .query(filters, {
               signal: AbortSignal.any([pageSignal, AbortSignal.timeout(8000)]),
             });
           // Only a relay that actually HAS events may start the race clock. An
@@ -228,6 +263,14 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
       void clearChannelExhausted(idHex);
     }
 
+    // Retired-epoch freeze: once this channel's history has verifiably reached
+    // bottom, retired stream addresses leave every REQ this round issues. An
+    // ejected keyholder can sign wraps at those addresses forever (and forge
+    // any timestamp) — the only spam-proof filter dimension is not asking. A
+    // rekey adoption clears `exhausted` (see useChannelTimeline2's epoch
+    // effect), so each newly retired epoch still gets its one final sweep.
+    const freezeRetired = Boolean(saved?.exhausted);
+
     // Hold each relay's pages until THAT relay has ACKED our stream AUTHs (if
     // it challenged) — a kind-1059 REQ racing NIP-42 gets CLOSED and reads
     // back as an empty page, which on a cold open paints "no messages" for a
@@ -246,6 +289,7 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
     // re-reads.
     const newest = await backfillStore(nostr, community.relays, channel, signal, {
       maxPages: 1,
+      freezeRetired,
       beforeRelay: authGate,
     });
     if (signal.aborted) return;
@@ -268,6 +312,7 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
       bridge = await backfillStore(nostr, community.relays, channel, signal, {
         until: newest.oldest - 1,
         since: saved.newest,
+        freezeRetired,
         beforeRelay: authGate,
       });
       if (signal.aborted) return;
@@ -279,6 +324,7 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
     const resumeFrom = saved?.oldest ?? (newest.oldest !== undefined ? newest.oldest - 1 : undefined);
     const older = await backfillStore(nostr, community.relays, channel, signal, {
       until: resumeFrom,
+      freezeRetired,
       beforeRelay: authGate,
     });
     if (signal.aborted) return;

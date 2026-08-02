@@ -13,6 +13,7 @@ import {
   currentGuestbookGroup,
   openGuestbookOpened,
   sealGuestbook,
+  snapshotAuthorities,
   type CoalescedMember,
 } from "@/concord-v2/lib/guestbook";
 import { mergeOpened, sweepGuestbook } from "@/concord-v2/lib/planeSync";
@@ -47,13 +48,14 @@ export function useGuestbook2(community: CommunityV2 | undefined) {
   const coalesced = useMemo(() => {
     if (!community || !query.data) return new Map<string, CoalescedMember>();
     const opened = openGuestbookOpened(query.data);
-    // A snapshot is honored only from the npub whose Refounding minted THIS
-    // epoch (CORD-02 §5). At genesis (epoch 0) there is no snapshot, so no
-    // authority is needed. For a post-genesis epoch the authority is the
-    // recorded refounder; if it's unknown we accept NO snapshot rather than
-    // falling back to the owner — an owner who didn't mint this epoch must not
-    // be able to seed arbitrary members into it.
-    const snapshotAuthority = community.rootEpoch === 0n ? undefined : community.refounder;
+    // A snapshot is honored only from the npub whose Refounding minted the
+    // epoch carrying it (CORD-02 §5). The sweep spans EVERY held epoch's
+    // guestbook, so the authority is the set of recorded refounders — matching
+    // only the current one silently dropped every prior epoch's snapshot. At
+    // genesis (epoch 0) there is no snapshot; an epoch with no recorded
+    // refounder contributes no authority, so we accept NO snapshot for it
+    // rather than falling back to the owner.
+    const authorities = snapshotAuthorities(community);
     return coalesceGuestbook(opened, {
       nowMs: Date.now(),
       canKick: (actor, target, citation, atMs) =>
@@ -69,7 +71,7 @@ export function useGuestbook2(community: CommunityV2 | undefined) {
             // demotion we haven't read yet parks instead of landing.
             citationSatisfied(folded, community.id, actor, citation),
         ),
-      snapshotAuthority,
+      snapshotAuthorities: authorities,
       banned: folded?.banned,
     });
   }, [community, query.data, folded, dissolvedAtMs]);

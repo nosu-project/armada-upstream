@@ -697,10 +697,12 @@ describe("useChannelRekeyWatch2 (CORD-06 §2 channel rotations)", () => {
                   key: bytesToHex(finalKey),
                   epoch: 2,
                   // Both superseded keys are retained: they read the history
-                  // written under each earlier epoch (CORD-03 §3).
+                  // written under each earlier epoch (CORD-03 §3). Each
+                  // carries its superseding rotation's publish time as the
+                  // hard read cutoff.
                   priors: expect.arrayContaining([
-                    { key: bytesToHex(midKey), epoch: 1 },
-                    { key: bytesToHex(ch.key), epoch: 0 },
+                    expect.objectContaining({ key: bytesToHex(midKey), epoch: 1, retired_at: expect.any(Number) }),
+                    expect.objectContaining({ key: bytesToHex(ch.key), epoch: 0, retired_at: expect.any(Number) }),
                   ]),
                 }),
               ],
@@ -1254,7 +1256,11 @@ describe("useRefound2 (CORD-06 §3 channel rotations)", () => {
             channels: [
               expect.objectContaining({
                 epoch: 1,
-                priors: [{ key: bytesToHex(ch.key), epoch: 0 }],
+                // The severed key is retained WITH its read cutoff (the
+                // rotation's publish time).
+                priors: [
+                  expect.objectContaining({ key: bytesToHex(ch.key), epoch: 0, retired_at: expect.any(Number) }),
+                ],
               }),
             ],
           }),
