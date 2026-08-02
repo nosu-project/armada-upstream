@@ -89,7 +89,9 @@ function InviteBody({ community, canCreateLink }: { community: CommunityV2 | und
     if (
       !isPublic &&
       !confirm(
-        "Creating an invite link makes this community public: anyone with the link can join. Revoking every link makes it private again.",
+        "Creating an invite link makes this community public: anyone with the link can join.\n\n" +
+          "Anyone who gets the link can read every message in this community, past and future, and keeps that access permanently. Revoking the link, or removing the person from the community later, does NOT take it away.\n\n" +
+          "Revoking every link stops new people from joining and makes the community private again.",
       )
     ) {
       return;
