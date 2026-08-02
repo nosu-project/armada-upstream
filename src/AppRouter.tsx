@@ -216,6 +216,10 @@ function useWarmRouteChunks() {
         () => import("@/concord-v2/pages/ConcordV2Page"),
         () => import("@/pages/DMsPage"),
         () => import("@/pages/ServerPage"),
+        // Not a notification target, but the landing surface a new user hits
+        // first — its first paint shouldn't stack a chunk fetch on top of the
+        // directory queries.
+        () => import("@/pages/DiscoverPage"),
       ]) {
         void load().catch(() => undefined);
       }

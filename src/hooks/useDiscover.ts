@@ -1,7 +1,7 @@
 import { useNostr } from "@nostrify/react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { nip19 } from "nostr-tools";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -14,6 +14,7 @@ import {
   type DiscoveredInvite,
 } from "@/concord-v2/lib/inviteDiscovery";
 import { isNostrId } from "@/lib/nostrId";
+import { getArmadaDB } from "@/lib/db/armadaDB";
 import { normalizeRelayUrl } from "@/lib/platform";
 import { THEME_DEFINITION_KIND, parseDittoTheme } from "@/lib/themeEvent";
 
@@ -36,6 +37,51 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 
 const FETCH_LIMIT = 100;
 const TIMEOUT_MS = 6000;
+
+/**
+ * Warm-load seeds: the last successful follow-pack membership and community
+ * list, persisted in KV and pushed into the react-query cache on mount so a
+ * returning session paints the Discover grid from local data immediately
+ * instead of holding a skeleton for the pack → announcements round trips.
+ * Seeds are written into the cache already STALE (`updatedAt: 0`), so the
+ * normal network fetch still runs and overwrites them — a seed accelerates
+ * first paint, it never suppresses a refresh — and a seed never overwrites
+ * data the network already delivered.
+ */
+const PACK_SEED_KV = "discover:seed:pack";
+const COMMUNITIES_SEED_KV = "discover:seed:communities";
+
+/** Push a persisted KV value under a react-query key if nothing is there yet. */
+function useKvQuerySeed<T>(kvKey: string, queryKey: QueryKey | undefined): void {
+  const queryClient = useQueryClient();
+  // Serialize so the effect re-runs when the key changes by value (the
+  // announcements key re-keys as the author allow-list resolves).
+  const keyString = queryKey ? JSON.stringify(queryKey) : "";
+  useEffect(() => {
+    if (!keyString) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const stored = await getArmadaDB().kv.get<T>(kvKey);
+        if (cancelled || stored === undefined) return;
+        const key = JSON.parse(keyString) as QueryKey;
+        if (queryClient.getQueryData(key) !== undefined) return;
+        queryClient.setQueryData(key, stored, { updatedAt: 0 });
+      } catch {
+        // Best-effort: an unreadable seed just means a skeleton first paint.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [kvKey, keyString, queryClient]);
+}
+
+/** Persist a query's latest non-empty result as the next session's seed. */
+function writeSeed(kvKey: string, value: unknown[]): void {
+  if (value.length === 0) return; // an empty read may be a miss — keep the last good seed
+  getArmadaDB().kv.set(kvKey, value).catch(() => undefined);
+}
 
 /**
  * The "team soapbox" follow pack (kind 39089). Its members are the seed
@@ -146,8 +192,13 @@ export function useDiscoverAuthors(): {
 
   const unrestricted = config.discoverAllContent;
 
+  const packKey: QueryKey = ["discover", "follow-pack", TEAM_FOLLOW_PACK, relays];
+  // Warm loads: last session's pack membership paints (and un-gates the
+  // feeds) immediately; the fetch below still runs and overwrites it.
+  useKvQuerySeed<string[]>(PACK_SEED_KV, unrestricted ? undefined : packKey);
+
   const pack = useQuery<string[]>({
-    queryKey: ["discover", "follow-pack", TEAM_FOLLOW_PACK, relays],
+    queryKey: packKey,
     // Skip the pack fetch entirely when the allow-list is bypassed.
     enabled: relays.length > 0 && TEAM_PACK_COORD !== null && !unrestricted,
     staleTime: 60 * 60 * 1000,
@@ -157,7 +208,9 @@ export function useDiscoverAuthors(): {
         [{ kinds: [coord.kind], authors: [coord.pubkey], "#d": [coord.identifier], limit: 1 }],
         { signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) },
       );
-      return followPackPubkeys(event);
+      const pubkeys = followPackPubkeys(event);
+      writeSeed(PACK_SEED_KV, pubkeys);
+      return pubkeys;
     },
   });
 
@@ -174,8 +227,14 @@ export function useDiscoverAuthors(): {
   return {
     authors,
     unrestricted,
-    // Nothing to wait for when the allow-list is bypassed.
-    isLoading: unrestricted ? false : pack.isLoading || (!!user && followList.isLoading),
+    // Nothing to wait for when the allow-list is bypassed. Only the PACK read
+    // gates the feeds: it is the seed authorship, so querying without it would
+    // show a logged-in user a follows-only directory and then re-key. The
+    // viewer's own follow list merely WIDENS the list — when it lands later,
+    // `authors` changes, the feed queries re-key and refetch, and
+    // `placeholderData` holds the pack-authored results meanwhile — so first
+    // paint doesn't wait the follow-list round trip out.
+    isLoading: unrestricted ? false : pack.isLoading,
   };
 }
 
@@ -198,38 +257,45 @@ export function useDiscoverCommunities() {
 
   const authorFilter = unrestricted ? undefined : authors;
 
+  const communitiesKey: QueryKey = [
+    "discover",
+    "community-announcements",
+    relays,
+    authorFilter ?? "all",
+  ];
+  // Warm loads: last session's listings paint immediately, then refresh.
+  useKvQuerySeed<DiscoveredInvite[]>(COMMUNITIES_SEED_KV, communitiesKey);
+
   const result = useQuery<DiscoveredInvite[]>({
-    queryKey: ["discover", "community-announcements", relays, authorFilter ?? "all"],
+    queryKey: communitiesKey,
     enabled: relays.length > 0 && !authorsLoading && (unrestricted || authors.length > 0),
     staleTime: 30_000,
     placeholderData: (prev) => prev,
     queryFn: async ({ signal }) => {
       const filter: NostrFilter = { kinds: [KIND_COMMUNITY_ANNOUNCEMENT], limit: FETCH_LIMIT };
       if (authorFilter) filter.authors = authorFilter;
-      const events = await nostr.group(relays).query(
-        [filter],
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) },
-      );
       // Honor un-publishes: a NIP-09 delete by the ANNOUNCEMENT'S OWN author
-      // removes the listing (anyone else's delete is ignored).
+      // removes the listing (anyone else's delete is ignored). Fetched in the
+      // SAME round trip as the announcements — un-listing always attaches a
+      // `["k", "3314"]` tag (ShareToDiscoverDialog), so the deletes are
+      // addressable by kind up front instead of by the announcement ids,
+      // which would serialize a second relay hop behind the first.
+      const delFilter: NostrFilter = {
+        kinds: [5],
+        "#k": [String(KIND_COMMUNITY_ANNOUNCEMENT)],
+        limit: FETCH_LIMIT,
+      };
+      if (authorFilter) delFilter.authors = authorFilter;
+      const timeout = () => AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]);
+      const [events, dels] = await Promise.all([
+        nostr.group(relays).query([filter], { signal: timeout() }),
+        nostr.group(relays).query([delFilter], { signal: timeout() }).catch(() => []),
+      ]);
       const deleted = new Set<string>();
-      if (events.length > 0) {
-        const dels = await nostr
-          .group(relays)
-          .query(
-            [{
-              kinds: [5],
-              authors: [...new Set(events.map((e) => e.pubkey))],
-              "#e": events.map((e) => e.id),
-            }],
-            { signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) },
-          )
-          .catch(() => []);
-        const byId = new Map(events.map((e) => [e.id, e.pubkey]));
-        for (const del of dels) {
-          for (const [n, id] of del.tags) {
-            if (n === "e" && byId.get(id) === del.pubkey) deleted.add(id);
-          }
+      const byId = new Map(events.map((e) => [e.id, e.pubkey]));
+      for (const del of dels) {
+        for (const [n, id] of del.tags) {
+          if (n === "e" && byId.get(id) === del.pubkey) deleted.add(id);
         }
       }
       // Newest announcement wins for a given link.
@@ -241,7 +307,9 @@ export function useDiscoverCommunities() {
         if (!invite) continue;
         if (!byLinkSigner.has(invite.linkSigner)) byLinkSigner.set(invite.linkSigner, invite);
       }
-      return [...byLinkSigner.values()];
+      const invites = [...byLinkSigner.values()];
+      writeSeed(COMMUNITIES_SEED_KV, invites);
+      return invites;
     },
   });
 

@@ -165,35 +165,68 @@ function writeBundleFloor(linkSigner: string, event: NostrEvent): void {
   getArmadaDB().kv.set(BUNDLE_FLOOR_KV + linkSigner, event).catch(() => undefined);
 }
 
+/**
+ * How long a coordinate query keeps waiting for the REMAINING relays once one
+ * of them has already produced a valid bundle event. The full per-relay
+ * timeout below exists for the nothing-yet case; once a copy is in hand, the
+ * other live relays (dialed in parallel) answer within moments, and only a
+ * dead relay is still pending — which must not hold every invite preview
+ * hostage for the whole timeout. Stale-copy risk from cutting a laggard off
+ * is already covered twice over: the persisted newest-copy floor never
+ * regresses, and resolveBundle's second hop re-asks the community's home
+ * relays for a newer copy.
+ */
+const BUNDLE_GRACE_MS = 1200;
+const BUNDLE_RELAY_TIMEOUT_MS = 8000;
+
 /** Query one relay set for a link's bundle coordinate, verified events only. */
 async function queryBundleCoordinate(
   nostr: ReturnType<typeof useNostr>["nostr"],
   invite: ParsedInviteLink,
   relays: string[],
 ): Promise<NostrEvent[]> {
-  const results = await Promise.all(
-    relays.map((url) =>
+  const valid: NostrEvent[] = [];
+  await new Promise<void>((resolve) => {
+    if (relays.length === 0) return resolve();
+    let settled = 0;
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = () => {
+      clearTimeout(graceTimer);
+      resolve();
+    };
+    for (const url of relays) {
       nostr
         .relay(url)
         .query(
           [{ kinds: [KIND_INVITE_BUNDLE], authors: [invite.linkSigner], "#d": [""], limit: 1 }],
-          { signal: AbortSignal.timeout(8000) },
+          { signal: AbortSignal.timeout(BUNDLE_RELAY_TIMEOUT_MS) },
         )
-        .catch(() => [] as NostrEvent[]),
-    ),
-  );
-  // Only link-signer-authored, signature-valid events count: a hostile relay
-  // answering with a forged far-future event must not pin the coordinate
-  // (parseBundleEvent re-checks, but by then the floor would be poisoned).
-  return results
-    .flat()
-    .filter(
-      (e) =>
-        e.kind === KIND_INVITE_BUNDLE &&
-        e.pubkey === invite.linkSigner &&
-        verifyEvent(e as Parameters<typeof verifyEvent>[0]),
-    )
-    .sort((a, b) => b.created_at - a.created_at);
+        .then((events) => {
+          // Only link-signer-authored, signature-valid events count: a hostile
+          // relay answering with a forged far-future event must not pin the
+          // coordinate (parseBundleEvent re-checks, but by then the floor
+          // would be poisoned).
+          for (const e of events) {
+            if (
+              e.kind === KIND_INVITE_BUNDLE &&
+              e.pubkey === invite.linkSigner &&
+              verifyEvent(e as Parameters<typeof verifyEvent>[0])
+            ) {
+              valid.push(e);
+            }
+          }
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          settled += 1;
+          if (settled === relays.length) finish();
+          else if (valid.length > 0 && graceTimer === undefined) {
+            graceTimer = setTimeout(finish, BUNDLE_GRACE_MS);
+          }
+        });
+    }
+  });
+  return valid.sort((a, b) => b.created_at - a.created_at);
 }
 
 /** Fetch + verify a V2 invite bundle from its bootstrap relays. */
@@ -239,6 +272,25 @@ export async function resolveBundle(
 
   if (best !== remembered) writeBundleFloor(invite.linkSigner, best);
   return bundle;
+}
+
+/**
+ * The invite bundle as remembered locally — the persisted newest-copy floor
+ * (see {@link resolveBundle}) parsed with the link's own secret, no relay
+ * round trip. `null` when nothing usable is remembered: no floor yet, or a
+ * floor that no longer parses (revoked tombstone, expired link, wrong token),
+ * which the caller must treat as "ask the network", never as "not revoked".
+ * Used to paint invite previews (the Discover cards) instantly from local
+ * data while a live resolve refreshes them.
+ */
+export async function readCachedBundle(invite: ParsedInviteLink): Promise<InviteBundle | null> {
+  const remembered = await readBundleFloor(invite.linkSigner);
+  if (!remembered) return null;
+  try {
+    return parseBundleEvent(remembered, invite.linkSigner, invite.token, Date.now());
+  } catch {
+    return null;
+  }
 }
 
 /** Turn a verified bundle into the membership-list join material + entry. */
