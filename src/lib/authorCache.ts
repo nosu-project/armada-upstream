@@ -66,9 +66,16 @@ const PREWARM_LIMIT = 2000;
 export async function prewarmAuthorCache(queryClient: QueryClient): Promise<void> {
   try {
     const store = await appEventStore();
-    const profiles = await store.query([{ kinds: [0], limit: PREWARM_LIMIT }]);
-    for (const event of profiles) seedAuthorCache(queryClient, event.pubkey, event);
-    perfMark('authors.prewarm', `${profiles.length} profile(s) seeded`);
+    // NO limit in the filter, deliberately: NIndexedDB runs a limited scan as
+    // a cursor stepped one record — one event-loop task — at a time, which on
+    // a congested boot loop turns this read into thousands of delayed tasks
+    // that never finish before the boot does. The unlimited path fetches the
+    // whole kind-0 index range with a single getAll(); the cap is applied
+    // here, on the newest-first result.
+    const profiles = await store.query([{ kinds: [0] }]);
+    const seeded = profiles.slice(0, PREWARM_LIMIT);
+    for (const event of seeded) seedAuthorCache(queryClient, event.pubkey, event);
+    perfMark('authors.prewarm', `${seeded.length} profile(s) seeded`);
   } catch {
     // Best-effort: a failed pre-warm just means the lazy per-pubkey reads
     // (and the profile sync topic) do the work as before.
