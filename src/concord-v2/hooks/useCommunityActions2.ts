@@ -176,7 +176,7 @@ function writeBundleFloor(linkSigner: string, event: NostrEvent): void {
  * regresses, and resolveBundle's second hop re-asks the community's home
  * relays for a newer copy.
  */
-const BUNDLE_GRACE_MS = 1200;
+const BUNDLE_GRACE_MS = 600;
 const BUNDLE_RELAY_TIMEOUT_MS = 8000;
 
 /** Query one relay set for a link's bundle coordinate, verified events only. */
@@ -229,11 +229,34 @@ async function queryBundleCoordinate(
   return valid.sort((a, b) => b.created_at - a.created_at);
 }
 
+/**
+ * What resolveBundle's home-relay second hop found, delivered asynchronously
+ * when the caller opted into a non-blocking second hop.
+ */
+export interface SecondHopResult {
+  /** A newer, valid bundle the home relays vended. */
+  bundle?: InviteBundle;
+  /** The home relays vended a newer revocation tombstone. */
+  revoked?: boolean;
+}
+
 /** Fetch + verify a V2 invite bundle from its bootstrap relays. */
 export async function resolveBundle(
   nostr: ReturnType<typeof useNostr>["nostr"],
   invite: ParsedInviteLink,
   fallbackRelays: string[],
+  opts?: {
+    /**
+     * When set, the home-relay second hop below runs in the BACKGROUND and
+     * reports through this callback instead of blocking the return. Meant for
+     * previews (the Discover cards), where painting the first-hop bundle now
+     * beats waiting a further round trip for a copy that is almost always
+     * identical — and where a join that follows re-resolves with full
+     * (blocking) semantics anyway. The floor is still written either way, so
+     * whatever the background hop learns outlives this call.
+     */
+    onSecondHop?: (result: SecondHopResult) => void;
+  },
 ): Promise<InviteBundle> {
   const pool = invite.bootstrapRelays.length ? invite.bootstrapRelays : fallbackRelays;
   const flat = await queryBundleCoordinate(nostr, invite, pool);
@@ -256,6 +279,35 @@ export async function resolveBundle(
   // first-hop bundle already in hand is the floor, never the ceiling.
   const covered = new Set(pool);
   const home = (Array.isArray(bundle.relays) ? bundle.relays : []).filter((r) => !covered.has(r));
+
+  if (home.length > 0 && opts?.onSecondHop) {
+    const onSecondHop = opts.onSecondHop;
+    // Non-blocking mode: the first-hop bundle is the answer; the home-relay
+    // check refines it out-of-band. Write the first-hop floor NOW so an
+    // interrupted session still remembers it; the background hop only ever
+    // overwrites it with a strictly newer event.
+    if (best !== remembered) writeBundleFloor(invite.linkSigner, best);
+    const first = best;
+    void (async () => {
+      const [newer] = await queryBundleCoordinate(nostr, invite, home).catch(() => [] as NostrEvent[]);
+      if (!newer || newer.created_at <= first.created_at) return;
+      try {
+        const fresher = parseBundleEvent(newer, invite.linkSigner, invite.token, Date.now());
+        writeBundleFloor(invite.linkSigner, newer);
+        onSecondHop({ bundle: fresher });
+      } catch {
+        // A newer tombstone still terminates the link honestly; anything else
+        // malformed keeps the first-hop bundle (and the first-hop floor — a
+        // floor that doesn't parse would poison every later read).
+        if (newer.tags.some((t) => t[0] === "vsk" && t[1] === VSK_INVITE_REVOKED)) {
+          writeBundleFloor(invite.linkSigner, newer);
+          onSecondHop({ revoked: true });
+        }
+      }
+    })();
+    return bundle;
+  }
+
   if (home.length > 0) {
     const [newer] = await queryBundleCoordinate(nostr, invite, home).catch(() => [] as NostrEvent[]);
     if (newer && newer.created_at > best.created_at) {

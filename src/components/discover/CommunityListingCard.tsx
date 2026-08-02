@@ -85,13 +85,26 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
   const [copied, setCopied] = useState(false);
 
   // Resolve the community from its bundle (the link carries the secret, so we
-  // can decrypt the preview).
+  // can decrypt the preview). The home-relay second hop runs in the
+  // background — the card paints the bootstrap copy a full round trip sooner,
+  // and a fresher copy (or a revocation) lands via the callback. Joining
+  // re-resolves with full blocking semantics on the invite route.
+  const queryClient = useQueryClient();
   const { data: bundle, isLoading: bundleLoading, isError: bundleError } = useQuery({
     queryKey: ["discover", "invite-bundle", invite.linkSigner],
     enabled: !!parsed,
     staleTime: 5 * 60_000,
     retry: false,
-    queryFn: () => resolveBundle(nostr, parsed!, parsed!.bootstrapRelays),
+    queryFn: () =>
+      resolveBundle(nostr, parsed!, parsed!.bootstrapRelays, {
+        onSecondHop: (result) => {
+          const key = ["discover", "invite-bundle", invite.linkSigner];
+          if (result.bundle) queryClient.setQueryData(key, result.bundle);
+          // A revocation re-runs the resolve, which now trips over the
+          // tombstoned floor and errors the query — hiding the card.
+          else if (result.revoked) void queryClient.invalidateQueries({ queryKey: key });
+        },
+      }),
   });
 
   // Instant warm paint: the persisted newest-copy floor from an earlier
@@ -100,7 +113,6 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
   // runs — a seeded card is never how a revocation goes unnoticed — and never
   // over a result the network already delivered. A tombstoned/expired floor
   // reads as null, so a known-dead link stays skeleton-then-hidden as before.
-  const queryClient = useQueryClient();
   useEffect(() => {
     if (!parsed) return;
     let cancelled = false;
