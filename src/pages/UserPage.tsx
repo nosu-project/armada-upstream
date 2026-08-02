@@ -70,7 +70,7 @@ export function UserPage() {
     // Someone opening their own link has no conversation to open.
     if (pubkey === user.pubkey) {
       opened.current = true;
-      navigate("/dms", { replace: true });
+      navigate("/dm", { replace: true });
       return;
     }
     if (!npub) return;
@@ -82,7 +82,7 @@ export function UserPage() {
     reopen(pubkey);
     accept(pubkey);
     start(pubkey);
-    navigate(`/dms/${npub}`, { replace: true });
+    navigate(`/dm/${npub}`, { replace: true });
   }, [user, pubkey, npub, navigate, reopen, accept, start]);
 
   // Not a person's identifier at all: this is an ordinary unrouted path.

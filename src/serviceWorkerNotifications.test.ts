@@ -84,7 +84,7 @@ function loadWorker(options: { clients?: WindowClientStub[]; ownEventId?: string
 describe("Web Push suppression", () => {
   it("suppresses an outgoing event marked by this device", async () => {
     const worker = loadWorker({ ownEventId: "own-wrap" });
-    await worker.push({ scope: "dm", event_id: "own-wrap", url: "/dms" });
+    await worker.push({ scope: "dm", event_id: "own-wrap", url: "/dm" });
     expect(worker.showNotification).not.toHaveBeenCalled();
   });
 
@@ -100,25 +100,37 @@ describe("Web Push suppression", () => {
   it("suppresses generic DM push while a specific DM thread is focused", async () => {
     const worker = loadWorker({
       clients: [{
+        url: "https://armada.buzz/dm/npub1peer",
+        visibilityState: "visible",
+        focused: true,
+      }],
+    });
+    await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dm" });
+    expect(worker.showNotification).not.toHaveBeenCalled();
+  });
+
+  it("suppresses when the focused window predates the /dms → /dm rename", async () => {
+    const worker = loadWorker({
+      clients: [{
         url: "https://armada.buzz/dms/npub1peer",
         visibilityState: "visible",
         focused: true,
       }],
     });
-    await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dms" });
+    await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dm" });
     expect(worker.showNotification).not.toHaveBeenCalled();
   });
 
   it("queries the page when client.url still has the pre-navigation DM-list route", async () => {
     const worker = loadWorker({
       clients: [{
-        url: "https://armada.buzz/dms",
+        url: "https://armada.buzz/dm",
         visibilityState: "visible",
         focused: true,
         activeDm: true,
       }],
     });
-    await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dms" });
+    await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dm" });
     expect(worker.showNotification).not.toHaveBeenCalled();
   });
 
@@ -130,7 +142,7 @@ describe("Web Push suppression", () => {
         focused: true,
       }],
     });
-    await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dms" });
+    await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dm" });
     expect(worker.showNotification).toHaveBeenCalledTimes(1);
   });
 
@@ -143,7 +155,7 @@ describe("Web Push suppression", () => {
         ownsNotifications: true,
       }],
     });
-    await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dms" });
+    await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dm" });
     expect(worker.showNotification).not.toHaveBeenCalled();
   });
 
@@ -174,7 +186,7 @@ describe("Web Push suppression", () => {
 
   it("keeps the generic DM fallback when no live page can decrypt it", async () => {
     const worker = loadWorker();
-    await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dms" });
+    await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dm" });
     expect(worker.showNotification).toHaveBeenCalledTimes(1);
   });
 });

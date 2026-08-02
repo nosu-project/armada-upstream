@@ -97,7 +97,7 @@ export function dm17NotifyCandidates(opened: OpenedDm[], self: string): NotifyCa
       body: dm.kind === KIND_DM_FILE ? "Sent a file" : dm.content,
       roomKey: `dm:${dm.peer}`,
       readKey: `dm:${dm.peer}`,
-      path: `/dms/${dm.peer}`,
+      path: `/dm/${dm.peer}`,
       peer: dm.peer,
       eventId: dm.rumorId,
     }];

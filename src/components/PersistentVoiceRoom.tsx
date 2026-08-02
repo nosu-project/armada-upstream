@@ -590,7 +590,7 @@ function Nip29VoiceRoom({
 
   const goToChannel = useCallback(() => {
     if (isDm && call.dmPeer) {
-      navigate(`/dms/${nip19.npubEncode(call.dmPeer)}`);
+      navigate(`/dm/${nip19.npubEncode(call.dmPeer)}`);
       return;
     }
     navigate(`/s/${relayToRouteParam(call.relayUrl)}/${encodeURIComponent(call.groupId)}`);

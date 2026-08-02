@@ -10,8 +10,14 @@ describe("sanitizePlausibleUrl", () => {
   });
 
   it("collapses the DM peer pubkey", () => {
+    expect(sanitizePlausibleUrl("https://armada.buzz/dm/npub1abc123")).toBe(
+      "https://armada.buzz/dm/:peer",
+    );
+  });
+
+  it("collapses the peer pubkey on the pre-rename /dms path too", () => {
     expect(sanitizePlausibleUrl("https://armada.buzz/dms/npub1abc123")).toBe(
-      "https://armada.buzz/dms/:peer",
+      "https://armada.buzz/dm/:peer",
     );
   });
 

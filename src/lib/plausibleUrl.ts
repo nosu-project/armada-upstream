@@ -5,7 +5,7 @@
  * the event URL) embeds identifiers that would de-anonymize a visitor and break
  * the cookieless "we don't track individuals" posture:
  *
- * - `/dms/:peer` leaks the DM counterparty's pubkey.
+ * - `/dm/:peer` leaks the DM counterparty's pubkey.
  * - `/s/:server`, `/s/:server/:groupId` leak which relay/server + group.
  * - `/c1/:communityId`, `/c/:communityId/:channelId` leak which community/channel.
  * - `/invite/:naddr` leaks the invited resource; an invite **secret** may also
@@ -30,7 +30,11 @@ const ROUTE_TEMPLATES: Array<[RegExp, string]> = [
   [/^\/c\/[^/]+\/[^/]+$/, "/c/:communityId/:channelId"],
   [/^\/c\/[^/]+$/, "/c/:communityId"],
   [/^\/invite\/[^/]+$/, "/invite/:naddr"],
-  [/^\/dms\/[^/]+$/, "/dms/:peer"],
+  [/^\/dm\/[^/]+$/, "/dm/:peer"],
+  // Pre-rename path. Kept because a stale link (an old push subscription, a
+  // tray notification) lands on it and AppRouter's redirect can report the
+  // pageview before it replaces — the peer pubkey is there either way.
+  [/^\/dms\/[^/]+$/, "/dm/:peer"],
 ];
 
 export function sanitizePlausibleUrl(rawUrl: string): string {

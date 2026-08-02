@@ -2142,7 +2142,7 @@ public class NotificationRelayService extends Service {
                             // decrypt, so enqueueRoomMessage's active-room gate
                             // does it here rather than a synchronous pre-check).
                             enqueueRoomMessage(/*community=*/null, "dm:" + peer, name,
-                                    appendMessageParam("/dms/" + peer, rumor.optString("id", "")),
+                                    appendMessageParam("/dm/" + peer, rumor.optString("id", "")),
                                     peer, name, picture, line, fTs, /*mention=*/false);
                         });
                     } catch (Exception ignored) {
@@ -2207,7 +2207,7 @@ public class NotificationRelayService extends Service {
             if (roomKey.startsWith("dm:")) return;
         }
         if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY dm17 (opaque)");
-        enqueueRoomMessage(/*community=*/null, "dm17:opaque", "Direct messages", "/dms",
+        enqueueRoomMessage(/*community=*/null, "dm17:opaque", "Direct messages", "/dm",
                 /*senderPubkey=*/null, "Someone", /*picture=*/null,
                 "New direct message", System.currentTimeMillis(), /*mention=*/true);
     }
@@ -2719,7 +2719,7 @@ public class NotificationRelayService extends Service {
                 case 4:
                     // kind-4 DMs are NIP-04 encrypted; the service has no key.
                     line = "Sent you a direct message";
-                    url = appendMessageParam("/dms/" + author, id);
+                    url = appendMessageParam("/dm/" + author, id);
                     break;
                 default:
                     return;

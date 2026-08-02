@@ -1258,7 +1258,7 @@ function Conversation({
               <ChatMessage
                 key={msg.id}
                 event={msg}
-                permalink={`/dms/${peer}`}
+                permalink={`/dm/${peer}`}
                 canWrite={transport.canWrite}
                 canModerate={transport.canModerate}
                 sendStatus={transport.sendStatusFor?.(msg.id)}
@@ -2269,7 +2269,7 @@ export function DMsPage() {
   );
 
   // Open a request's thread and the list follows it into the request view —
-  // covers both clicking through and landing on `/dms/<stranger>` cold. It only
+  // covers both clicking through and landing on `/dm/<stranger>` cold. It only
   // ever switches INTO requests: a peer that graduates to the inbox mid-thread
   // (you replied, so `mine` flipped) shouldn't yank the list out from under the
   // conversation being read. The empty-list effect below handles that instead.
@@ -2362,7 +2362,7 @@ export function DMsPage() {
       // `renderedPeer`. (Without this the "Select a conversation" screen flashes
       // when switching from a new-message draft to an existing conversation.)
       setRenderedPeer(pubkey);
-      navigate(`/dms/${nip19.npubEncode(pubkey)}`);
+      navigate(`/dm/${nip19.npubEncode(pubkey)}`);
     },
     [navigate],
   );
@@ -2385,7 +2385,7 @@ export function DMsPage() {
       closeDm(pubkey, latest);
       if (activePeer === pubkey) {
         setRenderedPeer(undefined);
-        navigate("/dms");
+        navigate("/dm");
       }
     },
     [closeDm, activePeer, navigate],
@@ -2421,13 +2421,13 @@ export function DMsPage() {
   // thread by re-selecting it.
   const revealList = () => {
     setComposing(false);
-    navigate("/dms");
+    navigate("/dm");
   };
   const returnToThread = () => {
-    if (renderedPeer) navigate(`/dms/${nip19.npubEncode(renderedPeer)}`);
+    if (renderedPeer) navigate(`/dm/${nip19.npubEncode(renderedPeer)}`);
   };
   const startComposing = () => {
-    navigate("/dms");
+    navigate("/dm");
     setComposing(true);
   };
 

@@ -305,7 +305,7 @@ export function QuickSwitcher() {
         )}
         {scope === "all" && (
           <CommandGroup heading="Go to">
-            <CommandItem value="direct messages dms" onSelect={() => go("/dms")}>
+            <CommandItem value="direct messages dms" onSelect={() => go("/dm")}>
               <MessageCircle className="mr-2 size-4 shrink-0 text-muted-foreground" />
               Direct messages
             </CommandItem>

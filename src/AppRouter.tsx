@@ -169,7 +169,7 @@ function HomeRedirect() {
     if (mesh.available) {
       return <Navigate to="/mesh" replace />;
     }
-    return <Navigate to="/dms" replace />;
+    return <Navigate to="/dm" replace />;
   }
   return <Navigate to={firstRoute} replace />;
 }
@@ -186,6 +186,21 @@ function RequireAuth({ children }: { children: ReactNode }) {
     return <Navigate to="/welcome" replace />;
   }
   return <>{children}</>;
+}
+
+/**
+ * Redirect the old `/dms` paths to `/dm`. Targets that still spell the old path
+ * live OUTSIDE this build and cannot be rewritten by shipping it: a push
+ * subscription registered before the rename is stored on the relay with
+ * `url: "/dms"` until the client next re-registers, and an Android notification
+ * already in the tray carries an `armada://open/dms/<peer>` PendingIntent that
+ * survives the app update. Search and hash ride along — the notification deep
+ * link appends `?message=<id>` to scroll to the message that fired it.
+ */
+function LegacyDmRedirect() {
+  const { peer } = useParams<{ peer: string }>();
+  const { search, hash } = useLocation();
+  return <Navigate to={`/dm${peer ? `/${peer}` : ""}${search}${hash}`} replace />;
 }
 
 /**
@@ -291,8 +306,13 @@ export function AppRouter() {
                 sign-in at the point of action, like the invite landing). */}
             <Route path="/discover" element={<DiscoverPage />} />
             <Route path="/mesh" element={<RequireAuth><MeshPage /></RequireAuth>} />
-            <Route path="/dms" element={<RequireAuth><DMsPage /></RequireAuth>} />
-            <Route path="/dms/:peer" element={<RequireAuth><DMsPage /></RequireAuth>} />
+            <Route path="/dm" element={<RequireAuth><DMsPage /></RequireAuth>} />
+            <Route path="/dm/:peer" element={<RequireAuth><DMsPage /></RequireAuth>} />
+            {/* Pre-rename links (stale push subscriptions, tray notifications,
+                bookmarks). Declared before `/:user`, which would otherwise
+                swallow a bare `/dms` and render its own 404. */}
+            <Route path="/dms" element={<LegacyDmRedirect />} />
+            <Route path="/dms/:peer" element={<LegacyDmRedirect />} />
             <Route path="/settings" element={<RequireAuth><SettingsPage /></RequireAuth>} />
             {/* A person's public chat link: `/<npub>`, `/<name@domain>` or
                 `/<domain>`. Declared last for readability only — React Router

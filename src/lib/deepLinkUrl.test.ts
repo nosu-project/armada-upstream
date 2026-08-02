@@ -13,7 +13,7 @@ describe("pathFromDeepLinkUrl", () => {
     expect(pathFromDeepLinkUrl("armada://open/s/chat.example.com/abc123")).toBe(
       "/s/chat.example.com/abc123",
     );
-    expect(pathFromDeepLinkUrl("armada://open/dms/npub1xyz")).toBe("/dms/npub1xyz");
+    expect(pathFromDeepLinkUrl("armada://open/dm/npub1xyz")).toBe("/dm/npub1xyz");
   });
 
   it("rejects armada://open URLs without a rooted path", () => {

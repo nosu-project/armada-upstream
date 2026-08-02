@@ -1707,7 +1707,7 @@ export function ServerRail({
           <Tooltip>
             <TooltipTrigger asChild>
               <NavLink
-                to="/dms"
+                to="/dm"
                 aria-label="Direct messages"
                 onClick={onNavigate}
                 className="group relative flex items-center justify-center shrink-0"

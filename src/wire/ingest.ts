@@ -404,7 +404,7 @@ function plaintextCandidates(
       kind: KIND_DM,
       roomKey: `dm:${peer}`,
       readKey: `dm:${peer}`,
-      path: `/dms/${peer}`,
+      path: `/dm/${peer}`,
       peer,
     }];
   }

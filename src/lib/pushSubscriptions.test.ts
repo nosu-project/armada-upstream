@@ -121,7 +121,7 @@ describe("buildPushSubscriptions", () => {
     expect(dm.notification.data).toEqual({
       scope: "dm",
       relays: ["wss://one", "wss://two"],
-      url: "/dms",
+      url: "/dm",
     });
   });
 

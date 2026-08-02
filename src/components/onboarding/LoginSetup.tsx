@@ -116,7 +116,7 @@ export function LoginSetup() {
 
   // The decrypt step is demand-driven: the consent gate opens it the first time
   // a surface needs a real (uncached) decrypt, which for most users is landing
-  // on /dms right after login — but it can also be much later, long after the
+  // on /dm right after login — but it can also be much later, long after the
   // other steps are done. Either way it joins the same queue.
   useEffect(() => registerConsentPromptOpener(() => enqueue("decrypt")), [enqueue]);
 

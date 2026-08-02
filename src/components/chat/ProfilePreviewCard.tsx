@@ -58,7 +58,7 @@ function ProfilePreviewBody({ pubkey, onAction }: { pubkey: string; onAction?: (
   const message = () => {
     if (!npub) return;
     onAction?.();
-    navigate(`/dms/${npub}`);
+    navigate(`/dm/${npub}`);
   };
 
   const mention = () => {

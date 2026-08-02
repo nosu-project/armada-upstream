@@ -84,7 +84,7 @@ export function SharePage() {
               variant="outline"
               size="lg"
               className="h-12 w-full clip-corner-lg text-base font-medium"
-              onClick={() => navigate("/dms", { replace: true })}
+              onClick={() => navigate("/dm", { replace: true })}
             >
               <MessageSquareLock className="size-4 mr-2" />
               Go to DMs

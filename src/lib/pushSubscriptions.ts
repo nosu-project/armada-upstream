@@ -174,7 +174,7 @@ export function buildPushSubscriptions(input: PushSubscriptionInput): PushSubscr
       notification: {
         title: "New message",
         body: "New direct message",
-        data: { scope: "dm", relays: dmRelays, url: "/dms" },
+        data: { scope: "dm", relays: dmRelays, url: "/dm" },
       },
     });
   }

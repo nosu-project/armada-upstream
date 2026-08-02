@@ -146,7 +146,7 @@ async function suppressPush(data) {
       // An encrypted wrap hides its peer, so while any specific DM thread is in
       // the focused Armada window the page owns notification decisions. Ask the
       // page for its live React Router state: WindowClient.url is only the
-      // document's creation URL and can still say `/dms` after pushState opened a
+      // document's creation URL and can still say `/dm` after pushState opened a
       // peer. The URL check remains as a fallback for directly-loaded threads or
       // browsers that cannot transfer a MessagePort.
       const liveStates = await Promise.all(windows.map((client) => clientHasActiveDm(client)));
@@ -155,12 +155,15 @@ async function suppressPush(data) {
         try {
           const url = new URL(client.url);
           const parts = url.pathname.split("/").filter(Boolean);
-          const dms = parts.lastIndexOf("dms");
+          // `dms` is the pre-rename spelling: a window opened before this
+          // worker updated still carries it in its creation URL, and missing
+          // that is a duplicate notification for a thread being read.
+          const dm = Math.max(parts.lastIndexOf("dm"), parts.lastIndexOf("dms"));
           return url.origin === self.location.origin
             && client.visibilityState === "visible"
             && client.focused
-            && dms >= 0
-            && parts.length > dms + 1;
+            && dm >= 0
+            && parts.length > dm + 1;
         } catch {
           return false;
         }

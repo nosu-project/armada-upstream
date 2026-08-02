@@ -246,7 +246,7 @@ export function WelcomePage() {
   // send them to DMs rather than re-forcing getting-started. Onboarding only
   // happens on account creation.
   if (user && step === null) {
-    return <Navigate to="/dms" replace />;
+    return <Navigate to="/dm" replace />;
   }
 
   // ── Wizard step 1: generate the key ─────────────────────────────────────

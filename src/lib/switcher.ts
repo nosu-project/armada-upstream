@@ -426,7 +426,7 @@ async function searchDmMessages(
     content: snippet(h.content),
     authorPubkey: h.author,
     peerPubkey: h.peer,
-    route: `/dms/${nip19.npubEncode(h.peer)}`,
+    route: `/dm/${nip19.npubEncode(h.peer)}`,
     createdAt: h.createdAt,
   }));
 }
