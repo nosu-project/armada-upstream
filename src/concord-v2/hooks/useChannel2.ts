@@ -21,16 +21,12 @@ import { KIND_COMMENT, KIND_DELETE, KIND_MESSAGE, KIND_POLL, KIND_REACTION, KIND
 import {
   clearChannelExhausted,
   queryChannelRumors,
-  queryPlane,
-  queryRekeyRounds,
   readChannelCursor,
   updateChannelCursor,
   writeRumors,
   peekPendingWraps,
   ackPendingWraps,
 } from "@/concord-v2/lib/rumorStore";
-import { historicalAuthorAllowlist } from "@/concord-v2/lib/historicalAuthors";
-import { parseRekey, ROOT_SCOPE_HEX, type ParsedRekey } from "@/concord-v2/lib/rekey";
 import { citationToTag, type AuthorityCitation } from "@/concord-v2/lib/edition";
 import { citationSatisfied } from "@/concord-v2/lib/control";
 import { canActOnMember, Permissions } from "@/concord-v2/lib/roles";
@@ -109,65 +105,6 @@ export function useChatModeration2(community: CommunityV2 | undefined): ChatMode
     }),
     [folded, community, dissolvedAtMs],
   );
-}
-
-/** Root rotations enumerated for the locator proof (bounds the store read). */
-const HISTORICAL_ROUNDS_MAX = 64;
-
-/**
- * The retired-epoch author allow-list (see historicalAuthors.ts): computed
- * from stored guestbook snapshots/kicks, the control fold, and stored rekey
- * rounds' blob locators checked against `candidates` (the authors actually
- * appearing in retired-epoch history). Returns undefined — fail OPEN, no
- * filtering — until an anchor (authority snapshot or stored rotation) exists.
- */
-export function useHistoricalAuthors2(
-  community: CommunityV2 | undefined,
-  candidates: readonly string[],
-): ReadonlySet<string> | undefined {
-  const { user } = useCurrentUser();
-  const { data: folded } = useControlFold2(community);
-  const query = useQuery({
-    queryKey: [
-      "concord2",
-      "hist-authors",
-      community?.idHex ?? null,
-      community?.rootEpoch?.toString() ?? "",
-      candidates.join(","),
-    ],
-    enabled: Boolean(community && folded && candidates.length > 0),
-    staleTime: 30_000,
-    queryFn: async ({ signal }) => {
-      const top = Number(community!.rootEpoch);
-      const epochs: Array<{ scopeIdHex: string; newEpoch: bigint }> = [];
-      for (let e = Math.max(1, top - HISTORICAL_ROUNDS_MAX + 1); e <= top; e++) {
-        epochs.push({ scopeIdHex: ROOT_SCOPE_HEX, newEpoch: BigInt(e) });
-      }
-      const [guestbook, rounds] = await Promise.all([
-        queryPlane(community!.idHex, "guestbook", { signal }),
-        queryRekeyRounds(community!.idHex, epochs, { signal }),
-      ]);
-      const parsed: ParsedRekey[] = [];
-      for (const ev of rounds) {
-        try {
-          parsed.push(parseRekey(ev));
-        } catch {
-          // not a rekey round
-        }
-      }
-      return historicalAuthorAllowlist({
-        ownerHex: folded!.ownerHex,
-        selfHex: user?.pubkey,
-        refounders: [community!.refounder, ...(community!.heldRoots ?? []).map((r) => r.refounder)],
-        roster: folded!.roster,
-        banned: folded!.banned,
-        guestbook,
-        rekeyRounds: parsed,
-        candidates,
-      });
-    },
-  });
-  return query.data?.anchored ? query.data.allowed : undefined;
 }
 
 /**
@@ -431,28 +368,6 @@ export function useChannelTimeline2(
     }
   }, [hasMore, isLoadingOlder, query, nostr, community, channel, channelIdHex, queryClient, queryKey]);
 
-  // Retired epochs of THIS channel (decimal strings) and the authors seen in
-  // them, feeding the retired-epoch author allow-list. The gate only arms for
-  // channels that have actually rotated, and the allow-list fails open until
-  // an anchor exists (see useHistoricalAuthors2).
-  const retiredEpochs = useMemo(() => {
-    const out = new Set<string>();
-    for (const s of channel?.streams ?? []) {
-      if (s.retiredAt !== undefined) out.add(s.epoch.toString());
-    }
-    return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [epochSig]);
-  const historicalCandidates = useMemo(() => {
-    if (retiredEpochs.size === 0) return [] as string[];
-    const authors = new Set<string>();
-    for (const m of query.data ?? []) {
-      if (retiredEpochs.has(m.epoch.toString())) authors.add(m.author);
-    }
-    return [...authors].sort();
-  }, [query.data, retiredEpochs]);
-  const historicalAuthors = useHistoricalAuthors2(community, historicalCandidates);
-
   // The folded view (moderation + edits + reaction tallies), plus the
   // optimistic-delete overlay.
   const optimisticDeleted = useQuery<string[]>({
@@ -466,15 +381,13 @@ export function useChannelTimeline2(
   }).data;
 
   const folded: FoldedTimeline = useMemo(() => {
-    const mod =
-      retiredEpochs.size > 0 ? { ...moderation, retiredEpochs, historicalAuthors } : moderation;
-    const result = foldTimeline(query.data ?? [], mod);
+    const result = foldTimeline(query.data ?? [], moderation);
     if (optimisticDeleted && optimisticDeleted.length > 0) {
       const hidden = new Set(optimisticDeleted);
       return { ...result, messages: result.messages.filter((m) => !hidden.has(m.rumorId)) };
     }
     return result;
-  }, [query.data, moderation, optimisticDeleted, retiredEpochs, historicalAuthors]);
+  }, [query.data, moderation, optimisticDeleted]);
 
   return {
     /** The folded, moderated timeline + reaction tallies. */

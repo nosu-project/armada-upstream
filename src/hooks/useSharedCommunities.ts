@@ -8,6 +8,7 @@ import { citationSatisfied, type FoldedControl } from "@/concord-v2/lib/control"
 import {
   coalesceGuestbook,
   completeMemberlist,
+  snapshotAuthorities,
 } from "@/concord-v2/lib/guestbook";
 import { canActOnMember, Permissions } from "@/concord-v2/lib/roles";
 import { queryPlane } from "@/concord-v2/lib/rumorStore";
@@ -92,8 +93,9 @@ export function useSharedCommunities(
                 citationSatisfied(folded, community.id, actor, citation),
             ),
           // A snapshot is honored only from the npub whose Refounding minted
-          // this epoch; at genesis there is none. Mirrors useGuestbook2.
-          snapshotAuthority: community.rootEpoch === 0n ? undefined : community.refounder,
+          // the epoch carrying it; at genesis there is none. Mirrors
+          // useGuestbook2.
+          snapshotAuthorities: snapshotAuthorities(community),
           banned: folded?.banned,
         });
         // No `observed` map: healing from message authorship would mean reading

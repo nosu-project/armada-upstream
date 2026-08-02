@@ -224,7 +224,7 @@ describe("channelSync — the c2: topic handler", () => {
 });
 
 describe("channelFilters (retired-epoch fetch policy)", () => {
-  it("until-caps retired streams and drops them from the author set once frozen", async () => {
+  it("asks every held epoch until frozen, then drops retired addresses", async () => {
     const m = await freshModules();
     const channel = makeChannel(m);
     const oldGroup = m.channelGroupKey(root, channel.id, 5);
@@ -233,22 +233,24 @@ describe("channelFilters (retired-epoch fetch policy)", () => {
       streams: [channel.current, { epoch: 5n, group: oldGroup, retiredAt: 500 }],
     };
 
-    // Live stream pages normally; the retired stream is `until`-capped at its
-    // cutoff (+ skew slack) — a lazy-spam trim, not a boundary (timestamps are
-    // forgeable; the decode/fold cutoffs are the enforcement).
-    const both = m.channelFilters(withRetired, { limit: 50 });
-    expect(both).toEqual([
-      { kinds: [1059], authors: [channel.current.group.pk], limit: 50 },
-      { kinds: [1059], authors: [oldGroup.pk], limit: 50, until: 500 + 3600 },
+    // ONE filter across every held epoch (CORD-03 §3), so the caller's single
+    // per-relay `until` cursor stays a sound frontier. Splitting live from
+    // retired and capping the retired half would skip the live region below
+    // the cap on any page where both halves came back full.
+    expect(m.channelFilters(withRetired, { limit: 50 })).toEqual([
+      { kinds: [1059], authors: [channel.current.group.pk, oldGroup.pk], limit: 50 },
     ]);
 
-    // A paging cursor below the cap tightens it further.
-    const paged = m.channelFilters(withRetired, { limit: 50, cursor: 300 });
-    expect(paged[1].until).toBe(300);
+    // Paging and the bridge pass apply to that one filter uniformly — no
+    // filter can be handed a `since` above its own `until`.
+    expect(m.channelFilters(withRetired, { limit: 50, cursor: 300, since: 100 })).toEqual([
+      { kinds: [1059], authors: [channel.current.group.pk, oldGroup.pk], limit: 50, until: 300, since: 100 },
+    ]);
 
     // FROZEN (history swept to exhaustion): the retired address leaves the
     // author set entirely — the only spam-proof filter dimension is not asking.
-    const frozen = m.channelFilters(withRetired, { limit: 50, freezeRetired: true });
-    expect(frozen).toEqual([{ kinds: [1059], authors: [channel.current.group.pk], limit: 50 }]);
+    expect(m.channelFilters(withRetired, { limit: 50, freezeRetired: true })).toEqual([
+      { kinds: [1059], authors: [channel.current.group.pk], limit: 50 },
+    ]);
   });
 });

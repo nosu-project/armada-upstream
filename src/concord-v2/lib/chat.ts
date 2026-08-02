@@ -204,19 +204,18 @@ export function eTargetOf(ev: { tags: string[][] }): string | undefined {
 
 /** Moderation context the read path applies while folding. */
 export interface ChatModeration {
-  /** Banned author pubkeys — every event from them is dropped (CORD-04 §4). */
-  banned: Set<string>;
-  /** Epochs (decimal strings) whose keys are retired — sealed history. */
-  retiredEpochs?: ReadonlySet<string>;
   /**
-   * Identity-anchored authors permitted to appear in retired epochs (see
-   * historicalAuthors.ts). Undefined = no anchor available: fail OPEN and
-   * display everything, exactly as before the allow-list existed. When set,
-   * a retired-epoch event from an author outside it is dropped — an ejected
-   * keyholder can forge any timestamp, but not their presence in a
-   * refounder-signed snapshot, the roster, or a rotation's blob locators.
+   * Banned author pubkeys — every event from them is dropped (CORD-04 §4).
+   *
+   * This is the ONLY author-identity drop an honest client performs. Nothing
+   * here filters on epoch: a retired epoch's key is held by everyone who ever
+   * had it, but CORD-02 §5 makes an author seen publishing *observably
+   * present* and a self-signed Join unsuppressable, and CORD-04 §6 makes the
+   * Banlist (plus its Refounding) the removal that enforces. An allow-list
+   * gate over retired-epoch history would invert both — and would hide real
+   * history from exactly the clients whose local anchors are thinnest.
    */
-  historicalAuthors?: ReadonlySet<string>;
+  banned: Set<string>;
   /**
    * Whether `deleter` may delete a message by `author` (MANAGE_MESSAGES).
    *
@@ -326,16 +325,6 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
 
   for (const ev of opened) {
     if (moderation?.banned.has(ev.author)) continue;
-    // Retired-epoch history admits only identity-anchored authors (see
-    // ChatModeration.historicalAuthors). Current-epoch events never touch
-    // this — the live epoch keeps CORD-02 §5's unsuppressable self-attestation.
-    if (
-      moderation?.historicalAuthors &&
-      moderation.retiredEpochs?.has(ev.epoch.toString()) &&
-      !moderation.historicalAuthors.has(ev.author)
-    ) {
-      continue;
-    }
 
     if (ev.kind === KIND_DELETE) {
       // NIP-09 shape: possibly several `e` targets.

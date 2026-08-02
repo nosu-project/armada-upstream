@@ -389,9 +389,9 @@ describe("chat plane (CORD-03)", () => {
     expect(filterEpochCutoff(rows, uncapped)).toBe(rows);
   });
 
-  it("retired-epoch history admits only allow-listed authors; the live epoch is untouched", () => {
-    const anchored = "aa".repeat(32);
-    const throwaway = "bb".repeat(32);
+  it("drops only banned authors — a retired epoch is not an author filter (CORD-02 §5)", () => {
+    const member = "aa".repeat(32);
+    const banned = "bb".repeat(32);
     const mk = (content: string, author: string, epoch: bigint, ms: number) => ({
       rumorId: content,
       author,
@@ -404,26 +404,20 @@ describe("chat plane (CORD-03)", () => {
       epoch,
     });
     const rows = [
-      mk("legit-old", anchored, 0n, 1000),
-      // An old keyholder can seal this with any timestamp — but not forge the
-      // author into a snapshot/roster/rotation, which is what the list encodes.
-      mk("forged-old", throwaway, 0n, 1100),
-      mk("live", throwaway, 1n, 1200),
+      mk("old", member, 0n, 1000),
+      mk("old-banned", banned, 0n, 1100),
+      mk("live", member, 1n, 1200),
     ];
-    const gated = foldTimeline(rows, {
-      banned: new Set(),
-      canDelete: () => false,
-      retiredEpochs: new Set(["0"]),
-      historicalAuthors: new Set([anchored]),
-    });
-    expect(gated.messages.map((m) => m.content)).toEqual(["legit-old", "live"]);
 
-    // No anchor available → fail OPEN (display hardening, not consensus).
-    const open = foldTimeline(rows, {
-      banned: new Set(),
-      canDelete: () => false,
-      retiredEpochs: new Set(["0"]),
-    });
+    // The Banlist is the one author drop, and it is epoch-blind: it silences
+    // the banned in retired AND live history alike (CORD-04 §4).
+    const folded = foldTimeline(rows, { banned: new Set([banned]), canDelete: () => false });
+    expect(folded.messages.map((m) => m.content)).toEqual(["old", "live"]);
+
+    // An unbanned author's retired-epoch history is never hidden: CORD-02 §5
+    // makes an author seen publishing observably present, and a self-signed
+    // Join unsuppressable. Nothing folds on the epoch being retired.
+    const open = foldTimeline(rows, { banned: new Set(), canDelete: () => false });
     expect(open.messages).toHaveLength(3);
   });
 

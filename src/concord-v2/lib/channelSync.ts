@@ -67,54 +67,38 @@ export const CHANNEL_SYNC_MIN_INTERVAL_MS = 30_000;
 export const CHANNEL_SYNC_STALE_AFTER_MS = 5 * 60_000;
 
 /**
- * Slack behind a retired epoch's cutoff for its relay-side `until` cap: an
- * honest straggler's WRAP timestamp can trail the rotation by clock skew.
- * Bandwidth trimming only — an adversary backdates past any time filter, and
- * the decode/fold cutoffs are what actually refuse their content.
- */
-const RETIRED_UNTIL_SLACK_SECS = 3600;
-
-/**
- * The relay filters for one channel page. `authors` is the only relay-side
- * dimension an adversary can't forge (the wrap must be signed by the stream
- * key), so it is the real control surface here:
+ * The relay filter for one channel page — ONE filter, so the caller's single
+ * per-relay `until` cursor stays a sound frontier.
  *
- *   - LIVE streams (no recorded retirement) page normally;
- *   - RETIRED streams are `until`-capped at their cutoff (lazy-spam trim),
- *     and once `freezeRetired` says this channel's history has been swept to
- *     exhaustion they leave the author set entirely — a retired address is
- *     never asked for again, whatever timestamps are pumped at it. The local
- *     store is the archive (CORD-03 §3's continuity, satisfied from disk).
+ * `authors` is the only relay-side dimension an adversary can't forge (the
+ * wrap must be signed by the stream key), so it is the whole control surface:
+ * a retired stream is asked for until this channel's history has verifiably
+ * been swept to the bottom, and from then on (`freezeRetired`) its address
+ * leaves the author set entirely — never asked for again, whatever timestamps
+ * are pumped at it. The local store is the archive from that point, which is
+ * what keeps CORD-03 §3's continuity across a rekey satisfied from disk.
+ *
+ * Deliberately NOT split into a live filter plus an `until`-capped retired
+ * one. Capping retired streams at their cutoff only trims spam lazy enough
+ * not to backdate (the decode/fold cutoffs are what actually refuse content),
+ * and it costs correctness: two filters share one cursor here, so when both
+ * return a full page the frontier jumps to the older filter's floor and the
+ * newer filter's unread region is skipped and then persisted as covered.
  */
 export function channelFilters(
   channel: ChannelV2,
   opts: { limit: number; cursor?: number; since?: number; freezeRetired?: boolean },
 ): NostrFilter[] {
-  const live: string[] = [];
-  const retired: string[] = [];
-  let newestRetiredAt = 0;
+  const authors: string[] = [];
   for (const s of channel.streams) {
-    if (s.retiredAt === undefined) live.push(s.group.pk);
-    else if (!opts.freezeRetired) {
-      retired.push(s.group.pk);
-      if (s.retiredAt > newestRetiredAt) newestRetiredAt = s.retiredAt;
-    }
+    if (s.retiredAt !== undefined && opts.freezeRetired) continue;
+    authors.push(s.group.pk);
   }
-  const base = (authors: string[]): NostrFilter => {
-    const f: NostrFilter = { kinds: [KIND_WRAP], authors, limit: opts.limit };
-    if (opts.cursor !== undefined) f.until = opts.cursor;
-    if (opts.since !== undefined) f.since = opts.since;
-    return f;
-  };
-  const filters: NostrFilter[] = [];
-  if (live.length > 0) filters.push(base(live));
-  if (retired.length > 0) {
-    const cap = newestRetiredAt + RETIRED_UNTIL_SLACK_SECS;
-    const f = base(retired);
-    f.until = f.until === undefined ? cap : Math.min(f.until, cap);
-    filters.push(f);
-  }
-  return filters;
+  if (authors.length === 0) return [];
+  const f: NostrFilter = { kinds: [KIND_WRAP], authors, limit: opts.limit };
+  if (opts.cursor !== undefined) f.until = opts.cursor;
+  if (opts.since !== undefined) f.since = opts.since;
+  return [f];
 }
 
 /**
