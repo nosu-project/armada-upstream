@@ -134,6 +134,20 @@ interface RoleWire {
   display?: boolean;
 }
 
+/**
+ * Coerce a wire `color` to the spec's u32 (CORD-04 §2). A non-number, a
+ * negative, or a value past 2^32-1 is out of range and becomes the theme
+ * default rather than an arbitrary tint; an in-range float is truncated, since
+ * its integer part is a colour the sender plausibly meant. Since `roleToJSON`
+ * writes back whatever we parsed, this is also what stops a malformed value
+ * round-tripping onto the wire unchanged.
+ */
+function clampColor(color: unknown): number {
+  if (typeof color !== "number" || !Number.isFinite(color)) return 0;
+  if (color < 0 || color > 0xffffffff) return 0;
+  return Math.trunc(color);
+}
+
 export function roleToJSON(role: Role): string {
   const scope: RoleWire["scope"] =
     role.scope.kind === "channel" ? { kind: "channel", channel_id: role.scope.channelId } : { kind: "server" };
@@ -143,7 +157,7 @@ export function roleToJSON(role: Role): string {
     position: role.position,
     permissions: role.permissions.toString(), // always the string form
     scope,
-    color: role.color,
+    color: clampColor(role.color),
     ...(role.display === true ? { display: true } : {}),
   };
   return JSON.stringify(wire);
@@ -174,12 +188,99 @@ export function roleFromJSON(json: string): Role | undefined {
       position: w.position,
       permissions,
       scope,
-      color: typeof w.color === "number" ? w.color : 0,
+      color: clampColor(w.color),
       ...(w.display === true ? { display: true } : {}),
     };
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Wire `color` is a u32 holding packed 0xRRGGBB. 0 is "theme default", so a
+ * role tinted pure black is indistinguishable from an untinted one — an
+ * inherent property of the spec encoding, not something a client can fix.
+ * Returns undefined for 0 so callers fall through to the theme.
+ *
+ * NOTE the asymmetry with serialization: `roleFromJSON`/`roleToJSON` carry the
+ * full u32, so a foreign client's high byte survives a round-trip untouched.
+ * These two only speak 24-bit RGB, because that is all the picker can express —
+ * so EDITING such a role's colour narrows it to its low 24 bits. That is a real
+ * (if cosmetic) loss, and it is confined to an explicit user edit rather than
+ * happening to every role we merely read.
+ */
+export function colorToHex(color: number): string | undefined {
+  if (!Number.isFinite(color)) return undefined;
+  const rgb = Math.trunc(color) & 0xffffff;
+  if (rgb === 0) return undefined;
+  return `#${rgb.toString(16).padStart(6, "0")}`;
+}
+
+/** `#RRGGBB` → the packed u32 the wire wants. Unparseable input is theme default (0). */
+export function hexToColor(hex: string): number {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  return m ? parseInt(m[1], 16) : 0;
+}
+
+/**
+ * Where a reorder would actually land. A reorder reuses the existing multiset
+ * of `position` values, reassigned to the roles in the requested visual order,
+ * rather than renumbering 1..N — renumbering would try to claim position 1,
+ * which no actor ranked at 1 may write, so a legal reshuffle of the lower ranks
+ * would fail for everyone but the owner.
+ *
+ * The cost of that reuse is that it cannot separate peers: given A(3) B(3)
+ * C(5), requesting C, A, B assigns C→3 and B→5, and the §3 tie-break then
+ * renders A, C, B. The request is unsatisfiable, not merely partially applied,
+ * so callers must compare `rendered` against what was asked for BEFORE
+ * publishing anything.
+ *
+ * `current` must already be sorted by {@link byDisplayOrder}; `next` is a
+ * permutation of it.
+ */
+export function projectReorder(current: Role[], next: Role[]): { landing: Role[]; rendered: Role[] } {
+  const positions = current.map((r) => r.position);
+  const landing = next.map((role, i) => ({ ...role, position: positions[i] }));
+  return { landing, rendered: [...landing].sort(byDisplayOrder) };
+}
+
+/**
+ * The escape from a roster reuse cannot reorder. Peers are legal (§3) and a
+ * roster where every Role shares one position has ZERO reachable orders under
+ * {@link projectReorder} — every reassignment is the identity — while
+ * `RoleEditor` offers no position control, so the roster is stuck. Such a
+ * roster is reachable in practice: a reorder that failed partway leaves two
+ * Roles on one position.
+ *
+ * This gives every Role its own `position`, in the requested display order, so
+ * the tie-break stops deciding anything and the drag then applies normally.
+ * Rewriting position-on-role is the spec's own mechanism ("position-on-role is
+ * the frozen baseline", CORD-04 §3) — no wire change, no RoleOrder entity.
+ *
+ * `floor` is the lowest position the actor may claim: rank + 1, or 1 for the
+ * owner (no edition may claim a position at or above its own signer, §3). Roles
+ * already above the floor cannot be rewritten by this actor, so they keep their
+ * position and must lead the requested order — if `next` asks to overtake one,
+ * the request needs a rank the actor does not have and this returns null.
+ *
+ * Numbering starts at the touchable roles' current lowest position rather than
+ * at `floor`, so a roster that is already spread out barely moves, and repeated
+ * normalizing does not inflate positions.
+ */
+export function normalizeOrder(next: Role[], floor: number): Role[] | null {
+  const fixed = next.filter((r) => r.position < floor);
+  // Untouchable roles outrank every position the actor can write, so they must
+  // already occupy the leading slots, in their own display order.
+  const lead = next.slice(0, fixed.length);
+  if (lead.some((r) => r.position >= floor)) return null;
+  if ([...lead].sort(byDisplayOrder).some((r, i) => r.roleId !== lead[i].roleId)) return null;
+
+  const movable = next.slice(fixed.length);
+  if (movable.length === 0) return null; // nothing this actor may rewrite
+  // Every movable role already sits at or below the floor in authority, so the
+  // lowest of them is itself a position the actor may claim.
+  const base = Math.min(...movable.map((r) => r.position));
+  return [...lead, ...movable.map((role, i) => ({ ...role, position: base + i }))];
 }
 
 export interface MemberGrant {
