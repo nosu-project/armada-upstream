@@ -54,6 +54,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ChannelNavContext } from "@/contexts/ChannelNavContext";
+import { MemberRolesContext, type MemberRolesValue } from "@/contexts/MemberRolesContext";
 import { ChatScopeContext } from "@/contexts/ChatScopeContext";
 import type { AppScope } from "@/contexts/AppsContext";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
@@ -92,8 +93,12 @@ import { replyTargetOf } from "@/concord-v2/lib/chat";
 import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
 import { useGuestbook2 } from "@/concord-v2/hooks/useGuestbook2";
 import { useModeration2, useReadCutRetry2 } from "@/concord-v2/hooks/useModeration2";
-import { useChannelRekeyWatch2, useLinkRefreshWatch2, useRekeyWatch2 } from "@/concord-v2/hooks/useRekey2";
+import { useChannelRekey2, useChannelRekeyWatch2, useLinkRefreshWatch2, useRekeyWatch2 } from "@/concord-v2/hooks/useRekey2";
+import { useInviteActions2 } from "@/concord-v2/hooks/useInvites2";
+import { channelsHingingOn, isEntitled } from "@/concord-v2/lib/channelAccess";
+import { bytesToHex } from "@/concord-v2/lib/derive";
 import { useRelayFollow2 } from "@/concord-v2/hooks/useRelayFollow2";
+import { useRoleIntent } from "@/concord-v2/hooks/useRoleIntent";
 import { useRoles2 } from "@/concord-v2/hooks/useRoles2";
 import { useSendMessage2 } from "@/concord-v2/hooks/useChannel2";
 import { useTransport2 } from "@/concord-v2/hooks/useTransport2";
@@ -108,7 +113,7 @@ import { resolveVoiceBroker, useVoiceBroker2, useVoicePresence2 } from "@/concor
 import type { VoicePresenceFold } from "@/concord-v2/lib/voice";
 import { useRegisterChannelStreamKeys2 } from "@/concord-v2/hooks/useStreamAuth2";
 import { completeMemberlist } from "@/concord-v2/lib/guestbook";
-import { badgeOf, isAuthorized, Permissions } from "@/concord-v2/lib/roles";
+import { badgeOf, byDisplayOrder, canActOnMember, canActOnPosition, isAuthorized, isAuthorizedIn, MAX_ROLES_PER_MEMBER, Permissions } from "@/concord-v2/lib/roles";
 import { channelGitRepositoryAttachments, type ChannelV2, type CommunityV2, type ImagePointer } from "@/concord-v2/lib/types";
 import { matchGitTicketRepository, parseGitRepositoryAddress, sortAndDedupeGitTimelineActivities, trustedGitStatusAuthors, type GitComment, type GitStatusKind, type GitTicket } from "@/lib/gitActivity";
 import { cn, pickDefaultChannel } from "@/lib/utils";
@@ -999,7 +1004,9 @@ export function ConcordV2Page() {
     );
   }, [channel, lastChannelKey, updateConfig]);
 
-  const { setTier } = useRoles2(community);
+  const { setTier, setMemberRoles } = useRoles2(community);
+  const { sendDirectInvite } = useInviteActions2(community);
+  const { rekeyChannel, canRekeyChannel } = useChannelRekey2(community);
   const ownerHex = folded?.ownerHex ?? community?.owner;
   const iAmOwner = Boolean(user && ownerHex && user.pubkey === ownerHex);
   const roster = folded?.roster;
@@ -1009,7 +1016,12 @@ export function ConcordV2Page() {
   const canCreateInvite = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.CREATE_INVITE));
   const canKickAny = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.KICK));
   const canBanAny = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.BAN));
-  const canModerateMessages = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.MANAGE_MESSAGES));
+  // Channel-targeted authority honors role scope: a Role scoped to one channel
+  // moderates there and nowhere else (its bits are inert outside it).
+  const canModerateMessages = Boolean(
+    user && folded && channel &&
+    isAuthorizedIn(folded.roster, user.pubkey, ownerHex, channel.idHex, Permissions.MANAGE_MESSAGES),
+  );
   // A dissolved community is terminal: the owner has torn it down, so no key
   // rotation or new messages will ever land. Keep it fully readable (members
   // asked to still see the history), but freeze every write path.
@@ -1169,11 +1181,7 @@ export function ConcordV2Page() {
     return () => document.removeEventListener("visibilitychange", stamp);
   }, [readerPubkey, channelIdForRead, mixedEntries, allMessages, threads, markChannelRead, markMentionsRead, markThreadRead]);
 
-  const { leave, isLeaving, dissolve, createChannel } = useCommunityManagement2(community);
-  const handleCreateTextChannel = useCallback(async (name: string) => {
-    const { channelIdHex: created } = await createChannel({ name });
-    selectChannel(created);
-  }, [createChannel, selectChannel]);
+  const { leave, isLeaving, dissolve, createChannel, privatiseChannel } = useCommunityManagement2(community);
   const handleCreateRepositoryChannel = useCallback(async (name: string, repository: WizardRepository) => {
     const { channelIdHex: created } = await createChannel({
       name,
@@ -1323,18 +1331,119 @@ export function ConcordV2Page() {
 
   // Member list: the coalesced Guestbook (joins) ∪ observed authors ∪ roster,
   // minus the banned — the Complete Memberlist (CORD-02 §5).
+  //
+  // The Admin/Mod tier badge follows the STOCK Admin/Moderator roles only
+  // (the same name-match setTier grants by), never permission-bit inference:
+  // a custom role carrying management bits shows as itself — its hoisted
+  // section or name chip — not as a phantom "Mod".
   const memberAdmins = useMemo(() => {
     const out: Array<{ pubkey: string; roles: string[] }> = [];
     if (ownerHex) out.push({ pubkey: ownerHex, roles: ["owner"] });
     if (roster) {
+      const stockAdmin = roster.roles.find((r) => r.name === "Admin" && r.scope.kind === "server")?.roleId;
+      const stockModerator = roster.roles.find((r) => r.name === "Moderator" && r.scope.kind === "server")?.roleId;
       for (const g of roster.grants) {
         if (g.member === ownerHex) continue;
-        const badge = badgeOf(roster, g.member);
+        const badge = stockAdmin && g.roleIds.includes(stockAdmin)
+          ? "admin"
+          : stockModerator && g.roleIds.includes(stockModerator)
+            ? "moderator"
+            : undefined;
         if (badge) out.push({ pubkey: g.member, roles: [badge] });
       }
     }
     return out;
   }, [roster, ownerHex]);
+
+  // The per-member "Roles" picker: every role, position-ordered (ties broken by
+  // the lower role_id, the display rule of CORD-04 §3), each flagged with
+  // whether the viewer outranks its position — the same gate the fold applies,
+  // so an un-assignable role renders disabled instead of failing on publish.
+  const roleCatalog = useMemo(() => {
+    if (!roster || !user) return undefined;
+    return [...roster.roles]
+      .sort(byDisplayOrder)
+      .map((r) => ({
+        id: r.roleId,
+        name: r.name,
+        color: r.color,
+        channelName:
+          r.scope.kind === "channel"
+            ? (folded?.channels.get(r.scope.channelId)?.name ?? "deleted channel")
+            : undefined,
+        assignable: canActOnPosition(roster, user.pubkey, ownerHex, r.position, Permissions.MANAGE_ROLES),
+      }));
+  }, [roster, user, ownerHex, folded]);
+
+  // Per channel, the Roles scoped to it — the channel's access list
+  // (CORD-04 §2), for the info dialog's access panel.
+  const channelRoleCatalog = useMemo(() => {
+    const out = new Map<string, Array<{ id: string; name: string }>>();
+    for (const r of roster?.roles ?? []) {
+      if (r.scope.kind !== "channel") continue;
+      const at = out.get(r.scope.channelId) ?? [];
+      at.push({ id: r.roleId, name: r.name });
+      out.set(r.scope.channelId, at);
+    }
+    return out;
+  }, [roster]);
+
+  const memberRoleIds = useMemo(
+    () => Object.fromEntries((roster?.grants ?? []).map((g) => [g.member, g.roleIds])),
+    [roster],
+  );
+  const roleIntent = useRoleIntent(memberRoleIds, setMemberRoles);
+
+  // Every surface that shows a person (profile card today) can name their
+  // roles without each one re-deriving the roster.
+  const memberRolesValue = useMemo<MemberRolesValue>(() => {
+    const byId = new Map((roster?.roles ?? []).map((r) => [r.roleId, r]));
+    const cache = new Map<string, Array<{ id: string; name: string; color: number }>>();
+    return {
+      rolesOf: (pubkey: string) => {
+        const cached = cache.get(pubkey);
+        if (cached) return cached;
+        const held = (roster?.grants ?? []).find((g) => g.member === pubkey)?.roleIds ?? [];
+        const out = held
+          .map((id) => byId.get(id))
+          .filter((r): r is NonNullable<typeof r> => Boolean(r))
+          .sort(byDisplayOrder)
+          .map((r) => ({ id: r.roleId, name: r.name, color: r.color }));
+        cache.set(pubkey, out);
+        return out;
+      },
+    };
+  }, [roster]);
+
+  const canEditMemberRoles = useCallback(
+    (pubkey: string) => {
+      if (!roster || !user) return false;
+      // The owner may hold roles COSMETICALLY (hoisted-section filing; their
+      // authority stays position 0 either way), and only they can self-grant:
+      // the fold admits any owner-authored grant, while no one else may ever
+      // target the owner (canActOnMember).
+      if (user.pubkey === ownerHex && pubkey === ownerHex) return true;
+      return canActOnMember(roster, user.pubkey, ownerHex, pubkey, Permissions.MANAGE_ROLES);
+    },
+    [roster, user, ownerHex],
+  );
+
+  // EVERY live Private Channel, flagged with whether I hold its key — not
+  // just the ones I hold. Granting a Role scoped to one vends its key onward;
+  // revoking that Role rotates the key away from the loser (CORD-06 §1). A
+  // revoke that only looked at my own keyring could not see that a channel I
+  // lack changed hands, so it would report success while the target kept
+  // reading it (`channelsHingingOn` splits the two).
+  const privateChannelsHere = useMemo(() => {
+    if (!community || !folded) return [] as Array<{ idHex: string; heldByMe: boolean }>;
+    const heldIds = new Set(community.privateChannels.map((ch) => bytesToHex(ch.id)));
+    const out: Array<{ idHex: string; heldByMe: boolean }> = [];
+    for (const [idHex, def] of folded.channels) {
+      if (def.deleted || !def.isPrivate) continue;
+      out.push({ idHex, heldByMe: heldIds.has(idHex) });
+    }
+    return out;
+  }, [community, folded]);
 
   const memberPubkeys = useMemo(() => {
     const banned = folded?.banned ?? new Set<string>();
@@ -1355,6 +1464,92 @@ export function ConcordV2Page() {
     if (user && !banned.has(user.pubkey)) set.add(user.pubkey);
     return [...set];
   }, [coalesced, allMessages, roster, ownerHex, user, folded]);
+
+  // Hoisted role sections (Role.display): position order, a member files under
+  // their highest hoisted role only. The owner included — a self-granted
+  // hoisted role moves their row out of the synthetic Admins group (the crown
+  // chip still marks them; authority is position 0 either way).
+  const roleSections = useMemo(() => {
+    if (!roster) return undefined;
+    const memberSet = new Set(memberPubkeys);
+    const hoisted = roster.roles
+      .filter((r) => r.display)
+      .sort(byDisplayOrder);
+    if (hoisted.length === 0) return undefined;
+    const placed = new Set<string>();
+    const sections = hoisted.map((role) => {
+      const holders = roster.grants
+        .filter((g) => g.roleIds.includes(role.roleId) && memberSet.has(g.member) && !placed.has(g.member))
+        .map((g) => g.member)
+        .sort();
+      for (const m of holders) placed.add(m);
+      return { id: role.roleId, name: role.name, color: role.color, members: holders };
+    });
+    return sections.filter((s) => s.members.length > 0);
+  }, [roster, memberPubkeys]);
+
+  // A private channel's member panel shows only those entitled to its key
+  // (CORD-03: readable only by granted role-holders) — listing members who
+  // can't read the room would be a lie about access.
+  const entitledHere = useCallback(
+    (pk: string) => !channel?.isPrivate || isEntitled(roster, ownerHex, pk, channel.idHex),
+    [channel, roster, ownerHex],
+  );
+  const panelMembers = useMemo(() => memberPubkeys.filter(entitledHere), [memberPubkeys, entitledHere]);
+  const panelAdmins = useMemo(() => memberAdmins.filter((a) => entitledHere(a.pubkey)), [memberAdmins, entitledHere]);
+  const panelSections = useMemo(
+    () => roleSections?.map((s) => ({ ...s, members: s.members.filter(entitledHere) })).filter((s) => s.members.length > 0),
+    [roleSections, entitledHere],
+  );
+
+  const handleCreateTextChannel = useCallback(async (name: string, opts?: { isPrivate?: boolean }) => {
+    const { channelIdHex: created } = await createChannel({ name, isPrivate: opts?.isPrivate });
+    // A newborn Private Channel is born alongside the Role that names who may
+    // read it, and nobody holds that Role yet — so there is nobody to vend to.
+    // Access starts empty and is handed out by granting the Role, which is the
+    // path that vends the key (see handleToggleRole).
+    selectChannel(created);
+  }, [createChannel, selectChannel]);
+
+  /**
+   * Re-key a private channel to exactly the members entitled TODAY. The repair
+   * for custody drift: anyone still holding a key they are no longer entitled
+   * to (a key vended before a Role was revoked elsewhere, a suspected leak) is
+   * cut from here forward, without needing a role change to trigger it.
+   */
+  const handleRotateChannelKey = useCallback(async (channelIdHex: string) => {
+    if (!roster) throw new Error("Not ready.");
+    const keep = memberPubkeys.filter((pk) => isEntitled(roster, ownerHex, pk, channelIdHex));
+    const keepSet = new Set(keep);
+    await rekeyChannel({
+      channelIdHex,
+      keepRecipients: keep,
+      removedTargets: memberPubkeys.filter((pk) => !keepSet.has(pk)),
+    });
+  }, [roster, memberPubkeys, ownerHex, rekeyChannel]);
+
+  /**
+   * Convert a public channel to private (CORD-03 §2). It gets its own key and
+   * a Role scoped to it; access is then granted by handing out that Role.
+   */
+  const handlePrivatiseChannel = useCallback(async (channelIdHex: string) => {
+    const def = folded?.channels.get(channelIdHex);
+    if (!def) throw new Error("Channel not found in the control fold yet; try again shortly.");
+    // The conversion moves the conversation to a new stream and cannot reach
+    // back over what has already been said, so the trade is stated plainly.
+    const ok = confirm(
+      `Make #${def.name} private?\n\n` +
+      "It gets its own key from here on, and a role of the same name decides who may read it — nobody holds that role yet, so grant it to the members who should have access. " +
+      "Messages already posted stay readable to everyone in the community; a restriction can't be applied backwards.",
+    );
+    if (!ok) return;
+    await privatiseChannel({ channelIdHex });
+    toast({
+      title: "Channel is now private",
+      description: `Grant the "${def.name}" role to give members access.`,
+    });
+  }, [folded, privatiseChannel]);
+
 
   const openThread = useCallback((event: ChatMsg, focusReply = false) => {
     setThreadAutoFocus(focusReply);
@@ -1566,7 +1761,8 @@ export function ConcordV2Page() {
     const latest = replies.length > 0 ? replies[replies.length - 1].created_at : threadRoot?.created_at ?? 0;
     if (latest <= 0) return;
     const stamp = () => {
-      if (document.visibilityState === "visible") markThreadRead(threadRootId, latest);
+      if (document.visibilityState !== "visible") return;
+      markThreadRead(threadRootId, latest);
     };
     stamp();
     document.addEventListener("visibilitychange", stamp);
@@ -1577,6 +1773,7 @@ export function ConcordV2Page() {
 
   const publishTyping = useTypingPublisher2(community, channel);
   const typingPubkeys = useTyping2(community, channel);
+
 
   // A dissolved community stays viewable (read-only) rather than redirecting
   // home — members asked to keep seeing the history. `canWrite` (above) is
@@ -1619,6 +1816,101 @@ export function ConcordV2Page() {
       navigateTo("/");
     } catch (e) {
       toast({ title: "Couldn't dissolve", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+    }
+  };
+
+  const handleToggleRole = async (pubkey: string, roleId: string, on: boolean) => {
+    if (on && !roleIntent.rolesFor(pubkey).includes(roleId) && roleIntent.rolesFor(pubkey).length >= MAX_ROLES_PER_MEMBER) {
+      toast({ title: "Role limit reached", description: `A member holds at most ${MAX_ROLES_PER_MEMBER} roles.`, variant: "destructive" });
+      return;
+    }
+    try {
+      // Composes on this client's last intent, not the lagging fold, and
+      // ignores a repeat of the same toggle while one is in flight — a Grant
+      // replaces the member's WHOLE role list, so two racing toggles would
+      // drop each other's role and start the gate rotation below twice.
+      const published = await roleIntent.toggle(pubkey, roleId, on);
+      if (!published) return; // already in flight
+      toast({ title: on ? "Role granted" : "Role removed" });
+    } catch (e) {
+      toast({ title: "Couldn't change roles", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+      return;
+    }
+
+    // Role-gated channel keys follow the grant (channelAccess.ts). Judged with the
+    // just-published change overlaid, since the fold lags the publish; "via
+    // another role" uses the withoutRoleIds overlay so a member keeping
+    // entitlement through a second scoped role is never vended-to or cut twice.
+    if (!roster) return;
+    const affected = channelsHingingOn(roster, ownerHex, pubkey, roleId, privateChannelsHere);
+    const nameOf = (idHex: string) => folded?.channels.get(idHex)?.name ?? idHex.slice(0, 8);
+    const listNames = (ids: string[]) => ids.map((id) => `#${nameOf(id)}`).join(", ");
+
+    if (on) {
+      if (affected.held.length > 0) {
+        try {
+          await sendDirectInvite({
+            recipientPubkey: pubkey,
+            onlyChannelIdHexes: new Set(affected.held),
+            // The Grant landed moments ago and the fold still lags it, so the
+            // vend has to judge entitlement with it overlaid — otherwise the
+            // recipient reads as unentitled and is handed nothing.
+            entitlementOverlay: { withRoleIds: [roleId] },
+          });
+          toast({ title: "Channel keys sent", description: `The member received ${affected.held.length} private channel key${affected.held.length > 1 ? "s" : ""}.` });
+        } catch (e) {
+          toast({
+            title: "Couldn't send the channel keys",
+            description: `The role was granted, but delivering its private channel keys failed${e instanceof Error ? `: ${e.message}` : "."} Toggle the role off and on to retry.`,
+            variant: "destructive",
+          });
+        }
+      }
+      // A key I don't hold can't be vended by me, and the grantee cannot read
+      // the room until someone who holds it hands it over.
+      if (affected.unheld.length > 0) {
+        toast({
+          title: "Some channel keys weren't sent",
+          description: `You don't hold the key to ${listNames(affected.unheld)}, so a member who does has to share it before they can read ${affected.unheld.length > 1 ? "those channels" : "that channel"}.`,
+        });
+      }
+      return;
+    }
+
+    if (affected.held.length === 0 && affected.unheld.length === 0) return;
+    // Say the un-rotatable part FIRST and always: a revoke that cuts nobody is
+    // the failure worth hearing about, and it is invisible from my keyring.
+    if (affected.unheld.length > 0) {
+      toast({
+        title: "Channel access not revoked",
+        description: `You don't hold the key to ${listNames(affected.unheld)}, so they keep reading until a member who does rotates it.`,
+        variant: "destructive",
+      });
+    }
+    if (affected.held.length === 0) return;
+    if (!canRekeyChannel) {
+      toast({
+        title: "Channel keys not rotated",
+        description: "They lost access to a private channel, but rotating its key needs the Manage-channels permission — ask an admin to rotate it.",
+        variant: "destructive",
+      });
+      return;
+    }
+    for (const idHex of affected.held) {
+      const keep = memberPubkeys.filter(
+        (pk) => pk !== pubkey && isEntitled(roster, ownerHex, pk, idHex),
+      );
+      try {
+        // The revoke targets exactly this member: everyone else entitled is
+        // kept, so they are the whole removed set (CORD-06 §Authority).
+        await rekeyChannel({ channelIdHex: idHex, keepRecipients: keep, removedTargets: [pubkey] });
+      } catch (e) {
+        toast({
+          title: "Channel key rotation failed",
+          description: `They may still read #${nameOf(idHex)} until it succeeds${e instanceof Error ? `: ${e.message}` : "."}`,
+          variant: "destructive",
+        });
+      }
     }
   };
 
@@ -1938,6 +2230,7 @@ export function ConcordV2Page() {
       {/* Member kind-0s often live only on the community's own relays, which
           the pool's general routing never asks. */}
       <ProfileRelayHints relays={community?.relays} />
+      <MemberRolesContext.Provider value={memberRolesValue}>
       <SwipeReveal
         open={channelsOpen}
         onReveal={() => setChannelsOpen(true)}
@@ -2591,12 +2884,18 @@ export function ConcordV2Page() {
                 )}
               >
                 <MemberList
-                  admins={memberAdmins}
-                  members={memberPubkeys}
+                  admins={panelAdmins}
+                  members={panelMembers}
                   canModerate={canManageRoles || canKickAny || canBanAny}
                   viewerIsAdmin={iAmOwner}
                   currentUserPubkey={user?.pubkey}
                   onSetRole={canManageRoles ? handleSetRole : undefined}
+                  roleCatalog={roleCatalog}
+                  memberRoleIds={memberRoleIds}
+                  canEditMemberRoles={canEditMemberRoles}
+                  onToggleRole={canManageRoles ? handleToggleRole : undefined}
+                  isRoleToggling={roleIntent.isPending}
+                  roleSections={panelSections}
                   onKick={canKickAny ? (pk) => moderation.kick({ target: pk }).catch(() => {}) : undefined}
                   onBan={canBanAny ? setBanTarget : undefined}
                   banLabel={(pk) =>
@@ -2634,10 +2933,14 @@ export function ConcordV2Page() {
         memberCount={memberPubkeys.length}
         canManageMetadata={canManageMetadata}
         canManageChannels={canManageChannels}
+        channelRoles={channelRoleCatalog}
+        onPrivatiseChannel={canManageChannels ? handlePrivatiseChannel : undefined}
+        onRotateChannelKey={canRekeyChannel ? handleRotateChannelKey : undefined}
         open={infoOpen}
         onOpenChange={setInfoOpen}
       />
       <RolesDialog2 community={community} open={rolesOpen} onOpenChange={setRolesOpen} />
+    </MemberRolesContext.Provider>
     </ChannelNavContext.Provider>
   );
 }

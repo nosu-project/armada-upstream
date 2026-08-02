@@ -56,9 +56,12 @@ global.IntersectionObserver = vi.fn().mockImplementation((_callback) => ({
   thresholds: [],
 }));
 
-// Mock ResizeObserver
-global.ResizeObserver = vi.fn().mockImplementation((_callback) => ({
-  observe: vi.fn(),
-  unobserve: vi.fn(),
-  disconnect: vi.fn(),
-}));
+// Mock ResizeObserver. It has to be a real constructor, not an arrow
+// function: Radix measures with `new ResizeObserver(...)` (`useSize`), so any
+// component built on it — Checkbox, Select, Tooltip — fails to render against
+// a mock that can't be `new`'d.
+global.ResizeObserver = class {
+  observe = vi.fn();
+  unobserve = vi.fn();
+  disconnect = vi.fn();
+};

@@ -176,6 +176,13 @@ export function buildMetadataEdition(communityId: Uint8Array, metadata: Communit
 /** Role (vsk 1); eid = the role_id. Gated by MANAGE_ROLES. */
 export function buildRoleEdition(role: Role, o: BuildCommon): NostrRumor {
   if (utf8Len(role.name) > NAME_MAX_BYTES) throw new Error(`role name exceeds ${NAME_MAX_BYTES} bytes`);
+  // CORD-04 §3: position 0 is the owner's alone — "no Role may ever claim
+  // position 0, or an owner could create a peer nobody outranks". Refused
+  // here, like the name cap, so a malformed mint fails at its author rather
+  // than being dropped by every verifier after it lands.
+  if (!Number.isInteger(role.position) || role.position < 1) {
+    throw new Error("role position must be an integer of 1 or greater (position 0 is the owner's)");
+  }
   return buildEditionRumor({ vsk: VSK_ROLE, entityId: hex32(role.roleId), content: roleToJSON(role), ...o });
 }
 
@@ -363,7 +370,13 @@ function headCandidates(
     // Tracking client + a gap: the served chain doesn't reach our floor. Refuse
     // to adopt anything above the floor — a withheld-middle attack can't push a
     // higher dangling edition onto a client that already advanced the chain.
-    gapped = floor !== undefined && result.gap;
+    //
+    // A null head under a floor is that same withholding by omission: every
+    // served edition sat BELOW the floor, so the head we already accepted was
+    // not served at all. `fold` reports no gap for it (it skips below-floor
+    // editions before it ever looks for a chain), which is why this arm has to
+    // name the case itself — the snapshot arm does the same above.
+    gapped = floor !== undefined && (result.gap || result.head === null);
     if (gapped) onGap?.();
 
     if (result.head !== null && !gapped) {
@@ -377,9 +390,18 @@ function headCandidates(
       const id = bytesToHex(e.rumorId);
       if (seenRumors.has(id)) return false;
       seenRumors.add(id);
-      // Under a gap, suppress every candidate above the floor: only the floor's
-      // own version (a re-served head we can still verify against our snapshot)
-      // remains admissible, so the entity never downgrades to a dangling head.
+      // Refuse-to-downgrade (CORD-04 §1): "a lower version is ignored, so a
+      // relay replaying a stale Grant or a lifted Ban is rejected". A
+      // below-floor edition is never a candidate — not even as the last one
+      // standing, which is exactly the shape that replay takes. Withholding
+      // everything at or above the floor must suspend the entity (it is
+      // reported as a gap above, and refetched), never quietly seat the stale
+      // state the attacker chose to serve.
+      if (floor !== undefined && e.version < floor.version) return false;
+      // Under a gap, suppress every candidate above the floor too: only the
+      // floor's own version (a re-served head we can still verify against our
+      // snapshot) remains admissible, so the entity never downgrades to a
+      // dangling head either.
       if (gapped && e.version > floor!.version) return false;
       return true;
     })
@@ -676,15 +698,23 @@ export function foldControlState(
   }
 
   const first = foldOnce(editions, communityId, ownerHex, priorHeads, snapshotIds);
-  let result = first;
+  // The owner is "supreme and unremovable" (CORD-04 §2), so a Banlist naming
+  // them is honored for everyone it validly names and inert as to them. The
+  // filter belongs HERE, on the set every reader consumes, not in each reader:
+  // "every honest client drops every event from a banned npub" (§4) is applied
+  // by the chat fold, the guestbook, the rekey rotator gate, the call roster
+  // and the join path, and a rule only some of them apply is one an authorized
+  // BAN holder can use to silence the owner in every member's client while the
+  // fold still (correctly) honors the owner's authority.
   const banned = new Set([...first.banned].filter((pk) => pk !== ownerHex));
+  let result: FoldedControl = banned.size === first.banned.size ? first : { ...first, banned };
   if (banned.size > 0 && editions.some((e) => banned.has(e.author))) {
     // Pass 1 stays authoritative for `incomplete`: pass 2 drops banned authors'
     // editions by SEMANTICS (CORD-04 §4), not data loss — a gap it introduces
     // must not read as "plane unserved" and block the ban→refound flow.
     result = {
       ...foldOnce(editions.filter((e) => !banned.has(e.author)), communityId, ownerHex, priorHeads, snapshotIds),
-      banned: first.banned,
+      banned,
       bannedAt: first.bannedAt,
       incomplete: first.incomplete,
     };
@@ -915,7 +945,7 @@ function foldOnce(
   // 4. Channels (vsk 2), each gated by MANAGE_CHANNELS.
   const channels = new Map<string, FoldedChannel>();
   for (const [eid, candidates] of candidatesOf(VSK_CHANNEL)) {
-    const head = pickHead(candidates, heads, headEditions, (p) => {
+    const channelGate = (p: ParsedEdition): boolean => {
       if (!isAuthorized(roster, p.author, ownerHex, Permissions.MANAGE_CHANNELS)) return false;
       if (!citationOk(p)) return false;
       try {
@@ -924,15 +954,36 @@ function foldOnce(
       } catch {
         return false;
       }
-    });
+    };
+    const head = pickHead(candidates, heads, headEditions, channelGate);
     if (!head) continue;
     const meta = normalizeChannelMetadata(JSON.parse(head.content) as ChannelMetadata);
+    // CORD-03 §2: "Deletion is terminal: the id is never reused, clients drop
+    // the Channel from display and may discard its keys." Terminal means the
+    // HEAD cannot lift it — an authorized, correctly-chained edition clearing
+    // the flag is ignored as to deletion (everything else in it still folds).
+    //
+    // The key-discard permission is what makes this load-bearing rather than
+    // cosmetic: members who honored it can never read a resurrected private
+    // channel, members who ignored it can, and no rotation heals the split,
+    // because every fold agrees the channel is live. So deletion is decided
+    // over the whole chain this client accepted, not off the head alone.
+    // Gated by the SAME predicate the head was picked with: an unauthorized
+    // author's tombstone is not a deletion, or anyone could erase a channel.
+    const everDeleted = candidates.some((p) => {
+      if (!channelGate(p)) return false;
+      try {
+        return (JSON.parse(p.content) as ChannelMetadata).deleted === true;
+      } catch {
+        return false;
+      }
+    });
     channels.set(eid, {
       channelIdHex: eid,
       name: meta.name,
       isPrivate: meta.private === true,
-      deleted: meta.deleted === true,
-      metadata: meta,
+      deleted: meta.deleted === true || everDeleted,
+      metadata: everDeleted ? { ...meta, deleted: true } : meta,
     });
   }
 

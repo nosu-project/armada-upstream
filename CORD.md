@@ -533,3 +533,24 @@ In the Armada client:
 - `client/src/components/chat/CallControls.tsx` +
   `client/src/components/chat/CallStage.tsx` — the raise-hand + emoji buttons and
   the per-tile hand badge / floating-emoji rendering.
+
+
+## Role Display
+
+One optional field Armada adds to the CORD-04 Role wire object, read
+tolerantly and written only when set — a client that drops it loses a
+cosmetic, never authority:
+
+- `display: true` — hoist: the member list groups holders under the role's own
+  name (position order; a member files under their highest hoisted role). The
+  owner may self-grant a role to file under its section — the fold admits any
+  owner-authored Grant, including one targeting the owner, and it is purely
+  cosmetic (the owner's authority is position 0 with or without roles); a
+  roleless owner sits in the synthetic Admins group.
+
+`color` is baseline CORD-04, not an extension; Armada renders it as the role's
+badge/section tint (low 24 bits, `#rrggbb`).
+
+Implementation: `client/src/concord-v2/lib/roles.ts` (`Role.display`, written
+only when true), `client/src/components/chat/MemberList.tsx` (the hoisted
+sections).

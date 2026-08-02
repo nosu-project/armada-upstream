@@ -13,12 +13,14 @@ import { fetchCreatorDmRelays } from "@/lib/creatorRelays";
 import { getArmadaDB } from "@/lib/db/armadaDB";
 import { APP_RELAYS } from "@/lib/platform";
 import { preferPortableRelays, unusableRelaysReason } from "@/lib/relayUsability";
-import { toJoinMaterial, rehydrateCommunity, type CommunityListEntry, type JoinMaterial } from "@/concord-v2/lib/communityList";
+import { channelKeysToWire, nextChannelEpoch, toJoinMaterial, rehydrateCommunity, type CommunityListEntry, type JoinMaterial } from "@/concord-v2/lib/communityList";
 import { mintCommunity } from "@/concord-v2/lib/community";
-import { isAuthorized, Permissions } from "@/concord-v2/lib/roles";
+import { accessRolePosition, isAuthorized, MAX_ROLES_PER_COMMUNITY, Permissions } from "@/concord-v2/lib/roles";
+import { channelEpochFloor, channelRekeyAddressWindow } from "@/concord-v2/lib/rekey";
 import {
   buildChannelEdition,
   buildMetadataEdition,
+  buildRoleEdition,
   sealDissolved,
 } from "@/concord-v2/lib/control";
 import { bytesToHex, hex32, random32 } from "@/concord-v2/lib/derive";
@@ -38,9 +40,18 @@ import {
   withChannelGitRepositoryAttachments,
   type ChannelMetadata,
   type CommunityV2,
+  type PrivateChannelKey,
 } from "@/concord-v2/lib/types";
 import { controlGroups, foldControlState, openControlWraps } from "@/concord-v2/lib/control";
 import { registerStreamKeys } from "@/concord-v2/lib/streamAuth";
+
+/**
+ * How far up a channel's rekey addresses to look when finding the epoch floor
+ * for a privatisation. Bounded because the scan is speculative — one REQ of
+ * this many authors per held root — and a channel that has genuinely rotated
+ * past it is far outside anything a UI flow produces.
+ */
+const MAX_PROBED_CHANNEL_EPOCH = 64;
 import { KIND_WRAP } from "@/concord-v2/lib/kinds";
 import { attachGitRepository, detachGitRepository, parseGitRepositoryAddress } from "@/lib/gitActivity";
 
@@ -479,12 +490,64 @@ export function useCommunityManagement2(community: CommunityV2 | undefined) {
     },
   });
 
+  /**
+   * Mint the Role that confers read access to a Private Channel (CORD-04 §2
+   * `scope`), named after the channel.
+   *
+   * It carries NO permission bits: read access is key possession (CORD-04 §1)
+   * and a Role "mints no key, so granting it hands a member rank, never a
+   * secret" (§2) — the scope is what routes the key, the bits would only hand
+   * out authority nobody asked for.
+   *
+   * It is minted at the BOTTOM of the hierarchy for the same reason. Rank is
+   * the lowest position among a member's Roles and is independent of the
+   * bits, so an access Role placed at the signer's ceiling would promote
+   * every grantee to the signer's own rank (see `accessRolePosition`).
+   */
+  const mintChannelRole = async (channelId: Uint8Array, channelName: string): Promise<string | undefined> => {
+    if (!user || !community) return undefined;
+    const ownerHex = folded?.ownerHex ?? community.owner;
+    // Below every existing Role and strictly below the signer, or nothing at
+    // all. A signer with no resolvable rank (roleless, or a roster that has
+    // not folded) may mint no Role: treating them as rank 0 would publish an
+    // edition every verifier drops for self-promotion while this client
+    // reported success.
+    const position = accessRolePosition(folded?.roster, user.pubkey, ownerHex);
+    if (position === undefined) {
+      throw new Error("You don't hold a rank that can create this channel's access role.");
+    }
+    // At the 100-role cap the fold keeps the 100 LOWEST role_ids (CORD-04
+    // §2), so a fresh random id may silently fold out — or evict one that
+    // gates another channel. Refuse rather than gamble with the access list.
+    if ((folded?.roster.roles.length ?? 0) >= MAX_ROLES_PER_COMMUNITY) {
+      throw new Error("This community is at its 100-role limit; delete a role first.");
+    }
+    const roleId = bytesToHex(random32());
+    await publishEdition2(
+      nostr,
+      community,
+      user.signer,
+      buildRoleEdition(
+        {
+          roleId,
+          name: channelName.slice(0, 64),
+          position,
+          permissions: 0n,
+          scope: { kind: "channel", channelId: bytesToHex(channelId) },
+          color: 0,
+        },
+        { actorPubkey: user.pubkey, version: 1n, authority: citationFor(community, folded, user.pubkey) },
+      ),
+    );
+    return roleId;
+  };
+
   const createChannel = useMutation<
-    { channelIdHex: string },
+    { channelIdHex: string; minted?: PrivateChannelKey },
     Error,
-    { name: string; repository?: { address: string; relayHints: string[] } }
+    { name: string; repository?: { address: string; relayHints: string[] }; isPrivate?: boolean }
   >({
-    mutationFn: async ({ name, repository }) => {
+    mutationFn: async ({ name, repository, isPrivate }) => {
       if (!user || !community) throw new Error("Not ready.");
       const trimmed = name.trim();
       if (!trimmed) throw new Error("Channel name is required.");
@@ -494,7 +557,7 @@ export function useCommunityManagement2(community: CommunityV2 | undefined) {
       // fold, which this mutation only invalidates in the background, so a
       // just-created channel is absent from it and the attach throws. Building
       // one edition leaves the channel born attached instead.
-      let metadata: ChannelMetadata = { name: trimmed, private: false };
+      let metadata: ChannelMetadata = { name: trimmed, private: Boolean(isPrivate) };
       if (repository) {
         const address = parseGitRepositoryAddress(repository.address);
         if (!address) throw new Error("Repository address must be a canonical 30617 coordinate.");
@@ -503,18 +566,52 @@ export function useCommunityManagement2(community: CommunityV2 | undefined) {
           attachGitRepository([], address, repository.relayHints, Math.floor(Date.now() / 1000)),
         );
       }
-      await publishEdition2(
-        nostr,
-        community,
-        user.signer,
-        buildChannelEdition(
-          channelId,
-          metadata,
-          { actorPubkey: user.pubkey, version: 1n, authority: citationFor(community, folded, user.pubkey) },
-        ),
-      );
+
+      // A Private Channel is born with its own independent key (CORD-03),
+      // epoch 0. The key lands in the creator's own list BEFORE the edition
+      // publishes: a lost list write would otherwise orphan the only copy of
+      // the key behind a live channel definition — unreadable forever. The
+      // reverse failure (edition never lands) is rolled back below.
+      let minted: PrivateChannelKey | undefined;
+      const priorChannels = community.privateChannels;
+      if (isPrivate) {
+        minted = { id: channelId, key: random32(), epoch: 0n, name: trimmed };
+        await updateList({
+          type: "refresh-channels",
+          communityId: community.idHex,
+          channels: channelKeysToWire([...priorChannels, minted]),
+        });
+      }
+
+      try {
+        // The Role publishes BEFORE the channel edition. The pair is born
+        // together, and a partial failure has to leave the less harmful
+        // orphan: a role scoped to a channel that never appeared is inert
+        // (it confers no key and grants nothing), while a channel whose role
+        // mint then failed is a live room the whole community can see — and
+        // the retry that follows the error would mint a SECOND one.
+        if (isPrivate) await mintChannelRole(channelId, trimmed);
+        await publishEdition2(
+          nostr,
+          community,
+          user.signer,
+          buildChannelEdition(
+            channelId,
+            metadata,
+            { actorPubkey: user.pubkey, version: 1n, authority: citationFor(community, folded, user.pubkey) },
+          ),
+        );
+      } catch (e) {
+        if (minted) {
+          // Best-effort: pull the never-announced key back out so it doesn't
+          // linger as a ghost channel in the creator's sidebar.
+          await updateList({ type: "refresh-channels", communityId: community.idHex, channels: channelKeysToWire(priorChannels) }).catch(() => undefined);
+        }
+        throw e;
+      }
       invalidateControl2(queryClient, community.idHex);
-      return { channelIdHex: bytesToHex(channelId) };
+      queryClient.invalidateQueries({ queryKey: ["concord2", "list"] });
+      return { channelIdHex: bytesToHex(channelId), minted };
     },
   });
 
@@ -533,6 +630,164 @@ export function useCommunityManagement2(community: CommunityV2 | undefined) {
           hex32(channelIdHex),
           // Round-trip all metadata a rename doesn't touch (CORD-02 §6 discipline).
           { ...(def?.metadata ?? { private: false }), name: trimmed },
+          {
+            actorPubkey: user.pubkey,
+            version: head ? head.version + 1n : 1n,
+            prevHash: head?.hash,
+            authority: citationFor(community, folded, user.pubkey),
+          },
+        ),
+      );
+      invalidateControl2(queryClient, community.idHex);
+    },
+  });
+
+  /**
+   * Convert a Public Channel to Private (CORD-03 §2): mint its independent
+   * key at the next channel epoch, flip the metadata flag, and mint the Role
+   * scoped to it that names who may read it.
+   *
+   * A public channel's stream derives from the `community_root` that every
+   * member holds, so restriction is impossible without an independent key.
+   * The mint lands in the caller's own list before the edition publishes (a
+   * lost list write would orphan the only copy of the key), and `minted` is
+   * returned so the caller can vend it to the entitled.
+   *
+   * Conversion moves the channel to a NEW stream: "Privatising protects the
+   * future only" (§2) — pre-conversion history was written under
+   * root-derived keys every member holds and stays readable to all of them.
+   * Callers must say so before doing it.
+   */
+  const privatiseChannel = useMutation<
+    { minted?: PrivateChannelKey; roleId?: string },
+    Error,
+    { channelIdHex: string }
+  >({
+    mutationFn: async ({ channelIdHex }) => {
+      if (!user || !community) throw new Error("Not ready.");
+      const def = folded?.channels.get(channelIdHex);
+      if (!def) throw new Error("Channel not found in the control fold yet; try again shortly.");
+      if (def.isPrivate) throw new Error("This channel is already private.");
+      const head = folded?.heads.get(channelIdHex);
+
+      // CORD-03 §2: a conversion mints at the NEXT channel_epoch, monotonic
+      // and never resetting. Resetting to 0 would put two different keys at
+      // one epoch across a privatise -> publish -> privatise cycle, where the
+      // list merge (epoch-max) and a `channel_cuts` floor (epoch-min) both
+      // stop being able to tell the generations apart.
+      //
+      // The floor is read off the wire, not out of this client's keyring: a
+      // channel's rotations publish to addresses derived from the
+      // `community_root` and `channel_id` alone (CORD-06 §2), so generations
+      // this client never held are still countable by it.
+      const channelId = hex32(channelIdHex);
+      const roots = community.heldRoots.length > 0 ? community.heldRoots : [{ key: community.root }];
+      const window = channelRekeyAddressWindow(roots, channelId, MAX_PROBED_CHANNEL_EPOCH);
+      let seenPubkeys: string[] | undefined;
+      try {
+        const seen = await Promise.all(
+          community.relays.map((url) =>
+            nostr
+              .relay(url)
+              .query([{ kinds: [KIND_WRAP], authors: [...window.keys()] }], {
+                signal: AbortSignal.timeout(8000),
+              })
+              .catch(() => []),
+          ),
+        );
+        seenPubkeys = seen.flat().map((e) => e.pubkey);
+      } catch {
+        // Unreachable relays leave the local floor to stand on its own.
+      }
+      // A saturated probe THROWS rather than returning its ceiling: a rotation
+      // found at the edge of the window proves only that the channel reached
+      // the edge, and minting on top of that guess collides with a generation
+      // that already exists (CORD-03 §2's counter is what tells them apart).
+      const observedFloor =
+        seenPubkeys === undefined ? 0n : channelEpochFloor(window, seenPubkeys, MAX_PROBED_CHANNEL_EPOCH);
+
+      const priorChannels = community.privateChannels;
+      const minted: PrivateChannelKey = {
+        id: channelId,
+        key: random32(),
+        epoch: nextChannelEpoch(priorChannels, channelIdHex, observedFloor),
+        name: def.name,
+      };
+      await updateList({
+        type: "refresh-channels",
+        communityId: community.idHex,
+        channels: channelKeysToWire([...priorChannels, minted]),
+      });
+
+      let roleId: string | undefined;
+      try {
+        // Role first, flag second — same partial-failure ordering as
+        // createChannel: an orphan role scoped to a still-public channel is
+        // inert, while a privatised channel whose role mint then failed is a
+        // room whose access list nobody can ever be added to, and a retry
+        // would re-run the whole conversion against a now-private channel.
+        roleId = await mintChannelRole(channelId, def.name);
+        await publishEdition2(
+          nostr,
+          community,
+          user.signer,
+          buildChannelEdition(
+            channelId,
+            // Round-trip everything the conversion doesn't touch (CORD-02 §6).
+            { ...def.metadata, private: true },
+            {
+              actorPubkey: user.pubkey,
+              version: head ? head.version + 1n : 1n,
+              prevHash: head?.hash,
+              authority: citationFor(community, folded, user.pubkey),
+            },
+          ),
+        );
+      } catch (e) {
+        await updateList({ type: "refresh-channels", communityId: community.idHex, channels: channelKeysToWire(priorChannels) }).catch(() => undefined);
+        throw e;
+      }
+      invalidateControl2(queryClient, community.idHex);
+      queryClient.invalidateQueries({ queryKey: ["concord2", "list"] });
+      return { minted, roleId };
+    },
+  });
+
+  /**
+   * Convert a Private Channel back to Public (CORD-03 §2): flip the metadata
+   * flag and nothing else. "The Channel begins deriving from the
+   * `community_root` going forward, and a member joining after the switch
+   * reads only the now-public history, never the prior private messages (they
+   * never held that key)."
+   *
+   * No key is minted or destroyed. The held channel key STAYS in the caller's
+   * list: `channelsView` keeps querying it alongside the root-derived stream,
+   * so the private era remains readable to whoever held it — a conversion is
+   * never retroactive in either direction. The Role scoped to the channel is
+   * left alone too; it now confers nothing (a public channel's key derives
+   * from the root every member holds) and is inert rather than wrong, and
+   * deleting it is a separate authority action the user can take.
+   */
+  const publiciseChannel = useMutation<void, Error, { channelIdHex: string }>({
+    mutationFn: async ({ channelIdHex }) => {
+      if (!user || !community) throw new Error("Not ready.");
+      const def = folded?.channels.get(channelIdHex);
+      if (!def) throw new Error("Channel not found in the control fold yet; try again shortly.");
+      if (!def.isPrivate) throw new Error("This channel is already public.");
+      if (def.deleted) throw new Error("This channel was deleted.");
+      const ownerHex = folded?.ownerHex ?? community.owner;
+      if (!isAuthorized(folded?.roster ?? { roles: [], grants: [] }, user.pubkey, ownerHex, Permissions.MANAGE_CHANNELS)) {
+        throw new Error("Making a channel public needs the Manage-channels permission.");
+      }
+      const head = folded?.heads.get(channelIdHex);
+      await publishEdition2(
+        nostr,
+        community,
+        user.signer,
+        buildChannelEdition(
+          hex32(channelIdHex),
+          // Round-trip everything the conversion doesn't touch (CORD-02 §6).
+          { ...def.metadata, private: false },
           {
             actorPubkey: user.pubkey,
             version: head ? head.version + 1n : 1n,
@@ -642,6 +897,8 @@ export function useCommunityManagement2(community: CommunityV2 | undefined) {
     isAddingChannel: createChannel.isPending,
     renameChannel: renameChannel.mutateAsync,
     isRenaming: renameChannel.isPending,
+    privatiseChannel: privatiseChannel.mutateAsync,
+    publiciseChannel: publiciseChannel.mutateAsync,
     deleteChannel: deleteChannel.mutateAsync,
     attachRepository: attachRepository.mutateAsync,
     detachRepository: detachRepository.mutateAsync,

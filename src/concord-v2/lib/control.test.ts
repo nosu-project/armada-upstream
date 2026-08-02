@@ -1289,7 +1289,10 @@ describe("control plane fold (CORD-04)", () => {
       tracked.heads,
       new Set([bytesToHex(p1.rumorId)]),
     );
-    expect(starved.metadata?.name).not.toBe("Two"); // v2 wasn't served; v1 is below the floor
+    // v2 wasn't served and v1 is below the floor, so the entity is SUSPENDED —
+    // not downgraded to "One". Asserting only `not.toBe("Two")` would have
+    // passed on the downgrade, which is the whole failure mode.
+    expect(starved.metadata).toBeUndefined();
     expect(starved.incomplete).toContain(bytesToHex(communityId));
   });
 

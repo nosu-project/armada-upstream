@@ -9,6 +9,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useMemberRoles } from "@/hooks/useMemberRoles";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { requestMention } from "@/hooks/useMentionBus";
 import { useProfileTheme, usePrefetchProfileTheme } from "@/hooks/useProfileTheme";
@@ -34,6 +35,7 @@ function ProfilePreviewBody({ pubkey, onAction }: { pubkey: string; onAction?: (
   const navigate = useNavigate();
   const { user } = useCurrentUser();
   const metadata = author.data?.metadata;
+  const roles = useMemberRoles(pubkey);
   const status = useUserStatus(pubkey).data?.status;
   const rawMusicStatus = useUserStatus(pubkey, "music").data?.status;
   // Music statuses expire when the track ends; hide one whose NIP-40 expiration
@@ -99,6 +101,34 @@ function ProfilePreviewBody({ pubkey, onAction }: { pubkey: string; onAction?: (
           </div>
           <BotPill metadata={metadata} />
         </div>
+
+        {/* Roles in this community (Concord). Tinted per role, wrapping — the
+            card is the one surface with room for every role, where the member
+            row shows only the highest. */}
+        {roles.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {roles.map((role) => (
+              <span
+                key={role.id}
+                title={role.name}
+                className={cn(
+                  "inline-flex max-w-full items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+                  !role.color && "bg-muted text-muted-foreground",
+                )}
+                style={
+                  role.color
+                    ? {
+                        color: `#${(role.color & 0xffffff).toString(16).padStart(6, "0")}`,
+                        backgroundColor: `#${(role.color & 0xffffff).toString(16).padStart(6, "0")}26`,
+                      }
+                    : undefined
+                }
+              >
+                <span className="truncate">{role.name}</span>
+              </span>
+            ))}
+          </div>
+        )}
 
         {/* NIP-38 status */}
         {status?.content && (

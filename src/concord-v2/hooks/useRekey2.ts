@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { useCommunityEntry2, useUpdateCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
 import { citationFor, useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { toJoinMaterial } from "@/concord-v2/lib/communityList";
+import { channelKeysToWire, toJoinMaterial } from "@/concord-v2/lib/communityList";
 import { currentControlGroup, foldControlState, openControlEditions } from "@/concord-v2/lib/control";
 import { sweepControl } from "@/concord-v2/lib/planeSync";
 import { channelRekeyGroupKey, controlGroupKey, guestbookGroupKey } from "@/concord-v2/lib/derive";
@@ -20,6 +20,7 @@ import { KIND_SEAL_ENCRYPTED, KIND_WRAP } from "@/concord-v2/lib/kinds";
 import {
   base64ToBytes,
   buildRekeyRumors,
+  CHANNEL_REKEY_LOOKAHEAD,
   bytesToBase64,
   checkContinuity,
   decodeWrappedKey,
@@ -37,7 +38,7 @@ import {
   type RekeyBlob,
 } from "@/concord-v2/lib/rekey";
 import { citationSatisfied } from "@/concord-v2/lib/control";
-import { hasPermission, Permissions } from "@/concord-v2/lib/roles";
+import { hasPermission, outranksMember, Permissions } from "@/concord-v2/lib/roles";
 import { queryPlane, queryRekeyRounds, readControlSnapshot, readStoredSeal, readStreamCursor, updateStreamCursor, writeOpened } from "@/concord-v2/lib/rumorStore";
 import { openWrap, rewrapSeal, sealRumor, wrapSeal, type OpenedEvent, type OpenedWireEvent } from "@/concord-v2/lib/stream";
 import { buildRefreshedBundleEvents, type InviteBundle } from "@/concord-v2/lib/invite";
@@ -76,18 +77,23 @@ export async function refreshInviteBundlesFor(
   const live = list.entries.filter((e) => e.community_id === rotated.idHex);
   if (live.length === 0) return;
 
+  // A refresh vends exactly what the mint vends, and a link mints no Private
+  // Channel keys at all: its audience is whoever the URL reaches (CORD-05 §2)
+  // and holds no scoped Role, so it is entitled to none (CORD-03 §1).
+  //
+  // Carrying them here is worse than at mint time, because this runs right
+  // after a rotation that CUT somebody. The cut is recorded at the excluding
+  // epoch and the floor admits `epoch >= cut` so a genuine re-admission still
+  // lands — but a refreshed bundle carries that same current key at that same
+  // epoch, so the floor cannot tell the two apart, and the removed member
+  // re-resolving their link undoes the rotation that removed them.
   const bundle: InviteBundle = {
     community_id: rotated.idHex,
     owner: rotated.owner,
     owner_salt: bytesToHex(rotated.ownerSalt),
     community_root: bytesToHex(rotated.root),
     root_epoch: Number(rotated.rootEpoch),
-    channels: rotated.privateChannels.map((ch) => ({
-      id: bytesToHex(ch.id),
-      key: bytesToHex(ch.key),
-      epoch: Number(ch.epoch),
-      name: ch.name,
-    })),
+    channels: [],
     relays: rotated.relays,
     name: metadata?.name ?? rotated.name,
     ...(metadata?.icon ? { icon: metadata.icon } : {}),
@@ -281,14 +287,27 @@ export function useRekeyWatch2(community: CommunityV2 | undefined): { stranded: 
         // read as a removal (else the rail icon vanishes seconds after every
         // join/rejoin while the community stays fully interactable — exposing it
         // as a liveness-only bug). Only a rotation at/after the join can exclude.
-        const couldCarryMyBlob = rotationExcludesMe(rotationPublishedAtMs(set), joinedAt);
+        // A rotation is my removal only if it could have carried my blob AND
+        // its Rotator strictly outranks me — CORD-06 §Authority: "the Rotator
+        // must strictly outrank every removed target". The other targets'
+        // locators are opaque to me; my own removal is the one I can judge.
+        const postDatesMyJoin = rotationExcludesMe(rotationPublishedAtMs(set), joinedAt);
+        const couldExcludeMe =
+          postDatesMyJoin && outranksMember(folded.roster, set.rotator, folded.ownerHex, user.pubkey);
         const locator = myLocator(set.rotator, user.pubkey, set.scopeIdHex, set.newEpoch);
         const blob = findBlob(set, locator);
         if (!blob) {
-          if (couldCarryMyBlob) sawExcludingRotation = true;
+          if (couldExcludeMe) sawExcludingRotation = true;
           // Predates my join AND advances past the epoch I hold → I'm stranded
           // on a stale invite's dead epoch, with no wire path forward.
-          else if (set.newEpoch > community.rootEpoch) sawStrandingRotation = true;
+          //
+          // Tested on the JOIN TIME, not on `!couldExcludeMe`: a rotation from
+          // a rotator who does not outrank me is not my removal AND not my
+          // strand — it is simply not about me, and both flags must stay off.
+          // Negating the conjunction would route every peer-rank rotation here
+          // (this watcher only ever queries `rootEpoch + 1`, so the epoch test
+          // is always true) and tell the user their invite link is stale.
+          else if (!postDatesMyJoin && set.newEpoch > community.rootEpoch) sawStrandingRotation = true;
           continue;
         }
         try {
@@ -300,7 +319,7 @@ export function useRekeyWatch2(community: CommunityV2 | undefined): { stranded: 
           }
         } catch {
           // undecryptable blob at my locator — treat as absent
-          if (couldCarryMyBlob) sawExcludingRotation = true;
+          if (couldExcludeMe) sawExcludingRotation = true;
         }
       }
       if (cancelled) return;
@@ -484,8 +503,12 @@ export function useChannelRekeyWatch2(community: CommunityV2 | undefined) {
   const query = useQuery<OpenedEvent[]>({
     queryKey: ["concord2", "chrekey", community?.idHex ?? null, watchKey],
     enabled: Boolean(community && community.privateChannels.length > 0),
-    staleTime: 30_000,
-    refetchInterval: 2 * 60_000,
+    staleTime: 15_000,
+    // A rotation is how a member learns they were cut from (or re-keyed into)
+    // a channel — a 2-minute lag reads as "revoking did nothing" to the
+    // moderator watching the other screen. The REQ is cheap (author-filtered,
+    // per-relay since-cursor), so poll at 45s while visible.
+    refetchInterval: 45_000,
     refetchIntervalInBackground: false,
     queryFn: async ({ signal }) => {
       // Per held channel, the next channel-epoch's address under EVERY held
@@ -496,8 +519,12 @@ export function useChannelRekeyWatch2(community: CommunityV2 | undefined) {
       const byPk = new Map<string, ReturnType<typeof channelRekeyGroupKey>>();
       for (const ch of community!.privateChannels) {
         for (const r of roots) {
-          const address = channelRekeyGroupKey(r.key, ch.id, ch.epoch + 1n);
-          byPk.set(address.pk, address);
+          // A WINDOW of epochs, not just the next one: a member who missed a
+          // rotation must still be able to catch up (or learn they're out).
+          for (let ahead = 1n; ahead <= BigInt(CHANNEL_REKEY_LOOKAHEAD); ahead++) {
+            const address = channelRekeyGroupKey(r.key, ch.id, ch.epoch + ahead);
+            byPk.set(address.pk, address);
+          }
         }
       }
       const authors = [...byPk.keys()];
@@ -539,15 +566,23 @@ export function useChannelRekeyWatch2(community: CommunityV2 | undefined) {
         }
       }
       if (fresh.length > 0) writeOpened(community!.idHex, fresh, "rekey");
-      // Per watched (channel, next-epoch) — the held-root dimension that
-      // multiplies the ADDRESSES collapses here, because a round's rumor names
-      // its scope and epoch but not the root it was sealed under.
+      // Per watched (channel, epoch) across the SAME window the REQ above
+      // covers. Reading back only `held + 1` would make the window a
+      // single-poll affair: the wire hands a rotation over once, `since`
+      // advances past it, and the walk it was meant to complete then sees a
+      // chain truncated at the first link on every later poll and every
+      // restart — which is precisely the stranded member the window exists
+      // for. The held-root dimension that multiplies the ADDRESSES collapses
+      // here, because a round's rumor names its scope and epoch but not the
+      // root it was sealed under.
       const stored = await queryRekeyRounds(
         community!.idHex,
-        community!.privateChannels.map((ch) => ({
-          scopeIdHex: bytesToHex(ch.id),
-          newEpoch: ch.epoch + 1n,
-        })),
+        community!.privateChannels.flatMap((ch) =>
+          Array.from({ length: CHANNEL_REKEY_LOOKAHEAD }, (_, i) => ({
+            scopeIdHex: bytesToHex(ch.id),
+            newEpoch: ch.epoch + BigInt(i + 1),
+          })),
+        ),
       );
       const byId = new Map<string, OpenedEvent>();
       for (const e of stored) byId.set(e.rumorId, e);
@@ -579,74 +614,214 @@ export function useChannelRekeyWatch2(community: CommunityV2 | undefined) {
 
       // Walk each held channel independently; accumulate one channels update.
       let nextChannels = entry.current.channels.map((c) => ({ ...c }));
+      const cuts: Array<{ id: string; epoch: number }> = [];
+      // What this pass claimed as handled, so a failed write can release it —
+      // the guard exists to stop the same list update being re-issued while it
+      // is in flight, not to retire a rotation that never landed anywhere.
+      const marked: string[] = [];
+      // Every exit that does NOT write must release what it claimed. The
+      // handles are claimed inside the per-channel loop, but the loop awaits
+      // (decrypt, store reads) and the effect's deps change identity on every
+      // refetch, so a cancellation mid-walk is routine. A handle left claimed
+      // is never re-armed: `watchKey` still names the epoch the channel is
+      // stuck at, so every later pass re-derives the same handle and
+      // `continue`s past it, and the channel sits on a dead key until restart.
+      const releaseClaims = () => {
+        for (const handle of marked) handled.current.delete(handle);
+      };
       let changed = false;
 
       for (const ch of community.privateChannels) {
         const chIdHex = bytesToHex(ch.id);
-        const chNext = ch.epoch + 1n;
-        const key = `${community.idHex}:${chIdHex}:${chNext}`;
-        if (handled.current.has(key)) continue;
 
         // Authorized rotators only (CORD-06): MANAGE_CHANNELS mints a
         // single-channel Rekey, BAN mints a Refounding's channel rotations,
         // the owner outranks all. Key possession is never authority.
-        const rotations = sets.filter(
-          (set) =>
-            set.scopeIdHex === chIdHex &&
-            set.newEpoch === chNext &&
-            !folded.banned.has(set.rotator) &&
-            (set.rotator === folded.ownerHex ||
-              hasPermission(folded.roster, set.rotator, Permissions.BAN) ||
-              hasPermission(folded.roster, set.rotator, Permissions.MANAGE_CHANNELS)) &&
-            citationSatisfied(folded, community.id, set.rotator, set.authority) &&
-            checkContinuity(set, ch.epoch, ch.key).ok,
-        );
+        //
+        // EVERY rotation past my epoch counts, not just `held + 1`: if I
+        // missed one, the channel moved on without me and that next-epoch
+        // address will never carry anything again — leaving me holding a key
+        // that decrypts nothing, with the channel still in my sidebar and no
+        // way to learn I was removed. Continuity is deliberately NOT filtered
+        // here — it gates ADOPTION epoch by epoch as the chain is walked below.
+        const rotations = sets
+          .filter(
+            (set) =>
+              set.scopeIdHex === chIdHex &&
+              set.newEpoch > ch.epoch &&
+              set.complete && // a missing chunk is never a removal
+              !folded.banned.has(set.rotator) &&
+              (set.rotator === folded.ownerHex ||
+                hasPermission(folded.roster, set.rotator, Permissions.BAN) ||
+                hasPermission(folded.roster, set.rotator, Permissions.MANAGE_CHANNELS)) &&
+              citationSatisfied(folded, community.id, set.rotator, set.authority),
+          )
+          .sort((a, b) => (a.newEpoch === b.newEpoch ? 0 : a.newEpoch < b.newEpoch ? -1 : 1));
         if (rotations.length === 0) continue;
 
-        let adopted: Uint8Array | undefined;
-        let sawExcludingRotation = false;
+        // The de-dupe key names the epoch the walk actually LANDS on, so it is
+        // computed after the walk, not from the window's ceiling. Keying it on
+        // the highest rotation in sight would retire a walk that only got part
+        // way: a chain that stalled at a gap would be skipped from the next
+        // poll onward, and the missing link it is waiting for could never be
+        // picked up when it finally arrives.
+        const keyFor = (epoch: bigint) => `${community.idHex}:${chIdHex}:${epoch}`;
+
+        // Walk the rotations epoch by epoch, ascending, carrying the key each
+        // step leaves me holding.
+        //
+        // ADOPTION requires an unbroken chain from the key I already have.
+        // CORD-06 §2 makes `prevcommit` the proof that a rotation extends MY
+        // key, and answers a gap by fetching the missing link (which the
+        // lookahead window has already tried) — never by waiving the check.
+        // Waiving it lets one authorized rotator fork a lagging member onto a
+        // branch neither of them can detect, which is exactly what the
+        // commitment exists to prevent.
+        //
+        // REMOVAL is judged separately and needs no chain: hiding a channel is
+        // local, and errs in the safe direction. So a member whose gap can no
+        // longer be fetched still learns the room moved on without them,
+        // rather than sitting forever on a key that decrypts nothing — the
+        // stranding this watcher's epoch window was widened to fix.
+        const byEpoch = new Map<bigint, typeof rotations>();
         for (const set of rotations) {
-          if (!set.complete) continue; // a missing chunk is never a removal
-          const couldCarryMyBlob = rotationExcludesMe(rotationPublishedAtMs(set), joinedAt);
-          const locator = myLocator(set.rotator, user.pubkey, chIdHex, chNext);
-          const blob = findBlob(set, locator);
-          if (!blob) {
-            if (couldCarryMyBlob) sawExcludingRotation = true;
+          const at = byEpoch.get(set.newEpoch);
+          if (at) at.push(set);
+          else byEpoch.set(set.newEpoch, [set]);
+        }
+        const epochsAscending = [...byEpoch.keys()].sort((a, b) => (a === b ? 0 : a < b ? -1 : 1));
+
+        let chainEpoch = ch.epoch;
+        let chainKey = ch.key;
+        let adopted: { key: Uint8Array; epoch: bigint } | undefined;
+        let excludedAt: bigint | undefined; // ascending scan → the newest wins
+        // Every key the walk steps OFF, newest first. Catching up across a gap
+        // opens each intermediate epoch's key on the way past, and each one
+        // reads the history written under it — so they are retained as priors
+        // rather than thrown away with the step (CORD-03 §3).
+        const steppedOver: Array<{ key: Uint8Array; epoch: bigint }> = [];
+
+        for (const epoch of epochsAscending) {
+          const candidates = byEpoch.get(epoch)!;
+          let keyHere: Uint8Array | undefined;
+          let addressedHere = false;
+
+          for (const set of candidates) {
+            const blob = findBlob(set, myLocator(set.rotator, user.pubkey, chIdHex, epoch));
+            if (!blob) continue;
+            addressedHere = true;
+            // Only a rotation off the key I actually hold can hand me the next
+            // one; a fork, or a gap I could not fetch, is not mine to adopt.
+            if (!checkContinuity(set, chainEpoch, chainKey).ok) continue;
+            try {
+              const plainB64 = await nip44.decrypt(set.rotator, blob.wrapped);
+              // Scope binds INSIDE the ciphertext: a blob minted for another
+              // channel (or the base) can never be spliced onto this one.
+              const newKey = decodeWrappedKey(base64ToBytes(plainB64), ch.id, epoch);
+              // Two rotators racing to one epoch converge on the lower key.
+              keyHere = keyHere ? lowerKeyWins(keyHere, newKey) : newKey;
+            } catch {
+              // Undecryptable at my locator — not a key I can carry forward.
+            }
+          }
+          if (cancelled) return releaseClaims();
+
+          if (keyHere) {
+            steppedOver.unshift({ key: chainKey, epoch: chainEpoch });
+            adopted = { key: keyHere, epoch };
+            chainEpoch = epoch;
+            chainKey = keyHere;
             continue;
           }
-          try {
-            const plainB64 = await nip44.decrypt(set.rotator, blob.wrapped);
-            // Scope binds INSIDE the ciphertext: a blob minted for another
-            // channel (or the base) can never be spliced onto this one.
-            const newKey = decodeWrappedKey(base64ToBytes(plainB64), ch.id, chNext);
-            if (!adopted || lowerKeyWins(adopted, newKey) === newKey) adopted = newKey;
-          } catch {
-            if (couldCarryMyBlob) sawExcludingRotation = true;
+          // Addressed to me, but not off a key I can verify: neither adopt nor
+          // remove. The window keeps polling, so if the missing link shows up
+          // the chain completes; acting either way on an unproven rotation is
+          // how a member ends up on a fork or loses a room they still hold.
+          if (addressedHere) continue;
+          // Nothing here for me at all. If a rotation at this epoch could have
+          // carried my blob and did not, that is the read-cut (CORD-06 §2) —
+          // but only from a rotator who STRICTLY OUTRANKS me. CORD-06
+          // §Authority: "the Rotator must strictly outrank every removed
+          // target"; a receiver cannot see who else a rotation kept or cut
+          // (locators are opaque), but its own removal it can always judge.
+          // A peer's rotation is no more my removal than a forged one.
+          if (
+            candidates.some(
+              (set) =>
+                rotationExcludesMe(rotationPublishedAtMs(set), joinedAt) &&
+                outranksMember(folded.roster, set.rotator, folded.ownerHex, user.pubkey),
+            )
+          ) {
+            excludedAt = epoch;
           }
         }
-        if (cancelled) return;
+        if (cancelled) return releaseClaims();
 
-        if (adopted) {
-          handled.current.add(key);
-          const keyHex = bytesToHex(adopted);
+        // A key addressed to me ABOVE the newest rotation that skipped me is a
+        // re-admission; below it, the exclusion is the later word.
+        if (adopted && (excludedAt === undefined || adopted.epoch > excludedAt)) {
+          const handle = keyFor(adopted.epoch);
+          if (handled.current.has(handle)) continue;
+          handled.current.add(handle);
+          marked.push(handle);
+          const keyHex = bytesToHex(adopted.key);
+          const adoptedEpoch = Number(adopted.epoch);
           nextChannels = nextChannels.map((c) =>
-            c.id.toLowerCase() === chIdHex ? { ...c, key: keyHex, epoch: Number(chNext) } : c,
+            c.id.toLowerCase() === chIdHex
+              ? {
+                  ...c,
+                  key: keyHex,
+                  epoch: adoptedEpoch,
+                  // Retain every key the walk stepped off — the one I held
+                  // plus each intermediate epoch a catch-up passed through.
+                  // Each reads what was written under it (CORD.md history
+                  // rule), so dropping them would trade a rotation for a hole
+                  // in the conversation.
+                  priors: [
+                    ...steppedOver.map((p) => ({ key: bytesToHex(p.key), epoch: Number(p.epoch) })),
+                    ...(c.priors ?? []),
+                  ],
+                }
+              : c,
           );
           changed = true;
-        } else if (sawExcludingRotation) {
+        } else if (excludedAt !== undefined) {
           // Removed from this channel: drop it so it visibly disappears
           // (CORD-06 §2). `seed` retains the original key; only `current`
-          // forgets it.
-          handled.current.add(key);
+          // forgets it. The cut is RECORDED at the epoch that excluded me, so
+          // a stale invite bundle carrying the pre-rotation key can never
+          // merge the access back (see `channel_cuts`).
+          const handle = keyFor(excludedAt);
+          if (handled.current.has(handle)) continue;
+          handled.current.add(handle);
+          marked.push(handle);
           nextChannels = nextChannels.filter((c) => c.id.toLowerCase() !== chIdHex);
+          cuts.push({ id: chIdHex, epoch: Number(excludedAt) });
           changed = true;
         }
       }
 
-      if (!changed || cancelled) return;
-      await updateList({ type: "refresh-channels", communityId: community.idHex, channels: nextChannels }).catch(
-        () => undefined,
-      );
+      // Nothing is going to be written, so release every claim this pass made
+      // — including on the CANCELLED path. The handles are claimed inside the
+      // per-channel loop, but the loop awaits (decrypt, store reads), and the
+      // effect's deps change identity on every refetch, so cancellation
+      // mid-walk is routine. A handle left claimed here is never re-armed:
+      // `watchKey` still names the epoch the channel is stuck at, so every
+      // later pass re-derives the same handle and `continue`s past it, and the
+      // channel sits on a dead key until the app restarts.
+      if (!changed || cancelled) return releaseClaims();
+      await updateList({
+        type: "refresh-channels",
+        communityId: community.idHex,
+        channels: nextChannels,
+        ...(cuts.length > 0 ? { cuts } : {}),
+      }).catch(() => {
+        // The adoption/removal never reached the list, so un-claim it and let
+        // the next poll try again (the base watcher does the same). Leaving it
+        // claimed would retire a rotation this client only ever held in a
+        // local variable.
+        releaseClaims();
+      });
       queryClient.invalidateQueries({ queryKey: ["concord2", "list"] });
     })();
     return () => {
@@ -662,6 +837,146 @@ export function useChannelRekeyWatch2(community: CommunityV2 | undefined) {
  * Requires BAN (or ownership) and a NIP-44 signer — pairwise blob wrapping is
  * one ECDH either side can compute, so bunkers rotate too.
  */
+/**
+ * Rotate ONE held Private Channel's key (CORD-06 §3 channel rotation, without
+ * a Refounding): mint the next channel epoch, deliver it to exactly
+ * `keepRecipients` (+ the rotator), and adopt it locally. Members not handed
+ * a blob see the complete rotation as their removal (useChannelRekeyWatch2)
+ * and the channel disappears from their view — the read-cut behind revoking a
+ * role-gated channel's entitlement (channelAccess.ts). Requires MANAGE_CHANNELS
+ * (or ownership): a verifier honors a single-channel rekey under exactly that
+ * authority, so publishing without it would be dropped network-wide.
+ */
+export function useChannelRekey2(community: CommunityV2 | undefined) {
+  const { nostr } = useNostr();
+  const { user } = useCurrentUser();
+  const { data: folded } = useControlFold2(community);
+  const { data: dissolved } = useDissolved2(community);
+  const { mutateAsync: updateList } = useUpdateCommunityList2();
+  const queryClient = useQueryClient();
+
+  const rekeyChannel = useMutation<
+    void,
+    Error,
+    {
+      channelIdHex: string;
+      keepRecipients: string[];
+      /**
+       * Who this rotation CUTS. Required, not derived from `keepRecipients`,
+       * because CORD-06 §Authority binds the rotator's rank to the removed
+       * set and only the caller knows the membership it filtered.
+       */
+      removedTargets: string[];
+    }
+  >({
+    scope: { id: `concord2-chrekey:${community?.idHex}` },
+    mutationFn: async ({ channelIdHex, keepRecipients, removedTargets }) => {
+      if (!user || !community) throw new Error("Not ready.");
+      if (dissolved) throw new Error("This community was dissolved.");
+      const nip44 = user.signer.nip44;
+      if (!nip44) throw new Error("This signer can't rotate keys (NIP-44 unsupported).");
+      const ch = community.privateChannels.find((c) => bytesToHex(c.id) === channelIdHex);
+      if (!ch) throw new Error("You don't hold this channel's key.");
+      const ownerHex = folded?.ownerHex ?? community.owner;
+      if (user.pubkey !== ownerHex && !(folded && hasPermission(folded.roster, user.pubkey, Permissions.MANAGE_CHANNELS))) {
+        throw new Error("Rotating a channel key needs the Manage-channels permission.");
+      }
+      // CORD-06 §Authority: holding MANAGE_CHANNELS is only half — "the
+      // Rotator must strictly outrank every removed target". Checked before
+      // publishing, because every receiver checks it too: a peer's rotation
+      // is refused as a removal by its target, who then sits holding a key
+      // that decrypts nothing while this client reports the cut succeeded.
+      if (user.pubkey !== ownerHex) {
+        const unrankable = removedTargets.filter(
+          (pk) => pk !== user.pubkey && !(folded && outranksMember(folded.roster, user.pubkey, ownerHex, pk)),
+        );
+        if (unrankable.length > 0) {
+          throw new Error(
+            unrankable.length === 1
+              ? "You don't outrank one of the members this would cut, so they would ignore the rotation."
+              : `You don't outrank ${unrankable.length} of the members this would cut, so they would ignore the rotation.`,
+          );
+        }
+      }
+
+      const chEpoch = ch.epoch + 1n;
+      const chPrevCommit = bytesToHex(epochKeyCommitment(ch.epoch, ch.key));
+      const chKey = await mintOrReuseRotationKey(
+        community.idHex,
+        { kind: "channel", channelId: ch.id },
+        chEpoch,
+        chPrevCommit,
+      );
+      const chPlain = bytesToBase64(encodeWrappedKey(ch.id, chEpoch, chKey));
+      const recipients = [...new Set([user.pubkey, ...keepRecipients])];
+      const chBlobs: RekeyBlob[] = [];
+      for (const pk of recipients) {
+        chBlobs.push({ locator: myLocator(user.pubkey, pk, channelIdHex, chEpoch), wrapped: await nip44.encrypt(pk, chPlain) });
+      }
+      const chAddress = channelRekeyGroupKey(community.root, ch.id, chEpoch);
+      const chRumors = buildRekeyRumors(
+        user.pubkey,
+        { scope: { kind: "channel", channelId: ch.id }, newEpoch: chEpoch, prevEpoch: ch.epoch, prevCommit: chPrevCommit },
+        chBlobs,
+        Date.now(),
+        // A rotation is an authority action, so it cites the Grant it acts
+        // under (CORD-06 §Authority / CORD-04 §5). Without it every receiver's
+        // `citationSatisfied` fails closed for a non-owner rotator: the
+        // rotation is dropped network-wide, so nobody adopts the new key and
+        // the member being revoked is never actually cut.
+        citationFor(community, folded, user.pubkey),
+      );
+      for (const rumor of chRumors) {
+        const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, chAddress, user.signer), chAddress);
+        const results = await Promise.allSettled(
+          community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
+        );
+        if (!results.some((r) => r.status === "fulfilled")) {
+          throw new Error(`No relay accepted the #${ch.name} channel key rotation.`);
+        }
+      }
+
+      // Adopt my own rotation immediately (the watcher would also pick it up,
+      // but the rotator must never keep writing under the severed key).
+      const rotated = community.privateChannels.map((c) =>
+        bytesToHex(c.id) === channelIdHex
+          ? { ...c, key: chKey, epoch: chEpoch, priors: [{ key: c.key, epoch: c.epoch }, ...(c.priors ?? [])] }
+          : c,
+      );
+      await updateList({
+        type: "refresh-channels",
+        communityId: community.idHex,
+        channels: channelKeysToWire(rotated),
+      });
+      queryClient.invalidateQueries({ queryKey: ["concord2", "list"] });
+
+      // Any link I minted still vends the key this rotation just retired, so a
+      // joiner would land on a dead epoch and then read the blobless rotation
+      // as their own removal. Re-mint at the fresh keys, exactly as a
+      // Refounding does (CORD-05 §2) — only I hold these links' `signer_sk`.
+      // Best-effort: the rotation itself has already landed, and
+      // `useLinkRefreshWatch2` retries.
+      await refreshInviteBundlesFor(
+        nostr,
+        user,
+        { ...community, privateChannels: rotated },
+        folded?.metadata,
+      ).catch(() => undefined);
+    },
+  });
+
+  return {
+    rekeyChannel: rekeyChannel.mutateAsync,
+    isRekeyingChannel: rekeyChannel.isPending,
+    canRekeyChannel: Boolean(
+      user?.signer.nip44 &&
+      community &&
+      (user.pubkey === (folded?.ownerHex ?? community.owner) ||
+        (folded && hasPermission(folded.roster, user.pubkey, Permissions.MANAGE_CHANNELS))),
+    ),
+  };
+}
+
 export function useRefound2(community: CommunityV2 | undefined) {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
@@ -745,6 +1060,20 @@ export function useRefound2(community: CommunityV2 | undefined) {
 
       const authorized = user.pubkey === folded.ownerHex || hasPermission(folded.roster, user.pubkey, Permissions.BAN);
       if (!authorized) throw new Error("You don't have permission to rotate this community's keys.");
+      // CORD-06 §Authority, the other half: BAN alone does not authorize a
+      // Refounding — "the Rotator must strictly outrank every removed
+      // target". Judged against the freshly-folded roster above, so a
+      // just-landed promotion of the target counts.
+      if (user.pubkey !== folded.ownerHex) {
+        const unrankable = exclude.filter(
+          (pk) => pk !== user.pubkey && !outranksMember(folded.roster, user.pubkey, folded.ownerHex, pk),
+        );
+        if (unrankable.length > 0) {
+          throw new Error(
+            "You don't outrank every member this would remove, so they would ignore the rotation.",
+          );
+        }
+      }
 
       // Freshness guard: if the list entry has advanced past the epoch this
       // call captured (a prior rotation landed first), abort rather than mint a
@@ -908,7 +1237,17 @@ export function useRefound2(community: CommunityV2 | undefined) {
             throw new Error(`No relay accepted the #${ch.name} channel key rotation.`);
           }
         }
-        rotatedChannels.push({ ...ch, key: chKey, epoch: chEpoch });
+        // The key this rotation steps off still reads everything written under
+        // it (CORD-03 §3), so it is retained rather than overwritten — the
+        // same continuity a single-channel rotation keeps. Dropping it here
+        // would make every ban silently truncate every private channel's
+        // history, for the members who stayed.
+        rotatedChannels.push({
+          ...ch,
+          key: chKey,
+          epoch: chEpoch,
+          priors: [{ key: ch.key, epoch: ch.epoch }, ...(ch.priors ?? [])],
+        });
       }
 
       // 3. Guestbook snapshot: best-effort, non-gating (CORD-02 §5).
@@ -949,6 +1288,7 @@ export function useRefound2(community: CommunityV2 | undefined) {
           rootEpoch: newEpoch,
           privateChannels: rotatedChannels,
         };
+
         let refreshed = false;
         for (let attempt = 0; attempt < 3; attempt++) {
           try {

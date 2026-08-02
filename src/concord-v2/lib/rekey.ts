@@ -16,7 +16,7 @@
  * spec feedback).
  */
 
-import { bytesToHex, epochKeyCommitment, random32, recipientLocator } from "@/concord-v2/lib/derive";
+import { bytesToHex, channelRekeyGroupKey, epochKeyCommitment, random32, recipientLocator } from "@/concord-v2/lib/derive";
 import { KIND_REKEY, KIND_SEAL_ENCRYPTED } from "@/concord-v2/lib/kinds";
 import { citationFromTags, citationToTag, isTagDecimal, type AuthorityCitation } from "@/concord-v2/lib/edition";
 import { buildRumor, type OpenedEvent } from "@/concord-v2/lib/stream";
@@ -25,6 +25,20 @@ import { readFolded, writeFolded } from "@/lib/foldedCache";
 
 /** Per-recipient blobs per rekey event (CORD-06 §1). */
 export const REKEY_BLOBS_PER_EVENT = 120;
+
+/**
+ * How many channel epochs past the one I hold to watch for rotations.
+ *
+ * Watching only `held + 1` strands anyone who MISSES a rotation — offline
+ * through it, behind an auth-gating relay, or holding a key a stale list
+ * merge resurrected: the channel moves on without them and the address they
+ * poll is never published again. They keep a key that decrypts nothing while
+ * the channel still sits in their sidebar, and no later rotation can tell
+ * them they were removed. A window lets the client catch up (or learn it is
+ * out) across any gap up to this depth; the cost is one extra author per
+ * epoch per held root on a filter that is already author-scoped.
+ */
+export const CHANNEL_REKEY_LOOKAHEAD = 8;
 
 const ZERO32 = new Uint8Array(32);
 const ZERO32_HEX = "0".repeat(64);
@@ -378,3 +392,74 @@ export function myLocator(rotatorHex: string, myHex: string, scopeIdHex: string,
 }
 
 export { ZERO32_HEX as ROOT_SCOPE_HEX };
+
+/**
+ * Every rekey address a channel could have published a rotation to, from
+ * epoch 1 up to `maxEpoch`, under each of the roots this client holds.
+ *
+ * The point is that this needs no channel key. CORD-06 §2 derives a channel's
+ * rekey address from the `community_root` and the `channel_id` alone, both of
+ * which every member has, so a member who never held a single generation of a
+ * channel can still see where its rotations went — and therefore how far its
+ * epoch counter has climbed. That is what makes CORD-03 §2's "monotonic,
+ * never resetting" checkable by whoever is about to privatise a public
+ * channel, rather than a promise resting on which keys they happen to keep.
+ *
+ * Returns address pubkey → the epoch it stands for.
+ */
+export function channelRekeyAddressWindow(
+  roots: ReadonlyArray<{ key: Uint8Array }>,
+  channelId: Uint8Array,
+  maxEpoch: number,
+): Map<string, bigint> {
+  const out = new Map<string, bigint>();
+  for (const root of roots) {
+    for (let e = 1; e <= maxEpoch; e++) {
+      out.set(channelRekeyGroupKey(root.key, channelId, BigInt(e)).pk, BigInt(e));
+    }
+  }
+  return out;
+}
+
+/**
+ * The highest channel epoch any observed rotation address accounts for — the
+ * floor a privatisation must climb past (0n when the channel has never been
+ * private, so the first privatisation is epoch 1, CORD-03 §2).
+ */
+export function highestRotatedEpoch(
+  window: ReadonlyMap<string, bigint>,
+  seenAuthors: Iterable<string>,
+): bigint {
+  let highest = 0n;
+  for (const pk of seenAuthors) {
+    const epoch = window.get(pk);
+    if (epoch !== undefined && epoch > highest) highest = epoch;
+  }
+  return highest;
+}
+
+/**
+ * {@link highestRotatedEpoch}, but refusing an INCONCLUSIVE read.
+ *
+ * The probe covers epochs 1..`maxEpoch`, so a rotation found at `maxEpoch`
+ * itself proves only that the channel reached the edge of what was looked at —
+ * there may be more above it. Returning the ceiling anyway would mint the next
+ * generation at an epoch the channel has already used, and CORD-03 §2's
+ * counter is "monotonic, never resetting" precisely so that cannot happen: it
+ * is what lets the list merge (epoch-max) and a `channel_cuts` floor
+ * (epoch-min) tell two generations apart at all. A collision is silent at
+ * mint time and unrecoverable afterwards, so a saturated probe throws.
+ */
+export function channelEpochFloor(
+  window: ReadonlyMap<string, bigint>,
+  seenAuthors: Iterable<string>,
+  maxEpoch: number,
+): bigint {
+  const highest = highestRotatedEpoch(window, seenAuthors);
+  if (highest >= BigInt(maxEpoch)) {
+    throw new Error(
+      `This channel has rotated at least ${maxEpoch} times; this client can't establish its next epoch safely.`,
+    );
+  }
+  return highest;
+}

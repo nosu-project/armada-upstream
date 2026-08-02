@@ -5,7 +5,7 @@ import { useControlFold2, citationFor, invalidateControl2, publishEdition2 } fro
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { buildGrantEdition, buildMetadataEdition, buildRoleEdition } from "@/concord-v2/lib/control";
 import { bytesToHex, grantLocator, hex32, random32 } from "@/concord-v2/lib/derive";
-import { adminRole, canActOnMember, canActOnPosition, emptyRoles, moderatorRole, Permissions, type MemberGrant, type Role } from "@/concord-v2/lib/roles";
+import { adminRole, canActOnMember, canActOnPosition, emptyRoles, grantRefusal, moderatorRole, Permissions, type MemberGrant, type Role } from "@/concord-v2/lib/roles";
 import type { CommunityMetadata, CommunityV2, ImagePointer } from "@/concord-v2/lib/types";
 
 /**
@@ -111,6 +111,13 @@ export function useRoles2(community: CommunityV2 | undefined) {
   const setMemberRoles = useMutation<void, Error, { member: string; roleIds: string[] }>({
     mutationFn: async ({ member, roleIds }) => {
       if (!user || !community) throw new Error("Not ready.");
+      // The fold's own gate, applied before publishing (CORD-04 §2/§3): a
+      // Grant whose signer doesn't outrank the member and every granted Role
+      // is dropped by every verifier — fail here with a reason instead. The
+      // UI pre-gates too, but a mutation must not rely on its callers.
+      const ownerHex = folded?.ownerHex ?? community.owner;
+      const refusal = grantRefusal(folded?.roster ?? emptyRoles(), user.pubkey, ownerHex, member, roleIds);
+      if (refusal) throw new Error(refusal);
       const head = grantHeadOf(member);
       const grant: MemberGrant = { member, roleIds };
       await publishEdition2(
@@ -172,8 +179,12 @@ export function useRoles2(community: CommunityV2 | undefined) {
         }
       }
 
+      // A tier change swaps only the stock Admin/Moderator role — custom
+      // roles the member holds ride along untouched.
+      const stock = new Set([adminRoleId, moderatorRoleId].filter((id): id is string => Boolean(id)));
+      const kept = (roster.grants.find((g) => g.member === member)?.roleIds ?? []).filter((id) => !stock.has(id));
       const head = grantHeadOf(member);
-      const grant: MemberGrant = { member, roleIds: roleId ? [roleId] : [] };
+      const grant: MemberGrant = { member, roleIds: roleId ? [...kept, roleId] : kept };
       await publishEdition2(
         nostr,
         community,

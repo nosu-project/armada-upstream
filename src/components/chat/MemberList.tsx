@@ -1,4 +1,4 @@
-import { AtSign, Ban, Bot, Copy, Crown, IdCard, MessageSquareText, MoreVertical, Music, Shield, ShieldOff, Smile, UserMinus, X } from "lucide-react";
+import { AtSign, Ban, Bot, Copy, Crown, IdCard, MessageSquareText, MoreVertical, Music, Shield, ShieldOff, Smile, UserCog, UserMinus, X } from "lucide-react";
 
 import { useState } from "react";
 
@@ -9,18 +9,26 @@ import { StatusDialog } from "@/components/dialogs/StatusDialog";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
+  ContextMenuCheckboxItem,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuLabel,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
@@ -54,7 +62,32 @@ interface MenuParts {
   Item: ComponentType<{ className?: string; onSelect?: (e: Event) => void; children?: ReactNode }>;
   Separator: ComponentType<{ className?: string }>;
   Label: ComponentType<{ className?: string; children?: ReactNode }>;
+  Sub: ComponentType<{ children?: ReactNode }>;
+  SubTrigger: ComponentType<{ className?: string; children?: ReactNode }>;
+  SubContent: ComponentType<{ className?: string; children?: ReactNode }>;
+  CheckboxItem: ComponentType<{
+    className?: string;
+    checked?: boolean;
+    disabled?: boolean;
+    onCheckedChange?: (checked: boolean) => void;
+    onSelect?: (e: Event) => void;
+    children?: ReactNode;
+  }>;
 }
+
+/** A grantable role in the member-row "Roles" picker (Concord custom roles). */
+export interface RolePickerOption {
+  id: string;
+  name: string;
+  /** Cosmetic badge tint (low 24 bits an #rrggbb); 0 = theme default. */
+  color: number;
+  /** Set when the role is channel-scoped — rendered as a "# channel" hint. */
+  channelName?: string;
+  /** Whether the viewer outranks this role's position (may grant/revoke it). */
+  assignable: boolean;
+}
+
+const roleTint = (color: number) => `#${(color & 0xffffff).toString(16).padStart(6, "0")}`;
 
 interface MemberRowProps {
   pubkey: string;
@@ -82,6 +115,18 @@ interface MemberRowProps {
   onEditProfile?: () => void;
   /** Start a direct message with this member (Buzz relays: kind 41010). */
   onMessage?: (pubkey: string) => void;
+  /** Concord: every custom role, for the per-member "Roles" picker submenu. */
+  roleCatalog?: RolePickerOption[];
+  /** Concord: role ids this member currently holds. */
+  customRoleIds?: string[];
+  /** Concord: whether the viewer outranks this member (may edit their roles). */
+  canEditRoles?: boolean;
+  /** Concord: grant/revoke one custom role. */
+  onToggleRole?: (pubkey: string, roleId: string, on: boolean) => void;
+  /** True while a toggle for this member+role is still publishing. */
+  isRoleToggling?: (pubkey: string, roleId: string) => boolean;
+  /** A custom-role chip for members without a tier badge (name + tint). */
+  customBadge?: { name: string; color: number };
 }
 
 function MemberRow({
@@ -100,6 +145,12 @@ function MemberRow({
   isBanned,
   onEditProfile,
   onMessage,
+  roleCatalog,
+  customRoleIds,
+  canEditRoles,
+  onToggleRole,
+  isRoleToggling,
+  customBadge,
 }: MemberRowProps) {
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
@@ -131,8 +182,10 @@ function MemberRow({
     );
   };
 
+  const showRolePicker = Boolean(onToggleRole && canEditRoles && roleCatalog && roleCatalog.length > 0);
+
   // Shared between the ⋮ dropdown and the right-click context menu.
-  const renderMenuItems = ({ Item, Separator, Label }: MenuParts) => (
+  const renderMenuItems = ({ Item, Separator, Label, Sub, SubTrigger, SubContent, CheckboxItem }: MenuParts) => (
     <>
       <Item className="gap-3 px-3 py-2.5" onSelect={() => requestMention(pubkey)}>
         <AtSign className="size-4" />
@@ -163,14 +216,48 @@ function MemberRow({
         </Item>
       )}
 
-      {canActOnUser && (onSetRole || onRemove || onKick || onBan || onUnban) && (
+      {((canActOnUser && (onSetRole || onRemove || onKick || onBan || onUnban)) || showRolePicker) && (
         <>
           <Separator />
           <Label className="px-2 pb-1.5 text-[11px] uppercase tracking-wide text-muted-foreground/80">
-            Moderation
+            {/* The picker can stand alone on the viewer's own row (an owner
+                self-assigning a cosmetic role) — no moderation implied. */}
+            {canActOnUser ? "Moderation" : "Roles"}
           </Label>
 
-          {onSetRole && viewerIsAdmin && !isAdmin && (
+          {showRolePicker && (
+            <Sub>
+              <SubTrigger className="gap-3 px-3 py-2.5">
+                <UserCog className="size-4" />
+                Roles
+              </SubTrigger>
+              <SubContent className="w-56 max-h-72 overflow-y-auto p-1.5">
+                {roleCatalog!.map((role) => (
+                  <CheckboxItem
+                    key={role.id}
+                    className="py-2"
+                    checked={customRoleIds?.includes(role.id) ?? false}
+                    // A Grant replaces the member's whole role list, so a
+                    // second click before the first lands would publish from a
+                    // stale set and re-trigger any gated-channel rotation.
+                    disabled={!role.assignable || Boolean(isRoleToggling?.(pubkey, role.id))}
+                    onCheckedChange={(on) => onToggleRole!(pubkey, role.id, on)}
+                    // Keep the menu open so several roles can be toggled in one visit.
+                    onSelect={(e) => e.preventDefault()}
+                  >
+                    <span className="min-w-0 flex-1 truncate text-sm" style={role.color ? { color: roleTint(role.color) } : undefined}>
+                      {role.name}
+                    </span>
+                    {role.channelName && (
+                      <span className="ml-2 shrink-0 text-[11px] text-muted-foreground truncate max-w-24"># {role.channelName}</span>
+                    )}
+                  </CheckboxItem>
+                ))}
+              </SubContent>
+            </Sub>
+          )}
+
+          {canActOnUser && onSetRole && viewerIsAdmin && !isAdmin && (
             <Item
               className="gap-3 px-3 py-2.5"
               onSelect={() => onSetRole(pubkey, [ROLE_ADMIN])}
@@ -179,7 +266,7 @@ function MemberRow({
               Make admin
             </Item>
           )}
-          {onSetRole && !isModerator && !isAdmin && (
+          {canActOnUser && onSetRole && !isModerator && !isAdmin && (
             <Item
               className="gap-3 px-3 py-2.5"
               onSelect={() => onSetRole(pubkey, [ROLE_MODERATOR])}
@@ -188,7 +275,7 @@ function MemberRow({
               Make moderator
             </Item>
           )}
-          {onSetRole && isAdmin && (
+          {canActOnUser && onSetRole && isAdmin && (
             <Item
               className="gap-3 px-3 py-2.5"
               onSelect={() => onSetRole(pubkey, [ROLE_MODERATOR])}
@@ -197,7 +284,7 @@ function MemberRow({
               Demote to moderator
             </Item>
           )}
-          {onSetRole && (isAdmin || isModerator) && (
+          {canActOnUser && onSetRole && (isAdmin || isModerator) && (
             <Item
               className="gap-3 px-3 py-2.5"
               onSelect={() => onSetRole(pubkey, [])}
@@ -207,7 +294,7 @@ function MemberRow({
             </Item>
           )}
 
-          {onRemove && (
+          {canActOnUser && onRemove && (
             <Item
               className="gap-3 px-3 py-2.5 text-destructive focus:text-destructive"
               onSelect={() => onRemove(pubkey)}
@@ -217,13 +304,13 @@ function MemberRow({
             </Item>
           )}
 
-          {onKick && (
+          {canActOnUser && onKick && (
             <Item className="gap-3 px-3 py-2.5" onSelect={() => onKick(pubkey)}>
               <UserMinus className="size-4" />
               Kick (can rejoin)
             </Item>
           )}
-          {onBan && !isBanned && (
+          {canActOnUser && onBan && !isBanned && (
             <Item
               className="gap-3 px-3 py-2.5 text-destructive focus:text-destructive"
               onSelect={() => onBan(pubkey)}
@@ -232,7 +319,7 @@ function MemberRow({
               {banLabel?.(pubkey) ?? "Ban & lock out"}
             </Item>
           )}
-          {onUnban && isBanned && (
+          {canActOnUser && onUnban && isBanned && (
             <Item className="gap-3 px-3 py-2.5" onSelect={() => onUnban(pubkey)}>
               <ShieldOff className="size-4" />
               Unban
@@ -320,6 +407,17 @@ function MemberRow({
           <Shield className="size-3" aria-hidden />
           Mod
         </span>
+      ) : customBadge ? (
+        <span
+          title={customBadge.name}
+          className={cn(
+            "shrink-0 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium max-w-24",
+            !customBadge.color && "bg-muted text-muted-foreground",
+          )}
+          style={customBadge.color ? { color: roleTint(customBadge.color), backgroundColor: `${roleTint(customBadge.color)}26` } : undefined}
+        >
+          <span className="truncate">{customBadge.name}</span>
+        </span>
       ) : roleSet.has(ROLE_BOT) ? (
         <span
           title="Agent"
@@ -353,6 +451,10 @@ function MemberRow({
             Item: DropdownMenuItem,
             Separator: DropdownMenuSeparator,
             Label: DropdownMenuLabel,
+            Sub: DropdownMenuSub,
+            SubTrigger: DropdownMenuSubTrigger,
+            SubContent: DropdownMenuSubContent,
+            CheckboxItem: DropdownMenuCheckboxItem,
           })}
         </DropdownMenuContent>
       </DropdownMenu>
@@ -363,6 +465,10 @@ function MemberRow({
         Item: ContextMenuItem,
         Separator: ContextMenuSeparator,
         Label: ContextMenuLabel,
+        Sub: ContextMenuSub,
+        SubTrigger: ContextMenuSubTrigger,
+        SubContent: ContextMenuSubContent,
+        CheckboxItem: ContextMenuCheckboxItem,
       })}
     </ContextMenuContent>
     </ContextMenu>
@@ -398,6 +504,22 @@ interface MemberListProps {
   onEditProfile?: () => void;
   /** Start a direct message with a member (Buzz relays: kind 41010). */
   onMessage?: (pubkey: string) => void;
+  /** Concord: every custom role, position-ordered, for the "Roles" picker. */
+  roleCatalog?: RolePickerOption[];
+  /** Concord: pubkey → the custom role ids that member holds. */
+  memberRoleIds?: Record<string, string[]>;
+  /** Concord: whether the viewer outranks a member (may edit their roles). */
+  canEditMemberRoles?: (pubkey: string) => boolean;
+  /** Concord: grant/revoke one custom role on one member. */
+  onToggleRole?: (pubkey: string, roleId: string, on: boolean) => void;
+  /** True while a toggle for this member+role is still publishing. */
+  isRoleToggling?: (pubkey: string, roleId: string) => boolean;
+  /**
+   * Hoisted role sections, in display order: each renders as its own named
+   * group above Admins, and its members are pulled out of the Admins/Members
+   * groups below (a member appears exactly once).
+   */
+  roleSections?: Array<{ id: string; name: string; color: number; members: string[] }>;
   /** Override the default desktop panel chrome (e.g. for the mobile drawer). */
   className?: string;
 }
@@ -421,9 +543,24 @@ export function MemberList({
   onClose,
   onEditProfile,
   onMessage,
+  roleCatalog,
+  memberRoleIds,
+  canEditMemberRoles,
+  onToggleRole,
+  isRoleToggling,
+  roleSections,
   className,
 }: MemberListProps) {
   const adminMap = new Map(admins.map((a) => [a.pubkey, a.roles] as const));
+  // Members already shown under a hoisted role section render nowhere else.
+  const sectioned = new Set((roleSections ?? []).flatMap((s) => s.members));
+  // The chip for a member with no tier badge: their first (highest-position)
+  // server-scope custom role. Tier badges out-prioritize it in MemberRow.
+  const customBadgeOf = (pubkey: string): { name: string; color: number } | undefined => {
+    const held = memberRoleIds?.[pubkey];
+    if (!held?.length || !roleCatalog) return undefined;
+    return roleCatalog.find((r) => !r.channelName && held.includes(r.id));
+  };
   // NIP-29 relays don't guarantee a stable order for the `p` tags in the
   // members/admins events, so each 30s refetch could otherwise reshuffle the
   // roster. Sort the owner first, then by pubkey for a stable order.
@@ -433,8 +570,9 @@ export function MemberList({
     const bo = isOwnerRole(b) ? 0 : 1;
     return ao - bo || a.pubkey.localeCompare(b.pubkey);
   });
+  const visibleAdmins = sortedAdmins.filter((a) => !sectioned.has(a.pubkey));
   const regulars = members
-    .filter((pubkey) => !adminMap.has(pubkey))
+    .filter((pubkey) => !adminMap.has(pubkey) && !sectioned.has(pubkey))
     .sort((a, b) => a.localeCompare(b));
 
   return (
@@ -457,12 +595,12 @@ export function MemberList({
           </Button>
         </div>
       )}
-      {admins.length > 0 && (
+      {visibleAdmins.length > 0 && (
         <>
           <h3 className="px-2 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Admins · {admins.length}
+            Admins · {visibleAdmins.length}
           </h3>
-          {sortedAdmins.map((admin) => (
+          {visibleAdmins.map((admin) => (
             <MemberRow
               key={admin.pubkey}
               pubkey={admin.pubkey}
@@ -480,10 +618,52 @@ export function MemberList({
               isBanned={bannedPubkeys?.has(admin.pubkey)}
               onEditProfile={onEditProfile}
               onMessage={onMessage}
+              roleCatalog={roleCatalog}
+              customRoleIds={memberRoleIds?.[admin.pubkey]}
+              canEditRoles={canEditMemberRoles?.(admin.pubkey)}
+              onToggleRole={onToggleRole}
+              isRoleToggling={isRoleToggling}
+              customBadge={customBadgeOf(admin.pubkey)}
             />
           ))}
         </>
       )}
+
+      {(roleSections ?? []).map((section) => (
+        <div key={section.id}>
+          <h3
+            className="px-2 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+            style={section.color ? { color: roleTint(section.color) } : undefined}
+          >
+            {section.name} · {section.members.length}
+          </h3>
+          {section.members.map((pubkey) => (
+            <MemberRow
+              key={pubkey}
+              pubkey={pubkey}
+              roles={adminMap.get(pubkey)}
+              presence={presence?.[pubkey]}
+              canModerate={canModerate}
+              viewerIsAdmin={viewerIsAdmin}
+              currentUserPubkey={currentUserPubkey}
+              onRemove={onRemove}
+              onSetRole={onSetRole}
+              onKick={onKick}
+              onBan={onBan}
+              banLabel={banLabel}
+              onUnban={onUnban}
+              isBanned={bannedPubkeys?.has(pubkey)}
+              onEditProfile={onEditProfile}
+              onMessage={onMessage}
+              roleCatalog={roleCatalog}
+              customRoleIds={memberRoleIds?.[pubkey]}
+              canEditRoles={canEditMemberRoles?.(pubkey)}
+              onToggleRole={onToggleRole}
+              isRoleToggling={isRoleToggling}
+            />
+          ))}
+        </div>
+      ))}
 
       <h3 className="px-2 py-1 mt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
         Members · {regulars.length}
@@ -511,6 +691,12 @@ export function MemberList({
             isBanned={bannedPubkeys?.has(pubkey)}
             onEditProfile={onEditProfile}
             onMessage={onMessage}
+            roleCatalog={roleCatalog}
+            customRoleIds={memberRoleIds?.[pubkey]}
+            canEditRoles={canEditMemberRoles?.(pubkey)}
+            onToggleRole={onToggleRole}
+            isRoleToggling={isRoleToggling}
+            customBadge={customBadgeOf(pubkey)}
           />
         ))
       )}

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   baseRekeyGroupKey,
   bytesToHex,
+  channelRekeyGroupKey,
   epochKeyCommitment,
   random32,
   recipientLocator,
@@ -14,6 +15,8 @@ import { KIND_SEAL_ENCRYPTED } from "@/concord-v2/lib/kinds";
 import {
   base64ToBytes,
   buildRekeyRumors,
+  channelRekeyAddressWindow,
+  highestRotatedEpoch,
   bytesToBase64,
   checkContinuity,
   decodeWrappedKey,
@@ -322,5 +325,43 @@ describe("rotation key reservation (retry safety)", () => {
     const forked = await mintOrReuseRotationKey(CID, { kind: "root" }, 7n, "cd".repeat(32));
     const hexes = [base, nextEpoch, channel, forked].map(bytesToHex);
     expect(new Set(hexes).size, "a reservation is only shared by genuine retries").toBe(4);
+  });
+});
+
+describe("channel epoch floor from the wire (CORD-03 §2 / CORD-06 §2)", () => {
+  it("derives rotation addresses from the ROOT alone — no channel key needed", () => {
+    // This is the whole reason the floor is discoverable. A member who never
+    // held a single generation of a channel still holds the community root,
+    // and CORD-06 §2 keys the rekey address on (root, channel_id, epoch).
+    const root = random32();
+    const channelId = random32();
+    const window = channelRekeyAddressWindow([{ key: root }], channelId, 4);
+    expect(window.size).toBe(4);
+    expect([...window.values()]).toEqual([1n, 2n, 3n, 4n]);
+    for (const [pk, epoch] of window) {
+      expect(pk).toBe(channelRekeyGroupKey(root, channelId, epoch).pk);
+    }
+  });
+
+  it("spans every held root, since a Refounding seals under the PRIOR one", () => {
+    const a = random32();
+    const b = random32();
+    const channelId = random32();
+    expect(channelRekeyAddressWindow([{ key: a }, { key: b }], channelId, 3).size).toBe(6);
+  });
+
+  it("reports the highest epoch any observed rotation accounts for", () => {
+    const root = random32();
+    const channelId = random32();
+    const window = channelRekeyAddressWindow([{ key: root }], channelId, 8);
+    const at = (e: bigint) => channelRekeyGroupKey(root, channelId, e).pk;
+    expect(highestRotatedEpoch(window, [at(1n), at(5n), at(3n)])).toBe(5n);
+  });
+
+  it("is 0 for a channel that never rotated, so the first privatisation is epoch 1", () => {
+    const window = channelRekeyAddressWindow([{ key: random32() }], random32(), 8);
+    expect(highestRotatedEpoch(window, [])).toBe(0n);
+    // An unrelated author proves nothing about this channel.
+    expect(highestRotatedEpoch(window, ["ff".repeat(32)])).toBe(0n);
   });
 });

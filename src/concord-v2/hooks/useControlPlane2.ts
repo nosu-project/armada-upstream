@@ -537,11 +537,31 @@ export async function publishEdition2(
   const control = currentControlGroup(community);
   const wrap = await sealEdition(rumor, control, signer);
   const urls = opts?.relays ?? community.relays;
-  const results = await Promise.allSettled(
-    urls.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
-  );
+  const attempt = () =>
+    Promise.allSettled(urls.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })));
+  let results = await attempt();
+  // An auth-gating relay refuses a stream-authored wrap until the socket's
+  // NIP-42 wave re-authenticates the control key ("restricted: you cannot
+  // publish events on behalf of others") — a race every socket (re)open
+  // invites. One paced retry outlives the wave; a genuine policy refusal
+  // just fails again and surfaces below.
+  if (
+    !results.some((r) => r.status === "fulfilled") &&
+    results.some((r) => r.status === "rejected" && /restricted|auth/i.test(String(r.reason instanceof Error ? r.reason.message : r.reason)))
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    results = await attempt();
+  }
   if (!results.some((r) => r.status === "fulfilled")) {
-    throw new Error("No relay accepted the change.");
+    if (urls.length === 0) throw new Error("No relay accepted the change: the community has no relays configured.");
+    const reasons = [
+      ...new Set(
+        results
+          .map((r) => (r.status === "rejected" ? (r.reason instanceof Error ? r.reason.message : String(r.reason)) : ""))
+          .filter(Boolean),
+      ),
+    ];
+    throw new Error(`No relay accepted the change${reasons.length ? `: ${reasons.slice(0, 2).join("; ")}` : "."}`);
   }
   // Write our own edition to the local opened-event store immediately: the
   // refetch after invalidation unions the store, so the publisher's fold picks

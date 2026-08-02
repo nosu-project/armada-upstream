@@ -79,6 +79,27 @@ export interface Role {
   scope: RoleScope;
   /** Cosmetic badge tint; 0 = theme default. */
   color: number;
+  /**
+   * Hoist: show holders under this role's own named section in the member
+   * list. An Armada extension field — written only when true, read tolerantly,
+   * absent on the frozen CORD-04 baseline (a client that drops it loses only
+   * the grouping, never authority).
+   */
+  display?: boolean;
+}
+
+/**
+ * The CORD-04 §3 display order: by `position` (lower is higher authority),
+ * ties broken by the lower `role_id`.
+ *
+ * The tiebreak is not cosmetic. Two Roles MAY share a position — they are
+ * peers — and without a deterministic second key the order falls out of fold
+ * insertion, which differs between clients and between reloads. Anything
+ * index-based over the list (a drag, a move-up button) then acts on whichever
+ * pair happened to land adjacent.
+ */
+export function byDisplayOrder(a: Role, b: Role): number {
+  return a.position - b.position || a.roleId.localeCompare(b.roleId);
 }
 
 /** A stock server-scope Admin role: all current management bits, position 1. */
@@ -109,6 +130,8 @@ interface RoleWire {
   permissions: string | number;
   scope: { kind: "server" } | { kind: "channel"; channel_id: string };
   color: number;
+  /** Armada hoist extension — present only when true (see {@link Role.display}). */
+  display?: boolean;
 }
 
 export function roleToJSON(role: Role): string {
@@ -121,6 +144,7 @@ export function roleToJSON(role: Role): string {
     permissions: role.permissions.toString(), // always the string form
     scope,
     color: role.color,
+    ...(role.display === true ? { display: true } : {}),
   };
   return JSON.stringify(wire);
 }
@@ -151,6 +175,7 @@ export function roleFromJSON(json: string): Role | undefined {
       permissions,
       scope,
       color: typeof w.color === "number" ? w.color : 0,
+      ...(w.display === true ? { display: true } : {}),
     };
   } catch {
     return undefined;
@@ -217,6 +242,31 @@ export function effectivePermissions(roles: CommunityRoles, memberHex: string): 
   return rolesOf(roles, memberHex).reduce((acc, r) => acc | r.permissions, 0n);
 }
 
+/**
+ * Effective permissions for an action TARGETING one channel: server-scope
+ * Roles plus Roles scoped to that channel. The fold stays scope-agnostic
+ * (every implementation folds the same union, CORD-04 §3), so this narrows
+ * only what THIS client offers its user, never what it honors from others.
+ */
+export function effectivePermissionsIn(roles: CommunityRoles, memberHex: string, channelIdHex: string): bigint {
+  return rolesOf(roles, memberHex).reduce(
+    (acc, r) => (r.scope.kind === "server" || r.scope.channelId === channelIdHex ? acc | r.permissions : acc),
+    0n,
+  );
+}
+
+/** {@link isAuthorized}, judged against one channel per {@link effectivePermissionsIn}. */
+export function isAuthorizedIn(
+  roles: CommunityRoles,
+  actorHex: string,
+  ownerHex: string | undefined,
+  channelIdHex: string,
+  permission: bigint,
+): boolean {
+  if (ownerHex === actorHex) return true;
+  return permsContain(effectivePermissionsIn(roles, actorHex, channelIdHex), permission);
+}
+
 export function hasPermission(roles: CommunityRoles, memberHex: string, bits: bigint): boolean {
   return permsContain(effectivePermissions(roles, memberHex), bits);
 }
@@ -254,6 +304,65 @@ export function isAuthorized(
   return hasPermission(roles, actorHex, permission);
 }
 
+/**
+ * The position a new Role signed by `actorHex` may claim, or `undefined` when
+ * they may claim none (CORD-04 §3).
+ *
+ * "No edition may claim a position at or above its own signer" — so the rank a
+ * client mints at is a function of the signer's rank, never a constant. The
+ * owner is position 0 and mints at 1 (no Role may ever claim 0 itself).
+ *
+ * `undefined` is the important return. A roleless member is "effectively
+ * last", so every position is at or above them and there is nothing they may
+ * mint; the same holds when the roster has not folded yet, because absence of
+ * evidence of rank is not evidence of supremacy. Collapsing either case to
+ * rank 0 mints an edition every verifier drops for self-promotion, while the
+ * minting client reports success — the failure is silent on both sides.
+ */
+export function mintablePosition(
+  roles: CommunityRoles | undefined,
+  actorHex: string,
+  ownerHex: string | undefined,
+): number | undefined {
+  // Owner supremacy comes from the community_id commitment, not the fold, so
+  // it holds even before the roster loads.
+  if (ownerHex === actorHex) return 1;
+  if (!roles) return undefined;
+  const rank = highestPosition(roles, actorHex);
+  return rank === undefined ? undefined : rank + 1;
+}
+
+/**
+ * The position to mint a Role that confers READ ACCESS and nothing else — the
+ * BOTTOM of the hierarchy rather than {@link mintablePosition}'s top.
+ *
+ * `mintablePosition` answers "how high may this signer reach", which is the
+ * right question for an authority Role and the wrong one for an access Role.
+ * A member's rank is the LOWEST position among their Roles (CORD-04 §3) and
+ * rank is independent of permission bits, so a zero-permission Role minted at
+ * the signer's own ceiling PROMOTES whoever is granted it to the signer's
+ * rank. Granting read access to an owner-created channel would seat a plain
+ * member at position 1 — peer to every Admin, and "equal cannot act on equal"
+ * then locks Admins out of moderating them AND out of granting the Role at
+ * all.
+ *
+ * So this returns one below the lowest-ranked Role in the community (or the
+ * signer's own floor, whichever is deeper). Two access Roles sharing a
+ * position is fine and expected — "two Roles MAY share a position, they are
+ * peers" — because peers at the bottom act on nobody. `undefined` when the
+ * signer may mint none, for {@link mintablePosition}'s reasons.
+ */
+export function accessRolePosition(
+  roles: CommunityRoles | undefined,
+  actorHex: string,
+  ownerHex: string | undefined,
+): number | undefined {
+  const ceiling = mintablePosition(roles, actorHex, ownerHex);
+  if (ceiling === undefined) return undefined;
+  const lowest = (roles?.roles ?? []).reduce((acc, r) => Math.max(acc, r.position), 0);
+  return Math.max(ceiling, lowest + 1);
+}
+
 /** Does the actor STRICTLY outrank `targetPosition`? Owner outranks everything. */
 export function outranks(
   roles: CommunityRoles,
@@ -264,6 +373,60 @@ export function outranks(
   if (ownerHex === actorHex) return true;
   const p = highestPosition(roles, actorHex);
   return p !== undefined && p < targetPosition;
+}
+
+/**
+ * Why this Grant would be dropped by its verifiers, or `undefined` when it is
+ * publishable (CORD-04 §2/§3): the signer must strictly outrank the member
+ * they are editing AND every Role the grant hands out. The owner's grants are
+ * always admitted — including one targeting the owner (a cosmetic self-grant;
+ * their authority is position 0 with or without roles).
+ *
+ * A conforming client checks this BEFORE publishing: the fold applies the
+ * same rules network-wide, so an edition that fails them is silently ignored
+ * by every verifier while its author sees success.
+ */
+export function grantRefusal(
+  roles: CommunityRoles,
+  actorHex: string,
+  ownerHex: string | undefined,
+  memberHex: string,
+  roleIds: string[],
+): string | undefined {
+  if (actorHex === ownerHex) return undefined;
+  if (!canActOnMember(roles, actorHex, ownerHex, memberHex, Permissions.MANAGE_ROLES)) {
+    return "You don't outrank this member.";
+  }
+  for (const id of roleIds) {
+    const r = roleById(roles, id);
+    if (!r) return "That role isn't in the synced roster yet.";
+    if (!canActOnPosition(roles, actorHex, ownerHex, r.position, Permissions.MANAGE_ROLES)) {
+      return `You don't outrank the "${r.name}" role.`;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Does `actorHex` strictly outrank the member `memberHex`? The owner outranks
+ * everyone and is outranked by no one; a roleless member is effectively last
+ * (CORD-04 §3), so any ranked actor outranks them.
+ *
+ * This is the target-side half of an authority check on its own — for the
+ * places where the required permission bit is verified separately (a rekey's
+ * rotation filter, CORD-06 §Authority: "the Rotator must strictly outrank
+ * every removed target").
+ */
+export function outranksMember(
+  roles: CommunityRoles,
+  actorHex: string,
+  ownerHex: string | undefined,
+  memberHex: string,
+): boolean {
+  if (actorHex === ownerHex) return true;
+  if (memberHex === ownerHex) return false;
+  const target = highestPosition(roles, memberHex) ?? Number.MAX_SAFE_INTEGER;
+  return outranks(roles, actorHex, ownerHex, target);
 }
 
 /** May `actorHex` perform an action requiring `permission` against a target at `targetPosition`? */

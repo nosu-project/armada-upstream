@@ -9,6 +9,7 @@ import { bytesToHex, communityIdOf, hex32, random32 } from "@/concord-v2/lib/der
 import {
   buildDirectInviteRumor,
   directInviteExpired,
+  isCatchUpBundle,
   parseDirectInviteRumor,
   sealDirectInvite,
   unwrapDirectInvite,
@@ -229,5 +230,37 @@ describe("direct-invite inbox store", () => {
     // Monotonic: an older value never regresses the cursor.
     await advanceInviteInboxCursor(pubkey, newest - 500);
     expect(await inviteInboxSince(pubkey)).toBe(newest - WRAP_BACKDATE_SECS);
+  });
+});
+
+describe("catch-up classification (isCatchUpBundle)", () => {
+  const held = { rootEpoch: 3, channelEpochs: new Map([["aa", 2]]) };
+  const ch = (id: string, epoch: number) => ({ id, key: "1".repeat(64), epoch, name: "c" });
+
+  it("a fresher root epoch is a catch-up regardless of channels", () => {
+    expect(isCatchUpBundle(held, { root_epoch: 4, channels: [] })).toBe(true);
+  });
+
+  it("a same-epoch vend carrying a channel key the member lacks is a catch-up", () => {
+    // The exact field bug: a role-gate key vend rides the SAME root epoch and
+    // was skipped as "already a member", so the key never arrived.
+    expect(isCatchUpBundle(held, { root_epoch: 3, channels: [ch("bb", 0)] })).toBe(true);
+    // A higher CHANNEL epoch for a held channel also qualifies (post-rotation vend).
+    expect(isCatchUpBundle(held, { root_epoch: 3, channels: [ch("aa", 3)] })).toBe(true);
+  });
+
+  it("a bundle carrying a channel key I was CUT from is not a vend", () => {
+    // Cut out of "bb" at channel epoch 2: an old bundle holding bb@0 is the
+    // access that was revoked, so it must not park as a fresh key.
+    const cut = { rootEpoch: 3, channelEpochs: new Map<string, number>(), channelCuts: new Map([["bb", 2]]) };
+    expect(isCatchUpBundle(cut, { root_epoch: 3, channels: [ch("bb", 0)] })).toBe(false);
+    // A key at/above the cut epoch is a genuine re-admission.
+    expect(isCatchUpBundle(cut, { root_epoch: 3, channels: [ch("bb", 2)] })).toBe(true);
+  });
+
+  it("same-epoch bundles with nothing new, stale roots, and non-members never park", () => {
+    expect(isCatchUpBundle(held, { root_epoch: 3, channels: [ch("aa", 2)] })).toBe(false);
+    expect(isCatchUpBundle(held, { root_epoch: 2, channels: [ch("bb", 0)] })).toBe(false);
+    expect(isCatchUpBundle(undefined, { root_epoch: 9, channels: [ch("bb", 0)] })).toBe(false);
   });
 });

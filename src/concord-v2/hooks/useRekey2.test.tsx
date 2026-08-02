@@ -33,8 +33,11 @@ import {
   bytesToHex,
   channelRekeyGroupKey,
   epochKeyCommitment,
+  grantLocator,
+  hex32,
   random32,
 } from "@/concord-v2/lib/derive";
+import type { AuthorityCitation } from "@/concord-v2/lib/edition";
 import {
   mintLinkSigner,
   mintToken,
@@ -58,7 +61,7 @@ import { openWrap, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
 import type { CommunityListEntry, JoinMaterial } from "@/concord-v2/lib/communityList";
 import type { CommunityV2, PrivateChannelKey } from "@/concord-v2/lib/types";
 
-import { useChannelRekeyWatch2, useLinkRefreshWatch2, useRefound2, useRekeyWatch2 } from "./useRekey2";
+import { useChannelRekey2, useChannelRekeyWatch2, useLinkRefreshWatch2, useRefound2, useRekeyWatch2 } from "./useRekey2";
 
 import type { NUser } from "@nostrify/react/login";
 
@@ -184,6 +187,7 @@ async function rotationWraps(
   newRoot: Uint8Array,
   recipients: string[],
   publishMs: number,
+  authority?: AuthorityCitation,
 ): Promise<NostrEvent[]> {
   const newEpoch = c.rootEpoch + 1n;
   const address = baseRekeyGroupKey(c.root, c.id, newEpoch);
@@ -199,6 +203,7 @@ async function rotationWraps(
     { scope: { kind: "root" }, newEpoch, prevEpoch: c.rootEpoch, prevCommit },
     blobs,
     publishMs,
+    authority,
   )) {
     wraps.push(wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, address, rotator), address));
   }
@@ -222,6 +227,34 @@ function foldedFor(ownerPk: string, icon?: InviteBundle["icon"], creatorPk?: str
   } as unknown;
 }
 
+/**
+ * A fold where `rotator` and `peer` hold the SAME admin role (equal rank,
+ * position 1) under a third-party owner, with the rotator's Grant head synced
+ * so their citation resolves — isolating CORD-06 §Authority's outrank rule
+ * from the permission and citation gates in front of it.
+ */
+function peerAdminsFold(ownerPk: string, communityId: Uint8Array, rotatorPk: string, peerPk: string) {
+  const roleId = "aa".repeat(32);
+  const grantEid = bytesToHex(grantLocator(communityId, hex32(rotatorPk)));
+  const grantHash = random32();
+  const citation: AuthorityCitation = { entityId: hex32(grantEid), version: 1n, editionHash: grantHash };
+  const fold = {
+    ownerHex: ownerPk,
+    banned: new Set<string>(),
+    roster: {
+      roles: [adminRole(roleId)],
+      grants: [
+        { member: rotatorPk, roleIds: [roleId] },
+        { member: peerPk, roleIds: [roleId] },
+      ],
+    },
+    metadata: { name: "Fleet", relays: [] },
+    heads: new Map([[grantEid, { version: 1n, hash: grantHash }]]),
+    headEditions: new Map(),
+  } as unknown;
+  return { fold, citation };
+}
+
 /** A complete channel-scoped rotation (CORD-06 §2/§3), sealed under `root`. */
 async function channelRotationWraps(
   rotator: ReturnType<typeof member>,
@@ -230,6 +263,7 @@ async function channelRotationWraps(
   newKey: Uint8Array,
   recipients: string[],
   publishMs: number,
+  authority?: AuthorityCitation,
 ): Promise<NostrEvent[]> {
   const chNext = ch.epoch + 1n;
   const address = channelRekeyGroupKey(root, ch.id, chNext);
@@ -250,6 +284,7 @@ async function channelRotationWraps(
     },
     blobs,
     publishMs,
+    authority,
   )) {
     wraps.push(wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, address, rotator), address));
   }
@@ -356,6 +391,43 @@ describe("useRekeyWatch2 (CORD-05 §2 / CORD-06 §2)", () => {
       // it live — a stale device can never resurrect a revoked link.
       await new Promise((r) => setTimeout(r, 150));
       expect(relay.published.some((e) => e.pubkey === linkB.pk)).toBe(false);
+    },
+  );
+
+  it(
+    "an EQUAL-RANK Refounder's exclusion is not honored (the Rotator must strictly outrank every removed target)",
+    { timeout: 30_000 },
+    async () => {
+      // Same CORD-06 §Authority rule as the channel watcher: BAN is necessary
+      // for a Refounding but not sufficient against ME — the Rotator must
+      // strictly outrank every removed target, and a peer admin does not.
+      // Their complete no-blob-for-me base rotation must not mark my
+      // membership excluded.
+      const owner = member();
+      const me = member();
+      const rotator = member();
+      const { community } = mintCommunity("Fleet", owner.pubkey, [RELAY]);
+      const { fold, citation } = peerAdminsFold(owner.pubkey, community.id, rotator.pubkey, me.pubkey);
+      const wraps = await rotationWraps(rotator, community, random32(), [rotator.pubkey], Date.now(), citation);
+
+      const relay = new FakeRelay();
+      relay.events = [...wraps];
+      h.pool = { relay: () => relay, query: async () => [] };
+      h.user = asNUser(me);
+      h.folded = fold;
+      h.updateList = vi.fn(async () => {});
+      const jm = jmOf(community, owner.pubkey);
+      h.entry = { community_id: community.idHex, seed: jm, current: jm, added_at: 1 } satisfies CommunityListEntry;
+
+      const { wrapper } = makeWrapper();
+      renderHook(() => useRekeyWatch2(community), { wrapper });
+
+      await waitFor(
+        () => expect(relay.queries.some((f) => f.kinds?.includes(1059))).toBe(true),
+        { timeout: 10_000 },
+      );
+      await new Promise((r) => setTimeout(r, 200));
+      expect(h.updateList).not.toHaveBeenCalledWith(expect.objectContaining({ type: "exclude" }));
     },
   );
 });
@@ -546,6 +618,266 @@ describe("useChannelRekeyWatch2 (CORD-06 §2 channel rotations)", () => {
   );
 
   it(
+    "a member who MISSED a rotation still learns they were removed (later epoch, not just +1)",
+    { timeout: 30_000 },
+    async () => {
+      const { owner, me, community, ch } = setupChannel();
+      // The channel rotated TWICE while I was away. I hold epoch 0, so the
+      // epoch-1 address is stale history and epoch 2 is where the channel
+      // actually lives — and neither carries a blob for me.
+      const mid: PrivateChannelKey = { ...ch, key: random32(), epoch: 1n };
+      const first = await channelRotationWraps(owner, community.root, ch, mid.key, [owner.pubkey], Date.now() - 1000);
+      const second = await channelRotationWraps(owner, community.root, mid, random32(), [owner.pubkey], Date.now());
+
+      const relay = new FakeRelay();
+      // Only the LATER rotation is still served — the removal must not depend
+      // on the one rotation my epoch could verify continuity against.
+      relay.events = [...second];
+      void first;
+      h.pool = { relay: () => relay, query: async () => [] };
+      h.user = asNUser(me);
+      h.folded = foldedFor(owner.pubkey);
+      h.updateList = vi.fn(async () => {});
+      const jm = jmOf(community, owner.pubkey);
+      h.entry = { community_id: community.idHex, seed: jm, current: jm, added_at: 1 } satisfies CommunityListEntry;
+
+      const { wrapper } = makeWrapper();
+      renderHook(() => useChannelRekeyWatch2(community), { wrapper });
+
+      await waitFor(
+        () =>
+          expect(h.updateList).toHaveBeenCalledWith(
+            expect.objectContaining({
+              type: "refresh-channels",
+              channels: [],
+              // The cut is recorded at the epoch that actually excluded me.
+              cuts: [expect.objectContaining({ id: bytesToHex(ch.id), epoch: 2 })],
+            }),
+          ),
+        { timeout: 10_000 },
+      );
+    },
+  );
+
+  it(
+    "catches up ACROSS a gap by walking the chain, ending on the newest verified key",
+    { timeout: 30_000 },
+    async () => {
+      const { owner, me, community, ch } = setupChannel();
+      // Two rotations happened while I was offline, and BOTH are still on the
+      // relay — which is the "fetch the gap first" CORD-06 §2 prescribes. Each
+      // one carries a blob for me, so every link is verifiable against the key
+      // the previous link handed over.
+      const midKey = random32();
+      const mid: PrivateChannelKey = { ...ch, key: midKey, epoch: 1n };
+      const finalKey = random32();
+      const first = await channelRotationWraps(owner, community.root, ch, midKey, [owner.pubkey, me.pubkey], Date.now() - 1000);
+      const second = await channelRotationWraps(owner, community.root, mid, finalKey, [owner.pubkey, me.pubkey], Date.now());
+
+      const relay = new FakeRelay();
+      relay.events = [...first, ...second];
+      h.pool = { relay: () => relay, query: async () => [] };
+      h.user = asNUser(me);
+      h.folded = foldedFor(owner.pubkey);
+      h.updateList = vi.fn(async () => {});
+      const jm = jmOf(community, owner.pubkey);
+      h.entry = { community_id: community.idHex, seed: jm, current: jm, added_at: 1 } satisfies CommunityListEntry;
+
+      const { wrapper } = makeWrapper();
+      renderHook(() => useChannelRekeyWatch2(community), { wrapper });
+
+      await waitFor(
+        () =>
+          expect(h.updateList).toHaveBeenCalledWith(
+            expect.objectContaining({
+              type: "refresh-channels",
+              channels: [
+                expect.objectContaining({
+                  id: bytesToHex(ch.id),
+                  key: bytesToHex(finalKey),
+                  epoch: 2,
+                  // Both superseded keys are retained: they read the history
+                  // written under each earlier epoch (CORD-03 §3).
+                  priors: expect.arrayContaining([
+                    { key: bytesToHex(midKey), epoch: 1 },
+                    { key: bytesToHex(ch.key), epoch: 0 },
+                  ]),
+                }),
+              ],
+            }),
+          ),
+        { timeout: 10_000 },
+      );
+    },
+  );
+
+  it(
+    "finishes a catch-up from the local store when the wire no longer re-serves the gap",
+    { timeout: 30_000 },
+    async () => {
+      const { owner, me, community, ch } = setupChannel();
+      // The same two-rotation gap as above, but split across two SESSIONS.
+      // Session one ingests both rotations into the opened-event store and
+      // advances the per-relay `since` cursor past them; session two therefore
+      // sees nothing new on the wire and must complete the walk from the store
+      // alone. This is the whole reason rotations are persisted: the window
+      // heals a member who missed a rotation, and a member who missed one is
+      // by definition not going to be handed it again on the next REQ.
+      const midKey = random32();
+      const mid: PrivateChannelKey = { ...ch, key: midKey, epoch: 1n };
+      const finalKey = random32();
+      const first = await channelRotationWraps(owner, community.root, ch, midKey, [owner.pubkey, me.pubkey], Date.now() - 1000);
+      const second = await channelRotationWraps(owner, community.root, mid, finalKey, [owner.pubkey, me.pubkey], Date.now());
+
+      h.user = asNUser(me);
+      h.folded = foldedFor(owner.pubkey);
+      const jm = jmOf(community, owner.pubkey);
+      h.entry = { community_id: community.idHex, seed: jm, current: jm, added_at: 1 } satisfies CommunityListEntry;
+
+      // Session one: both rotations on the wire, ingested and cached.
+      const online = new FakeRelay();
+      online.events = [...first, ...second];
+      h.pool = { relay: () => online, query: async () => [] };
+      h.updateList = vi.fn(async () => {});
+      const { wrapper: w1 } = makeWrapper();
+      const session1 = renderHook(() => useChannelRekeyWatch2(community), { wrapper: w1 });
+      await waitFor(() => expect(h.updateList).toHaveBeenCalled(), { timeout: 10_000 });
+      session1.unmount();
+
+      // Session two: same held epoch (the list write is mocked, so nothing
+      // moved), and the relay has nothing left to give.
+      const offline = new FakeRelay();
+      h.pool = { relay: () => offline, query: async () => [] };
+      h.updateList = vi.fn(async () => {});
+      const { wrapper: w2 } = makeWrapper();
+      renderHook(() => useChannelRekeyWatch2(community), { wrapper: w2 });
+
+      await waitFor(
+        () =>
+          expect(h.updateList).toHaveBeenCalledWith(
+            expect.objectContaining({
+              type: "refresh-channels",
+              channels: [
+                expect.objectContaining({
+                  id: bytesToHex(ch.id),
+                  key: bytesToHex(finalKey),
+                  epoch: 2,
+                }),
+              ],
+            }),
+          ),
+        { timeout: 10_000 },
+      );
+    },
+  );
+
+  it(
+    "does NOT adopt a far-ahead key whose chain it cannot verify (CORD-06 §2 continuity)",
+    { timeout: 30_000 },
+    async () => {
+      const { owner, me, community, ch } = setupChannel();
+      // A rotation at epoch 2 addressed to me, but built off an epoch-1 key I
+      // never held and whose rotation is not on the relay — so `prevcommit`
+      // proves nothing about the key in my hand. Waiving the check here is how
+      // one rotator forks a lagging member onto a branch nobody can detect.
+      const unseen: PrivateChannelKey = { ...ch, key: random32(), epoch: 1n };
+      const forked = await channelRotationWraps(owner, community.root, unseen, random32(), [owner.pubkey, me.pubkey], Date.now());
+
+      const relay = new FakeRelay();
+      relay.events = [...forked];
+      h.pool = { relay: () => relay, query: async () => [] };
+      h.user = asNUser(me);
+      h.folded = foldedFor(owner.pubkey);
+      h.updateList = vi.fn(async () => {});
+      const jm = jmOf(community, owner.pubkey);
+      h.entry = { community_id: community.idHex, seed: jm, current: jm, added_at: 1 } satisfies CommunityListEntry;
+
+      const { wrapper } = makeWrapper();
+      renderHook(() => useChannelRekeyWatch2(community), { wrapper });
+
+      await waitFor(
+        () => expect(relay.queries.some((f) => f.kinds?.includes(1059))).toBe(true),
+        { timeout: 10_000 },
+      );
+      await new Promise((r) => setTimeout(r, 200));
+      // Neither adopted nor removed: someone addressed me, so this is a gap to
+      // keep polling on, not a read-cut. Acting either way would be wrong.
+      expect(h.updateList).not.toHaveBeenCalled();
+    },
+  );
+
+  it(
+    "retries a chain that stalled mid-window once the missing link arrives",
+    { timeout: 60_000 },
+    async () => {
+      const { owner, me, community, ch } = setupChannel();
+      // I hold epoch 0. Two rotations are reachable — epoch 1 (verifiable off
+      // my key) and epoch 3 (addressed to me, but built off the epoch-2 key,
+      // whose rotation hasn't arrived). So the walk adopts 1 and PARKS at 3,
+      // which is the documented behaviour: neither adopt nor remove on a
+      // rotation whose chain can't be proven, and keep polling.
+      //
+      // Keeping polling is the part being tested. The gap closing is not a
+      // hypothetical — it is the ordinary case of a relay serving a page at a
+      // time — and if the walk that stalled is never re-run, "keep polling"
+      // buys nothing and the member is stuck one epoch behind for good.
+      const k1 = random32();
+      const k2 = random32();
+      const k3 = random32();
+      const at1: PrivateChannelKey = { ...ch, key: k1, epoch: 1n };
+      const at2: PrivateChannelKey = { ...ch, key: k2, epoch: 2n };
+      const r1 = await channelRotationWraps(owner, community.root, ch, k1, [owner.pubkey, me.pubkey], Date.now() - 2000);
+      const r2 = await channelRotationWraps(owner, community.root, at1, k2, [owner.pubkey, me.pubkey], Date.now() - 1000);
+      const r3 = await channelRotationWraps(owner, community.root, at2, k3, [owner.pubkey, me.pubkey], Date.now());
+
+      const relay = new FakeRelay();
+      relay.events = [...r1, ...r3]; // the epoch-2 link is missing, for now
+      h.pool = { relay: () => relay, query: async () => [] };
+      h.user = asNUser(me);
+      h.folded = foldedFor(owner.pubkey);
+      h.updateList = vi.fn(async () => {});
+      const jm = jmOf(community, owner.pubkey);
+      h.entry = { community_id: community.idHex, seed: jm, current: jm, added_at: 1 } satisfies CommunityListEntry;
+
+      const { queryClient, wrapper } = makeWrapper();
+      renderHook(() => useChannelRekeyWatch2(community), { wrapper });
+
+      // Stalls at the gap, having adopted only the link it could verify.
+      await waitFor(
+        () =>
+          expect(h.updateList).toHaveBeenCalledWith(
+            expect.objectContaining({
+              type: "refresh-channels",
+              channels: [expect.objectContaining({ key: bytesToHex(k1), epoch: 1 })],
+            }),
+          ),
+        { timeout: 10_000 },
+      );
+
+      // The missing link shows up on the next poll. `refetchQueries` (not
+      // `invalidateQueries`) so the promise resolves only once the fetch has
+      // actually completed; the walk it feeds is still async behind it, so
+      // the waitFor stays — with a margin sized for a fully loaded worker
+      // pool, where the 10s default has flaked.
+      relay.events = [...r1, ...r2, ...r3];
+      await act(async () => {
+        await queryClient.refetchQueries({ queryKey: ["concord2", "chrekey"] });
+      });
+
+      await waitFor(
+        () =>
+          expect(h.updateList).toHaveBeenCalledWith(
+            expect.objectContaining({
+              type: "refresh-channels",
+              channels: [expect.objectContaining({ key: bytesToHex(k3), epoch: 3 })],
+            }),
+          ),
+        { timeout: 30_000 },
+      );
+    },
+  );
+
+  it(
     "an unauthorized rotator's channel rotation is ignored (key possession is never authority)",
     { timeout: 30_000 },
     async () => {
@@ -572,6 +904,199 @@ describe("useChannelRekeyWatch2 (CORD-06 §2 channel rotations)", () => {
       );
       await new Promise((r) => setTimeout(r, 200));
       expect(h.updateList).not.toHaveBeenCalled();
+    },
+  );
+
+  it(
+    "an EQUAL-RANK rotator's exclusion is not honored (the Rotator must strictly outrank every removed target)",
+    { timeout: 30_000 },
+    async () => {
+      // CORD-06 §Authority: holding MANAGE_CHANNELS is necessary but not
+      // sufficient — "the Rotator must strictly outrank every removed target",
+      // and equal cannot act on equal (CORD-04 §3). A receiver cannot see who
+      // else a rotation kept or cut (locators are opaque), but it can always
+      // judge the one removal that concerns it: its own. A peer admin's
+      // complete no-blob-for-me rotation therefore must NOT read as my
+      // removal, however valid its permission bits and citation are.
+      const { owner, me, community, ch } = setupChannel();
+      const rotator = member();
+      const { fold, citation } = peerAdminsFold(owner.pubkey, community.id, rotator.pubkey, me.pubkey);
+      const wraps = await channelRotationWraps(
+        rotator, community.root, ch, random32(), [rotator.pubkey], Date.now(), citation,
+      );
+
+      const relay = new FakeRelay();
+      relay.events = [...wraps];
+      h.pool = { relay: () => relay, query: async () => [] };
+      h.user = asNUser(me);
+      h.folded = fold;
+      h.updateList = vi.fn(async () => {});
+      const jm = jmOf(community, owner.pubkey);
+      h.entry = { community_id: community.idHex, seed: jm, current: jm, added_at: 1 } satisfies CommunityListEntry;
+
+      const { wrapper } = makeWrapper();
+      renderHook(() => useChannelRekeyWatch2(community), { wrapper });
+
+      await waitFor(
+        () => expect(relay.queries.some((f) => f.kinds?.includes(1059))).toBe(true),
+        { timeout: 10_000 },
+      );
+      await new Promise((r) => setTimeout(r, 200));
+      // Neither removed nor adopted: I keep my key and my channel.
+      expect(h.updateList).not.toHaveBeenCalled();
+    },
+  );
+});
+
+// ── useChannelRekey2: the standalone rotation behind role-gate revokes ───────
+
+describe("useChannelRekey2 (standalone channel rotation, channel-access revoke)", () => {
+  it(
+    "end to end: the produced rotation re-keys the rotator and removes the revoked member",
+    { timeout: 30_000 },
+    async () => {
+      const owner = member();
+      const revoked = member();
+      const { community: base } = mintCommunity("Fleet", owner.pubkey, [RELAY]);
+      const ch: PrivateChannelKey = { id: random32(), key: random32(), epoch: 0n, name: "sec" };
+      const community: CommunityV2 = { ...base, privateChannels: [ch] };
+
+      // The owner rotates the channel to themselves only (the revoke shape).
+      const relay = new FakeRelay();
+      h.pool = { relay: () => relay, query: async () => [] };
+      h.user = asNUser(owner);
+      h.folded = foldedFor(owner.pubkey);
+      h.updateList = vi.fn(async () => {});
+      const jmOwner = jmOf(community, owner.pubkey);
+      h.entry = { community_id: community.idHex, seed: jmOwner, current: jmOwner, added_at: 1 } satisfies CommunityListEntry;
+
+      const { wrapper } = makeWrapper();
+      const { result } = renderHook(() => useChannelRekey2(community), { wrapper });
+      await act(async () => {
+        await result.current.rekeyChannel({ channelIdHex: bytesToHex(ch.id), keepRecipients: [], removedTargets: [] });
+      });
+
+      // The rotator adopts its own rotation immediately (epoch 1, fresh key).
+      expect(h.updateList).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "refresh-channels",
+          communityId: community.idHex,
+          channels: [expect.objectContaining({ id: bytesToHex(ch.id), epoch: 1 })],
+        }),
+      );
+      expect(relay.published.length).toBeGreaterThan(0);
+
+      // The revoked member's watch sees the complete no-blob rotation and
+      // drops the channel from `current` — the room visibly disappears.
+      const relay2 = new FakeRelay();
+      relay2.events = [...relay.published];
+      h.pool = { relay: () => relay2, query: async () => [] };
+      h.user = asNUser(revoked);
+      h.updateList = vi.fn(async () => {});
+      const jm = jmOf(community, owner.pubkey);
+      h.entry = { community_id: community.idHex, seed: jm, current: jm, added_at: 1 } satisfies CommunityListEntry;
+
+      const { wrapper: w2 } = makeWrapper();
+      renderHook(() => useChannelRekeyWatch2(community), { wrapper: w2 });
+
+      await waitFor(
+        () =>
+          expect(h.updateList).toHaveBeenCalledWith(
+            expect.objectContaining({
+              type: "refresh-channels",
+              communityId: community.idHex,
+              channels: [],
+            }),
+          ),
+        { timeout: 10_000 },
+      );
+    },
+  );
+
+  it(
+    "re-posts the rotator's live invite links, and they vend no channel key at all",
+    { timeout: 30_000 },
+    async () => {
+      // A private channel rotated by hand ("Rotate key"). The link bundle
+      // still on the relay carries the pre-rotation key, so it has to be
+      // re-posted (CORD-05 §2) — but at NO channel key rather than the fresh
+      // one. A link's audience is whoever the URL reaches and holds no scoped
+      // Role, so it is entitled to no Private Channel (CORD-03 §1).
+      //
+      // Re-vending here is the worst case of it: the rotation this refresh
+      // follows exists to CUT somebody, the cut is recorded at the excluding
+      // epoch, and the floor admits `epoch >= cut` so a genuine re-admission
+      // still lands — so a bundle carrying the fresh key at that same epoch is
+      // indistinguishable from one, and the removed member re-resolving their
+      // link undoes the rotation that removed them.
+      const owner = member();
+      const { community: base } = mintCommunity("Fleet", owner.pubkey, [RELAY]);
+      const ch: PrivateChannelKey = { id: random32(), key: random32(), epoch: 0n, name: "sec" };
+      const community: CommunityV2 = { ...base, privateChannels: [ch] };
+      const fold = foldedFor(owner.pubkey) as { channels?: Map<string, unknown> };
+      fold.channels = new Map([
+        [bytesToHex(ch.id), { channelIdHex: bytesToHex(ch.id), name: "sec", isPrivate: true, deleted: false }],
+      ]);
+
+      const link = mintLinkSigner();
+      const token = mintToken();
+      const listEvent = finalizeEvent(
+        {
+          kind: KIND_INVITE_LIST,
+          content: nip44Encrypt(
+            JSON.stringify({
+              entries: [
+                { token: bytesToHex(token), signer_sk: bytesToHex(link.sk), community_id: community.idHex, url: "", created_at: 1 },
+              ],
+              tombstones: [],
+            }),
+            getConversationKey(owner.sk, owner.pubkey),
+          ),
+          tags: [],
+          created_at: nowSecs() - 10,
+        },
+        owner.sk,
+      );
+
+      const relay = new FakeRelay();
+      h.pool = {
+        relay: () => relay,
+        query: async (filters: Filter[]) =>
+          filters.some((f) => f.kinds?.includes(KIND_INVITE_LIST)) ? [listEvent] : [],
+      };
+      h.user = asNUser(owner);
+      h.folded = fold;
+      h.updateList = vi.fn(async () => {});
+      const jm = jmOf(community, owner.pubkey);
+      h.entry = { community_id: community.idHex, seed: jm, current: jm, added_at: 1 } satisfies CommunityListEntry;
+
+      const { wrapper } = makeWrapper();
+      const { result } = renderHook(() => useChannelRekey2(community), { wrapper });
+      await act(async () => {
+        await result.current.rekeyChannel({ channelIdHex: bytesToHex(ch.id), keepRecipients: [], removedTargets: [] });
+      });
+
+      // Recover the key the rotation actually minted, from the rotator's blob.
+      const chAddress = channelRekeyGroupKey(community.root, ch.id, 1n);
+      const rotation = groupRotations(
+        relay.published.filter((e) => e.pubkey === chAddress.pk).map((w) => parseRekey(openWrap(w, chAddress))),
+      )[0];
+      const ownBlob = findBlob(rotation, myLocator(owner.pubkey, owner.pubkey, bytesToHex(ch.id), 1n))!;
+      const newChKey = decodeWrappedKey(
+        base64ToBytes(owner.nip44decrypt(owner.pubkey, ownBlob.wrapped)),
+        ch.id,
+        1n,
+      );
+
+      await waitFor(
+        () => expect(relay.published.some((e) => e.pubkey === link.pk)).toBe(true),
+        { timeout: 10_000 },
+      );
+      const vended = parseBundleEvent(relay.published.filter((e) => e.pubkey === link.pk).at(-1)!, link.pk, token, Date.now());
+      expect(vended.channels).toEqual([]);
+      // The rotation really did mint a fresh key — it just travels by grant
+      // (a Direct Invite to an entitled npub), never by link.
+      expect(bytesToHex(newChKey)).not.toBe(bytesToHex(ch.key));
     },
   );
 });
@@ -675,16 +1200,66 @@ describe("useRefound2 (CORD-06 §3 channel rotations)", () => {
         }),
       );
 
-      // …and the refreshed invite bundle vends the POST-rotation channel key,
-      // never the severed one (a fresh joiner must not receive keys a
-      // Refounding just retired).
+      // …and the refreshed invite bundle advances the ROOT epoch while
+      // carrying no Private Channel key at all. A link's audience is whoever
+      // the URL reaches (CORD-05 §2) and holds no scoped Role, so it is
+      // entitled to none (CORD-03 §1) — and vending one here would be worse
+      // than at mint time, because this refresh follows a rotation that just
+      // severed Mallory at exactly this epoch, which the `channel_cuts` floor
+      // cannot tell from a re-admission.
       const refreshed = relay.published.filter((e) => e.pubkey === link.pk).at(-1)!;
       expect(refreshed).toBeDefined();
       const vended = parseBundleEvent(refreshed, link.pk, token, Date.now());
       expect(vended.root_epoch).toBe(1);
-      expect(vended.channels).toEqual([
-        { id: bytesToHex(ch.id), key: bytesToHex(newChKey), epoch: 1, name: "sec" },
-      ]);
+      expect(vended.channels).toEqual([]);
+      // The rotated key still exists — it just travels by grant, not by link.
+      expect(newChKey).toBeDefined();
+    },
+  );
+
+  it(
+    "retains each channel's pre-Refounding key, so the channel's history survives the rotation",
+    { timeout: 30_000 },
+    async () => {
+      // A Refounding rotates every held private channel. CORD-03 §3 has a
+      // client read a channel across every epoch key it holds, and CORD.md's
+      // continuity rule says superseded channel keys are retained and carried
+      // through every list write. Overwriting `key`/`epoch` in place drops the
+      // only copy of the key that reads everything said before the rotation —
+      // for every member, in every private channel, on every ban.
+      const owner = member();
+      const alice = member();
+      const { community: base } = mintCommunity("Fleet", owner.pubkey, [RELAY]);
+      const ch: PrivateChannelKey = { id: random32(), key: random32(), epoch: 0n, name: "sec" };
+      const community: CommunityV2 = { ...base, privateChannels: [ch] };
+
+      const relay = new FakeRelay();
+      h.pool = { relay: () => relay, query: async () => [] };
+      h.user = asNUser(owner);
+      h.folded = foldedFor(owner.pubkey);
+      h.updateList = vi.fn(async () => {});
+      const jm = jmOf(community, owner.pubkey);
+      h.entry = { community_id: community.idHex, seed: jm, current: jm, added_at: 1 } satisfies CommunityListEntry;
+
+      const { wrapper } = makeWrapper();
+      const { result } = renderHook(() => useRefound2(community), { wrapper });
+      await act(async () => {
+        await result.current.refound({ keep: [alice.pubkey], exclude: [member().pubkey] });
+      });
+
+      expect(h.updateList).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "refresh-current",
+          current: expect.objectContaining({
+            channels: [
+              expect.objectContaining({
+                epoch: 1,
+                priors: [{ key: bytesToHex(ch.key), epoch: 0 }],
+              }),
+            ],
+          }),
+        }),
+      );
     },
   );
 

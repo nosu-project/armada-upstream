@@ -192,3 +192,45 @@ describe("attachRepository", () => {
     expect(h.editions).toHaveLength(0);
   });
 });
+
+// ── CORD-03 §2: Private → Public ─────────────────────────────────────────────
+
+describe("publiciseChannel (CORD-03 §2, the reverse conversion)", () => {
+  const CHANNEL = "cd".repeat(32);
+
+  beforeEach(() => {
+    h.folded = {
+      channels: new Map([
+        [CHANNEL, { channelIdHex: CHANNEL, name: "was-secret", isPrivate: true, deleted: false, metadata: { name: "was-secret", private: true } }],
+      ]),
+      heads: new Map(),
+      ownerHex: OWNER,
+      roster: { roles: [], grants: [] },
+    };
+  });
+
+  it("O-19: flips a private channel back to public", async () => {
+    // "Converting Private to Public reverses it: the Channel begins deriving
+    // from the community_root going forward." A client that can only privatise
+    // makes the conversion a one-way door — there is no way back from a
+    // mis-privatised channel, and the spec provides for one.
+    const { result } = renderHook(() => useCommunityManagement2(community), { wrapper });
+
+    await result.current.publiciseChannel({ channelIdHex: CHANNEL });
+
+    await waitFor(() => expect(h.editions).toHaveLength(1));
+    expect(metadataOf(h.editions[0]).private).toBe(false);
+    // Round-trips everything the conversion doesn't touch (CORD-02 §6).
+    expect(metadataOf(h.editions[0]).name).toBe("was-secret");
+  });
+
+  it("refuses a channel that is already public", async () => {
+    (h.folded as { channels: Map<string, unknown> }).channels.set(CHANNEL, {
+      channelIdHex: CHANNEL, name: "open", isPrivate: false, deleted: false, metadata: { name: "open", private: false },
+    });
+    const { result } = renderHook(() => useCommunityManagement2(community), { wrapper });
+
+    await expect(result.current.publiciseChannel({ channelIdHex: CHANNEL })).rejects.toThrow(/already public/i);
+    expect(h.editions).toHaveLength(0);
+  });
+});

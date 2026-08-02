@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   addToList,
   canonicalJson,
+  channelKeysToWire,
   EMPTY_COMMUNITY_LIST,
   isLive,
   liveEntries,
   mergeCommunityLists,
+  nextChannelEpoch,
   refreshChannels,
   refreshCurrent,
   refreshRelays,
@@ -124,6 +126,109 @@ describe("community list merge (CORD-02 §8)", () => {
   });
 });
 
+describe("channel-key union on merge (role-gate vends, CORD.md)", () => {
+  const chan = (id: string, epoch: number, key = "1".repeat(64)) => ({ id, key, epoch, name: "c" });
+
+  it("a partial vend unions into the held set instead of replacing it", () => {
+    const base = makeJoinMaterial({ channels: [chan("aa", 0), chan("bb", 1)] });
+    // Same community, same root epoch: a direct vend carrying ONE new channel.
+    const vend: JoinMaterial = { ...base, channels: [chan("cc", 0, "2".repeat(64))] };
+    const merged = mergeCommunityLists(
+      { entries: [entryOf(base)], tombstones: [] },
+      { entries: [entryOf(vend)], tombstones: [] },
+    );
+    expect(merged.entries[0].current.channels.map((c) => c.id).sort()).toEqual(["aa", "bb", "cc"]);
+  });
+
+  it("the higher channel epoch wins, and the superseded key is kept as a prior", () => {
+    const old = makeJoinMaterial({ channels: [chan("aa", 1, "1".repeat(64))] });
+    const fresh: JoinMaterial = { ...old, channels: [chan("aa", 2, "2".repeat(64))] };
+    for (const [x, y] of [[old, fresh], [fresh, old]] as const) {
+      const merged = mergeCommunityLists(
+        { entries: [entryOf(x)], tombstones: [] },
+        { entries: [entryOf(y)], tombstones: [] },
+      );
+      const [ch] = merged.entries[0].current.channels;
+      expect(ch.epoch).toBe(2);
+      expect(ch.key).toBe("2".repeat(64));
+      // The rotated-off key survives — it reads everything written before it.
+      expect(ch.priors).toEqual([{ key: "1".repeat(64), epoch: 1 }]);
+    }
+  });
+
+  it("keeps BOTH keys when two rotations raced to the same channel epoch", () => {
+    // CORD-06's same-epoch convergence: among authorized candidates at one
+    // continuity point every client picks the same winner, and "both forks'
+    // keys are retained, so messages sent into the losing fork stay readable".
+    // The epochs are equal here, so the epoch-max branch never runs — dropping
+    // the loser silently takes every message written into its branch dark.
+    const forkA = makeJoinMaterial({ channels: [chan("aa", 3, "a".repeat(64))] });
+    const forkB: JoinMaterial = { ...forkA, channels: [chan("aa", 3, "b".repeat(64))] };
+    for (const [x, y] of [[forkA, forkB], [forkB, forkA]] as const) {
+      const merged = mergeCommunityLists(
+        { entries: [entryOf(x)], tombstones: [] },
+        { entries: [entryOf(y)], tombstones: [] },
+      );
+      const [ch] = merged.entries[0].current.channels;
+      // Deterministic winner (canonical bytes), same on both orderings…
+      expect(ch.epoch).toBe(3);
+      expect(ch.key).toBe("a".repeat(64));
+      // …and the loser is retained rather than discarded.
+      expect(ch.priors).toEqual([{ key: "b".repeat(64), epoch: 3 }]);
+    }
+  });
+});
+
+describe("channel cuts (a revoke is monotonic)", () => {
+  const chan = (id: string, epoch: number, key = "1".repeat(64)) => ({ id, key, epoch, name: "c" });
+
+  it("a stale bundle cannot restore a channel I was rotated out of", () => {
+    // The field case: the channel was ungated and its key vended to everyone,
+    // so an old invite still sits in the inbox. Re-gating rotated me out at
+    // channel epoch 1. Merging that old bundle must NOT hand the key back.
+    const before = makeJoinMaterial({ channels: [chan("aa", 0)] });
+    const cutEntry: CommunityListEntry = {
+      ...entryOf({ ...before, channels: [] }),
+      channel_cuts: [{ id: "aa", epoch: 1 }],
+    };
+    const staleInvite = entryOf(before); // still carries the epoch-0 key
+
+    for (const [x, y] of [[cutEntry, staleInvite], [staleInvite, cutEntry]] as const) {
+      const merged = mergeCommunityLists(
+        { entries: [x], tombstones: [] },
+        { entries: [y], tombstones: [] },
+      );
+      expect(merged.entries[0].current.channels).toEqual([]);
+      expect(merged.entries[0].channel_cuts).toEqual([{ id: "aa", epoch: 1 }]);
+    }
+  });
+
+  it("a genuine re-admission (a key AT/ABOVE the cut epoch) is accepted", () => {
+    const cutEntry: CommunityListEntry = {
+      ...entryOf(makeJoinMaterial({ channels: [] })),
+      channel_cuts: [{ id: "aa", epoch: 1 }],
+    };
+    const readmit = entryOf({ ...cutEntry.current, channels: [chan("aa", 1, "2".repeat(64))] });
+    const merged = mergeCommunityLists(
+      { entries: [cutEntry], tombstones: [] },
+      { entries: [readmit], tombstones: [] },
+    );
+    expect(merged.entries[0].current.channels).toEqual([chan("aa", 1, "2".repeat(64))]);
+  });
+
+  it("refreshChannels records the cut and floors the update", () => {
+    const jm = makeJoinMaterial({ channels: [chan("aa", 0), chan("bb", 0)] });
+    const list = addToList(EMPTY_COMMUNITY_LIST, entryOf(jm));
+    // The watcher drops "aa" at epoch 1 and keeps "bb".
+    const next = refreshChannels(list, jm.community_id, [chan("bb", 0)], [{ id: "aa", epoch: 1 }]);
+    expect(next.entries[0].current.channels).toEqual([chan("bb", 0)]);
+    expect(next.entries[0].channel_cuts).toEqual([{ id: "aa", epoch: 1 }]);
+    // A later refresh that re-supplies the stale key is floored out.
+    const relapse = refreshChannels(next, jm.community_id, [chan("aa", 0), chan("bb", 0)]);
+    expect(relapse.entries[0].current.channels).toEqual([chan("bb", 0)]);
+  });
+});
+
 describe("refreshChannels (channel-scope rekey adoption/exclusion, CORD-06 §2)", () => {
   const chan = (id: string, epoch: number) => ({ id, key: bytesToHex(random32()), epoch, name: "sec" });
 
@@ -232,5 +337,91 @@ describe("rehydration", () => {
     expect(back.community_id).toBe(jm.community_id);
     expect(back.root_epoch).toBe(1);
     expect((back as Record<string, unknown>).vendor_field).toBe(42);
+  });
+});
+
+describe("nextChannelEpoch (CORD-03 §2: monotonic, never resetting)", () => {
+  const id = random32();
+  const idHex = bytesToHex(id);
+
+  it("a channel that was never private privatises at epoch 1, not 0", () => {
+    // CORD-03 §2 names it outright: "the first privatisation is epoch 1".
+    expect(nextChannelEpoch([], idHex)).toBe(1n);
+  });
+
+  it("a re-privatisation climbs past every generation this client has seen", () => {
+    // privatise → publish → privatise. Restarting at 0 would put two different
+    // keys at one epoch, and neither the merge (epoch-max) nor a channel_cuts
+    // floor (epoch-min) could tell the generations apart.
+    const held = [{ id, key: random32(), epoch: 2n, name: "c", priors: [{ key: random32(), epoch: 1n }] }];
+    expect(nextChannelEpoch(held, idHex)).toBe(3n);
+  });
+
+  it("a prior above the current key still raises the floor", () => {
+    const held = [{ id, key: random32(), epoch: 1n, name: "c", priors: [{ key: random32(), epoch: 4n }] }];
+    expect(nextChannelEpoch(held, idHex)).toBe(5n);
+  });
+
+  it("is case-insensitive on the channel id and ignores other channels", () => {
+    const held = [{ id, key: random32(), epoch: 7n, name: "c" }];
+    expect(nextChannelEpoch(held, idHex.toUpperCase())).toBe(8n);
+    expect(nextChannelEpoch(held, bytesToHex(random32()))).toBe(1n);
+  });
+
+  it("climbs past a generation this client never held a key for", () => {
+    // The spec property is about the CHANNEL's whole life, not one client's
+    // keyring. Whoever privatises a public channel need never have held its
+    // earlier private generations — they joined afterwards, were never granted
+    // its Role, or a rotation cut them out and the cut floor dropped the key.
+    // The observed floor comes off the rekey addresses (CORD-06 §2), which
+    // derive from the community root every member holds.
+    expect(nextChannelEpoch([], idHex, 6n)).toBe(7n);
+  });
+
+  it("takes the highest of the observed floor and its own keys, either way round", () => {
+    // Both are lower bounds on the truth and neither dominates: the wire can
+    // have been pruned, and a keyring lags every generation its owner sat out.
+    const held = [{ id, key: random32(), epoch: 9n, name: "c" }];
+    expect(nextChannelEpoch(held, idHex, 3n)).toBe(10n);
+    expect(nextChannelEpoch(held, idHex, 20n)).toBe(21n);
+  });
+});
+
+describe("channelKeysToWire (history survives a list write)", () => {
+  it("carries priors through, so touching one channel can't blank another's history", () => {
+    // `refreshChannels` REPLACES the stored array, so a serializer that drops
+    // priors takes every OTHER channel's pre-rotation history dark as a side
+    // effect — the streams CORD-03 §3 requires a reader to query.
+    const a = random32();
+    const b = random32();
+    const priorKey = random32();
+    const wire = channelKeysToWire([
+      { id: a, key: random32(), epoch: 3n, name: "one", priors: [{ key: priorKey, epoch: 2n }] },
+      { id: b, key: random32(), epoch: 0n, name: "two" },
+    ]);
+    expect(wire[0].priors).toEqual([{ key: bytesToHex(priorKey), epoch: 2 }]);
+    // No empty `priors` key when there are none — the wire stays as it was.
+    expect("priors" in wire[1]).toBe(false);
+  });
+
+  it("round-trips through rehydrateCommunity", () => {
+    // `rehydrateCommunity` re-derives the community_id, so the material has to
+    // be self-consistent (same shape as the round-trip test above).
+    const ownerPk = bytesToHex(random32());
+    const salt = random32();
+    const cid = communityIdOf(
+      Uint8Array.from(ownerPk.match(/.{2}/g)!.map((b) => parseInt(b, 16))),
+      salt,
+    );
+    const id = random32();
+    const priorKey = random32();
+    const jm = makeJoinMaterial({
+      community_id: bytesToHex(cid),
+      owner: ownerPk,
+      owner_salt: bytesToHex(salt),
+      channels: channelKeysToWire([{ id, key: random32(), epoch: 2n, name: "c", priors: [{ key: priorKey, epoch: 1n }] }]),
+    });
+    const community = rehydrateCommunity(entryOf(jm))!;
+    expect(community.privateChannels[0].priors).toEqual([{ key: priorKey, epoch: 1n }]);
   });
 });
