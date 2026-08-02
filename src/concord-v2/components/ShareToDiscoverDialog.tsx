@@ -349,7 +349,7 @@ function ShareForm({ idHex, onDone }: { idHex: string; onDone: () => void }) {
       {!listed && (
         <Alert>
           <AlertDescription>
-            Sharing publishes an invite link from your account — including its secret — so anyone
+            Sharing publishes an invite link from your account, including its secret, so anyone
             can find and join.
             {willMint && !isPublic
               ? " It also creates this community's first invite link, making the community public until every link is revoked."
