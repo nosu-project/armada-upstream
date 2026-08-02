@@ -1,9 +1,19 @@
-import { Check, ChevronRight, Copy, Info, Link as LinkIcon, Loader2, UserPlus } from "lucide-react";
+import { AlertTriangle, Check, ChevronRight, Copy, Info, Link as LinkIcon, Loader2, UserPlus } from "lucide-react";
 import { useState } from "react";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { ProfileSearchSelect } from "@/components/chat/ProfileSearchSelect";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
@@ -63,6 +73,7 @@ function InviteBody({ community, canCreateLink }: { community: CommunityV2 | und
   const [sentPubkey, setSentPubkey] = useState<string | null>(null);
   const [pendingPubkey, setPendingPubkey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const handleSelect = async (profile: SearchProfile) => {
     setError(null);
@@ -81,31 +92,15 @@ function InviteBody({ community, canCreateLink }: { community: CommunityV2 | und
     }
   };
 
-  const handleGenerate = async () => {
+  // The first live link flips the community Public (CORD-05 §5), and every
+  // recipient then keeps read access to the whole history for good (bans don't
+  // rotate keys while public). Announcing to Discover publishes the secret too.
+  // Both are consequential and irreversible, so a click routes through an in-app
+  // confirm rather than firing straight away.
+  const needsConfirm = !isPublic || listPublicly;
+
+  const doGenerate = async () => {
     setError(null);
-    // The first live link flips the derived mode Public (CORD-05 §5). Whether
-    // bans still rotate is per-banner (foreign links gate rotations, own links
-    // don't) — the ban dialog's step list tells that truth case by case.
-    if (
-      !isPublic &&
-      !confirm(
-        "Creating an invite link makes this community public: anyone with the link can join.\n\n" +
-          "Anyone who gets the link can read every message in this community, past and future, and keeps that access permanently. Revoking the link, or removing the person from the community later, does NOT take it away.\n\n" +
-          "Revoking every link stops new people from joining and makes the community private again.",
-      )
-    ) {
-      return;
-    }
-    // Announcing publishes the full link (secret included) in a public
-    // listing — a real privacy step, so confirm it explicitly.
-    if (
-      listPublicly &&
-      !confirm(
-        "Sharing to Discover publishes this invite link from your account — including its secret — so anyone can find and join. Only do this for a community you want strangers to join.",
-      )
-    ) {
-      return;
-    }
     try {
       const expiresAtMs = expiryDays > 0 ? Date.now() + expiryDays * 86400_000 : undefined;
       setLink(
@@ -118,6 +113,14 @@ function InviteBody({ community, canCreateLink }: { community: CommunityV2 | und
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't create the link.");
     }
+  };
+
+  const handleGenerateClick = () => {
+    if (needsConfirm) {
+      setConfirmOpen(true);
+      return;
+    }
+    void doGenerate();
   };
 
   const handleRevoke = async (url: string) => {
@@ -235,10 +238,23 @@ function InviteBody({ community, canCreateLink }: { community: CommunityV2 | und
           </>
         ) : (
           <>
+            {/* The consequence is shown up front, before the click — not sprung
+                in a popup after — the first time a link would make this public. */}
+            {!isPublic && (
+              <Alert variant="destructive" className="normal-case tracking-normal">
+                <AlertTriangle className="size-4" />
+                <AlertTitle>Anyone with the link can read everything</AlertTitle>
+                <AlertDescription>
+                  Creating a link makes this community public. Anyone who gets it can read every
+                  message, past and future, and keeps that access permanently, even if you later
+                  revoke the link or remove them from the community.
+                </AlertDescription>
+              </Alert>
+            )}
             <Button
               type="button"
               variant="secondary"
-              onClick={handleGenerate}
+              onClick={handleGenerateClick}
               disabled={isCreatingLink || !community}
               className="w-full clip-corner-lg"
             >
@@ -333,6 +349,35 @@ function InviteBody({ community, canCreateLink }: { community: CommunityV2 | und
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
+
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {!isPublic ? "Make this community public?" : "Share this link to Discover?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              {!isPublic && (
+                <span className="block">
+                  Creating an invite link makes this community public. Anyone who gets the link can
+                  read every message, past and future, and keeps that access permanently, even if you
+                  later revoke the link or remove them from the community.
+                </span>
+              )}
+              {listPublicly && (
+                <span className="block">
+                  Sharing to Discover publishes this link, including its secret, from your account, so
+                  anyone can find and join.
+                </span>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void doGenerate()}>Create link</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
