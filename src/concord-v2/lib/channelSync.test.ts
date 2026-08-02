@@ -151,6 +151,33 @@ describe("channelSync — the c2: topic handler", () => {
     release();
   });
 
+  it("rings the channel's bus scope even when the round decrypts nothing", { timeout: 30_000 }, async () => {
+    // `writeRumors` rings only for a non-empty batch, and it runs BEFORE the
+    // cursor write — so without the handler's own ring, a round whose only
+    // result is a cursor verdict (`exhausted`, a moved `newest`) never
+    // reaches an already-rendered timeline, which reads `hasMore` from that
+    // cursor and would keep a stale scroll-up affordance.
+    const m = await freshModules();
+    const bus = await import("@/wire/bus");
+    const channel = makeChannel(m);
+    // Reachable, but holds nothing for this channel: no rumors are written,
+    // so the handler is the only thing that can ring.
+    const relay = new FakeRelay();
+    const community = { idHex: CID, relays: [RELAY] } as unknown as CommunityV2;
+    m.setChannelSyncContext(channel.idHex, { nostr: makePool({ [RELAY]: relay }), community, channel });
+
+    const topic = `c2:${channel.idHex}`;
+    const rings: string[] = [];
+    const off = bus.onWireScopes((scopes) => rings.push(...scopes));
+    const release = m.want(topic);
+    try {
+      await vi.waitFor(() => expect(rings).toContain(topic), { timeout: 15_000 });
+    } finally {
+      off();
+      release();
+    }
+  });
+
   it("a round with no reachable relay marks the topic error, never fresh", { timeout: 30_000 }, async () => {
     const m = await freshModules();
     const channel = makeChannel(m);

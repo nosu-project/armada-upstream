@@ -21,8 +21,10 @@ import {
   queryWebxdcRumors,
   readControlSnapshot,
   readStoredSeal,
+  readStreamCursor,
   storedToOpened,
   storedToOpenedChat,
+  updateStreamCursor,
   writeOpened,
   writeRumors,
 } from "@/concord-v2/lib/rumorStore";
@@ -578,5 +580,38 @@ describe("concord-v2 rumor store", () => {
     );
     expect(back.some((e) => e.rumorId === rumor.id)).toBe(true);
     expect(await readControlSnapshot(CID, control.pk)).toBeUndefined();
+  });
+});
+
+describe("stream cursors", () => {
+  it("merges concurrent updates instead of letting the last writer win", async () => {
+    // The scheduler's `c2:` round and a `loadOlder` scroll-up write the same
+    // channel's cursor from different call stacks. Unserialized, all three
+    // read the same (absent) cursor and only the last write survives — losing
+    // a deeper `oldest` or a sticky `exhausted` and costing a redundant round.
+    const scope = "cursor-race";
+    await Promise.all([
+      updateStreamCursor(scope, { newest: 500, oldest: 100 }),
+      updateStreamCursor(scope, { exhausted: true }),
+      updateStreamCursor(scope, { oldest: 50 }),
+    ]);
+
+    expect(await readStreamCursor(scope)).toEqual({ newest: 500, oldest: 50, exhausted: true });
+  });
+
+  it("keeps the queue moving when one write fails", async () => {
+    const scope = "cursor-throws";
+    await updateStreamCursor(scope, { newest: 10 });
+    // A rejected mutation must release the lock rather than wedge the scope.
+    await expect(
+      updateStreamCursor(scope, {
+        get newest(): number {
+          throw new Error("boom");
+        },
+      }),
+    ).rejects.toThrow("boom");
+    await updateStreamCursor(scope, { oldest: 7 });
+
+    expect(await readStreamCursor(scope)).toEqual({ newest: 10, oldest: 7, exhausted: false });
   });
 });

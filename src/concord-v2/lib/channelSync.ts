@@ -33,6 +33,7 @@ import {
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 import { beginSyncTask } from "@/lib/syncActivity";
 import { registerSyncTopic } from "@/sync/syncManager";
+import { emitWireScopes } from "@/wire/bus";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
@@ -301,6 +302,14 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
       oldest: older.oldest,
       exhausted: older.exhausted ? true : undefined,
     });
+
+    // Ring once the CURSOR has landed, and even when nothing decrypted:
+    // `writeRumors` rings only for a non-empty batch, and it ran before this
+    // write — so a round that only learned "no deeper history" (or learned it
+    // after the last rumor was announced) would otherwise leave an
+    // already-rendered timeline showing a stale scroll-up affordance until
+    // some unrelated event rang the scope.
+    emitWireScopes([`c2:${idHex}`]);
 
     // A round that failed outright with nothing decrypted must not stamp the
     // topic fresh: the relays were likely wedged (a REQ swallowed by a

@@ -342,8 +342,9 @@ export function useChannelTimeline2(
 
         // Deep-history paging never touches `newest` (that's the scheduler
         // round's bridge job); the persisted merge is monotonic (`oldest`
-        // only recedes) and `exhausted` sticky, so a concurrent round can't
-        // be clobbered.
+        // only recedes, `exhausted` sticky) and serialized per scope inside
+        // `updateStreamCursor`, so a scheduler round writing the same cursor
+        // concurrently merges with this rather than reading around it.
         void updateChannelCursor(cursorKeyId, {
           oldest: older.oldest,
           exhausted: older.exhausted ? true : undefined,

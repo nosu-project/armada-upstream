@@ -815,28 +815,61 @@ export function readStreamCursor(scope: string): Promise<StreamCursor | undefine
 }
 
 /**
+ * Serializes the read-modify-writes below, per scope.
+ *
+ * The merge is monotonic per call, but the read and the write are two awaits:
+ * two overlapping callers both read the old cursor and the second write wins,
+ * losing the first's patch (a deeper `oldest`, a sticky `exhausted`). Two
+ * callers now genuinely do overlap — the sync scheduler's `c2:` round and a
+ * `loadOlder` scroll-up write the same channel's cursor from different call
+ * stacks, where before they shared one hook's in-memory mirror and could not.
+ * A lost update is self-healing (the next round re-pages the region) but it
+ * costs a whole redundant round, so mutations of one scope run one at a time.
+ *
+ * The chain is dropped once it drains, so this holds only in-flight scopes.
+ */
+const cursorWrites = new Map<string, Promise<void>>();
+
+function withCursorLock(scope: string, fn: () => Promise<void>): Promise<void> {
+  const prev = cursorWrites.get(scope) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  // The queued tail must never reject: a failed write releases the lock for
+  // the next caller rather than poisoning the chain. The caller still sees
+  // the rejection through `run`.
+  const tail: Promise<void> = run.catch(() => undefined).then(() => {
+    if (cursorWrites.get(scope) === tail) cursorWrites.delete(scope);
+  });
+  cursorWrites.set(scope, tail);
+  return run;
+}
+
+/**
  * Merge new sync progress into a scope's cursor (best-effort). `newest` only
  * advances forward, `oldest` only recedes, `exhausted` is sticky until cleared.
  */
-export async function updateStreamCursor(scope: string, patch: Partial<StreamCursor>): Promise<void> {
-  const prev = await readStreamCursor(scope);
-  const next: StreamCursor = {
-    newest: Math.max(prev?.newest ?? 0, patch.newest ?? 0),
-    oldest:
-      patch.oldest !== undefined
-        ? prev?.oldest
-          ? Math.min(prev.oldest, patch.oldest)
-          : patch.oldest
-        : (prev?.oldest ?? 0),
-    exhausted: patch.exhausted ?? prev?.exhausted ?? false,
-  };
-  await writeFolded(cursorKey(scope), next);
+export function updateStreamCursor(scope: string, patch: Partial<StreamCursor>): Promise<void> {
+  return withCursorLock(scope, async () => {
+    const prev = await readStreamCursor(scope);
+    const next: StreamCursor = {
+      newest: Math.max(prev?.newest ?? 0, patch.newest ?? 0),
+      oldest:
+        patch.oldest !== undefined
+          ? prev?.oldest
+            ? Math.min(prev.oldest, patch.oldest)
+            : patch.oldest
+          : (prev?.oldest ?? 0),
+      exhausted: patch.exhausted ?? prev?.exhausted ?? false,
+    };
+    await writeFolded(cursorKey(scope), next);
+  });
 }
 
 /** Clear the exhausted flag (e.g. after a rekey catch-up unlocks older history). */
-export async function clearStreamExhausted(scope: string): Promise<void> {
-  const prev = await readStreamCursor(scope);
-  if (prev?.exhausted) await writeFolded(cursorKey(scope), { ...prev, exhausted: false });
+export function clearStreamExhausted(scope: string): Promise<void> {
+  return withCursorLock(scope, async () => {
+    const prev = await readStreamCursor(scope);
+    if (prev?.exhausted) await writeFolded(cursorKey(scope), { ...prev, exhausted: false });
+  });
 }
 
 // Back-compat aliases (chat call sites).

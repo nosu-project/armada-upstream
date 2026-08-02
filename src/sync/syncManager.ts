@@ -35,6 +35,7 @@
  */
 import { isBootGateOpen, onBootGateOpen } from "@/lib/bootGate";
 import { KvPrefixCache } from "@/lib/db/kvCache";
+import { logSync } from "@/lib/syncLog";
 
 export type SyncPriority = "visible" | "background" | "prefetch";
 
@@ -52,16 +53,6 @@ export interface SyncCtx {
   signal: AbortSignal;
 }
 
-/**
- * Transport budgets, carried on the policy for the pool to enforce once
- * per-topic accounting exists there. Not enforced by the scheduler itself.
- */
-export interface SyncBudget {
-  maxEvents?: number;
-  maxPages?: number;
-  maxRelays?: number;
-}
-
 export interface TopicPolicy {
   /** Hard floor between two runs of one topic, however demanded. */
   minIntervalMs: number;
@@ -72,7 +63,6 @@ export interface TopicPolicy {
   staleAfterMs: number;
   /** Fetch and write into ArmadaDB. Results reach readers via the wire bus. */
   handler: (ctx: SyncCtx) => Promise<void>;
-  budget?: SyncBudget;
 }
 
 export interface WantOpts {
@@ -118,6 +108,15 @@ const topics = new Map<string, TopicRuntime>();
 /**
  * Durable freshness stamps. In KV rather than memory so throttling survives
  * remounts and relaunches; cleared with the rest of KV on logout/purge.
+ *
+ * NOT scoped by account, deliberately: a stamp says "this TOPIC's data was
+ * pulled from its relays at T", and a topic names data that is itself
+ * account-independent (a channel on its community's relays, a group on its
+ * relay), stored in the same tenant whoever is logged in. An account switch
+ * therefore inherits the other account's stamps — which costs at most a
+ * skipped round on data already present. Anything whose FRESHNESS differs per
+ * account (a per-account read set, a DM inbox) must put the account in its
+ * topic key rather than rely on this.
  */
 const stamps = new KvPrefixCache<number>({ prefix: "sync-fresh:" });
 
@@ -365,11 +364,17 @@ function startRun(topic: string, rt: TopicRuntime, policy: TopicPolicy, priority
   publish(topic, rt, "pending");
   policy.handler({ topic, signal: controller.signal }).then(
     () => finishRun(topic, rt, policy, true),
-    () => finishRun(topic, rt, policy, false),
+    (err) => finishRun(topic, rt, policy, false, err),
   );
 }
 
-function finishRun(topic: string, rt: TopicRuntime, policy: TopicPolicy, ok: boolean): void {
+function finishRun(
+  topic: string,
+  rt: TopicRuntime,
+  policy: TopicPolicy,
+  ok: boolean,
+  err?: unknown,
+): void {
   const aborted = rt.run?.controller.signal.aborted ?? false;
   rt.run = undefined;
   if (aborted) {
@@ -384,6 +389,15 @@ function finishRun(topic: string, rt: TopicRuntime, policy: TopicPolicy, ok: boo
     publish(topic, rt, "settled");
   } else {
     rt.failures++;
+    // Trace the reason. Without it a handler-contract bug (a missing context
+    // registration, a malformed topic key — the throws the handlers make
+    // deliberately) is indistinguishable from a dead relay: both just show as
+    // `error` and retry into the backoff ceiling forever.
+    logSync(
+      "sync",
+      `topic ${topic} failed (attempt ${rt.failures}): ${err instanceof Error ? err.message : String(err)}`,
+      err,
+    );
     // Deliberately NOT scaled by `minIntervalMs`: a failed round left the
     // reader with nothing, so the first retry should come in seconds (a
     // wedged relay REQ, a mid-flight NIP-42 handshake) — the min-interval
