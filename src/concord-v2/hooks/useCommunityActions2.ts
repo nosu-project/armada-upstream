@@ -304,7 +304,7 @@ export async function resolveBundle(
           onSecondHop({ revoked: true });
         }
       }
-    })();
+    })().catch(() => undefined); // the caller has its answer; the refinement is best-effort
     return bundle;
   }
 

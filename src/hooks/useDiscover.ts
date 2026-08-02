@@ -475,7 +475,10 @@ export function useDiscoverCommunities() {
     return [...byLinkSigner.values()];
   }, [result.data, unrestricted, authors, overflowed, fallback.data]);
 
-  return { data, isLoading: result.isLoading, isError: result.isError };
+  // A failed refresh over a grid already painted (KV seed or placeholder)
+  // must not swap real cards for the error state — error only when there is
+  // nothing to show.
+  return { data, isLoading: result.isLoading, isError: result.isError && !data };
 }
 
 /** How long after boot the Discover warmup fires (chunk warmup fires at 3s). */
