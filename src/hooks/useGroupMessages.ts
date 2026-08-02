@@ -5,32 +5,24 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useSendStatusMap } from "@/hooks/useSendStatusMap";
 import { useTimelineSnapshotWriter } from "@/hooks/useTimelineSnapshot";
-import { KIND_GROUP_CHAT } from "@/lib/nip29";
+import {
+  NIP29_PAGE_SIZE,
+  NIP29_TIMELINE_KINDS,
+  nip29PullFull,
+  nip29SyncTopic,
+  setNip29SyncContext,
+} from "@/lib/nip29Sync";
 import { isSigned } from "@/lib/nostrRumor";
+import { STORE_READ } from "@/lib/storeQuery";
 import { nip29SnapshotScope, readTimelineSnapshot } from "@/lib/timelineSnapshot";
+import { useSyncTopic } from "@/sync/useSyncTopic";
 import { useWireScopes } from "@/wire/useWireScopes";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
-/** NIP-88 poll kind — polls posted to the group render in the timeline. */
-const KIND_POLL = 1068;
 /** NIP-09 deletion kind. */
 const KIND_DELETE = 5;
-
-/** Event kinds shown in the group timeline. */
-const TIMELINE_KINDS = [KIND_GROUP_CHAT, KIND_POLL];
-
-/** How many messages to fetch per page (initial load and each backfill). */
-const PAGE_SIZE = 30;
-
-/**
- * Minimum interval between relay top-up pulls for one room. The wire delivers
- * new messages to the store live; this pull exists to fetch history the wire's
- * `since` window never covered (first visit, deep offline gaps) and to heal a
- * dead wire socket — it must NOT fire on every store-change invalidation.
- */
-const PULL_MIN_INTERVAL_MS = 30_000;
 
 /**
  * Largest gap (seconds) between the cursor message and the next-oldest before
@@ -95,10 +87,11 @@ function paginationCursor(events: NostrRumor[]): number | undefined {
  *
  * This hook holds NO sockets. The wire (WireSync) owns the standing per-relay
  * subscription and funnels every incoming event into the store; the wire bus
- * then announces `nip29:<groupId>` and this hook re-reads. The only network
- * this hook performs is PULLS: a throttled newest-page top-up (first visit /
- * deep gaps / dead-socket healing) and explicit scroll-up pagination — both of
- * which are mirrored into the store by the relay pool's caching layer.
+ * then announces `nip29:<groupId>` and this hook re-reads. The newest-page
+ * top-up (first visit / deep gaps / dead-socket healing) is the sync
+ * scheduler's `nip29:` topic (see `nip29Sync.ts`), wanted for the life of
+ * this view; the only network the hook itself performs is explicit scroll-up
+ * pagination, mirrored into the store by the relay pool's caching layer.
  *
  * Supports optimistic publishing: locally-signed messages are inserted
  * immediately with a `pending` status. Because we sign locally, the optimistic
@@ -116,12 +109,6 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
   const [hasMore, setHasMore] = useState(true);
   const cursorRef = useRef<number | undefined>(undefined);
   const loadingRef = useRef(false);
-  const lastPullRef = useRef(0);
-  // Whether this room's first store read has settled. Until it has, an empty
-  // read reads as LOADING (skeleton), not an authoritative "no messages yet".
-  // Keyed off the local READ (always runs in the queryFn), not the throttled
-  // network pull (which can be skipped, deadlocking the skeleton).
-  const [firstLoadDone, setFirstLoadDone] = useState(false);
 
   // Last-known-good localStorage snapshot scope for this room: a pure READ
   // CACHE for the first frame of a cold launch (Android IndexedDB cold-opens
@@ -129,13 +116,28 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
   const snapshotScope = relayUrl && groupId ? nip29SnapshotScope(relayUrl, groupId) : undefined;
 
   useEffect(() => {
-    lastPullRef.current = 0;
     setHasMore(true);
     cursorRef.current = undefined;
-    setFirstLoadDone(false);
   }, [relayUrl, groupId]);
 
+  // The newest-page top-up (first visit, offline gaps, dead-socket healing)
+  // is owned by the sync scheduler: this view registers the pool handle a
+  // `nip29:` round needs, then declares standing interest in the topic. The
+  // relay is part of the topic key — a group id means nothing without its
+  // relay — and freshness is a durable stamp, so a room revisited inside the
+  // fresh window is a pure store read. The context effect is declared BEFORE
+  // the want, so a round never starts without it.
+  const syncTopic = relayUrl && groupId ? nip29SyncTopic(relayUrl, groupId) : undefined;
+  useEffect(() => {
+    if (!syncTopic) return;
+    return setNip29SyncContext(syncTopic, { nostr });
+  }, [syncTopic, nostr]);
+  const sync = useSyncTopic(syncTopic);
+
   const query = useQuery<NostrRumor[]>({
+    // A pure store read now (see below): no offline pausing, no retry ladder
+    // held at `isPending` — this query's loading state is a skeleton gate.
+    ...STORE_READ,
     queryKey: messagesKey(relayUrl, groupId),
     queryFn: async ({ signal }) => {
       const store = await eventStore;
@@ -153,7 +155,7 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
       // the read is aimed at that relay's tenant rather than a shared cache.
       const [cached, deletes] = await Promise.all([
         store.query(
-          [{ kinds: TIMELINE_KINDS, "#h": [groupId!], limit: Math.max(PAGE_SIZE, existing.length) }],
+          [{ kinds: NIP29_TIMELINE_KINDS, "#h": [groupId!], limit: Math.max(NIP29_PAGE_SIZE, existing.length) }],
           { relay: relayUrl },
         ),
         // Deletions: the store self-applies NIP-09 for same-author deletes, but
@@ -167,52 +169,20 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
 
       const local = sortDedupe([...existing, ...cached]).filter((e) => !deletedIds.has(e.id));
 
-      // Throttled background top-up: the newest relay page, for history the
-      // wire's since-window never covered. NOT awaited (never gates paint);
-      // the pool mirrors results into the store; merged append-only here.
-      // `firstLoadDone` (the loading-skeleton gate) flips when this pull settles
-      // — or immediately if it's throttled-skipped (a recent pull already ran).
-      const now = Date.now();
-      if (now - lastPullRef.current >= PULL_MIN_INTERVAL_MS) {
-        lastPullRef.current = now;
-        void (async () => {
-          if (signal.aborted) return;
-          try {
-            const events = await nostr.relay(relayUrl!).query(
-              [{ kinds: TIMELINE_KINDS, "#h": [groupId!], limit: PAGE_SIZE }],
-              { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
-            );
-            setHasMore(events.length >= PAGE_SIZE);
-            const cursor = paginationCursor(events);
-            if (cursor !== undefined && (cursorRef.current === undefined || cursor < cursorRef.current)) {
-              cursorRef.current = cursor;
-            }
-            if (signal.aborted || events.length === 0) return;
-            queryClient.setQueryData<NostrRumor[]>(messagesKey(relayUrl, groupId), (old = []) =>
-              sortDedupe([...old, ...events]).filter((e) => !deletedIds.has(e.id)),
-            );
-          } catch {
-            // Best-effort; the store-hydrated result already rendered.
-          } finally {
-            if (!signal.aborted) setFirstLoadDone(true);
-          }
-        })();
-      } else if (!signal.aborted) {
-        // Pull throttled-skipped: a recent pull already settled, so an empty
-        // timeline is authoritative now (don't hang on the skeleton).
-        setFirstLoadDone(true);
-      }
+      // No network here: the scheduler owns the newest-page pull (the topic
+      // wanted above); its round mirrors results into the store and rings the
+      // bus back into this queryFn. `hasMore` reflects the last round's page
+      // fullness; a `loadOlder` probe refines it.
+      const full = syncTopic ? nip29PullFull(syncTopic) : undefined;
+      if (full !== undefined && !signal.aborted) setHasMore(full);
 
       // Seed the cursor from local history so scroll-up backfill works even
-      // before any network pull lands.
+      // before any network pull lands. (The scheduler's pull is the NEWEST
+      // page, so once its rows are in this read, the local oldest is at least
+      // as deep a cursor as the pull could have offered.)
       if (cursorRef.current === undefined && local.length > 0) {
         cursorRef.current = paginationCursor(local);
       }
-      // If the store already had messages, loading is done immediately. If it
-      // was empty, the pull's `finally` (above) flips the gate once it settles —
-      // an empty store read isn't authoritative, since NIP-29 history arrives
-      // via this pull, not the wire's live `since` window.
-      if (local.length > 0 && !signal.aborted) setFirstLoadDone(true);
       return local;
     },
     enabled: Boolean(relayUrl && groupId),
@@ -230,13 +200,10 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
       return own && own.length > 0 ? own : undefined;
     },
     initialDataUpdatedAt: 0,
-    // Healing backstops: the wire owns liveness, but a half-dead socket (one
-    // the OS severed while backgrounded) stalls silently — a periodic re-read
-    // (whose throttled pull tops up from the relay) and a refetch on
-    // focus/reconnect close that gap.
-    refetchInterval: 60_000,
-    refetchOnWindowFocus: true,
-    refetchOnReconnect: true,
+    // No refetch timer or focus/reconnect backstops here: the scheduler
+    // re-runs the topic's pull on its staleness interval and on focus/online
+    // nudges while this view holds its want, and every round rings the bus
+    // back into this query — dead-socket healing included.
     // Keep the previous render's messages painted ONLY when they belong to
     // THIS room (the previous query has the same key — e.g. a remount after
     // cache eviction), so a same-room reload never flashes the skeleton. A
@@ -294,7 +261,7 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     setIsLoadingOlder(true);
     try {
       const older = await nostr.relay(relayUrl).query(
-        [{ kinds: TIMELINE_KINDS, "#h": [groupId], until, limit: PAGE_SIZE }],
+        [{ kinds: NIP29_TIMELINE_KINDS, "#h": [groupId], until, limit: NIP29_PAGE_SIZE }],
         { signal: AbortSignal.timeout(8000) },
       );
 
@@ -303,7 +270,7 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
       const existingIds = new Set(existing.map((e) => e.id));
       const fresh = older.filter((e) => !existingIds.has(e.id));
 
-      if (older.length < PAGE_SIZE) setHasMore(false);
+      if (older.length < NIP29_PAGE_SIZE) setHasMore(false);
       // Advance the cursor from the raw page (pre-dedupe) so a page that's all
       // boundary-overlap still moves us backwards in time.
       cursorRef.current = paginationCursor(older) ?? until - 1;
@@ -362,17 +329,15 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
     [status, insertOptimistic, markSent, markFailed, removeOptimistic, loadOlder, hasMore, isLoadingOlder],
   );
 
-  // Effective loading: the react-query load, OR a first cold visit where the
-  // store hydrated empty and the first network top-up hasn't settled yet. This
-  // keeps the timeline on its skeleton (not the "no messages yet" empty state)
-  // until we've actually heard back from the relay — the wire may not have
-  // ingested this room's history yet on a fresh app start.
-  // Loading skeleton gate — see useConcordChannel for the full rationale. Hold
-  // the skeleton while empty AND a load is genuinely in progress; never force
-  // it while the query is idle-and-never-fetched.
+  // Loading skeleton gate: the local store read, plus the sync topic on a
+  // cold first visit — an empty store is NOT authoritative for NIP-29 until
+  // the scheduler's newest-page pull settles (history arrives via that pull,
+  // not the wire's live `since` window). `pending` covers the whole span from
+  // this view declaring interest to the round settling; a settled, errored,
+  // or fresh-stamped topic releases the gate, so an empty room shows its
+  // empty state instead of a skeleton forever.
   const isLoading =
-    query.isLoading ||
-    ((query.data?.length ?? 0) === 0 && (query.isFetching || query.isFetched) && !firstLoadDone);
+    query.isLoading || ((query.data?.length ?? 0) === 0 && sync.status === "pending");
 
   return { ...query, ...helpers, isLoading };
 }

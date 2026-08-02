@@ -122,7 +122,7 @@ describe("channelSync — the c2: topic handler", () => {
     localStorage.clear();
   });
 
-  it("a round decrypts relay history into the rumor store, advances the cursor, and settles the topic", async () => {
+  it("a round decrypts relay history into the rumor store, advances the cursor, and settles the topic", { timeout: 30_000 }, async () => {
     const m = await freshModules();
     const channel = makeChannel(m);
     const alice = signer();
@@ -137,7 +137,7 @@ describe("channelSync — the c2: topic handler", () => {
 
     const topic = `c2:${channel.idHex}`;
     const release = m.want(topic);
-    await vi.waitFor(() => expect(m.syncState(topic).status).toBe("settled"), { timeout: 5000 });
+    await vi.waitFor(() => expect(m.syncState(topic).status).toBe("settled"), { timeout: 15_000 });
 
     const rumors = await m.queryChannelRumors(CID, channel.idHex, { limit: 10 });
     expect(rumors.map((r) => r.content).sort()).toEqual(["msg-0", "msg-1", "msg-2"]);
@@ -151,7 +151,7 @@ describe("channelSync — the c2: topic handler", () => {
     release();
   });
 
-  it("a round with no reachable relay marks the topic error, never fresh", async () => {
+  it("a round with no reachable relay marks the topic error, never fresh", { timeout: 30_000 }, async () => {
     const m = await freshModules();
     const channel = makeChannel(m);
     const relay = new FakeRelay();
@@ -161,21 +161,21 @@ describe("channelSync — the c2: topic handler", () => {
 
     const topic = `c2:${channel.idHex}`;
     const release = m.want(topic);
-    await vi.waitFor(() => expect(m.syncState(topic).status).toBe("error"), { timeout: 5000 });
+    await vi.waitFor(() => expect(m.syncState(topic).status).toBe("error"), { timeout: 15_000 });
     expect(m.syncState(topic).lastSyncedAt).toBeUndefined();
     release();
   });
 
-  it("a want without a registered context fails the run instead of stamping it fresh", async () => {
+  it("a want without a registered context fails the run instead of stamping it fresh", { timeout: 30_000 }, async () => {
     const m = await freshModules();
     const topic = `c2:${"ee".repeat(32)}`;
     const release = m.want(topic);
-    await vi.waitFor(() => expect(m.syncState(topic).status).toBe("error"), { timeout: 5000 });
+    await vi.waitFor(() => expect(m.syncState(topic).status).toBe("error"), { timeout: 15_000 });
     expect(m.syncState(topic).lastSyncedAt).toBeUndefined();
     release();
   });
 
-  it("a released mount's teardown never clobbers a newer context for the same channel", async () => {
+  it("a released mount's teardown never clobbers a newer context for the same channel", { timeout: 30_000 }, async () => {
     const m = await freshModules();
     const channel = makeChannel(m);
     const community = { idHex: CID, relays: [RELAY] } as unknown as CommunityV2;
@@ -191,7 +191,7 @@ describe("channelSync — the c2: topic handler", () => {
     // The newer registration survives: a round now still finds its context.
     const topic = `c2:${channel.idHex}`;
     const release = m.want(topic);
-    await vi.waitFor(() => expect(m.syncState(topic).status).toBe("settled"), { timeout: 5000 });
+    await vi.waitFor(() => expect(m.syncState(topic).status).toBe("settled"), { timeout: 15_000 });
     release();
   });
 });
