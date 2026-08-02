@@ -214,6 +214,50 @@ describe("syncManager", () => {
     release();
   });
 
+  it("publishes pending synchronously on a want for a registered topic", async () => {
+    const m = await freshModule();
+    const gate = deferred();
+    m.registerSyncTopic("t:", { minIntervalMs: 0, staleAfterMs: 60_000, handler: () => gate.promise });
+
+    // Before the stamp warm, before any run: the reader's coverage guarantee
+    // (an empty store read renders as catching-up, not as an empty verdict).
+    const release = m.want("t:a");
+    expect(m.syncState("t:a").status).toBe("pending");
+
+    gate.resolve();
+    await vi.waitFor(() => expect(m.syncState("t:a").status).toBe("settled"));
+    release();
+  });
+
+  it("resolves the optimistic pending when the last want releases without a run", async () => {
+    const m = await freshModule();
+    const handler = vi.fn(async () => {});
+    m.registerSyncTopic("t:", { minIntervalMs: 0, staleAfterMs: 60_000, handler });
+
+    // Want and release synchronously, before the stamp warm lets anything
+    // run: the optimistic pending must resolve (to idle — never synced), not
+    // stick forever for read-only observers of the topic.
+    const release = m.want("t:a");
+    expect(m.syncState("t:a").status).toBe("pending");
+    release();
+    expect(m.syncState("t:a").status).toBe("idle");
+
+    await sleep(20);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("invalidateSyncTopic re-runs a fresh topic with a standing want", async () => {
+    const m = await freshModule();
+    const handler = vi.fn(async () => {});
+    m.registerSyncTopic("t:", { minIntervalMs: 0, staleAfterMs: 60_000, handler });
+
+    const release = m.want("t:a");
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    m.invalidateSyncTopic("t:a");
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(2));
+    release();
+  });
+
   it("a forced want re-runs a fresh topic", async () => {
     const m = await freshModule();
     const handler = vi.fn(async () => {});

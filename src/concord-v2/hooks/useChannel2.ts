@@ -15,8 +15,8 @@ import {
   type FoldedTimeline,
   type OpenedChat,
 } from "@/concord-v2/lib/chat";
-import { KIND_COMMENT, KIND_DELETE, KIND_MESSAGE, KIND_POLL, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_WRAP } from "@/concord-v2/lib/kinds";
-import { whenAuthSettled } from "@/concord-v2/lib/planeSync";
+import { backfillStore, LOAD_OLDER_MAX_PAGES, setChannelSyncContext } from "@/concord-v2/lib/channelSync";
+import { KIND_COMMENT, KIND_DELETE, KIND_MESSAGE, KIND_POLL, KIND_REACTION, KIND_SEAL_ENCRYPTED } from "@/concord-v2/lib/kinds";
 import {
   clearChannelExhausted,
   queryChannelRumors,
@@ -33,13 +33,14 @@ import { buildRumor, channelBindingTags, sealRumor, wrapSeal } from "@/concord-v
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 import { publishTimeoutMs } from "@/lib/publishTimeout";
-import { beginSyncTask, type SyncTaskHandle } from "@/lib/syncActivity";
 import { logSync, sinceMs } from "@/lib/syncLog";
 import { STORE_READ } from "@/lib/storeQuery";
 import { markOwnWebPushEvent } from "@/lib/webPushState";
+import { invalidateSyncTopic } from "@/sync/syncManager";
+import { useSyncTopic } from "@/sync/useSyncTopic";
 import { useWireScopes } from "@/wire/useWireScopes";
 
-import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
+import type { NostrEvent } from "@nostrify/nostrify";
 
 /** Query key for a channel's RAW opened-event set (all chat-plane kinds). */
 export const channelKey = (channelIdHex: string | null) => ["concord2", "channel", channelIdHex] as const;
@@ -52,32 +53,6 @@ const deletedKey = (channelIdHex: string | null) => ["concord2", "msg-deleted", 
  * Sized above V1's 30 accordingly; the rumor cache serves re-reads with no decrypt.
  */
 const WINDOW_SIZE = 100;
-/** Relay backfill page size. */
-const BACKFILL_PAGE = 50;
-/** EOSE race grace once the fastest relay returns a page. */
-const BACKFILL_EOSE_GRACE_MS = 500;
-/**
- * Older-history pages walked back-to-back on a cold load. The passes chain
- * without waiting for the 60s poll, so deep history fills promptly rather than
- * one ~300-event chunk per minute. Bounded so a huge channel can't page relays
- * forever in one go — the saved cursor resumes any remainder on later polls or
- * on an explicit `loadOlder`.
- */
-const BACKFILL_MAX_PAGES = 20;
-/** Pages per `loadOlder` scroll-up when the local store is exhausted. */
-const LOAD_OLDER_MAX_PAGES = 6;
-
-/**
- * Minimum interval between relay backfill rounds for one channel. The wire
- * delivers live wraps to the rumor store; the backfill exists for history the
- * wire never covered (cold opens, offline gaps) and must not re-run on every
- * bus-invalidated re-read.
- */
-const BACKFILL_MIN_INTERVAL_MS = 30_000;
-
-function channelFilter(channel: ChannelV2, extra?: Partial<NostrFilter>): NostrFilter {
-  return { kinds: [KIND_WRAP], authors: channel.streams.map((s) => s.group.pk), ...extra };
-}
 
 /** Upsert opened events into the raw set, deduped by rumor id, sorted by ms. */
 export function upsertOpenedChat(old: OpenedChat[] | undefined, incoming: OpenedChat[]): OpenedChat[] {
@@ -96,117 +71,6 @@ export function upsertOpenedChat(old: OpenedChat[] | undefined, incoming: Opened
 
 /** Local shorthand. */
 const upsert = upsertOpenedChat;
-
-/**
- * Backfill wraps from the relays with `until` pagination and per-relay cursors
- * (a relay ignoring `until` is culled after one non-progressing page). Returns
- * the oldest and newest `created_at` seen, every raw wrap collected across the
- * passes (so the caller can decrypt them into the rumor cache directly),
- * whether history is exhausted (no relay had a full page left to page past),
- * and whether any relay FAILED (error/abort) — a failed relay's events may be
- * missing, so failure must never be recorded as exhaustion and must block
- * cursor advancement past the failed region.
- *
- * `since` bounds a pass from below (the bridge pass uses it to fetch exactly
- * the region between the saved cursor and the newest page).
- *
- * The kind-1059 wraps these reads return are NEVER mirrored into the shared
- * `armada-events` store — `NostrBatcher.cacheEvents` drops all gift-wrap kinds
- * unconditionally. Only the decrypted rumors are persisted (see rumorStore.ts).
- */
-async function backfillStore(
-  nostr: ReturnType<typeof useNostr>["nostr"],
-  relays: string[],
-  channel: ChannelV2,
-  signal: AbortSignal,
-  opts: { until?: number; since?: number; maxPages?: number; beforeRelay?: (url: string) => Promise<void> } = {},
-): Promise<{ oldest?: number; newest?: number; events: NostrEvent[]; exhausted: boolean; failed: boolean }> {
-  const maxPages = opts.maxPages ?? BACKFILL_MAX_PAGES;
-  let oldest: number | undefined;
-  let newest: number | undefined;
-  let active = relays.map((url) => ({ url, cursor: opts.until }));
-  const collected: NostrEvent[] = [];
-  let failed = false;
-
-  for (let page = 0; page < maxPages && active.length > 0; page++) {
-    if (signal.aborted) break;
-    const pageController = new AbortController();
-    const pageSignal = AbortSignal.any([signal, pageController.signal]);
-    let graceTimer: ReturnType<typeof setTimeout> | undefined;
-    const armGrace = () => {
-      graceTimer ??= setTimeout(() => pageController.abort(), BACKFILL_EOSE_GRACE_MS);
-    };
-
-    const results = await Promise.all(
-      active.map(async (relay) => {
-        const filter = channelFilter(channel, { limit: BACKFILL_PAGE });
-        if (relay.cursor !== undefined) filter.until = relay.cursor;
-        if (opts.since !== undefined) filter.since = opts.since;
-        try {
-          // Per-relay auth gate (see backfillAndRefresh): each relay's page
-          // waits only for ITS OWN stream AUTHs to settle, never for the
-          // slowest relay's cap.
-          await opts.beforeRelay?.(relay.url);
-          if (pageSignal.aborted) return { relay, events: [] as NostrEvent[], ok: false };
-          const events = await nostr
-            .relay(relay.url)
-            .query([filter], {
-              signal: AbortSignal.any([pageSignal, AbortSignal.timeout(8000)]),
-            });
-          // Only a relay that actually HAS events may start the race clock. An
-          // instant empty EOSE (e.g. a relay that stores no wraps) must never
-          // abort relays still mid-answer — cold NIP-42 AUTH costs extra
-          // round-trips, and losing that race silently drops their messages
-          // (issue #19: the platform relay answered empty in ~0ms and starved
-          // the real community relays on every cold open).
-          if (events.length > 0) armGrace();
-          return { relay, events, ok: true };
-        } catch {
-          return { relay, events: [] as NostrEvent[], ok: false };
-        }
-      }),
-    );
-    if (graceTimer !== undefined) clearTimeout(graceTimer);
-
-    const next: typeof active = [];
-    for (const { relay, events, ok } of results) {
-      if (!ok) {
-        // Error or aborted — this relay's region was NOT read. Track the
-        // failure (blocks exhaustion/cursor advancement) and drop it for this
-        // run; a later poll retries it.
-        failed = true;
-        continue;
-      }
-      collected.push(...events);
-      let relayOldest = Infinity;
-      let progressed = 0;
-      for (const ev of events) {
-        if (newest === undefined || ev.created_at > newest) newest = ev.created_at;
-        if (relay.cursor === undefined || ev.created_at < relay.cursor) {
-          progressed += 1;
-          if (ev.created_at < relayOldest) relayOldest = ev.created_at;
-        }
-      }
-      if (Number.isFinite(relayOldest)) {
-        if (oldest === undefined || relayOldest < oldest) oldest = relayOldest;
-      }
-      if (progressed > 0 && events.length >= BACKFILL_PAGE && relayOldest > 0) {
-        next.push({ url: relay.url, cursor: relayOldest - 1 });
-      }
-    }
-    active = next;
-  }
-  // `exhausted` means we verifiably reached the bottom: every relay ran to a
-  // short/empty page AFTER we'd seen history. An all-empty run (no events
-  // collected at all) is INCONCLUSIVE — a relay answering empty before NIP-42
-  // AUTH completes, or a stale `until` cursor past the relay's data — and must
-  // NOT seal the channel as exhausted, or a notification-only room (1 message,
-  // no history yet) gets permanently stuck with just that message. Treat an
-  // all-empty run like a failure so a later poll retries it.
-  const reachedBottom = active.length === 0 && !failed;
-  const exhausted = reachedBottom && collected.length > 0;
-  return { oldest, newest, events: collected, exhausted, failed: failed || (reachedBottom && collected.length === 0) };
-}
 
 /** The moderation context resolved from the community's control fold. */
 export function useChatModeration2(community: CommunityV2 | undefined): ChatModeration {
@@ -292,60 +156,43 @@ export function useChannelTimeline2(
   const windowLimitRef = useRef(WINDOW_SIZE);
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
-  // In-memory mirror of the persisted per-channel cursor (created_at bounds +
-  // exhausted flag), loaded on channel change and written through on progress.
-  // `newest` is the top of CONTIGUOUSLY-synced history: it only advances when
-  // a backfill's bridge pass has verifiably fetched everything between the old
-  // `newest` and the newest page (see backfillAndRefresh), so a hole can never
-  // be sealed over.
-  const cursor = useRef<Map<string, { newest?: number; oldest?: number; exhausted: boolean }>>(new Map());
-  const initialLoadedRef = useRef<string | null>(null);
-  const lastBackfillRef = useRef(0);
 
   useEffect(() => {
     windowLimitRef.current = WINDOW_SIZE;
     setHasMore(true);
     setIsLoadingOlder(false);
-    initialLoadedRef.current = null;
-    lastBackfillRef.current = 0;
-    // Hydrate the in-memory cursor from the persisted one for this channel.
-    if (channelIdHex) {
-      void readChannelCursor(channelIdHex).then((c) => {
-        if (!c) return;
-        // Heal a POISONED cursor: `exhausted` with `oldest === 0` means it was
-        // sealed without ever paging down (an all-empty backfill run — e.g. a
-        // relay that answered empty before NIP-42 AUTH). Clearing `exhausted`
-        // lets the backfill retry so a notification-only room finally pulls its
-        // history instead of showing just the one delivered message.
-        const poisoned = c.exhausted && !c.oldest;
-        cursor.current.set(channelIdHex, {
-          newest: c.newest,
-          oldest: c.oldest,
-          exhausted: poisoned ? false : c.exhausted,
-        });
-        if (poisoned) void clearChannelExhausted(channelIdHex);
-      });
-    }
   }, [channelIdHex]);
 
   // A caught-up rekey changes the held stream set: forget remembered decode
-  // failures, clear the exhaustion flag (a new stream key may unlock history),
-  // and re-read.
+  // failures, clear the exhaustion flag and force a sync round (a new stream
+  // key may unlock history a fresh stamp would skip), and re-read.
   useEffect(() => {
     if (!channelIdHex) return;
     forgetChatSkips();
-    const c = cursor.current.get(channelIdHex);
-    if (c) c.exhausted = false;
     void clearChannelExhausted(channelIdHex);
+    invalidateSyncTopic(`c2:${channelIdHex}`);
     queryClient.invalidateQueries({ queryKey: channelKey(channelIdHex) });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [epochSig]);
 
+  // The catch-up pull (cold opens, offline gaps, deep history) is owned by
+  // the sync scheduler: this view registers the context a `c2:` round needs
+  // (pool handle, community relays, stream keys), then declares standing
+  // interest in the topic. Freshness is a durable stamp, so switching back to
+  // a recently-synced channel is a pure store read — the per-mount throttle
+  // this replaces re-paged every relay on every switch. The context effect is
+  // declared BEFORE the want, so a round never starts without it.
+  useEffect(() => {
+    if (!community || !channel) return;
+    return setChannelSyncContext(channel.idHex, { nostr, community, channel });
+  }, [nostr, community, channel]);
+  useSyncTopic(community && channel ? `c2:${channel.idHex}` : undefined);
+
   // Live updates come from the wire: WireSync holds the standing kind-1059
   // subscription for EVERY channel, decrypts with our stream keys, writes the
   // rumor store, and announces `c2:<idHex>` on the bus. We just re-read.
-  // (Relay backfill inside the queryFn is independently throttled below so a
-  // bus invalidation is a cheap local read, not a network round.)
+  // (Relay catch-up lives behind the sync scheduler, so a bus invalidation is
+  // a cheap local read, not a network round.)
   //
   // `c2park:<streamPk>` covers the wire's blind spot: a wrap for one of OUR
   // stream addresses that the wire couldn't decrypt (its spec hadn't refreshed
@@ -380,12 +227,10 @@ export function useChannelTimeline2(
     // already point at the new channel by the second render.
     placeholderData: (prev, prevQuery) =>
       prevQuery && hashKey(prevQuery.queryKey) === hashKey(queryKey) ? prev : undefined,
-    // Live messages arrive over the wire's standing subscription (see above);
-    // this timer only drives periodic relay BACKFILL/healing, itself floored by
-    // BACKFILL_MIN_INTERVAL_MS. Run it slowly and only while the tab is visible
-    // — a wire-bus invalidation still refreshes the view instantly on new msgs.
-    refetchInterval: 5 * 60_000,
-    refetchIntervalInBackground: false,
+    // No refetch timer: live messages arrive over the wire's standing
+    // subscription, and periodic catch-up/healing is the sync scheduler's
+    // (its staleness interval re-runs the `c2:` round while this view holds
+    // its want, and every store write rings the bus back into this query).
     queryFn: async ({ signal }) => {
       const cursorKeyId = channelIdHex ?? "";
 
@@ -411,17 +256,18 @@ export function useChannelTimeline2(
         ackPendingWraps(parked.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
       };
 
-      // hasMore is true if the local rumor window is full OR relays may have more.
-      const refreshHasMore = (localFull: boolean) => {
-        setHasMore(localFull || !cursor.current.get(cursorKeyId)?.exhausted);
-      };
-
       const composeFromStore = async (extra?: OpenedChat[]): Promise<OpenedChat[]> => {
-        const rumors = await queryChannelRumors(community!.idHex, channelIdHex!, {
-          limit: windowLimitRef.current,
-          signal,
-        });
-        refreshHasMore(rumors.length >= windowLimitRef.current);
+        // hasMore: the local rumor window is full OR relays may have more
+        // (the persisted cursor — the scheduler's round writes it — isn't
+        // exhausted). Read alongside the rumors, not serially.
+        const [rumors, saved] = await Promise.all([
+          queryChannelRumors(community!.idHex, channelIdHex!, {
+            limit: windowLimitRef.current,
+            signal,
+          }),
+          readChannelCursor(cursorKeyId),
+        ]);
+        setHasMore(rumors.length >= windowLimitRef.current || !saved?.exhausted);
         const prev = (queryClient.getQueryData<OpenedChat[]>(queryKey) ?? []).filter(
           (m) => m.channelIdHex === channelIdHex,
         );
@@ -430,153 +276,32 @@ export function useChannelTimeline2(
         return upsert(prev, extra ? upsert(rumors, extra) : rumors);
       };
 
-      const backfillAndRefresh = async (task: SyncTaskHandle) => {
-        if (signal.aborted) return;
-        // Hold each relay's pages until THAT relay has ACKED our stream AUTHs
-        // (if it challenged) — a kind-1059 REQ racing NIP-42 gets CLOSED and
-        // reads back as an empty page, which on a cold open paints "no
-        // messages" for a channel that has plenty (the post-login empty-rooms
-        // bug). Gated PER RELAY (backfillStore's beforeRelay) rather than
-        // awaited for the whole relay set up front: one unsettled relay used
-        // to hold every relay's first page behind its full cap
-        // (whenAuthSettled, up to 8s) — a cold-open skeleton stall. A relay
-        // that reads empty or aborts while its auth settles is recorded as
-        // failed, so the cursor never seals over its region and a later round
-        // retries it.
-        const authGate = (url: string) => whenAuthSettled(url, () => channel!.streams.map((s) => s.group));
-        // Running count of rumors this round decrypted, for the status bar.
-        let synced = 0;
-        const tick = () => {
-          if (synced > 0) task.update({ detail: `${synced} ${synced === 1 ? "message" : "messages"}` });
-        };
-        // Pass 1: pull the newest page (no `until`) so live-adjacent history
-        // lands first. Decrypt it and PAINT immediately — the newest page is
-        // what the viewer sees on open, so the timeline shows as soon as this
-        // lands rather than waiting for the deep-history passes below (which,
-        // on a cold channel, meant staring at a skeleton through up to 20
-        // back-to-back relay pages).
-        const newest = await backfillStore(nostr, community!.relays, channel!, signal, { maxPages: 1, beforeRelay: authGate });
-        if (signal.aborted) return;
-
-        const firstOpened = await openChatBatch(newest.events, channel!, { signal });
-        if (signal.aborted) return;
-        writeRumors(community!.idHex, firstOpened);
-        synced += firstOpened.length;
-        tick();
-        queryClient.setQueryData<OpenedChat[]>(queryKey, await composeFromStore(firstOpened));
-
-        const saved = cursor.current.get(cursorKeyId);
-
-        // Pass 2 (the bridge): fetch the REGION BETWEEN the saved `newest` and
-        // pass 1's oldest. Without it, an offline burst larger than one page
-        // leaves a permanent hole — pass 3 resumes BELOW already-seen history
-        // and the advanced cursor seals the gap forever (issue #19).
-        let bridge: Awaited<ReturnType<typeof backfillStore>> = {
-          events: [],
-          exhausted: true,
-          failed: false,
-        };
-        if (saved?.newest && newest.oldest !== undefined && newest.oldest > saved.newest) {
-          bridge = await backfillStore(nostr, community!.relays, channel!, signal, {
-            until: newest.oldest - 1,
-            since: saved.newest,
-            beforeRelay: authGate,
-          });
-          if (signal.aborted) return;
-        }
-
-        // Pass 3: page OLDER history back-to-back. Resume from the saved
-        // cursor if we have one; otherwise (cold channel) resume from just
-        // below pass 1's newest page rather than re-fetching that page.
-        const resumeFrom = saved?.oldest ?? (newest.oldest !== undefined ? newest.oldest - 1 : undefined);
-        const older = await backfillStore(nostr, community!.relays, channel!, signal, { until: resumeFrom, beforeRelay: authGate });
-        if (signal.aborted) return;
-
-        // Decrypt the bridge + older pages into the rumor cache (pass 1 already
-        // decrypted + painted above).
-        const opened = await openChatBatch(
-          [...bridge.events, ...older.events],
-          channel!,
-          { signal },
-        );
-        writeRumors(community!.idHex, opened);
-        synced += opened.length;
-        tick();
-
-        // Advance the persisted cursor: `oldest` back, `exhausted` sticky, and
-        // `newest` forward ONLY when the newest region is verifiably complete —
-        // pass 1 had no relay failures and the bridge ran to exhaustion. An
-        // incomplete round leaves `newest` where it was, so the next poll
-        // re-bridges the same region instead of sealing a hole.
-        const c = cursor.current.get(cursorKeyId) ?? { exhausted: false };
-        if (older.oldest !== undefined && (c.oldest === undefined || older.oldest < c.oldest)) {
-          c.oldest = older.oldest;
-        }
-        if (older.exhausted) c.exhausted = true;
-        const complete = !newest.failed && bridge.exhausted;
-        if (complete) {
-          const top = Math.max(newest.newest ?? 0, bridge.newest ?? 0, c.newest ?? 0);
-          if (top > 0) c.newest = top;
-        }
-        cursor.current.set(cursorKeyId, c);
-        void updateChannelCursor(cursorKeyId, {
-          newest: complete ? c.newest : undefined,
-          oldest: c.oldest,
-          exhausted: c.exhausted,
-        });
-
-        // A round that failed outright with nothing decrypted must not hold
-        // the 30s throttle: the relays were likely wedged (a REQ swallowed by
-        // a mid-flight NIP-42 handshake, a poisoned shared query mid-heal) —
-        // let the next poll / bus ring / re-open retry immediately instead of
-        // reading as a permanently empty room.
-        if (synced === 0 && newest.failed && older.failed) lastBackfillRef.current = 0;
-
-        queryClient.setQueryData<OpenedChat[]>(queryKey, await composeFromStore(opened));
-      };
-
       const existing = queryClient.getQueryData<OpenedChat[]>(queryKey);
 
-      // Relay backfill is throttled: a wire-bus invalidation re-reads the
-      // store (cheap, instant) without re-paging relays on every message.
-      // Nothing here gates the loading skeleton — the queryFn resolves on the
-      // store read below and the relay round runs behind it, announced on the
-      // sync-activity signal instead (see `beginSyncTask`).
-      const dueForBackfill = Date.now() - lastBackfillRef.current >= BACKFILL_MIN_INTERVAL_MS;
-      const maybeBackfill = () => {
-        if (!dueForBackfill) return Promise.resolve();
-        lastBackfillRef.current = Date.now();
-        // Report this relay round on the sync-activity signal, named after the
-        // channel with a live decrypted-message count and scoped `c2:<id>` so
-        // the chat view can tell "this room is catching up" from unrelated
-        // background sync — cold opens and post-wake gap-bridging are exactly
-        // the "silent minute" the in-chat status bar exists for.
-        const task = beginSyncTask(`#${channel!.name}`, { scope: `c2:${channel!.idHex}` });
-        return backfillAndRefresh(task).finally(() => task.end());
-      };
+      // No relay round starts here: the scheduler owns the `c2:` catch-up
+      // (wanted above), so a wire-bus invalidation is a cheap local re-read,
+      // never a network round. The round's writes ring the bus back into this
+      // queryFn, and its progress surfaces on the sync-activity signal and
+      // the topic's sync state — never on `isLoading`.
 
       if (existing && existing.length > 0) {
         // Warm: paint what we have; heal in the background.
-        initialLoadedRef.current = channelIdHex;
         void (async () => {
           if (signal.aborted) return;
           queryClient.setQueryData<OpenedChat[]>(queryKey, await composeFromStore());
           await drainParked();
-          await maybeBackfill();
         })().catch(() => undefined);
         return existing;
       }
 
       // The store read is the whole of the first load. An empty result is NOT
-      // authoritative for V2 — history is decrypted by the backfill, not the
-      // wire's live `since` window — but that is a SYNC state, not a loading
-      // one: the park drain and the relay round below run behind this return,
-      // report themselves on the sync-activity signal, and repaint through
-      // `setQueryData` as they land.
+      // authoritative for V2 — history is decrypted by the scheduler's
+      // backfill, not the wire's live `since` window — but that is a SYNC
+      // state, not a loading one: the park drain runs behind this return, the
+      // relay round runs in the scheduler, and both repaint through the bus
+      // as they land.
       const local = await composeFromStore();
-      initialLoadedRef.current = channelIdHex;
       void drainParked().catch(() => undefined);
-      void maybeBackfill().catch(() => undefined);
       return local;
     },
   });
@@ -605,26 +330,23 @@ export function useChannelTimeline2(
 
       windowLimitRef.current += WINDOW_SIZE;
 
-      if (!localHasMore && !cursor.current.get(cursorKeyId)?.exhausted) {
+      const saved = localHasMore ? undefined : await readChannelCursor(cursorKeyId);
+      if (!localHasMore && !saved?.exhausted) {
         const controller = new AbortController();
-        const resumeFrom = cursor.current.get(cursorKeyId)?.oldest;
         const older = await backfillStore(nostr, community!.relays, channel!, controller.signal, {
-          until: resumeFrom,
+          until: saved?.oldest,
           maxPages: LOAD_OLDER_MAX_PAGES,
         });
         const opened = await openChatBatch(older.events, channel!);
         writeRumors(community!.idHex, opened);
 
-        const c = cursor.current.get(cursorKeyId) ?? { exhausted: false };
-        if (older.oldest !== undefined && (c.oldest === undefined || older.oldest < c.oldest)) {
-          c.oldest = older.oldest;
-        }
-        if (older.exhausted) c.exhausted = true;
-        cursor.current.set(cursorKeyId, c);
-        // Deep-history paging never touches `newest` (that's the bridge's job).
+        // Deep-history paging never touches `newest` (that's the scheduler
+        // round's bridge job); the persisted merge is monotonic (`oldest`
+        // only recedes) and `exhausted` sticky, so a concurrent round can't
+        // be clobbered.
         void updateChannelCursor(cursorKeyId, {
-          oldest: c.oldest,
-          exhausted: c.exhausted,
+          oldest: older.oldest,
+          exhausted: older.exhausted ? true : undefined,
         });
 
         const prev = (queryClient.getQueryData<OpenedChat[]>(queryKey) ?? []).filter(

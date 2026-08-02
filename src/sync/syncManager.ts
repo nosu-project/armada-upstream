@@ -154,15 +154,42 @@ export function want(topic: string, priority: SyncPriority = "visible", opts?: W
   if (rt.run && PRIORITY_RANK[priority] > PRIORITY_RANK[rt.run.priority]) {
     rt.run.priority = priority;
   }
+  // Publish `pending` SYNCHRONOUSLY for a topic that may yet run — before the
+  // stamp warm, the boot gate, the lane queue. This is the reader's coverage
+  // guarantee: from the moment a view declares interest until the topic
+  // settles, an empty store read renders as "catching up", never as an
+  // authoritative empty. Skipped when a policy hasn't registered (the topic
+  // truly is idle) and when a fresh stamp / error verdict already stands.
+  if (rt.state.status === "idle" && policyFor(topic) !== undefined) {
+    publish(topic, rt, "pending");
+  }
   schedule();
   return () => {
     if (!rt.wants.delete(token)) return;
     if (rt.wants.size === 0) {
-      rt.run?.controller.abort();
+      if (rt.run) {
+        rt.run.controller.abort();
+      } else if (rt.state.status === "pending") {
+        // Nothing was in flight: resolve the optimistic pending so a
+        // read-only observer of this topic doesn't see it "syncing" forever.
+        publish(topic, rt, stamps.get(topic) === undefined ? "idle" : "settled");
+      }
       rt.forced = false;
     }
     schedule();
   };
+}
+
+/**
+ * Mark a topic stale NOW (e.g. a rekey landed new stream keys that may unlock
+ * history): the next scheduler pass re-runs it regardless of stamp age,
+ * respecting only the min-interval floor. No-op for a topic never wanted.
+ */
+export function invalidateSyncTopic(topic: string): void {
+  const rt = topics.get(topic);
+  if (!rt) return;
+  rt.forced = true;
+  schedule();
 }
 
 /** The topic's current state. Stable snapshot identity between changes. */
@@ -357,10 +384,11 @@ function finishRun(topic: string, rt: TopicRuntime, policy: TopicPolicy, ok: boo
     publish(topic, rt, "settled");
   } else {
     rt.failures++;
-    // A zero min-interval must not mean a zero backoff: a persistently
-    // failing handler with a standing want would hot-loop.
-    const base = Math.max(policy.minIntervalMs, 1000);
-    rt.nextEligibleAt = Date.now() + Math.min(base * 2 ** rt.failures, MAX_BACKOFF_MS);
+    // Deliberately NOT scaled by `minIntervalMs`: a failed round left the
+    // reader with nothing, so the first retry should come in seconds (a
+    // wedged relay REQ, a mid-flight NIP-42 handshake) — the min-interval
+    // floor is a success-spacing rule, not a failure-penalty one.
+    rt.nextEligibleAt = Date.now() + Math.min(1000 * 2 ** rt.failures, MAX_BACKOFF_MS);
     publish(topic, rt, "error");
   }
   schedule();

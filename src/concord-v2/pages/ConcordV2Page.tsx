@@ -75,6 +75,7 @@ import { useNewMessagesDivider } from "@/hooks/useNewMessagesDivider";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { useSyncTasks } from "@/hooks/useSyncActivity";
+import { useSyncTopicState } from "@/sync/useSyncTopic";
 import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
 import { useNotifLevels, concordChannelScopeKey } from "@/hooks/useNotifLevels";
 import { NotifLevelMenu } from "@/components/NotifLevelMenu";
@@ -1496,15 +1497,24 @@ export function ConcordV2Page() {
   // hands its timeline to ChatComposer as `messages: []`, so it must supply this.
   const recentAuthors = useMemo(() => authorsByRecency(transport.messages), [transport.messages]);
 
-  // Background catch-up. `channelSyncing` = a sync task scoped to the channel
-  // on screen (its backfill/gap-bridge round is running); the timeline uses it
-  // for its own quiet catching-up affordance. The passive corner indicator on
-  // the header icon surfaces whatever is in flight (self-gated so a
-  // sub-second sync never paints), so it needn't hide once the focused channel
-  // is live — it simply goes away when there's no work left.
+  // Background catch-up. `channelSyncing` = the channel on screen is being
+  // caught up: its sync TOPIC is pending (covers the whole span from the
+  // timeline hook declaring interest to the scheduler's round settling —
+  // including the queue/warm-up gaps before any relay is touched), or a sync
+  // task is scoped to it (the running round's live message counts). The
+  // timeline uses it for its quiet catching-up affordance, so an empty store
+  // read never paints "No messages yet" as a verdict mid-catch-up. The
+  // passive corner indicator on the header icon surfaces whatever is in
+  // flight (self-gated so a sub-second sync never paints), so it needn't hide
+  // once the focused channel is live — it simply goes away when there's no
+  // work left.
   const syncTasks = useSyncTasks();
   const channelScope = channel ? `c2:${channel.idHex}` : undefined;
-  const channelSyncing = Boolean(channelScope && syncTasks.some((t) => t.scope === channelScope));
+  const channelTopic = useSyncTopicState(channelScope);
+  const channelSyncing = Boolean(
+    channelScope &&
+      (channelTopic.status === "pending" || syncTasks.some((t) => t.scope === channelScope)),
+  );
 
   const onOpenThreadCb = useMemo(
     () => (canWrite ? (event: ChatMsg) => openThread(event, true) : undefined),

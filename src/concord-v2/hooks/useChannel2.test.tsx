@@ -44,6 +44,7 @@ import {
 } from "@/concord-v2/lib/rumorStore";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
 import { getSyncTasks } from "@/lib/syncActivity";
+import { syncState } from "@/sync/syncManager";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
@@ -465,7 +466,11 @@ describe("useChannelTimeline2 — issue #19 (notified but never rendered)", () =
         frames.push({
           loading: t.isLoading,
           count: t.folded.messages.length,
-          syncing: getSyncTasks().some((task) => task.scope === `c2:${watched}`),
+          // The production derivation (ConcordV2Page's `channelSyncing`): the
+          // channel's sync TOPIC is pending, or a sync task is scoped to it.
+          syncing:
+            syncState(`c2:${watched}`).status === "pending" ||
+            getSyncTasks().some((task) => task.scope === `c2:${watched}`),
           channel: watched,
         });
         return t;
@@ -493,9 +498,11 @@ describe("useChannelTimeline2 — issue #19 (notified but never rendered)", () =
     // `isLoading` covers the local store read only, so on a cold channel it
     // clears the moment ArmadaDB answers empty (that is the point: a channel
     // whose history IS cached must not wait on relays). What keeps the empty
-    // frame from reading as a verdict is the sync-activity task the backfill
-    // registers under this channel's scope — the timeline renders "Catching
-    // up…" from it and shows its empty state only once it ends.
+    // frame from reading as a verdict is the channel's sync TOPIC: pending
+    // from the moment the hook declares interest until the scheduler's round
+    // settles (plus the round's own sync-activity task) — the timeline
+    // renders "Catching up…" from it and shows its empty state only once the
+    // topic resolves.
     const uncovered = frames.find((f) => !f.loading && f.count === 0 && !f.syncing);
     expect(uncovered).toBeUndefined();
     expect(result.current.folded.messages.map((m) => m.content)).toContain("b-msg");

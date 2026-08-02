@@ -19,6 +19,15 @@ export function useSyncTopic(topic: string | undefined, priority: SyncPriority =
     return want(topic, priority);
   }, [topic, priority]);
 
+  return useSyncTopicState(topic);
+}
+
+/**
+ * Read a topic's sync state reactively WITHOUT declaring interest — for a
+ * view that reflects someone else's sync (e.g. the chat page's catching-up
+ * affordance over the timeline hook's topic).
+ */
+export function useSyncTopicState(topic: string | undefined): SyncState {
   const subscribe = useCallback(
     (listener: () => void) => (topic === undefined ? () => undefined : onSyncState(topic, listener)),
     [topic],
