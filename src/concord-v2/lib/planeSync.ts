@@ -45,7 +45,7 @@
 import { currentControlGroup } from "@/concord-v2/lib/control";
 import { guestbookGroups } from "@/concord-v2/lib/guestbook";
 import { KIND_WRAP, type Plane } from "@/concord-v2/lib/kinds";
-import { readStreamCursor, updateStreamCursor, writeOpened } from "@/concord-v2/lib/rumorStore";
+import { readControlSnapshot, readStreamCursor, updateStreamCursor, writeOpened } from "@/concord-v2/lib/rumorStore";
 import { isStreamPubkey, streamAuthsSettled } from "@/concord-v2/lib/streamAuth";
 import { openWrap, type OpenedEvent, type OpenedWireEvent } from "@/concord-v2/lib/stream";
 import type { GroupKey } from "@/concord-v2/lib/derive";
@@ -738,6 +738,21 @@ async function runScopes(
   // The persisted seen-wrap memo must be in the session set before the
   // complete-scope narrowing below, or a cold launch re-decrypts everything.
   await loadSeenWraps();
+  // A Refounded control scope whose snapshot id-set has gone missing must
+  // re-ingest the plane WITHOUT the seen-memo narrowing. The set is recorded
+  // only when a wrap is fresh (`noteControlSnapshot` via writeOpened), so once
+  // every wrap is memoed a lost set can never be re-recorded by an ordinary
+  // sweep — and the fold then anchors a Refounded community on an empty
+  // snapshot, outranking nothing. The set is per-KV-key and unguarded (it can
+  // be pruned by another account's warm-up, or simply lost), while the memo is
+  // global and persisted; only re-decrypting the plane reunites them. Known
+  // junk stays skipped — it never opened, so it never fed the set.
+  const rebuildSnapshot = await Promise.all(
+    scopes.map(async (s) => {
+      if (!s.complete || !s.refounded || s.groups.length === 0) return false;
+      return !(await readControlSnapshot(s.communityIdHex, s.groups[0].pk));
+    }),
+  );
   const cursors = await Promise.all(
     scopes.map((s) => (s.complete ? undefined : readStreamCursor(s.scope))),
   );
@@ -801,7 +816,9 @@ async function runScopes(
         if (!s.complete) continue;
         const ingest = async (page: NostrEvent[]) => {
           // Narrow by the memo BEFORE advancing it, or nothing ever decrypts.
-          const fresh = page.filter((w) => !seenCompleteWraps.has(w.id));
+          const fresh = rebuildSnapshot[i]
+            ? page.filter((w) => !junkWraps.has(w.id))
+            : page.filter((w) => !seenCompleteWraps.has(w.id));
           const opened = await openPlaneWrapsChunked(fresh, s.groups);
           // Anything attempted that didn't open is junk, remembered so later
           // sweeps can still count it without re-attempting the decrypt.

@@ -601,6 +601,43 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
 
   signerRef.current = currentSigner;
 
+  // Switching accounts must not inherit the previous account's relay sessions.
+  // NIP-42 has no un-auth: a socket authenticated as account A keeps answering
+  // account B's REQs with A's read grants (and A's identity) until it happens
+  // to reconnect — on a membership-gating relay that reads as missing or wrong
+  // content right after a switch. So when the ACTIVE pubkey changes between
+  // two logged-in accounts, bounce every live socket: the fresh socket
+  // re-issues NRelay1's standing subscriptions, the relay re-challenges, and
+  // signerRef already holds the new account's signer. First login and final
+  // logout are skipped — there is no prior session to shed (logout also purges
+  // and hard-redirects).
+  const prevPubkeyRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const pubkey = currentLogin?.pubkey;
+    const prev = prevPubkeyRef.current;
+    prevPubkeyRef.current = pubkey;
+    if (!prev || !pubkey || prev === pubkey) return;
+    for (const [url, entry] of openRelaysRef.current) {
+      const internals = entry.relay as unknown as { closedByUser: boolean; wake(): void };
+      // An idle-closed socket carries no session; waking it here would open a
+      // connection nothing asked for (its next wake re-authenticates anyway).
+      if (internals.closedByUser || entry.relay.socket.closedByUser) continue;
+      logSync("auth", `account switched — reconnecting ${url} to re-authenticate`);
+      entry.challenge = undefined; // the old socket's nonce dies with it
+      try {
+        entry.relay.socket.close();
+        // websocket-ts treats close() as final (closedByUser) and NRelay1 only
+        // builds a replacement socket on its next send — which a relay carrying
+        // only standing subscriptions may never issue. Wake it now; the socket
+        // swap is watched (watchSocketReopen), so the reopen resets the relay's
+        // auth state like any other reconnect.
+        internals.wake();
+      } catch {
+        // Socket already dead — its next reconnect re-authenticates anyway.
+      }
+    }
+  }, [currentLogin?.pubkey]);
+
   // Wrap the pool in the batching proxy (combines profile/id lookups into single REQs).
   const batcher = useRef<NostrBatcher | undefined>(undefined);
   if (!batcher.current && pool.current) {

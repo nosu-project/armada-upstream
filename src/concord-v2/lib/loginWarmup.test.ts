@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const h = vi.hoisted(() => ({
   truncated: false,
   writeFolded: vi.fn(async () => undefined),
+  prune: vi.fn(async () => undefined),
 }));
 
 vi.mock("@/concord-v2/lib/planeSync", () => ({
@@ -17,7 +18,7 @@ vi.mock("@/concord-v2/lib/planeSync", () => ({
   whenAuthSettled: async () => undefined,
 }));
 vi.mock("@/concord-v2/lib/rumorStore", () => ({
-  pruneControlSnapshots: async () => undefined,
+  pruneControlSnapshots: h.prune,
   queryPlane: async () => [],
   writeRumors: async () => undefined,
 }));
@@ -48,12 +49,29 @@ describe("warmupCommunities2 persistence gate", () => {
   beforeEach(() => {
     h.truncated = false;
     h.writeFolded.mockClear();
+    h.prune.mockClear();
   });
 
   it("persists the fold when the sweep ran its course", async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await warmupCommunities2(nostr as any, [{} as any]);
     expect(h.writeFolded).toHaveBeenCalled();
+  });
+
+  it("prunes retired control-snapshot sets for a sole logged-in account", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await warmupCommunities2(nostr as any, [{} as any]);
+    expect(h.prune).toHaveBeenCalled();
+  });
+
+  it("skips the prune when told other accounts share the device", async () => {
+    // "Epochs this community no longer holds keys for" is judged from THIS
+    // account's list entry; another logged-in account's entry for the same
+    // community can hold different epochs, and pruning by the active account's
+    // keys deletes the other account's fold anchor.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await warmupCommunities2(nostr as any, [{} as any], { pruneSnapshots: false });
+    expect(h.prune).not.toHaveBeenCalled();
   });
 
   it("does not persist a fold from a sweep that hit its budget", async () => {

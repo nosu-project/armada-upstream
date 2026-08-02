@@ -28,7 +28,7 @@ import {
   sweepRelayScopes,
   whenAuthSettled,
 } from "@/concord-v2/lib/planeSync";
-import { updateStreamCursor } from "@/concord-v2/lib/rumorStore";
+import { pruneControlSnapshots, readControlSnapshot, updateStreamCursor } from "@/concord-v2/lib/rumorStore";
 import {
   _resetStreamAuthRegistry,
   noteAuthResult,
@@ -962,6 +962,55 @@ describe("control completeness — the whole plane, every sweep", () => {
     for (const w of wraps) {
       expect(fresh.map((e) => e.rumorId)).toContain(w.rumor.id);
     }
+  });
+});
+
+describe("control snapshot rebuild — a lost id-set is re-recorded despite the memo", () => {
+  it("re-ingests a Refounded plane whose snapshot set was pruned away", async () => {
+    // The cross-account hazard: pruneControlSnapshots keeps only the pks the
+    // CURRENT account's list entry holds, so another logged-in account's
+    // warm-up (holding different epochs of the same community) can delete the
+    // set this account's fold anchors on. The set is only recorded for FRESH
+    // wraps, and after the first sweep every wrap is in the seen memo — so
+    // without the rebuild pass the deletion is permanent and the fold anchors
+    // a Refounded community on an empty snapshot.
+    const owner = signer();
+    const base = communityOf(100, owner.pubkey);
+    const newRoot = new Uint8Array(32).fill(0x66);
+    const community: CommunityV2 = {
+      ...base,
+      root: newRoot,
+      rootEpoch: 1n,
+      heldRoots: [
+        { epoch: 1n, key: newRoot },
+        { epoch: 0n, key: base.root },
+      ],
+    };
+    const control = controlGroupKey(newRoot, community.id, 1);
+    const now = Math.floor(Date.now() / 1000);
+    const e1 = await wrapAt(control, owner, "ab".repeat(32), now - 100);
+
+    const relay = new FakeRelay();
+    relay.events = [e1.wrap];
+    const nostr = poolOf({ [RELAY_A]: relay });
+
+    const first = await sweepControl(nostr, community);
+    expect(first.map((e) => e.rumorId)).toContain(e1.rumor.id);
+    expect(
+      [...((await readControlSnapshot(community.idHex, control.pk)) ?? [])],
+      "the first sweep records which stream each edition arrived on",
+    ).toContain(e1.rumor.id);
+
+    // Another account's warm-up, whose entry holds none of these epochs.
+    await pruneControlSnapshots(community.idHex, []);
+    expect(await readControlSnapshot(community.idHex, control.pk)).toBeUndefined();
+
+    const healed = await sweepControl(nostr, community);
+    expect(
+      [...((await readControlSnapshot(community.idHex, control.pk)) ?? [])],
+      "the missing set must force a re-ingest that re-records it",
+    ).toContain(e1.rumor.id);
+    expect(healed.map((e) => e.rumorId), "the re-ingested editions re-announce").toContain(e1.rumor.id);
   });
 });
 

@@ -85,7 +85,21 @@ export interface WarmupResult {
 export async function warmupCommunities2(
   nostr: NostrLike,
   entries: CommunityListEntry[],
-  opts: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void } = {},
+  opts: {
+    signal?: AbortSignal;
+    onProgress?: (done: number, total: number) => void;
+    /**
+     * Whether retired control-snapshot sets may be dropped. Pass FALSE when
+     * more than one account is logged in on this device: "epochs this
+     * community no longer holds keys for" is judged from THIS account's list
+     * entry, and another logged-in account's entry for the same community can
+     * hold different epochs — pruning by the active account's keys deletes the
+     * other account's fold anchor. The sweep can rebuild a lost set (see
+     * planeSync's snapshot-rebuild pass), but only by re-decrypting the whole
+     * plane, so a switch-prune-switch loop would pay that on every switch.
+     */
+    pruneSnapshots?: boolean;
+  } = {},
 ): Promise<WarmupResult> {
   const communities: CommunityV2[] = [];
   for (const entry of entries) {
@@ -119,7 +133,10 @@ export async function warmupCommunities2(
       try {
         // Once per session, drop the control-snapshot sets of epochs this
         // community no longer holds keys for — nothing reads them again.
-        void pruneControlSnapshots(c.idHex, controlGroups(c).map((g) => g.pk));
+        // Only when this account is the device's sole reader (see the opt).
+        if (opts.pruneSnapshots !== false) {
+          void pruneControlSnapshots(c.idHex, controlGroups(c).map((g) => g.pk));
+        }
         const stored = await queryPlane(c.idHex, "control");
         const folded = foldControlState(openControlEditions(stored), c.id, c.owner);
         // A sweep we KNOW came up short must never become the durable

@@ -1,4 +1,5 @@
 import { useNostr } from "@nostrify/react";
+import { useNostrLogin } from "@nostrify/react/login";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
@@ -164,6 +165,12 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
+  const { logins } = useNostrLogin();
+
+  // Read at warm-up time through a ref, so the login list neither re-runs nor
+  // re-keys the once-per-pubkey effect below.
+  const soleAccountRef = useRef(true);
+  soleAccountRef.current = logins.length <= 1;
 
   const [state, setState] = useState<SyncState>({
     phase: "settings",
@@ -457,6 +464,9 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
         const warmup = warmupCommunities2(nostr, v2Live, {
           signal: overall,
           onProgress: (done, total) => progress(hId, `${done}/${total}`),
+          // With a second account logged in, "retired epoch" cannot be judged
+          // from this account's list entry alone — see the opt's docstring.
+          pruneSnapshots: soleAccountRef.current,
         });
         // The abandoned branch of the race must never surface as unhandled.
         warmup.catch(() => undefined);
