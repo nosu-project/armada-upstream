@@ -244,11 +244,10 @@ function InviteBody({ community, canCreateLink }: { community: CommunityV2 | und
             {!isPublic && (
               <Alert variant="destructive" className="normal-case tracking-normal">
                 <AlertTriangle className="size-4" />
-                <AlertTitle>Anyone with the link can read public-channel history</AlertTitle>
+                <AlertTitle>Creating invite links makes communities public</AlertTitle>
                 <AlertDescription>
                   Creating a link makes this community public. Anyone who gets it can read every
-                  message sent up to this point in the community's public channels, and keeps that
-                  access even if you later revoke the link or remove them from the community.
+                  message sent up to this point in the community's public channels.
                 </AlertDescription>
               </Alert>
             )}
