@@ -1,13 +1,17 @@
 import type { ReactNode } from "react";
+import { ArrowLeft, X } from "lucide-react";
 
 import { ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
+import { AsciiSea } from "@/components/landing/AsciiSea";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 /**
  * Full-screen wizard chrome, shared by the signup wizard ({@link WelcomePage})
  * and the post-login setup flow ({@link LoginSetup}): background takeover, a
- * thin progress bar on top, and a centered, width-capped column that
- * fades/slides in per step.
+ * thin progress bar on top, a back/close header, the landing's ASCII sea along
+ * the bottom, and a centered, width-capped column that fades/slides in per
+ * step.
  *
  * `stepKey` must differ between steps — it keys the column so React remounts it
  * and the enter animation replays. `index` (0-based) and `total` drive the
@@ -19,6 +23,8 @@ export function WizardShell({
   stepKey,
   maxWidth = "max-w-sm",
   zClassName = "z-50",
+  onBack,
+  onClose,
   children,
 }: {
   index: number;
@@ -32,22 +38,68 @@ export function WizardShell({
    * dialog can't paint over a setup step.
    */
   zClassName?: string;
+  /** Step back. Omitted when there is nowhere to go back to. */
+  onBack?: () => void;
+  /** Leave the wizard entirely. Omitted when the flow can't be abandoned. */
+  onClose?: () => void;
   children: ReactNode;
 }) {
   const pct = total > 0 ? ((index + 1) / total) * 100 : 100;
   return (
     <div className={cn("fixed inset-0 flex flex-col bg-background", zClassName)}>
-      <div className="h-1 shrink-0 bg-muted">
+      {/*
+        The landing's living background, at its resting waterline: a band of
+        surf along the bottom of every step. Nothing scrolls it (no `scrollRef`)
+        — the sea just breathes there while the wizard runs. Positioned, so
+        every layer above it needs an explicit `relative z-*` to paint over it.
+      */}
+      <AsciiSea />
+
+      <div className="relative z-10 h-1 shrink-0 bg-muted">
         <div
           className="h-full bg-primary transition-all duration-500 ease-out"
           style={{ width: `${pct}%` }}
         />
       </div>
-      <div className="flex-1 overflow-y-auto">
+
+      {/* Back top-left, close top-right, on every step — the slots hold their
+          width even when empty so the row never reflows between steps. */}
+      <div className="relative z-20 flex shrink-0 items-center justify-between px-2 pt-2 safe-area-top">
+        {onBack ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-9 touch:size-11 text-muted-foreground hover:text-foreground"
+            onClick={onBack}
+            aria-label="Back"
+          >
+            <ArrowLeft className="size-5" />
+          </Button>
+        ) : (
+          <div className="size-9 touch:size-11" />
+        )}
+        {onClose ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-9 touch:size-11 text-muted-foreground hover:text-foreground"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            <X className="size-5" />
+          </Button>
+        ) : (
+          <div className="size-9 touch:size-11" />
+        )}
+      </div>
+
+      <div className="relative z-10 flex-1 overflow-y-auto">
         <div
           key={stepKey}
           className={cn(
-            "mx-auto flex min-h-full w-full flex-col justify-center gap-8 px-6 py-12 safe-area-top safe-area-bottom",
+            "mx-auto flex min-h-full w-full flex-col justify-center gap-8 px-6 pb-12 pt-6 safe-area-bottom",
             "animate-in fade-in slide-in-from-right-4 duration-300",
             maxWidth,
           )}

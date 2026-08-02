@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
-import { Check, Copy, Eye, EyeOff } from "lucide-react";
+import { AlertTriangle, Check, Copy, Download, Eye, EyeOff } from "lucide-react";
 import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
 
 import { ArmadaIdentity, ArmadaKey } from "@/components/brand/ArmadaCrest";
@@ -35,8 +35,8 @@ import { flattenLayout, mergeLayout, railKeyToRoute } from "@/lib/railLayout";
  *
  *   1. generate — a secret key is your identity; generate it.
  *   2. download — reveal the key and copy or back it up. Continue is gated on
- *      an explicit backup so a new user can't skip past saving their only
- *      login; then log in.
+ *      an explicit backup — a successful Copy, keyring save, or file export —
+ *      so a new user can't skip past saving their only login; then log in.
  *   3. profile  — the same WYSIWYG {@link ProfileSettings} editor used in
  *      Settings, so a new user sets their name/avatar before entering any
  *      community. Skippable.
@@ -54,10 +54,12 @@ const WIZARD_STEPS = ["generate", "download", "profile"] as const;
 type WizardStep = (typeof WIZARD_STEPS)[number];
 
 /** The shared wizard chrome, positioned within this wizard's step sequence. */
-function SignupShell({ step, maxWidth, children }: {
+function SignupShell({ step, maxWidth, onBack, onClose, children }: {
   step: WizardStep;
   /** Column width cap (a `max-w-*` class). Text-heavy steps go a size up. */
   maxWidth?: "max-w-sm" | "max-w-md" | "max-w-xl";
+  onBack?: () => void;
+  onClose?: () => void;
   children: ReactNode;
 }) {
   return (
@@ -66,6 +68,8 @@ function SignupShell({ step, maxWidth, children }: {
       total={WIZARD_STEPS.length}
       stepKey={step}
       maxWidth={maxWidth}
+      onBack={onBack}
+      onClose={onClose}
     >
       {children}
     </WizardShell>
@@ -90,8 +94,12 @@ export function WelcomePage() {
   const [nsec, setNsec] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [copied, setCopied] = useState(false);
-  // True while the OS keyring sheet is up (Continue is saving the key).
+  // True while the OS keyring sheet is up (Save key is running).
   const [saving, setSaving] = useState(false);
+  // The gate on the save step: Continue stays disabled until the key has
+  // demonstrably left this screen — copied to the clipboard, stored in the OS
+  // keyring, or written to a file. A dismissed keyring sheet is not a backup.
+  const [backedUp, setBackedUp] = useState(false);
 
   // Whatever exit the wizard takes (finish, skip, or navigating onto a
   // community), it unmounts — so clear the onboarding flag here. Setting it is
@@ -102,13 +110,28 @@ export function WelcomePage() {
     setNsec(nip19.nsecEncode(generateSecretKey()));
     setShowKey(false);
     setCopied(false);
+    setBackedUp(false);
     setStep("download");
   };
+
+  /** The generated key's identity, or null while there's no valid key in hand. */
+  const identity = useMemo(() => {
+    if (!nsec) return null;
+    try {
+      const decoded = nip19.decode(nsec);
+      if (decoded.type !== "nsec") return null;
+      const pubkey = getPublicKey(decoded.data);
+      return { pubkey, npub: nip19.npubEncode(pubkey) };
+    } catch {
+      return null;
+    }
+  }, [nsec]);
 
   const copyKey = async () => {
     try {
       await writeClipboardText(nsec);
       setCopied(true);
+      setBackedUp(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
       toast({
@@ -128,25 +151,19 @@ export function WelcomePage() {
     navigate("/discover");
   };
 
-  // Continue IS the backup: save the key to the OS keyring / password manager
-  // (a real, biometric-gated, recoverable backup), then log in and move to
-  // profile setup. Onboarding must not advance without the key saved, so:
-  //   - saved       → proceed.
-  //   - cancelled   → the user dismissed the keyring sheet; stay put so their
-  //                   only login isn't lost, and point them at Copy / retry.
+  // Back the key up, without advancing. Continue is gated on this having
+  // succeeded at least once (or on a successful Copy), so the outcomes are
+  // kept apart rather than collapsed into "the button ran":
+  //   - saved       → in the OS keyring / password manager (a real,
+  //                   biometric-gated, recoverable backup).
+  //   - cancelled   → the user dismissed the keyring sheet. NOT a backup:
+  //                   leave the gate shut and point them at Copy / retry.
   //   - unavailable → no keyring to save to (Firefox/Safari, or an Android with
-  //                   no credential provider): export the key file instead (a
-  //                   download on web, the share sheet on native), then proceed.
-  const handleContinue = async () => {
+  //                   no credential provider): write the key file instead (a
+  //                   download on web, the Downloads folder on native).
+  const saveKey = async () => {
     if (saving) return;
-    let pubkey: string;
-    let npub: string;
-    try {
-      const decoded = nip19.decode(nsec);
-      if (decoded.type !== "nsec") throw new Error("Invalid nsec");
-      pubkey = getPublicKey(decoded.data);
-      npub = nip19.npubEncode(pubkey);
-    } catch {
+    if (!identity) {
       toast({
         title: "Invalid key",
         description: "That key is invalid. Please generate a new one.",
@@ -157,45 +174,61 @@ export function WelcomePage() {
 
     setSaving(true);
     try {
-      const result = await saveToKeyring(npub, nsec);
+      const result = await saveToKeyring(identity.npub, nsec);
+      if (result === "saved") {
+        setBackedUp(true);
+        toast({
+          title: "Key saved",
+          description: "Stored in your password manager. Keep it — it's your only login.",
+        });
+        return;
+      }
       if (result === "cancelled") {
         toast({
-          title: "Save your key first",
+          title: "Key not saved",
           description: "Save it to your password manager — or Copy it — before continuing. It's your only login.",
         });
         return;
       }
-      if (result === "unavailable") {
-        // No keyring here — save the key to the filesystem so it isn't lost.
-        const location = await exportNsec(nsec);
-        if (!location) {
-          toast({
-            title: "Couldn't save your key",
-            description: "Saving to the filesystem failed. Copy your key and store it safely, then continue.",
-            variant: "destructive",
-          });
-          return;
-        }
+      // No keyring here — save the key to the filesystem so it isn't lost.
+      const location = await exportNsec(nsec);
+      if (!location) {
         toast({
-          title: "Key saved",
-          description: `Saved to ${location}. Keep it somewhere safe — it's your only login.`,
+          title: "Couldn't save your key",
+          description: "Saving to the filesystem failed. Copy your key and store it safely, then continue.",
+          variant: "destructive",
         });
+        return;
       }
+      setBackedUp(true);
+      toast({
+        title: "Key saved",
+        description: `Saved to ${location}. Keep it somewhere safe — it's your only login.`,
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Leave the save step: log in as the new account and move to profile setup.
+  // Only reachable once `backedUp` is set. Guarded on `user` because the step
+  // is also reachable BACKWARDS from profile setup (to re-read the key), and a
+  // second `login.nsec` would register the same account twice.
+  const handleContinue = () => {
+    if (!user) {
       // Brand-new account: nothing to catch up on, so skip the post-login sync
       // gate. Otherwise its full-screen overlay paints over the profile/add
       // wizard steps (SyncGate is z-100, the wizard z-50) while a network-bound
       // sync runs — on a slow phone that looks like onboarding was skipped.
-      suppressNextSyncGate(pubkey);
+      if (identity) suppressNextSyncGate(identity.pubkey);
       // Mark onboarding in progress BEFORE login so it's already true on the
       // commit that first exposes the user — otherwise the headless web-push
       // opt-in (and the native notification step) would enqueue and paint over
       // the profile step. Cleared when this wizard unmounts.
       setOnboardingActive(true);
       login.nsec(nsec);
-      setStep("profile");
-    } finally {
-      setSaving(false);
     }
+    setStep("profile");
   };
 
   // A signed-in user with a community never sees onboarding: redirect onto
@@ -238,7 +271,7 @@ export function WelcomePage() {
   // ── Wizard step 1: generate the key ─────────────────────────────────────
   if (!user && step === "generate") {
     return (
-      <SignupShell step="generate">
+      <SignupShell step="generate" onBack={() => setStep(null)} onClose={() => setStep(null)}>
         <div className="flex flex-col items-center gap-8 text-center">
           <ArmadaIdentity size={110} />
           <div className="space-y-2.5">
@@ -257,32 +290,44 @@ export function WelcomePage() {
           >
             Generate my key
           </Button>
-          <button
-            type="button"
-            onClick={() => setStep(null)}
-            className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-          >
-            Back
-          </button>
         </div>
       </SignupShell>
     );
   }
 
   // ── Wizard step 2: save the key ─────────────────────────────────────────
-  if (!user && step === "download") {
+  // Reachable backwards from profile setup, so this doesn't require `!user`.
+  if (step === "download") {
     return (
-      <SignupShell step="download">
-        <div className="flex flex-col items-center gap-8 text-center">
+      <SignupShell
+        step="download"
+        onBack={() => setStep(user ? "profile" : "generate")}
+        onClose={() => setStep(null)}
+      >
+        <div className="flex flex-col items-center gap-6 text-center">
           <ArmadaKey size={110} />
-          <div className="space-y-2.5">
-            <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
-              save your secret key
-            </h1>
-            <p className="text-sm leading-relaxed text-muted-foreground">
-              This key is your one and only login. Save it somewhere safe
-              before continuing.
-            </p>
+          <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
+            save your secret key
+          </h1>
+
+          {/* The one thing this step has to land. There is no second copy of
+              this key and no way to reissue it, so the warning IS the step's
+              description rather than a footnote under a milder one. */}
+          <div className="w-full clip-corner-lg border-2 border-amber-500/50 bg-amber-500/10 p-4 text-left">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              <div className="space-y-1.5">
+                <p className="text-xs font-bold uppercase tracking-widest text-amber-600 dark:text-amber-400">
+                  This key is your only login
+                </p>
+                <p className="text-xs leading-relaxed text-amber-700 dark:text-amber-200/90">
+                  There is <strong className="font-bold">no password reset</strong> and{" "}
+                  <strong className="font-bold">no way to recover it</strong>. Lose it and
+                  the account is gone for good; share it and whoever has it becomes you.
+                  Save it somewhere only you can reach — a password manager — right now.
+                </p>
+              </div>
+            </div>
           </div>
 
           <div className="relative w-full">
@@ -307,37 +352,47 @@ export function WelcomePage() {
             </Button>
           </div>
 
-          <div className="w-full space-y-3">
+          {/* Two ways to back the key up, then the gate. Continue stays shut
+              until one of them has actually succeeded — see `backedUp`. */}
+          <div className="w-full space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11 clip-corner-lg"
+                onClick={saveKey}
+                disabled={saving}
+              >
+                <Download className="size-4" />
+                {saving ? "Saving…" : "Save key"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11 clip-corner-lg"
+                onClick={copyKey}
+                disabled={saving}
+              >
+                {copied ? (
+                  <Check className="size-4 text-success" />
+                ) : (
+                  <Copy className="size-4" />
+                )}
+                {copied ? "Copied" : "Copy key"}
+              </Button>
+            </div>
             <Button
               size="lg"
               className="h-12 w-full clip-corner-lg text-base font-medium"
               onClick={handleContinue}
-              disabled={saving}
+              disabled={!backedUp || saving}
             >
-              {saving ? "Saving…" : "Save key & continue"}
+              Continue
             </Button>
-            <Button
-              variant="ghost"
-              className="w-full text-muted-foreground"
-              onClick={copyKey}
-              disabled={saving}
-            >
-              {copied ? (
-                <Check className="size-4 text-success" />
-              ) : (
-                <Copy className="size-4" />
-              )}
-              {copied ? "Copied" : "Copy key"}
-            </Button>
-          </div>
-
-          <div className="w-full clip-corner-lg bg-amber-500/10 p-3 text-left">
-            <p className="mb-1 text-xs font-semibold text-amber-600 dark:text-amber-300">
-              Important Warning
-            </p>
-            <p className="text-xs text-amber-700 dark:text-amber-300/90">
-              This key is your primary and only means of accessing your
-              account. Store it safely and securely.
+            <p className="text-center text-xs text-muted-foreground">
+              {backedUp
+                ? "Key backed up. Make sure it's somewhere you'll still have it later."
+                : "Save or copy your key to continue."}
             </p>
           </div>
         </div>
@@ -348,7 +403,12 @@ export function WelcomePage() {
   // ── Wizard step 3: profile setup ────────────────────────────────────────
   if (user && step === "profile") {
     return (
-      <SignupShell step="profile" maxWidth="max-w-xl">
+      <SignupShell
+        step="profile"
+        maxWidth="max-w-xl"
+        onBack={() => setStep("download")}
+        onClose={() => setStep(null)}
+      >
         <div className="space-y-1.5 text-center">
           <ArmadaIdentity size={84} className="mx-auto mb-4" />
           <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
@@ -359,15 +419,20 @@ export function WelcomePage() {
           </p>
         </div>
 
-        <ProfileSettings saveLabel="Continue" centerSave showNip05={false} onSaved={finishOnboarding} />
-
-        <Button
-          variant="ghost"
-          className="mx-auto text-muted-foreground"
-          onClick={finishOnboarding}
-        >
-          Skip for now
-        </Button>
+        {/* Continue lives inside the editor, so Skip is spaced against it
+            directly rather than left to the column's wider step gap. (Not a
+            `space-y-*` wrapper: ProfileSettings' hidden file inputs are
+            siblings of its form, so the rule would land on the form too.) */}
+        <div>
+          <ProfileSettings saveLabel="Continue" centerSave showNip05={false} onSaved={finishOnboarding} />
+          <Button
+            variant="ghost"
+            className="mx-auto mt-2 flex text-muted-foreground"
+            onClick={finishOnboarding}
+          >
+            Skip for now
+          </Button>
+        </div>
       </SignupShell>
     );
   }

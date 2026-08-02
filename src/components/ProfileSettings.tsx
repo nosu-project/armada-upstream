@@ -727,132 +727,137 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
             </div>
           )}
 
-          {/* Profile fields + account flags live behind Advanced to keep the
+          {/* Profile fields + account flags live behind More to keep the
               core profile (card + save) uncluttered. */}
           <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
             <CollapsibleTrigger asChild>
               <Button type="button" variant="ghost" className="w-full justify-between px-0 py-1 h-auto text-muted-foreground hover:bg-transparent hover:text-foreground">
-                <span className="text-xs font-medium">Advanced</span>
+                <span className="text-xs font-medium">More</span>
                 <ChevronDown className="size-3.5 text-muted-foreground transition-transform duration-200 [[data-state=open]_&]:rotate-180" strokeWidth={4} />
               </Button>
             </CollapsibleTrigger>
-            <CollapsibleContent className="pt-3 space-y-4">
-              {/* Profile fields */}
-              <div>
-                <h2 className="text-sm font-medium py-2">Profile Fields</h2>
+            {/* Padding sits on the inner wrapper, not on the animated element:
+                Radix measures the content box, so padding on the element being
+                animated shows up as a jump at the start of the collapse. */}
+            <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
+              <div className="pt-3 space-y-4">
+                {/* Profile fields */}
+                <div>
+                  <h2 className="text-sm font-medium py-2">Profile Fields</h2>
 
-                <div className="space-y-3 pt-1">
-                  {/* Website — always first */}
-                  <FormField
-                    control={form.control}
-                    name="website"
-                    render={({ field }) => (
-                      <div className="grid grid-cols-[auto,1fr,2fr,auto] gap-2 items-center">
-                        <div className="w-6" />
-                        <div className="flex items-center h-9 px-3 text-sm text-muted-foreground">
-                          <span>Website</span>
-                        </div>
-                        <Input placeholder="https://yourwebsite.com" {...field} className="h-9" />
-                        <div className="size-9" />
-                      </div>
-                    )}
-                  />
-
-                  {/* Lightning address */}
-                  <FormField
-                    control={form.control}
-                    name="lud16"
-                    render={({ field }) => (
-                      <div className="grid grid-cols-[auto,1fr,2fr,auto] gap-2 items-center">
-                        <div className="w-6" />
-                        <div className="flex items-center h-9 px-3 text-sm text-muted-foreground">
-                          <span>Lightning</span>
-                        </div>
-                        <Input placeholder="you@walletofsatoshi.com" {...field} className="h-9" />
-                        <div className="size-9" />
-                      </div>
-                    )}
-                  />
-
-                  {/* LNURL (lud06) */}
-                  <FormField
-                    control={form.control}
-                    name="lud06"
-                    render={({ field }) => (
-                      <div className="grid grid-cols-[auto,1fr,2fr,auto] gap-2 items-center">
-                        <div className="w-6" />
-                        <div className="flex items-center h-9 px-3 text-sm text-muted-foreground">
-                          <span>LNURL</span>
-                        </div>
-                        <Input placeholder="lnurl1…" {...field} className="h-9" />
-                        <div className="size-9" />
-                      </div>
-                    )}
-                  />
-
-                  {fields.map((field, index) => (
-                    <FieldRow
-                      key={field.id}
-                      index={index}
-                      type={form.watch(`fields.${index}.type`) ?? 'text'}
-                      accept={form.watch(`fields.${index}.accept`)}
-                      valuePlaceholder={form.watch(`fields.${index}.placeholder`)}
-                      isUploading={uploadingFieldIndex === index}
+                  <div className="space-y-3 pt-1">
+                    {/* Website — always first */}
+                    <FormField
                       control={form.control}
-                      canMoveUp={index > 0}
-                      canMoveDown={index < fields.length - 1}
-                      onRemove={() => remove(index)}
-                      onMoveUp={() => moveField(index, index - 1)}
-                      onMoveDown={() => moveField(index, index + 1)}
-                      onMediaPick={() => handleMediaPick(index)}
-                      onTickerChange={(ticker) => form.setValue(`fields.${index}.label`, ticker, { shouldDirty: true })}
+                      name="website"
+                      render={({ field }) => (
+                        <div className="grid grid-cols-[auto,1fr,2fr,auto] gap-2 items-center">
+                          <div className="w-6" />
+                          <div className="flex items-center h-9 px-3 text-sm text-muted-foreground">
+                            <span>Website</span>
+                          </div>
+                          <Input placeholder="https://yourwebsite.com" {...field} className="h-9" />
+                          <div className="size-9" />
+                        </div>
+                      )}
                     />
-                  ))}
 
-                  {/* Add field — visible pill buttons */}
-                  <div className="flex flex-wrap gap-1.5 pt-1">
-                    {[...FIELD_PRESETS, CUSTOM_PRESET].map((preset) => {
-                      const Icon = preset.icon;
-                      return (
-                        <Tooltip key={preset.id}>
-                          <TooltipTrigger asChild>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="h-7 rounded-full px-3 text-xs gap-1.5"
-                              onClick={() => handleAddPreset(preset)}
-                            >
-                              <Plus className="size-3 text-muted-foreground" />
-                              <Icon className="size-3.5 text-muted-foreground" />
-                              {preset.label}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom" className="text-xs">
-                            {preset.description}
-                          </TooltipContent>
-                        </Tooltip>
-                      );
-                    })}
+                    {/* Lightning address */}
+                    <FormField
+                      control={form.control}
+                      name="lud16"
+                      render={({ field }) => (
+                        <div className="grid grid-cols-[auto,1fr,2fr,auto] gap-2 items-center">
+                          <div className="w-6" />
+                          <div className="flex items-center h-9 px-3 text-sm text-muted-foreground">
+                            <span>Lightning</span>
+                          </div>
+                          <Input placeholder="you@walletofsatoshi.com" {...field} className="h-9" />
+                          <div className="size-9" />
+                        </div>
+                      )}
+                    />
+
+                    {/* LNURL (lud06) */}
+                    <FormField
+                      control={form.control}
+                      name="lud06"
+                      render={({ field }) => (
+                        <div className="grid grid-cols-[auto,1fr,2fr,auto] gap-2 items-center">
+                          <div className="w-6" />
+                          <div className="flex items-center h-9 px-3 text-sm text-muted-foreground">
+                            <span>LNURL</span>
+                          </div>
+                          <Input placeholder="lnurl1…" {...field} className="h-9" />
+                          <div className="size-9" />
+                        </div>
+                      )}
+                    />
+
+                    {fields.map((field, index) => (
+                      <FieldRow
+                        key={field.id}
+                        index={index}
+                        type={form.watch(`fields.${index}.type`) ?? 'text'}
+                        accept={form.watch(`fields.${index}.accept`)}
+                        valuePlaceholder={form.watch(`fields.${index}.placeholder`)}
+                        isUploading={uploadingFieldIndex === index}
+                        control={form.control}
+                        canMoveUp={index > 0}
+                        canMoveDown={index < fields.length - 1}
+                        onRemove={() => remove(index)}
+                        onMoveUp={() => moveField(index, index - 1)}
+                        onMoveDown={() => moveField(index, index + 1)}
+                        onMediaPick={() => handleMediaPick(index)}
+                        onTickerChange={(ticker) => form.setValue(`fields.${index}.label`, ticker, { shouldDirty: true })}
+                      />
+                    ))}
+
+                    {/* Add field — visible pill buttons */}
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {[...FIELD_PRESETS, CUSTOM_PRESET].map((preset) => {
+                        const Icon = preset.icon;
+                        return (
+                          <Tooltip key={preset.id}>
+                            <TooltipTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-7 rounded-full px-3 text-xs gap-1.5"
+                                onClick={() => handleAddPreset(preset)}
+                              >
+                                <Plus className="size-3 text-muted-foreground" />
+                                <Icon className="size-3.5 text-muted-foreground" />
+                                {preset.label}
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom" className="text-xs">
+                              {preset.description}
+                            </TooltipContent>
+                          </Tooltip>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              <FormField
-                control={form.control}
-                name="bot"
-                render={({ field }) => (
-                  <FormItem className="flex items-center justify-between rounded-lg border p-3">
-                    <div>
-                      <FormLabel className="text-sm">Bot Account</FormLabel>
-                      <FormDescription className="text-xs">Mark this account as automated</FormDescription>
-                    </div>
-                    <FormControl>
-                      <Switch checked={field.value} onCheckedChange={field.onChange} />
-                    </FormControl>
-                  </FormItem>
-                )}
-              />
+                <FormField
+                  control={form.control}
+                  name="bot"
+                  render={({ field }) => (
+                    <FormItem className="flex items-center justify-between rounded-lg border p-3">
+                      <div>
+                        <FormLabel className="text-sm">Bot Account</FormLabel>
+                        <FormDescription className="text-xs">Mark this account as automated</FormDescription>
+                      </div>
+                      <FormControl>
+                        <Switch checked={field.value} onCheckedChange={field.onChange} />
+                      </FormControl>
+                    </FormItem>
+                  )}
+                />
+              </div>
             </CollapsibleContent>
           </Collapsible>
 
