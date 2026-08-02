@@ -1,6 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo } from "react";
 import { useDeferredFold } from "@/concord-v2/hooks/useDeferredFold2";
 import {
   controlFoldKey,
@@ -225,6 +225,33 @@ function useControlSnapshot2(community: CommunityV2 | undefined, active: boolean
 }
 
 /**
+ * Per-entity high-water floors (CORD-04 §1), one map per (community, epoch).
+ *
+ * Module-level and SHARED by every mounted fold instance, deliberately. The
+ * floor is "the highest version we've ever accepted", so a per-instance ref
+ * was both weaker (a fresh mount started at zero and forgot the session's
+ * floors) and wasteful: ~20 fold hooks mount per open community, and each
+ * one's different floor produced a different `foldControlState` memo key —
+ * the identical fold was recomputed and re-logged once per instance per wave.
+ * One shared map gives every instance the same floors, the same memo key, and
+ * therefore one fold. Keyed by epoch so adopting a rekey still re-baselines
+ * (a floor from a superseded founding must not out-anchor the new epoch's
+ * compacted snapshot); the within-epoch withholding defense is untouched.
+ */
+const foldFloors = new Map<string, Map<string, EntityHead>>();
+
+/**
+ * The last fold per opened-events array (the react-query data all instances
+ * share), so instances 2..N — and re-runs over unchanged inputs — return the
+ * shared result without re-deriving editions, re-building the memo key
+ * (itself O(n log n) string work per call) or re-logging the fold line.
+ */
+const foldByInputs = new WeakMap<
+  OpenedEvent[],
+  { idHex: string; rootEpoch: bigint; snapIds: string[] | undefined; folded: FoldedControl }
+>();
+
+/**
  * The Control Plane replayed into current state (roster, metadata, channels,
  * banlist, registries). Folded off the render path with a persisted snapshot.
  */
@@ -234,18 +261,12 @@ export function useControlFold2(community: CommunityV2 | undefined, active = tru
   const refounded = Boolean(community && community.rootEpoch > 0n);
   const snapIds = useControlSnapshot2(community, active).data;
 
-  // Per-entity high-water floor (CORD-04 §1): the highest version we've ever
-  // accepted for each entity, monotonic and never lowered. Feeding it back into
-  // the fold makes a tracking client fail closed on a withheld-middle chain —
-  // a hostile relay serving only a higher DANGLING edition can't downgrade an
-  // entity we already advanced past. EPOCH-primary: a floor from a superseded
-  // founding must not out-anchor the new epoch's compacted snapshot, so
-  // adopting a rekey (itself continuity-gated) re-baselines the floor — the
-  // within-epoch withholding defense is untouched.
+  // The shared floor for this (community, epoch) — see `foldFloors`.
   const floorKey = community ? `${community.idHex}@${community.rootEpoch}` : "";
-  const floorRef = useRef<{ key: string; heads: Map<string, EntityHead> }>({ key: "", heads: new Map() });
-  if (community && floorRef.current.key !== floorKey) {
-    floorRef.current = { key: floorKey, heads: new Map() };
+  let floorHeads = foldFloors.get(floorKey);
+  if (!floorHeads) {
+    floorHeads = new Map();
+    foldFloors.set(floorKey, floorHeads);
   }
 
   const data = useDeferredFold<FoldedControl>(
@@ -266,18 +287,30 @@ export function useControlFold2(community: CommunityV2 | undefined, active = tru
       // flood can't downgrade an entity we've advanced past) and `incomplete`
       // (floored entities the served set can't account for), which is what the
       // Refounding path aborts on.
+      // Another instance (or a re-run over unchanged inputs) already folded
+      // this exact events array: share its result, work and log line included.
+      const shared = foldByInputs.get(events);
+      if (
+        shared &&
+        shared.idHex === community.idHex &&
+        shared.rootEpoch === community.rootEpoch &&
+        shared.snapIds === snapIds
+      ) {
+        return shared.folded;
+      }
       const editions = openControlEditions(events);
       // Once the community has Refounded, editions under the CURRENT epoch's
       // control group fold by version-anchored bootstrap (the compaction
       // snapshot outranks old-root fragments — see headCandidates). A
       // never-rotated community keeps full chain-contiguity semantics.
       const snapshotIds = refounded && snapIds ? new Set(snapIds) : undefined;
-      const folded = foldControlState(editions, community.id, community.owner, floorRef.current.heads, snapshotIds);
+      const folded = foldControlState(editions, community.id, community.owner, floorHeads, snapshotIds);
       // Raise the high-water floor from this fold's accepted heads (upward only).
       for (const [eid, head] of folded.heads) {
-        const prior = floorRef.current.heads.get(eid);
-        if (!prior || head.version > prior.version) floorRef.current.heads.set(eid, head);
+        const prior = floorHeads.get(eid);
+        if (!prior || head.version > prior.version) floorHeads.set(eid, head);
       }
+      foldByInputs.set(events, { idHex: community.idHex, rootEpoch: community.rootEpoch, snapIds, folded });
       logSync(
         "fold",
         `${community.idHex.slice(0, 8)}: ${events.length} opened → ${editions.length} edition(s); name=${folded.metadata?.name ?? "∅"} icon=${folded.metadata?.icon ? "yes" : "no"} channels=${folded.channels.size} banned=${folded.banned.size} heads=${folded.heads.size}`,
