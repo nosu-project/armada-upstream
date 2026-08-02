@@ -731,7 +731,7 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
               core profile (card + save) uncluttered. */}
           <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
             <CollapsibleTrigger asChild>
-              <Button type="button" variant="ghost" className="w-full justify-between px-0 py-1 h-auto text-muted-foreground hover:bg-transparent hover:text-foreground">
+              <Button type="button" variant="ghost" className="w-full justify-start gap-1.5 px-0 py-1 h-auto text-muted-foreground hover:bg-transparent hover:text-foreground">
                 <span className="text-xs font-medium">More</span>
                 <ChevronDown className="size-3.5 text-muted-foreground transition-transform duration-200 [[data-state=open]_&]:rotate-180" strokeWidth={4} />
               </Button>
@@ -824,7 +824,9 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
                                 type="button"
                                 variant="outline"
                                 size="sm"
-                                className="h-7 rounded-full px-3 text-xs gap-1.5"
+                                // Opaque: onboarding renders this over the
+                              // wizard's animated ASCII background.
+                              className="h-7 rounded-full px-3 text-xs gap-1.5 bg-background"
                                 onClick={() => handleAddPreset(preset)}
                               >
                                 <Plus className="size-3 text-muted-foreground" />
@@ -846,7 +848,7 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
                   control={form.control}
                   name="bot"
                   render={({ field }) => (
-                    <FormItem className="flex items-center justify-between rounded-lg border p-3">
+                    <FormItem className="flex items-center justify-between rounded-lg border bg-card p-3">
                       <div>
                         <FormLabel className="text-sm">Bot Account</FormLabel>
                         <FormDescription className="text-xs">Mark this account as automated</FormDescription>

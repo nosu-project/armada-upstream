@@ -77,23 +77,85 @@ export async function saveToKeyring(npub: string, nsec: string): Promise<Keyring
 const KEY_FILENAME = "armada-secret-key.txt";
 
 /**
- * Save the key to the FILESYSTEM when the keyring isn't an option: a browser
- * download on web, a real file in the public Downloads folder on native (blob
- * downloads don't work in the Android WebView, so the native plugin writes the
- * file via MediaStore). Returns the human-readable location for a confirmation
- * message, or `null` if the write failed.
+ * `showSaveFilePicker` — the File System Access API's "Save as…" dialog. Not
+ * in `lib.dom`, and absent in Firefox/Safari, so it's declared and probed.
  */
-export async function exportNsec(nsec: string): Promise<string | null> {
+interface SaveFilePicker {
+  (options?: {
+    suggestedName?: string;
+    types?: Array<{ description?: string; accept: Record<string, string[]> }>;
+  }): Promise<{
+    name: string;
+    createWritable(): Promise<{ write(data: string): Promise<void>; close(): Promise<void> }>;
+  }>;
+}
+
+/**
+ * Save the key to the FILESYSTEM: a real "Save as…" dialog where the browser
+ * has one, a plain download where it doesn't, and the public Downloads folder
+ * on native (blob downloads don't work in the Android WebView, so the native
+ * plugin writes the file via MediaStore).
+ *
+ * `"cancelled"` is only ever returned for a save dialog the user dismissed —
+ * a plain download has no dialog to dismiss, so it reports `"saved"`.
+ */
+export async function exportNsec(nsec: string): Promise<ExportResult> {
   if (Capacitor.isNativePlatform()) {
     try {
       const { location } = await ArmadaCredential.saveToFile({ filename: KEY_FILENAME, content: nsec });
-      return location;
+      return { status: "saved", location };
     } catch {
-      return null;
+      return { status: "failed" };
     }
   }
+
+  const picker = (window as unknown as { showSaveFilePicker?: SaveFilePicker }).showSaveFilePicker;
+  if (picker) {
+    try {
+      const handle = await picker({
+        suggestedName: KEY_FILENAME,
+        types: [{ description: "Text file", accept: { "text/plain": [".txt"] } }],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(nsec);
+      await writable.close();
+      return { status: "saved", location: handle.name };
+    } catch (err) {
+      // AbortError is the user closing the dialog — a real "no". Anything else
+      // (a sandboxed frame, a blocked permission, a write failure) is the
+      // picker being unusable here, so fall through to the plain download.
+      if (err instanceof DOMException && err.name === "AbortError") return { status: "cancelled" };
+    }
+  }
+
   downloadTextFile(KEY_FILENAME, nsec);
-  return KEY_FILENAME;
+  return { status: "saved", location: `your downloads (${KEY_FILENAME})` };
+}
+
+/** Outcome of a key export / backup attempt. */
+export type ExportResult =
+  | { status: "saved"; location: string }
+  | { status: "cancelled" }
+  | { status: "failed" };
+
+/**
+ * Back the key up during onboarding, by whatever route the platform can SHOW
+ * the user happening.
+ *
+ * Native gets the Credential Manager sheet first: it's a visible, biometric-
+ * gated, syncing backup, and the user watches it appear. The web
+ * Credential Management API is deliberately not used here — Chromium stores
+ * silently, so a "saved to your password manager" confirmation names a place
+ * the user never saw and may not have. On web the file dialog IS the
+ * confirmation.
+ */
+export async function backUpNsec(npub: string, nsec: string): Promise<ExportResult> {
+  if (Capacitor.isNativePlatform()) {
+    const result = await saveToKeyring(npub, nsec);
+    if (result === "saved") return { status: "saved", location: "your password manager" };
+    if (result === "cancelled") return { status: "cancelled" };
+  }
+  return exportNsec(nsec);
 }
 
 interface PasswordCredentialData {
@@ -134,8 +196,8 @@ export async function getNsecCredential(): Promise<NsecCredential | null> {
  * Save the nsec to the OS keyring / password manager, falling back to a file
  * download (web) or the share sheet (native) when there's no keyring or the
  * user dismisses it. Fire-and-forget helper for callers that don't need to
- * distinguish the outcome; onboarding uses {@link saveToKeyring} directly so it
- * can gate on an explicit save.
+ * distinguish the outcome; onboarding uses {@link backUpNsec} so it can gate
+ * on a backup the user actually saw happen.
  */
 export async function saveNsec(npub: string, nsec: string): Promise<void> {
   if ((await saveToKeyring(npub, nsec)) === "saved") return;

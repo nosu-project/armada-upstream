@@ -20,7 +20,7 @@ import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { toast } from "@/hooks/useToast";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { writeClipboardText } from "@/lib/clipboard";
-import { exportNsec, saveToKeyring } from "@/lib/credentialManager";
+import { backUpNsec } from "@/lib/credentialManager";
 import { flattenLayout, mergeLayout, railKeyToRoute } from "@/lib/railLayout";
 
 /**
@@ -151,16 +151,11 @@ export function WelcomePage() {
     navigate("/discover");
   };
 
-  // Back the key up, without advancing. Continue is gated on this having
-  // succeeded at least once (or on a successful Copy), so the outcomes are
-  // kept apart rather than collapsed into "the button ran":
-  //   - saved       → in the OS keyring / password manager (a real,
-  //                   biometric-gated, recoverable backup).
-  //   - cancelled   → the user dismissed the keyring sheet. NOT a backup:
-  //                   leave the gate shut and point them at Copy / retry.
-  //   - unavailable → no keyring to save to (Firefox/Safari, or an Android with
-  //                   no credential provider): write the key file instead (a
-  //                   download on web, the Downloads folder on native).
+  // Back the key up to a place the user chose and watched it go to — a "Save
+  // as…" dialog on web, the Credential Manager sheet on native. Doesn't
+  // advance: Continue is gated on this (or Copy) having actually succeeded, so
+  // the outcomes stay apart rather than collapsing into "the button ran". A
+  // dismissed dialog leaves the gate shut.
   const saveKey = async () => {
     if (saving) return;
     if (!identity) {
@@ -174,28 +169,18 @@ export function WelcomePage() {
 
     setSaving(true);
     try {
-      const result = await saveToKeyring(identity.npub, nsec);
-      if (result === "saved") {
-        setBackedUp(true);
-        toast({
-          title: "Key saved",
-          description: "Stored in your password manager. Keep it — it's your only login.",
-        });
-        return;
-      }
-      if (result === "cancelled") {
+      const result = await backUpNsec(identity.npub, nsec);
+      if (result.status === "cancelled") {
         toast({
           title: "Key not saved",
-          description: "Save it to your password manager — or Copy it — before continuing. It's your only login.",
+          description: "Save the file — or Copy the key — before continuing. It's your only login.",
         });
         return;
       }
-      // No keyring here — save the key to the filesystem so it isn't lost.
-      const location = await exportNsec(nsec);
-      if (!location) {
+      if (result.status === "failed") {
         toast({
           title: "Couldn't save your key",
-          description: "Saving to the filesystem failed. Copy your key and store it safely, then continue.",
+          description: "Saving failed. Copy your key and store it somewhere safe, then continue.",
           variant: "destructive",
         });
         return;
@@ -203,7 +188,7 @@ export function WelcomePage() {
       setBackedUp(true);
       toast({
         title: "Key saved",
-        description: `Saved to ${location}. Keep it somewhere safe — it's your only login.`,
+        description: `Saved to ${result.location}. Keep it — it's your only login.`,
       });
     } finally {
       setSaving(false);
@@ -211,23 +196,19 @@ export function WelcomePage() {
   };
 
   // Leave the save step: log in as the new account and move to profile setup.
-  // Only reachable once `backedUp` is set. Guarded on `user` because the step
-  // is also reachable BACKWARDS from profile setup (to re-read the key), and a
-  // second `login.nsec` would register the same account twice.
+  // Only reachable once `backedUp` is set.
   const handleContinue = () => {
-    if (!user) {
-      // Brand-new account: nothing to catch up on, so skip the post-login sync
-      // gate. Otherwise its full-screen overlay paints over the profile/add
-      // wizard steps (SyncGate is z-100, the wizard z-50) while a network-bound
-      // sync runs — on a slow phone that looks like onboarding was skipped.
-      if (identity) suppressNextSyncGate(identity.pubkey);
-      // Mark onboarding in progress BEFORE login so it's already true on the
-      // commit that first exposes the user — otherwise the headless web-push
-      // opt-in (and the native notification step) would enqueue and paint over
-      // the profile step. Cleared when this wizard unmounts.
-      setOnboardingActive(true);
-      login.nsec(nsec);
-    }
+    // Brand-new account: nothing to catch up on, so skip the post-login sync
+    // gate. Otherwise its full-screen overlay paints over the profile/add
+    // wizard steps (SyncGate is z-100, the wizard z-50) while a network-bound
+    // sync runs — on a slow phone that looks like onboarding was skipped.
+    if (identity) suppressNextSyncGate(identity.pubkey);
+    // Mark onboarding in progress BEFORE login so it's already true on the
+    // commit that first exposes the user — otherwise the headless web-push
+    // opt-in (and the native notification step) would enqueue and paint over
+    // the profile step. Cleared when this wizard unmounts.
+    setOnboardingActive(true);
+    login.nsec(nsec);
     setStep("profile");
   };
 
@@ -296,12 +277,11 @@ export function WelcomePage() {
   }
 
   // ── Wizard step 2: save the key ─────────────────────────────────────────
-  // Reachable backwards from profile setup, so this doesn't require `!user`.
-  if (step === "download") {
+  if (!user && step === "download") {
     return (
       <SignupShell
         step="download"
-        onBack={() => setStep(user ? "profile" : "generate")}
+        onBack={() => setStep("generate")}
         onClose={() => setStep(null)}
       >
         <div className="flex flex-col items-center gap-6 text-center">
@@ -313,18 +293,16 @@ export function WelcomePage() {
           {/* The one thing this step has to land. There is no second copy of
               this key and no way to reissue it, so the warning IS the step's
               description rather than a footnote under a milder one. */}
-          <div className="w-full clip-corner-lg border-2 border-amber-500/50 bg-amber-500/10 p-4 text-left">
+          <div className="w-full clip-corner-lg border-2 border-destructive/60 bg-destructive/10 p-3.5 text-left">
             <div className="flex items-start gap-2.5">
-              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
-              <div className="space-y-1.5">
-                <p className="text-xs font-bold uppercase tracking-widest text-amber-600 dark:text-amber-400">
+              <AlertTriangle className="mt-px size-4 shrink-0 text-destructive" />
+              <div className="space-y-1">
+                <p className="text-xs font-bold uppercase tracking-widest text-destructive">
                   This key is your only login
                 </p>
-                <p className="text-xs leading-relaxed text-amber-700 dark:text-amber-200/90">
-                  There is <strong className="font-bold">no password reset</strong> and{" "}
-                  <strong className="font-bold">no way to recover it</strong>. Lose it and
-                  the account is gone for good; share it and whoever has it becomes you.
-                  Save it somewhere only you can reach — a password manager — right now.
+                <p className="text-xs leading-relaxed text-destructive/90">
+                  No reset, no recovery. Lose it and the account is gone; share it and
+                  whoever has it is you.
                 </p>
               </div>
             </div>
@@ -335,7 +313,7 @@ export function WelcomePage() {
               type={showKey ? "text" : "password"}
               value={nsec}
               readOnly
-              className="pr-10 font-mono bg-background/40 border-transparent"
+              className="pr-10 font-mono bg-background border-transparent"
             />
             <Button
               type="button"
@@ -359,7 +337,7 @@ export function WelcomePage() {
               <Button
                 type="button"
                 variant="outline"
-                className="h-11 clip-corner-lg"
+                className="h-11 clip-corner-lg bg-background"
                 onClick={saveKey}
                 disabled={saving}
               >
@@ -369,7 +347,7 @@ export function WelcomePage() {
               <Button
                 type="button"
                 variant="outline"
-                className="h-11 clip-corner-lg"
+                className="h-11 clip-corner-lg bg-background"
                 onClick={copyKey}
                 disabled={saving}
               >
@@ -389,11 +367,6 @@ export function WelcomePage() {
             >
               Continue
             </Button>
-            <p className="text-center text-xs text-muted-foreground">
-              {backedUp
-                ? "Key backed up. Make sure it's somewhere you'll still have it later."
-                : "Save or copy your key to continue."}
-            </p>
           </div>
         </div>
       </SignupShell>
@@ -401,12 +374,14 @@ export function WelcomePage() {
   }
 
   // ── Wizard step 3: profile setup ────────────────────────────────────────
+  // No back arrow: the previous step created the account, and there is no
+  // un-creating it. A back arrow here could only return to a key screen whose
+  // own back leads forward again — a loop, not a step back.
   if (user && step === "profile") {
     return (
       <SignupShell
         step="profile"
         maxWidth="max-w-xl"
-        onBack={() => setStep("download")}
         onClose={() => setStep(null)}
       >
         <div className="space-y-1.5 text-center">

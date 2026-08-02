@@ -95,7 +95,14 @@ export function WizardShell({
         )}
       </div>
 
-      <div className="relative z-10 flex-1 overflow-y-auto">
+      {/*
+        `scrollbar-gutter: stable` so the gutter is reserved whether or not a
+        scrollbar is showing. Without it, a step that grows past the viewport
+        (opening the profile editor's More section) takes ~15px of width away
+        from the centered column mid-animation, and the whole step slides
+        sideways while the section expands.
+      */}
+      <div className="relative z-10 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         <div
           key={stepKey}
           className={cn(
