@@ -262,7 +262,7 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
           {isMember ? (
             <Button variant="secondary" className="min-w-0 flex-1 clip-corner-lg" onClick={onOpen}>
               <Check className="size-4" />
-              Joined — Open
+              Joined · Open
             </Button>
           ) : (
             <Button className="min-w-0 flex-1 clip-corner-lg" onClick={onJoin}>

@@ -95,7 +95,7 @@ function InviteBody({ community }: { community: CommunityV2 | undefined }) {
     if (
       listPublicly &&
       !confirm(
-        "Sharing to Discover publishes this invite link from your account — including its secret — so anyone can find and join. Only do this for a community you want strangers to join.",
+        "Sharing to Discover publishes this invite link from your account, including its secret, so anyone can find and join. Only do this for a community you want strangers to join.",
       )
     ) {
       return;
