@@ -15,17 +15,29 @@
  *
  * Two completeness modes, chosen per plane:
  *
- * - COMPLETE (Control): correctness-critical and compaction-bounded, so every
- *   sweep re-fetches the WHOLE plane — no `since`, paging past the relay's
- *   per-filter limit. A forward cursor here silently starves the fold: the
- *   cursor key outlives a leave/ban/rejoin and the held-epoch set it was
- *   minted under, so any edition below the high-water mark that was never
- *   ingested (an unban published while the client was out, a compaction
- *   re-wrap under a newly-held epoch) stays invisible forever — the client
- *   then folds a STALE banlist/roster and mis-renders membership. Repeat
- *   sweeps stay cheap: a persisted seen-wrap memo skips the re-decrypt (the
- *   folds re-read the opened-event store), and `onFresh` fires only for wraps
- *   not yet processed.
+ * - COMPLETE (Control): correctness-critical and compaction-bounded. A
+ *   PERSISTED forward cursor here silently starves the fold: the cursor key
+ *   outlives a leave/ban/rejoin and the held-epoch set it was minted under,
+ *   so any edition below the high-water mark that was never ingested (an
+ *   unban published while the client was out, a compaction re-wrap under a
+ *   newly-held epoch) stays invisible forever — the client then folds a STALE
+ *   banlist/roster and mis-renders membership. So the cadence is TWO-TIER,
+ *   with the delta floor held only in SESSION memory: the first sweep of a
+ *   scope each session re-fetches the WHOLE plane — no `since`, paging past
+ *   the relay's per-filter limit — as does every sweep once the floor ages
+ *   out, after a truncated read, for a snapshot rebuild, for an exhaustive
+ *   (Refounding) read, and after the fold reports `incomplete`
+ *   ({@link markControlPlaneStale}). Sweeps between ride a short-overlap
+ *   `since` off the last clean full read: wraps are immutable and Concord
+ *   does NOT backdate them (CORD-01), so the overlap only has to cover
+ *   publisher clock skew — and the full-plane re-fetch every 5 minutes was
+ *   the client's single largest steady-state download. The "while the client
+ *   was out" starvation cases are exactly what the session-start full sweep
+ *   re-reads, and an epoch change renames the scope (controlScopeKey) so a
+ *   rotation never inherits a floor. Repeat full sweeps stay decrypt-cheap:
+ *   a persisted seen-wrap memo skips the re-decrypt (the folds re-read the
+ *   opened-event store), and `onFresh` fires only for wraps not yet
+ *   processed.
  * - FORWARD (Guestbook): append-mostly and unbounded, so it keeps the
  *   persisted `since` cursor — but the cursor scope is keyed by the newest
  *   held epoch, so an epoch advance (rejoin, rekey adoption) re-baselines
@@ -141,8 +153,9 @@ export interface PlaneScope {
   /** The stream keys whose addresses this plane's wraps are authored by. */
   groups: GroupKey[];
   /**
-   * COMPLETE mode (see the module docstring): every sweep re-fetches the whole
-   * plane instead of trusting a forward cursor. Reserved for planes that are
+   * COMPLETE mode (see the module docstring): the plane is re-fetched whole
+   * rather than trusting a persisted forward cursor — full at session start /
+   * floor age-out, short-overlap delta between. Reserved for planes that are
    * both correctness-critical and compaction-bounded (Control).
    */
   complete?: boolean;
@@ -180,6 +193,17 @@ export interface PlaneScope {
  */
 export const controlScopeKey = (community: CommunityV2, relayUrl: string) =>
   `control:${community.idHex}@${community.rootEpoch}|${relayUrl}`;
+
+/**
+ * Forget the two-tier delta floors for one community's control scopes, so its
+ * NEXT sweep re-reads the whole plane. Called when the fold reports
+ * `incomplete` — a floored entity the served editions can't account for is
+ * exactly the "an edition below the floor never arrived" case a delta sweep
+ * cannot heal.
+ */
+export function markControlPlaneStale(community: CommunityV2): void {
+  for (const url of community.relays) completeFloors.delete(controlScopeKey(community, url));
+}
 
 /**
  * One community's Control Plane on one relay. COMPLETE: the fold that hangs
@@ -331,6 +355,32 @@ export function _configureSweepPagingForTests(cfg: Partial<typeof paging>): void
 }
 
 /**
+ * Two-tier cadence knobs for COMPLETE scopes (see the module docstring).
+ * Test seam via {@link _configureSweepCadenceForTests}.
+ */
+const cadence = {
+  /** How long a clean full read licenses delta sweeps before the next full one. */
+  fullSweepIntervalMs: 6 * 60 * 60_000,
+  /** Overlap behind the floor's newest wrap (publisher clock skew — CORD-01
+   *  wraps are not backdated, so skew is all the overlap has to cover). */
+  deltaOverlapSecs: 3600,
+};
+
+/** Test seam: force every sweep full (`fullSweepIntervalMs: 0`) or pin the overlap. */
+export function _configureSweepCadenceForTests(cfg: Partial<typeof cadence>): void {
+  Object.assign(cadence, cfg);
+}
+
+/**
+ * Per-scope delta floor for COMPLETE sweeps: the time of the last CLEAN full
+ * read (not truncated, relay answered) and the newest wrap `created_at` seen.
+ * SESSION-ONLY on purpose — persisting it would recreate the forward-cursor
+ * starvation the module docstring forbids; losing it merely costs one full
+ * re-read on the next launch, which is the launch's job anyway.
+ */
+const completeFloors = new Map<string, { fullAt: number; newest: number }>();
+
+/**
  * Wrap ids a COMPLETE scope has already processed (decrypted or judged
  * garbage). Full-plane sweeps re-receive the same wraps every round — the
  * memo keeps repeat sweeps decrypt-free and `onFresh` quiet. Ids are global
@@ -441,6 +491,7 @@ export function _resetPlaneSweepMemoForTests(): void {
   unreadableScopes.clear();
   scopeTruncated.clear();
   scopeReached.clear();
+  completeFloors.clear();
   if (seenWrapsPersistTimer !== undefined) {
     clearTimeout(seenWrapsPersistTimer);
     seenWrapsPersistTimer = undefined;
@@ -756,11 +807,23 @@ async function runScopes(
   const cursors = await Promise.all(
     scopes.map((s) => (s.complete ? undefined : readStreamCursor(s.scope))),
   );
+  // COMPLETE scopes: a fresh session floor licenses a short-overlap delta
+  // read; anything else — no floor, an aged floor, a snapshot rebuild, an
+  // exhaustive read — re-fetches the whole plane (see the module docstring).
+  const deltaSince = scopes.map((s, i) => {
+    if (!s.complete || s.exhaustive || rebuildSnapshot[i]) return undefined;
+    const floor = completeFloors.get(s.scope);
+    if (!floor || floor.newest <= 0) return undefined;
+    if (Date.now() - floor.fullAt >= cadence.fullSweepIntervalMs) return undefined;
+    return Math.max(0, floor.newest - cadence.deltaOverlapSecs);
+  });
   const filters: NostrFilter[] = scopes.map((s, i) => ({
     kinds: [KIND_WRAP],
     authors: s.groups.map((g) => g.pk),
     limit: paging.pageLimit,
-    ...(cursors[i]?.newest ? { since: cursors[i]!.newest } : {}),
+    ...(s.complete
+      ? deltaSince[i] !== undefined ? { since: deltaSince[i] } : {}
+      : cursors[i]?.newest ? { since: cursors[i]!.newest } : {}),
   }));
   const out = new Map<string, OpenedEvent[]>(scopes.map((s) => [s.scope, []]));
 
@@ -807,6 +870,12 @@ async function runScopes(
 
       const freshPerScope: OpenedEvent[][] = scopes.map(() => []);
       const totals: number[] = scopes.map((_, i) => perScope[i].length);
+      // Newest wrap per scope, read off page one (relays answer newest-first)
+      // BEFORE the complete-mode pager consumes it — this is what advances the
+      // session delta floor.
+      const newestPerScope = perScope.map((evs) =>
+        evs.length > 0 ? Math.max(...evs.map((e) => e.created_at)) : undefined,
+      );
 
       // A complete scope STREAMS: decrypt (time-sliced — a cold plane is
       // thousands of synchronous EC ops), store and memo each page, then drop
@@ -923,6 +992,18 @@ async function runScopes(
         if (s.complete && (authSettled || totals[i] > 0)) {
           scopeReached.add(s.scope);
           s.onReached?.();
+          // Advance the session delta floor: a CLEAN full read (re)establishes
+          // the baseline; a truncated one establishes nothing (older plane went
+          // unread — the next sweep must re-ask whole); a delta read only
+          // raises the floor's high-water mark.
+          const prior = completeFloors.get(s.scope);
+          const newest = Math.max(newestPerScope[i] ?? 0, prior?.newest ?? 0);
+          if (deltaSince[i] === undefined) {
+            if (scopeTruncated.get(s.scope) === true) completeFloors.delete(s.scope);
+            else completeFloors.set(s.scope, { fullAt: Date.now(), newest });
+          } else if (prior) {
+            completeFloors.set(s.scope, { fullAt: prior.fullAt, newest });
+          }
         }
         const fresh = freshPerScope[i];
         if (fresh.length === 0) continue;

@@ -16,7 +16,7 @@ import { channelsView } from "@/concord-v2/lib/community";
 import { bytesToHex, dissolvedGroupKey, grantLocator, hex32 } from "@/concord-v2/lib/derive";
 import type { AuthorityCitation } from "@/concord-v2/lib/edition";
 import { KIND_WRAP } from "@/concord-v2/lib/kinds";
-import { openPlaneWraps, mergeOpened, sweepControl } from "@/concord-v2/lib/planeSync";
+import { markControlPlaneStale, openPlaneWraps, mergeOpened, sweepControl } from "@/concord-v2/lib/planeSync";
 import { queryPlane, readControlSnapshot, writeOpened } from "@/concord-v2/lib/rumorStore";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import { STORE_READ } from "@/lib/storeQuery";
@@ -311,6 +311,11 @@ export function useControlFold2(community: CommunityV2 | undefined, active = tru
         if (!prior || head.version > prior.version) floorHeads.set(eid, head);
       }
       foldByInputs.set(events, { idHex: community.idHex, rootEpoch: community.rootEpoch, snapIds, folded });
+      // A floored entity the served editions can't account for means an
+      // edition BELOW the sweep's delta floor never arrived here — only a
+      // whole-plane read can heal that, so drop the session floors and let
+      // the next sweep (on-open, or the background tick) re-ask full.
+      if (folded.incomplete.length > 0) markControlPlaneStale(community);
       logSync(
         "fold",
         `${community.idHex.slice(0, 8)}: ${events.length} opened → ${editions.length} edition(s); name=${folded.metadata?.name ?? "∅"} icon=${folded.metadata?.icon ? "yes" : "no"} channels=${folded.channels.size} banned=${folded.banned.size} heads=${folded.heads.size}`,
