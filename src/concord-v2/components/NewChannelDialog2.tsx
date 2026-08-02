@@ -162,15 +162,15 @@ export function NewChannelDialog2({ open, onOpenChange, connectedCoordinates, on
                   <Lock className="size-3.5" /> Private channel
                 </span>
                 <span className="block text-xs text-muted-foreground">
-                  Gets its own key — only members granted its role can read it, in any client.
+                  Gets its own key. Only members granted its role can read it, in any client.
                 </span>
               </span>
             </label>
 
             {isPrivate && (
               <p className="text-xs text-muted-foreground">
-                A role of the same name is created alongside it and decides who may read it —
-                grant that role to give a member access.
+                A role of the same name is created alongside it and decides who may read it.
+                Grant that role to give a member access.
               </p>
             )}
 
