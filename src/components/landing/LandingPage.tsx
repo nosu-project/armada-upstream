@@ -153,7 +153,7 @@ export function LandingPage({
                   Nostr
                 </a>
                 , a social protocol which redefines the Internet. On Nostr,
-                applications are separate from infra. Users sign events with
+                apps are separate from infra. Users sign events with
                 private keys and distribute them across multiple public
                 relays. Messages can be encrypted so even Nostr relays don't
                 know what they say.
