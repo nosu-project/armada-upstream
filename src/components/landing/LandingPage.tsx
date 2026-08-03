@@ -216,9 +216,20 @@ export function LandingPage({
             A screen of its own, bookending the hero: the same control over
             the same sea, with nothing else on it to read. */}
         <section className="mx-auto flex min-h-[100svh] max-w-xl flex-col items-center justify-center gap-8 px-6 py-16 text-center safe-area-bottom">
-          <p className="text-balance font-mono text-xl font-bold tracking-tight text-foreground sm:text-2xl">
-            What are you waiting for? Sail the seas!
-          </p>
+          {/* The sign-off returns to the hero's prompt: same cyan `$`, same
+              magenta line, same blinking caret as {@link BrandMark}, so the
+              page ends at the terminal it opened on. `armada-caret` comes from
+              the crest's keyframes, already mounted below. */}
+          <div className="flex flex-col items-center gap-2">
+            <p className="text-balance text-sm text-muted-foreground sm:text-base">
+              What are you waiting for?
+            </p>
+            <p className="font-mono text-xl text-[hsl(var(--primary))] sm:text-2xl">
+              <span className="text-[hsl(var(--accent2,180_90%_55%))]">$ </span>
+              sail the seas
+              <span className="animate-[armada-caret_1s_step-end_infinite]">_</span>
+            </p>
+          </div>
 
           {/* The reader who scrolled the whole way shouldn't have to go back
               up to act on it. */}
