@@ -1,0 +1,304 @@
+/**
+ * Pins (CORD-04 §7) against real crypto: every entry here is a genuinely
+ * sealed chat message, and every attack is mounted for real rather than
+ * simulated. The proof bundle's whole claim is that a reader holding NO
+ * channel keys reaches the truth, so most of these verify with nothing but
+ * the entry and the channel id.
+ */
+
+import { finalizeEvent, generateSecretKey, getEventHash, getPublicKey } from "nostr-tools/pure";
+import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
+import { describe, expect, it } from "vitest";
+
+import { channelGroupKey, bytesToHex, random32 } from "@/concord-v2/lib/derive";
+import { KIND_MESSAGE, KIND_SEAL_ENCRYPTED } from "@/concord-v2/lib/kinds";
+import {
+  PIN_MAX_CONTENT_BYTES,
+  PIN_MAX_ENTRIES,
+  buildPinEntry,
+  partitionDeletedPins,
+  pinKilledBy,
+  readPinList,
+  serializePublicPinList,
+  serializeSealedPinList,
+  verifyPinEntry,
+  type PinEntry,
+} from "@/concord-v2/lib/pins";
+import { buildRumor, openWrap, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
+import { discloseKeysFor, encodeMessageKeys } from "@/concord-v2/lib/nip44keys";
+
+function signer(sk = generateSecretKey()) {
+  return { sk, pubkey: getPublicKey(sk), signEvent: async (t: EventTemplate) => finalizeEvent(t, sk) };
+}
+
+/**
+ * An entry as a verifier actually receives it: JSON off the wire. Also strips
+ * nostr-tools' `verifiedSymbol`, which object spread copies — a live tampered
+ * object would otherwise arrive pre-marked "already verified".
+ */
+const overWire = (e: PinEntry): PinEntry => JSON.parse(JSON.stringify(e)) as PinEntry;
+
+const CHANNEL_A = random32();
+const CHANNEL_B = random32();
+const chanA = channelGroupKey(random32(), CHANNEL_A, 0);
+const chanB = channelGroupKey(random32(), CHANNEL_B, 0);
+
+/** A real sealed+wrapped chat message, opened the way the client opens it. */
+async function pinnable(
+  text: string,
+  author = signer(),
+  group = chanA,
+  channelId = CHANNEL_A,
+  epoch = "0",
+) {
+  const rumor = buildRumor({
+    kind: KIND_MESSAGE,
+    content: text,
+    tags: [["channel", bytesToHex(channelId)], ["epoch", epoch]],
+    pubkey: author.pubkey,
+  });
+  const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, group, author);
+  const wrap = wrapSeal(seal, group);
+  return { opened: openWrap(wrap, group), author, group };
+}
+
+describe("the proof bundle", () => {
+  it("verifies author, words, channel and time with NO channel key", async () => {
+    const { opened, author } = await pinnable("Hey chat!");
+    const entry = buildPinEntry(opened, chanA.convKey)!;
+    expect(entry).toBeDefined();
+
+    // The verifier holds only the entry and the channel id — no group key.
+    const pin = verifyPinEntry(entry, bytesToHex(CHANNEL_A))!;
+    expect(pin).toBeDefined();
+    expect(pin.author).toBe(author.pubkey);
+    expect(pin.content).toBe("Hey chat!");
+    expect(pin.rumorId).toBe(opened.rumorId);
+    expect(pin.epoch).toBe("0");
+    expect(pin.createdAt).toBe(opened.createdAt);
+  });
+
+  it("discloses ONE message: the entry's keys open nothing else in the channel", async () => {
+    const a = await pinnable("pinned one");
+    const b = await pinnable("still private");
+    const entry = buildPinEntry(a.opened, chanA.convKey)!;
+
+    // Swap in the OTHER message's seal, keep the disclosed keys.
+    const crossed: PinEntry = { ...entry, seal: b.opened.seal! };
+    expect(verifyPinEntry(crossed, bytesToHex(CHANNEL_A)), "a sibling stays sealed").toBeUndefined();
+  });
+
+  it("refuses a message from another channel — the cross-channel leak (B1)", async () => {
+    // A private channel B message, pinned into channel A's list.
+    const { opened } = await pinnable("private to B", signer(), chanB, CHANNEL_B);
+    const entry = buildPinEntry(opened, chanB.convKey)!;
+    expect(verifyPinEntry(entry, bytesToHex(CHANNEL_B)), "valid in its own list").toBeDefined();
+    expect(verifyPinEntry(entry, bytesToHex(CHANNEL_A)), "refused in another channel's list").toBeUndefined();
+  });
+
+  it("refuses a rumor with no channel tag at all", async () => {
+    const author = signer();
+    const rumor = buildRumor({ kind: KIND_MESSAGE, content: "unbound", tags: [], pubkey: author.pubkey });
+    const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, chanA, author);
+    const entry = buildPinEntry(openWrap(wrapSeal(seal, chanA), chanA), chanA.convKey);
+    expect(entry, "build refuses it").toBeUndefined();
+  });
+
+  it("refuses an impersonating rumor: seal honestly signed around another author's name", async () => {
+    const mallory = signer();
+    const alice = signer();
+    // Mallory seals a rumor CLAIMING Alice wrote it. The seal signature is
+    // genuine (Mallory's), so only the pubkey-equality check catches this.
+    // `openWrap` already refuses it at ingest, so a hostile pinner would have
+    // to hand-build the entry — which is exactly what this does.
+    const forged = buildRumor({
+      kind: KIND_MESSAGE,
+      content: "Alice said this",
+      tags: [["channel", bytesToHex(CHANNEL_A)]],
+      pubkey: alice.pubkey,
+    });
+    const seal = await sealRumor(forged, KIND_SEAL_ENCRYPTED, chanA, mallory);
+    const keys = discloseKeysFor(seal.content, chanA.convKey)!;
+    const handBuilt = overWire({ seal, keys: encodeMessageKeys(keys) });
+    expect(verifyPinEntry(handBuilt, bytesToHex(CHANNEL_A)), "author equality is the only guard here").toBeUndefined();
+    // The ingest path refuses it too, from the other direction.
+    expect(() => openWrap(wrapSeal(seal, chanA), chanA)).toThrow(/author/);
+  });
+
+  it("refuses a tampered seal signature and tampered ciphertext", async () => {
+    const { opened } = await pinnable("original");
+    const entry = buildPinEntry(opened, chanA.convKey)!;
+
+    const badSig = overWire({ ...entry, seal: { ...entry.seal, sig: "0".repeat(128) } as NostrEvent });
+    expect(verifyPinEntry(badSig, bytesToHex(CHANNEL_A))).toBeUndefined();
+
+    // Swap the content for another message's ciphertext: the seal signature no
+    // longer covers it, and the disclosed keys were derived from a different nonce.
+    const other = await pinnable("different");
+    const badContent = overWire({ ...entry, seal: { ...entry.seal, content: other.opened.seal!.content } as NostrEvent });
+    expect(verifyPinEntry(badContent, bytesToHex(CHANNEL_A))).toBeUndefined();
+
+    // The honest entry still verifies once it has crossed the wire.
+    expect(verifyPinEntry(overWire(entry), bytesToHex(CHANNEL_A))).toBeDefined();
+  });
+
+  it("refuses a plaintext seal, a non-chat kind, and malformed keys", async () => {
+    const { opened } = await pinnable("x");
+    const entry = buildPinEntry(opened, chanA.convKey)!;
+    expect(verifyPinEntry({ ...entry, seal: { ...entry.seal, kind: 20014 } as NostrEvent }, bytesToHex(CHANNEL_A))).toBeUndefined();
+    expect(verifyPinEntry({ ...entry, keys: "beef" }, bytesToHex(CHANNEL_A))).toBeUndefined();
+    expect(verifyPinEntry({ ...entry, keys: entry.keys.toUpperCase() }, bytesToHex(CHANNEL_A))).toBeUndefined();
+    expect(verifyPinEntry(entry, "not-a-channel-id")).toBeUndefined();
+
+    // A reaction (kind 7) is verifier-valid nonsense: refused by kind.
+    const author = signer();
+    const reaction = buildRumor({ kind: 7, content: "+", tags: [["channel", bytesToHex(CHANNEL_A)]], pubkey: author.pubkey });
+    const seal = await sealRumor(reaction, KIND_SEAL_ENCRYPTED, chanA, author);
+    expect(buildPinEntry(openWrap(wrapSeal(seal, chanA), chanA), chanA.convKey)).toBeUndefined();
+  });
+
+  it("never throws on hostile input", () => {
+    for (const junk of [{}, { seal: null }, { seal: {}, keys: "" }, { seal: 5, keys: 5 }] as unknown as PinEntry[]) {
+      expect(() => verifyPinEntry(junk, bytesToHex(CHANNEL_A))).not.toThrow();
+      expect(verifyPinEntry(junk, bytesToHex(CHANNEL_A))).toBeUndefined();
+    }
+  });
+});
+
+describe("the two content forms", () => {
+  const key = (_e: bigint) => chanA.convKey;
+
+  it("public form round-trips plaintext; sealed form round-trips under the channel key", async () => {
+    const { opened } = await pinnable("hello");
+    const entry = buildPinEntry(opened, chanA.convKey)!;
+
+    const pub = readPinList(serializePublicPinList([entry]), key);
+    expect(pub.entries).toHaveLength(1);
+    expect(pub.sealed).toBe(false);
+
+    const priv = readPinList(serializeSealedPinList([entry], chanA.convKey, 4n), key);
+    expect(priv.entries).toHaveLength(1);
+    expect(verifyPinEntry(priv.entries[0], bytesToHex(CHANNEL_A))?.content).toBe("hello");
+  });
+
+  it("a sealed list whose epoch key we lack reads as dark, not as a violation", async () => {
+    const { opened } = await pinnable("secret");
+    const entry = buildPinEntry(opened, chanA.convKey)!;
+    const content = serializeSealedPinList([entry], chanA.convKey, 4n);
+    const out = readPinList(content, () => undefined);
+    expect(out).toEqual({ entries: [], sealed: true });
+  });
+
+  it("the sealed form declares its epoch as a decimal STRING", async () => {
+    const { opened } = await pinnable("x");
+    const entry = buildPinEntry(opened, chanA.convKey)!;
+    const parsed = JSON.parse(serializeSealedPinList([entry], chanA.convKey, 12n));
+    expect(parsed.epoch).toBe("12");
+    expect(typeof parsed.epoch).toBe("string");
+  });
+});
+
+describe("structural caps", () => {
+  it("a writer refuses to publish past either cap", async () => {
+    const { opened } = await pinnable("x");
+    const entry = buildPinEntry(opened, chanA.convKey)!;
+    const tooMany = Array.from({ length: PIN_MAX_ENTRIES + 1 }, () => entry);
+    expect(() => serializePublicPinList(tooMany)).toThrow(/25 entries/);
+    expect(() => serializeSealedPinList(tooMany, chanA.convKey, 0n)).toThrow(/25 entries/);
+
+    const huge = await pinnable("y".repeat(40_000));
+    const bigEntry = buildPinEntry(huge.opened, chanA.convKey)!;
+    expect(() => serializePublicPinList([bigEntry])).toThrow(/cap 32768/);
+  });
+
+  it("a reader treats a cap-violating edition as an EMPTY list, never a refusal (B2)", async () => {
+    const { opened } = await pinnable("x");
+    const entry = buildPinEntry(opened, chanA.convKey)!;
+    const key = () => chanA.convKey;
+
+    // Hand-built over-length list (a hostile publisher bypassing our writer).
+    const overCount = JSON.stringify({ entries: Array.from({ length: PIN_MAX_ENTRIES + 1 }, () => entry) });
+    expect(readPinList(overCount, key)).toEqual({ entries: [], sealed: false });
+
+    const overBytes = JSON.stringify({ entries: [entry], pad: "z".repeat(PIN_MAX_CONTENT_BYTES) });
+    expect(readPinList(overBytes, key)).toEqual({ entries: [], sealed: false });
+
+    // Junk and unknown shapes read empty too — never an exception.
+    for (const junk of ["", "{", "null", "[]", '{"nope":1}']) {
+      expect(() => readPinList(junk, key)).not.toThrow();
+      expect(readPinList(junk, key).entries).toEqual([]);
+    }
+  });
+
+  it("the entry cap governs the public form; the byte cap governs the sealed one", async () => {
+    // Measured, not assumed: an entry's floor is ~1.1 KB (seal id + pubkey +
+    // sig + the NIP-44 payload + the 76-byte disclosure), so a typical ~135
+    // character pin runs ~1.3 KB. 25 of those fill the public form almost
+    // exactly, while the sealed form's base64 + padding live INSIDE the same
+    // cap and bind far sooner.
+    const entries: PinEntry[] = [];
+    for (let i = 0; i < PIN_MAX_ENTRIES; i++) {
+      const { opened } = await pinnable(`Announcement ${i}: ${"x".repeat(120)}`);
+      entries.push(buildPinEntry(opened, chanA.convKey)!);
+    }
+    const publicBytes = new TextEncoder().encode(serializePublicPinList(entries)).length;
+    expect(publicBytes, "a full 25 fits the public form").toBeLessThanOrEqual(PIN_MAX_CONTENT_BYTES);
+    expect(publicBytes).toBeGreaterThan(PIN_MAX_CONTENT_BYTES * 0.9); // and only just
+
+    // The sealed form refuses the same 25 — the byte cap is the real ceiling.
+    expect(() => serializeSealedPinList(entries, chanA.convKey, 0n)).toThrow(/cap 32768/);
+    // …and accepts a smaller list.
+    const fifteen = entries.slice(0, 15);
+    expect(() => serializeSealedPinList(fifteen, chanA.convKey, 0n)).not.toThrow();
+    const sealedBytes = new TextEncoder().encode(serializeSealedPinList(fifteen, chanA.convKey, 0n)).length;
+    const publicFifteen = new TextEncoder().encode(serializePublicPinList(fifteen)).length;
+    expect(sealedBytes, "sealing inflates ~1.4x inside the cap").toBeGreaterThan(publicFifteen);
+  });
+});
+
+describe("deletion (§7)", () => {
+  it("an author's own delete kills their pin; a stranger's does not", async () => {
+    const alice = signer();
+    const { opened } = await pinnable("delete me", alice);
+    const pin = verifyPinEntry(buildPinEntry(opened, chanA.convKey)!, bytesToHex(CHANNEL_A))!;
+
+    const selfDelete = { author: alice.pubkey, tags: [["e", pin.rumorId]] };
+    const strangerDelete = { author: signer().pubkey, tags: [["e", pin.rumorId]] };
+    const wrongTarget = { author: alice.pubkey, tags: [["e", "f".repeat(64)]] };
+
+    expect(pinKilledBy(pin, selfDelete)).toBe(true);
+    expect(pinKilledBy(pin, strangerDelete), "only the proven author may erase").toBe(false);
+    expect(pinKilledBy(pin, wrongTarget)).toBe(false);
+  });
+
+  it("matching uses the RECOMPUTED id, so a lying embedded id cannot dodge a delete", async () => {
+    const alice = signer();
+    const { opened } = await pinnable("delete me", alice);
+    const entry = buildPinEntry(opened, chanA.convKey)!;
+    const pin = verifyPinEntry(entry, bytesToHex(CHANNEL_A))!;
+    // The true id is the hash of the decrypted rumor, not anything self-declared.
+    expect(pin.rumorId).toBe(
+      getEventHash({
+        kind: pin.kind,
+        content: pin.content,
+        tags: pin.tags,
+        created_at: pin.createdAt,
+        pubkey: alice.pubkey,
+      }),
+    );
+    expect(pin.rumorId).toBe(opened.rumorId);
+  });
+
+  it("partitions a list into living and killed pins", async () => {
+    const alice = signer();
+    const a = await pinnable("gone", alice);
+    const b = await pinnable("stays", signer());
+    const pins = [
+      verifyPinEntry(buildPinEntry(a.opened, chanA.convKey)!, bytesToHex(CHANNEL_A))!,
+      verifyPinEntry(buildPinEntry(b.opened, chanA.convKey)!, bytesToHex(CHANNEL_A))!,
+    ];
+    const { alive, killed } = partitionDeletedPins(pins, [{ author: alice.pubkey, tags: [["e", pins[0].rumorId]] }]);
+    expect(killed.map((p) => p.content)).toEqual(["gone"]);
+    expect(alive.map((p) => p.content)).toEqual(["stays"]);
+  });
+});

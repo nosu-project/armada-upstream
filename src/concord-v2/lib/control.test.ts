@@ -22,9 +22,11 @@ import {
   sealDissolved,
   sealEdition,
 } from "@/concord-v2/lib/control";
-import { bytesToHex, communityIdOf, controlGroupKey, dissolvedGroupKey, grantLocator, hex32, random32, type GroupKey } from "@/concord-v2/lib/derive";
+import { bytesToHex, communityIdOf, controlGroupKey, dissolvedGroupKey, grantLocator, hex32, pinsLocator, random32, type GroupKey } from "@/concord-v2/lib/derive";
 import { channelCategory } from "@/concord-v2/lib/channelCategory";
-import { isTagDecimal } from "@/concord-v2/lib/edition";
+import { buildEditionRumor, isTagDecimal } from "@/concord-v2/lib/edition";
+import { readPinList } from "@/concord-v2/lib/pins";
+import { VSK_PINS } from "@/concord-v2/lib/kinds";
 import { buildRumor, openWrap, rewrapSeal, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import { KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
