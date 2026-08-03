@@ -2,9 +2,9 @@ import { APP_NAME } from "@/lib/platform";
 
 /**
  * The Armada wordmark + terminal tagline, echoing the OG card
- * (`public/og.svg`): a lowercase monospace wordmark in gilt-cream, a cyan `$`
- * prompt leading a magenta tagline, and a muted secondary line ending in a
- * blinking caret. Flat, no glow.
+ * (`public/og.svg`): a lowercase monospace wordmark in gilt-cream and a cyan
+ * `$` prompt leading a magenta tagline, ending in a blinking caret. Flat, no
+ * glow.
  *
  * `lines` adds extra muted `$` follow-up lines (short, punchy) below the
  * tagline; the blinking caret moves to the last line.
@@ -24,13 +24,9 @@ export function BrandMark({
       </span>
       <span className="text-lg text-[hsl(var(--primary))]">
         <span className="text-[hsl(var(--accent2,180_90%_55%))]">$ </span>
-        a sovereign harbor on the open relays
-      </span>
-      <span className="text-lg text-foreground/55">
-        <span className="text-[hsl(var(--accent2,180_90%_55%))]">$ </span>
-        your keys. your fleet.
+        a sovereign harbor on the open web
         {lines.length === 0 && (
-          <span className="animate-[armada-caret_1s_step-end_infinite] text-[hsl(var(--primary))]">_</span>
+          <span className="animate-[armada-caret_1s_step-end_infinite]">_</span>
         )}
       </span>
       {lines.map((line, i) => (
