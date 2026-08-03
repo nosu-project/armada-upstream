@@ -165,8 +165,8 @@ export function LandingPage({
         {/* ── The quiz ─────────────────────────────────────────────────── */}
         <EncryptionQuiz />
 
-        {/* ── The closer ───────────────────────────────────────────────── */}
-        <section className="mx-auto flex min-h-[100svh] max-w-2xl flex-col items-center justify-center gap-6 px-6 py-16 text-center safe-area-bottom">
+        {/* ── What else it does ────────────────────────────────────────── */}
+        <section className="mx-auto flex min-h-[100svh] max-w-2xl flex-col items-center justify-center gap-6 px-6 py-16 text-center">
           <h2 className="text-balance font-mono text-xl font-bold tracking-tight text-foreground sm:text-3xl">
             We have voice and video too
           </h2>
@@ -192,11 +192,19 @@ export function LandingPage({
             </a>{" "}
             too.
           </p>
+        </section>
 
-          {/* The same control as the hero's, at the other end of the page —
-              the reader who scrolled the whole way shouldn't have to go back
+        {/* ── The closer ───────────────────────────────────────────────────
+            A screen of its own, bookending the hero: the same control over
+            the same sea, with nothing else on it to read. */}
+        <section className="mx-auto flex min-h-[100svh] max-w-xl flex-col items-center justify-center gap-8 px-6 py-16 text-center safe-area-bottom">
+          <p className="text-balance font-mono text-xl font-bold tracking-tight text-foreground sm:text-2xl">
+            What are you waiting for? Sail the seas!
+          </p>
+
+          {/* The reader who scrolled the whole way shouldn't have to go back
               up to act on it. */}
-          <div className="mt-4 w-full max-w-sm">
+          <div className="w-full max-w-sm">
             <Button
               size="lg"
               onClick={onJoin}
@@ -205,10 +213,6 @@ export function LandingPage({
               Join
             </Button>
           </div>
-
-          <p className="font-mono text-sm tracking-wide text-muted-foreground/70">
-            What are you waiting for? Sail the seas!
-          </p>
         </section>
       </div>
 
