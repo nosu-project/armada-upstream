@@ -443,6 +443,83 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
   });
 
   /**
+   * Revoke EVERY invite link of mine for this community, in two halves,
+   * because they are two different acts (CORD-05 §5):
+   *
+   *   - A link whose `signer_sk` is in my Invite List gets a real revocation
+   *     tombstone at its bundle coordinate — the URL is dead for everyone,
+   *     immediately.
+   *   - A registry coordinate of mine WITHOUT a held secret (the kind-13303
+   *     Invite List is the ONLY copy of `signer_sk`, so a lost or unsynced
+   *     list orphans its links) can never be tombstoned, by anyone. The best
+   *     remedy that exists is the one the protocol already uses for stripped
+   *     creators: republish my registry (vsk 8) without them, so they stop
+   *     counting toward the community's Public flag and vanish from the admin
+   *     panel — while a URL already in someone's hands keeps vending its
+   *     bundle until the next rekey strands it on a dead epoch.
+   *
+   * A tombstone that no relay accepts keeps its Invite List entry (so the
+   * link stays individually revocable on a retry) and stays IN the registry —
+   * delisting a still-working held link would flip the Public flag to a lie
+   * the creator can still fix.
+   */
+  const revokeAllMyLinks = useMutation<
+    { revoked: number; delisted: number; failed: number },
+    Error,
+    void
+  >({
+    mutationFn: async () => {
+      if (!user || !community) throw new Error("Not ready.");
+      const entries = (inviteList.data?.entries ?? []).filter(
+        (e) => e.community_id === community.idHex,
+      );
+
+      // Tombstone what this account can (best-effort per link).
+      const results = await Promise.allSettled(
+        entries.map((entry) =>
+          publishToAnyRelay(
+            nostr,
+            community.relays,
+            buildRevocationEvent(hexToBytes(entry.signer_sk)),
+            "No relay accepted the revocation.",
+          ),
+        ),
+      );
+      const revoked = entries.filter((_, i) => results[i].status === "fulfilled");
+      const kept = entries.filter((_, i) => results[i].status === "rejected");
+
+      if (revoked.length > 0) {
+        await updateInviteList({
+          entries: [],
+          tombstones: revoked.map((e) => ({ token: e.token, community_id: community.idHex })),
+        });
+      }
+
+      // My registry keeps only the links whose tombstone didn't land; every
+      // other coordinate of mine — revoked or orphaned — is delisted.
+      const mine = new Set(folded?.registriesByCreator.get(user.pubkey) ?? []);
+      const keptSigners = new Set(
+        kept.map((e) => parseInviteLink(e.url)?.linkSigner).filter((s): s is string => !!s),
+      );
+      const delisted = [...mine].filter((s) => !keptSigners.has(s)).length;
+      await publishRegistry([...mine].filter((s) => keptSigners.has(s)));
+
+      return { revoked: revoked.length, delisted, failed: kept.length };
+    },
+  });
+
+  /**
+   * Whether revoking ALL my links would empty the aggregate live-link set,
+   * flipping the community Private — the bulk analogue of
+   * {@link revokeWouldPrivatize}.
+   */
+  const revokeAllWouldPrivatize = (): boolean => {
+    if (!user || !folded || folded.liveInviteLinks.size === 0) return false;
+    const mine = new Set(folded.registriesByCreator.get(user.pubkey) ?? []);
+    return [...folded.liveInviteLinks].every((s) => mine.has(s));
+  };
+
+  /**
    * Hand the keys straight to an npub (CORD-05 §6): the same §1 bundle, sealed
    * by the sender's REAL key (the seal's verified npub is what proves who
    * invited them) inside an ephemeral, `k`-tagged giftwrap the recipient can
@@ -577,6 +654,9 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
     isCreatingLink: createLink.isPending,
     revokeLink: revokeLink.mutateAsync,
     isRevoking: revokeLink.isPending,
+    revokeAllMyLinks: revokeAllMyLinks.mutateAsync,
+    isRevokingAll: revokeAllMyLinks.isPending,
+    revokeAllWouldPrivatize,
     sendDirectInvite: sendDirectInvite.mutateAsync,
     isSendingInvite: sendDirectInvite.isPending,
     myLinks,
