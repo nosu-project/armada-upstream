@@ -3,7 +3,11 @@ import { Loader2, Lock, Pin, ShieldCheck, X } from "lucide-react";
 import { DisplayName } from "@/components/DisplayName";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useCallback, useMemo, useState } from "react";
+
+import { Lightbox } from "@/components/chat/Lightbox";
 import { PinAttachments2 } from "@/concord-v2/components/PinAttachments2";
+import { pinImageRefs } from "@/concord-v2/lib/pinAttachments";
 import type { VerifiedPin } from "@/concord-v2/lib/pins";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
@@ -33,12 +37,14 @@ function PinRow({
   busy,
   onJump,
   onUnpin,
+  onOpenImage,
 }: {
   pin: BarPin;
   canUnpin: boolean;
   busy: boolean;
   onJump?: (rumorId: string) => void;
   onUnpin: (rumorId: string) => void;
+  onOpenImage: (indexWithinPin: number) => void;
 }) {
   const author = useAuthor(pin.author);
   const name = useScopedDisplayName(pin.author, author.data?.metadata);
@@ -92,7 +98,7 @@ function PinRow({
       </button>
       {/* Outside the jump button: these carry their own links and download
           controls, and a keyless reader has no other way to reach this file. */}
-      <PinAttachments2 content={pin.content} tags={pin.tags} />
+      <PinAttachments2 content={pin.content} tags={pin.tags} onOpenImage={onOpenImage} />
       </div>
       {canUnpin && (
         <Tooltip>
@@ -149,6 +155,29 @@ export function PinnedBar2({
 }) {
   const expanded = open && (pins.length > 0 || dark);
 
+  // One gallery for the whole bar, so swiping moves between pinned images
+  // rather than trapping the reader in a single pin.
+  const galleryImages = useMemo(() => pins.flatMap((p) => pinImageRefs(p.content, p.tags)), [pins]);
+  const galleryOffsets = useMemo(() => {
+    const offsets: number[] = [];
+    let running = 0;
+    for (const p of pins) {
+      offsets.push(running);
+      running += pinImageRefs(p.content, p.tags).length;
+    }
+    return offsets;
+  }, [pins]);
+  const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
+  const closeGallery = useCallback(() => setGalleryIndex(null), []);
+  const nextImage = useCallback(
+    () => setGalleryIndex((i) => (i === null ? null : (i + 1) % galleryImages.length)),
+    [galleryImages.length],
+  );
+  const prevImage = useCallback(
+    () => setGalleryIndex((i) => (i === null ? null : (i - 1 + galleryImages.length) % galleryImages.length)),
+    [galleryImages.length],
+  );
+
   return (
     <div
       className={cn(
@@ -199,7 +228,7 @@ export function PinnedBar2({
           </p>
         ) : (
           <div className="max-h-56 overflow-y-auto space-y-0.5 pr-0.5">
-            {pins.map((pin) => (
+            {pins.map((pin, i) => (
               <PinRow
                 key={pin.rumorId}
                 pin={pin}
@@ -207,11 +236,21 @@ export function PinnedBar2({
                 busy={isUnpinning}
                 onJump={onJump}
                 onUnpin={onUnpin}
+                onOpenImage={(within) => setGalleryIndex(galleryOffsets[i] + within)}
               />
             ))}
           </div>
         )}
       </div>
+      {galleryIndex !== null && galleryImages.length > 0 && (
+        <Lightbox
+          images={galleryImages}
+          currentIndex={galleryIndex}
+          onClose={closeGallery}
+          onNext={nextImage}
+          onPrev={prevImage}
+        />
+      )}
     </div>
   );
 }
