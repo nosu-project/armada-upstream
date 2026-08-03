@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 
 import { usePressDrag } from "@/hooks/usePressDrag";
 
@@ -60,8 +60,15 @@ export function useChannelDrag({
 
   const slots = useRef<ChannelDropSlot[]>([]);
   const targetRef = useRef<ChannelDrop | null>(null);
+  /** Last aimed-at point, so a re-measure can re-aim without a pointer event. */
+  const lastPoint = useRef<{ x: number; y: number } | null>(null);
+  // Held by ref: the re-measure below must not re-run when the caller happens
+  // to hand us a new closure.
+  const measureRef = useRef(measure);
+  measureRef.current = measure;
 
   const aim = useCallback((_source: string, x: number, y: number) => {
+    lastPoint.current = { x, y };
     setPointer({ x, y });
     let best: ChannelDropSlot | null = null;
     let bestDistance = Infinity;
@@ -104,6 +111,23 @@ export function useChannelDrag({
     },
     onAbort: finish,
   });
+
+  /**
+   * Re-measure once the drag chrome has mounted.
+   *
+   * The trailing "new category" zone exists only WHILE a drag is in flight, so
+   * it cannot be among the slots measured at pickup — it was not in the DOM
+   * yet, and aiming at it was therefore impossible. Nothing else moves at
+   * pickup (the source row goes `invisible`, keeping its box, and the
+   * placeholder over it is absolute), so this adds the zone rather than
+   * shifting anything already measured.
+   */
+  useLayoutEffect(() => {
+    if (!drag.dragging) return;
+    slots.current = measureRef.current();
+    const at = lastPoint.current;
+    if (at) aim("", at.x, at.y);
+  }, [drag.dragging, aim]);
 
   const onPointerDown = useCallback(
     (idHex: string) => (e: React.PointerEvent) => {

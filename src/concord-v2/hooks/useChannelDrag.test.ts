@@ -4,13 +4,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useChannelDrag, type ChannelDropSlot } from "./useChannelDrag";
 
 /** Two rows in the uncategorized run, then two under "Voice". */
-const SLOTS: ChannelDropSlot[] = [
+const ROW_SLOTS: ChannelDropSlot[] = [
   { index: 0, category: undefined, y: 100 },
   { index: 1, category: undefined, y: 130 },
   { index: 1, category: "Voice", y: 200 },
   { index: 2, category: "Voice", y: 230 },
-  { index: 3, category: undefined, y: 300, newCategory: true },
 ];
+/**
+ * The trailing zone is rendered only WHILE dragging, so it appears in the
+ * measurement taken after the chrome mounts and not in the one at pickup.
+ */
+const ZONE: ChannelDropSlot = { index: 4, category: undefined, y: 300, newCategory: true };
 
 function pointer(type: string, init: Record<string, unknown> = {}) {
   const ev = new Event(type, { bubbles: true, cancelable: true });
@@ -31,10 +35,15 @@ function press(y: number) {
 function setup(enabled = true) {
   const onDrop = vi.fn();
   const columnRef = { current: document.createElement("div") as HTMLElement | null };
-  const view = renderHook(() =>
-    useChannelDrag({ enabled, columnRef, measure: () => SLOTS, onDrop }),
-  );
-  return { ...view, onDrop };
+  // What the DOM would yield: the zone is absent until a drag is in flight.
+  let dragging = false;
+  const measure = vi.fn(() => {
+    const slots = dragging ? [...ROW_SLOTS, ZONE] : [...ROW_SLOTS];
+    dragging = true;
+    return slots;
+  });
+  const view = renderHook(() => useChannelDrag({ enabled, columnRef, measure, onDrop }));
+  return { ...view, onDrop, measure };
 }
 
 describe("useChannelDrag", () => {
@@ -65,17 +74,22 @@ describe("useChannelDrag", () => {
     expect(result.current.indicatorY).toBeNull();
   });
 
-  it("reports the trailing zone so the caller can prompt for a name", () => {
-    const { result, onDrop } = setup();
+  it("re-measures once the drag chrome is up, so the new-category zone is aimable", () => {
+    const { result, onDrop, measure } = setup();
+
     act(() => {
       result.current.onPointerDown("chan-a")(press(100));
       vi.advanceTimersByTime(300);
-      window.dispatchEvent(pointer("pointermove", { clientY: 295 }));
     });
+    // Once at pickup, once after the zone mounted.
+    expect(measure).toHaveBeenCalledTimes(2);
+
+    act(() => void window.dispatchEvent(pointer("pointermove", { clientY: 295 })));
     expect(result.current.target).toMatchObject({ newCategory: true });
+
     act(() => void window.dispatchEvent(pointer("pointerup", { clientY: 295 })));
     expect(onDrop).toHaveBeenCalledWith("chan-a", {
-      index: 3,
+      index: 4,
       category: undefined,
       newCategory: true,
     });

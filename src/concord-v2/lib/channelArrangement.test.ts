@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  applyArrangement,
   arrangementChanges,
+  arrangementSettled,
+  pendingFromPlan,
   planChannelDrop,
   type ArrangedChannel,
 } from "@/concord-v2/lib/channelArrangement";
@@ -85,5 +88,54 @@ describe("arrangementChanges", () => {
     expect(arrangementChanges(before, planChannelDrop(before, "a", 0, "   "))).toEqual([
       { idHex: "a", position: 0, category: undefined },
     ]);
+  });
+});
+
+describe("the optimistic overlay", () => {
+  /** A fold that still says the pre-drop arrangement. */
+  const folded = [
+    { idHex: "a", name: "alpha", position: 0, category: undefined },
+    { idHex: "b", name: "bravo", position: 1, category: undefined },
+    { idHex: "c", name: "charlie", position: 2, category: "Voice" },
+  ];
+
+  it("reads as the drop will read, before any edition lands", () => {
+    const plan = planChannelDrop(folded, "c", 0, undefined);
+    const shown = applyArrangement(folded, pendingFromPlan(plan));
+    expect(shown.map((c) => c.idHex)).toEqual(["c", "a", "b"]);
+    expect(shown[0]).toMatchObject({ position: 0, category: undefined });
+  });
+
+  it("passes through a channel the plan never named", () => {
+    const plan = planChannelDrop(folded, "c", 0, undefined);
+    const withNew = [...folded, { idHex: "d", name: "delta", position: 9, category: undefined }];
+    const shown = applyArrangement(withNew, pendingFromPlan(plan));
+    expect(shown.map((c) => c.idHex)).toEqual(["c", "a", "b", "d"]);
+  });
+
+  it("is unsettled until the fold carries the planned position AND category", () => {
+    const pending = pendingFromPlan(planChannelDrop(folded, "c", 0, undefined));
+    expect(arrangementSettled(folded, pending)).toBe(false);
+
+    const positioned = [
+      { idHex: "c", name: "charlie", position: 0, category: "Voice" },
+      { idHex: "a", name: "alpha", position: 1, category: undefined },
+      { idHex: "b", name: "bravo", position: 2, category: undefined },
+    ];
+    // Position landed, the un-filing did not: still ours to hold.
+    expect(arrangementSettled(positioned, pending)).toBe(false);
+
+    const landed = positioned.map((c) => (c.idHex === "c" ? { ...c, category: undefined } : c));
+    expect(arrangementSettled(landed, pending)).toBe(true);
+  });
+
+  it("settles on a case-only respelling of the same category", () => {
+    const pending = pendingFromPlan(planChannelDrop(folded, "a", 2, "Voice"));
+    const landed = [
+      { idHex: "b", name: "bravo", position: 0, category: undefined },
+      { idHex: "c", name: "charlie", position: 1, category: "Voice" },
+      { idHex: "a", name: "alpha", position: 2, category: "VOICE" },
+    ];
+    expect(arrangementSettled(landed, pending)).toBe(true);
   });
 });

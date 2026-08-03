@@ -13,7 +13,14 @@ import { MemberList } from "@/components/chat/MemberList";
 import { ProfileRelayHints } from "@/components/ProfileRelayHints";
 import { ChannelCategoryHeading2 } from "@/concord-v2/components/ChannelCategoryHeading2";
 import { categoryKey, categoryNames, groupChannelsByCategory } from "@/concord-v2/lib/channelCategory";
-import { arrangementChanges, planChannelDrop } from "@/concord-v2/lib/channelArrangement";
+import {
+  applyArrangement,
+  arrangementChanges,
+  arrangementSettled,
+  pendingFromPlan,
+  planChannelDrop,
+  type PendingArrangement,
+} from "@/concord-v2/lib/channelArrangement";
 import { useChannelDrag, type ChannelDrop, type ChannelDropSlot } from "@/concord-v2/hooks/useChannelDrag";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { useMessagePermalink } from "@/hooks/useMessagePermalink";
@@ -933,12 +940,39 @@ export function ConcordV2Page() {
   // `channelsView` has already dropped any whose key they don't hold — so a
   // category all of whose channels are gated away simply isn't here. No
   // separate visibility rule to keep in step (see channelCategory.ts).
-  const { uncategorized: uncategorizedChannels, categories: channelCategories } = useMemo(
-    () => groupChannelsByCategory(channels, (c) => c.category),
-    [channels],
+  /**
+   * A drop the user has made but the control plane has not confirmed yet: one
+   * edition per moved channel, each a signed publish, so waiting for the fold
+   * would leave the row under the finger sitting where it was for as long as
+   * the relay takes. The overlay is the planned arrangement, applied over the
+   * folded channels and re-sorted by the same comparator `channelsView` uses,
+   * so the sidebar reads exactly as it will once the editions land. It is
+   * dropped when the fold agrees (below) or when the publish fails.
+   */
+  const [pendingArrangement, setPendingArrangement] = useState<PendingArrangement | null>(null);
+
+  const arrangedChannels = useMemo(
+    () => applyArrangement(channels, pendingArrangement),
+    [channels, pendingArrangement],
   );
 
-  const categoryPicklist = useMemo(() => categoryNames(channels, (c) => c.category), [channels]);
+  // Let go of the overlay the moment the fold says the same thing, so a later
+  // change from anyone else is never masked by a drop of ours that has landed.
+  useEffect(() => {
+    if (pendingArrangement && arrangementSettled(channels, pendingArrangement)) {
+      setPendingArrangement(null);
+    }
+  }, [channels, pendingArrangement]);
+
+  const { uncategorized: uncategorizedChannels, categories: channelCategories } = useMemo(
+    () => groupChannelsByCategory(arrangedChannels, (c) => c.category),
+    [arrangedChannels],
+  );
+
+  const categoryPicklist = useMemo(
+    () => categoryNames(arrangedChannels, (c) => c.category),
+    [arrangedChannels],
+  );
 
   /**
    * The sidebar's rendered sequence, flattened — the uncategorized run then
@@ -1483,10 +1517,19 @@ export function ConcordV2Page() {
       out.push({ index, category, y: rect.top });
       out.push({ index: index + 1, category, y: rect.bottom });
     }
+    // Only present once a drag is in flight, which is why the slots are
+    // re-measured after the chrome mounts (useChannelDrag.ts). The channel
+    // lands at the end of the sequence, so the index is the row count — each
+    // row contributed two slots above.
     const zone = root.querySelector<HTMLElement>("[data-ch-newzone]");
     if (zone) {
       const rect = zone.getBoundingClientRect();
-      out.push({ index: out.length, category: undefined, y: rect.top + rect.height / 2, newCategory: true });
+      out.push({
+        index: out.length / 2,
+        category: undefined,
+        y: rect.top + rect.height / 2,
+        newCategory: true,
+      });
     }
     return out;
   }, []);
@@ -1506,12 +1549,18 @@ export function ConcordV2Page() {
         position: c.position,
         category: c.category,
       }));
-      const changes = arrangementChanges(
-        before,
-        planChannelDrop(before, sourceIdHex, drop.index, drop.category),
-      );
+      const plan = planChannelDrop(before, sourceIdHex, drop.index, drop.category);
+      const changes = arrangementChanges(before, plan);
       if (changes.length === 0) return;
+      // Show the whole planned arrangement, not just the changed run: it is
+      // what the sidebar will read once the editions land, and `before` was
+      // itself read off the rendered order, so a second drag before the first
+      // confirms plans against what the user is looking at.
+      setPendingArrangement(pendingFromPlan(plan));
       void arrangeChannels(changes).catch((e: unknown) => {
+        // Put the sidebar back: nothing was published, so the optimistic order
+        // is a claim about the community that isn't true.
+        setPendingArrangement(null);
         toast({
           title: "Couldn't rearrange the channels",
           description: e instanceof Error ? e.message : undefined,

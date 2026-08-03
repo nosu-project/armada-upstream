@@ -25,6 +25,7 @@
  */
 
 import { categoryKey } from "@/concord-v2/lib/channelCategory";
+import { compareChannelOrder } from "@/concord-v2/lib/channelOrder";
 
 /** A channel as an arrangement sees it: an identity, a slot and a heading. */
 export interface ArrangedChannel {
@@ -95,7 +96,64 @@ export function arrangementChanges(
   return out;
 }
 
-function sameCategory(a: string | undefined, b: string | undefined): boolean {
+/** A planned arrangement held while its editions are still in flight. */
+export type PendingArrangement = ReadonlyMap<
+  string,
+  { position: number; category: string | undefined }
+>;
+
+/** The whole plan as an overlay, for a caller that shows it before it lands. */
+export function pendingFromPlan(plan: readonly ArrangedChannel[]): PendingArrangement {
+  return new Map(
+    plan.map((c, index) => [c.idHex, { position: index, category: c.category?.trim() || undefined }]),
+  );
+}
+
+/**
+ * The channels as they will read once a pending arrangement lands: the plan
+ * laid over what the fold says, sorted by the same comparator `channelsView`
+ * sorts by so the optimistic sidebar and the confirmed one cannot disagree
+ * about order. Channels the plan doesn't name are passed through — it is an
+ * overlay, not a replacement, so one that has gone stale against a channel
+ * created meanwhile still renders that channel.
+ */
+export function applyArrangement<T extends ArrangedChannel & { name: string }>(
+  channels: readonly T[],
+  pending: PendingArrangement | null,
+): readonly T[] {
+  if (!pending) return channels;
+  return channels
+    .map((c) => {
+      const planned = pending.get(c.idHex);
+      return planned ? { ...c, position: planned.position, category: planned.category } : c;
+    })
+    .sort(compareChannelOrder);
+}
+
+/**
+ * Whether the fold now says what the arrangement asked for, in which case the
+ * overlay must be dropped — holding it any longer would mask a later change
+ * by someone else behind a drop of ours that has already landed.
+ */
+export function arrangementSettled(
+  channels: readonly ArrangedChannel[],
+  pending: PendingArrangement,
+): boolean {
+  return channels.every((c) => {
+    const planned = pending.get(c.idHex);
+    return (
+      !planned || (c.position === planned.position && sameCategory(c.category, planned.category))
+    );
+  });
+}
+
+/**
+ * Whether two category names mean the same bucket. Casefolded and
+ * trim-insensitive, and blank is the uncategorized run — the same rule
+ * `groupChannelsByCategory` groups by, so "is this arrangement the one I
+ * asked for" and "does it render the same" cannot disagree.
+ */
+export function sameCategory(a: string | undefined, b: string | undefined): boolean {
   const ka = a?.trim() ? categoryKey(a) : "";
   const kb = b?.trim() ? categoryKey(b) : "";
   return ka === kb;
