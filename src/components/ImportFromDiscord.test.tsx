@@ -1,15 +1,15 @@
-import { render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const signedIn = vi.hoisted(() => ({ value: true }));
 vi.mock('@/hooks/useCurrentUser', () => ({
-  useCurrentUser: () => ({ user: { pubkey: 'test-pubkey' } }),
+  useCurrentUser: () => ({ user: signedIn.value ? { pubkey: 'test-pubkey' } : undefined }),
 }));
-// The wizard is lazy and never opened here; stub it so the chunk (and the whole
-// bridge API client) stays out of this suite.
-vi.mock('@/components/discord-import/DiscordImportWizard', () => ({
-  DiscordImportWizard: () => null,
-}));
+
+beforeEach(() => {
+  signedIn.value = true;
+});
 
 /**
  * `platform.ts` reads `VITE_BRIDGE_PORTAL_URL` once, at module load, so each
@@ -78,6 +78,46 @@ describe('ImportFromDiscordButton', () => {
 
     expect(screen.getByRole('button', { name: /import a discord server/i })).toBeInTheDocument();
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  /**
+   * Regression: the button used to render the wizard itself. Sitting inside the
+   * Add dialog, dismissing that dialog unmounted the button — and the wizard
+   * with it, the instant it opened. The wizard belongs to the route now, so
+   * this button must do nothing but navigate.
+   */
+  it('navigates to the wizard route instead of rendering it', async () => {
+    const { ImportFromDiscordButton } = await load('https://bridge.example.com');
+    render(
+      <MemoryRouter initialEntries={['/discover']}>
+        <Routes>
+          <Route path="/discover" element={<ImportFromDiscordButton />} />
+          <Route path="/import/discord" element={<div>wizard route</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /import a discord server/i }));
+    expect(screen.getByText('wizard route')).toBeInTheDocument();
+  });
+
+  // Signing founding events needs a key, so a signed-out visitor gets sent to
+  // make one first rather than into a wizard that can't finish.
+  it('sends a signed-out visitor to the welcome page', async () => {
+    signedIn.value = false;
+    const { ImportFromDiscordButton } = await load('https://bridge.example.com');
+    render(
+      <MemoryRouter initialEntries={['/discover']}>
+        <Routes>
+          <Route path="/discover" element={<ImportFromDiscordButton />} />
+          <Route path="/welcome" element={<div>welcome page</div>} />
+          <Route path="/import/discord" element={<div>wizard route</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /import a discord server/i }));
+    expect(screen.getByText('welcome page')).toBeInTheDocument();
   });
 });
 

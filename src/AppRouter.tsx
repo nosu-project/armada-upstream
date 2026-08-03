@@ -32,6 +32,7 @@ import { lazyWithReload } from "@/lib/chunkReload";
 // a consistent build instead of surfacing as a crash.
 const ConcordPage = lazy(lazyWithReload(() => import("@/concord-v1/pages/ConcordPage").then((m) => ({ default: m.ConcordPage }))));
 const ConcordV2Page = lazy(lazyWithReload(() => import("@/concord-v2/pages/ConcordV2Page").then((m) => ({ default: m.ConcordV2Page }))));
+const DiscordImportPage = lazy(lazyWithReload(() => import("@/pages/DiscordImportPage").then((m) => ({ default: m.DiscordImportPage }))));
 const DiscoverPage = lazy(lazyWithReload(() => import("@/pages/DiscoverPage").then((m) => ({ default: m.DiscoverPage }))));
 const DMsPage = lazy(lazyWithReload(() => import("@/pages/DMsPage").then((m) => ({ default: m.DMsPage }))));
 const GroupPage = lazy(lazyWithReload(() => import("@/pages/GroupPage").then((m) => ({ default: m.GroupPage }))));
@@ -335,6 +336,9 @@ export function AppRouter() {
             {/* Public browse/search directory — no auth (joining/adding prompts
                 sign-in at the point of action, like the invite landing). */}
             <Route path="/discover" element={<DiscoverPage />} />
+            {/* Full-screen wizard. A route, not a dialog: it has to outlive the
+                Add dialog its entry point sits in (see DiscordImportPage). */}
+            <Route path="/import/discord" element={<RequireAuth><DiscordImportPage /></RequireAuth>} />
             <Route path="/mesh" element={<RequireAuth><MeshPage /></RequireAuth>} />
             <Route path="/dm" element={<RequireAuth><DMsPage /></RequireAuth>} />
             <Route path="/dm/:peer" element={<RequireAuth><DMsPage /></RequireAuth>} />

@@ -243,8 +243,9 @@ export function DiscordImportWizard({ onClose }: { onClose: () => void }) {
       if (!invite) throw new Error("The portal returned an invite link Armada couldn't read.");
       const { communityId, name } = await join({ invite });
       toast({ title: "Imported from Discord", description: name });
-      onClose();
-      navigate(`/c/${encodeURIComponent(communityId)}`);
+      // Navigating away IS the close: the wizard is the route. Calling onClose
+      // as well would race a history pop against this push.
+      navigate(`/c/${encodeURIComponent(communityId)}`, { replace: true });
     } catch (e) {
       setError(errText(e));
     } finally {

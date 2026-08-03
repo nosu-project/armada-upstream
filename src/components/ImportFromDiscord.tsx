@@ -1,20 +1,10 @@
 import { ExternalLink } from "lucide-react";
-import { lazy, Suspense, useState } from "react";
-import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { bridgePortalUrl } from "@/lib/platform";
 import { cn } from "@/lib/utils";
-
-// The wizard pulls in the whole bridge API client and its step UI; nobody who
-// never clicks "import" should pay for that chunk.
-const DiscordImportWizard = lazy(() =>
-  import("@/components/discord-import/DiscordImportWizard").then((m) => ({
-    default: m.DiscordImportWizard,
-  })),
-);
 
 /**
  * Entry points into the Discord bridge portal (`armada-discord-bridge`).
@@ -66,46 +56,29 @@ export function ImportFromDiscordButton({
 }) {
   const { user } = useCurrentUser();
   const navigate = useNavigate();
-  const [open, setOpen] = useState(false);
   const configured = Boolean(bridgePortalUrl("/import"));
 
   if (!configured) return null;
 
   return (
-    <>
-      <Button
-        type="button"
-        size={size}
-        className={cn(
-          "w-full clip-corner-lg border-0 bg-[#5865F2] text-white hover:bg-[#4752C4]",
-          className,
-        )}
-        onClick={() => {
-          if (!user) {
-            navigate("/welcome");
-            return;
-          }
-          setOpen(true);
-          onOpen?.();
-        }}
-      >
-        <DiscordMark className="size-4 shrink-0" />
-        Import a Discord server
-      </Button>
-      {/*
-        Portalled to <body> deliberately. The wizard is `position: fixed`, and a
-        transformed ancestor (Radix centres its dialog with a transform) becomes
-        the containing block for fixed children — so rendered in place inside a
-        dialog it fills the dialog box instead of the screen.
-      */}
-      {open &&
-        createPortal(
-          <Suspense fallback={null}>
-            <DiscordImportWizard onClose={() => setOpen(false)} />
-          </Suspense>,
-          document.body,
-        )}
-    </>
+    <Button
+      type="button"
+      size={size}
+      className={cn(
+        "w-full clip-corner-lg border-0 bg-[#5865F2] text-white hover:bg-[#4752C4]",
+        className,
+      )}
+      onClick={() => {
+        // Navigation is the whole mechanism: it unmounts any dialog this button
+        // sits in (so no second close button), and the wizard is owned by the
+        // route, so nothing unmounting here can take it down with it.
+        navigate(user ? "/import/discord" : "/welcome");
+        onOpen?.();
+      }}
+    >
+      <DiscordMark className="size-4 shrink-0" />
+      Import a Discord server
+    </Button>
   );
 }
 
