@@ -151,11 +151,11 @@ export function LandingPage({
                 >
                   Nostr
                 </a>
-                , which redefines how services run online by separating the
-                application from the infrastructure. Anyone can run a server,
-                and every app can read and write across all of them — so the
-                people who own the machines are no longer the people who own
-                the community.
+                , a social protocol which redefines the Internet. On Nostr,
+                applications are separate from infra. Users sign events with
+                private keys and distribute them across multiple public
+                relays. Messages can be encrypted so even Nostr relays don't
+                know what they say.
               </p>
             </CollapsibleContent>
           </Collapsible>
