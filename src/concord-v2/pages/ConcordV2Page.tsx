@@ -1,6 +1,6 @@
 import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, FolderGit2, Hash, Headphones, Link as LinkIcon, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Phone, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Trash2, UserPlus, Users, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { AppStageSlot } from "@/components/chat/AppStage";
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
@@ -118,6 +118,7 @@ import { badgeOf, byDisplayOrder, canActOnMember, canActOnPosition, isAuthorized
 import { channelGitRepositoryAttachments, type ChannelV2, type CommunityV2, type ImagePointer } from "@/concord-v2/lib/types";
 import { matchGitTicketRepository, parseGitRepositoryAddress, sortAndDedupeGitTimelineActivities, trustedGitStatusAuthors, type GitComment, type GitStatusKind, type GitTicket } from "@/lib/gitActivity";
 import { cn, pickDefaultChannel } from "@/lib/utils";
+import { chatRoute, parseChatRoute, type Concord2Pane } from "@/lib/routes";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { shortTimeAgo } from "@/lib/formatTime";
 
@@ -722,8 +723,21 @@ function ThreadReplyAvatar({ pubkey }: { pubkey: string }) {
  * components as NIP-29 / DMs / Concord V1; only the transport differs.
  */
 export function ConcordV2Page() {
-  const { communityId, channelId: routeChannelId } = useParams<{ communityId: string; channelId: string }>();
+  // The whole location, parsed once: which channel, which community-wide pane,
+  // which thread, which message. Read through `parseChatRoute` rather than
+  // `useParams` because the panes are static segments (they have no param to
+  // read) and because it is the same parse the builder, the notification
+  // producers and the analytics sanitizer use — one spelling of the route.
+  const { pathname } = useLocation();
+  const route = useMemo(() => {
+    const parsed = parseChatRoute(pathname);
+    return parsed?.kind === "concord2" ? parsed : undefined;
+  }, [pathname]);
+  const communityId = route?.communityId;
+  const routeChannelId = route?.channelId;
+  const routePane = route?.pane;
   const { user } = useCurrentUser();
+  const navigateTo = useNavigate();
   const isTouchDevice = useIsTouch();
   const composerBoundsRef = useRef<HTMLElement | null>(null);
   const { config, updateConfig } = useAppContext();
@@ -846,23 +860,30 @@ export function ConcordV2Page() {
   // `pickDefaultChannel` prefers this same stored id once channels resolve,
   // and a stale id (channel since deleted) falls back exactly as before:
   // `channels.find(...) ?? channels[0]`.
-  const [channelIdHex, setChannelIdHex] = useState<string | null>(
-    () => routeChannelId ?? (lastChannelKey ? config.lastChannelByServer[lastChannelKey] ?? null : null),
+  // The route names the channel. When it doesn't — the community root, or a
+  // community-wide pane, both of which leave the channel implicit — fall back
+  // to the persisted last-open channel, which app config makes available
+  // synchronously on the first render. That fallback is what lets the timeline
+  // snapshot prewarm and paint before the control fold has resolved anything.
+  const channelIdHex = routeChannelId ?? (lastChannelKey ? config.lastChannelByServer[lastChannelKey] ?? null : null);
+  // Which pane the main area shows: the selected channel's chat, or one of the
+  // community-wide panes. Navigating to a channel returns to chat by virtue of
+  // the route no longer naming a pane.
+  const view: "channel" | Concord2Pane = routePane ?? "channel";
+  const selectChannel = useCallback(
+    (idHex: string) => {
+      if (!communityId) return;
+      navigateTo(chatRoute({ kind: "concord2", communityId, channelId: idHex }));
+    },
+    [communityId, navigateTo],
   );
-  useEffect(() => {
-    if (routeChannelId) setChannelIdHex(routeChannelId);
-  }, [routeChannelId]);
-  // Which pane the main area shows: the selected channel's chat, the
-  // community-wide "@ Mentions" list, the "Threads" list, or the "Projects"
-  // view. Selecting a channel returns to chat.
-  const [view, setView] = useState<"channel" | "mentions" | "threads" | "projects" | "audit" | "invites" | "banned" | "members">("channel");
-  useEffect(() => {
-    if (routeChannelId) setView("channel");
-  }, [routeChannelId]);
-  const selectChannel = useCallback((idHex: string) => {
-    setChannelIdHex(idHex);
-    setView("channel");
-  }, []);
+  const selectPane = useCallback(
+    (pane: Concord2Pane) => {
+      if (!communityId) return;
+      navigateTo(chatRoute({ kind: "concord2", communityId, pane }));
+    },
+    [communityId, navigateTo],
+  );
   // Projects data loads lazily: the first time the tab is opened this session,
   // or when a ticket conversation opens (its trust set and thread need it).
   const [projectsTouched, setProjectsTouched] = useState(false);
@@ -1004,6 +1025,23 @@ export function ConcordV2Page() {
         : { ...c, lastChannelByServer: { ...c.lastChannelByServer, [lastChannelKey]: channel.idHex } },
     );
   }, [channel, lastChannelKey, updateConfig]);
+
+  // Canonicalize the community root: `/c/<id>` resolves a default channel to
+  // render, so name it in the URL once it is known. Without this the address
+  // bar keeps claiming the community while the reader is looking at a
+  // channel — and "Copy message link" would build a link that lands elsewhere
+  // for anyone whose default resolves differently.
+  //
+  // `replace`, because this is the app finishing the reader's navigation
+  // rather than a new one: a pushed entry here would make Back bounce between
+  // the bare URL and its own redirect. A pane route is already canonical and
+  // deliberately leaves the channel implicit, so it is left alone.
+  useEffect(() => {
+    if (!communityId || routeChannelId || routePane || !channel) return;
+    navigateTo(chatRoute({ kind: "concord2", communityId, channelId: channel.idHex }), {
+      replace: true,
+    });
+  }, [communityId, routeChannelId, routePane, channel, navigateTo]);
 
   const { setTier, setMemberRoles } = useRoles2(community);
   const { sendDirectInvite } = useInviteActions2(community);
@@ -1241,7 +1279,6 @@ export function ConcordV2Page() {
     [community, user, activeCall, joinConcordCall],
   );
 
-  const navigateTo = useNavigate();
   // Compliant self-removal: if the folded Banlist names ME, silently tear
   // down the local copy and route home (CORD-04 §4).
   useBanSelfRemove2(baseCommunity, useCallback(() => navigateTo("/"), [navigateTo]));
@@ -1292,10 +1329,17 @@ export function ConcordV2Page() {
   // after the route change. A lagging effect would paint one frame of the
   // (stale) chat pane first — the "flash of the previous chat" glitch. A deep
   // link with a channel opens chat directly.
-  const [navKey, setNavKey] = useState(`${communityId}\u0000${routeChannelId ?? ""}`);
-  const curNavKey = `${communityId}\u0000${routeChannelId ?? ""}`;
-  if (navKey !== curNavKey) {
-    setNavKey(curNavKey);
+  //
+  // Keyed on the COMMUNITY, not on the community+channel pair: the root route
+  // canonicalizes itself to a channel (see the redirect above), so a key that
+  // included the channel would fire a second time the instant that redirect
+  // lands and slam the list shut again — the list would flash and never stay
+  // open. What matters is how the reader ARRIVED at this community, which is
+  // exactly what the first render for a new `communityId` sees. Selecting a
+  // channel or a pane still closes the list, explicitly, at each call site.
+  const [navKey, setNavKey] = useState(communityId);
+  if (navKey !== communityId) {
+    setNavKey(communityId);
     setChannelsOpen(!routeChannelId);
   }
   const [threadRoot, setThreadRoot] = useState<ChatMsg | undefined>(undefined);
@@ -2049,7 +2093,7 @@ export function ConcordV2Page() {
                     // Also close the mobile channel drawer so the view slides
                     // into the <main> overlay (inert on desktop).
                     onClick: () => {
-                      setView("audit");
+                      selectPane("audit");
                       setChannelsOpen(false);
                     },
                   },
@@ -2058,7 +2102,7 @@ export function ConcordV2Page() {
                     icon: <LinkIcon className="size-4" />,
                     label: "Invite links",
                     onClick: () => {
-                      setView("invites");
+                      selectPane("invites");
                       setChannelsOpen(false);
                     },
                   },
@@ -2067,7 +2111,7 @@ export function ConcordV2Page() {
                     icon: <Ban className="size-4" />,
                     label: "Banned members",
                     onClick: () => {
-                      setView("banned");
+                      selectPane("banned");
                       setChannelsOpen(false);
                     },
                   },
@@ -2076,7 +2120,7 @@ export function ConcordV2Page() {
                     icon: <Users className="size-4" />,
                     label: "Members",
                     onClick: () => {
-                      setView("members");
+                      selectPane("members");
                       setChannelsOpen(false);
                     },
                   },
@@ -2149,7 +2193,7 @@ export function ConcordV2Page() {
             <button
               type="button"
               onClick={() => {
-                setView("mentions");
+                selectPane("mentions");
                 onNavigate?.();
               }}
               className={cn(
@@ -2177,7 +2221,7 @@ export function ConcordV2Page() {
             <button
               type="button"
               onClick={() => {
-                setView("threads");
+                selectPane("threads");
                 onNavigate?.();
               }}
               className={cn(
@@ -2204,7 +2248,7 @@ export function ConcordV2Page() {
                 type="button"
                 onClick={() => {
                   setProjectsTouched(true);
-                  setView("projects");
+                  selectPane("projects");
                   onNavigate?.();
                 }}
                 className={cn(
