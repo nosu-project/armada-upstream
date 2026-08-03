@@ -785,11 +785,18 @@ describe("CORD-04 §3 — Permissions and Position", () => {
 
   it("O-28: there is no all-powerful bit — ADMIN_ALL does not inherit future bits", () => {
     // "a Role granted everything today does not inherit a permission added
-    // tomorrow." 1<<10..1<<12 are reserved and must NOT already be held.
-    expect(permsContain(ADMIN_ALL, 1n << 10n)).toBe(false);
-    expect(permsContain(ADMIN_ALL, 1n << 11n)).toBe(false);
-    expect(permsContain(ADMIN_ALL, 1n << 12n)).toBe(false);
+    // tomorrow." Still-RESERVED bits must not already be held. 1<<11 was
+    // reserved for PIN_MESSAGES and is now claimed (§7), so it belongs to the
+    // management union a NEW Admin is minted with — which grants nothing
+    // retroactively, since a published Role carries its own frozen bitmask.
+    expect(permsContain(ADMIN_ALL, 1n << 10n)).toBe(false); // MANAGE_EMOJI
+    expect(permsContain(ADMIN_ALL, 1n << 12n)).toBe(false); // MANAGE_EVENTS
     expect(permsContain(ADMIN_ALL, 1n << 13n)).toBe(false);
+    // The claimed bit IS held by a fresh Admin, and a Role minted before it
+    // existed still does not hold it.
+    expect(permsContain(ADMIN_ALL, Permissions.PIN_MESSAGES)).toBe(true);
+    const legacyAdmin = role("e".repeat(64), 1, ADMIN_ALL & ~Permissions.PIN_MESSAGES);
+    expect(permsContain(legacyAdmin.permissions, Permissions.PIN_MESSAGES)).toBe(false);
   });
 
   it("O-29: permissions ride the wire as a DECIMAL STRING, and a number still reads", () => {

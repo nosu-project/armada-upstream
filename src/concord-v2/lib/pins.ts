@@ -90,7 +90,17 @@ export function buildPinEntry(opened: OpenedEvent, convKey: Uint8Array): PinEntr
 }
 
 /** Why a message could not be pinned — each cause needs a different answer. */
-export type PinBuildFailure = "no-seal" | "not-encrypted" | "bad-payload" | "unverifiable";
+export type PinBuildFailure = "no-seal" | "pending" | "not-encrypted" | "bad-payload" | "unverifiable";
+
+/**
+ * A row a client just sent carries a PLACEHOLDER seal — empty content, no
+ * signature — so the message paints before the (possibly remote) signer
+ * answers. It is truthy, so a plain presence check waves it through into
+ * verification, where it fails as unreadable rather than as unfinished.
+ */
+export function isPlaceholderSeal(seal: NostrEvent | undefined): boolean {
+  return Boolean(seal) && (!seal!.sig || !seal!.content);
+}
 
 /**
  * {@link buildPinEntry} with the reason attached. A pinner told "that message
@@ -103,6 +113,7 @@ export function buildPinEntryOrReason(
 ): { entry?: PinEntry; reason?: PinBuildFailure } {
   const seal = opened.seal;
   if (!seal) return { reason: "no-seal" };
+  if (isPlaceholderSeal(seal)) return { reason: "pending" };
   if (seal.kind !== KIND_SEAL_ENCRYPTED) return { reason: "not-encrypted" };
   const keys = discloseKeysFor(seal.content, convKey);
   if (!keys) return { reason: "bad-payload" };

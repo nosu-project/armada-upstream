@@ -16,6 +16,8 @@ import {
   PIN_MAX_CONTENT_BYTES,
   PIN_MAX_ENTRIES,
   buildPinEntry,
+  buildPinEntryOrReason,
+  isPlaceholderSeal,
   partitionDeletedPins,
   pinKilledBy,
   readPinList,
@@ -156,6 +158,26 @@ describe("the proof bundle", () => {
     const reaction = buildRumor({ kind: 7, content: "+", tags: [["channel", bytesToHex(CHANNEL_A)]], pubkey: author.pubkey });
     const seal = await sealRumor(reaction, KIND_SEAL_ENCRYPTED, chanA, author);
     expect(buildPinEntry(openWrap(wrapSeal(seal, chanA), chanA), chanA.convKey)).toBeUndefined();
+  });
+
+  it("names a still-sending message as PENDING, never as a key problem", async () => {
+    // The optimistic send paints a message before its (possibly remote) signer
+    // answers, carrying a placeholder seal: empty content, no signature. It is
+    // truthy, so a plain presence check waves it into verification, where it
+    // fails as unreadable — and told the user their keys were gone when the
+    // real answer was "wait a second".
+    const { opened } = await pinnable("just sent");
+    const placeholder = {
+      ...opened,
+      seal: { ...opened.seal!, id: "", content: "", sig: "" },
+    };
+    const { entry, reason } = buildPinEntryOrReason(placeholder, chanA.convKey);
+    expect(entry).toBeUndefined();
+    expect(reason, "not bad-payload — that message blames the wrong thing").toBe("pending");
+    expect(isPlaceholderSeal(placeholder.seal)).toBe(true);
+    // A finished seal is not a placeholder, and still pins.
+    expect(isPlaceholderSeal(opened.seal)).toBe(false);
+    expect(buildPinEntryOrReason(opened, chanA.convKey).entry).toBeDefined();
   });
 
   it("never throws on hostile input", () => {

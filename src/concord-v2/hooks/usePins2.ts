@@ -15,6 +15,7 @@ import {
   PIN_MAX_CONTENT_BYTES,
   PIN_MAX_ENTRIES,
   buildPinEntryOrReason,
+  isPlaceholderSeal,
   readPinList,
   withProvenEdit,
   serializePublicPinList,
@@ -25,17 +26,20 @@ import {
   type VerifiedPin,
 } from "@/concord-v2/lib/pins";
 
-const PIN_FAILURE_MESSAGE: Record<PinBuildFailure, string> = {
-  "no-seal": "This message's original signature wasn't kept, so it can't be proven. Messages received from now on can be pinned.",
-  "not-encrypted": "Only chat messages can be pinned.",
-  "bad-payload": "This message is from an epoch whose keys you no longer hold.",
-  unverifiable: "This message failed verification, so pinning it would publish an unprovable claim.",
-};
 import { isAuthorized, Permissions } from "@/concord-v2/lib/roles";
 import { readStoredSeal } from "@/concord-v2/lib/rumorStore";
 import type { OpenedEvent } from "@/concord-v2/lib/stream";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+
+const PIN_FAILURE_MESSAGE: Record<PinBuildFailure, string> = {
+  "no-seal": "This message's original signature wasn't kept, so it can't be proven. Messages received from now on can be pinned.",
+  pending: "This message is still being sent. Try pinning it again in a moment.",
+  "not-encrypted": "Only chat messages can be pinned.",
+  "bad-payload": "This message is from an epoch whose keys you no longer hold.",
+  unverifiable: "This message failed verification, so pinning it would publish an unprovable claim.",
+};
+
 
 /**
  * A Channel's pins (CORD-04 §7).
@@ -165,12 +169,13 @@ export function usePins2(
       // The epoch the message was written under — its keys, not today's.
       const epoch = epochOf(opened);
       const stream = channel.streams.find((s) => (epoch === undefined ? false : s.epoch === epoch)) ?? channel.current;
-      // A row read back from the store carries the rumor, not the seal — the
-      // seal lives in KV beside it. Recover it here rather than on every read:
-      // pinning is the one path that needs it.
-      const withSeal = opened.seal
-        ? opened
-        : { ...opened, seal: community ? await readStoredSeal(community.idHex, opened.rumorId) : undefined };
+      // A row read back from the store has no seal (it lives in KV beside the
+      // rumor); a row just sent carries a PLACEHOLDER one. Both need the real
+      // seal fetched here — pinning is the only path that needs it at all.
+      const needsSeal = !opened.seal || isPlaceholderSeal(opened.seal);
+      const withSeal = needsSeal
+        ? { ...opened, seal: community ? await readStoredSeal(community.idHex, opened.rumorId) : undefined }
+        : opened;
       const { entry, reason } = buildPinEntryOrReason(withSeal, stream.group.convKey);
       if (!entry) throw new Error(PIN_FAILURE_MESSAGE[reason ?? "unverifiable"]);
       if (pins.some((p) => p.rumorId === opened.rumorId)) return; // already pinned
@@ -218,9 +223,10 @@ export function usePins2(
         // A row read back from the store carries the rumor, not the seal — and
         // proving a revision needs the Edit's seal exactly as pinning needs the
         // message's. Recover it here, on this path only.
-        const opened = local.opened.seal
-          ? local.opened
-          : { ...local.opened, seal: await readStoredSeal(community.idHex, local.opened.rumorId) };
+        const opened =
+          local.opened.seal && !isPlaceholderSeal(local.opened.seal)
+            ? local.opened
+            : { ...local.opened, seal: await readStoredSeal(community.idHex, local.opened.rumorId) };
         const withEdit = withProvenEdit(p.entry, opened, stream.group.convKey);
         if (withEdit !== p.entry) changed += 1;
         next.push(withEdit);
