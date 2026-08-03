@@ -680,10 +680,27 @@ In the Armada client:
   folded is per-device state in `AppConfig.collapsedChannelCategories`, keyed by
   community id then casefolded category name.
 
-Filing is done from the sidebar itself — right-click a Channel (press-and-hold
-on touch) for "Move to category", and the same gesture on a heading for
-"Rename category" / "Ungroup channels"; the community-settings Channel list
-carries the same actions. Renaming and ungrouping are one edition PER Channel,
+Filing is done from the sidebar itself — **drag** a Channel (press and hold for
+300ms, on any pointer type) to a slot, right-click it for "Move to category",
+or use the same gesture on a heading for "Rename category" / "Ungroup
+channels"; the community-settings Channel list carries the same actions.
+
+A drag sets position and category at once, so each moved Channel gets ONE
+edition carrying both (`arrangeChannels`) — publishing them separately would
+be two editions on one entity for one gesture, and a failure between them
+would leave a Channel filed where it isn't positioned. Dropping on the
+trailing zone asks for a name first, since a category can't exist before a
+Channel names it. The planner is
+`client/src/concord-v2/lib/channelArrangement.ts`; the gesture is
+`useChannelDrag.ts`.
+
+The drag re-stamps the whole rendered sequence, which is what makes it
+expressible: `groupChannelsByCategory` buckets a flat list, so a category's
+members need not be contiguous in it, and "the row above where I dropped" has
+no stable stored index until the two orders are collapsed into one. The first
+drag in a never-arranged community therefore stamps every Channel — the same
+bound Channel Ordering already states — and later ones stamp the run between
+the old slot and the new. Renaming and ungrouping are one edition PER Channel,
 published in sequence, because a category is only ever the set of Channels
 naming it: there is no category object to edit. They are independent entities
 with independent version chains, so a failure part-way through leaves a

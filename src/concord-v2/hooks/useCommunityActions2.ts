@@ -1021,6 +1021,51 @@ export function useCommunityManagement2(community: CommunityV2 | undefined) {
     [user, community, folded, nostr, queryClient],
   );
 
+  /**
+   * Apply a whole planned arrangement — what a drag commits.
+   *
+   * A drop sets a channel's slot AND the heading it landed under, so each
+   * changed channel gets ONE edition carrying both. Publishing position and
+   * category separately would be two editions on one entity for one gesture,
+   * and a failure between them would leave a channel filed where it isn't
+   * positioned.
+   */
+  const arrangeChannels = useMutation<
+    void,
+    Error,
+    Array<{ idHex: string; position: number; category: string | undefined }>
+  >({
+    mutationFn: async (changes) => {
+      if (!user || !community) throw new Error("Not ready.");
+      const ownerHex = folded?.ownerHex ?? community.owner;
+      if (!isAuthorized(folded?.roster ?? { roles: [], grants: [] }, user.pubkey, ownerHex, Permissions.MANAGE_CHANNELS)) {
+        throw new Error("Rearranging channels needs the Manage-channels permission.");
+      }
+      for (const { idHex, position, category } of changes) {
+        const def = folded?.channels.get(idHex);
+        if (!def) continue;
+        const head = folded?.heads.get(idHex);
+        await publishEdition2(
+          nostr,
+          community,
+          user.signer,
+          buildChannelEdition(
+            hex32(idHex),
+            // Round-trip everything the drop doesn't touch (CORD-02 §6).
+            withChannelPosition(withChannelCategory(def.metadata, category), position),
+            {
+              actorPubkey: user.pubkey,
+              version: head ? head.version + 1n : 1n,
+              prevHash: head?.hash,
+              authority: citationFor(community, folded, user.pubkey),
+            },
+          ),
+        );
+      }
+      invalidateControl2(queryClient, community.idHex);
+    },
+  });
+
   /** Move a channel one slot up or down the sidebar (the settings buttons). */
   const moveChannel = useMutation<void, Error, { channelIdHex: string; direction: -1 | 1 }>({
     mutationFn: async ({ channelIdHex, direction }) => {
@@ -1197,6 +1242,8 @@ export function useCommunityManagement2(community: CommunityV2 | undefined) {
     moveChannel: moveChannel.mutateAsync,
     isMovingChannel: moveChannel.isPending,
     reorderChannel: reorderChannel.mutateAsync,
+    arrangeChannels: arrangeChannels.mutateAsync,
+    isArranging: arrangeChannels.isPending,
     isRenaming: renameChannel.isPending,
     privatiseChannel: privatiseChannel.mutateAsync,
     publiciseChannel: publiciseChannel.mutateAsync,

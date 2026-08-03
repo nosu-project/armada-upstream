@@ -61,6 +61,8 @@ interface ChannelSidebarViewProps {
   channelsHeaderExtra?: ReactNode;
   /** The channel rows (NavLinks for NIP-29, selection buttons for Concord). */
   children: ReactNode;
+  /** The scrolling channel column, for a drag that pans it by hand. */
+  scrollRef?: React.Ref<HTMLDivElement>;
   /** Pinned footer (NIP-29: the persistent call-bar slot + account area). */
   footer?: ReactNode;
   className?: string;
@@ -90,6 +92,7 @@ export function ChannelSidebarView({
   children,
   footer,
   className,
+  scrollRef,
 }: ChannelSidebarViewProps) {
   const addLabel = addChannelOpen ? "Cancel" : addChannelLabel;
   const addButton = (onAddChannel || addChannelDisabled) && (
@@ -203,7 +206,7 @@ export function ChannelSidebarView({
       {/* Channels. The scroll column is a set of sections (pre-channels group,
           the "Channels" list, then any trailing groups) separated by one
           consistent gap; rows WITHIN a section stay tight (space-y-0.5). */}
-      <div className="flex-1 overflow-y-auto px-1 pt-[11px] pb-2 flex flex-col gap-5">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-1 pt-[11px] pb-2 flex flex-col gap-5">
         {preChannels && <div className="space-y-0.5">{preChannels}</div>}
 
         <div className="space-y-0.5">

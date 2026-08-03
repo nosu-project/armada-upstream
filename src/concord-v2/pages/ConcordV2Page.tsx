@@ -13,6 +13,8 @@ import { MemberList } from "@/components/chat/MemberList";
 import { ProfileRelayHints } from "@/components/ProfileRelayHints";
 import { ChannelCategoryHeading2 } from "@/concord-v2/components/ChannelCategoryHeading2";
 import { categoryKey, categoryNames, groupChannelsByCategory } from "@/concord-v2/lib/channelCategory";
+import { arrangementChanges, planChannelDrop } from "@/concord-v2/lib/channelArrangement";
+import { useChannelDrag, type ChannelDrop, type ChannelDropSlot } from "@/concord-v2/hooks/useChannelDrag";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { useMessagePermalink } from "@/hooks/useMessagePermalink";
 import { CalendarEventsBar } from "@/components/chat/CalendarEventsBar";
@@ -938,6 +940,21 @@ export function ConcordV2Page() {
 
   const categoryPicklist = useMemo(() => categoryNames(channels, (c) => c.category), [channels]);
 
+  /**
+   * The sidebar's rendered sequence, flattened — the uncategorized run then
+   * each category's channels, exactly as drawn. A drop index is an index into
+   * THIS, so the drag never has to translate between what the user sees and
+   * how the fold happens to be ordered (channelArrangement.ts).
+   */
+  const renderedChannels = useMemo(
+    () => [...uncategorizedChannels, ...channelCategories.flatMap((group) => group.channels)],
+    [uncategorizedChannels, channelCategories],
+  );
+  const renderedIndexOf = useMemo(
+    () => new Map(renderedChannels.map((c, index) => [c.idHex, index])),
+    [renderedChannels],
+  );
+
   const collapsedCategories = useMemo(
     () => new Set(config.collapsedChannelCategories[community?.idHex ?? ""] ?? []),
     [config.collapsedChannelCategories, community?.idHex],
@@ -1415,7 +1432,7 @@ export function ConcordV2Page() {
     return () => document.removeEventListener("visibilitychange", stamp);
   }, [readerPubkey, channelIdForRead, mixedEntries, allMessages, threads, markChannelRead, markMentionsRead, markThreadRead]);
 
-  const { leave, isLeaving, dissolve, createChannel, privatiseChannel, setChannelCategory } =
+  const { leave, isLeaving, dissolve, createChannel, privatiseChannel, setChannelCategory, arrangeChannels } =
     useCommunityManagement2(community);
 
   /**
@@ -1446,6 +1463,72 @@ export function ConcordV2Page() {
    * different entities), so a failure part-way leaves a half-renamed category
    * rather than a corrupt one. Renaming onto a name already in use merges.
    */
+  /** The column the drag pans by hand on touch (rows are `touch-action: none`). */
+  const channelScrollRef = useRef<HTMLElement | null>(null);
+
+  /**
+   * Measure the drop points off the DOM at pickup. Each row offers two — its
+   * top edge and its bottom edge — so the ends of every run and every category
+   * are reachable without enumerating them; nearest-y wins.
+   */
+  const measureDropSlots = useCallback((): ChannelDropSlot[] => {
+    const root = channelScrollRef.current;
+    if (!root) return [];
+    const out: ChannelDropSlot[] = [];
+    for (const el of root.querySelectorAll<HTMLElement>("[data-ch-slot]")) {
+      const index = Number(el.dataset.chIndex);
+      if (!Number.isInteger(index)) continue;
+      const category = el.dataset.chCategory || undefined;
+      const rect = el.getBoundingClientRect();
+      out.push({ index, category, y: rect.top });
+      out.push({ index: index + 1, category, y: rect.bottom });
+    }
+    const zone = root.querySelector<HTMLElement>("[data-ch-newzone]");
+    if (zone) {
+      const rect = zone.getBoundingClientRect();
+      out.push({ index: out.length, category: undefined, y: rect.top + rect.height / 2, newCategory: true });
+    }
+    return out;
+  }, []);
+
+  const commitDrop = useCallback(
+    (sourceIdHex: string, drop: ChannelDrop) => {
+      const source = renderedChannels.find((c) => c.idHex === sourceIdHex);
+      if (!source) return;
+      // A brand-new category has no name yet, so the drop becomes the naming
+      // prompt; the channel is filed when it's answered.
+      if (drop.newCategory) {
+        setCategoryPrompt({ channels: [source], initial: "" });
+        return;
+      }
+      const before = renderedChannels.map((c) => ({
+        idHex: c.idHex,
+        position: c.position,
+        category: c.category,
+      }));
+      const changes = arrangementChanges(
+        before,
+        planChannelDrop(before, sourceIdHex, drop.index, drop.category),
+      );
+      if (changes.length === 0) return;
+      void arrangeChannels(changes).catch((e: unknown) => {
+        toast({
+          title: "Couldn't rearrange the channels",
+          description: e instanceof Error ? e.message : undefined,
+          variant: "destructive",
+        });
+      });
+    },
+    [renderedChannels, arrangeChannels],
+  );
+
+  const channelDrag = useChannelDrag({
+    enabled: canManageChannels,
+    scrollRef: channelScrollRef,
+    measure: measureDropSlots,
+    onDrop: commitDrop,
+  });
+
   const refileCategory = useCallback(
     async (members: readonly ChannelV2[], category: string | undefined) => {
       let moved = 0;
@@ -2267,10 +2350,24 @@ export function ConcordV2Page() {
   /** Curried on the sidebar's navigate callback, which differs per instance. */
   const renderChannelRow = (onNavigate?: () => void) => (c: ChannelV2) => {
     if (!community) return null;
+    const index = renderedIndexOf.get(c.idHex) ?? 0;
     const inCall = Boolean(activeCall?.concord && activeCall.concord.channel.idHex === c.idHex);
     return (
-      <ChannelRow2
+      <div
         key={c.idHex}
+        data-ch-slot
+        data-ch-index={index}
+        data-ch-category={c.category ?? ""}
+        onPointerDown={channelDrag.onPointerDown(c.idHex)}
+        // Chrome's gesture arbitration will otherwise claim a touch drag as a
+        // pan and kill it with pointercancel; the drag pans the column itself
+        // when the gesture turns out to be a scroll (useChannelDrag.ts).
+        className={cn(
+          canManageChannels && "touch:touch-none",
+          channelDrag.sourceIdHex === c.idHex && "opacity-40",
+        )}
+      >
+      <ChannelRow2
         community={community}
         channel={c}
         active={Boolean(view === "channel" && channel && channel.idHex === c.idHex)}
@@ -2289,11 +2386,13 @@ export function ConcordV2Page() {
         }
         onNewCategory={() => setCategoryPrompt({ channels: [c], initial: "" })}
       />
+      </div>
     );
   };
 
   const channelList = (onNavigate?: () => void, className?: string) => (
     <ChannelSidebarView
+      scrollRef={onNavigate ? undefined : (channelScrollRef as React.Ref<HTMLDivElement>)}
       className={className ?? (onNavigate ? "flex-1" : "hidden sidebar:flex")}
       title={
         <button
@@ -2587,7 +2686,33 @@ export function ConcordV2Page() {
               </div>
             );
           })}
+          {/* The trailing drop zone: dragging here asks for a name and files
+              the channel under it. Only while dragging — an always-present
+              "new category" affordance would be a button, and a category with
+              no channel in it can't exist to be created. */}
+          {channelDrag.dragging && (
+            <div
+              data-ch-newzone
+              className={cn(
+                "mt-2 flex items-center justify-center gap-1.5 rounded-lg border border-dashed px-2 py-3 text-[11px] font-semibold uppercase tracking-wider transition-colors",
+                channelDrag.target?.newCategory
+                  ? "border-primary text-primary"
+                  : "border-muted-foreground/30 text-muted-foreground/70",
+              )}
+            >
+              <Plus className="size-3.5" />
+              New category
+            </div>
+          )}
         </>
+      )}
+      {/* The insertion line, drawn in viewport coordinates over the column. */}
+      {channelDrag.indicatorY !== null && !channelDrag.target?.newCategory && (
+        <div
+          aria-hidden
+          className="pointer-events-none fixed left-0 right-0 z-50 h-0.5 bg-primary"
+          style={{ top: channelDrag.indicatorY - 1 }}
+        />
       )}
     </ChannelSidebarView>
   );
