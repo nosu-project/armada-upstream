@@ -56,6 +56,8 @@ import type { NostrEvent } from "@nostrify/nostrify";
 
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import {
+  KIND_COMMENT,
+  KIND_MESSAGE,
   KIND_SEAL_PLAINTEXT,
   KIND_WEBXDC,
   PLANE_KINDS,
@@ -573,7 +575,10 @@ function writeStored(
   const writes: Promise<unknown>[] = [];
   for (const o of opened) {
     writes.push(s.event(openedToStored(o)));
-    if (o.seal && o.sealKind === KIND_SEAL_PLAINTEXT) {
+    // Keep the seal for plaintext editions (compaction re-wraps them verbatim)
+    // AND for chat messages (a Pin proves a message FROM its seal, CORD-04 §7 —
+    // without it a message stops being pinnable the moment it leaves memory).
+    if (o.seal && (o.sealKind === KIND_SEAL_PLAINTEXT || o.kind === KIND_MESSAGE || o.kind === KIND_COMMENT)) {
       writes.push(db.kv.set(sealKey(communityIdHex, o.rumorId), o.seal));
     }
   }

@@ -14,15 +14,24 @@ import { VSK_PINS } from "@/concord-v2/lib/kinds";
 import {
   PIN_MAX_CONTENT_BYTES,
   PIN_MAX_ENTRIES,
-  buildPinEntry,
+  buildPinEntryOrReason,
   readPinList,
   serializePublicPinList,
   serializeSealedPinList,
   verifyPinEntry,
+  type PinBuildFailure,
   type PinEntry,
   type VerifiedPin,
 } from "@/concord-v2/lib/pins";
+
+const PIN_FAILURE_MESSAGE: Record<PinBuildFailure, string> = {
+  "no-seal": "This message's original signature wasn't kept, so it can't be proven. Messages received from now on can be pinned.",
+  "not-encrypted": "Only chat messages can be pinned.",
+  "bad-payload": "This message is from an epoch whose keys you no longer hold.",
+  unverifiable: "This message failed verification, so pinning it would publish an unprovable claim.",
+};
 import { isAuthorized, Permissions } from "@/concord-v2/lib/roles";
+import { readStoredSeal } from "@/concord-v2/lib/rumorStore";
 import type { OpenedEvent } from "@/concord-v2/lib/stream";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -107,8 +116,14 @@ export function usePins2(community: CommunityV2 | undefined, channel: ChannelV2 
       // The epoch the message was written under — its keys, not today's.
       const epoch = epochOf(opened);
       const stream = channel.streams.find((s) => (epoch === undefined ? false : s.epoch === epoch)) ?? channel.current;
-      const entry = buildPinEntry(opened, stream.group.convKey);
-      if (!entry) throw new Error("This message can't be proven — it may be from an epoch you no longer hold.");
+      // A row read back from the store carries the rumor, not the seal — the
+      // seal lives in KV beside it. Recover it here rather than on every read:
+      // pinning is the one path that needs it.
+      const withSeal = opened.seal
+        ? opened
+        : { ...opened, seal: community ? await readStoredSeal(community.idHex, opened.rumorId) : undefined };
+      const { entry, reason } = buildPinEntryOrReason(withSeal, stream.group.convKey);
+      if (!entry) throw new Error(PIN_FAILURE_MESSAGE[reason ?? "unverifiable"]);
       if (pins.some((p) => p.rumorId === opened.rumorId)) return; // already pinned
       await publish([entry, ...pins.map((p) => p.entry)]);
     },

@@ -241,6 +241,9 @@ interface ChatMessage2Props {
   replyParent: ChatMsg | undefined;
   onJumpToReply: (id: string) => void;
   onDelete: ((event: ChatMsg) => void) | undefined;
+  /** Pins (CORD-04 §7) — both present only for PIN_MESSAGES holders. */
+  isPinned: boolean;
+  onTogglePin: ((event: ChatMsg) => void) | undefined;
   onRetry: ((event: ChatMsg) => void) | undefined;
   onDiscard: ((id: string) => void) | undefined;
   isEditing: boolean;
@@ -273,6 +276,8 @@ const ChatMessage2 = memo(function ChatMessage2({
   replyParent,
   onJumpToReply,
   onDelete,
+  isPinned,
+  onTogglePin,
   onRetry,
   onDiscard,
   isEditing,
@@ -315,6 +320,8 @@ const ChatMessage2 = memo(function ChatMessage2({
       onReply={onReply}
       replyContext={replyContext}
       onDelete={onDelete}
+      isPinned={isPinned}
+      onTogglePin={onTogglePin}
       onRetry={onRetry ? () => onRetry(event) : undefined}
       onDiscard={onDiscard ? () => onDiscard(event.id) : undefined}
       isEditing={isEditing}
@@ -3367,6 +3374,8 @@ export function ConcordV2Page() {
                         continuation={continuation}
                         canWrite={transport.canWrite}
                         canModerate={transport.canModerate}
+                        isPinned={Boolean(transport.isPinned?.(msg.id))}
+                        onTogglePin={transport.togglePin}
                         sendStatus={transport.sendStatusFor?.(msg.id)}
                         active={activeId === msg.id}
                         onToggleActive={toggleActive}

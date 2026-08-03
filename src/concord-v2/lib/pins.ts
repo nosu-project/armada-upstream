@@ -78,14 +78,30 @@ function resolveMs(createdAt: number, tags: string[][]): number {
  * (not an encrypted seal, or the key doesn't fit the payload).
  */
 export function buildPinEntry(opened: OpenedEvent, convKey: Uint8Array): PinEntry | undefined {
+  return buildPinEntryOrReason(opened, convKey).entry;
+}
+
+/** Why a message could not be pinned — each cause needs a different answer. */
+export type PinBuildFailure = "no-seal" | "not-encrypted" | "bad-payload" | "unverifiable";
+
+/**
+ * {@link buildPinEntry} with the reason attached. A pinner told "that message
+ * is from an epoch you no longer hold" when the real cause is a missing seal
+ * will retry forever, so the caller gets the distinction.
+ */
+export function buildPinEntryOrReason(
+  opened: OpenedEvent,
+  convKey: Uint8Array,
+): { entry?: PinEntry; reason?: PinBuildFailure } {
   const seal = opened.seal;
-  if (!seal || seal.kind !== KIND_SEAL_ENCRYPTED) return undefined;
+  if (!seal) return { reason: "no-seal" };
+  if (seal.kind !== KIND_SEAL_ENCRYPTED) return { reason: "not-encrypted" };
   const keys = discloseKeysFor(seal.content, convKey);
-  if (!keys) return undefined;
+  if (!keys) return { reason: "bad-payload" };
   // Refuse to build an entry that would not verify — a pinner publishing a
   // broken proof burns list budget for nothing.
   const entry: PinEntry = { seal, keys: encodeMessageKeys(keys), wrap: opened.wrapId };
-  return verifyPinEntry(entry, tagValue(opened.tags, "channel") ?? "") ? entry : undefined;
+  return verifyPinEntry(entry, tagValue(opened.tags, "channel") ?? "") ? { entry } : { reason: "unverifiable" };
 }
 
 /**
