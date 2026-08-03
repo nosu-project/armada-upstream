@@ -1,4 +1,4 @@
-import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, Link as LinkIcon, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Phone, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Trash2, UserPlus, Users, X } from "lucide-react";
+import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, Link as LinkIcon, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Phone, Pin, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Trash2, UserPlus, Users, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
@@ -25,6 +25,7 @@ import { useChannelDrag, type ChannelDrop, type ChannelDropSlot } from "@/concor
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { useMessagePermalink } from "@/hooks/useMessagePermalink";
 import { CalendarEventsBar } from "@/components/chat/CalendarEventsBar";
+import { PinnedBar2 } from "@/concord-v2/components/PinnedBar2";
 import { CreateEventDialog } from "@/components/dialogs/CreateEventDialog";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import { GitTimelineRow, TicketSidePanel } from "@/components/chat/GitTimeline";
@@ -1720,6 +1721,7 @@ export function ConcordV2Page() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchFilters, setSearchFilters] = useState<SearchFilters2>(EMPTY_SEARCH_FILTERS);
   const [eventsOpen, setEventsOpen] = useState(false);
+  const [pinsOpen, setPinsOpen] = useState(false);
   const [createEventOpen, setCreateEventOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   // Mobile: landing on the community root (no channel in the URL) shows the
@@ -3073,6 +3075,24 @@ export function ConcordV2Page() {
                 <TooltipContent>{membersVisible ? "Hide members" : "Show members"}</TooltipContent>
               </Tooltip>
 
+              {view === "channel" && channel && (pins.pins.length > 0 || pins.dark) && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={cn("size-8 touch:size-11 text-muted-foreground", pinsOpen && "text-foreground")}
+                      aria-label={pinsOpen ? "Hide pinned messages" : "Show pinned messages"}
+                      aria-pressed={pinsOpen}
+                      onClick={() => setPinsOpen((v) => !v)}
+                    >
+                      <Pin className="size-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Pinned messages</TooltipContent>
+                </Tooltip>
+              )}
+
               {view === "channel" && channel && (calendar.events.length > 0 || calendar.canModerate) && (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -3284,6 +3304,25 @@ export function ConcordV2Page() {
                 </div>
               ) : (
                 <>
+                  <PinnedBar2
+                    open={pinsOpen}
+                    pins={pins.pins}
+                    dark={pins.dark}
+                    canUnpin={pins.canPin}
+                    isUnpinning={pins.isUnpinning}
+                    onJump={jumpWithinChannel}
+                    onUnpin={(rumorId) => {
+                      void (async () => {
+                        try {
+                          await pins.unpin({ rumorId });
+                          toast({ title: "Unpinned" });
+                        } catch (e) {
+                          toast({ title: "Couldn't unpin", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+                        }
+                      })();
+                    }}
+                    onClose={() => setPinsOpen(false)}
+                  />
                   <CalendarEventsBar
                     open={eventsOpen}
                     calendar={calendar}
