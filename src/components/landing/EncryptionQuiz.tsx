@@ -212,7 +212,7 @@ export function EncryptionQuiz() {
     <>
       <section
         ref={sectionRef}
-        className="mx-auto grid min-h-[100svh] max-w-3xl place-items-center px-6 py-16 safe-area-bottom"
+        className="mx-auto grid min-h-[100svh] max-w-3xl place-items-center px-6 py-16"
       >
         {/* Both children share one grid cell: the punchline sits behind the
             quiz all along, so uncovering it costs no layout shift. */}

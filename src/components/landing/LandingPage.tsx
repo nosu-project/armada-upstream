@@ -164,6 +164,52 @@ export function LandingPage({
 
         {/* ── The quiz ─────────────────────────────────────────────────── */}
         <EncryptionQuiz />
+
+        {/* ── The closer ───────────────────────────────────────────────── */}
+        <section className="mx-auto flex min-h-[100svh] max-w-2xl flex-col items-center justify-center gap-6 px-6 py-16 text-center safe-area-bottom">
+          <h2 className="text-balance font-mono text-xl font-bold tracking-tight text-foreground sm:text-3xl">
+            We have voice and video too
+          </h2>
+          <p className="max-w-xl text-pretty text-sm leading-relaxed text-muted-foreground sm:text-base">
+            Armada has everything you need to use it seriously. If not, you can
+            always{" "}
+            <a
+              href="https://gitworkshop.dev/soapbox.pub/relay.ngit.dev/armada/issues"
+              target="_blank"
+              rel="noreferrer"
+              className="text-foreground underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:decoration-current"
+            >
+              request a feature
+            </a>{" "}
+            or{" "}
+            <a
+              href="https://gitworkshop.dev/soapbox.pub/relay.ngit.dev/armada"
+              target="_blank"
+              rel="noreferrer"
+              className="text-foreground underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:decoration-current"
+            >
+              hack it
+            </a>{" "}
+            too.
+          </p>
+
+          {/* The same control as the hero's, at the other end of the page —
+              the reader who scrolled the whole way shouldn't have to go back
+              up to act on it. */}
+          <div className="mt-4 w-full max-w-sm">
+            <Button
+              size="lg"
+              onClick={onJoin}
+              className="h-12 w-full clip-corner-lg text-base font-medium"
+            >
+              Join
+            </Button>
+          </div>
+
+          <p className="font-mono text-sm tracking-wide text-muted-foreground/70">
+            What are you waiting for? Sail the seas!
+          </p>
+        </section>
       </div>
 
       <ArmadaCrestKeyframes />
