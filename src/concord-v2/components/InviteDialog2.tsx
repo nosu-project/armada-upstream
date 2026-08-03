@@ -1,32 +1,24 @@
-import { AlertTriangle, Check, ChevronRight, Copy, Info, Link as LinkIcon, Loader2, UserPlus } from "lucide-react";
+import { Check, ChevronRight, Copy, Info, Link as LinkIcon, Loader2, Share2, UserPlus, X } from "lucide-react";
 import { useState } from "react";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { ProfileSearchSelect } from "@/components/chat/ProfileSearchSelect";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
+import { Drawer, DrawerClose, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useInviteActions2 } from "@/concord-v2/hooks/useInvites2";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { toast } from "@/hooks/useToast";
 import type { SearchProfile } from "@/hooks/useSearchProfiles";
 import { writeClipboardText } from "@/lib/clipboard";
-import { shareOrigin } from "@/lib/shareOrigin";
+import { canShare, share } from "@/lib/share";
 import { cn } from "@/lib/utils";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 
@@ -37,6 +29,11 @@ import type { CommunityV2 } from "@/concord-v2/lib/types";
  * locator, the `#fragment` carries the unlock token, never sent to any server.
  * Links revoke without re-keying; a direct invite is unrevocable and keeps the
  * community Private.
+ *
+ * Presented as a full-screen bottom sheet on a phone and a centered modal on a
+ * pointer device. The body is a tall stack — a search field with results, a
+ * link row, a collapsible options panel and the live-link list — which a
+ * centered card can only ever show a slice of on a 360px screen.
  */
 export function InviteDialog2({
   community,
@@ -51,6 +48,35 @@ export function InviteDialog2({
       link section (mint/revoke/live links) is hidden from them. */
   canCreateLink: boolean;
 }) {
+  const isMobile = useIsMobile();
+
+  if (isMobile) {
+    return (
+      <Drawer open={open} onOpenChange={onOpenChange}>
+        <DrawerContent className="mt-0 h-[100dvh] max-h-[100dvh] rounded-t-none bg-chrome pt-[env(safe-area-inset-top)]">
+          <DrawerTitle className="sr-only">Invite people</DrawerTitle>
+          {/* A full-screen sheet has no visible edge to swipe from, so the
+              drag handle alone isn't a discoverable way out. */}
+          <DrawerClose asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="Close"
+              className="absolute right-2 top-[calc(env(safe-area-inset-top)+0.5rem)] z-10 size-9 touch:size-11"
+            >
+              <X className="size-5" />
+            </Button>
+          </DrawerClose>
+          <div className="chrome-dialog flex-1 overflow-y-auto overscroll-contain px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-6">
+            <InviteBody community={community} canCreateLink={canCreateLink} />
+          </div>
+          <ArmadaCrestKeyframes />
+        </DrawerContent>
+      </Drawer>
+    );
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <ChromeDialogContent title="Invite people">
@@ -62,9 +88,9 @@ export function InviteDialog2({
 }
 
 function InviteBody({ community, canCreateLink }: { community: CommunityV2 | undefined; canCreateLink: boolean }) {
-  const { createLink, isCreatingLink, revokeLink, myLinks, sendDirectInvite, isSendingInvite, isPublic, revokeWouldPrivatize } =
+  const { createLink, revokeLink, myLinks, sendDirectInvite, isSendingInvite, isPublic, revokeWouldPrivatize } =
     useInviteActions2(community);
-  const [link, setLink] = useState<string | null>(null);
+  const [sharing, setSharing] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const [expiryDays, setExpiryDays] = useState<number>(0); // 0 = never
   const [label, setLabel] = useState("");
@@ -74,7 +100,6 @@ function InviteBody({ community, canCreateLink }: { community: CommunityV2 | und
   const [sentPubkey, setSentPubkey] = useState<string | null>(null);
   const [pendingPubkey, setPendingPubkey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const handleSelect = async (profile: SearchProfile) => {
     setError(null);
@@ -93,35 +118,76 @@ function InviteBody({ community, canCreateLink }: { community: CommunityV2 | und
     }
   };
 
-  // The first live link flips the community Public (CORD-05 §5): anyone with the
-  // link can then read the public-channel history up to that point, and revoking
-  // the link or removing them later doesn't take that back. Announcing to
-  // Discover publishes the secret too. Both are consequential, so a click routes
-  // through an in-app confirm rather than firing straight away.
-  const needsConfirm = !isPublic || listPublicly;
+  /**
+   * My newest link that can still be joined. "Invite" reuses it instead of
+   * minting one per tap: every extra live link is another door to revoke later
+   * and they all lead to the same community.
+   */
+  const liveLink = (() => {
+    const now = Math.floor(Date.now() / 1000);
+    return (
+      [...myLinks]
+        .filter((e) => !e.expires_at || e.expires_at > now)
+        .sort((a, b) => b.created_at - a.created_at)[0]?.url ?? null
+    );
+  })();
 
-  const doGenerate = async () => {
-    setError(null);
-    try {
-      const expiresAtMs = expiryDays > 0 ? Date.now() + expiryDays * 86400_000 : undefined;
-      setLink(
-        await createLink({
-          expiresAtMs,
-          label: label.trim() || undefined,
-          listPublicly: listPublicly || undefined,
-        }),
-      );
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't create the link.");
+  /** Mint a link with the options as set, confirming the two lines it crosses. */
+  const mintLink = async (): Promise<string> => {
+    // The first live link flips the derived mode Public (CORD-05 §5). Whether
+    // bans still rotate is per-banner (foreign links gate rotations, own links
+    // don't) — the ban dialog's step list tells that truth case by case.
+    if (
+      !isPublic &&
+      !confirm(
+        "Creating an invite link makes this community public: anyone with the link can join. Revoking every link makes it private again.",
+      )
+    ) {
+      throw new Error("Cancelled");
     }
+    // Announcing publishes the full link (secret included) as a public note —
+    // a real privacy step, so confirm it explicitly.
+    if (
+      listPublicly &&
+      !confirm(
+        "Sharing to Discover posts a public note from your account with this invite link — including its secret — so anyone can find and join. Only do this for a community you want strangers to join.",
+      )
+    ) {
+      throw new Error("Cancelled");
+    }
+    return createLink({
+      expiresAtMs: expiryDays > 0 ? Date.now() + expiryDays * 86400_000 : undefined,
+      label: label.trim() || undefined,
+      listPublicly: listPublicly || undefined,
+    });
   };
 
-  const handleGenerateClick = () => {
-    if (needsConfirm) {
-      setConfirmOpen(true);
-      return;
+  /**
+   * One tap: hand a live link straight to the system share sheet, minting one
+   * first ONLY when there is none to reuse. Reusing skips the relay round trip
+   * entirely — which is also what keeps the click's user activation alive, since
+   * `navigator.share` refuses to open once an await has swallowed it.
+   */
+  const handleInvite = async (forceNew = false) => {
+    setError(null);
+    setSharing(true);
+    try {
+      const url = forceNew || !liveLink ? await mintLink() : liveLink;
+      const shared = await share({
+        title: community?.name ? `Join ${community.name}` : "Join my community",
+        url,
+        dialogTitle: "Share invite link",
+      });
+      if (!shared) {
+        await handleCopy(url);
+        toast({ title: "Invite link copied", description: "It's on your clipboard, ready to paste." });
+      }
+    } catch (e) {
+      if (e instanceof Error && e.message === "Cancelled") return;
+      setError(e instanceof Error ? e.message : "Couldn't create the link.");
+    } finally {
+      setSharing(false);
     }
-    void doGenerate();
   };
 
   const handleRevoke = async (url: string) => {
@@ -138,7 +204,6 @@ function InviteBody({ community, canCreateLink }: { community: CommunityV2 | und
     setRevoking(url);
     try {
       await revokeLink({ url });
-      if (link === url) setLink(null);
       toast({
         title: "Invite link revoked",
         description: privatizes
@@ -162,8 +227,6 @@ function InviteBody({ community, canCreateLink }: { community: CommunityV2 | und
     }
   };
 
-  const existing = myLinks.filter((e) => e.url !== link);
-
   return (
     <div className="flex flex-col items-center gap-6">
       <div className="flex flex-col items-center gap-3 text-center">
@@ -185,13 +248,15 @@ function InviteBody({ community, canCreateLink }: { community: CommunityV2 | und
       </div>
 
       {/* Direct invite — search by name, follows first. A key handoff: the
-          bundle giftwraps straight to them, and the community stays Private. */}
+          bundle giftwraps straight to them, and the community stays Private.
+          Deliberately NOT autofocused: on a phone that throws the keyboard up
+          over the rest of the sheet before the user has seen it. */}
       <div className="w-full space-y-2">
         <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
           <UserPlus className="size-3.5" />
           Invite someone directly
         </div>
-        <ProfileSearchSelect onSelect={handleSelect} busyPubkey={pendingPubkey} autoFocus />
+        <ProfileSearchSelect onSelect={handleSelect} busyPubkey={pendingPubkey} />
         {sentPubkey && !isSendingInvite && (
           <p className="flex items-center gap-1.5 text-xs text-success">
             <Check className="size-3.5" /> Invite sent. Search again to invite more.
@@ -218,112 +283,104 @@ function InviteBody({ community, canCreateLink }: { community: CommunityV2 | und
             </PopoverContent>
           </Popover>
         </div>
-        {link ? (
-          <>
-            <div className="flex items-center gap-2">
-              <Input readOnly value={link} className="min-w-0 font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
-              <Button type="button" size="icon" variant="outline" className="shrink-0" onClick={() => handleCopy(link)} aria-label="Copy link">
-                {copied === link ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
-              </Button>
+        {/* One button, one job, one shape: it hands a link to the share sheet.
+            It does not become a link row afterwards — the minted link is
+            already listed under "Your live links" below, and swapping the
+            control out from under the tap that just succeeded means the next
+            invite needs a different gesture than the last one. */}
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={() => void handleInvite()}
+          disabled={sharing || !community}
+          className="w-full clip-corner-lg"
+        >
+          {sharing ? (
+            <Loader2 className="size-4 mr-2 animate-spin" />
+          ) : canShare() ? (
+            <Share2 className="size-4 mr-2" />
+          ) : (
+            <Copy className="size-4 mr-2" />
+          )}
+          Invite
+        </Button>
+        <Collapsible open={optionsOpen} onOpenChange={setOptionsOpen}>
+          <CollapsibleTrigger className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground">
+            <ChevronRight className={cn("size-3.5 transition-transform", optionsOpen && "rotate-90")} />
+            Link options
+            {!optionsOpen && (expiryDays > 0 || label.trim()) && (
+              <span className="text-foreground/70">
+                {" · "}
+                {[expiryDays > 0 ? `expires in ${expiryDays} day${expiryDays > 1 ? "s" : ""}` : null, label.trim() ? `"${label.trim()}"` : null]
+                  .filter(Boolean)
+                  .join(", ")}
+              </span>
+            )}
+          </CollapsibleTrigger>
+          <CollapsibleContent className="pt-2">
+            <div className="flex gap-2">
+              <Select value={String(expiryDays)} onValueChange={(v) => setExpiryDays(Number(v))}>
+                <SelectTrigger className="w-40 shrink-0" aria-label="Link expiry">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0">Never expires</SelectItem>
+                  <SelectItem value="1">Expires in 1 day</SelectItem>
+                  <SelectItem value="7">Expires in 7 days</SelectItem>
+                  <SelectItem value="30">Expires in 30 days</SelectItem>
+                </SelectContent>
+              </Select>
+              <Input
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                placeholder="Label (optional)"
+                className="min-w-0 text-sm"
+                aria-label="Invite label"
+              />
             </div>
+
+            {/* Opt-in public directory listing. */}
+            <div className="mt-3 rounded-lg border border-chrome p-3 space-y-2.5">
+              <Label
+                htmlFor="list-publicly"
+                className="flex items-start justify-between gap-3 cursor-pointer"
+              >
+                <span className="space-y-0.5">
+                  <span className="block text-sm font-medium normal-case tracking-normal">
+                    Share to Discover
+                  </span>
+                  <span className="block text-xs font-normal normal-case tracking-normal text-muted-foreground">
+                    List the community publicly on the Discover page so anyone can find and
+                    join it. The link's secret becomes public.
+                  </span>
+                </span>
+                <Switch id="list-publicly" checked={listPublicly} onCheckedChange={setListPublicly} />
+              </Label>
+            </div>
+
+            {/* "Invite" reuses the newest live link; these options only mean
+                anything for a link that doesn't exist yet, so they get their
+                own action rather than silently changing what the tap above
+                does. */}
             <Button
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => handleRevoke(link)}
-              disabled={revoking === link}
-              className="text-destructive hover:text-destructive"
+              className="mt-3 w-full text-muted-foreground"
+              onClick={() => void handleInvite(true)}
+              disabled={sharing || !community}
             >
-              {revoking === link ? <><Loader2 className="size-3.5 mr-1.5 animate-spin" /> Revoking...</> : "Revoke this link"}
+              Create a new link with these options
             </Button>
-          </>
-        ) : (
-          <>
-            {/* The consequence is shown up front, before the click — not sprung
-                in a popup after — the first time a link would make this public. */}
-            {!isPublic && (
-              <Alert variant="destructive" className="normal-case tracking-normal">
-                <AlertTriangle className="size-4" />
-                <AlertTitle>Invite links make communities public</AlertTitle>
-                <AlertDescription>
-                  Anyone who gets the link can read every message sent up to this point in the
-                  community's public channels.
-                </AlertDescription>
-              </Alert>
-            )}
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={handleGenerateClick}
-              disabled={isCreatingLink || !community}
-              className="w-full clip-corner-lg"
-            >
-              {isCreatingLink ? <><Loader2 className="size-4 mr-2 animate-spin" /> Generating...</> : "Generate invite link"}
-            </Button>
-            <Collapsible open={optionsOpen} onOpenChange={setOptionsOpen}>
-              <CollapsibleTrigger className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground">
-                <ChevronRight className={cn("size-3.5 transition-transform", optionsOpen && "rotate-90")} />
-                Link options
-                {!optionsOpen && (expiryDays > 0 || label.trim()) && (
-                  <span className="text-foreground/70">
-                    {" · "}
-                    {[expiryDays > 0 ? `expires in ${expiryDays} day${expiryDays > 1 ? "s" : ""}` : null, label.trim() ? `"${label.trim()}"` : null]
-                      .filter(Boolean)
-                      .join(", ")}
-                  </span>
-                )}
-              </CollapsibleTrigger>
-              <CollapsibleContent className="pt-2">
-                <div className="flex gap-2">
-                  <Select value={String(expiryDays)} onValueChange={(v) => setExpiryDays(Number(v))}>
-                    <SelectTrigger className="w-40 shrink-0" aria-label="Link expiry">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="0">Never expires</SelectItem>
-                      <SelectItem value="1">Expires in 1 day</SelectItem>
-                      <SelectItem value="7">Expires in 7 days</SelectItem>
-                      <SelectItem value="30">Expires in 30 days</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Input
-                    value={label}
-                    onChange={(e) => setLabel(e.target.value)}
-                    placeholder="Label (optional)"
-                    className="min-w-0 text-sm"
-                    aria-label="Invite label"
-                  />
-                </div>
-
-                {/* Opt-in public directory listing. */}
-                <div className="mt-3 rounded-lg border border-chrome p-3 space-y-2.5">
-                  <Label
-                    htmlFor="list-publicly"
-                    className="flex items-start justify-between gap-3 cursor-pointer"
-                  >
-                    <span className="space-y-0.5">
-                      <span className="block text-sm font-medium normal-case tracking-normal">
-                        Share to Discover
-                      </span>
-                      <span className="block text-xs font-normal normal-case tracking-normal text-muted-foreground">
-                        List the community publicly on the Discover page so anyone can find and
-                        join it. The link's secret becomes public.
-                      </span>
-                    </span>
-                    <Switch id="list-publicly" checked={listPublicly} onCheckedChange={setListPublicly} />
-                  </Label>
-                </div>
-              </CollapsibleContent>
-            </Collapsible>
-          </>
-        )}
+          </CollapsibleContent>
+        </Collapsible>
       </div>
       )}
 
-      {canCreateLink && existing.length > 0 && (
+      {canCreateLink && myLinks.length > 0 && (
         <div className="w-full space-y-1.5 border-t border-chrome pt-4">
           <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Your live links</div>
-          {existing.map((e) => (
+          {myLinks.map((e) => (
             <div key={e.token} className="flex items-center gap-2">
               <Input readOnly value={e.url} className="min-w-0 font-mono text-[0.65rem]" onFocus={(ev) => ev.currentTarget.select()} />
               <Button type="button" size="icon" variant="outline" className="shrink-0" aria-label="Copy link" onClick={() => handleCopy(e.url)}>
@@ -349,39 +406,6 @@ function InviteBody({ community, canCreateLink }: { community: CommunityV2 | und
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
-
-      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {!isPublic
-                ? "Are you sure you want to make this community\u00A0public?"
-                : "Share this link to Discover?"}
-            </AlertDialogTitle>
-            <AlertDialogDescription className="space-y-2">
-              {!isPublic && (
-                <span className="block">
-                  Creating an invite link makes this community public. If you want to keep the room
-                  private, you can still invite users individually. Invite them to create an account
-                  at {shareOrigin()}.
-                </span>
-              )}
-              {listPublicly && (
-                <span className="block">
-                  Sharing to Discover publishes this link, including its secret, from your account, so
-                  anyone can find and join.
-                </span>
-              )}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void doGenerate()}>
-              {!isPublic ? "Make Room Public and Create Link" : "Create Link"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }
