@@ -18,6 +18,7 @@ import { parseInviteLink, type InviteListEntry } from "@/concord-v2/lib/invite";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 import { DisplayName } from "@/components/DisplayName";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { toast } from "@/hooks/useToast";
 import { writeClipboardText } from "@/lib/clipboard";
@@ -41,7 +42,17 @@ import { writeClipboardText } from "@/lib/clipboard";
  */
 export function InvitesView({ community }: { community: CommunityV2 }) {
   const { data: folded } = useControlFold2(community);
-  const { myLinks, revokeLink, isRevoking, isPublic, revokeWouldPrivatize } = useInviteActions2(community);
+  const {
+    myLinks,
+    revokeLink,
+    isRevoking,
+    revokeAllMyLinks,
+    isRevokingAll,
+    revokeAllWouldPrivatize,
+    isPublic,
+    revokeWouldPrivatize,
+  } = useInviteActions2(community);
+  const { user } = useCurrentUser();
   const { data: linkEpochs } = useMyLinkEpochs2(community);
   const [copied, setCopied] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
@@ -61,6 +72,15 @@ export function InvitesView({ community }: { community: CommunityV2 }) {
     }
     return set;
   }, [myLinks]);
+
+  // Registry coordinates of mine whose signing secret this account doesn't
+  // hold — links whose Invite List entry is gone (lost/unsynced 13303, a
+  // signer that can't decrypt it). They can't be revoked one by one, so the
+  // only handle on them is "Revoke all", which delists them from the registry.
+  const orphanCount = useMemo(() => {
+    const mine = user ? folded?.registriesByCreator.get(user.pubkey) ?? [] : [];
+    return mine.filter((s) => !myLinkSigners.has(s)).length;
+  }, [folded, user, myLinkSigners]);
 
   // creatorHex → count of that creator's live link signers (control-plane
   // registry). This is the community-wide, admin-visible source of truth.
@@ -115,6 +135,43 @@ export function InvitesView({ community }: { community: CommunityV2 }) {
     }
   };
 
+  const handleRevokeAll = async () => {
+    const total = myLinks.length + orphanCount;
+    const privatizes = revokeAllWouldPrivatize();
+    const lines = [
+      `Revoke all ${total} of your invite links for this community? Links whose secrets this device holds stop working immediately.`,
+    ];
+    if (orphanCount > 0) {
+      lines.push(
+        `${orphanCount} of them ${orphanCount === 1 ? "has" : "have"} no signing secret on this account, so ${orphanCount === 1 ? "it" : "they"} can only be delisted: anyone who already has the URL may still join until the community next rotates its keys.`,
+      );
+    }
+    if (privatizes) {
+      lines.push(
+        "These are the last live invite links, so this makes the community private: new members can then only be added by direct invite, and banning a member will rotate the community keys.",
+      );
+    }
+    if (!confirm(lines.join("\n\n"))) return;
+    try {
+      const { revoked, delisted, failed } = await revokeAllMyLinks();
+      const parts: string[] = [];
+      if (revoked > 0) parts.push(`${revoked} revoked`);
+      if (delisted > revoked) parts.push(`${delisted - revoked} delisted from the registry`);
+      if (failed > 0) parts.push(`${failed} failed — try revoking ${failed === 1 ? "it" : "them"} individually`);
+      toast({
+        title: failed > 0 ? "Some invite links couldn't be revoked" : "Invite links revoked",
+        description: parts.join(", ") + ".",
+        variant: failed > 0 ? "destructive" : undefined,
+      });
+    } catch (e) {
+      toast({
+        title: "Couldn't revoke your links",
+        description: e instanceof Error ? e.message : undefined,
+        variant: "destructive",
+      });
+    }
+  };
+
   return (
     <div className="mx-auto w-full max-w-2xl space-y-6 px-3 py-4">
       <div className="flex items-center gap-2">
@@ -148,11 +205,12 @@ export function InvitesView({ community }: { community: CommunityV2 }) {
         <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
           Your live links
         </h3>
-        {myLinks.length === 0 ? (
+        {myLinks.length === 0 && orphanCount === 0 && (
           <p className="text-sm text-muted-foreground">
             You haven't created any invite links for this community.
           </p>
-        ) : (
+        )}
+        {myLinks.length > 0 && (
           <ul className="space-y-1.5">
             {myLinks.map((e) => {
               // The epoch this link currently vends, once resolved. Undefined
@@ -236,6 +294,36 @@ export function InvitesView({ community }: { community: CommunityV2 }) {
               );
             })}
           </ul>
+        )}
+        {orphanCount > 0 && (
+          <div className="flex items-start gap-1.5 rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+            <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+            <span>
+              The community registry lists {orphanCount} more invite link
+              {orphanCount === 1 ? "" : "s"} of yours whose signing secret{" "}
+              {orphanCount === 1 ? "isn't" : "aren't"} on this account (created elsewhere, or the
+              synced record was lost), so {orphanCount === 1 ? "it" : "they"} can't be revoked one
+              by one. "Revoke all" removes {orphanCount === 1 ? "it" : "them"} from the registry.
+            </span>
+          </div>
+        )}
+        {(myLinks.length > 0 || orphanCount > 0) && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="text-destructive hover:text-destructive"
+            disabled={isRevokingAll}
+            onClick={handleRevokeAll}
+          >
+            {isRevokingAll ? (
+              <>
+                <Loader2 className="size-3.5 animate-spin" /> Revoking…
+              </>
+            ) : (
+              `Revoke all my invite links (${myLinks.length + orphanCount})`
+            )}
+          </Button>
         )}
       </section>
 
