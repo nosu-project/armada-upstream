@@ -9,6 +9,7 @@ import { relayToHttpUrl } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 import { AsciiSea } from "./AsciiSea";
+import { EncryptionQuiz } from "./EncryptionQuiz";
 
 /**
  * The signed-out landing page: the crest, wordmark and Join button over the
@@ -91,7 +92,7 @@ export function LandingPage({
         {/* ── The statement ────────────────────────────────────────────── */}
         <section
           ref={statementRef}
-          className="mx-auto flex min-h-[100svh] max-w-5xl flex-col items-center justify-center gap-4 px-6 py-16 text-center safe-area-bottom sm:gap-5"
+          className="mx-auto flex min-h-[100svh] max-w-5xl flex-col items-center justify-center gap-4 px-6 py-16 text-center sm:gap-5"
         >
           {/* `text-balance` because each line only fits on one line on a wide
               viewport — where it has to wrap, both halves stay even rather
@@ -160,6 +161,9 @@ export function LandingPage({
             </CollapsibleContent>
           </Collapsible>
         </section>
+
+        {/* ── The quiz ─────────────────────────────────────────────────── */}
+        <EncryptionQuiz />
       </div>
 
       <ArmadaCrestKeyframes />
