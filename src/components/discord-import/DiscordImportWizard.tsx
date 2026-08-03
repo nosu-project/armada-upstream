@@ -1,5 +1,5 @@
 import type { NostrEvent } from "@nostrify/nostrify";
-import { AlertTriangle, Check, Hash, Loader2, Plus, Volume2, X } from "lucide-react";
+import { AlertTriangle, Check, Hash, Loader2, Lock, Plus, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -517,7 +517,7 @@ function ChannelRow({
   historyAllowed: boolean;
   onToggle: (field: "selected" | "bridge" | "history") => void;
 }) {
-  const Icon = channel.kind === "voice" ? Volume2 : Hash;
+  const Icon = channel.private ? Lock : channel.kind === "voice" ? Volume2 : Hash;
   return (
     <div className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-secondary/50">
       <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
@@ -617,7 +617,31 @@ function ReviewStep(props: {
             {plan.emojis.length} custom emoji will be published as an Armada emoji pack.
           </p>
         )}
+        {plan.channels.some((c) => c.private) && (
+          <p className="text-xs text-muted-foreground">
+            <Lock className="mr-1 inline size-3" />
+            Gated channels import as private — key-gated, invisible to members
+            without the role. Mirroring one is off unless you turn it on.
+          </p>
+        )}
       </Section>
+
+      {/* Only once they've actually ticked one: a warning about a thing you
+          didn't choose is noise, and teaches people to skip the real ones. */}
+      {plan.channels.some((c) => c.private && c.selected && c.bridge) && (
+        <Alert variant="destructive">
+          <Lock className="size-4" />
+          <AlertDescription className="text-xs leading-relaxed">
+            You're mirroring a private channel. Its key is handed to the bridge's
+            own identity so it can read the room, and everything posted there is
+            copied to Discord in plaintext — a gated room on this side is an
+            ordinary Discord channel on the other. You can revoke the bridge's
+            access from the channel's role in Armada at any time; note that doing
+            so rotates the key, and the bridge stays silent on that channel until
+            you re-grant it.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {plan.roles.length > 0 && (
         <Section title="Roles">

@@ -103,6 +103,8 @@ export interface ImportChannel {
   name: string;
   category?: string;
   kind?: "voice";
+  /** Gated on Discord, so it imports as a CORD-03 Private Channel. */
+  private?: boolean;
   bridgeable: boolean;
   bridge: boolean;
   selected: boolean;
