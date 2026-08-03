@@ -1,5 +1,6 @@
 import { ExternalLink } from "lucide-react";
 import { lazy, Suspense, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
@@ -51,12 +52,17 @@ export function DiscordMark({ className }: { className?: string }) {
  */
 export function ImportFromDiscordButton({
   className,
-  variant = "outline",
   size,
+  onOpen,
 }: {
   className?: string;
-  variant?: "outline" | "secondary" | "ghost";
   size?: "sm" | "lg";
+  /**
+   * Called when the wizard opens, so a host dialog can dismiss itself. Without
+   * it the dialog stays mounted behind the wizard and shows a second close
+   * button over it.
+   */
+  onOpen?: () => void;
 }) {
   const { user } = useCurrentUser();
   const navigate = useNavigate();
@@ -69,19 +75,36 @@ export function ImportFromDiscordButton({
     <>
       <Button
         type="button"
-        variant={variant}
         size={size}
-        className={cn("w-full clip-corner-lg", className)}
-        onClick={() => (user ? setOpen(true) : navigate("/welcome"))}
+        className={cn(
+          "w-full clip-corner-lg border-0 bg-[#5865F2] text-white hover:bg-[#4752C4]",
+          className,
+        )}
+        onClick={() => {
+          if (!user) {
+            navigate("/welcome");
+            return;
+          }
+          setOpen(true);
+          onOpen?.();
+        }}
       >
         <DiscordMark className="size-4 shrink-0" />
         Import a Discord server
       </Button>
-      {open && (
-        <Suspense fallback={null}>
-          <DiscordImportWizard onClose={() => setOpen(false)} />
-        </Suspense>
-      )}
+      {/*
+        Portalled to <body> deliberately. The wizard is `position: fixed`, and a
+        transformed ancestor (Radix centres its dialog with a transform) becomes
+        the containing block for fixed children — so rendered in place inside a
+        dialog it fills the dialog box instead of the screen.
+      */}
+      {open &&
+        createPortal(
+          <Suspense fallback={null}>
+            <DiscordImportWizard onClose={() => setOpen(false)} />
+          </Suspense>,
+          document.body,
+        )}
     </>
   );
 }

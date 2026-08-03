@@ -397,7 +397,7 @@ function ConnectStep({
     <WizardStepBody
       glyph={glyph}
       title="import from discord"
-      description="Turn a Discord server you run into an encrypted Armada community — channels, roles, custom emoji, and optionally its message history. You'll sign for it with your own key, so you own it outright."
+      description="Turn a Discord server you run into an encrypted Armada community, with its channels, roles, custom emoji, and optionally its message history. You'll sign for it with your own key, so you own it outright."
     >
       <div className="w-full space-y-3">
         <Button size="lg" className="h-12 w-full clip-corner-lg text-base" disabled={busy} onClick={onConnect}>
@@ -501,7 +501,7 @@ function InstallBotStep({
           </a>
         </Button>
         <Button variant="outline" className="w-full clip-corner-lg" disabled={busy} onClick={onRecheck}>
-          {busy ? <><Loader2 className="size-4 mr-2 animate-spin" /> Checking…</> : "I installed it — check again"}
+          {busy ? <><Loader2 className="size-4 mr-2 animate-spin" /> Checking…</> : "I installed it, check again"}
         </Button>
       </div>
     </WizardStepBody>
@@ -620,7 +620,7 @@ function ReviewStep(props: {
         {plan.channels.some((c) => c.private) && (
           <p className="text-xs text-muted-foreground">
             <Lock className="mr-1 inline size-3" />
-            Gated channels import as private — key-gated, invisible to members
+            Gated channels import as private: key-gated, and invisible to members
             without the role. Mirroring one is off unless you turn it on.
           </p>
         )}
@@ -634,7 +634,7 @@ function ReviewStep(props: {
           <AlertDescription className="text-xs leading-relaxed">
             You're mirroring a private channel. Its key is handed to the bridge's
             own identity so it can read the room, and everything posted there is
-            copied to Discord in plaintext — a gated room on this side is an
+            copied to Discord in plaintext. A gated room on this side is an
             ordinary Discord channel on the other. You can revoke the bridge's
             access from the channel's role in Armada at any time; note that doing
             so rotates the key, and the bridge stays silent on that channel until
@@ -663,7 +663,7 @@ function ReviewStep(props: {
           <div className="space-y-1">
             {plan.skipped.map((s, i) => (
               <p key={i} className="text-xs text-muted-foreground">
-                {s.name} — {s.reason}
+                {s.name}: {s.reason}
               </p>
             ))}
           </div>
@@ -742,7 +742,7 @@ function ReviewStep(props: {
       <Alert>
         <AlertTriangle className="size-4" />
         <AlertDescription className="text-xs leading-relaxed">
-          You'll sign the community's founding events with your key, in this app — it
+          You'll sign the community's founding events with your key, in this app. It
           never leaves your device, and the community is yours. The bridge keeps an
           Admin role to run the import and the live bridges; you can revoke it from
           Armada at any time. <strong>Bridged channels leave end-to-end encryption:</strong>{" "}
@@ -839,7 +839,7 @@ function ProgressStep({
       title={failed ? "import stopped" : "importing…"}
       description={
         failed
-          ? "The import stopped partway. Nothing is lost — retrying picks up where it left off."
+          ? "The import stopped partway. Nothing is lost, and retrying picks up where it left off."
           : "Minting the community, publishing channels and roles, then wiring the live bridges. This can take a few minutes for a big server."
       }
     >
@@ -897,7 +897,7 @@ function DoneStep({
     <WizardStepBody
       glyph={<Check className="size-14 text-success" />}
       title={`${plan?.communityName ?? "your community"} is live`}
-      description={`${bits.join(", ")} — owned by your key.`}
+      description={`${bits.join(", ")}, owned by your key.`}
     >
       <div className="w-full space-y-3">
         <Button
@@ -915,7 +915,7 @@ function DoneStep({
             </span>
             {plan.skipped.map((s, i) => (
               <p key={i} className="text-xs text-muted-foreground">
-                {s.name} — {s.reason}
+                {s.name}: {s.reason}
               </p>
             ))}
           </div>

@@ -211,7 +211,7 @@ export function AddBody({ onDone }: { onDone: () => void }) {
           channels and history, signed with this user's own key, and hands back
           an invite the escape hatch below accepts. Absent unless the build
           names a portal. */}
-      <ImportFromDiscordSection />
+      <ImportFromDiscordSection onOpen={onDone} />
 
       <EscapeHatch onDone={onDone} />
     </div>
@@ -219,7 +219,7 @@ export function AddBody({ onDone }: { onDone: () => void }) {
 }
 
 /** The Discord-import path, with the one line of context it needs. */
-function ImportFromDiscordSection() {
+function ImportFromDiscordSection({ onOpen }: { onOpen: () => void }) {
   if (!bridgePortalUrl("/import")) return null;
 
   return (
@@ -229,10 +229,10 @@ function ImportFromDiscordSection() {
         <span className="text-[0.7rem] uppercase tracking-wider text-muted-foreground">or</span>
         <span className="h-px flex-1 bg-border" />
       </div>
-      <ImportFromDiscordButton />
+      <ImportFromDiscordButton onOpen={onOpen} />
       <p className="text-xs text-muted-foreground">
-        Bring a server you run across — channels, history, and emoji. You sign
-        the new community with your own key, so you own it.
+        Bring a server you run across, with its channels, history, and emoji.
+        You sign the new community with your own key, so you own it.
       </p>
     </div>
   );

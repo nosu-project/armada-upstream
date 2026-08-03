@@ -65,7 +65,7 @@ export function CreateCommunityCard({ className }: { className?: string }) {
         </Button>
         {/* Second door for people arriving from Discord. Renders nothing when
             the build names no bridge portal, leaving the tile as it was. */}
-        <ImportFromDiscordButton variant="ghost" size="sm" className="text-muted-foreground" />
+        <ImportFromDiscordButton size="sm" />
       </div>
 
       <ArmadaCrestKeyframes />
