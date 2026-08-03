@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
+import { cn } from "@/lib/utils";
+
 /**
  * The landing page's closing beat: a quiz you cannot read.
  *
@@ -159,7 +161,13 @@ function AnswerButton({
       onClick={onPick}
       disabled={dust}
       aria-label={label}
-      className="clip-corner-lg w-full border border-border/60 bg-background/40 px-4 py-6 font-mono text-[0.65rem] leading-relaxed text-muted-foreground/60 transition-colors hover:border-border hover:bg-background/70 hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default sm:text-xs"
+      className={cn(
+        "clip-corner-lg w-full border border-border/60 bg-background/40 px-4 py-6 font-mono text-[0.65rem] leading-relaxed text-muted-foreground/60 transition-colors hover:border-border hover:bg-background/70 hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default sm:text-xs",
+        // The box goes first, and it goes fast — but as border and background
+        // rather than opacity, which would multiply down onto the characters
+        // and fade the dust out before it had blown anywhere.
+        dust && "border-transparent bg-transparent duration-300 ease-out hover:border-transparent hover:bg-transparent",
+      )}
     >
       {rows.map((row, i) => (
         <span key={i} className="block break-all">
