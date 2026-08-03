@@ -456,21 +456,33 @@ describe("pin failure reasons", () => {
 });
 
 describe("unconfirmed writes", () => {
+  const A = "a".repeat(64);
+  const B = "b".repeat(64);
+  const mine = { eid: A, version: 5n, held: "ours" };
+
   it("keeps our own list until the fold reaches that version", () => {
-    const mine = { version: 5n, held: "ours" };
-    expect(unconfirmedWrite(mine, undefined), "fold has nothing yet").toBe("ours");
-    expect(unconfirmedWrite(mine, { version: 4n }), "fold is behind").toBe("ours");
-    expect(unconfirmedWrite(mine, { version: 5n }), "fold caught up").toBeUndefined();
+    expect(unconfirmedWrite(mine, undefined, A), "fold has nothing yet").toBe("ours");
+    expect(unconfirmedWrite(mine, { version: 4n }, A), "fold is behind").toBe("ours");
+    expect(unconfirmedWrite(mine, { version: 5n }, A), "fold caught up").toBeUndefined();
   });
 
   it("yields to a version beyond ours, which is someone else's write", () => {
     // Ours is no longer the list that exists, so building on it would erase
     // whatever they just published.
-    expect(unconfirmedWrite({ version: 5n, held: "ours" }, { version: 6n })).toBeUndefined();
+    expect(unconfirmedWrite(mine, { version: 6n }, A)).toBeUndefined();
+  });
+
+  it("never lends one channel's list to another", () => {
+    // The hazard this guards: pinning in a private channel, switching to a
+    // public one, and publishing the private list — and the per-message keys
+    // that open it — into the public channel's entity, forever.
+    expect(unconfirmedWrite(mine, undefined, B), "another channel").toBeUndefined();
+    expect(unconfirmedWrite(mine, { version: 1n }, B)).toBeUndefined();
+    expect(unconfirmedWrite(mine, undefined, undefined), "no channel at all").toBeUndefined();
   });
 
   it("holds nothing when this client has not written", () => {
-    expect(unconfirmedWrite(undefined, { version: 3n })).toBeUndefined();
-    expect(unconfirmedWrite(undefined, undefined)).toBeUndefined();
+    expect(unconfirmedWrite(undefined, { version: 3n }, A)).toBeUndefined();
+    expect(unconfirmedWrite(undefined, undefined, A)).toBeUndefined();
   });
 });

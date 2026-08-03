@@ -390,12 +390,19 @@ export function withProvenEdit(entry: PinEntry, editOpened: OpenedEvent, convKey
  * taken. A client that publishes edition N keeps N as its truth until it sees
  * a fold at N or later — including a LATER one, since a version beyond ours is
  * someone else's write and theirs is the list that now exists.
+ *
+ * The record carries the entity it belongs to. A client holding one channel's
+ * unconfirmed list must never build on it while viewing another: that would
+ * publish one channel's pins — and the per-message keys that open them — into
+ * the other channel's entity, where compaction carries them forever.
  */
 export function unconfirmedWrite<T>(
-  mine: { version: bigint; held: T } | undefined,
+  mine: { eid: string; version: bigint; held: T } | undefined,
   folded: { version: bigint } | undefined,
+  /** The entity being written NOW. A record for any other one is not ours to use. */
+  eid: string | undefined,
 ): T | undefined {
-  if (!mine) return undefined;
+  if (!mine || !eid || mine.eid !== eid) return undefined;
   if (folded && folded.version >= mine.version) return undefined;
   return mine.held;
 }

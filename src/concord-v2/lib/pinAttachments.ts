@@ -21,9 +21,13 @@ export function sizeBytes(raw: string | undefined): number | undefined {
 }
 
 export function isImageAttachment(entry: ImetaEntry): boolean {
+  // SVG is a document that can carry script, and a pin renders inline for
+  // every member of the channel, unprompted, for as long as the pin exists.
+  // It stays an attachment: downloadable, never auto-rendered.
+  if (entry.mime === "image/svg+xml") return false;
   if (entry.mime?.startsWith("image/")) return true;
   if (entry.mime) return false;
-  return /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i.test(entry.url);
+  return /\.(png|jpe?g|gif|webp|avif|bmp)$/i.test(entry.url);
 }
 
 /** Every attachment a pinned message carries, imeta first, bare URLs as fallback. */

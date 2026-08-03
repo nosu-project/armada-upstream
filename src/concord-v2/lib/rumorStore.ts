@@ -44,9 +44,7 @@
  * Deletes ARE deletes: a kind-5 rumor written here triggers the store's NIP-09
  * pass, which physically removes the targeted event it authored. Moderator
  * deletes are authorized against the roster at the WRITE site (see `useChannel2`)
- * before the kind-5 rumor reaches the store. A delete also drops any retained
- * seal for its target: a seal plus a held epoch key would leave the "deleted"
- * plaintext recoverable from local storage.
+ * before the kind-5 rumor reaches the store.
  *
  * Trust note: this persists DECRYPTED plane data at rest — the same device-trust
  * level as the folded cache and the signer's decrypt cache, which already do.
@@ -59,7 +57,6 @@ import type { NostrEvent } from "@nostrify/nostrify";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import {
   KIND_COMMENT,
-  KIND_DELETE,
   KIND_EDIT,
   KIND_MESSAGE,
   KIND_SEAL_PLAINTEXT,
@@ -595,17 +592,6 @@ function writeStored(
       // its wrap, and the write would never be acked. A storage-pressure
       // problem must not become a sync problem.
       writes.push(db.kv.set(sealKey(communityIdHex, o.rumorId), o.seal).catch(() => undefined));
-    }
-
-    // W2(b): a delete must take the seal with it. The rumor row goes via the
-    // store's NIP-09 pass, but a retained seal plus a held epoch key leaves the
-    // "deleted" plaintext fully recoverable from local storage.
-    if (o.kind === KIND_DELETE) {
-      for (const t of o.tags) {
-        if (t[0] === "e" && t[1]) {
-          writes.push(db.kv.delete(sealKey(communityIdHex, t[1])).catch(() => undefined));
-        }
-      }
     }
   }
   if (plane === "control" && snapshot) {

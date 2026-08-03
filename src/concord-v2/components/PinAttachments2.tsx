@@ -62,13 +62,16 @@ function PinImage({ entry, onOpen }: { entry: ImetaEntry; onOpen?: () => void })
     />
   );
   // The shared gallery when the bar offers one — the same surface an in-chat
-  // image opens (swipe, zoom, download) — and a plain link otherwise.
+  // image opens (swipe, zoom, download) — and a plain link otherwise. The link
+  // goes to the remote URL, never the resolved blob: a blob carries the mime
+  // the SENDER chose and opens same-origin, so navigating to one hands them a
+  // document in our own origin.
   return onOpen ? (
     <button type="button" onClick={onOpen} className="block cursor-zoom-in">
       {img}
     </button>
   ) : (
-    <a href={src} target="_blank" rel="noopener noreferrer" className="block">
+    <a href={entry.url} target="_blank" rel="noopener noreferrer" className="block">
       {img}
     </a>
   );

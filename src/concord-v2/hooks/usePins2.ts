@@ -155,12 +155,16 @@ export function usePins2(
     [alive, localEdits],
   );
 
-  const canPin = Boolean(
-    user && folded && isAuthorized(folded.roster, user.pubkey, folded.ownerHex, Permissions.PIN_MESSAGES),
-    // A dark list is one we cannot read: publishing a replace-entire edition
-    // from an empty view would drop every entry sealed under the old key, and
-    // compaction would then prune the ancestors that still held them.
-  ) && !dark;
+  // A view that is empty because we could not READ the list must never be
+  // published from: a replace-entire edition would drop every entry we cannot
+  // see, and compaction would then prune the ancestors that still held them.
+  // Two ways that happens, and neither looks different from "no pins yet":
+  // the list is sealed under an epoch we never held (`dark`), or the fold
+  // served no edition for this entity this round (`incomplete`).
+  const unreadable = dark || Boolean(eidHex && folded?.incomplete.includes(eidHex));
+  const canPin =
+    Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, folded.ownerHex, Permissions.PIN_MESSAGES)) &&
+    !unreadable;
 
   /**
    * Our own last write, held until the fold catches up to it.
@@ -171,17 +175,20 @@ export function usePins2(
    * claim a version that is already taken. The edition hash is computable
    * locally, so we chain off our own edition rather than waiting to see it.
    */
-  const written = useRef<{ version: bigint; hash: Uint8Array; held: HeldPin[] } | undefined>(undefined);
+  const written = useRef<{ eid: string; version: bigint; hash: Uint8Array; held: HeldPin[] } | undefined>(undefined);
+  // Keyed by entity, not cleared on switch: an op already queued for the old
+  // channel resolves after any clear and would repopulate the ref.
+  const mineHere = () => (written.current?.eid === eidHex ? written.current : undefined);
 
   /** The head as we best know it: our own write while it outranks the fold. */
   const knownHead = () => {
     const foldedHead = eidHex ? folded?.heads.get(eidHex) : undefined;
-    return unconfirmedWrite(written.current, foldedHead) ? written.current : foldedHead;
+    return unconfirmedWrite(mineHere(), foldedHead, eidHex) ? mineHere() : foldedHead;
   };
 
   /** The list to build the next write from — ours if the fold hasn't caught up. */
   const currentPins = (): HeldPin[] =>
-    unconfirmedWrite(written.current, eidHex ? folded?.heads.get(eidHex) : undefined) ??
+    unconfirmedWrite(mineHere(), eidHex ? folded?.heads.get(eidHex) : undefined, eidHex) ??
     pins.map((p) => ({ rumorId: p.rumorId, entry: p.entry }));
 
   // Writes run one at a time. Concurrency here is not a race to lose a render,
@@ -218,6 +225,7 @@ export function usePins2(
       }),
     );
     written.current = {
+      eid: eidHex,
       version,
       hash: editionHash(entityId, version, prior?.hash, new TextEncoder().encode(content)),
       held,
@@ -255,19 +263,6 @@ export function usePins2(
         await publish(currentPins().filter((h) => h.rumorId !== rumorId));
       }),
   });
-
-  /**
-   * Drop an entry an author erased (§7). Separate from `unpin` so the caller
-   * can express the obligation rather than a curator's choice — the pinner
-   * publishes at once, other holders jitter and re-check first.
-   */
-  const omitDeleted = (rumorIds: ReadonlySet<string>) =>
-    serialize(async () => {
-      const current = currentPins();
-      const survivors = current.filter((h) => !rumorIds.has(h.rumorId));
-      if (survivors.length === current.length) return;
-      await publish(survivors);
-    });
 
   /**
    * Settle what the published list owes its keyless readers: drop entries whose
@@ -348,14 +343,23 @@ export function usePins2(
   );
   const pushed = useRef("");
   const runPush = useRef<() => Promise<unknown>>(async () => undefined);
-  runPush.current = () => refreshEdits.mutateAsync();
+  useEffect(() => {
+    runPush.current = () => refreshEdits.mutateAsync();
+  });
   useEffect(() => {
     if (!canPin || !editSignature) return;
     // One attempt per distinct set of stale revisions: a failure must not spin.
     if (pushed.current === editSignature) return;
     const timer = setTimeout(() => {
-      pushed.current = editSignature;
-      void runPush.current().catch(() => undefined);
+      // Marked done only on success: a relay that was briefly unreachable must
+      // not cost the list a §7 obligation permanently. Re-firing is bounded —
+      // the signature only survives while the obligation does.
+      void runPush.current().then(
+        () => {
+          pushed.current = editSignature;
+        },
+        () => undefined,
+      );
     }, 3_000 + Math.floor(Math.random() * 12_000));
     return () => clearTimeout(timer);
   }, [canPin, editSignature]);
@@ -379,9 +383,8 @@ export function usePins2(
     isPinning: pin.isPending,
     unpin: unpin.mutateAsync,
     isUnpinning: unpin.isPending,
-    omitDeleted,
     /** Remaining budget, which is the real ceiling for a private channel (§7). */
-    remaining: { entries: Math.max(0, PIN_MAX_ENTRIES - pins.length), bytes: PIN_MAX_CONTENT_BYTES },
+    remaining: { entries: Math.max(0, PIN_MAX_ENTRIES - alive.length), bytes: PIN_MAX_CONTENT_BYTES },
   };
 }
 
