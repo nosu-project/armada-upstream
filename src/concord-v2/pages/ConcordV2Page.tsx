@@ -2390,9 +2390,12 @@ export function ConcordV2Page() {
     );
   };
 
+  // There is ONE channel column, mounted on every viewport (the mobile reveal
+  // and the desktop sidebar are the same element), so it always carries the
+  // scroll ref — the drag measures its drop slots out of it.
   const channelList = (onNavigate?: () => void, className?: string) => (
     <ChannelSidebarView
-      scrollRef={onNavigate ? undefined : (channelScrollRef as React.Ref<HTMLDivElement>)}
+      scrollRef={channelScrollRef as React.Ref<HTMLDivElement>}
       className={className ?? (onNavigate ? "flex-1" : "hidden sidebar:flex")}
       title={
         <button
@@ -2710,8 +2713,12 @@ export function ConcordV2Page() {
       {channelDrag.indicatorY !== null && !channelDrag.target?.newCategory && (
         <div
           aria-hidden
-          className="pointer-events-none fixed left-0 right-0 z-50 h-0.5 bg-primary"
-          style={{ top: channelDrag.indicatorY - 1 }}
+          className="pointer-events-none fixed z-50 h-0.5 bg-primary"
+          style={{
+            top: channelDrag.indicatorY - 1,
+            left: channelDrag.columnX?.left ?? 0,
+            width: channelDrag.columnX?.width ?? "100%",
+          }}
         />
       )}
     </ChannelSidebarView>

@@ -30,6 +30,8 @@ export interface ChannelDragState {
   target: ChannelDrop | null;
   /** Viewport y of the drop indicator. */
   indicatorY: number | null;
+  /** Viewport x/width of the channel column, so the indicator spans only it. */
+  columnX: { left: number; width: number } | null;
 }
 
 /**
@@ -54,7 +56,9 @@ export interface ChannelDragState {
  *   these rows have one. Pickup at 300ms would otherwise be followed by the
  *   menu opening on top of the drag. Radix clears that timer on
  *   `pointercancel`, so beginning a drag dispatches one at the source — which
- *   is also just true: the press stopped being a press.
+ *   is also just true: the press stopped being a press. That event bubbles to
+ *   this hook's OWN window `pointercancel` listener, which would otherwise end
+ *   the drag in the same tick it began; `selfCancelling` fences it out.
  */
 export function useChannelDrag({
   enabled,
@@ -74,9 +78,11 @@ export function useChannelDrag({
     sourceIdHex: null,
     target: null,
     indicatorY: null,
+    columnX: null,
   });
   const active = useRef<string | null>(null);
   const slots = useRef<ChannelDropSlot[]>([]);
+  const columnX = useRef<ChannelDragState["columnX"]>(null);
   const targetRef = useRef<ChannelDrop | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Where the panning finger was last seen, for the manual scroll delta. */
@@ -88,7 +94,8 @@ export function useChannelDrag({
     active.current = null;
     targetRef.current = null;
     slots.current = [];
-    setState({ sourceIdHex: null, target: null, indicatorY: null });
+    columnX.current = null;
+    setState({ sourceIdHex: null, target: null, indicatorY: null, columnX: null });
   }, []);
 
   useEffect(() => reset, [reset]);
@@ -105,7 +112,12 @@ export function useChannelDrag({
     }
     if (!best) return;
     targetRef.current = { index: best.index, category: best.category, newCategory: best.newCategory };
-    setState({ sourceIdHex: active.current, target: targetRef.current, indicatorY: best.y });
+    setState({
+      sourceIdHex: active.current,
+      target: targetRef.current,
+      indicatorY: best.y,
+      columnX: columnX.current,
+    });
   }, []);
 
   const onPointerDown = useCallback(
@@ -119,6 +131,10 @@ export function useChannelDrag({
       // where the finger IS rather than where it landed.
       let lastY = startY;
       let scrolling = false;
+      // Set only while pickup dispatches its own `pointercancel` at the source
+      // (below). That event bubbles to the window listener installed here, and
+      // without this the drag would cancel itself the instant it began.
+      let selfCancelling = false;
 
       const clear = () => {
         if (timer.current) clearTimeout(timer.current);
@@ -162,7 +178,8 @@ export function useChannelDrag({
         if (dx > SCROLL_SLOP_PX || dy > SCROLL_SLOP_PX) clear();
       };
 
-      const onUp = () => {
+      const onUp = (ev: PointerEvent) => {
+        if (ev.pointerId !== pointerId) return;
         const drop = targetRef.current;
         const dragged = active.current;
         clear();
@@ -170,7 +187,8 @@ export function useChannelDrag({
         reset();
       };
 
-      const onCancel = () => {
+      const onCancel = (ev: PointerEvent) => {
+        if (ev.pointerId !== pointerId || selfCancelling) return;
         clear();
         reset();
       };
@@ -186,9 +204,13 @@ export function useChannelDrag({
         if (scrolling) return;
         active.current = idHex;
         slots.current = measure();
+        const column = scrollRef.current?.getBoundingClientRect();
+        columnX.current = column ? { left: column.left, width: column.width } : null;
         // The press has stopped being a press: tell Radix's context menu so it
         // doesn't open its own long-press menu over the drag.
+        selfCancelling = true;
         source.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true, pointerId }));
+        selfCancelling = false;
         aim(lastY);
       }, PICKUP_MS);
     },
