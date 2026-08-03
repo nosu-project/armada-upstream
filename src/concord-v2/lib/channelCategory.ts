@@ -70,6 +70,26 @@ export function categoryKey(name: string): string {
   return name.trim().toLowerCase();
 }
 
+/**
+ * The category names in use, in display order, one entry per casefolded group.
+ *
+ * What a "move to category" picker offers: filing from the list is the only
+ * thing keeping the arrangement from silting up with near-duplicates, since a
+ * category has no id and re-typing its name is how the two spellings that then
+ * have to be merged get created.
+ */
+export function categoryNames<T>(
+  channels: readonly T[],
+  categoryOf: (channel: T) => string | undefined,
+): string[] {
+  const byKey = new Map<string, string>();
+  for (const channel of channels) {
+    const name = categoryOf(channel)?.trim();
+    if (name && !byKey.has(categoryKey(name))) byKey.set(categoryKey(name), name);
+  }
+  return [...byKey.values()];
+}
+
 /** One rendered group: a heading (or the uncategorized run) and its channels. */
 export interface ChannelCategory<T> {
   /** Casefolded identity; empty string for the uncategorized run. */

@@ -1,4 +1,4 @@
-import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, FolderGit2, Hash, Headphones, Link as LinkIcon, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Phone, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Trash2, UserPlus, Users, X } from "lucide-react";
+import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, Link as LinkIcon, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Phone, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Trash2, UserPlus, Users, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
@@ -12,7 +12,7 @@ import { JoinButton } from "@/components/auth/JoinButton";
 import { MemberList } from "@/components/chat/MemberList";
 import { ProfileRelayHints } from "@/components/ProfileRelayHints";
 import { ChannelCategoryHeading2 } from "@/concord-v2/components/ChannelCategoryHeading2";
-import { groupChannelsByCategory } from "@/concord-v2/lib/channelCategory";
+import { categoryKey, categoryNames, groupChannelsByCategory } from "@/concord-v2/lib/channelCategory";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { useMessagePermalink } from "@/hooks/useMessagePermalink";
 import { CalendarEventsBar } from "@/components/chat/CalendarEventsBar";
@@ -45,6 +45,11 @@ import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import {
   ContextMenu,
   ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
@@ -53,6 +58,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -117,7 +123,7 @@ import type { VoicePresenceFold } from "@/concord-v2/lib/voice";
 import { useRegisterChannelStreamKeys2 } from "@/concord-v2/hooks/useStreamAuth2";
 import { completeMemberlist } from "@/concord-v2/lib/guestbook";
 import { badgeOf, byDisplayOrder, canActOnMember, canActOnPosition, isAuthorized, isAuthorizedIn, MAX_ROLES_PER_MEMBER, Permissions } from "@/concord-v2/lib/roles";
-import { channelGitRepositoryAttachments, type ChannelV2, type CommunityV2, type ImagePointer } from "@/concord-v2/lib/types";
+import { channelGitRepositoryAttachments, NAME_MAX_BYTES, type ChannelV2, type CommunityV2, type ImagePointer } from "@/concord-v2/lib/types";
 import { matchGitTicketRepository, parseGitRepositoryAddress, sortAndDedupeGitTimelineActivities, trustedGitStatusAuthors, type GitComment, type GitStatusKind, type GitTicket } from "@/lib/gitActivity";
 import { cn, pickDefaultChannel } from "@/lib/utils";
 import { chatRoute, parseChatRoute, type ChatRoute, type Concord2Pane } from "@/lib/routes";
@@ -345,6 +351,78 @@ function SidebarFooter2() {
   );
 }
 
+/**
+ * Names a category, for one channel being filed under a new one or for every
+ * channel in an existing one being renamed. It is the same act either way: a
+ * category has no id, so its name IS the thing, and both cases end in the same
+ * `onSubmit(name)` re-filing the channels it was handed.
+ *
+ * A prefilled name that comes back unchanged is a no-op rather than N
+ * pointless editions.
+ */
+function CategoryNameDialog2({
+  open,
+  initial,
+  count,
+  onOpenChange,
+  onSubmit,
+}: {
+  open: boolean;
+  initial: string;
+  /** How many channels the name will be applied to, for the button's copy. */
+  count: number;
+  onOpenChange: (open: boolean) => void;
+  onSubmit: (name: string) => void;
+}) {
+  const [value, setValue] = useState(initial);
+  useEffect(() => {
+    if (open) setValue(initial);
+  }, [open, initial]);
+
+  const trimmed = value.trim();
+  const unchanged = trimmed === initial.trim();
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <ChromeDialogContent title={initial ? "Rename category" : "New category"}>
+        <form
+          className="space-y-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!trimmed || unchanged) {
+              onOpenChange(false);
+              return;
+            }
+            onSubmit(trimmed);
+            onOpenChange(false);
+          }}
+        >
+          <Input
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder="Category name"
+            autoFocus
+            maxLength={NAME_MAX_BYTES}
+          />
+          {initial && count > 1 && (
+            <p className="text-xs text-muted-foreground">
+              Renames it for all {count} channels in it — a category is only ever the channels
+              naming it, so each one is re-filed.
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={!trimmed || unchanged}>
+              {initial ? "Rename" : "Create"}
+            </Button>
+          </div>
+        </form>
+      </ChromeDialogContent>
+    </Dialog>
+  );
+}
+
 function ChannelRow2({
   community,
   channel,
@@ -355,6 +433,9 @@ function ChannelRow2({
   unread,
   onSelect,
   onJoinVoice,
+  categories,
+  onSetCategory,
+  onNewCategory,
 }: {
   community: CommunityV2 | undefined;
   channel: ChannelV2;
@@ -368,6 +449,12 @@ function ChannelRow2({
   unread?: Concord2Unread;
   onSelect: () => void;
   onJoinVoice: (channel: ChannelV2, broker: string | null, fold?: VoicePresenceFold) => void;
+  /** Category names already in use, offered so near-duplicates aren't retyped. */
+  categories?: string[];
+  /** Undefined for a member without MANAGE_CHANNELS: no filing menu at all. */
+  onSetCategory?: (category: string | undefined) => void;
+  /** Opens the naming prompt — a context menu is a poor place for a text field. */
+  onNewCategory?: () => void;
 }) {
   // Every Channel is callable (CORD-07): live presence drives the Discord-style
   // nested roster under the row whenever a call is active, and the rendezvous
@@ -493,6 +580,37 @@ function ChannelRow2({
               setNotifLevel(concordChannelScopeKey("c2", community.idHex, channel.idHex), lvl)
             }
           />
+        )}
+        {onSetCategory && (
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>
+              <Folder className="mr-2 size-4" />
+              Move to category
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent className="w-52">
+              {(categories ?? []).map((name) => (
+                <ContextMenuItem
+                  key={name}
+                  disabled={categoryKey(name) === categoryKey(channel.category ?? "")}
+                  onSelect={() => onSetCategory(name)}
+                >
+                  <Folder className="mr-2 size-4" />
+                  <span className="truncate">{name}</span>
+                </ContextMenuItem>
+              ))}
+              {(categories ?? []).length > 0 && <ContextMenuSeparator />}
+              <ContextMenuItem onSelect={() => onNewCategory?.()}>
+                <Plus className="mr-2 size-4" />
+                New category…
+              </ContextMenuItem>
+              {channel.category && (
+                <ContextMenuItem onSelect={() => onSetCategory(undefined)}>
+                  <X className="mr-2 size-4" />
+                  Remove from category
+                </ContextMenuItem>
+              )}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
         )}
       </ContextMenuContent>
     </ContextMenu>
@@ -785,6 +903,8 @@ export function ConcordV2Page() {
     () => groupChannelsByCategory(channels, (c) => c.category),
     [channels],
   );
+
+  const categoryPicklist = useMemo(() => categoryNames(channels, (c) => c.category), [channels]);
 
   const collapsedCategories = useMemo(
     () => new Set(config.collapsedChannelCategories[community?.idHex ?? ""] ?? []),
@@ -1263,7 +1383,55 @@ export function ConcordV2Page() {
     return () => document.removeEventListener("visibilitychange", stamp);
   }, [readerPubkey, channelIdForRead, mixedEntries, allMessages, threads, markChannelRead, markMentionsRead, markThreadRead]);
 
-  const { leave, isLeaving, dissolve, createChannel, privatiseChannel } = useCommunityManagement2(community);
+  const { leave, isLeaving, dissolve, createChannel, privatiseChannel, setChannelCategory } =
+    useCommunityManagement2(community);
+
+  /**
+   * File one channel, from the sidebar's own context menu — the same edition
+   * the community-settings row publishes, just reachable where the arrangement
+   * is actually visible.
+   */
+  const fileChannel = useCallback(
+    async (channelIdHex: string, category: string | undefined) => {
+      try {
+        await setChannelCategory({ channelIdHex, category });
+      } catch (e) {
+        toast({
+          title: "Couldn't move the channel",
+          description: e instanceof Error ? e.message : undefined,
+          variant: "destructive",
+        });
+      }
+    },
+    [setChannelCategory],
+  );
+
+  /**
+   * Re-file every channel in a category at once — what "rename" and "ungroup"
+   * mean when a category is only ever the set of channels naming it. One
+   * edition per channel, sequentially so a rate-limited relay doesn't drop
+   * half of them, and each is independently version-chained (they are
+   * different entities), so a failure part-way leaves a half-renamed category
+   * rather than a corrupt one. Renaming onto a name already in use merges.
+   */
+  const refileCategory = useCallback(
+    async (members: readonly ChannelV2[], category: string | undefined) => {
+      let moved = 0;
+      try {
+        for (const member of members) {
+          await setChannelCategory({ channelIdHex: member.idHex, category });
+          moved += 1;
+        }
+      } catch (e) {
+        toast({
+          title: moved > 0 ? `Only moved ${moved} of ${members.length} channels` : "Couldn't move the channels",
+          description: e instanceof Error ? e.message : undefined,
+          variant: "destructive",
+        });
+      }
+    },
+    [setChannelCategory],
+  );
   const handleCreateRepositoryChannel = useCallback(async (name: string, repository: WizardRepository) => {
     const { channelIdHex: created } = await createChannel({
       name,
@@ -1330,6 +1498,15 @@ export function ConcordV2Page() {
   const [shareDiscoverOpen, setShareDiscoverOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);
   const [banTarget, setBanTarget] = useState<string | null>(null);
+  /**
+   * The pending "name a category" prompt. A category has no id, so naming one
+   * is the same act whether it is being created (file one channel under a new
+   * name) or renamed (re-file every channel currently under the old one) —
+   * hence one prompt with two targets rather than two dialogs.
+   */
+  const [categoryPrompt, setCategoryPrompt] = useState<
+    { channels: ChannelV2[]; initial: string } | null
+  >(null);
   // The community-name header menu (Discord-style): expands inline below the
   // header, pushing the channel list down with a height animation.
   const [communityMenuOpen, setCommunityMenuOpen] = useState(false);
@@ -2074,6 +2251,11 @@ export function ConcordV2Page() {
           onNavigate?.();
         }}
         onJoinVoice={handleJoinVoice}
+        categories={categoryPicklist}
+        onSetCategory={
+          canManageChannels ? (category) => void fileChannel(c.idHex, category) : undefined
+        }
+        onNewCategory={() => setCategoryPrompt({ channels: [c], initial: "" })}
       />
     );
   };
@@ -2360,6 +2542,14 @@ export function ConcordV2Page() {
                   collapsed={collapsed}
                   onToggle={() => toggleCategory(group.key)}
                   hasUnread={group.channels.some((c) => unreadByChannel[c.idHex])}
+                  onRename={
+                    canManageChannels
+                      ? () => setCategoryPrompt({ channels: group.channels, initial: group.name })
+                      : undefined
+                  }
+                  onUngroup={
+                    canManageChannels ? () => void refileCategory(group.channels, undefined) : undefined
+                  }
                 />
                 {shown.map(renderChannelRow(onNavigate))}
               </div>
@@ -3103,6 +3293,13 @@ export function ConcordV2Page() {
         onRotateChannelKey={canRekeyChannel ? handleRotateChannelKey : undefined}
         open={infoOpen}
         onOpenChange={setInfoOpen}
+      />
+      <CategoryNameDialog2
+        open={Boolean(categoryPrompt)}
+        initial={categoryPrompt?.initial ?? ""}
+        count={categoryPrompt?.channels.length ?? 0}
+        onOpenChange={(next) => !next && setCategoryPrompt(null)}
+        onSubmit={(name) => categoryPrompt && void refileCategory(categoryPrompt.channels, name)}
       />
       <RolesDialog2 community={community} open={rolesOpen} onOpenChange={setRolesOpen} />
     </MemberRolesContext.Provider>

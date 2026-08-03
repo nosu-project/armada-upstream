@@ -34,7 +34,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ImageLightbox2 } from "@/concord-v2/components/ImageLightbox2";
-import { categoryKey } from "@/concord-v2/lib/channelCategory";
+import { categoryKey, categoryNames } from "@/concord-v2/lib/channelCategory";
 import { useCommunityManagement2 } from "@/concord-v2/hooks/useCommunityActions2";
 import { useChannels2, useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
@@ -744,13 +744,7 @@ function ChannelsSection({
 
   // Existing category names, in sidebar order, offered when filing a channel
   // so a moderator picks "Voice" rather than retyping it as "voice".
-  const categoryNames = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const ch of channels) {
-      if (ch.category && !seen.has(categoryKey(ch.category))) seen.set(categoryKey(ch.category), ch.category);
-    }
-    return [...seen.values()];
-  }, [channels]);
+  const categories = useMemo(() => categoryNames(channels, (ch) => ch.category), [channels]);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
 
@@ -796,7 +790,7 @@ function ChannelsSection({
             channel={ch}
             canManage={canManage}
             disabled={isRenaming || isFiling}
-            categories={categoryNames}
+            categories={categories}
             onRename={(name) => renameChannel({ channelIdHex: ch.idHex, name })}
             accessRoles={channelRoles?.get(ch.idHex) ?? []}
             onPrivatise={onPrivatiseChannel ? () => onPrivatiseChannel(ch.idHex) : undefined}

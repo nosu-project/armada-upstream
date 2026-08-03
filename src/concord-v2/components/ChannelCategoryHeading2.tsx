@@ -1,5 +1,11 @@
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, FolderMinus, Pencil } from "lucide-react";
 
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 
 interface ChannelCategoryHeading2Props {
@@ -11,6 +17,16 @@ interface ChannelCategoryHeading2Props {
    * collapsing a category never hides the fact that something happened in it.
    */
   hasUnread?: boolean;
+  /**
+   * Re-file every channel in the category under a new name. A category has no
+   * id, so this is the only thing "rename" can mean — and why it belongs here
+   * rather than as a per-channel edit repeated by hand.
+   *
+   * Undefined for a member without MANAGE_CHANNELS: no menu at all.
+   */
+  onRename?: () => void;
+  /** Clear the category from every channel in it, dissolving the heading. */
+  onUngroup?: () => void;
   children?: React.ReactNode;
 }
 
@@ -20,9 +36,11 @@ export function ChannelCategoryHeading2({
   collapsed,
   onToggle,
   hasUnread,
+  onRename,
+  onUngroup,
   children,
 }: ChannelCategoryHeading2Props) {
-  return (
+  const heading = (
     <button
       type="button"
       onClick={onToggle}
@@ -42,5 +60,28 @@ export function ChannelCategoryHeading2({
       )}
       {children}
     </button>
+  );
+
+  if (!onRename && !onUngroup) return heading;
+  return (
+    <ContextMenu>
+      {/* Right-click on a pointer device, press-and-hold on touch — Radix
+          drives both, so the heading needs no gesture handling of its own. */}
+      <ContextMenuTrigger asChild>{heading}</ContextMenuTrigger>
+      <ContextMenuContent className="w-52">
+        {onRename && (
+          <ContextMenuItem onSelect={onRename}>
+            <Pencil className="mr-2 size-4" />
+            Rename category
+          </ContextMenuItem>
+        )}
+        {onUngroup && (
+          <ContextMenuItem onSelect={onUngroup}>
+            <FolderMinus className="mr-2 size-4" />
+            Ungroup channels
+          </ContextMenuItem>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

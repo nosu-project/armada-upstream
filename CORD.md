@@ -648,3 +648,13 @@ In the Armada client:
   anything unread, so folding one away never hides a mention. Which headings are
   folded is per-device state in `AppConfig.collapsedChannelCategories`, keyed by
   community id then casefolded category name.
+
+Filing is done from the sidebar itself — right-click a Channel (press-and-hold
+on touch) for "Move to category", and the same gesture on a heading for
+"Rename category" / "Ungroup channels"; the community-settings Channel list
+carries the same actions. Renaming and ungrouping are one edition PER Channel,
+published in sequence, because a category is only ever the set of Channels
+naming it: there is no category object to edit. They are independent entities
+with independent version chains, so a failure part-way through leaves a
+half-renamed category rather than a corrupt one, and renaming onto a name
+already in use merges the two. Only MANAGE_CHANNELS holders see any of it.

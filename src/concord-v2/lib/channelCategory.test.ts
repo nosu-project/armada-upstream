@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ARMADA_CHANNEL_CATEGORY_METADATA_KEY,
+  categoryNames,
   channelCategory,
   groupChannelsByCategory,
   withChannelCategory,
@@ -118,6 +119,24 @@ describe("grouping", () => {
     const { uncategorized, categories } = groupChannelsByCategory([ch("general", "   ")], categoryOf);
     expect(uncategorized.map((c) => c.name)).toEqual(["general"]);
     expect(categories).toEqual([]);
+  });
+});
+
+describe("the picker's name list", () => {
+  it("offers each category once, in display order", () => {
+    expect(
+      categoryNames([ch("general"), ch("lobby", "Voice"), ch("standup", "Team"), ch("afk", "Voice")], categoryOf),
+    ).toEqual(["Voice", "Team"]);
+  });
+
+  it("folds case so a second spelling isn't offered as a second category", () => {
+    // Picking from this list is what keeps `Voice`/`voice` from ever being
+    // created; offering both would defeat it.
+    expect(categoryNames([ch("lobby", "Voice"), ch("afk", "voice")], categoryOf)).toEqual(["Voice"]);
+  });
+
+  it("has nothing to offer when nothing is filed", () => {
+    expect(categoryNames([ch("general"), ch("random", "  ")], categoryOf)).toEqual([]);
   });
 });
 
