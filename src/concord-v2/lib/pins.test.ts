@@ -11,7 +11,7 @@ import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
 import { describe, expect, it } from "vitest";
 
 import { channelGroupKey, bytesToHex, random32 } from "@/concord-v2/lib/derive";
-import { KIND_MESSAGE, KIND_SEAL_ENCRYPTED } from "@/concord-v2/lib/kinds";
+import { KIND_EDIT, KIND_MESSAGE, KIND_SEAL_ENCRYPTED } from "@/concord-v2/lib/kinds";
 import {
   PIN_MAX_CONTENT_BYTES,
   PIN_MAX_ENTRIES,
@@ -22,6 +22,7 @@ import {
   serializePublicPinList,
   serializeSealedPinList,
   verifyPinEntry,
+  withProvenEdit,
   type PinEntry,
 } from "@/concord-v2/lib/pins";
 import { buildRumor, openWrap, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
@@ -300,5 +301,98 @@ describe("deletion (§7)", () => {
     const { alive, killed } = partitionDeletedPins(pins, [{ author: alice.pubkey, tags: [["e", pins[0].rumorId]] }]);
     expect(killed.map((p) => p.content)).toEqual(["gone"]);
     expect(alive.map((p) => p.content)).toEqual(["stays"]);
+  });
+});
+
+describe("edits (§7)", () => {
+  /** A real kind-3302 Edit rumor targeting `targetId`, sealed for chanA. */
+  async function editOf(targetId: string, text: string, author: ReturnType<typeof signer>, group = chanA, channelId = CHANNEL_A) {
+    const rumor = buildRumor({
+      kind: KIND_EDIT,
+      content: text,
+      tags: [["channel", bytesToHex(channelId)], ["epoch", "0"], ["e", targetId]],
+      pubkey: author.pubkey,
+    });
+    const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, group, author);
+    return openWrap(wrapSeal(seal, group), group);
+  }
+
+  it("a proven edit supersedes the original's words, for a reader with no keys", async () => {
+    const alice = signer();
+    const { opened } = await pinnable("frist post", alice);
+    const base = buildPinEntry(opened, chanA.convKey)!;
+    const edit = await editOf(opened.rumorId, "first post", alice);
+
+    const entry = overWire(withProvenEdit(base, edit, chanA.convKey));
+    expect(entry.edit, "the bundle rode along").toBeDefined();
+
+    const pin = verifyPinEntry(entry, bytesToHex(CHANNEL_A))!;
+    expect(pin.content, "renders the revision").toBe("first post");
+    expect(pin.edited?.content).toBe("first post");
+    expect(pin.rumorId, "identity stays the ORIGINAL — deletes still match").toBe(opened.rumorId);
+    expect(pin.author).toBe(alice.pubkey);
+  });
+
+  it("refuses an edit from anyone but the original's author", async () => {
+    const alice = signer();
+    const mallory = signer();
+    const { opened } = await pinnable("alice's words", alice);
+    const base = buildPinEntry(opened, chanA.convKey)!;
+    const forged = await editOf(opened.rumorId, "mallory's rewrite", mallory);
+
+    // The builder refuses to attach it…
+    expect(withProvenEdit(base, forged, chanA.convKey).edit).toBeUndefined();
+    // …and a reader handed one anyway drops the EDIT, never the pin.
+    const seal = forged.seal!;
+    const keys = encodeMessageKeys(discloseKeysFor(seal.content, chanA.convKey)!);
+    const smuggled = overWire({ ...base, edit: { seal, keys } });
+    const pin = verifyPinEntry(smuggled, bytesToHex(CHANNEL_A))!;
+    expect(pin, "the pin survives").toBeDefined();
+    expect(pin.content, "the forgery does not").toBe("alice's words");
+    expect(pin.edited).toBeUndefined();
+  });
+
+  it("refuses an edit aimed at a different message", async () => {
+    const alice = signer();
+    const a = await pinnable("message A", alice);
+    const b = await pinnable("message B", alice);
+    const base = buildPinEntry(a.opened, chanA.convKey)!;
+    const wrongTarget = await editOf(b.opened.rumorId, "edit of B", alice);
+    expect(withProvenEdit(base, wrongTarget, chanA.convKey).edit).toBeUndefined();
+  });
+
+  it("refuses a non-edit kind smuggled into the edit slot", async () => {
+    const alice = signer();
+    const { opened } = await pinnable("original", alice);
+    const base = buildPinEntry(opened, chanA.convKey)!;
+    // A plain chat message, not a kind-3302 edit.
+    const notAnEdit = await pinnable("pretending to be an edit", alice);
+    const seal = notAnEdit.opened.seal!;
+    const keys = encodeMessageKeys(discloseKeysFor(seal.content, chanA.convKey)!);
+    const pin = verifyPinEntry(overWire({ ...base, edit: { seal, keys } }), bytesToHex(CHANNEL_A))!;
+    expect(pin.content).toBe("original");
+    expect(pin.edited).toBeUndefined();
+  });
+
+  it("a later edit REPLACES rather than appends, so cost stays flat", async () => {
+    const alice = signer();
+    const { opened } = await pinnable("v1", alice);
+    let entry = buildPinEntry(opened, chanA.convKey)!;
+    const sizes: number[] = [];
+    for (const [i, text] of ["v2", "v3", "v4"].entries()) {
+      const edit = await editOf(opened.rumorId, text, alice);
+      entry = withProvenEdit(entry, edit, chanA.convKey);
+      sizes.push(new TextEncoder().encode(JSON.stringify(entry)).length);
+      expect(verifyPinEntry(overWire(entry), bytesToHex(CHANNEL_A))?.content).toBe(text);
+      expect(Object.keys(entry.edit ?? {}), `edit ${i} is a single bundle`).toEqual(["seal", "keys"]);
+    }
+    // Three edits, one bundle: the entry never grows.
+    expect(Math.max(...sizes) - Math.min(...sizes)).toBeLessThan(20);
+  });
+
+  it("a bad edit bundle never costs the pin its proof", () => {
+    // Garbage in the edit slot is dropped alone.
+    const junk = { seal: null, keys: "zz" } as unknown as PinEntry["edit"];
+    expect(() => verifyPinEntry({ seal: {} as never, keys: "", edit: junk }, bytesToHex(CHANNEL_A))).not.toThrow();
   });
 });

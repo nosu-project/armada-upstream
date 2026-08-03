@@ -1341,7 +1341,7 @@ export function ConcordV2Page() {
   // Pins (CORD-04 §7). Building a proof needs the ORIGINAL seal, not the
   // rendered message, so the toggle reaches back into the opened-rumor cache
   // by rumor id — the decrypted row alone can prove nothing.
-  const pins = usePins2(community, channel);
+  const pins = usePins2(community, channel, openedById);
   const togglePin = useCallback(
     (event: ChatMsg) => {
       const run = async () => {
@@ -3317,6 +3317,18 @@ export function ConcordV2Page() {
                     dark={pins.dark}
                     canUnpin={pins.canPin}
                     isUnpinning={pins.isUnpinning}
+                    staleEdits={pins.staleEdits}
+                    isRefreshingEdits={pins.isRefreshingEdits}
+                    onRefreshEdits={pins.canPin ? () => {
+                      void (async () => {
+                        try {
+                          const n = await pins.refreshEdits();
+                          toast({ title: n > 0 ? `Updated ${n} pin${n === 1 ? "" : "s"}` : "Pins already current" });
+                        } catch (e) {
+                          toast({ title: "Couldn't update pins", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+                        }
+                      })();
+                    } : undefined}
                     onJump={jumpWithinChannel}
                     onUnpin={(rumorId) => {
                       void (async () => {

@@ -21,7 +21,7 @@ import {
   discloseKeysFor,
   encodeMessageKeys,
 } from "@/concord-v2/lib/nip44keys";
-import { KIND_COMMENT, KIND_MESSAGE, KIND_SEAL_ENCRYPTED } from "@/concord-v2/lib/kinds";
+import { KIND_COMMENT, KIND_EDIT, KIND_MESSAGE, KIND_SEAL_ENCRYPTED } from "@/concord-v2/lib/kinds";
 import type { OpenedEvent } from "@/concord-v2/lib/stream";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
@@ -36,6 +36,12 @@ export interface PinEntry {
   keys: string;
   /** Optional, UNVERIFIED locator hint for jump-to-context. */
   wrap?: string;
+  /**
+   * The newest provable Edit, for readers who hold no Chat plane (§7 Edits).
+   * At most one, ever: Edits target the ORIGINAL rumor and never each other, so
+   * a later Edit REPLACES this rather than appending.
+   */
+  edit?: { seal: NostrEvent; keys: string };
 }
 
 /** A pin that passed the full §7 verification — safe to render. */
@@ -54,6 +60,8 @@ export interface VerifiedPin {
   createdAt: number;
   /** Untrusted locator hint, if the entry carried one. */
   wrapHint?: string;
+  /** Set when a proven Edit superseded the original's words. */
+  edited?: { content: string; ms: number };
   /** The wire entry, verbatim — for republishing (re-wraps, omissions). */
   entry: PinEntry;
 }
@@ -159,18 +167,68 @@ export function verifyPinEntry(entry: PinEntry, channelIdHex: string): VerifiedP
     return undefined;
   }
 
+  // The Edit bundle, if the entry carries one. A bad bundle drops the EDIT,
+  // never the pin: the original is still proven, and refusing it outright would
+  // hide a message because someone attached a bad correction.
+  const edited = entry.edit ? verifyEditBundle(entry.edit, seal.pubkey, rumorId) : undefined;
+
   return {
     rumorId,
     author: seal.pubkey,
     kind: rumor.kind,
-    content: rumor.content,
+    content: edited?.content ?? rumor.content,
     tags: rumor.tags,
     epoch: tagValue(rumor.tags, "epoch"),
     ms: resolveMs(rumor.created_at, rumor.tags),
     createdAt: rumor.created_at,
     wrapHint: typeof entry.wrap === "string" ? entry.wrap : undefined,
+    edited,
     entry,
   };
+}
+
+/**
+ * An Edit bundle proves the SAME author revised THIS message: the five steps of
+ * {@link verifyPinEntry} plus the fold's own two rules — author equality (nobody
+ * else may revise another member's words) and an `e` tag naming the original's
+ * recomputed rumor id.
+ */
+function verifyEditBundle(
+  bundle: { seal: NostrEvent; keys: string },
+  originalAuthor: string,
+  originalRumorId: string,
+): { content: string; ms: number } | undefined {
+  const seal = bundle?.seal;
+  if (!seal || typeof seal !== "object" || seal.kind !== KIND_SEAL_ENCRYPTED) return undefined;
+  // Author equality is checkable before any crypto: a bundle sealed by anyone
+  // but the original's author cannot revise it, whatever it decrypts to.
+  if (seal.pubkey !== originalAuthor) return undefined;
+  let sigOk = false;
+  try {
+    sigOk = verifyEvent(seal);
+  } catch {
+    return undefined;
+  }
+  if (!sigOk) return undefined;
+
+  const keys = decodeMessageKeys(bundle.keys ?? "");
+  if (!keys) return undefined;
+  const plaintext = decryptWithDisclosedKeys(seal.content, keys);
+  if (plaintext === undefined) return undefined;
+
+  let rumor: NostrRumor;
+  try {
+    rumor = JSON.parse(plaintext) as NostrRumor;
+  } catch {
+    return undefined;
+  }
+  if (typeof rumor !== "object" || rumor === null) return undefined;
+  if (rumor.pubkey !== seal.pubkey) return undefined;
+  if (rumor.kind !== KIND_EDIT) return undefined;
+  if (!Array.isArray(rumor.tags)) return undefined;
+  if (tagValue(rumor.tags, "e") !== originalRumorId) return undefined;
+  if (typeof rumor.content !== "string" || !Number.isSafeInteger(rumor.created_at)) return undefined;
+  return { content: rumor.content, ms: resolveMs(rumor.created_at, rumor.tags) };
 }
 
 // ── The list's two self-describing content forms ─────────────────────────────
@@ -277,4 +335,21 @@ export function partitionDeletedPins(
     (deletes.some((d) => pinKilledBy(pin, d)) ? killed : alive).push(pin);
   }
   return { alive, killed };
+}
+
+/**
+ * Attach the newest provable Edit to an entry (§7 Edits). Requires the Channel
+ * conversation key of the Edit's own epoch — i.e. the curator can read it.
+ * Returns the entry unchanged when the Edit cannot be proven, so a refresh
+ * never downgrades a good pin into a broken one.
+ */
+export function withProvenEdit(entry: PinEntry, editOpened: OpenedEvent, convKey: Uint8Array): PinEntry {
+  const seal = editOpened.seal;
+  if (!seal || seal.kind !== KIND_SEAL_ENCRYPTED) return entry;
+  const keys = discloseKeysFor(seal.content, convKey);
+  if (!keys) return entry;
+  const candidate: PinEntry = { ...entry, edit: { seal, keys: encodeMessageKeys(keys) } };
+  // Only keep it if it actually verifies against this entry — the same gate a
+  // reader will apply, run before it costs list budget.
+  return verifyPinEntry(candidate, tagValue(editOpened.tags, "channel") ?? "")?.edited ? candidate : entry;
 }

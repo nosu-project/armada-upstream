@@ -9,6 +9,9 @@ import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { cn } from "@/lib/utils";
 
+/** A pin as the bar renders it: verified, plus any locally-applied Edit. */
+type BarPin = VerifiedPin & { staleEdit?: boolean };
+
 /** Strip URLs to a paperclip for a compact preview. */
 function previewText(content: string): string {
   return content.replace(/https?:\/\/\S+/g, "📎").trim() || "📎";
@@ -26,7 +29,7 @@ function PinRow({
   onJump,
   onUnpin,
 }: {
-  pin: VerifiedPin;
+  pin: BarPin;
   canUnpin: boolean;
   busy: boolean;
   onJump?: (rumorId: string) => void;
@@ -62,6 +65,18 @@ function PinRow({
           <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
             {shortTimeAgo(pin.createdAt)}
           </span>
+          {pin.edited && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="shrink-0 text-[10px] text-muted-foreground">(edited)</span>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-56 text-xs">
+                {pin.staleEdit
+                  ? "The author revised this. You can read the revision; members who joined later still see the original until an admin refreshes the pin."
+                  : "The author revised this, and the revision is proven for everyone."}
+              </TooltipContent>
+            </Tooltip>
+          )}
         </span>
         <span className="text-[12px] text-muted-foreground line-clamp-2 break-words">
           {previewText(pin.content)}
@@ -101,15 +116,21 @@ export function PinnedBar2({
   dark,
   canUnpin,
   isUnpinning,
+  staleEdits,
+  isRefreshingEdits,
+  onRefreshEdits,
   onJump,
   onUnpin,
   onClose,
 }: {
   open: boolean;
-  pins: VerifiedPin[];
+  pins: BarPin[];
   dark: boolean;
   canUnpin: boolean;
   isUnpinning: boolean;
+  staleEdits: number;
+  isRefreshingEdits: boolean;
+  onRefreshEdits?: () => void;
   onJump?: (rumorId: string) => void;
   onUnpin: (rumorId: string) => void;
   onClose: () => void;
@@ -141,6 +162,19 @@ export function PinnedBar2({
             <X className="size-3.5" />
           </Button>
         </div>
+        {staleEdits > 0 && onRefreshEdits && (
+          <button
+            type="button"
+            disabled={isRefreshingEdits}
+            onClick={onRefreshEdits}
+            className="mb-1.5 flex w-full items-center gap-2 rounded-md bg-amber-500/10 px-2 py-1.5 text-left text-[11px] text-amber-700 disabled:opacity-60 dark:text-amber-400"
+          >
+            {isRefreshingEdits ? <Loader2 className="size-3 shrink-0 animate-spin" /> : <ShieldCheck className="size-3 shrink-0" />}
+            {staleEdits} pin{staleEdits === 1 ? " was" : "s were"} edited after pinning. Members who joined
+            later still see the original.
+            <span className="ml-auto shrink-0 underline">Update</span>
+          </button>
+        )}
         {dark && pins.length === 0 ? (
           <p className="flex items-center gap-2 px-2 py-3 text-[12px] text-muted-foreground">
             <Lock className="size-3.5 shrink-0" />

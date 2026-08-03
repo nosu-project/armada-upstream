@@ -10,12 +10,13 @@ import {
 } from "@/concord-v2/hooks/useControlPlane2";
 import { buildEditionRumor } from "@/concord-v2/lib/edition";
 import { bytesToHex, pinsLocator } from "@/concord-v2/lib/derive";
-import { VSK_PINS } from "@/concord-v2/lib/kinds";
+import { KIND_EDIT, VSK_PINS } from "@/concord-v2/lib/kinds";
 import {
   PIN_MAX_CONTENT_BYTES,
   PIN_MAX_ENTRIES,
   buildPinEntryOrReason,
   readPinList,
+  withProvenEdit,
   serializePublicPinList,
   serializeSealedPinList,
   verifyPinEntry,
@@ -46,7 +47,12 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
  * author equality, and the channel binding — so the UI never displays an
  * unproven claim about who said what.
  */
-export function usePins2(community: CommunityV2 | undefined, channel: ChannelV2 | undefined) {
+export function usePins2(
+  community: CommunityV2 | undefined,
+  channel: ChannelV2 | undefined,
+  /** The channel's opened rows, so a keyed client can apply Edits locally (§7). */
+  opened?: Map<string, OpenedEvent>,
+) {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
@@ -78,6 +84,49 @@ export function usePins2(community: CommunityV2 | undefined, channel: ChannelV2 
     return readList(head.content, channel).sealed;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [head?.content, channel?.idHex, channel?.streams.length]);
+
+  /**
+   * Edits this client can read but the entry doesn't carry (§7 Edits). A keyed
+   * member folds these locally and MUST show the revision rather than
+   * superseded words; a curator can then push the proof so keyless readers
+   * catch up. Keyed by the pinned rumor id.
+   */
+  const localEdits = useMemo(() => {
+    const out = new Map<string, { opened: OpenedEvent; content: string; ms: number }>();
+    if (!opened || pins.length === 0) return out;
+    const pinned = new Map(pins.map((p) => [p.rumorId, p]));
+    for (const ev of opened.values()) {
+      if (ev.kind !== KIND_EDIT) continue;
+      const target = ev.tags.find((t) => t[0] === "e")?.[1];
+      if (!target) continue;
+      const pin = pinned.get(target);
+      // Only the original author may revise — the fold's own rule.
+      if (!pin || ev.author !== pin.author) continue;
+      // Newer than whatever the entry already proves, and newer than any
+      // sibling edit we've already picked.
+      if (pin.edited && ev.ms <= pin.edited.ms) continue;
+      const prev = out.get(target);
+      if (prev && prev.ms >= ev.ms) continue;
+      out.set(target, { opened: ev, content: ev.content, ms: ev.ms });
+    }
+    return out;
+  }, [opened, pins]);
+
+  /**
+   * What the UI renders: the verified pins with any locally-readable Edit
+   * applied on top. `staleEdit` marks a pin whose revision this client can see
+   * but the entry cannot yet prove to keyless readers.
+   */
+  const view = useMemo(
+    () =>
+      pins.map((p) => {
+        const local = localEdits.get(p.rumorId);
+        return local
+          ? { ...p, content: local.content, edited: { content: local.content, ms: local.ms }, staleEdit: true }
+          : { ...p, staleEdit: false };
+      }),
+    [pins, localEdits],
+  );
 
   const canPin = Boolean(
     user && folded && isAuthorized(folded.roster, user.pubkey, folded.ownerHex, Permissions.PIN_MESSAGES),
@@ -146,8 +195,37 @@ export function usePins2(community: CommunityV2 | undefined, channel: ChannelV2 
     await publish(survivors.map((p) => p.entry));
   };
 
+  /**
+   * Push the newest Edit this client can prove into the list, so keyless
+   * readers stop seeing superseded words. Offered only while we hold something
+   * newer than the entry carries — a refresh attaching an OLDER Edit would
+   * silently revert the pin, which no keyless reader could detect.
+   */
+  const refreshEdits = useMutation<number, Error, void>({
+    mutationFn: async () => {
+      if (!channel || localEdits.size === 0) return 0;
+      let changed = 0;
+      const next = pins.map((p) => {
+        const local = localEdits.get(p.rumorId);
+        if (!local) return p.entry;
+        const epoch = epochOf(local.opened);
+        const stream =
+          channel.streams.find((s) => (epoch === undefined ? false : s.epoch === epoch)) ?? channel.current;
+        const withEdit = withProvenEdit(p.entry, local.opened, stream.group.convKey);
+        if (withEdit !== p.entry) changed += 1;
+        return withEdit;
+      });
+      if (changed > 0) await publish(next);
+      return changed;
+    },
+  });
+
   return {
-    pins,
+    pins: view,
+    /** Pins whose revision this client sees but the entry can't prove yet. */
+    staleEdits: localEdits.size,
+    refreshEdits: refreshEdits.mutateAsync,
+    isRefreshingEdits: refreshEdits.isPending,
     /** The list is sealed under an epoch we never held — pins exist but are unreadable. */
     dark,
     canPin,
