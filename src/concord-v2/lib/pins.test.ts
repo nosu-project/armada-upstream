@@ -21,6 +21,7 @@ import {
   partitionDeletedPins,
   pinKilledBy,
   readPinList,
+  unconfirmedWrite,
   serializePublicPinList,
   serializeSealedPinList,
   verifyPinEntry,
@@ -181,7 +182,13 @@ describe("the proof bundle", () => {
   });
 
   it("never throws on hostile input", () => {
-    for (const junk of [{}, { seal: null }, { seal: {}, keys: "" }, { seal: 5, keys: 5 }] as unknown as PinEntry[]) {
+    // `null` is the one that used to THROW rather than return undefined — a
+    // curator publishing {"entries":[null]} crashed every reader's channel view
+    // from inside a render memo.
+    for (const junk of [
+      null, undefined, 0, "x", [],
+      {}, { seal: null }, { seal: {}, keys: "" }, { seal: 5, keys: 5 },
+    ] as unknown as PinEntry[]) {
       expect(() => verifyPinEntry(junk, bytesToHex(CHANNEL_A))).not.toThrow();
       expect(verifyPinEntry(junk, bytesToHex(CHANNEL_A))).toBeUndefined();
     }
@@ -374,6 +381,23 @@ describe("edits (§7)", () => {
     expect(pin.edited).toBeUndefined();
   });
 
+  it("refuses an edit sealed in another channel (step 4 applies to the bundle too)", async () => {
+    const alice = signer();
+    const { opened } = await pinnable("in channel A", alice);
+    const base = buildPinEntry(opened, chanA.convKey)!;
+    // A genuine Edit by the same author, targeting the same rumor — but sealed
+    // in channel B and naming B's id. A reader must be no weaker than the
+    // writer, which already refuses this.
+    const foreign = await editOf(opened.rumorId, "revised elsewhere", alice, chanB, CHANNEL_B);
+    const seal = foreign.seal!;
+    const keys = encodeMessageKeys(discloseKeysFor(seal.content, chanB.convKey)!);
+    const smuggled = overWire({ ...base, edit: { seal, keys } });
+    const pin = verifyPinEntry(smuggled, bytesToHex(CHANNEL_A))!;
+    expect(pin, "the pin survives").toBeDefined();
+    expect(pin.content, "the foreign edit does not apply").toBe("in channel A");
+    expect(pin.edited).toBeUndefined();
+  });
+
   it("refuses an edit aimed at a different message", async () => {
     const alice = signer();
     const a = await pinnable("message A", alice);
@@ -416,5 +440,37 @@ describe("edits (§7)", () => {
     // Garbage in the edit slot is dropped alone.
     const junk = { seal: null, keys: "zz" } as unknown as PinEntry["edit"];
     expect(() => verifyPinEntry({ seal: {} as never, keys: "", edit: junk }, bytesToHex(CHANNEL_A))).not.toThrow();
+  });
+});
+
+describe("pin failure reasons", () => {
+  it("separates a key we do not hold from a proof that does not hold up", async () => {
+    const { opened } = await pinnable("gm");
+    // The key expansion succeeds under ANY conversation key, so holding the
+    // wrong epoch's key yields a well-formed disclosure that opens nothing.
+    // The pinner must be told that, not told their proof is broken.
+    expect(buildPinEntryOrReason(opened, chanB.convKey).reason, "wrong epoch").toBe("bad-payload");
+    expect(buildPinEntryOrReason(opened, chanA.convKey).entry, "our own epoch").toBeDefined();
+    expect(buildPinEntryOrReason({ ...opened, seal: undefined }, chanA.convKey).reason).toBe("no-seal");
+  });
+});
+
+describe("unconfirmed writes", () => {
+  it("keeps our own list until the fold reaches that version", () => {
+    const mine = { version: 5n, held: "ours" };
+    expect(unconfirmedWrite(mine, undefined), "fold has nothing yet").toBe("ours");
+    expect(unconfirmedWrite(mine, { version: 4n }), "fold is behind").toBe("ours");
+    expect(unconfirmedWrite(mine, { version: 5n }), "fold caught up").toBeUndefined();
+  });
+
+  it("yields to a version beyond ours, which is someone else's write", () => {
+    // Ours is no longer the list that exists, so building on it would erase
+    // whatever they just published.
+    expect(unconfirmedWrite({ version: 5n, held: "ours" }, { version: 6n })).toBeUndefined();
+  });
+
+  it("holds nothing when this client has not written", () => {
+    expect(unconfirmedWrite(undefined, { version: 3n })).toBeUndefined();
+    expect(unconfirmedWrite(undefined, undefined)).toBeUndefined();
   });
 });

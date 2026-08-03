@@ -117,6 +117,12 @@ export function buildPinEntryOrReason(
   if (seal.kind !== KIND_SEAL_ENCRYPTED) return { reason: "not-encrypted" };
   const keys = discloseKeysFor(seal.content, convKey);
   if (!keys) return { reason: "bad-payload" };
+  // Deriving keys is not the same as being able to read: the expansion succeeds
+  // under ANY conversation key, and a message written under an epoch we no
+  // longer hold only fails later, at the MAC. Check it here so "you don't hold
+  // these keys" and "this proof doesn't hold up" stay different answers — the
+  // pinner can act on one of them.
+  if (decryptWithDisclosedKeys(seal.content, keys) === undefined) return { reason: "bad-payload" };
   // Refuse to build an entry that would not verify — a pinner publishing a
   // broken proof burns list budget for nothing.
   const entry: PinEntry = { seal, keys: encodeMessageKeys(keys), wrap: opened.wrapId };
@@ -130,6 +136,11 @@ export function buildPinEntryOrReason(
  * a failed entry is dropped alone, its edition folds normally.
  */
 export function verifyPinEntry(entry: PinEntry, channelIdHex: string): VerifiedPin | undefined {
+  // The list's elements are unvalidated wire data: a curator can publish
+  // `{"entries":[null]}` under both caps. Reaching `.seal` first would throw
+  // inside the caller's render memo and take the channel view down for
+  // everyone, permanently, until that head is replaced.
+  if (!entry || typeof entry !== "object") return undefined;
   const seal = entry.seal;
   if (!seal || typeof seal !== "object") return undefined;
   if (seal.kind !== KIND_SEAL_ENCRYPTED) return undefined;
@@ -181,7 +192,7 @@ export function verifyPinEntry(entry: PinEntry, channelIdHex: string): VerifiedP
   // The Edit bundle, if the entry carries one. A bad bundle drops the EDIT,
   // never the pin: the original is still proven, and refusing it outright would
   // hide a message because someone attached a bad correction.
-  const edited = entry.edit ? verifyEditBundle(entry.edit, seal.pubkey, rumorId) : undefined;
+  const edited = entry.edit ? verifyEditBundle(entry.edit, seal.pubkey, rumorId, channelIdHex) : undefined;
 
   return {
     rumorId,
@@ -208,6 +219,7 @@ function verifyEditBundle(
   bundle: { seal: NostrEvent; keys: string },
   originalAuthor: string,
   originalRumorId: string,
+  channelIdHex: string,
 ): { content: string; ms: number } | undefined {
   const seal = bundle?.seal;
   if (!seal || typeof seal !== "object" || seal.kind !== KIND_SEAL_ENCRYPTED) return undefined;
@@ -237,6 +249,9 @@ function verifyEditBundle(
   if (rumor.pubkey !== seal.pubkey) return undefined;
   if (rumor.kind !== KIND_EDIT) return undefined;
   if (!Array.isArray(rumor.tags)) return undefined;
+  // Step 4 binds the Edit to this Channel too — a reader must not be weaker
+  // than the writer, which already enforces this via withProvenEdit.
+  if (tagValue(rumor.tags, "channel") !== channelIdHex) return undefined;
   if (tagValue(rumor.tags, "e") !== originalRumorId) return undefined;
   if (typeof rumor.content !== "string" || !Number.isSafeInteger(rumor.created_at)) return undefined;
   return { content: rumor.content, ms: resolveMs(rumor.created_at, rumor.tags) };
@@ -363,4 +378,24 @@ export function withProvenEdit(entry: PinEntry, editOpened: OpenedEvent, convKey
   // Only keep it if it actually verifies against this entry — the same gate a
   // reader will apply, run before it costs list budget.
   return verifyPinEntry(candidate, tagValue(editOpened.tags, "channel") ?? "")?.edited ? candidate : entry;
+}
+
+/**
+ * Whether a write this client made still outranks what the control fold shows,
+ * and so must be the base for the next one.
+ *
+ * The list is replace-entire and the fold is a relay round trip behind every
+ * write. Two actions in quick succession would each build from the pre-write
+ * list, so the second erases the first's entry and claims a version already
+ * taken. A client that publishes edition N keeps N as its truth until it sees
+ * a fold at N or later — including a LATER one, since a version beyond ours is
+ * someone else's write and theirs is the list that now exists.
+ */
+export function unconfirmedWrite<T>(
+  mine: { version: bigint; held: T } | undefined,
+  folded: { version: bigint } | undefined,
+): T | undefined {
+  if (!mine) return undefined;
+  if (folded && folded.version >= mine.version) return undefined;
+  return mine.held;
 }

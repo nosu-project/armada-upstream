@@ -1,5 +1,6 @@
 import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
 import { parseImetaMap, type ImetaEntry } from "@/lib/imeta";
+import { isLocalNetworkUrl, sanitizeUrl } from "@/lib/sanitizeUrl";
 
 /**
  * Attachment extraction for pinned messages — pure, so it can be tested and so
@@ -27,11 +28,27 @@ export function isImageAttachment(entry: ImetaEntry): boolean {
 
 /** Every attachment a pinned message carries, imeta first, bare URLs as fallback. */
 export function pinAttachmentEntries(content: string, tags: string[][]): ImetaEntry[] {
-  const entries: ImetaEntry[] = [...parseImetaMap(tags).values()];
+  // parseImetaMap does no scheme validation, and every one of these URLs came
+  // from a member's message and was chosen by a curator. The chat timeline
+  // sanitizes both imeta paths; pins must not be the one renderer that skips
+  // it, or a `javascript:` imeta reaches an <img src>/<a href>. Local-network
+  // hosts are dropped too — a pinned http://192.168.x.x prompts every viewer
+  // on every channel open, forever.
+  const safe = (e: ImetaEntry): ImetaEntry | undefined => {
+    const url = sanitizeUrl(e.url);
+    if (!url || isLocalNetworkUrl(url)) return undefined;
+    const thumbnail = e.thumbnail ? sanitizeUrl(e.thumbnail) : undefined;
+    return { ...e, url, thumbnail: thumbnail && !isLocalNetworkUrl(thumbnail) ? thumbnail : undefined };
+  };
+  const entries: ImetaEntry[] = [...parseImetaMap(tags).values()]
+    .map(safe)
+    .filter((e): e is ImetaEntry => e !== undefined);
   if (entries.length === 0) {
     for (const url of content.match(/https?:\/\/\S+/g) ?? []) {
-      if (/\.(png|jpe?g|gif|webp|avif|bmp|svg|mp4|webm|mp3|ogg|wav|pdf|zip)(\?|$)/i.test(url)) {
-        entries.push({ url });
+      const safeUrl = sanitizeUrl(url);
+      if (!safeUrl || isLocalNetworkUrl(safeUrl)) continue;
+      if (/\.(png|jpe?g|gif|webp|avif|bmp|svg|mp4|webm|mp3|ogg|wav|pdf|zip)(\?|$)/i.test(safeUrl)) {
+        entries.push({ url: safeUrl });
       }
     }
   }
