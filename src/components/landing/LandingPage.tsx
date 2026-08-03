@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { BrandMark } from "@/components/brand/BrandMark";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { STOCK_RELAYS } from "@/concord-v2/lib/invite";
 import { relayToHttpUrl } from "@/lib/platform";
 import { cn } from "@/lib/utils";
@@ -119,14 +120,45 @@ export function LandingPage({
               </a>
             </li>
           </ul>
-          <a
-            href="https://soapbox.pub/blog/how-to-self-host-armada"
-            target="_blank"
-            rel="noreferrer"
-            className="mt-5 font-mono text-xs tracking-wide text-muted-foreground/70 underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:text-foreground hover:decoration-current"
-          >
-            Host your own
-          </a>
+          {/* Radix Collapsible rather than the shadcn Accordion: the trigger
+              here is one word sitting inline beside a link, not a full-width
+              header with a chevron and a rule under it. */}
+          <Collapsible className="mt-5 w-full max-w-lg">
+            <div className="flex items-center justify-center gap-6 font-mono text-xs tracking-wide text-muted-foreground/70">
+              <CollapsibleTrigger className="transition-colors hover:text-foreground data-[state=open]:text-foreground">
+                Why?
+              </CollapsibleTrigger>
+              <a
+                href="https://soapbox.pub/blog/how-to-self-host-armada"
+                target="_blank"
+                rel="noreferrer"
+                className="underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:text-foreground hover:decoration-current"
+              >
+                Host your own
+              </a>
+            </div>
+            {/* The height keyframes are landing-local: the shared
+                `animate-accordion-*` utilities read the ACCORDION height
+                variable, which a Collapsible never sets. */}
+            <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-[armada-reveal-up_200ms_ease-out] data-[state=open]:animate-[armada-reveal-down_200ms_ease-out]">
+              <p className="text-pretty px-2 pt-6 text-xs leading-relaxed text-muted-foreground sm:text-sm">
+                Armada is built on{" "}
+                <a
+                  href="https://github.com/nostr-protocol/nostr"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-foreground underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:decoration-current"
+                >
+                  Nostr
+                </a>
+                , which redefines how services run online by separating the
+                application from the infrastructure. Anyone can run a server,
+                and every app can read and write across all of them — so the
+                people who own the machines are no longer the people who own
+                the community.
+              </p>
+            </CollapsibleContent>
+          </Collapsible>
         </section>
       </div>
 
@@ -203,6 +235,21 @@ function RelayLight({ url, index }: { url: string; index: number }) {
 function LandingKeyframes() {
   return (
     <style>{`
+      /* The "Why?" reveal. Radix measures the panel and publishes its height
+         on the content element, so the open/close is a real height animation
+         rather than a guessed max-height. */
+      @keyframes armada-reveal-down {
+        from { height: 0; opacity: 0; }
+        to   { height: var(--radix-collapsible-content-height); opacity: 1; }
+      }
+      @keyframes armada-reveal-up {
+        from { height: var(--radix-collapsible-content-height); opacity: 1; }
+        to   { height: 0; opacity: 0; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        [class*="animate-[armada-reveal"] { animation-duration: 1ms !important; }
+      }
+
       /* A lit relay LED: mostly a steady glow, with a quick double flicker
          once a cycle. Opacity + box-shadow only, so it never lays out. */
       @keyframes armada-led {
