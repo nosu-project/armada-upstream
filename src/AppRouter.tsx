@@ -18,6 +18,7 @@ import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { flattenLayout, mergeLayout, railKeyToRoute } from "@/lib/railLayout";
+import { CONCORD2_PANES } from "@/lib/routes";
 import { lazyWithReload } from "@/lib/chunkReload";
 
 // Route-level code splitting: each page loads as its own chunk on first visit,
@@ -284,11 +285,32 @@ export function AppRouter() {
                 and Inbox views resolve here, not as a channel. */}
             <Route path="/s/:server/projects" element={<ProjectsPage />} />
             <Route path="/s/:server/inbox" element={<RequireAuth><InboxPage /></RequireAuth>} />
+            {/* A room, optionally with a thread open and/or a message focused
+                (see `lib/routes.ts`). `/t/` and `/m/` are markers rather than
+                bare positions so that a thread root's two identities — the
+                message in the timeline and the thread it opens — stay
+                distinguishable. Each surface renders the same page for all
+                four shapes; the page reads the params. */}
             <Route path="/s/:server/:groupId" element={<GroupPage />} />
+            <Route path="/s/:server/:groupId/m/:messageId" element={<GroupPage />} />
+            <Route path="/s/:server/:groupId/t/:threadRoot" element={<GroupPage />} />
+            <Route path="/s/:server/:groupId/t/:threadRoot/m/:messageId" element={<GroupPage />} />
             <Route path="/c1/:communityId" element={<ConcordPage />} />
             <Route path="/c1/:communityId/:channelId" element={<ConcordPage />} />
+            <Route path="/c1/:communityId/:channelId/m/:messageId" element={<ConcordPage />} />
+            <Route path="/c1/:communityId/:channelId/t/:threadRoot" element={<ConcordPage />} />
+            <Route path="/c1/:communityId/:channelId/t/:threadRoot/m/:messageId" element={<ConcordPage />} />
             <Route path="/c/:communityId" element={<ConcordV2Page />} />
+            {/* Community-wide panes. Static segments outrank `:channelId`, and
+                Concord channel ids are hex, so these can never be shadowed by
+                a real channel. Kept in one place: `CONCORD2_PANES`. */}
+            {CONCORD2_PANES.map((pane) => (
+              <Route key={pane} path={`/c/:communityId/${pane}`} element={<ConcordV2Page />} />
+            ))}
             <Route path="/c/:communityId/:channelId" element={<ConcordV2Page />} />
+            <Route path="/c/:communityId/:channelId/m/:messageId" element={<ConcordV2Page />} />
+            <Route path="/c/:communityId/:channelId/t/:threadRoot" element={<ConcordV2Page />} />
+            <Route path="/c/:communityId/:channelId/t/:threadRoot/m/:messageId" element={<ConcordV2Page />} />
             {/* V1 invite links carry the token at /invite#…; V2 links carry an
                 naddr path segment at /invite/<naddr>#… (CORD-05). A Buzz relay
                 invite shares the same `/invite/<code>` path (its code is a
@@ -308,6 +330,8 @@ export function AppRouter() {
             <Route path="/mesh" element={<RequireAuth><MeshPage /></RequireAuth>} />
             <Route path="/dm" element={<RequireAuth><DMsPage /></RequireAuth>} />
             <Route path="/dm/:peer" element={<RequireAuth><DMsPage /></RequireAuth>} />
+            {/* DMs have no thread panel, so no `/t/` shape here. */}
+            <Route path="/dm/:peer/m/:messageId" element={<RequireAuth><DMsPage /></RequireAuth>} />
             {/* Pre-rename links (stale push subscriptions, tray notifications,
                 bookmarks). Declared before `/:user`, which would otherwise
                 swallow a bare `/dms` and render its own 404. */}

@@ -47,6 +47,39 @@ describe("sanitizePlausibleUrl", () => {
     );
   });
 
+  it("collapses thread roots and message ids", () => {
+    // These live in the pathname, so the query-string strip below is not a
+    // backstop for them: a shape that failed to template would ship a raw
+    // event id to a third party.
+    expect(sanitizePlausibleUrl("https://armada.buzz/c/comm/chan/m/evid")).toBe(
+      "https://armada.buzz/c/:communityId/:channelId/m/:messageId",
+    );
+    expect(sanitizePlausibleUrl("https://armada.buzz/c/comm/chan/t/root")).toBe(
+      "https://armada.buzz/c/:communityId/:channelId/t/:threadRoot",
+    );
+    expect(sanitizePlausibleUrl("https://armada.buzz/c/comm/chan/t/root/m/evid")).toBe(
+      "https://armada.buzz/c/:communityId/:channelId/t/:threadRoot/m/:messageId",
+    );
+    expect(sanitizePlausibleUrl("https://armada.buzz/s/relay/group123/t/root/m/evid")).toBe(
+      "https://armada.buzz/s/:server/:groupId/t/:threadRoot/m/:messageId",
+    );
+    expect(sanitizePlausibleUrl("https://armada.buzz/c1/comm/chan/m/evid")).toBe(
+      "https://armada.buzz/c1/:communityId/:channelId/m/:messageId",
+    );
+    expect(sanitizePlausibleUrl("https://armada.buzz/dm/npub1abc123/m/evid")).toBe(
+      "https://armada.buzz/dm/:peer/m/:messageId",
+    );
+  });
+
+  it("collapses Concord community panes without leaking the community id", () => {
+    expect(sanitizePlausibleUrl("https://armada.buzz/c/comm/mentions")).toBe(
+      "https://armada.buzz/c/:communityId/mentions",
+    );
+    expect(sanitizePlausibleUrl("https://armada.buzz/c/comm/members")).toBe(
+      "https://armada.buzz/c/:communityId/members",
+    );
+  });
+
   it("collapses invite naddr", () => {
     expect(sanitizePlausibleUrl("https://armada.buzz/invite/naddr1xyz")).toBe(
       "https://armada.buzz/invite/:naddr",
