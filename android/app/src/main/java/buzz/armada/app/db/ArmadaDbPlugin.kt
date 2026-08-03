@@ -161,10 +161,26 @@ class ArmadaDbPlugin : Plugin() {
         }
     }
 
+    /**
+     * The entries a selector picks out, as `{ key, value }` objects. `value` is
+     * the stored JSON TEXT carried as a string: re-serializing it here would
+     * risk respelling a number, and the WebView is the only side that parses.
+     */
     @PluginMethod
-    fun kvKeys(call: PluginCall) {
+    fun kvList(call: PluginCall) {
         try {
-            call.resolve(JSObject().put("keys", JSONArray(db.kvKeys(call.getString("prefix"))).toString()))
+            val entries = db.kvList(
+                prefix = call.getString("prefix"),
+                start = call.getString("start"),
+                end = call.getString("end"),
+                limit = call.getInt("limit"),
+                reverse = call.getBoolean("reverse", false) == true,
+            )
+            val array = JSONArray()
+            for (entry in entries) {
+                array.put(JSObject().put("key", entry.key).put("value", entry.json))
+            }
+            call.resolve(JSObject().put("entries", array.toString()))
         } catch (error: Exception) {
             call.reject(error.message, error)
         }

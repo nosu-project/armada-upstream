@@ -216,7 +216,9 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
           { kinds: RELAY_SCOPED_CANDIDATE_KINDS, limit: 1 },
         ]);
         if (count > 0) return true;
-        return (await getArmadaDB().kv.keys(PROVENANCE_PREFIX)).length > 0;
+        // Only whether ANY provenance key is left, so stop the scan at the first.
+        const [any] = await getArmadaDB().kv.list({ prefix: PROVENANCE_PREFIX }, { limit: 1 });
+        return any !== undefined;
       } catch {
         return false;
       }
@@ -246,7 +248,7 @@ export const SCHEMA_MIGRATIONS: SchemaMigration[] = [
       }
 
       // The provenance space: (relay, day, event id) keys and its drain marker.
-      for (const key of await db.kv.keys(PROVENANCE_PREFIX)) {
+      for (const { key } of await db.kv.list({ prefix: PROVENANCE_PREFIX })) {
         await db.kv.delete(key).catch(() => undefined);
       }
     },

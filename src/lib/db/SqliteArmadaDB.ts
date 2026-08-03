@@ -85,12 +85,20 @@ import {
   ARMADA_DB_SCHEMA,
   ARMADA_DB_VERSION,
 } from "./sqliteSchema";
-import { defaultIndexTags, prefixUpperBound } from "./types";
+import { defaultIndexTags, matchesKvRange, resolveKvRange } from "./types";
 
 import type { NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { ArmadaSqlDriver, SqlRow, SqlValue } from "./driver";
-import type { ArmadaDB, ArmadaDBOpts, ArmadaKV, NRumorStore } from "./types";
+import type {
+  ArmadaDB,
+  ArmadaDBOpts,
+  ArmadaKV,
+  ArmadaKVEntry,
+  ArmadaKVListOptions,
+  ArmadaKVSelector,
+  NRumorStore,
+} from "./types";
 
 /** Bits of the rowid reserved for the per-second sequence number. */
 const SEQ_BITS = 20;
@@ -1301,25 +1309,46 @@ class SqliteKV implements ArmadaKV {
     await this.db.transaction(() => this.db.run(`DELETE FROM kv WHERE key = ?`, [key]));
   }
 
-  async keys(prefix?: string): Promise<string[]> {
+  async list<T>(
+    selector?: ArmadaKVSelector,
+    opts: ArmadaKVListOptions = {},
+  ): Promise<ArmadaKVEntry<T>[]> {
+    const range = resolveKvRange(selector);
+    if (range.empty) return [];
     await this.db.ready;
 
-    let rows: SqlRow[];
-    if (!prefix) {
-      rows = await this.db.all(`SELECT key FROM kv ORDER BY key`);
-    } else {
-      const upper = prefixUpperBound(prefix);
-      rows = upper === undefined
-        ? await this.db.all(`SELECT key FROM kv WHERE key >= ? ORDER BY key`, [prefix])
-        : await this.db.all(
-          `SELECT key FROM kv WHERE key >= ? AND key < ? ORDER BY key`,
-          [prefix, upper],
-        );
+    const conditions: string[] = [];
+    const params: SqlValue[] = [];
+    if (range.lower !== undefined) {
+      conditions.push(`key >= ?`);
+      params.push(range.lower);
+    }
+    if (range.upper !== undefined) {
+      conditions.push(`key < ?`);
+      params.push(range.upper);
     }
 
-    const keys = rows.map((row) => String(row.key));
-    // The range is a scan hint, not the contract — see `prefixUpperBound`.
-    return prefix ? keys.filter((key) => key.startsWith(prefix)) : keys;
+    // A limit only reaches SQL when the scan's own order is the answer's — see
+    // `KvRange.exact`. Otherwise the rows dropped below would come off the top
+    // of a short page.
+    let sql = `SELECT key, value FROM kv${conditions.length ? ` WHERE ${conditions.join(" AND ")}` : ""}` +
+      ` ORDER BY key${opts.reverse ? " DESC" : ""}`;
+    if (range.exact && opts.limit !== undefined) {
+      sql += ` LIMIT ?`;
+      params.push(opts.limit);
+    }
+
+    const rows = await this.db.all(sql, params);
+    let entries = rows.map((row) => ({
+      key: String(row.key),
+      value: JSON.parse(String(row.value)) as T,
+    }));
+    // The range is a scan hint, not the contract — see `matchesKvRange`.
+    if (!range.exact) {
+      entries = entries.filter((entry) => matchesKvRange(entry.key, range));
+      if (opts.limit !== undefined && entries.length > opts.limit) entries = entries.slice(0, opts.limit);
+    }
+    return entries;
   }
 }
 

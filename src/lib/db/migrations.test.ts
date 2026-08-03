@@ -441,7 +441,7 @@ describe("the NIP-29 relay-tenant split", { timeout: 30_000 }, () => {
 
     await runMigrations([A]);
 
-    expect(await db.kv.keys("provenance:")).toEqual([]);
+    expect(await db.kv.list({ prefix: "provenance:" })).toEqual([]);
     expect(await db.kv.get("draft:keep")).toEqual({ content: "mine" });
   });
 

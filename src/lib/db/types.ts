@@ -89,20 +89,64 @@ export interface ArmadaKV {
   /** Forget a key. Deleting one that was never set is a no-op, not an error. */
   delete(key: string): Promise<void>;
   /**
-   * Every key currently set, restricted to those starting with `prefix` when
-   * one is given (an empty prefix means all of them).
+   * The entries the selector picks out — KEY AND VALUE, in one round trip.
+   *
+   * This is how a subsystem gets enumeration out of a store that is otherwise
+   * addressed by exact key: give related entries a shared key prefix and scan
+   * it. Every adapter pushes the selector down to a range scan, so the cost is
+   * in what matches, not in what's stored.
+   *
+   * Values come back with the keys deliberately. The enumeration this replaced
+   * handed back keys alone, so every caller followed it with one `get` per key
+   * — a bridge round trip each on Android, against rows the scan had already
+   * visited. Nothing needed the keys on their own.
    *
    * The order is each adapter's native string collation — IndexedDB compares
    * UTF-16 code units, SQLite's `BINARY` compares UTF-8 bytes — which agree on
    * everything except astral-plane characters. Sort yourself if you need an
-   * order both adapters promise.
+   * order both adapters promise. `reverse` reverses that order rather than
+   * imposing one, and `limit` then takes from the front of it.
    *
-   * This is how a subsystem gets enumeration out of a store that is otherwise
-   * addressed by exact key: give related entries a shared key prefix and scan
-   * it. Both adapters push the prefix down to a range scan, so the cost is in
-   * what matches, not in what's stored.
+   * `start`/`end` are compared in that same collation, so a bound containing an
+   * astral character is one the adapters can disagree about the membership of.
+   * A key space built from hex, timestamps or relay URLs — which is all of them
+   * — never reaches the disagreement.
    */
-  keys(prefix?: string): Promise<string[]>;
+  list<T>(selector?: ArmadaKVSelector, opts?: ArmadaKVListOptions): Promise<ArmadaKVEntry<T>[]>;
+}
+
+/** One entry from {@link ArmadaKV.list}. */
+export interface ArmadaKVEntry<T> {
+  key: string;
+  value: T;
+}
+
+/**
+ * Which keys {@link ArmadaKV.list} covers: a prefix, an explicit half-open
+ * range, or a prefix narrowed by one end of one. An empty selector is the whole
+ * store.
+ *
+ * `start`/`end` are what makes this more than a prefix scan: a key space with an
+ * ordered suffix (a timestamp, a sequence number) can be read from a cursor
+ * forward, so resuming does not mean listing everything before it. As in
+ * Deno.KV, giving `start` AND `end` alongside a `prefix` is rejected — the two
+ * bounds already describe the range, and a prefix on top of them is either
+ * redundant or a contradiction.
+ */
+export interface ArmadaKVSelector {
+  /** Keys must start with this. */
+  prefix?: string;
+  /** Inclusive lower bound. */
+  start?: string;
+  /** Exclusive upper bound. */
+  end?: string;
+}
+
+export interface ArmadaKVListOptions {
+  /** At most this many entries. Unset means all of them. */
+  limit?: number;
+  /** Walk the key order backwards (descending). */
+  reverse?: boolean;
 }
 
 export interface ArmadaDB {
@@ -143,10 +187,10 @@ export function defaultIndexTags(rumor: NostrRumor): string[][] {
  * `undefined` when there isn't one — an empty prefix, or a prefix ending in the
  * maximal code unit, both of which are open-ended.
  *
- * Shared by the adapters' {@link ArmadaKV.keys} so they narrow their scans the
+ * Shared by the adapters' {@link ArmadaKV.list} so they narrow their scans the
  * same way. It is only ever a NARROWING: the two engines' collations disagree
  * about astral-plane characters, so a range can admit a key that doesn't
- * actually start with the prefix, and both adapters filter the result rather
+ * actually start with the prefix, and every adapter filters the result rather
  * than trust the bound.
  */
 export function prefixUpperBound(prefix: string): string | undefined {
@@ -154,6 +198,113 @@ export function prefixUpperBound(prefix: string): string | undefined {
   const last = prefix.charCodeAt(prefix.length - 1);
   if (last === 0xffff) return undefined;
   return prefix.slice(0, -1) + String.fromCharCode(last + 1);
+}
+
+/**
+ * An {@link ArmadaKVSelector} reduced to what an engine can scan: a half-open
+ * key range, plus the prefix the range is only an approximation of.
+ */
+export interface KvRange {
+  /** Inclusive lower bound; `undefined` means unbounded below. */
+  lower?: string;
+  /** Exclusive upper bound; `undefined` means unbounded above. */
+  upper?: string;
+  /** Keys must start with this. `""` when the selector named no prefix. */
+  prefix: string;
+  /**
+   * Whether the bounds cross, so nothing can match — a `start` past the end of
+   * its own prefix, an `end` at or below `start`.
+   *
+   * Carried as a flag because an inverted range has no faithful representation
+   * to hand an engine: `IDBKeyRange.bound` throws on one, and SQL would answer
+   * it correctly but only by accident of the comparison. Adapters check this and
+   * answer with nothing.
+   */
+  empty: boolean;
+  /**
+   * Whether the bounds alone select exactly the keys the selector accepts, so
+   * {@link matchesKvRange} can only ever agree with them.
+   *
+   * An engine may push a `limit` into the scan when this holds, and must not
+   * otherwise: a scan that stops at `limit` rows and then drops some of them to
+   * the filter would answer with fewer entries than exist.
+   */
+  exact: boolean;
+}
+
+/** Whether `text` holds a surrogate code unit — see {@link resolveKvRange}. */
+function hasSurrogate(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdfff) return true;
+  }
+  return false;
+}
+
+/**
+ * Resolve a selector into the range an engine scans, shared by every adapter
+ * (and ported as `KvRange.resolve` in `SqliteArmadaDb.kt`, which Android's
+ * native store plans with) so they all narrow the same way.
+ *
+ * @throws TypeError if `prefix` is combined with both `start` and `end`.
+ */
+export function resolveKvRange(selector: ArmadaKVSelector = {}): KvRange {
+  const { prefix = "", start, end } = selector;
+  if (prefix && start !== undefined && end !== undefined) {
+    throw new TypeError("A KV selector cannot combine a prefix with both start and end");
+  }
+
+  // The bounds are the INTERSECTION of what the prefix implies and what the
+  // caller asked for, so a `start` outside the prefix narrows to nothing rather
+  // than escaping it.
+  const prefixUpper = prefixUpperBound(prefix);
+  const lower = start !== undefined && start > prefix ? start : prefix || undefined;
+  const upper = end !== undefined && (prefixUpper === undefined || end < prefixUpper)
+    ? end
+    : prefixUpper;
+
+  return {
+    lower,
+    upper,
+    prefix,
+    empty: lower !== undefined && upper !== undefined && lower >= upper,
+    exact: boundsAreExact(lower, upper, prefix),
+  };
+}
+
+/**
+ * Whether a scan of `[lower, upper)` can admit only keys the selector accepts.
+ *
+ * Two things spoil it. An open-ended scan under a non-empty prefix (a prefix
+ * ending in the maximal code unit) reads the whole tail of the store. And a
+ * bound containing a surrogate code unit is a bound the engines order
+ * differently: SQLite compares UTF-8 bytes, where astral characters sort ABOVE
+ * U+E000-U+FFFF, while IndexedDB compares UTF-16 code units, where they sort
+ * below — and a lone surrogate has no UTF-8 form at all, so SQLite's bundled
+ * driver substitutes U+FFFD and the bound stops meaning what it says.
+ *
+ * Nothing Armada stores goes near either case; this is what keeps the one that
+ * someday might from silently getting short answers.
+ */
+function boundsAreExact(lower: string | undefined, upper: string | undefined, prefix: string): boolean {
+  if (prefix && upper === undefined) return false;
+  return !hasSurrogate(lower ?? "") && !hasSurrogate(upper ?? "");
+}
+
+/**
+ * Whether `key` is genuinely in `range` — the contract the bounds only
+ * approximate. Every adapter filters its scan through this.
+ *
+ * It can only ever REMOVE rows the engine's range admitted. Where the two
+ * collations disagree about a bound the engine's own ordering decides what was
+ * scanned in the first place, which is the caveat {@link ArmadaKV.list}
+ * documents; this is not a place that could paper over it.
+ */
+export function matchesKvRange(key: string, range: KvRange): boolean {
+  if (range.prefix && !key.startsWith(range.prefix)) return false;
+  if (range.lower !== undefined && key < range.lower) return false;
+  if (range.upper !== undefined && key >= range.upper) return false;
+  return true;
 }
 
 /**

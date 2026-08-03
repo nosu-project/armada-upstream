@@ -30,9 +30,16 @@ import { perfCount, perfMark, perfTime } from "@/lib/perf";
 
 import type { NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
-import type { ArmadaDB, ArmadaKV, NRumorStore } from "./types";
+import type {
+  ArmadaDB,
+  ArmadaKV,
+  ArmadaKVEntry,
+  ArmadaKVListOptions,
+  ArmadaKVSelector,
+  NRumorStore,
+} from "./types";
 
-import { tenantClass } from "./types";
+import { resolveKvRange, tenantClass } from "./types";
 import { WrittenIds } from "./writtenIds";
 
 /** The native surface, as `ArmadaDbPlugin.kt` exposes it. */
@@ -49,7 +56,15 @@ export interface ArmadaDBPlugin {
   kvGet(options: { key: string }): Promise<{ value?: string }>;
   kvSet(options: { key: string; value: string }): Promise<void>;
   kvDelete(options: { key: string }): Promise<void>;
-  kvKeys(options: { prefix?: string }): Promise<{ keys: string }>;
+  /**
+   * The entries a selector picks out, as a JSON array string of
+   * `{ key, value }` — `value` being the stored JSON TEXT, not the parsed value.
+   * Re-serializing it natively would risk changing a number's spelling; this
+   * side is the only one that parses.
+   */
+  kvList(
+    options: { prefix?: string; start?: string; end?: string; limit?: number; reverse?: boolean },
+  ): Promise<{ entries: string }>;
   /** Empty every table (logout purge). The file and its schema survive. */
   wipe(): Promise<void>;
 }
@@ -253,8 +268,26 @@ class NativeKV implements ArmadaKV {
     await perfTime("kv.delete", () => ArmadaDBBridge().kvDelete({ key }));
   }
 
-  async keys(prefix?: string): Promise<string[]> {
-    const { keys } = await perfTime("kv.keys", () => ArmadaDBBridge().kvKeys({ prefix }));
-    return JSON.parse(keys) as string[];
+  async list<T>(
+    selector: ArmadaKVSelector = {},
+    opts: ArmadaKVListOptions = {},
+  ): Promise<ArmadaKVEntry<T>[]> {
+    // Resolved native-side, like the rest of the planning: Kotlin's `KvRange`
+    // is the port of `resolveKvRange`, and one crossing carries the selector
+    // rather than the bounds derived from it. Resolved here too, and only for
+    // its refusals — an invalid selector is a caller's bug, and it should be the
+    // same TypeError on every platform rather than a rejected bridge call.
+    if (resolveKvRange(selector).empty) return [];
+
+    const { entries } = await perfTime(
+      "kv.list",
+      () => ArmadaDBBridge().kvList({ ...selector, ...opts }),
+      (result) => result.entries.length,
+      "chars",
+    );
+    return (JSON.parse(entries) as Array<{ key: string; value: string }>).map(({ key, value }) => ({
+      key,
+      value: JSON.parse(value) as T,
+    }));
   }
 }

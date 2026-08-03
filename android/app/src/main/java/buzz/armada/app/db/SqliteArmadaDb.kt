@@ -1005,28 +1005,56 @@ class SqliteArmadaDb(
     }
 
     /**
-     * Every key currently set, restricted to those starting with [prefix]. The
-     * order is SQLite's `BINARY` collation (UTF-8 bytes).
+     * The entries a selector picks out — KEY AND JSON TEXT, in one call.
+     *
+     * The order is SQLite's `BINARY` collation (UTF-8 bytes), reversed by
+     * [reverse]; [limit] then takes from the front of it.
      */
-    fun kvKeys(prefix: String?): List<String> = lock.withLock {
-        val keys = if (prefix.isNullOrEmpty()) {
-            db.query("SELECT key FROM kv ORDER BY key") { it.text(0) }
-        } else {
-            val upper = prefixUpperBound(prefix)
-            if (upper == null) {
-                db.query("SELECT key FROM kv WHERE key >= ? ORDER BY key", listOf(prefix)) { it.text(0) }
+    fun kvList(
+        prefix: String? = null,
+        start: String? = null,
+        end: String? = null,
+        limit: Int? = null,
+        reverse: Boolean = false,
+    ): List<KvEntry> {
+        val range = KvRange.resolve(prefix, start, end)
+        if (range.empty) return emptyList()
+
+        return lock.withLock {
+            val conditions = mutableListOf<String>()
+            val params = mutableListOf<Any?>()
+            range.lower?.let {
+                conditions.add("key >= ?")
+                params.add(it)
+            }
+            range.upper?.let {
+                conditions.add("key < ?")
+                params.add(it)
+            }
+
+            // A limit only reaches SQL when the scan's own order is the answer's
+            // — see [KvRange.exact]. Otherwise the rows dropped below would come
+            // off the top of a short page.
+            val sql = StringBuilder("SELECT key, value FROM kv")
+            if (conditions.isNotEmpty()) sql.append(" WHERE ").append(conditions.joinToString(" AND "))
+            sql.append(" ORDER BY key")
+            if (reverse) sql.append(" DESC")
+            if (range.exact && limit != null) {
+                sql.append(" LIMIT ?")
+                params.add(limit.toLong())
+            }
+
+            val entries = db.query(sql.toString(), params) { KvEntry(it.text(0), it.text(1)) }
+            // The range is a scan hint, not the contract: SQLite compares UTF-8
+            // bytes and the WebView's other adapter compares UTF-16 code units,
+            // so a range can admit a key the selector doesn't accept.
+            if (range.exact) {
+                entries
             } else {
-                db.query(
-                    "SELECT key FROM kv WHERE key >= ? AND key < ? ORDER BY key",
-                    listOf(prefix, upper),
-                ) { it.text(0) }
+                val kept = entries.filter { range.matches(it.key) }
+                if (limit != null && kept.size > limit) kept.subList(0, limit) else kept
             }
         }
-
-        // The range is a scan hint, not the contract: SQLite compares UTF-8
-        // bytes and the WebView's other adapter compares UTF-16 code units, so
-        // a range can admit a key that doesn't actually start with the prefix.
-        if (prefix.isNullOrEmpty()) keys else keys.filter { it.startsWith(prefix) }
     }
 
     // ── Driver plumbing ───────────────────────────────────────────────────────
@@ -1250,6 +1278,71 @@ class SqliteArmadaDb(
         }
 
         return TimeRange(min, max, exact)
+    }
+}
+
+/** One entry from [SqliteArmadaDb.kvList]: a key and the JSON text under it. */
+data class KvEntry(val key: String, val json: String)
+
+/**
+ * A KV selector reduced to what the scan needs: a half-open key range, plus the
+ * prefix the range is only an approximation of. A port of `resolveKvRange` in
+ * `src/lib/db/types.ts` — Kotlin compares strings by UTF-16 code unit, as
+ * JavaScript does, so the bounds derive identically on both sides.
+ */
+internal data class KvRange(
+    /** Inclusive lower bound; null means unbounded below. */
+    val lower: String?,
+    /** Exclusive upper bound; null means unbounded above. */
+    val upper: String?,
+    /** Keys must start with this. Empty when the selector named no prefix. */
+    val prefix: String,
+    /** Whether the bounds cross, so nothing can match. */
+    val empty: Boolean,
+    /**
+     * Whether the bounds alone select exactly the keys the selector accepts, so
+     * [matches] can only ever agree with them — and a `limit` may be pushed into
+     * the scan. See the TypeScript original for why a bound holding a surrogate
+     * spoils it.
+     */
+    val exact: Boolean,
+) {
+    /** Whether [key] is genuinely in range — the contract the bounds approximate. */
+    fun matches(key: String): Boolean {
+        if (prefix.isNotEmpty() && !key.startsWith(prefix)) return false
+        if (lower != null && key < lower) return false
+        if (upper != null && key >= upper) return false
+        return true
+    }
+
+    companion object {
+        /** @throws IllegalArgumentException if a prefix comes with both bounds. */
+        fun resolve(prefix: String?, start: String?, end: String?): KvRange {
+            val pre = prefix ?: ""
+            require(!(pre.isNotEmpty() && start != null && end != null)) {
+                "A KV selector cannot combine a prefix with both start and end"
+            }
+
+            // The bounds are the INTERSECTION of what the prefix implies and what
+            // the caller asked for, so a `start` outside the prefix narrows to
+            // nothing rather than escaping it.
+            val prefixUpper = SqliteArmadaDb.prefixUpperBound(pre)
+            val lower = if (start != null && start > pre) start else pre.ifEmpty { null }
+            val upper = if (end != null && (prefixUpper == null || end < prefixUpper)) end else prefixUpper
+
+            val openEndedPrefix = pre.isNotEmpty() && upper == null
+            val exact = !openEndedPrefix && !hasSurrogate(lower) && !hasSurrogate(upper)
+            return KvRange(
+                lower = lower,
+                upper = upper,
+                prefix = pre,
+                empty = lower != null && upper != null && lower >= upper,
+                exact = exact,
+            )
+        }
+
+        private fun hasSurrogate(text: String?): Boolean =
+            text != null && text.any { it.code in 0xd800..0xdfff }
     }
 }
 

@@ -100,12 +100,12 @@ function replaceableKey(event: NostrEvent, relay?: string): string | null {
 /** Every queued publish, oldest first (the order the flush should deliver in). */
 export async function getQueuedPublishes(): Promise<QueuedPublish[]> {
   await migrateLegacyOutbox();
-  const { kv } = getArmadaDB();
-  const keys = await kv.keys(KEY_PREFIX);
-  const items = await Promise.all(keys.map((key) => kv.get<QueuedPublish>(key)));
-  return items
+  const entries = await getArmadaDB().kv.list<QueuedPublish>({ prefix: KEY_PREFIX });
+  return entries
+    .map(({ value }) => value)
+    // `outbox:migrated` shares the prefix, and is a boolean rather than an entry.
     .filter(isQueuedPublish)
-    // `keys()` comes back in key order, i.e. by event id — meaningless here.
+    // `list()` comes back in key order, i.e. by event id — meaningless here.
     .sort((a, b) => a.enqueuedAt - b.enqueuedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
@@ -180,8 +180,8 @@ export async function markQueuedPublishFailure(id: string, error: unknown): Prom
 
 export async function clearPublishOutbox(): Promise<void> {
   const { kv } = getArmadaDB();
-  const keys = await kv.keys(KEY_PREFIX);
-  await Promise.all(keys.map((key) => kv.delete(key)));
+  const entries = await kv.list({ prefix: KEY_PREFIX });
+  await Promise.all(entries.map(({ key }) => kv.delete(key)));
 }
 
 // ── migration ─────────────────────────────────────────────────────────────────

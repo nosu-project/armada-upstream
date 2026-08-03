@@ -36,7 +36,10 @@ const native = vi.hoisted(() => {
       get<T>(key: string): Promise<T | undefined>;
       set<T>(key: string, value: T): Promise<void>;
       delete(key: string): Promise<void>;
-      keys(prefix?: string): Promise<string[]>;
+      list<T>(
+        selector?: { prefix?: string; start?: string; end?: string },
+        opts?: { limit?: number; reverse?: boolean },
+      ): Promise<{ key: string; value: T }[]>;
     };
   };
 
@@ -81,8 +84,19 @@ const native = vi.hoisted(() => {
       async kvDelete({ key }: { key: string }) {
         await store.kv.delete(key);
       },
-      async kvKeys({ prefix }: { prefix?: string }) {
-        return { keys: JSON.stringify(await store.kv.keys(prefix)) };
+      async kvList(
+        { prefix, start, end, limit, reverse }: {
+          prefix?: string;
+          start?: string;
+          end?: string;
+          limit?: number;
+          reverse?: boolean;
+        },
+      ) {
+        // Values cross as the JSON TEXT they are stored as, which for this
+        // stand-in means the string the backing store handed back.
+        const entries = await store.kv.list<string>({ prefix, start, end }, { limit, reverse });
+        return { entries: JSON.stringify(entries) };
       },
       async wipe() {},
     },
@@ -229,16 +243,32 @@ describe("NativeArmadaDB", () => {
     expect(await db.kv.get("undef")).toBeNull();
   });
 
-  it("deletes and prefix-scans kv keys", async () => {
+  it("deletes and prefix-scans kv entries", async () => {
     await db.kv.set("a:1", 1);
     await db.kv.set("a:2", 2);
     await db.kv.set("b:1", 3);
 
-    expect(await db.kv.keys("a:")).toEqual(["a:1", "a:2"]);
+    // Values come back with the keys, having crossed the bridge as JSON text.
+    expect(await db.kv.list({ prefix: "a:" })).toEqual([
+      { key: "a:1", value: 1 },
+      { key: "a:2", value: 2 },
+    ]);
 
     await db.kv.delete("a:1");
-    expect(await db.kv.keys("a:")).toEqual(["a:2"]);
+    expect(await db.kv.list({ prefix: "a:" })).toEqual([{ key: "a:2", value: 2 }]);
     // Deleting a key that was never set is a no-op, not an error.
     await db.kv.delete("a:1");
+  });
+
+  it("carries a range selector across the bridge", async () => {
+    for (const n of [1, 2, 3, 4]) await db.kv.set(`log:${n}`, n);
+
+    expect(await db.kv.list({ prefix: "log:", start: "log:3" })).toEqual([
+      { key: "log:3", value: 3 },
+      { key: "log:4", value: 4 },
+    ]);
+    expect(await db.kv.list({ prefix: "log:" }, { reverse: true, limit: 1 })).toEqual([
+      { key: "log:4", value: 4 },
+    ]);
   });
 });

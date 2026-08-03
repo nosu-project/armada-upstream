@@ -61,7 +61,7 @@ describe("useDB", () => {
   it("takes an injected database", () => {
     const db = {
       tenant: vi.fn(),
-      kv: { get: vi.fn(), set: vi.fn(), delete: vi.fn(), keys: vi.fn() },
+      kv: { get: vi.fn(), set: vi.fn(), delete: vi.fn(), list: vi.fn() },
     };
     const { result } = renderHook(() => useDB(), {
       wrapper: ({ children }) => <ArmadaDBProvider db={db}>{children}</ArmadaDBProvider>,

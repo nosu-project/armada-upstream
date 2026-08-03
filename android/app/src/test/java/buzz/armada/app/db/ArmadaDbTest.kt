@@ -6,6 +6,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -505,7 +506,7 @@ class ArmadaDbTest {
         db.wipe()
 
         assertEquals(emptyList<String>(), db.query("t", filters("{}")).map { it.id })
-        assertEquals(emptyList<String>(), db.kvKeys(null))
+        assertEquals(emptyList<KvEntry>(), db.kvList())
         assertEquals(emptyList<String>(), db.tenantIds())
         assertEquals(0L, rowCount("rumors"))
         assertEquals(0L, rowCount("rumor_coords"))
@@ -583,7 +584,7 @@ class ArmadaDbTest {
         db.kvSet(key, "{\"a\":1}")
 
         assertEquals("{\"a\":1}", db.kvGet(key))
-        assertEquals(listOf(key), db.kvKeys("k"))
+        assertEquals(listOf(KvEntry(key, "{\"a\":1}")), db.kvList("k"))
     }
 
     // ── KV ────────────────────────────────────────────────────────────────────
@@ -606,13 +607,26 @@ class ArmadaDbTest {
     }
 
     @Test
-    fun `kv keys are prefix-scanned and ordered`() {
+    fun `kv entries are prefix-scanned and ordered`() {
         val db = open()
         for (key in listOf("b:1", "a:2", "a:1", "a:10")) db.kvSet(key, "null")
 
-        assertEquals(listOf("a:1", "a:10", "a:2", "b:1"), db.kvKeys(null))
-        assertEquals(listOf("a:1", "a:10", "a:2"), db.kvKeys("a:"))
-        assertEquals(emptyList<String>(), db.kvKeys("zzz"))
+        assertEquals(listOf("a:1", "a:10", "a:2", "b:1"), db.kvList().map { it.key })
+        assertEquals(listOf("a:1", "a:10", "a:2"), db.kvList("a:").map { it.key })
+        assertEquals(emptyList<KvEntry>(), db.kvList("zzz"))
+    }
+
+    @Test
+    fun `kv list carries the value with the key`() {
+        val db = open()
+        db.kvSet("a:1", "{\"since\":7}")
+        db.kvSet("a:2", "null")
+
+        // The JSON text, verbatim: nothing native parses or respells it.
+        assertEquals(
+            listOf(KvEntry("a:1", "{\"since\":7}"), KvEntry("a:2", "null")),
+            db.kvList("a:"),
+        )
     }
 
     @Test
@@ -621,7 +635,72 @@ class ArmadaDbTest {
         db.kvSet("ab", "null")
         db.kvSet("b", "null")
 
-        assertEquals(listOf("ab"), db.kvKeys("a"))
+        assertEquals(listOf("ab"), db.kvList("a").map { it.key })
+    }
+
+    @Test
+    fun `kv list scans a half-open range`() {
+        val db = open()
+        for (key in listOf("a", "b", "c", "d")) db.kvSet(key, "null")
+
+        // `start` inclusive, `end` exclusive.
+        assertEquals(listOf("b", "c"), db.kvList(start = "b", end = "d").map { it.key })
+        assertEquals(listOf("c", "d"), db.kvList(start = "c").map { it.key })
+        assertEquals(listOf("a"), db.kvList(end = "b").map { it.key })
+    }
+
+    @Test
+    fun `kv list resumes a prefix scan from a cursor`() {
+        val db = open()
+        for (n in 1..4) db.kvSet("log:$n", "null")
+
+        assertEquals(listOf("log:3", "log:4"), db.kvList("log:", start = "log:3").map { it.key })
+        assertEquals(listOf("log:1", "log:2"), db.kvList("log:", end = "log:3").map { it.key })
+    }
+
+    @Test
+    fun `a range bound stays inside its prefix`() {
+        val db = open()
+        db.kvSet("p:1", "null")
+        db.kvSet("q:1", "null")
+
+        // A bound outside the prefix narrows to nothing rather than escaping it.
+        assertEquals(emptyList<KvEntry>(), db.kvList("p:", start = "q:"))
+        assertEquals(emptyList<KvEntry>(), db.kvList("p:", end = "a"))
+        assertEquals(listOf("p:1"), db.kvList("p:", start = "a").map { it.key })
+    }
+
+    @Test
+    fun `kv list is empty when the bounds cross`() {
+        val db = open()
+        db.kvSet("b", "null")
+
+        assertEquals(emptyList<KvEntry>(), db.kvList(start = "z", end = "a"))
+        assertEquals(emptyList<KvEntry>(), db.kvList(start = "b", end = "b"))
+    }
+
+    @Test
+    fun `kv list refuses a prefix given both bounds`() {
+        val db = open()
+
+        // The bounds already describe the range; a prefix on top of them is
+        // either redundant or a contradiction.
+        assertThrows(IllegalArgumentException::class.java) {
+            db.kvList("p:", start = "p:1", end = "p:9")
+        }
+    }
+
+    @Test
+    fun `kv list limits and reverses`() {
+        val db = open()
+        for (n in 1..3) db.kvSet("p:$n", "null")
+
+        assertEquals(listOf("p:1", "p:2"), db.kvList("p:", limit = 2).map { it.key })
+        assertEquals(emptyList<KvEntry>(), db.kvList("p:", limit = 0))
+        assertEquals(listOf("p:3", "p:2", "p:1"), db.kvList("p:", reverse = true).map { it.key })
+        // A limit takes from the front of the order it was asked for, so
+        // reversing makes it the LAST entries.
+        assertEquals(listOf("p:3"), db.kvList("p:", limit = 1, reverse = true).map { it.key })
     }
 
     @Test
@@ -634,8 +713,9 @@ class ArmadaDbTest {
         // There is no exclusive upper bound for this prefix, so the range is
         // open-ended and everything above it is read and then filtered. What
         // comes back must still be only genuine matches — never the tail of the
-        // store.
-        assertEquals(emptyList<String>(), db.kvKeys(prefix))
+        // store, and never a page filled out to `limit` from beyond the prefix.
+        assertEquals(emptyList<KvEntry>(), db.kvList(prefix))
+        assertEquals(emptyList<KvEntry>(), db.kvList(prefix, limit = 2))
 
         // ENGINE NOTE: the bundled SQLite's JNI boundary replaces U+FFFF (a
         // Unicode noncharacter) with U+FFFD, so a key containing one cannot
@@ -643,7 +723,7 @@ class ArmadaDbTest {
         // web build's adapters keep it verbatim. Nothing Armada stores is
         // affected — no tenant id, cursor key or cache key is built from
         // noncharacters — but a future key space must not assume otherwise.
-        assertEquals(listOf("x\ufffd1", "y"), db.kvKeys(null))
+        assertEquals(listOf("x\ufffd1", "y"), db.kvList().map { it.key })
     }
 
     // ── Schema migration ──────────────────────────────────────────────────────

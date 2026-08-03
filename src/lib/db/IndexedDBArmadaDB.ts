@@ -18,13 +18,22 @@ import { openDB } from "idb";
 
 import { perfCount, perfMark, perfTime } from "@/lib/perf";
 
-import { defaultIndexTags, prefixUpperBound, tenantClass } from "./types";
+import { defaultIndexTags, matchesKvRange, resolveKvRange, tenantClass } from "./types";
 import { WrittenIds } from "./writtenIds";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 import type { DBSchema, IDBPDatabase } from "idb";
 import type { NostrRumor } from "@/lib/nostrRumor";
-import type { ArmadaDB, ArmadaDBOpts, ArmadaKV, NRumorStore } from "./types";
+import type {
+  ArmadaDB,
+  ArmadaDBOpts,
+  ArmadaKV,
+  ArmadaKVEntry,
+  ArmadaKVListOptions,
+  ArmadaKVSelector,
+  KvRange,
+  NRumorStore,
+} from "./types";
 
 /** Strip the placeholder signature `NIndexedDB` round-trips. */
 function toRumor(event: NostrEvent): NostrRumor {
@@ -330,18 +339,23 @@ class IndexedDBKV implements ArmadaKV {
    *
    * idb's `db.get`/`db.put` shortcuts open one transaction PER CALL — three
    * event-loop tasks each (open, request, complete) — and the callers that
-   * matter issue them in bursts (a `KvPrefixCache` warm is `keys()` then a
-   * `Promise.all` of one get per key). On a congested boot loop that priced a
-   * few-KB read at seconds of queueing: 149 gets averaged 1.6s each, measured.
-   * One transaction per burst pays the task overhead once; executing the ops
-   * in arrival order inside it keeps read-your-writes exactly as sequential
-   * transactions had it.
+   * matter issue them in bursts (drafts and cursors written as the user types,
+   * a boot that warms every `KvPrefixCache` prefix at once). On a congested
+   * boot loop that priced a few-KB read at seconds of queueing: 149 gets
+   * averaged 1.6s each, measured. One transaction per burst pays the task
+   * overhead once; executing the ops in arrival order inside it keeps
+   * read-your-writes exactly as sequential transactions had it.
    */
   private pendingOps: Array<
     | { op: "get"; key: string; resolve: (value: unknown) => void }
     | { op: "set"; key: string; value: unknown; resolve: () => void; reject: (error: unknown) => void }
     | { op: "delete"; key: string; resolve: () => void; reject: (error: unknown) => void }
-    | { op: "keys"; prefix?: string; resolve: (keys: string[]) => void }
+    | {
+      op: "list";
+      range: KvRange;
+      opts: ArmadaKVListOptions;
+      resolve: (entries: ArmadaKVEntry<unknown>[]) => void;
+    }
   > = [];
   /** Whether a flush is already scheduled for the current burst. */
   private opsScheduled = false;
@@ -362,7 +376,7 @@ class IndexedDBKV implements ArmadaKV {
     if (!db) {
       // Degraded (no IndexedDB): reads answer their miss value, writes no-op.
       for (const op of ops) {
-        if (op.op === "keys") op.resolve([]);
+        if (op.op === "list") op.resolve([]);
         else if (op.op === "get") op.resolve(undefined);
         else op.resolve();
       }
@@ -376,23 +390,30 @@ class IndexedDBKV implements ArmadaKV {
       // read-only burst really does open readonly, and never calls them.
       const store = tx.store;
       const results = await Promise.all(
-        ops.map((op) =>
-          op.op === "get"
-            ? store.get(op.key)
-            : op.op === "keys"
-            ? store.getAllKeys(IndexedDBKV.keyRange(op.prefix))
-            : op.op === "set"
-            ? store.put(op.value, op.key)
-            : store.delete(op.key),
-        ),
+        ops.map((op) => {
+          if (op.op === "get") return store.get(op.key);
+          if (op.op === "set") return store.put(op.value, op.key);
+          if (op.op === "delete") return store.delete(op.key);
+          // Keys and values as two `getAll`s over the identical range rather
+          // than a cursor walk: a cursor is a round trip per row inside the
+          // transaction, and these two come back in the same order, so zipping
+          // them pairs each key with its own value.
+          const query = IndexedDBKV.keyRange(op.range);
+          const count = IndexedDBKV.scanCount(op.range, op.opts);
+          return Promise.all([store.getAllKeys(query, count), store.getAll(query, count)]);
+        }),
       );
       await tx.done;
       for (const [i, op] of ops.entries()) {
         if (op.op === "get") op.resolve(results[i] as never);
-        else if (op.op === "keys") {
-          // The range is a scan hint, not the contract — see `prefixUpperBound`.
-          const keys = results[i] as string[];
-          op.resolve(op.prefix ? keys.filter((key) => key.startsWith(op.prefix!)) : keys);
+        else if (op.op === "list") {
+          const [keys, values] = results[i] as [string[], unknown[]];
+          let entries = keys.map((key, j) => ({ key, value: values[j] }));
+          // The range is a scan hint, not the contract — see `matchesKvRange`.
+          if (!op.range.exact) entries = entries.filter((entry) => matchesKvRange(entry.key, op.range));
+          if (op.opts.reverse) entries.reverse();
+          const { limit } = op.opts;
+          op.resolve(limit !== undefined && entries.length > limit ? entries.slice(0, limit) : entries);
         } else op.resolve();
       }
     } catch (error) {
@@ -400,19 +421,31 @@ class IndexedDBKV implements ArmadaKV {
       // a miss, a failed write rejects to the caller's catch.
       for (const op of ops) {
         if (op.op === "get") op.resolve(undefined);
-        else if (op.op === "keys") op.resolve([]);
+        else if (op.op === "list") op.resolve([]);
         else op.reject(error);
       }
     }
   }
 
-  /** The key range covering `prefix` (or everything, without one). */
-  private static keyRange(prefix?: string): IDBKeyRange | undefined {
-    if (!prefix) return undefined;
-    const upper = prefixUpperBound(prefix);
-    return upper === undefined
-      ? IDBKeyRange.lowerBound(prefix)
-      : IDBKeyRange.bound(prefix, upper, false, true);
+  /** The key range `range` scans (everything, when it is unbounded). */
+  private static keyRange(range: KvRange): IDBKeyRange | undefined {
+    const { lower, upper } = range;
+    if (lower === undefined && upper === undefined) return undefined;
+    if (upper === undefined) return IDBKeyRange.lowerBound(lower!);
+    if (lower === undefined) return IDBKeyRange.upperBound(upper, true);
+    return IDBKeyRange.bound(lower, upper, false, true);
+  }
+
+  /**
+   * How many rows to ask the scan for, or `undefined` for all of them.
+   *
+   * `getAll` counts from the LOWER end of the range, so a `limit` can only be
+   * pushed down when the front of the scan is the front of the answer: nothing
+   * gets filtered out (see {@link KvRange.exact}) and the order isn't about to
+   * be reversed.
+   */
+  private static scanCount(range: KvRange, opts: ArmadaKVListOptions): number | undefined {
+    return range.exact && !opts.reverse ? opts.limit : undefined;
   }
 
   get<T>(key: string): Promise<T | undefined> {
@@ -441,20 +474,32 @@ class IndexedDBKV implements ArmadaKV {
       }));
   }
 
-  keys(prefix?: string): Promise<string[]> {
-    // Through the same queue as get/set/delete: a `keys()` racing a queued
-    // write must observe it (the KvPrefixCache warm is exactly a keys() after
+  // `async` so a selector this refuses rejects rather than throwing where the
+  // caller has no promise yet — the other adapters resolve theirs inside one.
+  async list<T>(
+    selector?: ArmadaKVSelector,
+    opts: ArmadaKVListOptions = {},
+  ): Promise<ArmadaKVEntry<T>[]> {
+    const range = resolveKvRange(selector);
+    if (range.empty) return [];
+    // Through the same queue as get/set/delete: a `list()` racing a queued write
+    // must observe it (a `KvPrefixCache` warm is exactly a list() after
     // fire-and-forget sets), and arrival order inside one transaction is the
     // ordering separate transactions used to provide.
     return perfTime(
-      "kv.keys",
+      "kv.list",
       () =>
-        new Promise<string[]>((resolve) => {
-          this.pendingOps.push({ op: "keys", prefix, resolve });
+        new Promise<ArmadaKVEntry<T>[]>((resolve) => {
+          this.pendingOps.push({
+            op: "list",
+            range,
+            opts,
+            resolve: resolve as (entries: ArmadaKVEntry<unknown>[]) => void,
+          });
           this.scheduleOps();
         }),
-      (k) => k.length,
-      "keys",
+      (entries) => entries.length,
+      "entries",
     );
   }
 

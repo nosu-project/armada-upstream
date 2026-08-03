@@ -109,22 +109,18 @@ export class KvPrefixCache<T> {
   }
 
   private async warm(generation: number): Promise<void> {
-    const { kv } = getArmadaDB();
-    const keys = await kv.keys(this.prefix);
-
-    // Read in parallel rather than one await at a time. Each `get` is a round
-    // trip — a bridge call on Android — and a prefix holds one entry per relay
-    // contacted or channel typed in, so a sequential warm is that many round
-    // trips before the first synchronous read can answer anything.
-    const values = await Promise.all(keys.map((key) => kv.get<T>(key)));
+    // One scan, values included. The warm used to enumerate the prefix and then
+    // issue a `get` per key — a bridge round trip each on Android, and on the
+    // web a burst the KV adapter had to batch back into one transaction to keep
+    // a boot from pricing a few-KB read in seconds.
+    const entries = await getArmadaDB().kv.list<T>({ prefix: this.prefix });
 
     // A `clear()` or `reset()` that landed mid-warm moved the generation on.
     // Its whole point is that the map is now empty, so filling it from a scan
     // that started before it would put the cleared entries straight back.
     if (generation !== this.generation) return;
 
-    for (const [i, key] of keys.entries()) {
-      const value = values[i];
+    for (const { key, value } of entries) {
       if (value === undefined || value === null) continue;
       const id = key.slice(this.prefix.length);
       // A write that happened while the warm was in flight is newer than what
@@ -167,8 +163,8 @@ export class KvPrefixCache<T> {
    */
   async clear(): Promise<void> {
     const { kv } = getArmadaDB();
-    const keys = await kv.keys(this.prefix).catch(() => [] as string[]);
-    await Promise.all(keys.map((key) => kv.delete(key).catch(() => undefined)));
+    const entries = await kv.list({ prefix: this.prefix }).catch(() => []);
+    await Promise.all(entries.map(({ key }) => kv.delete(key).catch(() => undefined)));
     this.entries.clear();
     // Retires any warm still in flight, whose reads were taken before the
     // delete and would otherwise repopulate what was just cleared.

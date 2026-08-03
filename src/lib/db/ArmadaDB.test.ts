@@ -385,20 +385,35 @@ describe.each(backends)("$name", ({ create }) => {
       await expect(db.kv.delete("never")).resolves.toBeUndefined();
     });
 
-    it("lists every key when no prefix is given", async () => {
+    it("lists every entry when no selector is given", async () => {
       await db.kv.set("a", 1);
       await db.kv.set("b", 2);
 
-      expect((await db.kv.keys()).sort()).toEqual(["a", "b"]);
-      expect((await db.kv.keys("")).sort()).toEqual(["a", "b"]);
+      const all = [{ key: "a", value: 1 }, { key: "b", value: 2 }];
+      expect(await db.kv.list()).toEqual(all);
+      expect(await db.kv.list({})).toEqual(all);
+      expect(await db.kv.list({ prefix: "" })).toEqual(all);
     });
 
-    it("lists only the keys under a prefix", async () => {
+    it("lists a value with its key, so no follow-up read is needed", async () => {
+      await db.kv.set("p:1", { since: 7 });
+      await db.kv.set("p:2", null);
+
+      expect(await db.kv.list({ prefix: "p:" })).toEqual([
+        { key: "p:1", value: { since: 7 } },
+        { key: "p:2", value: null },
+      ]);
+    });
+
+    it("lists only the entries under a prefix", async () => {
       await db.kv.set("p:1", 1);
       await db.kv.set("p:2", 2);
       await db.kv.set("q:1", 3);
 
-      expect((await db.kv.keys("p:")).sort()).toEqual(["p:1", "p:2"]);
+      expect(await db.kv.list({ prefix: "p:" })).toEqual([
+        { key: "p:1", value: 1 },
+        { key: "p:2", value: 2 },
+      ]);
     });
 
     it("treats the prefix as a boundary, not a substring match", async () => {
@@ -408,22 +423,22 @@ describe.each(backends)("$name", ({ create }) => {
       await db.kv.set("pp:1", 2);
       await db.kv.set("op:1", 3);
 
-      expect(await db.kv.keys("p:")).toEqual(["p:1"]);
-      expect(await db.kv.keys("pp")).toEqual(["pp:1"]);
+      expect(await db.kv.list({ prefix: "p:" })).toEqual([{ key: "p:1", value: 1 }]);
+      expect(await db.kv.list({ prefix: "pp" })).toEqual([{ key: "pp:1", value: 2 }]);
     });
 
-    it("lists no keys under an unmatched prefix", async () => {
+    it("lists nothing under an unmatched prefix", async () => {
       await db.kv.set("a:1", 1);
 
-      expect(await db.kv.keys("z:")).toEqual([]);
+      expect(await db.kv.list({ prefix: "z:" })).toEqual([]);
     });
 
-    it("stops listing a key once it is deleted", async () => {
+    it("stops listing an entry once it is deleted", async () => {
       await db.kv.set("d:1", 1);
       await db.kv.set("d:2", 2);
       await db.kv.delete("d:1");
 
-      expect(await db.kv.keys("d:")).toEqual(["d:2"]);
+      expect(await db.kv.list({ prefix: "d:" })).toEqual([{ key: "d:2", value: 2 }]);
     });
 
     it("scans a prefix ending in the maximal code unit", async () => {
@@ -432,7 +447,99 @@ describe.each(backends)("$name", ({ create }) => {
       await db.kv.set("k\uffff:1", 1);
       await db.kv.set("x", 2);
 
-      expect(await db.kv.keys("k\uffff")).toEqual(["k\uffff:1"]);
+      expect(await db.kv.list({ prefix: "k\uffff" })).toEqual([{ key: "k\uffff:1", value: 1 }]);
+    });
+
+    it("scans a half-open range", async () => {
+      for (const key of ["a", "b", "c", "d"]) await db.kv.set(key, key);
+
+      // `start` inclusive, `end` exclusive.
+      expect(await db.kv.list({ start: "b", end: "d" })).toEqual([
+        { key: "b", value: "b" },
+        { key: "c", value: "c" },
+      ]);
+      expect(await db.kv.list({ start: "c" })).toEqual([
+        { key: "c", value: "c" },
+        { key: "d", value: "d" },
+      ]);
+      expect(await db.kv.list({ end: "b" })).toEqual([{ key: "a", value: "a" }]);
+    });
+
+    it("resumes a prefix scan from a cursor", async () => {
+      // The reason ranges exist here: a key space with an ordered suffix can be
+      // read forward from where the last pass stopped.
+      for (const n of [1, 2, 3, 4]) await db.kv.set(`log:${n}`, n);
+
+      expect(await db.kv.list({ prefix: "log:", start: "log:3" })).toEqual([
+        { key: "log:3", value: 3 },
+        { key: "log:4", value: 4 },
+      ]);
+      expect(await db.kv.list({ prefix: "log:", end: "log:3" })).toEqual([
+        { key: "log:1", value: 1 },
+        { key: "log:2", value: 2 },
+      ]);
+    });
+
+    it("keeps a range bound inside its prefix", async () => {
+      await db.kv.set("p:1", 1);
+      await db.kv.set("q:1", 2);
+
+      // A bound outside the prefix narrows to nothing rather than escaping it:
+      // `q:` is past the end of `p:`, and `a` is before its start.
+      expect(await db.kv.list({ prefix: "p:", start: "q:" })).toEqual([]);
+      expect(await db.kv.list({ prefix: "p:", end: "a" })).toEqual([]);
+      expect(await db.kv.list({ prefix: "p:", start: "a" })).toEqual([{ key: "p:1", value: 1 }]);
+    });
+
+    it("lists nothing when the bounds cross", async () => {
+      await db.kv.set("b", 1);
+
+      expect(await db.kv.list({ start: "z", end: "a" })).toEqual([]);
+      expect(await db.kv.list({ start: "b", end: "b" })).toEqual([]);
+    });
+
+    it("refuses a prefix given both bounds", async () => {
+      // The bounds already describe the range; a prefix on top of them is either
+      // redundant or a contradiction, and Deno.KV rejects the same shape.
+      await expect(db.kv.list({ prefix: "p:", start: "p:1", end: "p:9" })).rejects.toThrow(TypeError);
+    });
+
+    it("takes the first entries under a limit", async () => {
+      for (const n of [1, 2, 3]) await db.kv.set(`p:${n}`, n);
+
+      expect(await db.kv.list({ prefix: "p:" }, { limit: 2 })).toEqual([
+        { key: "p:1", value: 1 },
+        { key: "p:2", value: 2 },
+      ]);
+      // A limit past the end is not an error, and 0 asks for nothing.
+      expect((await db.kv.list({ prefix: "p:" }, { limit: 9 })).length).toBe(3);
+      expect(await db.kv.list({ prefix: "p:" }, { limit: 0 })).toEqual([]);
+    });
+
+    it("walks the key order backwards", async () => {
+      for (const n of [1, 2, 3]) await db.kv.set(`p:${n}`, n);
+
+      expect((await db.kv.list({ prefix: "p:" }, { reverse: true })).map((e) => e.key))
+        .toEqual(["p:3", "p:2", "p:1"]);
+      // A limit takes from the front of the order it was asked for, so reversing
+      // makes it the LAST entries.
+      expect(await db.kv.list({ prefix: "p:" }, { reverse: true, limit: 1 })).toEqual([
+        { key: "p:3", value: 3 },
+      ]);
+    });
+
+    it("limits a scan whose range over-admits", async () => {
+      // An open-ended prefix scan (see above) reads past its own matches, so the
+      // limit cannot be handed to the engine — it has to apply to what SURVIVES
+      // the filter, or a full page would come back short.
+      await db.kv.set("k\uffff:1", 1);
+      await db.kv.set("k\uffff:2", 2);
+      await db.kv.set("x", 3);
+
+      expect(await db.kv.list({ prefix: "k\uffff" }, { limit: 2 })).toEqual([
+        { key: "k\uffff:1", value: 1 },
+        { key: "k\uffff:2", value: 2 },
+      ]);
     });
   });
 });

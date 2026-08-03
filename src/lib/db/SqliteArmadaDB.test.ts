@@ -819,7 +819,10 @@ describe("SqliteArmadaDB — injection", () => {
     }
 
     expect(rows(driver, "SELECT count(*) AS c FROM kv")[0].c).toBe(HOSTILE.length);
-    expect(await db.kv.keys("'")).toEqual([`' OR '1'='1`, `'; DROP TABLE rumors; --`]);
+    expect(await db.kv.list({ prefix: "'" })).toEqual([
+      { key: `' OR '1'='1`, value: { payload: `' OR '1'='1` } },
+      { key: `'; DROP TABLE rumors; --`, value: { payload: `'; DROP TABLE rumors; --` } },
+    ]);
   });
 });
 

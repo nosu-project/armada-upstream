@@ -192,8 +192,10 @@ export async function pruneControlSnapshots(
   try {
     const kv = getArmadaDB().kv;
     const keep = new Set(keepPks.map((pk) => snapshotKey(communityIdHex, pk)));
-    const stale = (await kv.keys(snapshotPrefix(communityIdHex))).filter((k) => !keep.has(k));
-    await Promise.all(stale.map((k) => kv.delete(k)));
+    const stale = (await kv.list({ prefix: snapshotPrefix(communityIdHex) }))
+      .map(({ key }) => key)
+      .filter((key) => !keep.has(key));
+    await Promise.all(stale.map((key) => kv.delete(key)));
   } catch {
     // best-effort
   }
