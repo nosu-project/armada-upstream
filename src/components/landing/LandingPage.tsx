@@ -1,8 +1,11 @@
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { BrandMark } from "@/components/brand/BrandMark";
 import { Button } from "@/components/ui/button";
+import { STOCK_RELAYS } from "@/concord-v2/lib/invite";
+import { relayToHttpUrl } from "@/lib/platform";
+import { cn } from "@/lib/utils";
 
 import { AsciiSea } from "./AsciiSea";
 
@@ -90,17 +93,70 @@ export function LandingPage({
           className="mx-auto flex min-h-[100svh] max-w-2xl flex-col items-center justify-center gap-3 px-6 py-16 text-center safe-area-bottom"
         >
           <p className="font-mono text-xl font-bold tracking-tight text-muted-foreground sm:text-2xl">
-            Chat apps tie infrastructure to control.
+            Chat apps belong to whoever runs the servers.
           </p>
           <p className="font-mono text-xl font-bold tracking-tight text-foreground sm:text-2xl">
-            Armada is spread across free public infrastructure.
+            Armada is spread across free public servers.
           </p>
+
+          <ul className="mt-8 flex flex-col items-start gap-2 font-mono text-sm text-muted-foreground">
+            {STOCK_RELAYS.map((url) => <RelayLight key={url} url={url} />)}
+          </ul>
+          <a
+            href="https://soapbox.pub/blog/how-to-self-host-armada"
+            target="_blank"
+            rel="noreferrer"
+            className="mt-2 font-mono text-sm text-muted-foreground underline underline-offset-4 transition-colors hover:text-foreground"
+          >
+            Host your own
+          </a>
         </section>
       </div>
 
       <ArmadaCrestKeyframes />
       <LandingKeyframes />
     </>
+  );
+}
+
+/**
+ * One default relay with a liveness light: green when a HEAD to its NIP-11
+ * endpoint answers 2xx, red otherwise. HEAD with the `application/nostr+json`
+ * accept header is a simple CORS request, so no preflight is needed.
+ */
+function RelayLight({ url }: { url: string }) {
+  const [alive, setAlive] = useState<boolean>();
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(relayToHttpUrl(url), {
+      method: "HEAD",
+      headers: { accept: "application/nostr+json" },
+      signal: AbortSignal.timeout(8000),
+    })
+      .then((res) => !cancelled && setAlive(res.ok))
+      .catch(() => !cancelled && setAlive(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [url]);
+
+  return (
+    <li className="flex items-center gap-2.5">
+      <span
+        aria-hidden="true"
+        className={cn(
+          "size-2 shrink-0 rounded-full",
+          alive === undefined && "animate-pulse bg-muted-foreground/40",
+          alive === true && "bg-emerald-500",
+          alive === false && "bg-red-500",
+        )}
+      />
+      {url.replace(/^wss:\/\//, "")}
+      <span className="sr-only">
+        {alive === undefined ? "(checking)" : alive ? "(online)" : "(offline)"}
+      </span>
+    </li>
   );
 }
 
