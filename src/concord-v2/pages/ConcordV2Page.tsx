@@ -1524,7 +1524,7 @@ export function ConcordV2Page() {
 
   const channelDrag = useChannelDrag({
     enabled: canManageChannels,
-    scrollRef: channelScrollRef,
+    columnRef: channelScrollRef,
     measure: measureDropSlots,
     onDrop: commitDrop,
   });
@@ -2359,11 +2359,14 @@ export function ConcordV2Page() {
         data-ch-index={index}
         data-ch-category={c.category ?? ""}
         onPointerDown={channelDrag.onPointerDown(c.idHex)}
-        // Chrome's gesture arbitration will otherwise claim a touch drag as a
-        // pan and kill it with pointercancel; the drag pans the column itself
-        // when the gesture turns out to be a scroll (useChannelDrag.ts).
+        // Unconditional `touch-none` while the drag is live, as the rail's
+        // entries carry: Chrome's gesture arbitration otherwise claims a touch
+        // drag as a pan and kills it with pointercancel. The column is then
+        // panned by hand for gestures that turn out to be scrolls
+        // (usePressDrag.ts). A member who can't rearrange gets neither, and
+        // keeps native scrolling.
         className={cn(
-          canManageChannels && "touch:touch-none",
+          canManageChannels && "touch-none",
           channelDrag.sourceIdHex === c.idHex && "opacity-40",
         )}
       >
@@ -2392,10 +2395,11 @@ export function ConcordV2Page() {
 
   // There is ONE channel column, mounted on every viewport (the mobile reveal
   // and the desktop sidebar are the same element), so it always carries the
-  // scroll ref — the drag measures its drop slots out of it.
+  // drag's container ref — which is both what the drop slots are measured out
+  // of and where the touchmove canceller lives.
   const channelList = (onNavigate?: () => void, className?: string) => (
     <ChannelSidebarView
-      scrollRef={channelScrollRef as React.Ref<HTMLDivElement>}
+      scrollRef={channelDrag.attachColumn}
       className={className ?? (onNavigate ? "flex-1" : "hidden sidebar:flex")}
       title={
         <button

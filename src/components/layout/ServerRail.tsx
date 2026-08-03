@@ -49,7 +49,7 @@ import { useServerActions } from "@/hooks/useServerActions";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
-import { impact } from "@/lib/haptics";
+import { useDragPointerDown, usePressDrag } from "@/hooks/usePressDrag";
 import { relayToRouteParam } from "@/lib/platform";
 import {
   applyDrop,
@@ -131,23 +131,6 @@ interface RailDragProps {
 /** data-* attributes identifying a draggable node for slot hit-testing. */
 function dragAttrs(anchor: string, parent?: string): Record<string, string> {
   return { "data-rail-anchor": anchor, ...(parent ? { "data-rail-parent": parent } : {}) };
-}
-
-/** Attach a native pointerdown listener (see RailDragProps docs). */
-function useDragPointerDown(
-  ref: React.RefObject<HTMLElement | null>,
-  draggable: boolean | undefined,
-  onDragPointerDown: ((e: PointerEvent) => void) | undefined,
-) {
-  const handlerRef = useRef(onDragPointerDown);
-  handlerRef.current = onDragPointerDown;
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || !draggable) return;
-    const handler = (e: PointerEvent) => handlerRef.current?.(e);
-    el.addEventListener("pointerdown", handler);
-    return () => el.removeEventListener("pointerdown", handler);
-  }, [ref, draggable]);
 }
 
 // ─── Mini icons (folder grids + drag ghosts) ────────────────────────────
@@ -1318,219 +1301,61 @@ export function ServerRail({
   // frozen at pickup and a fixed-position indicator line / target highlight
   // previews the drop (`planDrop`). On release the drop is applied to the
   // layout (`applyDrop`) and persisted.
-  const [dragSource, setDragSource] = useState<RailDragSource | null>(null);
   const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
   const [dropPlan, setDropPlan] = useState<RailDropPlan | null>(null);
   const navRef = useRef<HTMLElement | null>(null);
-  const longPressTimer = useRef<number | null>(null);
-  const startPos = useRef<{ x: number; y: number } | null>(null);
-  // Tracks the in-flight drag outside React state (read inside listeners).
-  const dragActive = useRef<RailDragSource | null>(null);
-  // Set briefly after a drag so the ensuing click doesn't navigate/toggle.
-  const didDragRef = useRef(false);
   // Frozen slot geometry + rail frame, captured once at pickup from clean DOM.
   const slotsRef = useRef<RailSlot[]>([]);
   const navRectRef = useRef<{ left: number; width: number } | null>(null);
   const dropPlanRef = useRef<RailDropPlan | null>(null);
 
-  // A PERMANENT non-passive touchmove canceller on the rail. Chrome decides
-  // at gesture start (touchstart) whether a blocking touch listener exists in
-  // the region; a listener attached mid-gesture (e.g. in pointerdown) is not
-  // consulted, its preventDefault is silently ignored, and the browser still
-  // pans the rail — killing the drag with pointercancel. This listener exists
-  // before any gesture starts, and only cancels moves while a drag is live,
-  // so normal rail scrolling stays native. Touch events keep targeting the
-  // touchstart element, so drags that wander outside the rail still bubble
-  // through it.
-  useEffect(() => {
-    const nav = navRef.current;
-    if (!nav) return;
-    const onTouchMove = (ev: TouchEvent) => {
-      if (dragActive.current !== null && ev.cancelable) ev.preventDefault();
-    };
-    nav.addEventListener("touchmove", onTouchMove, { passive: false });
-    return () => nav.removeEventListener("touchmove", onTouchMove);
-  }, []);
-
-  const beginDrag = useCallback((source: RailDragSource, x: number, y: number) => {
-    const nav = navRef.current;
-    if (nav) {
-      const slots: RailSlot[] = [];
-      nav.querySelectorAll<HTMLElement>("[data-rail-anchor]").forEach((el) => {
-        const r = el.getBoundingClientRect();
-        slots.push({
-          anchor: el.dataset.railAnchor!,
-          parentFolderId: el.dataset.railParent || undefined,
-          top: r.top,
-          height: r.height,
-        });
-      });
-      slotsRef.current = slots;
-      const navRect = nav.getBoundingClientRect();
-      navRectRef.current = { left: navRect.left, width: navRect.width };
-    }
-    dragActive.current = source;
+  const aim = useCallback((source: RailDragSource, x: number, y: number) => {
     const plan = planDrop(y, slotsRef.current, source);
     dropPlanRef.current = plan;
-    setDragSource(source);
     setDragPos({ x, y });
     setDropPlan(plan);
-    // Haptic nudge on supported devices.
-    impact("medium");
   }, []);
 
-  const handleDragPointerDown = useCallback(
-    (source: RailDragSource, e: PointerEvent) => {
-      // Only left mouse / touch / pen; ignore right-click etc.
-      if (e.button !== 0 && e.pointerType === "mouse") return;
-      startPos.current = { x: e.clientX, y: e.clientY };
-      const pointerId = e.pointerId;
-      const isMouse = e.pointerType === "mouse";
-      // Touch-scroll fallback state (see onMove): set once the gesture is
-      // classified as a scroll rather than a long-press drag.
-      let manualScroll = false;
-      let lastScrollY = e.clientY;
-      // Latest pointer position, so a long press that fires after the pointer
-      // has wandered picks up at the cursor, not at the press point.
-      let lastX = e.clientX;
-      let lastY = e.clientY;
-
-      const clear = () => {
-        if (longPressTimer.current !== null) {
-          window.clearTimeout(longPressTimer.current);
-          longPressTimer.current = null;
-        }
-        window.removeEventListener("pointermove", onMove);
-        window.removeEventListener("pointerup", onUp);
-        window.removeEventListener("pointercancel", onCancel);
-        window.removeEventListener("contextmenu", onContextMenu, true);
-      };
-
-      // While a drag is in flight, swallow the context menu the browser
-      // synthesizes for a touch long-press (~500ms on Android) — it would
-      // otherwise pop the folder's Radix menu in the middle of the gesture.
-      const onContextMenu = (ev: Event) => {
-        if (dragActive.current !== null) {
-          ev.preventDefault();
-          ev.stopPropagation();
-        }
-      };
-
-      const onMove = (ev: PointerEvent) => {
-        if (ev.pointerId !== pointerId) return;
-        if (dragActive.current === null) {
-          lastX = ev.clientX;
-          lastY = ev.clientY;
-          // Touch gesture that committed to scrolling: pan the rail manually.
-          // Entries carry `touch-action: none` (the ONLY reliable way to keep
-          // Chrome from claiming the drag as a pan and killing it with
-          // pointercancel — its gesture arbitration is racy no matter what we
-          // preventDefault), so the browser never scrolls the rail for
-          // gestures that start on an entry; we do it here instead.
-          if (manualScroll) {
-            const nav = navRef.current;
-            if (nav) nav.scrollTop -= ev.clientY - lastScrollY;
-            lastScrollY = ev.clientY;
-            return;
-          }
-          // Mouse movement neither picks up (only the long press does) nor
-          // cancels the pending long press.
-          if (isMouse) return;
-          const s = startPos.current;
-          if (!s) return;
-          const dist = Math.hypot(ev.clientX - s.x, ev.clientY - s.y);
-          if (dist > 10) {
-            // Touch: movement before the long-press fires is a scroll — hand
-            // the rest of the gesture to the manual panner above.
-            if (longPressTimer.current !== null) {
-              window.clearTimeout(longPressTimer.current);
-              longPressTimer.current = null;
-            }
-            manualScroll = true;
-            lastScrollY = ev.clientY;
-          }
-          return;
-        }
-        ev.preventDefault();
-        setDragPos({ x: ev.clientX, y: ev.clientY });
-        const plan = planDrop(ev.clientY, slotsRef.current, dragActive.current);
-        dropPlanRef.current = plan;
-        setDropPlan(plan);
-      };
-
-      const onUp = (ev: PointerEvent) => {
-        if (ev.pointerId !== pointerId) return;
-        if (dragActive.current !== null) {
-          const plan = dropPlanRef.current;
-          try {
-            if (plan) {
-              persistLayout(applyDrop(layoutRef.current, dragActive.current, plan.target));
-            }
-          } catch (err) {
-            // Never let a failed drop wedge the drag state / leave listeners
-            // attached (this bit us when crypto.randomUUID threw over http).
-            console.error("Failed to apply rail drop:", err);
-          }
-          didDragRef.current = true;
-          // Keep the guard up long enough to swallow the click that the
-          // browser synthesizes after pointerup, then clear it.
-          window.setTimeout(() => {
-            didDragRef.current = false;
-          }, 300);
-        }
-        dragActive.current = null;
-        dropPlanRef.current = null;
-        setDragSource(null);
-        setDragPos(null);
-        setDropPlan(null);
-        clear();
-      };
-
-      // The browser reclaimed the pointer (scroll takeover, palm rejection,
-      // system gesture): abort WITHOUT applying the drop — the last computed
-      // plan no longer reflects the user's intent.
-      const onCancel = (ev: PointerEvent) => {
-        if (ev.pointerId !== pointerId) return;
-        dragActive.current = null;
-        dropPlanRef.current = null;
-        setDragSource(null);
-        setDragPos(null);
-        setDropPlan(null);
-        clear();
-      };
-
-      window.addEventListener("pointermove", onMove, { passive: false });
-      window.addEventListener("pointerup", onUp);
-      window.addEventListener("pointercancel", onCancel);
-      window.addEventListener("contextmenu", onContextMenu, true);
-
-      // Press-and-hold pickup — the ONLY trigger, on every pointer type.
-      // Guarded: a touch gesture that converted to a scroll cleared the timer.
-      longPressTimer.current = window.setTimeout(() => {
-        if (dragActive.current === null) beginDrag(source, lastX, lastY);
-      }, 300);
+  const railDrag = usePressDrag<RailDragSource>({
+    containerRef: navRef,
+    onPickup: (source, x, y) => {
+      const nav = navRef.current;
+      if (nav) {
+        const slots: RailSlot[] = [];
+        nav.querySelectorAll<HTMLElement>("[data-rail-anchor]").forEach((el) => {
+          const r = el.getBoundingClientRect();
+          slots.push({
+            anchor: el.dataset.railAnchor!,
+            parentFolderId: el.dataset.railParent || undefined,
+            top: r.top,
+            height: r.height,
+          });
+        });
+        slotsRef.current = slots;
+        const navRect = nav.getBoundingClientRect();
+        navRectRef.current = { left: navRect.left, width: navRect.width };
+      }
+      aim(source, x, y);
     },
-    [beginDrag, persistLayout],
-  );
+    onAim: aim,
+    onDrop: (source) => {
+      const plan = dropPlanRef.current;
+      dropPlanRef.current = null;
+      setDragPos(null);
+      setDropPlan(null);
+      if (plan) persistLayout(applyDrop(layoutRef.current, source, plan.target));
+    },
+    onAbort: () => {
+      dropPlanRef.current = null;
+      setDragPos(null);
+      setDropPlan(null);
+    },
+  });
 
-  const reordering = dragSource !== null;
+  const { dragging: reordering, shouldSuppressClick } = railDrag;
+  const dragSource = railDrag.source;
+  const handleDragPointerDown = railDrag.begin;
   const draggable = items.length > 1;
-  const shouldSuppressClick = useCallback(() => didDragRef.current, []);
-
-  // While an entry is picked up, carry the grabbing cursor globally as a
-  // fallback (the full-viewport overlay below is what makes the flip visible
-  // in Chromium; this covers other engines and any hit-test edge cases). At
-  // rest, entries show the normal link cursor — the old grab-on-hover hand
-  // suggested a drag affordance before anything was picked up, which
-  // confused people.
-  useEffect(() => {
-    if (!reordering) return;
-    const prev = document.body.style.cursor;
-    document.body.style.cursor = "grabbing";
-    return () => {
-      document.body.style.cursor = prev;
-    };
-  }, [reordering]);
 
   // What the floating ghost carries.
   const draggedItem =
@@ -1572,7 +1397,7 @@ export function ServerRail({
       highlight: dropPlan?.highlightAnchor === itemAnchor(item.key),
       dragParent: parentFolderId,
       onDragPointerDown: (e: PointerEvent) =>
-        handleDragPointerDown({ kind: "item", key: item.key }, e),
+        handleDragPointerDown({ kind: "item", key: item.key })(e),
       shouldSuppressClick,
     };
     if (item.kind === "server") {
@@ -1627,7 +1452,7 @@ export function ServerRail({
       )}
     >
       <nav
-        ref={navRef}
+        ref={railDrag.attachContainer}
         aria-label="Servers"
         // Suppress the browser's native HTML5 drag (images and <a>/NavLink are
         // draggable by default). Without this, a press-and-drag on a community
@@ -1780,7 +1605,7 @@ export function ServerRail({
               dragging={dragSource?.kind === "folder" && dragSource.id === node.id}
               reordering={reordering}
               highlight={dropPlan?.highlightAnchor === folderAnchor(node.id)}
-              onDragPointerDown={(e) => handleDragPointerDown({ kind: "folder", id: node.id }, e)}
+              onDragPointerDown={(e) => handleDragPointerDown({ kind: "folder", id: node.id })(e)}
               shouldSuppressClick={shouldSuppressClick}
             >
               {node.items.map((item) => renderItem(item, node.id))}

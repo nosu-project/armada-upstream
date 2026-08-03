@@ -1,9 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
-/** How long a press rests before it becomes a drag, on every pointer type. */
-const PICKUP_MS = 300;
-/** Past this, a touch that started on a row is a scroll and never a drag. */
-const SCROLL_SLOP_PX = 8;
+import { usePressDrag } from "@/hooks/usePressDrag";
 
 /** A place a channel can be dropped: an insertion point in the rendered list. */
 export interface ChannelDropSlot {
@@ -23,84 +20,46 @@ export interface ChannelDrop {
   newCategory?: boolean;
 }
 
-export interface ChannelDragState {
-  /** The channel being dragged, or null. */
-  sourceIdHex: string | null;
-  /** Where it would land — drives the indicator and the heading highlight. */
-  target: ChannelDrop | null;
-  /** Viewport y of the drop indicator. */
-  indicatorY: number | null;
-  /** Viewport x/width of the channel column, so the indicator spans only it. */
-  columnX: { left: number; width: number } | null;
-}
-
 /**
  * Press-and-hold drag for the channel sidebar.
  *
- * Modelled on the server rail's drag (`ServerRail.tsx`), and it repeats that
- * one's hard-won parts rather than sharing them: the rail's is entangled with
- * folder combining, mini-grid ghosts and its own layout algebra, and prying
- * those apart is a bigger, riskier change than this feature warrants. What is
- * shared is the LESSONS, noted where they bite.
+ * The gesture is {@link usePressDrag}, the same one the server rail runs on —
+ * including the parts that are not guessable (the permanent touchmove
+ * canceller, `touch-action: none` on rows, hand-panning a touch that turns out
+ * to be a scroll). This hook is only the channel-shaped half: what a slot is,
+ * which one the pointer is nearest, and what the indicator draws.
  *
- * Two of them matter enough to state up front:
- *
- * - Rows must carry `touch-action: none`. It is the only reliable way to stop
- *   Chrome claiming the gesture as a pan and killing the drag with
- *   `pointercancel`; its arbitration is racy no matter what is
- *   `preventDefault`ed. The cost is that the browser then never scrolls the
- *   list for a gesture that starts on a row, so a touch that turns out to be a
- *   scroll is panned here by hand.
- *
- * - Radix's `ContextMenuTrigger` opens on its own ~700ms touch long-press, and
- *   these rows have one. Pickup at 300ms would otherwise be followed by the
- *   menu opening on top of the drag. Radix clears that timer on
- *   `pointercancel`, so beginning a drag dispatches one at the source — which
- *   is also just true: the press stopped being a press. That event bubbles to
- *   this hook's OWN window `pointercancel` listener, which would otherwise end
- *   the drag in the same tick it began; `selfCancelling` fences it out.
+ * Rows must carry `touch-none` while the drag is enabled — unconditionally,
+ * not behind the `touch:` variant.
  */
 export function useChannelDrag({
   enabled,
-  scrollRef,
+  columnRef,
   measure,
   onDrop,
 }: {
   /** False for a member who can't rearrange: no timers, no listeners. */
   enabled: boolean;
-  /** The scrolling channel column, panned by hand during a touch drag. */
-  scrollRef: React.RefObject<HTMLElement | null>;
+  /**
+   * The scrolling channel column, populated by `attachColumn`. The caller owns
+   * it because the caller is what measures the slots inside it.
+   */
+  columnRef: React.MutableRefObject<HTMLElement | null>;
   /** Measures the current drop slots. Called once per drag, at pickup. */
   measure: () => ChannelDropSlot[];
   onDrop: (sourceIdHex: string, drop: ChannelDrop) => void;
 }) {
-  const [state, setState] = useState<ChannelDragState>({
-    sourceIdHex: null,
-    target: null,
-    indicatorY: null,
-    columnX: null,
-  });
-  const active = useRef<string | null>(null);
+  /** Where it would land — drives the indicator and the heading highlight. */
+  const [target, setTarget] = useState<ChannelDrop | null>(null);
+  /** Viewport y of the drop indicator. */
+  const [indicatorY, setIndicatorY] = useState<number | null>(null);
+  /** Viewport x/width of the column, so the indicator spans only it. */
+  const [columnX, setColumnX] = useState<{ left: number; width: number } | null>(null);
+
   const slots = useRef<ChannelDropSlot[]>([]);
-  const columnX = useRef<ChannelDragState["columnX"]>(null);
   const targetRef = useRef<ChannelDrop | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** Where the panning finger was last seen, for the manual scroll delta. */
-  const panAnchor = useRef(0);
 
-  const reset = useCallback(() => {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = null;
-    active.current = null;
-    targetRef.current = null;
-    slots.current = [];
-    columnX.current = null;
-    setState({ sourceIdHex: null, target: null, indicatorY: null, columnX: null });
-  }, []);
-
-  useEffect(() => reset, [reset]);
-
-  const aim = useCallback((y: number) => {
+  const aim = useCallback((_source: string, _x: number, y: number) => {
     let best: ChannelDropSlot | null = null;
     let bestDistance = Infinity;
     for (const slot of slots.current) {
@@ -112,110 +71,54 @@ export function useChannelDrag({
     }
     if (!best) return;
     targetRef.current = { index: best.index, category: best.category, newCategory: best.newCategory };
-    setState({
-      sourceIdHex: active.current,
-      target: targetRef.current,
-      indicatorY: best.y,
-      columnX: columnX.current,
-    });
+    setTarget(targetRef.current);
+    setIndicatorY(best.y);
   }, []);
+
+  const finish = useCallback(() => {
+    const landed = targetRef.current;
+    targetRef.current = null;
+    slots.current = [];
+    setTarget(null);
+    setIndicatorY(null);
+    setColumnX(null);
+    return landed;
+  }, []);
+
+  const drag = usePressDrag<string>({
+    containerRef: columnRef,
+    onPickup: (idHex, x, y) => {
+      slots.current = measure();
+      const rect = columnRef.current?.getBoundingClientRect();
+      setColumnX(rect ? { left: rect.left, width: rect.width } : null);
+      aim(idHex, x, y);
+    },
+    onAim: aim,
+    onDrop: (idHex) => {
+      const landed = finish();
+      if (landed) onDrop(idHex, landed);
+    },
+    onAbort: finish,
+  });
 
   const onPointerDown = useCallback(
     (idHex: string) => (e: React.PointerEvent) => {
-      if (!enabled || e.button !== 0) return;
-      const source = e.currentTarget as HTMLElement;
-      const pointerId = e.pointerId;
-      const startX = e.clientX;
-      const startY = e.clientY;
-      // Latest position, so a pickup that fires after the finger wandered aims
-      // where the finger IS rather than where it landed.
-      let lastY = startY;
-      let scrolling = false;
-      // Set only while pickup dispatches its own `pointercancel` at the source
-      // (below). That event bubbles to the window listener installed here, and
-      // without this the drag would cancel itself the instant it began.
-      let selfCancelling = false;
-
-      const clear = () => {
-        if (timer.current) clearTimeout(timer.current);
-        timer.current = null;
-        window.removeEventListener("pointermove", onMove);
-        window.removeEventListener("pointerup", onUp);
-        window.removeEventListener("pointercancel", onCancel);
-        window.removeEventListener("contextmenu", onContextMenu, true);
-      };
-
-      // Swallow the platform's own long-press callout while a drag is in
-      // flight — it would otherwise pop over the gesture.
-      const onContextMenu = (ev: Event) => {
-        if (active.current !== null) {
-          ev.preventDefault();
-          ev.stopPropagation();
-        }
-      };
-
-      const onMove = (ev: PointerEvent) => {
-        if (ev.pointerId !== pointerId) return;
-        lastY = ev.clientY;
-        if (active.current !== null) {
-          if (ev.cancelable) ev.preventDefault();
-          aim(ev.clientY);
-          return;
-        }
-        const dx = Math.abs(ev.clientX - startX);
-        const dy = Math.abs(ev.clientY - startY);
-        // Rows are `touch-action: none`, so the browser will not scroll this
-        // column for us; a gesture that committed to scrolling gets panned by
-        // hand from here until it ends.
-        if (scrolling || (ev.pointerType === "touch" && dy > SCROLL_SLOP_PX && dy > dx)) {
-          scrolling = true;
-          if (timer.current) clearTimeout(timer.current);
-          timer.current = null;
-          scrollRef.current?.scrollBy({ top: -(ev.clientY - panAnchor.current) });
-          panAnchor.current = ev.clientY;
-          return;
-        }
-        if (dx > SCROLL_SLOP_PX || dy > SCROLL_SLOP_PX) clear();
-      };
-
-      const onUp = (ev: PointerEvent) => {
-        if (ev.pointerId !== pointerId) return;
-        const drop = targetRef.current;
-        const dragged = active.current;
-        clear();
-        if (dragged && drop) onDrop(dragged, drop);
-        reset();
-      };
-
-      const onCancel = (ev: PointerEvent) => {
-        if (ev.pointerId !== pointerId || selfCancelling) return;
-        clear();
-        reset();
-      };
-
-      panAnchor.current = startY;
-      window.addEventListener("pointermove", onMove, { passive: false });
-      window.addEventListener("pointerup", onUp);
-      window.addEventListener("pointercancel", onCancel);
-      window.addEventListener("contextmenu", onContextMenu, true);
-
-      timer.current = setTimeout(() => {
-        timer.current = null;
-        if (scrolling) return;
-        active.current = idHex;
-        slots.current = measure();
-        const column = scrollRef.current?.getBoundingClientRect();
-        columnX.current = column ? { left: column.left, width: column.width } : null;
-        // The press has stopped being a press: tell Radix's context menu so it
-        // doesn't open its own long-press menu over the drag.
-        selfCancelling = true;
-        source.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true, pointerId }));
-        selfCancelling = false;
-        aim(lastY);
-      }, PICKUP_MS);
+      // A plain wrapper div, not a Radix `asChild` Slot, so React's own
+      // pointer prop is delivered — the rail's native-listener workaround
+      // isn't needed here.
+      if (enabled) drag.begin(idHex)(e.nativeEvent);
     },
-    [enabled, measure, onDrop, aim, reset, scrollRef],
+    [enabled, drag],
   );
 
-  return { ...state, onPointerDown, dragging: state.sourceIdHex !== null };
+  return {
+    sourceIdHex: drag.source,
+    dragging: drag.dragging,
+    target,
+    indicatorY,
+    columnX,
+    /** Ref for the scrolling channel column. Carries the touchmove canceller. */
+    attachColumn: drag.attachContainer,
+    onPointerDown,
+  };
 }
