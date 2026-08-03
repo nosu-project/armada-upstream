@@ -17,6 +17,9 @@ name: Deploy web
 #                             enabling privacy-friendly analytics in the HOSTED
 #                             build only; empty/unprovisioned = analytics off
 #   VITE_PLAUSIBLE_ENDPOINT   (optional) self-hosted/proxied Plausible API URL
+#   VITE_BRIDGE_PORTAL_URL    (optional) Discord bridge portal origin (e.g.
+#                             https://bridge.armada.buzz); empty/unprovisioned
+#                             hides the Discord import UI entirely
 # If DEPLOY_SSH_KEY_BASE64 is empty (not provisioned, or a non-maintainer PR),
 # the job builds and then skips the deploy instead of failing.
 
@@ -39,6 +42,9 @@ jobs:
       # provisioned) leaves web push unavailable.
       VITE_NOSTR_PUSH_PUBKEY: ${{ secrets.VITE_NOSTR_PUSH_PUBKEY }}
       VITE_NOSTR_PUSH_RELAYS: ${{ secrets.VITE_NOSTR_PUSH_RELAYS }}
+      # Discord bridge portal, hosted build only. Empty (secret not provisioned)
+      # renders no Discord import buttons at all.
+      VITE_BRIDGE_PORTAL_URL: ${{ secrets.VITE_BRIDGE_PORTAL_URL }}
     steps:
       - uses: actions/checkout@v4
 

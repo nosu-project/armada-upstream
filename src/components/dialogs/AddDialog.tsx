@@ -11,6 +11,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
+import { ImportFromDiscordButton } from "@/components/ImportFromDiscord";
 import { Input } from "@/components/ui/input";
 import {
   Tooltip,
@@ -30,7 +31,7 @@ import { claimBuzzInvite, fetchBuzzJoinPolicy, parseBuzzInviteUrl, type BuzzInvi
 import { classifyAddInput, type ConcordInvite } from "@/concord-v1/lib/concord";
 import { parseInviteLink, type ParsedInviteLink } from "@/concord-v2/lib/invite";
 import { parseGroupNaddr } from "@/lib/nip29";
-import { normalizeRelayUrl, relayToHttpUrl, relayToRouteParam } from "@/lib/platform";
+import { bridgePortalUrl, normalizeRelayUrl, relayToHttpUrl, relayToRouteParam } from "@/lib/platform";
 
 import { cn } from "@/lib/utils";
 
@@ -206,7 +207,33 @@ export function AddBody({ onDone }: { onDone: () => void }) {
         </Collapsible>
       </div>
 
+      {/* Coming off Discord: the portal mints the community from a guild's
+          channels and history, signed with this user's own key, and hands back
+          an invite the escape hatch below accepts. Absent unless the build
+          names a portal. */}
+      <ImportFromDiscordSection />
+
       <EscapeHatch onDone={onDone} />
+    </div>
+  );
+}
+
+/** The Discord-import path, with the one line of context it needs. */
+function ImportFromDiscordSection() {
+  if (!bridgePortalUrl("/import")) return null;
+
+  return (
+    <div className="w-full max-w-sm space-y-2">
+      <div className="flex items-center gap-3">
+        <span className="h-px flex-1 bg-border" />
+        <span className="text-[0.7rem] uppercase tracking-wider text-muted-foreground">or</span>
+        <span className="h-px flex-1 bg-border" />
+      </div>
+      <ImportFromDiscordButton />
+      <p className="text-xs text-muted-foreground">
+        Bring a server you run across — channels, history, and emoji. You sign
+        the new community with your own key, so you own it.
+      </p>
     </div>
   );
 }

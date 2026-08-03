@@ -261,6 +261,55 @@ export function linkPreviewUrl(url: string): string | null {
     : `${LINK_PREVIEW_ENDPOINT}${encoded}`;
 }
 
+/** Normalize the configured portal origin, or "" for absent/unusable. */
+function parseBridgePortalUrl(raw: string): string {
+  const value = raw.trim();
+  if (!value) return "";
+  try {
+    const url = new URL(value);
+    // Refuse anything that isn't a web origin: this string ends up in an href,
+    // and a `javascript:` value from a bad build arg would be script injection.
+    if (url.protocol !== "https:" && url.protocol !== "http:") return "";
+    return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Discord bridge portal (the `armada-discord-bridge` companion service), named
+ * at build time.
+ *
+ * OFF by default. The portal is deployment infrastructure, not part of the
+ * protocol: it is a hosted web app that holds a Discord bot token, a Discord
+ * OAuth application, and per-bridge key material. A build that doesn't have one
+ * to point at must not advertise Discord features at all, so every Discord
+ * affordance in the UI is gated on this being set. Forks, the Android APK, the
+ * desktop app, and `npm run dev` all render nothing.
+ *
+ * Nothing is dialed on boot and no Armada data is sent here — this is only the
+ * origin of links the user clicks, which is why a compiled-in value is fine
+ * where a relay pin would not be (see "How the client reaches backends").
+ * Importing happens entirely on the portal: the user signs in with Discord
+ * there, and the resulting community is signed with *their own* Nostr key, then
+ * joined back here with the invite link the portal hands them.
+ */
+export const BRIDGE_PORTAL_URL: string = parseBridgePortalUrl(
+  import.meta.env.VITE_BRIDGE_PORTAL_URL ?? "",
+);
+
+/**
+ * Absolute URL into the bridge portal, or `null` when this build has no portal
+ * configured — callers render nothing on `null`.
+ *
+ * - `/import` opens the "import a Discord server" wizard directly.
+ * - `/` is the portal dashboard, where existing bridges are managed.
+ */
+export function bridgePortalUrl(path: "/" | "/import" = "/"): string | null {
+  if (!BRIDGE_PORTAL_URL) return null;
+  return path === "/" ? BRIDGE_PORTAL_URL : `${BRIDGE_PORTAL_URL}${path}`;
+}
+
 /**
  * Privacy-friendly analytics (Plausible), configured at build time.
  *

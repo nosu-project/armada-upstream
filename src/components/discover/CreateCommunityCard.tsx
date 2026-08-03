@@ -3,6 +3,7 @@ import { lazy, Suspense, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
+import { ImportFromDiscordButton } from "@/components/ImportFromDiscord";
 import { Button } from "@/components/ui/button";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { cn } from "@/lib/utils";
@@ -62,6 +63,9 @@ export function CreateCommunityCard({ className }: { className?: string }) {
           <Plus className="size-4" />
           Create community
         </Button>
+        {/* Second door for people arriving from Discord. Renders nothing when
+            the build names no bridge portal, leaving the tile as it was. */}
+        <ImportFromDiscordButton variant="ghost" size="sm" className="text-muted-foreground" />
       </div>
 
       <ArmadaCrestKeyframes />

@@ -21,6 +21,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { DiscordBridgeSection } from "@/components/ImportFromDiscord";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { OwnerAvatar, OwnerSlashRepo, RepositoryPicker, type PickedRepository } from "@/components/projects/RepositoryPicker";
 import { Input } from "@/components/ui/input";
@@ -368,6 +369,8 @@ function InfoBody({
         <ChannelsSection community={community} canManage={canManageChannels} channelRoles={channelRoles} onPrivatiseChannel={onPrivatiseChannel} onRotateChannelKey={onRotateChannelKey} />
 
         <ConnectedRepositoriesSection community={community} canManage={canManageChannels} />
+
+        <DiscordBridgeSection canManage={canManageChannels} />
 
         <RelaysSection
           community={community}
