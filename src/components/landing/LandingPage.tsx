@@ -198,24 +198,29 @@ function RelayLight({ url, index }: { url: string; index: number }) {
     <li className="flex items-center gap-2 tracking-wide">
       {/* A status light, not a bullet: small, with a soft halo so the lit
           state reads at a glance without out-shouting the muted caption.
-          A live one flickers like a panel LED — each relay gets its own
-          period and offset so the row never blinks in lockstep, which is
-          what would make it read as an animation rather than as hardware.
-          `currentColor` is the glow, so the color lives in one class. */}
+          `currentColor` is the glow, so the color lives in one class.
+
+          The two states blink like the two kinds of LED they're imitating: a
+          live relay stutters like an activity light under load, a dead one
+          keeps a slow fault beat. Each relay gets its own period and offset —
+          a row blinking in lockstep reads as one animation rather than as
+          four independent machines. */}
       <span
         aria-hidden="true"
         style={
-          alive
-            ? { animationDelay: `${index * 0.83}s`, animationDuration: `${3.1 + index * 0.71}s` }
-            : undefined
+          alive === undefined
+            ? undefined
+            : alive
+              ? { animationDelay: `${index * 0.29}s`, animationDuration: `${1.15 + index * 0.13}s` }
+              : { animationDelay: `${index * 0.11}s` }
         }
         className={cn(
           "size-1.5 shrink-0 rounded-full ring-2",
           alive === undefined && "animate-pulse bg-muted-foreground/40 ring-transparent motion-reduce:animate-none",
           alive === true &&
-            "animate-[armada-led_3.1s_ease-in-out_infinite] bg-emerald-400 text-emerald-400/60 ring-emerald-400/20 motion-reduce:animate-none",
-          // A dead relay's light just sits there — no blink to suggest work.
-          alive === false && "bg-red-400/80 ring-red-400/15",
+            "animate-[armada-led-busy_1.15s_steps(1,end)_infinite] bg-emerald-400 text-emerald-400/60 ring-emerald-400/20 motion-reduce:animate-none",
+          alive === false &&
+            "animate-[armada-led-fault_1.9s_steps(1,end)_infinite] bg-red-400 text-red-400/50 ring-red-400/15 motion-reduce:animate-none",
         )}
       />
       {/* The relay's own https origin — the same host the light just probed,
@@ -254,14 +259,34 @@ function LandingKeyframes() {
         [class*="animate-[armada-reveal"] { animation-duration: 1ms !important; }
       }
 
-      /* A lit relay LED: mostly a steady glow, with a quick double flicker
-         once a cycle. Opacity + box-shadow only, so it never lays out. */
-      @keyframes armada-led {
-        0%, 44%, 100% { opacity: 1;    box-shadow: 0 0 5px 1px currentColor; }
-        47%           { opacity: 0.35; box-shadow: 0 0 1px 0 currentColor; }
-        50%           { opacity: 1;    box-shadow: 0 0 5px 1px currentColor; }
-        54%           { opacity: 0.55; box-shadow: 0 0 2px 0 currentColor; }
-        58%           { opacity: 1;    box-shadow: 0 0 5px 1px currentColor; }
+      /* A live relay's activity light: fast, uneven, mostly lit — traffic,
+         not a heartbeat. Driven with steps(1,end) so every change is a hard
+         switch; interpolating between stops would make it breathe instead of
+         blink. Opacity + box-shadow only, so it never lays out. */
+      @keyframes armada-led-busy {
+        0%   { opacity: 1;   box-shadow: 0 0 5px 1px currentColor; }
+        7%   { opacity: 0.2; box-shadow: none; }
+        11%  { opacity: 1;   box-shadow: 0 0 5px 1px currentColor; }
+        15%  { opacity: 0.2; box-shadow: none; }
+        23%  { opacity: 1;   box-shadow: 0 0 5px 1px currentColor; }
+        34%  { opacity: 0.2; box-shadow: none; }
+        38%  { opacity: 1;   box-shadow: 0 0 5px 1px currentColor; }
+        45%  { opacity: 0.2; box-shadow: none; }
+        49%  { opacity: 1;   box-shadow: 0 0 5px 1px currentColor; }
+        61%  { opacity: 0.2; box-shadow: none; }
+        66%  { opacity: 1;   box-shadow: 0 0 5px 1px currentColor; }
+        72%  { opacity: 0.2; box-shadow: none; }
+        76%  { opacity: 1;   box-shadow: 0 0 5px 1px currentColor; }
+        88%  { opacity: 0.2; box-shadow: none; }
+        93%  { opacity: 1;   box-shadow: 0 0 5px 1px currentColor; }
+      }
+
+      /* A dead relay's fault light: one short pulse per cycle, same beat every
+         time — the point is that it is NOT doing any work. */
+      @keyframes armada-led-fault {
+        0%   { opacity: 1;    box-shadow: 0 0 4px 0 currentColor; }
+        22%  { opacity: 0.15; box-shadow: none; }
+        100% { opacity: 0.15; box-shadow: none; }
       }
 
       /* The scroll cue riding the swell. Transform only. */

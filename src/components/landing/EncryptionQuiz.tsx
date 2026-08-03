@@ -13,8 +13,12 @@ import { cn } from "@/lib/utils";
 
 const TITLE = "What are you talking about?";
 
-/** The sentence the quiz was covering. */
-const PUNCHLINE = "Messages on Armada are encrypted. Not even we know what you're talking about.";
+/**
+ * The sentence the quiz was covering. Broken after the first sentence by hand:
+ * the claim and its consequence get a line each, rather than whatever split the
+ * container width happens to produce.
+ */
+const PUNCHLINE = ["Messages on Armada are encrypted.", "Not even we know what you're talking about."];
 
 /** Rows and columns of hex in each answer button. */
 const BLOCK_ROWS = 5;
@@ -217,7 +221,9 @@ export function EncryptionQuiz() {
             picked ? "opacity-100 delay-500" : "opacity-0"
           }`}
         >
-          {PUNCHLINE}
+          {PUNCHLINE[0]}
+          <br />
+          {PUNCHLINE[1]}
         </p>
 
         <div
