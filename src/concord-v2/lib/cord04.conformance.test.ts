@@ -57,6 +57,7 @@ import { sealRumor, wrapSeal } from "./stream";
 import { bootstrapHead, editionHash, fold, type Edition } from "./version";
 import {
   ADMIN_ALL,
+  PERMISSION_LABELS,
   byDisplayOrder,
   canActOnMember,
   canActOnPosition,
@@ -797,6 +798,24 @@ describe("CORD-04 §3 — Permissions and Position", () => {
     expect(permsContain(ADMIN_ALL, Permissions.PIN_MESSAGES)).toBe(true);
     const legacyAdmin = role("e".repeat(64), 1, ADMIN_ALL & ~Permissions.PIN_MESSAGES);
     expect(permsContain(legacyAdmin.permissions, Permissions.PIN_MESSAGES)).toBe(false);
+  });
+
+  it("O-28b: every ENFORCED permission is grantable — no bit without a checkbox", () => {
+    // A permission this client enforces but the role editor cannot offer is a
+    // permission only the OWNER can ever exercise, since owners bypass the bit
+    // check entirely. Claiming a bit and forgetting its label ships exactly
+    // that, silently.
+    //
+    // VIEW_AUDIT_LOG is deliberately exempt: it is declared for wire
+    // compatibility but gated nowhere in this client (the audit log is open to
+    // every member), so a checkbox would promise an enforcement that does not
+    // exist. It belongs on the list the day something reads it.
+    const UNENFORCED = new Set<bigint>([Permissions.VIEW_AUDIT_LOG]);
+    const labelled = new Set(PERMISSION_LABELS.map((l) => l.bit));
+    for (const [name, bit] of Object.entries(Permissions)) {
+      if (UNENFORCED.has(bit)) continue;
+      expect(labelled.has(bit), `${name} is enforced but has no PERMISSION_LABELS entry, so nobody can be granted it`).toBe(true);
+    }
   });
 
   it("O-29: permissions ride the wire as a DECIMAL STRING, and a number still reads", () => {
