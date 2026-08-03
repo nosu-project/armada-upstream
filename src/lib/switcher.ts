@@ -15,12 +15,10 @@
 import { matchPath } from "react-router-dom";
 import { nip19 } from "nostr-tools";
 
-import { controlFoldKey } from "@/concord-v2/hooks/useControlPlane2";
 import { channelsView } from "@/concord-v2/lib/community";
 import { rehydrateCommunity, type CommunityListEntry } from "@/concord-v2/lib/communityList";
 import { searchRumors } from "@/concord-v2/lib/rumorStore";
-import type { FoldedControl } from "@/concord-v2/lib/control";
-import { readFolded } from "@/lib/foldedCache";
+import { readControlFold } from "@/concord-v2/lib/control";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { searchDm17Rumors } from "@/lib/nip17/dm17Store";
 import { relayToRouteParam, routeParamToRelay } from "@/lib/platform";
@@ -172,7 +170,7 @@ const concordTransport: Transport = {
     // assemble the readable channels in display order. No decrypt, no network.
     const community = rehydrateCommunity(entry);
     if (!community) return [];
-    const folded = await readFolded<FoldedControl>(controlFoldKey(id));
+    const folded = await readControlFold(id);
     return channelsView(community, folded).map((c) => ({
       key: `${key}::${c.idHex}`,
       id: c.idHex,

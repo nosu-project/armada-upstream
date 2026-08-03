@@ -10,6 +10,8 @@ import {
   buildRegistryEdition,
   buildRoleEdition,
   foldControlState,
+  isCurrentFoldedControl,
+  type FoldedChannel,
   banShouldRotate,
   banShouldRotateMany,
   hasForeignLiveLinks,
@@ -21,6 +23,7 @@ import {
   sealEdition,
 } from "@/concord-v2/lib/control";
 import { bytesToHex, communityIdOf, controlGroupKey, dissolvedGroupKey, grantLocator, hex32, random32, type GroupKey } from "@/concord-v2/lib/derive";
+import { channelCategory } from "@/concord-v2/lib/channelCategory";
 import { isTagDecimal } from "@/concord-v2/lib/edition";
 import { buildRumor, openWrap, rewrapSeal, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -1650,5 +1653,45 @@ describe("dissolution (CORD-02 §9)", () => {
     });
     const seal = await sealRumor(legacy, KIND_SEAL_PLAINTEXT, group, owner);
     expect(isDissolved([wrapSeal(seal, group)], communityId, owner.pubkey)).toBe(false);
+  });
+});
+
+describe("isCurrentFoldedControl", () => {
+  /**
+   * The fold is persisted whole and rehydrated behind an unchecked `as T`, so a
+   * snapshot from a build that predates a field arrives typed as though it has
+   * one. `FoldedChannel.metadata` is exactly that field, and its readers
+   * dereference it — hence the boundary check rather than a guard per reader.
+   */
+  it("rejects a snapshot whose channels predate `metadata`", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const channelId = random32();
+    const wrap = await sealEdition(
+      buildChannelEdition(channelId, normalizeChannelMetadata({ name: "general", private: false }), {
+        actorPubkey: owner.pubkey,
+        version: 1n,
+      }),
+      control,
+      owner,
+    );
+    const folded = foldControlState(openControlWraps([wrap], [control]), communityId, owner.pubkey);
+    expect(isCurrentFoldedControl(folded)).toBe(true);
+
+    const idHex = bytesToHex(channelId);
+    const { metadata: _dropped, ...older } = folded.channels.get(idHex)!;
+    folded.channels.set(idHex, older as FoldedChannel);
+    expect(isCurrentFoldedControl(folded)).toBe(false);
+
+    // What accepting it would have cost: the readers dereference `metadata`.
+    expect(() => channelCategory(folded.channels.get(idHex)!.metadata)).toThrow(TypeError);
+  });
+
+  it("rejects a miss, and anything that isn't a fold", () => {
+    expect(isCurrentFoldedControl(undefined)).toBe(false);
+    expect(isCurrentFoldedControl(null)).toBe(false);
+    expect(isCurrentFoldedControl({})).toBe(false);
+    // `channels` survives JSON only because the codec revives it as a Map; a
+    // plain object here means the snapshot was written by something else.
+    expect(isCurrentFoldedControl({ channels: {}, heads: new Map() })).toBe(false);
   });
 });

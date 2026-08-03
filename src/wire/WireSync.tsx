@@ -8,9 +8,10 @@ import { useBootGateOpen } from "@/lib/bootGate";
 import { useConcordList } from "@/concord-v1/hooks/useConcordList";
 import { buildConcordSubs, buildConcordControlSubs } from "@/concord-v1/lib/concordNotifications";
 import { useCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
-import { controlFoldKey, dissolvedAt } from "@/concord-v2/hooks/useControlPlane2";
+import { dissolvedAt } from "@/concord-v2/hooks/useControlPlane2";
 import { openChatBatch } from "@/concord-v2/lib/chat";
 import { channelsView } from "@/concord-v2/lib/community";
+import { readControlFold } from "@/concord-v2/lib/control";
 import { channelGitRepositoryAttachments } from "@/concord-v2/lib/types";
 import { heldChannelKeys, liveEntries, rehydrateCommunity } from "@/concord-v2/lib/communityList";
 import { controlGroups } from "@/concord-v2/lib/control";
@@ -27,7 +28,7 @@ import { useWireGitTicketRoots } from "@/hooks/useWireGitTicketRoots";
 import { hasNativeNotificationService } from "@/hooks/useNativeNotifications";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { KvPrefixCache } from "@/lib/db/kvCache";
-import { onFoldedWrite, readFolded } from "@/lib/foldedCache";
+import { onFoldedWrite } from "@/lib/foldedCache";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
 import { onRelayReopened } from "@/lib/relayReopen";
 import { logSync } from "@/lib/syncLog";
@@ -38,7 +39,6 @@ import { ingestWireEvents } from "@/wire/ingest";
 import { buildWireSpec, stampRoundSince, type WireSpec } from "@/wire/spec";
 import type { GitRepositoryWireInput } from "@/wire/spec";
 
-import type { FoldedControl } from "@/concord-v2/lib/control";
 import type { GroupKey } from "@/concord-v2/lib/derive";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
@@ -171,7 +171,7 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
         // so a relay outage can't quietly resurrect the feed.
         if ((await dissolvedAt(community.idHex)) !== undefined) continue;
         const keys: GroupKey[] = [];
-        const folded = await readFolded<FoldedControl>(controlFoldKey(community.idHex));
+        const folded = await readControlFold(community.idHex);
         for (const channel of channelsView(community, folded)) {
           if (channel.streams.length === 0) continue;
           out.push({

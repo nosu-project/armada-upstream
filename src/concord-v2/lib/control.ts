@@ -59,6 +59,7 @@ import {
   type Role,
 } from "@/concord-v2/lib/roles";
 import { buildRumor, openWrap, sealRumor, wrapSeal, type OpenedEvent, type StreamSigner } from "@/concord-v2/lib/stream";
+import { readFolded } from "@/lib/foldedCache";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import { perfCount } from "@/lib/perf";
 import {
@@ -284,6 +285,41 @@ export interface FoldedControl {
    * gate as `banned`, so a forged banlist can't backdate-suppress a member.
    */
   bannedAt: Map<string, number>;
+}
+
+/**
+ * Whether a snapshot decoded off disk still has the shape this build reads.
+ *
+ * `readFolded` rehydrates JSON behind an unchecked `as T`, so a snapshot written
+ * by an older build arrives TYPED as current and is then dereferenced as
+ * current. That is not hypothetical: {@link FoldedChannel.metadata} was added
+ * after this cache already existed, and the readers came later still —
+ * `channelsView` reads `def.metadata.custom` unguarded, so an older snapshot
+ * threw during the boot render, and a moderator's next reorder would have built
+ * its edition from a metadata object that isn't there.
+ *
+ * Checked at the boundary rather than patched at each reader, because the fold
+ * is a pure cache: rejecting it costs one re-fold from editions already on
+ * disk, and the next {@link writeFolded} replaces the entry under the same key,
+ * so there is nothing to migrate and nothing left behind. Extend this when the
+ * persisted shape gains a field readers assume is there.
+ */
+export function isCurrentFoldedControl(value: unknown): value is FoldedControl {
+  const fold = value as FoldedControl | undefined;
+  if (!fold || !(fold.channels instanceof Map) || !(fold.heads instanceof Map)) return false;
+  for (const def of fold.channels.values()) {
+    if (!def || typeof def.metadata !== "object" || def.metadata === null) return false;
+  }
+  return true;
+}
+
+/**
+ * A community's cached control fold, or undefined on a miss OR a snapshot this
+ * build can't read. Every reader of the persisted fold goes through here.
+ */
+export async function readControlFold(idHex: string): Promise<FoldedControl | undefined> {
+  const folded = await readFolded<FoldedControl>(controlFoldKey(idHex));
+  return isCurrentFoldedControl(folded) ? folded : undefined;
 }
 
 function pushEdition(m: Map<string, ParsedEdition[]>, key: string, p: ParsedEdition) {

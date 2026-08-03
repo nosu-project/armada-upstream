@@ -81,6 +81,15 @@ the box; other hostnames need HTTPS.
   media servers" toggle.
 - `VITE_CONCORD_AV_SERVERS` — fallback Concord voice (CORD-07) token brokers
   (default `https://armada.buzz`).
+- `VITE_BRIDGE_PORTAL_URL` — origin of a Discord bridge portal
+  (`armada-discord-bridge`), e.g. `https://bridge.armada.buzz`. **Empty by
+  default**, which hides every Discord affordance in the client; set it and the
+  "Import a Discord server" buttons appear on the Add dialog, the welcome page,
+  the Discover grid, and community settings. It is only the target of links the
+  user clicks — nothing is dialed on boot and no Armada data is sent to it. The
+  import itself runs on the portal, which signs the resulting community with the
+  user's own Nostr key and hands back an ordinary invite link. Must be an
+  `http(s)` URL; anything else is treated as unset.
 - `VITE_APP_NAME` — display name.
 
 ## Packaging

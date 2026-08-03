@@ -18,6 +18,8 @@ interface ImportMetaEnv {
   readonly VITE_SANDBOX_DOMAIN?: string;
   /** Generic link-preview proxy template, `{url}` = encoded target. Empty = generic previews disabled. */
   readonly VITE_LINK_PREVIEW_ENDPOINT?: string;
+  /** Discord bridge portal origin (e.g. "https://bridge.armada.buzz"). Empty/unset = Discord import UI hidden. */
+  readonly VITE_BRIDGE_PORTAL_URL?: string;
   /** Plausible site domain (e.g. "armada.buzz"). Empty/unset = analytics disabled. */
   readonly VITE_PLAUSIBLE_DOMAIN?: string;
   /** Plausible API endpoint (self-hosted instance or proxy). Empty/unset = Plausible Cloud default. */

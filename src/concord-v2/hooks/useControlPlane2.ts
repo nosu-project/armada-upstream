@@ -6,6 +6,7 @@ import {
   controlFoldKey,
   currentControlGroup,
   foldControlState,
+  isCurrentFoldedControl,
   isDissolvedOpened,
   openControlEditions,
   sealEdition,
@@ -323,6 +324,7 @@ export function useControlFold2(community: CommunityV2 | undefined, active = tru
       return folded;
     },
     [community, events, refounded, snapIds],
+    isCurrentFoldedControl,
   );
 
   return { ...control, data } as typeof control & { data: FoldedControl | undefined };

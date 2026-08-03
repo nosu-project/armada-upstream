@@ -18,7 +18,7 @@
  *   - the community list, cached under {@link communityListFoldKey} — every
  *     joined community's secrets, so `rehydrateCommunity` reconstitutes the
  *     full `CommunityV2` with no signer and no relay;
- *   - each community's control fold, cached under {@link controlFoldKey} —
+ *   - each community's control fold, cached and vetted by {@link readControlFold} —
  *     the channel definitions, so `channelsView` yields the chat channels.
  *
  * From those, {@link mirrorGroups} enumerates every non-chat plane address
@@ -68,7 +68,7 @@ import {
   rehydrateCommunity,
   type PersistedCommunityList,
 } from "@/concord-v2/lib/communityList";
-import { controlFoldKey, controlGroups } from "@/concord-v2/lib/control";
+import { controlGroups, readControlFold } from "@/concord-v2/lib/control";
 import { dissolvedGroupKey } from "@/concord-v2/lib/derive";
 import { guestbookGroups } from "@/concord-v2/lib/guestbook";
 import { KIND_SEAL_PLAINTEXT, PLANE_KINDS, PLANE_RULES, type Plane } from "@/concord-v2/lib/kinds";
@@ -83,7 +83,6 @@ import { getArmadaDB } from "@/lib/db/armadaDB";
 import { MigrationDeferredError, skipLegacyDrain } from "@/lib/db/legacyDatabases";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
-import type { FoldedControl } from "@/concord-v2/lib/control";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 
@@ -225,7 +224,7 @@ function planeByAddress(community: CommunityV2): Map<string, Plane> {
 
 /** Copy every row addressed to one community into its tenant. */
 async function drainCommunity(legacy: NIndexedDB, community: CommunityV2): Promise<void> {
-  const folded = await readFolded<FoldedControl>(controlFoldKey(community.idHex));
+  const folded = await readControlFold(community.idHex);
   const channels = channelsView(community, folded);
 
   const channelIds = channels.map((c) => c.idHex);
