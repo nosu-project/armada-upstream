@@ -163,16 +163,20 @@ export function PinnedBar2({
           </Button>
         </div>
         {staleEdits > 0 && onRefreshEdits && (
+          // Informational, not an errand: the push happens on its own (§7
+          // Edits). The manual trigger stays only so a curator who is watching
+          // can skip the wait, or retry one that failed.
           <button
             type="button"
             disabled={isRefreshingEdits}
             onClick={onRefreshEdits}
-            className="mb-1.5 flex w-full items-center gap-2 rounded-md bg-amber-500/10 px-2 py-1.5 text-left text-[11px] text-amber-700 disabled:opacity-60 dark:text-amber-400"
+            className="mb-1.5 flex w-full items-center gap-2 rounded-md bg-foreground/5 px-2 py-1.5 text-left text-[11px] text-muted-foreground disabled:opacity-60"
           >
-            {isRefreshingEdits ? <Loader2 className="size-3 shrink-0 animate-spin" /> : <ShieldCheck className="size-3 shrink-0" />}
-            {staleEdits} pin{staleEdits === 1 ? " was" : "s were"} edited after pinning. Members who joined
-            later still see the original.
-            <span className="ml-auto shrink-0 underline">Update</span>
+            <Loader2 className={cn("size-3 shrink-0", isRefreshingEdits && "animate-spin")} />
+            {isRefreshingEdits
+              ? "Publishing the revision so later members see it too…"
+              : `${staleEdits} pin${staleEdits === 1 ? "" : "s"} edited — publishing the revision shortly.`}
+            {!isRefreshingEdits && <span className="ml-auto shrink-0 underline">Now</span>}
           </button>
         )}
         {dark && pins.length === 0 ? (

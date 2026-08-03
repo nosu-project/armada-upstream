@@ -1,6 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import {
   citationFor,
@@ -219,6 +219,38 @@ export function usePins2(
       return changed;
     },
   });
+
+  /**
+   * Push a revision to keyless readers on our own, the way the deletion
+   * omission does. A pin nobody refreshes shows superseded words forever, and a
+   * button nobody clicks is the same as no rule at all.
+   *
+   * Deferring by a random interval does double duty: it collapses simultaneous
+   * curators into one publisher (every republish carries the same list), and it
+   * coalesces an author's burst of corrections, since the push attaches
+   * whatever is newest when it fires rather than each revision as it lands.
+   */
+  // Depend on a STRING, never the Map or the mutation: both take a fresh
+  // identity most renders, and an effect keyed on them re-arms its own cleanup
+  // before the timer can fire — the push would be scheduled forever and never
+  // happen.
+  const editSignature = useMemo(
+    () => [...localEdits.entries()].map(([id, e]) => `${id}:${e.ms}`).sort().join("|"),
+    [localEdits],
+  );
+  const pushed = useRef("");
+  const runPush = useRef<() => Promise<unknown>>(async () => undefined);
+  runPush.current = () => refreshEdits.mutateAsync();
+  useEffect(() => {
+    if (!canPin || !editSignature) return;
+    // One attempt per distinct set of stale revisions: a failure must not spin.
+    if (pushed.current === editSignature) return;
+    const timer = setTimeout(() => {
+      pushed.current = editSignature;
+      void runPush.current().catch(() => undefined);
+    }, 3_000 + Math.floor(Math.random() * 12_000));
+    return () => clearTimeout(timer);
+  }, [canPin, editSignature]);
 
   return {
     pins: view,

@@ -55,6 +55,8 @@ const deletedKey = (channelIdHex: string | null) => ["concord2", "msg-deleted", 
  */
 const WINDOW_SIZE = 100;
 
+const EMPTY_RAW: OpenedChat[] = [];
+
 /** Upsert opened events into the raw set, deduped by rumor id, sorted by ms. */
 export function upsertOpenedChat(old: OpenedChat[] | undefined, incoming: OpenedChat[]): OpenedChat[] {
   const byId = new Map<string, OpenedChat>();
@@ -392,6 +394,12 @@ export function useChannelTimeline2(
   return {
     /** The folded, moderated timeline + reaction tallies. */
     folded,
+    /**
+     * The RAW opened rows, pre-fold. The fold consumes Edits, deletes and
+     * reactions into their targets, so they exist nowhere else — and a Pin
+     * needs the Edit rumor itself to prove a revision (CORD-04 §7).
+     */
+    raw: query.data ?? EMPTY_RAW,
     // Loading skeleton gate: the LOCAL read, and nothing else. `isPending` is
     // true from the moment the query mounts until its queryFn resolves, and
     // that queryFn resolves on the rumor-store read — so a channel whose

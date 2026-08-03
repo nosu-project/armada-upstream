@@ -57,6 +57,7 @@ import type { NostrEvent } from "@nostrify/nostrify";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import {
   KIND_COMMENT,
+  KIND_EDIT,
   KIND_MESSAGE,
   KIND_SEAL_PLAINTEXT,
   KIND_WEBXDC,
@@ -509,6 +510,9 @@ export async function queryRekeyRounds(
 // can republish an entity's head under the new epoch verbatim (CORD-06 §3), and
 // is read by exactly one call site, once per rotation.
 
+/** Rumor kinds a Pin can prove, whose seals must therefore survive the store. */
+const PIN_PROVABLE_KINDS: ReadonlySet<number> = new Set([KIND_MESSAGE, KIND_COMMENT, KIND_EDIT]);
+
 /** KV key holding the signed seal a stored rumor arrived in. */
 function sealKey(communityIdHex: string, rumorId: string): string {
   return `c2seal:${communityIdHex}:${rumorId}`;
@@ -576,9 +580,12 @@ function writeStored(
   for (const o of opened) {
     writes.push(s.event(openedToStored(o)));
     // Keep the seal for plaintext editions (compaction re-wraps them verbatim)
-    // AND for chat messages (a Pin proves a message FROM its seal, CORD-04 §7 —
-    // without it a message stops being pinnable the moment it leaves memory).
-    if (o.seal && (o.sealKind === KIND_SEAL_PLAINTEXT || o.kind === KIND_MESSAGE || o.kind === KIND_COMMENT)) {
+    // and for everything a Pin can prove (CORD-04 §7): the message itself, and
+    // the Edit that revises it — a pin carries the Edit's own seal so keyless
+    // readers verify the revision rather than trust a curator's retyping.
+    // Without this a message stops being pinnable, and a revision stops being
+    // provable, the moment it leaves memory.
+    if (o.seal && (o.sealKind === KIND_SEAL_PLAINTEXT || PIN_PROVABLE_KINDS.has(o.kind))) {
       writes.push(db.kv.set(sealKey(communityIdHex, o.rumorId), o.seal));
     }
   }

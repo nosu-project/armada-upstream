@@ -79,7 +79,7 @@ export function useTransport2(
 } {
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
-  const { folded, isLoading, loadOlder, hasMore, isLoadingOlder } = useChannelTimeline2(community, channel, routeChannelIdHex);
+  const { folded, raw, isLoading, loadOlder, hasMore, isLoadingOlder } = useChannelTimeline2(community, channel, routeChannelIdHex);
   const { mutateAsync: send } = useSendMessage2(community, channel);
   const { retry, discard, deleteMessage } = useMessageActions2(community, channel);
   const sendStatus = useSendStatus2(channel);
@@ -537,11 +537,13 @@ export function useTransport2(
     [timeline, isLoading, canWrite, canModerate, rotationDividerIds, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, calendarFor, threadRepliesFor, sendThreadReply],
   );
 
+  // Built from the RAW rows, not the folded ones: pinning needs the original
+  // seal, and proving a revision needs the Edit rumor the fold consumed.
   const openedById = useMemo(() => {
     const map = new Map<string, OpenedChat>();
-    for (const m of folded.messages) map.set(m.rumorId, m);
+    for (const m of raw ?? []) map.set(m.rumorId, m);
     return map;
-  }, [folded.messages]);
+  }, [raw]);
 
   return { transport, reactionsFor, allMessages: messages, calendar, openedById };
 }
