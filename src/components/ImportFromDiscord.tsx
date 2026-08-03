@@ -1,8 +1,19 @@
 import { ExternalLink } from "lucide-react";
+import { lazy, Suspense, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { bridgePortalUrl } from "@/lib/platform";
 import { cn } from "@/lib/utils";
+
+// The wizard pulls in the whole bridge API client and its step UI; nobody who
+// never clicks "import" should pay for that chunk.
+const DiscordImportWizard = lazy(() =>
+  import("@/components/discord-import/DiscordImportWizard").then((m) => ({
+    default: m.DiscordImportWizard,
+  })),
+);
 
 /**
  * Entry points into the Discord bridge portal (`armada-discord-bridge`).
@@ -31,9 +42,12 @@ export function DiscordMark({ className }: { className?: string }) {
 }
 
 /**
- * "Import a Discord server" — opens the portal's import wizard in a new tab.
+ * "Import a Discord server" — opens the in-app import wizard.
+ *
  * Renders nothing when this build has no portal configured, so call sites can
- * drop it in unconditionally.
+ * drop it in unconditionally. A signed-out visitor is sent to the welcome page
+ * first (the flow signs founding events, so it needs a key), matching what the
+ * create-community tile does.
  */
 export function ImportFromDiscordButton({
   className,
@@ -44,17 +58,31 @@ export function ImportFromDiscordButton({
   variant?: "outline" | "secondary" | "ghost";
   size?: "sm" | "lg";
 }) {
-  const href = bridgePortalUrl("/import");
-  if (!href) return null;
+  const { user } = useCurrentUser();
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const configured = Boolean(bridgePortalUrl("/import"));
+
+  if (!configured) return null;
 
   return (
-    <Button asChild variant={variant} size={size} className={cn("w-full clip-corner-lg", className)}>
-      <a href={href} target="_blank" rel="noopener noreferrer">
+    <>
+      <Button
+        type="button"
+        variant={variant}
+        size={size}
+        className={cn("w-full clip-corner-lg", className)}
+        onClick={() => (user ? setOpen(true) : navigate("/welcome"))}
+      >
         <DiscordMark className="size-4 shrink-0" />
         Import a Discord server
-        <ExternalLink className="size-3.5 shrink-0 opacity-60" />
-      </a>
-    </Button>
+      </Button>
+      {open && (
+        <Suspense fallback={null}>
+          <DiscordImportWizard onClose={() => setOpen(false)} />
+        </Suspense>
+      )}
+    </>
   );
 }
 
