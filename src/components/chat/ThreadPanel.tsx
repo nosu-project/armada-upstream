@@ -1,4 +1,4 @@
-import { Braces, ChevronDown, Copy, Link2, Loader2, Maximize2, MessagesSquare, Minimize2, Pencil, Trash2, X, Zap } from "lucide-react";
+import { Braces, ChevronDown, Copy, Link2, Link as LinkIcon, Loader2, Maximize2, MessagesSquare, Minimize2, Pencil, Trash2, X, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
@@ -8,6 +8,7 @@ import { MessageActionSheet } from "@/components/chat/MessageActionSheet";
 import { MessageActionToolbar } from "@/components/chat/MessageActionToolbar";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { ReactionBar } from "@/components/chat/ReactionBar";
+import { flashRow } from "@/components/chat/rowFlash";
 import { ZapDialog } from "@/components/chat/ZapDialog";
 import { ZapPill } from "@/components/chat/ZapPill";
 import { DisplayName } from "@/components/DisplayName";
@@ -37,18 +38,21 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useAutosizeTextarea } from "@/hooks/useAutosizeTextarea";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { useLongPress } from "@/hooks/useLongPress";
+import { useMessagePermalink } from "@/hooks/useMessagePermalink";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { isTombstoneRoot } from "@/concord-v2/hooks/useConcord2Threads";
 import { ComposerBoundsProvider, getComposerCollisionPadding, useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { shortClockTime } from "@/lib/formatTime";
 import { writeClipboardText } from "@/lib/clipboard";
+import { chatUrl, type ChatRoute } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 import type { MessageActionItem } from "@/components/chat/messageActions";
@@ -80,6 +84,7 @@ function ThreadMessage({
   canModerate = false,
   isRumor = false,
   continuation = false,
+  permalink,
   onDelete,
   isEditing = false,
   onEdit,
@@ -87,6 +92,8 @@ function ThreadMessage({
   onEditCancel,
 }: {
   event: ChatMsg;
+  /** This thread's route; rows append their own `/m/<id>` to it. */
+  permalink?: ChatRoute;
   reactions?: MessageReactions;
   /** Aggregated zaps for this message (feeds the ⚡ total chip). */
   zaps?: MessageZaps;
@@ -197,6 +204,15 @@ function ThreadMessage({
   });
   if (!isRumor) {
     menuActions.push({ id: "copy-id", label: "Copy message ID", icon: Link2, onSelect: copyMessageId });
+  }
+  if (permalink) {
+    menuActions.push({
+      id: "copy-link",
+      label: "Copy message link",
+      icon: LinkIcon,
+      onSelect: () =>
+        writeClipboardText(chatUrl({ ...permalink, messageId: event.id })).catch(() => undefined),
+    });
   }
   menuActions.push({ id: "json", label: "View event JSON", icon: Braces, onSelect: () => setJsonOpen(true) });
   if (canDelete && !isEditing) {
@@ -430,6 +446,21 @@ interface ThreadPanelProps {
   mentionPubkeys?: string[];
   /** Focus the reply input on open (e.g. when launched via /thread). */
   autoFocus?: boolean;
+  /**
+   * This thread's own route (`.../t/<root>`), which makes every row in here
+   * linkable as what it is: a reply *inside* a thread. Without it the panel
+   * offered no "Copy message link" at all, because a reply is not in the
+   * timeline and the room-only link a caller could have passed would have sent
+   * the reader hunting for it there.
+   */
+  permalink?: ChatRoute;
+  /**
+   * Whether the panel is actually on screen. Callers keep it mounted through
+   * its slide-out animation, and during that window it must stop claiming the
+   * Android back gesture — otherwise back is swallowed by a panel the reader
+   * has already closed. Defaults to true for callers that unmount it outright.
+   */
+  open?: boolean;
   onClose: () => void;
   /** Called when the expand/collapse state changes. Parent uses this to resize the container. */
   onExpandChange?: (expanded: boolean) => void;
@@ -443,7 +474,7 @@ interface ThreadPanelProps {
  * via the {@link ChatTransport} (`threadRepliesFor`/`sendThreadReply`), so
  * replies never appear in the main timeline (they're nested here instead).
  */
-export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, mentionPubkeys, botCommands, conversationRelays, autoFocus = false, onClose, onExpandChange }: ThreadPanelProps) {
+export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, mentionPubkeys, botCommands, conversationRelays, autoFocus = false, open = true, permalink, onClose, onExpandChange }: ThreadPanelProps) {
   const replies = transport.threadRepliesFor?.(root.id) ?? [];
   const isLoading = transport.threadLoading?.(root.id) ?? false;
   const { config } = useAppContext();
@@ -465,6 +496,19 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
   useEffect(() => {
     onExpandChange?.(isExpanded);
   }, [isExpanded, onExpandChange]);
+
+  // Android back closes the thread.
+  //
+  // This has to be handled here rather than left to the history fall-through
+  // in `useAndroidBack`: the channel list's SwipeReveal registers a handler
+  // that CONSUMES back to reveal the list, so without an entry of our own the
+  // reveal would win and slide the list in with the thread still open behind
+  // it. Handlers run most-recently-mounted first, and the panel mounts when it
+  // opens, so it takes precedence for exactly as long as it is on screen.
+  useAndroidBack(() => {
+    onClose();
+    return true;
+  }, open);
 
   const handleEditSubmit = (original: ChatMsg, content: string) => {
     const trimmed = content.trim();
@@ -505,6 +549,36 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
     scrollToBottom("auto");
   }, [root.id, scrollToBottom]);
 
+  // `/t/<root>/m/<reply>` — a permalink to a reply, which exists only in here
+  // (thread replies are never in the main timeline). The panel's replies are
+  // real DOM in normal flow, so the target is simply looked up by id; there is
+  // no window to extend and nothing older to pull, so an id that isn't among
+  // the loaded replies is dropped on the first pass.
+  const scrollToReply = useCallback((id: string) => {
+    const row = contentRef.current?.querySelector<HTMLElement>(`[data-event-id="${id}"]`);
+    if (!row) return false;
+    flashRow(row, true);
+    // Record the new distance from the newest reply the way a real scroll
+    // would: the ResizeObserver re-pins to the bottom while that reads as
+    // zero, which would undo the jump the moment a reply's image resolves.
+    const el = scrollRef.current;
+    if (el) distanceRef.current = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setShowJumpToLatest(distanceRef.current > 120);
+    return true;
+  }, []);
+  const clearReplyFocus = useMessagePermalink({
+    // The root is addressable in here too: it has a timeline identity
+    // (`/m/<root>`) and a thread identity (`/t/<root>/m/<root>`), and "Copy
+    // message link" on the root row inside the panel produces the latter.
+    messages: [root, ...replies],
+    isLoading,
+    scrollTo: scrollToReply,
+    scope: "thread",
+    // The panel stays mounted through its slide-out, and a closed panel must
+    // not consume (or discard) the location's focus.
+    enabled: open,
+  });
+
   // Snap to a newly-arrived reply — the panel's long-standing behavior, unlike
   // the main timeline, which only follows for a reader already at the bottom.
   useLayoutEffect(() => {
@@ -538,7 +612,9 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
           <span className="italic">Original message not loaded — it may be older than the channel window.</span>
         </div>
       ) : (
-        <ThreadMessage event={root} reactions={reactionsFor?.(root.id)} zaps={zapsFor?.(root.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} onDelete={onDelete} isEditing={editingId === root.id} onEdit={(e) => setEditingId(e.id)} onEditSubmit={handleEditSubmit} onEditCancel={() => setEditingId(undefined)} />
+        <div data-event-id={root.id}>
+        <ThreadMessage event={root} permalink={permalink} reactions={reactionsFor?.(root.id)} zaps={zapsFor?.(root.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} onDelete={onDelete} isEditing={editingId === root.id} onEdit={(e) => setEditingId(e.id)} onEditSubmit={handleEditSubmit} onEditCancel={() => setEditingId(undefined)} />
+        </div>
       )}
       <div className="flex items-center gap-2 px-3 py-1 mt-1">
         <div className="h-px flex-1 bg-border/60" />
@@ -603,8 +679,8 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
                 prev.pubkey === reply.pubkey &&
                 reply.created_at - prev.created_at < CONTINUATION_WINDOW_SECONDS;
               return (
-                <div key={reply.id} className="pt-1">
-                  <ThreadMessage event={reply} reactions={reactionsFor?.(reply.id)} zaps={zapsFor?.(reply.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} continuation={continuation} onDelete={onDelete} isEditing={editingId === reply.id} onEdit={(e) => setEditingId(e.id)} onEditSubmit={handleEditSubmit} onEditCancel={() => setEditingId(undefined)} />
+                <div key={reply.id} data-event-id={reply.id} className="pt-1">
+                  <ThreadMessage event={reply} permalink={permalink} reactions={reactionsFor?.(reply.id)} zaps={zapsFor?.(reply.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} continuation={continuation} onDelete={onDelete} isEditing={editingId === reply.id} onEdit={(e) => setEditingId(e.id)} onEditSubmit={handleEditSubmit} onEditCancel={() => setEditingId(undefined)} />
                 </div>
               );
             })}
@@ -638,6 +714,10 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
           autoFocus={autoFocus}
           sendOverride={async (text, tags) => {
             await transport.sendThreadReply?.(root, text, tags);
+            // Replying is an explicit "I'm at the present", so the panel
+            // snaps to the new reply — the location must stop claiming the
+            // reader is parked at some older one.
+            clearReplyFocus();
           }}
         />
       ) : (

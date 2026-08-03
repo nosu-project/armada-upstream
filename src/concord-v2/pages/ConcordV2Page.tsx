@@ -118,7 +118,8 @@ import { badgeOf, byDisplayOrder, canActOnMember, canActOnPosition, isAuthorized
 import { channelGitRepositoryAttachments, type ChannelV2, type CommunityV2, type ImagePointer } from "@/concord-v2/lib/types";
 import { matchGitTicketRepository, parseGitRepositoryAddress, sortAndDedupeGitTimelineActivities, trustedGitStatusAuthors, type GitComment, type GitStatusKind, type GitTicket } from "@/lib/gitActivity";
 import { cn, pickDefaultChannel } from "@/lib/utils";
-import { chatRoute, parseChatRoute, type Concord2Pane } from "@/lib/routes";
+import { chatRoute, parseChatRoute, type ChatRoute, type Concord2Pane } from "@/lib/routes";
+import { useLegacyFocusParams } from "@/hooks/useLegacyFocusParams";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { shortTimeAgo } from "@/lib/formatTime";
 
@@ -190,7 +191,7 @@ function ReplyContext2({ parent, onJump }: { parent: ChatMsg | undefined; onJump
 
 interface ChatMessage2Props {
   /** Channel route for "Copy message link" (see ChatMessage.permalink). */
-  permalink?: string;
+  permalink?: ChatRoute;
   event: ChatMsg;
   reactions: MessageReactions;
   zaps: MessageZaps | undefined;
@@ -728,7 +729,8 @@ export function ConcordV2Page() {
   // `useParams` because the panes are static segments (they have no param to
   // read) and because it is the same parse the builder, the notification
   // producers and the analytics sanitizer use — one spelling of the route.
-  const { pathname } = useLocation();
+  const location = useLocation();
+  const { pathname } = location;
   const route = useMemo(() => {
     const parsed = parseChatRoute(pathname);
     return parsed?.kind === "concord2" ? parsed : undefined;
@@ -736,8 +738,14 @@ export function ConcordV2Page() {
   const communityId = route?.communityId;
   const routeChannelId = route?.channelId;
   const routePane = route?.pane;
+  const routeThreadRoot = route?.threadRoot;
   const { user } = useCurrentUser();
   const navigateTo = useNavigate();
+  // Whether the reply composer should take focus when the thread panel opens.
+  // An intent belonging to the click that navigated, not to the location — a
+  // shared link must not steal focus — so it rides in history state, which
+  // stays out of the URL and survives Back/Forward.
+  const threadAutoFocus = Boolean((location.state as { threadAutoFocus?: boolean } | null)?.threadAutoFocus);
   const isTouchDevice = useIsTouch();
   const composerBoundsRef = useRef<HTMLElement | null>(null);
   const { config, updateConfig } = useAppContext();
@@ -890,25 +898,23 @@ export function ConcordV2Page() {
   const [openTicket, setOpenTicket] = useState<GitTicket | undefined>();
   const channelNameById = useMemo(() => new Map(channels.map((c) => [c.idHex, c.name])), [channels]);
   const projects = useGitProjects(gitAttachmentsByChannel, channelNameById, projectsTouched || Boolean(openTicket));
-  // A pending "jump to message" target set by clicking a mention: switch to its
-  // channel, then scroll+highlight it once that channel's timeline has loaded
-  // it (an effect below fires when the message appears in `allMessages`).
-  const [jumpTarget, setJumpTarget] = useState<{ channelIdHex: string; messageId: string } | null>(null);
   const timelineRef = useRef<MessageTimelineHandle | null>(null);
+  // Clicking a mention: navigate to its channel with the message focused. The
+  // cross-channel wait is the permalink's — `/m/<id>` names the target, and
+  // the hunt resolves it once that channel's timeline has it — so there is no
+  // pending-jump state to keep in step with the route.
   const jumpToMention = useCallback(
     (channelIdHex: string, messageId: string) => {
-      setJumpTarget({ channelIdHex, messageId });
-      selectChannel(channelIdHex);
+      if (!communityId) return;
+      navigateTo(chatRoute({ kind: "concord2", communityId, channelId: channelIdHex, messageId }));
       setChannelsOpen(false);
     },
-    [selectChannel],
+    [communityId, navigateTo],
   );
-  // Opening a thread from the Threads tab: switch to its channel, then open the
-  // thread panel once that channel's transport has the root loaded (an effect
-  // below fires when the root appears in `allMessages`). Marks the thread read
-  // and drops its "new" highlight (the auto-mark below keeps rows lit for the
-  // visit, but actually opening one means it's been read for real).
-  const [pendingThread, setPendingThread] = useState<Concord2Thread | null>(null);
+  // Opening a thread from the Threads tab: navigate straight to the thread's
+  // own route, in whichever channel it lives. Marks it read and drops its
+  // "new" highlight (the auto-mark below keeps rows lit for the visit, but
+  // actually opening one means it's been read for real).
   const openThreadFromList = useCallback(
     (thread: Concord2Thread) => {
       markThreadRead(thread.root.id, thread.lastReplyAt);
@@ -918,11 +924,18 @@ export function ConcordV2Page() {
         next.delete(thread.root.id);
         return next;
       });
-      setPendingThread(thread);
-      selectChannel(thread.channelIdHex);
+      if (!communityId) return;
+      navigateTo(
+        chatRoute({
+          kind: "concord2",
+          communityId,
+          channelId: thread.channelIdHex,
+          threadRoot: thread.root.id,
+        }),
+      );
       setChannelsOpen(false);
     },
-    [selectChannel, markThreadRead],
+    [communityId, navigateTo, markThreadRead],
   );
 
   // Having the Mentions pane on screen counts as reading it, same as Threads
@@ -1171,19 +1184,6 @@ export function ConcordV2Page() {
   // (useActiveRoom is called below, after `threadRoot` is defined, so it can
   // also pass thread-level keys for notification suppression.)
 
-  // Fulfil a pending mention jump once the target channel is active and its
-  // timeline has loaded the target message. MessageTimeline queues the jump
-  // while its opening window is still mounting, so this can run immediately
-  // after the channel switch without a timing delay.
-  useEffect(() => {
-    if (!jumpTarget || view !== "channel") return;
-    if (channel?.idHex !== jumpTarget.channelIdHex) return;
-    if (!allMessages.some((m) => m.id === jumpTarget.messageId)) return;
-    if (timelineRef.current?.scrollToMessage(jumpTarget.messageId)) {
-      setJumpTarget(null);
-    }
-  }, [jumpTarget, view, channel?.idHex, allMessages]);
-
   // Mark the open channel read up to its newest timeline entry (chat or git)
   // while it's on screen —
   // immediately and again on tab refocus (mirrors GroupChat's NIP-29 behavior).
@@ -1342,24 +1342,33 @@ export function ConcordV2Page() {
     setNavKey(communityId);
     setChannelsOpen(!routeChannelId);
   }
-  const [threadRoot, setThreadRoot] = useState<ChatMsg | undefined>(undefined);
-  const [threadAutoFocus, setThreadAutoFocus] = useState(false);
+  // The open thread is the one the route names, resolved against loaded
+  // history. Deriving it (rather than mirroring the id into state) is what
+  // makes the panel survive a refresh, close on Back, and open from a
+  // notification without a second code path: there is one answer to "which
+  // thread is open", and the URL is it.
+  //
+  // An unresolved id — a deep link into a thread whose root is older than the
+  // loaded window — simply leaves the panel closed while the hunt in
+  // `usePermalinkTarget` pages back toward it.
+  const threadRoot = useMemo(
+    () => (routeThreadRoot ? allMessages.find((m) => m.id === routeThreadRoot) : undefined),
+    [routeThreadRoot, allMessages],
+  );
   const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);
   const [threadExpanded, setThreadExpanded] = useState(false);
-  // Close the thread panel when the channel or community changes. The scope
-  // key includes `communityId` because the page is reused across concord
-  // switches (no route `key`), and `channel?.idHex` alone can lag during the
-  // transition. `lastThreadRoot` is cleared here (not just via the slide-out
-  // timeout) because the timeout only re-runs when `threadRoot` changes; if
-  // the panel was already closed, it wouldn't fire.
+  // Drop the slide-out keepalive when the channel or community changes. The
+  // panel itself needs no closing — leaving a channel drops the `/t/` segment,
+  // so `threadRoot` resolves to nothing — but `lastThreadRoot` is cleared here
+  // rather than only by the animation timeout, which re-runs on `threadRoot`
+  // changes and so wouldn't fire for an already-closed panel. The scope key
+  // includes `communityId` because the page is reused across community
+  // switches (no route `key`) and `channel?.idHex` alone can lag the change.
   const threadScopeKey = `${communityId}\u0000${channel?.idHex ?? ""}`;
   const [threadChannelKey, setThreadChannelKey] = useState(threadScopeKey);
   if (threadChannelKey !== threadScopeKey) {
     setThreadChannelKey(threadScopeKey);
-    if (!pendingThread) {
-      setThreadRoot(undefined);
-      setLastThreadRoot(undefined);
-    }
+    setLastThreadRoot(undefined);
   }
   // Search is community-wide, so it survives channel switches but resets when
   // the community changes.
@@ -1628,17 +1637,30 @@ export function ConcordV2Page() {
   }, [folded, privatiseChannel]);
 
 
-  const openThread = useCallback((event: ChatMsg, focusReply = false) => {
-    setThreadAutoFocus(focusReply);
-    setThreadRoot(event);
-    // Mark the thread read up to its newest reply so the Threads tab clears
-    // its "new" highlight no matter which entry point opened it (inline
-    // reply badge, reply icon, /thread command, or the Threads-tab list).
-    // `openThreadFromList` stamps eagerly on click; this is the catch-all.
-    const replies = baseTransport.threadRepliesFor?.(event.id) ?? EMPTY_REPLIES;
-    const latest = replies.length > 0 ? replies[replies.length - 1].created_at : event.created_at;
-    markThreadRead(event.id, latest);
-  }, [baseTransport, markThreadRead]);
+  // Opening a thread is a navigation: it pushes `/t/<root>` onto the channel
+  // route. Back therefore closes the panel, the panel survives a refresh, and
+  // "Copy message link" inside it can name where the reader actually is.
+  //
+  // Read-stamping stays out of this: the effect below marks whatever thread is
+  // open, which covers arriving by link or by Back as well as by click.
+  const openThread = useCallback(
+    (event: ChatMsg, focusReply = false) => {
+      if (!communityId || !channel) return;
+      navigateTo(
+        chatRoute({ kind: "concord2", communityId, channelId: channel.idHex, threadRoot: event.id }),
+        { state: { threadAutoFocus: focusReply } },
+      );
+    },
+    [communityId, channel, navigateTo],
+  );
+  // Closing when no thread is routed is a no-op rather than a second push, so
+  // a stray close (the panel is still mounted through its slide-out) can't
+  // stack duplicate history entries.
+  const closeThread = useCallback(() => {
+    if (!communityId || !channel || !routeThreadRoot) return;
+    setThreadExpanded(false);
+    navigateTo(chatRoute({ kind: "concord2", communityId, channelId: channel.idHex }));
+  }, [communityId, channel, routeThreadRoot, navigateTo]);
 
   // Inline-reply plumbing: a by-id lookup over the decoded set (rumors aren't
   // relay-fetchable, so the "replying to …" line resolves the parent locally),
@@ -1677,22 +1699,6 @@ export function ConcordV2Page() {
     searchOpen ? searchFilters : EMPTY_SEARCH_FILTERS,
   );
 
-  // Fulfil a pending Threads-tab open: once its channel is active and the
-  // transport has loaded the root, open the thread panel with the freshly
-  // resolved root (so replies bucket correctly), then clear the target.
-  useEffect(() => {
-    if (!pendingThread) return;
-    if (channel?.idHex !== pendingThread.channelIdHex) return;
-    const loaded = allMessages.find((m) => m.id === pendingThread.root.id);
-    if (!loaded) return;
-    openThread(loaded);
-    setPendingThread(null);
-  }, [pendingThread, channel?.idHex, allMessages, openThread]);
-
-  // Auto-open the thread panel when arrived via a notification deep-link
-  // (`?thread=<rootId>` — the service appends it for kind-1111 Concord
-  // replies). Mirrors the NIP-29 GroupChat behavior: fires once per param,
-  // then clears it so a later load doesn't snap back.
   const [searchParams, setSearchParams] = useSearchParams();
   const ticketParam = searchParams.get("ticket");
   // Git notification deep links use the stable ticket event id. Wait for the
@@ -1708,22 +1714,17 @@ export function ConcordV2Page() {
       return next;
     }, { replace: true });
   }, [ticketParam, openTicket, gitActivity.activities, setSearchParams]);
-  const threadParam = searchParams.get("thread");
-  useEffect(() => {
-    if (!threadParam || threadRoot || view !== "channel") return;
-    const root = allMessages.find((m) => m.id === threadParam);
-    if (root) {
-      openThread(root);
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          next.delete("thread");
-          return next;
-        },
-        { replace: true },
-      );
-    }
-  }, [threadParam, threadRoot, view, allMessages, openThread, setSearchParams]);
+  // Pre-path deep links (`?thread=`, `?m=`) become their route equivalents.
+  // Old tray notifications and copied links still carry them.
+  useLegacyFocusParams(
+    useMemo(
+      () =>
+        communityId && channel
+          ? ({ kind: "concord2", communityId, channelId: channel.idHex } as const)
+          : undefined,
+      [communityId, channel],
+    ),
+  );
 
   // Keep the thread panel content mounted through its slide-out animation.
   useEffect(() => {
@@ -1764,7 +1765,7 @@ export function ConcordV2Page() {
     (id: string) => timelineRef.current?.scrollToMessage(id, true) ?? false,
     [],
   );
-  useMessagePermalink({
+  const clearMessageFocus = useMessagePermalink({
     messages: allMessages,
     isLoading: Boolean(baseTransport.isLoading),
     hasMore: transport.hasMore,
@@ -1874,6 +1875,9 @@ export function ConcordV2Page() {
     );
     await send({ content, extraTags });
     setReplyTo(undefined);
+    // Sending is an explicit "I'm at the present": the location must stop
+    // claiming the reader is parked at some older message.
+    clearMessageFocus();
   };
 
   const handleLeave = async () => {
@@ -2757,7 +2761,7 @@ export function ConcordV2Page() {
                       <ChatMessage2
                         key={msg.id}
                         event={msg}
-                        permalink={communityId && channel ? `/c/${encodeURIComponent(communityId)}/${channel.idHex}` : undefined}
+                        permalink={communityId && channel ? { kind: "concord2", communityId, channelId: channel.idHex } : undefined}
                         reactions={reactionsFor(msg.id)}
                         zaps={transport.zapsFor?.(msg.id)}
                         onSendZap={config.zapsEnabled ? transport.sendZap : undefined}
@@ -2929,7 +2933,8 @@ export function ConcordV2Page() {
                     botCommands
                     conversationRelays={community?.relays}
                     autoFocus={threadAutoFocus}
-                    onClose={() => { setThreadRoot(undefined); setThreadExpanded(false); }}
+                    open={Boolean(threadRoot)}
+                    onClose={closeThread}
                     onExpandChange={setThreadExpanded}
                   />
                 )}

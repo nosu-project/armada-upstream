@@ -1,7 +1,7 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { ChevronDown, ChevronLeft, Bell, BellOff, CheckCheck, Hash, Loader2, LogOut, Plus, Settings, Shield, Trash2, UserPlus, Users } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
 
 import { AppStageSlot } from "@/components/chat/AppStage";import { ChannelNavContext } from "@/contexts/ChannelNavContext";
 import { ChatScopeContext } from "@/contexts/ChatScopeContext";
@@ -61,6 +61,9 @@ import { isAdmin as rosterIsAdmin, isAuthorized, Permissions } from "@/concord-v
 import { channelZs } from "@/concord-v1/lib/concordNotifications";
 import { type Channel, type Community, type CommunityImage } from "@/concord-v1/lib/types";
 import { cn, pickDefaultChannel } from "@/lib/utils";
+import { chatRoute, parseChatRoute, type ChatRoute } from "@/lib/routes";
+import { useLegacyFocusParams } from "@/hooks/useLegacyFocusParams";
+import { useMessagePermalink } from "@/hooks/useMessagePermalink";
 
 import { authorsByRecency, threadSummary } from "@/components/chat/transport";
 import type { ChatMsg, MessageReactions, SendStatus } from "@/components/chat/transport";
@@ -121,6 +124,8 @@ interface ConcordChatMessageProps {
   onToggleActive: (id: string) => void;
   onOpenThread: ((event: ChatMsg) => void) | undefined;
   onReply: ((event: ChatMsg) => void) | undefined;
+  /** This channel's route, which "Copy message link" stamps the id onto. */
+  permalink: ChatRoute | undefined;
   /**
    * The inline reply's parent: its id (undefined when this isn't a reply) and
    * the resolved message (undefined when it isn't in the decoded set). Passed
@@ -157,6 +162,7 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
   onToggleActive,
   onOpenThread,
   onReply,
+  permalink,
   replyToId,
   replyParent,
   onJumpToReply,
@@ -184,6 +190,7 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
       replyContext={replyContext}
       onOpenThread={onOpenThread}
       onReply={onReply}
+      permalink={permalink}
       onDelete={onDelete}
       onRetry={onRetry ? () => onRetry(event) : undefined}
       onDiscard={onDiscard ? () => onDiscard(event.id) : undefined}
@@ -306,7 +313,21 @@ function ConcordChannelRow({
  * the channel/community chrome differ.
  */
 export function ConcordPage() {
-  const { communityId, channelId: routeChannelId } = useParams<{ communityId: string; channelId: string }>();
+  // The whole location, parsed once — the same parse the builder, the
+  // notification producers and the analytics sanitizer use.
+  const navigateTo = useNavigate();
+  const location = useLocation();
+  const parsedRoute = useMemo(() => {
+    const parsed = parseChatRoute(location.pathname);
+    return parsed?.kind === "concord1" ? parsed : undefined;
+  }, [location.pathname]);
+  const communityId = parsedRoute?.communityId;
+  const routeChannelId = parsedRoute?.channelId;
+  const routeThreadRoot = parsedRoute?.threadRoot;
+  // Whether the reply composer takes focus when the thread panel opens: an
+  // intent belonging to the click that navigated, not to the location, so it
+  // rides in history state and a shared link never steals focus.
+  const threadAutoFocus = Boolean((location.state as { threadAutoFocus?: boolean } | null)?.threadAutoFocus);
   const { user } = useCurrentUser();
   const isTouchDevice = useIsTouch();
   const composerBoundsRef = useRef<HTMLElement | null>(null);
@@ -349,16 +370,17 @@ export function ConcordPage() {
   // within a frame or two, so an ungated skeleton flashes for a nanosecond
   // (reads as a glitch). Delay it so fast loads show nothing.
   const showChannelSkeleton = useDelayedFlag(!community);
-  const [channelIdHex, setChannelIdHex] = useState<string | null>(routeChannelId ?? null);
-
-  // A deep-link to a specific channel (e.g. tapping a notification, which routes
-  // to /c1/<community>/<channel>) must open THAT channel, overriding the
-  // last-opened-channel memory below — even if the page is already mounted on a
-  // different channel of the same community. In-page channel clicks use local
-  // state and don't touch the URL, so this only fires on a genuine route change.
-  useEffect(() => {
-    if (routeChannelId) setChannelIdHex(routeChannelId);
-  }, [routeChannelId]);
+  // The route names the channel; when it doesn't, fall back to the persisted
+  // last-open channel for this community (app config, available synchronously
+  // on the first render).
+  const channelIdHex = routeChannelId ?? null;
+  const selectChannel = useCallback(
+    (idHex: string) => {
+      if (!communityId) return;
+      navigateTo(chatRoute({ kind: "concord1", communityId, channelId: idHex }));
+    },
+    [communityId, navigateTo],
+  );
 
   const channel = useMemo(() => {
     if (!community) return undefined;
@@ -382,6 +404,16 @@ export function ConcordPage() {
   // "Mute channel" / "Mute community" items each reflect only their own scope
   // (no cascade), so a muted community doesn't flip the channel item.
   const currentChannelIdHex = channel ? bytesToHex(channel.id) : undefined;
+  // The open channel as a route: what "Copy message link" stamps a message id
+  // onto, what the legacy `?m=`/`?thread=` translation redirects into, and what
+  // a send navigates back to.
+  const channelRoute = useMemo(
+    () =>
+      communityId && currentChannelIdHex
+        ? ({ kind: "concord1", communityId, channelId: currentChannelIdHex } as const)
+        : undefined,
+    [communityId, currentChannelIdHex],
+  );
   const channelMuted = Boolean(
     communityId && currentChannelIdHex &&
     mutedChannels.has(concordChannelMuteKey("c1", communityId, currentChannelIdHex)),
@@ -402,14 +434,25 @@ export function ConcordPage() {
     );
   }, [channel, lastChannelKey, updateConfig]);
 
+  // Canonicalize the community root: `/c1/<id>` resolves a default channel to
+  // render, so name it in the URL once it is known, with `replace` — the app
+  // is finishing the reader's navigation, not starting a new one. Otherwise
+  // the address bar keeps claiming the community while a channel is on screen.
+  useEffect(() => {
+    if (!communityId || routeChannelId || !currentChannelIdHex) return;
+    navigateTo(chatRoute({ kind: "concord1", communityId, channelId: currentChannelIdHex }), {
+      replace: true,
+    });
+  }, [communityId, routeChannelId, currentChannelIdHex, navigateTo]);
+
   // Let `#channel-name` hashtags in chat jump to that local channel.
   const navChannels = useMemo(
     () =>
       (community?.channels ?? []).map((c) => ({
         name: c.name,
-        go: () => setChannelIdHex(bytesToHex(c.id)),
+        go: () => selectChannel(bytesToHex(c.id)),
       })),
-    [community?.channels],
+    [community?.channels, selectChannel],
   );
   const channelNav = useChannelNavValue(navChannels);
 
@@ -472,7 +515,6 @@ export function ConcordPage() {
   const { createChannel, isAddingChannel } = useConcordActions();
   const { leave, isLeaving, dissolve } = useConcordCommunityActions(community, communityId);
   const { data: dissolved } = useConcordDissolved(community);
-  const navigateTo = useNavigate();
   const [creatingChannel, setCreatingChannel] = useState(false);
   const [newChannelName, setNewChannelName] = useState("");
 
@@ -512,29 +554,37 @@ export function ConcordPage() {
   // after the route change. A lagging effect would paint one frame of the
   // (stale) chat pane first — the "flash of the previous chat" glitch. A deep
   // link with a channel opens chat directly.
-  const [navKey, setNavKey] = useState(`${communityId}\u0000${routeChannelId ?? ""}`);
-  const curNavKey = `${communityId}\u0000${routeChannelId ?? ""}`;
-  if (navKey !== curNavKey) {
-    setNavKey(curNavKey);
+  //
+  // Keyed on the COMMUNITY, not on the community+channel pair: the root route
+  // canonicalizes itself to a channel (see the redirect below), so a key that
+  // included the channel would fire again the instant that redirect lands and
+  // slam the list shut — it would flash and never stay open. What matters is
+  // how the reader ARRIVED, which is what the first render for a new
+  // `communityId` sees. Channel clicks still close the list at their own sites.
+  const [navKey, setNavKey] = useState(communityId);
+  if (navKey !== communityId) {
+    setNavKey(communityId);
     setChannelsOpen(!routeChannelId);
   }
-  // Slack-style threads: the root message whose thread panel is open (and
-  // whether to focus its reply composer on open).
-  const [threadRoot, setThreadRoot] = useState<ChatMsg | undefined>(undefined);
-  const [threadAutoFocus, setThreadAutoFocus] = useState(false);
+  // Slack-style threads: the open one is whichever the route names, resolved
+  // against loaded history, so it survives a refresh and closes on Back.
+  const threadRoot = useMemo(
+    () => (routeThreadRoot ? allMessages.find((m) => m.id === routeThreadRoot) : undefined),
+    [routeThreadRoot, allMessages],
+  );
   const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);
   const [threadExpanded, setThreadExpanded] = useState(false);
-  // Close the thread panel when the channel or community changes. The scope
-  // key includes `communityId` because the page is reused across concord
-  // switches (no route `key`), and `currentChannelIdHex` alone can lag during
-  // the transition. `lastThreadRoot` is cleared here (not just via the
-  // slide-out timeout) because the timeout only re-runs when `threadRoot`
-  // changes; if the panel was already closed, it wouldn't fire.
-  const threadScopeKey = `${communityId}\u0000${currentChannelIdHex ?? ""}`;
+  // Drop the slide-out keepalive when the channel or community changes. The
+  // panel needs no closing — leaving a channel drops the `/t/` segment — but
+  // `lastThreadRoot` is cleared here rather than only by the animation
+  // timeout, which re-runs on `threadRoot` changes and so wouldn't fire for an
+  // already-closed panel. The scope key includes `communityId` because the
+  // page is reused across community switches (no route `key`) and
+  // `currentChannelIdHex` alone can lag the change.
+  const threadScopeKey = `${communityId} ${currentChannelIdHex ?? ""}`;
   const [threadChannelKey, setThreadChannelKey] = useState(threadScopeKey);
   if (threadChannelKey !== threadScopeKey) {
     setThreadChannelKey(threadScopeKey);
-    setThreadRoot(undefined);
     setLastThreadRoot(undefined);
   }
   const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
@@ -547,32 +597,34 @@ export function ConcordPage() {
     [],
   );
 
-  const openThread = useCallback((event: ChatMsg, focusReply = false) => {
-    setThreadAutoFocus(focusReply);
-    setThreadRoot(event);
-  }, []);
-
-  // Auto-open the thread panel when arrived via a notification deep-link
-  // (`?thread=<rootId>` — the service appends it for kind-1111 Concord
-  // replies). Mirrors the NIP-29 GroupChat behavior: fires once per param,
-  // then clears it so a later load doesn't snap back.
-  const [searchParams, setSearchParams] = useSearchParams();
-  const threadParam = searchParams.get("thread");
-  useEffect(() => {
-    if (!threadParam || threadRoot) return;
-    const root = allMessages.find((m) => m.id === threadParam);
-    if (root) {
-      openThread(root);
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          next.delete("thread");
-          return next;
-        },
-        { replace: true },
+  // Opening a thread pushes `/t/<root>` onto the channel route, so Back closes
+  // the panel and the panel survives a refresh.
+  const openThread = useCallback(
+    (event: ChatMsg, focusReply = false) => {
+      if (!communityId || !currentChannelIdHex) return;
+      navigateTo(
+        chatRoute({
+          kind: "concord1",
+          communityId,
+          channelId: currentChannelIdHex,
+          threadRoot: event.id,
+        }),
+        { state: { threadAutoFocus: focusReply } },
       );
-    }
-  }, [threadParam, threadRoot, allMessages, openThread, setSearchParams]);
+    },
+    [communityId, currentChannelIdHex, navigateTo],
+  );
+  // A no-op when no thread is routed, so a stray close (the panel stays
+  // mounted through its slide-out) can't stack duplicate history entries.
+  const closeThread = useCallback(() => {
+    if (!communityId || !currentChannelIdHex || !routeThreadRoot) return;
+    setThreadExpanded(false);
+    navigateTo(chatRoute({ kind: "concord1", communityId, channelId: currentChannelIdHex }));
+  }, [communityId, currentChannelIdHex, routeThreadRoot, navigateTo]);
+
+  // Pre-path deep links (`?thread=`, `?m=`) become their route equivalents.
+  // Old tray notifications and copied links still carry them.
+  useLegacyFocusParams(channelRoute);
 
   // Keep the thread panel content mounted through its slide-out animation.
   useEffect(() => {
@@ -638,6 +690,21 @@ export function ConcordPage() {
     timelineRef.current?.scrollToMessage(id);
   }, []);
 
+  // Message permalinks (`/m/<id>` — notification taps, copied links): scroll to
+  // the target with the focus indicator once it's loaded, pulling older pages
+  // when it's further back than the loaded history.
+  const permalinkScroll = useCallback(
+    (id: string) => timelineRef.current?.scrollToMessage(id, true) ?? false,
+    [],
+  );
+  const clearMessageFocus = useMessagePermalink({
+    messages: allMessages,
+    isLoading: baseTransport.isLoading,
+    hasMore: baseTransport.hasMore,
+    loadOlder: baseTransport.loadOlder,
+    scrollTo: permalinkScroll,
+  });
+
   // Moderation: ban (read-cut), kick (cooperative), unban. The recipient set for
   // a ban's read-cut is everyone we know about minus the banned member.
   const moderation = useConcordModeration(community, memberPubkeys);
@@ -670,6 +737,9 @@ export function ConcordPage() {
     );
     await send({ content, extraTags });
     setReplyTo(undefined);
+    // Sending is an explicit "I'm at the present": the location must stop
+    // claiming the reader is parked at some older message.
+    clearMessageFocus();
   };
 
   const handleCreateChannel = async () => {
@@ -678,7 +748,7 @@ export function ConcordPage() {
     try {
       const updated = await createChannel({ community, name });
       const added = updated.channels[updated.channels.length - 1];
-      setChannelIdHex(bytesToHex(added.id));
+      selectChannel(bytesToHex(added.id));
       setNewChannelName("");
       setCreatingChannel(false);
     } catch {
@@ -905,7 +975,7 @@ export function ConcordPage() {
               active={active}
               unread={unreadByChannel[idHex]}
               onSelect={() => {
-                setChannelIdHex(idHex);
+                selectChannel(idHex);
                 onNavigate?.();
               }}
             />
@@ -1056,6 +1126,7 @@ export function ConcordPage() {
                   onToggleActive={toggleActive}
                   onOpenThread={onOpenThreadCb}
                   onReply={canWrite ? setReplyTo : undefined}
+                  permalink={channelRoute}
                   replyToId={replyId}
                   replyParent={replyId ? messagesById.get(replyId) : undefined}
                   onJumpToReply={jumpWithinChannel}
@@ -1127,7 +1198,11 @@ export function ConcordPage() {
                   botCommands
                   conversationRelays={community?.relays}
                   autoFocus={threadAutoFocus}
-                  onClose={() => { setThreadRoot(undefined); setThreadExpanded(false); }}
+                  open={Boolean(threadRoot)}
+                  permalink={
+                    channelRoute ? { ...channelRoute, threadRoot: lastThreadRoot.id } : undefined
+                  }
+                  onClose={closeThread}
                   onExpandChange={setThreadExpanded}
                 />
               )}

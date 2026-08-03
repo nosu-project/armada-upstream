@@ -1,7 +1,7 @@
 import { ArrowBigDown, ArrowBigUp, Bot as BotIcon, Copy, Hash, Link2, Loader2, MessagesSquare, MoreHorizontal, Search, Trash2 } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import { BuzzDiffRow, BuzzHuddleRow, BuzzJobRow, BuzzSystemRow, BuzzWorkflowDefinitionRow, BuzzWorkflowEventRow } from "@/buzz/BuzzRows";
 import {
@@ -59,7 +59,8 @@ import { toast } from "@/hooks/useToast";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useEvent } from "@/hooks/useEvent";
 import { getAvatarShape } from "@/lib/avatarShape";
-import { relayToRouteParam } from "@/lib/platform";
+import { chatRoute, parseChatRoute, type ChatRoute } from "@/lib/routes";
+import { useLegacyFocusParams } from "@/hooks/useLegacyFocusParams";
 import { writeClipboardText } from "@/lib/clipboard";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { withSignature } from "@/lib/publishOutbox";
@@ -116,7 +117,7 @@ interface BuzzChatMessageProps {
   /** Whether the author holds the `bot` role in this channel (agent badge). */
   isAgent?: boolean;
   /** Channel route for "Copy message link" (see ChatMessage.permalink). */
-  permalink?: string;
+  permalink?: ChatRoute;
 }
 
 /**
@@ -396,7 +397,6 @@ interface BuzzChatProps {
   membershipPending?: boolean;
   canModerate: boolean;
   searchQuery?: string;
-  scrollToMessageRef?: React.MutableRefObject<((id: string) => void) | null>;
 }
 
 /**
@@ -415,7 +415,6 @@ export function BuzzChat({
   membershipPending = false,
   canModerate,
   searchQuery = "",
-  scrollToMessageRef,
 }: BuzzChatProps) {
   const { user } = useCurrentUser();
   const composerBoundsRef = useRef<HTMLElement | null>(null);
@@ -482,31 +481,36 @@ export function BuzzChat({
     (id: string) => setActiveId((cur) => (cur === id ? undefined : id)),
     [],
   );
-  const [threadRoot, setThreadRoot] = useState<ChatMsg | undefined>(undefined);
+  // The open thread is whichever one the route names, resolved against loaded
+  // history — so it survives a refresh, closes on Back, and opens straight
+  // from a notification without a second code path.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const routeThreadRoot = useMemo(() => {
+    const parsed = parseChatRoute(location.pathname);
+    return parsed?.kind === "nip29" ? parsed.threadRoot : undefined;
+  }, [location.pathname]);
+  const threadRoot = useMemo(
+    () => (routeThreadRoot ? timeline.find((m) => m.id === routeThreadRoot) : undefined),
+    [routeThreadRoot, timeline],
+  );
 
   useActiveRoom(
     relayUrl && channelId ? `h:${relayUrl}|${channelId}` : undefined,
     relayUrl && channelId && threadRoot ? `h:${relayUrl}|${channelId}:t:${threadRoot.id}` : undefined,
   );
 
-  // Notification deep-link into a thread (`?thread=<rootId>`).
-  const [searchParams, setSearchParams] = useSearchParams();
-  const threadParam = searchParams.get("thread");
-  useEffect(() => {
-    if (!threadParam || threadRoot) return;
-    const root = timeline.find((m) => m.id === threadParam);
-    if (root) {
-      setThreadRoot(root);
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          next.delete("thread");
-          return next;
-        },
-        { replace: true },
-      );
-    }
-  }, [threadParam, threadRoot, timeline, setSearchParams]);
+  // Pre-path deep links (`?thread=`, `?m=`) become their route equivalents.
+  // Old tray notifications and copied links still carry them.
+  useLegacyFocusParams(
+    useMemo(
+      () =>
+        relayUrl && channelId
+          ? ({ kind: "nip29", relayUrl, groupId: channelId } as const)
+          : undefined,
+      [relayUrl, channelId],
+    ),
+  );
 
   // Tallies resolve over the timeline PLUS the open thread's replies.
   const tallyIds = useMemo(() => {
@@ -561,7 +565,10 @@ export function BuzzChat({
     [voteTallies, publish, channelId, relayUrl, mergeEvents],
   );
 
-  const [threadAutoFocus, setThreadAutoFocus] = useState(false);
+  // Whether the reply composer takes focus on open: an intent belonging to the
+  // click that navigated, not to the location, so it rides in history state
+  // and a shared link never steals focus.
+  const threadAutoFocus = Boolean((location.state as { threadAutoFocus?: boolean } | null)?.threadAutoFocus);
   const [threadExpanded, setThreadExpanded] = useState(false);
   const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);
   const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
@@ -572,16 +579,16 @@ export function BuzzChat({
     timelineRef.current?.scrollToMessage(id);
   }, []);
 
-  // Message permalinks (`?m=<id>` — notification taps, copied links).
+  // Message permalinks (`/m/<id>` — notification taps, copied links).
   const channelRoute = useMemo(
-    () => `/s/${relayToRouteParam(relayUrl)}/${encodeURIComponent(channelId)}`,
+    () => ({ kind: "nip29", relayUrl, groupId: channelId }) as const,
     [relayUrl, channelId],
   );
   const permalinkScroll = useCallback(
     (id: string) => timelineRef.current?.scrollToMessage(id, true) ?? false,
     [],
   );
-  useMessagePermalink({
+  const clearMessageFocus = useMessagePermalink({
     messages: timeline,
     isLoading,
     hasMore,
@@ -619,17 +626,29 @@ export function BuzzChat({
   // timeline observes its own scroller and content and holds the reading
   // position across them.
 
+  // Sending is an explicit "I'm at the present": follow the new message, and
+  // drop any `/m/` focus so the location stops claiming the reader is parked
+  // at an older one (a remount would otherwise snap them back to it).
   const handleSent = useCallback(() => {
     timelineRef.current?.pinToBottom();
-  }, []);
+    clearMessageFocus();
+  }, [clearMessageFocus]);
 
   const openThread = useCallback((event: ChatMsg, focusReply = false) => {
-    setThreadAutoFocus(focusReply);
-    setThreadRoot(event);
+    navigate(chatRoute({ kind: "nip29", relayUrl, groupId: channelId, threadRoot: event.id }), {
+      state: { threadAutoFocus: focusReply },
+    });
     // Backfill the full thread by `#e` reference — the loaded `#h` window may
     // not span an old thread's replies.
     void fetchThread(event.id);
-  }, [fetchThread]);
+  }, [fetchThread, navigate, relayUrl, channelId]);
+  // A no-op when no thread is routed, so a stray close (the panel stays
+  // mounted through its slide-out) can't stack duplicate history entries.
+  const closeThread = useCallback(() => {
+    if (!routeThreadRoot) return;
+    setThreadExpanded(false);
+    navigate(chatRoute({ kind: "nip29", relayUrl, groupId: channelId }));
+  }, [routeThreadRoot, navigate, relayUrl, channelId]);
 
   const handleSlashAction = useCallback(
     async (action: SlashAction) => {
@@ -675,14 +694,6 @@ export function BuzzChat({
     },
     [user?.pubkey, deleteOwnMessage, deleteEvent],
   );
-
-  useEffect(() => {
-    if (!scrollToMessageRef) return;
-    scrollToMessageRef.current = (id: string) => timelineRef.current?.scrollToMessage(id);
-    return () => {
-      scrollToMessageRef.current = null;
-    };
-  }, [scrollToMessageRef]);
 
   const handleEditSubmit = useCallback(
     async (original: NostrRumor, content: string) => {
@@ -959,7 +970,9 @@ export function BuzzChat({
               groupId={channelId}
               canWrite={Boolean(user && canWrite)}
               autoFocus={threadAutoFocus}
-              onClose={() => { setThreadRoot(undefined); setThreadExpanded(false); }}
+              open={Boolean(threadRoot)}
+              permalink={{ kind: "nip29", relayUrl, groupId: channelId, threadRoot: lastThreadRoot.id }}
+              onClose={closeThread}
               onExpandChange={setThreadExpanded}
             />
           )}

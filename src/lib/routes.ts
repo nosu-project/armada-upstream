@@ -177,6 +177,18 @@ export function roomPath(route: ChatRoute): string {
 }
 
 /**
+ * The same location with only the message focus dropped.
+ *
+ * Giving up on an unresolvable `/m/<id>` should close the permalink, not the
+ * thread panel the reader is looking at — so the `/t/<root>` segment stays.
+ */
+export function withoutMessage(route: ChatRoute): ChatRoute {
+  if (route.kind === "dm") return { kind: "dm", peer: route.peer };
+  const { messageId: _dropped, ...rest } = route;
+  return rest;
+}
+
+/**
  * Parse the `/t/<root>` + `/m/<id>` suffix that follows a room segment.
  *
  * Returns `null` for anything that isn't one of the four legal shapes, so an

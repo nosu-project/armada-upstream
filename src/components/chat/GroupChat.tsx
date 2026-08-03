@@ -1,6 +1,6 @@
 import { Hash, Loader2, Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage, ReplyContextLine, ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
@@ -32,7 +32,8 @@ import { useNewMessagesDivider } from "@/hooks/useNewMessagesDivider";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { toast } from "@/hooks/useToast";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
-import { relayToRouteParam } from "@/lib/platform";
+import { chatRoute, parseChatRoute } from "@/lib/routes";
+import { useLegacyFocusParams } from "@/hooks/useLegacyFocusParams";
 import { withSignature } from "@/lib/publishOutbox";
 import { type SlashAction } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
@@ -136,8 +137,10 @@ function Nip29ChatMessage({
       ) : undefined,
     [replyToId, relayUrl, onJumpToReply],
   );
+  // This row is a timeline message, so its link names the room only. Replies
+  // are rendered by ThreadPanel, which supplies its own thread-scoped base.
   const permalink = useMemo(
-    () => `/s/${relayToRouteParam(relayUrl)}/${encodeURIComponent(groupId)}`,
+    () => ({ kind: "nip29", relayUrl, groupId }) as const,
     [relayUrl, groupId],
   );
 
@@ -230,11 +233,6 @@ interface GroupChatProps {
    * messages (filtered in-place in the chat area, not a separate view).
    */
   searchQuery?: string;
-  /**
-   * Populated by GroupChat with a function that scrolls a message into view by
-   * id (used by the header's pinned-messages popover).
-   */
-  scrollToMessageRef?: React.MutableRefObject<((id: string) => void) | null>;
 }
 
 /**
@@ -244,7 +242,7 @@ interface GroupChatProps {
  * and rendered through the shared {@link MessageTimeline}/{@link ChatMessage}/
  * {@link ChatComposer}, the same components Concord uses.
  */
-export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = false, canModerate, calendar, searchQuery = "", scrollToMessageRef }: GroupChatProps) {
+export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = false, canModerate, calendar, searchQuery = "" }: GroupChatProps) {
   const { user } = useCurrentUser();
   const composerBoundsRef = useRef<HTMLElement | null>(null);
   const { data: groupDetails } = useGroup(relayUrl, groupId);
@@ -297,7 +295,19 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     (id: string) => setActiveId((cur) => (cur === id ? undefined : id)),
     [],
   );
-  const [threadRoot, setThreadRoot] = useState<ChatMsg | undefined>(undefined);
+  // The open thread is whichever one the route names, resolved against loaded
+  // history — so it survives a refresh, closes on Back, and opens straight
+  // from a notification without a second code path.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const routeThreadRoot = useMemo(() => {
+    const parsed = parseChatRoute(location.pathname);
+    return parsed?.kind === "nip29" ? parsed.threadRoot : undefined;
+  }, [location.pathname]);
+  const threadRoot = useMemo(
+    () => (routeThreadRoot ? messages.find((m) => m.id === routeThreadRoot) : undefined),
+    [routeThreadRoot, messages],
+  );
 
   // Tell the native notification service this NIP-29 room (and, if a thread
   // panel is open, that specific thread) is on screen, so it suppresses
@@ -309,28 +319,14 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     relayUrl && groupId && threadRoot ? `h:${relayUrl}|${groupId}:t:${threadRoot.id}` : undefined,
   );
 
-  // Auto-open the thread panel when arrived via a notification deep-link
-  // (`?thread=<rootId>` — the service appends it for kind-1111 replies). Only
-  // fires once per `thread` param: when the root message is in the loaded
-  // window we open its thread; otherwise we clear the param so a later load
-  // doesn't snap to it after the user has scrolled.
-  const [searchParams, setSearchParams] = useSearchParams();
-  const threadParam = searchParams.get("thread");
-  useEffect(() => {
-    if (!threadParam || threadRoot) return;
-    const root = messages.find((m) => m.id === threadParam);
-    if (root) {
-      setThreadRoot(root);
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          next.delete("thread");
-          return next;
-        },
-        { replace: true },
-      );
-    }
-  }, [threadParam, threadRoot, messages, setSearchParams]);
+  // Pre-path deep links (`?thread=`, `?m=`) become their route equivalents.
+  // Old tray notifications and copied links still carry them.
+  useLegacyFocusParams(
+    useMemo(
+      () => (relayUrl && groupId ? ({ kind: "nip29", relayUrl, groupId } as const) : undefined),
+      [relayUrl, groupId],
+    ),
+  );
 
   // Reaction and zap tallies resolve over the timeline PLUS the open thread's
   // replies (kind-1111 comments, which aren't in the timeline), so a reply's
@@ -350,7 +346,10 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     relayUrl && groupId ? `nip29:${relayUrl}:${groupId}` : undefined,
     tallyIds,
   );
-  const [threadAutoFocus, setThreadAutoFocus] = useState(false);
+  // Whether the reply composer takes focus on open: an intent belonging to the
+  // click that navigated, not to the location, so it rides in history state
+  // and a shared link never steals focus.
+  const threadAutoFocus = Boolean((location.state as { threadAutoFocus?: boolean } | null)?.threadAutoFocus);
   const [threadExpanded, setThreadExpanded] = useState(false);
   const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);
   const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
@@ -371,7 +370,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     (id: string) => timelineRef.current?.scrollToMessage(id, true) ?? false,
     [],
   );
-  useMessagePermalink({
+  const clearMessageFocus = useMessagePermalink({
     messages,
     isLoading,
     hasMore,
@@ -417,14 +416,31 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
   // content, so it holds the reading position across every frame of both — this
   // used to be a rAF loop polling `maintainBottom` for 260ms.
 
+  // Sending is an explicit "I'm at the present": follow the new message, and
+  // drop any `/m/` focus so the location stops claiming the reader is parked
+  // at an older one (a remount would otherwise snap them back to it).
   const handleSent = useCallback(() => {
     timelineRef.current?.pinToBottom();
-  }, []);
+    clearMessageFocus();
+  }, [clearMessageFocus]);
 
-  const openThread = useCallback((event: ChatMsg, focusReply = false) => {
-    setThreadAutoFocus(focusReply);
-    setThreadRoot(event);
-  }, []);
+  // Opening a thread pushes `/t/<root>` onto the room route, so Back closes
+  // the panel and the panel survives a refresh.
+  const openThread = useCallback(
+    (event: ChatMsg, focusReply = false) => {
+      navigate(chatRoute({ kind: "nip29", relayUrl, groupId, threadRoot: event.id }), {
+        state: { threadAutoFocus: focusReply },
+      });
+    },
+    [navigate, relayUrl, groupId],
+  );
+  // A no-op when no thread is routed, so a stray close (the panel stays
+  // mounted through its slide-out) can't stack duplicate history entries.
+  const closeThread = useCallback(() => {
+    if (!routeThreadRoot) return;
+    setThreadExpanded(false);
+    navigate(chatRoute({ kind: "nip29", relayUrl, groupId }));
+  }, [routeThreadRoot, navigate, relayUrl, groupId]);
 
   const handleSlashAction = useCallback(
     async (action: SlashAction) => {
@@ -487,15 +503,6 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     },
     [isPinned, pin, unpin],
   );
-
-  // Expose scrollToMessage to the parent (the pinned-messages popover).
-  useEffect(() => {
-    if (!scrollToMessageRef) return;
-    scrollToMessageRef.current = (id: string) => timelineRef.current?.scrollToMessage(id);
-    return () => {
-      scrollToMessageRef.current = null;
-    };
-  }, [scrollToMessageRef]);
 
   const handleEditSubmit = useCallback(
     async (original: NostrRumor, content: string) => {
@@ -781,7 +788,9 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
               canWrite={Boolean(user && canWrite)}
               botCommands
               autoFocus={threadAutoFocus}
-              onClose={() => { setThreadRoot(undefined); setThreadExpanded(false); }}
+              open={Boolean(threadRoot)}
+              permalink={{ kind: "nip29", relayUrl, groupId, threadRoot: lastThreadRoot.id }}
+              onClose={closeThread}
               onExpandChange={setThreadExpanded}
             />
           )}

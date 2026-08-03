@@ -8,6 +8,7 @@ import {
   TRIM_ABOVE,
   WINDOW_STEP,
 } from "@/components/chat/timelineWindow";
+import { flashRow } from "@/components/chat/rowFlash";
 import { Skeleton } from "@/components/ui/skeleton";
 import { markBootPainted } from "@/lib/bootGate";
 import { usePerfMilestone } from "@/hooks/usePerfMilestone";
@@ -585,28 +586,8 @@ export function MessageTimeline({
     const el = scrollRef.current;
     const row = contentRef.current?.querySelector<HTMLElement>(`[data-event-id="${id}"]`);
     if (!el || !row) return;
-    // Rows above the target that have never been painted are still sitting at
-    // their `contain-intrinsic-size` estimate, so the first scroll lands
-    // approximately; re-centering on the next two frames settles it once those
-    // rows have real heights. Bounded, unlike polling for the row to appear.
-    row.scrollIntoView({ block: "center" });
-    requestAnimationFrame(() => {
-      row.scrollIntoView({ block: "center" });
-      requestAnimationFrame(() => row.scrollIntoView({ block: "center" }));
-    });
+    flashRow(row, focus);
     distanceRef.current = el.scrollHeight - el.scrollTop - el.clientHeight;
-    row.classList.add("bg-primary/10", "transition-colors", "duration-1000", "rounded-md");
-    // A permalink target additionally gets a primary bar beside the row (an
-    // inset shadow, so nothing shifts) that outlives the background wash —
-    // the arriving reader needs "this exact message" to survive the first
-    // moment, where an in-channel jump only needs a flash.
-    const indicator = "shadow-[inset_3px_0_0_0_hsl(var(--primary))]";
-    if (focus) row.classList.add(indicator);
-    const washMs = focus ? 2200 : 1200;
-    setTimeout(() => row.classList.remove("bg-primary/10"), washMs);
-    setTimeout(() => {
-      row.classList.remove("transition-colors", "duration-1000", "rounded-md", indicator);
-    }, washMs + 1000);
   }, []);
 
   // The one place scroll position is adjusted for a rendered-slice change.

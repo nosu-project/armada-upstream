@@ -49,7 +49,7 @@ import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { getComposerCollisionPadding, useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { writeClipboardText } from "@/lib/clipboard";
-import { shareOrigin } from "@/lib/shareOrigin";
+import { chatUrl, type ChatRoute } from "@/lib/routes";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { expirationOf } from "@/lib/nip17/protocol";
 import { parseProxyTag } from "@/lib/nip48";
@@ -370,14 +370,13 @@ export interface ChatMessageProps {
    */
   nameBadge?: ReactNode;
   /**
-   * The channel route this message lives at (e.g. `/s/<relay>/<group>`). When
-   * present, the menu offers "Copy message link": a shareable
-   * `<shareOrigin()><permalink>?m=<id>` URL, consumed on open by
-   * useMessagePermalink (scroll to the message + focus indicator). Omitted on
-   * surfaces where the row isn't addressable that way (thread panels, the
-   * inbox digest, mesh).
+   * Where this message lives: the room, plus the thread when the row is a
+   * reply inside one. When present, the menu offers "Copy message link" — the
+   * same route with `/m/<id>` appended, so a reply's link opens its thread
+   * rather than sending the reader hunting a timeline it was never in.
+   * Omitted on surfaces where a row isn't addressable (the inbox digest, mesh).
    */
-  permalink?: string;
+  permalink?: ChatRoute;
   /**
    * When set, this message is an unsigned rumor (e.g. a Concord V2 sealed chat
    * event) rather than a relay-addressable signed event. "View event JSON" then
@@ -600,7 +599,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
       label: "Copy message link",
       icon: Link,
       onSelect: () =>
-        writeClipboardText(`${shareOrigin()}${permalink}?m=${event.id}`).catch(() => undefined),
+        writeClipboardText(chatUrl({ ...permalink, messageId: event.id })).catch(() => undefined),
     });
   }
   menuActions.push({

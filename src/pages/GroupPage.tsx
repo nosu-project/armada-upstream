@@ -55,7 +55,8 @@ import { usePinnedMessages } from "@/hooks/usePinnedMessages";
 import { useUpdateUserGroupList, useUserGroupList } from "@/hooks/useUserGroupList";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { toast } from "@/hooks/useToast";
-import { relayToRouteParam, routeParamToRelay } from "@/lib/platform";
+import { routeParamToRelay } from "@/lib/platform";
+import { chatRoute } from "@/lib/routes";
 import { relayRejectionMessage, type Nip29Admin } from "@/lib/nip29";
 import { cn } from "@/lib/utils";
 
@@ -146,7 +147,7 @@ export function GroupPage() {
       if (!relayUrl) return;
       try {
         const dmId = await openBuzzDm(peer);
-        navigate(`/s/${relayToRouteParam(relayUrl)}/${encodeURIComponent(dmId)}`);
+        navigate(chatRoute({ kind: "nip29", relayUrl, groupId: dmId }));
       } catch (e) {
         toast({
           title: "Couldn't start the conversation",
@@ -226,7 +227,7 @@ export function GroupPage() {
       relayUrl
         ? (relayGroups ?? []).map((g) => ({
             name: g.name,
-            go: () => navigate(`/s/${relayToRouteParam(relayUrl)}/${encodeURIComponent(g.id)}`),
+            go: () => navigate(chatRoute({ kind: "nip29", relayUrl, groupId: g.id })),
           }))
         : [],
     [relayGroups, relayUrl, navigate],
@@ -258,9 +259,6 @@ export function GroupPage() {
   const pinsCollapsed = showPins && overflowCount >= (showEvents ? 2 : 1);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
-  // Lets the pinned-messages bar jump to a message in the timeline; GroupChat
-  // assigns the scroll function into this ref.
-  const scrollToMessageRef = useRef<((id: string) => void) | null>(null);
   // Focus the search field when it expands. `preventScroll` is essential: the
   // input starts off-screen (left-full) and slides in, so a default focus()
   // makes the browser scroll the whole page to reveal it — a visible jolt.
@@ -757,7 +755,12 @@ export function GroupPage() {
           pinnedRefs={pinnedRefs}
           relayUrl={relayUrl}
           canModerate={isAdmin}
-          onJump={(id) => scrollToMessageRef.current?.(id)}
+          // Jumping from a pin is a navigation, not a scroll: `/m/<id>` names
+          // where the reader ends up, so Back returns them to where they were
+          // and the chat surface's own permalink handling does the seeking —
+          // including pulling older pages for a pin above the loaded window,
+          // which a bare `scrollToMessage` could only no-op on.
+          onJump={(id) => navigate(chatRoute({ kind: "nip29", relayUrl, groupId, messageId: id }))}
           onUnpin={(id) => { void unpin(id); }}
           onClose={() => setPinsOpen(false)}
         />
@@ -805,7 +808,6 @@ export function GroupPage() {
               membershipPending={membershipPending}
               canModerate={isAdmin}
               searchQuery={searchOpen ? searchQuery : ""}
-              scrollToMessageRef={scrollToMessageRef}
             />
           ) : (
             <GroupChat
@@ -816,7 +818,6 @@ export function GroupPage() {
               canModerate={isAdmin}
               calendar={calendar}
               searchQuery={searchOpen ? searchQuery : ""}
-              scrollToMessageRef={scrollToMessageRef}
             />
           )}
           <div

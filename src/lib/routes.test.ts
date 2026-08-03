@@ -6,6 +6,7 @@ import {
   chatRouteTemplate,
   parseChatRoute,
   roomPath,
+  withoutMessage,
 } from "./routes";
 
 /** Every legal shape, as the pair the builder and parser must agree on. */
@@ -177,5 +178,41 @@ describe("roomPath", () => {
       roomPath({ kind: "nip29", relayUrl: "wss://relay.example", groupId: "g", messageId: "m1" }),
     ).toBe("/s/relay.example/g");
     expect(roomPath({ kind: "dm", peer: "npub1abc", messageId: "m1" })).toBe("/dm/npub1abc");
+  });
+});
+
+describe("withoutMessage", () => {
+  it("drops the message focus but keeps an open thread", () => {
+    // Giving up on an unresolvable reply must not close the panel the reader
+    // is looking at.
+    expect(
+      chatRoute(
+        withoutMessage({
+          kind: "concord2",
+          communityId: "c",
+          channelId: "ch",
+          threadRoot: "r1",
+          messageId: "m1",
+        }),
+      ),
+    ).toBe("/c/c/ch/t/r1");
+    expect(
+      chatRoute(
+        withoutMessage({
+          kind: "nip29",
+          relayUrl: "wss://relay.example",
+          groupId: "g",
+          messageId: "m1",
+        }),
+      ),
+    ).toBe("/s/relay.example/g");
+    expect(chatRoute(withoutMessage({ kind: "dm", peer: "npub1abc", messageId: "m1" }))).toBe(
+      "/dm/npub1abc",
+    );
+  });
+
+  it("leaves a location with no message focus alone", () => {
+    const route: ChatRoute = { kind: "concord1", communityId: "c", channelId: "ch" };
+    expect(chatRoute(withoutMessage(route))).toBe(chatRoute(route));
   });
 });

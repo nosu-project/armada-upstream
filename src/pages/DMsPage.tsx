@@ -704,7 +704,7 @@ function Conversation({
     (id: string) => timelineRef.current?.scrollToMessage(id, true) ?? false,
     [],
   );
-  useMessagePermalink({
+  const clearMessageFocus = useMessagePermalink({
     messages,
     isLoading: transport.isLoading,
     hasMore: transport.hasMore,
@@ -881,6 +881,8 @@ function Conversation({
         // stick-to-bottom deliberately won't, and group and Buzz chat both pin
         // here too.
         timelineRef.current?.pinToBottom();
+        // …and the location must stop claiming they're parked at an older one.
+        clearMessageFocus();
         setReplyTo(undefined);
       } catch (e) {
         // The peer can't receive private DMs and legacy hasn't been enabled —
@@ -901,7 +903,7 @@ function Conversation({
         throw e;
       }
     },
-    [send, toast, replyTo, legacyAllowed, isRequest, onAccept],
+    [send, toast, replyTo, legacyAllowed, isRequest, onAccept, clearMessageFocus],
   );
 
   const handleMute = useCallback(async () => {
@@ -1258,7 +1260,7 @@ function Conversation({
               <ChatMessage
                 key={msg.id}
                 event={msg}
-                permalink={`/dm/${peer}`}
+                permalink={{ kind: "dm", peer }}
                 canWrite={transport.canWrite}
                 canModerate={transport.canModerate}
                 sendStatus={transport.sendStatusFor?.(msg.id)}
