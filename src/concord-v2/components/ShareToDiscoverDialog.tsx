@@ -21,7 +21,7 @@ import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useCommunity2, useLiveCommunities2 } from "@/concord-v2/hooks/useCommunityList2";
 import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
-import { useInviteActions2 } from "@/concord-v2/hooks/useInvites2";
+import { useInviteActions2, useInviteList2 } from "@/concord-v2/hooks/useInvites2";
 import {
   KIND_COMMUNITY_ANNOUNCEMENT,
   buildCommunityAnnouncement,
@@ -39,10 +39,12 @@ import type { ImagePointer } from "@/concord-v2/lib/types";
 /**
  * Share a community to Discover: publish a kind-33302 community announcement
  * carrying a live invite link (secret included), so the Discover page can list
- * it. Only communities the user OWNS or ADMINS are offered — the picker checks
- * each community's Control fold and hides the rest. Opened either from the
- * Discover page ("Add your community", with the picker) or from a community's
- * own menu (preselected via `communityId`).
+ * it. The picker offers only communities the user OWNS or ADMINS **and already
+ * holds a live invite link for** — sharing reuses that link, and a community
+ * with no link would have its FIRST one minted by the share, flipping a
+ * private community public from a picker misclick. Minting-on-share stays
+ * available only through a community's own menu (preselected via
+ * `communityId`), where the destructive confirm makes the flip explicit.
  */
 export function ShareToDiscoverDialog({
   open,
@@ -161,6 +163,7 @@ function CommunityOption({
 
 function CommunityPicker({ onSelect }: { onSelect: (idHex: string) => void }) {
   const entries = useLiveCommunities2();
+  const inviteList = useInviteList2();
   const [eligibility, setEligibility] = useState<Record<string, boolean>>({});
   const report = useCallback(
     (idHex: string, eligible: boolean) =>
@@ -168,9 +171,24 @@ function CommunityPicker({ onSelect }: { onSelect: (idHex: string) => void }) {
     [],
   );
 
-  const allChecked = entries.every((e) => e.community_id in eligibility);
+  // Communities I hold a live (unrevoked, unexpired) invite link for — the
+  // Invite List's merge already drops revoked tokens, so only expiry needs
+  // checking here. Only these are offered: sharing one reuses its link, so
+  // the picker can never be the step that mints a private community's first
+  // link and thereby flips it public.
+  const linked = useMemo(() => {
+    const now = Math.floor(Date.now() / 1000);
+    const ids = new Set<string>();
+    for (const e of inviteList.data?.entries ?? []) {
+      if (!e.expires_at || e.expires_at > now) ids.add(e.community_id);
+    }
+    return ids;
+  }, [inviteList.data]);
+
+  const candidates = entries.filter((e) => linked.has(e.community_id));
+  const checking = inviteList.isLoading || !candidates.every((e) => e.community_id in eligibility);
   const noneEligible =
-    entries.length === 0 || (allChecked && entries.every((e) => !eligibility[e.community_id]));
+    !checking && (candidates.length === 0 || candidates.every((e) => !eligibility[e.community_id]));
 
   return (
     <div className="w-full space-y-2">
@@ -179,24 +197,26 @@ function CommunityPicker({ onSelect }: { onSelect: (idHex: string) => void }) {
         Pick a community you own or admin
       </div>
       <div className="max-h-64 space-y-0.5 overflow-y-auto p-1 clip-corner-lg bg-secondary">
-        {entries.map((e) => (
-          <CommunityOption
-            key={e.community_id}
-            idHex={e.community_id}
-            onSelect={onSelect}
-            onEligibility={report}
-          />
-        ))}
-        {!allChecked && (
+        {!inviteList.isLoading &&
+          candidates.map((e) => (
+            <CommunityOption
+              key={e.community_id}
+              idHex={e.community_id}
+              onSelect={onSelect}
+              onEligibility={report}
+            />
+          ))}
+        {checking && (
           <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
             Checking your communities…
           </div>
         )}
-        {noneEligible && allChecked && (
+        {noneEligible && (
           <p className="px-3 py-2 text-sm text-muted-foreground">
-            None of your communities can be shared: only a community's owner or an admin can list
-            it here.
+            None of your communities can be listed here: sharing needs a community you own or
+            admin with a live invite link of yours to publish. Create an invite link from the
+            community's menu first.
           </p>
         )}
       </div>

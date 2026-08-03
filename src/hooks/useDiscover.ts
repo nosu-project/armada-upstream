@@ -414,7 +414,14 @@ export function useDiscoverAuthors(): {
  * (the card resolves name/icon/banner live from the invite bundle), so there
  * is nothing server-side to match. The Communities tab filters the rendered
  * cards against their RESOLVED names instead.
+ *
+ * Returned alongside the invites: `packAuthors` (the team follow pack's
+ * members) and `trustedAuthors` (pack ∪ viewer ∪ follows), so the tab can
+ * rank listings — pack-owned communities first, the rest of the trusted set
+ * after — without a second membership read.
  */
+const NO_AUTHORS: string[] = [];
+
 export function useDiscoverCommunities() {
   const { nostr } = useNostr();
   const { config } = useAppContext();
@@ -478,7 +485,13 @@ export function useDiscoverCommunities() {
   // A failed refresh over a grid already painted (KV seed or placeholder)
   // must not swap real cards for the error state — error only when there is
   // nothing to show.
-  return { data, isLoading: result.isLoading, isError: result.isError && !data };
+  return {
+    data,
+    packAuthors: result.data?.packAuthors ?? NO_AUTHORS,
+    trustedAuthors: authors,
+    isLoading: result.isLoading,
+    isError: result.isError && !data,
+  };
 }
 
 /** How long after boot the Discover warmup fires (chunk warmup fires at 3s). */
@@ -527,11 +540,20 @@ export function useWarmDiscover(): void {
           const visible = unrestricted
             ? directory.invites
             : directory.invites.filter((invite) => allowed.has(invite.source.pubkey));
-          // Resolve the bundles the grid would show first. Sequenced behind
-          // the announcements by necessity; each resolve also persists its
-          // floor, which is what makes the NEXT session's cards instant.
+          // Resolve the bundles the grid would show first: the tab ranks
+          // pack-authored listings ahead of the rest, so warm those first.
+          // (The pre-resolve announcement author stands in for the bundle
+          // owner here, the same heuristic the tab's initial order uses.)
+          // Sequenced behind the announcements by necessity; each resolve
+          // also persists its floor, which is what makes the NEXT session's
+          // cards instant.
+          const packSet = new Set(directory.packAuthors);
+          const prioritized = [
+            ...visible.filter((invite) => packSet.has(invite.source.pubkey)),
+            ...visible.filter((invite) => !packSet.has(invite.source.pubkey)),
+          ];
           await Promise.allSettled(
-            visible.slice(0, WARM_BUNDLE_COUNT).map((invite) => {
+            prioritized.slice(0, WARM_BUNDLE_COUNT).map((invite) => {
               const parsed = parseInviteLink(invite.inviteUrl);
               if (!parsed) return Promise.resolve();
               return queryClient.fetchQuery({

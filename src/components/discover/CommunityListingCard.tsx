@@ -35,13 +35,14 @@ interface CommunityListingCardProps {
    */
   filter?: string;
   /**
-   * Reports the bundle's self-certified `community_id` once it resolves, so
-   * the grid can fold two different links to the SAME community into one
-   * card. The announcement carries no community identity of its own — a tag
-   * would be an unverifiable claim — so this resolution is the only place a
-   * duplicate becomes knowable.
+   * Reports the bundle's self-certified `community_id` and verified `owner`
+   * once the bundle resolves, so the grid can fold two different links to the
+   * SAME community into one card and rank listings by who owns them. The
+   * announcement carries no community identity of its own — a tag would be an
+   * unverifiable claim — so this resolution is the only place either fact
+   * becomes knowable.
    */
-  onResolved?: (linkSigner: string, communityId: string) => void;
+  onResolved?: (linkSigner: string, communityId: string, owner: string) => void;
 }
 
 /** The card-shaped placeholder shown while a listing's bundle resolves. */
@@ -160,8 +161,8 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
   const channelCount = Array.isArray(bundle?.channels) ? bundle!.channels.length : 0;
 
   useEffect(() => {
-    if (bundle?.community_id) onResolved?.(invite.linkSigner, bundle.community_id);
-  }, [bundle?.community_id, invite.linkSigner, onResolved]);
+    if (bundle?.community_id) onResolved?.(invite.linkSigner, bundle.community_id, bundle.owner);
+  }, [bundle?.community_id, bundle?.owner, invite.linkSigner, onResolved]);
 
   const onJoin = () => navigate(inviteUrlToLocalRoute(invite.inviteUrl));
   const onOpen = () => navigate(`/c/${encodeURIComponent(bundle!.community_id)}`);

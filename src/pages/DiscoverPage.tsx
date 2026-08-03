@@ -12,6 +12,7 @@ import { ServerRail } from "@/components/layout/ServerRail";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import type { DiscoveredInvite } from "@/concord-v2/lib/inviteDiscovery";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
   useDiscoverCommunities,
@@ -215,32 +216,58 @@ function TabState({ icon: Icon, children }: { icon: typeof Users; children: Reac
 }
 
 function CommunitiesTab({ query }: { query: string }) {
-  const { data, isLoading, isError } = useDiscoverCommunities();
+  const { data, packAuthors, trustedAuthors, isLoading, isError } = useDiscoverCommunities();
 
-  // Cross-link de-duplication: an announcement names no community (only its
-  // resolved bundle does, verifiably), so each card reports its bundle's
-  // community_id as it lands, and every link AFTER the first — in the hook's
-  // newest-first order — that resolves to an already-seen community is
-  // dropped. Until a bundle resolves its card simply shows.
-  const [resolved, setResolved] = useState<Record<string, string>>({});
+  // Cross-link de-duplication and owner-based ranking: an announcement names
+  // no community and no owner (only its resolved bundle does, verifiably), so
+  // each card reports its bundle's community_id and owner as it lands.
+  const [resolved, setResolved] = useState<Record<string, { communityId: string; owner: string }>>(
+    {},
+  );
   const onResolved = useCallback(
-    (linkSigner: string, communityId: string) =>
-      setResolved((prev) =>
-        prev[linkSigner] === communityId ? prev : { ...prev, [linkSigner]: communityId },
-      ),
+    (linkSigner: string, communityId: string, owner: string) =>
+      setResolved((prev) => {
+        const cur = prev[linkSigner];
+        if (cur?.communityId === communityId && cur?.owner === owner) return prev;
+        return { ...prev, [linkSigner]: { communityId, owner } };
+      }),
     [],
   );
+
+  // Display order: communities owned by team-follow-pack members first, then
+  // the rest of the trusted set (pack ∪ viewer ∪ follows), then — only in
+  // unrestricted mode, where the allow-list is bypassed — everyone else.
+  // Newest-first within each tier (a stable partition preserves the hook's
+  // order). The verified bundle owner ranks a card once it resolves; until
+  // then the announcement's author stands in, so the first paint is already
+  // ordered and a card only moves in the rare case the sharer isn't the
+  // owner. O(n) over ≤ a few hundred listings — no extra fetches.
+  const ordered = useMemo(() => {
+    if (!data) return data;
+    const pack = new Set(packAuthors);
+    const trusted = new Set(trustedAuthors);
+    const tiers: [DiscoveredInvite[], DiscoveredInvite[], DiscoveredInvite[]] = [[], [], []];
+    for (const invite of data) {
+      const owner = resolved[invite.linkSigner]?.owner ?? invite.source.pubkey;
+      tiers[pack.has(owner) ? 0 : trusted.has(owner) ? 1 : 2].push(invite);
+    }
+    return tiers.flat();
+  }, [data, resolved, packAuthors, trustedAuthors]);
+
+  // Every link AFTER the first — in display order, so a pack-owned card wins
+  // the fold — that resolves to an already-seen community is dropped. Until a
+  // bundle resolves its card simply shows.
   const duplicates = useMemo(() => {
     const seen = new Set<string>();
     const dup = new Set<string>();
-    for (const invite of data ?? []) {
-      const communityId = resolved[invite.linkSigner];
+    for (const invite of ordered ?? []) {
+      const communityId = resolved[invite.linkSigner]?.communityId;
       if (!communityId) continue;
       if (seen.has(communityId)) dup.add(invite.linkSigner);
       else seen.add(communityId);
     }
     return dup;
-  }, [data, resolved]);
+  }, [ordered, resolved]);
 
   if (isLoading && !data) {
     // Card-shaped placeholders, enough of them to fill a desktop viewport.
@@ -273,7 +300,7 @@ function CommunitiesTab({ query }: { query: string }) {
       <CreateCommunityCard />
       {/* The announcement is metadata-free, so the search matches each card's
           RESOLVED community name: non-matching cards render nothing. */}
-      {data
+      {(ordered ?? [])
         .filter((invite) => !duplicates.has(invite.linkSigner))
         .map((invite) => (
           <CommunityListingCard
