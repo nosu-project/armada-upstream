@@ -105,6 +105,7 @@ import { toast } from "@/hooks/useToast";
 import { useCommunity2, useIsExcluded2 } from "@/concord-v2/hooks/useCommunityList2";
 import { useCommunityManagement2, useStrandedRecovery2 } from "@/concord-v2/hooks/useCommunityActions2";
 import { useChannels2, useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPlane2";
+import { usePins2 } from "@/concord-v2/hooks/usePins2";
 import { BanMemberDialog } from "@/concord-v2/components/BanMemberDialog2";
 import type { BanPhase } from "@/concord-v2/hooks/useModeration2";
 import { hasForeignLiveLinks } from "@/concord-v2/lib/control";
@@ -1328,7 +1329,32 @@ export function ConcordV2Page() {
   const { data: dissolved } = useDissolved2(community);
   const canWrite = Boolean(user && channel && !dissolved && !excluded && !stranded);
 
-  const { transport: baseTransport, reactionsFor, allMessages, calendar } = useTransport2(community, channel, canWrite, canModerateMessages, channelIdHex);
+  const { transport: baseTransport, reactionsFor, allMessages, calendar, openedById } = useTransport2(community, channel, canWrite, canModerateMessages, channelIdHex);
+  // Pins (CORD-04 §7). Building a proof needs the ORIGINAL seal, not the
+  // rendered message, so the toggle reaches back into the opened-rumor cache
+  // by rumor id — the decrypted row alone can prove nothing.
+  const pins = usePins2(community, channel);
+  const togglePin = useCallback(
+    (event: ChatMsg) => {
+      const run = async () => {
+        try {
+          if (pins.isPinned(event.id)) {
+            await pins.unpin({ rumorId: event.id });
+            toast({ title: "Unpinned" });
+            return;
+          }
+          const opened = openedById.get(event.id);
+          if (!opened) throw new Error("That message isn't loaded here any more — scroll to it and try again.");
+          await pins.pin({ opened });
+          toast({ title: "Pinned", description: "Everyone in this channel can see it, now and after any key rotation." });
+        } catch (e) {
+          toast({ title: "Couldn't update pins", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+        }
+      };
+      void run();
+    },
+    [pins, openedById],
+  );
   // Git activity remains its own event domain. The store-first channel hook
   // supplies attached repository activity; this page only merges its display
   // order with decrypted chat rumors.
@@ -2136,7 +2162,14 @@ export function ConcordV2Page() {
       return chatAdded + gitAdded;
     },
     openThread,
-  }), [baseTransport, gitActivity, openThread]);
+    // Lights up the pin entry in the message menu (ChatMessage already renders
+    // it when both are present).
+    isPinned: pins.canPin ? pins.isPinned : undefined,
+    togglePin: pins.canPin ? togglePin : undefined,
+  }), [baseTransport, gitActivity, openThread, pins.canPin, pins.isPinned, togglePin]);
+  // Recently-active members, for a bot command's `user`-argument picker. Concord
+  // hands its timeline to ChatComposer as `messages: []`, so it must supply this.
+  const recentAuthors = useMemo(() => authorsByRecency(transport.messages), [transport.messages]);
 
   // Message permalinks (`?m=<id>` — notification taps, copied links): scroll
   // to the target with the focus indicator once it's loaded, pulling older
@@ -2153,9 +2186,6 @@ export function ConcordV2Page() {
     scrollTo: permalinkScroll,
     enabled: view === "channel",
   });
-  // Recently-active members, for a bot command's `user`-argument picker. Concord
-  // hands its timeline to ChatComposer as `messages: []`, so it must supply this.
-  const recentAuthors = useMemo(() => authorsByRecency(transport.messages), [transport.messages]);
 
   // Background catch-up. `channelSyncing` = the channel on screen is being
   // caught up: its sync TOPIC is pending (covers the whole span from the

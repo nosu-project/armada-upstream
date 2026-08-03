@@ -71,6 +71,11 @@ export function useTransport2(
   allMessages: ChatMsg[];
   /** The channel's calendar events + RSVPs, for the shared events bar. */
   calendar: CalendarTransport;
+  /**
+   * Opened rows by rumor id — the ONLY place the original seal survives.
+   * A pin proves a message from its seal, so a rendered ChatMsg cannot supply it.
+   */
+  openedById: Map<string, OpenedChat>;
 } {
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
@@ -532,5 +537,11 @@ export function useTransport2(
     [timeline, isLoading, canWrite, canModerate, rotationDividerIds, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, calendarFor, threadRepliesFor, sendThreadReply],
   );
 
-  return { transport, reactionsFor, allMessages: messages, calendar };
+  const openedById = useMemo(() => {
+    const map = new Map<string, OpenedChat>();
+    for (const m of folded.messages) map.set(m.rumorId, m);
+    return map;
+  }, [folded.messages]);
+
+  return { transport, reactionsFor, allMessages: messages, calendar, openedById };
 }
