@@ -48,6 +48,11 @@ function prefersReducedMotion(): boolean {
  * Where character `i` goes when the quiz is blown apart. Derived from the index
  * by hash rather than drawn from `Math.random`, so a re-render mid-flight can't
  * reshuffle a character that is already moving.
+ *
+ * Direction only, deliberately: every character leaves on the same frame, and
+ * what makes it read as dust rather than a fade is that they all leave on
+ * different headings. Staggering the starts instead put the title, the left
+ * answer and the right answer on visibly separate clocks.
  */
 function scatter(i: number) {
   const rand = (salt: number) => {
@@ -58,9 +63,6 @@ function scatter(i: number) {
     dx: `${(rand(1) - 0.3) * 130}px`,
     dy: `${-40 - rand(2) * 110}px`,
     rot: `${(rand(3) - 0.5) * 200}deg`,
-    // A left-to-right sweep with enough jitter that no two neighbours leave
-    // together — the gust crosses the quiz rather than lifting it whole.
-    delay: `${i * 5 + rand(4) * 260}ms`,
   };
 }
 
@@ -74,12 +76,12 @@ function DustText({ text, dust, seed = 0 }: { text: string; dust: boolean; seed?
   return (
     <>
       {Array.from(text, (ch, i) => {
-        const { dx, dy, rot, delay } = scatter(seed + i);
+        const { dx, dy, rot } = scatter(seed + i);
         return (
           <span
             key={i}
             className="inline-block animate-[armada-dust_900ms_ease-in_forwards] motion-reduce:animate-none"
-            style={{ "--dust-dx": dx, "--dust-dy": dy, "--dust-rot": rot, animationDelay: delay } as React.CSSProperties}
+            style={{ "--dust-dx": dx, "--dust-dy": dy, "--dust-rot": rot } as React.CSSProperties}
           >
             {ch === " " ? "\u00a0" : ch}
           </span>
