@@ -110,9 +110,10 @@ describe('connectDiscord', () => {
   // postMessage at us claiming to be the portal.
   it('ignores a token from any other origin', async () => {
     const { connectDiscord, bridgeToken } = await load();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"pending":true}', { status: 200 })));
     const popup = fakePopup();
 
-    const promise = connectDiscord();
+    const promise = connectDiscord({ closeGraceMs: 20, pollMs: 5 });
     window.dispatchEvent(
       new MessageEvent('message', {
         origin: 'https://evil.example.com',
@@ -127,13 +128,40 @@ describe('connectDiscord', () => {
     await expect(promise).rejects.toThrow(/cancelled/i);
   });
 
-  it('rejects when the user closes the popup without finishing', async () => {
+  it('rejects when the popup closes and the claim keeps coming up empty', async () => {
     const { connectDiscord } = await load();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"pending":true}', { status: 200 })));
     const popup = fakePopup();
 
-    const promise = connectDiscord();
+    const promise = connectDiscord({ closeGraceMs: 20, pollMs: 5 });
     popup.closed = true;
 
     await expect(promise).rejects.toThrow(/cancelled/i);
+  });
+
+  // The COOP path: Discord's login severs window.opener, so no message ever
+  // arrives — the token comes home through the nonce claim instead, even
+  // after the callback page has already closed the popup.
+  it('claims the token by nonce when the popup closes without a message', async () => {
+    const { connectDiscord, bridgeToken } = await load();
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ token: 'e'.repeat(48) }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const popup = fakePopup();
+
+    const promise = connectDiscord({ closeGraceMs: 5_000, pollMs: 5 });
+    popup.closed = true;
+
+    await expect(promise).resolves.toBeUndefined();
+    expect(bridgeToken()).toBe('e'.repeat(48));
+
+    // The claim carried the same nonce the popup URL was minted with.
+    const openMock = window.open as unknown as ReturnType<typeof vi.fn>;
+    const openedUrl = String(openMock.mock.calls[0][0]);
+    const nonce = /[?&]nonce=([0-9a-f]{32})/.exec(openedUrl)?.[1];
+    expect(nonce).toBeTruthy();
+    const calls = fetchMock.mock.calls as unknown as [string, RequestInit][];
+    const claimCall = calls.find(([u]) => String(u).endsWith('/api/auth/claim'));
+    expect(claimCall).toBeTruthy();
+    expect(JSON.parse(claimCall![1].body as string)).toEqual({ nonce });
   });
 });

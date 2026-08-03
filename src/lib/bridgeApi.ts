@@ -198,19 +198,29 @@ export const rerunImportHistory = (importId: string) =>
  * Sign in to the portal with Discord, in a popup.
  *
  * OAuth cannot happen inside our own page: the redirect has to land on the
- * portal's registered `redirect_uri`. So the portal opens in a popup, finishes
- * the exchange, and posts the session token back to this exact origin (which it
- * only does for origins the operator allow-listed). We verify `event.origin`
- * against the configured portal before trusting anything.
+ * portal's registered `redirect_uri`. So the portal opens in a popup and
+ * finishes the exchange there. Getting the session token BACK is the subtle
+ * part: Discord's pages carry `Cross-Origin-Opener-Policy:
+ * same-origin-allow-popups`, which severs the popup's `window.opener` the
+ * moment it navigates to the login page — so the callback's postMessage
+ * usually has no one to talk to. The reliable channel is polling: we mint a
+ * random nonce, hand it to the portal in the auth URL, and poll
+ * `/api/auth/claim` until the callback has landed and the portal releases the
+ * token (the nonce is single-use, spent by the first successful claim).
+ * postMessage is kept as a fast path for the runs where the opener survives,
+ * verified against the portal origin before trusting anything.
  *
- * Resolves once the token is stored. Rejects if the popup is blocked, closed,
- * or nothing arrives inside the timeout.
+ * Resolves once the token is stored. Rejects if the popup is blocked, or on
+ * timeout; a CLOSED popup only starts a short grace period, because in the
+ * successful flow the callback closes the popup itself and the claim may
+ * still be a poll away.
  */
-export function connectDiscord({ timeoutMs = 5 * 60_000 } = {}): Promise<void> {
+export function connectDiscord({ timeoutMs = 5 * 60_000, pollMs = 2_000, closeGraceMs = 15_000 } = {}): Promise<void> {
   const base = bridgePortalUrl("/");
   if (!base) return Promise.reject(new BridgeApiError("This build has no Discord bridge portal configured.", 0));
 
-  const url = `${base}/api/auth/discord?mode=popup&origin=${encodeURIComponent(window.location.origin)}`;
+  const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
+  const url = `${base}/api/auth/discord?mode=popup&origin=${encodeURIComponent(window.location.origin)}&nonce=${nonce}`;
   const popup = window.open(url, "armada-bridge-discord", "width=520,height=780,menubar=no,toolbar=no");
   if (!popup) {
     return Promise.reject(
@@ -225,8 +235,14 @@ export function connectDiscord({ timeoutMs = 5 * 60_000 } = {}): Promise<void> {
       settled = true;
       window.removeEventListener("message", onMessage);
       clearInterval(closedTimer);
+      clearInterval(claimTimer);
       clearTimeout(timer);
       fn();
+    };
+
+    const accept = (token: string) => {
+      setBridgeToken(token);
+      finish(resolve);
     };
 
     const onMessage = (event: MessageEvent) => {
@@ -234,18 +250,42 @@ export function connectDiscord({ timeoutMs = 5 * 60_000 } = {}): Promise<void> {
       if (event.origin !== new URL(base).origin) return;
       const data = event.data as { type?: string; token?: string } | null;
       if (!data || data.type !== BRIDGE_SESSION_MESSAGE) return;
-      if (typeof data.token !== "string" || !data.token) {
-        finish(() => reject(new BridgeApiError("The portal returned no session token.", 0)));
-        return;
-      }
-      setBridgeToken(data.token);
-      finish(resolve);
+      if (typeof data.token !== "string" || !data.token) return;
+      accept(data.token);
     };
     window.addEventListener("message", onMessage);
 
-    // The popup closing without a message means the user backed out.
+    // Claim poll: errors are just "not yet" — the overall timeout bounds it.
+    let claiming = false;
+    const claim = async () => {
+      if (settled || claiming) return;
+      claiming = true;
+      try {
+        const res = await bridgeApi<{ token?: string }>("/api/auth/claim", {
+          method: "POST",
+          body: JSON.stringify({ nonce }),
+        });
+        if (typeof res.token === "string" && res.token) accept(res.token);
+      } catch {
+        // pending or unreachable; keep polling
+      } finally {
+        claiming = false;
+      }
+    };
+    const claimTimer = setInterval(() => void claim(), pollMs);
+
+    // The callback page closes the popup itself, possibly before our next
+    // claim poll — so a closed popup means "cancelled" only once a grace
+    // period of polling has also come up empty.
+    let closedAt = 0;
     const closedTimer = setInterval(() => {
-      if (popup.closed) {
+      if (!popup.closed) return;
+      if (!closedAt) {
+        closedAt = Date.now();
+        void claim();
+        return;
+      }
+      if (Date.now() - closedAt >= closeGraceMs) {
         finish(() => reject(new BridgeApiError("Discord sign-in was cancelled.", 0)));
       }
     }, 500);
