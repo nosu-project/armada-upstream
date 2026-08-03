@@ -99,14 +99,16 @@ export function LandingPage({
             Armada is spread across free public servers.
           </p>
 
-          <ul className="mt-8 flex flex-col items-start gap-2 font-mono text-sm text-muted-foreground">
+          {/* The receipts for the claim above — a caption strip, not a second
+              block of copy, so it stays subordinate to the statement. */}
+          <ul className="mt-14 flex flex-wrap items-center justify-center gap-x-6 gap-y-2.5 font-mono text-xs text-muted-foreground/70">
             {STOCK_RELAYS.map((url) => <RelayLight key={url} url={url} />)}
           </ul>
           <a
             href="https://soapbox.pub/blog/how-to-self-host-armada"
             target="_blank"
             rel="noreferrer"
-            className="mt-2 font-mono text-sm text-muted-foreground underline underline-offset-4 transition-colors hover:text-foreground"
+            className="mt-5 font-mono text-xs tracking-wide text-muted-foreground/70 underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:text-foreground hover:decoration-current"
           >
             Host your own
           </a>
@@ -142,14 +144,16 @@ function RelayLight({ url }: { url: string }) {
   }, [url]);
 
   return (
-    <li className="flex items-center gap-2.5">
+    <li className="flex items-center gap-2 tracking-wide">
+      {/* A status light, not a bullet: small, with a soft halo so the lit
+          state reads at a glance without out-shouting the muted caption. */}
       <span
         aria-hidden="true"
         className={cn(
-          "size-2 shrink-0 rounded-full",
-          alive === undefined && "animate-pulse bg-muted-foreground/40",
-          alive === true && "bg-emerald-500",
-          alive === false && "bg-red-500",
+          "size-1.5 shrink-0 rounded-full ring-2",
+          alive === undefined && "animate-pulse bg-muted-foreground/40 ring-transparent motion-reduce:animate-none",
+          alive === true && "bg-emerald-400 ring-emerald-400/20",
+          alive === false && "bg-red-400/80 ring-red-400/15",
         )}
       />
       {url.replace(/^wss:\/\//, "")}
