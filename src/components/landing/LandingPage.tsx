@@ -243,6 +243,15 @@ export function LandingPage({
             </Button>
           </div>
         </section>
+
+        {/* The floor of the page. Absolutely placed rather than appended in
+            flow, so it darkens the last stretch of sea instead of adding a
+            screenful of scroll after the CTA — reaching the bottom reads as
+            arriving somewhere, not as running out of page. */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-56 bg-gradient-to-b from-transparent via-black/45 to-black/90"
+        />
       </div>
 
       <ArmadaCrestKeyframes />
