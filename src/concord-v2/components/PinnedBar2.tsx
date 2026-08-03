@@ -3,6 +3,7 @@ import { Loader2, Lock, Pin, ShieldCheck, X } from "lucide-react";
 import { DisplayName } from "@/components/DisplayName";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { PinAttachments2 } from "@/concord-v2/components/PinAttachments2";
 import type { VerifiedPin } from "@/concord-v2/lib/pins";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
@@ -12,9 +13,13 @@ import { cn } from "@/lib/utils";
 /** A pin as the bar renders it: verified, plus any locally-applied Edit. */
 type BarPin = VerifiedPin & { staleEdit?: boolean };
 
-/** Strip URLs to a paperclip for a compact preview. */
+/**
+ * Compact text preview. URLs are dropped rather than replaced with a paperclip:
+ * the attachments render inline below, so a placeholder would just duplicate
+ * them — and an attachment-only message would preview as nothing but "📎".
+ */
 function previewText(content: string): string {
-  return content.replace(/https?:\/\/\S+/g, "📎").trim() || "📎";
+  return content.replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim();
 }
 
 /**
@@ -43,11 +48,12 @@ function PinRow({
 
   return (
     <div className="group/pin flex items-start gap-2 min-w-0 rounded-md px-2 py-1.5 hover:bg-secondary/60">
+      <div className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
       <button
         type="button"
         disabled={!jumpable}
         onClick={() => onJump?.(pin.rumorId)}
-        className={cn("flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left", !jumpable && "cursor-default")}
+        className={cn("flex min-w-0 w-full flex-col items-start gap-0.5 text-left", !jumpable && "cursor-default")}
       >
         <span className="flex items-center gap-1.5 max-w-full">
           <span className="text-[11px] font-semibold text-primary truncate">
@@ -78,10 +84,16 @@ function PinRow({
             </Tooltip>
           )}
         </span>
-        <span className="text-[12px] text-muted-foreground line-clamp-2 break-words">
-          {previewText(pin.content)}
-        </span>
+        {previewText(pin.content) && (
+          <span className="text-[12px] text-muted-foreground line-clamp-2 break-words">
+            {previewText(pin.content)}
+          </span>
+        )}
       </button>
+      {/* Outside the jump button: these carry their own links and download
+          controls, and a keyless reader has no other way to reach this file. */}
+      <PinAttachments2 content={pin.content} tags={pin.tags} />
+      </div>
       {canUnpin && (
         <Tooltip>
           <TooltipTrigger asChild>
