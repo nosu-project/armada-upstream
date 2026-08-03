@@ -203,18 +203,28 @@ export function usePins2(
    */
   const refreshEdits = useMutation<number, Error, void>({
     mutationFn: async () => {
-      if (!channel || localEdits.size === 0) return 0;
+      if (!channel || !community || localEdits.size === 0) return 0;
       let changed = 0;
-      const next = pins.map((p) => {
+      const next: PinEntry[] = [];
+      for (const p of pins) {
         const local = localEdits.get(p.rumorId);
-        if (!local) return p.entry;
+        if (!local) {
+          next.push(p.entry);
+          continue;
+        }
         const epoch = epochOf(local.opened);
         const stream =
           channel.streams.find((s) => (epoch === undefined ? false : s.epoch === epoch)) ?? channel.current;
-        const withEdit = withProvenEdit(p.entry, local.opened, stream.group.convKey);
+        // A row read back from the store carries the rumor, not the seal — and
+        // proving a revision needs the Edit's seal exactly as pinning needs the
+        // message's. Recover it here, on this path only.
+        const opened = local.opened.seal
+          ? local.opened
+          : { ...local.opened, seal: await readStoredSeal(community.idHex, local.opened.rumorId) };
+        const withEdit = withProvenEdit(p.entry, opened, stream.group.convKey);
         if (withEdit !== p.entry) changed += 1;
-        return withEdit;
-      });
+        next.push(withEdit);
+      }
       if (changed > 0) await publish(next);
       return changed;
     },
