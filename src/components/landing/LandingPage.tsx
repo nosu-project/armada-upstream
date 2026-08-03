@@ -192,6 +192,24 @@ export function LandingPage({
             </a>{" "}
             too.
           </p>
+          {/* Set in the body face, not mono: it reads as the paragraph's own
+              next step rather than as another line of the caption strip. */}
+          <a
+            href="https://soapbox.pub/armada"
+            target="_blank"
+            rel="noreferrer"
+            className="group inline-flex items-center gap-1.5 text-sm font-medium text-foreground/80 transition-colors hover:text-foreground sm:text-base"
+          >
+            Armada features
+            {/* U+2192, for the reason the hero's ↓ is U+2193: WGL4 core, so
+                every system font has a real glyph rather than tofu. */}
+            <span
+              aria-hidden="true"
+              className="text-[hsl(var(--accent2)/0.75)] transition-transform group-hover:translate-x-0.5 group-hover:text-[hsl(var(--accent2))]"
+            >
+              &#8594;
+            </span>
+          </a>
         </section>
 
         {/* ── The closer ───────────────────────────────────────────────────
