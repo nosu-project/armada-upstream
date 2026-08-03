@@ -1,4 +1,5 @@
 import { KIND_DM_CHAT, KIND_DM_FILE, type OpenedDm } from "@/lib/nip17/protocol";
+import { chatRoute } from "@/lib/routes";
 
 /**
  * Foreground-notification feed.
@@ -97,7 +98,7 @@ export function dm17NotifyCandidates(opened: OpenedDm[], self: string): NotifyCa
       body: dm.kind === KIND_DM_FILE ? "Sent a file" : dm.content,
       roomKey: `dm:${dm.peer}`,
       readKey: `dm:${dm.peer}`,
-      path: `/dm/${dm.peer}`,
+      path: chatRoute({ kind: "dm", peer: dm.peer, messageId: dm.rumorId }),
       peer: dm.peer,
       eventId: dm.rumorId,
     }];

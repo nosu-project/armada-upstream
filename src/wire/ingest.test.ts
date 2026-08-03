@@ -387,7 +387,7 @@ describe("ingestWireEvents — foreground notify candidates", () => {
     expect(captured[0].body).toBeUndefined();
   });
 
-  it("emits a c2 candidate with the resolved community route", async () => {
+  it("emits a c2 candidate routed to the message, not just the channel", async () => {
     const { channel, idHex } = makeChannel();
     const alice = signer();
     const wrap = await wrapChat(channel, alice, "sealed hi");
@@ -401,11 +401,14 @@ describe("ingestWireEvents — foreground notify candidates", () => {
       off();
     }
     expect(captured).toHaveLength(1);
+    const rumorId = captured[0].eventId;
+    expect(rumorId).toBeTruthy();
     expect(captured[0]).toMatchObject({
       plane: "c2",
       channelIdHex: idHex,
       body: "sealed hi",
-      path: `/c/comm-hex/${idHex}`,
+      // A tap lands on the message, which is what the `/m/` segment names.
+      path: `/c/comm-hex/${idHex}/m/${rumorId}`,
     });
   });
 

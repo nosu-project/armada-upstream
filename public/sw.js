@@ -233,7 +233,7 @@ self.addEventListener("push", (event) => {
         tag,
         data: {
           ...data,
-          url: h && relays[0] ? groupUrl(relays[0], h) : data.url,
+          url: h && relays[0] ? groupUrl(relays[0], h, ev.id) : data.url,
         },
       });
     })(),
@@ -251,12 +251,18 @@ function truncate(text, max) {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-/** Deep link to a NIP-29 group, matching the SPA router's relay route param. */
-function groupUrl(relayUrl, groupId) {
+/**
+ * Deep link to a message in a NIP-29 group, matching the SPA's chat routes
+ * (`src/lib/routes.ts`) — including the relay route param. A worker can't
+ * import the app's module, so this stays a hand-written mirror; the shapes it
+ * has to agree with are `/s/:server/:groupId` and its `/m/:messageId` suffix.
+ */
+function groupUrl(relayUrl, groupId, eventId) {
   const param = encodeURIComponent(
     relayUrl.replace(/^wss?:\/\//i, (m) => (m.toLowerCase() === "ws://" ? "ws:" : "")),
   );
-  return `/s/${param}/${groupId}`;
+  const room = `/s/${param}/${encodeURIComponent(groupId)}`;
+  return eventId ? `${room}/m/${encodeURIComponent(eventId)}` : room;
 }
 
 /**

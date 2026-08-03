@@ -11,6 +11,7 @@ import { reactionContentKey } from "@/hooks/useReactions";
 import { emitWireScopes } from "@/wire/bus";
 import { feedNotifyCandidates, type NotifyCandidate } from "@/wire/notify";
 import { isCIEventKind, matchCIEventRepository } from "@/lib/ci";
+import { chatRoute } from "@/lib/routes";
 import { isGitRepositoryAttachedAt, matchGitTicketRepository, parseGitComment, parseGitStatusEvent, parseGitTicket } from "@/lib/gitActivity";
 
 import type { OpenedChat } from "@/concord-v2/lib/chat";
@@ -61,7 +62,12 @@ export interface WireSinks {
 
 /** First value of a tag, if any. */
 function tagValue(ev: NostrEvent, name: string): string | undefined {
-  for (const t of ev.tags) if (t[0] === name && t[1]) return t[1];
+  return tagValueIn(ev.tags, name);
+}
+
+/** The same, over bare tags (a decrypted rumor isn't a `NostrEvent`). */
+function tagValueIn(tags: readonly string[][], name: string): string | undefined {
+  for (const t of tags) if (t[0] === name && t[1]) return t[1];
   return undefined;
 }
 
@@ -311,9 +317,14 @@ function v2Candidates(
   self: string | undefined,
 ): NotifyCandidate[] {
   const out: NotifyCandidate[] = [];
-  const path = communityIdHex
-    ? `/c/${encodeURIComponent(communityIdHex)}/${encodeURIComponent(channel.idHex)}`
-    : "";
+  // A tap lands on the message, not merely the channel — so the path carries
+  // the id. `communityIdHex` unknown leaves the path empty and the hook drops
+  // the candidate; there is no channel-only route to fall back to.
+  const room = communityIdHex
+    ? ({ kind: "concord2", communityId: communityIdHex, channelId: channel.idHex } as const)
+    : undefined;
+  const pathTo = (messageId: string | undefined) =>
+    room ? chatRoute(messageId ? { ...room, messageId } : room) : "";
   for (const r of opened) {
     if (self && r.author === self) continue; // never notify on our own message
     const pTagsMe = Boolean(self) && r.tags.some(([n, v]) => n === "p" && v === self);
@@ -334,7 +345,12 @@ function v2Candidates(
         kind: r.kind,
         roomKey: `c2:${channel.idHex}`,
         readKey: channel.idHex,
-        path,
+        // A reaction is folded onto its target rather than rendered as a row,
+        // so the link points at the message that was reacted to — the thing
+        // the reader is being told about, and the only one of the two the
+        // timeline can actually show.
+        path: pathTo(tagValueIn(r.tags, "e")),
+        eventId: r.rumorId,
         channelIdHex: channel.idHex,
       });
       continue;
@@ -349,7 +365,8 @@ function v2Candidates(
       body: preview(r.content),
       roomKey: `c2:${channel.idHex}`,
       readKey: channel.idHex, // Concord2 read map is keyed by channel id hex
-      path,
+      path: pathTo(r.rumorId),
+      eventId: r.rumorId,
       channelIdHex: channel.idHex,
     });
   }
@@ -387,7 +404,8 @@ function plaintextCandidates(
       body: preview(ev.content),
       roomKey: "", // filled by the hook once the relay URL is known
       readKey: "", // filled by the hook (needs the relay URL)
-      path: "",
+      path: "", // ditto — the route names the relay
+      eventId: ev.id,
       groupId: h,
     }];
   }
@@ -404,7 +422,8 @@ function plaintextCandidates(
       kind: KIND_DM,
       roomKey: `dm:${peer}`,
       readKey: `dm:${peer}`,
-      path: `/dm/${peer}`,
+      path: chatRoute({ kind: "dm", peer, messageId: ev.id }),
+      eventId: ev.id,
       peer,
     }];
   }
@@ -475,7 +494,9 @@ function gitCandidates(ev: NostrEvent, spec: WireSpec | undefined): NotifyCandid
       kind: ev.kind,
       roomKey: `c2:${channelId}`,
       readKey: channelId,
-      path: `/c/${encodeURIComponent(communityId)}/${encodeURIComponent(channelId)}?ticket=${encodeURIComponent(ticketId ?? ev.id)}`,
+      // `?ticket=` opens the ticket pane, not a message permalink — a git
+      // activity event is not a row in the channel timeline.
+      path: `${chatRoute({ kind: "concord2", communityId, channelId })}?ticket=${encodeURIComponent(ticketId ?? ev.id)}`,
       channelIdHex: channelId,
       git: { action, repository: attachment.address.identifier, ticketId, ticketTitle },
       eventId: ev.id,

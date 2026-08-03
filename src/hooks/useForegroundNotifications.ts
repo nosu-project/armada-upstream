@@ -18,7 +18,8 @@ import {
 import { isRoomActive } from "@/lib/activeRooms";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
-import { normalizeRelayUrl, relayToRouteParam } from "@/lib/platform";
+import { normalizeRelayUrl } from "@/lib/platform";
+import { chatRoute, parseChatRoute } from "@/lib/routes";
 import { tryNpubEncode } from "@/lib/safeNip19";
 import { registerNotifySink } from "@/wire/notify";
 import { useWireNip29Groups } from "@/wire/useWireNip29Groups";
@@ -200,16 +201,25 @@ export function useForegroundNotifications(): void {
           if (!relay || !cand.groupId) continue; // not a group we're in
           roomKey = `h:${relay}|${cand.groupId}`;
           readKey = channelReadKey(relay, cand.groupId);
-          path = `/s/${relayToRouteParam(relay)}/${encodeURIComponent(cand.groupId)}`;
+          path = chatRoute({
+            kind: "nip29",
+            relayUrl: relay,
+            groupId: cand.groupId,
+            messageId: cand.eventId,
+          });
           level = c.channelLevel(relay, cand.groupId);
         } else if (cand.plane === "dm") {
           level = cand.peer ? c.dmLevel(cand.peer) : "all";
         } else if (cand.plane === "c2") {
           if (!path) continue; // couldn't resolve the community route
-          // Recover the community id from the route (`/c/<communityId>/<channel>`)
-          // to resolve the per-channel level.
-          const parts = path.split("/");
-          const communityId = parts[2] ? decodeURIComponent(parts[2]) : "";
+          // Recover the community id from the route, to resolve the
+          // per-channel level. Parsed rather than split on "/": the route may
+          // carry a `/m/<id>` focus, and the parser is the same one the app
+          // navigates by.
+          // (A git-activity candidate carries a `?ticket=` query; parse only
+          // the path part.)
+          const parsed = parseChatRoute(path.split("?")[0]);
+          const communityId = parsed?.kind === "concord2" ? parsed.communityId : "";
           level =
             communityId && cand.channelIdHex
               ? c.concordChannelLevel("c2", communityId, cand.channelIdHex)
@@ -219,7 +229,14 @@ export function useForegroundNotifications(): void {
           const info = cand.v1ChannelIdHex ? c.v1ByChannel.get(cand.v1ChannelIdHex) : undefined;
           if (!info) continue;
           roomKey = cand.roomKey; // `z:<pseudonym>`
-          path = `/c1/${encodeURIComponent(info.communityId)}/${encodeURIComponent(cand.v1ChannelIdHex!)}`;
+          // No `/m/` here: a V1 outer is sealed at ingest, so the id we have
+          // is the carrier's, not the rumor's — the id the timeline holds is
+          // only known after decrypt.
+          path = chatRoute({
+            kind: "concord1",
+            communityId: info.communityId,
+            channelId: cand.v1ChannelIdHex!,
+          });
           level = c.concordChannelLevel("c1", info.communityId, cand.v1ChannelIdHex!);
         }
 

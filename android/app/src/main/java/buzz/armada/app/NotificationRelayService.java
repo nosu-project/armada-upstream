@@ -2142,7 +2142,7 @@ public class NotificationRelayService extends Service {
                             // decrypt, so enqueueRoomMessage's active-room gate
                             // does it here rather than a synchronous pre-check).
                             enqueueRoomMessage(/*community=*/null, "dm:" + peer, name,
-                                    appendMessageParam("/dm/" + peer, rumor.optString("id", "")),
+                                    appendMessageSegment("/dm/" + peer, rumor.optString("id", "")),
                                     peer, name, picture, line, fTs, /*mention=*/false);
                         });
                     } catch (Exception ignored) {
@@ -2499,7 +2499,7 @@ public class NotificationRelayService extends Service {
                 String text = buildMessageText(preview, fMention, threadRoot != null);
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord: " + fRoom + " / " + name);
                 enqueueRoomMessage(
-                        zToCommunity.get(fZ), "z:" + fZ, fRoom, appendThreadParam(fUrl, threadRoot),
+                        zToCommunity.get(fZ), "z:" + fZ, fRoom, appendThreadSegment(fUrl, threadRoot),
                         author, name, picture, text, fTs, fMention);
             });
             return;
@@ -2596,7 +2596,7 @@ public class NotificationRelayService extends Service {
                     if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord2 reaction: " + fStR.name + " / " + name);
                     enqueueRoomMessage(
                             fStR.community, "c2:" + fStR.channelId, fStR.name,
-                            appendMessageParam(fStR.url, reactTarget),
+                            appendMessageSegment(fStR.url, reactTarget),
                             author2, name, picture, reactionLine, fTsR, /*mention=*/true);
                 });
                 return;
@@ -2637,7 +2637,7 @@ public class NotificationRelayService extends Service {
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord2: " + fSt.name + " / " + name);
                 enqueueRoomMessage(
                         fSt.community, "c2:" + fSt.channelId, fSt.name,
-                        appendMessageParam(appendThreadParam(fSt.url, threadRoot2), msgId2),
+                        appendMessageSegment(appendThreadSegment(fSt.url, threadRoot2), msgId2),
                         author2, name, picture, text, fTs2, fMention2);
             });
             return;
@@ -2694,7 +2694,7 @@ public class NotificationRelayService extends Service {
                             ? "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(nip29GroupId)
                             : "/";
                     // Land on the message itself, not just its channel.
-                    url = appendMessageParam(url, id);
+                    url = appendMessageSegment(url, id);
                     break;
                 }
                 case 7: {
@@ -2703,7 +2703,7 @@ public class NotificationRelayService extends Service {
                             ? "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(nip29GroupId)
                             : "/";
                     // Land on YOUR message the reaction points at (its `e` tag).
-                    url = appendMessageParam(url, tagValue(event, "e"));
+                    url = appendMessageSegment(url, tagValue(event, "e"));
                     break;
                 }
                 case 1111: {
@@ -2711,15 +2711,20 @@ public class NotificationRelayService extends Service {
                     url = nip29GroupId != null
                             ? "/s/" + relayToRouteParam(relayUrl) + "/" + uriEncode(nip29GroupId)
                             : "/";
-                    // Deep-link to the specific thread (uppercase `E` root id) so
-                    // a tap opens the thread panel, not just the channel.
-                    url = appendThreadParam(url, nip29ThreadRoot);
+                    // Deep-link to the reply inside its thread (uppercase `E`
+                    // root id): a tap opens the thread panel and lands on the
+                    // reply. The id is only appended alongside the thread —
+                    // a reply is never in the channel timeline, so `/m/` on
+                    // its own would name a message the timeline can't find.
+                    if (nip29ThreadRoot != null && !nip29ThreadRoot.isEmpty()) {
+                        url = appendMessageSegment(appendThreadSegment(url, nip29ThreadRoot), id);
+                    }
                     break;
                 }
                 case 4:
                     // kind-4 DMs are NIP-04 encrypted; the service has no key.
                     line = "Sent you a direct message";
-                    url = appendMessageParam("/dm/" + author, id);
+                    url = appendMessageSegment("/dm/" + author, id);
                     break;
                 default:
                     return;
@@ -3848,29 +3853,41 @@ public class NotificationRelayService extends Service {
     }
 
     /**
-     * Append {@code ?thread=<rootId>} to a deep-link url when {@code rootId} is
-     * non-empty, so the WebView can auto-open the thread panel on tap. No-op
-     * (returns the url unchanged) when there's no thread root (a top-level
-     * message, an opaque/undecryptable event, or a malformed inner).
+     * Append {@code /t/<rootId>} to a deep-link url when {@code rootId} is
+     * non-empty, so the WebView opens the thread panel on tap. No-op (returns
+     * the url unchanged) when there's no thread root (a top-level message, an
+     * opaque/undecryptable event, or a malformed inner) or no room to hang it
+     * on — a focus segment is only meaningful under a room.
+     *
+     * <p>Must be applied BEFORE {@link #appendMessageSegment}: the route is
+     * {@code …/t/<root>/m/<id>}, and the two markers are what tell a reply
+     * inside a thread from a message in the timeline.
      */
-    private static String appendThreadParam(String url, String rootId) {
-        if (url == null) return null;
-        if (rootId == null || rootId.isEmpty()) return url;
-        String sep = url.indexOf('?') >= 0 ? "&" : "?";
-        return url + sep + "thread=" + uriEncode(rootId);
+    private static String appendThreadSegment(String url, String rootId) {
+        return appendFocusSegment(url, "t", rootId);
     }
 
     /**
-     * Append {@code ?m=<eventId>} — the message the notification is about —
-     * to a deep-link url, so a tap lands ON that message: the web client's
-     * useMessagePermalink scrolls the timeline to it and marks it. No-op when
-     * there's no id to point at.
+     * Append {@code /m/<eventId>} — the message the notification is about — to
+     * a deep-link url, so a tap lands ON that message: the web client's
+     * useMessagePermalink scrolls to it and marks it. No-op when there's no id
+     * to point at.
      */
-    private static String appendMessageParam(String url, String eventId) {
+    private static String appendMessageSegment(String url, String eventId) {
+        return appendFocusSegment(url, "m", eventId);
+    }
+
+    /**
+     * Mirror of the web client's route builder (`src/lib/routes.ts`) for the
+     * `/t/` + `/m/` suffix. The client also still accepts the pre-path
+     * `?thread=`/`?m=` query form, which is what an already-posted tray
+     * notification carries — this only governs newly built links.
+     */
+    private static String appendFocusSegment(String url, String marker, String value) {
         if (url == null) return null;
-        if (eventId == null || eventId.isEmpty()) return url;
-        String sep = url.indexOf('?') >= 0 ? "&" : "?";
-        return url + sep + "m=" + uriEncode(eventId);
+        if (value == null || value.isEmpty()) return url;
+        if (url.isEmpty() || url.equals("/")) return url;
+        return url + "/" + marker + "/" + uriEncode(value);
     }
 
     private static String truncate(String s) {
