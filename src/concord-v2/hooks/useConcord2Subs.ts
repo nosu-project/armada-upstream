@@ -1,13 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
-import { controlFoldKey } from "@/concord-v2/hooks/useControlPlane2";
 import { useCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
 import { heldChannelKeys, rehydrateCommunity, liveEntries } from "@/concord-v2/lib/communityList";
 import { buildConcord2Subs, type Concord2Sub } from "@/concord-v2/lib/concordNotifications2";
-import type { FoldedControl } from "@/concord-v2/lib/control";
+import { readControlFold } from "@/concord-v2/lib/control";
 import { registerStreamKeys } from "@/concord-v2/lib/streamAuth";
-import { readFolded } from "@/lib/foldedCache";
 
 /**
  * The Concord V2 native-notification subscriptions for EVERY live community
@@ -16,7 +14,7 @@ import { readFolded } from "@/lib/foldedCache";
  * names/ids for the notification + deep link.
  *
  * Channels are assembled from the persisted control-fold snapshot
- * ({@link controlFoldKey}) — a local IndexedDB read, no relay fan-out — so
+ * ({@link readControlFold}) — a local IndexedDB read, no relay fan-out — so
  * this stays cheap enough to poll. A community whose fold has never been
  * computed on this device (never opened) contributes only the private
  * channels carried in its join bundle; opening it once fills in the rest.
@@ -52,7 +50,7 @@ export function useConcord2Subs(): Concord2Sub[] {
       for (const entry of entries) {
         const community = rehydrateCommunity(entry);
         if (!community) continue;
-        const folded = await readFolded<FoldedControl>(controlFoldKey(community.idHex));
+        const folded = await readControlFold(community.idHex);
         const built = buildConcord2Subs(community, folded);
         subs.push(...built.subs);
         // Register for NIP-42, scoped to the community's relays: the native

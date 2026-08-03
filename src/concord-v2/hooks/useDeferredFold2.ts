@@ -51,11 +51,19 @@ const FOLD_DEADLINE_MS = 250;
  * `deps` is the dependency list that should trigger a recompute (the shared
  * control events, the community, any upstream fold). Returns the value to
  * render: the live fold when computed, else the persisted snapshot.
+ *
+ * `accept` vets a snapshot RESTORED FROM DISK, which arrives as `JSON.parse`
+ * behind an unchecked cast and may therefore have been written by a build whose
+ * shape differed (see `isCurrentFoldedControl`). One it rejects is treated as a
+ * miss: `compute` fills in, and the next persist replaces it. The in-memory
+ * cache is not vetted — this process wrote those, so they are this shape by
+ * construction.
  */
 export function useDeferredFold<T>(
   key: string | null,
   compute: () => T | undefined,
   deps: unknown[],
+  accept?: (value: unknown) => boolean,
 ): T | undefined {
   const [live, setLive] = useState<T | undefined>(undefined);
   // Seed the initial snapshot from the in-memory cache so a fresh mount of a
@@ -68,6 +76,10 @@ export function useDeferredFold<T>(
   // Keep the latest `compute` without making it a scheduling dependency.
   const computeRef = useRef(compute);
   computeRef.current = compute;
+  // Same, for the snapshot check: a caller passing an inline predicate must not
+  // re-run the restore (and re-read IndexedDB) on every render.
+  const acceptRef = useRef(accept);
+  acceptRef.current = accept;
   // Whether there is anything on screen for a deferral to protect. Read (not
   // depended on) by the scheduling effect, so a `live`/`restored` change never
   // by itself reschedules a fold.
@@ -105,7 +117,10 @@ export function useDeferredFold<T>(
     }
     let cancelled = false;
     void readFolded<T>(key).then((v) => {
-      if (!cancelled && v !== undefined) setRestored(v);
+      if (cancelled || v === undefined) return;
+      // A snapshot this build can't read is a miss, not something to render.
+      if (acceptRef.current && !acceptRef.current(v)) return;
+      setRestored(v);
     });
     return () => {
       cancelled = true;

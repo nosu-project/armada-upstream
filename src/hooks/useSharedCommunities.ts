@@ -2,9 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
 import { useCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
-import { controlFoldKey } from "@/concord-v2/hooks/useControlPlane2";
 import { liveEntries, rehydrateCommunity } from "@/concord-v2/lib/communityList";
-import { citationSatisfied, type FoldedControl } from "@/concord-v2/lib/control";
+import { citationSatisfied, readControlFold } from "@/concord-v2/lib/control";
 import {
   coalesceGuestbook,
   completeMemberlist,
@@ -13,7 +12,6 @@ import {
 import { canActOnMember, Permissions } from "@/concord-v2/lib/roles";
 import { queryPlane } from "@/concord-v2/lib/rumorStore";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
-import { readFolded } from "@/lib/foldedCache";
 
 /**
  * For each of `peers`, a community the viewer shares with them — the trust hint
@@ -83,7 +81,7 @@ export function useSharedCommunities(
         // On a miss we still coalesce, but no kick is honored and nobody is
         // banned — so an absent fold can only ever over-include. Acceptable
         // for a hint; it would not be for a gate.
-        const folded = await readFolded<FoldedControl>(controlFoldKey(community.idHex));
+        const folded = await readControlFold(community.idHex);
         const coalesced = coalesceGuestbook(events, {
           nowMs: Date.now(),
           canKick: (actor, target, citation) =>

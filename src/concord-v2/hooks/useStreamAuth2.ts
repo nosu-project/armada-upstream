@@ -15,8 +15,8 @@ import { useChannels2, controlFoldKey } from "@/concord-v2/hooks/useControlPlane
 import { useCommunity2, useLiveCommunities2 } from "@/concord-v2/hooks/useCommunityList2";
 import { rehydrateCommunity } from "@/concord-v2/lib/communityList";
 import { channelsView } from "@/concord-v2/lib/community";
-import type { FoldedControl } from "@/concord-v2/lib/control";
-import { onFoldedWrite, readFolded } from "@/lib/foldedCache";
+import { readControlFold } from "@/concord-v2/lib/control";
+import { onFoldedWrite } from "@/lib/foldedCache";
 import { logSync } from "@/lib/syncLog";
 
 /**
@@ -95,7 +95,7 @@ export function useRegisterAllStreamKeys2(): void {
         // Per-channel keys from the persisted fold (may be absent on a
         // never-synced community — then only core keys register until it folds).
         try {
-          const folded = await readFolded<FoldedControl>(controlFoldKey(community.idHex));
+          const folded = await readControlFold(community.idHex);
           for (const channel of channelsView(community, folded)) {
             keys.push(...channel.streams.map((s) => s.group));
           }
