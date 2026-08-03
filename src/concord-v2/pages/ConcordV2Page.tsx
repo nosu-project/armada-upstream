@@ -1529,6 +1529,11 @@ export function ConcordV2Page() {
     onDrop: commitDrop,
   });
 
+  /** What the floating ghost carries. */
+  const draggedChannel = channelDrag.sourceIdHex
+    ? (renderedChannels.find((c) => c.idHex === channelDrag.sourceIdHex) ?? null)
+    : null;
+
   const refileCategory = useCallback(
     async (members: readonly ChannelV2[], category: string | undefined) => {
       let moved = 0;
@@ -2352,6 +2357,7 @@ export function ConcordV2Page() {
     if (!community) return null;
     const index = renderedIndexOf.get(c.idHex) ?? 0;
     const inCall = Boolean(activeCall?.concord && activeCall.concord.channel.idHex === c.idHex);
+    const dragged = channelDrag.sourceIdHex === c.idHex;
     return (
       <div
         key={c.idHex}
@@ -2365,11 +2371,14 @@ export function ConcordV2Page() {
         // panned by hand for gestures that turn out to be scrolls
         // (usePressDrag.ts). A member who can't rearrange gets neither, and
         // keeps native scrolling.
-        className={cn(
-          canManageChannels && "touch-none",
-          channelDrag.sourceIdHex === c.idHex && "opacity-40",
-        )}
+        className={cn("relative", canManageChannels && "touch-none")}
       >
+      {/* The dragged row's real content stays MOUNTED and merely invisible,
+          with the dashed placeholder over it — the rail's `DragSlot`, and for
+          its reason: unmounting the DOM node the finger is touching detaches
+          the touch target, its events stop bubbling, and Chrome cancels the
+          gesture on the first movement. */}
+      <span className={cn("contents", dragged && "invisible")}>
       <ChannelRow2
         community={community}
         channel={c}
@@ -2379,6 +2388,9 @@ export function ConcordV2Page() {
         muted={inCall ? mutedPubkeys : undefined}
         unread={unreadByChannel[c.idHex]}
         onSelect={() => {
+          // The browser synthesizes a click after the drag's pointerup;
+          // without this, dropping a channel also navigates to it.
+          if (channelDrag.shouldSuppressClick()) return;
           selectChannel(c.idHex);
           onNavigate?.();
         }}
@@ -2389,6 +2401,10 @@ export function ConcordV2Page() {
         }
         onNewCategory={() => setCategoryPrompt({ channels: [c], initial: "" })}
       />
+      </span>
+      {dragged && (
+        <span className="pointer-events-none absolute inset-x-0 inset-y-px clip-corner-lg border-2 border-dashed border-primary/50 bg-primary/5" />
+      )}
       </div>
     );
   };
@@ -2680,6 +2696,11 @@ export function ConcordV2Page() {
                   collapsed={collapsed}
                   onToggle={() => toggleCategory(group.key)}
                   hasUnread={group.channels.some((c) => unreadByChannel[c.idHex])}
+                  highlight={
+                    channelDrag.dragging &&
+                    !channelDrag.target?.newCategory &&
+                    channelDrag.target?.category === group.name
+                  }
                   onRename={
                     canManageChannels
                       ? () => setCategoryPrompt({ channels: group.channels, initial: group.name })
@@ -2701,10 +2722,10 @@ export function ConcordV2Page() {
             <div
               data-ch-newzone
               className={cn(
-                "mt-2 flex items-center justify-center gap-1.5 rounded-lg border border-dashed px-2 py-3 text-[11px] font-semibold uppercase tracking-wider transition-colors",
+                "mt-2 flex items-center justify-center gap-1.5 clip-corner-lg border-2 border-dashed px-2 py-3 text-[11px] font-semibold uppercase tracking-wider transition-colors",
                 channelDrag.target?.newCategory
-                  ? "border-primary text-primary"
-                  : "border-muted-foreground/30 text-muted-foreground/70",
+                  ? "border-primary bg-primary/5 text-primary"
+                  : "border-primary/50 text-muted-foreground/70",
               )}
             >
               <Plus className="size-3.5" />
@@ -2713,15 +2734,47 @@ export function ConcordV2Page() {
           )}
         </>
       )}
-      {/* The insertion line, drawn in viewport coordinates over the column. */}
+
+      {/* Everything below is the server rail's drag chrome, in channel shape:
+          the pointer-following ghost, the grabbing-cursor layer and the
+          insertion line (ServerRail.tsx). Same z-bands, same treatments. */}
+
+      {channelDrag.pointer && draggedChannel && (
+        <div
+          className="pointer-events-none fixed z-[300] -translate-y-1/2 animate-in zoom-in-75 duration-150"
+          style={{ left: (channelDrag.columnX?.left ?? 0) + 12, top: channelDrag.pointer.y }}
+        >
+          <span className="flex max-w-48 items-center gap-2 rotate-[-2deg] scale-105 clip-corner-lg bg-muted px-3 py-1.5 text-sm font-medium ring-2 ring-primary [filter:drop-shadow(0_8px_16px_rgba(0,0,0,0.55))_drop-shadow(0_0_8px_hsl(var(--primary)/0.6))]">
+            {draggedChannel.isPrivate ? (
+              <Lock className="size-4 shrink-0" />
+            ) : (
+              <Hash className="size-4 shrink-0" />
+            )}
+            <span className="truncate">{draggedChannel.name}</span>
+          </span>
+        </div>
+      )}
+
+      {/* A full-viewport layer carrying the grabbing cursor. This is what makes
+          the cursor actually flip at pickup: Chromium does not re-evaluate a
+          style-only cursor change while a button is down and the pointer is
+          stationary, but a NEW element appearing under it forces the recompute.
+          It must NOT be pointer-events-none (hit-test-transparent elements
+          don't contribute a cursor); the listeners live on window, so events
+          bubbling through it are still seen. */}
+      {channelDrag.dragging && (
+        <div className="fixed inset-0 z-[298] cursor-grabbing" aria-hidden />
+      )}
+
+      {/* Insertion indicator: where the drop would land. */}
       {channelDrag.indicatorY !== null && !channelDrag.target?.newCategory && (
         <div
           aria-hidden
-          className="pointer-events-none fixed z-50 h-0.5 bg-primary"
+          className="pointer-events-none fixed z-[299] h-0.5 rounded-full bg-primary shadow-[0_0_6px_hsl(var(--primary)/0.7)]"
           style={{
             top: channelDrag.indicatorY - 1,
-            left: channelDrag.columnX?.left ?? 0,
-            width: channelDrag.columnX?.width ?? "100%",
+            left: (channelDrag.columnX?.left ?? 0) + 6,
+            width: (channelDrag.columnX?.width ?? 0) - 12,
           }}
         />
       )}

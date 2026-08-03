@@ -55,11 +55,14 @@ export function useChannelDrag({
   const [indicatorY, setIndicatorY] = useState<number | null>(null);
   /** Viewport x/width of the column, so the indicator spans only it. */
   const [columnX, setColumnX] = useState<{ left: number; width: number } | null>(null);
+  /** Viewport position of the pointer, which the floating ghost follows. */
+  const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null);
 
   const slots = useRef<ChannelDropSlot[]>([]);
   const targetRef = useRef<ChannelDrop | null>(null);
 
-  const aim = useCallback((_source: string, _x: number, y: number) => {
+  const aim = useCallback((_source: string, x: number, y: number) => {
+    setPointer({ x, y });
     let best: ChannelDropSlot | null = null;
     let bestDistance = Infinity;
     for (const slot of slots.current) {
@@ -82,6 +85,7 @@ export function useChannelDrag({
     setTarget(null);
     setIndicatorY(null);
     setColumnX(null);
+    setPointer(null);
     return landed;
   }, []);
 
@@ -117,8 +121,10 @@ export function useChannelDrag({
     target,
     indicatorY,
     columnX,
+    pointer,
     /** Ref for the scrolling channel column. Carries the touchmove canceller. */
     attachColumn: drag.attachContainer,
+    shouldSuppressClick: drag.shouldSuppressClick,
     onPointerDown,
   };
 }

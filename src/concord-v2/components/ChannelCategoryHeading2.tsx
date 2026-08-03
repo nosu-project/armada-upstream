@@ -27,6 +27,12 @@ interface ChannelCategoryHeading2Props {
   onRename?: () => void;
   /** Clear the category from every channel in it, dissolving the heading. */
   onUngroup?: () => void;
+  /**
+   * A drag is currently aimed inside this category — the rail's drop-target
+   * highlight, which is how "release here and it lands in this bucket" is
+   * said for a heading rather than an icon.
+   */
+  highlight?: boolean;
   children?: React.ReactNode;
 }
 
@@ -38,6 +44,7 @@ export function ChannelCategoryHeading2({
   hasUnread,
   onRename,
   onUngroup,
+  highlight,
   children,
 }: ChannelCategoryHeading2Props) {
   const heading = (
@@ -47,7 +54,10 @@ export function ChannelCategoryHeading2({
       aria-expanded={!collapsed}
       // The dense desktop heading is ~28px tall; on touch the tap target grows
       // to the 44px floor without moving the text (extra padding, same type).
-      className="flex w-full items-center gap-1 px-2 pt-3 pb-0.5 touch:pt-4 touch:pb-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80 transition-colors hover:text-foreground"
+      className={cn(
+        "flex w-full items-center gap-1 px-2 pt-3 pb-0.5 touch:pt-4 touch:pb-2.5 text-left text-[11px] font-semibold uppercase tracking-wider transition-colors",
+        highlight ? "text-primary" : "text-muted-foreground/80 hover:text-foreground",
+      )}
     >
       <ChevronDown
         aria-hidden
