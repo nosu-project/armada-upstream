@@ -1,23 +1,27 @@
 import { useNostr } from "@nostrify/react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { nip19 } from "nostr-tools";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useFollowList } from "@/hooks/useFollowList";
 import { KIND_EMOJI_SET, emojiPackEntries, emojiPackName } from "@/hooks/useEmojiPacks";
+import { resolveBundle } from "@/concord-v2/hooks/useCommunityActions2";
+import { parseInviteLink } from "@/concord-v2/lib/invite";
 import {
   KIND_COMMUNITY_ANNOUNCEMENT,
   announcementFromEvent,
   type DiscoveredInvite,
 } from "@/concord-v2/lib/inviteDiscovery";
 import { isNostrId } from "@/lib/nostrId";
+import { getArmadaDB } from "@/lib/db/armadaDB";
 import { normalizeRelayUrl } from "@/lib/platform";
 import { THEME_DEFINITION_KIND, parseDittoTheme } from "@/lib/themeEvent";
 
 import type { NostrFilter } from "@nostrify/nostrify";
+import type { FollowListData } from "@/hooks/useFollowList";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
@@ -36,6 +40,51 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 
 const FETCH_LIMIT = 100;
 const TIMEOUT_MS = 6000;
+
+/**
+ * Warm-load seeds: the last successful follow-pack membership and community
+ * list, persisted in KV and pushed into the react-query cache on mount so a
+ * returning session paints the Discover grid from local data immediately
+ * instead of holding a skeleton for the pack → announcements round trips.
+ * Seeds are written into the cache already STALE (`updatedAt: 0`), so the
+ * normal network fetch still runs and overwrites them — a seed accelerates
+ * first paint, it never suppresses a refresh — and a seed never overwrites
+ * data the network already delivered.
+ */
+const PACK_SEED_KV = "discover:seed:pack";
+const DIRECTORY_SEED_KV = "discover:seed:directory";
+
+/** Push a persisted KV value under a react-query key if nothing is there yet. */
+function useKvQuerySeed<T>(kvKey: string, queryKey: QueryKey | undefined): void {
+  const queryClient = useQueryClient();
+  // Serialize so the effect re-runs when the key changes by value (the
+  // announcements key re-keys as the author allow-list resolves).
+  const keyString = queryKey ? JSON.stringify(queryKey) : "";
+  useEffect(() => {
+    if (!keyString) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const stored = await getArmadaDB().kv.get<T>(kvKey);
+        if (cancelled || stored === undefined) return;
+        const key = JSON.parse(keyString) as QueryKey;
+        if (queryClient.getQueryData(key) !== undefined) return;
+        queryClient.setQueryData(key, stored, { updatedAt: 0 });
+      } catch {
+        // Best-effort: an unreadable seed just means a skeleton first paint.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [kvKey, keyString, queryClient]);
+}
+
+/** Persist a query's latest non-empty result as the next session's seed. */
+function writeSeed(kvKey: string, value: unknown[]): void {
+  if (value.length === 0) return; // an empty read may be a miss — keep the last good seed
+  getArmadaDB().kv.set(kvKey, value).catch(() => undefined);
+}
 
 /**
  * The "team soapbox" follow pack (kind 39089). Its members are the seed
@@ -117,6 +166,168 @@ export function useDiscoverRelays(): string[] {
   }, [config.appRelays]);
 }
 
+/** The react-query key of the follow-pack membership read. */
+function packQueryKey(relays: string[]): QueryKey {
+  return ["discover", "follow-pack", TEAM_FOLLOW_PACK, relays];
+}
+
+/** The react-query key of the community-announcements read. */
+function communitiesQueryKey(relays: string[], authorFilter: string[] | undefined): QueryKey {
+  return ["discover", "community-announcements", relays, authorFilter ?? "all"];
+}
+
+/** Fetch the team follow pack's member pubkeys, persisting the warm-load seed. */
+async function fetchFollowPack(
+  nostr: ReturnType<typeof useNostr>["nostr"],
+  relays: string[],
+  signal: AbortSignal,
+): Promise<string[]> {
+  const coord = TEAM_PACK_COORD!;
+  const [event] = await nostr.group(relays).query(
+    [{ kinds: [coord.kind], authors: [coord.pubkey], "#d": [coord.identifier], limit: 1 }],
+    { signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) },
+  );
+  const pubkeys = followPackPubkeys(event);
+  writeSeed(PACK_SEED_KV, pubkeys);
+  return pubkeys;
+}
+
+/**
+ * Fetch the allow-listed community announcements (and, in the same round
+ * trip, the NIP-09 un-publishes that remove listings). Used only as the
+ * completeness fallback when the unfiltered directory read overflowed its
+ * window — see {@link DiscoverDirectory}.
+ */
+async function fetchCommunityAnnouncements(
+  nostr: ReturnType<typeof useNostr>["nostr"],
+  relays: string[],
+  authorFilter: string[] | undefined,
+  signal: AbortSignal,
+): Promise<DiscoveredInvite[]> {
+  const filter: NostrFilter = { kinds: [KIND_COMMUNITY_ANNOUNCEMENT], limit: FETCH_LIMIT };
+  if (authorFilter) filter.authors = authorFilter;
+  // Honor un-publishes: a NIP-09 delete by the ANNOUNCEMENT'S OWN author
+  // removes the listing (anyone else's delete is ignored). Fetched in the
+  // SAME round trip as the announcements — un-listing always attaches a
+  // `["k", "3314"]` tag (ShareToDiscoverDialog), so the deletes are
+  // addressable by kind up front instead of by the announcement ids,
+  // which would serialize a second relay hop behind the first.
+  const delFilter: NostrFilter = {
+    kinds: [5],
+    "#k": [String(KIND_COMMUNITY_ANNOUNCEMENT)],
+    limit: FETCH_LIMIT,
+  };
+  if (authorFilter) delFilter.authors = authorFilter;
+  const timeout = () => AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]);
+  const [events, dels] = await Promise.all([
+    nostr.group(relays).query([filter], { signal: timeout() }),
+    nostr.group(relays).query([delFilter], { signal: timeout() }).catch(() => []),
+  ]);
+  const deleted = new Set<string>();
+  const byId = new Map(events.map((e) => [e.id, e.pubkey]));
+  for (const del of dels) {
+    for (const [n, id] of del.tags) {
+      if (n === "e" && byId.get(id) === del.pubkey) deleted.add(id);
+    }
+  }
+  // Newest announcement wins for a given link.
+  events.sort((a, b) => b.created_at - a.created_at);
+  const byLinkSigner = new Map<string, DiscoveredInvite>();
+  for (const event of events) {
+    if (deleted.has(event.id)) continue;
+    const invite = announcementFromEvent(event);
+    if (!invite) continue;
+    if (!byLinkSigner.has(invite.linkSigner)) byLinkSigner.set(invite.linkSigner, invite);
+  }
+  const invites = [...byLinkSigner.values()];
+  return invites;
+}
+
+/**
+ * Everything the Communities tab needs, fetched in ONE relay round trip: the
+ * follow pack that seeds the author allow-list, every recent announcement
+ * (UNFILTERED — the allow-list is applied client-side, so nothing unvetted
+ * ever renders, but the pack read no longer serializes ahead of the
+ * announcement read), and the NIP-09 un-publishes.
+ */
+export interface DiscoverDirectory {
+  /** The team follow pack's member pubkeys (empty when unreadable). */
+  packAuthors: string[];
+  /**
+   * Every parsed announcement, newest-first, deduped by link signer, with
+   * un-published ones removed — NOT allow-list filtered. The hook filters at
+   * render time against pack ∪ viewer ∪ follows.
+   */
+  invites: DiscoveredInvite[];
+  /**
+   * The unfiltered announcement read filled its whole `limit` window, so
+   * allow-listed announcements may have been crowded out of it — the caller
+   * should run the (slower, authors-filtered) fallback read for completeness.
+   */
+  overflow: boolean;
+}
+
+/** Fetch the {@link DiscoverDirectory}, persisting the warm-load seeds. */
+async function fetchDiscoverDirectory(
+  nostr: ReturnType<typeof useNostr>["nostr"],
+  relays: string[],
+  signal: AbortSignal,
+): Promise<DiscoverDirectory> {
+  const filters: NostrFilter[] = [
+    { kinds: [KIND_COMMUNITY_ANNOUNCEMENT], limit: FETCH_LIMIT },
+    // Un-publishes, addressable by their `["k", "3314"]` tag
+    // (ShareToDiscoverDialog always attaches it) rather than by the
+    // announcement ids, which would serialize a second hop behind the first.
+    { kinds: [5], "#k": [String(KIND_COMMUNITY_ANNOUNCEMENT)], limit: FETCH_LIMIT },
+  ];
+  if (TEAM_PACK_COORD) {
+    const coord = TEAM_PACK_COORD;
+    filters.push({ kinds: [coord.kind], authors: [coord.pubkey], "#d": [coord.identifier], limit: 1 });
+  }
+  const events = await nostr
+    .group(relays)
+    .query(filters, { signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) });
+
+  const packEvent = TEAM_PACK_COORD
+    ? events
+        .filter((e) => e.kind === TEAM_PACK_COORD.kind && e.pubkey === TEAM_PACK_COORD.pubkey)
+        .sort((a, b) => b.created_at - a.created_at)[0]
+    : undefined;
+  const packAuthors = followPackPubkeys(packEvent);
+  // Feed the standalone pack query's seed too (the Emojis/Themes tabs).
+  writeSeed(PACK_SEED_KV, packAuthors);
+
+  const anns = events.filter((e) => e.kind === KIND_COMMUNITY_ANNOUNCEMENT);
+  const dels = events.filter((e) => e.kind === 5);
+  // Honor un-publishes: a NIP-09 delete by the ANNOUNCEMENT'S OWN author
+  // removes the listing (anyone else's delete is ignored).
+  const deleted = new Set<string>();
+  const byId = new Map(anns.map((e) => [e.id, e.pubkey]));
+  for (const del of dels) {
+    for (const [n, id] of del.tags) {
+      if (n === "e" && byId.get(id) === del.pubkey) deleted.add(id);
+    }
+  }
+  // Newest announcement wins for a given link.
+  anns.sort((a, b) => b.created_at - a.created_at);
+  const byLinkSigner = new Map<string, DiscoveredInvite>();
+  for (const event of anns) {
+    if (deleted.has(event.id)) continue;
+    const invite = announcementFromEvent(event);
+    if (!invite) continue;
+    if (!byLinkSigner.has(invite.linkSigner)) byLinkSigner.set(invite.linkSigner, invite);
+  }
+  const directory: DiscoverDirectory = {
+    packAuthors,
+    invites: [...byLinkSigner.values()],
+    overflow: anns.length >= FETCH_LIMIT,
+  };
+  if (directory.invites.length > 0 || directory.packAuthors.length > 0) {
+    getArmadaDB().kv.set(DIRECTORY_SEED_KV, directory).catch(() => undefined);
+  }
+  return directory;
+}
+
 /**
  * The author allow-list that gates every Discover feed.
  *
@@ -146,19 +357,17 @@ export function useDiscoverAuthors(): {
 
   const unrestricted = config.discoverAllContent;
 
+  const packKey = packQueryKey(relays);
+  // Warm loads: last session's pack membership paints (and un-gates the
+  // feeds) immediately; the fetch below still runs and overwrites it.
+  useKvQuerySeed<string[]>(PACK_SEED_KV, unrestricted ? undefined : packKey);
+
   const pack = useQuery<string[]>({
-    queryKey: ["discover", "follow-pack", TEAM_FOLLOW_PACK, relays],
+    queryKey: packKey,
     // Skip the pack fetch entirely when the allow-list is bypassed.
     enabled: relays.length > 0 && TEAM_PACK_COORD !== null && !unrestricted,
     staleTime: 60 * 60 * 1000,
-    queryFn: async ({ signal }) => {
-      const coord = TEAM_PACK_COORD!;
-      const [event] = await nostr.group(relays).query(
-        [{ kinds: [coord.kind], authors: [coord.pubkey], "#d": [coord.identifier], limit: 1 }],
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) },
-      );
-      return followPackPubkeys(event);
-    },
+    queryFn: ({ signal }) => fetchFollowPack(nostr, relays, signal),
   });
 
   const authors = useMemo(() => {
@@ -174,17 +383,32 @@ export function useDiscoverAuthors(): {
   return {
     authors,
     unrestricted,
-    // Nothing to wait for when the allow-list is bypassed.
-    isLoading: unrestricted ? false : pack.isLoading || (!!user && followList.isLoading),
+    // Nothing to wait for when the allow-list is bypassed. Only the PACK read
+    // gates the feeds: it is the seed authorship, so querying without it would
+    // show a logged-in user a follows-only directory and then re-key. The
+    // viewer's own follow list merely WIDENS the list — when it lands later,
+    // `authors` changes, the feed queries re-key and refetch, and
+    // `placeholderData` holds the pack-authored results meanwhile — so first
+    // paint doesn't wait the follow-list round trip out.
+    isLoading: unrestricted ? false : pack.isLoading,
   };
 }
 
 /**
  * Public Concord communities — kind-3314 community announcements, each a
  * regular event whose content is a full shareable invite link and nothing
- * else. De-duplicated here by link-signer keeping the newest announcement;
+ * else. De-duplicated by link-signer keeping the newest announcement;
  * two DIFFERENT links to one community can only be recognized as duplicates
  * once their bundles resolve, so that fold happens in the Communities tab.
+ *
+ * One round trip: the follow pack and the announcements are fetched in a
+ * single unfiltered REQ ({@link fetchDiscoverDirectory}) and the author
+ * allow-list (pack ∪ viewer ∪ follows) is applied CLIENT-side here — the gate
+ * is unchanged (nothing unvetted renders, and `discoverAllContent` still
+ * bypasses it), but first paint no longer waits pack → announcements out in
+ * sequence. If the unfiltered window overflowed (a flooder could crowd
+ * allow-listed announcements out of the newest 100), a server-side
+ * authors-filtered fallback read fills in the rest.
  *
  * No search filter is sent: the announcement deliberately carries no metadata
  * (the card resolves name/icon/banner live from the invite bundle), so there
@@ -193,60 +417,138 @@ export function useDiscoverAuthors(): {
  */
 export function useDiscoverCommunities() {
   const { nostr } = useNostr();
+  const { config } = useAppContext();
   const relays = useDiscoverRelays();
-  const { authors, unrestricted, isLoading: authorsLoading } = useDiscoverAuthors();
+  const { user } = useCurrentUser();
+  const followList = useFollowList();
 
-  const authorFilter = unrestricted ? undefined : authors;
+  const unrestricted = config.discoverAllContent;
 
-  const result = useQuery<DiscoveredInvite[]>({
-    queryKey: ["discover", "community-announcements", relays, authorFilter ?? "all"],
-    enabled: relays.length > 0 && !authorsLoading && (unrestricted || authors.length > 0),
+  const directoryKey: QueryKey = ["discover", "directory", relays];
+  // Warm loads: last session's directory paints immediately, then refreshes.
+  useKvQuerySeed<DiscoverDirectory>(DIRECTORY_SEED_KV, directoryKey);
+
+  const result = useQuery<DiscoverDirectory>({
+    queryKey: directoryKey,
+    enabled: relays.length > 0,
     staleTime: 30_000,
     placeholderData: (prev) => prev,
-    queryFn: async ({ signal }) => {
-      const filter: NostrFilter = { kinds: [KIND_COMMUNITY_ANNOUNCEMENT], limit: FETCH_LIMIT };
-      if (authorFilter) filter.authors = authorFilter;
-      const events = await nostr.group(relays).query(
-        [filter],
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) },
-      );
-      // Honor un-publishes: a NIP-09 delete by the ANNOUNCEMENT'S OWN author
-      // removes the listing (anyone else's delete is ignored).
-      const deleted = new Set<string>();
-      if (events.length > 0) {
-        const dels = await nostr
-          .group(relays)
-          .query(
-            [{
-              kinds: [5],
-              authors: [...new Set(events.map((e) => e.pubkey))],
-              "#e": events.map((e) => e.id),
-            }],
-            { signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) },
-          )
-          .catch(() => []);
-        const byId = new Map(events.map((e) => [e.id, e.pubkey]));
-        for (const del of dels) {
-          for (const [n, id] of del.tags) {
-            if (n === "e" && byId.get(id) === del.pubkey) deleted.add(id);
-          }
-        }
-      }
-      // Newest announcement wins for a given link.
-      events.sort((a, b) => b.created_at - a.created_at);
-      const byLinkSigner = new Map<string, DiscoveredInvite>();
-      for (const event of events) {
-        if (deleted.has(event.id)) continue;
-        const invite = announcementFromEvent(event);
-        if (!invite) continue;
-        if (!byLinkSigner.has(invite.linkSigner)) byLinkSigner.set(invite.linkSigner, invite);
-      }
-      return [...byLinkSigner.values()];
-    },
+    queryFn: ({ signal }) => fetchDiscoverDirectory(nostr, relays, signal),
   });
 
-  // Keep the skeleton up while the author allow-list is still resolving.
-  return { ...result, isLoading: result.isLoading || authorsLoading };
+  // The allow-list, assembled reactively: follows landing later just widen the
+  // rendered set — no query re-keys, no refetch, no skeleton.
+  const authors = useMemo(() => {
+    const set = new Set<string>(result.data?.packAuthors ?? []);
+    if (user) {
+      set.add(user.pubkey);
+      for (const pk of followList.data?.pubkeys ?? []) set.add(pk);
+    }
+    return [...set].sort();
+  }, [result.data?.packAuthors, user, followList.data]);
+
+  // Completeness fallback for the (rare) overflowed window — see the doc.
+  const overflowed = !unrestricted && !!result.data?.overflow && authors.length > 0;
+  const fallback = useQuery<DiscoveredInvite[]>({
+    queryKey: communitiesQueryKey(relays, authors),
+    enabled: overflowed,
+    staleTime: 30_000,
+    queryFn: ({ signal }) => fetchCommunityAnnouncements(nostr, relays, authors, signal),
+  });
+
+  const data = useMemo(() => {
+    if (!result.data) return undefined;
+    const allowed = unrestricted ? null : new Set(authors);
+    const base = result.data.invites.filter(
+      (invite) => !allowed || allowed.has(invite.source.pubkey),
+    );
+    if (!overflowed || !fallback.data) return base;
+    // Union with the fallback's complete allow-listed set, newest-first,
+    // link-signer deduped like the fetchers.
+    const byLinkSigner = new Map<string, DiscoveredInvite>();
+    const all = [...base, ...fallback.data].sort(
+      (a, b) => b.source.created_at - a.source.created_at,
+    );
+    for (const invite of all) {
+      if (!byLinkSigner.has(invite.linkSigner)) byLinkSigner.set(invite.linkSigner, invite);
+    }
+    return [...byLinkSigner.values()];
+  }, [result.data, unrestricted, authors, overflowed, fallback.data]);
+
+  // A failed refresh over a grid already painted (KV seed or placeholder)
+  // must not swap real cards for the error state — error only when there is
+  // nothing to show.
+  return { data, isLoading: result.isLoading, isError: result.isError && !data };
+}
+
+/** How long after boot the Discover warmup fires (chunk warmup fires at 3s). */
+const WARM_DELAY_MS = 3500;
+/** How many listings get their invite bundle pre-resolved (about a viewport). */
+const WARM_BUNDLE_COUNT = 12;
+
+/**
+ * Pre-fetch the Discover data a first navigation needs, shortly after boot and
+ * off the critical path: the directory (follow pack + announcements, one REQ)
+ * and the first viewport's worth of invite bundles. Everything lands in the
+ * shared react-query cache under the SAME keys the page hooks use, and — via
+ * the fetcher's KV seed and the bundle floor — in local storage, so opening
+ * Discover paints real cards immediately even in a session (or install) that
+ * has never visited it. Best-effort throughout: a failed warmup just means the
+ * page fetches for itself, exactly as if this hook didn't exist.
+ */
+export function useWarmDiscover(): void {
+  const { nostr } = useNostr();
+  const { config } = useAppContext();
+  const relays = useDiscoverRelays();
+  const { user } = useCurrentUser();
+  const queryClient = useQueryClient();
+
+  const unrestricted = config.discoverAllContent;
+  const pubkey = user?.pubkey;
+
+  useEffect(() => {
+    if (relays.length === 0) return;
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const directory = await queryClient.fetchQuery({
+            queryKey: ["discover", "directory", relays],
+            staleTime: 30_000,
+            queryFn: ({ signal }) => fetchDiscoverDirectory(nostr, relays, signal),
+          });
+          // Only warm bundles the page would actually render: the allow-list
+          // applies here too (with whatever the follow list holds right now).
+          const allowed = new Set(directory.packAuthors);
+          if (pubkey) {
+            allowed.add(pubkey);
+            const follows = queryClient.getQueryData<FollowListData>(["follow-list", pubkey]);
+            for (const pk of follows?.pubkeys ?? []) allowed.add(pk);
+          }
+          const visible = unrestricted
+            ? directory.invites
+            : directory.invites.filter((invite) => allowed.has(invite.source.pubkey));
+          // Resolve the bundles the grid would show first. Sequenced behind
+          // the announcements by necessity; each resolve also persists its
+          // floor, which is what makes the NEXT session's cards instant.
+          await Promise.allSettled(
+            visible.slice(0, WARM_BUNDLE_COUNT).map((invite) => {
+              const parsed = parseInviteLink(invite.inviteUrl);
+              if (!parsed) return Promise.resolve();
+              return queryClient.fetchQuery({
+                queryKey: ["discover", "invite-bundle", invite.linkSigner],
+                staleTime: 5 * 60_000,
+                retry: false,
+                queryFn: () => resolveBundle(nostr, parsed, parsed.bootstrapRelays),
+              });
+            }),
+          );
+        } catch {
+          // Warmup is best-effort; the page's own queries remain authoritative.
+        }
+      })();
+    }, WARM_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [nostr, queryClient, relays, unrestricted, pubkey]);
 }
 
 /** NIP-30 emoji packs (kind 30030). */

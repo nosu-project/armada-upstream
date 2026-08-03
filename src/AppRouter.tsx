@@ -17,6 +17,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
+import { useWarmDiscover } from "@/hooks/useDiscover";
 import { flattenLayout, mergeLayout, railKeyToRoute } from "@/lib/railLayout";
 import { CONCORD2_PANES } from "@/lib/routes";
 import { lazyWithReload } from "@/lib/chunkReload";
@@ -232,6 +233,10 @@ function useWarmRouteChunks() {
         () => import("@/concord-v2/pages/ConcordV2Page"),
         () => import("@/pages/DMsPage"),
         () => import("@/pages/ServerPage"),
+        // Not a notification target, but the landing surface a new user hits
+        // first — its first paint shouldn't stack a chunk fetch on top of the
+        // directory queries.
+        () => import("@/pages/DiscoverPage"),
       ]) {
         void load().catch(() => undefined);
       }
@@ -261,6 +266,9 @@ function ForegroundNotifications() {
 
 export function AppRouter() {
   useWarmRouteChunks();
+  // Data too, not just code: pre-resolve the Discover directory at idle so the
+  // page's first open paints real cards instead of a skeleton waterfall.
+  useWarmDiscover();
   return (
       <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <NotificationNavigation />

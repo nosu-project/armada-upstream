@@ -32,6 +32,7 @@ import {
 import { KIND_INVITE_LIST } from "@/concord-v2/lib/kinds";
 import { buildCommunityAnnouncement } from "@/concord-v2/lib/inviteDiscovery";
 import { inviteDeliveryRelays, recipientInboxRelays } from "@/concord-v2/lib/inviteRelays";
+import { publishToAnyRelay } from "@/concord-v2/lib/relayPublish";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { toast } from "@/hooks/useToast";
 import { shareOrigin } from "@/lib/shareOrigin";
@@ -160,6 +161,19 @@ function useUpdateInviteList2() {
     scope: { id: "concord2-invite-list" },
     mutationFn: async (patch: InviteList) => {
       if (!user?.signer.nip44) throw new Error("NIP-44 unsupported.");
+      // Fold the patch into the local cache before anything that can fail: for
+      // a mint the patch carries the ONLY copy of `signer_sk`, and createLink
+      // no longer blocks on this write — so the cache, not the publish, is
+      // what keeps a just-shared link revocable from this device when the
+      // read-merge below can't reach the relays. Merge is idempotent by token,
+      // so re-merging the patch into `next` is harmless.
+      queryClient.setQueryData(
+        inviteListKey(user.pubkey),
+        mergeInviteLists(
+          queryClient.getQueryData<InviteList>(inviteListKey(user.pubkey)) ?? EMPTY_INVITE_LIST,
+          patch,
+        ),
+      );
       const { list: remote, newestCreatedAt } = await fetchInviteList(nostr, user);
       const cached = queryClient.getQueryData<InviteList>(inviteListKey(user.pubkey)) ?? EMPTY_INVITE_LIST;
       const next = mergeInviteLists(mergeInviteLists(remote, cached), patch);
@@ -343,19 +357,34 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
       // is handed out by granting its scoped Role, which vends the key by
       // Direct Invite.
       const bundle = buildBundle({ kind: "link" }, { expiresAtMs, label });
-
       const bundleEvent = buildBundleEvent(bundle, token, link.sk);
-      const results = await Promise.allSettled(
-        community.relays.map((url) => nostr.relay(url).event(bundleEvent, { signal: AbortSignal.timeout(8000) })),
-      );
-      if (!results.some((r) => r.status === "fulfilled")) {
-        throw new Error("No relay accepted the invite bundle.");
-      }
-
+      // The URL is decided LOCALLY — the naddr names the freshly minted signer
+      // and the fragment carries the freshly minted token, so no write below
+      // feeds into it. That is what lets the writes run concurrently.
       const url = buildInviteUrl(shareOrigin(), link.pk, token, community.relays);
 
+      // The member-facing Registry: this creator's live coordinates.
+      const mine = new Set(folded?.registriesByCreator.get(user.pubkey) ?? []);
+      mine.add(link.pk);
+
+      // Opt-in public community announcement (best-effort — a failed post must
+      // not fail the mint; the link itself is already live).
+      const announcement = listPublicly ? buildCommunityAnnouncement({ inviteUrl: url }) : null;
+
+      // The bundle is the ONLY write that makes the link joinable, so it is the
+      // only one the caller waits on. Awaiting the others in series made the
+      // mint the sum of several round trips (each with its own 8s ceiling)
+      // before the user could be handed a URL that had been valid since the
+      // first one landed.
+      await publishToAnyRelay(nostr, community.relays, bundleEvent, "No relay accepted the invite bundle.");
+
       // The creator's private bookkeeping (the merge key is the token).
-      await updateInviteList({
+      // `signer_sk` exists nowhere else, so losing this write costs the ability
+      // to revoke — but it is optimistically cached before it publishes, so the
+      // secret is on this device either way, and a failure here used to be
+      // reported as "couldn't create the link" for a link that was already
+      // live, which invites minting a second one.
+      void updateInviteList({
         entries: [
           {
             token: bytesToHex(token),
@@ -368,19 +397,20 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
           },
         ],
         tombstones: [],
+      }).catch(() => {
+        toast({
+          title: "Invite link created, but not synced",
+          description:
+            "Its revocation secret didn't reach your relays, so your other devices won't be able to revoke this link.",
+          variant: "destructive",
+        });
       });
 
-      // The member-facing Registry: this creator's live coordinates.
-      const mine = new Set(folded?.registriesByCreator.get(user.pubkey) ?? []);
-      mine.add(link.pk);
-      await publishRegistry([...mine]);
-
-      // Opt-in public announcement (best-effort — a failed post must not
-      // fail the mint; the link itself is already live).
-      if (listPublicly) {
-        const announcement = buildCommunityAnnouncement({ inviteUrl: url });
-        if (announcement) await publishEvent(announcement).catch(() => undefined);
-      }
+      // The member-facing Registry (swallows its own publish errors; the catch
+      // covers a throw before it) and the opt-in announcement: neither gates
+      // the link working.
+      void publishRegistry([...mine]).catch(() => undefined);
+      if (announcement) void publishEvent(announcement).catch(() => undefined);
 
       return url;
     },
@@ -399,12 +429,7 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
       if (!entry) throw new Error("This device doesn't hold that link's signing secret.");
 
       const tomb = buildRevocationEvent(hexToBytes(entry.signer_sk));
-      const results = await Promise.allSettled(
-        community.relays.map((relay) => nostr.relay(relay).event(tomb, { signal: AbortSignal.timeout(8000) })),
-      );
-      if (!results.some((r) => r.status === "fulfilled")) {
-        throw new Error("No relay accepted the revocation.");
-      }
+      await publishToAnyRelay(nostr, community.relays, tomb, "No relay accepted the revocation.");
 
       await updateInviteList({
         entries: [],
@@ -469,12 +494,7 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
       // success). Fail loudly so the user retries once the network settles.
       if (inbox === null) throw new Error("Couldn't reach the network to send the invite. Please try again.");
       const relays = inviteDeliveryRelays(inbox);
-      const results = await Promise.allSettled(
-        relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(8000) })),
-      );
-      if (!results.some((r) => r.status === "fulfilled")) {
-        throw new Error("No relay accepted the invite.");
-      }
+      await publishToAnyRelay(nostr, relays, wrap, "No relay accepted the invite.");
     },
   });
 
