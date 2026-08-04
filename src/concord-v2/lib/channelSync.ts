@@ -123,13 +123,27 @@ export async function backfillStore(
   relays: string[],
   channel: ChannelV2,
   signal: AbortSignal,
-  opts: { until?: number; since?: number; maxPages?: number; freezeRetired?: boolean; beforeRelay?: (url: string) => Promise<void> } = {},
-): Promise<{ oldest?: number; newest?: number; events: NostrEvent[]; exhausted: boolean; failed: boolean }> {
+  opts: {
+    until?: number;
+    since?: number;
+    maxPages?: number;
+    freezeRetired?: boolean;
+    beforeRelay?: (url: string) => Promise<void>;
+    /**
+     * Consume each page's wraps as it lands instead of accumulating them into
+     * the returned `events`. A multi-page round over slow relays can run for
+     * minutes; with this, the caller decrypts/stores page by page and the
+     * timeline paints as history arrives rather than after the whole round.
+     */
+    onPage?: (events: NostrEvent[]) => Promise<void>;
+  } = {},
+): Promise<{ oldest?: number; newest?: number; events: NostrEvent[]; count: number; exhausted: boolean; failed: boolean }> {
   const maxPages = opts.maxPages ?? BACKFILL_MAX_PAGES;
   let oldest: number | undefined;
   let newest: number | undefined;
   let active = relays.map((url) => ({ url, cursor: opts.until }));
   const collected: NostrEvent[] = [];
+  let count = 0;
   let failed = false;
 
   for (let page = 0; page < maxPages && active.length > 0; page++) {
@@ -177,6 +191,7 @@ export async function backfillStore(
     if (graceTimer !== undefined) clearTimeout(graceTimer);
 
     const next: typeof active = [];
+    const pageEvents: NostrEvent[] = [];
     for (const { relay, events, ok } of results) {
       if (!ok) {
         // Error or aborted — this relay's region was NOT read. Track the
@@ -185,7 +200,7 @@ export async function backfillStore(
         failed = true;
         continue;
       }
-      collected.push(...events);
+      pageEvents.push(...events);
       let relayOldest = Infinity;
       let progressed = 0;
       for (const ev of events) {
@@ -202,6 +217,14 @@ export async function backfillStore(
         next.push({ url: relay.url, cursor: relayOldest - 1 });
       }
     }
+    count += pageEvents.length;
+    if (opts.onPage) {
+      // Hand the page over as it lands (the caller stores it); nothing is
+      // retained here, so a deep round's memory stays one page.
+      if (pageEvents.length > 0) await opts.onPage(pageEvents);
+    } else {
+      collected.push(...pageEvents);
+    }
     active = next;
   }
   // `exhausted` means we verifiably reached the bottom: every relay ran to a
@@ -212,8 +235,25 @@ export async function backfillStore(
   // no history yet) gets permanently stuck with just that message. Treat an
   // all-empty run like a failure so a later round retries it.
   const reachedBottom = active.length === 0 && !failed;
-  const exhausted = reachedBottom && collected.length > 0;
-  return { oldest, newest, events: collected, exhausted, failed: failed || (reachedBottom && collected.length === 0) };
+  const exhausted = reachedBottom && count > 0;
+  return { oldest, newest, events: collected, count, exhausted, failed: failed || (reachedBottom && count === 0) };
+}
+
+/**
+ * Channels whose LAST completed round fetched wraps but decrypted none — the
+ * held stream keys can't open anything the relays return (a stranded invite, a
+ * rekey this device hasn't caught up to). Without this, such a channel is
+ * indistinguishable from a genuinely empty one: the round "succeeds" with zero
+ * messages and the timeline renders "No messages yet" as a verdict. In-memory
+ * only (a session-scoped diagnosis, re-derived by the next round); cleared the
+ * moment any round decrypts something (e.g. after a rekey adoption re-runs the
+ * topic with new keys).
+ */
+const decodeDeadEnds = new Set<string>();
+
+/** Whether the channel's last sync round returned wraps none of which opened. */
+export function channelDecodeDeadEnd(channelIdHex: string): boolean {
+  return decodeDeadEnds.has(channelIdHex);
 }
 
 /** What a round needs beyond the topic string. Registered by the live view. */
@@ -282,6 +322,19 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
     const tick = () => {
       if (synced > 0) task.update({ detail: `${synced} ${synced === 1 ? "message" : "messages"}` });
     };
+    // Decrypt + commit one fetched page. Every committed write rings the wire
+    // bus (writeRumors), so the timeline re-reads and paints as each page
+    // lands — a deep round over slow relays used to hold everything in memory
+    // and write once at the very end, minutes after decryptable history was
+    // already in hand.
+    const writePage = async (events: NostrEvent[]) => {
+      if (signal.aborted) return;
+      const opened = await openChatBatch(events, channel, { signal });
+      if (opened.length === 0) return;
+      await writeRumors(community.idHex, opened);
+      synced += opened.length;
+      tick();
+    };
 
     // Pass 1: the newest page (no `until`), decrypted and committed first —
     // it's what the viewer sees on open, so it must not wait behind the deep
@@ -291,13 +344,9 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
       maxPages: 1,
       freezeRetired,
       beforeRelay: authGate,
+      onPage: writePage,
     });
     if (signal.aborted) return;
-    const firstOpened = await openChatBatch(newest.events, channel, { signal });
-    if (signal.aborted) return;
-    await writeRumors(community.idHex, firstOpened);
-    synced += firstOpened.length;
-    tick();
 
     // Pass 2 (the bridge): fetch the REGION BETWEEN the saved `newest` and
     // pass 1's oldest. Without it, an offline burst larger than one page
@@ -305,6 +354,7 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
     // and the advanced cursor seals the gap forever (issue #19).
     let bridge: Awaited<ReturnType<typeof backfillStore>> = {
       events: [],
+      count: 0,
       exhausted: true,
       failed: false,
     };
@@ -314,6 +364,7 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
         since: saved.newest,
         freezeRetired,
         beforeRelay: authGate,
+        onPage: writePage,
       });
       if (signal.aborted) return;
     }
@@ -326,14 +377,9 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
       until: resumeFrom,
       freezeRetired,
       beforeRelay: authGate,
+      onPage: writePage,
     });
     if (signal.aborted) return;
-
-    const opened = await openChatBatch([...bridge.events, ...older.events], channel, { signal });
-    if (signal.aborted) return;
-    await writeRumors(community.idHex, opened);
-    synced += opened.length;
-    tick();
 
     // Advance the persisted cursor (the store merge is monotonic: `newest`
     // only forward, `oldest` only back, `exhausted` sticky). `newest` moves
@@ -348,6 +394,14 @@ async function syncChannelRound(ctx: ChannelSyncContext, signal: AbortSignal): P
       oldest: older.oldest,
       exhausted: older.exhausted ? true : undefined,
     });
+
+    // Keep the decode dead-end diagnosis current: a round that pulled wraps
+    // and opened NONE of them means the held keys can't read this channel
+    // right now (surfaced by the timeline's empty state); any opened rumor —
+    // including pass 1's routine re-fetch of the newest page — clears it.
+    const fetched = newest.count + bridge.count + older.count;
+    if (synced > 0) decodeDeadEnds.delete(idHex);
+    else if (fetched > 0) decodeDeadEnds.add(idHex);
 
     // Ring once the CURSOR has landed, and even when nothing decrypted:
     // `writeRumors` rings only for a non-empty batch, and it ran before this

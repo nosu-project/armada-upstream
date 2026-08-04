@@ -1,4 +1,4 @@
-import { ChevronDown, KeyRound, Loader2 } from "lucide-react";
+import { ChevronDown, CloudOff, KeyRound, Loader2 } from "lucide-react";
 import { memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -264,6 +264,13 @@ interface MessageTimelineProps {
    * conversation behind a skeleton for as long as its backfill ran.
    */
   syncing?: boolean;
+  /**
+   * True when the conversation's catch-up keeps FAILING (its sync topic is in
+   * error/backoff). An empty timeline then says the relays are unreachable
+   * instead of alternating between "Catching up…" and an empty-state verdict
+   * every retry — the retries continue in the background either way.
+   */
+  syncFailed?: boolean;
   className?: string;
 }
 
@@ -385,6 +392,7 @@ export function MessageTimeline({
   paused = false,
   newDividerId,
   syncing = false,
+  syncFailed = false,
   className,
 }: MessageTimelineProps) {
   const { messages, isLoading, loadOlder, hasMore, isLoadingOlder, rotationDividerIds } = transport;
@@ -768,8 +776,16 @@ export function MessageTimeline({
               judged yet, so it must not read as "no messages" — but it isn't
               LOADING either (the local read is done and it was empty). Say
               which of the two it is, rather than holding a skeleton that
-              claims history is about to appear from disk. */}
-          {syncing ? (
+              claims history is about to appear from disk. A catch-up stuck in
+              its retry loop takes precedence over the spinner: the scheduler
+              alternates error/pending on every backoff, and flip-flopping
+              copy would read as progress that isn't happening. */}
+          {syncFailed ? (
+            <p className="flex items-center justify-center gap-2 px-2 py-8 text-center text-sm text-muted-foreground">
+              <CloudOff className="size-4 shrink-0" aria-hidden />
+              Can't reach the relays for this conversation. Retrying in the background…
+            </p>
+          ) : syncing ? (
             <p className="flex items-center justify-center gap-2 px-2 py-8 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin shrink-0" />
               Catching up…

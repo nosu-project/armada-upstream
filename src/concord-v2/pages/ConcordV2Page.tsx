@@ -102,7 +102,8 @@ import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
 import { useNotifLevels, concordChannelScopeKey } from "@/hooks/useNotifLevels";
 import { NotifLevelMenu } from "@/components/NotifLevelMenu";
 import { toast } from "@/hooks/useToast";
-import { useCommunity2, useIsExcluded2 } from "@/concord-v2/hooks/useCommunityList2";
+import { useCommunity2, useCommunityList2, useIsExcluded2 } from "@/concord-v2/hooks/useCommunityList2";
+import { channelDecodeDeadEnd } from "@/concord-v2/lib/channelSync";
 import { useCommunityManagement2, useStrandedRecovery2 } from "@/concord-v2/hooks/useCommunityActions2";
 import { useChannels2, useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPlane2";
 import { BanMemberDialog } from "@/concord-v2/components/BanMemberDialog2";
@@ -2222,6 +2223,28 @@ export function ConcordV2Page() {
     channelScope &&
       (channelTopic.status === "pending" || syncTasks.some((t) => t.scope === channelScope)),
   );
+  // The serial gate itself (community list → control sweep → fold), surfaced
+  // as "syncing" while it is genuinely in flight on a cold load. Before the
+  // fold names a ChannelV2 the timeline query is disabled and `isLoading` is
+  // deliberately false, so without this the chat pane sat BLANK — no spinner,
+  // no skeleton — for the whole list-fetch + control-sweep chain on a fresh
+  // device. Scoped so a resolved list with no such community (a bad link, a
+  // left community) still falls through to the page's not-found handling
+  // instead of spinning forever.
+  const { isLoading: communityListLoading } = useCommunityList2();
+  const gateResolving = Boolean(
+    !channel && communityId && (communityListLoading || (baseCommunity && !folded)),
+  );
+  // A catch-up stuck in its retry loop: the scheduler alternates error
+  // (backoff) and pending (retry) forever against an unreachable relay set,
+  // so the verdict must LATCH across that cycle — it clears only when a round
+  // actually settles, or when the channel changes.
+  const [channelSyncFailed, setChannelSyncFailed] = useState(false);
+  useEffect(() => setChannelSyncFailed(false), [channelScope]);
+  useEffect(() => {
+    if (channelTopic.status === "error") setChannelSyncFailed(true);
+    else if (channelTopic.status === "settled") setChannelSyncFailed(false);
+  }, [channelTopic.status]);
 
   const onOpenThreadCb = useMemo(
     () => (canWrite ? (event: ChatMsg) => openThread(event, true) : undefined),
@@ -3365,17 +3388,29 @@ export function ConcordV2Page() {
                     newDividerId={newDividerId}
                     renderEntry={(entry, relatedEntries) => isGitTimelineEntry(entry) ? <GitTimelineRow entry={entry} members={memberSet} onOpen={(ticket) => { setOpenTicket(ticket); void gitActivity.refreshTicket(ticket); }} commentEntries={entry.type === "git-comment" ? relatedEntries as Extract<typeof entry, { type: "git-comment" }>[] : undefined} activities={gitActivity.activities} /> : entry.type === "dm-timer" ? <TimerNotice2 author={entry.author} seconds={entry.seconds} self={user?.pubkey} /> : null}
                     handleRef={timelineRef}
-                    syncing={channelSyncing}
+                    syncing={channelSyncing || gateResolving}
+                    syncFailed={channelSyncFailed}
                     className="flex-1 min-h-0"
                     emptyState={
                       // Only once a channel has actually resolved. Before the
                       // control fold names one there is no conversation to
                       // call empty, and "say something" would be inviting the
                       // reader to write into a channel that isn't there yet.
+                      // A decode dead-end (the last round pulled wraps and
+                      // opened none) is a different verdict from "empty": the
+                      // messages exist, this device just can't read them yet.
                       channel ? (
-                        <p className="px-2 py-8 text-center text-sm text-muted-foreground">
-                          No messages yet. Say something — only members can read it.
-                        </p>
+                        channelDecodeDeadEnd(channel.idHex) ? (
+                          <p className="px-2 py-8 text-center text-sm text-muted-foreground">
+                            There are messages here, but they can't be decrypted with the keys
+                            this device holds yet. They should become readable once the next key
+                            update from the community reaches you.
+                          </p>
+                        ) : (
+                          <p className="px-2 py-8 text-center text-sm text-muted-foreground">
+                            No messages yet. Say something — only members can read it.
+                          </p>
+                        )
                       ) : undefined
                     }
                     renderMessage={(msg, continuation) => {
