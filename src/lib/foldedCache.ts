@@ -34,15 +34,30 @@ function foldedKey(key: string): string {
 
 // ── codec ─────────────────────────────────────────────────────────────────────
 // Tagged wrappers for types JSON drops. Hex is used for bytes (compact, stable).
+// Table-driven: a control fold's decode revives megabytes of hex on the boot
+// path, where per-byte `slice`+`parseInt`/`padStart` dominated the profile.
+
+const BYTE_HEX: string[] = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
+// Char code → nibble value. Out-of-range indexes read undefined, which the
+// bit-ops below coerce to 0 — same result the old parseInt NaN produced for
+// malformed hex once assigned into the Uint8Array.
+const HEX_NIBBLE = new Uint8Array(103); // 'f' (102) is the highest hex char
+for (let i = 0; i < 10; i++) HEX_NIBBLE[48 + i] = i; // '0'-'9'
+for (let i = 0; i < 6; i++) {
+  HEX_NIBBLE[97 + i] = 10 + i; // 'a'-'f'
+  HEX_NIBBLE[65 + i] = 10 + i; // 'A'-'F'
+}
 
 function toHex(bytes: Uint8Array): string {
   let s = "";
-  for (const b of bytes) s += b.toString(16).padStart(2, "0");
+  for (const b of bytes) s += BYTE_HEX[b];
   return s;
 }
 function fromHex(hex: string): Uint8Array {
   const out = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = (HEX_NIBBLE[hex.charCodeAt(i * 2)] << 4) | HEX_NIBBLE[hex.charCodeAt(i * 2 + 1)];
+  }
   return out;
 }
 

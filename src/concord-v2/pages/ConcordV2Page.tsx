@@ -466,7 +466,7 @@ function CategoryNameDialog2({
   );
 }
 
-function ChannelRow2({
+const ChannelRow2 = memo(function ChannelRow2({
   community,
   channel,
   active,
@@ -490,14 +490,14 @@ function ChannelRow2({
   /** Live muted set (only passed when `inCall`), for the roster mute indicator. */
   muted?: ReadonlySet<string>;
   unread?: Concord2Unread;
-  onSelect: () => void;
+  onSelect: (channelIdHex: string) => void;
   onJoinVoice: (channel: ChannelV2, broker: string | null, fold?: VoicePresenceFold) => void;
   /** Category names already in use, offered so near-duplicates aren't retyped. */
   categories?: string[];
   /** Undefined for a member without MANAGE_CHANNELS: no filing menu at all. */
-  onSetCategory?: (category: string | undefined) => void;
+  onSetCategory?: (channelIdHex: string, category: string | undefined) => void;
   /** Opens the naming prompt — a context menu is a poor place for a text field. */
-  onNewCategory?: () => void;
+  onNewCategory?: (channel: ChannelV2) => void;
 }) {
   // Every Channel is callable (CORD-07): live presence drives the Discord-style
   // nested roster under the row whenever a call is active, and the rendezvous
@@ -541,7 +541,7 @@ function ChannelRow2({
             <button
               type="button"
               onClick={() => {
-                onSelect();
+                onSelect(channel.idHex);
               }}
               className={cn(
                 // Slack-style selection: the active channel sits on a filled primary
@@ -635,19 +635,19 @@ function ChannelRow2({
                 <ContextMenuItem
                   key={name}
                   disabled={categoryKey(name) === categoryKey(channel.category ?? "")}
-                  onSelect={() => onSetCategory(name)}
+                  onSelect={() => onSetCategory(channel.idHex, name)}
                 >
                   <Folder className="mr-2 size-4" />
                   <span className="truncate">{name}</span>
                 </ContextMenuItem>
               ))}
               {(categories ?? []).length > 0 && <ContextMenuSeparator />}
-              <ContextMenuItem onSelect={() => onNewCategory?.()}>
+              <ContextMenuItem onSelect={() => onNewCategory?.(channel)}>
                 <Plus className="mr-2 size-4" />
                 New category…
               </ContextMenuItem>
               {channel.category && (
-                <ContextMenuItem onSelect={() => onSetCategory(undefined)}>
+                <ContextMenuItem onSelect={() => onSetCategory(channel.idHex, undefined)}>
                   <X className="mr-2 size-4" />
                   Remove from category
                 </ContextMenuItem>
@@ -658,7 +658,7 @@ function ChannelRow2({
       </ContextMenuContent>
     </ContextMenu>
   );
-}
+});
 
 /**
  * The community-wide "@ Mentions" pane: every cached kind-9 message that
@@ -2276,6 +2276,51 @@ export function ConcordV2Page() {
 
   const moderation = useModeration2(community, memberPubkeys);
 
+  // The member panel's action callbacks land on every memoized MemberRow, so
+  // they must keep a stable identity while their bodies read the freshest
+  // fold/moderation state. The handler closures live below the route guard;
+  // each render writes them into this ref, and these render-stable wrappers
+  // delegate through it (never invoked on a guard-returned render).
+  const memberOpsRef = useRef<{
+    setRole: (pk: string, roles: string[]) => Promise<void>;
+    toggleRole: (pk: string, roleId: string, on: boolean) => Promise<void>;
+    kick: (pk: string) => void;
+    unban: (pk: string) => void;
+    banLabel: (pk: string) => string;
+  } | null>(null);
+  const handleSetRoleStable = useCallback((pk: string, roles: string[]) => memberOpsRef.current?.setRole(pk, roles), []);
+  const handleToggleRoleStable = useCallback(
+    (pk: string, roleId: string, on: boolean) => memberOpsRef.current?.toggleRole(pk, roleId, on),
+    [],
+  );
+  const handleKickMember = useCallback((pk: string) => memberOpsRef.current?.kick(pk), []);
+  const handleUnbanMember = useCallback((pk: string) => memberOpsRef.current?.unban(pk), []);
+  const memberBanLabel = useCallback((pk: string) => memberOpsRef.current?.banLabel(pk) ?? "Ban", []);
+  const openAddMembers = useCallback(() => setAddMembersOpen(true), []);
+  const closeMembers = useCallback(() => setMembersOpen(false), []);
+
+  // Stable identities for the memoized ChannelRow2's callbacks; these close
+  // over only render-stable values, so no ref indirection is needed.
+  const suppressChannelClick = channelDrag.shouldSuppressClick;
+  const handleSelectChannel = useCallback(
+    (idHex: string) => {
+      // The browser synthesizes a click after the drag's pointerup;
+      // without this, dropping a channel also navigates to it.
+      if (suppressChannelClick()) return;
+      selectChannel(idHex);
+      setChannelsOpen(false);
+    },
+    [suppressChannelClick, selectChannel],
+  );
+  const handleSetCategory = useCallback(
+    (idHex: string, category: string | undefined) => void fileChannel(idHex, category),
+    [fileChannel],
+  );
+  const handleNewCategory = useCallback(
+    (c: ChannelV2) => setCategoryPrompt({ channels: [c], initial: "" }),
+    [],
+  );
+
   const publishTyping = useTypingPublisher2(community, channel);
   const typingPubkeys = useTyping2(community, channel);
 
@@ -2432,6 +2477,20 @@ export function ConcordV2Page() {
     }
   };
 
+  // This render's closures for the stable member-panel wrappers declared
+  // above the route guard (memberOpsRef): a render-time ref write, as in
+  // ui/avatar.tsx.
+  memberOpsRef.current = {
+    setRole: handleSetRole,
+    toggleRole: handleToggleRole,
+    kick: (pk: string) => void moderation.kick({ target: pk }).catch(() => {}),
+    unban: (pk: string) => void moderation.unban({ target: pk }).catch(() => {}),
+    banLabel: (pk: string) =>
+      folded && user && moderation.canRekey && !hasForeignLiveLinks(folded, user.pubkey, pk)
+        ? "Ban & lock out"
+        : "Ban",
+  };
+
   // A ban rotates keys unless someone ELSE holds a live link (a rotation
   // would strand it; my own links refresh with the rotation). Judged as-of
   // after this ban: the target's links die with their authority.
@@ -2448,8 +2507,7 @@ export function ConcordV2Page() {
     }
   };
 
-  /** Curried on the sidebar's navigate callback, which differs per instance. */
-  const renderChannelRow = (onNavigate?: () => void) => (c: ChannelV2) => {
+  const renderChannelRow = (c: ChannelV2) => {
     if (!community) return null;
     const index = renderedIndexOf.get(c.idHex) ?? 0;
     const inCall = Boolean(activeCall?.concord && activeCall.concord.channel.idHex === c.idHex);
@@ -2483,19 +2541,11 @@ export function ConcordV2Page() {
         speaking={inCall ? speakingPubkeys : undefined}
         muted={inCall ? mutedPubkeys : undefined}
         unread={unreadByChannel[c.idHex]}
-        onSelect={() => {
-          // The browser synthesizes a click after the drag's pointerup;
-          // without this, dropping a channel also navigates to it.
-          if (channelDrag.shouldSuppressClick()) return;
-          selectChannel(c.idHex);
-          onNavigate?.();
-        }}
+        onSelect={handleSelectChannel}
         onJoinVoice={handleJoinVoice}
         categories={categoryPicklist}
-        onSetCategory={
-          canManageChannels ? (category) => void fileChannel(c.idHex, category) : undefined
-        }
-        onNewCategory={() => setCategoryPrompt({ channels: [c], initial: "" })}
+        onSetCategory={canManageChannels ? handleSetCategory : undefined}
+        onNewCategory={handleNewCategory}
       />
       </span>
       {dragged && (
@@ -2770,7 +2820,7 @@ export function ConcordV2Page() {
         ) : null
       ) : (
         <>
-          {uncategorizedChannels.map(renderChannelRow(onNavigate))}
+          {uncategorizedChannels.map(renderChannelRow)}
           {channelCategories.map((group) => {
             const collapsed = collapsedCategories.has(group.key);
             // A collapsed category still surfaces the channel you are in and
@@ -2806,7 +2856,7 @@ export function ConcordV2Page() {
                     canManageChannels ? () => void refileCategory(group.channels, undefined) : undefined
                   }
                 />
-                {shown.map(renderChannelRow(onNavigate))}
+                {shown.map(renderChannelRow)}
               </div>
             );
           })}
@@ -3543,28 +3593,24 @@ export function ConcordV2Page() {
                   canModerate={canManageRoles || canKickAny || canBanAny}
                   viewerIsAdmin={iAmOwner}
                   currentUserPubkey={user?.pubkey}
-                  onSetRole={canManageRoles ? handleSetRole : undefined}
+                  onSetRole={canManageRoles ? handleSetRoleStable : undefined}
                   roleCatalog={roleCatalog}
                   memberRoleIds={memberRoleIds}
                   canEditMemberRoles={canEditMemberRoles}
-                  onToggleRole={canManageRoles ? handleToggleRole : undefined}
+                  onToggleRole={canManageRoles ? handleToggleRoleStable : undefined}
                   isRoleToggling={roleIntent.isPending}
                   roleSections={panelSections}
-                  onKick={canKickAny ? (pk) => moderation.kick({ target: pk }).catch(() => {}) : undefined}
+                  onKick={canKickAny ? handleKickMember : undefined}
                   onBan={canBanAny ? setBanTarget : undefined}
-                  banLabel={(pk) =>
-                    folded && user && moderation.canRekey && !hasForeignLiveLinks(folded, user.pubkey, pk)
-                      ? "Ban & lock out"
-                      : "Ban"
-                  }
-                  onUnban={canBanAny ? (pk) => moderation.unban({ target: pk }).catch(() => {}) : undefined}
+                  banLabel={memberBanLabel}
+                  onUnban={canBanAny ? handleUnbanMember : undefined}
                   bannedPubkeys={moderation.banned}
                   onAddMembers={
                     channel?.isPrivate && addableChannelRoles.length > 0
-                      ? () => setAddMembersOpen(true)
+                      ? openAddMembers
                       : undefined
                   }
-                  onClose={() => setMembersOpen(false)}
+                  onClose={closeMembers}
                 />
               </div>
             </div>

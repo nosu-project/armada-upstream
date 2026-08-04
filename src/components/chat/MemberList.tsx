@@ -1,6 +1,6 @@
 import { AtSign, Ban, Bot, Copy, Crown, IdCard, MessageSquareText, MoreVertical, Music, Shield, ShieldOff, Smile, UserCog, UserMinus, UserPlus, X } from "lucide-react";
 
-import { useState } from "react";
+import { memo, useMemo, useState } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { BotPill } from "@/components/BotPill";
@@ -129,7 +129,7 @@ interface MemberRowProps {
   customBadge?: { name: string; color: number };
 }
 
-function MemberRow({
+const MemberRow = memo(function MemberRow({
   pubkey,
   roles,
   presence,
@@ -475,7 +475,7 @@ function MemberRow({
     {isSelf && <StatusDialog open={statusOpen} onOpenChange={setStatusOpen} />}
     </>
   );
-}
+});
 
 interface MemberListProps {
   admins: Nip29Admin[];
@@ -559,6 +559,13 @@ export function MemberList({
   className,
 }: MemberListProps) {
   const adminMap = new Map(admins.map((a) => [a.pubkey, a.roles] as const));
+  // Stable per-member arrays: `[memberRoles[pubkey]]` inline would hand the
+  // memoized MemberRow a fresh `roles` identity every render.
+  const buzzRoles = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const [pubkey, role] of Object.entries(memberRoles ?? {})) m.set(pubkey, [role]);
+    return m;
+  }, [memberRoles]);
   // Members already shown under a hoisted role section render nowhere else.
   const sectioned = new Set((roleSections ?? []).flatMap((s) => s.members));
   // The chip for a member with no tier badge: their first (highest-position)
@@ -696,7 +703,7 @@ export function MemberList({
           <MemberRow
             key={pubkey}
             pubkey={pubkey}
-            roles={memberRoles?.[pubkey] ? [memberRoles[pubkey]] : undefined}
+            roles={buzzRoles.get(pubkey)}
             presence={presence?.[pubkey]}
             canModerate={canModerate}
             viewerIsAdmin={viewerIsAdmin}

@@ -1,5 +1,5 @@
 import { ChevronDown, KeyRound, Loader2 } from "lucide-react";
-import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import {
   FIRST_PAINT_WINDOW,
@@ -304,7 +304,7 @@ const SKELETON_ROWS: { continuation: boolean; name?: string; widths: string[] }[
  * empty pane. The pattern is repeated so it overflows tall viewports too — the
  * previous fixed eight rows left most of the screen blank.
  */
-function TimelineSkeleton() {
+const TimelineSkeleton = memo(function TimelineSkeleton() {
   return (
     <div
       className="flex-1 min-h-0 overflow-hidden flex flex-col justify-end px-3 py-4"
@@ -335,7 +335,7 @@ function TimelineSkeleton() {
       ))}
     </div>
   );
-}
+});
 
 /**
  * The transport-agnostic message timeline: a bottom-anchored, auto-scrolling
