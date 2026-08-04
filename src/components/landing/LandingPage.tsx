@@ -23,7 +23,7 @@ import { EncryptionQuiz } from "./EncryptionQuiz";
  * dictionary ids (and STOCK_RELAYS' order) are the CORD-05 wire format and
  * stay fixed.
  */
-const LANDING_RELAYS: string[] = [3, 4, 1, 2].map((i) => RELAY_DICTIONARY[i]);
+const LANDING_RELAYS: string[] = [3, 1, 4, 2].map((i) => RELAY_DICTIONARY[i]);
 
 /** True when the user has asked the OS to keep motion to a minimum. */
 function prefersReducedMotion() {
