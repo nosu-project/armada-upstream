@@ -1020,41 +1020,102 @@ class SqliteArmadaDb(
         val range = KvRange.resolve(prefix, start, end)
         if (range.empty) return emptyList()
 
-        return lock.withLock {
-            val conditions = mutableListOf<String>()
-            val params = mutableListOf<Any?>()
-            range.lower?.let {
-                conditions.add("key >= ?")
-                params.add(it)
-            }
-            range.upper?.let {
-                conditions.add("key < ?")
-                params.add(it)
-            }
+        return lock.withLock { kvScan(range, limit, reverse) }
+    }
 
-            // A limit only reaches SQL when the scan's own order is the answer's
-            // — see [KvRange.exact]. Otherwise the rows dropped below would come
-            // off the top of a short page.
-            val sql = StringBuilder("SELECT key, value FROM kv")
-            if (conditions.isNotEmpty()) sql.append(" WHERE ").append(conditions.joinToString(" AND "))
-            sql.append(" ORDER BY key")
-            if (reverse) sql.append(" DESC")
-            if (range.exact && limit != null) {
-                sql.append(" LIMIT ?")
-                params.add(limit.toLong())
-            }
+    /** The scan behind [kvList] and a [KvOp.Scan]. Callers already hold [lock]. */
+    private fun kvScan(range: KvRange, limit: Int?, reverse: Boolean): List<KvEntry> {
+        val conditions = mutableListOf<String>()
+        val params = mutableListOf<Any?>()
+        range.lower?.let {
+            conditions.add("key >= ?")
+            params.add(it)
+        }
+        range.upper?.let {
+            conditions.add("key < ?")
+            params.add(it)
+        }
 
-            val entries = db.query(sql.toString(), params) { KvEntry(it.text(0), it.text(1)) }
-            // The range is a scan hint, not the contract: SQLite compares UTF-8
-            // bytes and the WebView's other adapter compares UTF-16 code units,
-            // so a range can admit a key the selector doesn't accept.
-            if (range.exact) {
-                entries
-            } else {
-                val kept = entries.filter { range.matches(it.key) }
-                if (limit != null && kept.size > limit) kept.subList(0, limit) else kept
+        // A limit only reaches SQL when the scan's own order is the answer's
+        // — see [KvRange.exact]. Otherwise the rows dropped below would come
+        // off the top of a short page.
+        val sql = StringBuilder("SELECT key, value FROM kv")
+        if (conditions.isNotEmpty()) sql.append(" WHERE ").append(conditions.joinToString(" AND "))
+        sql.append(" ORDER BY key")
+        if (reverse) sql.append(" DESC")
+        if (range.exact && limit != null) {
+            sql.append(" LIMIT ?")
+            params.add(limit.toLong())
+        }
+
+        val entries = db.query(sql.toString(), params) { KvEntry(it.text(0), it.text(1)) }
+        // The range is a scan hint, not the contract: SQLite compares UTF-8
+        // bytes and the WebView's other adapter compares UTF-16 code units,
+        // so a range can admit a key the selector doesn't accept.
+        return if (range.exact) {
+            entries
+        } else {
+            val kept = entries.filter { range.matches(it.key) }
+            if (limit != null && kept.size > limit) kept.subList(0, limit) else kept
+        }
+    }
+
+    /** One operation in a [kvOps] batch. */
+    sealed class KvOp {
+        data class Get(val key: String) : KvOp()
+        data class Set(val key: String, val json: String) : KvOp()
+        data class Delete(val key: String) : KvOp()
+        data class Scan(
+            val prefix: String? = null,
+            val start: String? = null,
+            val end: String? = null,
+            val limit: Int? = null,
+            val reverse: Boolean = false,
+        ) : KvOp()
+    }
+
+    /**
+     * Execute a batch of KV operations in arrival order: ONE turn of [lock],
+     * and one transaction when the batch writes at all. The WebView coalesces
+     * a burst into a single bridge call (`NativeArmadaDB.ts`), so the batch
+     * here IS the burst — per-op calls paid a bridge crossing and a lock turn
+     * each, and Capacitor's thread pool never guaranteed their ORDER anyway.
+     * A get or scan later in the batch sees an earlier set, exactly the
+     * read-your-writes the web adapter's op queue defines.
+     *
+     * Returns one element per op: the stored JSON text (or null) for a
+     * [KvOp.Get], null for a [KvOp.Set]/[KvOp.Delete], a list of [KvEntry]
+     * for a [KvOp.Scan].
+     */
+    fun kvOps(ops: List<KvOp>): List<Any?> = lock.withLock {
+        val run = {
+            ops.map { op ->
+                when (op) {
+                    is KvOp.Get ->
+                        db.query("SELECT value FROM kv WHERE key = ?", listOf(op.key)) { it.text(0) }
+                            .firstOrNull()
+                    is KvOp.Set -> {
+                        db.run(
+                            """INSERT INTO kv (key, value) VALUES (?, ?)
+                                ON CONFLICT(key) DO UPDATE SET value = excluded.value""".collapseWhitespace(),
+                            listOf(op.key, op.json),
+                        )
+                        null
+                    }
+                    is KvOp.Delete -> {
+                        db.run("DELETE FROM kv WHERE key = ?", listOf(op.key))
+                        null
+                    }
+                    is KvOp.Scan -> {
+                        val range = KvRange.resolve(op.prefix, op.start, op.end)
+                        if (range.empty) emptyList<KvEntry>() else kvScan(range, op.limit, op.reverse)
+                    }
+                }
             }
         }
+        // Reads alone skip BEGIN IMMEDIATE: they take no write lock the
+        // notification service would then wait out.
+        if (ops.any { it is KvOp.Set || it is KvOp.Delete }) transaction(run) else run()
     }
 
     // ── Driver plumbing ───────────────────────────────────────────────────────

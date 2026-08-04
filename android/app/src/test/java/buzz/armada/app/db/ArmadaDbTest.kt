@@ -659,6 +659,79 @@ class ArmadaDbTest {
     }
 
     @Test
+    fun `kvOps executes a mixed batch in arrival order`() {
+        val db = open()
+
+        // Read-your-writes inside one batch: each get sees the set before it.
+        val results = db.kvOps(
+            listOf(
+                SqliteArmadaDb.KvOp.Set("a", "1"),
+                SqliteArmadaDb.KvOp.Get("a"),
+                SqliteArmadaDb.KvOp.Set("a", "2"),
+                SqliteArmadaDb.KvOp.Get("a"),
+                SqliteArmadaDb.KvOp.Delete("a"),
+                SqliteArmadaDb.KvOp.Get("a"),
+            ),
+        )
+
+        assertEquals(listOf(null, "1", null, "2", null, null), results)
+        assertNull(db.kvGet("a"))
+    }
+
+    @Test
+    fun `kvOps scan sees earlier writes in the same batch`() {
+        val db = open()
+
+        val results = db.kvOps(
+            listOf(
+                SqliteArmadaDb.KvOp.Set("p:1", "1"),
+                SqliteArmadaDb.KvOp.Set("p:2", "2"),
+                SqliteArmadaDb.KvOp.Scan(prefix = "p:"),
+            ),
+        )
+
+        assertEquals(listOf(KvEntry("p:1", "1"), KvEntry("p:2", "2")), results[2])
+    }
+
+    @Test
+    fun `kvOps answers a read-only batch without a transaction`() {
+        val db = open()
+        db.kvSet("k", "\"v\"")
+
+        val results = db.kvOps(
+            listOf(
+                SqliteArmadaDb.KvOp.Get("k"),
+                SqliteArmadaDb.KvOp.Get("missing"),
+                SqliteArmadaDb.KvOp.Scan(prefix = "zzz"),
+            ),
+        )
+
+        assertEquals("\"v\"", results[0])
+        assertNull(results[1])
+        assertEquals(emptyList<KvEntry>(), results[2])
+    }
+
+    @Test
+    fun `kvOps scan honors range, limit and reverse like kvList`() {
+        val db = open()
+        for (n in 1..4) db.kvSet("log:$n", "null")
+
+        val results = db.kvOps(
+            listOf(
+                SqliteArmadaDb.KvOp.Scan(prefix = "log:", start = "log:3"),
+                SqliteArmadaDb.KvOp.Scan(prefix = "log:", limit = 2),
+                SqliteArmadaDb.KvOp.Scan(prefix = "log:", reverse = true, limit = 1),
+            ),
+        )
+
+        @Suppress("UNCHECKED_CAST")
+        fun keys(i: Int) = (results[i] as List<KvEntry>).map { it.key }
+        assertEquals(listOf("log:3", "log:4"), keys(0))
+        assertEquals(listOf("log:1", "log:2"), keys(1))
+        assertEquals(listOf("log:4"), keys(2))
+    }
+
+    @Test
     fun `a range bound stays inside its prefix`() {
         val db = open()
         db.kvSet("p:1", "null")

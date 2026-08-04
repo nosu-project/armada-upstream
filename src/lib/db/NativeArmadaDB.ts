@@ -65,6 +65,14 @@ export interface ArmadaDBPlugin {
   kvList(
     options: { prefix?: string; start?: string; end?: string; limit?: number; reverse?: boolean },
   ): Promise<{ entries: string }>;
+  /**
+   * A whole burst of KV operations as ONE crossing: `ops` is a JSON array of
+   * `{ op: "get" | "set" | "delete" | "list", ... }`, executed in arrival
+   * order inside one native transaction. `results` is a JSON array aligned
+   * with `ops`: the stored JSON text (or null) for a get, null for a
+   * set/delete, an array of `{ key, value }` for a list.
+   */
+  kvOps(options: { ops: string }): Promise<{ results: string }>;
   /** Empty every table (logout purge). The file and its schema survive. */
   wipe(): Promise<void>;
 }
@@ -243,29 +251,119 @@ class NativeRumorStore implements NRumorStore {
   [Symbol.toStringTag] = "NativeRumorStore";
 }
 
+/** One queued KV operation, as it will cross the bridge (minus the settlers). */
+type PendingKvOp =
+  | { op: "get"; key: string; resolve: (value: unknown) => void }
+  | { op: "set"; key: string; value: string; resolve: () => void; reject: (error: unknown) => void }
+  | { op: "delete"; key: string; resolve: () => void; reject: (error: unknown) => void }
+  | {
+    op: "list";
+    prefix?: string;
+    start?: string;
+    end?: string;
+    limit?: number;
+    reverse?: boolean;
+    resolve: (entries: ArmadaKVEntry<unknown>[]) => void;
+  };
+
 /**
  * The KV, carried as JSON text. Serializing on this side is what keeps the
  * native store from having to agree with JavaScript about how a value
  * round-trips — the contract already says only JSON-serializable values are
  * supported.
+ *
+ * Operations are coalesced on a microtask and cross the bridge as ONE `kvOps`
+ * call, mirroring `NativeRumorStore`'s write batching and the IndexedDB
+ * adapter's op queue: every bridge call is a hop onto Capacitor's single
+ * plugin thread and a turn of the native store's global lock (shared with the
+ * notification service), so a burst of per-op calls paid that toll per key —
+ * and Capacitor does not promise call ORDER across its thread pool, so a
+ * `list()` racing a fire-and-forget `set()` could historically pass it.
+ * Executing the burst in arrival order inside one native transaction keeps
+ * read-your-writes exactly as the web adapter defines it.
  */
 class NativeKV implements ArmadaKV {
-  async get<T>(key: string): Promise<T | undefined> {
-    const { value } = await perfTime("kv.get", () => ArmadaDBBridge().kvGet({ key }));
-    if (typeof value !== "string") return undefined;
-    return JSON.parse(value) as T;
+  private pendingOps: PendingKvOp[] = [];
+  private flushScheduled = false;
+
+  private schedule(): void {
+    if (this.flushScheduled) return;
+    this.flushScheduled = true;
+    queueMicrotask(() => {
+      this.flushScheduled = false;
+      void this.flush();
+    });
   }
 
-  async set<T>(key: string, value: T): Promise<void> {
-    // `undefined` (and anything else without a JSON form) is out of contract;
-    // normalized to null so the adapters agree instead of throwing here.
-    await perfTime("kv.set", () =>
-      ArmadaDBBridge().kvSet({ key, value: JSON.stringify(value) ?? "null" }),
-    );
+  private async flush(): Promise<void> {
+    const ops = this.pendingOps;
+    this.pendingOps = [];
+    if (ops.length === 0) return;
+
+    let results: Array<string | null | Array<{ key: string; value: string }>>;
+    try {
+      const wire = ops.map((op) => {
+        if (op.op === "get" || op.op === "delete") return { op: op.op, key: op.key };
+        if (op.op === "set") return { op: op.op, key: op.key, value: op.value };
+        const { resolve: _resolve, ...listOp } = op;
+        return listOp;
+      });
+      const response = await perfTime(
+        "kv.ops",
+        () => ArmadaDBBridge().kvOps({ ops: JSON.stringify(wire) }),
+        () => ops.length,
+        "ops",
+      );
+      results = JSON.parse(response.results) as typeof results;
+    } catch (error) {
+      // Match the per-op contracts from the unbatched days (and the web
+      // adapter): a failed read is a miss, a failed write rejects.
+      for (const op of ops) {
+        if (op.op === "get") op.resolve(undefined);
+        else if (op.op === "list") op.resolve([]);
+        else op.reject(error);
+      }
+      return;
+    }
+
+    for (const [i, op] of ops.entries()) {
+      if (op.op === "get") {
+        const value = results[i];
+        op.resolve(typeof value === "string" ? (JSON.parse(value) as unknown) : undefined);
+      } else if (op.op === "list") {
+        const entries = Array.isArray(results[i]) ? (results[i] as Array<{ key: string; value: string }>) : [];
+        op.resolve(entries.map(({ key, value }) => ({ key, value: JSON.parse(value) as unknown })));
+      } else {
+        op.resolve();
+      }
+    }
   }
 
-  async delete(key: string): Promise<void> {
-    await perfTime("kv.delete", () => ArmadaDBBridge().kvDelete({ key }));
+  get<T>(key: string): Promise<T | undefined> {
+    return perfTime("kv.get", () =>
+      new Promise<T | undefined>((resolve) => {
+        this.pendingOps.push({ op: "get", key, resolve: resolve as (value: unknown) => void });
+        this.schedule();
+      }));
+  }
+
+  set<T>(key: string, value: T): Promise<void> {
+    return perfTime("kv.set", () =>
+      new Promise<void>((resolve, reject) => {
+        // `undefined` (and anything else without a JSON form) is out of
+        // contract; normalized to null so the adapters agree instead of
+        // throwing here.
+        this.pendingOps.push({ op: "set", key, value: JSON.stringify(value) ?? "null", resolve, reject });
+        this.schedule();
+      }));
+  }
+
+  delete(key: string): Promise<void> {
+    return perfTime("kv.delete", () =>
+      new Promise<void>((resolve, reject) => {
+        this.pendingOps.push({ op: "delete", key, resolve, reject });
+        this.schedule();
+      }));
   }
 
   async list<T>(
@@ -273,21 +371,26 @@ class NativeKV implements ArmadaKV {
     opts: ArmadaKVListOptions = {},
   ): Promise<ArmadaKVEntry<T>[]> {
     // Resolved native-side, like the rest of the planning: Kotlin's `KvRange`
-    // is the port of `resolveKvRange`, and one crossing carries the selector
+    // is the port of `resolveKvRange`, and the crossing carries the selector
     // rather than the bounds derived from it. Resolved here too, and only for
     // its refusals — an invalid selector is a caller's bug, and it should be the
     // same TypeError on every platform rather than a rejected bridge call.
     if (resolveKvRange(selector).empty) return [];
 
-    const { entries } = await perfTime(
+    return perfTime(
       "kv.list",
-      () => ArmadaDBBridge().kvList({ ...selector, ...opts }),
-      (result) => result.entries.length,
-      "chars",
+      () =>
+        new Promise<ArmadaKVEntry<T>[]>((resolve) => {
+          this.pendingOps.push({
+            op: "list",
+            ...selector,
+            ...opts,
+            resolve: resolve as (entries: ArmadaKVEntry<unknown>[]) => void,
+          });
+          this.schedule();
+        }),
+      (entries) => entries.length,
+      "entries",
     );
-    return (JSON.parse(entries) as Array<{ key: string; value: string }>).map(({ key, value }) => ({
-      key,
-      value: JSON.parse(value) as T,
-    }));
   }
 }

@@ -186,6 +186,65 @@ class ArmadaDbPlugin : Plugin() {
         }
     }
 
+    /**
+     * A whole burst of KV operations as ONE crossing — the WebView coalesces a
+     * tick's worth of get/set/delete/list into a single call (see
+     * `NativeArmadaDB.ts`), and the store executes them in arrival order in
+     * one lock turn (one transaction, when the batch writes).
+     *
+     * `ops` is a JSON array of `{ op: "get"|"set"|"delete"|"list", ... }`.
+     * Resolves `{ results }` — a JSON array aligned with `ops`: the stored
+     * JSON text (or null) for a get, null for a set/delete, an array of
+     * `{ key, value }` for a list.
+     */
+    @PluginMethod
+    fun kvOps(call: PluginCall) {
+        val raw = call.getString("ops") ?: return call.reject("ops is required")
+
+        val ops: List<SqliteArmadaDb.KvOp>
+        try {
+            val array = JSONArray(raw)
+            ops = (0 until array.length()).map { i ->
+                val body = array.optJSONObject(i) ?: return call.reject("ops[$i] is not an object")
+                when (val op = body.optString("op")) {
+                    "get" -> SqliteArmadaDb.KvOp.Get(body.getString("key"))
+                    "set" -> SqliteArmadaDb.KvOp.Set(body.getString("key"), body.getString("value"))
+                    "delete" -> SqliteArmadaDb.KvOp.Delete(body.getString("key"))
+                    "list" -> SqliteArmadaDb.KvOp.Scan(
+                        prefix = body.stringOrNull("prefix"),
+                        start = body.stringOrNull("start"),
+                        end = body.stringOrNull("end"),
+                        limit = if (body.has("limit")) body.getInt("limit") else null,
+                        reverse = body.optBoolean("reverse", false),
+                    )
+                    else -> return call.reject("ops[$i]: unknown op \"$op\"")
+                }
+            }
+        } catch (error: Exception) {
+            return call.reject("ops is not a valid batch", error)
+        }
+
+        try {
+            val results = db.kvOps(ops)
+            val out = JSONArray()
+            for ((i, result) in results.withIndex()) {
+                if (ops[i] is SqliteArmadaDb.KvOp.Scan) {
+                    val entries = JSONArray()
+                    @Suppress("UNCHECKED_CAST")
+                    for (entry in result as List<KvEntry>) {
+                        entries.put(JSONObject().put("key", entry.key).put("value", entry.json))
+                    }
+                    out.put(entries)
+                } else {
+                    out.put(result ?: JSONObject.NULL)
+                }
+            }
+            call.resolve(JSObject().put("results", out.toString()))
+        } catch (error: Exception) {
+            call.reject(error.message, error)
+        }
+    }
+
     /** Empty every table (logout purge). The file and its schema survive. */
     @PluginMethod
     fun wipe(call: PluginCall) {
@@ -202,6 +261,10 @@ class ArmadaDbPlugin : Plugin() {
      * list that didn't parse is a programming error on the JS side, and
      * answering it with "no constraints" would hand back the whole tenant.
      */
+    /** The string under [name], or null when absent — `optString` would return `""`. */
+    private fun JSONObject.stringOrNull(name: String): String? =
+        if (has(name) && !isNull(name)) getString(name) else null
+
     private fun parseFilters(call: PluginCall): List<JSONObject>? {
         val raw = call.getString("filters")
         if (raw == null) {

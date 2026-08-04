@@ -24,7 +24,7 @@ import type { ArmadaSqlDriver, SqlRow, SqlValue } from "./driver";
  * Hoisted because `vi.mock`'s factory runs before the module body.
  */
 const native = vi.hoisted(() => {
-  const calls = { query: 0, event: 0, count: 0, remove: 0, kvSet: 0 };
+  const calls = { query: 0, event: 0, count: 0, remove: 0, kvSet: 0, kvOps: 0 };
   let store: {
     tenant(id: string): {
       query(filters: NostrFilter[]): Promise<NostrRumor[]>;
@@ -97,6 +97,35 @@ const native = vi.hoisted(() => {
         // stand-in means the string the backing store handed back.
         const entries = await store.kv.list<string>({ prefix, start, end }, { limit, reverse });
         return { entries: JSON.stringify(entries) };
+      },
+      // The batched KV crossing (see `NativeKV.flush`): ops in arrival order,
+      // results aligned positionally, values still opaque JSON TEXT.
+      async kvOps({ ops }: { ops: string }) {
+        calls.kvOps++;
+        const batch = JSON.parse(ops) as Array<
+          | { op: "get"; key: string }
+          | { op: "set"; key: string; value: string }
+          | { op: "delete"; key: string }
+          | { op: "list"; prefix?: string; start?: string; end?: string; limit?: number; reverse?: boolean }
+        >;
+        const results: Array<string | null | Array<{ key: string; value: string }>> = [];
+        for (const op of batch) {
+          if (op.op === "get") {
+            const value = await store.kv.get<string>(op.key);
+            results.push(value === undefined ? null : value);
+          } else if (op.op === "set") {
+            calls.kvSet++;
+            await store.kv.set(op.key, op.value);
+            results.push(null);
+          } else if (op.op === "delete") {
+            await store.kv.delete(op.key);
+            results.push(null);
+          } else {
+            const { prefix, start, end, limit, reverse } = op;
+            results.push(await store.kv.list<string>({ prefix, start, end }, { limit, reverse }));
+          }
+        }
+        return { results: JSON.stringify(results) };
       },
       async wipe() {},
     },
@@ -269,6 +298,24 @@ describe("NativeArmadaDB", () => {
     ]);
     expect(await db.kv.list({ prefix: "log:" }, { reverse: true, limit: 1 })).toEqual([
       { key: "log:4", value: 4 },
+    ]);
+  });
+
+  it("coalesces a same-tick kv burst into one crossing, in arrival order", async () => {
+    // A burst issued before anyone awaits — every op crosses the bridge ONCE,
+    // and the list at the end observes every write queued ahead of it.
+    const [, , got, listed] = await Promise.all([
+      db.kv.set("burst:1", 1),
+      db.kv.set("burst:2", 2),
+      db.kv.get("burst:1"),
+      db.kv.list({ prefix: "burst:" }),
+    ]);
+
+    expect(native.calls.kvOps).toBe(1);
+    expect(got).toBe(1);
+    expect(listed).toEqual([
+      { key: "burst:1", value: 1 },
+      { key: "burst:2", value: 2 },
     ]);
   });
 });
