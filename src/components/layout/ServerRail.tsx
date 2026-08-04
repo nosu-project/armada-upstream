@@ -1,5 +1,5 @@
 import { Bluetooth, Compass, FolderOpen, Headphones, Lock, LogOut, MessageSquare, Plus, Settings, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
 import type React from "react";
@@ -422,7 +422,7 @@ function DragSlot({ dragging, children }: { dragging?: boolean; children: React.
   );
 }
 
-function ServerButton({
+const ServerButton = memo(function ServerButton({
   url,
   onNavigate,
   onSelect,
@@ -609,13 +609,13 @@ function ServerButton({
       </ContextMenuContent>
     </ContextMenu>
   );
-}
+});
 
 /**
  * A rail button for an end-to-end-encrypted Concord community. Visually
  * distinguished from NIP-29 servers by the shield accent (different trust model).
  */
-function ConcordButton({
+const ConcordButton = memo(function ConcordButton({
   communityId,
   name,
   onNavigate,
@@ -776,14 +776,14 @@ function ConcordButton({
       </ContextMenuContent>
     </ContextMenu>
   );
-}
+});
 
 /**
  * A rail button for an end-to-end-encrypted Concord V2 community (CORD-02).
  * Same shield accent as V1 (same trust model); navigates to `/c/…` and pulls
  * its authoritative icon from the folded Control Plane metadata.
  */
-function Concord2Button({
+const Concord2Button = memo(function Concord2Button({
   communityId,
   name,
   onNavigate,
@@ -955,7 +955,7 @@ function Concord2Button({
       </ContextMenuContent>
     </ContextMenu>
   );
-}
+});
 
 /**
  * A Discord-style server folder in the rail. Collapsed it shows a 2×2 grid of
@@ -1389,6 +1389,19 @@ export function ServerRail({
     setRenameId(null);
   }, [renameId, renameValue, persistLayout]);
 
+  // Cached per item key: `begin` is render-stable and useDragPointerDown reads
+  // through a ref, so the only effect a fresh closure per render would have is
+  // to defeat the memoized rail buttons.
+  const dragDownByKey = useRef(new Map<string, (e: PointerEvent) => void>());
+  const dragPointerDownFor = (key: string) => {
+    let fn = dragDownByKey.current.get(key);
+    if (!fn) {
+      fn = (e: PointerEvent) => handleDragPointerDown({ kind: "item", key })(e);
+      dragDownByKey.current.set(key, fn);
+    }
+    return fn;
+  };
+
   const renderItem = (item: RailItem, parentFolderId?: string) => {
     const common: RailDragProps = {
       draggable,
@@ -1396,8 +1409,7 @@ export function ServerRail({
       reordering,
       highlight: dropPlan?.highlightAnchor === itemAnchor(item.key),
       dragParent: parentFolderId,
-      onDragPointerDown: (e: PointerEvent) =>
-        handleDragPointerDown({ kind: "item", key: item.key })(e),
+      onDragPointerDown: dragPointerDownFor(item.key),
       shouldSuppressClick,
     };
     if (item.kind === "server") {

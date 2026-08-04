@@ -65,7 +65,9 @@ export function useCommunityRumors(
     // which contends with the active channel's own reads on the shared store
     // connection — keep it slow.
     refetchInterval: 2 * 60_000,
-    staleTime: 30_000,
+    // The wire bus below is the live path and the interval the backstop; a
+    // finite staleTime only added focus/remount re-runs of the full scan.
+    staleTime: Infinity,
   });
 
   // Delta-read when the wire ingests a rumor for a watched channel: re-scan

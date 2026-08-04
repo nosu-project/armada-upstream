@@ -38,6 +38,9 @@ import { toast } from "@/hooks/useToast";
 /** The ban's steps, in execution order, for progress UI. */
 export type BanPhase = "silence" | "roles" | "rekey";
 
+/** Stable fallback so a fold-less render doesn't mint a fresh Set identity. */
+const NO_BANNED = new Set<string>();
+
 export function useModeration2(community: CommunityV2 | undefined, recipients: string[]) {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
@@ -243,7 +246,7 @@ export function useModeration2(community: CommunityV2 | undefined, recipients: s
   });
 
   return {
-    banned: folded?.banned ?? new Set<string>(),
+    banned: folded?.banned ?? NO_BANNED,
     canRekey: canRefound,
     /** Single-target delegate of {@link banMany} — one code path. */
     ban: (input: { target: string; onPhase?: (phase: BanPhase) => void; forceRotate?: boolean }) =>

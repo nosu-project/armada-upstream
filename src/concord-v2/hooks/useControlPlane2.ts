@@ -175,7 +175,11 @@ export function useControlEvents2(community: CommunityV2 | undefined, active = t
     // A pure store read (the network is the sweep effect above, not this).
     ...STORE_READ,
     enabled: Boolean(community) && active,
-    staleTime: 15_000,
+    // Push-updated (the seed effect, the sweep's onFresh merge, and
+    // invalidateControl2 after a publish): a staleness refetch only re-reads
+    // the same rows, while a finite staleTime scheduled a stale timer per
+    // mounted observer (~20 per open community, one more per rail button).
+    staleTime: Infinity,
     queryFn: async () => {
       const stored = await queryPlane(community!.idHex, "control");
       const prev = queryClient.getQueryData<OpenedEvent[]>(queryKey) ?? [];
@@ -220,7 +224,8 @@ function useControlSnapshot2(community: CommunityV2 | undefined, active: boolean
     // backing-off one is an empty channel list.
     ...STORE_READ,
     enabled: refounded && active && Boolean(cidHex),
-    staleTime: 5_000,
+    // Push-invalidated on the `c2ctl:<id>` wire scope (effect above).
+    staleTime: Infinity,
     queryFn: async () => [...((await readControlSnapshot(cidHex!, curPk)) ?? [])],
   });
 }
