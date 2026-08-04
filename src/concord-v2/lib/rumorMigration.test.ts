@@ -82,6 +82,8 @@ function foldWith(channelIdHex: string): FoldedControl {
     registriesByCreator: new Map(),
     heads: new Map(),
     headEditions: new Map(),
+    pinLists: new Map(),
+    incomplete: [],
   } as unknown as FoldedControl;
 }
 

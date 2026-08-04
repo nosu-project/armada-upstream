@@ -12,6 +12,7 @@ import {
   foldControlState,
   isCurrentFoldedControl,
   type FoldedChannel,
+  type FoldedControl,
   banShouldRotate,
   banShouldRotateMany,
   hasForeignLiveLinks,
@@ -1733,6 +1734,33 @@ describe("isCurrentFoldedControl", () => {
     expect(() => channelCategory(folded.channels.get(idHex)!.metadata)).toThrow(TypeError);
   });
 
+  /**
+   * The same failure, one field later. This one reached production: a snapshot
+   * written before Pins passed every check (`channels` and `heads` were both
+   * Maps), and `usePins2`'s first read of `pinLists.get()` threw inside a
+   * render, taking down the whole React tree for anyone with a cached fold.
+   */
+  it("rejects a snapshot that predates `pinLists`", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const channelId = random32();
+    const wrap = await sealEdition(
+      buildChannelEdition(channelId, normalizeChannelMetadata({ name: "general", private: false }), {
+        actorPubkey: owner.pubkey,
+        version: 1n,
+      }),
+      control,
+      owner,
+    );
+    const folded = foldControlState(openControlWraps([wrap], [control]), communityId, owner.pubkey);
+    expect(isCurrentFoldedControl(folded)).toBe(true);
+
+    const { pinLists: _dropped, ...older } = folded;
+    expect(isCurrentFoldedControl(older as FoldedControl)).toBe(false);
+
+    // What accepting it would have cost: a TypeError inside a render memo.
+    expect(() => (older as FoldedControl).pinLists.get("aa".repeat(32))).toThrow(TypeError);
+  });
+
   it("rejects a miss, and anything that isn't a fold", () => {
     expect(isCurrentFoldedControl(undefined)).toBe(false);
     expect(isCurrentFoldedControl(null)).toBe(false);
@@ -1740,5 +1768,7 @@ describe("isCurrentFoldedControl", () => {
     // `channels` survives JSON only because the codec revives it as a Map; a
     // plain object here means the snapshot was written by something else.
     expect(isCurrentFoldedControl({ channels: {}, heads: new Map() })).toBe(false);
+    // Every Map is load-bearing: missing any one of them is a stale shape.
+    expect(isCurrentFoldedControl({ channels: new Map(), heads: new Map() }), "no pinLists").toBe(false);
   });
 });

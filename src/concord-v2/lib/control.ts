@@ -315,6 +315,13 @@ export interface FoldedControl {
 export function isCurrentFoldedControl(value: unknown): value is FoldedControl {
   const fold = value as FoldedControl | undefined;
   if (!fold || !(fold.channels instanceof Map) || !(fold.heads instanceof Map)) return false;
+  // Every Map the fold carries has to be checked, not a representative sample:
+  // a snapshot from a build that predates a field passes every check that
+  // field is missing from, and then throws on first read. `pinLists` arrived
+  // after `channels` and `heads`, and a snapshot without it must be a MISS
+  // rather than an empty list — an empty pin list reads as "nothing pinned",
+  // which would let a write replace entries it never saw (CORD-04 §7).
+  if (!(fold.pinLists instanceof Map)) return false;
   for (const def of fold.channels.values()) {
     if (!def || typeof def.metadata !== "object" || def.metadata === null) return false;
   }
