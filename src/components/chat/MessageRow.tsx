@@ -45,10 +45,15 @@ const EXPIRY_URGENT_SECS = 60 * 60;
  * `expiration`: a live timer face that empties as the deadline approaches
  * ({@link ExpirationTimerIcon} owns that animation and its own scheduling).
  *
- * The face alone carries the fact for most of a message's life — a "4w"
+ * The face alone carries the fact for most of a message's life — a "30d"
  * countdown on every row would be noise — and the remaining time is spelled out
  * only in the last hour, when it's what the reader actually wants. The tooltip
  * always has it.
+ *
+ * Header rows only. A run of messages from one author expires as a run (the
+ * deadline is send time plus one shared timer), so the clock on the run's first
+ * row already states the fact for all of them; repeating it on every
+ * continuation only added a floating glyph in the right margin.
  *
  * This wrapper's own timer exists purely for that TEXT: once a second in the
  * final minute, twice a minute below an hour, and otherwise a single timeout
@@ -114,7 +119,8 @@ interface MessageRowProps {
   edited?: boolean;
   /**
    * NIP-40 deadline (unix seconds) for a disappearing message. When set, a
-   * timer glyph + countdown renders beside the timestamp. Absent on messages
+   * timer glyph + countdown renders beside the timestamp on the header row
+   * (ignored on `continuation` rows, which have no header). Absent on messages
    * with no `expiration` tag — a reader can't tell whether a client that
    * ignored the tag kept a copy, so the clock only ever claims what the
    * message itself says.
@@ -405,9 +411,9 @@ export const MessageRow = memo(function MessageRow({
             {actions}
           </div>
         )}
-        {continuation && (edited || pending || expiresAt !== undefined) && (
-          // Continuation rows hide the header, so surface the (edited)/sending/
-          // disappearing markers in the same floated slot the toolbar uses. The toolbar
+        {continuation && (edited || pending) && (
+          // Continuation rows hide the header, so surface the (edited)/sending
+          // markers in the same floated slot the toolbar uses. The toolbar
           // (z-20) takes over that slot on hover/active, so hand off: show this
           // marker at rest and fade it out when the toolbar appears, so the two
           // never stack on top of each other.
@@ -415,7 +421,6 @@ export const MessageRow = memo(function MessageRow({
             {edited && (
               <span className="text-[10px] text-muted-foreground/60 shrink-0" title="Edited">(edited)</span>
             )}
-            {expiresAt !== undefined && <ExpirationClock createdAt={createdAt} expiresAt={expiresAt} />}
             {pending && (
               <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground/70" aria-label="Sending" />
             )}

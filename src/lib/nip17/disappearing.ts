@@ -66,13 +66,16 @@ export function formatDisappearingDuration(seconds: number): string {
 
 /**
  * Time left until a deadline, abbreviated for the per-message clock indicator
- * ("3w", "2d", "4h", "12m", "45s"). Rounds UP so a message never reads "0s"
+ * ("21d", "2d", "4h", "12m", "45s"). Rounds UP so a message never reads "0s"
  * while it is still on screen; a passed deadline reads "0s".
+ *
+ * Days are the largest unit: the timers are set in days ("30 days", "90 days")
+ * and a countdown that answers a 30-day timer with "5w" makes the reader do
+ * arithmetic to check it against the setting they chose.
  */
 export function formatTimeLeft(expiresAt: number, nowSecs = Math.floor(Date.now() / 1000)): string {
   const left = expiresAt - nowSecs;
   if (left <= 0) return "0s";
-  if (left >= WEEK) return `${Math.ceil(left / WEEK)}w`;
   if (left >= DAY) return `${Math.ceil(left / DAY)}d`;
   if (left >= HOUR) return `${Math.ceil(left / HOUR)}h`;
   if (left >= MINUTE) return `${Math.ceil(left / MINUTE)}m`;

@@ -35,7 +35,12 @@ describe("formatTimeLeft", () => {
     expect(formatTimeLeft(now + 90, now)).toBe("2m");
     expect(formatTimeLeft(now + 3 * 3600, now)).toBe("3h");
     expect(formatTimeLeft(now + 2 * 86400, now)).toBe("2d");
-    expect(formatTimeLeft(now + 21 * 86400, now)).toBe("3w");
+  });
+
+  it("tops out at days, so a 30-day timer reads as days", () => {
+    expect(formatTimeLeft(now + 21 * 86400, now)).toBe("21d");
+    expect(formatTimeLeft(now + 30 * 86400, now)).toBe("30d");
+    expect(formatTimeLeft(now + 365 * 86400, now)).toBe("365d");
   });
 
   it("never counts below zero", () => {
