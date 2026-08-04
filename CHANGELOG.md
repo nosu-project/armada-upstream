@@ -4,6 +4,23 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.46.1] - 2026-08-04
+
+Pin messages in community channels — a pinned message is cryptographically verified against the original so its content cannot be falsified after the fact. In-app signup is now the full-screen key wizard, and channel history paints incrementally with a visible error when sync fails.
+
+### Added
+- Pin and unpin messages in a channel; a pin bar shows the channel's pinned messages with their images and attachments
+- In-app signup uses the same full-screen key wizard as the main onboarding flow
+
+### Changed
+- Channel history paints incrementally, and surfaces a visible error when sync fails
+- Startup sync skips communities and servers that already show an unread dot, reducing redundant work on open
+- Disappearing-message countdown appears only on the date separator row, not on every message
+
+### Fixed
+- Pinned images open in the full image viewer instead of a raw file URL
+- Messages that are still sending no longer show an encryption-error label
+
 ## [0.46.0] - 2026-08-04
 
 Concord communities get disappearing messages: a community-wide timer, set at creation or in community settings, that expires messages for everyone and lets relays purge them too. Channels can be grouped into categories and dragged into order, new text channels default to private, and invite links are limited to owners and admins. Discover gains a theme creator and paints faster, and channels, threads, DMs and message links are all addressable by URL.

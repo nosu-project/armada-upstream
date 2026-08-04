@@ -1,156 +1,276 @@
-// NOTE: This file is stable and usually should not be modified.
-// It is important that all functionality in this file is preserved, and should only be modified if explicitly requested.
+import React, { useEffect, useMemo, useState } from 'react';
+import { AlertTriangle, Check, Copy, Download, Eye, EyeOff } from 'lucide-react';
+import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
 
-import React, { useState, useEffect } from 'react';
-import { Eye, EyeOff, KeyRound } from 'lucide-react';
+import { ArmadaIdentity, ArmadaKey } from '@/components/brand/ArmadaCrest';
+import { WizardShell } from '@/components/onboarding/WizardShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
-import { toast } from '@/hooks/useToast';
 import { useLoginActions } from '@/hooks/useLoginActions';
-import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
-import { saveNsec } from '@/lib/credentialManager';
+import { toast } from '@/hooks/useToast';
+import { writeClipboardText } from '@/lib/clipboard';
+import { backUpNsec } from '@/lib/credentialManager';
 
 interface SignupDialogProps {
   isOpen: boolean;
   onClose: () => void;
   /**
-   * Called after the account is created and the key is saved (the user is
-   * logged in at this point). The welcome-page onboarding uses this to start
-   * the full-page profile-creation step; profile setup no longer lives in
-   * this dialog.
+   * Called after the account is created and the user is logged in. Optional:
+   * the landing wizard drives its own profile step from {@link WelcomePage};
+   * the in-app call sites ({@link JoinButton}, {@link LoginArea},
+   * {@link GroupChat}) just want the account made and the flow dismissed.
    */
   onComplete?: () => void;
 }
 
+/**
+ * Account creation reached from anywhere in the app that isn't the landing
+ * page — the "Create account" escape hatch inside {@link LoginScreen}, opened
+ * by {@link JoinButton}, {@link LoginArea} and {@link GroupChat}.
+ *
+ * This is the same full-screen {@link WizardShell} flow the landing wizard
+ * ({@link WelcomePage}) uses, not a modal: generate a key, then a save step
+ * whose Continue is gated on the key having demonstrably left the screen — a
+ * successful Copy, keyring save, or file export — so a new user can't skip
+ * past backing up their only login. It stays a self-contained two-step flow
+ * (no profile step); once logged in the app decides where they land.
+ */
 const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose, onComplete }) => {
+  const login = useLoginActions();
   const [step, setStep] = useState<'generate' | 'download'>('generate');
   const [nsec, setNsec] = useState('');
   const [showKey, setShowKey] = useState(false);
-  const login = useLoginActions();
+  const [copied, setCopied] = useState(false);
+  // True while the save-key dialog / keyring sheet is up.
+  const [saving, setSaving] = useState(false);
+  // The gate on the save step: Continue stays disabled until the key has
+  // demonstrably left this screen — copied, stored in the OS keyring, or
+  // written to a file. A dismissed keyring sheet is not a backup.
+  const [backedUp, setBackedUp] = useState(false);
 
-  // Generate a proper nsec key using nostr-tools.
-  const generateKey = () => {
-    const sk = generateSecretKey();
-    const encoded = nip19.nsecEncode(sk);
-    setNsec(encoded);
+  // Reset to a clean generate step each time the flow opens.
+  useEffect(() => {
+    if (!isOpen) return;
+    setStep('generate');
+    setNsec('');
+    setShowKey(false);
+    setCopied(false);
+    setSaving(false);
+    setBackedUp(false);
+  }, [isOpen]);
+
+  /** The generated key's identity, or null while there's no valid key in hand. */
+  const identity = useMemo(() => {
+    if (!nsec) return null;
+    try {
+      const decoded = nip19.decode(nsec);
+      if (decoded.type !== 'nsec') return null;
+      const pubkey = getPublicKey(decoded.data);
+      return { pubkey, npub: nip19.npubEncode(pubkey) };
+    } catch {
+      return null;
+    }
+  }, [nsec]);
+
+  const handleGenerate = () => {
+    setNsec(nip19.nsecEncode(generateSecretKey()));
+    setShowKey(false);
+    setCopied(false);
+    setBackedUp(false);
     setStep('download');
   };
 
-  // Save the key via the best available method (credential manager on
-  // Chromium, file download elsewhere), log in, and finish. Profile setup
-  // happens afterwards in the full-page onboarding (see WelcomePage), not
-  // here.
-  const handleContinue = async () => {
+  const copyKey = async () => {
     try {
-      const decoded = nip19.decode(nsec);
-      if (decoded.type !== 'nsec') {
-        throw new Error('Invalid nsec key');
-      }
-
-      const pubkey = getPublicKey(decoded.data);
-      const npub = nip19.npubEncode(pubkey);
-
-      await saveNsec(npub, nsec);
-
-      login.nsec(nsec);
-      onComplete?.();
-      onClose();
+      await writeClipboardText(nsec);
+      setCopied(true);
+      setBackedUp(true);
+      setTimeout(() => setCopied(false), 2000);
     } catch {
       toast({
-        title: 'Save failed',
-        description: 'Could not save the key. Please copy it manually.',
+        title: 'Copy failed',
+        description: 'Could not copy to the clipboard. Please select and copy it manually.',
         variant: 'destructive',
       });
     }
   };
 
-  const getTitle = () => {
-    if (step === 'generate') return 'sign up';
-    return 'secret key';
+  // Back the key up to a place the user chose and watched it go to — a "Save
+  // as…" dialog on web, the Credential Manager sheet on native. Doesn't
+  // advance: Continue is gated on this (or Copy) having actually succeeded, so
+  // the outcomes stay apart rather than collapsing into "the button ran". A
+  // dismissed dialog leaves the gate shut.
+  const saveKey = async () => {
+    if (saving) return;
+    if (!identity) {
+      toast({
+        title: 'Invalid key',
+        description: 'That key is invalid. Please generate a new one.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const result = await backUpNsec(identity.npub, nsec);
+      if (result.status === 'cancelled') {
+        toast({
+          title: 'Key not saved',
+          description: 'Save the file — or Copy the key — before continuing. It\'s your only login.',
+        });
+        return;
+      }
+      if (result.status === 'failed') {
+        toast({
+          title: 'Couldn\'t save your key',
+          description: 'Saving failed. Copy your key and store it somewhere safe, then continue.',
+          variant: 'destructive',
+        });
+        return;
+      }
+      setBackedUp(true);
+      toast({
+        title: 'Key saved',
+        description: `Saved to ${result.location}. Keep it — it's your only login.`,
+      });
+    } finally {
+      setSaving(false);
+    }
   };
 
-  // Reset state when dialog opens
-  useEffect(() => {
-    if (isOpen) {
-      setStep('generate');
-      setNsec('');
-      setShowKey(false);
-    }
-  }, [isOpen]);
+  // Log in as the new account and dismiss. Only reachable once `backedUp`.
+  const handleContinue = () => {
+    login.nsec(nsec);
+    onComplete?.();
+    onClose();
+  };
 
-  return (
-    <Dialog open={isOpen} onOpenChange={onClose}>
-      <ChromeDialogContent title={getTitle() ?? 'Sign up'}>
-        <div className="flex flex-col items-center gap-2 text-center">
-          <div className="flex size-12 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
-            <KeyRound className="size-6" />
+  if (!isOpen) return null;
+
+  // ── Step 1: generate the key ────────────────────────────────────────────
+  if (step === 'generate') {
+    return (
+      <WizardShell index={0} total={2} stepKey="generate" zClassName="z-[255]" onClose={onClose}>
+        <div className="flex flex-col items-center gap-8 text-center">
+          <ArmadaIdentity size={110} />
+          <div className="space-y-2.5">
+            <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
+              create your account
+            </h1>
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              Your identity is a secret key that lives on your device.
+              No email, no phone number, no password to forget.
+            </p>
           </div>
-          <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-            {getTitle()}
-          </h2>
+          <Button
+            size="lg"
+            className="h-12 w-full clip-corner-lg text-base font-medium"
+            onClick={handleGenerate}
+          >
+            Generate my key
+          </Button>
         </div>
+      </WizardShell>
+    );
+  }
 
-        <div className='mt-6 space-y-4 overflow-y-auto'>
-          {/* Generate Step */}
-          {step === 'generate' && (
-            <div className='text-center space-y-6'>
-              <p className="text-sm text-muted-foreground">
-                We&apos;ll generate a secret key, your one and only login. Keep it safe.
+  // ── Step 2: save the key ────────────────────────────────────────────────
+  return (
+    <WizardShell
+      index={1}
+      total={2}
+      stepKey="download"
+      zClassName="z-[255]"
+      onBack={() => setStep('generate')}
+      onClose={onClose}
+    >
+      <div className="flex flex-col items-center gap-6 text-center">
+        <ArmadaKey size={110} />
+        <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
+          save your secret key
+        </h1>
+
+        {/* The one thing this step has to land. There is no second copy of
+            this key and no way to reissue it, so the warning IS the step's
+            description rather than a footnote under a milder one. */}
+        <div className="w-full clip-corner-lg bg-destructive/10 p-3.5 text-left">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="mt-px size-4 shrink-0 text-destructive" />
+            <div className="space-y-1">
+              <p className="text-xs font-bold uppercase tracking-widest text-destructive">
+                This key is your only login
               </p>
-              <Button className="w-full h-12 clip-corner-lg" onClick={generateKey}>
-                Generate key
-              </Button>
+              <p className="text-xs leading-relaxed text-destructive/90">
+                No reset, no recovery. Lose it and the account is gone; share it and
+                whoever has it is you.
+              </p>
             </div>
-          )}
-
-          {/* Save Key Step */}
-          {step === 'download' && (
-            <div className='space-y-4'>
-              <div className="relative">
-                <Input
-                  type={showKey ? "text" : "password"}
-                  value={nsec}
-                  readOnly
-                  className="pr-10 font-mono bg-background/40 border-transparent"
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
-                  onClick={() => setShowKey(!showKey)}
-                >
-                  {showKey ? (
-                    <EyeOff className="h-4 w-4 text-muted-foreground" />
-                  ) : (
-                    <Eye className="h-4 w-4 text-muted-foreground" />
-                  )}
-                </Button>
-              </div>
-
-              <Button
-                className="w-full h-12 clip-corner-lg"
-                onClick={handleContinue}
-              >
-                Continue
-              </Button>
-
-              <div className='clip-corner-lg bg-amber-500/10 p-3'>
-                <div className='flex items-center gap-2 mb-1'>
-                  <span className='text-xs font-semibold text-amber-600 dark:text-amber-300'>
-                    Important Warning
-                  </span>
-                </div>
-                <p className='text-xs text-amber-700 dark:text-amber-300/90'>
-                  This key is your primary and only means of accessing your account. Store it safely and securely.
-                </p>
-              </div>
-            </div>
-          )}
+          </div>
         </div>
-      </ChromeDialogContent>
-    </Dialog>
+
+        <div className="relative w-full">
+          <Input
+            type={showKey ? 'text' : 'password'}
+            value={nsec}
+            readOnly
+            className="pr-10 font-mono bg-background border-transparent"
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
+            onClick={() => setShowKey((v) => !v)}
+          >
+            {showKey ? (
+              <EyeOff className="size-4 text-muted-foreground" />
+            ) : (
+              <Eye className="size-4 text-muted-foreground" />
+            )}
+          </Button>
+        </div>
+
+        {/* Two ways to back the key up, then the gate. Continue stays shut
+            until one of them has actually succeeded — see `backedUp`. */}
+        <div className="w-full space-y-2">
+          <div className="grid grid-cols-2 gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              className="h-11 clip-corner-lg"
+              onClick={saveKey}
+              disabled={saving}
+            >
+              <Download className="size-4" />
+              {saving ? 'Saving…' : 'Save key'}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              className="h-11 clip-corner-lg"
+              onClick={copyKey}
+              disabled={saving}
+            >
+              {copied ? (
+                <Check className="size-4 text-success" />
+              ) : (
+                <Copy className="size-4" />
+              )}
+              {copied ? 'Copied' : 'Copy key'}
+            </Button>
+          </div>
+          <Button
+            size="lg"
+            className="h-12 w-full clip-corner-lg text-base font-medium"
+            onClick={handleContinue}
+            disabled={!backedUp || saving}
+          >
+            Continue
+          </Button>
+        </div>
+      </div>
+    </WizardShell>
   );
 };
 

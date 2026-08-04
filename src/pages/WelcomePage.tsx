@@ -293,7 +293,7 @@ export function WelcomePage() {
           {/* The one thing this step has to land. There is no second copy of
               this key and no way to reissue it, so the warning IS the step's
               description rather than a footnote under a milder one. */}
-          <div className="w-full clip-corner-lg border-2 border-destructive/60 bg-destructive/10 p-3.5 text-left">
+          <div className="w-full clip-corner-lg bg-destructive/10 p-3.5 text-left">
             <div className="flex items-start gap-2.5">
               <AlertTriangle className="mt-px size-4 shrink-0 text-destructive" />
               <div className="space-y-1">
@@ -336,8 +336,8 @@ export function WelcomePage() {
             <div className="grid grid-cols-2 gap-2">
               <Button
                 type="button"
-                variant="outline"
-                className="h-11 clip-corner-lg bg-background"
+                variant="secondary"
+                className="h-11 clip-corner-lg"
                 onClick={saveKey}
                 disabled={saving}
               >
@@ -346,8 +346,8 @@ export function WelcomePage() {
               </Button>
               <Button
                 type="button"
-                variant="outline"
-                className="h-11 clip-corner-lg bg-background"
+                variant="secondary"
+                className="h-11 clip-corner-lg"
                 onClick={copyKey}
                 disabled={saving}
               >
