@@ -135,23 +135,49 @@ export interface GroupKey {
   sk: Uint8Array;
   /** x-only pubkey hex — the Stream address. */
   pk: string;
-  /** NIP-44 conversation key (self-ECDH of sk with its own pk). */
-  convKey: Uint8Array;
-}
-
-function groupKey(label: string, secret: Uint8Array, id: Uint8Array, epoch?: bigint): GroupKey {
-  const sk = hkdfToSecretKey(secret, buildInfo(label, id, epoch));
-  const pk = bytesToHex(schnorr.getPublicKey(sk));
-  const convKey = getConversationKey(sk, pk);
-  return { sk, pk, convKey };
+  /**
+   * NIP-44 conversation key (self-ECDH of sk with its own pk).
+   *
+   * Derived LAZILY on first read: the ECDH is an arbitrary-point multiplication
+   * (~1–2ms on a phone, the expensive half of a derivation), and many keys are
+   * only ever used for their address — subscription filters, stream-auth
+   * registration, voice room names — which never touch it.
+   */
+  readonly convKey: Uint8Array;
 }
 
 /**
- * `groupKey` memo. A single derivation costs one HKDF plus TWO secp256k1
- * point multiplications (~ms each on a phone), and the app re-derives every
- * community's full key set on short polls (stream-auth registration each 20s,
- * subscription and wire rebuilds each 60s/2min) — uncached, that alone was
- * seconds of main-thread crypto per poll for multi-community users.
+ * The persistable form of one derivation — what `groupKeyPersist.ts` writes
+ * into ArmadaDB's KV so a warm boot re-derives nothing.
+ *
+ * `h` is sha256 of the in-memory memo key, so the persisted blob never spells
+ * the community secret a derivation started FROM. The derived `sk` is stored
+ * (hex) — the same device-trust level as the decrypted plane data and raw
+ * channel keys the event store already persists. `ck` appears only once the
+ * lazy conversation key has actually been computed.
+ *
+ * Entries are trusted as our own prior output: `pk`/`ck` are not re-proved
+ * against `sk` on import (that point-mul is exactly the cost being cached),
+ * only shape-checked.
+ */
+export interface GroupKeyMemoEntry {
+  /** sha256 hex of the memo key (label|secret|id|epoch). */
+  h: string;
+  /** Derived secp256k1 secret key, hex. */
+  sk: string;
+  /** x-only pubkey hex — the Stream address. */
+  pk: string;
+  /** NIP-44 conversation key hex; absent until first `convKey` read. */
+  ck?: string;
+}
+
+/**
+ * `groupKey` memo. A single derivation costs one HKDF plus a secp256k1
+ * base-point multiplication up front (and a lazy ECDH on first `convKey`
+ * read, ~ms each on a phone), and the app re-derives every community's full
+ * key set on short polls (stream-auth registration each 20s, subscription and
+ * wire rebuilds each 60s/2min) — uncached, that alone was seconds of
+ * main-thread crypto per poll for multi-community users.
  *
  * Caching is sound because the derivation is a pure function of
  * (label, secret, id, epoch) — CORD-02 Appendix A is frozen — and every
@@ -159,19 +185,109 @@ function groupKey(label: string, secret: Uint8Array, id: Uint8Array, epoch?: big
  * FIFO-bounded: entries are tiny (~200B) and the working set is
  * O(communities × channels × held epochs), far under the cap.
  */
-const groupKeyMemo = new Map<string, GroupKey>();
+const groupKeyMemo = new Map<string, { key: GroupKey; entry: GroupKeyMemoEntry }>();
 const GROUP_KEY_MEMO_MAX = 8192;
+
+/** Persisted entries not yet claimed by a derivation this session, keyed by `h`. */
+const hydratedEntries = new Map<string, GroupKeyMemoEntry>();
+
+/** Notified synchronously whenever the persistable state gains information. */
+let memoDirtyListener: (() => void) | undefined;
+
+function memoDirty(): void {
+  memoDirtyListener?.();
+}
+
+function hashMemoKey(memoKey: string): string {
+  return bytesToHex(sha256(ASCII.encode(memoKey)));
+}
+
+/** The GroupKey view over a memo entry; reading `convKey` lazily fills `entry.ck`. */
+function entryGroupKey(entry: GroupKeyMemoEntry): GroupKey {
+  const sk = hexToBytes(entry.sk);
+  const pk = entry.pk;
+  let convKey = entry.ck !== undefined ? hexToBytes(entry.ck) : undefined;
+  return {
+    sk,
+    pk,
+    get convKey(): Uint8Array {
+      if (convKey === undefined) {
+        convKey = getConversationKey(sk, pk);
+        entry.ck = bytesToHex(convKey);
+        memoDirty();
+      }
+      return convKey;
+    },
+  };
+}
 
 function groupKeyCached(label: string, secret: Uint8Array, id: Uint8Array, epoch?: bigint): GroupKey {
   const memoKey = `${label}|${bytesToHex(secret)}|${bytesToHex(id)}|${epoch ?? ""}`;
   const hit = groupKeyMemo.get(memoKey);
-  if (hit) return hit;
-  const key = groupKey(label, secret, id, epoch);
+  if (hit) return hit.key;
+
+  const h = hashMemoKey(memoKey);
+  let entry = hydratedEntries.get(h);
+  if (entry !== undefined) {
+    hydratedEntries.delete(h);
+  } else {
+    const sk = hkdfToSecretKey(secret, buildInfo(label, id, epoch));
+    entry = { h, sk: bytesToHex(sk), pk: bytesToHex(schnorr.getPublicKey(sk)) };
+    memoDirty();
+  }
+
+  const slot = { key: entryGroupKey(entry), entry };
   if (groupKeyMemo.size >= GROUP_KEY_MEMO_MAX) {
     groupKeyMemo.delete(groupKeyMemo.keys().next().value as string);
   }
-  groupKeyMemo.set(memoKey, key);
-  return key;
+  groupKeyMemo.set(memoKey, slot);
+  return slot.key;
+}
+
+const HEX64 = /^[0-9a-f]{64}$/;
+
+/**
+ * Install persisted entries, shape-checked; malformed rows are skipped rather
+ * than trusted. Each is claimed (and dropped from this staging map) by the
+ * first derivation that asks for it.
+ */
+export function importGroupKeyMemo(entries: unknown[]): void {
+  for (const raw of entries) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const { h, sk, pk, ck } = raw as Partial<GroupKeyMemoEntry>;
+    if (typeof h !== "string" || !HEX64.test(h)) continue;
+    if (typeof sk !== "string" || !HEX64.test(sk)) continue;
+    if (typeof pk !== "string" || !HEX64.test(pk)) continue;
+    if (ck !== undefined && (typeof ck !== "string" || !HEX64.test(ck))) continue;
+    hydratedEntries.set(h, { h, sk, pk, ...(ck !== undefined ? { ck } : {}) });
+  }
+}
+
+/**
+ * Everything worth persisting: this session's memo PLUS the hydrated entries
+ * nothing claimed yet — a community not opened this session keeps its cache
+ * rather than losing it to the next write. Deduped by `h` (the live memo's
+ * copy wins, it may have gained a `ck`), oldest first so a `limit` drops the
+ * stalest hydrated leftovers.
+ */
+export function exportGroupKeyMemo(limit: number): GroupKeyMemoEntry[] {
+  const byHash = new Map<string, GroupKeyMemoEntry>();
+  for (const entry of hydratedEntries.values()) byHash.set(entry.h, entry);
+  for (const { entry } of groupKeyMemo.values()) byHash.set(entry.h, entry);
+  const entries = [...byHash.values()];
+  return entries.length > limit ? entries.slice(entries.length - limit) : entries;
+}
+
+/** Register THE dirty listener (last registration wins — one persist layer exists). */
+export function onGroupKeyMemoDirty(listener: () => void): void {
+  memoDirtyListener = listener;
+}
+
+/** Test seam: forget every cached and hydrated derivation. */
+export function _resetGroupKeyMemoForTests(): void {
+  groupKeyMemo.clear();
+  hydratedEntries.clear();
+  memoDirtyListener = undefined;
 }
 
 // ── Plane keys (CORD-02 §5, CORD-03 §1, CORD-06 §2) ─────────────────────────

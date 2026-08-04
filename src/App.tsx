@@ -28,6 +28,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import WalletProvider from "@/components/WalletProvider";
 import { WebPushNotifications } from "@/components/WebPushNotifications";
 import { WireSync } from "@/wire/WireSync";
+import { initGroupKeyPersistence } from "@/concord-v2/lib/groupKeyPersist";
 import { secureStorage } from "@/lib/secureStorage";
 
 import AppRouter from "./AppRouter";
@@ -54,6 +55,11 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+// Hydrate the Concord groupKey memo from KV at module load — before the
+// community list resolves and channelsView derives every stream key. A warm
+// boot then pays no secp256k1 point multiplications for last session's keys.
+void initGroupKeyPersistence();
 
 // On Android the WebView's `visibilitychange`/`focus` events (which React
 // Query's focusManager watches by default) don't fire reliably when the app is

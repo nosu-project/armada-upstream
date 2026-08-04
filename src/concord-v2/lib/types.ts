@@ -295,8 +295,13 @@ export interface ChannelV2 {
   category?: string;
   /** Sidebar position (channelOrder.ts); undefined sorts last, by name. */
   position?: number;
-  /** The current epoch's call coordinates — every Channel is callable (CORD-07 §1). */
-  voice: VoiceKeys;
+  /**
+   * The current epoch's call coordinates — every Channel is callable
+   * (CORD-07 §1). A lazy memoized getter on the objects `channelsView`
+   * builds: the room keypair costs a point multiplication, so it derives on
+   * first read (joining or resolving a call), not on every sidebar rebuild.
+   */
+  readonly voice: VoiceKeys;
   /**
    * Stream keys across every held epoch, newest first (reads span rekeys).
    * A retired epoch carries its rotation's publish time as `retiredAt` — the
