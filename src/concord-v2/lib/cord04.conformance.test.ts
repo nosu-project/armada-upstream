@@ -682,7 +682,9 @@ describe("CORD-04 §2 — The Roster", () => {
     // still NAMES the evicted role — it just confers nothing, because a role
     // outside the fold is a role that does not exist.
     expect(rolesOf(folded.roster, member.pubkey).map((r) => r.roleId)).toEqual([sorted[0]]);
-  });
+    // 105 sealed rounds is ~2s of real signing alone; under a full parallel
+    // suite run that regularly blows the 5s default.
+  }, 20_000);
 
   it("O-24: the Roster is owner-rooted — an entry not tracing to the owner is not authority", async () => {
     const { owner, communityId, control } = makeCommunity();
