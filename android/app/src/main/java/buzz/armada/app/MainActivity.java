@@ -65,6 +65,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(ArmadaCredentialPlugin.class);
         registerPlugin(BluetoothMeshPlugin.class);
         registerPlugin(WebReadyPlugin.class);
+        registerPlugin(ShareTargetPlugin.class);
 
         // Install the androidx splash screen. This dismisses the launch
         // (Theme.SplashScreen) window and hands off to postSplashScreenTheme
@@ -127,11 +128,14 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     protected void onNewIntent(Intent intent) {
-        // Gate only genuine deep links (ACTION_VIEW + data URI: notification
-        // taps' armada://open<path> and verified https App Links). The plain
-        // "open the app" tap on the foreground-service notification carries
-        // neither, and resuming to the previous screen is exactly right there.
-        if (Intent.ACTION_VIEW.equals(intent.getAction()) && intent.getData() != null) {
+        // Gate genuine deep links (ACTION_VIEW + data URI: notification taps'
+        // armada://open<path> and verified https App Links) and incoming
+        // shares (ACTION_SEND[_MULTIPLE], routed to the share flow by
+        // ShareTargetPlugin). The plain "open the app" tap on the
+        // foreground-service notification carries neither, and resuming to
+        // the previous screen is exactly right there.
+        if ((Intent.ACTION_VIEW.equals(intent.getAction()) && intent.getData() != null)
+                || ShareTargetPlugin.isShareIntent(intent)) {
             showDeepLinkGate();
         }
         // BridgeActivity forwards the intent to @capacitor/app (appUrlOpen).

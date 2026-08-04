@@ -2,12 +2,18 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from "
 import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { useNotificationNavigation } from "@/hooks/useNotificationNavigation";
+import { useShareTargetNavigation } from "@/hooks/useShareTargetNavigation";
 import { useForegroundNotifications } from "@/hooks/useForegroundNotifications";
 import {
   coldLaunchPending,
   consumeColdLaunchDeepLink,
   onColdLaunchResolved,
 } from "@/lib/coldLaunchDeepLink";
+import {
+  coldSharePending,
+  consumeColdShareRoute,
+  onColdShareResolved,
+} from "@/lib/shareTarget";
 import { BlankSplash, BootSplash } from "@/components/brand/BootSplash";
 import { MainLayout } from "@/components/layout/MainLayout";
 import { VersionCheck } from "@/components/VersionCheck";
@@ -84,23 +90,33 @@ function HomeRedirect() {
   const { mesh } = useMeshTransport();
   const online = useOnlineStatus();
 
-  // Cold launch from a notification tap: the launch URL resolves async (see
-  // coldLaunchDeepLink). Hold the default redirect until it's known — otherwise
-  // we'd send `/` to the default server, ServerPage would auto-open the default
-  // group, and the late deep-link navigate would lose that race. Once resolved,
-  // a captured deep link wins; otherwise fall through to the normal default.
+  // Cold launch from a notification tap or an incoming share: the launch
+  // intent resolves async (see coldLaunchDeepLink / shareTarget). Hold the
+  // default redirect until both are known — otherwise we'd send `/` to the
+  // default server, ServerPage would auto-open the default group, and the late
+  // navigate would lose that race. A launch intent is a deep link XOR a share
+  // (ACTION_VIEW vs ACTION_SEND), so at most one of the two produces a path.
   const [state, setState] = useState<{ ready: boolean; deepLink: string | null }>(() =>
-    coldLaunchPending()
+    coldLaunchPending() || coldSharePending()
       ? { ready: false, deepLink: null }
-      : { ready: true, deepLink: consumeColdLaunchDeepLink() },
+      : { ready: true, deepLink: consumeColdLaunchDeepLink() ?? consumeColdShareRoute() },
   );
-  useEffect(
-    () =>
-      onColdLaunchResolved(() => {
-        setState((prev) => (prev.ready ? prev : { ready: true, deepLink: consumeColdLaunchDeepLink() }));
-      }),
-    [],
-  );
+  useEffect(() => {
+    const check = () => {
+      if (coldLaunchPending() || coldSharePending()) return;
+      setState((prev) =>
+        prev.ready
+          ? prev
+          : { ready: true, deepLink: consumeColdLaunchDeepLink() ?? consumeColdShareRoute() },
+      );
+    };
+    const offLaunch = onColdLaunchResolved(check);
+    const offShare = onColdShareResolved(check);
+    return () => {
+      offLaunch();
+      offShare();
+    };
+  }, []);
 
   // Land on the first item of the user's *arranged* community rail — NIP-29
   // servers AND Concord V1/V2 communities intermixed in the order they chose
@@ -247,11 +263,13 @@ function useWarmRouteChunks() {
 }
 
 /**
- * Mounts the notification-tap → React Router navigation bridge. Rendered inside
- * <BrowserRouter> so `useNavigate` resolves; renders nothing.
+ * Mounts the notification-tap → React Router navigation bridge, and its
+ * warm-share sibling. Rendered inside <BrowserRouter> so `useNavigate`
+ * resolves; renders nothing.
  */
 function NotificationNavigation() {
   useNotificationNavigation();
+  useShareTargetNavigation();
   return null;
 }
 

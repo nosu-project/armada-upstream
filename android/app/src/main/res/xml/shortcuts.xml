@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Sharing Shortcuts declaration: a dynamic shortcut carrying the
+     buzz.armada.app.category.SHARE_TARGET category (pushed by
+     ShareTargetPlugin.publishShortcuts and the notification service's
+     pushConversationShortcut) appears as a Direct Share target in other
+     apps' share sheets, delivering ACTION_SEND to MainActivity with
+     EXTRA_SHORTCUT_ID identifying the conversation. The shortcut id IS the
+     in-app route (/dm/<peer>, /c/<community>/<channel>, /s/<relay>/<group>),
+     so the web layer navigates straight to it. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <share-target android:targetClass="buzz.armada.app.MainActivity">
+        <data android:mimeType="*/*" />
+        <category android:name="buzz.armada.app.category.SHARE_TARGET" />
+    </share-target>
+</shortcuts>

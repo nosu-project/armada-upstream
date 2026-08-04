@@ -3243,7 +3243,7 @@ public class NotificationRelayService extends Service {
                 // postRoomMessage — the key that promotes it into the
                 // conversation space where the shortcut's avatar (sender for
                 // DMs, community image for channels) replaces the app icon.
-                .setShortcutId(room.roomKey);
+                .setShortcutId(shortcutIdFor(room));
         // Each conversation gets its OWN unique group key: it shows
         // standalone (a group of one, no summary), but the explicit key opts
         // it out of Android's auto-bundling — which otherwise sweeps 4+
@@ -3499,12 +3499,25 @@ public class NotificationRelayService extends Service {
     private void pushConversationShortcut(RoomNotif room, Person sender, Bitmap avatar) {
         try {
             String label = conversationTitle(room);
-            ShortcutInfoCompat.Builder sb = new ShortcutInfoCompat.Builder(this, room.roomKey)
+            // The shortcut id is the conversation's stable in-app ROUTE, not
+            // the roomKey: it doubles as the Direct Share target id
+            // (EXTRA_SHORTCUT_ID on an incoming share), and a route is the one
+            // spelling the web layer can navigate without service state — a
+            // "z:<z>" roomKey is a per-epoch pseudonym only zToUrl can map.
+            // Must match ShareTargetPlugin.publishShortcuts, the other writer
+            // of these shortcuts.
+            String id = shortcutIdFor(room);
+            ShortcutInfoCompat.Builder sb = new ShortcutInfoCompat.Builder(this, id)
                     .setShortLabel(label)
                     .setPerson(sender)
                     .setLongLived(true)
-                    .setIntent(deepLinkIntent(room.url))
-                    .setCategories(java.util.Collections.singleton("android.shortcut.conversation"));
+                    // The base route, not room.url: a launcher/share tap should
+                    // open the room, not scroll to whatever message last
+                    // notified.
+                    .setIntent(deepLinkIntent(conversationRoute(room.url)))
+                    .setCategories(new java.util.HashSet<>(java.util.Arrays.asList(
+                            ShareTargetPlugin.CATEGORY_CONVERSATION,
+                            ShareTargetPlugin.CATEGORY_SHARE_TARGET)));
             // The shortcut icon is what the conversation layout paints on the
             // left; without it (avatar not fetched yet) the app icon shows until
             // the silent avatar re-post refreshes the shortcut.
@@ -3513,6 +3526,48 @@ public class NotificationRelayService extends Service {
         } catch (Exception e) {
             if (BuildConfig.DEBUG) Log.w(TAG, "pushConversationShortcut failed", e);
         }
+    }
+
+    /**
+     * The conversation shortcut id for a room: its stable in-app route when
+     * one can be derived from the room's deep link, the roomKey otherwise
+     * (never expected, but a shortcut beats no shortcut).
+     */
+    private static String shortcutIdFor(RoomNotif room) {
+        String route = conversationRoute(room.url);
+        return route != null && !route.isEmpty() && !route.equals("/") ? route : room.roomKey;
+    }
+
+    /**
+     * Strip a deep-link url down to its stable conversation route: room.url
+     * points at the LATEST message (it may carry /t/<root> and /m/<id> focus
+     * segments, see appendFocusSegment), but a shortcut identifies and opens
+     * the CONVERSATION. Keeps the fixed segment count of each route shape —
+     * /dm/<peer> and /c1/<id> are 2 segments, /c/<community>/<channel> and
+     * /s/<relay>/<group> are 3 — rather than scanning for "/t/", which a
+     * 1-char route param could fake.
+     */
+    private static String conversationRoute(String url) {
+        if (url == null || url.isEmpty() || url.equals("/")) return url;
+        String[] seg = url.split("/"); // leading "/" makes seg[0] empty
+        if (seg.length < 2) return url;
+        int keep;
+        switch (seg[1]) {
+            case "c":
+            case "s":
+                keep = 3;
+                break;
+            case "dm":
+            case "c1":
+                keep = 2;
+                break;
+            default:
+                return url;
+        }
+        keep = Math.min(keep, seg.length - 1);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 1; i <= keep; i++) sb.append('/').append(seg[i]);
+        return sb.toString();
     }
 
     private interface BitmapCallback {
