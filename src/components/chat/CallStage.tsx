@@ -22,7 +22,7 @@ import {
   X,
 } from "lucide-react";
 import type { CSSProperties } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { DisplayName } from "@/components/DisplayName";
@@ -45,6 +45,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
 import { useUserVolume } from "@/hooks/useUserVolume";
 import { useCallSignals } from "@/contexts/CallSignalsContext";
+import type { VoiceReactionEntry } from "@/concord-v2/lib/voice";
 import { useVoiceIdentity } from "@/contexts/VoiceIdentityContext";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { playScreenShareSound } from "@/lib/callSounds";
@@ -357,37 +358,144 @@ function RaisedHandBadge({ pubkey }: { pubkey: string }) {
 }
 
 /**
- * A small deterministic horizontal jitter (−16..16px) keyed off the reaction
- * nonce, so simultaneous emoji from one participant don't stack exactly and
- * read as a little burst.
+ * A deterministic horizontal jitter (−70..70px) keyed off the reaction
+ * nonce, so several reactions in flight — now all sharing one start point —
+ * fan out instead of stacking in an exact line.
  */
 function reactionOffset(nonce: string): number {
   let h = 0;
   for (let i = 0; i < nonce.length; i++) h = (h * 31 + nonce.charCodeAt(i)) | 0;
-  return (h % 33) - 16;
+  return (h % 141) - 70;
 }
 
 /**
- * The transient emoji reactions floating up a participant's tile (à la
- * Zoom/Signal). They rise up the CENTRE of the tile — deliberately clear of the
- * bottom-left nameplate — fading and drifting on their own (~4s, matching the
- * reaction TTL), keyed by nonce so React mounts/unmounts each independently.
+ * Registry of every currently-mounted participant tile's root element, keyed
+ * by pubkey, plus the box a `StageReactions` overlay measures itself against.
+ * Populated by `VideoTile`/`AvatarTile` as they mount/unmount and read (not
+ * continuously observed — a one-off `getBoundingClientRect` at the moment a
+ * reaction arrives is enough) by `computeSpawnPoint` below. One CallStage
+ * instance relayouts across theater/floating/docked (see its doc comment), so
+ * a single registry — not one per render branch — stays correct across mode
+ * switches; entries self-remove on unmount, e.g. floating mode only mounts
+ * the one primary tile, so anyone else's reaction falls back to the box's
+ * bottom-center.
  */
-function TileReactions({ pubkey }: { pubkey: string }) {
-  const { reactions } = useCallSignals();
-  const mine = reactions.filter((r) => r.author === pubkey);
-  if (mine.length === 0) return null;
+/** A reaction's start point + travel distance within its stage box, both in px. */
+interface ReactionSpawn {
+  x: number;
+  y: number;
+  rise: number;
+}
+
+/**
+ * Every reaction rises from the same spot — bottom-center of the stage box,
+ * roughly where the reaction button itself sits in the controls row — rather
+ * than from the sender's own tile. Tile position depends entirely on the
+ * current grid layout (how many people are in the call, video vs. avatar,
+ * join order), so it shifts under a viewer for reasons that have nothing to
+ * do with the reaction and read as arbitrary; the avatar/name pill on the
+ * floater already does 100% of the "who reacted" job, so the origin point
+ * doesn't need to. One fixed origin is layout-agnostic and gives everyone
+ * the exact same big, equal-length rise for free (no per-tile clipping case
+ * to reason about).
+ */
+const REACTION_RISE_RATIO = 0.7;
+const REACTION_RISE_MIN = 160;
+const REACTION_RISE_MAX = 420;
+const REACTION_BOTTOM_MARGIN = 24;
+
+function computeSpawnPoint(container: HTMLElement | null): ReactionSpawn {
+  const box = container?.getBoundingClientRect();
+  if (!box || box.width === 0 || box.height === 0) {
+    return { x: 0, y: 0, rise: REACTION_RISE_MIN };
+  }
+  const rise = Math.min(Math.max(box.height * REACTION_RISE_RATIO, REACTION_RISE_MIN), REACTION_RISE_MAX);
+  return { x: box.width / 2, y: box.height - REACTION_BOTTOM_MARGIN, rise };
+}
+
+/**
+ * A floating emoji + sender pill. Memoized because `entry`/`spawn` are stable
+ * references for a reaction's whole ~4s life, so this skips re-rendering
+ * every OTHER floater already on screen whenever `StageReactions` re-renders
+ * (a new reaction, or its 2s decay tick).
+ */
+const StageReactionFloater = memo(function StageReactionFloater({
+  entry,
+  spawn,
+}: {
+  entry: VoiceReactionEntry;
+  spawn: ReactionSpawn;
+}) {
+  const author = useAuthor(entry.author);
+  const metadata = author.data?.metadata;
+  const displayName = useScopedDisplayName(entry.author, metadata);
   return (
-    <div className="pointer-events-none absolute inset-0 z-20 overflow-hidden" aria-hidden>
-      {mine.map((r) => (
-        <span
-          key={r.nonce}
-          className="absolute bottom-[28%] left-1/2 font-emoji text-3xl leading-none animate-reaction-float drop-shadow"
-          style={{ marginLeft: reactionOffset(r.nonce) }}
-        >
-          {r.emoji}
+    <div
+      className="absolute flex items-center gap-1.5 animate-reaction-rise"
+      style={{
+        left: spawn.x + reactionOffset(entry.nonce),
+        top: spawn.y,
+        "--rise": `${spawn.rise}px`,
+      } as CSSProperties}
+    >
+      <span className="font-emoji text-4xl leading-none drop-shadow shrink-0">{entry.emoji}</span>
+      {/* Matches the tile nameplate's width budget (not the old tight 96px
+          pill) so the same names that read in full on a tile don't clip here. */}
+      <span className="flex items-center gap-1 rounded-full bg-black/70 pl-0.5 pr-2 py-0.5 text-xs text-white shadow shrink-0 max-w-56">
+        <Avatar className="size-4 shrink-0">
+          <AvatarImage src={metadata?.picture} alt="" />
+          <AvatarFallback className="bg-primary/30 text-primary text-[9px]">
+            {displayName[0]?.toUpperCase()}
+          </AvatarFallback>
+        </Avatar>
+        <span className="truncate">
+          <DisplayName pubkey={entry.author} name={displayName} />
         </span>
-      ))}
+      </span>
+    </div>
+  );
+});
+
+/**
+ * The stage-wide emoji reaction overlay (à la Jitsi/Zoom): a reaction pops in
+ * near the controls row and rises above the WHOLE stage, so everyone in the
+ * call sees it — not just whoever's looking at a small tile. One instance
+ * mounts per render branch (theater/floating/docked); `containerRef` is that
+ * branch's own media-area ref, used both to size this overlay and as the
+ * coordinate origin for `computeSpawnPoint`. Each reaction's spawn point is
+ * computed once and cached by nonce for its ~4s life.
+ */
+function StageReactions({ containerRef }: { containerRef: React.RefObject<HTMLElement | null> }) {
+  const { reactions } = useCallSignals();
+  const [spawns, setSpawns] = useState<Map<string, ReactionSpawn>>(new Map());
+
+  useEffect(() => {
+    setSpawns((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const r of reactions) {
+        if (!next.has(r.nonce)) {
+          next.set(r.nonce, computeSpawnPoint(containerRef.current));
+          changed = true;
+        }
+      }
+      for (const nonce of next.keys()) {
+        if (!reactions.some((r) => r.nonce === nonce)) {
+          next.delete(nonce);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [reactions, containerRef]);
+
+  if (reactions.length === 0) return null;
+  return (
+    <div className="pointer-events-none absolute inset-0 z-30 overflow-hidden" aria-hidden>
+      {reactions.map((r) => {
+        const spawn = spawns.get(r.nonce);
+        return spawn ? <StageReactionFloater key={r.nonce} entry={r} spawn={spawn} /> : null;
+      })}
     </div>
   );
 }
@@ -469,7 +577,6 @@ function VideoTile({
       )}
       <FocusButton focused={focused} onClick={onToggleFocus} />
       {!isScreenShare && <RaisedHandBadge pubkey={pubkey} />}
-      {!isScreenShare && <TileReactions pubkey={pubkey} />}
       {/* Remote (non-screenshare) nameplates open the per-user volume menu. */}
       {hasVolumeMenu ? (
         <VolumeMenu pubkey={pubkey} displayName={displayName} verified={verified}>
@@ -573,7 +680,6 @@ function AvatarTile({
       </div>
       <FocusButton focused={focused} onClick={onToggleFocus} />
       <RaisedHandBadge pubkey={pubkey} />
-      <TileReactions pubkey={pubkey} />
       {/* Remote nameplates open the per-user volume menu. */}
       {!isLocal ? (
         <VolumeMenu pubkey={pubkey} displayName={displayName} verified={verified}>
@@ -770,6 +876,12 @@ export function CallStage({
 
   // Which tile is spotlighted, tracked by its stable key (or null for the grid).
   const [focusKey, setFocusKey] = useState<string | null>(null);
+
+  // The media-area box the stage-wide reaction overlay sizes itself against —
+  // see `StageReactions`. Only one render branch (theater/floating/docked) is
+  // mounted at a time, but this one CallStage instance persists across
+  // switches between them, so a single ref stays valid throughout.
+  const stageBoxRef = useRef<HTMLDivElement | null>(null);
 
   // Video tracks (camera + screenshare) we've subscribed to — each a full
   // TrackReference so `VideoTrack` has a real reference to render.
@@ -1078,42 +1190,53 @@ export function CallStage({
     </div>
   );
 
-  const body = focused ? (
-    // Spotlight: the focused tile fills the available height (the panel has a
-    // definite height now, so the video letterboxes via object-contain); the
-    // rest go in a horizontally-scrolling thumbnail strip below.
-    <div className="flex-1 min-h-0 flex flex-col gap-2 p-3 pt-0">
-      <div className="flex-1 min-h-0">{focused.render(true)}</div>
-      {tiles.length > 1 && (
-        <div className="shrink-0 flex gap-2 overflow-x-auto">
-          {tiles
-            .filter((t) => t.key !== focusKey)
-            .map((t) => (
-              <div key={t.key} className="shrink-0 w-40 aspect-video">
+  // Wrapped in a relatively-positioned box so the stage-wide reaction overlay
+  // can size itself against exactly this media area (not the header/controls)
+  // and use it as the coordinate origin for each reaction's spawn point.
+  // Shared by both the theater and docked branches below (they render the
+  // identical media area, differing only in surrounding chrome).
+  const body = (
+    <div ref={stageBoxRef} className="relative flex-1 min-h-0 flex flex-col">
+      {focused ? (
+        // Spotlight: the focused tile fills the available height (the panel has
+        // a definite height now, so the video letterboxes via object-contain);
+        // the rest go in a horizontally-scrolling thumbnail strip below.
+        <div className="flex-1 min-h-0 flex flex-col gap-2 p-3 pt-0">
+          <div className="flex-1 min-h-0">{focused.render(true)}</div>
+          {tiles.length > 1 && (
+            <div className="shrink-0 flex gap-2 overflow-x-auto">
+              {tiles
+                .filter((t) => t.key !== focusKey)
+                .map((t) => (
+                  <div key={t.key} className="shrink-0 w-40 aspect-video">
+                    {t.render(false)}
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        // Auto-fit grid: tiles are sized to the largest 16:9 box that fits all
+        // of them in the measured area, so they scale down rather than
+        // overflowing.
+        <div ref={gridRef} className="flex-1 min-h-0 overflow-hidden p-3 pt-0 flex items-center justify-center">
+          <div
+            className="grid place-content-center"
+            style={{
+              gap: GRID_GAP,
+              gridTemplateColumns: `repeat(${grid.cols}, ${grid.tileW}px)`,
+              gridAutoRows: `${grid.tileH}px`,
+            }}
+          >
+            {tiles.map((t) => (
+              <div key={t.key} style={{ width: grid.tileW, height: grid.tileH }}>
                 {t.render(false)}
               </div>
             ))}
+          </div>
         </div>
       )}
-    </div>
-  ) : (
-    // Auto-fit grid: tiles are sized to the largest 16:9 box that fits all of
-    // them in the measured area, so they scale down rather than overflowing.
-    <div ref={gridRef} className="flex-1 min-h-0 overflow-hidden p-3 pt-0 flex items-center justify-center">
-      <div
-        className="grid place-content-center"
-        style={{
-          gap: GRID_GAP,
-          gridTemplateColumns: `repeat(${grid.cols}, ${grid.tileW}px)`,
-          gridAutoRows: `${grid.tileH}px`,
-        }}
-      >
-        {tiles.map((t) => (
-          <div key={t.key} style={{ width: grid.tileW, height: grid.tileH }}>
-            {t.render(false)}
-          </div>
-        ))}
-      </div>
+      <StageReactions containerRef={stageBoxRef} />
     </div>
   );
 
@@ -1153,7 +1276,7 @@ export function CallStage({
         {/* Both floating variants are width-constrained (their panels are
             resized by width), so the media area is a 16:9 box of the panel
             width — it scales with the panel and always preserves the aspect. */}
-        <div className="relative w-full bg-black aspect-video">
+        <div ref={stageBoxRef} className="relative w-full bg-black aspect-video">
           {showingShare && selectedShareTrackRef ? (
             // Render the SELECTED screen share directly from its own
             // TrackReference, keyed by participant identity + publication SID.
@@ -1199,6 +1322,7 @@ export function CallStage({
               onNext={() => cycleShare(1)}
             />
           )}
+          <StageReactions containerRef={stageBoxRef} />
         </div>
         {/* Media controls: only in the desktop floating window. On mobile the
             fixed MobileCallBar already carries mic/camera/screen-share/leave, so
