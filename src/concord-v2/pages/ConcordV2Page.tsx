@@ -104,6 +104,7 @@ import { NotifLevelMenu } from "@/components/NotifLevelMenu";
 import { toast } from "@/hooks/useToast";
 import { useCommunity2, useCommunityList2, useIsExcluded2 } from "@/concord-v2/hooks/useCommunityList2";
 import { channelDecodeDeadEnd } from "@/concord-v2/lib/channelSync";
+import { activateCommunity } from "@/concord-v2/lib/communityActivation";
 import { useCommunityManagement2, useStrandedRecovery2 } from "@/concord-v2/hooks/useCommunityActions2";
 import { useChannels2, useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPlane2";
 import { BanMemberDialog } from "@/concord-v2/components/BanMemberDialog2";
@@ -933,6 +934,13 @@ export function ConcordV2Page() {
   const { config, updateConfig } = useAppContext();
   const { mutedChannels, isCommunityMuted, toggleCommunityMute, toggleConcordChannelMute } = useMutes();
   const lastChannelKey = communityId ? `c2:${communityId}` : "";
+
+  // Session activation: being navigated into makes this community "live" for
+  // the rest of the session — the wire stops deferring it (unread-dot rule)
+  // and the global control sweep gives it first turn (see communityActivation).
+  useEffect(() => {
+    if (communityId) activateCommunity(communityId);
+  }, [communityId]);
 
   const baseCommunity = useCommunity2(communityId);
   const { data: folded } = useControlFold2(baseCommunity);

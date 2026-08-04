@@ -1,7 +1,7 @@
 import { App as CapacitorApp } from "@capacitor/app";
 import { useNostr } from "@nostrify/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useBootGateOpen } from "@/lib/bootGate";
 
@@ -11,16 +11,21 @@ import { useCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
 import { dissolvedAt } from "@/concord-v2/hooks/useControlPlane2";
 import { openChatBatch } from "@/concord-v2/lib/chat";
 import { channelsView } from "@/concord-v2/lib/community";
+import { isCommunityActivated, markCommunityLive, onCommunityActivation } from "@/concord-v2/lib/communityActivation";
 import { readControlFold } from "@/concord-v2/lib/control";
 import { channelGitRepositoryAttachments } from "@/concord-v2/lib/types";
-import { heldChannelKeys, liveEntries, rehydrateCommunity } from "@/concord-v2/lib/communityList";
+import { heldChannelKeys, liveEntries, rehydrateCommunity, type CommunityListEntry } from "@/concord-v2/lib/communityList";
 import { controlGroups } from "@/concord-v2/lib/control";
+import { KIND_MESSAGE } from "@/concord-v2/lib/kinds";
+import { warmupCommunities2 } from "@/concord-v2/lib/loginWarmup";
 import { openPlaneWrapsChunked } from "@/concord-v2/lib/planeSync";
-import { ackPendingWraps, peekPendingWraps, writeOpened, writeRumors } from "@/concord-v2/lib/rumorStore";
+import { ackPendingWraps, peekPendingWraps, queryRumorsByChannel, writeOpened, writeRumors } from "@/concord-v2/lib/rumorStore";
 import { registerStreamKeys } from "@/concord-v2/lib/streamAuth";
+import { concord2ReadKey, useReadState } from "@/hooks/useReadState";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useMutes } from "@/hooks/useMutes";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useFollowList } from "@/hooks/useFollowList";
@@ -119,13 +124,107 @@ function writeCursor(relay: string, createdAt: number): void {
 }
 
 /**
- * Concord V2 channels for EVERY live community in the membership list, with
+ * Newest-rumor window scanned per channel when judging a community's unread
+ * dot. Smaller than the rail's own 200-rumor scan, deliberately: a kind-9
+ * found unread inside this window is unread inside the rail's larger window
+ * too, so the wire never defers a community whose rail button isn't visibly
+ * dotted — a miss merely keeps the community syncing (the safe direction).
+ */
+const DOT_SCAN_WINDOW = 50;
+
+/**
+ * Communities the wire is deferring under the unread-dot rule, persisted so
+ * the fact survives a reload: the per-relay wire cursor keeps advancing on
+ * other traffic while a community's filters are excluded, so a deferred
+ * community's missed region can never be recovered from cursor replay alone.
+ * The flag is the durable IOU — whichever path brings the community back
+ * live (navigation, a remote read clearing the dot, this session or a later
+ * one) must run {@link catchUpCommunity} before the standing subscription
+ * can be trusted again.
+ */
+const deferredFlags = new KvPrefixCache<number>({ prefix: "wire-deferred:" });
+
+/** Single-flight guard for the per-community catch-up pull. */
+const catchUpsInFlight = new Set<string>();
+
+/** What the dot judgment needs from React context, snapshotted per spec run. */
+interface DotContext {
+  pubkey: string | undefined;
+  readState: Record<string, number>;
+  isMuted: (protocol: "c1" | "c2", communityId: string, channelIdHex: string) => boolean;
+}
+
+/**
+ * Whether the community's rail button currently shows an unread indicator,
+ * judged from the local rumor store the way the rail judges it
+ * (useConcord2Unread + the rail's mute rule): a non-self kind-9 newer than
+ * its channel's read stamp lights the dot unless the channel is muted, and a
+ * p-tag mention lights the badge regardless of mute.
+ */
+async function communityDotted(communityIdHex: string, channels: ChannelV2[], ctx: DotContext): Promise<boolean> {
+  if (!ctx.pubkey || channels.length === 0) return false;
+  const byChannel = await queryRumorsByChannel(
+    communityIdHex,
+    channels.map((c) => c.idHex),
+    { perChannel: DOT_SCAN_WINDOW },
+  );
+  for (const [idHex, rumors] of byChannel) {
+    const lastRead = ctx.readState[concord2ReadKey(idHex)] ?? 0;
+    const muted = ctx.isMuted("c2", communityIdHex, idHex);
+    for (const r of rumors) {
+      if (r.kind !== KIND_MESSAGE) continue;
+      if (r.author === ctx.pubkey) continue;
+      if (r.createdAt <= lastRead) continue;
+      if (!muted) return true;
+      if (r.tags.some(([name, value]) => name === "p" && value === ctx.pubkey)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Bring a previously-deferred community's stores current: sweep its planes
+ * and pull the newest page of every channel (the login warm-up, scoped to
+ * one community). Heals the region the shared per-relay cursor skipped past
+ * while the community was deferred; anything deeper than a newest page is
+ * bridged by the channel's own `c2:` round when it is viewed.
+ */
+function catchUpCommunity(
+  nostr: Parameters<typeof warmupCommunities2>[0],
+  entry: CommunityListEntry,
+  idHex: string,
+): void {
+  if (catchUpsInFlight.has(idHex)) return;
+  catchUpsInFlight.add(idHex);
+  logSync("wire", `community ${idHex.slice(0, 8)} back on the wire — pulling newest pages`);
+  void warmupCommunities2(nostr, [entry], { pruneSnapshots: false })
+    .catch(() => undefined)
+    .finally(() => {
+      catchUpsInFlight.delete(idHex);
+    });
+}
+
+/**
+ * Concord V2 channels for every live community in the membership list, with
  * their stream GroupKeys (rehydrated bundle + persisted control-fold snapshot,
  * local reads only). Registers every stream key for NIP-42 stream auth so the
  * wire's kind-1059 REQs pass auth-gating relays. Mirrors useConcord2Subs, but
  * keeps the full ChannelV2 (the wire decrypts; the native service can't).
+ *
+ * NOT every community, though: one whose rail button already shows the unread
+ * dot is DEFERRED — its channel filters leave the wire until the user
+ * navigates in (or the dot clears via a read synced from another device),
+ * because a binary dot can't get more lit and its history is pulled on
+ * activation anyway ({@link catchUpCommunity}). This is the bandwidth rule
+ * that keeps a pageload from replaying every busy-but-ignored community's
+ * traffic. Control planes are deliberately NOT deferred (cheap, and they keep
+ * the fold current for the moment the community comes back).
  */
 function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2; communityIdHex: string; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }> {
+  const { nostr } = useNostr();
+  const { user } = useCurrentUser();
+  const { readState } = useReadState();
+  const { isConcordChannelMuted } = useMutes();
   const { data } = useCommunityList2();
   const entries = useMemo(() => (data ? liveEntries(data.list) : []), [data]);
   const listSig = useMemo(
@@ -136,6 +235,19 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
         .join(","),
     [entries],
   );
+
+  // Deferral inputs, read through a ref so read-state churn (every markRead
+  // in the open channel) doesn't rebuild the spec. Changes that matter to the
+  // dot verdict are picked up by the 2-minute refetch below — for the one
+  // case that needs it (a remote read clearing a deferred community's dot),
+  // minutes of extra deferral cost nothing but a slightly later catch-up.
+  const dotCtxRef = useRef<DotContext>({ pubkey: undefined, readState: {}, isMuted: () => false });
+  dotCtxRef.current = { pubkey: user?.pubkey, readState, isMuted: isConcordChannelMuted };
+
+  // Navigating into a community must re-run the spec NOW (its filters rejoin
+  // the wire and its catch-up starts), not on the next poll.
+  const [activationEpoch, setActivationEpoch] = useState(0);
+  useEffect(() => onCommunityActivation(() => setActivationEpoch((n) => n + 1)), []);
 
   // `listSig` only moves on a new community, a rotated epoch, or a channel
   // count change — a control edition that alters neither (attaching a
@@ -153,7 +265,7 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
   );
 
   const query = useQuery<Array<{ relays: string[]; channel: ChannelV2; communityIdHex: string; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }>>({
-    queryKey: ["wire", "concord2-channels", listSig],
+    queryKey: ["wire", "concord2-channels", listSig, activationEpoch],
     enabled: entries.length > 0,
     staleTime: 30_000,
     // Fold snapshots update out-of-band (community open / control sync) —
@@ -162,6 +274,10 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
     refetchInterval: 2 * 60_000,
     refetchIntervalInBackground: false,
     queryFn: async () => {
+      // The first run must see the persisted deferral flags, or a reload
+      // would treat every deferred community as live and skip the catch-up
+      // its cursor gap requires.
+      await deferredFlags.ready();
       const out: Array<{ relays: string[]; channel: ChannelV2; communityIdHex: string; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }> = [];
       for (const entry of entries) {
         const community = rehydrateCommunity(entry);
@@ -170,10 +286,38 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
         // received, processed or ingested for it (CORD-02 §9). Local + sticky,
         // so a relay outage can't quietly resurrect the feed.
         if ((await dissolvedAt(community.idHex)) !== undefined) continue;
-        const keys: GroupKey[] = [];
         const folded = await readControlFold(community.idHex);
+        const channels: ChannelV2[] = [];
         for (const channel of channelsView(community, folded)) {
           if (channel.streams.length === 0) continue;
+          channels.push(channel);
+        }
+
+        // The unread-dot deferral (see communityActivation.ts). Every path
+        // back to live runs the catch-up, because the shared per-relay cursor
+        // advanced past this community's traffic while it was excluded.
+        const wasDeferred = (deferredFlags.get(community.idHex) ?? 0) > 0;
+        if (isCommunityActivated(community.idHex)) {
+          // Navigated into (this session): live for good.
+          if (wasDeferred) {
+            deferredFlags.delete(community.idHex);
+            catchUpCommunity(nostr, entry, community.idHex);
+          }
+        } else if (await communityDotted(community.idHex, channels, dotCtxRef.current)) {
+          if (!wasDeferred) deferredFlags.set(community.idHex, Math.floor(Date.now() / 1000));
+          continue;
+        } else if (wasDeferred) {
+          // The dot cleared while deferred — a read synced back from another
+          // device. Pin it live for the session: re-deferring on the next
+          // unread would oscillate catch-up pulls against a standing
+          // subscription that costs less.
+          markCommunityLive(community.idHex);
+          deferredFlags.delete(community.idHex);
+          catchUpCommunity(nostr, entry, community.idHex);
+        }
+
+        const keys: GroupKey[] = [];
+        for (const channel of channels) {
           out.push({
             relays: community.relays,
             channel,

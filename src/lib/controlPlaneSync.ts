@@ -61,7 +61,17 @@ export async function syncControlPlane(
   queryClient: QueryClient,
   v1: Community[],
   v2: CommunityV2[],
-  opts?: { signal?: AbortSignal },
+  opts?: {
+    signal?: AbortSignal;
+    /**
+     * A V2 community to sweep FIRST, before the rest of the fan-out starts —
+     * the one the user is looking at. On a cold pageload direct to a
+     * community URL, everything the timeline is gated on (control fold →
+     * channels → stream keys) sits behind this community's sweep, so it must
+     * not queue behind every other membership's catch-up.
+     */
+    priorityIdHex?: string;
+  },
 ): Promise<ControlPlaneSyncResult> {
   const result: ControlPlaneSyncResult = { v1Touched: new Set(), v2Touched: new Set() };
   if (v1.length === 0 && v2.length === 0) return result;
@@ -124,31 +134,42 @@ export async function syncControlPlane(
     };
   };
   let guestbookTouched = 0;
-  const byRelay = new Map<string, PlaneScope[]>();
-  for (const c of v2) {
-    const announceControl = once(() => {
-      emitWireScopes([`c2ctl:${c.idHex}`]);
-      queryClient.invalidateQueries({ queryKey: ["concord2", "control", c.idHex] });
-    });
-    const announceGuestbook = once(() => {
-      guestbookTouched++;
-      queryClient.invalidateQueries({ queryKey: ["concord2", "guestbook", c.idHex] });
-    });
-    for (const url of c.relays) {
-      const scopes = byRelay.get(url) ?? [];
-      scopes.push(
-        controlScope(c, url, () => {
-          result.v2Touched.add(c.idHex);
-          announceControl();
-        }),
-        guestbookScope(c, url, announceGuestbook),
-      );
-      byRelay.set(url, scopes);
+  const v2Jobs = (list: CommunityV2[]): Array<Promise<unknown>> => {
+    const byRelay = new Map<string, PlaneScope[]>();
+    for (const c of list) {
+      const announceControl = once(() => {
+        emitWireScopes([`c2ctl:${c.idHex}`]);
+        queryClient.invalidateQueries({ queryKey: ["concord2", "control", c.idHex] });
+      });
+      const announceGuestbook = once(() => {
+        guestbookTouched++;
+        queryClient.invalidateQueries({ queryKey: ["concord2", "guestbook", c.idHex] });
+      });
+      for (const url of c.relays) {
+        const scopes = byRelay.get(url) ?? [];
+        scopes.push(
+          controlScope(c, url, () => {
+            result.v2Touched.add(c.idHex);
+            announceControl();
+          }),
+          guestbookScope(c, url, announceGuestbook),
+        );
+        byRelay.set(url, scopes);
+      }
     }
+    return [...byRelay].map(([url, scopes]) => sweepRelayScopes(nostr, url, scopes));
+  };
+
+  // The active community's sweep runs to completion BEFORE the all-membership
+  // fan-out is launched, so its REQs aren't contending with a dozen other
+  // communities' catch-up for sockets and bandwidth. Costs the rest of the
+  // sweep one community's round-trip of delay, at most.
+  const priority = v2.filter((c) => c.idHex === opts?.priorityIdHex);
+  const rest = opts?.priorityIdHex ? v2.filter((c) => c.idHex !== opts.priorityIdHex) : v2;
+  if (priority.length > 0) {
+    await Promise.all(v2Jobs(priority));
   }
-  for (const [url, scopes] of byRelay) {
-    jobs.push(sweepRelayScopes(nostr, url, scopes));
-  }
+  jobs.push(...v2Jobs(rest));
 
   await Promise.all(jobs);
 
