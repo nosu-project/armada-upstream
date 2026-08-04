@@ -90,6 +90,12 @@ the box; other hostnames need HTTPS.
   import itself runs on the portal, which signs the resulting community with the
   user's own Nostr key and hands back an ordinary invite link. Must be an
   `http(s)` URL; anything else is treated as unset.
+- `VITE_NOSTR_PUSH_PUBKEY` / `VITE_NOSTR_PUSH_RELAYS` — identity of a
+  content-blind NIP-PUSH gateway and the comma-separated Nostr relays used for
+  its encrypted RPC. When configured, web and Home-Screen installs can receive
+  standards-based Web Push while Armada is closed; when empty, background Web
+  Push is unavailable. These values are public client configuration (Vite
+  embeds them in the bundle), even when deployment CI supplies them as secrets.
 - `VITE_APP_NAME` — display name.
 
 ## Packaging

@@ -64,6 +64,37 @@ self.addEventListener("activate", (event) => {
 const PLAINTEXT_SCOPES = new Set(["group", "group-mention"]);
 const PUSH_STATE_CACHE = "armada-push-state-v1";
 const PUSH_STATE_PREFIX = "/.armada-push-state/";
+const BADGE_STATE_URL = new URL(`${PUSH_STATE_PREFIX}badge`, self.location.origin).href;
+
+/** Increment the Home-Screen badge without needing a live page. */
+async function incrementAppBadge() {
+  if (typeof self.navigator?.setAppBadge !== "function") return;
+  try {
+    const cache = await caches.open(PUSH_STATE_CACHE);
+    const stored = await cache.match(BADGE_STATE_URL);
+    const current = stored ? Number.parseInt(await stored.text(), 10) || 0 : 0;
+    const next = Math.min(current + 1, 999);
+    await Promise.all([
+      cache.put(BADGE_STATE_URL, new Response(String(next))),
+      self.navigator.setAppBadge(next),
+    ]);
+  } catch {
+    // Badging is enhancement only; never risk the visible notification.
+  }
+}
+
+/** Clear both the OS badge and the counter the next push increments. */
+async function clearAppBadge() {
+  try {
+    const cache = await caches.open(PUSH_STATE_CACHE);
+    await cache.delete(BADGE_STATE_URL);
+    if (typeof self.navigator?.clearAppBadge === "function") {
+      await self.navigator.clearAppBadge();
+    }
+  } catch {
+    // Ignore unsupported/revoked badging.
+  }
+}
 
 /** Ask a live page whether it is focused with a specific DM thread open. */
 function clientHasActiveDm(client) {
@@ -212,6 +243,7 @@ self.addEventListener("push", (event) => {
         data,
         tag,
       });
+      await incrementAppBadge();
 
       // 2. Best-effort enrichment for plaintext events (nostr-push scopes).
       if (!data.event_id || !PLAINTEXT_SCOPES.has(data.scope)) return;
@@ -362,12 +394,19 @@ self.addEventListener("pushsubscriptionchange", (event) => {
   );
 });
 
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "armada-clear-badge") {
+    event.waitUntil(clearAppBadge());
+  }
+});
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
   const target = event.notification.data?.url || "/";
 
-  event.waitUntil(
+  event.waitUntil(Promise.all([
+    clearAppBadge(),
     self.clients
       .matchAll({ type: "window", includeUncontrolled: true })
       .then((clientList) => {
@@ -381,5 +420,5 @@ self.addEventListener("notificationclick", (event) => {
         // Otherwise open a fresh window at the target.
         return self.clients.openWindow(target);
       }),
-  );
+  ]));
 });
