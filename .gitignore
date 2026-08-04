@@ -6,6 +6,7 @@ dist/
 .env
 data/
 .tsbuildinfo
+Trace-*.json
 
 # Android signing material — never commit. Injected via CI/CD variables.
 **/key.properties
