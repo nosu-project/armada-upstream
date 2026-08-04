@@ -46,14 +46,19 @@ internal object Concord2 {
      *    rumor has no seal left for the fold to check the form of. This is the
      *    other half of the boundary the WebView's `writeOpened` guards from the
      *    plane side.
+     *  - its NIP-40 deadline has passed (CORD-08 §3). The WebView's
+     *    `writeRumors` refuses an expired chat rumor at ingest, and its sweep
+     *    only walks rows the read filter already hides — a second writer that
+     *    stored one would plant a disappearing message past its deadline.
      *
      * The caller owns the crypto: that the seal's signature is good, that the
      * rumor's author IS the seal's signer, and that the channel/epoch binding
      * matches the stream whose key opened the wrap.
      */
-    fun storable(communityIdHex: String, sealKind: Int, rumor: Rumor): Boolean {
+    fun storable(communityIdHex: String, sealKind: Int, rumor: Rumor, now: Long): Boolean {
         if (communityIdHex.isEmpty()) return false
         if (sealKind != SEAL_ENCRYPTED) return false
-        return rumor.kind !in PLANE_KINDS
+        if (rumor.kind in PLANE_KINDS) return false
+        return !Dm17.isExpired(rumor.tags, now)
     }
 }

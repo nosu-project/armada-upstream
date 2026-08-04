@@ -49,11 +49,13 @@ export function gitActivityEntry(activity: GitTimelineActivity): GitChannelTimel
   return { type: "git-status", id: `git:${activity.status.event.id}`, createdAt: activity.createdAt, activity };
 }
 
-/** Deterministic oldest-first merge. IDs break timestamp ties across sources. */
-export function mergeChannelTimeline(chat: readonly ChatMsg[], git: readonly GitTimelineActivity[]): ChannelTimelineEntry[] {
+/** Deterministic oldest-first merge. IDs break timestamp ties across sources.
+ *  `extra` carries pre-built non-chat entries (e.g. Concord timer notices). */
+export function mergeChannelTimeline(chat: readonly ChatMsg[], git: readonly GitTimelineActivity[], extra: readonly ChannelTimelineEntry[] = []): ChannelTimelineEntry[] {
   const entries: ChannelTimelineEntry[] = [
     ...chat.map((message) => ({ type: "chat" as const, id: `chat:${message.id}`, createdAt: message.created_at, message })),
     ...git.map(gitActivityEntry),
+    ...extra,
   ];
   const seen = new Set<string>();
   return entries

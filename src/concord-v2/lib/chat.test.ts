@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { buildV2CommentTags, filterEpochCutoff, foldTimeline, openChatBatch, replyTargetOf } from "@/concord-v2/lib/chat";
 import { bytesToHex, channelGroupKey, voiceGroupKey, voiceMediaKey } from "@/concord-v2/lib/derive";
-import { KIND_CALENDAR_RSVP, KIND_CALENDAR_TIME, KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_POLL, KIND_POLL_VOTE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_ZAP } from "@/concord-v2/lib/kinds";
+import { KIND_CALENDAR_RSVP, KIND_CALENDAR_TIME, KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_MESSAGE, KIND_POLL, KIND_POLL_VOTE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_TIMER_NOTICE, KIND_ZAP } from "@/concord-v2/lib/kinds";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import { parseCalendarEvents, tallyRsvps } from "@/lib/calendar";
@@ -631,5 +631,64 @@ describe("chat plane (CORD-03)", () => {
     expect(folded.zaps.get(m1.id)?.length).toBe(1);
     expect(folded.zaps.get(m1.id)?.[0].pubkey).toBe(bob.pubkey);
     expect(folded.zaps.get(m2.id)).toBeUndefined();
+  });
+});
+
+describe("disappearing messages (CORD-08)", () => {
+  it("filters an expired rumor out of the fold", async () => {
+    const channel = makeChannel();
+    const alice = signer();
+    const nowMs = Date.now();
+    const nowSecs = Math.floor(nowMs / 1000);
+    const gone = chatRumor(alice, KIND_MESSAGE, "gone", nowMs, [["expiration", String(nowSecs - 10)]]);
+    const kept = chatRumor(alice, KIND_MESSAGE, "kept", nowMs + 1, [["expiration", String(nowSecs + 3600)]]);
+    const bare = chatRumor(alice, KIND_MESSAGE, "bare", nowMs + 2);
+
+    const wraps = await Promise.all([
+      wrapChat(gone, channel, alice),
+      wrapChat(kept, channel, alice),
+      wrapChat(bare, channel, alice),
+    ]);
+    const folded = foldTimeline(await openChatBatch(wraps, channel));
+
+    expect(folded.messages.map((m) => m.content)).toEqual(["kept", "bare"]);
+  });
+
+  it("surfaces timer notices only from authors the roster trusts, never as messages", async () => {
+    const channel = makeChannel();
+    const staff = signer();
+    const rando = signer();
+    const notice = chatRumor(staff, KIND_TIMER_NOTICE, "", 1000, [["timer", "86400"]]);
+    const forged = chatRumor(rando, KIND_TIMER_NOTICE, "", 1500, [["timer", "0"]]);
+    const malformed = chatRumor(staff, KIND_TIMER_NOTICE, "", 2000);
+
+    const wraps = await Promise.all([
+      wrapChat(notice, channel, staff),
+      wrapChat(forged, channel, rando),
+      wrapChat(malformed, channel, staff),
+    ]);
+    const folded = foldTimeline(await openChatBatch(wraps, channel), {
+      banned: new Set(),
+      canDelete: () => false,
+      canSetTimer: (author) => author === staff.pubkey,
+    });
+
+    expect(folded.timerNotices.map((n) => n.rumorId)).toEqual([notice.id]);
+    expect(folded.messages).toHaveLength(0);
+  });
+
+  it("keeps every well-formed notice when no roster gate is supplied", async () => {
+    // The threads view folds without moderation; an ungated fold must not
+    // silently drop conversation rows it merely can't yet judge.
+    const channel = makeChannel();
+    const alice = signer();
+    const bob = signer();
+    const n1 = chatRumor(alice, KIND_TIMER_NOTICE, "", 1000, [["timer", "86400"]]);
+    const n2 = chatRumor(bob, KIND_TIMER_NOTICE, "", 1500, [["timer", "0"]]);
+
+    const wraps = await Promise.all([wrapChat(n1, channel, alice), wrapChat(n2, channel, bob)]);
+    const folded = foldTimeline(await openChatBatch(wraps, channel));
+
+    expect(folded.timerNotices.map((n) => n.rumorId)).toEqual([n1.id, n2.id]);
   });
 });

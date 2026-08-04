@@ -2,7 +2,9 @@ import { useNostr } from "@nostrify/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
+import { useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { chatExpiresAt, messageExpirationOf } from "@/concord-v2/lib/disappearing";
 import { KIND_SEAL_ENCRYPTED, KIND_WEBXDC } from "@/concord-v2/lib/kinds";
 import { subscribeEphemeral } from "@/concord-v2/lib/ephemeralSub";
 import {
@@ -66,6 +68,10 @@ export function useConcord2AppSync(
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
+  // Durable app state is chat-plane data, so it disappears with the rest of
+  // the plane (CORD-08 §2); ephemeral frames are never stored and carry nothing.
+  const { data: folded } = useControlFold2(community);
+  const timerSecs = messageExpirationOf(folded?.metadata);
 
   const enabled = Boolean(community && channel && uuid && user);
   const channelIdHex = channel?.idHex ?? null;
@@ -121,15 +127,24 @@ export function useConcord2AppSync(
     async (content: string, extraTags: string[][], ephemeral: boolean) => {
       if (!community || !channel || !user) return;
       const ms = Date.now();
+      const expiresAt = ephemeral ? undefined : chatExpiresAt(KIND_WEBXDC, ms, timerSecs);
       const rumor = buildRumor({
         kind: KIND_WEBXDC,
         content,
-        tags: [...channelBindingTags(channel.idHex, channel.current.epoch), ...extraTags],
+        tags: [
+          ...channelBindingTags(channel.idHex, channel.current.epoch),
+          ...extraTags,
+          ...(expiresAt !== undefined ? [["expiration", String(expiresAt)]] : []),
+        ],
         pubkey: user.pubkey,
         ms,
       });
       const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, user.signer);
-      const wrap = wrapSeal(seal, channel.current.group, ephemeral ? { ephemeral: true } : undefined);
+      const wrap = wrapSeal(
+        seal,
+        channel.current.group,
+        ephemeral ? { ephemeral: true } : expiresAt !== undefined ? { expiration: expiresAt } : undefined,
+      );
       // Durable state: write our own update to the store immediately (the wire
       // ingests other members'), so the local app sees its own move without a
       // relay round-trip. Ephemeral frames are never stored.
@@ -158,7 +173,7 @@ export function useConcord2AppSync(
         ),
       );
     },
-    [nostr, community, channel, user],
+    [nostr, community, channel, user, timerSecs],
   );
 
   const sendState = useCallback(

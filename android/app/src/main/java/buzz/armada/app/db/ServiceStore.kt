@@ -198,7 +198,7 @@ object ServiceStore {
         rumor: JSONObject,
     ) {
         val opened = Rumor.parse(rumor) ?: return
-        if (!Concord2.storable(communityIdHex, sealKind, opened)) {
+        if (!Concord2.storable(communityIdHex, sealKind, opened, System.currentTimeMillis() / 1000)) {
             Log.w(TAG, "refusing a Concord chat rumor the chat plane may not carry")
             return
         }

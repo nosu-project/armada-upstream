@@ -24,6 +24,7 @@ import {
   readStreamCursor,
   storedToOpened,
   storedToOpenedChat,
+  sweepExpiredCommunityRumors,
   updateStreamCursor,
   writeOpened,
   writeRumors,
@@ -613,5 +614,47 @@ describe("stream cursors", () => {
     await updateStreamCursor(scope, { oldest: 7 });
 
     expect(await readStreamCursor(scope)).toEqual({ newest: 10, oldest: 7, exhausted: false });
+  });
+});
+
+describe("disappearing messages (CORD-08 §3)", () => {
+  it("refuses expired at ingest, hides at read, and physically sweeps", async () => {
+    const { channel, idHex } = makeChannel();
+    const alice = signer();
+    const realNow = Date.now();
+    const nowSecs = Math.floor(realNow / 1000);
+
+    const dead = chatRumor(idHex, alice, KIND_MESSAGE, "dead on arrival", realNow, [["expiration", String(nowSecs - 10)]]);
+    const live = chatRumor(idHex, alice, KIND_MESSAGE, "still here", realNow + 1, [["expiration", String(nowSecs + 30)]]);
+    const forever = chatRumor(idHex, alice, KIND_MESSAGE, "forever", realNow + 2);
+
+    const wraps = await Promise.all([
+      wrapChat(dead, channel, alice),
+      wrapChat(live, channel, alice),
+      wrapChat(forever, channel, alice),
+    ]);
+    const opened = await openChatBatch(wraps.map(plain), channel);
+    expect(opened).toHaveLength(3);
+    await writeRumors(CID, opened);
+
+    // The already-expired rumor never landed.
+    let rows = await queryChannelRumors(CID, idHex, { limit: 10 });
+    expect(rows.map((r) => r.content).sort()).toEqual(["forever", "still here"]);
+
+    // Cross the live one's deadline: the read filter hides it…
+    const clock = vi.spyOn(Date, "now").mockReturnValue(realNow + 60_000);
+    try {
+      rows = await queryChannelRumors(CID, idHex, { limit: 10 });
+      expect(rows.map((r) => r.content)).toEqual(["forever"]);
+      // …and the sweep removes the plaintext itself.
+      expect(await sweepExpiredCommunityRumors(CID)).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
+
+    // Back at REAL time — before the deadline, when the read filter would NOT
+    // hide a surviving row — the message is gone: deleted, not merely hidden.
+    rows = await queryChannelRumors(CID, idHex, { limit: 10 });
+    expect(rows.map((r) => r.content)).toEqual(["forever"]);
   });
 });

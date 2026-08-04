@@ -62,6 +62,7 @@ import {
   PLANE_RULES,
   type Plane,
 } from "@/concord-v2/lib/kinds";
+import { isExpired } from "@/lib/nip17/protocol";
 import { resolveMs, type OpenedEvent, type OpenedWireEvent } from "@/concord-v2/lib/stream";
 import { messageMatchesMedia, type SearchMedia2 } from "@/concord-v2/lib/search";
 import { emitWireScopes } from "@/wire/bus";
@@ -253,7 +254,18 @@ export function storedToOpenedChat(ev: NostrRumor, channelIdHex: string): Opened
 // ── Reads / writes ────────────────────────────────────────────────────────────
 
 /** All chat-plane rumor kinds we persist and fold. */
-const CHAT_KINDS = [5, 7, 9, 1018, 1068, 1111, 3302, 8333, 9735, 31922, 31923, 31925];
+const CHAT_KINDS = [5, 7, 9, 1018, 1068, 1111, 1740, 3302, 8333, 9735, 31922, 31923, 31925];
+
+/**
+ * Drop rows whose NIP-40 `expiration` has passed (CORD-08 §3). Every chat read
+ * applies this: the sweep ({@link sweepExpiredCommunityRumors}) physically
+ * removes expired rows eventually, but a read between expiry and the next
+ * sweep must not display them.
+ */
+function notExpired(events: NostrRumor[]): NostrRumor[] {
+  const now = Math.floor(Date.now() / 1000);
+  return events.filter((ev) => !isExpired(ev.tags, now));
+}
 
 /**
  * Read a channel's cached chat rumors, newest-first up to `limit`. A `channel`
@@ -272,7 +284,7 @@ export async function queryChannelRumors(
   };
   if (opts.before !== undefined) filter.until = opts.before - 1;
   const events = await rumorStore(communityIdHex).query([filter], { signal: opts.signal });
-  return events.map((ev) => storedToOpenedChat(ev, channelIdHex));
+  return notExpired(events).map((ev) => storedToOpenedChat(ev, channelIdHex));
 }
 
 /**
@@ -295,7 +307,7 @@ export async function queryWebxdcRumors(
     [{ kinds: [KIND_WEBXDC], "#channel": [channelIdHex], "#i": [uuid], limit: 1000 }],
     { signal: opts?.signal },
   );
-  return events.map((ev) => storedToOpenedChat(ev, channelIdHex));
+  return notExpired(events).map((ev) => storedToOpenedChat(ev, channelIdHex));
 }
 
 /**
@@ -331,7 +343,7 @@ export async function queryRumorsByChannel(
 
   // One query() merges + de-dupes across filters, so recover each row's channel
   // from its own binding tag rather than trusting filter order.
-  for (const ev of events) {
+  for (const ev of notExpired(events)) {
     const idHex = ev.tags.find((t) => t[0] === "channel")?.[1];
     if (!idHex) continue;
     let list = out.get(idHex);
@@ -369,7 +381,7 @@ export async function queryMentionRumors(
     limit: opts.limit,
   };
   const events = await rumorStore(communityIdHex).query([filter], { signal: opts.signal });
-  return events.map((ev) =>
+  return notExpired(events).map((ev) =>
     storedToOpenedChat(ev, ev.tags.find((t) => t[0] === "channel")?.[1] ?? ""),
   );
 }
@@ -415,7 +427,7 @@ export async function searchRumors(
   } = { kinds: SEARCHABLE_KINDS, "#channel": channelIdsHex, limit: SEARCH_SCAN_LIMIT };
   if (opts.authors && opts.authors.length > 0) filter.authors = opts.authors;
 
-  const events = await rumorStore(communityIdHex).query([filter], { signal: opts.signal });
+  const events = notExpired(await rumorStore(communityIdHex).query([filter], { signal: opts.signal }));
   const q = opts.query.trim().toLowerCase();
   const media = opts.media ?? "all";
 
@@ -676,13 +688,79 @@ export function writeRumors(communityIdHex: string, opened: OpenedChat[]): Promi
   // {@link KIND_WEBXDC} and anything added later), so enumerating what may pass
   // would silently drop new kinds. What must NOT pass is exactly, and only, the
   // set another plane is read back by.
-  const chat = opened.filter((o) => !PLANE_KINDS.has(o.kind));
+  // Already-expired rumors are refused at ingest (CORD-08 §3) — storing one
+  // would only hand the read filter and the sweep something to hide/delete.
+  const now = Math.floor(Date.now() / 1000);
+  const chat = opened.filter((o) => !PLANE_KINDS.has(o.kind) && !isExpired(o.tags, now));
   if (chat.length === 0) return Promise.resolve(true);
   const channels = new Set(chat.map((o) => o.channelIdHex).filter(Boolean));
   return writeStored(communityIdHex, chat).then((stored) => {
     if (stored && channels.size > 0) emitWireScopes([...channels].map((id) => `c2:${id}`));
     return stored;
   });
+}
+
+// ── Expiry sweep (CORD-08 §3) ────────────────────────────────────────────────
+
+/** Rumors scanned per sweep page. */
+const SWEEP_PAGE = 1000;
+/** Pages a single sweep will walk (bounds a huge history to a bounded cost). */
+const SWEEP_MAX_PAGES = 20;
+/** At most one sweep per community per interval, per session. */
+const SWEEP_MIN_INTERVAL_MS = 6 * 3600 * 1000;
+const lastSweepAt = new Map<string, number>();
+
+/**
+ * Physically remove every stored chat rumor whose NIP-40 `expiration` has
+ * passed (CORD-08 §3). The read paths filter expired rows out too, but hiding
+ * is not disappearing: the plaintext has to leave the store. `expiration` is a
+ * multi-letter tag with no index (and no range query would exist for it), so
+ * this walks the tenant newest-first in bounded pages and removes matches by
+ * id — the same shape as the DM plane's `sweepExpiredDm17Rumors`. Self-gated
+ * to one walk per community per {@link SWEEP_MIN_INTERVAL_MS}.
+ */
+export async function sweepExpiredCommunityRumors(
+  communityIdHex: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<number> {
+  if (!communityIdHex) return 0;
+  const last = lastSweepAt.get(communityIdHex);
+  if (last !== undefined && Date.now() - last < SWEEP_MIN_INTERVAL_MS) return 0;
+  lastSweepAt.set(communityIdHex, Date.now());
+
+  const s = rumorStore(communityIdHex);
+  const now = Math.floor(Date.now() / 1000);
+  // WebXDC state rides outside CHAT_KINDS but expires with the plane.
+  const kinds = [...CHAT_KINDS, KIND_WEBXDC];
+  let until: number | undefined;
+  let removed = 0;
+  const channels = new Set<string>();
+
+  for (let page = 0; page < SWEEP_MAX_PAGES; page++) {
+    const filter: { kinds: number[]; limit: number; until?: number } = { kinds, limit: SWEEP_PAGE };
+    if (until !== undefined) filter.until = until;
+    const events = await s.query([filter], { signal: opts.signal });
+    if (events.length === 0) break;
+
+    const expired = events.filter((ev) => isExpired(ev.tags, now));
+    if (expired.length > 0) {
+      await s.remove([{ ids: expired.map((ev) => ev.id) }], { signal: opts.signal });
+      removed += expired.length;
+      for (const ev of expired) {
+        const idHex = ev.tags.find((t) => t[0] === "channel")?.[1];
+        if (idHex) channels.add(idHex);
+      }
+    }
+    if (events.length < SWEEP_PAGE) break;
+    // Page strictly older than this page's oldest row — ties on `created_at`
+    // would otherwise loop forever on the same boundary second.
+    const oldest = Math.min(...events.map((ev) => ev.created_at));
+    if (until !== undefined && oldest - 1 >= until) break;
+    until = oldest - 1;
+  }
+
+  if (channels.size > 0) emitWireScopes([...channels].map((id) => `c2:${id}`));
+  return removed;
 }
 
 // ── Pending raw-wrap holding store ──────────────────────────────────────────

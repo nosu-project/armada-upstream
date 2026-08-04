@@ -37,6 +37,15 @@ export const KIND_DELETE = 5;
 /** Message edit (fields not yet pinned by the CORDs; `e` names the target). */
 export const KIND_EDIT = 3302;
 /**
+ * Disappearing-messages timer notice (CORD-08 §4): posted by staff into each
+ * channel after changing the community's `message_expiration`, carrying the
+ * new value in a `["timer", "<seconds>"]` tag ("0" = turned off). The same
+ * kind (and tag) NIP-17 disappearing-DM clients use. Informational — the
+ * metadata fold is the authority — and displayed only when its author holds
+ * MANAGE_METADATA. Never carries an `expiration` tag itself.
+ */
+export const KIND_TIMER_NOTICE = 1740;
+/**
  * Zap (CORD.md): NIP-57 receipt shape authored by the PAYER, plus a
  * `preimage` tag as the payment proof. Verified locally by every member
  * (sha256(preimage) == bolt11 payment hash, amount tag == invoice amount);

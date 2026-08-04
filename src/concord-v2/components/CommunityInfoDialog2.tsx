@@ -11,6 +11,7 @@ import {
   Pencil,
   Plus,
   Shield,
+  Timer,
   Trash2,
   Users,
   X,
@@ -36,7 +37,20 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { ImageLightbox2 } from "@/concord-v2/components/ImageLightbox2";
+import {
+  COMMUNITY_TIMER_PRESETS,
+  formatCommunityTimer,
+  messageExpirationOf,
+  publishTimerNotices,
+} from "@/concord-v2/lib/disappearing";
 import { categoryKey, categoryNames } from "@/concord-v2/lib/channelCategory";
 import { useCommunityManagement2 } from "@/concord-v2/hooks/useCommunityActions2";
 import { useChannels2, useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
@@ -365,6 +379,8 @@ function InfoBody({
             </span>
           </div>
         </div>
+
+        <DisappearingSection community={community} metadata={metadata} canManage={canManageMetadata} />
 
         <ChannelsSection community={community} canManage={canManageChannels} channelRoles={channelRoles} onPrivatiseChannel={onPrivatiseChannel} onRotateChannelKey={onRotateChannelKey} />
 
@@ -1229,6 +1245,102 @@ function normalizeRelayUrl(input: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Disappearing messages (CORD-08): the community-wide timer, shown to every
+ * member and editable under MANAGE_METADATA. Saving publishes a metadata
+ * edition (version-chained, like any staff edit) and then posts a kind-1740
+ * notice into every channel the actor holds keys for, so the change is a line
+ * in chat history. The timer applies at SEND time only — existing messages
+ * keep the expiry they were sent under.
+ */
+function DisappearingSection({
+  community,
+  metadata,
+  canManage,
+}: {
+  community: CommunityV2;
+  metadata: CommunityMetadata | undefined;
+  canManage: boolean;
+}) {
+  const { nostr } = useNostr();
+  const { user } = useCurrentUser();
+  const { updateMetadata } = useMetadataActions2(community);
+  const channels = useChannels2(community);
+  const [saving, setSaving] = useState(false);
+
+  const current = messageExpirationOf(metadata);
+
+  const handleChange = async (seconds: number) => {
+    if (seconds === current || !user) return;
+    setSaving(true);
+    try {
+      await updateMetadata({ message_expiration: seconds });
+      // The courtesy line in chat history (CORD-08 §4). Best-effort: the
+      // metadata fold is the authority, so a failed notice loses only the line.
+      await publishTimerNotices(nostr, community, channels, user.signer, user.pubkey, seconds).catch(
+        () => undefined,
+      );
+      toast({
+        title:
+          seconds > 0
+            ? `Disappearing messages: ${formatCommunityTimer(seconds)}`
+            : "Disappearing messages turned off",
+      });
+    } catch (e) {
+      toast({
+        title: "Couldn't update disappearing messages",
+        description: e instanceof Error ? e.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        Disappearing messages
+      </span>
+      <div className="flex items-center gap-2.5 text-sm">
+        <Timer className="size-4 shrink-0 text-muted-foreground" />
+        {canManage ? (
+          <>
+            <Select
+              value={String(current)}
+              disabled={saving}
+              onValueChange={(v) => void handleChange(Number(v))}
+            >
+              <SelectTrigger className="h-8 w-36" aria-label="Disappearing messages timer">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {COMMUNITY_TIMER_PRESETS.map((p) => (
+                  <SelectItem key={p.seconds} value={String(p.seconds)}>
+                    {p.label}
+                  </SelectItem>
+                ))}
+                {/* A value another client set that isn't a preset here. */}
+                {current > 0 && !COMMUNITY_TIMER_PRESETS.some((p) => p.seconds === current) && (
+                  <SelectItem value={String(current)}>{formatCommunityTimer(current)}</SelectItem>
+                )}
+              </SelectContent>
+            </Select>
+            {saving && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
+          </>
+        ) : (
+          <span>{current > 0 ? `New messages disappear after ${formatCommunityTimer(current)}` : "Off"}</span>
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {current > 0
+          ? "Messages in every channel are deleted for everyone after this long. Changes apply to new messages only."
+          : "Messages are kept forever. When set, messages in every channel delete for everyone after the chosen time."}
+      </p>
+    </div>
+  );
 }
 
 /**

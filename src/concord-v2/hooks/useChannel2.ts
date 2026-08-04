@@ -22,6 +22,7 @@ import {
   clearChannelExhausted,
   queryChannelRumors,
   readChannelCursor,
+  sweepExpiredCommunityRumors,
   updateChannelCursor,
   writeRumors,
   peekPendingWraps,
@@ -29,7 +30,8 @@ import {
 } from "@/concord-v2/lib/rumorStore";
 import { citationToTag, type AuthorityCitation } from "@/concord-v2/lib/edition";
 import { citationSatisfied } from "@/concord-v2/lib/control";
-import { canActOnMember, Permissions } from "@/concord-v2/lib/roles";
+import { canActOnMember, isAuthorized, Permissions } from "@/concord-v2/lib/roles";
+import { chatExpiresAt, messageExpirationOf } from "@/concord-v2/lib/disappearing";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
@@ -102,6 +104,11 @@ export function useChatModeration2(community: CommunityV2 | undefined): ChatMode
         // verdict above? Uncited means we have not, so the delete parks.
         return citationSatisfied(folded, community.id, deleter, action?.citation);
       },
+      // A timer notice is believed only from a MANAGE_METADATA holder
+      // (CORD-08 §4). False until the fold lands: an unverifiable notice is
+      // hidden, never trusted on faith.
+      canSetTimer: (author: string) =>
+        Boolean(folded && isAuthorized(folded.roster, author, folded.ownerHex, Permissions.MANAGE_METADATA)),
     }),
     [folded, community, dissolvedAtMs],
   );
@@ -155,6 +162,14 @@ export function useChannelTimeline2(
   useEffect(() => {
     if (channelIdHex) void prewarmTimelineSnapshot(queryClient, channelIdHex, channelKey(channelIdHex));
   }, [channelIdHex, queryClient]);
+
+  // Physically purge expired disappearing messages (CORD-08 §3). Hiding them
+  // is the read filter's job; the plaintext leaving the store is this one's.
+  // Fire-and-forget — the sweep self-gates to one walk per community per
+  // interval, so channel switches never re-scan.
+  useEffect(() => {
+    if (community?.idHex) void sweepExpiredCommunityRumors(community.idHex).catch(() => undefined);
+  }, [community?.idHex]);
 
   const windowLimitRef = useRef(WINDOW_SIZE);
   const [hasMore, setHasMore] = useState(true);
@@ -431,6 +446,12 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
   const queryClient = useQueryClient();
   const channelIdHex = channel?.idHex ?? null;
   const { setStatus } = useSendStatusMap(statusKey(channelIdHex));
+  // The community's disappearing-messages timer (CORD-08), read from the
+  // folded metadata at send time. A fold that hasn't landed reads as OFF —
+  // the tag as signed governs, so a client behind the head simply sends what
+  // it last knew, exactly the mixed-client behavior the CORD specifies.
+  const { data: folded } = useControlFold2(community);
+  const timerSecs = messageExpirationOf(folded?.metadata);
 
   const broadcast = useCallback(
     async (wrap: NostrEvent) => {
@@ -512,6 +533,12 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
       if (kind === KIND_REACTION && targetPubkey) tags.push(["p", targetPubkey]);
       if (kind === KIND_DELETE && target) tags.push(["k", String(targetKind ?? KIND_MESSAGE)]);
       if (extraTags) tags.push(...extraTags);
+      // CORD-08 §2: while the timer is set, every durable chat rumor except
+      // deletes (and timer notices) commits its NIP-40 deadline — send time
+      // plus the timer — inside the signed rumor; the wrap repeats it below so
+      // relays purge the ciphertext too.
+      const expiresAt = chatExpiresAt(effectiveKind, effectiveMs, timerSecs);
+      if (expiresAt !== undefined) tags.push(["expiration", String(expiresAt)]);
 
       const rumor: NostrRumor = buildRumor({ kind: effectiveKind, content, tags, pubkey: user.pubkey, ms: effectiveMs });
       // The message renders IMMEDIATELY — before the seal, which for a
@@ -566,7 +593,7 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
         throw err; // reactions/edits/deletes: callers own the rollback
       }
       logSync("send", `sealed ${rumor.id.slice(0, 8)} in ${sinceMs(sealStarted)} — wrapping + broadcasting to ${community.relays.length} relay(s)`);
-      const wrap = wrapSeal(seal, channel.current.group);
+      const wrap = wrapSeal(seal, channel.current.group, expiresAt !== undefined ? { expiration: expiresAt } : undefined);
 
       // The wrap is authored by the channel stream key rather than the user,
       // so identify this exact relay event as local before its push can arrive.
@@ -609,8 +636,11 @@ export function useMessageActions2(community: CommunityV2 | undefined, channel: 
       // its own tags, so preserve them verbatim (minus the channel binding,
       // which `send` re-adds) rather than rebuilding from a parent event.
       const isComment = msg.kind === KIND_COMMENT;
+      // Also strip the failed attempt's `expiration` — the re-send computes a
+      // fresh one from its own send time, and duplicating the tag would make
+      // the binding ambiguous.
       const threadTags = isComment
-        ? msg.tags.filter(([n]) => n !== "channel" && n !== "epoch")
+        ? msg.tags.filter(([n]) => n !== "channel" && n !== "epoch" && n !== "expiration")
         : undefined;
       queryClient.setQueryData<OpenedChat[]>(channelKey(channelIdHex), (old = []) =>
         old.filter((m) => m.rumorId !== id),

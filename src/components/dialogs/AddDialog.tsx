@@ -1,4 +1,4 @@
-import { ChevronDown, ClipboardPaste, Hash, Link2, Loader2, Server, ShieldCheck } from "lucide-react";
+import { ChevronDown, ClipboardPaste, Hash, Link2, Loader2, Server, ShieldCheck, Timer } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -13,6 +13,14 @@ import {
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { ImportFromDiscordButton } from "@/components/ImportFromDiscord";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { COMMUNITY_TIMER_PRESETS, DEFAULT_MESSAGE_EXPIRATION_SECS } from "@/concord-v2/lib/disappearing";
 import {
   Tooltip,
   TooltipContent,
@@ -78,6 +86,10 @@ export function AddBody({ onDone }: { onDone: () => void }) {
 
   const [name, setName] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
+  // Disappearing messages (CORD-08), surfaced at creation on purpose:
+  // retention is a decision a community should make before its first message.
+  // Defaults to 30 days; "Off" is right there on the same screen.
+  const [expiration, setExpiration] = useState(DEFAULT_MESSAGE_EXPIRATION_SECS);
 
   // Which relays the community is minted on. `null` = untouched (use the
   // resolved default candidates); once the user edits the picker, `relays`
@@ -100,6 +112,7 @@ export function AddBody({ onDone }: { onDone: () => void }) {
         // undefined only if candidates haven't resolved yet (create then picks
         // its own default).
         relays: relays ?? candidates ?? undefined,
+        messageExpirationSecs: expiration,
       });
       onDone();
       toast({ title: "Encrypted community ready", description: created });
@@ -144,6 +157,30 @@ export function AddBody({ onDone }: { onDone: () => void }) {
           autoFocus
           className="h-12 text-base"
         />
+
+        <div className="flex items-center justify-between gap-3 rounded-lg bg-secondary/50 p-3 text-left">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 text-sm font-medium">
+              <Timer className="size-4 shrink-0 text-muted-foreground" />
+              Disappearing messages
+            </div>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Messages delete for everyone after this long. Staff can change it later.
+            </p>
+          </div>
+          <Select value={String(expiration)} onValueChange={(v) => setExpiration(Number(v))}>
+            <SelectTrigger className="h-9 w-28 shrink-0" aria-label="Disappearing messages timer">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="z-[260]">
+              {COMMUNITY_TIMER_PRESETS.map((p) => (
+                <SelectItem key={p.seconds} value={String(p.seconds)}>
+                  {p.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
 
         {createError && (
           <Alert variant="destructive">

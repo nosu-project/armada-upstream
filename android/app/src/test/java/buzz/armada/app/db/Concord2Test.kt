@@ -18,18 +18,20 @@ import org.junit.Test
 class Concord2Test {
 
     private val community = "ab".repeat(32)
+    private val now = 1_000_000L
 
     @Test
     fun `stores an ordinary chat message`() {
-        assertTrue(Concord2.storable(community, Concord2.SEAL_ENCRYPTED, rumor(kind = 9)))
+        assertTrue(Concord2.storable(community, Concord2.SEAL_ENCRYPTED, rumor(kind = 9), now))
     }
 
     @Test
     fun `keeps every chat kind, including ones the timeline does not read`() {
         // A denylist, so kinds outside the timeline's own list still store —
-        // 3310 is the WebXDC signal, read by its own query.
-        for (kind in listOf(5, 7, 9, 1018, 1068, 1111, 3302, 3310, 8333, 9735, 31922, 31923, 31925)) {
-            assertTrue("kind $kind", Concord2.storable(community, Concord2.SEAL_ENCRYPTED, rumor(kind)))
+        // 3310 is the WebXDC signal, read by its own query, and 1740 the
+        // CORD-08 timer notice.
+        for (kind in listOf(5, 7, 9, 1018, 1068, 1111, 1740, 3302, 3310, 8333, 9735, 31922, 31923, 31925)) {
+            assertTrue("kind $kind", Concord2.storable(community, Concord2.SEAL_ENCRYPTED, rumor(kind), now))
         }
     }
 
@@ -40,7 +42,7 @@ class Concord2Test {
         // read back by kind, and a stored rumor keeps no seal for the fold to
         // check the form of, so this is the only place it can be refused.
         for (kind in listOf(3308, 3306, 3309, 3312, 3303)) {
-            assertFalse("kind $kind", Concord2.storable(community, Concord2.SEAL_ENCRYPTED, rumor(kind)))
+            assertFalse("kind $kind", Concord2.storable(community, Concord2.SEAL_ENCRYPTED, rumor(kind), now))
         }
     }
 
@@ -48,18 +50,44 @@ class Concord2Test {
     fun `refuses a chat rumor that did not arrive under an encrypted seal`() {
         // A plaintext seal would make the message a standalone signed artifact
         // any relay could display (CORD-02 §5).
-        assertFalse(Concord2.storable(community, 20014, rumor(kind = 9)))
+        assertFalse(Concord2.storable(community, 20014, rumor(kind = 9), now))
     }
 
     @Test
     fun `refuses a rumor with no community to file it under`() {
-        assertFalse(Concord2.storable("", Concord2.SEAL_ENCRYPTED, rumor(kind = 9)))
+        assertFalse(Concord2.storable("", Concord2.SEAL_ENCRYPTED, rumor(kind = 9), now))
     }
 
     @Test
     fun `a channel tag cannot move a plane kind past the refusal`() {
         val forged = rumor(kind = 3308, tags = listOf(listOf("channel", "cd".repeat(32)), listOf("epoch", "0")))
-        assertFalse(Concord2.storable(community, Concord2.SEAL_ENCRYPTED, forged))
+        assertFalse(Concord2.storable(community, Concord2.SEAL_ENCRYPTED, forged, now))
+    }
+
+    @Test
+    fun `refuses a chat rumor whose NIP-40 deadline has passed`() {
+        // CORD-08 §3: the WebView refuses an expired rumor at ingest and its
+        // sweep only walks what the read filter already hides — a second
+        // writer storing one would plant a disappearing message past its
+        // deadline.
+        val expired = rumor(kind = 9, tags = listOf(listOf("expiration", (now - 1).toString())))
+        assertFalse(Concord2.storable(community, Concord2.SEAL_ENCRYPTED, expired, now))
+        val atDeadline = rumor(kind = 9, tags = listOf(listOf("expiration", now.toString())))
+        assertFalse(Concord2.storable(community, Concord2.SEAL_ENCRYPTED, atDeadline, now))
+    }
+
+    @Test
+    fun `stores a chat rumor whose NIP-40 deadline is still ahead`() {
+        val live = rumor(kind = 9, tags = listOf(listOf("expiration", (now + 60).toString())))
+        assertTrue(Concord2.storable(community, Concord2.SEAL_ENCRYPTED, live, now))
+    }
+
+    @Test
+    fun `a malformed expiration tag is no deadline, not an expired one`() {
+        // A garbage tag must not be able to hide a message (the WebView's
+        // `expirationOf` reads it the same way).
+        val garbage = rumor(kind = 9, tags = listOf(listOf("expiration", "soon")))
+        assertTrue(Concord2.storable(community, Concord2.SEAL_ENCRYPTED, garbage, now))
     }
 
     @Test

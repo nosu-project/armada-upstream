@@ -1,4 +1,4 @@
-import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, Link as LinkIcon, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Phone, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Trash2, UserPlus, Users, X } from "lucide-react";
+import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, Link as LinkIcon, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Phone, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Timer, Trash2, UserPlus, Users, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
@@ -109,6 +109,8 @@ import { BanMemberDialog } from "@/concord-v2/components/BanMemberDialog2";
 import type { BanPhase } from "@/concord-v2/hooks/useModeration2";
 import { hasForeignLiveLinks } from "@/concord-v2/lib/control";
 import { replyTargetOf } from "@/concord-v2/lib/chat";
+import { communityTimerNotice } from "@/concord-v2/lib/disappearing";
+import { sweepExpiredCommunityRumors } from "@/concord-v2/lib/rumorStore";
 import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
 import { useGuestbook2 } from "@/concord-v2/hooks/useGuestbook2";
 import { useModeration2, useReadCutRetry2 } from "@/concord-v2/hooks/useModeration2";
@@ -878,6 +880,24 @@ function ThreadReplyAvatar({ pubkey }: { pubkey: string }) {
 }
 
 /**
+ * A disappearing-messages timer change (CORD-08 §4), rendered as a centered
+ * notice like the DM feed's — conversation state, not a message: no avatar,
+ * no actions, no reactions.
+ */
+function TimerNotice2({ author, seconds, self }: { author: string; seconds: number; self: string | undefined }) {
+  const a = useAuthor(author);
+  const name = a.data?.metadata?.name ?? author.slice(0, 8);
+  return (
+    <div className="flex items-center justify-center gap-1.5 px-4 py-1.5 select-none" role="status">
+      <Timer className="size-3.5 shrink-0 text-muted-foreground/70" aria-hidden />
+      <span className="text-[11px] text-muted-foreground/80 text-center">
+        {communityTimerNotice(seconds, author === self, name)}
+      </span>
+    </div>
+  );
+}
+
+/**
  * A Concord V2 community — CORD-01..06 Private Streams over interchangeable
  * relays, no host, no `#z` tags: every plane is kind-1059 traffic at derived
  * stream addresses. Lives at `/c/:communityId`, rehydrated from the
@@ -1347,7 +1367,15 @@ export function ConcordV2Page() {
   const { data: dissolved } = useDissolved2(community);
   const canWrite = Boolean(user && channel && !dissolved && !excluded && !stranded);
 
-  const { transport: baseTransport, reactionsFor, allMessages, calendar } = useTransport2(community, channel, canWrite, canModerateMessages, channelIdHex);
+  const { transport: baseTransport, reactionsFor, allMessages, calendar, timerEntries } = useTransport2(community, channel, canWrite, canModerateMessages, channelIdHex);
+
+  // Physically purge this community's expired disappearing messages
+  // (CORD-08 §3) — the sweep self-gates to one walk per interval, and every
+  // read path filters expired rows regardless, so this is hygiene, not a gate.
+  const sweepIdHex = community?.idHex;
+  useEffect(() => {
+    if (sweepIdHex) void sweepExpiredCommunityRumors(sweepIdHex);
+  }, [sweepIdHex]);
   // Git activity remains its own event domain. The store-first channel hook
   // supplies attached repository activity; this page only merges its display
   // order with decrypted chat rumors.
@@ -1356,7 +1384,7 @@ export function ConcordV2Page() {
     [folded, channel?.idHex, channel?.name, channel?.isPrivate],
   );
   const gitActivity = useChannelGitActivity(channel?.idHex, gitAttachments);
-  const mixedEntries = useMemo(() => mergeChannelTimeline(baseTransport.messages, gitActivity.activities), [baseTransport.messages, gitActivity.activities]);
+  const mixedEntries = useMemo(() => mergeChannelTimeline(baseTransport.messages, gitActivity.activities, timerEntries), [baseTransport.messages, gitActivity.activities, timerEntries]);
   // Memoized: this parallel array feeds a hook that settles once, and
   // rebuilding it on every page render was a full-timeline allocation per
   // keystroke/hover anywhere on the page.
@@ -3285,7 +3313,7 @@ export function ConcordV2Page() {
                     transport={transport}
                     entries={mixedEntries}
                     newDividerId={newDividerId}
-                    renderEntry={(entry, relatedEntries) => isGitTimelineEntry(entry) ? <GitTimelineRow entry={entry} members={memberSet} onOpen={(ticket) => { setOpenTicket(ticket); void gitActivity.refreshTicket(ticket); }} commentEntries={entry.type === "git-comment" ? relatedEntries as Extract<typeof entry, { type: "git-comment" }>[] : undefined} activities={gitActivity.activities} /> : null}
+                    renderEntry={(entry, relatedEntries) => isGitTimelineEntry(entry) ? <GitTimelineRow entry={entry} members={memberSet} onOpen={(ticket) => { setOpenTicket(ticket); void gitActivity.refreshTicket(ticket); }} commentEntries={entry.type === "git-comment" ? relatedEntries as Extract<typeof entry, { type: "git-comment" }>[] : undefined} activities={gitActivity.activities} /> : entry.type === "dm-timer" ? <TimerNotice2 author={entry.author} seconds={entry.seconds} self={user?.pubkey} /> : null}
                     handleRef={timelineRef}
                     syncing={channelSyncing}
                     className="flex-1 min-h-0"

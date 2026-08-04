@@ -138,19 +138,26 @@ export async function sealRumor(
  * conversation key, signed by the stream key, tagged with a random ephemeral
  * `p` (NIP-59 reversed). `created_at` is NOT tweaked (CORD-01). Keep
  * `ephemeralSk` if you want to NIP-09-delete the wrap later.
+ *
+ * `expiration` (unix seconds) puts a NIP-40 tag on the WRAP so relays purge
+ * the ciphertext itself — CORD-08 §2's deliberate exception to the
+ * no-outer-tags rule, used only for expiring chat rumors and always matching
+ * the rumor's own signed `expiration` tag (which is what readers enforce).
  */
 export function wrapSeal(
   seal: NostrEvent,
   stream: GroupKey,
-  opts?: { ephemeral?: boolean; ephemeralSk?: Uint8Array },
+  opts?: { ephemeral?: boolean; ephemeralSk?: Uint8Array; expiration?: number },
 ): NostrEvent {
   const ephemeralSk = opts?.ephemeralSk ?? generateSecretKey();
   const ephemeralPk = getPublicKey(ephemeralSk);
+  const tags: string[][] = [["p", ephemeralPk]];
+  if (opts?.expiration !== undefined) tags.push(["expiration", String(Math.floor(opts.expiration))]);
   return finalizeEvent(
     {
       kind: opts?.ephemeral ? KIND_WRAP_EPHEMERAL : KIND_WRAP,
       content: encryptChecked(stream.convKey, JSON.stringify(seal)),
-      tags: [["p", ephemeralPk]],
+      tags,
       created_at: Math.floor(Date.now() / 1000),
     },
     stream.sk,

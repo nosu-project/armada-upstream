@@ -2522,6 +2522,12 @@ public class NotificationRelayService extends Service {
             if (cts + 1 > sinceSec) sinceSec = cts + 1;
             notifiedIds.add(id);
 
+            // CORD-08: a disappearing message's wrap carries the rumor's NIP-40
+            // deadline, so an already-expired one is refused before anything is
+            // decrypted — not stored, not parked, not notified (the DM path
+            // above applies the same rule to its envelope).
+            if (ServiceStore.isExpired(event)) return;
+
             Concord2Open opened = openConcord2(event, st);
             if (opened == null) {
                 // Couldn't decrypt — a rekey epoch whose key we don't hold, or

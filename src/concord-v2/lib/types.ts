@@ -95,6 +95,13 @@ export interface CommunityMetadata {
   relays: string[];
   icon?: ImagePointer;
   banner?: ImagePointer;
+  /**
+   * Disappearing-messages timer in seconds (CORD-08): while set, every durable
+   * chat-plane rumor (except deletes and timer notices) carries a NIP-40
+   * `expiration` of its send time plus this. Absent, 0, or malformed = off;
+   * read through `messageExpirationOf`, never directly.
+   */
+  message_expiration?: number;
   /** Client-extensible opaque fields; editors MUST round-trip what they don't understand. */
   custom?: Record<string, unknown>;
   /** Unknown top-level fields, preserved for round-tripping. */

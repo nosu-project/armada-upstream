@@ -15,6 +15,7 @@ import { APP_RELAYS } from "@/lib/platform";
 import { preferPortableRelays, unusableRelaysReason } from "@/lib/relayUsability";
 import { channelKeysToWire, nextChannelEpoch, toJoinMaterial, rehydrateCommunity, type CommunityListEntry, type JoinMaterial } from "@/concord-v2/lib/communityList";
 import { mintCommunity } from "@/concord-v2/lib/community";
+import { DEFAULT_MESSAGE_EXPIRATION_SECS } from "@/concord-v2/lib/disappearing";
 import { accessRolePosition, isAuthorized, MAX_ROLES_PER_COMMUNITY, Permissions } from "@/concord-v2/lib/roles";
 import { channelEpochFloor, channelRekeyAddressWindow } from "@/concord-v2/lib/rekey";
 import {
@@ -440,8 +441,12 @@ export function useCommunityActions2() {
   // link must still resolve against the relays every CORD client shares.
   const bootstrapRelays = config.appRelays.length > 0 ? config.appRelays : STOCK_RELAYS;
 
-  const create = useMutation<{ communityId: string; name: string }, Error, { name: string; relays?: string[] }>({
-    mutationFn: async ({ name, relays: chosen }) => {
+  const create = useMutation<
+    { communityId: string; name: string },
+    Error,
+    { name: string; relays?: string[]; messageExpirationSecs?: number }
+  >({
+    mutationFn: async ({ name, relays: chosen, messageExpirationSecs }) => {
       if (!user) throw new Error("Sign in to start an encrypted community.");
       if (!user.signer.nip44) throw new Error("This signer can't hold encrypted communities (NIP-44 unsupported).");
       const trimmed = name.trim();
@@ -463,6 +468,10 @@ export function useCommunityActions2() {
         : defaultCreateRelays(appRelays, await fetchCreatorDmRelays(nostr, user.pubkey));
       const { community, generalChannelId } = mintCommunity(trimmed, user.pubkey, relays);
 
+      // Disappearing messages (CORD-08): default 30 days unless the creation
+      // screen chose otherwise; 0 (off) writes no field at all.
+      const timerSecs = Math.floor(messageExpirationSecs ?? DEFAULT_MESSAGE_EXPIRATION_SECS);
+
       // Genesis: two owner-signed editions, nothing more (CORD-02 §1).
       await publishEdition2(
         nostr,
@@ -470,7 +479,11 @@ export function useCommunityActions2() {
         user.signer,
         buildMetadataEdition(
           community.id,
-          { name: trimmed, relays: community.relays },
+          {
+            name: trimmed,
+            relays: community.relays,
+            ...(timerSecs > 0 ? { message_expiration: timerSecs } : {}),
+          },
           { actorPubkey: user.pubkey, version: 1n },
         ),
       );

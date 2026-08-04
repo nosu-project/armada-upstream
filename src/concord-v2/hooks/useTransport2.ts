@@ -11,7 +11,9 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { customEmojiReactionTags } from "@/hooks/useReactions";
 import { KIND_CALENDAR_RSVP, KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_ONCHAIN_ZAP, KIND_POLL, KIND_POLL_VOTE, KIND_REACTION, KIND_ZAP } from "@/concord-v2/lib/kinds";
 import { markReactionDeleted, type OpenedChat } from "@/concord-v2/lib/chat";
+import { timerNoticeSeconds } from "@/concord-v2/lib/disappearing";
 import { channelKey } from "@/concord-v2/hooks/useChannel2";
+import type { DmTimerTimelineEntry } from "@/components/chat/channelTimeline";
 import { buildCalendarTags, type CalendarEvent, type CalendarEventInput, type CalendarTransport, parseCalendarEvents, type RsvpStatus, type RsvpTally, tallyRsvps } from "@/lib/calendar";
 import { buildPollTags, parsePoll, tallyPollVotes, type PollTally, type PollVote } from "@/lib/polls";
 import { zapRumorTags, type ZapTally } from "@/lib/zaps";
@@ -71,6 +73,12 @@ export function useTransport2(
   allMessages: ChatMsg[];
   /** The channel's calendar events + RSVPs, for the shared events bar. */
   calendar: CalendarTransport;
+  /**
+   * Disappearing-messages timer notices (CORD-08 §4) as ready-made timeline
+   * entries — the same centered-notice shape the DM feed renders. The page
+   * merges them into its `entries` via {@link mergeChannelTimeline}.
+   */
+  timerEntries: DmTimerTimelineEntry[];
 } {
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
@@ -493,6 +501,20 @@ export function useTransport2(
     [send],
   );
 
+  // Timer-change notices (CORD-08 §4), already authority-gated by the fold,
+  // adapted to the DM timer entry shape the shared timeline renders.
+  const timerEntries = useMemo<DmTimerTimelineEntry[]>(
+    () =>
+      folded.timerNotices.map((n) => ({
+        type: "dm-timer" as const,
+        id: `dm-timer:${n.rumorId}`,
+        createdAt: Math.floor(n.ms / 1000),
+        author: n.author,
+        seconds: timerNoticeSeconds(n) ?? 0,
+      })),
+    [folded.timerNotices],
+  );
+
   // Adapters from the id-keyed hooks to the event-keyed ChatTransport shape.
   // Defined OUTSIDE the transport memo: inline in it they'd take a new identity
   // every time `messages` changed, and they're handed straight to memoized
@@ -532,5 +554,5 @@ export function useTransport2(
     [timeline, isLoading, canWrite, canModerate, rotationDividerIds, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, calendarFor, threadRepliesFor, sendThreadReply],
   );
 
-  return { transport, reactionsFor, allMessages: messages, calendar };
+  return { transport, reactionsFor, allMessages: messages, calendar, timerEntries };
 }

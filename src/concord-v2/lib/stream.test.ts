@@ -183,3 +183,35 @@ describe("stream envelope (CORD-01)", () => {
     expect(openWrap(wrap, stream).kind).toBe(23311);
   });
 });
+
+describe("wrap expiration (CORD-08 §2)", () => {
+  it("stamps the wrap with a NIP-40 tag on request, and opens unchanged", async () => {
+    const alice = testSigner();
+    const stream = channelGroupKey(secret, channelId, 0);
+    const rumor = buildRumor({
+      kind: KIND_MESSAGE,
+      content: "fleeting",
+      tags: [...channelBindingTags(channelIdHex, 0n), ["expiration", "1735689600"]],
+      pubkey: alice.pubkey,
+      ms: Date.now(),
+    });
+    const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, stream, alice);
+
+    const wrap = wrapSeal(seal, stream, { expiration: 1735689600.7 });
+    // Floored to whole seconds — a fractional deadline is not a NIP-40 value.
+    expect(wrap.tags).toContainEqual(["expiration", "1735689600"]);
+    // The ephemeral `p` camouflage stays alongside it.
+    expect(wrap.tags.some((t) => t[0] === "p")).toBe(true);
+
+    const opened = openWrap(wrap, stream);
+    expect(opened.content).toBe("fleeting");
+  });
+
+  it("stamps nothing by default", async () => {
+    const alice = testSigner();
+    const stream = channelGroupKey(secret, channelId, 0);
+    const rumor = buildRumor({ kind: KIND_MESSAGE, content: "x", tags: channelBindingTags(channelIdHex, 0n), pubkey: alice.pubkey, ms: Date.now() });
+    const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, stream, alice), stream);
+    expect(wrap.tags.some((t) => t[0] === "expiration")).toBe(false);
+  });
+});
