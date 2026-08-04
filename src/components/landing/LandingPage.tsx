@@ -4,7 +4,7 @@ import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCres
 import { BrandMark } from "@/components/brand/BrandMark";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { STOCK_RELAYS } from "@/concord-v2/lib/invite";
+import { RELAY_DICTIONARY } from "@/concord-v2/lib/invite";
 import { relayToHttpUrl } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +17,13 @@ import { EncryptionQuiz } from "./EncryptionQuiz";
  * Armada work?" cue scrolls into. Scrolling raises the sea's waterline until
  * the statement floats on open water.
  */
+
+/**
+ * The stock relays in landing-page display order. Display order only — the
+ * dictionary ids (and STOCK_RELAYS' order) are the CORD-05 wire format and
+ * stay fixed.
+ */
+const LANDING_RELAYS: string[] = [3, 4, 1, 2].map((i) => RELAY_DICTIONARY[i]);
 
 /** True when the user has asked the OS to keep motion to a minimum. */
 function prefersReducedMotion() {
@@ -107,7 +114,7 @@ export function LandingPage({
           {/* The receipts for the claim above — a caption strip, not a second
               block of copy, so it stays subordinate to the statement. */}
           <ul className="mt-14 flex flex-wrap items-center justify-center gap-x-6 gap-y-2.5 font-mono text-xs text-muted-foreground/70">
-            {STOCK_RELAYS.map((url, i) => <RelayLight key={url} url={url} index={i} />)}
+            {LANDING_RELAYS.map((url, i) => <RelayLight key={url} url={url} index={i} />)}
             {/* The defaults are a starting point, not the set — the rest of
                 the network is one link away, so no light to check. */}
             <li className="tracking-wide">
