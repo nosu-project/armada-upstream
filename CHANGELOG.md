@@ -4,6 +4,34 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.46.0] - 2026-08-04
+
+Concord communities get disappearing messages: a community-wide timer, set at creation or in community settings, that expires messages for everyone and lets relays purge them too. Channels can be grouped into categories and dragged into order, new text channels default to private, and invite links are limited to owners and admins. Discover gains a theme creator and paints faster, and channels, threads, DMs and message links are all addressable by URL.
+
+### Added
+- Disappearing messages in Concord communities, with a notice in each channel when staff change the timer
+- Channel categories: group channels, manage categories from the sidebar, and drag channels to reorder or file them
+- A theme creator in Discover
+- Revoke all of your own invite links for a community at once
+- Add members to a private channel from the member sidebar
+- A public chat link page for a person, so someone who isn't on Armada sees who they'd be talking to and can join
+- Share an image straight from the lightbox
+
+### Changed
+- New text channels default to private, and a new community starts with a private room alongside #general
+- Invite links can only be created by owners and admins, and warn that recipients keep permanent access to a public channel's history
+- Channels, threads, DMs and message links are driven from the URL, so sharing, bookmarking and back/forward work on every chat surface; DM addresses moved from `/dms` to `/dm`
+- Inviting someone is a single tap to share, and minting the link is faster
+- Discover paints sooner, fetches its directory in one round trip, and ranks communities by owner
+- The Discover share picker only offers communities that have a live invite link
+- The landing page is a single statement over live relay lights, with a "Why?" reveal, an encrypted quiz, and a closing join screen
+- Faster boots and lower memory use, from lazy key derivation, batched storage writes on Android, and fewer redundant renders
+
+### Fixed
+- Switching channels no longer flashes a stale channel or an empty sidebar while a community is still loading
+- A share the user cancels is no longer treated as a failure
+- Shared links and files carry the right preview details for the site that built them
+
 ## [0.45.0] - 2026-08-02
 
 Concord communities gain roles and serious moderation: build a role hierarchy with colours and ranks, gate private channels behind roles, and work through a searchable Members tab with mass ban and kick. Onboarding is now a guided full-screen wizard with a real key-backup step, and a new landing page greets first-time visitors. Under the hood, local storage moves to ArmadaDB for faster boots and steadier sync.
