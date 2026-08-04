@@ -65,6 +65,7 @@ import { extractWebxdcMeta } from "@/lib/webxdcMeta";
 import { IMETA_MEDIA_URL_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
 import { resizeImage } from "@/lib/resizeImage";
+import { consumeShareFor, onShareStashChanged } from "@/lib/shareTarget";
 import { processVideo } from "@/lib/video/processVideo";
 import { invocationTags, parseInvocation, usageLine, validateInvocation, type BotCommandEntry } from "@/lib/botCommands";
 import { executeSlashCommand, parseSlashCommand, resolveNpubArg, type SlashAction, type SlashCapability, type SlashCommand } from "@/lib/slashCommands";
@@ -1043,6 +1044,31 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       setPendingUploads((prev) => prev.filter((p) => p.id !== pendingId));
     }
   }, [uploadFile, toast, encryptAttachments]);
+
+  // Consume a shared payload routed to THIS conversation (Android share
+  // target / the /share destination picker): shared text is appended to the
+  // draft, shared files go through the normal attachment pipeline. The consume
+  // is matched on the current pathname — the share stash routes a payload to
+  // exactly one conversation path, and a thread-panel composer at a deeper
+  // `/t/` path never matches. Subscribed (not just checked on mount) because a
+  // native share's file copies can land AFTER navigation mounted this
+  // composer, and a Direct Share into the room already on screen re-routes the
+  // stash without remounting anything.
+  useEffect(() => {
+    const consume = () => {
+      const share = consumeShareFor(window.location.pathname);
+      if (!share) return;
+      if (share.text) {
+        setContent((cur) => (cur ? `${cur}\n${share.text}` : share.text));
+      }
+      textareaRef.current?.focus();
+      void (async () => {
+        for (const file of share.files) await handleFileUpload(file);
+      })();
+    };
+    consume();
+    return onShareStashChanged(consume);
+  }, [handleFileUpload]);
 
   const handlePaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = e.clipboardData?.items;

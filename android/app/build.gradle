@@ -108,6 +108,10 @@ dependencies {
     implementation "androidx.activity:activity:$androidxActivityVersion"
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    // Direct Share back-compat: serves the sharing shortcuts through the
+    // legacy ChooserTargetService API on API 24-28 (see the
+    // chooser_target_service meta-data in AndroidManifest.xml).
+    implementation "androidx.sharetarget:sharetarget:1.2.0"
     // Credential Manager: save the account's nsec to the system password
     // manager (biometric-gated OS sheet) as a real key backup on onboarding.
     // credentials-play-services-auth supplies the password-credential provider

@@ -38,6 +38,33 @@
                 <data android:scheme="https" android:host="armada.buzz" />
             </intent-filter>
 
+            <!-- Share target: receive text/links/files from other apps' share
+                 sheets (ShareTargetPlugin stages the payload for the web
+                 layer's destination picker). -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+
+            <!-- Sharing Shortcuts (API 29+): the static share-target category
+                 that dynamic conversation shortcuts must carry to surface as
+                 Direct Share suggestions in the share sheet. -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+            <!-- Direct Share back-compat (API 24-28) via androidx.sharetarget:
+                 serves the same dynamic shortcuts through the legacy
+                 ChooserTargetService API. -->
+            <meta-data
+                android:name="android.service.chooser.chooser_target_service"
+                android:value="androidx.sharetarget.ChooserTargetServiceCompat" />
+
         </activity>
 
         <provider
