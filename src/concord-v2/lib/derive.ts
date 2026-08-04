@@ -34,6 +34,7 @@ const LABEL_DISSOLVED = "concord/dissolved";
 const LABEL_GRANT = "concord/grant";
 const LABEL_BANLIST = "concord/banlist";
 const LABEL_INVITE_LINKS = "concord/invite-links";
+const LABEL_PINS = "concord/pins";
 const LABEL_INVITE_KEY = "concord/invite-key";
 
 /** The community_id commitment prefix (A.4) — plain SHA-256, NOT the hkdf shape. */
@@ -392,6 +393,13 @@ export function grantLocator(communityId: Uint8Array, memberXonly: Uint8Array): 
   assert32("communityId", communityId);
   assert32("memberXonly", memberXonly);
   return hkdf32(communityId, buildInfo(LABEL_GRANT, memberXonly));
+}
+
+/** A Channel's Pin List coordinate (CORD-04 §7). */
+export function pinsLocator(communityId: Uint8Array, channelId: Uint8Array): Uint8Array {
+  assert32("communityId", communityId);
+  assert32("channelId", channelId);
+  return hkdf32(communityId, buildInfo(LABEL_PINS, channelId));
 }
 
 /** The community-wide Banlist coordinate. */

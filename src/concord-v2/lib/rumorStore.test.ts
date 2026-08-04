@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { bytesToHex, channelGroupKey, voiceGroupKey, voiceMediaKey } from "@/concord-v2/lib/derive";
 import { openChatBatch, type OpenedChat } from "@/concord-v2/lib/chat";
+import { decryptWithDisclosedKeys, discloseKeysFor } from "@/concord-v2/lib/nip44keys";
 import { KIND_DELETE, KIND_MESSAGE, KIND_REACTION, KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
 import { buildRumor, channelBindingTags, openWrap, rewrapSeal, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -218,7 +219,11 @@ describe("concord-v2 rumor store", () => {
     expect(openWrap(rewrapped, control).rumorId).toBe(opened.rumorId);
   });
 
-  it("keeps no seal for encrypted-sealed rumors (they can never be re-wrapped)", async () => {
+  it("keeps a chat message's encrypted seal — a Pin proves a message FROM its seal", async () => {
+    // Encrypted seals were once dropped as pure cost: only compaction read
+    // them, and it can re-wrap plaintext seals alone. Pins (CORD-04 §7) changed
+    // that — a pin carries the original seal verbatim, so a message whose seal
+    // was discarded stops being pinnable the moment it leaves memory.
     const { channel, idHex } = makeChannel();
     const alice = signer();
     const rumor = chatRumor(idHex, alice, KIND_MESSAGE, "chat", 1000);
@@ -226,7 +231,15 @@ describe("concord-v2 rumor store", () => {
     writeRumors(CID, await openChatBatch([await wrapChat(rumor, channel, alice)], channel));
     await eventually(() => queryChannelRumors(CID, idHex, { limit: 10 }), (r) => r.length === 1);
 
-    expect(await readStoredSeal(CID, rumor.id)).toBeUndefined();
+    const seal = await eventually(
+      () => readStoredSeal(CID, rumor.id),
+      (s) => s !== undefined,
+    );
+    expect(seal?.kind).toBe(KIND_SEAL_ENCRYPTED);
+    // And it is the real thing: the disclosure opens it back to the message.
+    const keys = discloseKeysFor(seal!.content, channel.current.group.convKey)!;
+    expect(keys).toBeDefined();
+    expect(JSON.parse(decryptWithDisclosedKeys(seal!.content, keys)!).content).toBe("chat");
   });
 
   it("reads back the rumor verbatim, with the envelope absent unless supplied", () => {

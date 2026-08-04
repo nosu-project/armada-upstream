@@ -39,6 +39,7 @@ import {
   VSK_GRANT,
   VSK_INVITE_REGISTRY,
   VSK_METADATA,
+  VSK_PINS,
   VSK_ROLE,
 } from "@/concord-v2/lib/kinds";
 import {
@@ -259,6 +260,13 @@ export interface FoldedControl {
   liveInviteLinks: Set<string>;
   /** creatorHex → that creator's own registry list (for maintaining one's registry). */
   registriesByCreator: Map<string, string[]>;
+  /**
+   * Pin Lists (vsk 11) by their `pins_locator` eid → the head's RAW content.
+   * Content is never decoded here: the sealed form needs a Channel key the
+   * fold has no business holding, and a cap-violating or unreadable list reads
+   * as EMPTY rather than affecting the fold at all (CORD-04 §7).
+   */
+  pinLists: Map<string, { content: string; author: string }>;
   /** Per-entity head version + hash, for chaining the next edition (key = eid hex). */
   heads: Map<string, EntityHead>;
   /**
@@ -1118,6 +1126,19 @@ function foldOnce(
     for (const pk of list) liveInviteLinks.add(pk.toLowerCase());
   }
 
+  // 7. Pin Lists (vsk 11), each gated by PIN_MESSAGES (CORD-04 §7). Only the
+  // authority question is settled here; the content is carried verbatim, since
+  // a violating list reads as empty rather than as a refused edition.
+  const pinLists = new Map<string, { content: string; author: string }>();
+  for (const [eid, candidates] of candidatesOf(VSK_PINS)) {
+    const head = pickHead(candidates, heads, headEditions, (p) => {
+      if (!isAuthorized(roster, p.author, ownerHex, Permissions.PIN_MESSAGES)) return false;
+      return citationOk(p);
+    });
+    if (!head) continue;
+    pinLists.set(eid, { content: head.content, author: head.author });
+  }
+
   // Data-availability roll-up: gap-held entities, plus floored entities with
   // ZERO served editions this fold. A floored entity whose editions were
   // served but authority-rejected is NOT flagged — that's a deliberate drop
@@ -1130,7 +1151,7 @@ function foldOnce(
     if (!servedEids.has(eid) && !gapHeld.has(eid)) incomplete.push(eid);
   }
 
-  const result: FoldedControl = { roster, ownerHex, metadata, channels, banned, bannedAt, liveInviteLinks, registriesByCreator, heads, headEditions, incomplete };
+  const result: FoldedControl = { roster, ownerHex, metadata, channels, banned, bannedAt, liveInviteLinks, registriesByCreator, pinLists, heads, headEditions, incomplete };
   return result;
 }
 

@@ -47,3 +47,18 @@ describe("isLocalNetworkUrl", () => {
     expect(isLocalNetworkUrl("garbage")).toBe(false);
   });
 });
+
+describe('IPv4-mapped IPv6 literals', () => {
+  it('catches a loopback wearing an IPv6 spelling', () => {
+    // The URL parser normalizes the mapped form to hex, so the dotted rules
+    // below never see it — the same host, spelled past the guard.
+    expect(isLocalNetworkUrl('http://[::ffff:127.0.0.1]/x.png')).toBe(true);
+    expect(isLocalNetworkUrl('http://[::ffff:192.168.1.5]/x.png')).toBe(true);
+    expect(isLocalNetworkUrl('http://[::ffff:10.0.0.1]/x.png')).toBe(true);
+    expect(isLocalNetworkUrl('http://[::ffff:169.254.1.1]/x.png')).toBe(true);
+  });
+
+  it('still allows a mapped public address', () => {
+    expect(isLocalNetworkUrl('http://[::ffff:93.184.216.34]/x.png')).toBe(false);
+  });
+});

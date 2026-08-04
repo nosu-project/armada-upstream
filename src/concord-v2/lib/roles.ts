@@ -20,7 +20,8 @@ export const Permissions = {
   // 1<<7 RETIRED (was MANAGE_INVITES).
   VIEW_AUDIT_LOG: 1n << 8n,
   MENTION_EVERYONE: 1n << 9n,
-  // Reserved: MANAGE_EMOJI=1<<10, PIN_MESSAGES=1<<11, MANAGE_EVENTS=1<<12.
+  PIN_MESSAGES: 1n << 11n,
+  // Reserved: MANAGE_EMOJI=1<<10, MANAGE_EVENTS=1<<12.
 } as const;
 
 /**
@@ -37,7 +38,8 @@ export const ADMIN_ALL =
   Permissions.MANAGE_MESSAGES |
   Permissions.CREATE_INVITE |
   Permissions.VIEW_AUDIT_LOG |
-  Permissions.MENTION_EVERYONE;
+  Permissions.MENTION_EVERYONE |
+  Permissions.PIN_MESSAGES;
 
 /** Management bits (everything but the purely-social MENTION_EVERYONE). */
 export const MANAGEMENT_MASK = ADMIN_ALL & ~Permissions.MENTION_EVERYONE;
@@ -64,6 +66,7 @@ export const PERMISSION_LABELS: Array<{ bit: bigint; label: string; hint: string
   { bit: Permissions.KICK, label: "Kick members", hint: "Remove members (they can rejoin via invite)." },
   { bit: Permissions.BAN, label: "Ban members", hint: "Ban members and rotate keys to lock them out." },
   { bit: Permissions.MANAGE_MESSAGES, label: "Manage messages", hint: "Hide other members' messages." },
+  { bit: Permissions.PIN_MESSAGES, label: "Pin messages", hint: "Pin messages so everyone sees them, including members who join later." },
   { bit: Permissions.CREATE_INVITE, label: "Create invites", hint: "Mint public invite links." },
   { bit: Permissions.MENTION_EVERYONE, label: "Mention everyone", hint: "Use @everyone." },
 ];

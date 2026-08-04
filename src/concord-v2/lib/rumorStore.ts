@@ -56,6 +56,9 @@ import type { NostrEvent } from "@nostrify/nostrify";
 
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import {
+  KIND_COMMENT,
+  KIND_EDIT,
+  KIND_MESSAGE,
   KIND_SEAL_PLAINTEXT,
   KIND_WEBXDC,
   PLANE_KINDS,
@@ -519,6 +522,9 @@ export async function queryRekeyRounds(
 // can republish an entity's head under the new epoch verbatim (CORD-06 §3), and
 // is read by exactly one call site, once per rotation.
 
+/** Rumor kinds a Pin can prove, whose seals must therefore survive the store. */
+const PIN_PROVABLE_KINDS: ReadonlySet<number> = new Set([KIND_MESSAGE, KIND_COMMENT, KIND_EDIT]);
+
 /** KV key holding the signed seal a stored rumor arrived in. */
 function sealKey(communityIdHex: string, rumorId: string): string {
   return `c2seal:${communityIdHex}:${rumorId}`;
@@ -585,8 +591,19 @@ function writeStored(
   const writes: Promise<unknown>[] = [];
   for (const o of opened) {
     writes.push(s.event(openedToStored(o)));
-    if (o.seal && o.sealKind === KIND_SEAL_PLAINTEXT) {
-      writes.push(db.kv.set(sealKey(communityIdHex, o.rumorId), o.seal));
+    // Keep the seal for plaintext editions (compaction re-wraps them verbatim)
+    // and for everything a Pin can prove (CORD-04 §7): the message itself, and
+    // the Edit that revises it — a pin carries the Edit's own seal so keyless
+    // readers verify the revision rather than trust a curator's retyping.
+    // Without this a message stops being pinnable, and a revision stops being
+    // provable, the moment it leaves memory.
+    if (o.seal && (o.sealKind === KIND_SEAL_PLAINTEXT || PIN_PROVABLE_KINDS.has(o.kind))) {
+      // Swallowed deliberately: the seal is optional evidence, the rumor is the
+      // record. Letting a QuotaExceededError here fail the batch would report a
+      // rumor that committed fine as uncommitted — the sweep would not memoise
+      // its wrap, and the write would never be acked. A storage-pressure
+      // problem must not become a sync problem.
+      writes.push(db.kv.set(sealKey(communityIdHex, o.rumorId), o.seal).catch(() => undefined));
     }
   }
   if (plane === "control" && snapshot) {

@@ -22,6 +22,7 @@ import {
   VSK_CHANNEL,
   VSK_GRANT,
   VSK_INVITE_REGISTRY,
+  VSK_PINS,
   VSK_METADATA,
   VSK_ROLE,
 } from "@/concord-v2/lib/kinds";
@@ -83,6 +84,7 @@ const REQUIRED_PERMISSION: Record<string, bigint> = {
   [VSK_GRANT]: Permissions.MANAGE_ROLES,
   [VSK_BANLIST]: Permissions.BAN,
   [VSK_INVITE_REGISTRY]: Permissions.CREATE_INVITE,
+  [VSK_PINS]: Permissions.PIN_MESSAGES,
 };
 
 /**
@@ -97,6 +99,7 @@ export const ACTION_LABELS: Record<string, { one: string; many: string }> = {
   [VSK_GRANT]: { one: "permission change", many: "permission changes" },
   [VSK_BANLIST]: { one: "ban", many: "bans" },
   [VSK_INVITE_REGISTRY]: { one: "invite link change", many: "invite link changes" },
+  [VSK_PINS]: { one: "pin change", many: "pin changes" },
   unrecognised: { one: "unrecognised event", many: "unrecognised events" },
 };
 

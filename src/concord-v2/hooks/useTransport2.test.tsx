@@ -37,6 +37,7 @@ const h = vi.hoisted(() => ({
 vi.mock("@/concord-v2/hooks/useChannel2", () => ({
   useChannelTimeline2: () => ({
     folded: h.folded,
+    raw: [],
     isLoading: false,
     loadOlder: async () => 0,
     hasMore: false,

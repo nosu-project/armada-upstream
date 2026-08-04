@@ -57,6 +57,7 @@ import { sealRumor, wrapSeal } from "./stream";
 import { bootstrapHead, editionHash, fold, type Edition } from "./version";
 import {
   ADMIN_ALL,
+  PERMISSION_LABELS,
   byDisplayOrder,
   canActOnMember,
   canActOnPosition,
@@ -787,11 +788,36 @@ describe("CORD-04 §3 — Permissions and Position", () => {
 
   it("O-28: there is no all-powerful bit — ADMIN_ALL does not inherit future bits", () => {
     // "a Role granted everything today does not inherit a permission added
-    // tomorrow." 1<<10..1<<12 are reserved and must NOT already be held.
-    expect(permsContain(ADMIN_ALL, 1n << 10n)).toBe(false);
-    expect(permsContain(ADMIN_ALL, 1n << 11n)).toBe(false);
-    expect(permsContain(ADMIN_ALL, 1n << 12n)).toBe(false);
+    // tomorrow." Still-RESERVED bits must not already be held. 1<<11 was
+    // reserved for PIN_MESSAGES and is now claimed (§7), so it belongs to the
+    // management union a NEW Admin is minted with — which grants nothing
+    // retroactively, since a published Role carries its own frozen bitmask.
+    expect(permsContain(ADMIN_ALL, 1n << 10n)).toBe(false); // MANAGE_EMOJI
+    expect(permsContain(ADMIN_ALL, 1n << 12n)).toBe(false); // MANAGE_EVENTS
     expect(permsContain(ADMIN_ALL, 1n << 13n)).toBe(false);
+    // The claimed bit IS held by a fresh Admin, and a Role minted before it
+    // existed still does not hold it.
+    expect(permsContain(ADMIN_ALL, Permissions.PIN_MESSAGES)).toBe(true);
+    const legacyAdmin = role("e".repeat(64), 1, ADMIN_ALL & ~Permissions.PIN_MESSAGES);
+    expect(permsContain(legacyAdmin.permissions, Permissions.PIN_MESSAGES)).toBe(false);
+  });
+
+  it("O-28b: every ENFORCED permission is grantable — no bit without a checkbox", () => {
+    // A permission this client enforces but the role editor cannot offer is a
+    // permission only the OWNER can ever exercise, since owners bypass the bit
+    // check entirely. Claiming a bit and forgetting its label ships exactly
+    // that, silently.
+    //
+    // VIEW_AUDIT_LOG is deliberately exempt: it is declared for wire
+    // compatibility but gated nowhere in this client (the audit log is open to
+    // every member), so a checkbox would promise an enforcement that does not
+    // exist. It belongs on the list the day something reads it.
+    const UNENFORCED = new Set<bigint>([Permissions.VIEW_AUDIT_LOG]);
+    const labelled = new Set(PERMISSION_LABELS.map((l) => l.bit));
+    for (const [name, bit] of Object.entries(Permissions)) {
+      if (UNENFORCED.has(bit)) continue;
+      expect(labelled.has(bit), `${name} is enforced but has no PERMISSION_LABELS entry, so nobody can be granted it`).toBe(true);
+    }
   });
 
   it("O-29: permissions ride the wire as a DECIMAL STRING, and a number still reads", () => {

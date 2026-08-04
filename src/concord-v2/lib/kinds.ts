@@ -131,6 +131,7 @@ export const VSK_BANLIST = "4";
 // 7 retired (v1 owner attestation).
 export const VSK_INVITE_REGISTRY = "8";
 export const VSK_DISSOLVED = "10";
+export const VSK_PINS = "11";
 
 /** Invite-bundle marker values for its `vsk` tag: live vs revocation tombstone. */
 export const VSK_INVITE_LIVE = "6";

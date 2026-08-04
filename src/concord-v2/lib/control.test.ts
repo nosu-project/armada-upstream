@@ -22,9 +22,11 @@ import {
   sealDissolved,
   sealEdition,
 } from "@/concord-v2/lib/control";
-import { bytesToHex, communityIdOf, controlGroupKey, dissolvedGroupKey, grantLocator, hex32, random32, type GroupKey } from "@/concord-v2/lib/derive";
+import { bytesToHex, communityIdOf, controlGroupKey, dissolvedGroupKey, grantLocator, hex32, pinsLocator, random32, type GroupKey } from "@/concord-v2/lib/derive";
 import { channelCategory } from "@/concord-v2/lib/channelCategory";
-import { isTagDecimal } from "@/concord-v2/lib/edition";
+import { buildEditionRumor, isTagDecimal } from "@/concord-v2/lib/edition";
+import { readPinList } from "@/concord-v2/lib/pins";
+import { VSK_PINS } from "@/concord-v2/lib/kinds";
 import { buildRumor, openWrap, rewrapSeal, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import { KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
@@ -1074,6 +1076,51 @@ describe("control plane fold (CORD-04)", () => {
     expect(hasForeignLiveLinks(folded, otherAdmin)).toBe(true);
     // ...unless the link creator is the very target of the ban being judged.
     expect(hasForeignLiveLinks(folded, otherAdmin, owner.pubkey)).toBe(false);
+  });
+
+  it("pin lists (vsk 11) fold only from a PIN_MESSAGES holder, content carried verbatim", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const stranger = signer();
+    const chan = random32();
+    const eid = pinsLocator(communityId, chan);
+    const eidHex = bytesToHex(eid);
+    const content = JSON.stringify({ entries: [] });
+
+    // A roleless stranger's pin list is refused outright.
+    const strangerWraps = [
+      await sealEdition(
+        buildEditionRumor({ vsk: VSK_PINS, entityId: eid, content, actorPubkey: stranger.pubkey, version: 1n }),
+        control,
+        stranger,
+      ),
+    ];
+    const refused = foldControlState(openControlWraps(strangerWraps, [control]), communityId, owner.pubkey);
+    expect(refused.pinLists.has(eidHex)).toBe(false);
+
+    // The owner's folds, and the content rides through untouched.
+    const ownerWraps = [
+      await sealEdition(
+        buildEditionRumor({ vsk: VSK_PINS, entityId: eid, content, actorPubkey: owner.pubkey, version: 1n }),
+        control,
+        owner,
+      ),
+    ];
+    const folded = foldControlState(openControlWraps(ownerWraps, [control]), communityId, owner.pubkey);
+    expect(folded.pinLists.get(eidHex)).toEqual({ content, author: owner.pubkey });
+
+    // A cap-violating list still FOLDS (CORD-04 §7) — emptiness is a read-side
+    // verdict, never a refused edition, or two fold models would disagree.
+    const bloated = JSON.stringify({ entries: [], pad: "z".repeat(40_000) });
+    const bloatedWraps = [
+      await sealEdition(
+        buildEditionRumor({ vsk: VSK_PINS, entityId: eid, content: bloated, actorPubkey: owner.pubkey, version: 1n }),
+        control,
+        owner,
+      ),
+    ];
+    const withBloat = foldControlState(openControlWraps(bloatedWraps, [control]), communityId, owner.pubkey);
+    expect(withBloat.pinLists.get(eidHex)?.content, "folded, not refused").toBe(bloated);
+    expect(readPinList(bloated, () => undefined).entries, "but reads empty").toEqual([]);
   });
 
   it("banShouldRotate: a foreign live link blocks a rotation, but never a forced one", async () => {

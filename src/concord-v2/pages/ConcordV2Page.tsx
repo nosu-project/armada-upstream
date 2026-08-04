@@ -1,4 +1,4 @@
-import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, Link as LinkIcon, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Phone, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Timer, Trash2, UserPlus, Users, X } from "lucide-react";
+import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, Link as LinkIcon, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Phone, Pin, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Timer, Trash2, UserPlus, Users, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
@@ -25,6 +25,7 @@ import { useChannelDrag, type ChannelDrop, type ChannelDropSlot } from "@/concor
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
 import { useMessagePermalink } from "@/hooks/useMessagePermalink";
 import { CalendarEventsBar } from "@/components/chat/CalendarEventsBar";
+import { PinnedBar2 } from "@/concord-v2/components/PinnedBar2";
 import { CreateEventDialog } from "@/components/dialogs/CreateEventDialog";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import { GitTimelineRow, TicketSidePanel } from "@/components/chat/GitTimeline";
@@ -107,6 +108,7 @@ import { channelDecodeDeadEnd } from "@/concord-v2/lib/channelSync";
 import { activateScope, concord2Scope } from "@/wire/activation";
 import { useCommunityManagement2, useStrandedRecovery2 } from "@/concord-v2/hooks/useCommunityActions2";
 import { useChannels2, useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPlane2";
+import { usePins2 } from "@/concord-v2/hooks/usePins2";
 import { BanMemberDialog } from "@/concord-v2/components/BanMemberDialog2";
 import type { BanPhase } from "@/concord-v2/hooks/useModeration2";
 import { hasForeignLiveLinks } from "@/concord-v2/lib/control";
@@ -243,6 +245,9 @@ interface ChatMessage2Props {
   replyParent: ChatMsg | undefined;
   onJumpToReply: (id: string) => void;
   onDelete: ((event: ChatMsg) => void) | undefined;
+  /** Pins (CORD-04 §7) — both present only for PIN_MESSAGES holders. */
+  isPinned: boolean;
+  onTogglePin: ((event: ChatMsg) => void) | undefined;
   onRetry: ((event: ChatMsg) => void) | undefined;
   onDiscard: ((id: string) => void) | undefined;
   isEditing: boolean;
@@ -275,6 +280,8 @@ const ChatMessage2 = memo(function ChatMessage2({
   replyParent,
   onJumpToReply,
   onDelete,
+  isPinned,
+  onTogglePin,
   onRetry,
   onDiscard,
   isEditing,
@@ -317,6 +324,8 @@ const ChatMessage2 = memo(function ChatMessage2({
       onReply={onReply}
       replyContext={replyContext}
       onDelete={onDelete}
+      isPinned={isPinned}
+      onTogglePin={onTogglePin}
       onRetry={onRetry ? () => onRetry(event) : undefined}
       onDiscard={onDiscard ? () => onDiscard(event.id) : undefined}
       isEditing={isEditing}
@@ -1376,7 +1385,7 @@ export function ConcordV2Page() {
   const { data: dissolved } = useDissolved2(community);
   const canWrite = Boolean(user && channel && !dissolved && !excluded && !stranded);
 
-  const { transport: baseTransport, reactionsFor, allMessages, calendar, timerEntries } = useTransport2(community, channel, canWrite, canModerateMessages, channelIdHex);
+  const { transport: baseTransport, reactionsFor, allMessages, calendar, timerEntries, openedById } = useTransport2(community, channel, canWrite, canModerateMessages, channelIdHex);
 
   // Physically purge this community's expired disappearing messages
   // (CORD-08 §3) — the sweep self-gates to one walk per interval, and every
@@ -1385,6 +1394,32 @@ export function ConcordV2Page() {
   useEffect(() => {
     if (sweepIdHex) void sweepExpiredCommunityRumors(sweepIdHex);
   }, [sweepIdHex]);
+
+  // Pins (CORD-04 §7). Building a proof needs the ORIGINAL seal, not the
+  // rendered message, so the toggle reaches back into the opened-rumor cache
+  // by rumor id — the decrypted row alone can prove nothing.
+  const pins = usePins2(community, channel, openedById);
+  const togglePin = useCallback(
+    (event: ChatMsg) => {
+      const run = async () => {
+        try {
+          if (pins.isPinned(event.id)) {
+            await pins.unpin({ rumorId: event.id });
+            toast({ title: "Unpinned" });
+            return;
+          }
+          const opened = openedById.get(event.id);
+          if (!opened) throw new Error("That message isn't loaded here any more — scroll to it and try again.");
+          await pins.pin({ opened });
+          toast({ title: "Pinned", description: "Everyone in this channel can see it, now and after any key rotation." });
+        } catch (e) {
+          toast({ title: "Couldn't update pins", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+        }
+      };
+      void run();
+    },
+    [pins, openedById],
+  );
   // Git activity remains its own event domain. The store-first channel hook
   // supplies attached repository activity; this page only merges its display
   // order with decrypted chat rumors.
@@ -1750,6 +1785,7 @@ export function ConcordV2Page() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchFilters, setSearchFilters] = useState<SearchFilters2>(EMPTY_SEARCH_FILTERS);
   const [eventsOpen, setEventsOpen] = useState(false);
+  const [pinsOpen, setPinsOpen] = useState(false);
   const [createEventOpen, setCreateEventOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   // Mobile: landing on the community root (no channel in the URL) shows the
@@ -2192,7 +2228,14 @@ export function ConcordV2Page() {
       return chatAdded + gitAdded;
     },
     openThread,
-  }), [baseTransport, gitActivity, openThread]);
+    // Lights up the pin entry in the message menu (ChatMessage already renders
+    // it when both are present).
+    isPinned: pins.canPin ? pins.isPinned : undefined,
+    togglePin: pins.canPin ? togglePin : undefined,
+  }), [baseTransport, gitActivity, openThread, pins.canPin, pins.isPinned, togglePin]);
+  // Recently-active members, for a bot command's `user`-argument picker. Concord
+  // hands its timeline to ChatComposer as `messages: []`, so it must supply this.
+  const recentAuthors = useMemo(() => authorsByRecency(transport.messages), [transport.messages]);
 
   // Message permalinks (`?m=<id>` — notification taps, copied links): scroll
   // to the target with the focus indicator once it's loaded, pulling older
@@ -2209,9 +2252,6 @@ export function ConcordV2Page() {
     scrollTo: permalinkScroll,
     enabled: view === "channel",
   });
-  // Recently-active members, for a bot command's `user`-argument picker. Concord
-  // hands its timeline to ChatComposer as `messages: []`, so it must supply this.
-  const recentAuthors = useMemo(() => authorsByRecency(transport.messages), [transport.messages]);
 
   // Background catch-up. `channelSyncing` = the channel on screen is being
   // caught up: its sync TOPIC is pending (covers the whole span from the
@@ -3171,6 +3211,24 @@ export function ConcordV2Page() {
                 <TooltipContent>{membersVisible ? "Hide members" : "Show members"}</TooltipContent>
               </Tooltip>
 
+              {view === "channel" && channel && (pins.pins.length > 0 || pins.dark) && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={cn("size-8 touch:size-11 text-muted-foreground", pinsOpen && "text-foreground")}
+                      aria-label={pinsOpen ? "Hide pinned messages" : "Show pinned messages"}
+                      aria-pressed={pinsOpen}
+                      onClick={() => setPinsOpen((v) => !v)}
+                    >
+                      <Pin className="size-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Pinned messages</TooltipContent>
+                </Tooltip>
+              )}
+
               {view === "channel" && channel && (calendar.events.length > 0 || calendar.canModerate) && (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -3382,6 +3440,37 @@ export function ConcordV2Page() {
                 </div>
               ) : (
                 <>
+                  <PinnedBar2
+                    open={pinsOpen}
+                    pins={pins.pins}
+                    dark={pins.dark}
+                    canUnpin={pins.canPin}
+                    isUnpinning={pins.isUnpinning}
+                    staleEdits={pins.staleEdits}
+                    isRefreshingEdits={pins.isRefreshingEdits}
+                    onRefreshEdits={pins.canPin ? () => {
+                      void (async () => {
+                        try {
+                          const n = await pins.refreshEdits();
+                          toast({ title: n > 0 ? `Updated ${n} pin${n === 1 ? "" : "s"}` : "Pins already current" });
+                        } catch (e) {
+                          toast({ title: "Couldn't update pins", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+                        }
+                      })();
+                    } : undefined}
+                    onJump={jumpWithinChannel}
+                    onUnpin={(rumorId) => {
+                      void (async () => {
+                        try {
+                          await pins.unpin({ rumorId });
+                          toast({ title: "Unpinned" });
+                        } catch (e) {
+                          toast({ title: "Couldn't unpin", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+                        }
+                      })();
+                    }}
+                    onClose={() => setPinsOpen(false)}
+                  />
                   <CalendarEventsBar
                     open={eventsOpen}
                     calendar={calendar}
@@ -3438,6 +3527,8 @@ export function ConcordV2Page() {
                         continuation={continuation}
                         canWrite={transport.canWrite}
                         canModerate={transport.canModerate}
+                        isPinned={Boolean(transport.isPinned?.(msg.id))}
+                        onTogglePin={transport.togglePin}
                         sendStatus={transport.sendStatusFor?.(msg.id)}
                         active={activeId === msg.id}
                         onToggleActive={toggleActive}

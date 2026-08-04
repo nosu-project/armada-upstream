@@ -79,10 +79,15 @@ export function useTransport2(
    * merges them into its `entries` via {@link mergeChannelTimeline}.
    */
   timerEntries: DmTimerTimelineEntry[];
+  /**
+   * Opened rows by rumor id — the ONLY place the original seal survives.
+   * A pin proves a message from its seal, so a rendered ChatMsg cannot supply it.
+   */
+  openedById: Map<string, OpenedChat>;
 } {
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
-  const { folded, isLoading, loadOlder, hasMore, isLoadingOlder } = useChannelTimeline2(community, channel, routeChannelIdHex);
+  const { folded, raw, isLoading, loadOlder, hasMore, isLoadingOlder } = useChannelTimeline2(community, channel, routeChannelIdHex);
   const { mutateAsync: send } = useSendMessage2(community, channel);
   const { retry, discard, deleteMessage } = useMessageActions2(community, channel);
   const sendStatus = useSendStatus2(channel);
@@ -554,5 +559,13 @@ export function useTransport2(
     [timeline, isLoading, canWrite, canModerate, rotationDividerIds, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, calendarFor, threadRepliesFor, sendThreadReply],
   );
 
-  return { transport, reactionsFor, allMessages: messages, calendar, timerEntries };
+  // Built from the RAW rows, not the folded ones: pinning needs the original
+  // seal, and proving a revision needs the Edit rumor the fold consumed.
+  const openedById = useMemo(() => {
+    const map = new Map<string, OpenedChat>();
+    for (const m of raw ?? []) map.set(m.rumorId, m);
+    return map;
+  }, [raw]);
+
+  return { transport, reactionsFor, allMessages: messages, calendar, timerEntries, openedById };
 }

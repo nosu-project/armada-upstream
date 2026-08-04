@@ -42,9 +42,19 @@ export function isLocalNetworkUrl(raw: string | undefined | null): boolean {
   } catch {
     return false;
   }
-  const h = host.replace(/^\[|\]$/g, ''); // strip IPv6 brackets
+  let h = host.replace(/^\[|\]$/g, ''); // strip IPv6 brackets
   if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local')) return true;
   if (h === '::1' || h === '0.0.0.0') return true;
+  // An IPv4-mapped address reaches the same host by another spelling, and the
+  // URL parser hands it back in hex (::ffff:7f00:1), matching no rule below.
+  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h);
+  if (mapped) {
+    const n = (parseInt(mapped[1], 16) << 16) | parseInt(mapped[2], 16);
+    h = [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
+  } else {
+    const dotted = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(h);
+    if (dotted) h = dotted[1];
+  }
   const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
   if (v4) {
     const a = Number(v4[1]);

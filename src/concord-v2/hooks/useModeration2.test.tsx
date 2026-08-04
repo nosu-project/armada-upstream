@@ -107,6 +107,7 @@ function foldedWith(input: { grants?: CommunityRoles["grants"]; foreignLinks?: s
     banned: new Set(input.banned ?? []),
     liveInviteLinks: new Set(),
     registriesByCreator: registries,
+    pinLists: new Map(),
     heads: new Map(),
     headEditions: new Map(),
     incomplete: [],
