@@ -8,9 +8,6 @@ import { type NostrMetadata, NSchema as n } from '@nostrify/nostrify';
 
 import type { QueryClient } from '@tanstack/react-query';
 
-import { appEventStore } from '@/lib/db/mainEventStore';
-import { perfMark } from '@/lib/perf';
-
 import type { NostrRumor } from '@/lib/nostrRumor';
 
 export type AuthorResult = { event?: NostrRumor; metadata?: NostrMetadata };
@@ -20,10 +17,18 @@ export function authorQueryKey(pubkey: string): [string, string] {
   return ['author', pubkey];
 }
 
+/**
+ * The kind-0 content schema, built ONCE at module scope. `n.json()` and
+ * `n.metadata()` are factories that construct a full zod pipeline per call —
+ * profiled at ~0.25ms each, which a burst of profile parses turns into
+ * hundreds of milliseconds of pure schema construction.
+ */
+export const metadataSchema = n.json().pipe(n.metadata());
+
 /** Parse a kind-0 event into metadata + event, or return just the event on parse failure. */
 export function parseAuthorEvent(event: NostrRumor): { event: NostrRumor; metadata?: NostrMetadata } {
   try {
-    const metadata = n.json().pipe(n.metadata()).parse(event.content);
+    const metadata = metadataSchema.parse(event.content);
     return { metadata, event };
   } catch {
     return { event };
@@ -44,40 +49,4 @@ export function seedAuthorCache(queryClient: QueryClient, pubkey: string, event:
   const existing = queryClient.getQueryData<AuthorResult>(key);
   if (existing?.event && existing.event.created_at >= event.created_at) return;
   queryClient.setQueryData<AuthorResult>(key, parseAuthorEvent(event));
-}
-
-/**
- * Newest profiles pre-warmed at boot, at most. The store keeps one row per
- * author (kind 0 is replaceable), so this is a cap on authors, not versions.
- */
-const PREWARM_LIMIT = 2000;
-
-/**
- * Seed every cached kind-0 profile into the query cache in ONE bulk read,
- * issued at module load — before the boot's relay mirroring starts writing
- * into the `main` tenant and readwrite transactions begin starving reads.
- *
- * Without this, a profile paints only after its `useAuthor` mounts (which
- * can't happen before the message timeline itself paints) and its individual
- * per-pubkey store read survives the boot write storm — measured at 20+
- * seconds of queueing on a warm boot. After this, a mounting `useAuthor`
- * finds its data already in the cache and paints synchronously.
- */
-export async function prewarmAuthorCache(queryClient: QueryClient): Promise<void> {
-  try {
-    const store = await appEventStore();
-    // NO limit in the filter, deliberately: NIndexedDB runs a limited scan as
-    // a cursor stepped one record — one event-loop task — at a time, which on
-    // a congested boot loop turns this read into thousands of delayed tasks
-    // that never finish before the boot does. The unlimited path fetches the
-    // whole kind-0 index range with a single getAll(); the cap is applied
-    // here, on the newest-first result.
-    const profiles = await store.query([{ kinds: [0] }]);
-    const seeded = profiles.slice(0, PREWARM_LIMIT);
-    for (const event of seeded) seedAuthorCache(queryClient, event.pubkey, event);
-    perfMark('authors.prewarm', `${seeded.length} profile(s) seeded`);
-  } catch {
-    // Best-effort: a failed pre-warm just means the lazy per-pubkey reads
-    // (and the profile sync topic) do the work as before.
-  }
 }

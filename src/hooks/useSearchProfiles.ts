@@ -1,4 +1,3 @@
-import { NSchema as n } from "@nostrify/nostrify";
 import { useNostr } from "@nostrify/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
@@ -7,6 +6,7 @@ import { useDebounce } from "@/hooks/useDebounce";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useFollowList } from "@/hooks/useFollowList";
 import { seedAuthorCache } from "@/hooks/useAuthor";
+import { metadataSchema } from "@/lib/authorCache";
 
 import type { NostrMetadata } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -130,7 +130,7 @@ function useFollowProfiles(followedPubkeys: string[]) {
       const profiles: SearchProfile[] = [];
       for (const [pubkey, event] of byPubkey) {
         try {
-          const metadata = n.json().pipe(n.metadata()).parse(event.content);
+          const metadata = metadataSchema.parse(event.content);
           profiles.push({ pubkey, metadata, event });
           // Seed the shared author cache newest-wins, never downgrading a
           // fresher profile another path already resolved.
@@ -185,7 +185,7 @@ export function useSearchProfiles(query: string) {
 
       for (const event of events) {
         try {
-          const metadata = n.json().pipe(n.metadata()).parse(event.content);
+          const metadata = metadataSchema.parse(event.content);
           profiles.push({ pubkey: event.pubkey, metadata, event });
         } catch {
           // Skip invalid metadata

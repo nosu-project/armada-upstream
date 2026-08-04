@@ -2,9 +2,10 @@ import { useNostr } from '@nostrify/react';
 import { useNostrLogin } from '@nostrify/react/login';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
-import { NSchema as n, NostrMetadata } from '@nostrify/nostrify';
+import { NostrMetadata } from '@nostrify/nostrify';
 
 import { useEventStore } from '@/hooks/useEventStore';
+import { metadataSchema } from '@/lib/authorCache';
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 export interface Account {
@@ -17,7 +18,7 @@ export interface Account {
 /** Parse a kind-0 event's content into metadata (empty object on failure). */
 function parseMetadata(event: NostrRumor | undefined): NostrMetadata {
   try {
-    return n.json().pipe(n.metadata()).parse(event?.content);
+    return metadataSchema.parse(event?.content);
   } catch {
     return {};
   }

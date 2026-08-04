@@ -28,7 +28,6 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import WalletProvider from "@/components/WalletProvider";
 import { WebPushNotifications } from "@/components/WebPushNotifications";
 import { WireSync } from "@/wire/WireSync";
-import { prewarmAuthorCache } from "@/lib/authorCache";
 import { secureStorage } from "@/lib/secureStorage";
 
 import AppRouter from "./AppRouter";
@@ -55,12 +54,6 @@ const queryClient = new QueryClient({
     },
   },
 });
-
-// One bulk read of every cached kind-0, seeded into the `['author', pk]`
-// cache at module load — before boot sync starts writing into the `main`
-// tenant and starves individual reads. Names and avatars then paint from
-// disk the moment their rows mount. See `prewarmAuthorCache`.
-void prewarmAuthorCache(queryClient);
 
 // On Android the WebView's `visibilitychange`/`focus` events (which React
 // Query's focusManager watches by default) don't fire reliably when the app is
