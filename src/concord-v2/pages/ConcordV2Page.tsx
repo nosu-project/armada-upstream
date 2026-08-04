@@ -934,7 +934,11 @@ export function ConcordV2Page() {
   // lasted long enough to be worth a placeholder. On a cache hit the bundle
   // resolves within a frame or two, so the skeleton would otherwise flash for a
   // nanosecond — which reads as a glitch. Delay it so fast loads show nothing.
-  const showChannelSkeleton = useDelayedFlag(!community || channels.length === 0);
+  // The list counts as "nothing to render" until the control fold resolves:
+  // before that it holds only the bundle's private channels (public channels
+  // exist only in the fold), and painting that fragment as if it were the
+  // sidebar reads as the community having lost its channels.
+  const showChannelSkeleton = useDelayedFlag(!community || !folded || channels.length === 0);
 
   // Categories are derived from the channels the member can actually see —
   // `channelsView` has already dropped any whose key they don't hold — so a
@@ -1103,8 +1107,9 @@ export function ConcordV2Page() {
   // (a community-only URL previously had no id until the fold, so the
   // snapshot never engaged and the chat pane sat on a skeleton).
   // `pickDefaultChannel` prefers this same stored id once channels resolve,
-  // and a stale id (channel since deleted) falls back exactly as before:
-  // `channels.find(...) ?? channels[0]`.
+  // and a stale id (channel since deleted) falls back to the first channel —
+  // but only once the control fold has resolved and the miss is therefore
+  // real (see the `channel` memo below).
   // The route names the channel. When it doesn't — the community root, or a
   // community-wide pane, both of which leave the channel implicit — fall back
   // to the persisted last-open channel, which app config makes available
@@ -1238,16 +1243,30 @@ export function ConcordV2Page() {
   );
   const channelNav = useChannelNavValue(navChannels);
 
+  // Until the control fold resolves, `channels` holds ONLY the private
+  // channels carried in the bundle (channelsView renders held keys without
+  // waiting for the fold) — a public channel named by the URL is not findable
+  // yet. So before the fold, a miss means "not known yet", not "deleted": stay
+  // unresolved rather than falling back, or the reader is dropped into the
+  // first private channel, yanked to the right one when the fold lands, and
+  // the wrong id is persisted as last-open along the way. Same for the
+  // default pick on a channel-less URL, which the canonicalize effect below
+  // would otherwise write into the address bar for good.
   const channel = useMemo(() => {
     if (channels.length === 0) return undefined;
-    if (channelIdHex) return channels.find((c) => c.idHex === channelIdHex) ?? channels[0];
+    if (channelIdHex) {
+      const named = channels.find((c) => c.idHex === channelIdHex);
+      if (named || !folded) return named;
+      return channels[0];
+    }
+    if (!folded) return undefined;
     return pickDefaultChannel(
       channels,
       config.lastChannelByServer[lastChannelKey],
       (c) => c.idHex,
       (c) => c.name,
     );
-  }, [channels, channelIdHex, config.lastChannelByServer, lastChannelKey]);
+  }, [channels, channelIdHex, folded, config.lastChannelByServer, lastChannelKey]);
 
   // The chat scope for in-message app affordances (a `.xdc` launch card) and
   // the top-of-chat app stage. Present only once both community + channel
