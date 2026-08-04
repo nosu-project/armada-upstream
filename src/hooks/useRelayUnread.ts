@@ -18,8 +18,14 @@ const KIND_POLL = 1068;
  * "new content" set (stream v2, forum posts/comments — kind 9 is shared).
  * Buzz system rows / job events deliberately excluded (phantom unreads).
  * Kinds absent from a relay simply never match.
+ *
+ * Exported for the wire's unread-dot deferral, whose judgment of "this
+ * server's rail button is already dotted" must count exactly the kinds the
+ * rail counts — a kind only one side knows about is a dot the other can't
+ * explain.
  */
-const ACTIVITY_KINDS = [...new Set([KIND_GROUP_CHAT, KIND_POLL, ...BUZZ_UNREAD_KINDS])];
+export const NIP29_ACTIVITY_KINDS = [...new Set([KIND_GROUP_CHAT, KIND_POLL, ...BUZZ_UNREAD_KINDS])];
+const ACTIVITY_KINDS = NIP29_ACTIVITY_KINDS;
 
 /** Newest store events scanned per relay when deriving unread. */
 const SCAN_LIMIT = 300;

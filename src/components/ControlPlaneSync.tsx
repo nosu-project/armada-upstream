@@ -9,7 +9,7 @@ import { useConcordList } from "@/concord-v1/hooks/useConcordList";
 import { acceptInvite, type CommunityInvite } from "@/concord-v1/lib/invite";
 import { capRelays, type Community } from "@/concord-v1/lib/types";
 import { useCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
-import { activeCommunityIdHex } from "@/concord-v2/lib/communityActivation";
+import { activeScopeId } from "@/wire/activation";
 import { liveEntries, rehydrateCommunity } from "@/concord-v2/lib/communityList";
 import { onStreamKeysAdded } from "@/concord-v2/lib/streamAuth";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
@@ -87,7 +87,7 @@ function useControlPlaneSync(): void {
       // The community the user is currently in (if any) sweeps first — on a
       // cold pageload direct to a community URL, its control fold is the
       // serial gate in front of the timeline.
-      await syncControlPlane(nostr, queryClient, v1, v2, { signal, priorityIdHex: activeCommunityIdHex() });
+      await syncControlPlane(nostr, queryClient, v1, v2, { signal, priorityIdHex: activeScopeId("c2:") });
       return sig;
     },
   });

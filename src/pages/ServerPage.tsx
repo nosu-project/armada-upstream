@@ -1,6 +1,6 @@
 import { Bell, BellOff, Hash, IdCard, Link2, MoreVertical, Trash2, Volume2 } from "lucide-react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { ChannelSidebar } from "@/components/layout/ChannelSidebar";
 import { ServerRail } from "@/components/layout/ServerRail";
@@ -22,6 +22,7 @@ import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useServerActions } from "@/hooks/useServerActions";
 import { useIsBuzzRelay } from "@/buzz/detect";
 import { relayToRouteParam, routeParamToRelay } from "@/lib/platform";
+import { activateScope, nip29Scope } from "@/wire/activation";
 
 /**
  * Server home (drill-down level 1). On mobile the server rail + channel list
@@ -34,6 +35,12 @@ export function ServerPage() {
   const { user } = useCurrentUser();
   const relayUrl = server ? routeParamToRelay(server) : undefined;
   const [profileOpen, setProfileOpen] = useState(false);
+  // Session activation: being navigated into makes this server "live" for
+  // the rest of the session — the wire stops deferring its groups under the
+  // unread-dot rule (see wire/activation.ts).
+  useEffect(() => {
+    if (relayUrl) activateScope(nip29Scope(relayUrl));
+  }, [relayUrl]);
   // Shared with the mobile channel-sidebar header menu. Called unconditionally
   // (rules of hooks) with a placeholder before the `relayUrl` guard below; the
   // returned actions are only invoked once a real server is resolved.

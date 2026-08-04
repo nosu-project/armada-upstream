@@ -59,6 +59,7 @@ import { routeParamToRelay } from "@/lib/platform";
 import { chatRoute } from "@/lib/routes";
 import { relayRejectionMessage, type Nip29Admin } from "@/lib/nip29";
 import { cn } from "@/lib/utils";
+import { activateScope, nip29Scope } from "@/wire/activation";
 
 function JoinBanner({ relayUrl, groupId, isClosed }: { relayUrl: string; groupId: string; isClosed: boolean }) {
   const join = useJoinGroup(relayUrl, groupId);
@@ -285,6 +286,12 @@ export function GroupPage() {
   useEffect(() => {
     setChannelsOpen(false);
   }, [groupId]);
+  // Session activation: being navigated into makes this server "live" for
+  // the rest of the session — the wire stops deferring its groups under the
+  // unread-dot rule (see wire/activation.ts).
+  useEffect(() => {
+    if (relayUrl) activateScope(nip29Scope(relayUrl));
+  }, [relayUrl]);
   // Remember this as the server's last-opened channel, so returning to the
   // server re-opens it (see ServerPage's auto-open). Local-only preference.
   useEffect(() => {

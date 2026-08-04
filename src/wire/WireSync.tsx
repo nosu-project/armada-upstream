@@ -11,7 +11,7 @@ import { useCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
 import { dissolvedAt } from "@/concord-v2/hooks/useControlPlane2";
 import { openChatBatch } from "@/concord-v2/lib/chat";
 import { channelsView } from "@/concord-v2/lib/community";
-import { isCommunityActivated, markCommunityLive, onCommunityActivation } from "@/concord-v2/lib/communityActivation";
+import { concord2Scope, isScopeActivated, markScopeLive, nip29Scope, onActivation } from "@/wire/activation";
 import { readControlFold } from "@/concord-v2/lib/control";
 import { channelGitRepositoryAttachments } from "@/concord-v2/lib/types";
 import { heldChannelKeys, liveEntries, rehydrateCommunity, type CommunityListEntry } from "@/concord-v2/lib/communityList";
@@ -21,7 +21,8 @@ import { warmupCommunities2 } from "@/concord-v2/lib/loginWarmup";
 import { openPlaneWrapsChunked } from "@/concord-v2/lib/planeSync";
 import { ackPendingWraps, peekPendingWraps, queryRumorsByChannel, writeOpened, writeRumors } from "@/concord-v2/lib/rumorStore";
 import { registerStreamKeys } from "@/concord-v2/lib/streamAuth";
-import { concord2ReadKey, useReadState } from "@/hooks/useReadState";
+import { channelReadKey, concord2ReadKey, useReadState } from "@/hooks/useReadState";
+import { NIP29_ACTIVITY_KINDS } from "@/hooks/useRelayUnread";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -33,8 +34,11 @@ import { useWireGitTicketRoots } from "@/hooks/useWireGitTicketRoots";
 import { hasNativeNotificationService } from "@/hooks/useNativeNotifications";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { KvPrefixCache } from "@/lib/db/kvCache";
+import { appEventStore } from "@/lib/db/mainEventStore";
 import { onFoldedWrite } from "@/lib/foldedCache";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
+import { NIP29_PAGE_SIZE } from "@/lib/nip29Sync";
+import { normalizeRelayUrl } from "@/lib/platform";
 import { onRelayReopened } from "@/lib/relayReopen";
 import { logSync } from "@/lib/syncLog";
 import { perfCount, perfMark } from "@/lib/perf";
@@ -139,12 +143,19 @@ const DOT_SCAN_WINDOW = 50;
  * community's missed region can never be recovered from cursor replay alone.
  * The flag is the durable IOU — whichever path brings the community back
  * live (navigation, a remote read clearing the dot, this session or a later
- * one) must run {@link catchUpCommunity} before the standing subscription
- * can be trusted again.
+ * one) must run its catch-up ({@link catchUpCommunity} /
+ * {@link catchUpNip29Server}) before the standing subscription can be
+ * trusted again.
+ *
+ * Keyed by activation scope (`c2:<idHex>`, `nip29:<relay>` — see
+ * wire/activation.ts). Entries written before the scoped spelling were bare
+ * Concord idHexes; the Concord read still honors those so a community
+ * deferred under the old key isn't silently treated as live without its
+ * catch-up.
  */
 const deferredFlags = new KvPrefixCache<number>({ prefix: "wire-deferred:" });
 
-/** Single-flight guard for the per-community catch-up pull. */
+/** Single-flight guard for the per-scope catch-up pull. */
 const catchUpsInFlight = new Set<string>();
 
 /** What the dot judgment needs from React context, snapshotted per spec run. */
@@ -247,7 +258,7 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
   // Navigating into a community must re-run the spec NOW (its filters rejoin
   // the wire and its catch-up starts), not on the next poll.
   const [activationEpoch, setActivationEpoch] = useState(0);
-  useEffect(() => onCommunityActivation(() => setActivationEpoch((n) => n + 1)), []);
+  useEffect(() => onActivation(() => setActivationEpoch((n) => n + 1)), []);
 
   // `listSig` only moves on a new community, a rotated epoch, or a channel
   // count change — a control edition that alters neither (attaching a
@@ -293,26 +304,31 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
           channels.push(channel);
         }
 
-        // The unread-dot deferral (see communityActivation.ts). Every path
-        // back to live runs the catch-up, because the shared per-relay cursor
+        // The unread-dot deferral (see wire/activation.ts). Every path back
+        // to live runs the catch-up, because the shared per-relay cursor
         // advanced past this community's traffic while it was excluded.
-        const wasDeferred = (deferredFlags.get(community.idHex) ?? 0) > 0;
-        if (isCommunityActivated(community.idHex)) {
+        const scope = concord2Scope(community.idHex);
+        const wasDeferred = (deferredFlags.get(scope) ?? deferredFlags.get(community.idHex) ?? 0) > 0;
+        const clearFlag = () => {
+          deferredFlags.delete(scope);
+          deferredFlags.delete(community.idHex); // pre-scope legacy spelling
+        };
+        if (isScopeActivated(scope)) {
           // Navigated into (this session): live for good.
           if (wasDeferred) {
-            deferredFlags.delete(community.idHex);
+            clearFlag();
             catchUpCommunity(nostr, entry, community.idHex);
           }
         } else if (await communityDotted(community.idHex, channels, dotCtxRef.current)) {
-          if (!wasDeferred) deferredFlags.set(community.idHex, Math.floor(Date.now() / 1000));
+          if (!wasDeferred) deferredFlags.set(scope, Math.floor(Date.now() / 1000));
           continue;
         } else if (wasDeferred) {
           // The dot cleared while deferred — a read synced back from another
           // device. Pin it live for the session: re-deferring on the next
           // unread would oscillate catch-up pulls against a standing
           // subscription that costs less.
-          markCommunityLive(community.idHex);
-          deferredFlags.delete(community.idHex);
+          markScopeLive(scope);
+          clearFlag();
           catchUpCommunity(nostr, entry, community.idHex);
         }
 
@@ -329,6 +345,199 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
         // Scoped per community, so a relay's NIP-42 challenge only signs the
         // stream keys it actually hosts (see streamAuth.ts).
         registerStreamKeys(keys, community.relays);
+      }
+      return out;
+    },
+  });
+
+  return query.data ?? [];
+}
+
+/**
+ * Newest store events scanned per relay when judging a server's unread dot.
+ * Smaller than the rail's own 300-event scan, deliberately: activity found
+ * unread inside this window is unread inside the rail's larger window too, so
+ * the wire never defers a server whose rail button isn't visibly dotted — a
+ * miss merely keeps the server syncing (the safe direction).
+ */
+const NIP29_DOT_SCAN_LIMIT = 100;
+
+/** Group filters per catch-up REQ (relays commonly cap filters-per-REQ ~10-20). */
+const NIP29_CATCHUP_FILTERS_PER_REQ = 10;
+
+/** What the NIP-29 dot judgment needs from React context, snapshotted per run. */
+interface Nip29DotContext {
+  pubkey: string | undefined;
+  readState: Record<string, number>;
+  isMuted: (relayUrl: string, groupId: string) => boolean;
+}
+
+/**
+ * Whether the server's rail button currently shows an unread indicator,
+ * judged from the local event store the way the rail judges it
+ * (useRelayUnread + the rail's mute rule): non-self activity newer than its
+ * group's read stamp lights the dot unless the group is muted, and a p-tag
+ * mention lights the badge regardless of mute.
+ */
+async function nip29ServerDotted(
+  store: { query(filters: NostrFilter[], opts?: { relay?: string }): Promise<Array<Pick<NostrEvent, "pubkey" | "tags" | "created_at">>> },
+  relay: string,
+  groupIds: string[],
+  ctx: Nip29DotContext,
+): Promise<boolean> {
+  if (!ctx.pubkey || groupIds.length === 0) return false;
+  const activity = await store.query(
+    [{ kinds: [...NIP29_ACTIVITY_KINDS], "#h": groupIds, limit: NIP29_DOT_SCAN_LIMIT }],
+    { relay },
+  );
+  const idSet = new Set(groupIds);
+  for (const event of activity) {
+    if (event.pubkey === ctx.pubkey) continue; // never unread from self
+    const h = event.tags.find(([n]) => n === "h")?.[1];
+    if (!h || !idSet.has(h)) continue;
+    if (event.created_at <= (ctx.readState[channelReadKey(relay, h)] ?? 0)) continue;
+    if (!ctx.isMuted(relay, h)) return true;
+    if (event.tags.some(([n, v]) => n === "p" && v === ctx.pubkey)) return true;
+  }
+  return false;
+}
+
+/**
+ * Bring a previously-deferred NIP-29 server's store current: the newest page
+ * of every group, filed under the serving relay and announced on the bus —
+ * the `nip29:` sync round's write path, batched across the server's groups.
+ * Heals the region the shared per-relay cursor may have skipped past (the
+ * relay can carry DM/git filters that kept its cursor advancing while the
+ * server's `#h` filter was excluded); deeper history is the group's own
+ * `nip29:` round when it is viewed.
+ */
+function catchUpNip29Server(
+  nostr: { relay(url: string): { query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrEvent[]> } },
+  relay: string,
+  groupIds: string[],
+): void {
+  const scope = nip29Scope(relay);
+  if (catchUpsInFlight.has(scope)) return;
+  catchUpsInFlight.add(scope);
+  logSync("wire", `nip29 server ${relay} back on the wire — pulling newest pages`);
+  void (async () => {
+    const filters: NostrFilter[] = groupIds.map((id) => ({
+      kinds: [...NIP29_ACTIVITY_KINDS],
+      "#h": [id],
+      limit: NIP29_PAGE_SIZE,
+    }));
+    const store = await appEventStore();
+    const touched = new Set<string>();
+    for (let i = 0; i < filters.length; i += NIP29_CATCHUP_FILTERS_PER_REQ) {
+      const chunk = filters.slice(i, i + NIP29_CATCHUP_FILTERS_PER_REQ);
+      let events: NostrEvent[] = [];
+      try {
+        events = await nostr.relay(relay).query(chunk, { signal: AbortSignal.timeout(8000) });
+      } catch {
+        continue; // best-effort; the group's own round retries on open
+      }
+      // Filed under the serving relay (the relay-scoped tenant); per-event
+      // catch so one duplicate/refused row doesn't fail the page.
+      await Promise.all(events.map((ev) => store.event(ev, { relay }).catch(() => undefined)));
+      for (const ev of events) {
+        const h = ev.tags.find(([n]) => n === "h")?.[1];
+        if (h) touched.add(`nip29:${h}`);
+      }
+    }
+    if (touched.size > 0) emitWireScopes(touched);
+  })()
+    .catch(() => undefined)
+    .finally(() => {
+      catchUpsInFlight.delete(scope);
+    });
+}
+
+/**
+ * The unread-dot deferral for NIP-29 servers, over the wire's unioned group
+ * list: a server whose rail button already shows the dot has its groups'
+ * `#h` filters dropped from the wire until the user navigates into it (or
+ * the dot clears via a read synced from another device) — the same rule, and
+ * the same catch-up IOU, as the Concord V2 deferral above. NIP-29 is
+ * relay-per-community, so the unit of deferral is the relay: its rail button
+ * and its dot are per-server, and its channels defer and re-activate
+ * together.
+ */
+function useWireNip29Deferral(
+  groups: Array<{ id: string; relay: string; buzz?: boolean }>,
+): Array<{ id: string; relay: string; buzz?: boolean }> {
+  const { nostr } = useNostr();
+  const { user } = useCurrentUser();
+  const { readState } = useReadState();
+  const { isChannelMuted } = useMutes();
+  const eventStore = useEventStore();
+
+  // Deferral inputs through a ref, so read-state churn (every markRead in the
+  // open channel) doesn't rebuild the spec; the 2-minute refetch picks up the
+  // one change that matters (a remote read clearing a deferred server's dot).
+  const dotCtxRef = useRef<Nip29DotContext>({ pubkey: undefined, readState: {}, isMuted: () => false });
+  dotCtxRef.current = { pubkey: user?.pubkey, readState, isMuted: isChannelMuted };
+
+  // Navigating into a server must re-run the spec NOW (its filters rejoin
+  // the wire and its catch-up starts), not on the next poll.
+  const [activationEpoch, setActivationEpoch] = useState(0);
+  useEffect(() => onActivation(() => setActivationEpoch((n) => n + 1)), []);
+
+  const groupsSig = useMemo(
+    () => groups.map((g) => `${g.relay}|${g.id}${g.buzz ? "!" : ""}`).sort().join(","),
+    [groups],
+  );
+  const groupsRef = useRef(groups);
+  groupsRef.current = groups;
+
+  const query = useQuery<Array<{ id: string; relay: string; buzz?: boolean }>>({
+    queryKey: ["wire", "nip29-deferral", groupsSig, activationEpoch],
+    enabled: groups.length > 0,
+    staleTime: 30_000,
+    // A local (IndexedDB) read; the interval re-judges dots that changed
+    // out-of-band (a remote read syncing back). No reason to run it hidden.
+    refetchInterval: 2 * 60_000,
+    refetchIntervalInBackground: false,
+    queryFn: async () => {
+      // The first run must see the persisted deferral flags, or a reload
+      // would treat every deferred server as live and skip the catch-up its
+      // cursor gap may require.
+      await deferredFlags.ready();
+      const all = groupsRef.current;
+      // Grouped under the NORMALIZED relay — the spelling the read-state keys
+      // and the store's relay scope use; the entries keep their original
+      // relay string for the spec builder (which normalizes again).
+      const byRelay = new Map<string, typeof all>();
+      for (const g of all) {
+        const relay = normalizeRelayUrl(g.relay);
+        if (!relay) continue;
+        const list = byRelay.get(relay);
+        if (list) list.push(g);
+        else byRelay.set(relay, [g]);
+      }
+      const store = await eventStore;
+      const out: typeof all = [];
+      for (const [relay, relayGroups] of byRelay) {
+        const scope = nip29Scope(relay);
+        const wasDeferred = (deferredFlags.get(scope) ?? 0) > 0;
+        const ids = relayGroups.map((g) => g.id);
+        if (isScopeActivated(scope)) {
+          // Navigated into (this session): live for good.
+          if (wasDeferred) {
+            deferredFlags.delete(scope);
+            catchUpNip29Server(nostr, relay, ids);
+          }
+        } else if (await nip29ServerDotted(store, relay, ids, dotCtxRef.current)) {
+          if (!wasDeferred) deferredFlags.set(scope, Math.floor(Date.now() / 1000));
+          continue;
+        } else if (wasDeferred) {
+          // The dot cleared while deferred — a read synced back from another
+          // device. Pin it live for the session (see the V2 branch above for
+          // why re-deferring would oscillate).
+          markScopeLive(scope);
+          deferredFlags.delete(scope);
+          catchUpNip29Server(nostr, relay, ids);
+        }
+        out.push(...relayGroups);
       }
       return out;
     },
@@ -457,7 +666,7 @@ function WireSyncInner() {
   // primary source — see useWireNip29Groups) UNIONed with the kind-10009
   // `groups` list (which additionally carries private/closed channels the open
   // directory hides). De-duplicated by relay+id.
-  const groups = useMemo(() => {
+  const allNip29Groups = useMemo(() => {
     const byKey = new Map<string, { id: string; relay: string; buzz?: boolean }>();
     for (const g of nip29Groups) {
       if (g.id && g.relay) byKey.set(`${g.relay}\u0000${g.id}`, g);
@@ -470,6 +679,8 @@ function WireSyncInner() {
     }
     return [...byKey.values()];
   }, [nip29Groups, groupList?.groups]);
+  // …minus the servers deferred under the unread-dot rule.
+  const groups = useWireNip29Deferral(allNip29Groups);
 
   // The relays to hold the live kind-1059 gift-wrap subscription on. MUST match
   // the set useDm17's inbox scan reads from (useDm17SyncCtx): our effective DM
