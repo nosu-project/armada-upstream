@@ -32,15 +32,27 @@ interface ReqRecord {
 }
 const records: ReqRecord[] = [];
 
+/**
+ * The `debugNostr` toggle, re-read at most once a second: `enabled()` runs on
+ * EVERY outgoing REQ, and a synchronous `localStorage.getItem` per call showed
+ * up in boot profiles. The TTL keeps the console toggle live without the
+ * per-REQ storage hit.
+ */
+let enabledCache: { value: boolean; at: number } | undefined;
+
 function enabled(): boolean {
+  const now = Date.now();
+  if (enabledCache && now - enabledCache.at < 1000) return enabledCache.value;
+  let value = import.meta.env?.DEV ?? false;
   try {
     const v = localStorage.getItem("debugNostr");
-    if (v === "1" || v === "true") return true;
-    if (v === "0" || v === "false") return false;
+    if (v === "1" || v === "true") value = true;
+    else if (v === "0" || v === "false") value = false;
   } catch {
     /* localStorage may be unavailable */
   }
-  return import.meta.env?.DEV ?? false;
+  enabledCache = { value, at: now };
+  return value;
 }
 
 /** Human-readable one-liner for a filter, e.g. `kinds[0] authors×3 limit20`. */
