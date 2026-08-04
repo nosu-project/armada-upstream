@@ -24,7 +24,8 @@ import { useRelayInbox, type InboxItem } from "@/hooks/useRelayInbox";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { KIND_COMMENT } from "@/lib/nip29";
-import { relayToRouteParam, routeParamToRelay } from "@/lib/platform";
+import { routeParamToRelay } from "@/lib/platform";
+import { chatRoute } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
@@ -222,8 +223,7 @@ export function InboxPage() {
       item.event.kind === KIND_COMMENT
         ? item.event.tags.find(([n]) => n === "E")?.[1]
         : undefined;
-    const path = `/s/${relayToRouteParam(relayUrl)}/${encodeURIComponent(item.groupId)}`;
-    navigate(root ? `${path}?thread=${encodeURIComponent(root)}` : path);
+    navigate(chatRoute({ kind: "nip29", relayUrl, groupId: item.groupId, threadRoot: root }));
   };
 
   const markAllRead = () => {

@@ -5,8 +5,19 @@ import { sanitizePlausibleUrl } from "./plausibleUrl";
 describe("sanitizePlausibleUrl", () => {
   it("passes static routes through unchanged", () => {
     expect(sanitizePlausibleUrl("https://armada.buzz/")).toBe("https://armada.buzz/");
-    expect(sanitizePlausibleUrl("https://armada.buzz/about")).toBe("https://armada.buzz/about");
     expect(sanitizePlausibleUrl("https://armada.buzz/settings")).toBe("https://armada.buzz/settings");
+    expect(sanitizePlausibleUrl("https://armada.buzz/discover")).toBe("https://armada.buzz/discover");
+    expect(sanitizePlausibleUrl("https://armada.buzz/welcome")).toBe("https://armada.buzz/welcome");
+  });
+
+  it("collapses profile paths, in every identifier form", () => {
+    // `/:user` matches any single segment that isn't a static route, so an
+    // unrecognized one is a profile — not an unknown page to report verbatim.
+    expect(sanitizePlausibleUrl("https://armada.buzz/npub1abc123")).toBe("https://armada.buzz/:user");
+    expect(sanitizePlausibleUrl("https://armada.buzz/alex@alexgleason.me")).toBe(
+      "https://armada.buzz/:user",
+    );
+    expect(sanitizePlausibleUrl("https://armada.buzz/alexgleason.me")).toBe("https://armada.buzz/:user");
   });
 
   it("collapses the DM peer pubkey", () => {
@@ -90,8 +101,8 @@ describe("sanitizePlausibleUrl", () => {
     expect(sanitizePlausibleUrl("https://armada.buzz/invite/naddr1xyz?s=secret#frag")).toBe(
       "https://armada.buzz/invite/:naddr",
     );
-    expect(sanitizePlausibleUrl("https://armada.buzz/about?ref=twitter")).toBe(
-      "https://armada.buzz/about",
+    expect(sanitizePlausibleUrl("https://armada.buzz/discover?ref=twitter")).toBe(
+      "https://armada.buzz/discover",
     );
     expect(sanitizePlausibleUrl("https://armada.buzz/remoteloginsuccess#token=abc")).toBe(
       "https://armada.buzz/remoteloginsuccess",
@@ -99,8 +110,11 @@ describe("sanitizePlausibleUrl", () => {
   });
 
   it("strips query/hash from unknown paths as a safe default", () => {
+    expect(sanitizePlausibleUrl("https://armada.buzz/deep/unknown/path?x=1#y")).toBe(
+      "https://armada.buzz/deep/unknown/path",
+    );
     expect(sanitizePlausibleUrl("https://armada.buzz/whatever?x=1#y")).toBe(
-      "https://armada.buzz/whatever",
+      "https://armada.buzz/:user",
     );
   });
 
