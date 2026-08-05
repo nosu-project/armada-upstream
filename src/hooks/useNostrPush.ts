@@ -28,6 +28,10 @@ import {
   normalizeRelayUrl,
   nostrPushConfigured,
 } from "@/lib/platform";
+import {
+  notificationPermissionOf,
+  webPushUnavailableReason,
+} from "@/lib/webPushSupport";
 
 /**
  * useNostrPush
@@ -136,6 +140,23 @@ function pushDomain(): string {
   return typeof location !== "undefined" ? location.hostname : "";
 }
 
+interface PreparedPush {
+  registration: ServiceWorkerRegistration;
+  key: ArrayBuffer;
+  options: PushSubscriptionOptionsInit;
+}
+
+async function pushPermission(prepared: PreparedPush): Promise<NotificationPermission> {
+  if (typeof Notification !== "undefined") return Notification.permission;
+  const existing = await prepared.registration.pushManager.getSubscription();
+  if (existing) return "granted";
+  if (typeof prepared.registration.pushManager.permissionState === "function") {
+    const state = await prepared.registration.pushManager.permissionState(prepared.options);
+    return notificationPermissionOf(state);
+  }
+  return "default";
+}
+
 export function useNostrPush(): UsePushNotificationsReturn {
   const { user } = useCurrentUser();
   const { nostr } = useNostr();
@@ -147,20 +168,21 @@ export function useNostrPush(): UsePushNotificationsReturn {
   const { relays: publishedDmRelays } = useDmRelayList();
   const allConcord2Subs = useConcord2Subs();
 
-  const supported =
-    nostrPushConfigured() &&
-    !isNativeRuntime() &&
-    typeof window !== "undefined" &&
-    "serviceWorker" in navigator &&
-    "PushManager" in window &&
-    "Notification" in window;
+  const unavailableReason = isNativeRuntime()
+    ? "native-runtime" as const
+    : webPushUnavailableReason(nostrPushConfigured());
+  const supported = unavailableReason === undefined;
 
   const [permission, setPermission] = useState<NotificationPermission>(
     typeof Notification !== "undefined" ? Notification.permission : "default",
   );
   const [enabled, setEnabled] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [error, setError] = useState<string>();
+  const [prepareNonce, setPrepareNonce] = useState(0);
   const [prefs, setPrefsState] = useState<PushPrefs>(loadPrefs);
+  const preparedRef = useRef<PreparedPush | undefined>(undefined);
 
   // ── Inputs (mirror useNativeNotifications) ─────────────────────────────────
 
@@ -270,30 +292,82 @@ export function useNostrPush(): UsePushNotificationsReturn {
     });
   }, [supported, user, nostr]);
 
-  /** Ensure a current browser subscription, register the specs, prune stale. */
-  const sync = useCallback(async () => {
-    if (!client || !user) throw new Error("Push not available");
-    const domain = pushDomain();
-    const reg = await navigator.serviceWorker.ready;
-
-    // VAPID key (cached per domain; refetched on a stored-key miss).
-    let vapid: string;
-    try {
-      vapid = localStorage.getItem(`${VAPID_KEY}:${domain}`) || "";
-    } catch {
-      vapid = "";
+  // Prepare the service worker and public VAPID key before showing an enable
+  // action. PushManager.subscribe() has to run directly from the user's tap on
+  // iOS; doing this RPC first would consume that transient activation.
+  useEffect(() => {
+    if (!supported || !client || !user) {
+      preparedRef.current = undefined;
+      setReady(false);
+      return;
     }
-    if (!vapid) {
-      vapid = await client.getVapidKey(domain);
+
+    let cancelled = false;
+    setReady(false);
+    setError(undefined);
+    (async () => {
+      const domain = pushDomain();
+      let vapid = "";
       try {
-        localStorage.setItem(`${VAPID_KEY}:${domain}`, vapid);
+        vapid = localStorage.getItem(`${VAPID_KEY}:${domain}`) || "";
       } catch {
-        // ignore
+        // Storage can be unavailable in private browsing; fetch it below.
       }
-    }
-    const key = urlBase64ToBuffer(vapid);
+      if (!vapid) {
+        vapid = await client.getVapidKey(domain);
+        try {
+          localStorage.setItem(`${VAPID_KEY}:${domain}`, vapid);
+        } catch {
+          // The in-memory prepared value still works for this session.
+        }
+      }
 
-    let sub = await reg.pushManager.getSubscription();
+      const [registration, key] = await Promise.all([
+        navigator.serviceWorker.ready,
+        Promise.resolve(urlBase64ToBuffer(vapid)),
+      ]);
+      const options: PushSubscriptionOptionsInit = {
+        userVisibleOnly: true,
+        applicationServerKey: key,
+      };
+
+      // A gateway VAPID rotation makes the old browser subscription unusable.
+      // Remove it during preparation so the next user tap can subscribe as its
+      // first permission-sensitive operation.
+      const existing = await registration.pushManager.getSubscription();
+      if (existing && !matchesServerKey(existing, key)) {
+        await existing.unsubscribe().catch(() => false);
+      }
+
+      const prepared = { registration, key, options };
+      const nextPermission = await pushPermission(prepared);
+      const current = await registration.pushManager.getSubscription();
+      if (cancelled) return;
+      preparedRef.current = prepared;
+      setPermission(nextPermission);
+      setEnabled(Boolean(current && nextPermission === "granted" && loadIntent()));
+      setReady(true);
+    })().catch((err) => {
+      if (cancelled) return;
+      console.warn("[nostr-push] preparation failed:", err);
+      preparedRef.current = undefined;
+      setReady(false);
+      setError("Armada couldn't prepare background notifications. Check your connection and try again.");
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supported, client, user, prepareNonce]);
+
+  /** Ensure a current browser subscription, register the specs, prune stale. */
+  const sync = useCallback(async (gestureSubscription?: PushSubscription) => {
+    const prepared = preparedRef.current;
+    if (!client || !user || !prepared) throw new Error("Push not ready");
+    const domain = pushDomain();
+    const { registration, key, options } = prepared;
+
+    let sub = gestureSubscription ?? await registration.pushManager.getSubscription();
     if (sub && !matchesServerKey(sub, key)) {
       try {
         await sub.unsubscribe();
@@ -303,10 +377,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
       sub = null;
     }
     if (!sub) {
-      sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: key,
-      });
+      sub = await registration.pushManager.subscribe(options);
     }
 
     const json = sub.toJSON();
@@ -346,27 +417,6 @@ export function useNostrPush(): UsePushNotificationsReturn {
     saveRegisteredIds([...currentIds]);
   }, [client, user, specs]);
 
-  // Restore enabled state on mount: granted permission + an existing browser
-  // subscription means we're active.
-  useEffect(() => {
-    if (!supported) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const reg = await navigator.serviceWorker.ready;
-        const existing = await reg.pushManager.getSubscription();
-        if (!cancelled && existing && Notification.permission === "granted") {
-          setEnabled(true);
-        }
-      } catch {
-        // leave disabled
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [supported]);
-
   // Auto-(re)sync on every load and whenever the watch set changes: opt-out, so
   // as long as the user intends push, permission is granted, and there is
   // something to watch, keep the server's subscriptions current. Guarded by a
@@ -380,8 +430,8 @@ export function useNostrPush(): UsePushNotificationsReturn {
   const retry = useRef(0);
   const [nonce, setNonce] = useState(0);
   useEffect(() => {
-    if (!supported || !client || !user) return;
-    if (Notification.permission !== "granted") return;
+    if (!supported || !ready || !client || !user) return;
+    if (permission !== "granted") return;
     if (!loadIntent()) return;
     if (specs.length === 0) return; // still loading, or nothing to watch
     if (lastSynced.current === syncSig) return;
@@ -394,6 +444,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
         if (cancelled) return;
         lastSynced.current = syncSig;
         retry.current = 0;
+        setError(undefined);
         setEnabled(true);
       } catch (err) {
         if (cancelled) return;
@@ -402,6 +453,8 @@ export function useNostrPush(): UsePushNotificationsReturn {
           const delay = 10_000 * 2 ** retry.current;
           retry.current += 1;
           timer = setTimeout(() => setNonce((n) => n + 1), delay);
+        } else {
+          setError("Armada couldn't refresh background notifications. Check your connection and retry.");
         }
       }
     })();
@@ -409,12 +462,12 @@ export function useNostrPush(): UsePushNotificationsReturn {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [supported, client, user, specs.length, syncSig, sync, nonce]);
+  }, [supported, ready, permission, client, user, specs.length, syncSig, sync, nonce]);
 
   // A rotated browser subscription (SW pushsubscriptionchange → message) must
   // be re-registered with the server.
   useEffect(() => {
-    if (!supported) return;
+    if (!supported || !ready) return;
     const onMessage = (event: MessageEvent) => {
       if (event.data?.type !== "armada-push-changed") return;
       lastSynced.current = null;
@@ -423,26 +476,76 @@ export function useNostrPush(): UsePushNotificationsReturn {
     };
     navigator.serviceWorker.addEventListener("message", onMessage);
     return () => navigator.serviceWorker.removeEventListener("message", onMessage);
-  }, [supported]);
+  }, [supported, ready]);
+
+  // iOS can rotate or revoke a subscription while Armada is closed. Recheck
+  // whenever the app becomes visible/online; granted intent with no current
+  // subscription is repaired by the auto-sync effect above.
+  useEffect(() => {
+    if (!supported || !ready) return;
+    let cancelled = false;
+    const recheck = async () => {
+      if (document.visibilityState !== "visible") return;
+      const prepared = preparedRef.current;
+      if (!prepared) return;
+      try {
+        const [nextPermission, existing] = await Promise.all([
+          pushPermission(prepared),
+          prepared.registration.pushManager.getSubscription(),
+        ]);
+        if (cancelled) return;
+        setPermission(nextPermission);
+        setEnabled(Boolean(existing && nextPermission === "granted" && loadIntent()));
+        if (!existing && nextPermission === "granted" && loadIntent()) {
+          lastSynced.current = null;
+          retry.current = 0;
+          setNonce((n) => n + 1);
+        }
+      } catch {
+        // Leave the last known state; the explicit retry remains available.
+      }
+    };
+    document.addEventListener("visibilitychange", recheck);
+    window.addEventListener("online", recheck);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", recheck);
+      window.removeEventListener("online", recheck);
+    };
+  }, [supported, ready]);
 
   // ── Public actions ─────────────────────────────────────────────────────────
 
   const enable = useCallback(async () => {
-    if (!supported || !user) return;
+    const prepared = preparedRef.current;
+    if (!supported || !ready || !user || !prepared) return;
     setBusy(true);
+    setError(undefined);
+
+    // Call subscribe synchronously from the toggle's click. Besides creating
+    // the endpoint, this is the standards-based permission request; unlike
+    // Notification.requestPermission(), it also works in iOS Home-Screen web
+    // apps where window.Notification is unexpectedly absent.
+    const subscriptionPromise = prepared.registration.pushManager.subscribe(prepared.options);
     try {
-      const perm = await Notification.requestPermission();
-      setPermission(perm);
-      if (perm !== "granted") return;
+      const subscription = await subscriptionPromise;
+      setPermission("granted");
       saveIntent(true);
       lastSynced.current = null;
-      await sync();
+      await sync(subscription);
       lastSynced.current = syncSig;
       setEnabled(true);
+    } catch (err) {
+      const nextPermission = await pushPermission(prepared).catch(() => permission);
+      setPermission(nextPermission);
+      if (nextPermission !== "denied") {
+        console.warn("[nostr-push] enable failed:", err);
+        setError("Armada couldn't enable background notifications. Check your connection and retry.");
+      }
     } finally {
       setBusy(false);
     }
-  }, [supported, user, sync, syncSig]);
+  }, [supported, ready, user, sync, syncSig, permission]);
 
   const disable = useCallback(async () => {
     setBusy(true);
@@ -457,7 +560,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
       }
       saveRegisteredIds([]);
       try {
-        const reg = await navigator.serviceWorker.ready;
+        const reg = preparedRef.current?.registration ?? await navigator.serviceWorker.ready;
         const sub = await reg.pushManager.getSubscription();
         if (sub) await sub.unsubscribe();
       } catch {
@@ -481,5 +584,26 @@ export function useNostrPush(): UsePushNotificationsReturn {
     [],
   );
 
-  return { supported, permission, enabled, busy, prefs, enable, disable, setPrefs };
+  const retrySetup = useCallback(() => {
+    setError(undefined);
+    lastSynced.current = null;
+    retry.current = 0;
+    if (ready) setNonce((n) => n + 1);
+    else setPrepareNonce((n) => n + 1);
+  }, [ready]);
+
+  return {
+    supported,
+    unavailableReason,
+    ready,
+    error,
+    permission,
+    enabled,
+    busy: busy || (supported && !ready && !error),
+    prefs,
+    enable,
+    disable,
+    setPrefs,
+    retry: retrySetup,
+  };
 }

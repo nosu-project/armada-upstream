@@ -127,7 +127,7 @@ export function SettingsPage() {
   );
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
-  const { canInstall, install } = useInstallPrompt();
+  const { canInstall, install, needsManualInstall } = useInstallPrompt();
   const setVoiceToggle = (key: keyof AudioProcessingPrefs) => (value: boolean) => {
     setVoiceProcessing((prev) => {
       const next = { ...prev, [key]: value };
@@ -310,7 +310,7 @@ export function SettingsPage() {
     if (user && CONCORD_ENABLED) {
       appItems.push({ id: "advanced", title: "Advanced", icon: Wrench, inline: true });
     }
-    if (canInstall) {
+    if (canInstall || needsManualInstall) {
       appItems.push({ id: "install", title: "Install app", icon: Download, inline: true });
     }
     const groups: NavGroup[] = [
@@ -321,7 +321,7 @@ export function SettingsPage() {
       groups.push({ heading: "Danger zone", items: [{ id: "danger", title: "Delete account", icon: AlertTriangle, inline: true }] });
     }
     return groups;
-  }, [user, logins, canInstall, config.zapsEnabled]);
+  }, [user, logins, canInstall, needsManualInstall, config.zapsEnabled]);
 
   /** The row(s) inside one section's chrome card. */
   const sectionBody = (id: SectionId): ReactNode => {
@@ -636,8 +636,10 @@ export function SettingsPage() {
         return (
           <SettingsRow
             label="Install Armada"
-            description="Add to your home screen or desktop for a standalone app experience."
-            onClick={() => install()}
+            description={needsManualInstall
+              ? "In Safari, tap Share → Add to Home Screen, keep Open as Web App on, then launch Armada from its new icon."
+              : "Add to your home screen or desktop for a standalone app experience."}
+            onClick={canInstall ? () => install() : undefined}
           >
             <Download className="size-4 text-muted-foreground" />
           </SettingsRow>

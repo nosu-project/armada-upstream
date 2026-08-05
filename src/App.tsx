@@ -96,13 +96,14 @@ export function App() {
                       <NativeNotifications />
                       <NativeReadMarkerSync />
                       <NativeReadDismiss />
-                      <WebPushNotifications />
-                      <ControlPlaneSync />
-                      <ScreenSharePicker />
-                      <LoginSetup />
-                      <MeshProvider>
-                        <AppRouter />
-                      </MeshProvider>
+                      <WebPushNotifications>
+                        <ControlPlaneSync />
+                        <ScreenSharePicker />
+                        <LoginSetup />
+                        <MeshProvider>
+                          <AppRouter />
+                        </MeshProvider>
+                      </WebPushNotifications>
                     </ReadStateProvider>
                   </TooltipProvider>
                 </WalletProvider>
