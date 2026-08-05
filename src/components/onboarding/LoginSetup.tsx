@@ -110,6 +110,10 @@ export function LoginSetup() {
 
   const [queue, setQueue] = useState<StepId[]>([]);
   const [completed, setCompleted] = useState(0);
+  const ownsRelayList = user
+    ? !config.relayMetadata.pubkey || config.relayMetadata.pubkey === user.pubkey
+    : false;
+  const hasSignedRelayList = ownsRelayList && config.relayMetadata.relays.length > 0;
 
   const enqueue = useCallback((id: StepId) => {
     setQueue((q) => (q.includes(id) ? q : [...q, id]));
@@ -137,12 +141,17 @@ export function LoginSetup() {
   // skip is remembered per account and the same form remains in Settings.
   useEffect(() => {
     if (!user || syncing || onboarding) return;
-    const ownsRelayList =
-      !config.relayMetadata.pubkey || config.relayMetadata.pubkey === user.pubkey;
-    if (ownsRelayList && config.relayMetadata.relays.length > 0) return;
+    // Discovery and this effect can settle in adjacent renders. If the prompt
+    // was queued from the empty render, remove it as soon as the signed list
+    // arrives instead of leaving a stale "couldn't find" screen over a list we
+    // demonstrably found.
+    if (hasSignedRelayList) {
+      setQueue((current) => current.filter((candidate) => candidate !== "relays"));
+      return;
+    }
     if (read(relayPromptKey(user.pubkey))) return;
     enqueue("relays");
-  }, [user, syncing, onboarding, config.relayMetadata, enqueue]);
+  }, [user, syncing, onboarding, hasSignedRelayList, enqueue]);
 
   // If this unmounts with a decrypt prompt still queued, the callers awaiting
   // that decision would hang forever. Release them as "not now" (unpersisted,
@@ -189,7 +198,9 @@ export function LoginSetup() {
     if (step === "battery") write(BATTERY_NUDGE_KEY, String(Date.now()));
   }, [step, user?.pubkey]);
 
-  if (!step || syncing || onboarding) return null;
+  // Do not paint one contradictory frame while the effect above removes a
+  // relay step that was queued just before discovery completed.
+  if (!step || syncing || onboarding || (step === "relays" && hasSignedRelayList)) return null;
 
   const total = completed + queue.length;
 
