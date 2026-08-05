@@ -790,6 +790,40 @@ export function useHasUnreadDMs(): boolean {
 }
 
 /**
+ * Whether ONE conversation has unread messages, on the same terms as
+ * {@link useHasUnreadDMs}: the peer sent the latest message and it is newer
+ * than the thread's last-read stamp. Drives the dot on a DM pinned to the
+ * community rail.
+ *
+ * The request-tier narrowing that hook applies to NIP-17 is deliberately
+ * absent: a DM is only on the rail because the user put it there, which is a
+ * stronger statement about the peer than following them, and a rail icon that
+ * stayed dark for the one person the user singled out would be the bug.
+ *
+ * Both conversation queries are shared by key with the ones the rail already
+ * mounts for its DMs button, so a rail full of DMs costs no extra fetching.
+ */
+export function useDmPeerUnread(peer: string | undefined): boolean {
+  const { user } = useCurrentUser();
+  const { conversations } = useDMConversations();
+  const { conversations: dm17Conversations } = useDm17Conversations();
+  const { getLastRead } = useReadState();
+
+  return useMemo(() => {
+    if (!user || !peer) return false;
+    const lastRead = getLastRead(dmReadKey(peer));
+    const kind4 = conversations.find((c) => c.peer === peer);
+    if (kind4 && kind4.latest.pubkey !== user.pubkey && kind4.latest.created_at > lastRead) {
+      return true;
+    }
+    const dm17 = dm17Conversations.find((c) => c.peer === peer);
+    return Boolean(
+      dm17 && dm17.latest.author !== user.pubkey && dm17.latest.createdAt > lastRead,
+    );
+  }, [user, peer, conversations, dm17Conversations, getLastRead]);
+}
+
+/**
  * The decrypted message thread with a single peer, plus a `send` mutation.
  * Messages are kind-4 NIP-04 events on the DM relay, decrypted with the
  * signer's nip04 method.

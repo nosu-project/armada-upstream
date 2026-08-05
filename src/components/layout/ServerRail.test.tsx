@@ -2,6 +2,7 @@
 // ServerRail (data hooks mocked), fakes slot geometry (jsdom has no layout),
 // and drives the pointer-event flow to assert drops land in the layout.
 import { act, render } from "@testing-library/react";
+import { nip19 } from "nostr-tools";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -17,7 +18,19 @@ vi.mock("@/hooks/useCall", () => ({ useCall: () => ({ activeCall: null }) }));
 vi.mock("@/hooks/useCurrentUser", () => ({
   useCurrentUser: () => ({ user: { pubkey: "test-pubkey" } }),
 }));
-vi.mock("@/hooks/useDirectMessages", () => ({ useHasUnreadDMs: () => false }));
+// Per-peer DM unread, settable per test (drives the pinned-DM badge).
+const dmUnread = vi.hoisted(() => ({}) as Record<string, boolean>);
+vi.mock("@/hooks/useDirectMessages", () => ({
+  useHasUnreadDMs: () => false,
+  useDmPeerUnread: (peer?: string) => Boolean(peer && dmUnread[peer]),
+}));
+// Profile metadata for DMs on the rail, settable per test.
+const authorNames = vi.hoisted(() => ({}) as Record<string, string>);
+vi.mock("@/hooks/useAuthor", () => ({
+  useAuthor: (pubkey?: string) => ({
+    data: pubkey && authorNames[pubkey] ? { metadata: { name: authorNames[pubkey] } } : undefined,
+  }),
+}));
 vi.mock("@/hooks/useMeshTransport", () => ({
   useMeshTransport: () => ({ mesh: { available: false } }),
 }));
@@ -31,8 +44,11 @@ vi.mock("@/hooks/useRelayUnread", () => ({
   useRelayUnread: (url?: string) =>
     (url && relayUnread[url]) || { anyUnread: false, anyMention: false },
 }));
+// The kind 10009 write the rail makes to keep relay order in sync. Hoisted so
+// a test can assert what did — and didn't — reach the user's server list.
+const updateGroupList = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("@/hooks/useUserGroupList", () => ({
-  useUpdateUserGroupList: () => ({ mutateAsync: vi.fn(async () => undefined) }),
+  useUpdateUserGroupList: () => ({ mutateAsync: updateGroupList }),
 }));
 // The rail's NIP-29 half comes from the kind 10009 list. `extraServers` lets a
 // suite add members beyond the three base ones.
@@ -447,5 +463,90 @@ describe("ServerRail folder notification rollup", () => {
     renderRail();
     expect(folderBtn().querySelector('[aria-label="Unread messages"]')).toBeNull();
     expect(folderBtn().querySelector('[aria-label="You were mentioned"]')).toBeNull();
+  });
+});
+
+// ─── DMs pinned to the rail ─────────────────────────────────────────────
+//
+// A DM is on the rail because the user put it there and nowhere else records
+// that, so the arrangement is its whole source of truth: a `dm:` key IS the
+// item. These assert it renders from the layout alone, points at the peer's
+// thread, and is otherwise an ordinary rail item.
+
+describe("ServerRail DMs", () => {
+  const PEER = "a".repeat(64);
+  const DM_KEY = `dm:${PEER}`;
+  const DM_ANCHOR = `item:${DM_KEY}`;
+  const dmHref = `/dm/${nip19.npubEncode(PEER)}`;
+
+  let restoreGeometry: () => void;
+
+  beforeEach(() => {
+    extraServers = [];
+    // The DM is the only thing STORED; the three servers are appended live, so
+    // this also covers a key arriving from another device's arrangement.
+    config = {
+      ...defaultConfig,
+      railLayout: [{ type: "item", key: DM_KEY }],
+      railOrder: [],
+      railOpenFolders: [],
+    };
+    for (const key of Object.keys(dmUnread)) delete dmUnread[key];
+    for (const key of Object.keys(authorNames)) delete authorNames[key];
+    updateGroupList.mockClear();
+    restoreGeometry = installGeometry();
+    return () => restoreGeometry();
+  });
+
+  const dmBtn = () => document.querySelector(`[data-rail-anchor="${DM_ANCHOR}"]`)!;
+
+  it("renders an icon for a DM key and links to the peer's thread", () => {
+    authorNames[PEER] = "Sam";
+    renderRail();
+    expect(dmBtn()).toBeTruthy();
+    // The thread, not `/dm` — on mobile the list is the same route's other
+    // state, which is exactly what the icon exists to skip.
+    expect(dmBtn().getAttribute("href")).toBe(dmHref);
+    expect(dmBtn().getAttribute("aria-label")).toBe("Sam");
+  });
+
+  it("lights the active blade when that thread is open", () => {
+    renderRail([dmHref]);
+    expect(bladeIsLit(DM_ANCHOR)).toBe(true);
+    expect(bladeIsLit(`item:${RELAY_A}`)).toBe(false);
+  });
+
+  it("stays lit inside the thread's permalink route", () => {
+    renderRail([`${dmHref}/m/abc123`]);
+    expect(bladeIsLit(DM_ANCHOR)).toBe(true);
+  });
+
+  it("badges unread messages, and drops the badge while the thread is open", () => {
+    dmUnread[PEER] = true;
+    const { unmount } = renderRail();
+    expect(dmBtn().querySelector('[aria-label="Unread messages"]')).toBeTruthy();
+    unmount();
+    renderRail([dmHref]);
+    expect(dmBtn().querySelector('[aria-label="Unread messages"]')).toBeNull();
+  });
+
+  it("folders with a community like any other item", async () => {
+    renderRail();
+    // Slots (DOM order): 0=DM, 1=A, 2=B, 3=C.
+    await mouseDrag(DM_ANCHOR, slotCenter(1)); // middle of A → combine
+    expect(config.railLayout).toEqual([
+      { type: "folder", id: expect.any(String), name: "", keys: [RELAY_A, DM_KEY] },
+      { type: "item", key: RELAY_B },
+      { type: "item", key: RELAY_C },
+    ]);
+  });
+
+  it("never sends the DM key to the kind 10009 server list", async () => {
+    renderRail();
+    await mouseDrag(DM_ANCHOR, slotCenter(1));
+    expect(updateGroupList).toHaveBeenCalledWith({
+      type: "reorder-servers",
+      urls: [RELAY_A, RELAY_B, RELAY_C],
+    });
   });
 });

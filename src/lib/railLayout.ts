@@ -9,7 +9,14 @@
  * thin view over them.
  *
  * Keys are the rail's stable item keys: a normalized relay URL for NIP-29
- * servers, `c1:${communityId}` / `c2:${communityId}` for Concord communities.
+ * servers, `c1:${communityId}` / `c2:${communityId}` for Concord communities,
+ * `dm:${pubkey}` for a direct-message conversation the user put on the rail.
+ *
+ * DM keys are the one kind whose presence here IS the fact: a server or a
+ * community is on the rail because it's in the user's kind 10009 / Community
+ * List and the arrangement only orders it, but a DM is on the rail because the
+ * user said so and nowhere else records that. So the arrangement is the whole
+ * source of truth for them, and a `dm:` key is live by definition.
  *
  * The stored layout may reference keys that aren't currently "live" (a
  * Concord list still loading, a server on a relay that hasn't answered yet).
@@ -22,6 +29,8 @@
  * source list, or a later re-add would silently resurrect it at its old
  * position inside its old folder.
  */
+
+import { nip19 } from "nostr-tools";
 
 import { relayToRouteParam } from "@/lib/platform";
 
@@ -55,6 +64,38 @@ export type RailDropTarget =
   /** Insert the dragged item into an existing folder (before a child, or appended). */
   | { type: "into-folder"; folderId: string; beforeKey?: string };
 
+/** Stable rail key for a direct-message conversation with `pubkey` (hex). */
+export function dmRailKey(pubkey: string): string {
+  return `dm:${pubkey}`;
+}
+
+/**
+ * The peer pubkey a `dm:` rail key names, or `null` for any other key. The hex
+ * shape is checked here rather than trusted: the key round-trips through
+ * synced settings, and every caller either encodes it as an npub or hands it
+ * to a profile query.
+ */
+export function railKeyDmPubkey(key: string): string | null {
+  if (!key.startsWith("dm:")) return null;
+  const pubkey = key.slice("dm:".length);
+  return /^[0-9a-f]{64}$/.test(pubkey) ? pubkey : null;
+}
+
+/**
+ * Every DM peer on the rail, in visual order. Read straight from the stored
+ * arrangement (falling back to the legacy flat order when no layout has been
+ * stored yet) because for DMs there is no separate list to be live against.
+ */
+export function railDmPubkeys(stored: RailLayoutNode[], legacyOrder: string[]): string[] {
+  const keys = stored.length > 0 ? flattenLayout(stored) : legacyOrder;
+  const out: string[] = [];
+  for (const key of keys) {
+    const pubkey = railKeyDmPubkey(key);
+    if (pubkey && !out.includes(pubkey)) out.push(pubkey);
+  }
+  return out;
+}
+
 /** Stable DOM/target anchor for a top-level node. */
 export function itemAnchor(key: string): string {
   return `item:${key}`;
@@ -87,6 +128,13 @@ export function railKeyToRoute(key: string): string | null {
   }
   if (key.startsWith("c2:")) {
     return `/c/${encodeURIComponent(key.slice("c2:".length))}`;
+  }
+  if (key.startsWith("dm:")) {
+    const pubkey = railKeyDmPubkey(key);
+    // The peer route, not `/dm` — on mobile the conversation list and the
+    // thread are the same route's two states, so landing on the list would
+    // make the rail icon a shortcut to somewhere the user then has to search.
+    return pubkey ? `/dm/${nip19.npubEncode(pubkey)}` : null;
   }
   // NIP-29 server (key = normalized relay URL).
   return `/s/${relayToRouteParam(key)}`;

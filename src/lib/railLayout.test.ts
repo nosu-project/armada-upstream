@@ -1,20 +1,27 @@
+import { nip19 } from "nostr-tools";
 import { describe, expect, it } from "vitest";
 
 import {
   applyDrop,
   dissolveFolder,
+  dmRailKey,
   flattenLayout,
   folderAnchor,
   itemAnchor,
   mergeLayout,
   normalizeLayout,
   planDrop,
+  railDmPubkeys,
+  railKeyDmPubkey,
   railKeyToRoute,
   removeKey,
   renameFolder,
   type RailLayoutNode,
   type RailSlot,
 } from "./railLayout";
+
+const PEER = "a".repeat(64);
+const OTHER = "b".repeat(64);
 
 const item = (key: string): RailLayoutNode => ({ type: "item", key });
 const folder = (id: string, keys: string[], name = ""): RailLayoutNode => ({
@@ -192,6 +199,45 @@ describe("railKeyToRoute", () => {
 
   it("URL-encodes special characters in community ids", () => {
     expect(railKeyToRoute("c2:with/slash")).toBe("/c/with%2Fslash");
+  });
+
+  it("maps a DM key to the peer's THREAD, not the DM list", () => {
+    expect(railKeyToRoute(dmRailKey(PEER))).toBe(`/dm/${nip19.npubEncode(PEER)}`);
+  });
+
+  it("has no route for a DM key that isn't a pubkey", () => {
+    expect(railKeyToRoute("dm:not-a-pubkey")).toBeNull();
+  });
+});
+
+describe("DM rail keys", () => {
+  it("round-trips a pubkey", () => {
+    expect(railKeyDmPubkey(dmRailKey(PEER))).toBe(PEER);
+  });
+
+  it("rejects anything that isn't 64 hex chars", () => {
+    expect(railKeyDmPubkey("dm:")).toBeNull();
+    expect(railKeyDmPubkey(`dm:${PEER.toUpperCase()}`)).toBeNull();
+    expect(railKeyDmPubkey(`dm:${PEER}extra`)).toBeNull();
+    expect(railKeyDmPubkey("wss://relay.example.com")).toBeNull();
+    expect(railKeyDmPubkey(`c2:${PEER}`)).toBeNull();
+  });
+
+  it("collects DM peers from the layout in visual order, folders included", () => {
+    expect(
+      railDmPubkeys(
+        [item(dmRailKey(PEER)), folder("f", ["wss://a", dmRailKey(OTHER)])],
+        [],
+      ),
+    ).toEqual([PEER, OTHER]);
+  });
+
+  it("falls back to the legacy flat order when no layout has been stored", () => {
+    expect(railDmPubkeys([], ["wss://a", dmRailKey(OTHER)])).toEqual([OTHER]);
+  });
+
+  it("ignores a stored key that isn't a usable pubkey", () => {
+    expect(railDmPubkeys([item("dm:nope"), item(dmRailKey(PEER))], [])).toEqual([PEER]);
   });
 });
 

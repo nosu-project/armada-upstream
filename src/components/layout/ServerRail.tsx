@@ -1,10 +1,12 @@
-import { Bluetooth, Compass, FolderOpen, Headphones, Lock, LogOut, MessageSquare, Plus, Settings, Trash2 } from "lucide-react";
+import { Bluetooth, Compass, FolderOpen, Headphones, Lock, LogOut, MessageSquare, PanelLeftDashed, Plus, Settings, Trash2 } from "lucide-react";
+import { nip19 } from "nostr-tools";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
 import type React from "react";
 
 import { AddDialog } from "@/components/dialogs/AddDialog";
+import { NoteToSelfAvatar, NOTE_TO_SELF_NAME } from "@/components/NoteToSelfAvatar";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,6 +26,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
 import { useConcordList, useConcordCommunity } from "@/concord-v1/hooks/useConcordList";
 import { useConcordCommunityActions } from "@/concord-v1/hooks/useConcordCommunityActions";
@@ -37,10 +40,11 @@ import { useChannels2, useControlFold2 } from "@/concord-v2/hooks/useControlPlan
 import { useConcord2Unread } from "@/concord-v2/hooks/useConcord2Unread";
 import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useHasUnreadDMs } from "@/hooks/useDirectMessages";
+import { useDmPeerUnread, useHasUnreadDMs } from "@/hooks/useDirectMessages";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { useMutes } from "@/hooks/useMutes";
-import { useNotifLevels, communityScopeKey } from "@/hooks/useNotifLevels";
+import { useNotifLevels, communityScopeKey, dmScopeKey } from "@/hooks/useNotifLevels";
+import { useRailDms } from "@/hooks/useRailDms";
 import { NotifLevelMenu } from "@/components/NotifLevelMenu";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
@@ -50,16 +54,19 @@ import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { useDragPointerDown, usePressDrag } from "@/hooks/usePressDrag";
+import { getDisplayName } from "@/lib/getDisplayName";
 import { relayToRouteParam } from "@/lib/platform";
 import {
   applyDrop,
   dissolveFolder,
+  dmRailKey,
   flattenLayout,
   folderAnchor,
   itemAnchor,
   mergeLayout,
   normalizeLayout,
   planDrop,
+  railDmPubkeys,
   renameFolder,
 } from "@/lib/railLayout";
 import { cn } from "@/lib/utils";
@@ -85,19 +92,28 @@ function relayHost(url: string): string {
 }
 
 /**
- * A single entry in the unified community rail. NIP-29 servers and both
- * flavours of Concord community live in one list; each carries a stable `key`
- * used for drag/reorder, folders, and the persisted layout.
+ * A single entry in the unified community rail. NIP-29 servers, both flavours
+ * of Concord community and any DM the user put here live in one list; each
+ * carries a stable `key` used for drag/reorder, folders, and the persisted
+ * layout.
  */
 type RailItem =
   | { kind: "server"; key: string; url: string }
   | { kind: "concord1"; key: string; communityId: string; name: string }
-  | { kind: "concord2"; key: string; communityId: string; name: string };
+  | { kind: "concord2"; key: string; communityId: string; name: string }
+  | { kind: "dm"; key: string; pubkey: string };
 
 /** Stable rail key for a Concord V1 community. */
 const concord1Key = (communityId: string) => `c1:${communityId}`;
 /** Stable rail key for a Concord V2 community. */
 const concord2Key = (communityId: string) => `c2:${communityId}`;
+
+/**
+ * Route for a DM on the rail. The PEER's thread, not the DM list: on mobile
+ * both are the same route in two states, so `/dm` would drop the user on the
+ * conversation list they used this icon to skip.
+ */
+const dmRoute = (pubkey: string) => `/dm/${nip19.npubEncode(pubkey)}`;
 
 /** A rail node resolved against the currently-live items (render model). */
 type RenderNode =
@@ -216,11 +232,37 @@ function Concord2MiniIcon({ communityId, name }: { communityId: string; name: st
   );
 }
 
+function DmMiniIcon({ pubkey }: { pubkey: string }) {
+  const { user } = useCurrentUser();
+  const author = useAuthor(pubkey);
+  const metadata = author.data?.metadata;
+  const noteToSelf = pubkey === user?.pubkey;
+  const name = noteToSelf ? NOTE_TO_SELF_NAME : getDisplayName(metadata, pubkey);
+  const unread = useDmPeerUnread(pubkey);
+  return (
+    <span className="relative flex items-center justify-center overflow-hidden rounded-full bg-primary/20 text-primary">
+      {noteToSelf ? (
+        <NoteToSelfAvatar sizePx={16} className="size-full" />
+      ) : metadata?.picture ? (
+        <img src={metadata.picture} alt="" draggable={false} className="size-full object-cover" />
+      ) : (
+        <span className="text-[9px] font-semibold leading-none">
+          {name.trim().charAt(0).toUpperCase() || "?"}
+        </span>
+      )}
+      {/* A DM has no channels to be mentioned in — the message IS the mention,
+          so it lights the same dot any unread does. */}
+      <MiniUnreadDot mention={false} unread={unread} />
+    </span>
+  );
+}
+
 function RailMiniIcon({ item }: { item: RailItem }) {
   if (item.kind === "server") return <ServerMiniIcon url={item.url} />;
   if (item.kind === "concord1") {
     return <Concord1MiniIcon communityId={item.communityId} name={item.name} />;
   }
+  if (item.kind === "dm") return <DmMiniIcon pubkey={item.pubkey} />;
   return <Concord2MiniIcon communityId={item.communityId} name={item.name} />;
 }
 
@@ -283,6 +325,18 @@ function Concord1UnreadProbe({
   return null;
 }
 
+function DmUnreadProbe({
+  pubkey,
+  onChange,
+}: {
+  pubkey: string;
+  onChange: (unread: boolean, mention: boolean) => void;
+}) {
+  const unread = useDmPeerUnread(pubkey);
+  useEffect(() => onChange(unread, false), [unread, onChange]);
+  return null;
+}
+
 function RailItemUnreadProbe({
   item,
   onChange,
@@ -294,6 +348,7 @@ function RailItemUnreadProbe({
   if (item.kind === "concord2") {
     return <Concord2UnreadProbe communityId={item.communityId} onChange={onChange} />;
   }
+  if (item.kind === "dm") return <DmUnreadProbe pubkey={item.pubkey} onChange={onChange} />;
   return <Concord1UnreadProbe communityId={item.communityId} onChange={onChange} />;
 }
 
@@ -369,6 +424,28 @@ function Concord2DragGhost({ communityId, name }: { communityId: string; name: s
   );
 }
 
+function DmDragGhost({ pubkey }: { pubkey: string }) {
+  const { user } = useCurrentUser();
+  const author = useAuthor(pubkey);
+  const metadata = author.data?.metadata;
+  const noteToSelf = pubkey === user?.pubkey;
+  const name = noteToSelf ? NOTE_TO_SELF_NAME : getDisplayName(metadata, pubkey);
+  return (
+    <span className="block size-12 rotate-[-6deg] scale-110 [filter:drop-shadow(0_8px_16px_rgba(0,0,0,0.55))_drop-shadow(0_0_8px_hsl(var(--primary)/0.6))]">
+      {noteToSelf ? (
+        <NoteToSelfAvatar sizePx={48} className="size-12 ring-2 ring-primary" />
+      ) : (
+        <Avatar className="size-12 ring-2 ring-primary">
+          <AvatarImage src={metadata?.picture} alt={name} />
+          <AvatarFallback className="bg-primary/20 font-semibold text-primary">
+            {name.trim().charAt(0).toUpperCase() || "?"}
+          </AvatarFallback>
+        </Avatar>
+      )}
+    </span>
+  );
+}
+
 /** Fixed pointer-following layer carrying the dragged item or folder. */
 function DragGhost({
   item,
@@ -394,6 +471,8 @@ function DragGhost({
         <ServerDragGhost url={item.url} />
       ) : item?.kind === "concord1" ? (
         <Concord1DragGhost communityId={item.communityId} name={item.name} />
+      ) : item?.kind === "dm" ? (
+        <DmDragGhost pubkey={item.pubkey} />
       ) : item ? (
         <Concord2DragGhost communityId={item.communityId} name={item.name} />
       ) : null}
@@ -958,6 +1037,145 @@ const Concord2Button = memo(function Concord2Button({
 });
 
 /**
+ * A rail button for a direct-message conversation the user pinned here from
+ * the DM list. Round rather than the communities' cut-corner crest, because
+ * it's a person; otherwise it is an ordinary rail item — it drags, folders and
+ * reorders like the rest, and clicking it opens the THREAD (see `dmRoute`).
+ */
+const DmButton = memo(function DmButton({
+  pubkey,
+  onNavigate,
+  inCall,
+  draggable,
+  dragging,
+  reordering,
+  highlight,
+  dragParent,
+  onDragPointerDown,
+  shouldSuppressClick,
+}: {
+  pubkey: string;
+  onNavigate?: () => void;
+  /** Whether the active voice call is this DM. */
+  inCall?: boolean;
+} & RailDragProps) {
+  const triggerRef = useRef<HTMLAnchorElement | null>(null);
+  useDragPointerDown(triggerRef, draggable, onDragPointerDown);
+
+  const { user } = useCurrentUser();
+  const author = useAuthor(pubkey);
+  const metadata = author.data?.metadata;
+  // The conversation with yourself is Note to Self, here as in the DM list:
+  // the viewer's own face on the rail would read as a message from them.
+  const noteToSelf = pubkey === user?.pubkey;
+  const name = noteToSelf ? NOTE_TO_SELF_NAME : getDisplayName(metadata, pubkey);
+  const unread = useDmPeerUnread(pubkey);
+  const { dmLevel, setLevel: setNotifLevel } = useNotifLevels();
+  const { removeFromRail } = useRailDms();
+
+  // Idle-dim + brighten-on-hover, matched to the community buttons so a person
+  // and a community sit in one rail rather than two visual systems.
+  const dimClass = (isActive: boolean) =>
+    cn(
+      "transition-all duration-150 opacity-60 saturate-50",
+      "group-hover:opacity-100 group-hover:saturate-100",
+      (isActive || highlight) && "opacity-100 saturate-100",
+      isActive && "is-active",
+    );
+
+  return (
+    <ContextMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <ContextMenuTrigger asChild>
+            <NavLink
+              ref={triggerRef}
+              to={dmRoute(pubkey)}
+              aria-label={name}
+              onClick={(e) => {
+                if (shouldSuppressClick?.()) {
+                  e.preventDefault();
+                  return;
+                }
+                onNavigate?.();
+              }}
+              className={cn(
+                "group relative flex items-center justify-center shrink-0 touch-none",
+                dragging && "cursor-grabbing",
+                reordering && "touch-none",
+              )}
+              {...(draggable ? dragAttrs(itemAnchor(dmRailKey(pubkey)), dragParent) : {})}
+            >
+              {({ isActive }) => (
+                <DragSlot dragging={dragging}>
+                  <>
+                    {/* The same neon blade every rail entry gets. */}
+                    <span
+                      className={cn(
+                        "absolute -left-2 w-[3px] bg-primary transition-all",
+                        isActive
+                          ? "h-12 opacity-100"
+                          : "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
+                      )}
+                    />
+                    <span
+                      className={cn(
+                        "relative block size-12",
+                        highlight && "rounded-xl ring-2 ring-primary scale-110 transition-all duration-150",
+                      )}
+                    >
+                      {noteToSelf ? (
+                        <NoteToSelfAvatar sizePx={48} className={cn("size-12", dimClass(isActive))} />
+                      ) : (
+                        <Avatar className={cn("size-12", dimClass(isActive))}>
+                          <AvatarImage src={metadata?.picture} alt={name} />
+                          <AvatarFallback className="bg-primary/20 font-semibold text-primary">
+                            {name.trim().charAt(0).toUpperCase() || "?"}
+                          </AvatarFallback>
+                        </Avatar>
+                      )}
+                      {/* Voice indicator: a headphones badge when this DM's call is live. */}
+                      {inCall && (
+                        <span className="absolute -bottom-1 -right-1 z-10 flex size-4 items-center justify-center rounded-full bg-success text-success-foreground ring-2 ring-background">
+                          <Headphones className="size-2.5" />
+                        </span>
+                      )}
+                      {/* Unread indicator (hidden while active — you're reading it). */}
+                      {!isActive && unread ? (
+                        <span
+                          className="absolute -top-0.5 -right-0.5 z-10 size-3 rounded-full bg-foreground ring-2 ring-background"
+                          aria-label="Unread messages"
+                        />
+                      ) : null}
+                    </span>
+                  </>
+                </DragSlot>
+              )}
+            </NavLink>
+          </ContextMenuTrigger>
+        </TooltipTrigger>
+        <RailTooltipContent side="right" className="font-medium">
+          {name}
+        </RailTooltipContent>
+      </Tooltip>
+      <ContextMenuContent>
+        <NotifLevelMenu
+          label="Message notifications"
+          level={dmLevel(pubkey)}
+          onChange={(lvl) => setNotifLevel(dmScopeKey(pubkey), lvl)}
+        />
+        {/* Takes the icon off the rail and nothing else: the conversation, its
+            history and its place in the DM list are untouched. */}
+        <ContextMenuItem className="gap-2" onSelect={() => removeFromRail(pubkey)}>
+          <PanelLeftDashed className="size-4" />
+          Remove from rail
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+});
+
+/**
  * A Discord-style server folder in the rail. Collapsed it shows a 2×2 grid of
  * its members' icons; clicking expands it in place, listing the members
  * inside a tinted container. Right-click to rename or remove (dissolve) it.
@@ -1176,13 +1394,25 @@ export function ServerRail({
   // Order/grouping is applied by the layout below.
   const servers = useNip29Servers();
 
-  // Every live rail item (NIP-29 servers and Concord V1/V2 communities) in
-  // discovery order. The persisted layout arranges these into the visible
-  // ordered list + folders.
+  // DMs the user put on the rail. Unlike every other kind these have no source
+  // list to be live against — the arrangement IS the record — so they're read
+  // back out of it, which also means they can never be "not live yet" and get
+  // skipped at render the way a still-loading community can.
+  const railDms = useMemo(
+    () => railDmPubkeys(config.railLayout, config.railOrder),
+    [config.railLayout, config.railOrder],
+  );
+
+  // Every live rail item (NIP-29 servers, Concord V1/V2 communities and pinned
+  // DMs) in discovery order. The persisted layout arranges these into the
+  // visible ordered list + folders.
   const items = useMemo<RailItem[]>(() => {
     const base: RailItem[] = [];
     base.push(...servers.map((url) => ({ kind: "server" as const, key: url, url })));
     if (user) {
+      base.push(
+        ...railDms.map((pubkey) => ({ kind: "dm" as const, key: dmRailKey(pubkey), pubkey })),
+      );
       for (const entry of concord?.list.entries ?? []) {
         base.push({
           kind: "concord1",
@@ -1201,7 +1431,7 @@ export function ServerRail({
       }
     }
     return base;
-  }, [servers, concord, concord2, user]);
+  }, [servers, concord, concord2, railDms, user]);
 
   const liveByKey = useMemo(() => new Map(items.map((it) => [it.key, it])), [items]);
 
@@ -1256,7 +1486,9 @@ export function ServerRail({
           ? `/s/${relayToRouteParam(item.url)}`
           : item.kind === "concord1"
             ? `/c1/${encodeURIComponent(item.communityId)}`
-            : `/c/${encodeURIComponent(item.communityId)}`;
+            : item.kind === "dm"
+              ? dmRoute(item.pubkey)
+              : `/c/${encodeURIComponent(item.communityId)}`;
       return location.pathname === base || location.pathname.startsWith(`${base}/`);
     },
     [location.pathname, onServerSelect, selectedServer],
@@ -1279,7 +1511,11 @@ export function ServerRail({
 
       // Also sync the relative order of user-added relays to the kind 10009
       // list (the cross-device source of truth for the added-server set).
-      const addedOrder = keys.filter((k) => !k.startsWith("c1:") && !k.startsWith("c2:"));
+      // Only relay URLs qualify — every other kind's key would arrive there as
+      // a relay the user never added.
+      const addedOrder = keys.filter(
+        (k) => !k.startsWith("c1:") && !k.startsWith("c2:") && !k.startsWith("dm:"),
+      );
       if (user && addedOrder.length > 0) {
         updateList({ type: "reorder-servers", urls: addedOrder }).catch((err) =>
           console.warn("Failed to persist server order:", err),
@@ -1432,6 +1668,17 @@ export function ServerRail({
           communityId={item.communityId}
           name={item.name}
           onNavigate={onNavigate}
+          {...common}
+        />
+      );
+    }
+    if (item.kind === "dm") {
+      return (
+        <DmButton
+          key={item.key}
+          pubkey={item.pubkey}
+          onNavigate={onNavigate}
+          inCall={activeCall?.dmPeer === item.pubkey}
           {...common}
         />
       );

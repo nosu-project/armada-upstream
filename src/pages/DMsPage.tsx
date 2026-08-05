@@ -1,4 +1,4 @@
-import { AtSign, Bell, BellOff, CheckCheck, ChevronLeft, ChevronRight, Headphones, Inbox, Loader2, Lock, MessageSquare, MoreVertical, PenSquare, Phone, Pin, PinOff, Plus, Search, ShieldCheck, Sparkles, Timer, UserCheck, Users, UserX, X } from "lucide-react";
+import { AtSign, Bell, BellOff, CheckCheck, ChevronLeft, ChevronRight, Headphones, Inbox, Loader2, Lock, MessageSquare, MoreVertical, PanelLeft, PanelLeftDashed, PenSquare, Phone, Pin, PinOff, Plus, Search, ShieldCheck, Sparkles, Timer, UserCheck, Users, UserX, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type UIEvent } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
@@ -76,6 +76,7 @@ import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
 import { useNotifLevels, dmScopeKey, type NotifLevel } from "@/hooks/useNotifLevels";
 import { usePinnedDms } from "@/hooks/usePinnedDms";
+import { useRailDms } from "@/hooks/useRailDms";
 import { useAcceptedDms } from "@/hooks/useAcceptedDms";
 import { useClosedDms } from "@/hooks/useClosedDms";
 import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
@@ -154,10 +155,12 @@ function ConversationRow({
   messageMatch,
   active,
   pinned,
+  onRail,
   request,
   sharedCommunity,
   onClick,
   onTogglePin,
+  onToggleRail,
   onClose,
   onBlock,
 }: {
@@ -172,6 +175,8 @@ function ConversationRow({
   messageMatch: string | undefined;
   active: boolean;
   pinned: boolean;
+  /** This conversation has an icon on the community rail. */
+  onRail: boolean;
   /**
    * This row is in the request tier. It renders without the peer's profile
    * picture (loading it would hand an unknown sender our IP on sight) and
@@ -182,6 +187,7 @@ function ConversationRow({
   sharedCommunity?: string;
   onClick: () => void;
   onTogglePin: () => void;
+  onToggleRail: () => void;
   onClose?: () => void;
   onBlock?: () => void;
 }) {
@@ -318,6 +324,21 @@ function ConversationRow({
               ) : (
                 <>
                   <Pin className="mr-2 size-4" /> Pin
+                </>
+              )}
+            </ContextMenuItem>
+            {/* Puts an icon for this person on the community rail, where it
+                behaves like any community: drag it, fold it, reorder it.
+                Clicking it opens this thread — not the DM list — so the
+                shortcut lands where it points on mobile too. */}
+            <ContextMenuItem onSelect={onToggleRail}>
+              {onRail ? (
+                <>
+                  <PanelLeftDashed className="mr-2 size-4" /> Remove from rail
+                </>
+              ) : (
+                <>
+                  <PanelLeft className="mr-2 size-4" /> Add to rail
                 </>
               )}
             </ContextMenuItem>
@@ -1908,6 +1929,7 @@ function ConversationList({
   // Both sections stay in `rows` order — newest message first — so a pinned
   // conversation that just received a message rises to the top of its section.
   const { pinned: pinnedPeers, isPinned, togglePin } = usePinnedDms();
+  const { isOnRail, toggleRail } = useRailDms();
   const [pinnedRows, otherRows] = useMemo(() => {
     const pinnedSet = new Set(pinnedPeers);
     return [
@@ -1941,6 +1963,7 @@ function ConversationList({
       }
       active={c.peer === activePeer}
       pinned={isPinned(c.peer)}
+      onRail={isOnRail(c.peer)}
       request={request}
       sharedCommunity={request ? sharedCommunities.get(c.peer) : undefined}
       inCall={Boolean(activeCall?.dmPeer) && activeCall?.dmPeer === c.peer}
@@ -1948,6 +1971,7 @@ function ConversationList({
       voiceRelay={voiceRelay ?? undefined}
       onClick={() => openPeer(c.peer)}
       onTogglePin={() => togglePin(c.peer)}
+      onToggleRail={() => toggleRail(c.peer)}
       // Note to Self is always in the list (see withNoteToSelf), so there is
       // nothing a close could achieve — the row is re-added on the next render.
       onClose={c.peer === user?.pubkey ? undefined : () => closePeer(c.peer, c.latest)}
