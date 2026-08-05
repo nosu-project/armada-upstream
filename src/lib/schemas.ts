@@ -87,6 +87,7 @@ export const AppConfigSchema = z.object({
   memberListVisible: z.boolean().optional().catch(undefined),
   appRelays: z.array(z.string()).catch(defaultConfig.appRelays),
   searchRelays: z.array(z.string()).catch(defaultConfig.searchRelays),
+  preferredVoiceServer: z.string().catch(defaultConfig.preferredVoiceServer),
   useAppRelays: z.boolean().catch(defaultConfig.useAppRelays),
   useUserRelays: z.boolean().catch(defaultConfig.useUserRelays),
   relayMetadata: RelayMetadataSchema.catch(defaultConfig.relayMetadata),
@@ -129,6 +130,8 @@ export const EncryptedSettingsSchema = z.looseObject({
   appRelays: z.array(z.string()).optional(),
   /** NIP-50 search relays. */
   searchRelays: z.array(z.string()).optional(),
+  /** Portable Concord/DM voice host preference. */
+  preferredVoiceServer: z.string().optional(),
   /** Whether the app relays are used in the general pool (foot-gun when off). */
   useAppRelays: z.boolean().optional(),
   /** Whether the user's own NIP-65 relays are folded into the general pool. */

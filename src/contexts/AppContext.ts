@@ -1,6 +1,7 @@
 import { createContext } from "react";
 
 import { APP_RELAYS, DM_RELAYS, normalizeRelayUrl, SEARCH_RELAYS } from "@/lib/platform";
+import { getPreferredVoiceServer } from "@/lib/voiceDevices";
 
 import type { BlossomServerMetadata } from "@/lib/blossom";
 import type { RailLayoutNode } from "@/lib/railLayout";
@@ -18,7 +19,7 @@ export interface ClosedDmMarker {
  * The user's NIP-65 (kind 10002) relay list plus its sync timestamp, mirroring
  * `BlossomServerMetadata`. Each relay carries the `read`/`write` markers from
  * its `r` tag (a bare `r` tag is both). Synced FROM the user's kind-10002 event
- * by NostrSync (read-only — this client never publishes kind 10002); merged
+ * by NostrSync; user-approved edits publish a replacement kind 10002. Merged
  * into the general relay pool only when `useUserRelays` is on. Ported from
  * Ditto's `RelayMetadata` / `getEffectiveRelays`.
  */
@@ -121,6 +122,12 @@ export interface AppConfig {
    */
   searchRelays: string[];
   /**
+   * Portable preference for the host used to start empty Concord/DM voice
+   * calls. Unlike mic/speaker device ids and audio processing, this is an
+   * account choice and follows the user through encrypted NIP-78 settings.
+   */
+  preferredVoiceServer: string;
+  /**
    * Whether the app relays (`appRelays`) are used in the general relay pool.
    * On by default. Turning it off is a deliberate foot-gun: with no app
    * relays, no joined servers, and no NIP-65 relays enabled, the pool is empty
@@ -138,11 +145,10 @@ export interface AppConfig {
    */
   useUserRelays: boolean;
   /**
-   * The user's NIP-65 relay list, synced FROM their kind-10002 event by
-   * NostrSync. Read-only mirror — this client never publishes kind 10002, so
-   * enabling `useUserRelays` only ever ADDS the relays the user already
-   * declared elsewhere. Empty until synced; an empty/failed read never clears
-   * it (same non-destructive rule as `blossomServerMetadata`).
+   * The user's NIP-65 relay list, synced from their kind-10002 event by
+   * NostrSync and changed only through Armada's explicit relay-list editor.
+   * Empty until synced; an empty/failed read never clears it (same
+   * non-destructive rule as `blossomServerMetadata`).
    */
   relayMetadata: RelayMetadata;
   /**
@@ -377,14 +383,11 @@ export const SYNCED_CONFIG_KEYS = [
   "railOrder",
   "railLayout",
   "appRelays",
-  "searchRelays",
+  "preferredVoiceServer",
   "useAppRelays",
   "useUserRelays",
-  "relayMetadata",
   "useAppDmRelays",
   "useOwnDmRelays",
-  "dmRelays",
-  "blossomServerMetadata",
   "useAppBlossomServers",
   "mutedCommunities",
   "mutedChannels",
@@ -412,6 +415,7 @@ export const defaultConfig: AppConfig = {
   collapsedChannelCategories: {},
   appRelays: [...APP_RELAYS],
   searchRelays: [...SEARCH_RELAYS],
+  preferredVoiceServer: getPreferredVoiceServer(),
   useAppRelays: true,
   useUserRelays: false,
   relayMetadata: { relays: [], updatedAt: 0 },

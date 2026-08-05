@@ -48,6 +48,9 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useInstallPrompt } from "@/hooks/useInstallPrompt";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
+import { usePublishPortableSetup } from "@/hooks/usePublishPortableSetup";
+import { useSearchRelayList } from "@/hooks/useSearchRelayList";
+import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { CONCORD_ENABLED } from "@/concord-v1/lib/concord";
 import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
@@ -118,6 +121,8 @@ export function SettingsPage() {
   const servers = useNip29Servers();
   const dmRelayList = useDmRelayList();
   const blossomServerList = useBlossomServerList();
+  const searchRelayList = useSearchRelayList();
+  const portableSetup = usePublishPortableSetup();
 
   // Voice mic-processing prefs are device-local (stored in localStorage, not
   // synced AppConfig — a setting right for a laptop mic is wrong on a phone).
@@ -138,14 +143,20 @@ export function SettingsPage() {
   };
 
   /**
-   * Update a relay field locally. The added-server list is handled separately
-   * by `setAddedRelays` (which writes the NIP-29 kind 10009 list), and the DM
-   * relays by `setDmRelays` (also republishes the NIP-17 kind 10050 list).
-   * The change is pushed to the encrypted NIP-78 settings centrally by
-   * NostrSync, which watches every synced AppConfig field.
+   * App relays are an Armada preference and travel in encrypted NIP-78. Search
+   * relays have their own interoperable NIP-51 kind 10007 list, so their editor
+   * explicitly publishes that canonical record too.
    */
-  const setRelays = (key: "appRelays" | "searchRelays") => (relays: string[]) => {
-    updateConfig((current) => ({ ...current, [key]: relays }));
+  const setAppRelays = (relays: string[]) => {
+    updateConfig((current) => ({ ...current, appRelays: relays }));
+  };
+
+  const setSearchRelays = (relays: string[]) => {
+    updateConfig((current) => ({ ...current, searchRelays: relays }));
+    if (user) {
+      searchRelayList.publish(relays).catch((err) =>
+        console.warn("Search relay list (kind 10007) publish failed:", err));
+    }
   };
 
   /**
@@ -409,8 +420,8 @@ export function SettingsPage() {
             <SettingsRow>
               <RelayListEditor
                 relays={config.appRelays}
-                onChange={setRelays("appRelays")}
-                onReset={() => setRelays("appRelays")([...APP_RELAYS])}
+                onChange={setAppRelays}
+                onReset={() => setAppRelays([...APP_RELAYS])}
                 emptyText="No app relays yet. Your account data lives on your joined servers only."
               />
             </SettingsRow>
@@ -420,24 +431,47 @@ export function SettingsPage() {
             >
               <Switch checked={config.useUserRelays} onCheckedChange={setUseUserRelays} />
             </SettingsRow>
-            {config.useUserRelays && (
-              <SettingsRow>
-                <div className="space-y-2">
-                  <div className="text-sm font-medium leading-tight">Your relays</div>
-                  <RelayListEditor
-                    readOnly
-                    relays={userRelayUrls}
-                    emptyText="No NIP-65 relay list found yet — publish one from another client and it'll appear here."
-                  />
-                </div>
-              </SettingsRow>
-            )}
-            {user && userRelayUrls.length === 0 && (
+            {user && (
               <SettingsRow
-                label="Find or publish my relay list"
-                description="Look for your signed NIP-65 list using one bootstrap relay. If none exists, Armada can publish that relay only after you approve the signature."
+                label={userRelayUrls.length > 0 ? "Edit my signed relay list" : "Find or publish my relay list"}
+                description={userRelayUrls.length > 0
+                  ? "Changes replace your NIP-65 list only after you press Save and approve the signature."
+                  : "Look for your signed NIP-65 list using one bootstrap relay. If none exists, Armada can publish that relay only after you approve the signature."}
               >
                 <RelayBootstrapForm />
+              </SettingsRow>
+            )}
+            {user && userRelayUrls.length > 0 && (
+              <SettingsRow
+                label="Publish my current setup"
+                description="Copies your signed server, search, DM, media, and private Armada settings to every NIP-65 write relay so a fresh device can restore them. Nothing is published until you press the button."
+              >
+                <Button
+                  type="button"
+                  className="h-11 clip-corner-lg touch:h-12"
+                  disabled={portableSetup.isPending}
+                  onClick={() => {
+                    portableSetup.publish().then((result) => {
+                      toast({
+                        title: result.rejectedDeliveries > 0
+                          ? "Setup partially published"
+                          : "Setup published",
+                        description: result.rejectedDeliveries > 0
+                          ? `${result.records} signed records were sent to ${result.destinations} account relays, but ${result.rejectedDeliveries} deliveries were rejected.`
+                          : `${result.records} signed records are available on ${result.destinations} account relays.`,
+                        variant: result.rejectedDeliveries > 0 ? "destructive" : undefined,
+                      });
+                    }).catch((err) => {
+                      toast({
+                        title: "Setup was not fully published",
+                        description: err instanceof Error ? err.message : "Please try again.",
+                        variant: "destructive",
+                      });
+                    });
+                  }}
+                >
+                  {portableSetup.isPending ? "Publishing…" : "Publish current setup"}
+                </Button>
               </SettingsRow>
             )}
           </>
@@ -455,8 +489,8 @@ export function SettingsPage() {
             <SettingsRow>
               <RelayListEditor
                 relays={config.searchRelays}
-                onChange={setRelays("searchRelays")}
-                onReset={() => setRelays("searchRelays")([...SEARCH_RELAYS])}
+                onChange={setSearchRelays}
+                onReset={() => setSearchRelays([...SEARCH_RELAYS])}
                 emptyText="No search relays — search falls back to your app relays."
               />
             </SettingsRow>

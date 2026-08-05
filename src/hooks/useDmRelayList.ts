@@ -4,8 +4,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { accountDataRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { normalizeRelayUrl } from "@/lib/platform";
 import { queryExplicitRelays } from "@/lib/nip65";
+
+import type { NostrEvent } from "@nostrify/nostrify";
 
 /**
  * NIP-17 DM relay list kind. A user publishes the relays where they want to
@@ -30,6 +33,11 @@ export function parseDmRelays(event: { tags: string[][] } | undefined): string[]
   return urls;
 }
 
+export interface DmRelayListQuery {
+  event: NostrEvent | null;
+  relays: string[];
+}
+
 /**
  * Read and write the user's NIP-17 DM relay list (kind 10050).
  *
@@ -42,11 +50,12 @@ export function useDmRelayList() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { config } = useAppContext();
+  const { mutateAsync: publishEvent } = useNostrPublish();
   const queryClient = useQueryClient();
 
   const queryKey = ["dm-relay-list", user?.pubkey];
 
-  const query = useQuery<string[]>({
+  const query = useQuery<DmRelayListQuery>({
     queryKey,
     enabled: !!user?.pubkey,
     queryFn: async ({ signal }) => {
@@ -56,8 +65,10 @@ export function useDmRelayList() {
         [{ kinds: [KIND_DM_RELAYS], authors: [user!.pubkey], limit: 1 }],
         AbortSignal.any([signal, AbortSignal.timeout(6000)]),
       );
-      const event = events.sort((a, b) => b.created_at - a.created_at)[0];
-      return parseDmRelays(event);
+      const event = events.sort(
+        (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
+      )[0] ?? null;
+      return { event, relays: parseDmRelays(event ?? undefined) };
     },
     staleTime: 60_000,
   });
@@ -68,27 +79,48 @@ export function useDmRelayList() {
       const urls = relays
         .map((r) => normalizeRelayUrl(r))
         .filter((r): r is string => !!r);
-      const tags = urls.map((url) => ["relay", url]);
+      const events = await queryExplicitRelays(
+        nostr,
+        accountDataRelays(config, user.pubkey),
+        [{ kinds: [KIND_DM_RELAYS], authors: [user.pubkey], limit: 1 }],
+        AbortSignal.timeout(8_000),
+      );
+      const prev = events.sort(
+        (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
+      )[0] ?? null;
+      const cached = queryClient.getQueryData<DmRelayListQuery>(queryKey);
+      if (!prev && cached?.event) {
+        throw new Error("Could not refresh your existing DM relay list; no changes were published");
+      }
+      const tags = [
+        ...(prev?.tags.filter(([name]) => name !== "relay" && name !== "client") ?? []),
+        ...urls.map((url) => ["relay", url]),
+      ];
+      const createdAt = prev
+        ? Math.max(Math.floor(Date.now() / 1000), prev.created_at + 1)
+        : Math.floor(Date.now() / 1000);
 
-      const event = await user.signer.signEvent({
+      await publishEvent({
         kind: KIND_DM_RELAYS,
-        content: "",
+        content: prev?.content ?? "",
         tags,
-        created_at: Math.floor(Date.now() / 1000),
+        created_at: createdAt,
+        prev: prev ?? undefined,
+        onSigned: (event) => {
+          queryClient.setQueryData<DmRelayListQuery>(queryKey, { event, relays: urls });
+        },
       });
-
-      queryClient.setQueryData<string[]>(queryKey, urls);
-      await nostr.event(event, { signal: AbortSignal.timeout(8000) });
       return urls;
     },
   });
 
   return {
     /** The user's published DM relays (empty if they have none). */
-    relays: query.data ?? [],
+    relays: query.data?.relays ?? [],
+    event: query.data?.event ?? null,
     isLoading: query.isLoading,
     /** Whether a 10050 list with at least one relay exists. */
-    hasList: (query.data?.length ?? 0) > 0,
+    hasList: (query.data?.relays.length ?? 0) > 0,
     refetch: query.refetch,
     /** Publish a new kind-10050 DM relay list. */
     publish: publish.mutateAsync,

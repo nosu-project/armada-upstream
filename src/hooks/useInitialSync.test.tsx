@@ -12,6 +12,9 @@ const h = vi.hoisted(() => ({
     useAppRelays: true,
     useUserRelays: false,
     relayMetadata: { relays: [] as Array<{ url: string; read: boolean; write: boolean }>, updatedAt: 0 },
+    searchRelays: [] as string[],
+    dmRelays: [] as string[],
+    blossomServerMetadata: { servers: [] as string[], updatedAt: 0 },
   },
   updateConfig: vi.fn(),
   discoverRelayList: vi.fn(),
@@ -49,7 +52,8 @@ vi.mock("@/hooks/useAppContext", () => ({
 
 vi.mock("@/hooks/useDmRelayList", () => ({
   KIND_DM_RELAYS: 10050,
-  parseDmRelays: () => [],
+  parseDmRelays: (event: { tags: string[][] } | undefined) =>
+    event?.tags.filter(([name]) => name === "relay").map(([, url]) => url) ?? [],
 }));
 
 vi.mock("@/lib/nip65", () => ({
@@ -71,6 +75,9 @@ describe("useInitialSync", () => {
       useAppRelays: true,
       useUserRelays: false,
       relayMetadata: { relays: [], updatedAt: 0 },
+      searchRelays: [],
+      dmRelays: [],
+      blossomServerMetadata: { servers: [], updatedAt: 0 },
     };
     h.updateConfig = vi.fn((updater: (current: typeof h.config) => typeof h.config) => {
       h.config = updater(h.config);
@@ -111,5 +118,35 @@ describe("useInitialSync", () => {
       id: "ready",
       status: "READY",
     });
+  });
+
+  it("hydrates search, DM, and media fields from their canonical lists", async () => {
+    const base = {
+      pubkey: PUBKEY,
+      content: "",
+      sig: "s",
+      created_at: 20,
+    };
+    h.queryExplicitRelays.mockReset()
+      .mockResolvedValueOnce([
+        { ...base, id: "search", kind: 10007, tags: [["relay", "wss://search.example"]] },
+        { ...base, id: "dm", kind: 10050, tags: [["relay", "wss://dm.example"]] },
+        { ...base, id: "media", kind: 10063, tags: [["server", "https://media.example/"]] },
+      ])
+      .mockResolvedValue([]);
+
+    const view = renderHook(() => useInitialSync(PUBKEY));
+    await waitFor(() => expect(view.result.current.done).toBe(true));
+
+    expect(h.config.searchRelays).toEqual(["wss://search.example"]);
+    expect(h.config.dmRelays).toEqual(["wss://dm.example"]);
+    expect(h.config.blossomServerMetadata).toEqual({
+      servers: ["https://media.example/"],
+      updatedAt: 20,
+    });
+    expect(h.queryClient.setQueryData).toHaveBeenCalledWith(
+      ["dm-relay-list", PUBKEY],
+      expect.objectContaining({ relays: ["wss://dm.example"] }),
+    );
   });
 });

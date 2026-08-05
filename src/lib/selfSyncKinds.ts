@@ -36,6 +36,8 @@ export const KIND_FOLLOW_LIST = 3;
 export const KIND_MUTE_LIST = 10000;
 /** NIP-51 "simple groups" list — Armada's NIP-29 server/channel list (10009). */
 export const KIND_USER_GROUPS = 10009;
+/** NIP-51 search-relay list (10007). */
+export const KIND_SEARCH_RELAYS = 10007;
 /** NIP-17 DM relay list (10050). */
 export const KIND_DM_RELAYS = 10050;
 /** BUD-03 Blossom media server list (10063). */
@@ -64,6 +66,7 @@ export const T_ARMADA_GIF_FAVORITES = "armada-gif-favorites";
 export const SELF_SYNC_REPLACEABLE_KINDS: number[] = [
   KIND_FOLLOW_LIST,
   KIND_MUTE_LIST,
+  KIND_SEARCH_RELAYS,
   KIND_USER_GROUPS,
   KIND_DM_RELAYS,
   KIND_BLOSSOM_SERVERS,
@@ -94,6 +97,8 @@ export function queryKeysForSelfEvent(
       return [["follow-list"]];
     case KIND_MUTE_LIST:
       return [["mute-list"]];
+    case KIND_SEARCH_RELAYS:
+      return [["search-relay-list"]];
     case KIND_USER_GROUPS:
       // The rail's servers (`r` tags) + joined channels. This list IS the
       // source the rail renders, so re-reading it is the whole update.
@@ -101,9 +106,7 @@ export function queryKeysForSelfEvent(
     case KIND_DM_RELAYS:
       return [["dm-relay-list"]];
     case KIND_BLOSSOM_SERVERS:
-      // NostrSync pulls this directly (not via a keyed query); nothing to
-      // invalidate, but caching the event is still worthwhile.
-      return [];
+      return [["blossom-server-list"]];
     case KIND_USER_EMOJIS:
       return [["custom-emojis"]];
     case KIND_COMMUNITY_LIST_V2:

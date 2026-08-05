@@ -6,7 +6,15 @@ import { useEffect, useRef, useState } from "react";
 import { accountDataRelays } from "@/contexts/AppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useAppContext } from "@/hooks/useAppContext";
-import { KIND_DM_RELAYS, parseDmRelays } from "@/hooks/useDmRelayList";
+import {
+  KIND_DM_RELAYS,
+  parseDmRelays,
+  type DmRelayListQuery,
+} from "@/hooks/useDmRelayList";
+import {
+  KIND_BLOSSOM_SERVERS,
+  type BlossomServerListQuery,
+} from "@/hooks/useBlossomServerList";
 import {
   CONCORD_ENABLED,
   CONCORD_LIST_D_TAG,
@@ -27,6 +35,12 @@ import {
   type GroupRef,
 } from "@/lib/nip29";
 import { EncryptedSettingsSchema } from "@/lib/schemas";
+import { parseBlossomServerList } from "@/lib/blossom";
+import {
+  KIND_SEARCH_RELAYS,
+  readSearchRelayList,
+} from "@/lib/searchRelayList";
+import type { SearchRelayListQuery } from "@/hooks/useSearchRelayList";
 import { logSync } from "@/lib/syncLog";
 import {
   discoverRelayList,
@@ -300,6 +314,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       // ── 1. Signed NIP-65 relay map ──────────────────────────────────────
       const rId = begin("relays");
       let accountRelays = accountDataRelays(configRef.current, pubkey);
+      let bootstrapAppRelays: string[] = [];
       try {
         const discovery = await discoverRelayList(
           nostr,
@@ -316,26 +331,42 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
           // A first discovery is the user's own signed declaration, so adopt
           // it automatically. Preserve a deliberate later toggle-off.
           const sameOwner = current.relayMetadata.pubkey === pubkey;
-          if (!sameOwner || discovery.event.created_at > current.relayMetadata.updatedAt) {
+          const metadataIsNewer = !sameOwner
+            || discovery.event.created_at > current.relayMetadata.updatedAt;
+          const discoveredUrls = discovery.relays.map((relay) => relay.url);
+          if (metadataIsNewer || current.appRelays.length === 0) {
             const next = {
               ...current,
+              appRelays: current.appRelays.length === 0
+                ? discoveredUrls
+                : current.appRelays,
               useUserRelays:
-                !sameOwner || current.relayMetadata.updatedAt === 0 ? true : current.useUserRelays,
-              relayMetadata: {
-                relays: discovery.relays,
-                updatedAt: discovery.event.created_at,
-                pubkey,
-              },
+                metadataIsNewer && (!sameOwner || current.relayMetadata.updatedAt === 0)
+                  ? true
+                  : current.useUserRelays,
+              relayMetadata: metadataIsNewer
+                ? {
+                    relays: discovery.relays,
+                    updatedAt: discovery.event.created_at,
+                    pubkey,
+                  }
+                : current.relayMetadata,
             };
             configRef.current = next;
+            bootstrapAppRelays = current.appRelays.length === 0 ? next.appRelays : [];
             updateConfigRef.current((live) => {
               const sameLiveOwner = live.relayMetadata.pubkey === pubkey;
-              if (sameLiveOwner && discovery.event.created_at <= live.relayMetadata.updatedAt) return live;
+              const liveMetadataIsNewer = !sameLiveOwner
+                || discovery.event.created_at > live.relayMetadata.updatedAt;
+              if (!liveMetadataIsNewer && live.appRelays.length > 0) return live;
               return {
                 ...live,
+                appRelays: live.appRelays.length === 0 ? discoveredUrls : live.appRelays,
                 useUserRelays:
-                  !sameLiveOwner || live.relayMetadata.updatedAt === 0 ? true : live.useUserRelays,
-                relayMetadata: next.relayMetadata,
+                  liveMetadataIsNewer && (!sameLiveOwner || live.relayMetadata.updatedAt === 0)
+                    ? true
+                    : live.useUserRelays,
+                relayMetadata: liveMetadataIsNewer ? next.relayMetadata : live.relayMetadata,
               };
             });
           }
@@ -355,23 +386,73 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       }
       if (cancelled) return;
 
-      // Hydrate the separate NIP-17 inbox relay list from the same discovered
-      // account relays. Its normal query may have already cached an empty read
-      // against the app defaults before NIP-65 discovery completed.
+      // Hydrate the standard portable service lists from the same discovered
+      // account relays. Their normal queries may have already cached an empty
+      // read against app defaults before NIP-65 discovery completed.
+      let canonicalSearch: SearchRelayListQuery | undefined;
+      let canonicalDm: DmRelayListQuery | undefined;
+      let canonicalBlossom: (BlossomServerListQuery & { event: NostrEvent }) | undefined;
       try {
         const events = await queryExplicitRelays(
           nostr,
           accountRelays,
-          [{ kinds: [KIND_DM_RELAYS], authors: [pubkey], limit: 1 }],
+          [{
+            kinds: [KIND_SEARCH_RELAYS, KIND_DM_RELAYS, KIND_BLOSSOM_SERVERS],
+            authors: [pubkey],
+          }],
           stepSignal(),
         );
-        const event = events.sort((a, b) => b.created_at - a.created_at)[0];
-        const relays = parseDmRelays(event);
-        if (relays.length > 0 && !cancelled) {
-          queryClient.setQueryData(["dm-relay-list", pubkey], relays);
+        const newest = (kind: number) => events
+          .filter((event) => event.kind === kind)
+          .sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id))[0];
+
+        const searchEvent = newest(KIND_SEARCH_RELAYS);
+        if (searchEvent) {
+          canonicalSearch = {
+            event: searchEvent,
+            ...(await readSearchRelayList(searchEvent, user.signer)),
+          };
+          if (!canonicalSearch.decryptFailed) {
+            queryClient.setQueryData(["search-relay-list", pubkey], canonicalSearch);
+          }
+        }
+
+        const dmEvent = newest(KIND_DM_RELAYS);
+        if (dmEvent) {
+          canonicalDm = { event: dmEvent, relays: parseDmRelays(dmEvent) };
+          queryClient.setQueryData(["dm-relay-list", pubkey], canonicalDm);
+        }
+
+        const blossomEvent = newest(KIND_BLOSSOM_SERVERS);
+        if (blossomEvent) {
+          canonicalBlossom = {
+            event: blossomEvent,
+            servers: parseBlossomServerList(blossomEvent),
+          };
+          queryClient.setQueryData(["blossom-server-list", pubkey], canonicalBlossom);
+        }
+
+        if (!cancelled && (canonicalSearch || canonicalDm || canonicalBlossom)) {
+          const search = canonicalSearch && !canonicalSearch.decryptFailed
+            ? canonicalSearch.relays
+            : undefined;
+          updateConfigRef.current((current) => ({
+            ...current,
+            ...(search ? { searchRelays: search } : {}),
+            ...(canonicalDm ? { dmRelays: canonicalDm.relays } : {}),
+            ...(canonicalBlossom
+              && canonicalBlossom.event.created_at > current.blossomServerMetadata.updatedAt
+              ? {
+                  blossomServerMetadata: {
+                    servers: canonicalBlossom.servers,
+                    updatedAt: canonicalBlossom.event.created_at,
+                  },
+                }
+              : {}),
+          }));
         }
       } catch {
-        // Best-effort; useDmRelayList retries after the pool adopts NIP-65.
+        // Best-effort; the owning hooks retry after the pool adopts NIP-65.
       }
 
       // ── 2. Encrypted settings ───────────────────────────────────────────
@@ -390,7 +471,25 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
             const decrypted = await user.signer.nip44.decrypt(pubkey, event.content);
             const parsed = EncryptedSettingsSchema.safeParse(JSON.parse(decrypted));
             if (parsed.success && !cancelled) {
-              queryClient.setQueryData(["encrypted-settings", pubkey], parsed.data);
+              const merged = {
+                ...parsed.data,
+                ...(bootstrapAppRelays.length > 0 && parsed.data.appRelays?.length === 0
+                  ? { appRelays: bootstrapAppRelays }
+                  : {}),
+                ...(canonicalSearch && !canonicalSearch.decryptFailed
+                  ? { searchRelays: canonicalSearch.relays }
+                  : {}),
+                ...(canonicalDm ? { dmRelays: canonicalDm.relays } : {}),
+                ...(canonicalBlossom
+                  ? {
+                      blossomServerMetadata: {
+                        servers: canonicalBlossom.servers,
+                        updatedAt: canonicalBlossom.event.created_at,
+                      },
+                    }
+                  : {}),
+              };
+              queryClient.setQueryData(["encrypted-settings", pubkey], merged);
               settingsFound = true;
             }
           }

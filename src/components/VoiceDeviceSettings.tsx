@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/select";
 import { ownAvServers } from "@/concord-v2/hooks/useVoice2";
 import { probeAvBroker } from "@/concord-v2/lib/voice";
+import { useAppContext } from "@/hooks/useAppContext";
 import {
   desktopMicAccessStatus,
   isDesktop,
@@ -47,6 +48,7 @@ function deviceLabel(device: MediaDeviceInfo, index: number, kind: string): stri
  * the in-call gear menu and seed the next call's capture defaults.
  */
 export function VoiceDeviceSettings() {
+  const { config, updateConfig } = useAppContext();
   const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
   const [speakers, setSpeakers] = useState<MediaDeviceInfo[]>([]);
   const [micId, setMicId] = useState<string>(() => getPreferredMicId() ?? "default");
@@ -57,18 +59,27 @@ export function VoiceDeviceSettings() {
   const [osMicBlocked, setOsMicBlocked] = useState(false);
 
   // Voice server (advanced): the server used to start calls in empty Concord
-  // voice channels and to host DM calls. Device-local; empty = build defaults.
-  const [voiceServer, setVoiceServer] = useState<string>(() => getPreferredVoiceServer());
+  // voice channels and to host DM calls. This account-level preference follows
+  // the user through encrypted settings; empty = build defaults.
+  const [voiceServer, setVoiceServer] = useState<string>(
+    () => config.preferredVoiceServer || getPreferredVoiceServer(),
+  );
   const queryClient = useQueryClient();
   const commitVoiceServer = useCallback(() => {
     setPreferredVoiceServer(voiceServer);
-    setVoiceServer(getPreferredVoiceServer());
+    const normalized = getPreferredVoiceServer();
+    setVoiceServer(normalized);
+    updateConfig((current) => ({ ...current, preferredVoiceServer: normalized }));
     // Re-run every consumer of the preference: Concord broker rendezvous, the
     // DM voice-relay pick, and our own status probe below.
     void queryClient.invalidateQueries({ queryKey: ["concord2", "av-broker"] });
     void queryClient.invalidateQueries({ queryKey: ["nip29", "dm-voice-relay"] });
     void queryClient.invalidateQueries({ queryKey: ["voice-server-status"] });
-  }, [voiceServer, queryClient]);
+  }, [voiceServer, queryClient, updateConfig]);
+
+  useEffect(() => {
+    setVoiceServer(config.preferredVoiceServer);
+  }, [config.preferredVoiceServer]);
 
   // Live reachability: probe the effective server list (preference first, then
   // the deployment defaults) exactly the way call setup does, so this row

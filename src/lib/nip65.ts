@@ -162,8 +162,8 @@ export async function discoverRelayList(
   return { event, relays };
 }
 
-/** Fan one already-signed relay-list event to every explicit destination. */
-export async function publishRelayListEvent(
+/** Fan one already-signed event to every explicit destination. */
+export async function publishSignedEventToRelays(
   nostr: RelayPublishClient,
   event: NostrEvent,
   relayUrls: Iterable<string>,
@@ -180,3 +180,6 @@ export async function publishRelayListEvent(
     rejected: targets.filter((_, index) => settled[index]?.status === "rejected"),
   };
 }
+
+/** Fan one already-signed relay-list event to every explicit destination. */
+export const publishRelayListEvent = publishSignedEventToRelays;

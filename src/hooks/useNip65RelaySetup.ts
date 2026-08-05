@@ -55,6 +55,8 @@ export function useNip65RelaySetup() {
       queryClient.invalidateQueries({ queryKey: ["encrypted-settings", user?.pubkey] });
       queryClient.invalidateQueries({ queryKey: ["nip29", "user-groups", user?.pubkey] });
       queryClient.invalidateQueries({ queryKey: ["dm-relay-list"] });
+      queryClient.invalidateQueries({ queryKey: ["search-relay-list"] });
+      queryClient.invalidateQueries({ queryKey: ["blossom-server-list"] });
     }, 0);
   }, [queryClient, updateConfig, user?.pubkey]);
 
