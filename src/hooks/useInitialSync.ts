@@ -25,6 +25,7 @@ import {
 } from "@/lib/nip29";
 import { EncryptedSettingsSchema } from "@/lib/schemas";
 import { logSync } from "@/lib/syncLog";
+import type { SettingsRead } from "@/hooks/useEncryptedSettings";
 
 import { bytesToHex } from "@noble/hashes/utils.js";
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -282,7 +283,16 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
             const decrypted = await user.signer.nip44.decrypt(pubkey, event.content);
             const parsed = EncryptedSettingsSchema.safeParse(JSON.parse(decrypted));
             if (parsed.success && !cancelled) {
-              queryClient.setQueryData(["encrypted-settings", pubkey], parsed.data);
+              // Seeded in the shape useEncryptedSettings stores: this WAS a
+              // relay read, so it counts as a confirmed one and NostrSync may
+              // merge over it. (The settings watermark is deliberately not
+              // written here — see the note further down — so NostrSync still
+              // applies these to config.)
+              queryClient.setQueryData<SettingsRead>(["encrypted-settings", pubkey], {
+                settings: parsed.data,
+                source: "remote",
+                complete: true,
+              });
               settingsFound = true;
             }
           }

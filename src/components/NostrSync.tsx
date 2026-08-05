@@ -21,6 +21,7 @@ import {
   subscribeFrequentReactions,
 } from "@/hooks/useFrequentReactions";
 import { useFavoriteGifsSync } from "@/hooks/useFavoriteGifsSync";
+import { useResumeEpoch } from "@/hooks/useResumeEpoch";
 import { useTheme } from "@/hooks/useTheme";
 import { useReadState } from "@/hooks/useReadState";
 import { parseBlossomServerList } from "@/lib/blossom";
@@ -48,16 +49,16 @@ const PUBLISH_DEBOUNCE_MS = 800;
  */
 const FREQUENT_REACTIONS_DEBOUNCE_MS = 10_000;
 
-/**
- * Look-back applied to the standing self-state REQ's `since` on (re)subscribe:
- * a short window so a replaceable published while we were briefly offline is
- * caught. Replaceables are latest-wins, so no persisted cursor is needed — we
- * just want the newest version, and the store dedupes by id.
- */
-const SELF_SYNC_LOOKBACK_SECONDS = 5 * 60;
-
 /** Coalescing window (ms) for self-state query invalidations. */
 const SELF_SYNC_FLUSH_MS = 60;
+
+/**
+ * How long the app must have been backgrounded before the standing self-state
+ * REQ is torn down and rebuilt on return. An alt-tab missed nothing and isn't
+ * worth a resubscribe; a phone that spent the night asleep — with a socket that
+ * may be half-open, which no reconnect ever fires for — missed everything.
+ */
+const SELF_SYNC_RESUBSCRIBE_AFTER_AWAY_MS = 30_000;
 
 /** First value of a `d` tag on an event, if any. */
 function dTagOf(event: NostrEvent): string | undefined {
@@ -145,15 +146,22 @@ function NostrSyncInner() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { config, updateConfig } = useAppContext();
-  const { settings, updateSettings, hasNip44Support, isSuccess } = useEncryptedSettings();
+  const { settings, settingsSource, updateSettings, hasNip44Support, isSuccess } =
+    useEncryptedSettings();
   const { hydrate: hydrateReadState } = useReadState();
   const { applyCustomTheme } = useTheme();
   const queryClient = useQueryClient();
   useFavoriteGifsSync();
 
+  // Bumped when the app returns from a real backgrounding (not an alt-tab),
+  // rebuilding the standing subscription below.
+  const resumeEpoch = useResumeEpoch(SELF_SYNC_RESUBSCRIBE_AFTER_AWAY_MS);
+
   const dittoCheckedPubkey = useRef<string | undefined>(undefined);
   const blossomAppliedPubkey = useRef<string | undefined>(undefined);
   const relayListAppliedPubkey = useRef<string | undefined>(undefined);
+  // Newest created_at handled per (kind + optional d tag), across resubscribes.
+  const seenSelfVersions = useRef<Map<string, number>>(new Map());
   // The remote sync timestamp we've most recently folded into local config.
   const appliedSyncTs = useRef<number>(-1);
   // Whether the initial incoming pull has settled for the current account.
@@ -186,6 +194,7 @@ function NostrSyncInner() {
     lastSyncedSnapshot.current = undefined;
     blossomAppliedPubkey.current = undefined;
     relayListAppliedPubkey.current = undefined;
+    seenSelfVersions.current = new Map();
   }, [user?.pubkey]);
 
   // ─── A. Standing self-state subscription (transport / freshness) ──────
@@ -194,15 +203,26 @@ function NostrSyncInner() {
   // query key is invalidated so it re-reads. Echoes (a relay re-emitting the
   // same replaceable on reconnect) are suppressed by created_at; invalidations
   // are coalesced so an EOSE catch-up burst is one pass, not one per event.
+  //
+  // The filters carry NO `since`. They used to look back five minutes, which
+  // silently made this a live-only channel: a change published from another
+  // device an hour ago falls outside the window, so subscribing on app open
+  // never delivered it and the rail stayed stale until something else happened
+  // to refetch. The window bought nothing — every kind here is replaceable, so
+  // a relay stores exactly one version and an unbounded filter returns the same
+  // handful of events. Without it, every subscribe (and every NRelay1 reconnect
+  // replay) is a full catch-up.
   useEffect(() => {
     const pubkey = user?.pubkey;
     if (!pubkey) return;
 
     const controller = new AbortController();
-    const since = Math.floor(Date.now() / 1000) - SELF_SYNC_LOOKBACK_SECONDS;
 
-    // Newest created_at seen per (kind + optional d tag), scoped to this sub.
-    const seen = new Map<string, number>();
+    // Newest created_at seen per (kind + optional d tag). Held across
+    // resubscribes (reset only on account change) so rebuilding the sub on
+    // resume re-reads the same replaceables without invalidating all eight
+    // query keys for versions we already handled.
+    const seen = seenSelfVersions.current;
 
     let pendingKeys = new Map<string, readonly string[]>();
     let flushTimer: ReturnType<typeof setTimeout> | undefined;
@@ -236,9 +256,9 @@ function NostrSyncInner() {
     };
 
     const filters: NostrFilter[] = [
-      { authors: [pubkey], kinds: SELF_SYNC_REPLACEABLE_KINDS, since },
-      { authors: [pubkey], kinds: [KIND_APP_SPECIFIC], "#d": SELF_SYNC_DTAGS, since },
-      { authors: [pubkey], kinds: [KIND_APP_SPECIFIC], "#t": [T_ARMADA_GIF_FAVORITES], since },
+      { authors: [pubkey], kinds: SELF_SYNC_REPLACEABLE_KINDS },
+      { authors: [pubkey], kinds: [KIND_APP_SPECIFIC], "#d": SELF_SYNC_DTAGS },
+      { authors: [pubkey], kinds: [KIND_APP_SPECIFIC], "#t": [T_ARMADA_GIF_FAVORITES] },
     ];
 
     void (async () => {
@@ -256,7 +276,15 @@ function NostrSyncInner() {
       controller.abort();
       if (flushTimer !== undefined) clearTimeout(flushTimer);
     };
-  }, [nostr, user?.pubkey, queryClient]);
+    // `resumeEpoch` rebuilds the subscription after a real backgrounding. A
+    // socket that died while the app was away usually reconnects and replays
+    // stored subs on its own, but a HALF-open one — the OS dropped the
+    // connection without telling the WebView — never fires a reconnect, and the
+    // sub stays silently dead. A relay-sent CLOSED kills it just as
+    // permanently: it breaks the `for await` above and is swallowed there.
+    // Rebuilding is the only recovery for either, and with no `since` it costs
+    // a handful of replaceables.
+  }, [nostr, user?.pubkey, queryClient, resumeEpoch]);
 
   // ─── 1. Armada encrypted settings → local config ─────────────────────
   useEffect(() => {
@@ -316,14 +344,23 @@ function NostrSyncInner() {
     //     nothing to sync and no reason to fabricate a config for them.
     //
     // So: no observed remote event → gate stays closed → we never auto-publish.
-    // The gate opens the moment we read a real event (this session, or a prior
-    // one via the persisted local sync marker), after which genuine user edits
-    // publish and merge safely over the known-good remote base.
-    const observedRemote = settings !== null || getLocalSettingsSync(user.pubkey) > 0;
-    if (observedRemote) {
+    // The gate opens the moment we read a real event THIS SESSION, after which
+    // genuine user edits publish and merge safely over the known-good remote
+    // base.
+    //
+    // `settingsSource === "remote"` is the whole test. It used to be
+    // `settings !== null || getLocalSettingsSync(pubkey) > 0`, and both
+    // disjuncts opened the gate on a FAILED read: the query falls back to the
+    // locally mirrored copy, so `settings` is non-null even when no relay
+    // answered, and the persisted marker only says some PAST session read
+    // something. Either way the base we then merged over was this device's
+    // stale copy, republished with a fresh `lastSync` — which is precisely the
+    // "my other device reverted my changes" report. The source discriminator
+    // distinguishes the two, so the gate can require an actual read.
+    if (settingsSource === "remote") {
       pulledForPubkey.current = user.pubkey;
     }
-  }, [user?.pubkey, settings, isSuccess, updateConfig]);
+  }, [user?.pubkey, settings, settingsSource, isSuccess, updateConfig]);
 
   // ─── 2. Local config → encrypted settings (debounced publish) ─────────
   // A DIRECT user config edit (theme, relays, orders, last-open channel, …) is

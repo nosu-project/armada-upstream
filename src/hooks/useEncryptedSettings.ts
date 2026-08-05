@@ -7,6 +7,7 @@ import type { NostrFilter, NostrSigner } from "@nostrify/nostrify";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { APP_NAME } from "@/lib/platform";
+import { newestOf, readToEose } from "@/lib/relayRead";
 import { EncryptedSettingsSchema, type EncryptedSettings } from "@/lib/schemas";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
@@ -15,9 +16,41 @@ const SETTINGS_KIND = 30078;
 /** `d` tag identifying Armada's settings event. */
 const SETTINGS_D = "armada/metadata";
 
+/** How long the relay read may take before we fall back to the local mirror. */
+const SETTINGS_READ_TIMEOUT_MS = 6000;
+/** How long a CONFIRMED read stays fresh. */
+const SETTINGS_STALE_MS = 60_000;
+/**
+ * How often to re-attempt a read that never completed. Bounded and
+ * self-cancelling: it stops the moment one read finishes (`complete`), and
+ * React Query does not run intervals while the app is unfocused, so a
+ * backgrounded client doesn't poll.
+ */
+const SETTINGS_RETRY_MS = 20_000;
+
 /** Filter matching the current user's settings event. */
 function settingsFilter(pubkey: string): NostrFilter {
   return { kinds: [SETTINGS_KIND], authors: [pubkey], "#d": [SETTINGS_D], limit: 1 };
+}
+
+/** Where the settings we're holding actually came from. */
+export type SettingsSource =
+  /** Read from a relay this fetch. The only value that proves a good base. */
+  | "remote"
+  /** No relay event; this is the locally-mirrored copy, possibly stale. */
+  | "local"
+  /** Nothing anywhere, or an event we could not decrypt. */
+  | "none";
+
+export interface SettingsRead {
+  settings: EncryptedSettings | null;
+  source: SettingsSource;
+  /**
+   * True when the read was authoritative — every routed relay answered, or we
+   * got an event. False means we simply failed to ask, and an empty result
+   * must not be treated as "the user has no settings".
+   */
+  complete: boolean;
 }
 
 /** Decrypt + validate a settings event into EncryptedSettings, or null. */
@@ -85,46 +118,60 @@ export function useEncryptedSettings() {
 
   const queryKey = ["encrypted-settings", user?.pubkey];
 
-  const settings = useQuery<EncryptedSettings | null>({
+  const settings = useQuery<SettingsRead>({
     queryKey,
     enabled: !!user?.pubkey && !!user.signer.nip44,
-    queryFn: async ({ signal }) => {
-      if (!user?.signer.nip44) return null;
+    queryFn: async ({ signal }): Promise<SettingsRead> => {
+      if (!user?.signer.nip44) return { settings: null, source: "none", complete: false };
 
-      const events = await nostr.query(
-        [settingsFilter(user.pubkey)],
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(6000)]) },
-      );
+      // `readToEose`, not `nostr.query`: the pool's 300ms eoseTimeout makes
+      // `query` give up as soon as the FIRST relay answers, so on a cold or
+      // just-resumed client the relay holding this event routinely never gets
+      // asked. See lib/relayRead.ts — this is the read that decides whether
+      // another device's config reaches this one.
+      const { events, complete } = await readToEose(nostr, [settingsFilter(user.pubkey)], {
+        signal,
+        timeoutMs: SETTINGS_READ_TIMEOUT_MS,
+      });
+      const event = newestOf(events);
 
-      const event = events.sort((a, b) => b.created_at - a.created_at)[0];
-
-      // No event from the relay (offline, slow, EOSE before it arrived, or a
-      // genuine first load): fall back to the locally cached copy in
-      // NIndexedDB so the last-known config still applies. IMPORTANT: because
-      // `nostr.query` swallows relay errors/timeouts and returns whatever it
-      // collected before EOSE, a `null` result here does NOT prove the user
-      // has no settings — it may just mean we failed to read them. NostrSync
-      // treats this ambiguity conservatively and never opens its outgoing-
-      // publish gate off a null pull (it requires a positively observed remote
-      // settings event first).
-      if (!event) {
-        const store = await eventStore;
-        const cached = await store.query([settingsFilter(user.pubkey)]);
-        const newest = cached.sort((a, b) => b.created_at - a.created_at)[0];
-        return decodeSettings(user.signer, user.pubkey, newest);
+      if (event) {
+        // Mirror into the local store (fire-and-forget) for offline reads.
+        void eventStore.then((store) => store.event(event)).catch(() => undefined);
+        const decoded = await decodeSettings(user.signer, user.pubkey, event);
+        // A decrypt failure is authoritative in the sense that matters: we
+        // found the event and still have no usable base, so retrying on a
+        // timer would just fail identically. `source` stays "none" so nothing
+        // publishes a merge over settings we could not read.
+        if (!decoded) return { settings: null, source: "none", complete: true };
+        return { settings: decoded, source: "remote", complete: true };
       }
 
-      // Mirror the fresh event into the local store (fire-and-forget) so it is
-      // available offline on the next load.
-      void eventStore.then((store) => store.event(event)).catch(() => undefined);
-      return decodeSettings(user.signer, user.pubkey, event);
+      // No relay event. Fall back to the locally mirrored copy so the
+      // last-known config still applies to the UI — but report it as such.
+      // `complete` distinguishes the two very different reasons we got here:
+      // every relay answered and none had it (a genuine first load), versus we
+      // never managed to ask (offline, slow, still authenticating). Callers
+      // that would WRITE based on this must only trust `source === "remote"`;
+      // an empty read that is really a failed read is how a replaceable-event
+      // wipe happens.
+      const store = await eventStore;
+      const cached = await store.query([settingsFilter(user.pubkey)]);
+      const decoded = await decodeSettings(user.signer, user.pubkey, newestOf(cached));
+      return { settings: decoded, source: decoded ? "local" : "none", complete };
     },
-    staleTime: 60_000,
+    // Only a confirmed read earns the full freshness window. A fallback read is
+    // stale immediately, so the next focus/mount re-reads instead of serving a
+    // possibly-stale local copy for a minute and calling it fresh.
+    staleTime: (query) => (query.state.data?.source === "remote" ? SETTINGS_STALE_MS : 0),
+    // And actively re-attempt an incomplete read, so a client whose radio came
+    // back twenty seconds after launch catches up on its own. Stops as soon as
+    // any read completes.
+    refetchInterval: (query) => (query.state.data?.complete ? false : SETTINGS_RETRY_MS),
     // Cross-device freshness is driven by NostrSync's standing self-state REQ,
     // which invalidates this query when another device publishes new settings.
-    // Keep focus/mount refetch as a cheap backstop (catches anything the sub
-    // missed while the socket was down), but no periodic poll — the sub is the
-    // push channel now.
+    // Focus/mount refetch is the backstop for everything the sub missed while
+    // the socket was down.
     refetchOnWindowFocus: true,
     refetchOnMount: true,
   });
@@ -135,7 +182,7 @@ export function useEncryptedSettings() {
 
       // Merge over the freshest known state (cache + this session's pending).
       const base: EncryptedSettings = {
-        ...(settings.data ?? {}),
+        ...(settings.data?.settings ?? {}),
         ...(pendingSettings.current ?? {}),
       };
       const next: EncryptedSettings = { ...base, ...patch, lastSync: Date.now() };
@@ -156,7 +203,14 @@ export function useEncryptedSettings() {
       });
 
       // Optimistically update the cache, then publish in the background.
-      queryClient.setQueryData(queryKey, next);
+      // Recorded as a confirmed read: we just built this blob over a base we
+      // had, and it is now the newest state we know of, so subsequent merges
+      // may safely build on it.
+      queryClient.setQueryData<SettingsRead>(queryKey, {
+        settings: next,
+        source: "remote",
+        complete: true,
+      });
       setLocalSettingsSync(user.pubkey, next.lastSync ?? Date.now());
       // Persist locally first (offline durability), then publish.
       void eventStore.then((store) => store.event(event)).catch(() => undefined);
@@ -169,15 +223,23 @@ export function useEncryptedSettings() {
   });
 
   return {
-    settings: settings.data ?? null,
+    settings: settings.data?.settings ?? null,
+    /**
+     * Where {@link settings} came from. `"remote"` is the ONLY value that
+     * proves we read the user's real event this session — the others mean we
+     * are showing a local mirror (or nothing) and must not write over the
+     * remote on that basis.
+     */
+    settingsSource: settings.data?.source ?? "none",
     isLoading: settings.isLoading,
     /** True once the query has resolved at least once (event or cache miss). */
     isFetched: settings.isFetched,
     /**
      * True once the settings query has completed a successful pull (the query
-     * never rejects — NPool swallows relay errors — so in practice this tracks
+     * never rejects — relay errors are swallowed — so in practice this tracks
      * "the first fetch has resolved"). NostrSync waits for this before acting,
-     * but does NOT treat it as proof the remote was read; see its publish gate.
+     * but does NOT treat it as proof the remote was read; see its publish gate,
+     * which keys off `settingsSource` instead.
      */
     isSuccess: settings.isSuccess,
     refetch: settings.refetch,
