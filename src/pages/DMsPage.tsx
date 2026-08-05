@@ -622,7 +622,7 @@ function Conversation({
   const name = getDisplayName(author.data?.metadata, peer);
   const dittoProfileHref = dittoProfileUrl(peer);
   const composerBoundsRef = useRef<HTMLElement | null>(null);
-  const { transport, entries, disappearingTimer, setDisappearingTimer, encryptedIds, dm17Ids, dm17Enabled, dm17DeliveryGuaranteed, legacyPinned, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
+  const { transport, entries, syncing, disappearingTimer, setDisappearingTimer, encryptedIds, dm17Ids, dm17Enabled, dm17DeliveryGuaranteed, legacyPinned, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
     useDmTransport(peer);
   const { messages } = transport;
 
@@ -1224,6 +1224,10 @@ function Conversation({
           // Chat rows interleaved with the disappearing-messages timer
           // notices, so a change reads as history the way Signal's does.
           entries={entries}
+          // An empty thread whose catch-up is still running hasn't been judged
+          // yet: say "Catching up…" rather than "No messages yet". The wait
+          // itself is NOT in the skeleton gate — see shouldShowDmTimelineLoading.
+          syncing={syncing}
           renderEntry={(entry) =>
             entry.type === "dm-timer" ? (
               <DmTimerNotice

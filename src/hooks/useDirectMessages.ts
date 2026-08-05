@@ -17,6 +17,7 @@ import { decryptCached, getRenderedPlaintext, hasRenderedPlaintext, setRenderedP
 import { useDecryptConsent } from "@/hooks/useDecryptConsent";
 import { mayBulkDecrypt, signerNeedsApproval } from "@/lib/bulkDecryptGate";
 import { setDecryptConsent } from "@/lib/decryptConsent";
+import { STORE_READ } from "@/lib/storeQuery";
 import { useWireScopes } from "@/wire/useWireScopes";
 import { dmThreadSnapshotScope, readTimelineSnapshot } from "@/lib/timelineSnapshot";
 import { isDmSynced, markDmSynced } from "@/lib/dmSynced";
@@ -141,13 +142,24 @@ export interface DecryptedDM {
   renderKey?: string;
 }
 
-/** Loading gate for a DM thread's local-first read and bounded first pull. */
-export function shouldShowDmThreadLoading(
-  queryLoading: boolean,
+/**
+ * Whether an empty kind-4 thread is still waiting on its first relay pull —
+ * i.e. "no messages" is not yet a verdict.
+ *
+ * This is a SYNC signal, not a loading one. It used to be OR'd into the hook's
+ * `isLoading` (the timeline's skeleton), which made a relay round — up to the
+ * 8s pull timeout, and reliably the whole of it on a cold Android launch
+ * against unauthenticated relays — look like a disk read in progress. A
+ * conversation carrying its entire history on the NIP-17 plane has no local
+ * kind-4 rows at all, so this was true for every modern DM, and the merged
+ * transport's `isLoading || dm17.isLoading` then held the skeleton over rumors
+ * that were already read and folded. See `shouldShowDmTimelineLoading`.
+ */
+export function isEmptyThreadAwaitingPull(
   messageCount: number,
   waitingForInitialPull: boolean,
 ): boolean {
-  return queryLoading || (messageCount === 0 && waitingForInitialPull);
+  return messageCount === 0 && waitingForInitialPull;
 }
 
 /**
@@ -827,6 +839,10 @@ export function useDirectMessages(peer: string | undefined) {
 
   const query = useQuery<DecryptedDM[]>({
     queryKey,
+    // The queryFn returns on the store read and leaves the relay pull running
+    // behind it, so this is a store read and takes the store-read policy: no
+    // retry ladder held at `isPending` over on-disk history (see storeQuery).
+    ...STORE_READ,
     enabled: !!self && !!peer && !!user?.signer.nip04,
     queryFn: async ({ signal }) => {
       const nip04 = user!.signer.nip04!;
@@ -1300,14 +1316,13 @@ export function useDirectMessages(peer: string | undefined) {
 
   return {
     messages: query.data ?? [],
-    // A populated local result paints immediately even if an earlier empty
-    // pull is winding down. A cached settled empty result also paints its empty
-    // state immediately rather than inheriting a permanent loading skeleton.
-    isLoading: shouldShowDmThreadLoading(
-      query.isLoading,
-      query.data?.length ?? 0,
-      waitingForInitialPull,
-    ),
+    // The skeleton stands for the LOCAL read and nothing else: the queryFn
+    // resolves on the store read and leaves the relay pull running behind it,
+    // so this clears as soon as there is something on disk to paint.
+    isLoading: query.isLoading,
+    // …and the pull it left running is reported separately, so an empty thread
+    // says "Catching up…" instead of a premature "No messages yet".
+    syncing: isEmptyThreadAwaitingPull(query.data?.length ?? 0, waitingForInitialPull),
     error: query.error,
     send: send.mutateAsync,
     isSending: send.isPending,

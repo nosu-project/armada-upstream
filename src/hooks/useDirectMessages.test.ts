@@ -11,7 +11,7 @@ import {
   mergeDmEvents,
   mergeDmThread,
   nextDirectionCursor,
-  shouldShowDmThreadLoading,
+  isEmptyThreadAwaitingPull,
   type DecryptedDM,
   type RelayCursors,
 } from "@/hooks/useDirectMessages";
@@ -153,20 +153,20 @@ describe("mergeDmThread (thread merge floor)", () => {
   });
 });
 
-describe("DM thread loading gate", () => {
+describe("kind-4 thread catch-up signal", () => {
   it("settles a fresh cached empty thread when no initial pull is running", () => {
     // Reopening this cache entry within staleTime skips the queryFn. The old
     // sticky done-bit reset on mount and could therefore never become true.
-    expect(shouldShowDmThreadLoading(false, 0, false)).toBe(false);
+    expect(isEmptyThreadAwaitingPull(0, false)).toBe(false);
   });
 
-  it("keeps a cold empty thread loading only while its first pull is running", () => {
-    expect(shouldShowDmThreadLoading(false, 0, true)).toBe(true);
-    expect(shouldShowDmThreadLoading(false, 0, false)).toBe(false);
+  it("reports a cold empty thread as syncing only while its first pull runs", () => {
+    expect(isEmptyThreadAwaitingPull(0, true)).toBe(true);
+    expect(isEmptyThreadAwaitingPull(0, false)).toBe(false);
   });
 
-  it("paints local messages even while a superseded empty pull winds down", () => {
-    expect(shouldShowDmThreadLoading(false, 1, true)).toBe(false);
+  it("is not syncing once local messages exist, even mid-pull", () => {
+    expect(isEmptyThreadAwaitingPull(1, true)).toBe(false);
   });
 });
 

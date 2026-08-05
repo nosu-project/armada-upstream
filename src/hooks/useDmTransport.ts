@@ -17,6 +17,33 @@ import type { OpenedDm } from "@/lib/nip17/protocol";
 const EMPTY_TALLIES: ReactionTally[] = [];
 
 /**
+ * The merged timeline's skeleton gate.
+ *
+ * A DM thread is two INDEPENDENTLY-loading planes merged into one list, and
+ * the skeleton replaces the scroller outright — so OR-ing the two `isLoading`
+ * flags let either plane hide the other's messages. In practice that was
+ * one-directional and constant: a modern conversation lives entirely on the
+ * NIP-17 plane, its kind-4 half therefore reads zero rows locally, and the
+ * kind-4 half's `isLoading` used to stay true for the whole of its first relay
+ * pull. Every rumor could be folded and ready and the view still showed a
+ * placeholder thread until a network round for messages that do not exist
+ * finished — worst on a cold Android launch from a notification tap, where the
+ * relays are unauthenticated and the pull runs to its 8s timeout.
+ *
+ * So: whatever is painted, paint it. The skeleton means "nothing to show yet
+ * and a local read is still running", which is the only claim it can honestly
+ * make — a plane still reading will drop its rows into the merge when it lands.
+ */
+export function shouldShowDmTimelineLoading(
+  mergedMessageCount: number,
+  kind4Loading: boolean,
+  dm17Loading: boolean,
+): boolean {
+  if (mergedMessageCount > 0) return false;
+  return kind4Loading || dm17Loading;
+}
+
+/**
  * Thrown by {@link useDmTransport}'s `send` when the peer isn't reachable over
  * NIP-17 and the caller hasn't opted into the legacy kind-4 downgrade. The DM
  * page catches this to surface an explicit "send with legacy encryption"
@@ -64,6 +91,14 @@ export function useDmTransport(peer: string): {
    * Signal's do.
    */
   entries: ChannelTimelineEntry[];
+  /**
+   * Whether a catch-up is still running over an EMPTY thread, so "no messages"
+   * isn't a verdict yet. Deliberately not part of `transport.isLoading` (the
+   * skeleton stands for the local read alone): the timeline takes this as its
+   * own prop and says "Catching up…" in place of the empty state, exactly as a
+   * Concord channel does.
+   */
+  syncing: boolean;
   /**
    * The conversation's disappearing-messages timer in seconds (0 = off), and
    * the setter either participant uses to change it. NIP-17 plane only —
@@ -115,6 +150,7 @@ export function useDmTransport(peer: string): {
   const {
     messages,
     isLoading,
+    syncing,
     send: sendKind4,
     retry: retryKind4,
     loadOlder: loadOlderKind4,
@@ -384,7 +420,11 @@ export function useDmTransport(peer: string): {
     [pref, dm17Usable, dm17Send, sendKind4],
   );
 
-  const isLoadingMerged = isLoading || dm17.isLoading;
+  const isLoadingMerged = shouldShowDmTimelineLoading(
+    chatMessages.length,
+    isLoading,
+    dm17.isLoading,
+  );
 
   const transport = useMemo<ChatTransport>(
     () => ({
@@ -407,6 +447,7 @@ export function useDmTransport(peer: string): {
   return {
     transport,
     entries,
+    syncing,
     disappearingTimer: dm17.timer ?? 0,
     setDisappearingTimer: dm17.setTimer,
     encryptedIds,

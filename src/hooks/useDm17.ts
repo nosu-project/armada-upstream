@@ -43,6 +43,7 @@ import { APP_RELAYS } from "@/lib/platform";
 import { mayBulkDecrypt, signerNeedsApproval } from "@/lib/bulkDecryptGate";
 import { getDecryptConsent } from "@/lib/decryptConsent";
 import { isDmSynced, markDmSynced } from "@/lib/dmSynced";
+import { STORE_READ } from "@/lib/storeQuery";
 import { markOwnWebPushEvent } from "@/lib/webPushState";
 import {
   buildDmRumor,
@@ -666,6 +667,10 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
 
   const query = useQuery<OpenedDm[]>({
     queryKey,
+    // Store read (the inbox scan below is fired, not awaited), so: no retry
+    // ladder holding `isPending` — and therefore the timeline's skeleton — over
+    // rumors that are already on disk. See storeQuery.
+    ...STORE_READ,
     enabled: !!self && !!peer && support,
     queryFn: async ({ signal }) => {
       // LOCAL-FIRST: the store paints immediately; the inbox scan tops up in
