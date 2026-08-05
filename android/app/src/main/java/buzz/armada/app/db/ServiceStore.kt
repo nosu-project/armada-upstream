@@ -137,6 +137,33 @@ object ServiceStore {
     }
 
     /**
+     * File one of [self]'s own replaceable documents (see [SelfState]) in the
+     * `main` tenant — the same tenant, in the same database file, that the
+     * WebView's app-wide event store reads. Returns whether it was stored.
+     *
+     * No routing queue entry: nothing about a follow list or a settings blob is
+     * a notification candidate or needs a pass through wire ingest. The tenant
+     * write IS the delivery — the app finds the current version already on disk
+     * when it next opens, whether or not any relay is reachable at that moment.
+     *
+     * The store replaces by `kind:pubkey:d` coordinate for replaceable and
+     * addressable kinds, so re-receiving these on every reconnect costs one row
+     * each rather than growing a history nobody reads.
+     */
+    @JvmStatic
+    fun cacheSelfState(context: Context, event: JSONObject, self: String): Boolean {
+        val rumor = Rumor.parse(event) ?: return false
+        if (!SelfState.storable(self, rumor)) return false
+        return try {
+            ArmadaDb.get(context).event(ArmadaDb.TENANT_MAIN, rumor)
+            true
+        } catch (error: Throwable) {
+            Log.w(TAG, "self-state write failed", error)
+            false
+        }
+    }
+
+    /**
      * The relay URLs of the newest stored kind-10050 DM-inbox list for
      * [pubkey], or null when the store holds none. A read, never a fetch — so
      * a notification quick reply can address the peer's NIP-17 inbox without a

@@ -248,7 +248,13 @@ Things to know before touching it:
 - **The service is a second writer, so it obeys the same store rules.** `Dm17.kt`
   ports NIP-17's kind filter and NIP-40 expiry refusal;
   `ServiceStore.storeConcord2Rumor` ports the chat plane's encrypted-seal rule;
-  `RelayScope.kt` ports the tenant routing. A rule only one writer applies is a
+  `RelayScope.kt` ports the tenant routing; `SelfState.kt` ports the self-sync
+  catalogue (`selfSyncKinds.ts`) so the service can mirror the user's own
+  replaceable documents — follow/mute lists, the 10009 server list, the Concord
+  vaults, the NIP-78 settings document holding the rail's arrangement — into
+  `main` while the app is dead, which is what makes a change made on another
+  device already be on disk at open instead of racing a cold relay read. A rule
+  only one writer applies is a
   conversation the two disagree about — for routing, literally a message stored
   where the timeline never reads — and the rules are load-bearing precisely
   because nothing is stored beside the rumor for a reader to re-check them

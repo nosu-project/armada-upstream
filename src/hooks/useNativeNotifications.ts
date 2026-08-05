@@ -20,7 +20,7 @@ import { buildConcordSubs, type ConcordSub } from "@/concord-v1/lib/concordNotif
 import { useConcord2Subs } from "@/concord-v2/hooks/useConcord2Subs";
 import { signStreamAuthsChunked } from "@/concord-v2/lib/streamAuth";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
-import { effectiveDmRelays } from "@/contexts/AppContext";
+import { effectiveDmRelays, userReadRelays } from "@/contexts/AppContext";
 import { isGitAnnouncementDiscoveryRelay, normalizeRelayUrl } from "@/lib/platform";
 import { useWireGitTicketRoots } from "@/hooks/useWireGitTicketRoots";
 import type { GitRepositoryWireInput } from "@/wire/spec";
@@ -195,6 +195,30 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     // native config (which would tear down + rebuild every connection).
     return [...set].sort();
   }, [groupList]);
+
+  // The relays the user's OWN documents live on — the same general set the pool
+  // routes their replaceables to (NostrProvider's `poolGeneralRelays`): app
+  // relays plus their NIP-65 read relays. The service watches the self-state
+  // catalogue here and mirrors it into ArmadaDB, so a rail rearranged on
+  // another device is already on disk when this one opens.
+  //
+  // Derived separately from `relayUrls` on purpose: that set comes from the
+  // kind-10009 list and is therefore NIP-29 servers only, which a Concord-only
+  // user simply doesn't have.
+  const selfRelays = useMemo(() => {
+    const set = new Set<string>();
+    if (config.useAppRelays) {
+      for (const url of config.appRelays) {
+        const n = normalizeRelayUrl(url);
+        if (n) set.add(n);
+      }
+    }
+    for (const url of userReadRelays(config)) {
+      const n = normalizeRelayUrl(url);
+      if (n) set.add(n);
+    }
+    return [...set].sort();
+  }, [config]);
 
   // Joined group ids (the `h` tag values) for the kind-9 filter. Groups at the
   // `nothing` level are omitted entirely (the service never subscribes — no
@@ -438,6 +462,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
         concord2Subs,
         dmRelays,
         dmFollows,
+        selfRelays,
         signer: signerCfg,
         gitSubs,
       };
@@ -451,7 +476,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     ArmadaNotification.configure(payload).catch((err) => {
       console.warn("[native-notif] configure failed:", err);
     });
-  }, [supported, enabled, user, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, concord2Subs, dmRelays, dmFollows, signerCfg, gitSubs]);
+  }, [supported, enabled, user, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, concord2Subs, dmRelays, dmFollows, selfRelays, signerCfg, gitSubs]);
 
   // Auto-enable on launch (opt-out, like Ditto): if the user hasn't turned it
   // off AND the OS permission is already granted, start the background service

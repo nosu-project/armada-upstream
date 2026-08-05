@@ -205,6 +205,20 @@ export interface ArmadaNotificationPlugin {
      * (permanent friends-only). Empty ⇒ no DM subscription at all.
      */
     dmFollows?: string[];
+    /**
+     * The relays carrying the user's OWN replaceable documents — the general
+     * pool (app relays + their NIP-65 read relays). On these the service also
+     * subscribes to the self-state catalogue (follow/mute lists, the kind-10009
+     * server list, the Concord vaults, and the NIP-78 settings document that
+     * holds the community rail's arrangement) and files each version in the
+     * `main` tenant the WebView reads, so a change made on another device is
+     * already on disk when the app next opens.
+     *
+     * Distinct from `relayUrls`, which is the NIP-29 server set: a user with no
+     * servers has none, and their settings live on the app relays regardless.
+     * An older native binary ignores this field and simply doesn't mirror them.
+     */
+    selfRelays?: string[];
     /** Per-type notification prefs (mentions/reactions/replies/directMessages/allGroupMessages). */
     prefs?: Record<string, boolean>;
     /**

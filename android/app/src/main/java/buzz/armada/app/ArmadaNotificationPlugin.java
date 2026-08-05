@@ -548,6 +548,7 @@ public class ArmadaNotificationPlugin extends Plugin {
         String groupSubsRaw = arrayToString(call.getArray("groupSubs"));
         String dmRelaysRaw = arrayToString(call.getArray("dmRelays"));
         String dmFollowsRaw = arrayToString(call.getArray("dmFollows"));
+        String selfRelaysRaw = arrayToString(call.getArray("selfRelays"));
         String concordSubsRaw = arrayToString(call.getArray("concordSubs"));
         String concord2SubsRaw = arrayToString(call.getArray("concord2Subs"));
         String gitSubsRaw = arrayToString(call.getArray("gitSubs"));
@@ -592,6 +593,8 @@ public class ArmadaNotificationPlugin extends Plugin {
             else editor.remove("dmRelays");
             if (dmFollowsRaw != null) editor.putString("dmFollows", dmFollowsRaw);
             else editor.remove("dmFollows");
+            if (selfRelaysRaw != null) editor.putString("selfRelays", selfRelaysRaw);
+            else editor.remove("selfRelays");
             if (concordSubsRaw != null) editor.putString("concordSubs", concordSubsRaw);
             else editor.remove("concordSubs");
             if (concord2SubsRaw != null) editor.putString("concord2Subs", concord2SubsRaw);

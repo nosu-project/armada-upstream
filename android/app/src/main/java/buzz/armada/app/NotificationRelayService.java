@@ -38,6 +38,7 @@ import androidx.core.content.pm.ShortcutManagerCompat;
 import androidx.core.app.ServiceCompat;
 import androidx.core.graphics.drawable.IconCompat;
 
+import buzz.armada.app.db.SelfState;
 import buzz.armada.app.db.ServiceStore;
 
 import org.json.JSONArray;
@@ -200,6 +201,13 @@ public class NotificationRelayService extends Service {
     // are scoped to `authors:[...dmFollows]` so notifications only fire for DMs
     // from friends — matching the client's permanent friends-only DM view.
     private final Set<String> dmFollows = new LinkedHashSet<>();
+    // Relays carrying the user's OWN replaceable documents (see SelfState) —
+    // the client's general pool: app relays + the user's NIP-65 read relays.
+    // Kept separate from `relayUrls`, which is derived from the kind-10009 list
+    // and therefore holds NIP-29 servers only: a Concord-only user has none, and
+    // scoping self-state to them would mean never watching the relays their
+    // settings are actually published to.
+    private final Set<String> selfRelays = new LinkedHashSet<>();
     private JSONObject prefs = new JSONObject();
     // Concord (E2E) channel subscriptions, keyed for fast lookup:
     //   zToName: #z pseudonym (hex) → "Community / #channel" display name
@@ -860,6 +868,8 @@ public class NotificationRelayService extends Service {
         dmRelays.addAll(parseStringArray(sp.getString("dmRelays", null)));
         dmFollows.clear();
         dmFollows.addAll(parseStringArray(sp.getString("dmFollows", null)));
+        selfRelays.clear();
+        selfRelays.addAll(parseStringArray(sp.getString("selfRelays", null)));
         try {
             String p = sp.getString("prefs", null);
             prefs = p != null ? new JSONObject(p) : new JSONObject();
@@ -890,10 +900,12 @@ public class NotificationRelayService extends Service {
             if (nativeSigner == null) Log.w(TAG, "shared signer credential unavailable");
         }
 
-        // The relays to connect to: NIP-29 group relays ∪ DM relays ∪ Concord relays.
+        // The relays to connect to: NIP-29 group relays ∪ DM relays ∪ Concord
+        // relays ∪ the general relays carrying the user's own documents.
         Set<String> allRelays = new LinkedHashSet<>(relayUrls);
         allRelays.addAll(relayToGroupIds.keySet());
         allRelays.addAll(dmRelays);
+        allRelays.addAll(selfRelays);
         allRelays.addAll(relayToZs.keySet());
         allRelays.addAll(relayToPks2.keySet());
         allRelays.addAll(gitRepositoriesByRelay.keySet());
@@ -1213,6 +1225,7 @@ public class NotificationRelayService extends Service {
         final String subDm17 = "a7-" + Long.toHexString(System.nanoTime() + 7);
         final String subGitRoots = "ag-" + Long.toHexString(System.nanoTime() + 8);
         final String subGitChildren = "ai-" + Long.toHexString(System.nanoTime() + 9);
+        final String subSelf = "as-" + Long.toHexString(System.nanoTime() + 11);
         // Prefix for one-shot kind-10050 DM-inbox lookups (reply addressing).
         final String inboxPrefix = "ax-" + Long.toHexString(System.nanoTime() + 10) + "-";
         // One-shot lookup sub id → the full pubkey / group id it was issued
@@ -1404,6 +1417,52 @@ public class NotificationRelayService extends Service {
                         JSONObject statuses = new JSONObject(); statuses.put("kinds", new JSONArray().put(1630).put(1631).put(1632).put(1633)); statuses.put("#e", chunk); statuses.put("since", sinceSec);
                         webSocket.send(reqMessage(subGitChildren + "s" + offset, statuses));
                     }
+                }
+                // The user's OWN replaceable documents (SelfState): follow and
+                // mute lists, the NIP-29 server/channel list, the Concord
+                // vaults, DM/Blossom/emoji lists, and the NIP-78 settings
+                // document that carries the community rail's arrangement.
+                //
+                // Watched on the general relays and on the NIP-29 servers,
+                // because that is where the client publishes them (its event
+                // router fans a write out to the app relays, the user's servers
+                // and their NIP-65 write set) — so this is the set on which
+                // another device's change can actually be found.
+                //
+                // Deliberately NO `since`, unlike every other filter here. All
+                // of these are replaceable, so a relay stores exactly one
+                // version and an unbounded filter returns a handful of events;
+                // a `since` would only mean that a change made while this
+                // device was off is never seen at all, which is the whole
+                // failure this subscription exists to fix. It also makes every
+                // reconnect a full catch-up for free.
+                if (userPubkey != null && !userPubkey.isEmpty()
+                        && (selfRelays.contains(relayUrl) || relayUrls.contains(relayUrl))) {
+                    JSONArray me = new JSONArray().put(userPubkey);
+
+                    JSONArray selfKinds = new JSONArray();
+                    for (int kind : SelfState.KINDS) selfKinds.put(kind);
+                    JSONObject bare = new JSONObject();
+                    bare.put("kinds", selfKinds);
+                    bare.put("authors", me);
+
+                    // Kind 30078 is shared with every other NIP-78 client on
+                    // this identity, so it is asked for by `d` rather than
+                    // wholesale.
+                    JSONArray dTags = new JSONArray();
+                    for (String d : SelfState.D_TAGS) dTags.put(d);
+                    JSONObject documents = new JSONObject();
+                    documents.put("kinds", new JSONArray().put(SelfState.KIND_APP_SPECIFIC));
+                    documents.put("authors", me);
+                    documents.put("#d", dTags);
+
+                    // The GIF-favorite shards are named by topic, not by `d`.
+                    JSONObject shards = new JSONObject();
+                    shards.put("kinds", new JSONArray().put(SelfState.KIND_APP_SPECIFIC));
+                    shards.put("authors", me);
+                    shards.put("#t", new JSONArray().put(SelfState.TOPIC_GIF_FAVORITES));
+
+                    webSocket.send(reqMessage(subSelf, bare, documents, shards));
                 }
             } catch (JSONException e) {
                 Log.w(TAG, "Failed to build REQ", e);
@@ -1620,11 +1679,12 @@ public class NotificationRelayService extends Service {
         }
     }
 
-    private String reqMessage(String subId, JSONObject filter) throws JSONException {
+    /** `["REQ", <sub>, <filter>, …]` — NIP-01 allows several filters per REQ. */
+    private String reqMessage(String subId, JSONObject... filters) throws JSONException {
         JSONArray req = new JSONArray();
         req.put("REQ");
         req.put(subId);
-        req.put(filter);
+        for (JSONObject filter : filters) req.put(filter);
         return req.toString();
     }
 
@@ -2675,6 +2735,16 @@ public class NotificationRelayService extends Service {
             return;
         }
 
+        // The user's own replaceable documents. Signature-verified above, so
+        // what lands in `main` is the same bytes the WebView would have stored
+        // had it fetched this itself — and the rail, mutes and settings are
+        // simply current the next time the app opens, with no relay read in the
+        // critical path. Nothing here notifies: none of it is a message.
+        if (SelfState.isSelfKind(kind)) {
+            if (userPubkey != null) ServiceStore.cacheSelfState(this, event, userPubkey);
+            return;
+        }
+
         // Write the raw outer event into ArmadaDB — the SAME database the
         // WebView reads, not a mirror of it — and queue it for wire ingest, so
         // the WebView still gets to route it (park undecryptable wraps, ring the
@@ -3250,6 +3320,17 @@ public class NotificationRelayService extends Service {
                 return dmRelays.contains(relayUrl) && pTags(event).contains(userPubkey);
             }
             default:
+                // The user's own replaceable documents: authored by us, and
+                // only on the relays we actually asked. SelfState.storable
+                // re-checks authorship against the parsed rumor at write time;
+                // this is the same refusal at the filter boundary, so a relay
+                // volunteering somebody else's 10009 is dropped before it is
+                // verified, stored, or counted.
+                if (SelfState.isSelfKind(kind)
+                        && userPubkey != null
+                        && userPubkey.equals(event.optString("pubkey"))) {
+                    return selfRelays.contains(relayUrl) || relayUrls.contains(relayUrl);
+                }
                 return false;
         }
     }
