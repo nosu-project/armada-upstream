@@ -4,6 +4,22 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.46.5] - 2026-08-05
+
+Pin a direct message to the rail beside your communities, so a conversation you're in all day is one tap away, and the conversation with yourself now reads as Note to Self. Armada installed to the Home Screen shows an unread badge on its icon while it's closed, keeps its background notifications alive when the browser's subscription expires, and says plainly when a device can't deliver them at all.
+
+### Added
+- Pin a direct message to the rail from the DM list's right-click menu; it drags, folders, reorders, syncs and carries an unread dot like any other rail item
+- The conversation with yourself is shown as Note to Self across the DM list, thread header, recipient picker and composer
+- Armada installed to the Home Screen shows an unread badge on its app icon, cleared when you open it
+
+### Changed
+- Notification settings say precisely why background notifications are unavailable — no push service configured, Lockdown Mode, or not installed to the Home Screen — and offer a retry when setup fails
+
+### Fixed
+- Background notifications repair an expired browser subscription when you return to Armada, instead of going quietly dead
+- A conversation with messages in it no longer flashes a loading placeholder, and an empty thread still catching up says so rather than "No messages yet"
+
 ## [0.46.4] - 2026-08-05
 
 Your own lists and settings — follow and mute lists, your servers and communities, and how they're arranged — now sync reliably: a change made on another device is already there when you open the app, and on Android they keep syncing while the app is closed. Reading stored messages on Android also does substantially less work, so the app stutters less.
