@@ -20,6 +20,7 @@ import {
   buildInviteUrl,
   buildRefreshedBundleEvents,
   buildRevocationEvent,
+  capBundleDescription,
   EMPTY_INVITE_LIST,
   InviteError,
   mergeInviteLists,
@@ -271,6 +272,9 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
       name: folded?.metadata?.name ?? src.name,
       ...(folded?.metadata?.icon ? { icon: folded.metadata.icon } : {}),
       ...(folded?.metadata?.banner ? { banner: folded.metadata.banner } : {}),
+      ...(folded?.metadata?.description?.trim()
+        ? { description: capBundleDescription(folded.metadata.description.trim()) }
+        : {}),
       ...(opts?.expiresAtMs ? { expires_at: opts.expiresAtMs } : {}),
       creator_npub: user.pubkey,
       ...(opts?.label ? { label: opts.label } : {}),

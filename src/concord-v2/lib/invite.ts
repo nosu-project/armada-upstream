@@ -31,6 +31,23 @@ export const MAX_BOOTSTRAP_RELAYS = 3;
 /** The fragment format/dictionary generation byte. Lower values are legacy. */
 export const FRAGMENT_VERSION = 4;
 
+/**
+ * The bundle preview's description cap: far below the 10,000-byte Community
+ * metadata cap (CORD-02 §6), because the preview exists to render a card, not
+ * to mirror the full about text. Applied at build AND at parse (a hostile
+ * bundle is truncated, not refused — the description is cosmetic).
+ */
+export const BUNDLE_DESCRIPTION_MAX_BYTES = 500;
+
+/** Truncate to the byte cap on a UTF-8 code-point boundary. */
+export function capBundleDescription(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  if (bytes.length <= BUNDLE_DESCRIPTION_MAX_BYTES) return s;
+  let end = BUNDLE_DESCRIPTION_MAX_BYTES;
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+  return new TextDecoder().decode(bytes.subarray(0, end));
+}
+
 // ── The bundle (CORD-05 §1) ──────────────────────────────────────────────────
 
 export interface InviteBundle {
@@ -46,6 +63,8 @@ export interface InviteBundle {
   name: string;
   icon?: ImagePointer;
   banner?: ImagePointer;
+  /** Preview of the Community description, capped at {@link BUNDLE_DESCRIPTION_MAX_BYTES}. */
+  description?: string;
   /** Optional, unix ms: past it the preview still renders, joining refuses. */
   expires_at?: number;
   /** Optional attribution, echoed in the joiner's Guestbook Join. */
@@ -74,6 +93,10 @@ function boundBundle(bundle: InviteBundle): InviteBundle {
     throw new InviteError("bounds", `bundle carries ${bundle.channels.length} channels (cap ${MAX_BUNDLE_CHANNELS})`);
   }
   bundle.relays = capRelays(Array.isArray(bundle.relays) ? bundle.relays : []);
+  if (bundle.description !== undefined) {
+    if (typeof bundle.description === "string") bundle.description = capBundleDescription(bundle.description);
+    else delete bundle.description;
+  }
   return bundle;
 }
 
