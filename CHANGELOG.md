@@ -4,6 +4,17 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.46.3] - 2026-08-05
+
+Reply to a message straight from an Android notification, without opening the app — in servers, direct messages, and Concord communities. A quick reply honours the conversation's disappearing-message timer and appears in the notification thread under your own name and photo. Notifications for encrypted communities also keep arriving after a relay reconnects while the app is asleep.
+
+### Added
+- Reply to a message directly from an Android notification, without opening the app — in servers, direct messages, and Concord communities
+- A quick reply honours the conversation's disappearing-message timer, and shows your own name and photo in the notification thread
+
+### Fixed
+- Notifications for encrypted communities keep arriving after a relay reconnects while the app is asleep
+
 ## [0.46.2] - 2026-08-04
 
 Sharing into Armada from another app is smoother: the destination opens immediately instead of waiting for the shared file to finish copying, and a share that resolves slowly still lands in the right composer rather than nowhere.
