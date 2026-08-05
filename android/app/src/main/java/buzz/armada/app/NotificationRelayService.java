@@ -303,6 +303,14 @@ public class NotificationRelayService extends Service {
     // lookup (reply addressing), across relays. Read + cleared by the lookup's
     // timeout in resolveDmInbox.
     private final Map<String, JSONObject> bestInbox = new HashMap<>();
+    // The user's OWN kind-0 + avatar, for the MessagingStyle self person a
+    // sent quick reply renders as. Resolved once per config load through the
+    // ordinary profile path (memory store → shared DB → relays), so the
+    // notification build stays synchronous; a late arrival re-posts the rooms
+    // that already show a reply (see warmSelfProfile).
+    private Profile selfProfile;
+    private Bitmap selfAvatar;
+    private boolean selfProfilePending;
     // avatar URL → circle-cropped bitmap, decoded once and reused. Backed by a
     // persistent disk cache (avatarDir) so a warm avatar survives service
     // restarts and lands in the FIRST, alerting post instead of a later silent
@@ -903,6 +911,10 @@ public class NotificationRelayService extends Service {
             connections.add(rc);
             rc.connect();
         }
+
+        // Warm the user's own profile for the quick-reply self person, now
+        // that a relay fetch has somewhere to go if the store misses.
+        warmSelfProfile();
     }
 
     /**
@@ -3391,7 +3403,16 @@ public class NotificationRelayService extends Service {
         // (like a Signal group chat's group avatar) — if it isn't cached yet,
         // the shortcut goes up icon-less and the async fetch below re-pushes it
         // (and silently re-posts the room) once resolved.
+        // The shortcut names the CONVERSATION, so its person is the last
+        // INCOMING sender — a reply we sent must not repoint a DM's shortcut
+        // (and its avatar) at ourselves.
         MsgEntry lastEntry = room.messages.get(room.messages.size() - 1);
+        for (int i = room.messages.size() - 1; i >= 0; i--) {
+            if (!room.messages.get(i).fromSelf) {
+                lastEntry = room.messages.get(i);
+                break;
+            }
+        }
         Person lastSender = personFor(lastEntry);
         Bitmap communityIcon = community != null ? groupImageCache.get(community.imageCacheKey()) : null;
         if (community == null) {
@@ -3477,9 +3498,9 @@ public class NotificationRelayService extends Service {
         // community image for a channel (like a Signal group chat).
         boolean isDm = room.community == null;
 
-        // "You" is the local user; MessagingStyle needs a self Person to anchor
-        // incoming vs. outgoing (we only post incoming, so this is just the label).
-        Person self = new Person.Builder().setName("You").setKey(userPubkey != null ? userPubkey : "self").build();
+        // The local user, who a sent quick reply is attributed to: their own
+        // kind-0 name + avatar when we hold one, "You" when we don't.
+        Person self = selfPerson();
         NotificationCompat.MessagingStyle style = new NotificationCompat.MessagingStyle(self);
         if (isDm) {
             // 1:1: no conversation title — the system titles it with the
@@ -3556,6 +3577,90 @@ public class NotificationRelayService extends Service {
     /** The conversation title shown for a room (and its shortcut label). */
     private static String conversationTitle(RoomNotif room) {
         return room.title != null && !room.title.isEmpty() ? room.title : "Chat";
+    }
+
+    /**
+     * The MessagingStyle self Person — who a sent quick reply shows as. Uses
+     * the user's own kind-0 (name + avatar) once {@link #warmSelfProfile} has
+     * resolved it, falling back to a bare "You". Synchronous by construction:
+     * it reads only the warmed fields, so building a notification never waits
+     * on a profile fetch or an avatar decode.
+     *
+     * The fallback is "You", not {@link #displayName}'s "Anonymous" — an
+     * unnamed profile should read as the user, not as a stranger.
+     */
+    private Person selfPerson() {
+        String name = "You";
+        if (selfProfile != null) {
+            String resolved = displayName(selfProfile);
+            if (!"Anonymous".equals(resolved)) name = resolved;
+        }
+        Person.Builder pb = new Person.Builder()
+                .setName(name)
+                .setKey(userPubkey != null ? userPubkey : "self");
+        if (selfAvatar != null) pb.setIcon(IconCompat.createWithBitmap(selfAvatar));
+        return pb.build();
+    }
+
+    /**
+     * Resolve the user's own profile + avatar for {@link #selfPerson}, through
+     * the same path every other author takes (memory store → shared DB →
+     * one-shot relay fetch). Usually a synchronous hit: the WebView writes
+     * every kind-0 it reads into the shared store, the user's own included.
+     * A late resolve re-posts the rooms already showing a reply, so the line
+     * gains its name/avatar in place rather than only on the next message.
+     */
+    private void warmSelfProfile() {
+        if (userPubkey == null || selfProfilePending) return;
+        boolean haveName = selfProfile != null;
+        boolean needAvatar = selfAvatar == null && selfProfile != null
+                && selfProfile.picture != null && !selfProfile.picture.isEmpty();
+        if (haveName && !needAvatar) return;
+        selfProfilePending = true;
+        resolveAuthor(userPubkey, null, profile -> {
+            selfProfilePending = false;
+            if (profile != null) {
+                boolean gainedName = selfProfile == null;
+                selfProfile = profile;
+                if (gainedName) repostRoomsWithReplies();
+            }
+            String picture = selfProfile != null ? selfProfile.picture : null;
+            if (picture == null || picture.isEmpty() || selfAvatar != null) return;
+            Bitmap cached = avatarCache.get(picture);
+            if (cached != null) {
+                selfAvatar = cached;
+                repostRoomsWithReplies();
+                return;
+            }
+            fetchAvatar(picture, bmp -> {
+                if (bmp == null) return;
+                selfAvatar = bmp;
+                repostRoomsWithReplies();
+            });
+        });
+    }
+
+    /**
+     * Silently re-post every still-posted room that shows a sent reply, so a
+     * self name/avatar that resolved after the fact lands on the line already
+     * in the tray.
+     */
+    private void repostRoomsWithReplies() {
+        NotificationManager manager =
+                (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null) return;
+        for (RoomNotif room : roomNotifs.values()) {
+            boolean hasReply = false;
+            for (MsgEntry e : room.messages) {
+                if (e.fromSelf) {
+                    hasReply = true;
+                    break;
+                }
+            }
+            if (hasReply && isNotifActive(manager, room.notifId)) {
+                manager.notify(room.notifId, buildRoomNotification(room, /*alert=*/false));
+            }
+        }
     }
 
     /** Build a message line's sender Person (avatar attached once resolved). */
@@ -3700,6 +3805,10 @@ public class NotificationRelayService extends Service {
 
         MsgEntry sent = appendOutgoing(roomKey, text);
         markRepliedRead(roomKey);
+        // The reply renders as the user: resolve their own kind-0 if this is
+        // the first one since the service started (usually a store hit, and a
+        // late one re-posts the line in place).
+        warmSelfProfile();
 
         NativeSigner signer = nativeSigner;
         if (signer == null) {
