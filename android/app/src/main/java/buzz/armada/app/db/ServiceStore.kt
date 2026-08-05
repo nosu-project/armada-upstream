@@ -161,33 +161,69 @@ object ServiceStore {
     }
 
     /**
-     * The derived Concord V2 stream secret (hex) for a stream address, read
-     * from the group-key memo the WebView persists in KV (`c2gkmemo` — see
-     * groupKeyPersist.ts). The derived keys are ALREADY at rest in this same
-     * shared database, which is what lets the service sign a quick reply's
-     * wrap without any key crossing the plugin bridge. Null when no memo
-     * entry names the address; the caller verifies sk → pk before signing.
+     * The derived Concord V2 stream secrets (hex, keyed by stream address) for
+     * every requested address the group-key memo holds, read from the KV the
+     * WebView persists it in (`c2gkmemo` — see groupKeyPersist.ts). The
+     * derived keys are ALREADY at rest in this same shared database, which is
+     * what lets the service sign a quick reply's wrap and a NIP-42 stream
+     * AUTH without any key crossing the plugin bridge. One read + one parse
+     * however many addresses are asked for; the caller verifies sk → pk
+     * before signing with anything returned.
      */
     @JvmStatic
-    fun streamSecret(context: Context, pk: String): String? = try {
-        val raw = ArmadaDb.get(context).kvGet("c2gkmemo")
-        if (raw == null) {
-            null
-        } else {
+    fun streamSecrets(context: Context, pks: List<String>): Map<String, String> {
+        if (pks.isEmpty()) return emptyMap()
+        return try {
+            val raw = ArmadaDb.get(context).kvGet("c2gkmemo") ?: return emptyMap()
+            val wanted = pks.toHashSet()
+            val out = HashMap<String, String>()
             val entries = JSONArray(raw)
-            var found: String? = null
             for (i in 0 until entries.length()) {
                 val entry = entries.optJSONObject(i) ?: continue
-                if (entry.optString("pk") == pk) {
-                    found = entry.optString("sk").takeIf { it.isNotEmpty() }
-                    break
-                }
+                val pk = entry.optString("pk")
+                if (pk !in wanted) continue
+                val sk = entry.optString("sk")
+                if (sk.isNotEmpty()) out[pk] = sk
             }
-            found
+            out
+        } catch (error: Throwable) {
+            Log.w(TAG, "stream secret read failed", error)
+            emptyMap()
         }
+    }
+
+    /** Single-address form of [streamSecrets]. */
+    @JvmStatic
+    fun streamSecret(context: Context, pk: String): String? =
+        streamSecrets(context, listOf(pk))[pk]
+
+    /**
+     * The DM conversation's disappearing-message timer with [peer], in seconds
+     * (0 = off): the newest kind-1740 rumor in the thread wins, exactly as the
+     * WebView folds it (nip17/protocol.ts). Read from the stored thread — the
+     * two filters are the thread's own shape (received: authored by the peer;
+     * own copies: authored by self, `#p` the peer). A notice whose timer tag
+     * is malformed is skipped rather than read as "off".
+     */
+    @JvmStatic
+    fun dm17TimerSecs(context: Context, self: String, peer: String): Long = try {
+        val fromPeer = JSONObject()
+            .put("kinds", JSONArray().put(1740))
+            .put("authors", JSONArray().put(peer))
+            .put("limit", 1)
+        val fromSelf = JSONObject()
+            .put("kinds", JSONArray().put(1740))
+            .put("authors", JSONArray().put(self))
+            .put("#p", JSONArray().put(peer))
+            .put("limit", 1)
+        ArmadaDb.get(context).query(Dm17.tenant(self), listOf(fromPeer, fromSelf))
+            .sortedByDescending { it.createdAt }
+            .firstNotNullOfOrNull { rumor ->
+                rumor.tagValue("timer")?.toLongOrNull()?.takeIf { it >= 0 }
+            } ?: 0L
     } catch (error: Throwable) {
-        Log.w(TAG, "stream secret read failed", error)
-        null
+        Log.w(TAG, "dm timer read failed", error)
+        0L
     }
 
     /** The stored kind-0 for a pubkey, or null — so a profile already fetched isn't fetched again. */

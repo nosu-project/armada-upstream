@@ -394,8 +394,11 @@ public class NotificationRelayService extends Service {
         final String name;        // "Community / #channel" display name
         final String url;         // in-app deep link (/c/<communityId>/<channelId>)
         final CommunityRef community; // the community this stream's channel belongs to
+        // CORD-08 disappearing-message timer (seconds, 0 = off) — the quick
+        // reply stamps sendTime + timer on its rumor + wrap while set.
+        final long timerSecs;
         Concord2Stream(byte[] convKey, String communityId, String channelId, String epoch,
-                       String name, String url, CommunityRef community) {
+                       String name, String url, CommunityRef community, long timerSecs) {
             this.convKey = convKey;
             this.communityId = communityId;
             this.channelId = channelId;
@@ -403,6 +406,7 @@ public class NotificationRelayService extends Service {
             this.name = name;
             this.url = url;
             this.community = community;
+            this.timerSecs = timerSecs;
         }
     }
 
@@ -1094,7 +1098,7 @@ public class NotificationRelayService extends Service {
                     pkList.add(pk);
                     pkToStream2.put(pk, new Concord2Stream(
                             convKey, communityId, channelId, s.optString("epoch", ""),
-                            name, url, ref));
+                            name, url, ref, Math.max(0, sub.optLong("timerSecs", 0))));
                 }
                 for (int j = 0; j < relays.length(); j++) {
                     String relay = relays.optString(j);
@@ -1648,6 +1652,32 @@ public class NotificationRelayService extends Service {
                     });
                 } else if (!bridged) {
                     Log.w(TAG, "No bridge (WebView down) and no shared signer — can't AUTH " + relayUrl);
+                }
+                // The Concord V2 STREAM auths, signed natively from the same
+                // group-key memo the quick reply signs wraps with — so an
+                // auth-gating relay's kind-1059 subscription survives a
+                // reconnect with the WebView asleep, instead of waiting for it
+                // to wake and answer the bridge (which still signs too; a
+                // duplicate AUTH just re-authenticates).
+                Set<String> streamPks = relayToPks2.get(relayUrl);
+                if (streamPks != null && !streamPks.isEmpty()) {
+                    Map<String, String> secrets =
+                            ServiceStore.streamSecrets(this, new ArrayList<>(streamPks));
+                    long nowSecs = System.currentTimeMillis() / 1000;
+                    for (Map.Entry<String, String> entry : secrets.entrySet()) {
+                        byte[] sk = ConcordCrypto.hexToBytes(entry.getValue());
+                        if (sk == null || sk.length != 32) continue;
+                        try {
+                            if (!entry.getKey().equals(NostrCrypto.pubkeyOf(sk))) continue;
+                            JSONArray streamTags = new JSONArray()
+                                    .put(new JSONArray().put("relay").put(relayUrl))
+                                    .put(new JSONArray().put("challenge").put(challenge));
+                            deliverAuth(relayUrl, NostrCrypto.finalizeEvent(
+                                    22242, "", streamTags, nowSecs, sk).toString());
+                        } catch (Exception ignored) {
+                            // A stream that can't sign simply isn't authed.
+                        }
+                    }
                 }
                 return;
             }
@@ -3889,8 +3919,10 @@ public class NotificationRelayService extends Service {
      * the stream conversation key the config already ships; the wrap's
      * signature needs the stream SECRET, which is resolved from the group-key
      * memo in the shared store. Replies target the newest epoch held for the
-     * channel. A CORD-08 channel timer is not stamped — the service doesn't
-     * hold timer state, so a reply is simply a non-disappearing message.
+     * channel. While the community's CORD-08 timer is set (shipped as the
+     * sub's `timerSecs`), the rumor commits its NIP-40 deadline and the wrap
+     * repeats it, exactly like a WebView send — kind 9 is never an exempt
+     * kind, so the reply disappears like any other message.
      */
     private void sendConcord2Reply(NativeSigner signer, String roomKey, String text, MsgEntry sent) {
         final C2Stream target = c2ReplyStream(roomKey.substring(3));
@@ -3901,10 +3933,15 @@ public class NotificationRelayService extends Service {
         }
         final long nowMs = System.currentTimeMillis();
         final long createdAt = nowMs / 1000;
+        final long expiresAt =
+                target.stream.timerSecs > 0 ? createdAt + target.stream.timerSecs : 0;
         JSONArray rumorTags = new JSONArray()
                 .put(new JSONArray().put("channel").put(target.stream.channelId))
                 .put(new JSONArray().put("epoch").put(target.stream.epoch))
                 .put(new JSONArray().put("ms").put(String.valueOf(nowMs % 1000)));
+        if (expiresAt > 0) {
+            rumorTags.put(new JSONArray().put("expiration").put(String.valueOf(expiresAt)));
+        }
         final JSONObject rumor = new JSONObject();
         try {
             rumor.put("id", NostrCrypto.eventId(userPubkey, createdAt, 9, rumorTags, text));
@@ -3934,6 +3971,12 @@ public class NotificationRelayService extends Service {
                             try {
                                 JSONArray wrapTags = new JSONArray().put(new JSONArray()
                                         .put("p").put(NostrCrypto.pubkeyOf(randomSecretKey())));
+                                // CORD-08 §2: the wrap repeats the rumor's own
+                                // deadline so relays purge the ciphertext too.
+                                if (expiresAt > 0) {
+                                    wrapTags.put(new JSONArray()
+                                            .put("expiration").put(String.valueOf(expiresAt)));
+                                }
                                 built = NostrCrypto.finalizeEvent(
                                         1059, wrapContent, wrapTags,
                                         System.currentTimeMillis() / 1000, streamSk);
@@ -4038,7 +4081,16 @@ public class NotificationRelayService extends Service {
                 return;
             }
             long nowSecs = System.currentTimeMillis() / 1000;
+            // Disappearing messages: while the conversation's timer is set
+            // (the newest kind-1740 in the stored thread), the rumor commits
+            // its NIP-40 deadline; the seal and both wraps repeat it below —
+            // all three levels, matching nip17/protocol.ts.
+            long timerSecs = ServiceStore.dm17TimerSecs(this, userPubkey, peer);
+            final long expiresAt = timerSecs > 0 ? nowSecs + timerSecs : 0;
             JSONArray rumorTags = new JSONArray().put(new JSONArray().put("p").put(peer));
+            if (expiresAt > 0) {
+                rumorTags.put(new JSONArray().put("expiration").put(String.valueOf(expiresAt)));
+            }
             final JSONObject rumor = new JSONObject();
             try {
                 rumor.put("id", NostrCrypto.eventId(userPubkey, nowSecs, 14, rumorTags, text));
@@ -4052,7 +4104,7 @@ public class NotificationRelayService extends Service {
                 return;
             }
             final String rumorJson = rumor.toString();
-            buildDmEnvelope(signer, rumorJson, peer, peerWrap -> {
+            buildDmEnvelope(signer, rumorJson, peer, expiresAt, peerWrap -> {
                 if (peerWrap == null) {
                     finishReply(roomKey, sent, false);
                     return;
@@ -4068,7 +4120,7 @@ public class NotificationRelayService extends Service {
                 // The self copy, sealed + wrapped to ourselves, to our own DM
                 // relays. Best-effort: the peer copy above decides success, and
                 // the store write above is what our own thread reads anyway.
-                buildDmEnvelope(signer, rumorJson, userPubkey, selfWrap -> {
+                buildDmEnvelope(signer, rumorJson, userPubkey, expiresAt, selfWrap -> {
                     if (selfWrap != null && !dmRelays.isEmpty()) {
                         publishEvent(selfWrap, new ArrayList<>(dmRelays), selfOk -> { });
                     }
@@ -4081,15 +4133,24 @@ public class NotificationRelayService extends Service {
         void onWrap(JSONObject wrap);
     }
 
-    /** Seal + wrap a DM rumor to one recipient (both outer layers backdated). */
+    /**
+     * Seal + wrap a DM rumor to one recipient (both outer layers backdated).
+     * A non-zero {@code expiresAt} is repeated on the seal and the wrap — the
+     * outer tag is the only expiry a relay can act on, and the seal's copy is
+     * what a reader trusts without the wrap (nip17/protocol.ts).
+     */
     private void buildDmEnvelope(NativeSigner signer, String rumorJson, String recipient,
-                                 EnvelopeCallback cb) {
+                                 long expiresAt, EnvelopeCallback cb) {
         signer.encrypt44(recipient, rumorJson, (sealContent, unavailable) -> {
             if (sealContent == null) {
                 handler.post(() -> cb.onWrap(null));
                 return;
             }
-            signer.signEvent(13, sealContent, new JSONArray(), tweakedPast(), seal ->
+            JSONArray sealTags = new JSONArray();
+            if (expiresAt > 0) {
+                sealTags.put(new JSONArray().put("expiration").put(String.valueOf(expiresAt)));
+            }
+            signer.signEvent(13, sealContent, sealTags, tweakedPast(), seal ->
                     handler.post(() -> {
                         JSONObject wrap = null;
                         if (seal != null) {
@@ -4101,6 +4162,10 @@ public class NotificationRelayService extends Service {
                                 if (ct != null) {
                                     JSONArray tags = new JSONArray()
                                             .put(new JSONArray().put("p").put(recipient));
+                                    if (expiresAt > 0) {
+                                        tags.put(new JSONArray()
+                                                .put("expiration").put(String.valueOf(expiresAt)));
+                                    }
                                     wrap = NostrCrypto.finalizeEvent(
                                             1059, ct, tags, tweakedPast(), wrapSk);
                                 }

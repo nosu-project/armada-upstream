@@ -258,6 +258,11 @@ export interface ArmadaNotificationPlugin {
       communityImage?: CommunityNotifImage;
       /** "mentions only" — suppress non-mention messages (older binaries notify all). */
       mentionOnly?: boolean;
+      /**
+       * CORD-08 disappearing-message timer (seconds; 0/absent = off) so the
+       * native quick reply stamps its rumor + wrap with the NIP-40 deadline.
+       */
+      timerSecs?: number;
     }>;
     /**
      * The user's signer credential, shared with the service so it can open

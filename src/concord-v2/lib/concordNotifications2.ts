@@ -1,6 +1,7 @@
 import { bytesToHex } from "@noble/hashes/utils.js";
 
 import { channelsView } from "@/concord-v2/lib/community";
+import { messageExpirationOf } from "@/concord-v2/lib/disappearing";
 import { channelGitRepositoryAttachments } from "@/concord-v2/lib/types";
 import type { FoldedControl } from "@/concord-v2/lib/control";
 import type { GroupKey } from "@/concord-v2/lib/derive";
@@ -47,6 +48,15 @@ export interface Concord2Sub {
    * community has no icon.
    */
   communityImage?: { url: string; key: string; nonce: string; hash: string };
+  /**
+   * The community's CORD-08 disappearing-message timer (seconds; 0 = off),
+   * read from the control fold's metadata. The native quick reply stamps its
+   * rumor + wrap with `sendTime + timerSecs` so a reply sent from the
+   * notification shade disappears like any other message. A snapshot, like
+   * every other field here: a timer changed while the app is dead applies
+   * from the next reconfigure.
+   */
+  timerSecs: number;
   /** Public repository attachments folded from this channel's local metadata. */
   gitAttachments: ReturnType<typeof channelGitRepositoryAttachments>;
 }
@@ -73,6 +83,7 @@ export function buildConcord2Subs(
   const communityImage = icon
     ? { url: icon.url, key: icon.key, nonce: icon.nonce, hash: icon.hash }
     : undefined;
+  const timerSecs = messageExpirationOf(folded?.metadata);
   for (const channel of channelsView(community, folded)) {
     if (channel.streams.length === 0) continue;
     // EVERY held epoch registers for NIP-42 stream auth (backfill still reads
@@ -95,6 +106,7 @@ export function buildConcord2Subs(
         },
       ],
       communityImage,
+      timerSecs,
       gitAttachments: channelGitRepositoryAttachments(folded?.channels.get(channel.idHex)?.metadata ?? { name: channel.name, private: channel.isPrivate }),
     });
   }

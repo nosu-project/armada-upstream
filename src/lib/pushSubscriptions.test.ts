@@ -195,6 +195,7 @@ describe("buildPushSubscriptions", () => {
                 { pk: "s2", convKey: "k", epoch: "1" },
                 { pk: "s1", convKey: "k", epoch: "0" },
               ],
+              timerSecs: 0,
               gitAttachments: [],
             },
           ],
