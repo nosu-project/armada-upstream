@@ -2133,7 +2133,7 @@ public class NotificationRelayService extends Service {
                         final long rts = rumor.optLong("created_at", 0);
                         final long fTs = (rts > 0 ? rts * 1000L : System.currentTimeMillis());
                         resolveAuthor(peer, relayUrl, profile -> {
-                            String name = displayName(profile, peer);
+                            String name = displayName(profile);
                             String picture = profile != null ? profile.picture : null;
                             String line = preview.isEmpty() ? "Sent you a direct message" : preview;
                             if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY dm17 (signer) from=" + name);
@@ -2494,7 +2494,7 @@ public class NotificationRelayService extends Service {
                 return;
             }
             resolveAuthor(author, relayUrl, profile -> {
-                String name = displayName(profile, author);
+                String name = displayName(profile);
                 String picture = profile != null ? profile.picture : null;
                 String text = buildMessageText(preview, fMention, threadRoot != null);
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord: " + fRoom + " / " + name);
@@ -2597,7 +2597,7 @@ public class NotificationRelayService extends Service {
                     return;
                 }
                 resolveAuthor(author2, relayUrl, profile -> {
-                    String name = displayName(profile, author2);
+                    String name = displayName(profile);
                     String picture = profile != null ? profile.picture : null;
                     if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord2 reaction: " + fStR.name + " / " + name);
                     enqueueRoomMessage(
@@ -2637,7 +2637,7 @@ public class NotificationRelayService extends Service {
                 return;
             }
             resolveAuthor(author2, relayUrl, profile -> {
-                String name = displayName(profile, author2);
+                String name = displayName(profile);
                 String picture = profile != null ? profile.picture : null;
                 String text = buildMessageText(preview2, fMention2, threadRoot2 != null);
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord2: " + fSt.name + " / " + name);
@@ -2687,7 +2687,7 @@ public class NotificationRelayService extends Service {
         // MessagingStyle shows WHO via the sender Person, so the line is just the
         // message/verb; the room name is the conversation title.
         resolveAuthor(author, relayUrl, profile -> {
-            String name = displayName(profile, author);
+            String name = displayName(profile);
             final String picture = profile != null ? profile.picture : null;
             String line;
             String url;
@@ -2861,10 +2861,10 @@ public class NotificationRelayService extends Service {
      * Display name for a MENTIONED pubkey, resolved best-effort from what we
      * already hold (memory store, then the shared DB) — never the network, so a
      * mention can't delay or block the notification. An unknown mention falls
-     * back to a short id via {@link #displayName}, never a wrong name.
+     * back to "Anonymous" via {@link #displayName}, never a wrong name.
      */
     private String mentionName(String pubkeyHex) {
-        return displayName(cachedProfile(pubkeyHex), pubkeyHex);
+        return displayName(cachedProfile(pubkeyHex));
     }
 
     /** Synchronous profile lookup from cache/DB only; null when not held. */
@@ -2875,19 +2875,19 @@ public class NotificationRelayService extends Service {
             String raw = ServiceStore.profileRaw(this, pubkey);
             if (raw != null) return parseProfile(new JSONObject(raw));
         } catch (Exception ignored) {
-            // Unreadable row — treat as unknown (short-id fallback).
+            // Unreadable row — treat as unknown ("Anonymous" fallback).
         }
         return null;
     }
 
-    /** Display name from a resolved profile, falling back to a short npub-ish id. */
-    private static String displayName(Profile profile, String pubkey) {
+    /** Display name from a resolved profile, falling back to "Anonymous". */
+    private static String displayName(Profile profile) {
         if (profile != null && profile.name != null && !profile.name.isEmpty()) {
             return profile.name;
         }
         // Fall back to the NIP-05 identifier (its local-part, dropping a leading
-        // "_@" which conventionally means "the domain itself") before the raw
-        // pubkey stub, so a user with only a nip05 still gets a readable name.
+        // "_@" which conventionally means "the domain itself") before giving up,
+        // so a user with only a nip05 still gets a readable name.
         if (profile != null && profile.nip05 != null && !profile.nip05.isEmpty()) {
             String n = profile.nip05;
             int at = n.indexOf('@');
@@ -2899,10 +2899,7 @@ public class NotificationRelayService extends Service {
             }
             if (!n.isEmpty()) return n;
         }
-        if (pubkey != null && pubkey.length() >= 8) {
-            return "User " + pubkey.substring(0, 8);
-        }
-        return "Someone";
+        return "Anonymous";
     }
 
     /**
