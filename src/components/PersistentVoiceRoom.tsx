@@ -55,7 +55,14 @@ import { CallSignalsContext, type CallSignals } from "@/contexts/CallSignalsCont
 import { getDisplayName } from "@/lib/getDisplayName";
 import { relayToRouteParam } from "@/lib/platform";
 import { playJoinSound, playLeaveSound } from "@/lib/callSounds";
-import { getAudioProcessing, getPreferredCameraId, getPreferredMicId, getUserVolume, subscribeUserVolumes } from "@/lib/voiceDevices";
+import {
+  getAudioProcessing,
+  getPreferredCameraId,
+  getPreferredMicId,
+  getScreenShareVolume,
+  getUserVolume,
+  subscribeUserVolumes,
+} from "@/lib/voiceDevices";
 import { syncRnnoise } from "@/lib/voiceProcessor";
 import { cn } from "@/lib/utils";
 import { nip19 } from "nostr-tools";
@@ -166,15 +173,14 @@ function RosterReporter() {
 }
 
 /**
- * Keeps every remote participant's playback volume in sync with the persisted
- * per-pubkey store, for the whole call — independent of the call stage. The
- * stage's tiles also re-apply on (re)subscribe, but they only exist while the
- * stage is mounted; this applier runs even when the stage is closed, so a
- * volume change made from the audio-settings menu or the sidebar roster
- * takes effect on live audio immediately. Must render inside `LiveKitRoom`
- * (and, for Concord, inside the identity-resolver provider).
+ * Keeps every remote participant's microphone and screen-share playback gains
+ * in sync with their independent persisted stores for the whole call. The
+ * stage also re-applies on (re)subscribe, but this remains mounted while the
+ * stage is closed so changes from the audio menu or sidebar take effect live.
+ * Must render inside `LiveKitRoom` (and, for Concord, inside the identity
+ * resolver provider).
  */
-function UserVolumeApplier() {
+function PlaybackVolumeApplier() {
   const resolveIdentity = useVoiceIdentity();
   const participants = useParticipants();
 
@@ -183,11 +189,9 @@ function UserVolumeApplier() {
       for (const p of participants) {
         if (p.isLocal || !p.identity) continue;
         const { pubkey } = resolveIdentity(p.identity);
-        // The store/UI intent is 0–1 (0–100%). Clamp before handing the value
-        // to LiveKit: with the default room config (webAudioMix off)
-        // `setVolume` maps straight to `HTMLMediaElement.volume`, which throws
-        // outside [0, 1] — guards against stale values from older 0–200% builds.
-        (p as RemoteParticipant).setVolume(Math.min(Math.max(getUserVolume(pubkey), 0), 1));
+        const remote = p as RemoteParticipant;
+        remote.setVolume(getUserVolume(pubkey), Track.Source.Microphone);
+        remote.setVolume(getScreenShareVolume(pubkey), Track.Source.ScreenShareAudio);
       }
     };
     apply();
@@ -313,6 +317,11 @@ function useRoomOptions(extra?: Partial<RoomOptions>): RoomOptions {
         screenShareEncoding: VideoPresets.h1080.encoding,
       },
       ...extra,
+      // Route remote tracks through Web Audio GainNodes. Unlike media-element
+      // volume, this supports real gain above 100% and source-specific mic and
+      // screen-share controls. Keep this after `extra` so callers cannot
+      // accidentally disable the required gain path.
+      webAudioMix: true,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -536,7 +545,7 @@ function VoiceRoomShell({
       <SpeakingReporter />
       <MutedReporter />
       <RosterReporter />
-      <UserVolumeApplier />
+      <PlaybackVolumeApplier />
       {placeStage(
         <ServerScopeProvider relayUrl={scopeRelayUrl}>
           <CallStage callLabel={label} open={stageOpen} />
@@ -780,6 +789,8 @@ function ConcordVoiceRoom({
     const opts: RoomOptions = {
       adaptiveStream: true,
       dynacast: true,
+      // See useRoomOptions: source-specific 0–200% playback needs GainNodes.
+      webAudioMix: true,
       disconnectOnPageLeave,
       e2ee: { keyProvider, worker },
       audioCaptureDefaults: {

@@ -21,30 +21,36 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Slider } from "@/components/ui/slider";
 import { toast } from "@/hooks/useToast";
-import { useUserVolume } from "@/hooks/useUserVolume";
+import { useScreenShareVolume, useUserVolume } from "@/hooks/useUserVolume";
 import { writeClipboardText } from "@/lib/clipboard";
 import { tryNpubEncode } from "@/lib/safeNip19";
 import { cn } from "@/lib/utils";
+import { MAX_PLAYBACK_VOLUME } from "@/lib/voiceDevices";
+
+export type PlaybackVolumeTarget = "user" | "screenShare";
 
 /**
- * The mute-toggle + 0–100% volume slider row used inside voice user menus
- * (the call-stage nameplate dropdown and the right-click context menu).
+ * The mute-toggle + 0–200% volume slider row shared by voice-user and
+ * screen-share menus.
  */
 export function VolumeSliderRow({
   volume,
   apply,
   displayName,
+  target = "user",
 }: {
   volume: number;
   apply: (next: number) => void;
   displayName: string;
+  target?: PlaybackVolumeTarget;
 }) {
   const muted = volume === 0;
+  const targetLabel = target === "screenShare" ? "screen share" : "user";
   return (
     <div className="flex items-center gap-2">
       <button
         type="button"
-        aria-label={muted ? "Unmute user" : "Mute user"}
+        aria-label={muted ? `Unmute ${targetLabel}` : `Mute ${targetLabel}`}
         className="shrink-0 text-muted-foreground hover:text-foreground"
         onClick={() => apply(muted ? 1 : 0)}
       >
@@ -53,9 +59,12 @@ export function VolumeSliderRow({
       <Slider
         value={[volume]}
         min={0}
-        max={1}
+        max={MAX_PLAYBACK_VOLUME}
         step={0.05}
-        aria-label={`Volume for ${displayName}`}
+        aria-label={target === "screenShare"
+          ? `Screen share volume for ${displayName}`
+          : `Volume for ${displayName}`}
+        aria-valuetext={`${Math.round(volume * 100)}%`}
         onValueChange={([v]) => apply(v)}
       />
     </div>
@@ -63,22 +72,26 @@ export function VolumeSliderRow({
 }
 
 /**
- * The shared body of a voice user's menu — per-user volume slider, local mute
- * toggle, and copy npub — rendered via whichever primitive the caller passes
- * (context menu on right-click, dropdown menu on tap/click). Keeping one render
- * fn means both surfaces stay in lockstep, exactly like MemberList's member
- * menu. Volume state lives in the shared per-pubkey store (`useUserVolume`), so
- * the connected room applies changes live and every other control for the same
- * user stays in sync. Set `showVolume={false}` for the local user (there's no
- * local playback of your own audio to adjust).
+ * The shared body of a voice user's menu — source-specific volume slider,
+ * local mute toggle, and copy npub — rendered via whichever primitive the
+ * caller passes (context menu on right-click, dropdown menu on tap/click).
+ * Keeping one render fn means both surfaces stay in lockstep, exactly like
+ * MemberList's member menu. Volume state lives in the shared per-pubkey store,
+ * so the connected room applies changes live and every other control for the
+ * same user stays in sync. Set `showVolume={false}` for the local user (there's
+ * no local playback of your own audio to adjust).
  */
 function useVoiceMenuItems(
   pubkey: string,
   displayName: string,
   showVolume: boolean,
   verified: boolean,
+  volumeTarget: PlaybackVolumeTarget,
 ) {
-  const [volume, setVolume] = useUserVolume(pubkey);
+  const [userVolume, setUserVolume] = useUserVolume(pubkey);
+  const [screenShareVolume, setScreenShareVolume] = useScreenShareVolume(pubkey);
+  const volume = volumeTarget === "screenShare" ? screenShareVolume : userVolume;
+  const setVolume = volumeTarget === "screenShare" ? setScreenShareVolume : setUserVolume;
   const muted = volume === 0;
   const pct = Math.round(volume * 100);
 
@@ -107,6 +120,7 @@ function useVoiceMenuItems(
         <Label className="flex items-center justify-between gap-2">
           <span className="truncate">
             <DisplayName pubkey={verified ? pubkey : undefined} name={displayName} />
+            {volumeTarget === "screenShare" && " — screen share"}
           </span>
           {showVolume && (
             <span className="text-xs text-muted-foreground tabular-nums font-normal">{pct}%</span>
@@ -117,11 +131,16 @@ function useVoiceMenuItems(
             {/* Not a menu Item: the slider needs pointer drags, which Radix
                 item semantics would swallow. */}
             <div className="px-2 pb-2 pt-1">
-              <VolumeSliderRow volume={volume} apply={setVolume} displayName={displayName} />
+              <VolumeSliderRow
+                volume={volume}
+                apply={setVolume}
+                displayName={displayName}
+                target={volumeTarget}
+              />
             </div>
             <Separator />
             <CheckboxItem checked={muted} onSelect={() => setVolume(muted ? 1 : 0)}>
-              Mute
+              {volumeTarget === "screenShare" ? "Mute screen share" : "Mute"}
             </CheckboxItem>
           </>
         )}
@@ -146,11 +165,13 @@ export function VoiceUserContextMenu({
   displayName,
   showVolume = true,
   verified = true,
+  volumeTarget = "user",
   children,
 }: {
   pubkey: string;
   displayName: string;
   showVolume?: boolean;
+  volumeTarget?: PlaybackVolumeTarget;
   /**
    * Whether `pubkey` is a claim we've verified — i.e. whether the name (and the
    * custom emoji in it) are really theirs. Unverified claims render the name as
@@ -159,7 +180,13 @@ export function VoiceUserContextMenu({
   verified?: boolean;
   children: React.ReactNode;
 }) {
-  const renderMenuItems = useVoiceMenuItems(pubkey, displayName, showVolume, verified);
+  const renderMenuItems = useVoiceMenuItems(
+    pubkey,
+    displayName,
+    showVolume,
+    verified,
+    volumeTarget,
+  );
 
   return (
     <ContextMenu>
@@ -192,16 +219,24 @@ export function VoiceUserMenuButton({
   displayName,
   showVolume = true,
   verified = true,
+  volumeTarget = "user",
   className,
 }: {
   pubkey: string;
   displayName: string;
   showVolume?: boolean;
+  volumeTarget?: PlaybackVolumeTarget;
   /** See {@link VoiceUserContextMenu}. */
   verified?: boolean;
   className?: string;
 }) {
-  const renderMenuItems = useVoiceMenuItems(pubkey, displayName, showVolume, verified);
+  const renderMenuItems = useVoiceMenuItems(
+    pubkey,
+    displayName,
+    showVolume,
+    verified,
+    volumeTarget,
+  );
 
   return (
     <DropdownMenu>
