@@ -192,6 +192,15 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
   const configRef = useRef(config);
   configRef.current = config;
 
+  // AppProvider's localStorage setter is recreated when config changes. Relay
+  // discovery deliberately changes config in the middle of this sequence, so
+  // depending on that setter would clean up the active run immediately after
+  // `1 FOUND`; the once-per-pubkey guard would then refuse to restart it. Read
+  // the latest setter through a ref just like config so adoption cannot cancel
+  // the sync gate that is performing it.
+  const updateConfigRef = useRef(updateConfig);
+  updateConfigRef.current = updateConfig;
+
   const [state, setState] = useState<SyncState>({
     phase: "settings",
     log: [],
@@ -319,7 +328,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
               },
             };
             configRef.current = next;
-            updateConfig((live) => {
+            updateConfigRef.current((live) => {
               const sameLiveOwner = live.relayMetadata.pubkey === pubkey;
               if (sameLiveOwner && discovery.event.created_at <= live.relayMetadata.updatedAt) return live;
               return {
@@ -598,7 +607,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
     return () => {
       cancelled = true;
     };
-  }, [pubkey, user, nostr, queryClient, updateConfig]);
+  }, [pubkey, user, nostr, queryClient]);
 
   return state;
 }
