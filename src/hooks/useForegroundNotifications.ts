@@ -18,9 +18,17 @@ import {
 import { isRoomActive } from "@/lib/activeRooms";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
+import {
+  loadNotificationSoundSettings,
+  playNotificationSound,
+} from "@/lib/notificationSounds";
 import { normalizeRelayUrl } from "@/lib/platform";
 import { chatRoute, parseChatRoute } from "@/lib/routes";
 import { tryNpubEncode } from "@/lib/safeNip19";
+import {
+  installTabAttentionClearHandlers,
+  markTabAttention,
+} from "@/lib/tabAttention";
 import { registerNotifySink } from "@/wire/notify";
 import { useWireNip29Groups } from "@/wire/useWireNip29Groups";
 
@@ -31,18 +39,18 @@ import { useWireNip29Groups } from "@/wire/useWireNip29Groups";
  * native APK uses its background service instead). It surfaces the SAME
  * unread/mention signal the badges already compute — sourced from the wire's
  * ingest, which hands it every live event once — as a real OS
- * `new Notification(...)`.
+ * `new Notification(...)`, a selected in-app sound, and a browser-tab marker.
  *
  * This is complementary to Web Push (closed-tab delivery via the relay
  * gateway): it needs only the Notifications API + permission, so it works in
  * browsers where Web Push is unavailable (Brave with Google push disabled),
- * which otherwise get nothing while the app is open in the background. It fires
- * whether the tab is focused or backgrounded, except for the conversation the
- * user is currently looking at in a focused Armada window (see the active-room
- * gate).
+ * which otherwise get nothing while the app is open in the background. The
+ * in-app sound and tab marker do not require OS notification permission. Cues
+ * fire whether the tab is focused or backgrounded, except for the conversation
+ * the user is currently looking at in a focused Armada window (see the
+ * active-room gate).
  *
- * Gating (all must pass to notify):
- *   - the master foreground intent is on;
+ * Gating (all must pass to produce a cue):
  *   - the conversation's resolved notification level (Discord-style
  *     all/mentions/nothing, `useNotifLevels`, cascading channel → community →
  *     global per-type prefs) admits this message: `all` always, `mentions`
@@ -51,6 +59,9 @@ import { useWireNip29Groups } from "@/wire/useWireNip29Groups";
  *   - the user hasn't already read past it (`useReadState`, NIP-29/DM);
  *   - it's newer than this session's start AND newer than the last thing we
  *     notified for that room (so a backfill / re-ingest never re-alerts).
+ * The master foreground intent and OS permission gate only the system
+ * Notification; the selected in-app sound and inactive-tab marker remain
+ * useful without that permission.
  */
 
 /** Whether a candidate is admitted by a resolved notification level. */
@@ -145,6 +156,8 @@ export function useForegroundNotifications(): void {
     if (!user) return;
     if (isNativeRuntime()) return; // native has its own background service
 
+    const removeTabAttentionHandlers = installTabAttentionClearHandlers();
+
     // Resolve a display name for an author. Tries, in order: the react-query
     // author cache (populated when a profile has been viewed this session), the
     // shared event store's kind-0 (the wire keeps profiles flowing in), and
@@ -177,8 +190,11 @@ export function useForegroundNotifications(): void {
 
     const unregister = registerNotifySink((candidates) => {
       const intentOn = foregroundNotifyIntent();
-      if (!intentOn) return;
-      if (!notificationsApiAvailable() || Notification.permission !== "granted") return;
+      const canShowOsNotification = intentOn
+        && notificationsApiAvailable()
+        && Notification.permission === "granted";
+      const soundSettings = loadNotificationSoundSettings();
+      let playedSound = false;
 
       const c = ctx.current;
 
@@ -264,6 +280,18 @@ export function useForegroundNotifications(): void {
         lastNotified.current.set(roomKey, cand.createdAt);
         if (eventKey) notifiedEvents.current.add(eventKey);
 
+        // These page-owned cues work without Notification permission. A batch
+        // can contain multiple accepted events, but should produce one sound,
+        // not a stack of overlapping clips. The title marker itself is
+        // idempotent and only appears while the tab is hidden or unfocused.
+        markTabAttention();
+        if (soundSettings.enabled && !playedSound) {
+          playNotificationSound({ settings: soundSettings });
+          playedSound = true;
+        }
+
+        if (!canShowOsNotification) continue;
+
         // Resolve the title (async — needs the author's profile) then fire the
         // OS notification. Errors are swallowed so one bad event never breaks
         // the sink for the rest of the batch.
@@ -299,6 +327,9 @@ export function useForegroundNotifications(): void {
             const n = new Notification(title, {
               body,
               icon: "/favicon.png",
+              // Armada owns foreground audio so the selected sound isn't
+              // doubled by the browser's default notification tone.
+              silent: true,
               // Tag by room so repeated messages in the same conversation
               // collapse into one entry.
               tag: roomKey || "armada",
@@ -337,6 +368,7 @@ export function useForegroundNotifications(): void {
 
     return () => {
       unregister();
+      removeTabAttentionHandlers();
       navigator.serviceWorker?.removeEventListener("message", answerNotificationOwnerQuery);
     };
   }, [user]);

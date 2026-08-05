@@ -291,8 +291,8 @@ function NotificationNavigation() {
 }
 
 /**
- * Runs the foreground (in-page) notifier: toasts while focused, OS
- * notifications while backgrounded, for incoming messages/mentions/DMs. Must be
+ * Runs the foreground (in-page) notifier: selected sounds and inactive-tab
+ * markers plus OS notifications for incoming messages/mentions/DMs. Must be
  * inside the router (it navigates on notification click). Inert on native.
  */
 function ForegroundNotifications() {
