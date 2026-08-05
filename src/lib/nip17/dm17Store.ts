@@ -315,8 +315,16 @@ export async function queryDm17Thread(
  *
  * Each filter carries the full limit, so the union can be up to twice it; the
  * caller slices after the merge has put them in order.
+ *
+ * The conversation with YOURSELF (Note to Self) is the one case where those two
+ * directions are the same direction, and the incoming half degenerates to a
+ * filter that must not be run: `authors: [self]` with no `p` constraint is
+ * every DM the viewer has ever sent to anyone, so the union would empty the
+ * whole outbox into the notes. A self-addressed rumor names itself in `p` like
+ * any other, so the outgoing filter alone already selects exactly it — and only
+ * it, which is also why nothing another person wrote can appear there.
  */
-function conversationFilters(
+export function conversationFilters(
   self: string,
   peer: string,
   opts: { limit?: number; before?: number } = {},
@@ -324,6 +332,8 @@ function conversationFilters(
   const bounds: { limit?: number; until?: number } = {};
   if (opts.limit !== undefined) bounds.limit = opts.limit;
   if (opts.before !== undefined) bounds.until = opts.before - 1;
+
+  if (peer === self) return [{ kinds: DM_RUMOR_KINDS, authors: [self], "#p": [self], ...bounds }];
 
   return [
     { kinds: DM_RUMOR_KINDS, authors: [peer], ...bounds },

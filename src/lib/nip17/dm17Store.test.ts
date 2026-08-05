@@ -216,6 +216,43 @@ describe("dm17Store disappearing messages", () => {
   });
 });
 
+describe("dm17Store note to self", () => {
+  // Its own account: the conversation with yourself is read with `peer ===
+  // self`, and the shared fixtures above would make "only the notes" trivially
+  // true by having nothing else to leak in.
+  const me = getPublicKey(generateSecretKey());
+  const friend = getPublicKey(generateSecretKey());
+
+  it("reads back the notes addressed to yourself, and nothing else you sent", async () => {
+    const note = opened({ author: me, peer: me, tags: dmChatTags(me), content: "milk, eggs" });
+    const toFriend = opened({ author: me, peer: friend, tags: dmChatTags(friend), content: "sent to a person" });
+    const fromFriend = opened({ author: friend, peer: friend, tags: dmChatTags(me), content: "received" });
+    await writeDm17Rumors(me, [note, toFriend, fromFriend]);
+
+    // The general two-direction filter pair degenerates for a self thread: its
+    // incoming half is `authors: [me]` unqualified, which is every DM this
+    // account has ever SENT. Only the `p`-scoped half may run.
+    const thread = await queryDm17Thread(me, me, { limit: 50 });
+    expect(thread.map((r) => r.content)).toEqual(["milk, eggs"]);
+  });
+
+  it("lists the notes as an ordinary conversation the viewer authored", async () => {
+    const convos = await queryDm17Conversations(me);
+    const notes = convos.find((c) => c.peer === me);
+    expect(notes?.latest.content).toBe("milk, eggs");
+    // `mine` is what keeps it out of the request tier.
+    expect(notes?.mine).toBe(true);
+  });
+
+  it("keeps a timer set with a person out of the notes", async () => {
+    await writeDm17Rumors(me, [
+      opened({ author: me, peer: friend, kind: KIND_DM_TIMER, content: "", tags: dmTimerTags(friend, 3600) }),
+    ]);
+    expect(await queryDm17Timer(me, friend)).toBe(3600);
+    expect(await queryDm17Timer(me, me)).toBeUndefined();
+  });
+});
+
 describe("dm17Store legacy drain", () => {
   // The pre-tenant database was global: it recorded `peer`, never which
   // account opened the rumor. So the drain has to attribute each record from

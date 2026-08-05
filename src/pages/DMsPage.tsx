@@ -18,6 +18,7 @@ import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { VoicePresence } from "@/components/VoicePresence";
 import { BotPill } from "@/components/BotPill";
 import { DisplayName } from "@/components/DisplayName";
+import { NoteToSelfAvatar, NoteToSelfIcon, NOTE_TO_SELF_NAME } from "@/components/NoteToSelfAvatar";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -186,7 +187,11 @@ function ConversationRow({
 }) {
   const author = useAuthor(peer);
   const metadata = author.data?.metadata;
-  const name = getDisplayName(metadata, peer);
+  // The conversation with yourself is Note to Self: Signal's name and mark in
+  // place of your own profile, because a row showing your own face and handle
+  // reads as a message FROM you rather than as the place your notes live.
+  const noteToSelf = peer === selfPubkey;
+  const name = noteToSelf ? NOTE_TO_SELF_NAME : getDisplayName(metadata, peer);
 
   // Live voice presence for this DM (kind 39004), so we can show when the peer
   // is waiting in a call even if we haven't joined — mirroring the channel
@@ -229,25 +234,31 @@ function ConversationRow({
             active ? "bg-secondary" : "hover:bg-secondary/60",
           )}
         >
-          <Avatar shape={getAvatarShape(metadata)} className="size-12 shrink-0">
-            {/* A request's avatar is never fetched: the URL comes from the
-                sender's own profile, so rendering it would confirm to an
-                unknown party that their message reached a live reader. */}
-            {!request && <AvatarImage src={metadata?.picture} alt={name} />}
-            <AvatarFallback className="bg-primary/20 text-primary text-base">
-              {name[0]?.toUpperCase()}
-            </AvatarFallback>
-          </Avatar>
+          {noteToSelf ? (
+            <NoteToSelfAvatar sizePx={48} className="size-12" />
+          ) : (
+            <Avatar shape={getAvatarShape(metadata)} className="size-12 shrink-0">
+              {/* A request's avatar is never fetched: the URL comes from the
+                  sender's own profile, so rendering it would confirm to an
+                  unknown party that their message reached a live reader. */}
+              {!request && <AvatarImage src={metadata?.picture} alt={name} />}
+              <AvatarFallback className="bg-primary/20 text-primary text-base">
+                {name[0]?.toUpperCase()}
+              </AvatarFallback>
+            </Avatar>
+          )}
           <div className="min-w-0 flex-1 space-y-0.5">
             <div className="flex items-center gap-1.5 min-w-0">
               <div className={cn("text-[15px] truncate", unread ? "font-semibold text-foreground" : "font-medium")}>
                 {q ? (
                   <Highlight text={name} query={query} emojiTags={author.data?.event?.tags} />
+                ) : noteToSelf ? (
+                  name
                 ) : (
                   <DisplayName pubkey={peer} name={name} />
                 )}
               </div>
-              <BotPill metadata={metadata} />
+              {!noteToSelf && <BotPill metadata={metadata} />}
             </div>
             {(preview || secondLine) && (
               <div className={cn("text-sm truncate", unread ? "text-foreground/80" : "text-muted-foreground")}>
@@ -310,9 +321,14 @@ function ConversationRow({
                 </>
               )}
             </ContextMenuItem>
-            <ContextMenuItem onSelect={onClose}>
-              <X className="mr-2 size-4" /> Close DM
-            </ContextMenuItem>
+            {/* Note to Self is a fixture of the list, not a conversation the
+                user is in — there is nobody to stop hearing from, so it has no
+                close (the row would be back on the next render anyway). */}
+            {onClose && (
+              <ContextMenuItem onSelect={onClose}>
+                <X className="mr-2 size-4" /> Close DM
+              </ContextMenuItem>
+            )}
           </>
         )}
       </ContextMenuContent>
@@ -618,8 +634,12 @@ function Conversation({
   onAccept: () => void;
   onBack: () => void;
 }) {
+  const { user } = useCurrentUser();
   const author = useAuthor(peer);
-  const name = getDisplayName(author.data?.metadata, peer);
+  // See ConversationRow: a thread with yourself is Note to Self throughout —
+  // header, composer and empty state — not a thread with your own profile.
+  const noteToSelf = peer === user?.pubkey;
+  const name = noteToSelf ? NOTE_TO_SELF_NAME : getDisplayName(author.data?.metadata, peer);
   const dittoProfileHref = dittoProfileUrl(peer);
   const composerBoundsRef = useRef<HTMLElement | null>(null);
   const { transport, entries, syncing, disappearingTimer, setDisappearingTimer, encryptedIds, dm17Ids, dm17Enabled, dm17DeliveryGuaranteed, legacyPinned, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
@@ -646,7 +666,6 @@ function Conversation({
   const { markRead } = useReadState();
   const { dmLevel, setLevel: setNotifLevel } = useNotifLevels();
   const { toast } = useToast();
-  const { user } = useCurrentUser();
   const { config } = useAppContext();
   const { activeCall, joinDmCall, voiceRoomPubkeys } = useCall();
   const muteUser = useMuteUser();
@@ -941,19 +960,28 @@ function Conversation({
           <ChevronLeft className="size-5" />
         </Button>
         <div className="relative shrink-0">
-          <Avatar shape={getAvatarShape(author.data?.metadata)} className="size-7">
-            <AvatarImage src={author.data?.metadata?.picture} alt={name} />
-            <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
-              {name[0]?.toUpperCase()}
-            </AvatarFallback>
-          </Avatar>
-          {dm17Enabled && !dm17DeliveryGuaranteed && (
+          {noteToSelf ? (
+            <NoteToSelfAvatar sizePx={28} className="size-7" />
+          ) : (
+            <Avatar shape={getAvatarShape(author.data?.metadata)} className="size-7">
+              <AvatarImage src={author.data?.metadata?.picture} alt={name} />
+              <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
+                {name[0]?.toUpperCase()}
+              </AvatarFallback>
+            </Avatar>
+          )}
+          {/* Never on Note to Self: the badge means "this person may not be
+              reading the relays we can publish to", and the reader here is this
+              device, which already has the note before anything is published. */}
+          {dm17Enabled && !dm17DeliveryGuaranteed && !noteToSelf && (
             <DmBestEffortBadge peer={peer} name={name} className="absolute -bottom-1 -right-1" />
           )}
         </div>
         <div className="flex items-center gap-1.5 flex-1 min-w-0">
-          <h1 className="font-semibold truncate min-w-0"><DisplayName pubkey={peer} name={name} /></h1>
-          <BotPill metadata={author.data?.metadata} />
+          <h1 className="font-semibold truncate min-w-0">
+            {noteToSelf ? name : <DisplayName pubkey={peer} name={name} />}
+          </h1>
+          {!noteToSelf && <BotPill metadata={author.data?.metadata} />}
         </div>
         {/* Who's in this DM's voice room (others, not us) — shown whether or
             not we've joined, so the peer waiting in a call is visible. */}
@@ -1117,14 +1145,21 @@ function Conversation({
                 </a>
               </DropdownMenuItem>
             )}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              className="px-3 py-2 text-destructive focus:text-destructive"
-              onClick={() => setMuteConfirmOpen(true)}
-            >
-              <UserX className="size-4" />
-              Mute person
-            </DropdownMenuItem>
+            {/* Not offered on Note to Self. Mute writes the peer to the NIP-51
+                mute list, and the peer here is the viewer — muting yourself
+                would hide your own messages everywhere in the app. */}
+            {!noteToSelf && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="px-3 py-2 text-destructive focus:text-destructive"
+                  onClick={() => setMuteConfirmOpen(true)}
+                >
+                  <UserX className="size-4" />
+                  Mute person
+                </DropdownMenuItem>
+              </>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -1240,13 +1275,24 @@ function Conversation({
             ) : null
           }
           emptyState={
-            <div className="flex flex-col items-center justify-center py-16 text-center">
-              <MessageSquare className="size-10 text-muted-foreground/40 mb-3" />
-              <p className="text-sm text-muted-foreground">No messages yet</p>
-              <p className="text-xs text-muted-foreground/60 mt-1">
-                Say hello to <DisplayName pubkey={peer} name={name} />!
-              </p>
-            </div>
+            noteToSelf ? (
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <NoteToSelfIcon sizePx={40} className="size-10 text-muted-foreground/40 mb-3" />
+                <p className="text-sm text-muted-foreground">No notes yet</p>
+                <p className="text-xs text-muted-foreground/60 mt-1">
+                  Anything you send here is just for you, and syncs to your other
+                  devices.
+                </p>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <MessageSquare className="size-10 text-muted-foreground/40 mb-3" />
+                <p className="text-sm text-muted-foreground">No messages yet</p>
+                <p className="text-xs text-muted-foreground/60 mt-1">
+                  Say hello to <DisplayName pubkey={peer} name={name} />!
+                </p>
+              </div>
+            )
           }
           renderMessage={(msg, continuation) =>
             encryptedIds.has(msg.id) ? (
@@ -1338,7 +1384,7 @@ function Conversation({
           // the bot, so the invocation sends untagged (no routing leak, and it
           // rides inside NIP-17's sealed rumor like any other DM content).
           botDmPeer={peer}
-          placeholder={`Message ${name}…`}
+          placeholder={noteToSelf ? "Add a note…" : `Message ${name}…`}
           // Quote-replies use the NIP-C7 `q` marker (rich context, shared with
           // Concord's renderer); handleSubmit adds the NIP-17 `e` parent tag.
           replyTo={replyTo}
@@ -1414,7 +1460,12 @@ function RecipientSuggestion({
   followed: boolean;
   onSelect: () => void;
 }) {
-  const name = getDisplayName(metadata, pubkey);
+  const { user } = useCurrentUser();
+  // Picking yourself opens Note to Self, so name it that here too — otherwise
+  // the one row that leads there is the only place still labelled with your own
+  // handle, and it reads as messaging a stranger who happens to be you.
+  const noteToSelf = pubkey === user?.pubkey;
+  const name = noteToSelf ? NOTE_TO_SELF_NAME : getDisplayName(metadata, pubkey);
   const picture = sanitizeUrl(metadata?.picture);
   // Prefer a human-readable NIP-05 handle; fall back to the (truncated) npub.
   const npub = nip19.npubEncode(pubkey);
@@ -1430,20 +1481,28 @@ function RecipientSuggestion({
         active ? "bg-secondary" : "hover:bg-secondary/60",
       )}
     >
-      <Avatar shape={getAvatarShape(metadata)} className="size-9 shrink-0">
-        <AvatarImage src={picture} alt={name} />
-        <AvatarFallback className="bg-primary/20 text-primary text-xs">
-          {name[0]?.toUpperCase()}
-        </AvatarFallback>
-      </Avatar>
+      {noteToSelf ? (
+        <NoteToSelfAvatar sizePx={36} className="size-9" />
+      ) : (
+        <Avatar shape={getAvatarShape(metadata)} className="size-9 shrink-0">
+          <AvatarImage src={picture} alt={name} />
+          <AvatarFallback className="bg-primary/20 text-primary text-xs">
+            {name[0]?.toUpperCase()}
+          </AvatarFallback>
+        </Avatar>
+      )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
-          <span className="truncate text-sm font-medium"><DisplayName pubkey={pubkey} name={name} /></span>
-          {followed && (
+          <span className="truncate text-sm font-medium">
+            {noteToSelf ? name : <DisplayName pubkey={pubkey} name={name} />}
+          </span>
+          {followed && !noteToSelf && (
             <UserCheck className="size-3.5 shrink-0 text-primary" aria-label="You follow this person" />
           )}
         </div>
-        <span className="block truncate text-xs text-muted-foreground">{handle}</span>
+        <span className="block truncate text-xs text-muted-foreground">
+          {noteToSelf ? "Notes only you can read" : handle}
+        </span>
       </div>
     </button>
   );
@@ -1679,6 +1738,18 @@ function ConversationSectionHeader({
 type DmListView = "inbox" | "requests";
 
 /**
+ * One conversation-list row. `latest` is absent (as `undefined`, widened by the
+ * builders) for a thread with no messages yet — a freshly-opened peer, a
+ * started chat link, or Note to Self before its first note.
+ */
+interface DmListRow {
+  peer: string;
+  latest: NostrRumor;
+  plaintext?: string;
+  mine: boolean;
+}
+
+/**
  * The single row at the top of the conversation list that holds the request
  * tier, shown only when there's something in it.
  *
@@ -1851,6 +1922,9 @@ function ConversationList({
   // nothing.
   const sectioned = search.trim().length === 0 && pinnedRows.length > 0;
 
+  // Nothing but Note to Self — i.e. what used to be an empty list.
+  const onlyNoteToSelf = rows.length === 1 && rows[0]?.peer === user?.pubkey;
+
   const renderRow = (c: (typeof rows)[number], request = false) => (
     <ConversationRow
       key={c.peer}
@@ -1874,7 +1948,9 @@ function ConversationList({
       voiceRelay={voiceRelay ?? undefined}
       onClick={() => openPeer(c.peer)}
       onTogglePin={() => togglePin(c.peer)}
-      onClose={() => closePeer(c.peer, c.latest)}
+      // Note to Self is always in the list (see withNoteToSelf), so there is
+      // nothing a close could achieve — the row is re-added on the next render.
+      onClose={c.peer === user?.pubkey ? undefined : () => closePeer(c.peer, c.latest)}
       onBlock={() => void blockPeer(c.peer)}
     />
   );
@@ -2076,10 +2152,6 @@ function ConversationList({
           </>
         ) : isLoading ? (
           <ConversationRowSkeletons />
-        ) : rows.length === 0 && requestRows.length === 0 ? (
-          <p className="text-sm text-muted-foreground p-3">
-            No conversations yet. Start one with the + button.
-          </p>
         ) : (
           <>
             {/* Above the pinned section: the request tier is a property of the
@@ -2102,6 +2174,14 @@ function ConversationList({
               </>
             ) : (
               [...pinnedRows, ...otherRows].map((c) => renderRow(c))
+            )}
+            {/* The "start one" hint used to stand in for an empty list. Note to
+                Self is always a row, so the list is never empty — the hint goes
+                UNDER the only row there is instead of replacing it. */}
+            {onlyNoteToSelf && requestRows.length === 0 && search.trim().length === 0 && (
+              <p className="text-sm text-muted-foreground p-3">
+                No conversations yet. Start one with the + button.
+              </p>
             )}
             {isLoadingMore && (
               <div className="flex justify-center py-3">
@@ -2135,6 +2215,7 @@ export function DMsPage() {
   const navigate = useNavigate();
   const { peer: rawPeer } = useParams<{ peer: string }>();
   const { user } = useCurrentUser();
+  const self = user?.pubkey;
   // Either plane makes DMs usable: kind-4 needs nip04, NIP-17 needs nip44.
   const dmSupported = useDMSupport();
   const dm17Supported = useDm17Support();
@@ -2249,6 +2330,7 @@ export function DMsPage() {
     // first, so the newest lands nearest the top.
     for (const peer of startedPeers) {
       if (peer === activePeer) continue; // the rule below already places it
+      if (peer === self) continue; // Note to Self places itself — see withNoteToSelf
       if (sorted.some((c) => c.peer === peer)) continue; // it has real messages
       known.unshift({ peer, latest: undefined as unknown as NostrRumor, mine: false });
     }
@@ -2256,11 +2338,13 @@ export function DMsPage() {
     // user deliberately started: it belongs in the inbox, not the request pile.
     // (An EXISTING stranger conversation opened by deep link stays a request —
     // the list switches to the request view to show it instead.)
-    if (activePeer && !sorted.some((c) => c.peer === activePeer)) {
+    // Note to Self is excluded: it is in the list whether or not it is open, so
+    // hoisting it on open would move the row under the user as they clicked it.
+    if (activePeer && activePeer !== self && !sorted.some((c) => c.peer === activePeer)) {
       known.unshift({ peer: activePeer, latest: undefined as unknown as NostrRumor, mine: false });
     }
     return [known, requests];
-  }, [conversations, dm17Conversations, activePeer, isKnown, startedPeers]);
+  }, [conversations, dm17Conversations, activePeer, isKnown, startedPeers, self]);
 
   // A closed row is only a dismissal of the current latest message. As soon as
   // either participant sends another message, it becomes visible immediately;
@@ -2269,10 +2353,16 @@ export function DMsPage() {
     reopenForNewMessages(rows);
   }, [rows, reopenForNewMessages]);
 
-  const visibleRows = useMemo(
-    () => rows.filter((row) => !isDmClosed(row.peer, row.latest)),
-    [rows, isDmClosed],
+  // Note to Self is exempt: it is shown at all times, so a close marker could
+  // only ever strip the row of its preview (withNoteToSelf would re-add it
+  // message-less) rather than hide it. Markers from before it became a fixture
+  // of the list are the case this actually covers.
+  const isHidden = useCallback(
+    (row: DmListRow) => row.peer !== self && isDmClosed(row.peer, row.latest),
+    [self, isDmClosed],
   );
+
+  const visibleRows = useMemo(() => rows.filter((row) => !isHidden(row)), [rows, isHidden]);
 
   // Open a request's thread and the list follows it into the request view —
   // covers both clicking through and landing on `/dm/<stranger>` cold. It only
@@ -2311,22 +2401,46 @@ export function DMsPage() {
   }, [user?.pubkey]);
 
   const visibleRestoredRows = useMemo(
-    () => restoredRows.filter((row) => !isDmClosed(row.peer, row.latest)),
-    [restoredRows, isDmClosed],
+    () => restoredRows.filter((row) => !isHidden(row)),
+    [restoredRows, isHidden],
+  );
+
+  /**
+   * Guarantee the Note to Self row, wherever the list came from.
+   *
+   * It is a place to put something rather than a conversation that has to be
+   * started, so it is present before the first note exists — but it is not
+   * PINNED there: once it has notes it is an ordinary row that arrived through
+   * the merge above and sorts by its newest one like any other. Only the
+   * message-less case is appended, and it goes last, which is where a
+   * conversation whose newest message is "none" belongs.
+   *
+   * Applied here rather than inside `rows` so it covers the restored snapshot
+   * too — a cold start must not show the list without it for the window before
+   * the live rows land — and so the snapshot writer keeps seeing real rows only.
+   */
+  const withNoteToSelf = useCallback(
+    (list: DmListRow[]): DmListRow[] => {
+      if (!self || list.some((r) => r.peer === self)) return list;
+      return [...list, { peer: self, latest: undefined as unknown as NostrRumor, mine: true }];
+    },
+    [self],
   );
 
   // Skeletons are for a genuine cold start only: with a snapshot we show the
   // restored list instead, which is real content in the right order.
   const showSkeletons = isLoading && visibleRestoredRows.length === 0;
   const displayRows = useMemo(() => {
-    if (!isLoading || visibleRestoredRows.length === 0) return visibleRows;
+    if (!isLoading || visibleRestoredRows.length === 0) return withNoteToSelf(visibleRows);
     // Keep the open thread's row present even if it predates the snapshot.
-    if (!activePeer || visibleRestoredRows.some((r) => r.peer === activePeer)) return visibleRestoredRows;
-    return [
+    if (!activePeer || visibleRestoredRows.some((r) => r.peer === activePeer)) {
+      return withNoteToSelf(visibleRestoredRows);
+    }
+    return withNoteToSelf([
       { peer: activePeer, latest: undefined as unknown as NostrRumor, mine: false },
       ...visibleRestoredRows,
-    ];
-  }, [isLoading, visibleRestoredRows, visibleRows, activePeer]);
+    ]);
+  }, [isLoading, visibleRestoredRows, visibleRows, activePeer, withNoteToSelf]);
 
   // Persist the settled list for the next launch, debounced so a burst of live
   // messages coalesces. Gated on `!isLoading`, so a partial view is never

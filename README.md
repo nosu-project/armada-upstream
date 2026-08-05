@@ -116,3 +116,13 @@ the box; other hostnames need HTTPS.
   unchanged. Signal-Android is licensed AGPL-3.0, the same license as Armada,
   so the copy is license-compatible; the frames remain under their original
   copyright and license.
+- **Note to Self icon** — the three notepad glyphs in
+  `src/components/NoteToSelfAvatar.tsx` are the `symbol_note_compact_16`,
+  `symbol_note_24` and `symbol_note_display_bold_40` vector drawables from
+  [Signal-Android](https://github.com/signalapp/Signal-Android)
+  (`app/src/main/res/drawable/`), copyright Signal Messenger, LLC, converted
+  from Android `<vector>` `pathData` to SVG `d` attributes with the geometry
+  unchanged. Signal's size thresholds and its 0.625 icon-to-circle inset
+  (`FallbackAvatar`) are kept, as is its "Note to Self" label; the circle's
+  colours are Armada's. Same AGPL-3.0 compatibility as above; the glyphs remain
+  under their original copyright and license.
