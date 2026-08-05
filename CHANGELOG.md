@@ -4,6 +4,18 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.46.4] - 2026-08-05
+
+Your own lists and settings — follow and mute lists, your servers and communities, and how they're arranged — now sync reliably: a change made on another device is already there when you open the app, and on Android they keep syncing while the app is closed. Reading stored messages on Android also does substantially less work, so the app stutters less.
+
+### Changed
+- Reading stored messages on Android does substantially less work, reducing stutter and unresponsiveness
+
+### Fixed
+- Your lists and settings show the current version when the app opens, rather than only changes that arrived while it happened to be running, and refresh after the app has been in the background a while
+- On Android, your own lists and settings keep syncing while the app is closed
+- Settings are no longer republished on the basis of an incomplete read
+
 ## [0.46.3] - 2026-08-05
 
 Reply to a message straight from an Android notification, without opening the app — in servers, direct messages, and Concord communities. A quick reply honours the conversation's disappearing-message timer and appears in the notification thread under your own name and photo. Notifications for encrypted communities also keep arriving after a relay reconnects while the app is asleep.
