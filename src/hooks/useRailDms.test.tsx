@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defaultConfig, type AppConfig } from "@/contexts/AppContext";
+import { flattenLayout, mergeLayout } from "@/lib/railLayout";
 
 import { useRailDms } from "./useRailDms";
 
@@ -39,16 +40,20 @@ describe("useRailDms", () => {
     config = { ...defaultConfig, railLayout: [], railOrder: [], railOpenFolders: [] };
   });
 
-  it("adds a DM to the end of the rail, in both the layout and the flat order", () => {
+  // The top, not the end: the stored arrangement holds only what the user has
+  // arranged, and the rail's `mergeLayout` appends every live server and
+  // community it doesn't know AFTER it — so an appended DM would render in the
+  // middle. Only the top means the same place before and after that append.
+  it("adds a DM to the top of the rail, in both the layout and the flat order", () => {
     config.railLayout = [{ type: "item", key: RELAY_A }];
     const hook = railDms();
     hook.act((h) => h.addToRail(PEER));
 
     expect(config.railLayout).toEqual([
-      { type: "item", key: RELAY_A },
       { type: "item", key: `dm:${PEER}` },
+      { type: "item", key: RELAY_A },
     ]);
-    expect(config.railOrder).toEqual([RELAY_A, `dm:${PEER}`]);
+    expect(config.railOrder).toEqual([`dm:${PEER}`, RELAY_A]);
     expect(hook.current.railDms).toEqual([PEER]);
     expect(hook.current.isOnRail(PEER)).toBe(true);
     expect(hook.current.isOnRail(OTHER)).toBe(false);
@@ -62,12 +67,26 @@ describe("useRailDms", () => {
     const hook = railDms();
     hook.act((h) => h.addToRail(PEER));
 
-    expect(config.railOrder).toEqual([RELAY_B, RELAY_A, `dm:${PEER}`]);
+    expect(config.railOrder).toEqual([`dm:${PEER}`, RELAY_B, RELAY_A]);
     expect(config.railLayout).toEqual([
+      { type: "item", key: `dm:${PEER}` },
       { type: "item", key: RELAY_B },
       { type: "item", key: RELAY_A },
-      { type: "item", key: `dm:${PEER}` },
     ]);
+  });
+
+  // The regression the top placement exists for: a rail whose stored layout is
+  // behind the live lists (nothing dragged yet, or a community joined since).
+  it("lands above communities the stored arrangement doesn't mention yet", () => {
+    config.railLayout = [{ type: "item", key: RELAY_A }];
+    const hook = railDms();
+    hook.act((h) => h.addToRail(PEER));
+
+    // RELAY_B is live but unarranged, so the rail appends it after the stored
+    // keys. The DM must still be first — not wedged between the two.
+    expect(
+      flattenLayout(mergeLayout(config.railLayout, config.railOrder, [RELAY_A, RELAY_B])),
+    ).toEqual([`dm:${PEER}`, RELAY_A, RELAY_B]);
   });
 
   it("is idempotent — adding twice doesn't duplicate the icon", () => {

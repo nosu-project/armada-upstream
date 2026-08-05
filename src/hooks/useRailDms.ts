@@ -30,9 +30,12 @@ export interface UseRailDmsReturn {
  * other, and rides the same encrypted NIP-78 settings document to the user's
  * other devices.
  *
- * New entries land at the end of the top level rather than beside the DMs
- * button — the arrangement is the user's, so an addition takes the one
- * position that displaces nothing they arranged.
+ * New entries go to the TOP of the rail, directly under the DMs button. The
+ * end is not available to us: the stored arrangement holds only what the user
+ * has actually arranged, and `mergeLayout` appends every live server and
+ * community it doesn't yet know AFTER it — so appending here puts the icon
+ * ahead of all of those, i.e. in the middle. The top is the one position that
+ * is the same before and after that append.
  */
 export function useRailDms(): UseRailDmsReturn {
   const { config, updateConfig } = useAppContext();
@@ -55,7 +58,7 @@ export function useRailDms(): UseRailDmsReturn {
         // silently replacing the arrangement the user had.
         const base = mergeLayout(current.railLayout, current.railOrder, []);
         if (flattenLayout(base).includes(key)) return current;
-        const railLayout = normalizeLayout([...base, { type: "item", key }]);
+        const railLayout = normalizeLayout([{ type: "item", key }, ...base]);
         return { ...current, railLayout, railOrder: flattenLayout(railLayout) };
       });
     },

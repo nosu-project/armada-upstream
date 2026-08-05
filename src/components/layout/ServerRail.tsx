@@ -54,6 +54,7 @@ import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { useDragPointerDown, usePressDrag } from "@/hooks/usePressDrag";
+import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { relayToRouteParam } from "@/lib/platform";
 import {
@@ -240,15 +241,18 @@ function DmMiniIcon({ pubkey }: { pubkey: string }) {
   const name = noteToSelf ? NOTE_TO_SELF_NAME : getDisplayName(metadata, pubkey);
   const unread = useDmPeerUnread(pubkey);
   return (
-    <span className="relative flex items-center justify-center overflow-hidden rounded-full bg-primary/20 text-primary">
+    <span className="relative flex items-center justify-center">
       {noteToSelf ? (
         <NoteToSelfAvatar sizePx={16} className="size-full" />
-      ) : metadata?.picture ? (
-        <img src={metadata.picture} alt="" draggable={false} className="size-full object-cover" />
       ) : (
-        <span className="text-[9px] font-semibold leading-none">
-          {name.trim().charAt(0).toUpperCase() || "?"}
-        </span>
+        // The shared Avatar, so a profile's emoji shape masks the icon here
+        // exactly as it does in the DM list (and round when it has none).
+        <Avatar shape={getAvatarShape(metadata)} className="size-full">
+          <AvatarImage src={metadata?.picture} alt="" draggable={false} />
+          <AvatarFallback className="bg-primary/20 text-[9px] font-semibold leading-none text-primary">
+            {name.trim().charAt(0).toUpperCase() || "?"}
+          </AvatarFallback>
+        </Avatar>
       )}
       {/* A DM has no channels to be mentioned in — the message IS the mention,
           so it lights the same dot any unread does. */}
@@ -435,7 +439,7 @@ function DmDragGhost({ pubkey }: { pubkey: string }) {
       {noteToSelf ? (
         <NoteToSelfAvatar sizePx={48} className="size-12 ring-2 ring-primary" />
       ) : (
-        <Avatar className="size-12 ring-2 ring-primary">
+        <Avatar shape={getAvatarShape(metadata)} className="size-12 ring-2 ring-primary">
           <AvatarImage src={metadata?.picture} alt={name} />
           <AvatarFallback className="bg-primary/20 font-semibold text-primary">
             {name.trim().charAt(0).toUpperCase() || "?"}
@@ -1127,7 +1131,10 @@ const DmButton = memo(function DmButton({
                       {noteToSelf ? (
                         <NoteToSelfAvatar sizePx={48} className={cn("size-12", dimClass(isActive))} />
                       ) : (
-                        <Avatar className={cn("size-12", dimClass(isActive))}>
+                        <Avatar
+                          shape={getAvatarShape(metadata)}
+                          className={cn("size-12", dimClass(isActive))}
+                        >
                           <AvatarImage src={metadata?.picture} alt={name} />
                           <AvatarFallback className="bg-primary/20 font-semibold text-primary">
                             {name.trim().charAt(0).toUpperCase() || "?"}
