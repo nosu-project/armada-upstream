@@ -42,9 +42,25 @@ class ArmadaDbPlugin : Plugin() {
 
         try {
             val rumors = db.query(tenant, filters)
-            val array = JSONArray()
-            for (rumor in rumors) array.put(rumor.toJsonObject())
-            call.resolve(JSObject().put("rumors", array.toString()))
+
+            // Written straight out, not built into a `JSONArray` and
+            // stringified. Capacitor will escape whatever comes back into its
+            // own response envelope — a second full pass over the payload that
+            // is not ours to remove — so the one pass that IS ours has to be
+            // the cheap one. `org.json` was neither: it re-derived every rumor
+            // body from parsed fields, then appended the result a character at
+            // a time.
+            var hint = 2
+            for (rumor in rumors) hint += rumor.jsonSizeHint() + 1
+            val out = StringBuilder(hint)
+            out.append('[')
+            for ((i, rumor) in rumors.withIndex()) {
+                if (i > 0) out.append(',')
+                rumor.appendJsonTo(out)
+            }
+            out.append(']')
+
+            call.resolve(JSObject().put("rumors", out.toString()))
         } catch (error: Exception) {
             call.reject(error.message, error)
         }
@@ -176,11 +192,14 @@ class ArmadaDbPlugin : Plugin() {
                 limit = call.getInt("limit"),
                 reverse = call.getBoolean("reverse", false) == true,
             )
-            val array = JSONArray()
-            for (entry in entries) {
-                array.put(JSObject().put("key", entry.key).put("value", entry.json))
+            val out = StringBuilder()
+            out.append('[')
+            for ((i, entry) in entries.withIndex()) {
+                if (i > 0) out.append(',')
+                appendEntry(out, entry)
             }
-            call.resolve(JSObject().put("entries", array.toString()))
+            out.append(']')
+            call.resolve(JSObject().put("entries", out.toString()))
         } catch (error: Exception) {
             call.reject(error.message, error)
         }
@@ -226,19 +245,25 @@ class ArmadaDbPlugin : Plugin() {
 
         try {
             val results = db.kvOps(ops)
-            val out = JSONArray()
+            val out = StringBuilder()
+            out.append('[')
             for ((i, result) in results.withIndex()) {
+                if (i > 0) out.append(',')
                 if (ops[i] is SqliteArmadaDb.KvOp.Scan) {
-                    val entries = JSONArray()
+                    out.append('[')
                     @Suppress("UNCHECKED_CAST")
-                    for (entry in result as List<KvEntry>) {
-                        entries.put(JSONObject().put("key", entry.key).put("value", entry.json))
+                    for ((j, entry) in (result as List<KvEntry>).withIndex()) {
+                        if (j > 0) out.append(',')
+                        appendEntry(out, entry)
                     }
-                    out.put(entries)
+                    out.append(']')
+                } else if (result == null) {
+                    out.append("null")
                 } else {
-                    out.put(result ?: JSONObject.NULL)
+                    JsonText.quote(out, result as String)
                 }
             }
+            out.append(']')
             call.resolve(JSObject().put("results", out.toString()))
         } catch (error: Exception) {
             call.reject(error.message, error)
@@ -261,6 +286,19 @@ class ArmadaDbPlugin : Plugin() {
      * list that didn't parse is a programming error on the JS side, and
      * answering it with "no constraints" would hand back the whole tenant.
      */
+    /**
+     * One `{ key, value }` entry. `value` is the stored JSON TEXT carried as a
+     * string rather than spliced in: re-serializing it would risk respelling a
+     * number, and the WebView is the only side that parses.
+     */
+    private fun appendEntry(out: StringBuilder, entry: KvEntry) {
+        out.append("{\"key\":")
+        JsonText.quote(out, entry.key)
+        out.append(",\"value\":")
+        JsonText.quote(out, entry.json)
+        out.append('}')
+    }
+
     /** The string under [name], or null when absent — `optString` would return `""`. */
     private fun JSONObject.stringOrNull(name: String): String? =
         if (has(name) && !isNull(name)) getString(name) else null
