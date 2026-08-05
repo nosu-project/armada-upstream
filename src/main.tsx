@@ -101,12 +101,42 @@ if ("serviceWorker" in navigator) {
         .catch(() => {});
     }
   } else {
-    // Web: best-effort registration for push; if it fails (insecure origin,
-    // private browsing), push is simply unavailable.
-    window.addEventListener("load", () => {
-      navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch((err) => {
+    // Web: register immediately so the worker is active and its VAPID key can
+    // be prepared before a gesture-bound notification opt-in. Waiting for the
+    // load event could leave a fast onboarding tap with no ready worker.
+    // Include the build stamp in the script URL because the hosted CDN can
+    // cache /sw.js longer than the origin requests. A new URL per deployment
+    // makes the updated push worker available immediately instead of waiting
+    // for an edge-cache entry to expire.
+    const buildStamp = document.querySelector<HTMLMetaElement>('meta[name="build"]')?.content;
+    const serviceWorkerUrl = buildStamp
+      ? `/sw.js?v=${encodeURIComponent(buildStamp)}`
+      : "/sw.js";
+    navigator.serviceWorker
+      .register(serviceWorkerUrl, { scope: "/", updateViaCache: "none" })
+      .catch((err) => {
         console.warn("[sw] registration failed:", err);
       });
-    });
+
+    // A Home-Screen badge is useful while Armada is closed, but once the user
+    // returns the app itself is the source of truth for unread state. Clear the
+    // OS badge and the worker's persisted counter on launch/focus.
+    const clearWebAppBadge = () => {
+      if (document.visibilityState !== "visible") return;
+      const badgeNavigator = navigator as Navigator & { clearAppBadge?: () => Promise<void> };
+      void badgeNavigator.clearAppBadge?.().catch(() => {});
+      const clearWorkerCounter = (worker?: ServiceWorker | null) => {
+        worker?.postMessage({ type: "armada-clear-badge" });
+      };
+      if (navigator.serviceWorker.controller) {
+        clearWorkerCounter(navigator.serviceWorker.controller);
+      } else {
+        void navigator.serviceWorker.ready
+          .then((registration) => clearWorkerCounter(registration.active))
+          .catch(() => {});
+      }
+    };
+    clearWebAppBadge();
+    document.addEventListener("visibilitychange", clearWebAppBadge);
   }
 }

@@ -17,6 +17,8 @@ name: Deploy web
 #                             enabling privacy-friendly analytics in the HOSTED
 #                             build only; empty/unprovisioned = analytics off
 #   VITE_PLAUSIBLE_ENDPOINT   (optional) self-hosted/proxied Plausible API URL
+#   VITE_NOSTR_PUSH_PUBKEY     public hex/npub identity of the NIP-PUSH gateway
+#   VITE_NOSTR_PUSH_RELAYS     comma-separated rendezvous relays for its RPC
 #   VITE_BRIDGE_PORTAL_URL    (optional) Discord bridge portal origin (e.g.
 #                             https://bridge.armada.buzz); empty/unprovisioned
 #                             hides the Discord import UI entirely

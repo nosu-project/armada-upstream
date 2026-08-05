@@ -20,13 +20,23 @@ interface PushEventStub {
   waitUntil(promise: Promise<unknown>): void;
 }
 
-function loadWorker(options: { clients?: WindowClientStub[]; ownEventId?: string } = {}) {
+function loadWorker(options: {
+  clients?: WindowClientStub[];
+  ownEventId?: string;
+  badging?: boolean;
+} = {}) {
   const handlers = new Map<string, (event: unknown) => unknown>();
   const showNotification = vi.fn(async () => undefined);
+  const setAppBadge = vi.fn(async () => undefined);
+  let badgeResponse: Response | undefined;
   const cache = {
-    match: vi.fn(async (request: string) => (
-      options.ownEventId && request.includes(`/own/${options.ownEventId}`) ? {} : undefined
-    )),
+    match: vi.fn(async (request: string) => {
+      if (options.ownEventId && request.includes(`/own/${options.ownEventId}`)) return {};
+      if (request.endsWith("/.armada-push-state/badge")) return badgeResponse;
+      return undefined;
+    }),
+    put: vi.fn(async (_request: string, response: Response) => { badgeResponse = response; }),
+    delete: vi.fn(async () => true),
   };
   const clients = (options.clients ?? []).map((client) => ({
     ...client,
@@ -40,6 +50,7 @@ function loadWorker(options: { clients?: WindowClientStub[]; ownEventId?: string
   }));
   const self = {
     location: { origin: "https://armada.buzz" },
+    navigator: options.badging ? { setAppBadge, clearAppBadge: vi.fn() } : undefined,
     registration: { showNotification },
     clients: {
       matchAll: vi.fn(async () => clients),
@@ -61,6 +72,7 @@ function loadWorker(options: { clients?: WindowClientStub[]; ownEventId?: string
     caches,
     URL,
     MessageChannel,
+    Response,
     console,
     setTimeout,
     clearTimeout,
@@ -78,7 +90,7 @@ function loadWorker(options: { clients?: WindowClientStub[]; ownEventId?: string
     await pending;
   }
 
-  return { push, showNotification };
+  return { push, showNotification, setAppBadge };
 }
 
 describe("Web Push suppression", () => {
@@ -188,5 +200,11 @@ describe("Web Push suppression", () => {
     const worker = loadWorker();
     await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dm" });
     expect(worker.showNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it("increments the Home-Screen badge after displaying a push", async () => {
+    const worker = loadWorker({ badging: true });
+    await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dm" });
+    expect(worker.setAppBadge).toHaveBeenCalledWith(1);
   });
 });

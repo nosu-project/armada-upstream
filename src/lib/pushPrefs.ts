@@ -10,6 +10,8 @@
  * under `armada:push-prefs`, which each path reads directly.
  */
 
+import type { WebPushUnavailableReason } from "@/lib/webPushSupport";
+
 /** Discord-style per-type notification preferences. */
 export interface PushPrefs {
   /** Messages that mention you (p-tag). Default on. */
@@ -36,6 +38,12 @@ export const DEFAULT_PUSH_PREFS: PushPrefs = {
 export interface UsePushNotificationsReturn {
   /** Whether this browser/environment supports Web Push against a configured gateway. */
   supported: boolean;
+  /** Exact unavailable layer, so the UI does not mistake every failure for an old OS. */
+  unavailableReason?: WebPushUnavailableReason;
+  /** Whether the service worker and VAPID key are ready for a gesture-bound subscribe call. */
+  ready: boolean;
+  /** Recoverable preparation/registration failure, if one occurred. */
+  error?: string;
   /** Current Notification permission. */
   permission: NotificationPermission;
   /** Whether push is currently active (subscribed + registered). */
@@ -50,4 +58,6 @@ export interface UsePushNotificationsReturn {
   disable: () => Promise<void>;
   /** Update preferences; re-syncs the server record when enabled. */
   setPrefs: (next: PushPrefs) => Promise<void>;
+  /** Retry service-worker/VAPID preparation and server registration. */
+  retry: () => void;
 }
