@@ -1,9 +1,11 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { accountDataRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { normalizeRelayUrl } from "@/lib/platform";
+import { queryExplicitRelays } from "@/lib/nip65";
 
 /**
  * NIP-17 DM relay list kind. A user publishes the relays where they want to
@@ -39,6 +41,7 @@ export function parseDmRelays(event: { tags: string[][] } | undefined): string[]
 export function useDmRelayList() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
   const queryClient = useQueryClient();
 
   const queryKey = ["dm-relay-list", user?.pubkey];
@@ -47,9 +50,11 @@ export function useDmRelayList() {
     queryKey,
     enabled: !!user?.pubkey,
     queryFn: async ({ signal }) => {
-      const events = await nostr.query(
+      const events = await queryExplicitRelays(
+        nostr,
+        accountDataRelays(config, user!.pubkey),
         [{ kinds: [KIND_DM_RELAYS], authors: [user!.pubkey], limit: 1 }],
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(6000)]) },
+        AbortSignal.any([signal, AbortSignal.timeout(6000)]),
       );
       const event = events.sort((a, b) => b.created_at - a.created_at)[0];
       return parseDmRelays(event);

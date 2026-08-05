@@ -5,7 +5,7 @@ import { useEffect, useRef } from "react";
 import { useBootGateOpen } from "@/lib/bootGate";
 
 import { setBuzzMediaSigner } from "@/buzz/media";
-import { SYNCED_CONFIG_KEYS, type AppConfig, type RelayMetadata } from "@/contexts/AppContext";
+import { accountDataRelays, SYNCED_CONFIG_KEYS, type AppConfig } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
@@ -25,7 +25,7 @@ import { useTheme } from "@/hooks/useTheme";
 import { useReadState } from "@/hooks/useReadState";
 import { parseBlossomServerList } from "@/lib/blossom";
 import { KIND_BLOSSOM_SERVERS } from "@/hooks/useBlossomServerList";
-import { normalizeRelayUrl } from "@/lib/platform";
+import { parseRelayList, KIND_RELAY_LIST } from "@/lib/nip65";
 import { type EncryptedSettings } from "@/lib/schemas";
 import {
   KIND_APP_SPECIFIC,
@@ -63,28 +63,6 @@ const SELF_SYNC_FLUSH_MS = 60;
 function dTagOf(event: NostrEvent): string | undefined {
   for (const t of event.tags) if (t[0] === "d") return t[1];
   return undefined;
-}
-
-/** NIP-65 relay list. */
-const KIND_RELAY_LIST = 10002;
-
-/**
- * Parse a kind-10002 event's `r` tags into `RelayMetadata` relays. A bare `r`
- * tag (`["r", url]`) is both read and write; a marker (`"read"`/`"write"`)
- * restricts it. URLs are normalized and deduped, first-wins.
- */
-function parseRelayList(event: NostrEvent): RelayMetadata["relays"] {
-  const out: RelayMetadata["relays"] = [];
-  const seen = new Set<string>();
-  for (const t of event.tags) {
-    if (t[0] !== "r" || !t[1]) continue;
-    const url = normalizeRelayUrl(t[1]);
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
-    const marker = t[2];
-    out.push({ url, read: !marker || marker === "read", write: !marker || marker === "write" });
-  }
-  return out;
 }
 
 /** Pick just the synced fields out of AppConfig, dropping undefined values. */
@@ -149,6 +127,7 @@ function NostrSyncInner() {
   const { hydrate: hydrateReadState } = useReadState();
   const { applyCustomTheme } = useTheme();
   const queryClient = useQueryClient();
+  const selfRelayKey = accountDataRelays(config, user?.pubkey).sort().join("\u0000");
   useFavoriteGifsSync();
 
   const dittoCheckedPubkey = useRef<string | undefined>(undefined);
@@ -256,7 +235,7 @@ function NostrSyncInner() {
       controller.abort();
       if (flushTimer !== undefined) clearTimeout(flushTimer);
     };
-  }, [nostr, user?.pubkey, queryClient]);
+  }, [nostr, user?.pubkey, queryClient, selfRelayKey]);
 
   // ─── 1. Armada encrypted settings → local config ─────────────────────
   useEffect(() => {
@@ -290,6 +269,17 @@ function NostrSyncInner() {
       // the kind 10009 list, so there is nothing here to union.
       updateConfig((current) => {
         const next = { ...current, ...merged };
+        // NIP-65 is authoritative for its own timestamp. An older copy folded
+        // into Armada's encrypted settings must not replace a newer list just
+        // discovered directly from kind 10002.
+        if (merged.relayMetadata) {
+          const remoteRelayMetadata = { ...merged.relayMetadata, pubkey: user.pubkey };
+          next.relayMetadata =
+            current.relayMetadata.pubkey === user.pubkey
+            && remoteRelayMetadata.updatedAt < current.relayMetadata.updatedAt
+              ? current.relayMetadata
+              : remoteRelayMetadata;
+        }
         // Record what we just applied so the publish watcher treats it as
         // already-synced and doesn't echo it straight back out.
         lastSyncedSnapshot.current = JSON.stringify(syncedSubset(next));
@@ -505,10 +495,11 @@ function NostrSyncInner() {
         const relays = parseRelayList(event);
         if (relays.length === 0) return;
         updateConfig((current) => {
-          if (event.created_at <= current.relayMetadata.updatedAt) return current;
+          const sameOwner = current.relayMetadata.pubkey === user.pubkey;
+          if (sameOwner && event.created_at <= current.relayMetadata.updatedAt) return current;
           const next = {
             ...current,
-            relayMetadata: { relays, updatedAt: event.created_at },
+            relayMetadata: { relays, updatedAt: event.created_at, pubkey: user.pubkey },
           };
           // Sync-driven (hydrating the user's own 10002 list), not a user edit
           // — keep the publish baseline in lockstep so it isn't broadcast back.

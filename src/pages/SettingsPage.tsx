@@ -33,6 +33,7 @@ import { EmojiPackSettings } from "@/components/settings/EmojiPackSettings";
 import { ProfileSettings } from "@/components/ProfileSettings";
 import { NotificationSettings } from "@/components/NotificationSettings";
 import { RelayListEditor } from "@/components/RelayListEditor";
+import { RelayBootstrapForm } from "@/components/RelayBootstrapForm";
 import { KeyBackupSettings } from "@/components/settings/KeyBackupSettings";
 import { SettingsRow } from "@/components/settings/SettingsSection";
 import { WalletSettings } from "@/components/settings/WalletSettings";
@@ -376,7 +377,11 @@ export function SettingsPage() {
           </>
         );
       case "app-relays": {
-        const userRelayUrls = config.relayMetadata.relays.map((r) => r.url);
+        const ownsRelayList =
+          !config.relayMetadata.pubkey || config.relayMetadata.pubkey === user?.pubkey;
+        const userRelayUrls = ownsRelayList
+          ? config.relayMetadata.relays.map((r) => r.url)
+          : [];
         return (
           <>
             <SettingsRow>
@@ -425,6 +430,14 @@ export function SettingsPage() {
                     emptyText="No NIP-65 relay list found yet — publish one from another client and it'll appear here."
                   />
                 </div>
+              </SettingsRow>
+            )}
+            {user && userRelayUrls.length === 0 && (
+              <SettingsRow
+                label="Find or publish my relay list"
+                description="Look for your signed NIP-65 list using one bootstrap relay. If none exists, Armada can publish that relay only after you approve the signature."
+              >
+                <RelayBootstrapForm />
               </SettingsRow>
             )}
           </>

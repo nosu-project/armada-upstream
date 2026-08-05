@@ -25,6 +25,8 @@ export interface ClosedDmMarker {
 export interface RelayMetadata {
   relays: { url: string; read: boolean; write: boolean }[];
   updatedAt: number;
+  /** Owner of this replaceable list; absent only on pre-migration local data. */
+  pubkey?: string;
 }
 
 /**
@@ -477,8 +479,9 @@ export function effectiveDmRelays(config: AppConfig): string[] {
  * `getEffectiveRelays` (the `useUserRelays` half); the app relays are added
  * separately and always, so this returns ONLY the user's personal read relays.
  */
-export function userReadRelays(config: AppConfig): string[] {
+export function userReadRelays(config: AppConfig, pubkey?: string): string[] {
   if (!config.useUserRelays) return [];
+  if (pubkey && config.relayMetadata.pubkey && config.relayMetadata.pubkey !== pubkey) return [];
   return config.relayMetadata.relays.filter((r) => r.read).map((r) => r.url);
 }
 
@@ -487,15 +490,18 @@ export function userReadRelays(config: AppConfig): string[] {
  * routing, or none when `useUserRelays` is off. Companion to
  * `userReadRelays` — see there.
  */
-export function userWriteRelays(config: AppConfig): string[] {
+export function userWriteRelays(config: AppConfig, pubkey?: string): string[] {
   if (!config.useUserRelays) return [];
+  if (pubkey && config.relayMetadata.pubkey && config.relayMetadata.pubkey !== pubkey) return [];
   return config.relayMetadata.relays.filter((r) => r.write).map((r) => r.url);
 }
 
 /**
  * The relays a user's ACCOUNT-DATA singletons live on — app relays (unless the
- * user switched them off), the platform pins, and the user's own NIP-65 read
- * relays when `useUserRelays` is on. Deliberately EXCLUDES joined NIP-29 group
+ * user switched them off) and the user's own NIP-65 WRITE relays when
+ * `useUserRelays` is on. NIP-65's marker describes the user's behavior: their
+ * authored events are downloaded from their write relays; their read relays
+ * receive events that mention them. Deliberately EXCLUDES joined NIP-29 group
  * relays: a personal replaceable list (kind 10030 emojis, etc.) is account data
  * this client publishes to the app relays, not group-scoped traffic.
  *
@@ -507,7 +513,7 @@ export function userWriteRelays(config: AppConfig): string[] {
  * account-data relays keeps the all-relays EOSE achievable — and is where the
  * list actually is.
  */
-export function accountDataRelays(config: AppConfig): string[] {
+export function accountDataRelays(config: AppConfig, pubkey?: string): string[] {
   const urls = new Set<string>();
   if (config.useAppRelays) {
     for (const url of config.appRelays) {
@@ -515,7 +521,7 @@ export function accountDataRelays(config: AppConfig): string[] {
       if (normalized) urls.add(normalized);
     }
   }
-  for (const url of userReadRelays(config)) {
+  for (const url of userWriteRelays(config, pubkey)) {
     const normalized = normalizeRelayUrl(url);
     if (normalized) urls.add(normalized);
   }

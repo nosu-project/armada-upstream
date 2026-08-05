@@ -6,6 +6,8 @@ interface ImportMetaEnv {
   readonly VITE_KLIPY_API_KEY?: string;
   readonly VITE_APP_RELAYS?: string;
   readonly VITE_SEARCH_RELAYS?: string;
+  /** Comma-separated NIP-65 indexers used only for bounded login discovery. */
+  readonly VITE_NIP65_DISCOVERY_RELAYS?: string;
   /** NIP-34 repository directory relay. Empty = no directory search. */
   readonly VITE_GIT_DISCOVERY_RELAY?: string;
   readonly VITE_APP_BLOSSOM_SERVERS?: string;

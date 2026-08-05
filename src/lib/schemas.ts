@@ -37,6 +37,7 @@ export const RelayMetadataSchema = z.object({
     z.object({ url: z.string(), read: z.boolean(), write: z.boolean() }),
   ),
   updatedAt: z.number(),
+  pubkey: z.string().optional(),
 });
 
 /**

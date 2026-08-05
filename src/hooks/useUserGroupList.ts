@@ -2,6 +2,8 @@ import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 
+import { accountDataRelays } from "@/contexts/AppContext";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
@@ -16,6 +18,7 @@ import {
 import { normalizeRelayUrl } from "@/lib/platform";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import { groupListFoldKey, type PersistedGroupList } from "@/lib/nip29ServerCache";
+import { queryExplicitRelays } from "@/lib/nip65";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";
@@ -96,6 +99,7 @@ async function readGroupListEvent(
 export function useUserGroupList() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
   const eventStore = useEventStore();
   const queryClient = useQueryClient();
 
@@ -156,9 +160,11 @@ export function useUserGroupList() {
   return useQuery({
     queryKey,
     queryFn: async ({ signal }) => {
-      const events = await nostr.query(
+      const events = await queryExplicitRelays(
+        nostr,
+        accountDataRelays(config, user!.pubkey),
         [{ kinds: [KIND_USER_GROUPS], authors: [user!.pubkey], limit: 1 }],
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]) },
+        AbortSignal.any([signal, AbortSignal.timeout(8000)]),
       );
       const latest = events.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
 

@@ -1,10 +1,12 @@
 import { Capacitor } from "@capacitor/core";
-import { BatteryCharging, Bell, Lock } from "lucide-react";
+import { BatteryCharging, Bell, Lock, Waypoints } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { WizardShell, WizardStepBody } from "@/components/onboarding/WizardShell";
 import { useSyncGateActive } from "@/components/SyncGate";
 import { Button } from "@/components/ui/button";
+import { RelayBootstrapForm } from "@/components/RelayBootstrapForm";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useOnboardingActive } from "@/hooks/useOnboarding";
 import {
@@ -46,7 +48,7 @@ import {
  */
 
 /** Steps, in the order they're offered. */
-type StepId = "notifications" | "webpush" | "battery" | "decrypt";
+type StepId = "relays" | "notifications" | "webpush" | "battery" | "decrypt";
 
 /**
  * Set once the notification step has been shown. Unlike the old launch-time OS
@@ -55,6 +57,9 @@ type StepId = "notifications" | "webpush" | "battery" | "decrypt";
  * back in.
  */
 const NOTIF_PROMPT_KEY = "armada:notif-prompt-shown";
+
+/** Per-account marker: a skipped relay bootstrap stays available in Settings. */
+const relayPromptKey = (pubkey: string) => `armada:relay-prompt-shown:${pubkey}`;
 
 /**
  * Timestamp (ms) of the last battery-exemption nudge. Without the exemption,
@@ -96,6 +101,7 @@ async function batteryStepApplies(): Promise<boolean> {
 
 export function LoginSetup() {
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
   const syncing = useSyncGateActive();
   // Signup logs the user in before the profile/create-join steps render (and
   // suppresses the sync gate), so hold every step until the wizard is done —
@@ -125,6 +131,18 @@ export function LoginSetup() {
   // It asks us to surface the step here — parallel to the native
   // `NotificationsStep`, but for web/PWA.
   useEffect(() => registerWebPushOptInOpener(() => enqueue("webpush")), [enqueue]);
+
+  // Automatic login discovery adopts a signed NIP-65 list before the sync gate
+  // lifts. When no list exists, offer one explicit bootstrap/publish step. A
+  // skip is remembered per account and the same form remains in Settings.
+  useEffect(() => {
+    if (!user || syncing || onboarding) return;
+    const ownsRelayList =
+      !config.relayMetadata.pubkey || config.relayMetadata.pubkey === user.pubkey;
+    if (ownsRelayList && config.relayMetadata.relays.length > 0) return;
+    if (read(relayPromptKey(user.pubkey))) return;
+    enqueue("relays");
+  }, [user, syncing, onboarding, config.relayMetadata, enqueue]);
 
   // If this unmounts with a decrypt prompt still queued, the callers awaiting
   // that decision would hang forever. Release them as "not now" (unpersisted,
@@ -165,10 +183,11 @@ export function LoginSetup() {
   // Record that a step was surfaced as it renders, so a user who force-quits
   // mid-flow isn't asked the same thing on every launch.
   useEffect(() => {
+    if (step === "relays" && user?.pubkey) write(relayPromptKey(user.pubkey), "1");
     if (step === "notifications") write(NOTIF_PROMPT_KEY, "1");
     if (step === "webpush") markWebPushPromptShown();
     if (step === "battery") write(BATTERY_NUDGE_KEY, String(Date.now()));
-  }, [step]);
+  }, [step, user?.pubkey]);
 
   if (!step || syncing || onboarding) return null;
 
@@ -186,10 +205,27 @@ export function LoginSetup() {
           }}
         />
       )}
+      {step === "relays" && <RelayStep onDone={advance} />}
       {step === "webpush" && <WebPushStep onDone={advance} />}
       {step === "battery" && <BatteryStep onDone={advance} />}
       {step === "decrypt" && <DecryptStep onDone={advance} />}
     </WizardShell>
+  );
+}
+
+function RelayStep({ onDone }: { onDone: () => void }) {
+  return (
+    <WizardStepBody
+      glyph={
+        <StepGlyph>
+          <Waypoints className="size-9" />
+        </StepGlyph>
+      }
+      title="find your relays"
+      description="Armada couldn't find a signed NIP-65 relay list for this account. Enter one relay that may hold your setup; if no list exists, you can explicitly publish that relay as your starting read and write relay."
+    >
+      <RelayBootstrapForm onDone={onDone} onSkip={onDone} />
+    </WizardStepBody>
   );
 }
 

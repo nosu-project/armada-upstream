@@ -4,10 +4,13 @@ import { useRef } from "react";
 
 import type { NostrFilter, NostrSigner } from "@nostrify/nostrify";
 
+import { accountDataRelays } from "@/contexts/AppContext";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { APP_NAME } from "@/lib/platform";
 import { EncryptedSettingsSchema, type EncryptedSettings } from "@/lib/schemas";
+import { queryExplicitRelays } from "@/lib/nip65";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** NIP-78 application-data kind. */
@@ -79,6 +82,7 @@ export function setLocalSettingsSync(pubkey: string, lastSync: number): void {
 export function useEncryptedSettings() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
   const eventStore = useEventStore();
   const queryClient = useQueryClient();
   const pendingSettings = useRef<EncryptedSettings | null>(null);
@@ -91,9 +95,11 @@ export function useEncryptedSettings() {
     queryFn: async ({ signal }) => {
       if (!user?.signer.nip44) return null;
 
-      const events = await nostr.query(
+      const events = await queryExplicitRelays(
+        nostr,
+        accountDataRelays(config, user.pubkey),
         [settingsFilter(user.pubkey)],
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(6000)]) },
+        AbortSignal.any([signal, AbortSignal.timeout(6000)]),
       );
 
       const event = events.sort((a, b) => b.created_at - a.created_at)[0];

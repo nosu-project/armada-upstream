@@ -74,6 +74,12 @@ the box; other hostnames need HTTPS.
   mention autocomplete); `search` filters route only to these (default
   `wss://relay.ditto.pub,wss://relay.dreamith.to`). User-editable in Settings;
   when empty, search falls back to the app relays.
+- `VITE_NIP65_DISCOVERY_RELAYS` — comma-separated public NIP-65 indexes queried
+  once after login to locate the user's signed kind-10002 read/write relay list
+  (default `wss://purplepag.es,wss://user.kindpag.es,wss://relay.nos.social`).
+  These are discovery-only: they never enter the general pool or receive normal
+  account traffic. Set it empty to use only the app relays and user-entered
+  bootstrap hints for discovery.
 - `VITE_APP_BLOSSOM_SERVERS` — comma-separated default Blossom media servers
   (BUD-03) uploads fall back to, in the style of `VITE_APP_RELAYS` (default
   `https://blossom.ditto.pub/,https://blossom.dreamith.to/,https://blossom.primal.net/`).
