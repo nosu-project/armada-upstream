@@ -150,11 +150,10 @@ public class NotificationRelayService extends Service {
     static final String EXTRA_CHANNEL_TS = "armada_channel_ts";
     // "Reply" notification action: a RemoteInput whose text the service sends
     // back into the conversation ITSELF — a NIP-29 kind 9, a NIP-17
-    // gift-wrapped DM, or a Concord V1 sealed message — with the shared signer
-    // credential, so a reply typed on the lockscreen goes out with the app
-    // dead. Delivered as a start intent, exactly like Mark read. Rooms with no
-    // native send path (Concord V2: the wrap needs the stream SECRET key,
-    // which never crosses the bridge) don't get the action at all.
+    // gift-wrapped DM, or a Concord V1/V2 sealed message — with the shared
+    // signer credential, so a reply typed on the lockscreen goes out with the
+    // app dead. Delivered as a start intent, exactly like Mark read. Rooms
+    // with no native send path don't get the action at all.
     static final String ACTION_REPLY = "buzz.armada.app.action.REPLY";
     static final String KEY_TEXT_REPLY = "armada_text_reply";
     // How long a reply publish waits for any relay's OK before failing.
@@ -3499,8 +3498,8 @@ public class NotificationRelayService extends Service {
         b.setGroup(GROUP_PREFIX + "room:" + room.roomKey);
         // "Reply": a RemoteInput the service publishes back into the
         // conversation natively (see handleReply). Only on rooms with a real
-        // send path — no shared signer, or a protocol the service can't build
-        // end-to-end (Concord V2), leaves Mark read alone.
+        // send path — no shared signer, or a room the config can't route a
+        // send for, leaves Mark read alone.
         if (canReply(room)) {
             RemoteInput input = new RemoteInput.Builder(KEY_TEXT_REPLY)
                     .setLabel("Reply")
@@ -3611,9 +3610,10 @@ public class NotificationRelayService extends Service {
      * seal → wrap; the signer covers the seal's encrypt + sign for every login
      * type), NIP-29 rooms as a plain kind 9 to the group's host relay, Concord
      * V1 rooms as an inner signed by the user sealed under the channel key the
-     * config already ships. Concord V2 is absent DELIBERATELY: its wrap must
-     * be signed by the stream secret key, which never crosses the bridge (see
-     * nativeNotifications.ts) — those rooms keep Mark read only.
+     * config already ships, and Concord V2 rooms as a CORD-02 rumor → seal →
+     * wrap — the seal signed through the shared signer, the wrap by the stream
+     * secret read from the group-key memo the WebView persists in the shared
+     * ArmadaDB (no key crosses the plugin bridge; see streamSecretFor).
      */
     private boolean canReply(RoomNotif room) {
         if (nativeSigner == null || userPubkey == null || room.roomKey == null) return false;
@@ -3621,6 +3621,11 @@ public class NotificationRelayService extends Service {
         if (key.startsWith("dm:")) return key.length() == 3 + 64;
         if (key.startsWith("h:")) return key.substring(2).lastIndexOf('|') > 0;
         if (key.startsWith("z:")) return v1ReplyTarget(key.substring(2)) != null;
+        // Config-only check (no DB read on every post); the stream secret is
+        // resolved from the store at send time and fails the reply visibly if
+        // the memo lacks it (possible only if the WebView never derived it —
+        // which would also mean it could never have configured the stream).
+        if (key.startsWith("c2:")) return c2ReplyStream(key.substring(3)) != null;
         return false;
     }
 
@@ -3675,6 +3680,8 @@ public class NotificationRelayService extends Service {
             sendNip29Reply(signer, roomKey, text, sent);
         } else if (roomKey.startsWith("z:")) {
             sendConcord1Reply(signer, roomKey, text, sent);
+        } else if (roomKey.startsWith("c2:")) {
+            sendConcord2Reply(signer, roomKey, text, sent);
         } else {
             finishReply(roomKey, sent, false);
         }
@@ -3870,6 +3877,145 @@ public class NotificationRelayService extends Service {
             return Long.parseLong(epoch);
         } catch (NumberFormatException e) {
             return -1;
+        }
+    }
+
+    /**
+     * Concord V2 (CORD-02): rumor (kind 9, channel/epoch/ms binding tags,
+     * mirroring useChannel2's send) → seal (kind 20013, the rumor NIP-44'd
+     * under the STREAM conversation key, signed by the user through the shared
+     * signer) → wrap (kind 1059, random ephemeral `p`, real timestamp, signed
+     * by the stream key — NIP-59 reversed, CORD-01). Both encrypt layers ride
+     * the stream conversation key the config already ships; the wrap's
+     * signature needs the stream SECRET, which is resolved from the group-key
+     * memo in the shared store. Replies target the newest epoch held for the
+     * channel. A CORD-08 channel timer is not stamped — the service doesn't
+     * hold timer state, so a reply is simply a non-disappearing message.
+     */
+    private void sendConcord2Reply(NativeSigner signer, String roomKey, String text, MsgEntry sent) {
+        final C2Stream target = c2ReplyStream(roomKey.substring(3));
+        final byte[] streamSk = target != null ? streamSecretFor(target.pk) : null;
+        if (target == null || streamSk == null) {
+            finishReply(roomKey, sent, false);
+            return;
+        }
+        final long nowMs = System.currentTimeMillis();
+        final long createdAt = nowMs / 1000;
+        JSONArray rumorTags = new JSONArray()
+                .put(new JSONArray().put("channel").put(target.stream.channelId))
+                .put(new JSONArray().put("epoch").put(target.stream.epoch))
+                .put(new JSONArray().put("ms").put(String.valueOf(nowMs % 1000)));
+        final JSONObject rumor = new JSONObject();
+        try {
+            rumor.put("id", NostrCrypto.eventId(userPubkey, createdAt, 9, rumorTags, text));
+            rumor.put("pubkey", userPubkey);
+            rumor.put("created_at", createdAt);
+            rumor.put("kind", 9);
+            rumor.put("tags", rumorTags);
+            rumor.put("content", text);
+        } catch (JSONException e) {
+            finishReply(roomKey, sent, false);
+            return;
+        }
+        String sealContent = ConcordCrypto.encrypt(target.stream.convKey, rumor.toString());
+        if (sealContent == null) {
+            finishReply(roomKey, sent, false);
+            return;
+        }
+        // The seal is what the author signs; its created_at matches the
+        // rumor's (stream.ts sealRumor), and it carries no tags.
+        signer.signEvent(20013, sealContent, new JSONArray(), createdAt, seal ->
+                handler.post(() -> {
+                    JSONObject built = null;
+                    if (seal != null) {
+                        String wrapContent =
+                                ConcordCrypto.encrypt(target.stream.convKey, seal.toString());
+                        if (wrapContent != null) {
+                            try {
+                                JSONArray wrapTags = new JSONArray().put(new JSONArray()
+                                        .put("p").put(NostrCrypto.pubkeyOf(randomSecretKey())));
+                                built = NostrCrypto.finalizeEvent(
+                                        1059, wrapContent, wrapTags,
+                                        System.currentTimeMillis() / 1000, streamSk);
+                            } catch (Exception ignored) {
+                                // Falls through to the failure resolve below.
+                            }
+                        }
+                    }
+                    if (built == null) {
+                        finishReply(roomKey, sent, false);
+                        return;
+                    }
+                    final JSONObject wrap = built;
+                    publishEvent(wrap, target.relays, ok -> {
+                        if (ok) {
+                            notifiedIds.add(wrap.optString("id"));
+                            // The same write path a received wrap's rumor takes
+                            // (kind + seal-form rules enforced there), so the
+                            // reply is in the channel on next open.
+                            ServiceStore.storeConcord2Rumor(
+                                    this, target.stream.communityId, 20013, rumor);
+                        }
+                        finishReply(roomKey, sent, ok);
+                    });
+                }));
+    }
+
+    /** A Concord V2 reply's destination: the newest-epoch stream, its address,
+     * and the relays that host it. */
+    private static final class C2Stream {
+        final String pk;
+        final Concord2Stream stream;
+        final List<String> relays;
+
+        C2Stream(String pk, Concord2Stream stream, List<String> relays) {
+            this.pk = pk;
+            this.stream = stream;
+            this.relays = relays;
+        }
+    }
+
+    /**
+     * The V2 send target for a channel: the newest epoch the config holds a
+     * stream for (a room can be notified on an old epoch's stream after a
+     * rekey, but members read the current one). Null when no epoch binding or
+     * no relay hosts the stream — no Reply action then.
+     */
+    private C2Stream c2ReplyStream(String channelId) {
+        if (channelId.isEmpty()) return null;
+        String bestPk = null;
+        Concord2Stream best = null;
+        for (Map.Entry<String, Concord2Stream> e : pkToStream2.entrySet()) {
+            Concord2Stream cand = e.getValue();
+            if (!cand.channelId.equals(channelId) || cand.epoch.isEmpty()) continue;
+            if (best == null || parseEpoch(cand.epoch) > parseEpoch(best.epoch)) {
+                best = cand;
+                bestPk = e.getKey();
+            }
+        }
+        if (best == null) return null;
+        List<String> relays = new ArrayList<>();
+        for (Map.Entry<String, Set<String>> e : relayToPks2.entrySet()) {
+            if (e.getValue().contains(bestPk)) relays.add(e.getKey());
+        }
+        return relays.isEmpty() ? null : new C2Stream(bestPk, best, relays);
+    }
+
+    /**
+     * The stream SECRET for a stream address, from the group-key memo the
+     * WebView persists in the shared ArmadaDB (KV `c2gkmemo`, see
+     * groupKeyPersist.ts) — the derived keys are already at rest in this same
+     * database, so reading them here grants the service nothing the device
+     * didn't hold, and no key crosses the plugin bridge. Verified sk → pk so a
+     * corrupted or foreign row can never sign as the wrong stream.
+     */
+    private byte[] streamSecretFor(String pk) {
+        byte[] sk = ConcordCrypto.hexToBytes(ServiceStore.streamSecret(this, pk));
+        if (sk == null || sk.length != 32) return null;
+        try {
+            return pk.equals(NostrCrypto.pubkeyOf(sk)) ? sk : null;
+        } catch (Exception e) {
+            return null;
         }
     }
 

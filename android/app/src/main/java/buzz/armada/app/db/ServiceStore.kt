@@ -160,6 +160,36 @@ object ServiceStore {
         null
     }
 
+    /**
+     * The derived Concord V2 stream secret (hex) for a stream address, read
+     * from the group-key memo the WebView persists in KV (`c2gkmemo` — see
+     * groupKeyPersist.ts). The derived keys are ALREADY at rest in this same
+     * shared database, which is what lets the service sign a quick reply's
+     * wrap without any key crossing the plugin bridge. Null when no memo
+     * entry names the address; the caller verifies sk → pk before signing.
+     */
+    @JvmStatic
+    fun streamSecret(context: Context, pk: String): String? = try {
+        val raw = ArmadaDb.get(context).kvGet("c2gkmemo")
+        if (raw == null) {
+            null
+        } else {
+            val entries = JSONArray(raw)
+            var found: String? = null
+            for (i in 0 until entries.length()) {
+                val entry = entries.optJSONObject(i) ?: continue
+                if (entry.optString("pk") == pk) {
+                    found = entry.optString("sk").takeIf { it.isNotEmpty() }
+                    break
+                }
+            }
+            found
+        }
+    } catch (error: Throwable) {
+        Log.w(TAG, "stream secret read failed", error)
+        null
+    }
+
     /** The stored kind-0 for a pubkey, or null — so a profile already fetched isn't fetched again. */
     @JvmStatic
     fun profileRaw(context: Context, pubkey: String): String? = try {

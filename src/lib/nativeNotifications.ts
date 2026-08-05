@@ -236,7 +236,10 @@ export interface ArmadaNotificationPlugin {
      * per-stream NIP-44 conversation key to open wrap → seal → rumor for a
      * rich "<sender>: <preview>" notification deep-linking to
      * /c/<communityId>/<channelId>. Stream SECRET keys never cross this
-     * bridge — NIP-42 stream auth is signed in the WebView (authChallenge).
+     * bridge — NIP-42 stream auth is signed in the WebView (authChallenge),
+     * and the notification quick reply's wrap is signed with the derived
+     * stream key the service reads from the group-key memo already persisted
+     * in the shared ArmadaDB (`c2gkmemo`, see groupKeyPersist.ts).
      */
     concord2Subs?: Array<{
       relays: string[];
