@@ -4,6 +4,17 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.46.2] - 2026-08-04
+
+Sharing into Armada from another app is smoother: the destination opens immediately instead of waiting for the shared file to finish copying, and a share that resolves slowly still lands in the right composer rather than nowhere.
+
+### Changed
+- A sender whose profile can't be resolved is named "Anonymous" in notifications, instead of a truncated key
+
+### Fixed
+- Sharing into Armada opens the destination right away, without a flash of the previous screen while the shared file copies
+- A share that takes a while to resolve on a cold start now opens its composer instead of leaving the shared content stranded
+
 ## [0.46.1] - 2026-08-04
 
 Pin messages in community channels — a pinned message is cryptographically verified against the original so its content cannot be falsified after the fact. In-app signup is now the full-screen key wizard, and channel history paints incrementally with a visible error when sync fails.
