@@ -64,11 +64,27 @@ abstract class NativeSigner {
         void done(JSONObject event);
     }
 
+    interface EncryptCallback {
+        /**
+         * @param ciphertext  the NIP-44 payload, or null.
+         * @param unavailable true when null is because the signer couldn't be
+         *                    reached rather than a crypto/policy failure.
+         */
+        void done(String ciphertext, boolean unavailable);
+    }
+
     /** Serializes signer work off the relay/callback threads. */
     protected final ExecutorService executor = Executors.newSingleThreadExecutor();
 
     /** NIP-44-decrypt {@code ciphertext} from {@code peerPk}'s conversation. */
     abstract void decrypt44(String peerPk, String ciphertext, DecryptCallback cb);
+
+    /**
+     * NIP-44-encrypt {@code plaintext} into {@code peerPk}'s conversation —
+     * what sealing an outgoing NIP-17 reply needs (the seal's content is
+     * encrypted by the USER's key; the wrap layer's key is a local throwaway).
+     */
+    abstract void encrypt44(String peerPk, String plaintext, EncryptCallback cb);
 
     /** Sign an event template as the user. */
     abstract void signEvent(int kind, String content, JSONArray tags, long createdAt, SignCallback cb);
@@ -145,6 +161,14 @@ abstract class NativeSigner {
         }
 
         @Override
+        void encrypt44(String peerPk, String plaintext, EncryptCallback cb) {
+            executor.execute(() -> {
+                byte[] key = conv(peerPk);
+                cb.done(key != null ? ConcordCrypto.encrypt(key, plaintext) : null, false);
+            });
+        }
+
+        @Override
         void signEvent(int kind, String content, JSONArray tags, long createdAt, SignCallback cb) {
             executor.execute(() -> {
                 try {
@@ -184,6 +208,36 @@ abstract class NativeSigner {
                     if (cursor.moveToFirst()) {
                         if (rejected(cursor)) {
                             cb.done(null, false); // explicit user/app policy — stay silent
+                            return;
+                        }
+                        int idx = cursor.getColumnIndex("result");
+                        if (idx >= 0) {
+                            cb.done(cursor.getString(idx), false);
+                            return;
+                        }
+                    }
+                    cb.done(null, false);
+                } catch (Exception e) {
+                    cb.done(null, true);
+                }
+            });
+        }
+
+        @Override
+        void encrypt44(String peerPk, String plaintext, EncryptCallback cb) {
+            executor.execute(() -> {
+                // Same provider contract as NIP44_DECRYPT, mirrored: the
+                // projection carries [plaintext, peerPk, currentUser].
+                Uri uri = Uri.parse("content://" + packageName + ".NIP44_ENCRYPT");
+                try (Cursor cursor = context.getContentResolver().query(
+                        uri, new String[]{plaintext, peerPk, userPubkey}, null, null, null)) {
+                    if (cursor == null) {
+                        cb.done(null, true);
+                        return;
+                    }
+                    if (cursor.moveToFirst()) {
+                        if (rejected(cursor)) {
+                            cb.done(null, false);
                             return;
                         }
                         int idx = cursor.getColumnIndex("result");
@@ -379,6 +433,16 @@ abstract class NativeSigner {
         @Override
         void decrypt44(String peerPk, String ciphertext, DecryptCallback cb) {
             rpc("nip44_decrypt", new JSONArray().put(peerPk).put(ciphertext),
+                    (result, error, unavailable) -> {
+                        if (unavailable) cb.done(null, true);
+                        else if (error != null || result == null) cb.done(null, false);
+                        else cb.done(result, false);
+                    });
+        }
+
+        @Override
+        void encrypt44(String peerPk, String plaintext, EncryptCallback cb) {
+            rpc("nip44_encrypt", new JSONArray().put(peerPk).put(plaintext),
                     (result, error, unavailable) -> {
                         if (unavailable) cb.done(null, true);
                         else if (error != null || result == null) cb.done(null, false);

@@ -16,6 +16,7 @@ import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
@@ -31,6 +32,7 @@ import android.util.Log;
 
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.Person;
+import androidx.core.app.RemoteInput;
 import androidx.core.content.pm.ShortcutInfoCompat;
 import androidx.core.content.pm.ShortcutManagerCompat;
 import androidx.core.app.ServiceCompat;
@@ -146,6 +148,21 @@ public class NotificationRelayService extends Service {
     // marker survives a service cold start with the right timestamp.
     static final String EXTRA_CHANNEL_KEYS = "armada_channel_keys";
     static final String EXTRA_CHANNEL_TS = "armada_channel_ts";
+    // "Reply" notification action: a RemoteInput whose text the service sends
+    // back into the conversation ITSELF — a NIP-29 kind 9, a NIP-17
+    // gift-wrapped DM, or a Concord V1 sealed message — with the shared signer
+    // credential, so a reply typed on the lockscreen goes out with the app
+    // dead. Delivered as a start intent, exactly like Mark read. Rooms with no
+    // native send path (Concord V2: the wrap needs the stream SECRET key,
+    // which never crosses the bridge) don't get the action at all.
+    static final String ACTION_REPLY = "buzz.armada.app.action.REPLY";
+    static final String KEY_TEXT_REPLY = "armada_text_reply";
+    // How long a reply publish waits for any relay's OK before failing.
+    private static final long PUBLISH_TIMEOUT_MS = 20_000;
+    // How long the one-shot kind-10050 inbox lookup gathers answers.
+    private static final long DM_INBOX_TIMEOUT_MS = 4_000;
+    // NIP-59: outgoing seal/wrap timestamps are tweaked into the past, ≤ 2 days.
+    private static final long MAX_WRAP_BACKDATE_SECS = 2 * 24 * 3600;
     // Most recent messages kept per room for the MessagingStyle expansion.
     private static final int MAX_MESSAGES_PER_ROOM = 8;
 
@@ -283,6 +300,10 @@ public class NotificationRelayService extends Service {
     // all relays it was broadcast to. A profile from one relay can be staler
     // than another's, so we keep the highest created_at rather than first-wins.
     private final Map<String, Profile> bestProfile = new HashMap<>();
+    // pubkey → newest verified kind-10050 gathered by an in-flight DM-inbox
+    // lookup (reply addressing), across relays. Read + cleared by the lookup's
+    // timeout in resolveDmInbox.
+    private final Map<String, JSONObject> bestInbox = new HashMap<>();
     // avatar URL → circle-cropped bitmap, decoded once and reused. Backed by a
     // persistent disk cache (avatarDir) so a warm avatar survives service
     // restarts and lands in the FIRST, alerting post instead of a later silent
@@ -461,15 +482,20 @@ public class NotificationRelayService extends Service {
         final String senderKey;      // author pubkey (or a fallback key)
         final String senderName;
         Bitmap avatar;               // sender avatar; resolves late (may stay null)
-        final String text;
+        String text;                 // mutable: a failed reply rewrites its line in place
         final long tsMs;
+        // True for a line the user sent from the Reply action — rendered as an
+        // outgoing message (the MessagingStyle self person, no sender bubble).
+        final boolean fromSelf;
 
-        MsgEntry(String senderKey, String senderName, Bitmap avatar, String text, long tsMs) {
+        MsgEntry(String senderKey, String senderName, Bitmap avatar, String text, long tsMs,
+                 boolean fromSelf) {
             this.senderKey = senderKey;
             this.senderName = senderName;
             this.avatar = avatar;
             this.text = text;
             this.tsMs = tsMs;
+            this.fromSelf = fromSelf;
         }
     }
 
@@ -724,6 +750,15 @@ public class NotificationRelayService extends Service {
             // map the read-marker needs is populated before handleMarkRead reads it.
             if (connections.isEmpty()) loadConfigAndReconnect();
             handleMarkRead(intent);
+            return START_STICKY;
+        }
+        // A "Reply" action tap arrives the same way, and likewise must not
+        // rebuild the relay sockets — the publish rides the live ones (or the
+        // per-connection outbox, when cold-started and still connecting).
+        if (intent != null && ACTION_REPLY.equals(intent.getAction())) {
+            BootReceiver.scheduleWatchdog(this);
+            if (connections.isEmpty()) loadConfigAndReconnect();
+            handleReply(intent);
             return START_STICKY;
         }
         // Re-arm the self-healing watchdog on every start so it survives a
@@ -1163,11 +1198,20 @@ public class NotificationRelayService extends Service {
         final String subDm17 = "a7-" + Long.toHexString(System.nanoTime() + 7);
         final String subGitRoots = "ag-" + Long.toHexString(System.nanoTime() + 8);
         final String subGitChildren = "ai-" + Long.toHexString(System.nanoTime() + 9);
+        // Prefix for one-shot kind-10050 DM-inbox lookups (reply addressing).
+        final String inboxPrefix = "ax-" + Long.toHexString(System.nanoTime() + 10) + "-";
         // One-shot lookup sub id → the full pubkey / group id it was issued
         // for. Entries are removed when the lookup resolves; capped clears
         // protect against relays that never answer.
         final Map<String, String> profileLookups = new HashMap<>();
         final Map<String, String> groupLookups = new HashMap<>();
+        final Map<String, String> inboxLookups = new HashMap<>();
+        // In-flight reply publishes (event id → waiter) awaiting this relay's
+        // OK, and frames queued while the socket is down (flushed on the next
+        // open) — how a reply typed on a cold-started service survives the
+        // connect. Main-thread confined, like everything else here.
+        final Map<String, PendingPublish> pendingPublishes = new HashMap<>();
+        final List<PendingPublish> outbox = new ArrayList<>();
         // ids of the kind-22242s we sent and haven't seen an OK for. NIP-42
         // allows several AUTHs per connection (the user + every Concord V2
         // stream key), so this is a set; a relay's OK for some other event
@@ -1222,6 +1266,7 @@ public class NotificationRelayService extends Service {
                         handler.removeCallbacks(resubscribeRunnable);
                         authResendPending = false;
                         handler.removeCallbacks(authResendRunnable);
+                        flushOutbox(webSocket);
                     });
                     sendReqs(webSocket);
                 }
@@ -1350,6 +1395,32 @@ public class NotificationRelayService extends Service {
             }
         }
 
+        /**
+         * Send (or queue, while the socket is down) an EVENT frame, resolving
+         * the callback on this relay's OK — or on the publisher's timeout.
+         */
+        void publish(JSONObject event, PublishCallback cb) {
+            String eventId = event.optString("id", "");
+            PendingPublish p = new PendingPublish(eventId,
+                    new JSONArray().put("EVENT").put(event).toString(), cb);
+            if (ws != null) {
+                pendingPublishes.put(eventId, p);
+                ws.send(p.frame);
+            } else {
+                outbox.add(p);
+            }
+        }
+
+        /** Flush publishes queued while the socket was down (main thread). */
+        void flushOutbox(WebSocket webSocket) {
+            if (closed || outbox.isEmpty()) return;
+            for (PendingPublish p : outbox) {
+                pendingPublishes.put(p.eventId, p);
+                webSocket.send(p.frame);
+            }
+            outbox.clear();
+        }
+
         void sendAuth(String eventJson) {
             if (ws == null) return;
             try {
@@ -1424,6 +1495,33 @@ public class NotificationRelayService extends Service {
             return subId;
         }
 
+        /**
+         * Fire a one-shot kind-10050 REQ for {@code pubkey}'s published NIP-17
+         * inbox — where a DM reply's peer copy must be delivered. The matching
+         * EVENT is gathered in {@link #onRelayMessage}; the reply's own timeout
+         * resolves with the newest list seen across relays.
+         */
+        void fetchDmInbox(String pubkey) {
+            if (closed || ws == null) return;
+            try {
+                JSONObject f = new JSONObject();
+                f.put("kinds", new JSONArray().put(10050));
+                f.put("authors", new JSONArray().put(pubkey));
+                f.put("limit", 1);
+                ws.send(reqMessage(inboxSubId(pubkey), f));
+            } catch (JSONException e) {
+                if (BuildConfig.DEBUG) Log.w(TAG, "Failed to build inbox REQ", e);
+            }
+        }
+
+        /** DM-inbox analogue of {@link #profileSubId}. */
+        String inboxSubId(String pubkey) {
+            String subId = inboxPrefix + shortKey(pubkey);
+            if (inboxLookups.size() > 512) inboxLookups.clear();
+            inboxLookups.put(subId, pubkey);
+            return subId;
+        }
+
         void closeSub(String subId) {
             if (ws == null) return;
             try {
@@ -1467,6 +1565,12 @@ public class NotificationRelayService extends Service {
             closed = true;
             handler.removeCallbacks(reconnectRunnable);
             handler.removeCallbacks(resubscribeRunnable);
+            // Fail any in-flight/queued reply publish rather than strand its
+            // waiter until the timeout (the tally treats it as this relay's no).
+            for (PendingPublish p : pendingPublishes.values()) p.cb.done(false);
+            pendingPublishes.clear();
+            for (PendingPublish p : outbox) p.cb.done(false);
+            outbox.clear();
             if (ws != null) {
                 try { ws.close(1000, "service reconfigured"); } catch (Exception ignored) {}
                 ws = null;
@@ -1477,6 +1581,27 @@ public class NotificationRelayService extends Service {
             backoffMs = INITIAL_BACKOFF_MS;
             handler.removeCallbacks(reconnectRunnable);
             if (ws == null) connect();
+        }
+    }
+
+    /** Callback for a native EVENT publish (per relay, and for the overall tally). */
+    private interface PublishCallback {
+        void done(boolean ok);
+    }
+
+    /** One EVENT frame awaiting a relay's OK (or queued for the next open). */
+    private static final class PendingPublish {
+        final String eventId;
+        final String frame;
+        final PublishCallback cb;
+        // One delayed re-send is allowed after an `auth-required:` OK — the
+        // service AUTHs on challenge, so the retry usually lands authenticated.
+        boolean authRetried;
+
+        PendingPublish(String eventId, String frame, PublishCallback cb) {
+            this.eventId = eventId;
+            this.frame = frame;
+            this.cb = cb;
         }
     }
 
@@ -1545,6 +1670,12 @@ public class NotificationRelayService extends Service {
                 if (gid != null) {
                     closeProfileSub(relayUrl, sub);
                     resolveGroupName(gid, null);
+                    return;
+                }
+                // A DM-inbox lookup with no kind-10050 here: just close it —
+                // the reply's own timeout resolves with the best across relays.
+                if (inboxPubkeyForSub(sub) != null) {
+                    closeInboxSub(relayUrl, sub);
                 }
                 return;
             }
@@ -1566,6 +1697,10 @@ public class NotificationRelayService extends Service {
                 if (gid != null) {
                     closeProfileSub(relayUrl, sub);
                     resolveGroupName(gid, (String) null);
+                    return;
+                }
+                if (inboxPubkeyForSub(sub) != null) {
+                    closeInboxSub(relayUrl, sub);
                     return;
                 }
                 // A standing subscription the relay dropped. `auth-required`
@@ -1596,7 +1731,24 @@ public class NotificationRelayService extends Service {
                     if (!rc.relayUrl.equals(relayUrl) || rc.ws == null) continue;
                     if (ok && rc.pendingAuthIds.remove(okId)) {
                         rc.scheduleAuthResend();
+                        continue;
                     }
+                    // A reply publish's OK. `auth-required` earns ONE delayed
+                    // re-send (the AUTH this service signs on challenge usually
+                    // completes in the gap); anything else resolves the waiter.
+                    PendingPublish p = rc.pendingPublishes.get(okId);
+                    if (p == null) continue;
+                    if (!ok && msg.optString(3, "").startsWith("auth-required:") && !p.authRetried) {
+                        p.authRetried = true;
+                        handler.postDelayed(() -> {
+                            if (rc.ws != null && rc.pendingPublishes.containsKey(okId)) {
+                                rc.ws.send(p.frame);
+                            }
+                        }, 3_000);
+                        continue;
+                    }
+                    rc.pendingPublishes.remove(okId);
+                    p.cb.done(ok);
                 }
                 return;
             }
@@ -1661,6 +1813,24 @@ public class NotificationRelayService extends Service {
                 // between servers, so metadata is stored per relay).
                 ServiceStore.cache(this, event, relayUrl);
                 resolveGroupName(gid, parseGroupName(event));
+                return;
+            }
+            // A kind-10050 from a DM-inbox lookup: keep the newest VERIFIED
+            // list seen across relays; the reply's timeout reads it out. The
+            // same untrusted-relay gate as profiles — a forged inbox would
+            // redirect the reply's ciphertext to relays the peer never reads.
+            String inboxPk = inboxPubkeyForSub(sub);
+            if (inboxPk != null) {
+                closeInboxSub(relayUrl, sub);
+                if (event.optInt("kind", -1) == 10050
+                        && inboxPk.equals(event.optString("pubkey"))
+                        && NostrCrypto.verifyEvent(event)) {
+                    JSONObject prev = bestInbox.get(inboxPk);
+                    if (prev == null
+                            || event.optLong("created_at", 0) >= prev.optLong("created_at", 0)) {
+                        bestInbox.put(inboxPk, event);
+                    }
+                }
                 return;
             }
             handleEvent(event, relayUrl);
@@ -1841,6 +2011,81 @@ public class NotificationRelayService extends Service {
                 .edit()
                 .putString(PROFILES_KEY, profileStore.serialize())
                 .apply();
+    }
+
+    /**
+     * If {@code sub} is one of our one-shot DM-inbox lookups, return the
+     * pubkey it was issued for; otherwise null.
+     */
+    private String inboxPubkeyForSub(String sub) {
+        if (sub == null || sub.isEmpty()) return null;
+        for (RelayConnection rc : connections) {
+            String pk = rc.inboxLookups.get(sub);
+            if (pk != null) return pk;
+        }
+        return null;
+    }
+
+    private void closeInboxSub(String relayUrl, String sub) {
+        for (RelayConnection rc : connections) {
+            if (rc.relayUrl.equals(relayUrl)) {
+                rc.inboxLookups.remove(sub);
+                rc.closeSub(sub);
+                return;
+            }
+        }
+    }
+
+    private interface InboxCallback {
+        void onRelays(List<String> relays);
+    }
+
+    /**
+     * Resolve {@code pubkey}'s published NIP-17 inbox relays (kind-10050
+     * `relay` tags): the shared store first (the WebView caches peers' lists
+     * there), else a one-shot broadcast REQ to every open relay, gathering the
+     * newest list for {@link #DM_INBOX_TIMEOUT_MS}. Resolves with an EMPTY
+     * list when the peer has published none — DM sends are gated on a
+     * published inbox (matching the WebView), so an empty resolve fails the
+     * reply rather than publishing ciphertext somewhere the peer never reads.
+     */
+    private void resolveDmInbox(String pubkey, InboxCallback cb) {
+        List<String> cached = ServiceStore.dmInboxRelays(this, pubkey);
+        if (cached != null && !cached.isEmpty()) {
+            cb.onRelays(cached);
+            return;
+        }
+        boolean sentAny = false;
+        for (RelayConnection rc : connections) {
+            if (rc.ws != null && !rc.closed) {
+                rc.fetchDmInbox(pubkey);
+                sentAny = true;
+            }
+        }
+        if (!sentAny) {
+            cb.onRelays(new ArrayList<>());
+            return;
+        }
+        handler.postDelayed(() -> {
+            JSONObject best = bestInbox.remove(pubkey);
+            List<String> relays = new ArrayList<>();
+            if (best != null) {
+                // Cache the list (main tenant, replaceable) so the next reply
+                // to this peer skips the wait.
+                ServiceStore.cache(this, best);
+                JSONArray tags = best.optJSONArray("tags");
+                if (tags != null) {
+                    for (int i = 0; i < tags.length(); i++) {
+                        JSONArray tag = tags.optJSONArray(i);
+                        if (tag != null && "relay".equals(tag.optString(0)) && tag.length() > 1) {
+                            String u = tag.optString(1);
+                            if (!u.isEmpty() && !relays.contains(u)) relays.add(u);
+                        }
+                    }
+                }
+            }
+            cb.onRelays(relays);
+        }, DM_INBOX_TIMEOUT_MS);
     }
 
     private RelayConnection connectionFor(String relayUrl) {
@@ -3097,7 +3342,7 @@ public class NotificationRelayService extends Service {
             if (!found) return; // line already rotated out / dismissed
         } else {
             room.messages.add(new MsgEntry(sKey, sName, avatar,
-                    text != null ? text : "", timestampMs));
+                    text != null ? text : "", timestampMs, /*fromSelf=*/false));
             // Bound the retained history so a chatty room can't grow unbounded.
             while (room.messages.size() > MAX_MESSAGES_PER_ROOM) {
                 room.messages.remove(0);
@@ -3216,8 +3461,10 @@ public class NotificationRelayService extends Service {
             style.setGroupConversation(true);
         }
         for (MsgEntry e : room.messages) {
+            // A null sender means "the current user" (the style's self person)
+            // — how a line sent from the Reply action renders as outgoing.
             style.addMessage(new NotificationCompat.MessagingStyle.Message(
-                    e.text, e.tsMs, personFor(e)));
+                    e.text, e.tsMs, e.fromSelf ? null : personFor(e)));
         }
 
         NotificationCompat.Builder b = new NotificationCompat.Builder(this, MSG_CHANNEL_ID)
@@ -3250,6 +3497,22 @@ public class NotificationRelayService extends Service {
         // the community's branding (Android renders the app name/icon), so
         // channels stand alone instead of stacking.
         b.setGroup(GROUP_PREFIX + "room:" + room.roomKey);
+        // "Reply": a RemoteInput the service publishes back into the
+        // conversation natively (see handleReply). Only on rooms with a real
+        // send path — no shared signer, or a protocol the service can't build
+        // end-to-end (Concord V2), leaves Mark read alone.
+        if (canReply(room)) {
+            RemoteInput input = new RemoteInput.Builder(KEY_TEXT_REPLY)
+                    .setLabel("Reply")
+                    .build();
+            b.addAction(new NotificationCompat.Action.Builder(
+                    R.drawable.ic_stat_armada, "Reply", replyIntent(room))
+                    .addRemoteInput(input)
+                    .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
+                    .setShowsUserInterface(false)
+                    .setAllowGeneratedReplies(true)
+                    .build());
+        }
         // "Mark read": dismiss this notification and advance the in-app read
         // state (applied by the WebView on its next open). Shown on every room.
         b.addAction(new NotificationCompat.Action.Builder(
@@ -3337,6 +3600,509 @@ public class NotificationRelayService extends Service {
             }
             ArmadaNotificationPlugin.enqueueReadMarker(this, key, tsMs / 1000L, channelId);
             if (BuildConfig.DEBUG) Log.d(TAG, "MARK READ " + key);
+        }
+    }
+
+    // ── Quick reply ──────────────────────────────────────────────────────────
+
+    /**
+     * Whether a native send path exists for this room: a shared signer, plus a
+     * protocol the service can build end-to-end. DMs go out as NIP-17 (rumor →
+     * seal → wrap; the signer covers the seal's encrypt + sign for every login
+     * type), NIP-29 rooms as a plain kind 9 to the group's host relay, Concord
+     * V1 rooms as an inner signed by the user sealed under the channel key the
+     * config already ships. Concord V2 is absent DELIBERATELY: its wrap must
+     * be signed by the stream secret key, which never crosses the bridge (see
+     * nativeNotifications.ts) — those rooms keep Mark read only.
+     */
+    private boolean canReply(RoomNotif room) {
+        if (nativeSigner == null || userPubkey == null || room.roomKey == null) return false;
+        String key = room.roomKey;
+        if (key.startsWith("dm:")) return key.length() == 3 + 64;
+        if (key.startsWith("h:")) return key.substring(2).lastIndexOf('|') > 0;
+        if (key.startsWith("z:")) return v1ReplyTarget(key.substring(2)) != null;
+        return false;
+    }
+
+    /**
+     * PendingIntent for a room's "Reply" action. MUTABLE — unlike every other
+     * PendingIntent here — because the system must attach the RemoteInput
+     * results bundle to it; an immutable one delivers a null reply on
+     * Android 12+.
+     */
+    private PendingIntent replyIntent(RoomNotif room) {
+        Intent intent = new Intent(this, NotificationRelayService.class);
+        intent.setAction(ACTION_REPLY);
+        intent.setData(Uri.parse("armada-reply:" + room.notifId));
+        intent.putExtra(EXTRA_ROOM_KEY, room.roomKey);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            flags |= PendingIntent.FLAG_MUTABLE;
+        }
+        return PendingIntent.getService(this, room.notifId, intent, flags);
+    }
+
+    /**
+     * Handle a "Reply" action tap: append the text to the room's notification
+     * as an outgoing line at once (which is also what clears the action's
+     * spinner), enqueue a read marker (replying implies the room was read),
+     * then build and publish the reply natively. On failure the line is
+     * rewritten in place and the notification re-alerts, so a reply typed on
+     * the lockscreen never silently vanishes.
+     */
+    private void handleReply(Intent intent) {
+        String roomKey = intent.getStringExtra(EXTRA_ROOM_KEY);
+        if (roomKey == null || roomKey.isEmpty()) return;
+        Bundle results = RemoteInput.getResultsFromIntent(intent);
+        CharSequence raw = results != null ? results.getCharSequence(KEY_TEXT_REPLY) : null;
+        String text = raw != null ? raw.toString().trim() : "";
+        if (text.isEmpty()) {
+            // Nothing to send; re-post as-is so the action's spinner clears.
+            RoomNotif existing = roomNotifs.get(roomKey);
+            if (existing != null) repostRoom(existing, false);
+            return;
+        }
+
+        MsgEntry sent = appendOutgoing(roomKey, text);
+        markRepliedRead(roomKey);
+
+        NativeSigner signer = nativeSigner;
+        if (signer == null) {
+            finishReply(roomKey, sent, false);
+        } else if (roomKey.startsWith("dm:")) {
+            sendDmReply(signer, roomKey.substring(3), text, roomKey, sent);
+        } else if (roomKey.startsWith("h:")) {
+            sendNip29Reply(signer, roomKey, text, sent);
+        } else if (roomKey.startsWith("z:")) {
+            sendConcord1Reply(signer, roomKey, text, sent);
+        } else {
+            finishReply(roomKey, sent, false);
+        }
+    }
+
+    /**
+     * Append the reply as an outgoing line and re-post the room silently.
+     * Survives a service cold start (the in-memory room is gone but the
+     * notification is still in the tray): a minimal room is rebuilt so the
+     * post lands on the same stable id and the spinner still clears — with a
+     * generic title, since the accumulated history died with the process.
+     */
+    private MsgEntry appendOutgoing(String roomKey, String text) {
+        RoomNotif room = roomNotifs.get(roomKey);
+        if (room == null) {
+            room = new RoomNotif(roomKey, hashId(roomKey));
+            roomNotifs.put(roomKey, room);
+        }
+        MsgEntry entry = new MsgEntry(userPubkey != null ? userPubkey : "self", "You",
+                /*avatar=*/null, text, System.currentTimeMillis(), /*fromSelf=*/true);
+        room.messages.add(entry);
+        while (room.messages.size() > MAX_MESSAGES_PER_ROOM) room.messages.remove(0);
+        room.lastTimestampMs = Math.max(room.lastTimestampMs, entry.tsMs);
+        repostRoom(room, false);
+        return entry;
+    }
+
+    /** Re-post a room's notification ({@code alert} false ⇒ silent refresh). */
+    private void repostRoom(RoomNotif room, boolean alert) {
+        NotificationManager manager =
+                (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager != null) manager.notify(room.notifId, buildRoomNotification(room, alert));
+    }
+
+    /**
+     * Replying implies the user read the room: enqueue the same durable marker
+     * a "Mark read" tap would, WITHOUT cancelling the notification (the thread
+     * stays up, now showing their reply).
+     */
+    private void markRepliedRead(String roomKey) {
+        RoomNotif room = roomNotifs.get(roomKey);
+        long tsMs = room != null && room.lastTimestampMs > 0
+                ? room.lastTimestampMs : System.currentTimeMillis();
+        String channelId = null;
+        if (roomKey.startsWith("z:")) {
+            ConcordKey ck = zToKey.get(roomKey.substring(2));
+            if (ck != null && !ck.channelId.isEmpty()) channelId = ck.channelId;
+        }
+        ArmadaNotificationPlugin.enqueueReadMarker(this, roomKey, tsMs / 1000L, channelId);
+    }
+
+    /**
+     * Resolve a reply: on success the optimistic line already reads right; on
+     * failure rewrite it in place and re-alert, so the user knows to open the
+     * app and send again.
+     */
+    private void finishReply(String roomKey, MsgEntry sent, boolean ok) {
+        if (ok || sent == null) return;
+        sent.text = "⚠️ Not sent: " + sent.text;
+        RoomNotif room = roomNotifs.get(roomKey);
+        if (room != null && room.messages.contains(sent)) repostRoom(room, true);
+    }
+
+    /** NIP-29: a plain kind 9 with the group's `h` tag, sent to its host relay. */
+    private void sendNip29Reply(NativeSigner signer, String roomKey, String text, MsgEntry sent) {
+        String rest = roomKey.substring(2);
+        int i = rest.lastIndexOf('|');
+        if (i <= 0) {
+            finishReply(roomKey, sent, false);
+            return;
+        }
+        final String relayUrl = rest.substring(0, i);
+        final String groupId = rest.substring(i + 1);
+        JSONArray tags = new JSONArray().put(new JSONArray().put("h").put(groupId));
+        signer.signEvent(9, text, tags, System.currentTimeMillis() / 1000, ev ->
+                handler.post(() -> {
+                    if (ev == null) {
+                        finishReply(roomKey, sent, false);
+                        return;
+                    }
+                    publishEvent(ev, java.util.Collections.singletonList(relayUrl), ok -> {
+                        if (ok) {
+                            // The same write path a received kind 9 takes, so
+                            // the message is in the group's tenant on next open.
+                            notifiedIds.add(ev.optString("id"));
+                            ServiceStore.ingest(this, ev, relayUrl);
+                        }
+                        finishReply(roomKey, sent, ok);
+                    });
+                }));
+    }
+
+    /**
+     * Concord V1: an inner kind-3300 authorship event signed by the user
+     * (channel/epoch/ms binding tags, mirroring envelope.ts buildInnerEvent),
+     * NIP-44-sealed under the channel key, wrapped in an ephemeral-signed
+     * outer tagged with the epoch's pseudonym. Replies target the NEWEST epoch
+     * held for the channel — a room can be notified on an old epoch's
+     * pseudonym after a rekey, but members read the current one.
+     */
+    private void sendConcord1Reply(NativeSigner signer, String roomKey, String text, MsgEntry sent) {
+        final V1ReplyTarget target = v1ReplyTarget(roomKey.substring(2));
+        if (target == null) {
+            finishReply(roomKey, sent, false);
+            return;
+        }
+        final long nowMs = System.currentTimeMillis();
+        JSONArray innerTags = new JSONArray()
+                .put(new JSONArray().put("channel").put(target.key.channelId))
+                .put(new JSONArray().put("epoch").put(target.key.epoch))
+                .put(new JSONArray().put("ms").put(String.valueOf(nowMs % 1000)));
+        signer.signEvent(3300, text, innerTags, nowMs / 1000, inner ->
+                handler.post(() -> {
+                    JSONObject built = null;
+                    if (inner != null) {
+                        String ciphertext = ConcordCrypto.encrypt(target.key.key, inner.toString());
+                        if (ciphertext != null) {
+                            try {
+                                JSONArray outerTags = new JSONArray()
+                                        .put(new JSONArray().put("z").put(target.z))
+                                        .put(new JSONArray().put("v").put("1"));
+                                built = NostrCrypto.finalizeEvent(
+                                        3300, ciphertext, outerTags, nowMs / 1000, randomSecretKey());
+                            } catch (Exception ignored) {
+                                // Falls through to the failure resolve below.
+                            }
+                        }
+                    }
+                    if (built == null) {
+                        finishReply(roomKey, sent, false);
+                        return;
+                    }
+                    final JSONObject outer = built;
+                    final List<String> relays = relaysForZ(target.z);
+                    publishEvent(outer, relays, ok -> {
+                        if (ok) {
+                            String outerId = outer.optString("id");
+                            notifiedIds.add(outerId);
+                            ServiceStore.ingest(this, outer, relays.get(0));
+                            // Feed the decrypted inner live, like a received
+                            // one, so an open WebView paints it at once.
+                            ArmadaNotificationPlugin.feedConcordInner(
+                                    inner.toString(), target.z, outerId);
+                        }
+                        finishReply(roomKey, sent, ok);
+                    });
+                }));
+    }
+
+    /** A Concord V1 reply's destination: the newest held epoch's pseudonym + key. */
+    private static final class V1ReplyTarget {
+        final String z;
+        final ConcordKey key;
+
+        V1ReplyTarget(String z, ConcordKey key) {
+            this.z = z;
+            this.key = key;
+        }
+    }
+
+    /**
+     * The V1 send target for a notified room's pseudonym: the same CHANNEL, at
+     * the newest epoch the config holds a key for. Null when the binding is
+     * incomplete or no relay hosts the pseudonym — no Reply action then.
+     */
+    private V1ReplyTarget v1ReplyTarget(String z) {
+        ConcordKey held = zToKey.get(z);
+        if (held == null || held.channelId.isEmpty() || held.epoch.isEmpty()) return null;
+        String bestZ = z;
+        ConcordKey best = held;
+        for (Map.Entry<String, ConcordKey> e : zToKey.entrySet()) {
+            ConcordKey cand = e.getValue();
+            if (!held.channelId.equals(cand.channelId)) continue;
+            if (parseEpoch(cand.epoch) > parseEpoch(best.epoch)) {
+                best = cand;
+                bestZ = e.getKey();
+            }
+        }
+        return relaysForZ(bestZ).isEmpty() ? null : new V1ReplyTarget(bestZ, best);
+    }
+
+    /** The relays whose Concord V1 subscription carries this pseudonym. */
+    private List<String> relaysForZ(String z) {
+        List<String> out = new ArrayList<>();
+        for (Map.Entry<String, Set<String>> e : relayToZs.entrySet()) {
+            if (e.getValue().contains(z)) out.add(e.getKey());
+        }
+        return out;
+    }
+
+    private static long parseEpoch(String epoch) {
+        try {
+            return Long.parseLong(epoch);
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    /**
+     * NIP-17: rumor (kind 14) → seal (kind 13, nip44 to the recipient, signed
+     * by the user, backdated) → wrap (kind 1059, single-use key, backdated) —
+     * mirroring nip17/protocol.ts. Two envelopes: the peer's copy to their
+     * published kind-10050 inbox (sends are GATED on one existing, like the
+     * WebView's), and the self copy to the user's own DM relays. Success is
+     * the peer's copy landing; the self copy and the store write ride along.
+     */
+    private void sendDmReply(NativeSigner signer, String peer, String text, String roomKey, MsgEntry sent) {
+        if (peer.length() != 64 || userPubkey == null) {
+            finishReply(roomKey, sent, false);
+            return;
+        }
+        resolveDmInbox(peer, inboxRelays -> {
+            if (inboxRelays.isEmpty()) {
+                finishReply(roomKey, sent, false);
+                return;
+            }
+            long nowSecs = System.currentTimeMillis() / 1000;
+            JSONArray rumorTags = new JSONArray().put(new JSONArray().put("p").put(peer));
+            final JSONObject rumor = new JSONObject();
+            try {
+                rumor.put("id", NostrCrypto.eventId(userPubkey, nowSecs, 14, rumorTags, text));
+                rumor.put("pubkey", userPubkey);
+                rumor.put("created_at", nowSecs);
+                rumor.put("kind", 14);
+                rumor.put("tags", rumorTags);
+                rumor.put("content", text);
+            } catch (JSONException e) {
+                finishReply(roomKey, sent, false);
+                return;
+            }
+            final String rumorJson = rumor.toString();
+            buildDmEnvelope(signer, rumorJson, peer, peerWrap -> {
+                if (peerWrap == null) {
+                    finishReply(roomKey, sent, false);
+                    return;
+                }
+                publishEvent(peerWrap, inboxRelays, ok -> {
+                    if (ok) {
+                        // The thread shows the reply on next open, exactly as
+                        // if the WebView had sent it.
+                        ServiceStore.storeDm17Rumor(this, userPubkey, rumor);
+                    }
+                    finishReply(roomKey, sent, ok);
+                });
+                // The self copy, sealed + wrapped to ourselves, to our own DM
+                // relays. Best-effort: the peer copy above decides success, and
+                // the store write above is what our own thread reads anyway.
+                buildDmEnvelope(signer, rumorJson, userPubkey, selfWrap -> {
+                    if (selfWrap != null && !dmRelays.isEmpty()) {
+                        publishEvent(selfWrap, new ArrayList<>(dmRelays), selfOk -> { });
+                    }
+                });
+            });
+        });
+    }
+
+    private interface EnvelopeCallback {
+        void onWrap(JSONObject wrap);
+    }
+
+    /** Seal + wrap a DM rumor to one recipient (both outer layers backdated). */
+    private void buildDmEnvelope(NativeSigner signer, String rumorJson, String recipient,
+                                 EnvelopeCallback cb) {
+        signer.encrypt44(recipient, rumorJson, (sealContent, unavailable) -> {
+            if (sealContent == null) {
+                handler.post(() -> cb.onWrap(null));
+                return;
+            }
+            signer.signEvent(13, sealContent, new JSONArray(), tweakedPast(), seal ->
+                    handler.post(() -> {
+                        JSONObject wrap = null;
+                        if (seal != null) {
+                            try {
+                                byte[] wrapSk = randomSecretKey();
+                                byte[] convKey = NostrCrypto.conversationKey(wrapSk, recipient);
+                                String ct = convKey != null
+                                        ? ConcordCrypto.encrypt(convKey, seal.toString()) : null;
+                                if (ct != null) {
+                                    JSONArray tags = new JSONArray()
+                                            .put(new JSONArray().put("p").put(recipient));
+                                    wrap = NostrCrypto.finalizeEvent(
+                                            1059, ct, tags, tweakedPast(), wrapSk);
+                                }
+                            } catch (Exception ignored) {
+                                // Resolves null below.
+                            }
+                        }
+                        cb.onWrap(wrap);
+                    }));
+        });
+    }
+
+    /** NIP-59: a random timestamp within the past two days. */
+    private static long tweakedPast() {
+        return System.currentTimeMillis() / 1000
+                - (long) (Math.random() * MAX_WRAP_BACKDATE_SECS);
+    }
+
+    /** A fresh valid secp256k1 secret key (rejection-sampled, like generateSecretKey). */
+    private static byte[] randomSecretKey() {
+        java.security.SecureRandom random = new java.security.SecureRandom();
+        while (true) {
+            byte[] sk = new byte[32];
+            random.nextBytes(sk);
+            try {
+                NostrCrypto.pubkeyOf(sk);
+                return sk;
+            } catch (Exception ignored) {
+                // Out-of-range scalar (probability ~2⁻¹²⁸) — draw again.
+            }
+        }
+    }
+
+    /**
+     * Publish an event to a set of relays: the live connection (or its outbox)
+     * for relays the service already holds, a one-shot socket for foreign ones
+     * (a DM peer's inbox). Resolves true on the FIRST accepting OK, false when
+     * every relay refused or {@link #PUBLISH_TIMEOUT_MS} passes first.
+     */
+    private void publishEvent(JSONObject event, List<String> relayUrls, PublishCallback cb) {
+        final String eventId = event.optString("id", "");
+        final List<String> targets = new ArrayList<>(new LinkedHashSet<>(relayUrls));
+        if (targets.isEmpty() || eventId.isEmpty()) {
+            cb.done(false);
+            return;
+        }
+        final boolean[] resolved = { false };
+        final int[] pending = { targets.size() };
+        PublishCallback tally = ok -> {
+            if (resolved[0]) return;
+            if (ok) {
+                resolved[0] = true;
+                cb.done(true);
+            } else if (--pending[0] == 0) {
+                resolved[0] = true;
+                cb.done(false);
+            }
+        };
+        for (String url : targets) {
+            RelayConnection held = null;
+            for (RelayConnection rc : connections) {
+                if (rc.relayUrl.equals(url)) {
+                    held = rc;
+                    break;
+                }
+            }
+            if (held != null && !held.closed) {
+                held.publish(event, tally);
+            } else {
+                publishOneShot(url, event, tally);
+            }
+        }
+        handler.postDelayed(() -> {
+            if (resolved[0]) return;
+            resolved[0] = true;
+            for (RelayConnection rc : connections) {
+                rc.pendingPublishes.remove(eventId);
+                rc.outbox.removeIf(p -> p.eventId.equals(eventId));
+            }
+            cb.done(false);
+        }, PUBLISH_TIMEOUT_MS);
+    }
+
+    /**
+     * Publish over a socket opened just for this event — for a relay the
+     * service holds no connection to (a DM peer's inbox relay). Sends the
+     * frame on open, resolves on the matching OK, closes either way. No AUTH
+     * handling: an auth-walled foreign relay counts as a refusal, and the
+     * publish succeeds through any other target that accepts.
+     */
+    private void publishOneShot(String url, JSONObject event, PublishCallback cb) {
+        final String eventId = event.optString("id", "");
+        final boolean[] done = { false };
+        try {
+            Request req = new Request.Builder().url(url).build();
+            final WebSocket ws = httpClient.newWebSocket(req, new WebSocketListener() {
+                @Override
+                public void onOpen(WebSocket socket, Response response) {
+                    try {
+                        socket.send(new JSONArray().put("EVENT").put(event).toString());
+                    } catch (Exception ignored) {
+                        // The failure callback fires when the socket dies.
+                    }
+                }
+
+                @Override
+                public void onMessage(WebSocket socket, String text) {
+                    try {
+                        JSONArray m = new JSONArray(text);
+                        if (!"OK".equals(m.optString(0)) || !eventId.equals(m.optString(1))) return;
+                        final boolean ok = m.optBoolean(2, false);
+                        handler.post(() -> {
+                            if (!done[0]) {
+                                done[0] = true;
+                                cb.done(ok);
+                            }
+                        });
+                        socket.close(1000, "done");
+                    } catch (Exception ignored) {
+                        // Non-JSON frame — keep waiting for the OK.
+                    }
+                }
+
+                @Override
+                public void onFailure(WebSocket socket, Throwable t, Response response) {
+                    handler.post(() -> {
+                        if (!done[0]) {
+                            done[0] = true;
+                            cb.done(false);
+                        }
+                    });
+                }
+            });
+            handler.postDelayed(() -> {
+                if (!done[0]) {
+                    done[0] = true;
+                    try {
+                        ws.close(1000, "timeout");
+                    } catch (Exception ignored) {
+                    }
+                    cb.done(false);
+                }
+            }, PUBLISH_TIMEOUT_MS - 2_000);
+        } catch (Exception e) {
+            if (!done[0]) {
+                done[0] = true;
+                cb.done(false);
+            }
         }
     }
 

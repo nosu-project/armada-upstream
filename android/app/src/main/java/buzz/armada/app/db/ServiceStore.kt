@@ -136,6 +136,30 @@ object ServiceStore {
         }
     }
 
+    /**
+     * The relay URLs of the newest stored kind-10050 DM-inbox list for
+     * [pubkey], or null when the store holds none. A read, never a fetch — so
+     * a notification quick reply can address the peer's NIP-17 inbox without a
+     * relay round-trip whenever the WebView (or a previous lookup) already
+     * cached the list.
+     */
+    @JvmStatic
+    fun dmInboxRelays(context: Context, pubkey: String): List<String>? = try {
+        val filter = JSONObject()
+            .put("kinds", JSONArray().put(10050))
+            .put("authors", JSONArray().put(pubkey))
+            .put("limit", 1)
+        ArmadaDb.get(context).query(ArmadaDb.TENANT_MAIN, listOf(filter))
+            .firstOrNull()
+            ?.tags
+            ?.filter { it.size >= 2 && it[0] == "relay" }
+            ?.mapNotNull { it[1]?.takeIf(String::isNotEmpty) }
+            ?.takeIf { it.isNotEmpty() }
+    } catch (error: Throwable) {
+        Log.w(TAG, "dm inbox read failed", error)
+        null
+    }
+
     /** The stored kind-0 for a pubkey, or null — so a profile already fetched isn't fetched again. */
     @JvmStatic
     fun profileRaw(context: Context, pubkey: String): String? = try {
