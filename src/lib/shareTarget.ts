@@ -202,6 +202,7 @@ export async function resolveNativeShare(): Promise<string | null> {
 let coldResolved = !hasShareTarget();
 let coldShareRoute: string | null = null;
 const coldWaiters = new Set<() => void>();
+const lateColdWaiters = new Set<(route: string) => void>();
 
 function settleColdShare(route: string | null): void {
   if (coldResolved) return;
@@ -213,8 +214,10 @@ function settleColdShare(route: string | null): void {
 
 if (hasShareTarget()) {
   // Guard so a hung bridge can't pin HomeRedirect forever (same reasoning as
-  // coldLaunchDeepLink's 1.5s guard).
-  const timeout = setTimeout(() => settleColdShare(null), 2000);
+  // coldLaunchDeepLink's 1.5s guard; longer, because a share cold boot is
+  // exactly when the bridge is busiest and a late peek costs a visible
+  // default-screen flash before the late-route navigation below).
+  const timeout = setTimeout(() => settleColdShare(null), 3000);
   ShareTarget.peekShare()
     .then((res) => {
       clearTimeout(timeout);
@@ -222,9 +225,18 @@ if (hasShareTarget()) {
         settleColdShare(null);
         return;
       }
-      settleColdShare(
-        res.shortcutId && isShareableRoomRoute(res.shortcutId) ? res.shortcutId : "/share",
-      );
+      const route =
+        res.shortcutId && isShareableRoomRoute(res.shortcutId) ? res.shortcutId : "/share";
+      if (!coldResolved) {
+        settleColdShare(route);
+      } else {
+        // The guard already fired and HomeRedirect committed to the default
+        // route — hand the destination to the late listeners
+        // (useShareTargetNavigation) instead of dropping it: the payload
+        // below would otherwise land in the stash with nothing ever
+        // navigating to the composer that consumes it.
+        for (const w of lateColdWaiters) w(route);
+      }
       // Payload in the background; the stash subscribers pick it up.
       void resolveNativeShare().catch(() => undefined);
     })
@@ -255,5 +267,18 @@ export function onColdShareResolved(cb: () => void): () => void {
   coldWaiters.add(cb);
   return () => {
     coldWaiters.delete(cb);
+  };
+}
+
+/**
+ * Run `cb` if the launch-intent peek resolves to a share AFTER the guard has
+ * already released HomeRedirect (which then owns no navigation any more —
+ * it's unmounted). The subscriber applies the route as an ordinary in-router
+ * navigation (mirrors coldLaunchDeepLink's onLateColdLaunchDeepLink).
+ */
+export function onLateColdShareRoute(cb: (route: string) => void): () => void {
+  lateColdWaiters.add(cb);
+  return () => {
+    lateColdWaiters.delete(cb);
   };
 }

@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import {
   hasShareTarget,
   isShareableRoomRoute,
+  onLateColdShareRoute,
   resolveNativeShare,
   ShareTarget,
 } from "@/lib/shareTarget";
@@ -40,13 +41,21 @@ export function useShareTargetNavigation(): void {
             ? peek.shortcutId
             : "/share";
         if (!cancelled) navigate(route);
-        await resolveNativeShare();
       } finally {
         // MainActivity threw the crest gate over the WebView on the share
-        // intent; release it once the destination has painted. Signalled even
-        // on failure so the gate never sits out its full timeout.
+        // intent; release it once the destination (or its splash fallback)
+        // has painted — signalDeepLinkNavigated waits two rAFs for that.
+        // MUST fire here, right after the navigate, NOT after the payload
+        // resolve below: checkShare's stream copies can take seconds, and a
+        // gate held past its cap reveals the STALE pre-share screen before
+        // the router has moved (the exact flash the gate exists to prevent).
+        // Signalled even on failure so the gate never sits out its timeout.
         signalDeepLinkNavigated();
       }
+      // The payload, off the navigation's critical path: the destination's
+      // composer (or SharePage) subscribes to the share stash and picks it
+      // up whenever the copies land.
+      await resolveNativeShare();
     };
 
     let handle: { remove: () => void } | undefined;
@@ -59,8 +68,17 @@ export function useShareTargetNavigation(): void {
       })
       .catch(() => undefined);
 
+    // A cold-launch share whose peek resolved only after the guard had
+    // released HomeRedirect to the default route: apply its destination like
+    // a warm share instead of leaving the stashed payload with no navigation
+    // (same shape as useNotificationNavigation's late cold deep link).
+    const offLate = onLateColdShareRoute((route) => {
+      if (!cancelled) navigate(route);
+    });
+
     return () => {
       cancelled = true;
+      offLate();
       handle?.remove();
     };
   }, [navigate]);
