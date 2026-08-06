@@ -638,7 +638,11 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
   return (
     <ComposerBoundsProvider value={composerBoundsRef}>
     <aside className={cn(
-      "flex flex-col min-h-0 flex-1 min-w-0 m-2 sidebar:my-3 sidebar:mr-2 sidebar:ml-0 p-1.5 clip-corner-lg bg-chrome",
+      // `thread:ml-0` (not `sidebar:`) drops the left gap only at ≥1200px,
+      // where the panel is an in-flow sibling flush against the timeline's
+      // right edge. In the 900–1200 band it overlays the chat (see GroupChat),
+      // so it keeps the `m-2` left gutter and reads as a floating card.
+      "flex flex-col min-h-0 flex-1 min-w-0 m-2 sidebar:my-3 sidebar:mr-2 thread:ml-0 p-1.5 clip-corner-lg bg-chrome",
     )}>
       <div className="flex items-center justify-between px-2 py-1 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
