@@ -12,27 +12,32 @@
     canvas at 20px tall, leaving ~2px of transparency on every side, so the art
     doesn't collide with the panel's icon padding.
 
-    Color: flat rose (no gradient, which muds at 16px) rather than the Android
-    asset's white. A status-bar icon is an alpha mask the system tints; a tray
-    icon is drawn as-is onto a panel that may be light or dark, and only macOS
-    re-tints it (from trayTemplate.png below).
+    Color: white, like every other monochrome icon in a panel. Only macOS masks
+    a tray icon for you (trayTemplate.png below); a Linux panel is handed a
+    BITMAP — Electron's Tray takes a NativeImage, not a themed icon name, so
+    nothing in GTK/KDE ever recolors it — and Windows draws it as authored too.
+    So the dark-glyph variants below exist for the panels that are light, and
+    main.js picks between them.
 
     Regenerate with:
       cd electron
-      inkscape icon-src/tray.svg -w 32 -h 32 -o build/tray.png
-      inkscape icon-src/tray.svg -w 64 -h 64 -o build/tray@2x.png
+      inkscape icon-src/tray.svg -w 32 -h 32 -o build/tray-white.png
+      inkscape icon-src/tray.svg -w 64 -h 64 -o build/tray-white@2x.png
       # Windows tray: real 16/24/32/48 frames beat one downscaled bitmap.
       for s in 16 24 32 48; do
         inkscape icon-src/tray.svg -w $s -h $s -o /tmp/tray-$s.png
       done
-      convert /tmp/tray-16.png /tmp/tray-24.png /tmp/tray-32.png \
-        /tmp/tray-48.png build/tray.ico
-      # macOS menu-bar template: black + the alpha above; the system inverts it
-      # for dark mode and highlights, so the RGB is thrown away.
-      convert build/tray.png -fill black -colorize 100 build/trayTemplate.png
-      convert build/tray@2x.png -fill black -colorize 100 build/trayTemplate@2x.png
+      convert /tmp/tray-*.png build/tray-white.ico
+      # Dark glyph = the same alpha, RGB forced to black.
+      convert /tmp/tray-*.png -fill black -colorize 100 build/tray-dark.ico
+      # macOS menu-bar template: the system inverts it for dark mode and for the
+      # clicked state, so only the alpha matters and the RGB is thrown away.
+      convert build/tray-white.png -fill black -colorize 100 \
+        -define png:color-type=6 build/trayTemplate.png
+      convert build/tray-white@2x.png -fill black -colorize 100 \
+        -define png:color-type=6 build/trayTemplate@2x.png
   -->
-  <path fill="#fb4d96"
+  <path fill="#ffffff"
         d="M 128,56 60,200 h 28.000488 l 9.091187,-19.99878 -3.092651,-2.00134
            -1.999512,-20.00061 H 107.09119 L 128,112 l 20.90881,45.99975 h 15.09156
            l -1.99952,20.00061 -3.09265,2.00134 9.09119,19.99878 h 28.00049 z"/>

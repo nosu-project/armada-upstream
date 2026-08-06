@@ -76,11 +76,18 @@ derives `.ico`/`.icns` from it.
 
 The tray icon is separate art — the simplified Armada A, the same shape as the
 Android notification small icon — because the crest is illegible in a ~16px
-panel slot. Source: `icon-src/tray.svg`, with the regeneration commands for
-`build/tray.png` (+`@2x`), `build/tray.ico` (Windows) and
-`build/trayTemplate.png` (+`@2x`, the macOS menu-bar template) in its comment.
-Both icons are loaded at runtime, so `build/**/*` is listed in
-`electron-builder.yml`'s `files`.
+panel slot. Source: `icon-src/tray.svg`, with the regeneration commands in its
+comment. Only macOS masks a tray icon for you (`build/trayTemplate.png` +`@2x`,
+marked as a template image); a Linux or Windows panel is handed a bitmap and
+draws it as authored, so the variants are picked in `main.js`:
+`build/tray-white.png` (+`@2x`) on Linux, and `build/tray-white.ico` /
+`build/tray-dark.ico` on Windows, swapped on `nativeTheme` updates since the
+taskbar follows the system theme. Linux deliberately does *not* follow
+`nativeTheme` — that is the app's color-scheme preference, and panels are
+styled independently of it.
+
+Both the tray art and the window icon are loaded at runtime, so `build/**/*` is
+listed in `electron-builder.yml`'s `files`.
 
 ## CI
 

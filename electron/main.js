@@ -46,6 +46,7 @@ const {
   shell,
   protocol,
   nativeImage,
+  nativeTheme,
   ipcMain,
   desktopCapturer,
   session,
@@ -73,15 +74,7 @@ const ICON = path.join(__dirname, "build", "icon.png");
 // Tray art (electron/icon-src/tray.svg): the simplified Armada A, the same
 // shape as the Android notification small icon. A tray slot is ~16-22px, so
 // the full crest in ICON is unreadable there.
-const TRAY_ICON = path.join(
-  __dirname,
-  "build",
-  process.platform === "darwin"
-    ? "trayTemplate.png"
-    : process.platform === "win32"
-      ? "tray.ico"
-      : "tray.png",
-);
+const TRAY_DIR = path.join(__dirname, "build");
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -260,14 +253,39 @@ function showWindow() {
 
 // ── System tray ──────────────────────────────────────────────────────────────
 
-function createTray() {
+// Only macOS masks a tray icon for us: a template image is re-tinted by the
+// system for light/dark and for the highlighted (clicked) state. Elsewhere the
+// panel gets a bitmap and draws it as authored — Electron's Tray takes a
+// NativeImage, not an icon-theme NAME, so there is no symbolic recoloring to
+// opt into — and we pick the variant ourselves.
+function trayImage() {
+  let file;
+  if (process.platform === "darwin") {
+    file = "trayTemplate.png";
+  } else if (process.platform === "win32") {
+    // The taskbar tracks the system theme, which is what nativeTheme reports.
+    file = nativeTheme.shouldUseDarkColors ? "tray-white.ico" : "tray-dark.ico";
+  } else {
+    // Linux: white, like every other monochrome panel icon. NOT keyed to
+    // nativeTheme — that is the app's GTK/color-scheme preference, and a panel
+    // is styled independently of it (GNOME's top bar stays dark under a light
+    // theme), so following it would paint a dark glyph onto a dark panel.
+    file = "tray-white.png";
+  }
   // createFromPath picks up the @2x companion for HiDPI panels on its own.
-  const image = nativeImage.createFromPath(TRAY_ICON);
-  // macOS menu bar: a template image is re-tinted by the system for light/dark
-  // and for the highlighted (clicked) state. Everywhere else the icon is drawn
-  // as authored.
+  const image = nativeImage.createFromPath(path.join(TRAY_DIR, file));
   if (process.platform === "darwin") image.setTemplateImage(true);
+  return image;
+}
+
+function createTray() {
+  const image = trayImage();
   tray = new Tray(image.isEmpty() ? nativeImage.createEmpty() : image);
+  if (process.platform === "win32") {
+    nativeTheme.on("updated", () => {
+      if (tray && !tray.isDestroyed()) tray.setImage(trayImage());
+    });
+  }
   tray.setToolTip("Armada");
   tray.setContextMenu(
     Menu.buildFromTemplate([
