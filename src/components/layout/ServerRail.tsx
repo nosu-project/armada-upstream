@@ -1,4 +1,4 @@
-import { Bluetooth, Compass, FolderOpen, Headphones, Lock, LogOut, MailPlus, MessageSquare, PanelLeftDashed, Plus, Settings, Trash2 } from "lucide-react";
+import { Bluetooth, CheckCheck, Compass, FolderOpen, Headphones, Lock, LogOut, MailPlus, MessageSquare, PanelLeftDashed, Plus, Settings, Trash2 } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -43,6 +43,7 @@ import { useMutes } from "@/hooks/useMutes";
 import { useNotifLevels, communityScopeKey, dmScopeKey } from "@/hooks/useNotifLevels";
 import { useRailDms } from "@/hooks/useRailDms";
 import { NotifLevelMenu } from "@/components/NotifLevelMenu";
+import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { useRelayUnread } from "@/hooks/useRelayUnread";
@@ -474,12 +475,19 @@ const ServerButton = memo(function ServerButton({
   const { user } = useCurrentUser();
   const { data: groups } = useRelayGroups(user ? url : undefined);
   const groupIds = useMemo(() => (groups ?? []).map((g) => g.id), [groups]);
-  const { anyUnread, anyMention } = useRelayUnread(user ? url : undefined, groupIds);
+  const { byGroup, anyUnread, anyMention } = useRelayUnread(user ? url : undefined, groupIds);
+  const { markRead } = useReadState();
   const { communityLevel, setLevel: setNotifLevel } = useNotifLevels();
   const { isRemovable, removeServer } = useServerActions(url);
   const host = relayHost(url);
   const name = info?.name || host;
   const initial = name.trim().charAt(0).toUpperCase() || "?";
+  const hasUnread = Object.keys(byGroup).length > 0;
+  const markAllRead = useCallback(() => {
+    for (const [groupId, unread] of Object.entries(byGroup)) {
+      markRead(channelReadKey(url, groupId), unread.latest);
+    }
+  }, [byGroup, markRead, url]);
 
   const inner = (isActive: boolean) => (
     <>
@@ -617,6 +625,10 @@ const ServerButton = memo(function ServerButton({
         </RailTooltipContent>
       </Tooltip>
       <ContextMenuContent>
+        <ContextMenuItem className="gap-2" disabled={!hasUnread} onSelect={markAllRead}>
+          <CheckCheck className="size-4" />
+          Mark as read
+        </ContextMenuItem>
         <NotifLevelMenu
           label="Server notifications"
           level={communityLevel(url)}
@@ -681,7 +693,7 @@ const Concord2Button = memo(function Concord2Button({
   // query key). Mirrors the NIP-29 rail badge. Muted channels (or a muted
   // community) don't light the unread dot; unread mentions still badge.
   const channels = useChannels(community, false);
-  const { byChannel } = useConcordUnread(community, channels);
+  const { byChannel, markRead: markC2Read } = useConcordUnread(community, channels);
   const { isConcordChannelMuted } = useMutes();
   const { communityLevel, setLevel: setNotifLevel } = useNotifLevels();
 
@@ -689,6 +701,12 @@ const Concord2Button = memo(function Concord2Button({
     (id) => !isConcordChannelMuted("c2", communityId, id),
   );
   const anyMention = Object.values(byChannel).some((u) => u.mention);
+  const hasUnread = Object.keys(byChannel).length > 0;
+  const markAllRead = useCallback(() => {
+    for (const [channelId, unread] of Object.entries(byChannel)) {
+      markC2Read(channelId, unread.latest);
+    }
+  }, [byChannel, markC2Read]);
 
   // Leave from the rail's right-click menu (best-effort Guestbook leave, then
   // tombstone it locally), then go home.
@@ -805,6 +823,10 @@ const Concord2Button = memo(function Concord2Button({
         </RailTooltipContent>
       </Tooltip>
       <ContextMenuContent>
+        <ContextMenuItem className="gap-2" disabled={!hasUnread} onSelect={markAllRead}>
+          <CheckCheck className="size-4" />
+          Mark as read
+        </ContextMenuItem>
         <NotifLevelMenu
           label="Community notifications"
           level={communityLevel(concordKey(communityId))}
