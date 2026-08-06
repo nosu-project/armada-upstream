@@ -163,7 +163,7 @@ export function RelayBootstrapForm({
               className="max-w-64 text-xs leading-relaxed text-muted-foreground"
             >
               A relay is a server that stores your account's data. If you've used Armada or
-              another Nostr app before, enter a relay you used — it looks like{" "}
+              another Nostr app before, enter a relay you used. It looks like{" "}
               <span className="font-mono text-foreground">wss://relay.example.com</span>. Not
               sure? You can skip this; Armada still works with its built-in relays.
             </PopoverContent>
@@ -187,7 +187,7 @@ export function RelayBootstrapForm({
 
       {checkedRelay && (
         <div className="clip-corner-lg bg-secondary/50 p-3 text-xs leading-relaxed text-muted-foreground">
-          We didn't find a saved setup on that relay. You can start fresh here — Armada will
+          We didn't find a saved setup on that relay. You can start fresh here. Armada will
           remember <strong>{checkedRelay}</strong> as your account's home so your servers and
           settings follow you to your other devices. Nothing is saved until you confirm.
         </div>

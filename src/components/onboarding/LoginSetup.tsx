@@ -250,7 +250,7 @@ function RelayStep({ onDone }: { onDone: () => void }) {
         </StepGlyph>
       }
       title="restore your setup"
-      description="We couldn't automatically find your servers and settings for this account. If you know a server address you've used before, enter it to look them up — otherwise you can skip this and just keep going."
+      description="We couldn't automatically find your servers and settings for this account. If you know a server address you've used before, enter it to look them up, or skip this and keep going."
     >
       <RelayBootstrapForm onDone={onDone} onSkip={onDone} />
     </WizardStepBody>
