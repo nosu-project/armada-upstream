@@ -491,6 +491,31 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
               };
               queryClient.setQueryData(["encrypted-settings", pubkey], merged);
               settingsFound = true;
+
+              // Migration: kinds 10007/10050/10063 are the canonical home for
+              // these lists as of this release, and they were dropped from
+              // SYNCED_CONFIG_KEYS so the NIP-78 blob no longer applies them.
+              // Pre-migration clients stored them ONLY in that blob, so a fresh
+              // device with no canonical event yet would otherwise revert to
+              // defaults. Keep the blob's value alive locally; a later explicit
+              // publish promotes it to the real list. Nothing is published here.
+              const legacySearch = !canonicalSearch && Array.isArray(parsed.data.searchRelays)
+                ? parsed.data.searchRelays
+                : undefined;
+              const legacyDm = !canonicalDm && Array.isArray(parsed.data.dmRelays)
+                ? parsed.data.dmRelays
+                : undefined;
+              const legacyBlossom = !canonicalBlossom && parsed.data.blossomServerMetadata
+                ? parsed.data.blossomServerMetadata
+                : undefined;
+              if (legacySearch || legacyDm || legacyBlossom) {
+                updateConfigRef.current((current) => ({
+                  ...current,
+                  ...(legacySearch ? { searchRelays: legacySearch } : {}),
+                  ...(legacyDm ? { dmRelays: legacyDm } : {}),
+                  ...(legacyBlossom ? { blossomServerMetadata: legacyBlossom } : {}),
+                }));
+              }
             }
           }
         }

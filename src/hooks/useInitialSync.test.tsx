@@ -149,4 +149,43 @@ describe("useInitialSync", () => {
       expect.objectContaining({ relays: ["wss://dm.example"] }),
     );
   });
+
+  it("restores pre-10007 search/DM/media values from the NIP-78 blob when no canonical list exists", async () => {
+    const legacy = {
+      searchRelays: ["wss://legacy-search.example"],
+      dmRelays: ["wss://legacy-dm.example"],
+      blossomServerMetadata: { servers: ["https://legacy-media.example/"], updatedAt: 7 },
+    };
+    const priorSigner = h.user.signer;
+    h.user.signer = { nip44: { decrypt: vi.fn(async () => JSON.stringify(legacy)) } };
+
+    h.queryExplicitRelays.mockReset()
+      // 1. No canonical kind-10007/10050/10063 lists exist for this account.
+      .mockResolvedValueOnce([])
+      // 2. The encrypted settings blob still carries the pre-migration values.
+      .mockResolvedValueOnce([
+        {
+          pubkey: PUBKEY,
+          id: "settings",
+          kind: 30078,
+          sig: "s",
+          created_at: 30,
+          tags: [["d", "armada/metadata"]],
+          content: "cipher",
+        },
+      ])
+      .mockResolvedValue([]);
+
+    const view = renderHook(() => useInitialSync(PUBKEY));
+    await waitFor(() => expect(view.result.current.done).toBe(true));
+
+    expect(h.config.searchRelays).toEqual(["wss://legacy-search.example"]);
+    expect(h.config.dmRelays).toEqual(["wss://legacy-dm.example"]);
+    expect(h.config.blossomServerMetadata).toEqual({
+      servers: ["https://legacy-media.example/"],
+      updatedAt: 7,
+    });
+
+    h.user.signer = priorSigner;
+  });
 });

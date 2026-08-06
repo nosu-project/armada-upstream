@@ -28,6 +28,14 @@ interface RelayQueryClient {
       opts: { signal: AbortSignal },
     ): Promise<NostrEvent[]>;
   };
+  /**
+   * Pool-wide read, used only as a fallback when no explicit relays are given
+   * (see `queryExplicitRelays`). Optional so test doubles need not provide it.
+   */
+  query?(
+    filters: NostrFilter[],
+    opts: { signal: AbortSignal },
+  ): Promise<NostrEvent[]>;
 }
 
 interface RelayPublishClient {
@@ -129,6 +137,19 @@ export async function queryExplicitRelays(
   signal: AbortSignal,
 ): Promise<NostrEvent[]> {
   const urls = uniqueRelayUrls(relayUrls);
+  // No explicit relays to scope to — e.g. the app relays are switched off and
+  // no NIP-65 write relays have been adopted. Reading nothing would silently
+  // drop account-data singletons that the general pool can still reach, so fall
+  // back to a pool-wide read (the pre-scoping behavior) rather than return [].
+  if (urls.length === 0) {
+    if (!nostr.query) return [];
+    try {
+      const events = await nostr.query(filters, { signal });
+      return events.filter((event) => verifyEvent(event));
+    } catch {
+      return [];
+    }
+  }
   const settled = await Promise.allSettled(
     urls.map((url) => nostr.relay(url).query(filters, { signal })),
   );

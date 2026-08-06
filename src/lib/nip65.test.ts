@@ -105,6 +105,38 @@ describe("NIP-65 relay lists", () => {
     expect(events).toEqual([event]);
   });
 
+  it("falls back to a pool-wide read when no explicit relays are given", async () => {
+    const event = relayList([["r", "wss://one.example"]], 4_500);
+    const relay = vi.fn(() => ({ query: async () => [] as NostrEvent[] }));
+    const poolQuery = vi.fn(async () => [event]);
+    const nostr = { relay, query: poolQuery };
+    const events = await queryExplicitRelays(
+      nostr,
+      [],
+      [{ kinds: [KIND_RELAY_LIST] }],
+      new AbortController().signal,
+    );
+    expect(events).toEqual([event]);
+    expect(poolQuery).toHaveBeenCalledTimes(1);
+    expect(relay).not.toHaveBeenCalled();
+  });
+
+  it("returns nothing (never a pool read) when explicit relays are provided", async () => {
+    const poolQuery = vi.fn(async () => [relayList([["r", "wss://leak.example"]])]);
+    const nostr = {
+      relay: () => ({ query: async () => [] as NostrEvent[] }),
+      query: poolQuery,
+    };
+    const events = await queryExplicitRelays(
+      nostr,
+      ["wss://one.example"],
+      [{ kinds: [KIND_RELAY_LIST] }],
+      new AbortController().signal,
+    );
+    expect(events).toEqual([]);
+    expect(poolQuery).not.toHaveBeenCalled();
+  });
+
   it("fans the exact signed event to each relay and reports partial acceptance", async () => {
     const event = relayList([["r", "wss://home.example"]], 5_000);
     const delivered: Array<{ url: string; event: NostrEvent }> = [];
