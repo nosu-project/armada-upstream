@@ -157,6 +157,9 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
   const bannerUrl = useDecryptedImage2(banner);
   const name =
     folded?.metadata?.name?.trim() || bundle?.name?.trim() || "Encrypted community";
+  // Like name/icon: a member's authoritative fold wins; a non-member sees the
+  // bundle's capped preview copy.
+  const description = folded?.metadata?.description?.trim() || bundle?.description?.trim() || "";
   const initial = name.charAt(0).toUpperCase() || "·";
   const channelCount = Array.isArray(bundle?.channels) ? bundle!.channels.length : 0;
 
@@ -274,6 +277,10 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
             </span>
           </div>
         </div>
+
+        {description && (
+          <p className="text-xs text-muted-foreground line-clamp-2 break-words">{description}</p>
+        )}
 
         {/* Whose community it is */}
         <ProfilePreviewCard pubkey={attributedPubkey}>

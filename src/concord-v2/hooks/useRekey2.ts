@@ -41,7 +41,7 @@ import { citationSatisfied } from "@/concord-v2/lib/control";
 import { hasPermission, outranksMember, Permissions } from "@/concord-v2/lib/roles";
 import { queryPlane, queryRekeyRounds, readControlSnapshot, readStoredSeal, readStreamCursor, updateStreamCursor, writeOpened } from "@/concord-v2/lib/rumorStore";
 import { openWrap, rewrapSeal, sealRumor, wrapSeal, type OpenedEvent, type OpenedWireEvent } from "@/concord-v2/lib/stream";
-import { buildRefreshedBundleEvents, type InviteBundle } from "@/concord-v2/lib/invite";
+import { buildRefreshedBundleEvents, capBundleDescription, type InviteBundle } from "@/concord-v2/lib/invite";
 import { fetchInviteList } from "@/concord-v2/hooks/useInvites2";
 import { toast } from "@/hooks/useToast";
 import type { CommunityMetadata, CommunityV2, HeldRoot, PrivateChannelKey } from "@/concord-v2/lib/types";
@@ -66,7 +66,7 @@ export async function refreshInviteBundlesFor(
   nostr: ReturnType<typeof useNostr>["nostr"],
   user: NUser,
   rotated: Pick<CommunityV2, "id" | "idHex" | "owner" | "ownerSalt" | "root" | "rootEpoch" | "privateChannels" | "relays" | "name">,
-  metadata: Pick<CommunityMetadata, "name" | "icon"> | undefined,
+  metadata: Pick<CommunityMetadata, "name" | "icon" | "description"> | undefined,
   // Fan-out override for a relay-list change: the refreshed bundle (which
   // VENDS `rotated.relays`) must also overwrite the copy on the OLD relays —
   // that's where existing links' fragment hints send fetchers.
@@ -97,6 +97,9 @@ export async function refreshInviteBundlesFor(
     relays: rotated.relays,
     name: metadata?.name ?? rotated.name,
     ...(metadata?.icon ? { icon: metadata.icon } : {}),
+    ...(metadata?.description?.trim()
+      ? { description: capBundleDescription(metadata.description.trim()) }
+      : {}),
     creator_npub: user.pubkey,
   };
 
