@@ -4,6 +4,7 @@ import type { EventTemplate } from "nostr-tools/pure";
 import { describe, expect, it } from "vitest";
 
 import {
+  buildDmEditRumors,
   buildDmRumor,
   dmChatTags,
   dmDeleteTags,
@@ -191,6 +192,61 @@ describe("rumor tag builders + peer attribution", () => {
       pubkey: self,
     });
     expect(dmPeerOf(rumor, self)).toBe(peer);
+  });
+
+  it("builds an edit as a same-time replacement plus a tombstone", () => {
+    const original = buildDmRumor({
+      kind: KIND_DM_CHAT,
+      content: "before",
+      tags: dmChatTags(peer, {
+        replyTo: "parent",
+        extraTags: [["q", "quoted"], ["edited", "100"]],
+        expiresAt: 2_000_000_000,
+      }),
+      pubkey: self,
+      createdAt: 1_700_000_000,
+    });
+
+    const { replacement, deletion } = buildDmEditRumors(
+      original,
+      peer,
+      "after",
+      1_700_000_500,
+    );
+
+    expect(replacement).toMatchObject({
+      kind: KIND_DM_CHAT,
+      content: "after",
+      pubkey: self,
+      created_at: original.created_at,
+    });
+    expect(replacement.id).not.toBe(original.id);
+    expect(replacement.tags).toEqual([
+      ["p", peer],
+      ["e", "parent"],
+      ["q", "quoted"],
+      ["expiration", "2000000000"],
+      ["edited", "1700000500"],
+    ]);
+    expect(deletion).toMatchObject({
+      kind: KIND_DM_DELETE,
+      content: "",
+      pubkey: self,
+      created_at: 1_700_000_500,
+      tags: [["p", peer], ["e", original.id], ["k", "14"]],
+    });
+  });
+
+  it("refuses to edit a non-chat rumor", () => {
+    const reaction = buildDmRumor({
+      kind: KIND_DM_REACTION,
+      content: "+",
+      tags: dmReactionTags(peer, "target", KIND_DM_CHAT),
+      pubkey: self,
+    });
+    expect(() => buildDmEditRumors(reaction, peer, "changed")).toThrow(
+      "Only NIP-17 chat messages can be edited",
+    );
   });
 });
 

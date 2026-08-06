@@ -16,6 +16,7 @@ import {
   writeDm17Rumors,
 } from "@/lib/nip17/dm17Store";
 import {
+  buildDmEditRumors,
   buildDmRumor,
   dmChatTags,
   dmDeleteTags,
@@ -27,6 +28,7 @@ import {
   KIND_DM_TIMER,
   type OpenedDm,
 } from "@/lib/nip17/protocol";
+import { dmThreadScope, onWireScopes, resetWireBus } from "@/wire/bus";
 
 // A clean IndexedDB for the suite (the store singleton opens against it lazily).
 (globalThis as unknown as { indexedDB: IDBFactory }).indexedDB = new IDBFactory();
@@ -78,6 +80,42 @@ describe("dm17Store", () => {
     const thread = await queryDm17Thread(self, alice, { limit: 50 });
     const ids = thread.map((r) => r.rumorId).sort();
     expect(ids).toEqual([fromAlice.rumorId, toAlice.rumorId].sort());
+  });
+
+  it("rings the inbox and each affected thread after a durable write", async () => {
+    const scopedSelf = getPublicKey(generateSecretKey());
+    const scopedAlice = getPublicKey(generateSecretKey());
+    const scopedBob = getPublicKey(generateSecretKey());
+    resetWireBus();
+    const seen = new Set<string>();
+    const unsubscribe = onWireScopes((scopes) => {
+      for (const scope of scopes) seen.add(scope);
+    });
+
+    try {
+      await writeDm17Rumors(scopedSelf, [
+        opened({
+          author: scopedAlice,
+          peer: scopedAlice,
+          content: "scope alice",
+          tags: dmChatTags(scopedSelf),
+        }),
+        opened({
+          author: scopedBob,
+          peer: scopedBob,
+          content: "scope bob",
+          tags: dmChatTags(scopedSelf),
+        }),
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 75));
+
+      expect(seen).toEqual(
+        new Set(["dm", dmThreadScope(scopedAlice), dmThreadScope(scopedBob)]),
+      );
+    } finally {
+      unsubscribe();
+      resetWireBus();
+    }
   });
 
   it("groups conversations by peer, newest message first", async () => {
@@ -138,6 +176,37 @@ describe("dm17Store", () => {
     expect(thread.some((r) => r.rumorId === target.rumorId)).toBe(false);
     // The reaction survives (deletes are per-target).
     expect(thread.some((r) => r.rumorId === reaction.rumorId)).toBe(true);
+  });
+
+  it("persists an edit as the replacement and removes the old rumor", async () => {
+    const editor = getPublicKey(generateSecretKey());
+    const original = opened({
+      author: self,
+      peer: editor,
+      content: "uncorrected",
+      tags: dmChatTags(editor, { replyTo: "parent" }),
+    });
+    await writeDm17Rumors(self, [original]);
+
+    const { replacement, deletion } = buildDmEditRumors(
+      dm17ToStored(original),
+      editor,
+      "corrected",
+      original.createdAt + 10,
+    );
+    await writeDm17Rumors(self, [
+      storedToDm17(replacement, self),
+      storedToDm17(deletion, self),
+    ]);
+
+    const thread = await queryDm17Thread(self, editor, { limit: 50 });
+    expect(thread.some((r) => r.rumorId === original.rumorId)).toBe(false);
+    expect(thread).toContainEqual(expect.objectContaining({
+      rumorId: replacement.id,
+      content: "corrected",
+      createdAt: original.createdAt,
+      tags: expect.arrayContaining([["e", "parent"], ["edited", String(original.createdAt + 10)]]),
+    }));
   });
 });
 

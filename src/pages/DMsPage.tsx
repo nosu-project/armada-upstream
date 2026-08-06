@@ -7,6 +7,7 @@ import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { DittoIcon } from "@/components/brand/DittoIcon";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage, ReplyContextLine, ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
+import type { ChatMsg } from "@/components/chat/transport";
 import { firstImageRef, getQuoteReplyToId } from "@/components/chat/messageHelpers";
 import { MessageRow } from "@/components/chat/MessageRow";
 import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
@@ -703,6 +704,34 @@ function Conversation({
   const requestPeers = useMemo(() => (isRequest ? [peer] : []), [isRequest, peer]);
   const sharedCommunity = useSharedCommunities(requestPeers, isRequest).get(peer);
 
+  // The shared row owns the inline field and keyboard behavior; this page only
+  // tracks which NIP-17 row is active and hands the edit to the DM transport.
+  // Reach the latest transport through a ref so unchanged rows keep stable
+  // callback identities, matching Concord's channel implementation.
+  const transportRef = useRef(transport);
+  transportRef.current = transport;
+  const [editingId, setEditingId] = useState<string | undefined>(undefined);
+  const startEditing = useCallback((event: ChatMsg) => setEditingId(event.id), []);
+  const cancelEditing = useCallback(() => setEditingId(undefined), []);
+  useEffect(() => setEditingId(undefined), [peer]);
+  const handleEditSubmit = useCallback(async (original: ChatMsg, content: string) => {
+    const trimmed = content.trim();
+    if (!trimmed || trimmed === original.content.trim()) {
+      setEditingId(undefined);
+      return;
+    }
+    setEditingId(undefined);
+    try {
+      await transportRef.current.editMessage?.(original, trimmed);
+    } catch {
+      toast({
+        title: "Edit failed",
+        description: "Could not publish the edit.",
+        variant: "destructive",
+      });
+    }
+  }, [toast]);
+
   // Inline quote-reply state (NIP-17 sends only — a kind-4 send has no
   // in-band convention, so the control is hidden on legacy threads).
   const [replyTo, setReplyTo] = useState<NostrRumor | undefined>(undefined);
@@ -1350,6 +1379,14 @@ function Conversation({
                 // "Quote" primes the composer; the quoted parent renders above
                 // the body and clicking it jumps the timeline.
                 onReply={dm17Enabled ? setReplyTo : undefined}
+                isEditing={editingId === msg.id}
+                onEdit={
+                  dm17Ids.has(msg.id) && msg.pubkey === user?.pubkey && transport.editMessage
+                    ? startEditing
+                    : undefined
+                }
+                onEditSubmit={handleEditSubmit}
+                onEditCancel={cancelEditing}
                 replyContext={(() => {
                   const replyId = dmReplyToId(msg);
                   return replyId ? (

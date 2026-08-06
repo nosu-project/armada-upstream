@@ -49,7 +49,7 @@ import {
   KIND_DM_TIMER,
   type OpenedDm,
 } from "@/lib/nip17/protocol";
-import { emitWireScopes } from "@/wire/bus";
+import { dmThreadScope, emitWireScopes } from "@/wire/bus";
 
 /** The global pre-tenant database, drained into the tenants on first use. */
 const LEGACY_DB_NAME = "armada-dm17-rumors";
@@ -260,10 +260,10 @@ export function storedToDm17(ev: NostrRumor, self: string): OpenedDm {
 // ── Reads / writes ────────────────────────────────────────────────────────────
 
 /**
- * Persist opened DM rumors, then ring the wire bus's `dm` scope so every DM
- * surface (thread, conversation list, unread dot) re-reads. Kind-5 rumors
- * trigger the store's self-only NIP-09 removal of their targets. Best-effort;
- * resolves once the write commits.
+ * Persist opened DM rumors, then ring the wire bus's coarse conversation-list
+ * scope plus one scope per affected peer. Kind-5 rumors trigger the store's
+ * self-only NIP-09 removal of their targets. Best-effort; resolves once the
+ * write commits.
  */
 export async function writeDm17Rumors(self: string, opened: OpenedDm[]): Promise<void> {
   // Already-expired rumors never reach persistent storage. `openDmWrap` also
@@ -280,7 +280,9 @@ export async function writeDm17Rumors(self: string, opened: OpenedDm[]): Promise
       }),
     ),
   );
-  emitWireScopes(["dm"]);
+  const scopes = new Set<string>(["dm"]);
+  for (const rumor of fresh) if (rumor.peer) scopes.add(dmThreadScope(rumor.peer));
+  emitWireScopes(scopes);
 }
 
 /**
@@ -449,6 +451,7 @@ export async function sweepExpiredDm17Rumors(
   const now = Math.floor(Date.now() / 1000);
   let until: number | undefined;
   let removed = 0;
+  const peers = new Set<string>();
 
   for (let page = 0; page < SWEEP_MAX_PAGES; page++) {
     const filter: { kinds: number[]; limit: number; until?: number } = {
@@ -459,10 +462,15 @@ export async function sweepExpiredDm17Rumors(
     const events = await s.query([filter], { signal: opts.signal });
     if (events.length === 0) break;
 
-    const ids = events.filter((ev) => isExpired(ev.tags, now)).map((ev) => ev.id);
+    const expired = events.filter((ev) => isExpired(ev.tags, now));
+    const ids = expired.map((ev) => ev.id);
     if (ids.length > 0) {
       await s.remove([{ ids }], { signal: opts.signal });
       removed += ids.length;
+      for (const ev of expired) {
+        const peer = dmPeerOf(ev, self);
+        if (peer) peers.add(peer);
+      }
     }
     if (events.length < SWEEP_PAGE) break;
     // Page strictly older than this page's oldest row. Ties on `created_at`
@@ -472,7 +480,9 @@ export async function sweepExpiredDm17Rumors(
     until = oldest - 1;
   }
 
-  if (removed > 0) emitWireScopes(["dm"]);
+  if (removed > 0) {
+    emitWireScopes(["dm", ...[...peers].map(dmThreadScope)]);
+  }
   return removed;
 }
 

@@ -19,6 +19,7 @@ import { mayBulkDecrypt, signerNeedsApproval } from "@/lib/bulkDecryptGate";
 import { setDecryptConsent } from "@/lib/decryptConsent";
 import { STORE_READ } from "@/lib/storeQuery";
 import { useWireScopes } from "@/wire/useWireScopes";
+import { dmThreadScope } from "@/wire/bus";
 import { dmThreadSnapshotScope, readTimelineSnapshot } from "@/lib/timelineSnapshot";
 import { isDmSynced, markDmSynced } from "@/lib/dmSynced";
 import { markOwnWebPushEvent } from "@/lib/webPushState";
@@ -45,6 +46,25 @@ export function dmCounterparty(event: NostrRumor, self: string): string | undefi
   if (event.pubkey !== self) return event.pubkey; // received: peer is the sender
   // sent: peer is the first `p` tag
   return event.tags.find(([name]) => name === "p")?.[1];
+}
+
+/**
+ * Preserve inbox previews only while the same account and decrypt-consent mode
+ * move to a newer preview key. Carrying plaintext across either boundary could
+ * briefly expose the previous account's previews.
+ */
+export function keepPreviousDmPreviews(
+  previous: Record<string, string> | undefined,
+  previousKey: readonly unknown[] | undefined,
+  self: string,
+  consent: unknown,
+): Record<string, string> | undefined {
+  return previousKey?.[0] === "dm" &&
+    previousKey[1] === "previews" &&
+    previousKey[2] === self &&
+    previousKey[4] === consent
+    ? previous
+    : undefined;
 }
 
 /**
@@ -701,6 +721,11 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
     queryKey: ["dm", "previews", self, previewKey, consent],
     enabled: decryptPreviews && !!self && !!user?.signer.nip04 && conversations.length > 0,
     staleTime: 60_000,
+    // A new latest kind-4 event changes `previewKey`. Keep the previous map
+    // while that one row decrypts instead of blanking every conversation's
+    // preview and making the whole inbox appear to reload.
+    placeholderData: (previous, previousQuery) =>
+      keepPreviousDmPreviews(previous, previousQuery?.queryKey, self, consent),
     queryFn: async () => {
       const nip04 = user!.signer.nip04!;
       const out: Record<string, string> = {};
@@ -994,7 +1019,7 @@ export function useDirectMessages(peer: string | undefined) {
   // The wire funnels this thread's kind-4s into the store; re-read on change.
   // (The queryFn decrypts the newest rows and its pull is throttled.)
   useWireScopes((scopes) => {
-    if (self && peer && scopes.has("dm")) {
+    if (self && peer && scopes.has(dmThreadScope(peer))) {
       void queryClient.invalidateQueries({ queryKey });
     }
   });

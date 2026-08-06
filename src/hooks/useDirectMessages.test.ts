@@ -8,6 +8,7 @@ import {
   DM_PAGE_SIZE,
   dmCounterparty,
   hasMoreCursor,
+  keepPreviousDmPreviews,
   mergeDmEvents,
   mergeDmThread,
   nextDirectionCursor,
@@ -55,6 +56,25 @@ describe("dmCounterparty", () => {
   });
   it("sent message: counterparty is the first p tag", () => {
     expect(dmCounterparty(dmEvent({ id: "1", from: SELF, to: PEER1 }), SELF)).toBe(PEER1);
+  });
+});
+
+describe("keepPreviousDmPreviews", () => {
+  const previews = { [PEER1]: "hello" };
+
+  it("keeps previews while the same inbox advances to a new latest message", () => {
+    const previousKey = ["dm", "previews", SELF, `${PEER1}:old`, "allowed"];
+    expect(keepPreviousDmPreviews(previews, previousKey, SELF, "allowed")).toBe(previews);
+  });
+
+  it("does not carry decrypted previews across accounts", () => {
+    const previousKey = ["dm", "previews", PEER2, `${PEER1}:old`, "allowed"];
+    expect(keepPreviousDmPreviews(previews, previousKey, SELF, "allowed")).toBeUndefined();
+  });
+
+  it("does not carry decrypted previews across consent changes", () => {
+    const previousKey = ["dm", "previews", SELF, `${PEER1}:old`, "allowed"];
+    expect(keepPreviousDmPreviews(previews, previousKey, SELF, "declined")).toBeUndefined();
   });
 });
 
