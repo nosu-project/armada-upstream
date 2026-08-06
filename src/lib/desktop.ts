@@ -26,6 +26,26 @@ export type MicAccessStatus =
   | "restricted"
   | "unknown";
 
+/**
+ * Which OS facility is encrypting stored secrets. On Linux this is Chromium's
+ * selected password store; `basic_text` is a hardcoded key (obfuscation, not
+ * encryption) and is what a machine with no keyring daemon gets.
+ */
+export interface SecretsStatus {
+  available: boolean;
+  backend:
+    | "basic_text"
+    | "gnome_libsecret"
+    | "kwallet"
+    | "kwallet5"
+    | "kwallet6"
+    | "darwin"
+    | "win32"
+    | "linux"
+    | "unknown"
+    | string;
+}
+
 interface ArmadaDesktopBridge {
   isDesktop: true;
   setBadge: (count: number) => void;
@@ -34,6 +54,11 @@ interface ArmadaDesktopBridge {
   onPickScreenSource: (handler: () => string | null | Promise<string | null>) => void;
   getMicAccessStatus: () => Promise<MicAccessStatus>;
   openMicPrivacySettings: () => Promise<boolean>;
+  // Optional: a newer web bundle can run inside an older shell that predates
+  // these, so every call site feature-detects rather than assuming.
+  getSecretsStatus?: () => Promise<SecretsStatus>;
+  encryptSecret?: (plaintext: string) => Promise<string | null>;
+  decryptSecret?: (base64: string) => Promise<string | null>;
 }
 
 declare global {
@@ -86,5 +111,50 @@ export async function openDesktopMicSettings(): Promise<boolean> {
     return await bridge.openMicPrivacySettings();
   } catch {
     return false;
+  }
+}
+
+/**
+ * Whether the desktop shell can encrypt secrets with the OS credential store,
+ * and which backend does it. Resolves `available: false` on the web and in
+ * shells older than the bridge method.
+ */
+export async function desktopSecretsStatus(): Promise<SecretsStatus> {
+  const bridge = desktop();
+  if (!bridge?.getSecretsStatus) return { available: false, backend: "unknown" };
+  try {
+    return await bridge.getSecretsStatus();
+  } catch {
+    return { available: false, backend: "unknown" };
+  }
+}
+
+/**
+ * Encrypt a string with the OS credential store. Resolves null on the web, in
+ * an older shell, or whenever encryption is unavailable — callers fall back to
+ * storing plaintext rather than failing the write.
+ */
+export async function desktopEncryptSecret(plaintext: string): Promise<string | null> {
+  const bridge = desktop();
+  if (!bridge?.encryptSecret) return null;
+  try {
+    return await bridge.encryptSecret(plaintext);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Decrypt base64 ciphertext from `desktopEncryptSecret`. Null means the blob
+ * could not be opened — "locked", not "empty". Callers must preserve the
+ * ciphertext rather than overwriting it.
+ */
+export async function desktopDecryptSecret(base64: string): Promise<string | null> {
+  const bridge = desktop();
+  if (!bridge?.decryptSecret) return null;
+  try {
+    return await bridge.decryptSecret(base64);
+  } catch {
+    return null;
   }
 }

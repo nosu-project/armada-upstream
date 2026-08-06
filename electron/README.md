@@ -19,6 +19,27 @@ It also adds desktop-native behavior the web build can't:
 - **Screen-share picker** — Electron has no built-in `getDisplayMedia` picker,
   so the main process enumerates sources and the in-app `ScreenSharePicker`
   dialog lets the user choose a screen/window.
+- **Encrypted login store** — the web build keeps the login blob (which for an
+  nsec login holds the raw secret key) in plaintext `localStorage`. Here it is
+  encrypted at rest with `safeStorage`, i.e. the OS credential store
+  (libsecret/kwallet, Keychain, DPAPI). This is at-rest protection only — it
+  stops a stolen disk, a backup tool, or another account on the machine, not
+  code running inside the app. Notes:
+  - The value stays in `localStorage`; only its contents are ciphertext, in a
+    `{"v":1,"enc":"safeStorage","data":…}` envelope (`src/lib/secureStorage.ts`).
+    An empty login list is stored as literal `[]` — nothing secret in it, and
+    `index.html`'s inline boot script reads this key synchronously to decide
+    whether to draw the crest.
+  - Migration is lazy, on first successful read. If the credential store is
+    unavailable the adapter writes plaintext rather than failing the write.
+  - A blob that won't decrypt (reset keyring, profile copied to another
+    machine) means *locked*, not *empty*: it is copied to `armada:login-locked`
+    before the signed-out UI can overwrite it, since it may be the only copy of
+    the user's key.
+  - On Linux with no keyring daemon, Chromium selects the `basic_text` backend
+    — a hardcoded key, so obfuscation rather than encryption. The backend is
+    reported in Settings → Keys so the user isn't told they have protection
+    they don't.
 
 The web client talks to the shell through a small, explicit bridge
 (`window.armadaDesktop`, see `preload.js`); on the web that object is absent and

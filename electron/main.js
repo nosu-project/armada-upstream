@@ -27,6 +27,7 @@ const {
   desktopCapturer,
   session,
   systemPreferences,
+  safeStorage,
 } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
@@ -396,6 +397,68 @@ function installPermissionHandlers() {
   );
 }
 
+// ── Secret storage (safeStorage) ────────────────────────────────────────────
+//
+// The web build keeps the login store — which for an nsec login holds the raw
+// secret key — in localStorage, i.e. plaintext in the profile's LevelDB. On
+// desktop we can do better: `safeStorage` wraps the OS credential store
+// (libsecret/kwallet on Linux, Keychain on macOS, DPAPI on Windows), so the
+// blob is encrypted at rest against anything reading the profile directory.
+//
+// This does NOT defend against code running inside the app — the renderer can
+// always ask for a decrypt, exactly as it can on the mobile keystore path.
+// What it buys is at-rest protection: a stolen disk, a backup/sync tool, or
+// another account on the machine no longer yields a usable nsec.
+//
+// The renderer owns the storage container and the migration; the main process
+// only lends it the cipher. Buffers cross the bridge as base64 because the
+// bridge carries JSON.
+
+function installSecretIpc() {
+  // Whether encryption is usable, plus which backend is doing it. On Linux a
+  // machine with no keyring daemon falls back to `basic_text` — a hardcoded
+  // key, i.e. obfuscation rather than encryption. We still use it (it costs
+  // nothing and can't fail to unlock), but the renderer surfaces the backend
+  // in Settings so the user isn't told they have protection they don't.
+  ipcMain.handle("armada:secrets-status", () => {
+    try {
+      return {
+        available: safeStorage.isEncryptionAvailable(),
+        backend:
+          process.platform === "linux"
+            ? safeStorage.getSelectedStorageBackend()
+            : process.platform,
+      };
+    } catch {
+      return { available: false, backend: "unknown" };
+    }
+  });
+
+  ipcMain.handle("armada:encrypt-secret", (_event, plaintext) => {
+    try {
+      if (typeof plaintext !== "string") return null;
+      if (!safeStorage.isEncryptionAvailable()) return null;
+      return safeStorage.encryptString(plaintext).toString("base64");
+    } catch {
+      return null;
+    }
+  });
+
+  // Returns null rather than throwing when the ciphertext can't be opened (a
+  // reset keyring, a profile copied to another machine). The renderer treats
+  // null as "locked, not empty" and must not overwrite the blob — it is very
+  // likely the only copy of the user's identity key.
+  ipcMain.handle("armada:decrypt-secret", (_event, base64) => {
+    try {
+      if (typeof base64 !== "string" || !base64) return null;
+      if (!safeStorage.isEncryptionAvailable()) return null;
+      return safeStorage.decryptString(Buffer.from(base64, "base64"));
+    } catch {
+      return null;
+    }
+  });
+}
+
 // ── IPC from the renderer (preload bridge) ──────────────────────────────────
 
 function installIpc() {
@@ -451,6 +514,8 @@ if (!gotLock) {
     registerAppProtocol();
     installPermissionHandlers();
     installIpc();
+    // After whenReady: on Linux safeStorage has no key until the app is ready.
+    installSecretIpc();
     installDisplayMediaHandler();
     createTray();
     createWindow();

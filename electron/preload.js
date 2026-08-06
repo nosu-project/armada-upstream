@@ -33,6 +33,29 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
   openMicPrivacySettings: () => ipcRenderer.invoke("armada:open-mic-settings"),
 
   /**
+   * Whether OS-backed secret encryption is usable, and which backend provides
+   * it: { available, backend }. `backend` is the Chromium password store on
+   * Linux ("gnome_libsecret" | "kwallet*" | "basic_text" | "unknown") and the
+   * platform name elsewhere. "basic_text" means a hardcoded key — obfuscation,
+   * not encryption.
+   */
+  getSecretsStatus: () => ipcRenderer.invoke("armada:secrets-status"),
+
+  /**
+   * Encrypt a string with the OS credential store. Resolves base64 ciphertext,
+   * or null when encryption is unavailable (the caller then stores plaintext
+   * rather than failing the write).
+   */
+  encryptSecret: (plaintext) => ipcRenderer.invoke("armada:encrypt-secret", plaintext),
+
+  /**
+   * Decrypt base64 ciphertext produced by encryptSecret. Resolves null when it
+   * can't be opened (reset keyring, profile moved between machines) — which
+   * means "locked", NOT "empty": callers must not overwrite the stored blob.
+   */
+  decryptSecret: (base64) => ipcRenderer.invoke("armada:decrypt-secret", base64),
+
+  /**
    * List shareable screens/windows for the in-app screen-share picker.
    * Returns [{ id, name, thumbnail, appIcon, isScreen }].
    */

@@ -1,7 +1,7 @@
 import { Capacitor } from "@capacitor/core";
-import { Check, Copy, Download, Eye, EyeOff, Share2 } from "lucide-react";
+import { Check, Copy, Download, Eye, EyeOff, Lock, Share2, ShieldAlert } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { SettingsRow } from "@/components/settings/SettingsSection";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,56 @@ import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/useToast";
 import { writeClipboardText } from "@/lib/clipboard";
 import { saveNsec } from "@/lib/credentialManager";
+import { desktopSecretsStatus, isDesktop } from "@/lib/desktop";
 import { share } from "@/lib/share";
+
+import type { SecretsStatus } from "@/lib/desktop";
+
+/**
+ * How this device stores the key at rest. Desktop only: the browser has no
+ * credential store to report on, and native builds always use the OS keystore.
+ *
+ * `basic_text` is Chromium's no-keyring fallback — a hardcoded key, so the
+ * blob is obfuscated rather than encrypted. Saying so is the point of the row:
+ * claiming protection the machine isn't providing is worse than silence.
+ */
+function KeyStorageRow() {
+  const [status, setStatus] = useState<SecretsStatus | null>(null);
+
+  useEffect(() => {
+    if (!isDesktop()) return;
+    let cancelled = false;
+    desktopSecretsStatus().then((s) => {
+      if (!cancelled) setStatus(s);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!isDesktop() || !status) return null;
+
+  const encrypted = status.available && status.backend !== "basic_text";
+
+  return (
+    <SettingsRow
+      label="Storage on this device"
+      description={
+        encrypted
+          ? "Your key is encrypted at rest using your system's credential store."
+          : status.available
+            ? "No system keyring was found, so your key is only obfuscated on disk. Installing a keyring (GNOME Keyring or KWallet) enables real encryption."
+            : "Your key is stored unencrypted on this device."
+      }
+    >
+      {encrypted ? (
+        <Lock className="size-4 text-success" aria-label="Encrypted" />
+      ) : (
+        <ShieldAlert className="size-4 text-amber-500" aria-label="Not encrypted" />
+      )}
+    </SettingsRow>
+  );
+}
 
 interface KeyBackupSettingsProps {
   /** Bech32 nsec of the active login (only nsec logins expose a key). */
@@ -133,6 +182,8 @@ export function KeyBackupSettings({ nsec, pubkey }: KeyBackupSettingsProps) {
           </div>
         </div>
       </SettingsRow>
+
+      <KeyStorageRow />
 
       <SettingsRow
         label="Public key"
