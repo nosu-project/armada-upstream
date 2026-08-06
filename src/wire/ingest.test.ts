@@ -143,13 +143,19 @@ describe("ingestWireEvents", () => {
     expect(store.relays).toEqual(["wss://r.example"]);
   });
 
-  it("routes kind-4 DMs to the store under the dm scope", async () => {
+  it("routes kind-4 DMs to the inbox and affected-thread scopes", async () => {
+    const self = "e".repeat(64);
+    const peer = "f".repeat(64);
     const { store, sinks } = makeSinks({});
+    const withSelf = { ...sinks, getSelfPubkey: () => self };
+    const dm = plainEvent(4, [["p", self]]);
+    dm.pubkey = peer;
     const scopes = await collectScopes(() =>
-      ingestWireEvents(sinks, [plainEvent(4, [["p", "f".repeat(64)]])]),
+      ingestWireEvents(withSelf, [dm]),
     );
     expect(store.events).toHaveLength(1);
     expect(scopes.has("dm")).toBe(true);
+    expect(scopes.has(`dm-thread:${peer}`)).toBe(true);
   });
 
   it("stores attached issue roots and emits only their repository scope", async () => {

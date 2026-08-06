@@ -8,7 +8,7 @@ import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { KIND_STREAM_MESSAGE_V2 } from "@/buzz/kinds";
 import { KIND_COMMUNITY_MESSAGE } from "@/concord-v1/lib/kinds";
 import { reactionContentKey } from "@/hooks/useReactions";
-import { emitWireScopes } from "@/wire/bus";
+import { dmThreadScope, emitWireScopes } from "@/wire/bus";
 import { feedNotifyCandidates, type NotifyCandidate } from "@/wire/notify";
 import { isCIEventKind, matchCIEventRepository } from "@/lib/ci";
 import { chatRoute } from "@/lib/routes";
@@ -297,6 +297,13 @@ export async function ingestWireEvents(
     for (const ev of storable) {
       const scope = scopeOf(ev, spec);
       if (scope) scopes.add(scope);
+      // The coarse `dm` scope refreshes the conversation list. Name the
+      // affected peer separately so an open thread for somebody else does not
+      // re-read its entire local history whenever any DM arrives.
+      if (ev.kind === KIND_DM && self) {
+        const peer = ev.pubkey === self ? tagValue(ev, "p") : ev.pubkey;
+        if (peer) scopes.add(dmThreadScope(peer));
+      }
       candidates.push(...plaintextCandidates(ev, spec, self));
     }
     // Await the shared flush so the bus only rings once the events are

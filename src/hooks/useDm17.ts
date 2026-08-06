@@ -84,6 +84,7 @@ import {
 } from "@/lib/nip17/dm17Store";
 import { persistDm17ThreadSnapshot, prewarmDm17ThreadSnapshot } from "@/lib/nip17/threadSnapshot";
 import { useWireScopes } from "@/wire/useWireScopes";
+import { dmThreadScope } from "@/wire/bus";
 import { dm17NotifyCandidates, feedNotifyCandidates } from "@/wire/notify";
 
 import type { SendStatus } from "@/hooks/useGroupMessages";
@@ -706,22 +707,19 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
   //     Concurrent surfaces coalesce onto one pass (see openLiveDm17Wraps); a
   //     genuinely EMPTY buffer (overflow / spurious ring) falls back to a
   //     forced fetch so a lost wrap is never stranded until the poll.
-  //   - `dm` — the store changed (our decrypt/sends/deletes wrote rumors).
-  //     Re-read only; never decrypt-again (that would loop on its own `dm` ring).
+  //   - `dm-thread:<peer>` — a durable write changed this conversation. Re-read
+  //     only; never decrypt again (that would loop on the write's own ring).
   useWireScopes((scopes) => {
-    if (!self || !peer || !ctx) {
-      if (scopes.has("dm") || scopes.has("dm:wrap")) {
-        void queryClient.invalidateQueries({ queryKey });
-        void queryClient.invalidateQueries({ queryKey: timerQueryKey });
-      }
-      return;
-    }
-    if (scopes.has("dm:wrap")) {
+    if (!self || !peer) return;
+    if (ctx && scopes.has("dm:wrap")) {
       void openLiveDm17Wraps(ctx, { interactive: true }).then((result) => {
         if (result === "empty") void syncDm17Inbox(ctx, { force: true, interactive: true });
       });
     }
-    if (scopes.has("dm") || scopes.has("dm:wrap")) {
+    // Opening a live wrap writes the recovered rumor first, and that durable
+    // write rings this peer-specific scope. Do not also re-read on `dm:wrap`
+    // before there is anything new in the store.
+    if (scopes.has(dmThreadScope(peer))) {
       void queryClient.invalidateQueries({ queryKey });
       // A timer change arrives as an ordinary rumor, so the same ring covers it.
       void queryClient.invalidateQueries({ queryKey: timerQueryKey });

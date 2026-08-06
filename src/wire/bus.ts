@@ -11,7 +11,10 @@
  * Scopes are plain strings:
  *   - `nip29:<groupId>`      — a NIP-29 group's timeline changed
  *   - `dm`                   — a kind-4 DM arrived, or the NIP-17 rumor store
- *     changed (a DM sync/send/delete wrote rumors) — re-read
+ *     changed (a DM sync/send/delete wrote rumors) — refresh conversation-level
+ *     surfaces such as the inbox and unread dot
+ *   - `dm-thread:<peer>`      — one DM conversation changed; only that mounted
+ *     thread needs to re-read
  *   - `dm:wrap`              — the wire saw a live inbound NIP-17 gift wrap it
  *     can't decrypt itself; useDm17 force-syncs to fetch + decrypt + store it
  *   - `c1:<channelIdHex>`    — a Concord V1 channel's sealed history changed
@@ -30,6 +33,11 @@
  */
 
 export type WireScope = string;
+
+/** Scope naming one DM conversation without exposing it outside this process. */
+export function dmThreadScope(peer: string): WireScope {
+  return `dm-thread:${peer}`;
+}
 
 type WireListener = (scopes: ReadonlySet<WireScope>) => void;
 

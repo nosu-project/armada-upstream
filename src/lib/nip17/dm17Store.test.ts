@@ -27,6 +27,7 @@ import {
   KIND_DM_TIMER,
   type OpenedDm,
 } from "@/lib/nip17/protocol";
+import { dmThreadScope, onWireScopes, resetWireBus } from "@/wire/bus";
 
 // A clean IndexedDB for the suite (the store singleton opens against it lazily).
 (globalThis as unknown as { indexedDB: IDBFactory }).indexedDB = new IDBFactory();
@@ -78,6 +79,42 @@ describe("dm17Store", () => {
     const thread = await queryDm17Thread(self, alice, { limit: 50 });
     const ids = thread.map((r) => r.rumorId).sort();
     expect(ids).toEqual([fromAlice.rumorId, toAlice.rumorId].sort());
+  });
+
+  it("rings the inbox and each affected thread after a durable write", async () => {
+    const scopedSelf = getPublicKey(generateSecretKey());
+    const scopedAlice = getPublicKey(generateSecretKey());
+    const scopedBob = getPublicKey(generateSecretKey());
+    resetWireBus();
+    const seen = new Set<string>();
+    const unsubscribe = onWireScopes((scopes) => {
+      for (const scope of scopes) seen.add(scope);
+    });
+
+    try {
+      await writeDm17Rumors(scopedSelf, [
+        opened({
+          author: scopedAlice,
+          peer: scopedAlice,
+          content: "scope alice",
+          tags: dmChatTags(scopedSelf),
+        }),
+        opened({
+          author: scopedBob,
+          peer: scopedBob,
+          content: "scope bob",
+          tags: dmChatTags(scopedSelf),
+        }),
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 75));
+
+      expect(seen).toEqual(
+        new Set(["dm", dmThreadScope(scopedAlice), dmThreadScope(scopedBob)]),
+      );
+    } finally {
+      unsubscribe();
+      resetWireBus();
+    }
   });
 
   it("groups conversations by peer, newest message first", async () => {
