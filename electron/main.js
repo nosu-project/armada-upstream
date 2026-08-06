@@ -37,7 +37,11 @@ const DIST = path.join(__dirname, "dist");
 // (app://armada) for the service worker + secure-context checks.
 const SCHEME = "app";
 const ORIGIN = `${SCHEME}://armada`;
-const START_URL = `${ORIGIN}/index.html`;
+// Load the ROOT path, not /index.html: the SPA router has a catch-all
+// `/:user` profile route, so a pathname of "/index.html" boots the app into a
+// Nostr lookup for "index.html" ("No such person") instead of the app. The
+// protocol handler below maps "/" to index.html.
+const START_URL = `${ORIGIN}/`;
 
 // Dark background matching the app theme (index.html theme-color #100b15).
 const BACKGROUND = "#100b15";
