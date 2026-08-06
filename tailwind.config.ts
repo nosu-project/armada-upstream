@@ -24,6 +24,11 @@ export default {
 			'sidebar': '900px',
 			'md': '768px',
 			'lg': '1024px',
+			// The chat thread panel switches from a full-pane overlay slide to a
+			// side-by-side 23rem push only here: at the `sidebar` width (900px)
+			// the desktop rail + channel list already claim ~360px, so a 368px
+			// side panel would crush the message column to a phone-width sliver.
+			'thread': '1200px',
 			'xl': '1280px',
 			'2xl': '1536px',
 		},

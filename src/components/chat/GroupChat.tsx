@@ -619,8 +619,8 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
       <ComposerBoundsProvider value={composerBoundsRef}>
       <div className={cn(
         "relative flex flex-col flex-1 min-h-0 min-w-0",
-        "sidebar:transition-[width,opacity] sidebar:duration-300 sidebar:ease-out",
-        threadRoot && threadExpanded && "sidebar:flex-none sidebar:w-0 sidebar:opacity-0 sidebar:overflow-hidden sidebar:pointer-events-none",
+        "thread:transition-[width,opacity] thread:duration-300 thread:ease-out",
+        threadRoot && threadExpanded && "thread:flex-none thread:w-0 thread:opacity-0 thread:overflow-hidden thread:pointer-events-none",
       )}>
         {/* Search results replace the timeline in-place when searching. */}
         {searching ? (
@@ -754,21 +754,23 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
       </div>
       </ComposerBoundsProvider>
 
-      {/* Thread panel. Desktop: in-flow sibling whose width animates open.
-          Mobile: overlays the chat (absolute). */}
+      {/* Thread panel. Wide (≥1200px `thread:`): in-flow sibling whose width
+          animates open. Narrower (incl. the 900–1200 band where the rail +
+          channel list are shown but there's no room for a 23rem push): overlays
+          the chat (absolute) and slides in. */}
       <div
         className={cn(
           "overflow-hidden",
-          "absolute inset-0 z-20 sidebar:static sidebar:z-auto",
-          "sidebar:transition-[width] sidebar:duration-200 sidebar:ease-out",
+          "absolute inset-0 z-20 thread:static thread:z-auto",
+          "thread:transition-[width] thread:duration-200 thread:ease-out",
           threadRoot
-            ? (threadExpanded ? "sidebar:flex-1 sidebar:w-full" : "sidebar:shrink-0 sidebar:w-[23rem]")
-            : "sidebar:shrink-0 sidebar:w-0 pointer-events-none sidebar:pointer-events-auto",
+            ? (threadExpanded ? "thread:flex-1 thread:w-full" : "thread:shrink-0 thread:w-[23rem]")
+            : "thread:shrink-0 thread:w-0 pointer-events-none thread:pointer-events-auto",
         )}
       >
         <div
           className={cn(
-            "absolute inset-0 bg-background transition-opacity duration-200 ease-out sidebar:hidden",
+            "absolute inset-0 bg-background transition-opacity duration-200 ease-out thread:hidden",
             threadRoot ? "opacity-100" : "opacity-0",
           )}
         />
@@ -776,7 +778,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
           className={cn(
             "relative h-full flex w-full transition-transform duration-200 ease-out",
             threadRoot ? "translate-x-0" : "translate-x-full",
-            threadExpanded ? "sidebar:w-full" : "sidebar:w-[23rem]",
+            threadExpanded ? "thread:w-full" : "thread:w-[23rem]",
           )}
         >
           {lastThreadRoot && (
