@@ -307,7 +307,14 @@ Things to know before touching it:
   existed. Preserve the existing event's format: a list stored as public tags
   (e.g. by Flotilla) stays public; encrypted private items stay encrypted.
   This rule has been violated twice with user-visible data loss — do not
-  reintroduce any automatic list publish, however well-intentioned.
+  reintroduce any automatic list publish, however well-intentioned. The ONE
+  sanctioned exception is signup: when the account wizard generates a key
+  ITSELF, it publishes a default kind-10002 for that key
+  (`handleContinue` in `WelcomePage.tsx`). This is safe precisely because the
+  rule's hazard cannot arise — a key minted moments ago has provably never
+  published a list, so there is no existing/failed-read list to clobber. It is
+  scoped structurally to the generate path (existing-key logins never reach it)
+  and is the only place an unsolicited list publish is allowed.
 - Commit messages: concise, imperative, sentence case (see `git log`).
   Describe the technical change only — what was changed. Don't embed a
   confident problem diagnosis, root-cause narrative, or prescribed "this fixes

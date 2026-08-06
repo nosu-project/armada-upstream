@@ -1,8 +1,11 @@
+import { useNostr } from "@nostrify/react";
 import { useNostrLogin } from "@nostrify/react/login";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { AlertTriangle, Check, Copy, Download, Eye, EyeOff } from "lucide-react";
-import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
+import { finalizeEvent, generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
+
+import type { NostrEvent } from "@nostrify/nostrify";
 
 import { ArmadaIdentity, ArmadaKey } from "@/components/brand/ArmadaCrest";
 import { LandingPage } from "@/components/landing/LandingPage";
@@ -16,7 +19,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { suppressNextSyncGate } from "@/hooks/useFreshLogin";
 import { setOnboardingActive } from "@/hooks/useOnboarding";
 import { clearPendingJoin, peekPendingJoin, type JoinLink } from "@/lib/joinLink";
-import { uniqueRelayUrls } from "@/lib/nip65";
+import { publishSignedEventToRelays, uniqueRelayUrls } from "@/lib/nip65";
 import { markRelayRecoveryPromptShown } from "@/lib/relayRecoveryPrompt";
 import { useLoginActions } from "@/hooks/useLoginActions";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
@@ -83,6 +86,7 @@ function SignupShell({ step, maxWidth, onBack, onClose, children }: {
 export function WelcomePage() {
   const { config, updateConfig } = useAppContext();
   const { user } = useCurrentUser();
+  const { nostr } = useNostr();
   const { logins } = useNostrLogin();
   const { mesh } = useMeshTransport();
   const online = useOnlineStatus();
@@ -119,6 +123,19 @@ export function WelcomePage() {
   // community), it unmounts — so clear the onboarding flag here. Setting it is
   // done synchronously at login (see handleContinue) to beat the race.
   useEffect(() => () => setOnboardingActive(false), []);
+
+  // A default NIP-65 relay list, signed for a key WE JUST MINTED, waiting to be
+  // fanned to its relays once that key is the active login. Published post-login
+  // (not inline in handleContinue) so relays that gate writes behind NIP-42 AUTH
+  // get an answer from the now-active signer. See handleContinue for why this
+  // one auto-publish is safe.
+  const pendingRelayList = useRef<{ pubkey: string; event: NostrEvent; relays: string[] } | null>(null);
+  useEffect(() => {
+    const pending = pendingRelayList.current;
+    if (!pending || user?.pubkey !== pending.pubkey) return;
+    pendingRelayList.current = null;
+    void publishSignedEventToRelays(nostr, pending.event, pending.relays, 8_000);
+  }, [user?.pubkey, nostr]);
 
   const handleGenerate = () => {
     setNsec(nip19.nsecEncode(generateSecretKey()));
@@ -219,24 +236,61 @@ export function WelcomePage() {
     if (identity) {
       suppressNextSyncGate(identity.pubkey);
       // A brand-new account has nothing on any relay to recover, so never show
-      // it the "restore your setup" prompt. Portability comes from its first
-      // publish, or Settings on demand.
+      // it the "restore your setup" prompt.
       markRelayRecoveryPromptShown(identity.pubkey);
     }
-    // A referral/join link: make this new account live on the operator's
-    // relay(s). This is a LOCAL config seed only — no list is published (that
-    // stays an explicit action). On a first/only account, adopt their set as
-    // the app relays; with other accounts already on the device, only ADD
-    // them, so an existing account's relays are never rewritten.
+
+    // Where this brand-new account will live: an operator's set from a join
+    // link, otherwise the app's default relays.
+    const homeRelays = uniqueRelayUrls(join ? join.relays : config.appRelays);
+
     if (join) {
-      const relays = uniqueRelayUrls(join.relays);
+      // A referral/join link: seed the operator's relays into app config. On a
+      // first/only account adopt their set; with other accounts on the device
+      // only ADD them, so an existing account's relays are never rewritten.
       updateConfig((current) => ({
         ...current,
         appRelays: logins.length === 0
-          ? relays
-          : uniqueRelayUrls([...current.appRelays, ...relays]),
+          ? homeRelays
+          : uniqueRelayUrls([...current.appRelays, ...homeRelays]),
       }));
       clearPendingJoin();
+    }
+
+    // Publish a default NIP-65 relay list for the key we just generated. This
+    // is the ONE safe exception to the never-auto-publish rule: a key minted
+    // moments ago has provably never published anything, so there is no
+    // existing list an empty/failed read could be mistaken for and overwrite —
+    // the ambiguity the rule guards against cannot arise. It only ever runs
+    // here (the login path for EXISTING keys must never reach this), and it
+    // makes the new account discoverable on its home relays instead of relying
+    // on shared app-relay defaults. Signed now with the key in hand; fanned
+    // out post-login by the effect above. Skipped when there is nothing to
+    // declare (e.g. a build with empty app-relay defaults).
+    if (identity && homeRelays.length > 0) {
+      try {
+        const sk = nip19.decode(nsec).data as Uint8Array;
+        const event = finalizeEvent(
+          {
+            kind: 10002,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: homeRelays.map((url) => ["r", url]),
+            content: "",
+          },
+          sk,
+        );
+        pendingRelayList.current = { pubkey: identity.pubkey, event, relays: homeRelays };
+        updateConfig((current) => ({
+          ...current,
+          relayMetadata: {
+            relays: homeRelays.map((url) => ({ url, read: true, write: true })),
+            updatedAt: event.created_at,
+            pubkey: identity.pubkey,
+          },
+        }));
+      } catch {
+        // Best effort: the account still works on its local app relays.
+      }
     }
     // Mark onboarding in progress BEFORE login so it's already true on the
     // commit that first exposes the user — otherwise the headless web-push
