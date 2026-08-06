@@ -66,7 +66,8 @@ export class LegacyFallbackRequired extends Error {
  *   - Legacy kind-4 (NIP-04) events — Armada's historical DM plane, still
  *     read/written for peers that haven't published a NIP-17 inbox.
  *   - NIP-17 gift-wrapped rumors (kind 14/15) — the modern plane, with
- *     reactions (kind-7 rumors) and deletes (kind-5 rumors) in-band.
+ *     reactions (kind-7 rumors), deletes (kind-5 rumors), and optional NIP-17
+ *     replacement edits in-band.
  *
  * Sends prefer NIP-17 whenever the peer has published a kind-10050 DM-relay
  * list (the spec's "ready to receive" signal) and the signer does NIP-44.
@@ -74,7 +75,7 @@ export class LegacyFallbackRequired extends Error {
  * option — but it's a privacy downgrade (kind-4 leaks who's talking and when),
  * so it is NEVER used silently: `send` refuses with `LegacyFallbackRequired`
  * and the caller must opt in explicitly (`send(text, tags, { allowLegacy })`)
- * after telling the user. Reactions/deletes exist only on the NIP-17 plane.
+ * after telling the user. Reactions/deletes/edits exist only on the NIP-17 plane.
  *
  * Two kind-4-specific concerns the shared timeline can't model are surfaced
  * alongside the transport for the page's `renderMessage` to handle:
@@ -380,6 +381,17 @@ export function useDmTransport(peer: string): {
     [dm17Ids, dm17DeleteMessage],
   );
 
+  const dm17EditMessage = dm17.editMessage;
+  const editMessage = useCallback(
+    async (original: ChatMsg, content: string) => {
+      if (!dm17Ids.has(original.id) || original.kind !== KIND_DM_CHAT) {
+        throw new Error("Only NIP-17 chat messages can be edited");
+      }
+      await dm17EditMessage(original.id, content);
+    },
+    [dm17Ids, dm17EditMessage],
+  );
+
   // ── Backfill: both planes page independently; sum what they prepend. ──────
   const dm17LoadOlder = dm17.loadOlder;
   const loadOlder = useCallback(async () => {
@@ -440,8 +452,9 @@ export function useDmTransport(peer: string): {
       discard,
       reactionsFor: dm17Enabled || talliesById.size > 0 ? reactionsFor : undefined,
       deleteMessage: dm17Enabled ? deleteMessage : undefined,
+      editMessage: dm17Enabled ? editMessage : undefined,
     }),
-    [chatMessages, isLoadingMerged, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryById, discard, reactionsFor, deleteMessage, dm17Enabled, talliesById.size],
+    [chatMessages, isLoadingMerged, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryById, discard, reactionsFor, deleteMessage, editMessage, dm17Enabled, talliesById.size],
   );
 
   return {

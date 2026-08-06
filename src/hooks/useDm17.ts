@@ -46,6 +46,7 @@ import { isDmSynced, markDmSynced } from "@/lib/dmSynced";
 import { STORE_READ } from "@/lib/storeQuery";
 import { markOwnWebPushEvent } from "@/lib/webPushState";
 import {
+  buildDmEditRumors,
   buildDmRumor,
   DM_RUMOR_KINDS,
   dmChatTags,
@@ -567,6 +568,18 @@ interface PendingRumor {
    * `useDm17Thread`.
    */
   status: SendStatus | undefined;
+  /**
+   * A composite operation retried/discarded as one unit. NIP-17 edits are a
+   * replacement plus a kind-5 tombstone; keeping both here prevents retrying
+   * only half an edit after a transient relay failure.
+   */
+  batch?: PendingPublish[];
+}
+
+interface PendingPublish {
+  rumor: NostrRumor;
+  opened: OpenedDm;
+  opts?: { firstContact?: boolean };
 }
 
 export interface Dm17Thread {
@@ -614,6 +627,8 @@ export interface Dm17Thread {
   removeReaction: (reactionRumorId: string) => void;
   /** Delete an own message (kind-5 delete rumor into the conversation). */
   deleteMessage: (targetId: string, targetKind: number) => void;
+  /** Edit an own kind-14 message using NIP-17's replacement + delete pair. */
+  editMessage: (targetId: string, content: string) => Promise<void>;
   /** Optimistic delivery status for a rumor id. */
   sendStatusFor: (id: string) => SendStatus | undefined;
   /** Re-publish a failed optimistic rumor. */
@@ -808,8 +823,10 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
   /** Forget an optimistic rumor entirely (discard, or superseded by the store). */
   const dropPending = useCallback((id: string) => {
     setPending((old) => {
-      if (!old.has(id)) return old;
+      const entry = old.get(id);
+      if (!entry) return old;
       const next = new Map(old);
+      for (const item of entry.batch ?? []) next.delete(item.rumor.id);
       next.delete(id);
       return next;
     });
@@ -899,26 +916,51 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
     [nostr, user, self, peer, peerInboxRelays, myRelays, eventStore],
   );
 
-  /** Optimistically render a rumor, then seal/wrap/publish in the background. */
-  const dispatchRumor = useCallback(
-    (rumor: NostrRumor, opened: OpenedDm, opts?: { firstContact?: boolean }) => {
-      setPending((old) => new Map(old).set(rumor.id, { opened, status: "pending" }));
+  /**
+   * Optimistically render and sequentially publish one logical operation.
+   * Most sends contain one rumor; an edit contains its replacement followed by
+   * the tombstone. The visible row owns the whole batch for retry/discard.
+   */
+  const dispatchBatch = useCallback(
+    (items: PendingPublish[], visibleId: string, supersededId?: string) => {
+      setPending((old) => {
+        const next = new Map(old);
+        if (supersededId) next.delete(supersededId);
+        for (const item of items) {
+          next.set(item.rumor.id, {
+            opened: item.opened,
+            status: item.rumor.id === visibleId ? "pending" : undefined,
+            batch: item.rumor.id === visibleId && items.length > 1 ? items : undefined,
+          });
+        }
+        return next;
+      });
       void (async () => {
         try {
-          await publishRumor(rumor, opts);
+          // Keep signer calls sequential: NIP-07 extensions commonly serialize
+          // approval/signing, and an edit must not race its own tombstone.
+          for (const item of items) await publishRumor(item.rumor, item.opts);
           // Durable + confirmed: persist and clear the send badge, but KEEP the
           // optimistic row. It is retired only once the query has actually read
           // it back (see the prune effect) — the store write's `dm` ring is
           // debounced and the repaint costs an IndexedDB read, so dropping it
           // here would blank the row for that whole window.
-          if (self) await writeDm17Rumors(self, [opened]);
-          setStatus(rumor.id, undefined);
+          if (self) await writeDm17Rumors(self, items.map((item) => item.opened));
+          for (const item of items) setStatus(item.rumor.id, undefined);
         } catch {
-          setStatus(rumor.id, "failed");
+          setStatus(visibleId, "failed");
         }
       })();
     },
     [publishRumor, setStatus, self],
+  );
+
+  /** Optimistically render a rumor, then seal/wrap/publish in the background. */
+  const dispatchRumor = useCallback(
+    (rumor: NostrRumor, opened: OpenedDm, opts?: { firstContact?: boolean }) => {
+      dispatchBatch([{ rumor, opened, opts }], rumor.id);
+    },
+    [dispatchBatch],
   );
 
   const openedOf = useCallback(
@@ -979,6 +1021,41 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       dispatchRumor(rumor, openedOf(rumor), { firstContact: messages.length === 0 });
     },
     [canSend, self, peer, dispatchRumor, openedOf, messages.length, resolveExpiry],
+  );
+
+  /**
+   * NIP-17 edit: replace the kind-14 at its original timestamp, then tombstone
+   * its old id. The pair is one optimistic/retry unit so a failed relay round
+   * trip never leaves the UI offering to retry only the replacement.
+   */
+  const editMessage = useCallback(
+    async (targetId: string, content: string) => {
+      if (!canSend || !self || !peer) throw new Error("This person isn't reachable over private DMs yet.");
+      const original = messages.find((message) => message.rumorId === targetId);
+      if (!original || original.author !== self || original.kind !== KIND_DM_CHAT) {
+        throw new Error("Only your own NIP-17 chat messages can be edited");
+      }
+      const trimmed = content.trim();
+      if (!trimmed || trimmed === original.content.trim()) return;
+
+      const source: NostrRumor = {
+        id: original.rumorId,
+        kind: original.kind,
+        content: original.content,
+        tags: original.tags,
+        created_at: original.createdAt,
+        pubkey: original.author,
+      };
+      const { replacement, deletion } = buildDmEditRumors(source, peer, trimmed);
+      const items: PendingPublish[] = [replacement, deletion].map((rumor) => ({
+        rumor,
+        opened: openedOf(rumor),
+      }));
+      // Publish the replacement first: if signing fails immediately, the peer
+      // retains the original. The tombstone follows in the same retryable batch.
+      dispatchBatch(items, replacement.id, original.rumorId);
+    },
+    [canSend, self, peer, messages, openedOf, dispatchBatch],
   );
 
   const react = useCallback(
@@ -1072,6 +1149,10 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
     (id: string) => {
       const entry = pending.get(id);
       if (!entry || entry.status !== "failed") return;
+      if (entry.batch) {
+        dispatchBatch(entry.batch, id);
+        return;
+      }
       const o = entry.opened;
       const rumor: NostrRumor = {
         id: o.rumorId,
@@ -1083,7 +1164,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       };
       dispatchRumor(rumor, o);
     },
-    [pending, dispatchRumor],
+    [pending, dispatchBatch, dispatchRumor],
   );
 
   const discard = dropPending;
@@ -1139,6 +1220,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
     react,
     removeReaction,
     deleteMessage: sendDelete,
+    editMessage,
     sendStatusFor,
     retry,
     discard,

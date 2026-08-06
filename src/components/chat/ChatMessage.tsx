@@ -51,7 +51,7 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { writeClipboardText } from "@/lib/clipboard";
 import { chatUrl, type ChatRoute } from "@/lib/routes";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
-import { expirationOf } from "@/lib/nip17/protocol";
+import { expirationOf, KIND_DM_CHAT } from "@/lib/nip17/protocol";
 import { parseProxyTag } from "@/lib/nip48";
 import { requestCommand } from "@/hooks/useCommandBus";
 import { commandLine } from "@/lib/botCommands";
@@ -480,8 +480,14 @@ const ChatMessageInner = memo(function ChatMessageInner({
     mentionHighlight &&
       user && !isOwn && event.tags.some(([name, value]) => name === "p" && value === user.pubkey),
   );
-  // Only plain chat messages are editable (polls carry structured tags).
-  const canEdit = isOwn && event.kind === KIND_GROUP_CHAT && !isPending && !isFailed && Boolean(onEdit);
+  // Only plain group/NIP-17 chat messages are editable (polls, files and other
+  // structured rows carry semantics an inline text field cannot preserve).
+  const canEdit =
+    isOwn &&
+    (event.kind === KIND_GROUP_CHAT || event.kind === KIND_DM_CHAT) &&
+    !isPending &&
+    !isFailed &&
+    Boolean(onEdit);
   // The author can delete their own confirmed message; moderators can delete
   // anyone's. The transport decides how (NIP-09 vs NIP-29 vs Concord delete).
   const canDelete = Boolean(onDelete) && ((isOwn && !isPending && !isFailed) || canModerate);

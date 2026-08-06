@@ -219,6 +219,52 @@ export function dmDeleteTags(peer: string, targetId: string, targetKind: number)
   return [["p", peer], ["e", targetId], ["k", String(targetKind)]];
 }
 
+/** The two rumors that make one optional NIP-17 edit operation. */
+export interface DmEditRumors {
+  /** New kind-14 message carrying the edited content at the original timestamp. */
+  replacement: NostrRumor;
+  /** Kind-5 tombstone for the superseded message. */
+  deletion: NostrRumor;
+}
+
+/**
+ * Build the edit form NIP-17 specifies: delete the old rumor and publish a new
+ * kind-14 rumor with the SAME `created_at`. The replacement keeps the room,
+ * reply/citation, media and expiration tags verbatim; only Armada's display
+ * marker is refreshed. Foreign clients that implement the optional edit rule
+ * can fold the pair, while clients that do not still see an ordinary deletion
+ * and message.
+ */
+export function buildDmEditRumors(
+  original: NostrRumor,
+  peer: string,
+  content: string,
+  editedAt = Math.floor(Date.now() / 1000),
+): DmEditRumors {
+  if (original.kind !== KIND_DM_CHAT) throw new Error("Only NIP-17 chat messages can be edited");
+
+  const editTimestamp = Math.floor(editedAt);
+  const replacement = buildDmRumor({
+    kind: KIND_DM_CHAT,
+    content,
+    tags: [
+      ...original.tags.filter(([name]) => name !== "edited"),
+      ["edited", String(editTimestamp)],
+    ],
+    pubkey: original.pubkey,
+    createdAt: original.created_at,
+  });
+  const deletion = buildDmRumor({
+    kind: KIND_DM_DELETE,
+    content: "",
+    tags: dmDeleteTags(peer, original.id, original.kind),
+    pubkey: original.pubkey,
+    createdAt: editTimestamp,
+  });
+
+  return { replacement, deletion };
+}
+
 /** Tags for a kind-1740 timer-change rumor. `seconds` of 0 turns it off. */
 export function dmTimerTags(peer: string, seconds: number): string[][] {
   return [["p", peer], ["timer", String(Math.max(0, Math.floor(seconds)))]];

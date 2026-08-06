@@ -16,6 +16,7 @@ import {
   writeDm17Rumors,
 } from "@/lib/nip17/dm17Store";
 import {
+  buildDmEditRumors,
   buildDmRumor,
   dmChatTags,
   dmDeleteTags,
@@ -175,6 +176,37 @@ describe("dm17Store", () => {
     expect(thread.some((r) => r.rumorId === target.rumorId)).toBe(false);
     // The reaction survives (deletes are per-target).
     expect(thread.some((r) => r.rumorId === reaction.rumorId)).toBe(true);
+  });
+
+  it("persists an edit as the replacement and removes the old rumor", async () => {
+    const editor = getPublicKey(generateSecretKey());
+    const original = opened({
+      author: self,
+      peer: editor,
+      content: "uncorrected",
+      tags: dmChatTags(editor, { replyTo: "parent" }),
+    });
+    await writeDm17Rumors(self, [original]);
+
+    const { replacement, deletion } = buildDmEditRumors(
+      dm17ToStored(original),
+      editor,
+      "corrected",
+      original.createdAt + 10,
+    );
+    await writeDm17Rumors(self, [
+      storedToDm17(replacement, self),
+      storedToDm17(deletion, self),
+    ]);
+
+    const thread = await queryDm17Thread(self, editor, { limit: 50 });
+    expect(thread.some((r) => r.rumorId === original.rumorId)).toBe(false);
+    expect(thread).toContainEqual(expect.objectContaining({
+      rumorId: replacement.id,
+      content: "corrected",
+      createdAt: original.createdAt,
+      tags: expect.arrayContaining([["e", "parent"], ["edited", String(original.createdAt + 10)]]),
+    }));
   });
 });
 
