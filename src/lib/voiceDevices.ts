@@ -17,6 +17,11 @@ const SPEAKER_KEY = "armada:voice:speakerDeviceId";
 const CAMERA_KEY = "armada:voice:cameraDeviceId";
 const PROCESSING_KEY = "armada:voice:processing";
 const VOLUME_KEY = "armada:voice:userVolumes";
+const SCREEN_SHARE_VOLUME_KEY = "armada:voice:screenShareVolumes";
+
+/** Maximum playback gain exposed by voice and screen-share volume controls. */
+export const MAX_PLAYBACK_VOLUME = 2;
+
 const VOICE_SERVER_KEY = "armada:voice:preferredServer";
 /** The Concord-v1-era key for the same setting; read as a fallback. */
 const LEGACY_VOICE_SERVER_KEY = "armada:voice:concordServer";
@@ -171,17 +176,15 @@ export function setAudioProcessing(prefs: AudioProcessingPrefs): void {
 }
 
 /**
- * Per-user playback volume, keyed by pubkey, as a multiplier in [0, 1]
- * (1 = unchanged, 0 = muted). Stored so a deliberately quieted user stays that
- * way across calls and reloads. Volumes equal to the default 1 are not stored,
- * keeping the map small.
+ * Per-user playback volume, keyed by pubkey, as a multiplier in [0, 2]
+ * (1 = unchanged, 0 = muted, 2 = 200%). Microphone and screen-share playback
+ * are stored separately so quieting somebody's mic does not also quiet media
+ * they share. Stored values survive calls and reloads; the default 1 is
+ * omitted to keep each map small.
  *
- * Values are clamped to [0, 1] on both read and write: LiveKit's default
- * playback path maps this straight onto `HTMLMediaElement.volume`, which only
- * accepts [0, 1]. (Real Discord-style 100–200% boost would need LiveKit
- * `webAudioMix` / a Web Audio GainNode; tracked as a separate feature.) The
- * clamp on read also sanitizes any out-of-range values persisted by an older
- * 0–200% build so they can never reach playback.
+ * LiveKit rooms enable `webAudioMix`, so these multipliers drive a Web Audio
+ * GainNode instead of `HTMLMediaElement.volume` and values above 1 are valid.
+ * Reads and writes still clamp to [0, 2] to sanitize stale or corrupt storage.
  *
  * Changes are observable (`subscribeUserVolumes`) so every surface that shows
  * a volume control — the call-stage tiles, the sidebar roster's context
@@ -190,10 +193,10 @@ export function setAudioProcessing(prefs: AudioProcessingPrefs): void {
  */
 const volumeListeners = new Set<() => void>();
 
-/** Clamp a volume multiplier to the supported [0, 1] range (NaN → 1). */
+/** Clamp a volume multiplier to the supported [0, 2] range (NaN -> 1). */
 function clampVolume(v: number): number {
   if (!Number.isFinite(v)) return 1;
-  return Math.min(Math.max(v, 0), 1);
+  return Math.min(Math.max(v, 0), MAX_PLAYBACK_VOLUME);
 }
 
 /** Subscribe to per-user volume changes. Returns an unsubscribe function. */
@@ -202,9 +205,9 @@ export function subscribeUserVolumes(listener: () => void): () => void {
   return () => volumeListeners.delete(listener);
 }
 
-export function getUserVolumes(): Record<string, number> {
+function getStoredVolumes(key: string): Record<string, number> {
   try {
-    const raw = localStorage.getItem(VOLUME_KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as Record<string, number>;
     return parsed && typeof parsed === "object" ? parsed : {};
@@ -213,10 +216,13 @@ export function getUserVolumes(): Record<string, number> {
   }
 }
 
+export function getUserVolumes(): Record<string, number> {
+  return getStoredVolumes(VOLUME_KEY);
+}
+
 /**
- * The remembered playback volume for a pubkey, clamped to [0, 1] (defaults to
- * 1). The clamp sanitizes stale >1 values from older builds — they read as
- * 100% rather than crashing playback.
+ * The remembered microphone playback volume for a pubkey, clamped to [0, 2]
+ * (defaults to 1).
  */
 export function getUserVolume(pubkey: string): number {
   const v = getUserVolumes()[pubkey];
@@ -224,8 +230,8 @@ export function getUserVolume(pubkey: string): number {
 }
 
 /**
- * Persist a per-user playback volume, clamped to [0, 1]. A value of 1 clears
- * the override.
+ * Persist a per-user microphone playback volume, clamped to [0, 2]. A value of
+ * 1 clears the override.
  */
 export function rememberUserVolume(pubkey: string, volume: number): void {
   const next = clampVolume(volume);
@@ -234,6 +240,26 @@ export function rememberUserVolume(pubkey: string, volume: number): void {
     if (next === 1) delete all[pubkey];
     else all[pubkey] = next;
     localStorage.setItem(VOLUME_KEY, JSON.stringify(all));
+  } catch {
+    // localStorage unavailable — ignore.
+  }
+  for (const listener of volumeListeners) listener();
+}
+
+/** The remembered screen-share playback volume for a pubkey (defaults to 1). */
+export function getScreenShareVolume(pubkey: string): number {
+  const v = getStoredVolumes(SCREEN_SHARE_VOLUME_KEY)[pubkey];
+  return typeof v === "number" ? clampVolume(v) : 1;
+}
+
+/** Persist a per-user screen-share playback volume independently from their mic. */
+export function rememberScreenShareVolume(pubkey: string, volume: number): void {
+  const next = clampVolume(volume);
+  try {
+    const all = getStoredVolumes(SCREEN_SHARE_VOLUME_KEY);
+    if (next === 1) delete all[pubkey];
+    else all[pubkey] = next;
+    localStorage.setItem(SCREEN_SHARE_VOLUME_KEY, JSON.stringify(all));
   } catch {
     // localStorage unavailable — ignore.
   }

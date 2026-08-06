@@ -6,7 +6,16 @@ import {
 } from "@livekit/components-react";
 import { ConnectionState, LocalAudioTrack, Track } from "livekit-client";
 import type { Participant } from "livekit-client";
-import { Check, Headphones, Loader2, Mic, Settings2, Video, Volume2 } from "lucide-react";
+import {
+  Check,
+  Headphones,
+  Loader2,
+  Mic,
+  ScreenShare,
+  Settings2,
+  Video,
+  Volume2,
+} from "lucide-react";
 
 import "@livekit/components-styles";
 
@@ -28,7 +37,7 @@ import { VolumeSliderRow } from "@/components/VoiceUserContextMenu";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
-import { useUserVolume } from "@/hooks/useUserVolume";
+import { useScreenShareVolume, useUserVolume } from "@/hooks/useUserVolume";
 import { useVoiceIdentity } from "@/contexts/VoiceIdentityContext";
 import { getAvatarShape } from "@/lib/avatarShape";
 import {
@@ -199,11 +208,11 @@ function DeviceMenu({ className }: { className?: string }) {
 }
 
 /**
- * One remote participant's per-user volume control inside the Audio settings
- * menu: avatar + name + the shared mute-toggle/volume slider (`VolumeSliderRow`,
- * backed by the per-pubkey `useUserVolume` store, so changes apply to live
- * audio immediately via the room's `UserVolumeApplier`). The local participant
- * is skipped by the caller (no local playback of your own audio to adjust).
+ * One remote participant's microphone volume and, while present, independent
+ * screen-share audio volume inside the Audio settings menu. Both controls use
+ * the shared persisted stores and apply immediately through the room playback
+ * applier. The local participant is skipped because their media is not played
+ * back locally.
  */
 function ParticipantVolumeRow({ participant }: { participant: Participant }) {
   const resolveIdentity = useVoiceIdentity();
@@ -213,6 +222,10 @@ function ParticipantVolumeRow({ participant }: { participant: Participant }) {
   const scopedName = useScopedDisplayName(pubkey, metadata);
   const name = verified ? scopedName : "Unverified";
   const [volume, setVolume] = useUserVolume(pubkey);
+  const [screenShareVolume, setScreenShareVolume] = useScreenShareVolume(pubkey);
+  const hasScreenShareAudio = Boolean(
+    participant.getTrackPublication(Track.Source.ScreenShareAudio),
+  );
 
   return (
     // Keep the menu open while dragging the slider / toggling mute.
@@ -224,11 +237,29 @@ function ParticipantVolumeRow({ participant }: { participant: Participant }) {
             {name[0]?.toUpperCase()}
           </AvatarFallback>
         </Avatar>
-        <span className="truncate text-sm">
+        <span className="truncate text-sm flex-1">
           <DisplayName pubkey={verified ? pubkey : undefined} name={name} />
+        </span>
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {Math.round(volume * 100)}%
         </span>
       </div>
       <VolumeSliderRow volume={volume} apply={setVolume} displayName={name} />
+      {hasScreenShareAudio && (
+        <div className="mt-3 border-t border-border/60 pt-2">
+          <div className="mb-1.5 flex items-center gap-2 text-xs text-muted-foreground">
+            <ScreenShare className="size-3.5" />
+            <span className="flex-1">Screen share</span>
+            <span className="tabular-nums">{Math.round(screenShareVolume * 100)}%</span>
+          </div>
+          <VolumeSliderRow
+            volume={screenShareVolume}
+            apply={setScreenShareVolume}
+            displayName={name}
+            target="screenShare"
+          />
+        </div>
+      )}
     </div>
   );
 }

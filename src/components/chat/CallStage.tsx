@@ -40,10 +40,14 @@ import {
   ReactionsMenu,
   ScreenShareButton,
 } from "@/components/chat/CallControls";
-import { VoiceUserContextMenu, VolumeSliderRow } from "@/components/VoiceUserContextMenu";
+import {
+  VoiceUserContextMenu,
+  VolumeSliderRow,
+  type PlaybackVolumeTarget,
+} from "@/components/VoiceUserContextMenu";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
-import { useUserVolume } from "@/hooks/useUserVolume";
+import { useScreenShareVolume, useUserVolume } from "@/hooks/useUserVolume";
 import { useCallSignals } from "@/contexts/CallSignalsContext";
 import { useVoiceIdentity } from "@/contexts/VoiceIdentityContext";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
@@ -250,27 +254,21 @@ function useTileDisplayName(participant: Participant): {
 }
 
 /**
- * Keep a remote participant's playback volume applied: LiveKit resets to 1 on
- * a fresh subscription, and the persisted per-pubkey volume can be changed
- * from any surface (this tile's nameplate dropdown, the tile's context menu,
- * or the sidebar roster's context menu — all via the shared `useUserVolume`
- * store). Re-applies on (re)join, identity resolution, and store changes.
- * No-ops for the local participant.
+ * Keep a remote participant's microphone and screen-share playback gains
+ * applied independently. LiveKit remembers source-specific values for tracks
+ * that subscribe later, while this hook also re-applies after identity or
+ * persisted-volume changes. No-ops for the local participant.
  */
-function useApplyUserVolume(participant: Participant, pubkey: string) {
-  const [volume] = useUserVolume(pubkey);
+function useApplyPlaybackVolumes(participant: Participant, pubkey: string) {
+  const [userVolume] = useUserVolume(pubkey);
+  const [screenShareVolume] = useScreenShareVolume(pubkey);
   useEffect(() => {
     if (!participant.isLocal) {
-      // The store/UI intent is 0–1 (0–100%). Defensively clamp before handing
-      // the value to LiveKit: with the default room config (webAudioMix off)
-      // `setVolume` maps straight to `HTMLMediaElement.volume`, which throws
-      // outside [0, 1]. This guards against stale/corrupted localStorage values
-      // (e.g. a 1.5 or 2.0 persisted by an older 0–200% build).
-      // TODO: real Discord-style 100–200% boost needs LiveKit `webAudioMix`
-      // (a Web Audio GainNode, whose gain accepts >1) — tracked separately.
-      (participant as RemoteParticipant).setVolume(Math.min(Math.max(volume, 0), 1));
+      const remote = participant as RemoteParticipant;
+      remote.setVolume(userVolume, Track.Source.Microphone);
+      remote.setVolume(screenShareVolume, Track.Source.ScreenShareAudio);
     }
-  }, [participant, volume, pubkey]);
+  }, [participant, userVolume, screenShareVolume, pubkey]);
 }
 
 /**
@@ -282,22 +280,29 @@ function VolumeMenu({
   pubkey,
   displayName,
   verified,
+  target = "user",
   children,
 }: {
   pubkey: string;
   displayName: string;
   /** Whether `pubkey` is a verified claim — see {@link VoiceUserContextMenu}. */
   verified: boolean;
+  target?: PlaybackVolumeTarget;
   children: React.ReactNode;
 }) {
-  const [volume, setVolume] = useUserVolume(pubkey);
+  const [userVolume, setUserVolume] = useUserVolume(pubkey);
+  const [screenShareVolume, setScreenShareVolume] = useScreenShareVolume(pubkey);
+  const volume = target === "screenShare" ? screenShareVolume : userVolume;
+  const setVolume = target === "screenShare" ? setScreenShareVolume : setUserVolume;
   const pct = Math.round(volume * 100);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label={`Volume for ${displayName}`}
+          aria-label={target === "screenShare"
+            ? `Screen share volume for ${displayName}`
+            : `Volume for ${displayName}`}
           className={cn(nameplateClass, "cursor-pointer hover:bg-black/80")}
         >
           {children}
@@ -307,10 +312,16 @@ function VolumeMenu({
         <div className="flex items-center justify-between gap-2 mb-2">
           <span className="text-sm font-medium truncate">
             <DisplayName pubkey={verified ? pubkey : undefined} name={displayName} />
+            {target === "screenShare" && " — screen share"}
           </span>
           <span className="text-xs text-muted-foreground tabular-nums">{pct}%</span>
         </div>
-        <VolumeSliderRow volume={volume} apply={setVolume} displayName={displayName} />
+        <VolumeSliderRow
+          volume={volume}
+          apply={setVolume}
+          displayName={displayName}
+          target={target}
+        />
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -414,9 +425,10 @@ function VideoTile({
   // rendering that produced a black tile instead of reverting to the avatar.
   const hasVideo = Boolean(trackRef.publication?.track) && !trackRef.publication?.isMuted;
   const isLocal = participant.isLocal;
-  // Keep the persisted per-user volume applied to this participant's audio.
-  useApplyUserVolume(participant, pubkey);
-  const hasVolumeMenu = !isLocal && !isScreenShare;
+  // Keep persisted microphone and screen-share gains applied independently.
+  useApplyPlaybackVolumes(participant, pubkey);
+  const hasVolumeMenu = !isLocal;
+  const volumeTarget: PlaybackVolumeTarget = isScreenShare ? "screenShare" : "user";
 
   const nameplate = (
     <>
@@ -470,9 +482,14 @@ function VideoTile({
       <FocusButton focused={focused} onClick={onToggleFocus} />
       {!isScreenShare && <RaisedHandBadge pubkey={pubkey} />}
       {!isScreenShare && <TileReactions pubkey={pubkey} />}
-      {/* Remote (non-screenshare) nameplates open the per-user volume menu. */}
+      {/* Remote nameplates open the matching mic or screen-share volume menu. */}
       {hasVolumeMenu ? (
-        <VolumeMenu pubkey={pubkey} displayName={displayName} verified={verified}>
+        <VolumeMenu
+          pubkey={pubkey}
+          displayName={displayName}
+          verified={verified}
+          target={volumeTarget}
+        >
           {nameplate}
         </VolumeMenu>
       ) : (
@@ -482,7 +499,12 @@ function VideoTile({
   );
 
   return hasVolumeMenu ? (
-    <VoiceUserContextMenu pubkey={pubkey} displayName={displayName} verified={verified}>
+    <VoiceUserContextMenu
+      pubkey={pubkey}
+      displayName={displayName}
+      verified={verified}
+      volumeTarget={volumeTarget}
+    >
       {tile}
     </VoiceUserContextMenu>
   ) : (
@@ -530,8 +552,8 @@ function AvatarTile({
   const hasCustomShape = !!shape;
   const isLocal = participant.isLocal;
   const muted = !participant.isMicrophoneEnabled;
-  // Keep the persisted per-user volume applied to this participant's audio.
-  useApplyUserVolume(participant, pubkey);
+  // Keep persisted microphone and screen-share gains applied independently.
+  useApplyPlaybackVolumes(participant, pubkey);
 
   // For emoji-shaped avatars the speaking ring is a drop-shadow that hugs the
   // silhouette (a box ring would clip against the mask); circular avatars get a
