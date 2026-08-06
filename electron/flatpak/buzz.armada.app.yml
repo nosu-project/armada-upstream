@@ -1,0 +1,51 @@
+app-id: buzz.armada.app
+
+runtime: org.freedesktop.Platform
+runtime-version: &runtime-version '25.08'
+sdk: org.freedesktop.Sdk
+
+base: org.electronjs.Electron2.BaseApp
+base-version: *runtime-version
+
+command: armada
+separate-locales: false
+
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=x11
+  - --socket=wayland
+  - --socket=pulseaudio
+  - --device=all
+  - --filesystem=xdg-download
+  - --filesystem=xdg-pictures:ro
+  - --filesystem=xdg-videos:ro
+  - --filesystem=xdg-run/pipewire-0
+  - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --talk-name=com.canonical.AppMenu.Registrar
+  - --env=XCURSOR_PATH=/run/host/user-share/icons:/run/host/share/icons
+
+modules:
+  - name: armada
+    buildsystem: simple
+    build-commands:
+      - chmod +x Armada.AppImage
+      - ./Armada.AppImage --appimage-extract
+      - mv squashfs-root /app/armada
+      - install -Dm755 armada-wrapper /app/bin/armada
+      - install -Dm644 buzz.armada.app.desktop /app/share/applications/buzz.armada.app.desktop
+      - install -Dm644 buzz.armada.app.metainfo.xml /app/share/metainfo/buzz.armada.app.metainfo.xml
+      - install -Dm644 armada.png /app/share/icons/hicolor/512x512/apps/buzz.armada.app.png
+    sources:
+      - type: file
+        path: ../release/Armada.AppImage
+      - type: file
+        path: armada-wrapper
+      - type: file
+        path: buzz.armada.app.desktop
+      - type: file
+        path: buzz.armada.app.metainfo.xml
+      - type: file
+        path: ../build/icon.png
+        dest-filename: armada.png

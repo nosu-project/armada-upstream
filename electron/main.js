@@ -52,7 +52,9 @@ const {
   session,
   systemPreferences,
   safeStorage,
+  dialog,
 } = require("electron");
+const { autoUpdater } = require("electron-updater");
 const path = require("node:path");
 const fs = require("node:fs");
 
@@ -82,6 +84,10 @@ let mainWindow = null;
 let tray = null;
 // True once the user has actually chosen to quit (vs. closing to tray).
 let isQuitting = false;
+// True while a user-requested update check is in flight. Background checks
+// stay quiet when the installed build is already current or the feed is down.
+let manualUpdateCheck = false;
+let updateCheckInFlight = false;
 // Honour --hidden / --minimized (autostart "launch minimized to tray").
 const startHidden =
   process.argv.includes("--hidden") || process.argv.includes("--minimized");
@@ -290,6 +296,18 @@ function createTray() {
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: "Show Armada", click: showWindow },
+      autoUpdatesSupported()
+        ? {
+            label: "Check for Updates…",
+            click: () => void checkForDesktopUpdates(true),
+          }
+        : {
+            label:
+              process.platform === "linux" && app.isPackaged
+                ? "Updates are managed by your package manager"
+                : "Automatic updates unavailable",
+            enabled: false,
+          },
       { type: "separator" },
       {
         label: "Quit",
@@ -308,6 +326,114 @@ function createTray() {
       showWindow();
     }
   });
+}
+
+// ── Application updates ────────────────────────────────────────────────────
+//
+// electron-updater supports the installed NSIS build on Windows, signed macOS
+// builds, and AppImage on Linux. A portable .exe has nowhere stable to install
+// an update, while deb and Flatpak packages must remain owned by their package
+// manager, so those formats intentionally never contact the update feed.
+
+function autoUpdatesSupported() {
+  if (!app.isPackaged) return false;
+  if (process.platform === "win32") {
+    return !process.env.PORTABLE_EXECUTABLE_FILE && !process.env.PORTABLE_EXECUTABLE_DIR;
+  }
+  if (process.platform === "darwin") return !process.mas;
+  if (process.platform === "linux") {
+    return Boolean(process.env.APPIMAGE) && !process.env.FLATPAK_ID;
+  }
+  return false;
+}
+
+async function showUpdateMessage(options) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    return dialog.showMessageBox(mainWindow, options);
+  }
+  return dialog.showMessageBox(options);
+}
+
+async function checkForDesktopUpdates(manual = false) {
+  if (!autoUpdatesSupported()) return;
+  if (updateCheckInFlight) {
+    if (manual) manualUpdateCheck = true;
+    return;
+  }
+  updateCheckInFlight = true;
+  manualUpdateCheck = manual;
+  try {
+    await autoUpdater.checkForUpdates();
+  } catch (error) {
+    console.warn("[updater] update check failed", error);
+    const shouldReport = manual && manualUpdateCheck;
+    manualUpdateCheck = false;
+    if (shouldReport) {
+      await showUpdateMessage({
+        type: "error",
+        title: "Update check failed",
+        message: "Armada could not check for updates.",
+        detail: "Check your connection and try again.",
+      });
+    }
+  } finally {
+    updateCheckInFlight = false;
+  }
+}
+
+function installAutoUpdater() {
+  if (!autoUpdatesSupported()) return;
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.allowDowngrade = false;
+  autoUpdater.logger = console;
+
+  autoUpdater.on("update-not-available", async () => {
+    const wasManual = manualUpdateCheck;
+    manualUpdateCheck = false;
+    if (!wasManual) return;
+    await showUpdateMessage({
+      type: "info",
+      title: "Armada is up to date",
+      message: `You are running Armada ${app.getVersion()}, the newest available version.`,
+    });
+  });
+
+  autoUpdater.on("error", async (error) => {
+    console.warn("[updater] updater error", error);
+    const wasManual = manualUpdateCheck;
+    manualUpdateCheck = false;
+    if (!wasManual) return;
+    await showUpdateMessage({
+      type: "error",
+      title: "Update check failed",
+      message: "Armada could not check for updates.",
+      detail: "Check your connection and try again.",
+    });
+  });
+
+  autoUpdater.on("update-downloaded", async (info) => {
+    manualUpdateCheck = false;
+    const { response } = await showUpdateMessage({
+      type: "info",
+      title: "Armada update ready",
+      message: `Armada ${info.version} has been downloaded.`,
+      detail: "Restart Armada to install it now, or choose Later to install when you quit.",
+      buttons: ["Restart and install", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (response === 0) {
+      isQuitting = true;
+      autoUpdater.quitAndInstall(false, true);
+    }
+  });
+
+  // Let the UI and keyring finish booting before the first network request.
+  setTimeout(() => void checkForDesktopUpdates(false), 10_000);
+  setInterval(() => void checkForDesktopUpdates(false), 4 * 60 * 60 * 1000);
 }
 
 // ── Unread badge ─────────────────────────────────────────────────────────────
@@ -389,7 +515,15 @@ function installDisplayMediaHandler() {
             types: ["screen", "window"],
           });
           const source = sources.find((s) => s.id === chosenId) || sources[0];
-          callback({ video: source, audio: "loopback" });
+          // Electron's loopback capture is Windows-only. Linux audio is added
+          // by the PipeWire virtual microphone below after this video stream
+          // reaches the renderer.
+          callback({
+            video: source,
+            ...(process.platform === "win32" && request.audioRequested
+              ? { audio: "loopback" }
+              : {}),
+          });
         } catch {
           callback({});
         }
@@ -400,6 +534,170 @@ function installDisplayMediaHandler() {
     // one (Windows/macOS recents); we use our own picker for consistency.
     { useSystemPicker: false },
   );
+}
+
+// ── Linux screen-share audio (PipeWire) ────────────────────────────────────
+//
+// Chromium cannot attach Linux system audio to getDisplayMedia. venmic creates
+// a temporary PipeWire virtual microphone whose monitor contains either the
+// selected applications or the default speakers. The renderer adds that mic's
+// track to the display stream before LiveKit publishes it.
+
+let linuxAudioPatchBay;
+let linuxAudioLoadError;
+const linuxAudioMatchers = new Map();
+
+function getLinuxAudioPatchBay() {
+  if (process.platform !== "linux") return null;
+  if (linuxAudioPatchBay) return linuxAudioPatchBay;
+  if (linuxAudioLoadError) return null;
+  try {
+    const { PatchBay } = require("@vencord/venmic");
+    if (!PatchBay.hasPipeWire()) {
+      linuxAudioLoadError = "PipeWire is not available in this session.";
+      return null;
+    }
+    linuxAudioPatchBay = new PatchBay();
+    return linuxAudioPatchBay;
+  } catch (error) {
+    linuxAudioLoadError = "The PipeWire audio capture module could not be loaded.";
+    console.warn("[screen-share] failed to load venmic", error);
+    return null;
+  }
+}
+
+function electronAudioServiceMatcher() {
+  const metric = app.getAppMetrics().find((entry) => entry.name === "Audio Service");
+  return metric ? { "application.process.id": String(metric.pid) } : null;
+}
+
+function listLinuxAudioSources() {
+  if (process.platform !== "linux") {
+    return { supported: false, reason: null, sources: [] };
+  }
+  const patchBay = getLinuxAudioPatchBay();
+  if (!patchBay) {
+    return {
+      supported: false,
+      reason: linuxAudioLoadError || "Linux application audio requires PipeWire.",
+      sources: [],
+    };
+  }
+
+  try {
+    const nodes = patchBay.list([
+      "node.name",
+      "application.name",
+      "application.process.binary",
+      "application.process.id",
+      "media.name",
+      "media.class",
+      "node.virtual",
+    ]);
+    const audioService = electronAudioServiceMatcher();
+    const grouped = new Map();
+    linuxAudioMatchers.clear();
+
+    for (const node of nodes) {
+      if (
+        audioService &&
+        node["application.process.id"] === audioService["application.process.id"]
+      ) {
+        continue;
+      }
+      if (node["media.class"] === "Stream/Input/Audio" || node["node.virtual"] === "true") {
+        continue;
+      }
+
+      const matcher = node["application.process.binary"]
+        ? { "application.process.binary": node["application.process.binary"] }
+        : node["application.name"]
+          ? { "application.name": node["application.name"] }
+          : node["node.name"]
+            ? { "node.name": node["node.name"] }
+            : null;
+      if (!matcher) continue;
+
+      const key = JSON.stringify(matcher);
+      if (grouped.has(key)) continue;
+      const name =
+        node["application.name"] ||
+        node["media.name"] ||
+        node["application.process.binary"] ||
+        node["node.name"];
+      grouped.set(key, { name, matcher });
+    }
+
+    const sources = [...grouped.values()]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((source, index) => {
+        const id = `app-${index}`;
+        linuxAudioMatchers.set(id, source.matcher);
+        return { id, name: source.name };
+      });
+    return { supported: true, reason: null, sources };
+  } catch (error) {
+    console.warn("[screen-share] failed to enumerate PipeWire audio", error);
+    return { supported: false, reason: "PipeWire audio sources could not be listed.", sources: [] };
+  }
+}
+
+function startLinuxShareAudio(selection) {
+  const patchBay = getLinuxAudioPatchBay();
+  if (!patchBay) return false;
+  try {
+    patchBay.unlink();
+    const exclude = [];
+    const audioService = electronAudioServiceMatcher();
+    if (audioService) exclude.push(audioService);
+    exclude.push({ "media.class": "Stream/Input/Audio" }, { "node.virtual": "true" });
+
+    const common = {
+      exclude,
+      ignore_devices: true,
+      only_speakers: true,
+      only_default_speakers: true,
+      // Stay muted until the renderer has attached the virtual microphone;
+      // this avoids a short burst through the user's normal mic path.
+      mute: true,
+    };
+    if (selection?.mode === "system") {
+      return patchBay.link({ ...common, include: [] });
+    }
+    if (selection?.mode === "applications" && Array.isArray(selection.sourceIds)) {
+      const include = selection.sourceIds
+        .map((id) => linuxAudioMatchers.get(id))
+        .filter(Boolean);
+      if (include.length === 0) return false;
+      return patchBay.link({ ...common, include });
+    }
+    return false;
+  } catch (error) {
+    console.warn("[screen-share] failed to start PipeWire audio", error);
+    return false;
+  }
+}
+
+function installLinuxShareAudioIpc() {
+  ipcMain.handle("armada:linux-share-audio-sources", () => listLinuxAudioSources());
+  ipcMain.handle("armada:linux-share-audio-start", (_event, selection) =>
+    startLinuxShareAudio(selection),
+  );
+  ipcMain.handle("armada:linux-share-audio-unmute", () => {
+    try {
+      linuxAudioPatchBay?.unmute();
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  ipcMain.handle("armada:linux-share-audio-stop", () => {
+    try {
+      linuxAudioPatchBay?.unlink();
+    } catch (error) {
+      console.warn("[screen-share] failed to stop PipeWire audio", error);
+    }
+  });
 }
 
 // ── Permissions (microphone/camera for voice) ───────────────────────────────
@@ -682,6 +980,8 @@ if (!gotLock) {
     // before it reads anything.
     installDbIpc();
     installDisplayMediaHandler();
+    installLinuxShareAudioIpc();
+    installAutoUpdater();
     createTray();
     createWindow();
 

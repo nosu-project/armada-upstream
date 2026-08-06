@@ -62,6 +62,25 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
   getScreenSources: () => ipcRenderer.invoke("armada:get-screen-sources"),
 
   /**
+   * Linux/PipeWire application audio available to add to a screen share.
+   * Resolves { supported, reason, sources: [{ id, name }] }. The opaque ids
+   * remain valid until the next source-list request.
+   */
+  getLinuxShareAudioSources: () =>
+    ipcRenderer.invoke("armada:linux-share-audio-sources"),
+
+  /** Prepare the venmic virtual microphone for system or application audio. */
+  startLinuxShareAudio: (selection) =>
+    ipcRenderer.invoke("armada:linux-share-audio-start", selection),
+
+  /** Unmute the virtual mic once its track is attached to the display stream. */
+  unmuteLinuxShareAudio: () =>
+    ipcRenderer.invoke("armada:linux-share-audio-unmute"),
+
+  /** Tear down the virtual mic when sharing ends or is cancelled. */
+  stopLinuxShareAudio: () => ipcRenderer.invoke("armada:linux-share-audio-stop"),
+
+  /**
    * Register the callback the main process invokes when getDisplayMedia() is
    * called. It must resolve to the chosen source id (from getScreenSources),
    * or null/undefined to cancel. Stored on window so the main process can call

@@ -1,0 +1,120 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+function installBridge() {
+  const bridge = {
+    isDesktop: true as const,
+    setBadge: vi.fn(),
+    getInfo: vi.fn(async () => ({ platform: "linux", version: "1.2.3" })),
+    getScreenSources: vi.fn(async () => []),
+    onPickScreenSource: vi.fn(),
+    getMicAccessStatus: vi.fn(async () => "granted" as const),
+    openMicPrivacySettings: vi.fn(async () => false),
+    getLinuxShareAudioSources: vi.fn(async () => ({
+      supported: true,
+      reason: null,
+      sources: [],
+    })),
+    startLinuxShareAudio: vi.fn(async () => true),
+    unmuteLinuxShareAudio: vi.fn(async () => true),
+    stopLinuxShareAudio: vi.fn(async () => {}),
+  };
+  window.armadaDesktop = bridge;
+  return bridge;
+}
+
+beforeEach(() => {
+  vi.resetModules();
+});
+
+afterEach(() => {
+  delete window.armadaDesktop;
+  Reflect.deleteProperty(navigator, "mediaDevices");
+});
+
+describe("Electron Linux display audio", () => {
+  it("attaches venmic audio and unlinks it when LiveKit stops the video track", async () => {
+    const bridge = installBridge();
+    const originalVideoStop = vi.fn();
+    const videoTrack = {
+      addEventListener: vi.fn(),
+      stop: originalVideoStop,
+    } as unknown as MediaStreamTrack;
+    const audioTrack = {
+      addEventListener: vi.fn(),
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const audioTracks: MediaStreamTrack[] = [];
+    const displayStream = {
+      addTrack: (track: MediaStreamTrack) => audioTracks.push(track),
+      getAudioTracks: () => audioTracks,
+      getVideoTracks: () => [videoTrack],
+    } as unknown as MediaStream;
+    const audioStream = {
+      getAudioTracks: () => [audioTrack],
+    } as unknown as MediaStream;
+    const venmicDevice = {
+      deviceId: "venmic-id",
+      groupId: "",
+      kind: "audioinput" as const,
+      label: "vencord-screen-share",
+      toJSON: () => ({}),
+    };
+    const getDisplayMedia = vi.fn(async () => displayStream);
+    const getUserMedia = vi.fn(async () => audioStream);
+    const mediaDevices = {
+      enumerateDevices: vi.fn(async () => [venmicDevice]),
+      getDisplayMedia,
+      getUserMedia,
+    } as unknown as MediaDevices;
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: mediaDevices,
+    });
+
+    const desktop = await import("@/lib/desktop");
+    desktop.installDesktopDisplayMediaAudio();
+    await expect(desktop.prepareDesktopShareAudio({ mode: "system" })).resolves.toBe(true);
+
+    const result = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true });
+
+    expect(result).toBe(displayStream);
+    expect(getUserMedia).toHaveBeenCalledWith({
+      video: false,
+      audio: expect.objectContaining({
+        deviceId: { exact: "venmic-id" },
+        echoCancellation: false,
+      }),
+    });
+    expect(displayStream.getAudioTracks()).toEqual([audioTrack]);
+    expect(bridge.unmuteLinuxShareAudio).toHaveBeenCalledOnce();
+
+    videoTrack.stop();
+    expect(originalVideoStop).toHaveBeenCalledOnce();
+    expect(audioTrack.stop).toHaveBeenCalledOnce();
+    expect(bridge.stopLinuxShareAudio).toHaveBeenCalledOnce();
+  });
+
+  it("unlinks venmic when display capture fails after a source was chosen", async () => {
+    const bridge = installBridge();
+    const mediaDevices = {
+      enumerateDevices: vi.fn(async () => []),
+      getDisplayMedia: vi.fn(async () => {
+        throw new DOMException("cancelled", "NotAllowedError");
+      }),
+      getUserMedia: vi.fn(),
+    } as unknown as MediaDevices;
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: mediaDevices,
+    });
+
+    const desktop = await import("@/lib/desktop");
+    desktop.installDesktopDisplayMediaAudio();
+    await desktop.prepareDesktopShareAudio({ mode: "system" });
+
+    await expect(navigator.mediaDevices.getDisplayMedia({ video: true })).rejects.toMatchObject({
+      name: "NotAllowedError",
+    });
+    expect(bridge.stopLinuxShareAudio).toHaveBeenCalledOnce();
+  });
+});

@@ -7,7 +7,22 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-import { desktop, type ScreenSource } from "@/lib/desktop";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  desktop,
+  desktopShareAudioSources,
+  prepareDesktopShareAudio,
+  stopDesktopShareAudio,
+  type LinuxShareAudioSources,
+  type ScreenSource,
+} from "@/lib/desktop";
 
 /**
  * Screen-share source picker for the desktop app.
@@ -22,6 +37,10 @@ import { desktop, type ScreenSource } from "@/lib/desktop";
 export function ScreenSharePicker() {
   const [open, setOpen] = useState(false);
   const [sources, setSources] = useState<ScreenSource[]>([]);
+  const [audio, setAudio] = useState<LinuxShareAudioSources | null>(null);
+  const [audioChoice, setAudioChoice] = useState("system");
+  const [audioError, setAudioError] = useState<string | null>(null);
+  const [choosing, setChoosing] = useState(false);
   // The resolver for the in-flight pick; called with the chosen id or null.
   const resolveRef = useRef<((id: string | null) => void) | null>(null);
 
@@ -30,8 +49,15 @@ export function ScreenSharePicker() {
     if (!bridge) return;
 
     bridge.onPickScreenSource(async () => {
-      const list = await bridge.getScreenSources();
-      setSources(list);
+      const [screenSources, audioSources] = await Promise.all([
+        bridge.getScreenSources(),
+        desktopShareAudioSources(),
+      ]);
+      setSources(screenSources);
+      setAudio(audioSources.reason === null && !audioSources.supported ? null : audioSources);
+      setAudioChoice("system");
+      setAudioError(null);
+      setChoosing(false);
       setOpen(true);
       return new Promise<string | null>((resolve) => {
         resolveRef.current = resolve;
@@ -39,26 +65,59 @@ export function ScreenSharePicker() {
     });
   }, []);
 
-  const choose = (id: string | null) => {
+  const finish = (id: string | null) => {
     setOpen(false);
     const resolve = resolveRef.current;
     resolveRef.current = null;
     resolve?.(id);
   };
 
+  const cancel = () => {
+    if (!resolveRef.current) return;
+    void stopDesktopShareAudio();
+    finish(null);
+  };
+
+  const choose = async (id: string) => {
+    if (choosing) return;
+    setChoosing(true);
+    setAudioError(null);
+
+    if (audio?.supported && audioChoice !== "none") {
+      const prepared = await prepareDesktopShareAudio(
+        audioChoice === "system"
+          ? { mode: "system" }
+          : { mode: "applications", sourceIds: [audioChoice.slice(4)] },
+      );
+      if (!prepared) {
+        setAudioError("Application audio could not be started. Choose No audio or try again.");
+        setChoosing(false);
+        return;
+      }
+    } else {
+      await stopDesktopShareAudio();
+    }
+
+    finish(id);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && choose(null)}>
+    <Dialog open={open} onOpenChange={(o) => !o && cancel()}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Share your screen</DialogTitle>
-          <DialogDescription>Choose a screen or window to share.</DialogDescription>
+          <DialogDescription>
+            Choose a screen or window and, on Linux, the audio to share.
+          </DialogDescription>
         </DialogHeader>
-        <div className="grid grid-cols-2 gap-3 max-h-[60vh] overflow-y-auto sm:grid-cols-3">
+        <div className="grid grid-cols-2 gap-3 max-h-[48vh] overflow-y-auto sm:grid-cols-3">
           {sources.map((s) => (
             <button
               key={s.id}
-              onClick={() => choose(s.id)}
-              className="group flex flex-col gap-2 rounded-lg border border-border p-2 text-left hover:border-primary hover:bg-accent/50 transition-colors"
+              type="button"
+              disabled={choosing}
+              onClick={() => void choose(s.id)}
+              className="group flex flex-col gap-2 rounded-lg border border-border p-2 text-left transition-colors hover:border-primary hover:bg-accent/50 disabled:pointer-events-none disabled:opacity-50"
             >
               {s.thumbnail ? (
                 <img
@@ -81,6 +140,32 @@ export function ScreenSharePicker() {
             </p>
           )}
         </div>
+        {audio && (
+          <div className="space-y-2 border-t border-border pt-4">
+            <Label htmlFor="screen-share-audio">Share audio</Label>
+            {audio.supported ? (
+              <Select value={audioChoice} onValueChange={setAudioChoice} disabled={choosing}>
+                <SelectTrigger id="screen-share-audio">
+                  <SelectValue placeholder="Choose audio" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="system">Entire system</SelectItem>
+                  {audio.sources.map((source) => (
+                    <SelectItem key={source.id} value={`app:${source.id}`}>
+                      {source.name}
+                    </SelectItem>
+                  ))}
+                  <SelectItem value="none">No audio</SelectItem>
+                </SelectContent>
+              </Select>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                {audio.reason || "Application audio is unavailable in this Linux session."}
+              </p>
+            )}
+            {audioError && <p className="text-sm text-destructive">{audioError}</p>}
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

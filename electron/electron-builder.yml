@@ -5,10 +5,11 @@
 # custom secure scheme (see main.js), so the app is fully standalone — not tied
 # to any hosted domain.
 #
-# Built in CI on version tags; see ../../.gitlab-ci.yml (build-desktop-*).
+# Built in CI on version tags; see ../.ngit/act/workflows/desktop.yml.
 
 appId: buzz.armada.app
 productName: Armada
+executableName: armada
 copyright: Armada
 
 directories:
@@ -36,11 +37,22 @@ files:
   - dist/**/*
   - build/**/*
   - "!**/*.map"
+asarUnpack:
+  - node_modules/@vencord/venmic/prebuilds/**/*
+
+# The release workflow uploads these installers plus electron-builder's
+# latest*.yml metadata to this static directory. electron-updater reads it on
+# Windows NSIS, signed macOS builds, and Linux AppImage only; package-managed
+# deb/Flatpak installs disable the in-app updater in main.js.
+publish:
+  provider: generic
+  url: https://armada.buzz/desktop
 
 # ── Linux ─────────────────────────────────────────────────────────────────────
 linux:
   category: Network
   maintainer: Armada <chad@chadwick.site>
+  syncDesktopName: true
   target:
     - AppImage
     - deb
@@ -52,6 +64,8 @@ linux:
 
 # ── Windows ────────────────────────────────────────────────────────────────────
 win:
+  files:
+    - "!node_modules/@vencord/venmic{,/**/*}"
   target:
     - target: nsis
       arch: [x64]
@@ -71,11 +85,17 @@ nsis:
 # only after a Gatekeeper override on the user's machine.
 mac:
   category: public.app-category.social-networking
+  files:
+    - "!node_modules/@vencord/venmic{,/**/*}"
   target:
     - target: dmg
       arch: [x64, arm64]
-  # No hardened runtime / notarization unless signing is configured.
-  hardenedRuntime: false
+    # electron-updater's macOS feed installs the signed zip; the dmg remains
+    # the human-facing first-install artifact.
+    - target: zip
+      arch: [x64, arm64]
+  hardenedRuntime: true
+  gatekeeperAssess: false
   # macOS TCC requires these usage strings in Info.plist; without them the
   # process is killed the first time getUserMedia touches the mic/camera.
   extendInfo:
