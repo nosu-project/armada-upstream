@@ -234,9 +234,16 @@ jobs:
           # earlier attempts died invisibly — e.g. a bad ${SIGN_WITH} format made
           # the `test` below exit under `set -e` with nothing on the console.
           # Redact the client key; never trace it.
+          #
+          # The trace is `tee`d rather than redirected: v0.44.1 hung inside zsp
+          # for 55 minutes and, because the whole block was buffered into $out
+          # and only `cat`ed after zsp returned, the console showed NOTHING
+          # between "Run Main Publish to Zapstore" and the coordinator's
+          # "job timed out after 3600 seconds". A buffered trace is no trace at
+          # all when the failure mode is a hang. Stream it live.
           out="${RUNNER_TEMP:-/tmp}/zsp-output.txt"
           set +e
-          {
+          (
             set -x
             zsp --version || true
 
@@ -268,22 +275,45 @@ jobs:
             # exactly `zsp --json publish --quiet ...`.
             # --skip-certificate-linking: the ngit-ci upload key was rotated, so
             # its cert isn't linked to the publishing identity yet.
+            #
+            # Bounded with `timeout`: zsp talks to a NIP-46 bunker and to the
+            # RELAY_URLS/BLOSSOM_URL hosts, and it has no internal deadline of
+            # its own. If any of them accepts the TCP connection and then never
+            # answers, zsp waits indefinitely. What the v0.44.1 run log shows is
+            # that the build finished cleanly in ~4 minutes and the job then sat
+            # in THIS step until the coordinator killed it at
+            # NGIT_CI_JOB_TIMEOUT_SECS; which dependency stalled is not
+            # recoverable from that run, because the trace was buffered. 900s is
+            # ~15x the time a healthy publish takes (v0.44.0 published 220s into
+            # the run, build included), so this fails fast on a stalled
+            # dependency without ever firing on a merely slow one. Raising the
+            # coordinator ceiling would not have helped: an unbounded wait
+            # exhausts any ceiling.
+            timeout --signal=TERM --kill-after=30 900 \
             zsp --json publish \
               --quiet \
               --skip-metadata \
               --skip-preview \
               --skip-certificate-linking \
               "$release_config"
-          } >"$out" 2>&1
-          zsp_rc=$?
-          echo "=== zsp publish sequence output (rc=$zsp_rc) ==="
-          cat "$out" || true
+          ) 2>&1 | tee "$out"
+          zsp_rc=${PIPESTATUS[0]}
+          set -e
+          echo "=== zsp publish sequence finished (rc=$zsp_rc) ==="
+          # 124 = timeout sent TERM; 137 = it had to follow up with KILL.
+          if [ "$zsp_rc" -eq 124 ] || [ "$zsp_rc" -eq 137 ]; then
+            echo "zsp exceeded the 900s publish deadline and was killed. This is" >&2
+            echo "almost always an unreachable dependency, not a slow upload —" >&2
+            echo "check the bunker signer and each host in RELAY_URLS/BLOSSOM_URL." >&2
+          fi
           exit "$zsp_rc"
 
       # act truncates the failing step's console log, so surface the captured
-      # output through the reliable artifact channel whenever publish fails.
-      - name: Upload zsp output on failure
-        if: ${{ failure() }}
+      # output through the reliable artifact channel. `always()`, not
+      # `failure()`: a successful publish's trace is what tells us what "normal"
+      # timing looks like the next time this step misbehaves.
+      - name: Upload zsp output
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: zsp-output-${{ steps.version.outputs.name }}
@@ -350,6 +380,10 @@ jobs:
           # matches ditto's working publish-google-play job). It previously
           # passed "draft" because the app had never been published and the API
           # refuses "completed" releases for a draft app; the app is live now.
+          # Bounded for the same reason as the zsp publish above: fastlane
+          # supply talks to the Play Developer API and will sit on a stalled
+          # connection indefinitely. 1800s is generous for a 14 MB AAB upload.
+          timeout --signal=TERM --kill-after=30 1800 \
           fastlane supply \
             --aab "$aab_path" \
             --package_name buzz.armada.app \
