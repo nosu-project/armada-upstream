@@ -62,6 +62,27 @@ export function getPreferredCameraId(): string | undefined {
   return read(CAMERA_KEY);
 }
 
+/**
+ * Whether the user can pick an audio-output (speaker) device.
+ *
+ * Voice rooms always run with LiveKit `webAudioMix`, so remote playback is
+ * mixed through an `AudioContext` and switching the output device routes
+ * through `AudioContext.setSinkId` — NOT `HTMLMediaElement.setSinkId`. That is
+ * a much narrower capability (Chromium 110+; absent in Firefox/Safari, where
+ * the media-element method may still exist). Gating the Speaker menu on the
+ * media element instead would show it on engines where selecting a device
+ * makes LiveKit throw `"cannot switch audio output…"`, so we gate on the
+ * AudioContext capability that actually applies. See voicePlaybackOutput.test.ts.
+ */
+export function supportsSpeakerSelection(): boolean {
+  if (typeof document === "undefined") return false;
+  const Ctx =
+    typeof AudioContext !== "undefined"
+      ? AudioContext
+      : (globalThis as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  return Boolean(Ctx && "setSinkId" in Ctx.prototype);
+}
+
 /** Persist the user's device choice for the given kind. */
 export function rememberVoiceDevice(kind: MediaDeviceKind, deviceId: string): void {
   if (kind === "audioinput") write(MIC_KEY, deviceId);

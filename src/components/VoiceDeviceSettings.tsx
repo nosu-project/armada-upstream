@@ -27,11 +27,8 @@ import {
   preferredVoiceServerOrigin,
   rememberVoiceDevice,
   setPreferredVoiceServer,
+  supportsSpeakerSelection,
 } from "@/lib/voiceDevices";
-
-/** Whether this browser can route audio output to a chosen device. */
-const supportsSpeakerSelection =
-  typeof document !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
 
 /** A select option for a media device, with a sensible fallback label. */
 function deviceLabel(device: MediaDeviceInfo, index: number, kind: string): string {
@@ -269,7 +266,7 @@ export function VoiceDeviceSettings() {
 
       const audio = new Audio();
       audio.srcObject = dest.stream;
-      if (supportsSpeakerSelection && speakerId && speakerId !== "default") {
+      if (supportsSpeakerSelection() && speakerId && speakerId !== "default") {
         try {
           await (audio as HTMLMediaElement & { setSinkId(id: string): Promise<void> }).setSinkId(
             speakerId,
@@ -371,7 +368,7 @@ export function VoiceDeviceSettings() {
       </div>
 
       {/* Speaker */}
-      {supportsSpeakerSelection && (
+      {supportsSpeakerSelection() && (
         <div className="space-y-2.5">
           <div className="flex items-center gap-2">
             <Volume2 className="size-4 text-muted-foreground shrink-0" />

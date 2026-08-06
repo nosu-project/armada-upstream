@@ -44,14 +44,11 @@ import {
   getAudioProcessing,
   rememberVoiceDevice,
   setAudioProcessing,
+  supportsSpeakerSelection,
   type AudioProcessingPrefs,
 } from "@/lib/voiceDevices";
 import { rnnoiseSupported, syncRnnoise } from "@/lib/voiceProcessor";
 import { cn } from "@/lib/utils";
-
-/** Whether this browser supports choosing the audio output (speaker) sink. */
-const supportsSpeakerSelection =
-  typeof document !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
 
 function DeviceSelectGroup({
   kind,
@@ -173,7 +170,7 @@ function DeviceMenu({ className }: { className?: string }) {
       </Tooltip>
       <DropdownMenuContent align="end" className="max-w-72 max-h-[70vh] overflow-y-auto">
         <DeviceSelectGroup kind="audioinput" label="Microphone" icon={<Mic className="size-3.5" />} />
-        {supportsSpeakerSelection && (
+        {supportsSpeakerSelection() && (
           <>
             <DropdownMenuSeparator />
             <DeviceSelectGroup
