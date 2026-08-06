@@ -1,10 +1,19 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Play } from "lucide-react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useForegroundNotificationSettings } from "@/hooks/useForegroundNotificationSettings";
-import { useNativeNotifications } from "@/hooks/useNativeNotifications";
+import { isNativeRuntime, useNativeNotifications } from "@/hooks/useNativeNotifications";
 import { useWebPushNotifications } from "@/contexts/WebPushContext";
+import {
+  loadNotificationSoundSettings,
+  NOTIFICATION_SOUNDS,
+  NOTIFICATION_SOUND_SETTINGS_KEY,
+  playNotificationSound,
+  saveNotificationSoundSettings,
+  type NotificationSoundId,
+  type NotificationSoundSettings as NotificationSoundSettingsValue,
+} from "@/lib/notificationSounds";
 import { type PushPrefs } from "@/lib/pushPrefs";
 import type { WebPushUnavailableReason } from "@/lib/webPushSupport";
 import {
@@ -14,6 +23,14 @@ import {
 import { isIOS, isStandalonePwa } from "@/lib/platform";
 
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 
 /**
@@ -24,7 +41,7 @@ import { Switch } from "@/components/ui/switch";
  *    fires local notifications instantly (no FCM/Google). See
  *    useNativeNotifications.
  *  - Web / PWA: Web Push via a content-blind nostr-push gateway. See
- *    useNostrPush.
+ *    useWebPushNotifications.
  *
  * Both expose the same Discord-style per-type toggles.
  */
@@ -55,7 +72,116 @@ export function NotificationSettings() {
     );
   }
 
-  return <WebPushSettings />;
+  return (
+    <div className="space-y-6">
+      <WebPushSettings />
+      {!isNativeRuntime() && <NotificationSoundSettings />}
+    </div>
+  );
+}
+
+/** Sound played by the open web/desktop client; native platforms own audio. */
+function NotificationSoundSettings() {
+  const [settings, setSettings] = useState<NotificationSoundSettingsValue>(
+    loadNotificationSoundSettings,
+  );
+
+  useEffect(() => {
+    const syncFromStorage = (event: StorageEvent) => {
+      if (event.key === NOTIFICATION_SOUND_SETTINGS_KEY) {
+        setSettings(loadNotificationSoundSettings());
+      }
+    };
+    window.addEventListener("storage", syncFromStorage);
+    return () => window.removeEventListener("storage", syncFromStorage);
+  }, []);
+
+  const update = (patch: Partial<NotificationSoundSettingsValue>) => {
+    setSettings((current) => saveNotificationSoundSettings({ ...current, ...patch }));
+  };
+
+  return (
+    <div className="space-y-4 border-t border-border pt-5">
+      <label className="flex cursor-pointer items-center justify-between gap-4">
+        <span className="text-sm font-medium">
+          Notification sound
+          <span className="block text-xs font-normal text-muted-foreground">
+            Play a chosen sound for new activity while Armada is open.
+          </span>
+        </span>
+        <Switch
+          checked={settings.enabled}
+          onCheckedChange={(enabled) => update({ enabled })}
+        />
+      </label>
+
+      {settings.enabled && (
+        <div className="space-y-4">
+          <div className="flex items-end gap-2">
+            <label className="min-w-0 flex-1 space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Sound</span>
+              <Select
+                value={settings.sound}
+                onValueChange={(sound) => update({ sound: sound as NotificationSoundId })}
+              >
+                <SelectTrigger aria-label="Notification sound">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {NOTIFICATION_SOUNDS.map((sound) => (
+                    <SelectItem key={sound.id} value={sound.id}>
+                      {sound.label} — {sound.creator}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </label>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-10 gap-2 touch:h-11"
+              onClick={() => playNotificationSound({ settings, preview: true })}
+            >
+              <Play className="size-4" />
+              Preview
+            </Button>
+          </div>
+
+          <label className="block space-y-2">
+            <span className="flex items-center justify-between gap-4 text-xs font-medium text-muted-foreground">
+              <span>Volume</span>
+              <span>{Math.round(settings.volume * 100)}%</span>
+            </span>
+            <Slider
+              aria-label="Notification sound volume"
+              className="touch:h-11"
+              min={0}
+              max={1}
+              step={0.05}
+              value={[settings.volume]}
+              onValueChange={([volume]) => update({ volume })}
+            />
+          </label>
+        </div>
+      )}
+
+      <p className="text-xs text-muted-foreground">
+        Background push and Android use the sound selected by your device. Browsers may require
+        one interaction with Armada before allowing in-page audio. Sounds are CC0 or CC BY-SA;
+        see the{" "}
+        <a
+          className="underline underline-offset-2 hover:text-foreground"
+          href="/sounds/notifications/LICENSES.md"
+          target="_blank"
+          rel="noreferrer"
+        >
+          sound credits
+        </a>
+        .
+      </p>
+    </div>
+  );
 }
 
 /**
