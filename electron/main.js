@@ -15,6 +15,29 @@
 // (close-to-tray, Show/Quit, unread badge, launch-minimized) and screen-share
 // source selection (Electron has no built-in getDisplayMedia picker).
 
+// ── Session bus repair (Linux) ──────────────────────────────────────────────
+//
+// Must run before anything touches Chromium. Some launchers hand us an
+// environment with DBUS_SESSION_BUS_ADDRESS stripped (version-manager shims
+// like asdf's `node`, which is what `npm start` goes through) — Chromium then
+// marks it "disabled:" and every D-Bus consumer silently degrades. The one
+// that matters is `safeStorage`: without the bus it can't reach the OS
+// credential store, `isEncryptionAvailable()` is false, and the login store
+// (which holds the nsec) falls back to being written in plaintext.
+//
+// So restore the well-known per-user socket when, and only when, the variable
+// is missing AND that socket actually exists. If there is genuinely no session
+// bus, nothing changes — the connection fails exactly as it did before.
+if (process.platform === "linux") {
+  const current = process.env.DBUS_SESSION_BUS_ADDRESS;
+  if (!current || current === "disabled:") {
+    const socket = `/run/user/${process.getuid()}/bus`;
+    if (require("node:fs").existsSync(socket)) {
+      process.env.DBUS_SESSION_BUS_ADDRESS = `unix:path=${socket}`;
+    }
+  }
+}
+
 const {
   app,
   BrowserWindow,

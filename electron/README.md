@@ -36,6 +36,13 @@ It also adds desktop-native behavior the web build can't:
     machine) means *locked*, not *empty*: it is copied to `armada:login-locked`
     before the signed-out UI can overwrite it, since it may be the only copy of
     the user's key.
+  - On Linux, `main.js` restores `DBUS_SESSION_BUS_ADDRESS` from
+    `/run/user/<uid>/bus` when the launcher stripped it. Version-manager shims
+    do this — asdf's `node` shim drops it, and `npm start` runs through that
+    shim — which leaves Chromium with `disabled:`, no reachable secret
+    service, and a login store silently written in plaintext. Packaged builds
+    exec the binary directly and were never affected, which is what makes this
+    a dev-launch trap specifically.
   - On Linux with no keyring daemon, Chromium selects the `basic_text` backend
     — a hardcoded key, so obfuscation rather than encryption. The backend is
     reported in Settings → Keys so the user isn't told they have protection
