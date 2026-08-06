@@ -1,12 +1,20 @@
 import { Capacitor } from "@capacitor/core";
-import { BatteryCharging, Bell, Lock } from "lucide-react";
+import { BatteryCharging, Bell, Lock, Waypoints } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { WizardShell, WizardStepBody } from "@/components/onboarding/WizardShell";
 import { useSyncGateActive } from "@/components/SyncGate";
 import { Button } from "@/components/ui/button";
+import { RelayBootstrapForm } from "@/components/RelayBootstrapForm";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useEncryptedSettings } from "@/hooks/useEncryptedSettings";
+import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { useOnboardingActive } from "@/hooks/useOnboarding";
+import {
+  markRelayRecoveryPromptShown,
+  relayRecoveryPromptShown,
+} from "@/lib/relayRecoveryPrompt";
 import {
   enableNativeNotifications,
   hasNativeNotificationService,
@@ -46,7 +54,7 @@ import {
  */
 
 /** Steps, in the order they're offered. */
-type StepId = "notifications" | "webpush" | "battery" | "decrypt";
+type StepId = "relays" | "notifications" | "webpush" | "battery" | "decrypt";
 
 /**
  * Set once the notification step has been shown. Unlike the old launch-time OS
@@ -55,6 +63,8 @@ type StepId = "notifications" | "webpush" | "battery" | "decrypt";
  * back in.
  */
 const NOTIF_PROMPT_KEY = "armada:notif-prompt-shown";
+
+
 
 /**
  * Timestamp (ms) of the last battery-exemption nudge. Without the exemption,
@@ -96,6 +106,7 @@ async function batteryStepApplies(): Promise<boolean> {
 
 export function LoginSetup() {
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
   const syncing = useSyncGateActive();
   // Signup logs the user in before the profile/create-join steps render (and
   // suppresses the sync gate), so hold every step until the wizard is done —
@@ -104,6 +115,18 @@ export function LoginSetup() {
 
   const [queue, setQueue] = useState<StepId[]>([]);
   const [completed, setCompleted] = useState(0);
+  const ownsRelayList = user
+    ? !config.relayMetadata.pubkey || config.relayMetadata.pubkey === user.pubkey
+    : false;
+  const hasSignedRelayList = ownsRelayList && config.relayMetadata.relays.length > 0;
+
+  // The recovery prompt is only meaningful when sync came back empty-handed.
+  // If the account already has a relay list, restored encrypted settings, or
+  // any joined server, there is nothing to recover — don't interrupt.
+  const { settings, isFetched: settingsFetched } = useEncryptedSettings();
+  const joinedServers = useNip29Servers();
+  const hasRestoredData =
+    hasSignedRelayList || settings !== null || joinedServers.length > 0;
 
   const enqueue = useCallback((id: StepId) => {
     setQueue((q) => (q.includes(id) ? q : [...q, id]));
@@ -125,6 +148,27 @@ export function LoginSetup() {
   // It asks us to surface the step here — parallel to the native
   // `NotificationsStep`, but for web/PWA.
   useEffect(() => registerWebPushOptInOpener(() => enqueue("webpush")), [enqueue]);
+
+  // Login discovery adopts a signed relay list before the sync gate lifts, and
+  // the account wizard opts brand-new accounts out entirely. What's left for
+  // this step is the genuine recovery case: an existing account whose setup
+  // sync couldn't find. Offer a plain, skippable lookup; the same form lives in
+  // Settings for later. A skip is remembered per account.
+  useEffect(() => {
+    if (!user || syncing || onboarding) return;
+    // Restore can settle across adjacent renders. If any data arrives after the
+    // prompt was queued from an empty render, pull it rather than leaving a
+    // stale "couldn't find your setup" screen over a working account.
+    if (hasRestoredData) {
+      setQueue((current) => current.filter((candidate) => candidate !== "relays"));
+      return;
+    }
+    // An in-flight settings read looks empty; wait for it to resolve so a slow
+    // relay is never mistaken for "nothing found".
+    if (!settingsFetched) return;
+    if (relayRecoveryPromptShown(user.pubkey)) return;
+    enqueue("relays");
+  }, [user, syncing, onboarding, hasRestoredData, settingsFetched, enqueue]);
 
   // If this unmounts with a decrypt prompt still queued, the callers awaiting
   // that decision would hang forever. Release them as "not now" (unpersisted,
@@ -165,12 +209,15 @@ export function LoginSetup() {
   // Record that a step was surfaced as it renders, so a user who force-quits
   // mid-flow isn't asked the same thing on every launch.
   useEffect(() => {
+    if (step === "relays" && user?.pubkey) markRelayRecoveryPromptShown(user.pubkey);
     if (step === "notifications") write(NOTIF_PROMPT_KEY, "1");
     if (step === "webpush") markWebPushPromptShown();
     if (step === "battery") write(BATTERY_NUDGE_KEY, String(Date.now()));
-  }, [step]);
+  }, [step, user?.pubkey]);
 
-  if (!step || syncing || onboarding) return null;
+  // Do not paint one contradictory frame while the effect above removes a
+  // relay step that was queued just before restore data arrived.
+  if (!step || syncing || onboarding || (step === "relays" && hasRestoredData)) return null;
 
   const total = completed + queue.length;
 
@@ -186,10 +233,27 @@ export function LoginSetup() {
           }}
         />
       )}
+      {step === "relays" && <RelayStep onDone={advance} />}
       {step === "webpush" && <WebPushStep onDone={advance} />}
       {step === "battery" && <BatteryStep onDone={advance} />}
       {step === "decrypt" && <DecryptStep onDone={advance} />}
     </WizardShell>
+  );
+}
+
+function RelayStep({ onDone }: { onDone: () => void }) {
+  return (
+    <WizardStepBody
+      glyph={
+        <StepGlyph>
+          <Waypoints className="size-9" />
+        </StepGlyph>
+      }
+      title="restore your setup"
+      description="We couldn't automatically find your servers and settings for this account. If you know a server address you've used before, enter it to look them up, or skip this and keep going."
+    >
+      <RelayBootstrapForm onDone={onDone} onSkip={onDone} />
+    </WizardStepBody>
   );
 }
 

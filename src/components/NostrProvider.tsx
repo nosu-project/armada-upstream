@@ -133,6 +133,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   // call `useUserGroupList`. The fold needs no relay and no signer, and it
   // re-reads on every snapshot write, so the pool follows adds AND removals.
   const cachedServers = useCachedNip29Servers(logins[0]?.pubkey);
+  const activePubkey = logins[0]?.pubkey;
 
   // The base pool, shared by reads and writes: app relays (unless the user has
   // switched them off) + joined NIP-29 servers. The servers are never gated, so
@@ -162,21 +163,29 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   // single-set behavior, so the default path is unchanged.
   const poolReadRelays = useMemo(() => {
     const urls = new Set(basePoolRelays);
-    for (const url of userReadRelays(config)) {
+    // NIP-65 write relays hold the user's authored events (profile and lists),
+    // while read relays receive events mentioning them. The general pool is
+    // not yet author-routed, so include both for reads; writes below still go
+    // only to the declared write set.
+    for (const url of userReadRelays(config, activePubkey)) {
+      const normalized = normalizeRelayUrl(url);
+      if (normalized) urls.add(normalized);
+    }
+    for (const url of userWriteRelays(config, activePubkey)) {
       const normalized = normalizeRelayUrl(url);
       if (normalized) urls.add(normalized);
     }
     return [...urls];
-  }, [basePoolRelays, config]);
+  }, [basePoolRelays, config, activePubkey]);
 
   const poolWriteRelays = useMemo(() => {
     const urls = new Set(basePoolRelays);
-    for (const url of userWriteRelays(config)) {
+    for (const url of userWriteRelays(config, activePubkey)) {
       const normalized = normalizeRelayUrl(url);
       if (normalized) urls.add(normalized);
     }
     return [...urls];
-  }, [basePoolRelays, config]);
+  }, [basePoolRelays, config, activePubkey]);
 
   const poolReadRelaysRef = useRef(poolReadRelays);
   useEffect(() => {
@@ -201,12 +210,16 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         if (normalized) urls.add(normalized);
       }
     }
-    for (const url of userReadRelays(config)) {
+    for (const url of userReadRelays(config, activePubkey)) {
+      const normalized = normalizeRelayUrl(url);
+      if (normalized) urls.add(normalized);
+    }
+    for (const url of userWriteRelays(config, activePubkey)) {
       const normalized = normalizeRelayUrl(url);
       if (normalized) urls.add(normalized);
     }
     return [...urls];
-  }, [config]);
+  }, [config, activePubkey]);
 
   const poolGeneralRelaysRef = useRef(poolGeneralRelays);
   useEffect(() => {

@@ -3,7 +3,18 @@ import { useNostrLogin } from "@nostrify/react/login";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
+import { accountDataRelays } from "@/contexts/AppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useAppContext } from "@/hooks/useAppContext";
+import {
+  KIND_DM_RELAYS,
+  parseDmRelays,
+  type DmRelayListQuery,
+} from "@/hooks/useDmRelayList";
+import {
+  KIND_BLOSSOM_SERVERS,
+  type BlossomServerListQuery,
+} from "@/hooks/useBlossomServerList";
 import {
   CONCORD_ENABLED,
   CONCORD_LIST_D_TAG,
@@ -24,8 +35,20 @@ import {
   type GroupRef,
 } from "@/lib/nip29";
 import { EncryptedSettingsSchema } from "@/lib/schemas";
+import { parseBlossomServerList } from "@/lib/blossom";
+import {
+  KIND_SEARCH_RELAYS,
+  readSearchRelayList,
+} from "@/lib/searchRelayList";
+import type { SearchRelayListQuery } from "@/hooks/useSearchRelayList";
 import { logSync } from "@/lib/syncLog";
 import type { SettingsRead } from "@/hooks/useEncryptedSettings";
+import {
+  discoverRelayList,
+  queryExplicitRelays,
+  uniqueRelayUrls,
+} from "@/lib/nip65";
+import { RELAY_LIST_DISCOVERY_RELAYS } from "@/lib/platform";
 
 import { bytesToHex } from "@noble/hashes/utils.js";
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -64,6 +87,7 @@ const STEP_TIMEOUT_MS = 8_000;
 
 /** A phase of the post-login sync. */
 export type SyncPhase =
+  | "relays"
   | "settings"
   | "groups"
   | "messages"
@@ -90,6 +114,7 @@ export interface SyncState {
 
 /** The line shown (in-progress, no status) when a phase begins. */
 const PHASE_OPENING: Record<Exclude<SyncPhase, "done">, string> = {
+  relays: "locating signed relay map",
   settings: "establishing secure channel",
   groups: "mounting channel directory",
   messages: "syncing recent transmissions",
@@ -140,12 +165,14 @@ async function catchUpConcordChannel(
 /**
  * Runs the one-time post-login sync for `pubkey` and reports live progress:
  *
- *   1. Pull encrypted settings (NIP-78, kind 30078, d="armada/metadata") and
+ *   1. Discover the user's signed NIP-65 relay map from bounded public indexes
+ *      and the configured app relays, then use its read relays for this sync.
+ *   2. Pull encrypted settings (NIP-78, kind 30078, d="armada/metadata") and
  *      seed the `["encrypted-settings", pubkey]` cache so NostrSync applies
  *      theme/relay config without a second fetch.
- *   2. Pull the kind 10009 group list (joined channels + servers) and seed the
+ *   3. Pull the kind 10009 group list (joined channels + servers) and seed the
  *      `["nip29","user-groups",pubkey]` cache.
- *   3. Catch up on the newest page of messages for each joined channel (capped),
+ *   4. Catch up on the newest page of messages for each joined channel (capped),
  *      priming the same caches useGroupMessages reads so timelines render
  *      instantly once the gate lifts.
  *   4. Catch up on Concord (encrypted communities): decrypt the membership list,
@@ -165,6 +192,7 @@ async function catchUpConcordChannel(
 export function useInitialSync(pubkey: string | undefined): SyncState {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const { config, updateConfig } = useAppContext();
   const queryClient = useQueryClient();
   const { logins } = useNostrLogin();
 
@@ -172,6 +200,21 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
   // re-keys the once-per-pubkey effect below.
   const soleAccountRef = useRef(true);
   soleAccountRef.current = logins.length <= 1;
+
+  // The sequence runs once per pubkey, but relay discovery changes config in
+  // the middle of that sequence. Read through a ref so later phases see the
+  // adopted map without making the once-only effect restart.
+  const configRef = useRef(config);
+  configRef.current = config;
+
+  // AppProvider's localStorage setter is recreated when config changes. Relay
+  // discovery deliberately changes config in the middle of this sequence, so
+  // depending on that setter would clean up the active run immediately after
+  // `1 FOUND`; the once-per-pubkey guard would then refuse to restart it. Read
+  // the latest setter through a ref just like config so adoption cannot cancel
+  // the sync gate that is performing it.
+  const updateConfigRef = useRef(updateConfig);
+  updateConfigRef.current = updateConfig;
 
   const [state, setState] = useState<SyncState>({
     phase: "settings",
@@ -269,31 +312,223 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       const shortPk = `${pubkey.slice(0, 8)}…${pubkey.slice(-4)}`;
       note("auth", `authenticated ${shortPk}`, "OK", "ok");
 
-      // ── 1. Encrypted settings ───────────────────────────────────────────
+      // ── 1. Signed NIP-65 relay map ──────────────────────────────────────
+      const rId = begin("relays");
+      let accountRelays = accountDataRelays(configRef.current, pubkey);
+      let bootstrapAppRelays: string[] = [];
+      try {
+        const discovery = await discoverRelayList(
+          nostr,
+          pubkey,
+          uniqueRelayUrls([
+            ...accountRelays,
+            ...configRef.current.appRelays,
+            ...RELAY_LIST_DISCOVERY_RELAYS,
+          ]),
+          stepSignal(),
+        );
+        if (discovery) {
+          const current = configRef.current;
+          // A first discovery is the user's own signed declaration, so adopt
+          // it automatically. Preserve a deliberate later toggle-off.
+          const sameOwner = current.relayMetadata.pubkey === pubkey;
+          const metadataIsNewer = !sameOwner
+            || discovery.event.created_at > current.relayMetadata.updatedAt;
+          const discoveredUrls = discovery.relays.map((relay) => relay.url);
+          if (metadataIsNewer || current.appRelays.length === 0) {
+            const next = {
+              ...current,
+              appRelays: current.appRelays.length === 0
+                ? discoveredUrls
+                : current.appRelays,
+              useUserRelays:
+                metadataIsNewer && (!sameOwner || current.relayMetadata.updatedAt === 0)
+                  ? true
+                  : current.useUserRelays,
+              relayMetadata: metadataIsNewer
+                ? {
+                    relays: discovery.relays,
+                    updatedAt: discovery.event.created_at,
+                    pubkey,
+                  }
+                : current.relayMetadata,
+            };
+            configRef.current = next;
+            bootstrapAppRelays = current.appRelays.length === 0 ? next.appRelays : [];
+            updateConfigRef.current((live) => {
+              const sameLiveOwner = live.relayMetadata.pubkey === pubkey;
+              const liveMetadataIsNewer = !sameLiveOwner
+                || discovery.event.created_at > live.relayMetadata.updatedAt;
+              if (!liveMetadataIsNewer && live.appRelays.length > 0) return live;
+              return {
+                ...live,
+                appRelays: live.appRelays.length === 0 ? discoveredUrls : live.appRelays,
+                useUserRelays:
+                  liveMetadataIsNewer && (!sameLiveOwner || live.relayMetadata.updatedAt === 0)
+                    ? true
+                    : live.useUserRelays,
+                relayMetadata: liveMetadataIsNewer ? next.relayMetadata : live.relayMetadata,
+              };
+            });
+          }
+          // Use the discovered write set for THIS bootstrap even if the user
+          // had deliberately disabled it for ongoing traffic. That lets us
+          // find the encrypted Armada preference that records that choice.
+          accountRelays = uniqueRelayUrls([
+            ...accountRelays,
+            ...discovery.relays.filter((relay) => relay.write).map((relay) => relay.url),
+          ]);
+          resolve(rId, `${discovery.relays.length} FOUND`);
+        } else {
+          resolve(rId, "APP DEFAULTS", "info");
+        }
+      } catch {
+        resolve(rId, "APP DEFAULTS", "warn");
+      }
+      if (cancelled) return;
+
+      // Hydrate the standard portable service lists from the same discovered
+      // account relays. Their normal queries may have already cached an empty
+      // read against app defaults before NIP-65 discovery completed.
+      let canonicalSearch: SearchRelayListQuery | undefined;
+      let canonicalDm: DmRelayListQuery | undefined;
+      let canonicalBlossom: (BlossomServerListQuery & { event: NostrEvent }) | undefined;
+      try {
+        const events = await queryExplicitRelays(
+          nostr,
+          accountRelays,
+          [{
+            kinds: [KIND_SEARCH_RELAYS, KIND_DM_RELAYS, KIND_BLOSSOM_SERVERS],
+            authors: [pubkey],
+          }],
+          stepSignal(),
+        );
+        const newest = (kind: number) => events
+          .filter((event) => event.kind === kind)
+          .sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id))[0];
+
+        const searchEvent = newest(KIND_SEARCH_RELAYS);
+        if (searchEvent) {
+          canonicalSearch = {
+            event: searchEvent,
+            ...(await readSearchRelayList(searchEvent, user.signer)),
+          };
+          if (!canonicalSearch.decryptFailed) {
+            queryClient.setQueryData(["search-relay-list", pubkey], canonicalSearch);
+          }
+        }
+
+        const dmEvent = newest(KIND_DM_RELAYS);
+        if (dmEvent) {
+          canonicalDm = { event: dmEvent, relays: parseDmRelays(dmEvent) };
+          queryClient.setQueryData(["dm-relay-list", pubkey], canonicalDm);
+        }
+
+        const blossomEvent = newest(KIND_BLOSSOM_SERVERS);
+        if (blossomEvent) {
+          canonicalBlossom = {
+            event: blossomEvent,
+            servers: parseBlossomServerList(blossomEvent),
+          };
+          queryClient.setQueryData(["blossom-server-list", pubkey], canonicalBlossom);
+        }
+
+        if (!cancelled && (canonicalSearch || canonicalDm || canonicalBlossom)) {
+          const search = canonicalSearch && !canonicalSearch.decryptFailed
+            ? canonicalSearch.relays
+            : undefined;
+          updateConfigRef.current((current) => ({
+            ...current,
+            ...(search ? { searchRelays: search } : {}),
+            ...(canonicalDm ? { dmRelays: canonicalDm.relays } : {}),
+            ...(canonicalBlossom
+              && canonicalBlossom.event.created_at > current.blossomServerMetadata.updatedAt
+              ? {
+                  blossomServerMetadata: {
+                    servers: canonicalBlossom.servers,
+                    updatedAt: canonicalBlossom.event.created_at,
+                  },
+                }
+              : {}),
+          }));
+        }
+      } catch {
+        // Best-effort; the owning hooks retry after the pool adopts NIP-65.
+      }
+
+      // ── 2. Encrypted settings ───────────────────────────────────────────
       const sId = begin("settings");
       let settingsFound = false;
       try {
         if (user.signer.nip44) {
-          const events = await nostr.query(
+          const events = await queryExplicitRelays(
+            nostr,
+            accountRelays,
             [{ kinds: [SETTINGS_KIND], authors: [pubkey], "#d": [SETTINGS_D], limit: 1 }],
-            { signal: stepSignal() },
+            stepSignal(),
           );
           const event = events.sort((a, b) => b.created_at - a.created_at)[0];
           if (event?.content) {
             const decrypted = await user.signer.nip44.decrypt(pubkey, event.content);
             const parsed = EncryptedSettingsSchema.safeParse(JSON.parse(decrypted));
             if (parsed.success && !cancelled) {
+              // Fold this run's canonical relay reads (NIP-65 bootstrap, and
+              // the standard 10007/10050/10063 lists) over the NIP-78 blob so
+              // the seeded config already reflects them.
+              const merged = {
+                ...parsed.data,
+                ...(bootstrapAppRelays.length > 0 && parsed.data.appRelays?.length === 0
+                  ? { appRelays: bootstrapAppRelays }
+                  : {}),
+                ...(canonicalSearch && !canonicalSearch.decryptFailed
+                  ? { searchRelays: canonicalSearch.relays }
+                  : {}),
+                ...(canonicalDm ? { dmRelays: canonicalDm.relays } : {}),
+                ...(canonicalBlossom
+                  ? {
+                      blossomServerMetadata: {
+                        servers: canonicalBlossom.servers,
+                        updatedAt: canonicalBlossom.event.created_at,
+                      },
+                    }
+                  : {}),
+              };
               // Seeded in the shape useEncryptedSettings stores: this WAS a
               // relay read, so it counts as a confirmed one and NostrSync may
               // merge over it. (The settings watermark is deliberately not
               // written here — see the note further down — so NostrSync still
               // applies these to config.)
               queryClient.setQueryData<SettingsRead>(["encrypted-settings", pubkey], {
-                settings: parsed.data,
+                settings: merged,
                 source: "remote",
                 complete: true,
               });
               settingsFound = true;
+
+              // Migration: kinds 10007/10050/10063 are the canonical home for
+              // these lists as of this release, and they were dropped from
+              // SYNCED_CONFIG_KEYS so the NIP-78 blob no longer applies them.
+              // Pre-migration clients stored them ONLY in that blob, so a fresh
+              // device with no canonical event yet would otherwise revert to
+              // defaults. Keep the blob's value alive locally; a later explicit
+              // publish promotes it to the real list. Nothing is published here.
+              const legacySearch = !canonicalSearch && Array.isArray(parsed.data.searchRelays)
+                ? parsed.data.searchRelays
+                : undefined;
+              const legacyDm = !canonicalDm && Array.isArray(parsed.data.dmRelays)
+                ? parsed.data.dmRelays
+                : undefined;
+              const legacyBlossom = !canonicalBlossom && parsed.data.blossomServerMetadata
+                ? parsed.data.blossomServerMetadata
+                : undefined;
+              if (legacySearch || legacyDm || legacyBlossom) {
+                updateConfigRef.current((current) => ({
+                  ...current,
+                  ...(legacySearch ? { searchRelays: legacySearch } : {}),
+                  ...(legacyDm ? { dmRelays: legacyDm } : {}),
+                  ...(legacyBlossom ? { blossomServerMetadata: legacyBlossom } : {}),
+                }));
+              }
             }
           }
         }
@@ -303,13 +538,15 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       resolve(sId, settingsFound ? "RESTORED" : "DEFAULTS", settingsFound ? "ok" : "info");
       if (cancelled) return;
 
-      // ── 2. Group list (kind 10009) ──────────────────────────────────────
+      // ── 3. Group list (kind 10009) ──────────────────────────────────────
       const gId = begin("groups");
       let groups: GroupRef[] = [];
       try {
-        const events = await nostr.query(
+        const events = await queryExplicitRelays(
+          nostr,
+          accountRelays,
           [{ kinds: [KIND_USER_GROUPS], authors: [pubkey], limit: 1 }],
-          { signal: stepSignal() },
+          stepSignal(),
         );
         const latest = events.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
         if (latest) {
@@ -345,7 +582,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       }
       if (cancelled) return;
 
-      // ── 3. Warm the store with recent messages for joined channels ──────
+      // ── 4. Warm the store with recent messages for joined channels ──────
       // Skipped outright with no NIP-29 channels to catch up on — there is
       // nothing to sync and nothing worth showing.
       const channels = groups.slice(0, MAX_CATCHUP_CHANNELS);

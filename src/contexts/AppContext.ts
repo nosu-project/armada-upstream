@@ -1,6 +1,7 @@
 import { createContext } from "react";
 
 import { APP_RELAYS, DM_RELAYS, normalizeRelayUrl, SEARCH_RELAYS } from "@/lib/platform";
+import { getPreferredVoiceServer } from "@/lib/voiceDevices";
 
 import type { BlossomServerMetadata } from "@/lib/blossom";
 import type { RailLayoutNode } from "@/lib/railLayout";
@@ -18,13 +19,15 @@ export interface ClosedDmMarker {
  * The user's NIP-65 (kind 10002) relay list plus its sync timestamp, mirroring
  * `BlossomServerMetadata`. Each relay carries the `read`/`write` markers from
  * its `r` tag (a bare `r` tag is both). Synced FROM the user's kind-10002 event
- * by NostrSync (read-only — this client never publishes kind 10002); merged
+ * by NostrSync; user-approved edits publish a replacement kind 10002. Merged
  * into the general relay pool only when `useUserRelays` is on. Ported from
  * Ditto's `RelayMetadata` / `getEffectiveRelays`.
  */
 export interface RelayMetadata {
   relays: { url: string; read: boolean; write: boolean }[];
   updatedAt: number;
+  /** Owner of this replaceable list; absent only on pre-migration local data. */
+  pubkey?: string;
 }
 
 /**
@@ -119,6 +122,12 @@ export interface AppConfig {
    */
   searchRelays: string[];
   /**
+   * Portable preference for the host used to start empty Concord/DM voice
+   * calls. Unlike mic/speaker device ids and audio processing, this is an
+   * account choice and follows the user through encrypted NIP-78 settings.
+   */
+  preferredVoiceServer: string;
+  /**
    * Whether the app relays (`appRelays`) are used in the general relay pool.
    * On by default. Turning it off is a deliberate foot-gun: with no app
    * relays, no joined servers, and no NIP-65 relays enabled, the pool is empty
@@ -136,11 +145,10 @@ export interface AppConfig {
    */
   useUserRelays: boolean;
   /**
-   * The user's NIP-65 relay list, synced FROM their kind-10002 event by
-   * NostrSync. Read-only mirror — this client never publishes kind 10002, so
-   * enabling `useUserRelays` only ever ADDS the relays the user already
-   * declared elsewhere. Empty until synced; an empty/failed read never clears
-   * it (same non-destructive rule as `blossomServerMetadata`).
+   * The user's NIP-65 relay list, synced from their kind-10002 event by
+   * NostrSync and changed only through Armada's explicit relay-list editor.
+   * Empty until synced; an empty/failed read never clears it (same
+   * non-destructive rule as `blossomServerMetadata`).
    */
   relayMetadata: RelayMetadata;
   /**
@@ -375,14 +383,11 @@ export const SYNCED_CONFIG_KEYS = [
   "railOrder",
   "railLayout",
   "appRelays",
-  "searchRelays",
+  "preferredVoiceServer",
   "useAppRelays",
   "useUserRelays",
-  "relayMetadata",
   "useAppDmRelays",
   "useOwnDmRelays",
-  "dmRelays",
-  "blossomServerMetadata",
   "useAppBlossomServers",
   "mutedCommunities",
   "mutedChannels",
@@ -410,6 +415,7 @@ export const defaultConfig: AppConfig = {
   collapsedChannelCategories: {},
   appRelays: [...APP_RELAYS],
   searchRelays: [...SEARCH_RELAYS],
+  preferredVoiceServer: getPreferredVoiceServer(),
   useAppRelays: true,
   useUserRelays: false,
   relayMetadata: { relays: [], updatedAt: 0 },
@@ -477,8 +483,9 @@ export function effectiveDmRelays(config: AppConfig): string[] {
  * `getEffectiveRelays` (the `useUserRelays` half); the app relays are added
  * separately and always, so this returns ONLY the user's personal read relays.
  */
-export function userReadRelays(config: AppConfig): string[] {
+export function userReadRelays(config: AppConfig, pubkey?: string): string[] {
   if (!config.useUserRelays) return [];
+  if (pubkey && config.relayMetadata.pubkey && config.relayMetadata.pubkey !== pubkey) return [];
   return config.relayMetadata.relays.filter((r) => r.read).map((r) => r.url);
 }
 
@@ -487,15 +494,18 @@ export function userReadRelays(config: AppConfig): string[] {
  * routing, or none when `useUserRelays` is off. Companion to
  * `userReadRelays` — see there.
  */
-export function userWriteRelays(config: AppConfig): string[] {
+export function userWriteRelays(config: AppConfig, pubkey?: string): string[] {
   if (!config.useUserRelays) return [];
+  if (pubkey && config.relayMetadata.pubkey && config.relayMetadata.pubkey !== pubkey) return [];
   return config.relayMetadata.relays.filter((r) => r.write).map((r) => r.url);
 }
 
 /**
  * The relays a user's ACCOUNT-DATA singletons live on — app relays (unless the
- * user switched them off), the platform pins, and the user's own NIP-65 read
- * relays when `useUserRelays` is on. Deliberately EXCLUDES joined NIP-29 group
+ * user switched them off) and the user's own NIP-65 WRITE relays when
+ * `useUserRelays` is on. NIP-65's marker describes the user's behavior: their
+ * authored events are downloaded from their write relays; their read relays
+ * receive events that mention them. Deliberately EXCLUDES joined NIP-29 group
  * relays: a personal replaceable list (kind 10030 emojis, etc.) is account data
  * this client publishes to the app relays, not group-scoped traffic.
  *
@@ -507,7 +517,7 @@ export function userWriteRelays(config: AppConfig): string[] {
  * account-data relays keeps the all-relays EOSE achievable — and is where the
  * list actually is.
  */
-export function accountDataRelays(config: AppConfig): string[] {
+export function accountDataRelays(config: AppConfig, pubkey?: string): string[] {
   const urls = new Set<string>();
   if (config.useAppRelays) {
     for (const url of config.appRelays) {
@@ -515,7 +525,7 @@ export function accountDataRelays(config: AppConfig): string[] {
       if (normalized) urls.add(normalized);
     }
   }
-  for (const url of userReadRelays(config)) {
+  for (const url of userWriteRelays(config, pubkey)) {
     const normalized = normalizeRelayUrl(url);
     if (normalized) urls.add(normalized);
   }

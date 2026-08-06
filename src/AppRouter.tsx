@@ -25,6 +25,7 @@ import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { useWarmDiscover } from "@/hooks/useDiscover";
 import { flattenLayout, mergeLayout, railKeyToRoute } from "@/lib/railLayout";
+import { parseJoinLink, setPendingJoin } from "@/lib/joinLink";
 import { CONCORD2_PANES } from "@/lib/routes";
 import { lazyWithReload } from "@/lib/chunkReload";
 
@@ -68,6 +69,22 @@ function InviteRoute() {
   const { naddr } = useParams<{ naddr: string }>();
   const isBuzz = !!naddr && !/^naddr1/i.test(naddr) && naddr.includes(".");
   return isBuzz ? <BuzzInvitePage /> : <InviteV2Page />;
+}
+
+/**
+ * A signup "join" / referral link (`/join?relay=wss://op.example`): seed a
+ * BRAND-NEW account onto an operator's relay(s). It never touches a signed-in
+ * user's own relays — an existing user is simply sent home — and an unusable
+ * link (no valid relay) falls through the same way. Otherwise the parsed link
+ * is stashed for the signup wizard, which shows a named confirmation before
+ * adopting anything.
+ */
+function JoinRoute() {
+  const { user } = useCurrentUser();
+  const { search } = useLocation();
+  const join = useMemo(() => parseJoinLink(search), [search]);
+  if (!user && join) setPendingJoin(join);
+  return <Navigate to={!user && join ? "/welcome" : "/"} replace />;
 }
 
 /**
@@ -307,6 +324,7 @@ export function AppRouter() {
           <Route element={<MainLayout />}>
             <Route path="/" element={<HomeRedirect />} />
             <Route path="/welcome" element={<WelcomePage />} />
+            <Route path="/join" element={<JoinRoute />} />
             <Route path="/s/:server" element={<ServerPage />} />
             {/* Static segments outrank the `:groupId` param, so the Projects
                 and Inbox views resolve here, not as a channel. */}

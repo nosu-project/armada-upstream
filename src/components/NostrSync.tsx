@@ -5,7 +5,7 @@ import { useEffect, useRef } from "react";
 import { useBootGateOpen } from "@/lib/bootGate";
 
 import { setBuzzMediaSigner } from "@/buzz/media";
-import { SYNCED_CONFIG_KEYS, type AppConfig, type RelayMetadata } from "@/contexts/AppContext";
+import { accountDataRelays, SYNCED_CONFIG_KEYS, type AppConfig } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
@@ -22,11 +22,12 @@ import {
 } from "@/hooks/useFrequentReactions";
 import { useFavoriteGifsSync } from "@/hooks/useFavoriteGifsSync";
 import { useResumeEpoch } from "@/hooks/useResumeEpoch";
+import { useBlossomServerList } from "@/hooks/useBlossomServerList";
+import { useDmRelayList } from "@/hooks/useDmRelayList";
+import { useSearchRelayList } from "@/hooks/useSearchRelayList";
 import { useTheme } from "@/hooks/useTheme";
 import { useReadState } from "@/hooks/useReadState";
-import { parseBlossomServerList } from "@/lib/blossom";
-import { KIND_BLOSSOM_SERVERS } from "@/hooks/useBlossomServerList";
-import { normalizeRelayUrl } from "@/lib/platform";
+import { parseRelayList, KIND_RELAY_LIST } from "@/lib/nip65";
 import { type EncryptedSettings } from "@/lib/schemas";
 import {
   KIND_APP_SPECIFIC,
@@ -36,6 +37,8 @@ import {
   T_ARMADA_GIF_FAVORITES,
 } from "@/lib/selfSyncKinds";
 import { ACTIVE_THEME_KIND, parseDittoTheme } from "@/lib/themeEvent";
+import { syncedConfigSnapshot } from "@/lib/syncedConfig";
+import { setPreferredVoiceServer } from "@/lib/voiceDevices";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
@@ -64,38 +67,6 @@ const SELF_SYNC_RESUBSCRIBE_AFTER_AWAY_MS = 30_000;
 function dTagOf(event: NostrEvent): string | undefined {
   for (const t of event.tags) if (t[0] === "d") return t[1];
   return undefined;
-}
-
-/** NIP-65 relay list. */
-const KIND_RELAY_LIST = 10002;
-
-/**
- * Parse a kind-10002 event's `r` tags into `RelayMetadata` relays. A bare `r`
- * tag (`["r", url]`) is both read and write; a marker (`"read"`/`"write"`)
- * restricts it. URLs are normalized and deduped, first-wins.
- */
-function parseRelayList(event: NostrEvent): RelayMetadata["relays"] {
-  const out: RelayMetadata["relays"] = [];
-  const seen = new Set<string>();
-  for (const t of event.tags) {
-    if (t[0] !== "r" || !t[1]) continue;
-    const url = normalizeRelayUrl(t[1]);
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
-    const marker = t[2];
-    out.push({ url, read: !marker || marker === "read", write: !marker || marker === "write" });
-  }
-  return out;
-}
-
-/** Pick just the synced fields out of AppConfig, dropping undefined values. */
-function syncedSubset(config: AppConfig): Partial<EncryptedSettings> {
-  const out: Record<string, unknown> = {};
-  for (const key of SYNCED_CONFIG_KEYS) {
-    const value = config[key];
-    if (value !== undefined) out[key] = value;
-  }
-  return out as Partial<EncryptedSettings>;
 }
 
 /**
@@ -148,9 +119,13 @@ function NostrSyncInner() {
   const { config, updateConfig } = useAppContext();
   const { settings, settingsSource, updateSettings, hasNip44Support, isSuccess } =
     useEncryptedSettings();
+  const blossomServerList = useBlossomServerList();
+  const dmRelayList = useDmRelayList();
+  const searchRelayList = useSearchRelayList();
   const { hydrate: hydrateReadState } = useReadState();
   const { applyCustomTheme } = useTheme();
   const queryClient = useQueryClient();
+  const selfRelayKey = accountDataRelays(config, user?.pubkey).sort().join("\u0000");
   useFavoriteGifsSync();
 
   // Bumped when the app returns from a real backgrounding (not an alt-tab),
@@ -158,7 +133,9 @@ function NostrSyncInner() {
   const resumeEpoch = useResumeEpoch(SELF_SYNC_RESUBSCRIBE_AFTER_AWAY_MS);
 
   const dittoCheckedPubkey = useRef<string | undefined>(undefined);
-  const blossomAppliedPubkey = useRef<string | undefined>(undefined);
+  const blossomAppliedEvent = useRef<string | undefined>(undefined);
+  const dmRelaysAppliedEvent = useRef<string | undefined>(undefined);
+  const searchRelaysAppliedEvent = useRef<string | undefined>(undefined);
   const relayListAppliedPubkey = useRef<string | undefined>(undefined);
   // Newest created_at handled per (kind + optional d tag), across resubscribes.
   const seenSelfVersions = useRef<Map<string, number>>(new Map());
@@ -192,7 +169,9 @@ function NostrSyncInner() {
     appliedSyncTs.current = -1;
     pulledForPubkey.current = undefined;
     lastSyncedSnapshot.current = undefined;
-    blossomAppliedPubkey.current = undefined;
+    blossomAppliedEvent.current = undefined;
+    dmRelaysAppliedEvent.current = undefined;
+    searchRelaysAppliedEvent.current = undefined;
     relayListAppliedPubkey.current = undefined;
     seenSelfVersions.current = new Map();
   }, [user?.pubkey]);
@@ -283,8 +262,9 @@ function NostrSyncInner() {
     // sub stays silently dead. A relay-sent CLOSED kills it just as
     // permanently: it breaks the `for await` above and is swallowed there.
     // Rebuilding is the only recovery for either, and with no `since` it costs
-    // a handful of replaceables.
-  }, [nostr, user?.pubkey, queryClient, resumeEpoch]);
+    // a handful of replaceables. `selfRelayKey` rebuilds it when the account's
+    // relay set changes (e.g. NIP-65 adoption) so the standing REQ follows.
+  }, [nostr, user?.pubkey, queryClient, resumeEpoch, selfRelayKey]);
 
   // ─── 1. Armada encrypted settings → local config ─────────────────────
   useEffect(() => {
@@ -320,7 +300,7 @@ function NostrSyncInner() {
         const next = { ...current, ...merged };
         // Record what we just applied so the publish watcher treats it as
         // already-synced and doesn't echo it straight back out.
-        lastSyncedSnapshot.current = JSON.stringify(syncedSubset(next));
+        lastSyncedSnapshot.current = JSON.stringify(syncedConfigSnapshot(next));
         return next;
       });
       setLocalSettingsSync(user.pubkey, remoteTs);
@@ -381,7 +361,7 @@ function NostrSyncInner() {
     if (!user?.pubkey || !hasNip44Support) return;
     if (pulledForPubkey.current !== user.pubkey) return;
 
-    const snapshot = JSON.stringify(syncedSubset(config));
+    const snapshot = JSON.stringify(syncedConfigSnapshot(config));
     if (lastSyncedSnapshot.current === undefined) {
       // First observation post-pull: adopt current state as the baseline
       // (matches what the pull applied, or the local defaults if none).
@@ -405,7 +385,7 @@ function NostrSyncInner() {
     if (publishTimer.current) clearTimeout(publishTimer.current);
     publishTimer.current = setTimeout(() => {
       lastSyncedSnapshot.current = snapshot;
-      updateSettings(syncedSubset(config)).catch((err) =>
+      updateSettings(syncedConfigSnapshot(config)).catch((err) =>
         console.warn("Config sync failed:", err),
       );
     }, PUBLISH_DEBOUNCE_MS);
@@ -414,6 +394,13 @@ function NostrSyncInner() {
       if (publishTimer.current) clearTimeout(publishTimer.current);
     };
   }, [user?.pubkey, hasNip44Support, config, settings, updateSettings]);
+
+  // The portable voice-server preference is synchronized in AppConfig, while
+  // the voice runtime still reads its established localStorage key. Keep that
+  // bridge current after login and whenever another device changes the value.
+  useEffect(() => {
+    setPreferredVoiceServer(config.preferredVoiceServer);
+  }, [config.preferredVoiceServer]);
 
   // ─── 1a. Read-state (unread/mention) → local read-state cache ─────────
   // Merge-hydrate (max timestamp wins) so synced reads from other devices
@@ -473,54 +460,65 @@ function NostrSyncInner() {
   // The 10063 event is the cross-device source of truth for the user's
   // Blossom media servers (BUD-03); `config.blossomServerMetadata` is the
   // fast/offline cache. Apply only when the event is newer than what we hold
-  // (`updatedAt` is the created_at of the last list we synced) and non-empty
-  // — a transient empty/failed read must never wipe a good local list.
-  // Mirrors Ditto's NostrSync 10063 hydration. Runs once per account.
+  // (`updatedAt` is the created_at of the last list we synced). A signed empty
+  // event intentionally clears the list; a missing/failed read has no event
+  // and therefore never wipes a good local value.
+  // Mirrors Ditto's NostrSync 10063 hydration. The owning query is invalidated
+  // by the standing self-state subscription, so later cross-device edits apply
+  // without a reload too.
   useEffect(() => {
-    if (!user?.pubkey) return;
-    if (blossomAppliedPubkey.current === user.pubkey) return;
-    blossomAppliedPubkey.current = user.pubkey;
-
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const events = await nostr.query(
-          [{ kinds: [KIND_BLOSSOM_SERVERS], authors: [user.pubkey], limit: 1 }],
-          { signal: AbortSignal.timeout(6000) },
-        );
-        const event = events.sort((a, b) => b.created_at - a.created_at)[0];
-        if (!event || cancelled) return;
-        const servers = parseBlossomServerList(event);
-        if (servers.length === 0) return;
-        updateConfig((current) => {
-          if (event.created_at <= current.blossomServerMetadata.updatedAt) return current;
-          const next = {
-            ...current,
-            blossomServerMetadata: { servers, updatedAt: event.created_at },
-          };
-          // Sync-driven (hydrating the user's own 10063 list), not a user edit
-          // — keep the publish baseline in lockstep so it isn't broadcast back.
-          if (pulledForPubkey.current === user.pubkey) {
-            lastSyncedSnapshot.current = JSON.stringify(syncedSubset(next));
-          }
-          return next;
-        });
-      } catch {
-        // Relay error — keep the local cache.
+    const event = blossomServerList.event;
+    if (!user?.pubkey || !event || blossomAppliedEvent.current === event.id) return;
+    blossomAppliedEvent.current = event.id;
+    updateConfig((current) => {
+      if (event.created_at <= current.blossomServerMetadata.updatedAt) return current;
+      const next = {
+        ...current,
+        blossomServerMetadata: {
+          servers: blossomServerList.servers,
+          updatedAt: event.created_at,
+        },
+      };
+      if (pulledForPubkey.current === user.pubkey) {
+        lastSyncedSnapshot.current = JSON.stringify(syncedConfigSnapshot(next));
       }
-    })();
+      return next;
+    });
+  }, [user?.pubkey, blossomServerList.event, blossomServerList.servers, updateConfig]);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [user?.pubkey, nostr, updateConfig]);
+  // ─── 1d. Standard search + DM relay lists → config ────────────────────
+  // A signed empty replacement is an intentional clear, unlike a missing
+  // result. The hooks expose the event separately so we can apply the former
+  // and ignore the latter without ever treating a failed read as an empty list.
+  useEffect(() => {
+    const event = searchRelayList.event;
+    if (!user?.pubkey || !event || searchRelaysAppliedEvent.current === event.id) return;
+    searchRelaysAppliedEvent.current = event.id;
+    updateConfig((current) => {
+      const next = { ...current, searchRelays: searchRelayList.relays };
+      if (pulledForPubkey.current === user.pubkey) {
+        lastSyncedSnapshot.current = JSON.stringify(syncedConfigSnapshot(next));
+      }
+      return next;
+    });
+  }, [user?.pubkey, searchRelayList.event, searchRelayList.relays, updateConfig]);
+
+  useEffect(() => {
+    const event = dmRelayList.event;
+    if (!user?.pubkey || !event || dmRelaysAppliedEvent.current === event.id) return;
+    dmRelaysAppliedEvent.current = event.id;
+    updateConfig((current) => {
+      const next = { ...current, dmRelays: dmRelayList.relays };
+      if (pulledForPubkey.current === user.pubkey) {
+        lastSyncedSnapshot.current = JSON.stringify(syncedConfigSnapshot(next));
+      }
+      return next;
+    });
+  }, [user?.pubkey, dmRelayList.event, dmRelayList.relays, updateConfig]);
 
   // ─── 1e. NIP-65 relay list (kind 10002 `r` tags) → config ─────────────
-  // The user's own relay list is a READ-ONLY mirror here: `relayMetadata` is
-  // folded into the general pool only when `useUserRelays` is on, and this
-  // client never publishes kind 10002 (AGENTS.md: never publish a user's lists
-  // without an explicit user action — there is no such action for this list).
+  // The user's own relay list is mirrored here; publishing is available only
+  // through explicit controls in Settings.
   // Apply only when the event is newer than what we hold and non-empty, so a
   // transient empty/failed read never wipes a good local mirror. Exactly the
   // shape of the 10063 block above; runs once per account.
@@ -542,15 +540,19 @@ function NostrSyncInner() {
         const relays = parseRelayList(event);
         if (relays.length === 0) return;
         updateConfig((current) => {
-          if (event.created_at <= current.relayMetadata.updatedAt) return current;
+          const sameOwner = current.relayMetadata.pubkey === user.pubkey;
+          if (sameOwner && event.created_at <= current.relayMetadata.updatedAt) return current;
           const next = {
             ...current,
-            relayMetadata: { relays, updatedAt: event.created_at },
+            appRelays: current.appRelays.length === 0
+              ? relays.map((relay) => relay.url)
+              : current.appRelays,
+            relayMetadata: { relays, updatedAt: event.created_at, pubkey: user.pubkey },
           };
           // Sync-driven (hydrating the user's own 10002 list), not a user edit
           // — keep the publish baseline in lockstep so it isn't broadcast back.
           if (pulledForPubkey.current === user.pubkey) {
-            lastSyncedSnapshot.current = JSON.stringify(syncedSubset(next));
+            lastSyncedSnapshot.current = JSON.stringify(syncedConfigSnapshot(next));
           }
           return next;
         });

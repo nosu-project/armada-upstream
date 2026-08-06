@@ -12,6 +12,12 @@ import { nip19 } from "nostr-tools";
 export function normalizeRelayUrl(url: string): string | undefined {
   let value = url.trim();
   if (!value) return undefined;
+  // A fully-qualified non-WebSocket URL is invalid, not a bare hostname. If
+  // it were prefixed below, `https://relay.example` would become the valid but
+  // nonsensical host `wss://https//relay.example`.
+  if (/^[a-z][a-z\d+.-]*:\/\//i.test(value) && !/^wss?:\/\//i.test(value)) {
+    return undefined;
+  }
   if (!/^wss?:\/\//i.test(value)) {
     // Bare hostnames are allowed for convenience; assume wss except localhost/IPs.
     const secure = !/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(value);
@@ -86,6 +92,20 @@ export function isStandalonePwa(): boolean {
  * These seed `AppConfig.appRelays`, which the user can edit in Settings.
  */
 export const APP_RELAYS: string[] = (import.meta.env.VITE_APP_RELAYS || "wss://relay.ditto.pub,wss://relay.dreamith.to")
+  .split(",")
+  .map((url: string) => normalizeRelayUrl(url))
+  .filter((url: string | undefined): url is string => Boolean(url));
+
+/**
+ * Public NIP-65 indexes used only for a bounded kind-10002 lookup at login.
+ * They are not added to the general pool, subscribed to, or used for normal
+ * account traffic. Operators may replace the set or leave it empty; the app
+ * relays and a user-entered bootstrap hint are still queried.
+ */
+export const RELAY_LIST_DISCOVERY_RELAYS: string[] = (
+  import.meta.env.VITE_NIP65_DISCOVERY_RELAYS
+  ?? "wss://purplepag.es,wss://user.kindpag.es,wss://relay.nos.social"
+)
   .split(",")
   .map((url: string) => normalizeRelayUrl(url))
   .filter((url: string | undefined): url is string => Boolean(url));
