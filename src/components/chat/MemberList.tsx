@@ -1,6 +1,6 @@
-import { AtSign, Ban, Bot, Copy, Crown, IdCard, MessageSquareText, MoreVertical, Music, Shield, ShieldOff, Smile, UserCog, UserMinus, UserPlus, X } from "lucide-react";
+import { AtSign, Ban, Bot, Copy, Crown, IdCard, MessageSquareText, MoreVertical, Music, Search, Shield, ShieldOff, Smile, UserCog, UserMinus, UserPlus, X } from "lucide-react";
 
-import { memo, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { BotPill } from "@/components/BotPill";
@@ -33,7 +33,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { DisplayName } from "@/components/DisplayName";
+import { Input } from "@/components/ui/input";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useMemberSearch } from "@/hooks/useMemberSearch";
 import { useScopedIdentity } from "@/hooks/useScopedDisplayName";
 import { isStatusExpired, useUserStatus } from "@/hooks/useUserStatus";
 import { requestMention } from "@/hooks/useMentionBus";
@@ -558,6 +560,22 @@ export function MemberList({
   onAddMembers,
   className,
 }: MemberListProps) {
+  const [query, setQuery] = useState("");
+  // The field is revealed by a button, mirroring the channel/DM header search.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Focus the field when it expands. `preventScroll` matters: it starts parked
+  // off the right edge, so a default focus() would scroll the panel to reveal it.
+  useEffect(() => {
+    if (searchOpen) searchInputRef.current?.focus({ preventScroll: true });
+  }, [searchOpen]);
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setQuery("");
+  }, []);
+
   const adminMap = new Map(admins.map((a) => [a.pubkey, a.roles] as const));
   // Stable per-member arrays: `[memberRoles[pubkey]]` inline would hand the
   // memoized MemberRow a fresh `roles` identity every render.
@@ -584,10 +602,65 @@ export function MemberList({
     const bo = isOwnerRole(b) ? 0 : 1;
     return ao - bo || a.pubkey.localeCompare(b.pubkey);
   });
-  const visibleAdmins = sortedAdmins.filter((a) => !sectioned.has(a.pubkey));
-  const regulars = members
-    .filter((pubkey) => !adminMap.has(pubkey) && !sectioned.has(pubkey))
+  const allRegulars = members
+    .filter((pubkey) => !adminMap.has(pubkey))
     .sort((a, b) => a.localeCompare(b));
+
+  // One pass over the whole roster: every section filters against the same
+  // match set, so a name only has to be resolved once.
+  const roster = useMemo(
+    () => [...admins.map((a) => a.pubkey), ...allRegulars],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [admins.map((a) => a.pubkey).join(","), allRegulars.join(",")],
+  );
+  const matched = useMemberSearch(roster, query);
+  const searching = matched !== null;
+
+  // A member hoisted into a role section renders only there; when a query is
+  // active every section is also narrowed to the matches.
+  const visibleAdmins = sortedAdmins.filter(
+    (a) => !sectioned.has(a.pubkey) && (!matched || matched.has(a.pubkey)),
+  );
+  const regulars = allRegulars.filter(
+    (pubkey) => !sectioned.has(pubkey) && (!matched || matched.has(pubkey)),
+  );
+  const visibleSections = (roleSections ?? []).map((section) => ({
+    ...section,
+    members: matched ? section.members.filter((pubkey) => matched.has(pubkey)) : section.members,
+  }));
+  const noMatches =
+    searching &&
+    visibleAdmins.length === 0 &&
+    regulars.length === 0 &&
+    visibleSections.every((section) => section.members.length === 0);
+
+  // The reveal toggle rides whichever section header renders first — admins, else
+  // the first non-empty role section, else the members header — so it shares that
+  // row instead of taking one of its own.
+  const firstSection = visibleSections.find((s) => !searching || s.members.length > 0);
+  const toggleHost: string | null =
+    visibleAdmins.length > 0
+      ? "admins"
+      : firstSection
+        ? `section:${firstSection.id}`
+        : !searching || regulars.length > 0
+          ? "members"
+          : null;
+
+  // Same icon/component as the channel/DM header search. Hidden once the field is
+  // open — the field's own X closes it.
+  const searchToggle = searchOpen ? null : (
+    <Button
+      variant="ghost"
+      size="icon"
+      aria-label="Search members"
+      // Negative margin keeps the taller tap target from growing the label row.
+      className="-my-1 size-6 touch:size-10 shrink-0 text-muted-foreground"
+      onClick={() => setSearchOpen(true)}
+    >
+      <Search className="size-4" />
+    </Button>
+  );
 
   return (
     <aside
@@ -595,7 +668,7 @@ export function MemberList({
         // Floating roster: detached by a margin, cut-corner card, same recessed
         // chrome shade as the rail/console/header. No border. Matches the thread
         // panel: full-screen card overlay on mobile, in-flow card on desktop.
-        "flex flex-col flex-1 min-w-0 overflow-y-auto",
+        "flex flex-col flex-1 min-w-0 overflow-hidden",
         "m-2 sidebar:my-3 sidebar:mr-2 sidebar:ml-0 p-1.5 clip-corner-lg bg-chrome",
         className,
       )}
@@ -621,11 +694,63 @@ export function MemberList({
           Add members
         </button>
       )}
+
+      <div className="flex-1 min-h-0 overflow-y-auto">
+      {/* The reveal expands this field and pushes the roster below it down;
+          grid-rows 0fr→1fr animates the height without hardcoding it. The field
+          is borderless on the panel's chrome — same components as the header
+          search. */}
+      <div
+        className={cn(
+          "grid transition-[grid-template-rows] duration-150 ease-in-out",
+          searchOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
+        )}
+      >
+        <div className="overflow-hidden">
+          <div className="flex items-center gap-1.5 px-2 pb-1.5 pt-1">
+            <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            <Input
+              ref={searchInputRef}
+              // Deliberately not type="search": WebKit/Blink render their own
+              // cancel button for it, which would sit beside ours.
+              type="text"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.stopPropagation();
+                  closeSearch();
+                }
+              }}
+              placeholder="Search members"
+              aria-label="Search members"
+              className="h-8 flex-1 border-0 bg-transparent px-1 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+            />
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Close search"
+              className="size-8 touch:size-10 shrink-0 text-muted-foreground hover:text-foreground"
+              onClick={closeSearch}
+            >
+              <X className="size-4" />
+            </Button>
+          </div>
+        </div>
+      </div>
+      {noMatches && (
+        <p className="px-2 py-3 text-xs text-muted-foreground">
+          No members match “{query.trim()}”.
+        </p>
+      )}
       {visibleAdmins.length > 0 && (
         <>
-          <h3 className="px-2 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Admins · {visibleAdmins.length}
-          </h3>
+          <div className="flex items-center gap-1 px-2 py-1">
+            <h3 className="flex-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Admins · {visibleAdmins.length}
+            </h3>
+            {toggleHost === "admins" && searchToggle}
+          </div>
           {visibleAdmins.map((admin) => (
             <MemberRow
               key={admin.pubkey}
@@ -655,49 +780,63 @@ export function MemberList({
         </>
       )}
 
-      {(roleSections ?? []).map((section) => (
-        <div key={section.id}>
-          <h3
-            className="px-2 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground"
-            style={section.color ? { color: roleTint(section.color) } : undefined}
-          >
-            {section.name} · {section.members.length}
-          </h3>
-          {section.members.map((pubkey) => (
-            <MemberRow
-              key={pubkey}
-              pubkey={pubkey}
-              roles={adminMap.get(pubkey)}
-              presence={presence?.[pubkey]}
-              canModerate={canModerate}
-              viewerIsAdmin={viewerIsAdmin}
-              currentUserPubkey={currentUserPubkey}
-              onRemove={onRemove}
-              onSetRole={onSetRole}
-              onKick={onKick}
-              onBan={onBan}
-              banLabel={banLabel}
-              onUnban={onUnban}
-              isBanned={bannedPubkeys?.has(pubkey)}
-              onEditProfile={onEditProfile}
-              onMessage={onMessage}
-              roleCatalog={roleCatalog}
-              customRoleIds={memberRoleIds?.[pubkey]}
-              canEditRoles={canEditMemberRoles?.(pubkey)}
-              onToggleRole={onToggleRole}
-              isRoleToggling={isRoleToggling}
-            />
-          ))}
-        </div>
-      ))}
+      {visibleSections.map((section) =>
+        !searching || section.members.length > 0 ? (
+          <div key={section.id}>
+            <div className="flex items-center gap-1 px-2 py-1">
+              <h3
+                className="flex-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+                style={section.color ? { color: roleTint(section.color) } : undefined}
+              >
+                {section.name} · {section.members.length}
+              </h3>
+              {toggleHost === `section:${section.id}` && searchToggle}
+            </div>
+            {section.members.map((pubkey) => (
+              <MemberRow
+                key={pubkey}
+                pubkey={pubkey}
+                roles={adminMap.get(pubkey)}
+                presence={presence?.[pubkey]}
+                canModerate={canModerate}
+                viewerIsAdmin={viewerIsAdmin}
+                currentUserPubkey={currentUserPubkey}
+                onRemove={onRemove}
+                onSetRole={onSetRole}
+                onKick={onKick}
+                onBan={onBan}
+                banLabel={banLabel}
+                onUnban={onUnban}
+                isBanned={bannedPubkeys?.has(pubkey)}
+                onEditProfile={onEditProfile}
+                onMessage={onMessage}
+                roleCatalog={roleCatalog}
+                customRoleIds={memberRoleIds?.[pubkey]}
+                canEditRoles={canEditMemberRoles?.(pubkey)}
+                onToggleRole={onToggleRole}
+                isRoleToggling={isRoleToggling}
+              />
+            ))}
+          </div>
+        ) : null,
+      )}
 
-      <h3 className="px-2 py-1 mt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-        Members · {regulars.length}
-      </h3>
+      {/* While searching, an empty Members section is just "no hits here" —
+          the no-matches line above already says so. */}
+      {(!searching || regulars.length > 0) && (
+        <div className={cn("flex items-center gap-1 px-2 py-1", (visibleAdmins.length > 0 || firstSection) && "mt-2")}>
+          <h3 className="flex-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Members · {regulars.length}
+          </h3>
+          {toggleHost === "members" && searchToggle}
+        </div>
+      )}
       {regulars.length === 0 ? (
-        <p className="px-2 py-2 text-xs text-muted-foreground">
-          No visible members. The relay may hide the member list.
-        </p>
+        !searching && (
+          <p className="px-2 py-2 text-xs text-muted-foreground">
+            No visible members. The relay may hide the member list.
+          </p>
+        )
       ) : (
         regulars.map((pubkey) => (
           <MemberRow
@@ -726,6 +865,7 @@ export function MemberList({
           />
         ))
       )}
+      </div>
     </aside>
   );
 }
