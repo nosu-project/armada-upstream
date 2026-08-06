@@ -14,6 +14,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { suppressNextSyncGate } from "@/hooks/useFreshLogin";
 import { setOnboardingActive } from "@/hooks/useOnboarding";
+import { markRelayRecoveryPromptShown } from "@/lib/relayRecoveryPrompt";
 import { useLoginActions } from "@/hooks/useLoginActions";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
@@ -202,7 +203,13 @@ export function WelcomePage() {
     // gate. Otherwise its full-screen overlay paints over the profile/add
     // wizard steps (SyncGate is z-100, the wizard z-50) while a network-bound
     // sync runs — on a slow phone that looks like onboarding was skipped.
-    if (identity) suppressNextSyncGate(identity.pubkey);
+    if (identity) {
+      suppressNextSyncGate(identity.pubkey);
+      // A brand-new account has nothing on any relay to recover, so never show
+      // it the "restore your setup" prompt. Portability comes from its first
+      // publish, or Settings on demand.
+      markRelayRecoveryPromptShown(identity.pubkey);
+    }
     // Mark onboarding in progress BEFORE login so it's already true on the
     // commit that first exposes the user — otherwise the headless web-push
     // opt-in (and the native notification step) would enqueue and paint over

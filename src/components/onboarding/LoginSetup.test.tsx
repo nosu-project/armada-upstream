@@ -14,6 +14,8 @@ const h = vi.hoisted(() => ({
     },
   },
   user: { pubkey: "a".repeat(64) },
+  settings: { settings: null as unknown, isFetched: true },
+  servers: [] as string[],
 }));
 
 vi.mock("@capacitor/core", () => ({
@@ -35,6 +37,8 @@ vi.mock("@/components/SyncGate", () => ({ useSyncGateActive: () => false }));
 vi.mock("@/hooks/useOnboarding", () => ({ useOnboardingActive: () => false }));
 vi.mock("@/hooks/useAppContext", () => ({ useAppContext: () => ({ config: h.config }) }));
 vi.mock("@/hooks/useCurrentUser", () => ({ useCurrentUser: () => ({ user: h.user }) }));
+vi.mock("@/hooks/useEncryptedSettings", () => ({ useEncryptedSettings: () => h.settings }));
+vi.mock("@/hooks/useNip29Servers", () => ({ useNip29Servers: () => h.servers }));
 vi.mock("@/hooks/useNativeNotifications", () => ({
   enableNativeNotifications: vi.fn(),
   hasNativeNotificationService: () => false,
@@ -60,11 +64,13 @@ describe("LoginSetup relay discovery", () => {
   beforeEach(() => {
     localStorage.clear();
     h.config.relayMetadata = { relays: [], updatedAt: 0, pubkey: undefined };
+    h.settings = { settings: null, isFetched: true };
+    h.servers = [];
   });
 
-  it("dismisses a queued relay prompt when signed discovery finishes", async () => {
+  it("dismisses a queued recovery prompt when signed discovery finishes", async () => {
     const view = render(<LoginSetup />);
-    expect(await screen.findByRole("heading", { name: "find your relays" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "restore your setup" })).toBeInTheDocument();
 
     h.config.relayMetadata = {
       relays: [{ url: "wss://relay.example", read: true, write: true }],
@@ -74,7 +80,28 @@ describe("LoginSetup relay discovery", () => {
     view.rerender(<LoginSetup />);
 
     await waitFor(() => {
-      expect(screen.queryByRole("heading", { name: "find your relays" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "restore your setup" })).not.toBeInTheDocument();
     });
+  });
+
+  it("never prompts when the settings read is still in flight", async () => {
+    h.settings = { settings: null, isFetched: false };
+    render(<LoginSetup />);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByRole("heading", { name: "restore your setup" })).not.toBeInTheDocument();
+  });
+
+  it("does not prompt for an account that already restored data", async () => {
+    h.settings = { settings: { theme: "dark" }, isFetched: true };
+    render(<LoginSetup />);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByRole("heading", { name: "restore your setup" })).not.toBeInTheDocument();
+  });
+
+  it("does not prompt an account that was opted out (e.g. a fresh signup)", async () => {
+    localStorage.setItem(`armada:relay-prompt-shown:${h.user.pubkey}`, "1");
+    render(<LoginSetup />);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByRole("heading", { name: "restore your setup" })).not.toBeInTheDocument();
   });
 });

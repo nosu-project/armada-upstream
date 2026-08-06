@@ -8,7 +8,13 @@ import { Button } from "@/components/ui/button";
 import { RelayBootstrapForm } from "@/components/RelayBootstrapForm";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useEncryptedSettings } from "@/hooks/useEncryptedSettings";
+import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { useOnboardingActive } from "@/hooks/useOnboarding";
+import {
+  markRelayRecoveryPromptShown,
+  relayRecoveryPromptShown,
+} from "@/lib/relayRecoveryPrompt";
 import {
   enableNativeNotifications,
   hasNativeNotificationService,
@@ -58,8 +64,7 @@ type StepId = "relays" | "notifications" | "webpush" | "battery" | "decrypt";
  */
 const NOTIF_PROMPT_KEY = "armada:notif-prompt-shown";
 
-/** Per-account marker: a skipped relay bootstrap stays available in Settings. */
-const relayPromptKey = (pubkey: string) => `armada:relay-prompt-shown:${pubkey}`;
+
 
 /**
  * Timestamp (ms) of the last battery-exemption nudge. Without the exemption,
@@ -115,6 +120,14 @@ export function LoginSetup() {
     : false;
   const hasSignedRelayList = ownsRelayList && config.relayMetadata.relays.length > 0;
 
+  // The recovery prompt is only meaningful when sync came back empty-handed.
+  // If the account already has a relay list, restored encrypted settings, or
+  // any joined server, there is nothing to recover — don't interrupt.
+  const { settings, isFetched: settingsFetched } = useEncryptedSettings();
+  const joinedServers = useNip29Servers();
+  const hasRestoredData =
+    hasSignedRelayList || settings !== null || joinedServers.length > 0;
+
   const enqueue = useCallback((id: StepId) => {
     setQueue((q) => (q.includes(id) ? q : [...q, id]));
   }, []);
@@ -136,22 +149,26 @@ export function LoginSetup() {
   // `NotificationsStep`, but for web/PWA.
   useEffect(() => registerWebPushOptInOpener(() => enqueue("webpush")), [enqueue]);
 
-  // Automatic login discovery adopts a signed NIP-65 list before the sync gate
-  // lifts. When no list exists, offer one explicit bootstrap/publish step. A
-  // skip is remembered per account and the same form remains in Settings.
+  // Login discovery adopts a signed relay list before the sync gate lifts, and
+  // the account wizard opts brand-new accounts out entirely. What's left for
+  // this step is the genuine recovery case: an existing account whose setup
+  // sync couldn't find. Offer a plain, skippable lookup; the same form lives in
+  // Settings for later. A skip is remembered per account.
   useEffect(() => {
     if (!user || syncing || onboarding) return;
-    // Discovery and this effect can settle in adjacent renders. If the prompt
-    // was queued from the empty render, remove it as soon as the signed list
-    // arrives instead of leaving a stale "couldn't find" screen over a list we
-    // demonstrably found.
-    if (hasSignedRelayList) {
+    // Restore can settle across adjacent renders. If any data arrives after the
+    // prompt was queued from an empty render, pull it rather than leaving a
+    // stale "couldn't find your setup" screen over a working account.
+    if (hasRestoredData) {
       setQueue((current) => current.filter((candidate) => candidate !== "relays"));
       return;
     }
-    if (read(relayPromptKey(user.pubkey))) return;
+    // An in-flight settings read looks empty; wait for it to resolve so a slow
+    // relay is never mistaken for "nothing found".
+    if (!settingsFetched) return;
+    if (relayRecoveryPromptShown(user.pubkey)) return;
     enqueue("relays");
-  }, [user, syncing, onboarding, hasSignedRelayList, enqueue]);
+  }, [user, syncing, onboarding, hasRestoredData, settingsFetched, enqueue]);
 
   // If this unmounts with a decrypt prompt still queued, the callers awaiting
   // that decision would hang forever. Release them as "not now" (unpersisted,
@@ -192,15 +209,15 @@ export function LoginSetup() {
   // Record that a step was surfaced as it renders, so a user who force-quits
   // mid-flow isn't asked the same thing on every launch.
   useEffect(() => {
-    if (step === "relays" && user?.pubkey) write(relayPromptKey(user.pubkey), "1");
+    if (step === "relays" && user?.pubkey) markRelayRecoveryPromptShown(user.pubkey);
     if (step === "notifications") write(NOTIF_PROMPT_KEY, "1");
     if (step === "webpush") markWebPushPromptShown();
     if (step === "battery") write(BATTERY_NUDGE_KEY, String(Date.now()));
   }, [step, user?.pubkey]);
 
   // Do not paint one contradictory frame while the effect above removes a
-  // relay step that was queued just before discovery completed.
-  if (!step || syncing || onboarding || (step === "relays" && hasSignedRelayList)) return null;
+  // relay step that was queued just before restore data arrived.
+  if (!step || syncing || onboarding || (step === "relays" && hasRestoredData)) return null;
 
   const total = completed + queue.length;
 
@@ -232,8 +249,8 @@ function RelayStep({ onDone }: { onDone: () => void }) {
           <Waypoints className="size-9" />
         </StepGlyph>
       }
-      title="find your relays"
-      description="Armada couldn't find a signed NIP-65 relay list for this account. Enter one relay that may hold your setup; if no list exists, you can explicitly publish that relay as your starting read and write relay."
+      title="restore your setup"
+      description="We couldn't automatically find your servers and settings for this account. If you know a server address you've used before, enter it to look them up — otherwise you can skip this and just keep going."
     >
       <RelayBootstrapForm onDone={onDone} onSkip={onDone} />
     </WizardStepBody>

@@ -43,7 +43,7 @@ export function RelayBootstrapForm({
 
   const find = async () => {
     if (!normalized) {
-      setError("Enter a valid ws:// or wss:// relay URL.");
+      setError("Enter a relay address that starts with wss://.");
       return;
     }
     setBusy(true);
@@ -54,15 +54,15 @@ export function RelayBootstrapForm({
       if (found) {
         adopt(found);
         toast({
-          title: "Relay list restored",
-          description: `Found ${found.relays.length} signed NIP-65 ${found.relays.length === 1 ? "relay" : "relays"}.`,
+          title: "Setup found",
+          description: `Restored ${found.relays.length} ${found.relays.length === 1 ? "relay" : "relays"} for your account.`,
         });
         onDone?.();
       } else {
         setCheckedRelay(normalized);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Relay lookup failed.");
+      setError(err instanceof Error ? err.message : "Couldn't look that up. Try again.");
     } finally {
       setBusy(false);
     }
@@ -75,14 +75,14 @@ export function RelayBootstrapForm({
     try {
       const result = await publish([{ url: checkedRelay, read: true, write: true }]);
       toast({
-        title: "Relay list published",
+        title: "Saved",
         description: result.rejected.length > 0
-          ? `Accepted by ${result.accepted.length} relays; ${result.rejected.length} did not accept it.`
-          : `Accepted by ${result.accepted.length} relays.`,
+          ? `Saved on ${result.accepted.length} ${result.accepted.length === 1 ? "relay" : "relays"}; ${result.rejected.length} didn't accept it.`
+          : `Saved on ${result.accepted.length} ${result.accepted.length === 1 ? "relay" : "relays"}.`,
       });
       onDone?.();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Relay-list publish failed.");
+      setError(err instanceof Error ? err.message : "Couldn't save. Try again.");
     } finally {
       setBusy(false);
     }
@@ -90,7 +90,7 @@ export function RelayBootstrapForm({
 
   const saveExisting = async () => {
     if (editedRelays.length === 0) {
-      setError("Keep at least one relay so your account can be found on a new device.");
+      setError("Keep at least one relay so your account can be found on your other devices.");
       return;
     }
     setBusy(true);
@@ -101,14 +101,14 @@ export function RelayBootstrapForm({
         return existing ?? { url, read: true, write: true };
       }));
       toast({
-        title: "Relay list published",
+        title: "Saved",
         description: result.rejected.length > 0
-          ? `Accepted by ${result.accepted.length} relays; ${result.rejected.length} did not accept it.`
-          : `Accepted by ${result.accepted.length} relays.`,
+          ? `Saved on ${result.accepted.length} ${result.accepted.length === 1 ? "relay" : "relays"}; ${result.rejected.length} didn't accept it.`
+          : `Saved on ${result.accepted.length} ${result.accepted.length === 1 ? "relay" : "relays"}.`,
       });
       onDone?.();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Relay-list publish failed.");
+      setError(err instanceof Error ? err.message : "Couldn't save. Try again.");
     } finally {
       setBusy(false);
     }
@@ -123,7 +123,7 @@ export function RelayBootstrapForm({
             setEditedRelays(relays);
             setError(undefined);
           }}
-          emptyText="Add at least one relay before publishing."
+          emptyText="Add at least one relay before saving."
         />
         {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
         <Button
@@ -132,7 +132,7 @@ export function RelayBootstrapForm({
           onClick={() => void saveExisting()}
           disabled={busy || editedRelays.length === 0}
         >
-          {busy ? "Publishing…" : "Save and publish relay list"}
+          {busy ? "Saving…" : "Save"}
         </Button>
       </div>
     );
@@ -142,7 +142,7 @@ export function RelayBootstrapForm({
     <div className="w-full space-y-3 text-left">
       <div className="space-y-1.5">
         <label htmlFor={inputId} className="text-xs font-medium text-muted-foreground">
-          Bootstrap relay
+          Relay address
         </label>
         <Input
           id={inputId}
@@ -162,9 +162,9 @@ export function RelayBootstrapForm({
 
       {checkedRelay && (
         <div className="clip-corner-lg bg-secondary/50 p-3 text-xs leading-relaxed text-muted-foreground">
-          No signed relay list was found. Armada can publish <strong>{checkedRelay}</strong> as
-          your read and write relay. This creates or replaces your NIP-65 list only after you
-          approve the signature.
+          We didn't find a saved setup on that relay. You can start fresh here — Armada will
+          remember <strong>{checkedRelay}</strong> as your account's home so your servers and
+          settings follow you to your other devices. Nothing is saved until you confirm.
         </div>
       )}
 
@@ -178,7 +178,7 @@ export function RelayBootstrapForm({
           onClick={create}
           disabled={busy}
         >
-          Save and publish
+          Use this relay
         </Button>
       ) : (
         <Button
@@ -188,7 +188,7 @@ export function RelayBootstrapForm({
           onClick={find}
           disabled={busy || !value.trim()}
         >
-          {busy ? "Looking…" : "Find my relay setup"}
+          {busy ? "Looking…" : "Look up my setup"}
         </Button>
       )}
 
