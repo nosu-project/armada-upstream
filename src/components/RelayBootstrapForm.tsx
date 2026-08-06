@@ -218,15 +218,21 @@ export function RelayBootstrapForm({
       )}
 
       {onSkip && (
-        <Button
-          type="button"
-          variant="ghost"
-          className="w-full text-muted-foreground"
-          onClick={onSkip}
-          disabled={busy}
-        >
-          Not now
-        </Button>
+        <div className="space-y-1.5">
+          <Button
+            type="button"
+            variant="ghost"
+            className="w-full text-muted-foreground"
+            onClick={onSkip}
+            disabled={busy}
+          >
+            Skip for now
+          </Button>
+          <p className="text-center text-xs text-muted-foreground">
+            Armada keeps working with its default relays. You can set up your own anytime in
+            Settings.
+          </p>
+        </div>
       )}
     </div>
   );
