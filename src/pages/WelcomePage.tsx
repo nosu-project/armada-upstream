@@ -1,3 +1,4 @@
+import { useNostrLogin } from "@nostrify/react/login";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { AlertTriangle, Check, Copy, Download, Eye, EyeOff } from "lucide-react";
@@ -14,6 +15,8 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { suppressNextSyncGate } from "@/hooks/useFreshLogin";
 import { setOnboardingActive } from "@/hooks/useOnboarding";
+import { clearPendingJoin, peekPendingJoin, type JoinLink } from "@/lib/joinLink";
+import { uniqueRelayUrls } from "@/lib/nip65";
 import { markRelayRecoveryPromptShown } from "@/lib/relayRecoveryPrompt";
 import { useLoginActions } from "@/hooks/useLoginActions";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
@@ -78,8 +81,9 @@ function SignupShell({ step, maxWidth, onBack, onClose, children }: {
 }
 
 export function WelcomePage() {
-  const { config } = useAppContext();
+  const { config, updateConfig } = useAppContext();
   const { user } = useCurrentUser();
+  const { logins } = useNostrLogin();
   const { mesh } = useMeshTransport();
   const online = useOnlineStatus();
   const navigate = useNavigate();
@@ -92,6 +96,15 @@ export function WelcomePage() {
   // Wizard position. null = not in the wizard (landing when signed out; the
   // in-layout create/join step when signed in with no server).
   const [step, setStep] = useState<WizardStep | null>(null);
+  // A pending referral/join link (a `/join` deep link stashed it before routing
+  // here): the operator's relay set to seed this new account onto. Read once on
+  // mount; `joinAccepted` gates the confirmation screen ahead of the wizard.
+  const [join, setJoin] = useState<JoinLink | undefined>(() => peekPendingJoin());
+  const [joinAccepted, setJoinAccepted] = useState(false);
+  const dismissJoin = () => {
+    clearPendingJoin();
+    setJoin(undefined);
+  };
   const [nsec, setNsec] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -209,6 +222,21 @@ export function WelcomePage() {
       // it the "restore your setup" prompt. Portability comes from its first
       // publish, or Settings on demand.
       markRelayRecoveryPromptShown(identity.pubkey);
+    }
+    // A referral/join link: make this new account live on the operator's
+    // relay(s). This is a LOCAL config seed only — no list is published (that
+    // stays an explicit action). On a first/only account, adopt their set as
+    // the app relays; with other accounts already on the device, only ADD
+    // them, so an existing account's relays are never rewritten.
+    if (join) {
+      const relays = uniqueRelayUrls(join.relays);
+      updateConfig((current) => ({
+        ...current,
+        appRelays: logins.length === 0
+          ? relays
+          : uniqueRelayUrls([...current.appRelays, ...relays]),
+      }));
+      clearPendingJoin();
     }
     // Mark onboarding in progress BEFORE login so it's already true on the
     // commit that first exposes the user — otherwise the headless web-push
@@ -416,6 +444,58 @@ export function WelcomePage() {
           </Button>
         </div>
       </SignupShell>
+    );
+  }
+
+  // ── Referral / join link: confirm before seeding the new account ────────
+  // Reached only signed-out with a stashed `/join` link. Name the operator and
+  // their relay(s) plainly, then hand off to the normal key-generation wizard;
+  // relays are adopted at account creation, never here.
+  if (!user && join && !joinAccepted && step === null) {
+    const host = (url: string) => url.replace(/^wss?:\/\//i, "").replace(/\/+$/, "");
+    return (
+      <WizardShell index={0} total={0} stepKey="join" onClose={dismissJoin}>
+        <div className="flex flex-col items-center gap-6 text-center">
+          <ArmadaIdentity size={96} />
+          <div className="space-y-2.5">
+            <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">
+              join {join.name ?? host(join.relays[0])}
+            </h1>
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              You've been invited to create a new Armada account hosted on
+              {join.relays.length === 1 ? " this relay" : " these relays"}. Your account's data
+              will live here so it's ready wherever you sign in. You can change this later in
+              Settings.
+            </p>
+          </div>
+          <div className="w-full space-y-1 clip-corner-lg bg-secondary/50 p-3 text-left">
+            {join.relays.map((url) => (
+              <p key={url} className="break-all font-mono text-xs text-foreground">
+                {host(url)}
+              </p>
+            ))}
+          </div>
+          <div className="w-full space-y-2">
+            <Button
+              size="lg"
+              className="h-12 w-full clip-corner-lg text-base font-medium"
+              onClick={() => {
+                setJoinAccepted(true);
+                setStep("generate");
+              }}
+            >
+              Create my account
+            </Button>
+            <Button
+              variant="ghost"
+              className="w-full text-muted-foreground"
+              onClick={dismissJoin}
+            >
+              Not now
+            </Button>
+          </div>
+        </div>
+      </WizardShell>
     );
   }
 
