@@ -1,8 +1,10 @@
+import { HelpCircle } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 
 import { RelayListEditor } from "@/components/RelayListEditor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNip65RelaySetup } from "@/hooks/useNip65RelaySetup";
@@ -141,9 +143,32 @@ export function RelayBootstrapForm({
   return (
     <div className="w-full space-y-3 text-left">
       <div className="space-y-1.5">
-        <label htmlFor={inputId} className="text-xs font-medium text-muted-foreground">
-          Relay address
-        </label>
+        <div className="flex items-center gap-1">
+          <label htmlFor={inputId} className="text-xs font-medium text-muted-foreground">
+            Relay address
+          </label>
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                aria-label="What is a relay address?"
+                className="-m-1.5 flex size-7 items-center justify-center rounded-full p-1.5 text-muted-foreground/60 hover:text-muted-foreground touch:size-11"
+              >
+                <HelpCircle className="size-3.5" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              side="top"
+              align="start"
+              className="max-w-64 text-xs leading-relaxed text-muted-foreground"
+            >
+              A relay is a server that stores your account's data. If you've used Armada or
+              another Nostr app before, enter a relay you used — it looks like{" "}
+              <span className="font-mono text-foreground">wss://relay.example.com</span>. Not
+              sure? You can skip this; Armada still works with its built-in relays.
+            </PopoverContent>
+          </Popover>
+        </div>
         <Input
           id={inputId}
           value={value}
