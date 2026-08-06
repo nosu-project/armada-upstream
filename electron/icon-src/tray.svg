@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="41.60 41.60 172.80 172.80">
+  <!--
+    Source art for the desktop tray icon (electron/build/tray*.png|ico).
+
+    Same shape as the Android notification small icon
+    (android/icon-src/ic_stat_armada.svg): the simplified Armada A — the
+    advancing-A wedge with the ship's waterline notched into its legs, no crest
+    frame and no wake. A tray slot is ~16-22px, the same budget as a status-bar
+    icon, so the full crest (electron/build/icon.png) muds there.
+
+    Sizing: the art (136x144 in the 256 crest space) is centered on the 24px
+    canvas at 20px tall, leaving ~2px of transparency on every side, so the art
+    doesn't collide with the panel's icon padding.
+
+    Color: flat rose (no gradient, which muds at 16px) rather than the Android
+    asset's white. A status-bar icon is an alpha mask the system tints; a tray
+    icon is drawn as-is onto a panel that may be light or dark, and only macOS
+    re-tints it (from trayTemplate.png below).
+
+    Regenerate with:
+      cd electron
+      inkscape icon-src/tray.svg -w 32 -h 32 -o build/tray.png
+      inkscape icon-src/tray.svg -w 64 -h 64 -o build/tray@2x.png
+      # Windows tray: real 16/24/32/48 frames beat one downscaled bitmap.
+      for s in 16 24 32 48; do
+        inkscape icon-src/tray.svg -w $s -h $s -o /tmp/tray-$s.png
+      done
+      convert /tmp/tray-16.png /tmp/tray-24.png /tmp/tray-32.png \
+        /tmp/tray-48.png build/tray.ico
+      # macOS menu-bar template: black + the alpha above; the system inverts it
+      # for dark mode and highlights, so the RGB is thrown away.
+      convert build/tray.png -fill black -colorize 100 build/trayTemplate.png
+      convert build/tray@2x.png -fill black -colorize 100 build/trayTemplate@2x.png
+  -->
+  <path fill="#fb4d96"
+        d="M 128,56 60,200 h 28.000488 l 9.091187,-19.99878 -3.092651,-2.00134
+           -1.999512,-20.00061 H 107.09119 L 128,112 l 20.90881,45.99975 h 15.09156
+           l -1.99952,20.00061 -3.09265,2.00134 9.09119,19.99878 h 28.00049 z"/>
+</svg>

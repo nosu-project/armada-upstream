@@ -70,6 +70,18 @@ const START_URL = `${ORIGIN}/`;
 // Dark background matching the app theme (index.html theme-color #100b15).
 const BACKGROUND = "#100b15";
 const ICON = path.join(__dirname, "build", "icon.png");
+// Tray art (electron/icon-src/tray.svg): the simplified Armada A, the same
+// shape as the Android notification small icon. A tray slot is ~16-22px, so
+// the full crest in ICON is unreadable there.
+const TRAY_ICON = path.join(
+  __dirname,
+  "build",
+  process.platform === "darwin"
+    ? "trayTemplate.png"
+    : process.platform === "win32"
+      ? "tray.ico"
+      : "tray.png",
+);
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -249,10 +261,12 @@ function showWindow() {
 // ── System tray ──────────────────────────────────────────────────────────────
 
 function createTray() {
-  let image = nativeImage.createFromPath(ICON);
-  if (!image.isEmpty()) {
-    image = image.resize({ width: 18, height: 18 });
-  }
+  // createFromPath picks up the @2x companion for HiDPI panels on its own.
+  const image = nativeImage.createFromPath(TRAY_ICON);
+  // macOS menu bar: a template image is re-tinted by the system for light/dark
+  // and for the highlighted (clicked) state. Everywhere else the icon is drawn
+  // as authored.
+  if (process.platform === "darwin") image.setTemplateImage(true);
   tray = new Tray(image.isEmpty() ? nativeImage.createEmpty() : image);
   tray.setToolTip("Armada");
   tray.setContextMenu(

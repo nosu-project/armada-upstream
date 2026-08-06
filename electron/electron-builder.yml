@@ -19,11 +19,18 @@ directories:
 
 # What ships inside the app: the shell's own files plus the bundled web build.
 # electron + node_modules are provided by the builder runtime and not listed.
+#
+# build/ is buildResources (the installer/app icon the builder reads), but main
+# .js ALSO loads icons from it at runtime — the window icon and the tray art —
+# so it has to be listed here too. Unlisted, those paths don't exist inside the
+# asar and the shell silently falls back: the default Electron window icon, and
+# an EMPTY tray image (a blank slot in the panel).
 files:
   - main.js
   - preload.js
   - package.json
   - dist/**/*
+  - build/**/*
   - "!**/*.map"
 
 # ── Linux ─────────────────────────────────────────────────────────────────────

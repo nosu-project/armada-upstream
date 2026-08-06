@@ -74,6 +74,14 @@ npm run dist:mac     # .dmg (must run on macOS)
 The app icon lives at `build/icon.png` (1024×1024, committed); electron-builder
 derives `.ico`/`.icns` from it.
 
+The tray icon is separate art — the simplified Armada A, the same shape as the
+Android notification small icon — because the crest is illegible in a ~16px
+panel slot. Source: `icon-src/tray.svg`, with the regeneration commands for
+`build/tray.png` (+`@2x`), `build/tray.ico` (Windows) and
+`build/trayTemplate.png` (+`@2x`, the macOS menu-bar template) in its comment.
+Both icons are loaded at runtime, so `build/**/*` is listed in
+`electron-builder.yml`'s `files`.
+
 ## CI
 
 `.gitlab-ci.yml`, on version tags (`vX.Y.Z`):
