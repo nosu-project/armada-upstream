@@ -28,6 +28,7 @@ directories:
 # an EMPTY tray image (a blank slot in the panel).
 files:
   - main.js
+  - appOrigin.js
   - preload.js
   # The ArmadaDB store, built from src/lib/db by vite.config.electron.ts. main.js
   # requires it at startup; unlisted, the require fails inside the asar and the

@@ -55,6 +55,7 @@ const {
   dialog,
 } = require("electron");
 const { autoUpdater } = require("electron-updater");
+const { isArmadaAppUrl } = require("./appOrigin");
 const path = require("node:path");
 const fs = require("node:fs");
 
@@ -749,25 +750,17 @@ const ALLOWED_PERMISSIONS = new Set([
   "pointerLock",
 ]);
 
-function isAppOrigin(url) {
-  try {
-    return new URL(url).origin === ORIGIN;
-  } catch {
-    return false;
-  }
-}
-
 function installPermissionHandlers() {
   session.defaultSession.setPermissionRequestHandler(
     (webContents, permission, callback, details) => {
       const requestingUrl = details?.requestingUrl || webContents?.getURL() || "";
-      callback(isAppOrigin(requestingUrl) && ALLOWED_PERMISSIONS.has(permission));
+      callback(isArmadaAppUrl(requestingUrl) && ALLOWED_PERMISSIONS.has(permission));
     },
   );
   // Synchronous check (e.g. navigator.permissions.query, mediaDevices checks).
   session.defaultSession.setPermissionCheckHandler(
     (_webContents, permission, requestingOrigin) => {
-      return isAppOrigin(requestingOrigin) && ALLOWED_PERMISSIONS.has(permission);
+      return isArmadaAppUrl(requestingOrigin) && ALLOWED_PERMISSIONS.has(permission);
     },
   );
 }
