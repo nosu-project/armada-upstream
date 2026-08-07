@@ -56,6 +56,7 @@ const {
 } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const { isArmadaAppUrl } = require("./appOrigin");
+const { listLinuxAudioApplications } = require("./linuxAudioSources");
 const path = require("node:path");
 const fs = require("node:fs");
 
@@ -651,56 +652,18 @@ function listLinuxAudioSources() {
   }
 
   try {
-    const nodes = patchBay.list([
-      "node.name",
-      "application.name",
-      "application.process.binary",
-      "application.process.id",
-      "media.name",
-      "media.class",
-      "node.virtual",
-    ]);
     const audioService = electronAudioServiceMatcher();
-    const grouped = new Map();
+    const applications = listLinuxAudioApplications(
+      patchBay,
+      audioService?.["application.process.id"],
+    );
     linuxAudioMatchers.clear();
 
-    for (const node of nodes) {
-      if (
-        audioService &&
-        node["application.process.id"] === audioService["application.process.id"]
-      ) {
-        continue;
-      }
-      if (node["media.class"] === "Stream/Input/Audio" || node["node.virtual"] === "true") {
-        continue;
-      }
-
-      const matcher = node["application.process.binary"]
-        ? { "application.process.binary": node["application.process.binary"] }
-        : node["application.name"]
-          ? { "application.name": node["application.name"] }
-          : node["node.name"]
-            ? { "node.name": node["node.name"] }
-            : null;
-      if (!matcher) continue;
-
-      const key = JSON.stringify(matcher);
-      if (grouped.has(key)) continue;
-      const name =
-        node["application.name"] ||
-        node["media.name"] ||
-        node["application.process.binary"] ||
-        node["node.name"];
-      grouped.set(key, { name, matcher });
-    }
-
-    const sources = [...grouped.values()]
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map((source, index) => {
-        const id = `app-${index}`;
-        linuxAudioMatchers.set(id, source.matcher);
-        return { id, name: source.name };
-      });
+    const sources = applications.map((source, index) => {
+      const id = `app-${index}`;
+      linuxAudioMatchers.set(id, source.matcher);
+      return { id, name: source.name };
+    });
     return { supported: true, reason: null, sources };
   } catch (error) {
     console.warn("[screen-share] failed to enumerate PipeWire audio", error);
