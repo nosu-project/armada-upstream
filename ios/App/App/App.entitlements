@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Universal Links: the iOS counterpart of the Android verified App Links
+	     intent filter (AndroidManifest.xml), so invite/share links on
+	     armada.buzz open in the app instead of Safari. Verified against
+	     https://armada.buzz/.well-known/apple-app-site-association, which ships
+	     in public/.well-known/ and must name <TEAMID>.buzz.armada.app.
+
+	     Requires Associated Domains to be enabled on the App ID in the Apple
+	     developer portal; automatic signing then regenerates a profile carrying
+	     the capability. AppDelegate already proxies `continue userActivity` to
+	     Capacitor, and pathFromDeepLinkUrl() already forwards any https path to
+	     the router, so no app code is involved. -->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:armada.buzz</string>
+	</array>
+</dict>
+</plist>

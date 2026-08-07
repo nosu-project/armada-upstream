@@ -165,12 +165,23 @@ cd ios/App && xcodebuild -project App.xcodeproj -scheme App \
   -destination 'generic/platform=iOS Simulator' build
 ```
 
+For a release build use `scripts/ios-release.sh [vX.Y.Z]` (`ARCHIVE=1` to
+archive for distribution). The version is carried by the git tag like every
+other target — nothing is committed — and it stamps `MARKETING_VERSION` from
+the tag plus `CURRENT_PROJECT_VERSION` from the SAME
+`major*1_000_000 + minor*1_000 + patch` scheme Android's `versionCode` uses.
+Monotonicity is load-bearing: App Store Connect rejects an upload whose build
+number doesn't exceed the previous one.
+
 - **Don't pass `CODE_SIGNING_ALLOWED=NO`** even for the simulator. An unsigned
   app has no keychain-access-group entitlement, so every
   `capacitor-secure-storage-plugin` write fails (`errSecMissingEntitlement`,
   surfacing as a bare `"error"`) — which is where the nsec lives. Xcode's
-  default ad-hoc simulator signing is enough; a device/store build needs a
-  team + provisioning profile (not configured in-repo).
+  default ad-hoc simulator signing is enough.
+- Signing is automatic against `DEVELOPMENT_TEAM = GZLTTH5DLM` (Soapbox
+  Technology LLC), set in `project.pbxproj`. The Team ID is also baked into the
+  `appIDs` of `public/.well-known/apple-app-site-association`, so a team change
+  means changing both or universal links silently stop associating.
 - The WebView origin is `capacitor://localhost` (Android uses
   `https://localhost`). Changing `server.iosScheme` later would move the
   origin and orphan all IndexedDB/OPFS/localStorage data, so treat it as
@@ -195,12 +206,23 @@ touching it), NIP-55 external signers (Amber), the Bluetooth mesh, and
 the Credential Manager nsec export (itself Android 14+ only — see Conventions).
 **iOS therefore has no notifications at
 all** — no background service, and no Web Push in WKWebView; that needs APNs or
-a native iOS equivalent. Deep links are also unhandled: there is no
-`CFBundleURLTypes` entry and no `applinks:armada.buzz` associated-domains
-entitlement (the latter needs a paid team + `apple-app-site-association`), so
-`armada://` and armada.buzz universal links won't open the app yet. The JS
-layer (`deepLinkUrl.ts`, `coldLaunchDeepLink.ts`) is platform-agnostic and
-needs no change when they're added.
+a native iOS equivalent.
+
+Deep links: armada.buzz **universal links work**, via the
+`com.apple.developer.associated-domains` entitlement in
+`ios/App/App/App.entitlements` plus
+`public/.well-known/apple-app-site-association` (shipped in the static build
+like `assetlinks.json`, and matching every path on the host exactly as the
+Android intent filter does). No app code is involved: `AppDelegate` already
+proxies `continue userActivity` to Capacitor, and `deepLinkUrl.ts` /
+`coldLaunchDeepLink.ts` are platform-agnostic. Two things this can break on —
+the AASA must be served with `Content-Type: application/json` and **no
+redirect** (it is extensionless, so nginx needs the explicit `location =`
+block in `nginx.conf`), and its `appIDs` must be `<TEAMID>.buzz.armada.app`.
+There is still no `CFBundleURLTypes` entry, so the `armada://open<path>` scheme
+does not resolve — deliberately: per `deepLinkUrl.ts` that scheme is emitted
+ONLY by the Android notification service's PendingIntents, so on iOS nothing
+can currently produce one. Add it with the notifications work, not before.
 
 ## Local storage: ArmadaDB
 
@@ -368,6 +390,20 @@ Things to know before touching it:
   `android.permission.DUMP` as the permission a *caller* must hold; the app does
   not request DUMP and could not be granted it.) `com.google.code.gson` is also
   fine: Apache-2.0, no network.
+- **Gate an Android-only plugin on `getPlatform() === "android"`, never on
+  `isNativePlatform()`.** iOS is a native platform too, so an
+  `isNativePlatform()` gate routes it into a `registerPlugin` proxy with no
+  implementation behind it, and the call can only reject. Where the `catch`
+  returns a safe default this merely hides a wasted round-trip; where the
+  branch IS the feature it removes the feature with no fallback left. That is
+  exactly how `exportNsec` came to return `"failed"` on iOS, which took the
+  onboarding key backup (`backUpNsec`, the only route the signup wizard has)
+  down with it — a generated nsec the user could not save anywhere. The list of
+  plugins this applies to is `MainActivity.java`'s registrations:
+  `ArmadaNotification`, `ArmadaDb`, `ArmadaCredential`, `BluetoothMesh`,
+  `WebReady`, `ShareTarget`. Cross-platform plugins (Share, Haptics, Clipboard,
+  Filesystem, StatusBar, SecureStorage) are the case `isNativePlatform()` is
+  actually for.
 - Commit messages: concise, imperative, sentence case (see `git log`).
   Describe the technical change only — what was changed. Don't embed a
   confident problem diagnosis, root-cause narrative, or prescribed "this fixes

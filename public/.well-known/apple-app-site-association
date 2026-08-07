@@ -1,0 +1,15 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["GZLTTH5DLM.buzz.armada.app"],
+        "components": [
+          {
+            "/": "*",
+            "comment": "Every path on armada.buzz, mirroring the Android App Links intent filter, which matches the whole host. pathFromDeepLinkUrl() forwards the path verbatim to the router and returns null for a bare '/', so a homepage tap falls through to the normal HomeRedirect instead of self-navigating."
+          }
+        ]
+      }
+    ]
+  }
+}
