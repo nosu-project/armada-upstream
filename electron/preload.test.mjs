@@ -71,22 +71,37 @@ describe("push-to-talk preload bridge", () => {
       shiftKey: false,
     };
     const handler = vi.fn();
+    const statusHandler = vi.fn();
 
     api.configurePushToTalk(binding);
+    api.openPushToTalkSystemSettings();
     api.setPushToTalkActive(true);
     const unsubscribe = api.onPushToTalkState(handler);
+    const unsubscribeStatus = api.onPushToTalkStatus(statusHandler);
     listeners.get("armada:push-to-talk-state")({}, true);
     listeners.get("armada:push-to-talk-state")({}, false);
+    const status = { supported: true, backend: "portal", bindingLabel: "Ctrl + X", reason: null };
+    listeners.get("armada:push-to-talk-status")({}, status);
 
     expect(ipcRenderer.invoke).toHaveBeenCalledWith("armada:push-to-talk-configure", binding);
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith(
+      "armada:push-to-talk-open-system-settings",
+    );
     expect(ipcRenderer.invoke).toHaveBeenCalledWith("armada:push-to-talk-active", true);
     expect(handler.mock.calls).toEqual([[true], [false]]);
+    expect(statusHandler).toHaveBeenCalledWith(status);
 
     const listener = listeners.get("armada:push-to-talk-state");
     unsubscribe();
+    const statusListener = listeners.get("armada:push-to-talk-status");
+    unsubscribeStatus();
     expect(ipcRenderer.removeListener).toHaveBeenCalledWith(
       "armada:push-to-talk-state",
       listener,
+    );
+    expect(ipcRenderer.removeListener).toHaveBeenCalledWith(
+      "armada:push-to-talk-status",
+      statusListener,
     );
   });
 });

@@ -106,8 +106,10 @@ interface ArmadaDesktopBridge {
   configurePushToTalk?: (
     binding: DesktopPushToTalkBinding | null,
   ) => Promise<DesktopPushToTalkStatus>;
+  openPushToTalkSystemSettings?: () => Promise<boolean>;
   setPushToTalkActive?: (active: boolean) => Promise<boolean>;
   onPushToTalkState?: (handler: (pressed: boolean) => void) => () => void;
+  onPushToTalkStatus?: (handler: (status: DesktopPushToTalkStatus) => void) => () => void;
   // Optional: a newer web bundle can run inside an older shell that predates
   // these, so every call site feature-detects rather than assuming.
   getSecretsStatus?: () => Promise<SecretsStatus>;

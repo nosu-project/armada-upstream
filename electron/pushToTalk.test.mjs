@@ -100,6 +100,39 @@ describe("push-to-talk controller", () => {
     await controller.destroy();
   });
 
+  it("opens the portal configuration UI and forwards changed assignments", async () => {
+    const sendStatus = vi.fn();
+    let reportStatus;
+    const backend = {
+      start: vi.fn(async (_binding, _onPressed, onStatusChanged) => {
+        reportStatus = onStatusChanged;
+        return { supported: true, backend: "portal", bindingLabel: "Ctrl + X", reason: null };
+      }),
+      openSettings: vi.fn(async () => true),
+      stop: vi.fn(async () => {}),
+      release: vi.fn(),
+    };
+    const controller = new PushToTalkController({
+      platform: "linux",
+      env: { XDG_SESSION_TYPE: "wayland" },
+      portalFactory: () => backend,
+      sendStatus,
+    });
+    await controller.configure(capsLock);
+
+    await expect(controller.openSystemSettings()).resolves.toBe(true);
+    expect(backend.openSettings).toHaveBeenCalledOnce();
+    reportStatus({ supported: true, backend: "portal", bindingLabel: "F12", reason: null });
+    expect(sendStatus).toHaveBeenCalledWith({
+      supported: true,
+      backend: "portal",
+      bindingLabel: "F12",
+      reason: null,
+    });
+    expect(controller.status.bindingLabel).toBe("F12");
+    await controller.destroy();
+  });
+
   it("does not let an older async teardown clear a replacement binding", async () => {
     let releaseStop;
     const first = {

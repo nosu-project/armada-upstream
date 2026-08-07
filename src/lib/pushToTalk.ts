@@ -231,9 +231,27 @@ export async function setDesktopPushToTalkActive(active: boolean): Promise<boole
   }
 }
 
+export async function openDesktopPushToTalkSystemSettings(): Promise<boolean> {
+  try {
+    return (await desktop()?.openPushToTalkSystemSettings?.()) ?? false;
+  } catch {
+    return false;
+  }
+}
+
 export function onDesktopPushToTalkState(listener: (pressed: boolean) => void): () => void {
   try {
     return desktop()?.onPushToTalkState?.(listener) ?? (() => {});
+  } catch {
+    return () => {};
+  }
+}
+
+export function onDesktopPushToTalkStatus(
+  listener: (status: PushToTalkStatus) => void,
+): () => void {
+  try {
+    return desktop()?.onPushToTalkStatus?.(listener) ?? (() => {});
   } catch {
     return () => {};
   }

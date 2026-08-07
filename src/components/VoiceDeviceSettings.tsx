@@ -24,6 +24,8 @@ import { CONCORD_AV_SERVERS } from "@/lib/platform";
 import {
   bindingFromKeyboardEvent,
   configureDesktopPushToTalk,
+  onDesktopPushToTalkStatus,
+  openDesktopPushToTalkSystemSettings,
   setPushToTalkPreferences,
   usePushToTalkPreferences,
   type PushToTalkStatus,
@@ -66,6 +68,8 @@ export function VoiceDeviceSettings() {
   const [recordingPushToTalk, setRecordingPushToTalk] = useState(false);
   const [pushToTalkStatus, setPushToTalkStatus] = useState<PushToTalkStatus | null>(null);
   const [checkingPushToTalk, setCheckingPushToTalk] = useState(false);
+  const [openingPushToTalkSettings, setOpeningPushToTalkSettings] = useState(false);
+  const [pushToTalkSettingsError, setPushToTalkSettingsError] = useState<string | null>(null);
   const pushToTalkModifierRef = useRef<ReturnType<typeof bindingFromKeyboardEvent>>(null);
 
   // Voice server (advanced): the server used to start calls in empty Concord
@@ -332,6 +336,12 @@ export function VoiceDeviceSettings() {
     };
   }, [pushToTalk.binding, pushToTalk.enabled]);
 
+  useEffect(() => onDesktopPushToTalkStatus((status) => {
+    setPushToTalkStatus(status);
+    setCheckingPushToTalk(false);
+    setPushToTalkSettingsError(null);
+  }), []);
+
   const setPushToTalkEnabled = (enabled: boolean) => {
     setPushToTalkPreferences({ ...pushToTalk, enabled });
     setPushToTalkStatus(null);
@@ -346,6 +356,21 @@ export function VoiceDeviceSettings() {
     pushToTalkModifierRef.current = null;
     setPushToTalkStatus(null);
     if (pushToTalk.enabled) setCheckingPushToTalk(true);
+  };
+
+  const choosePushToTalkBinding = async () => {
+    if (pushToTalkStatus?.backend !== "portal") {
+      pushToTalkModifierRef.current = null;
+      setRecordingPushToTalk(true);
+      return;
+    }
+    setPushToTalkSettingsError(null);
+    setOpeningPushToTalkSettings(true);
+    const opened = await openDesktopPushToTalkSystemSettings();
+    setOpeningPushToTalkSettings(false);
+    if (!opened) {
+      setPushToTalkSettingsError("Your desktop could not open its global-shortcut settings.");
+    }
   };
 
   const recordPushToTalk = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
@@ -511,10 +536,7 @@ export function VoiceDeviceSettings() {
           </div>
           <button
             type="button"
-            onClick={() => {
-              pushToTalkModifierRef.current = null;
-              setRecordingPushToTalk(true);
-            }}
+            onClick={() => void choosePushToTalkBinding()}
             onKeyDown={recordPushToTalk}
             onKeyUp={finishPushToTalkModifier}
             onBlur={() => {
@@ -528,14 +550,20 @@ export function VoiceDeviceSettings() {
                 : "border-transparent bg-background/40 hover:bg-background/70",
             )}
           >
-            {recordingPushToTalk ? "Press a key or shortcut…" : pushToTalk.binding.label}
+            {recordingPushToTalk
+              ? "Press a key or shortcut…"
+              : openingPushToTalkSettings
+                ? "Opening system shortcut settings…"
+                : pushToTalkStatus?.backend === "portal"
+                  ? pushToTalkStatus.bindingLabel || "Set system shortcut"
+                  : pushToTalk.binding.label}
           </button>
           {checkingPushToTalk ? (
             <p className="text-xs text-muted-foreground">Registering global shortcut…</p>
           ) : pushToTalk.enabled && pushToTalkStatus?.supported ? (
             <p className="text-xs text-success">
               Ready globally: {pushToTalkStatus.bindingLabel || pushToTalk.binding.label}
-              {pushToTalkStatus.backend === "portal" ? " (system shortcut)" : ""}
+              {pushToTalkStatus.backend === "portal" ? " (managed by your desktop)" : ""}
             </p>
           ) : pushToTalk.enabled && pushToTalkStatus?.reason ? (
             <p className="text-xs text-destructive">{pushToTalkStatus.reason}</p>
@@ -544,6 +572,15 @@ export function VoiceDeviceSettings() {
               Hold this shortcut to transmit; releasing it mutes immediately, even while Armada
               is in the background. Press Escape while recording to cancel.
             </p>
+          )}
+          {pushToTalkStatus?.backend === "portal" && (
+            <p className="text-xs text-muted-foreground">
+              Wayland requires the trusted system dialog to change global shortcuts. Click the
+              assigned shortcut above to change it.
+            </p>
+          )}
+          {pushToTalkSettingsError && (
+            <p className="text-xs text-destructive">{pushToTalkSettingsError}</p>
           )}
         </div>
       )}

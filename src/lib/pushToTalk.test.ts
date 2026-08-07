@@ -4,6 +4,8 @@ import {
   bindingFromKeyboardEvent,
   configureDesktopPushToTalk,
   getPushToTalkPreferences,
+  onDesktopPushToTalkStatus,
+  openDesktopPushToTalkSystemSettings,
   setPushToTalkPreferences,
 } from "@/lib/pushToTalk";
 
@@ -73,5 +75,42 @@ describe("push-to-talk preferences", () => {
     const binding = getPushToTalkPreferences().binding;
     await expect(configureDesktopPushToTalk(binding)).resolves.toMatchObject({ supported: true });
     expect(configurePushToTalk).toHaveBeenCalledWith(binding);
+  });
+
+  it("opens and observes the desktop-owned shortcut settings", async () => {
+    const openPushToTalkSystemSettings = vi.fn(async () => true);
+    let desktopListener: ((status: {
+      supported: boolean;
+      backend: "portal";
+      bindingLabel: string;
+      reason: null;
+    }) => void) | undefined;
+    window.armadaDesktop = {
+      isDesktop: true,
+      setBadge: vi.fn(),
+      getInfo: vi.fn(),
+      getScreenSources: vi.fn(),
+      onPickScreenSource: vi.fn(),
+      getMicAccessStatus: vi.fn(),
+      openMicPrivacySettings: vi.fn(),
+      openPushToTalkSystemSettings,
+      onPushToTalkStatus: (listener) => {
+        desktopListener = listener;
+        return vi.fn();
+      },
+    };
+    const listener = vi.fn();
+    onDesktopPushToTalkStatus(listener);
+    const status = {
+      supported: true,
+      backend: "portal" as const,
+      bindingLabel: "Ctrl + X",
+      reason: null,
+    };
+    desktopListener?.(status);
+
+    await expect(openDesktopPushToTalkSystemSettings()).resolves.toBe(true);
+    expect(openPushToTalkSystemSettings).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledWith(status);
   });
 });

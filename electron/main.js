@@ -126,6 +126,10 @@ const pushToTalk = new PushToTalkController({
     if (!mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.webContents.send("armada:push-to-talk-state", Boolean(pressed));
   },
+  sendStatus: (status) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send("armada:push-to-talk-status", status);
+  },
 });
 // Honour --hidden / --minimized (autostart "launch minimized to tray").
 const startHidden =
@@ -1201,6 +1205,9 @@ function installIpc() {
   // signals. The renderer only marks this active while a LiveKit room exists.
   ipcMain.handle("armada:push-to-talk-configure", (_event, binding) =>
     pushToTalk.configure(binding),
+  );
+  ipcMain.handle("armada:push-to-talk-open-system-settings", () =>
+    pushToTalk.openSystemSettings(),
   );
   ipcMain.handle("armada:push-to-talk-active", (_event, active) =>
     pushToTalk.setActive(active),

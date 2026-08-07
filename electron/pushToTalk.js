@@ -134,6 +134,7 @@ class PushToTalkController {
     platform = process.platform,
     env = process.env,
     sendState = () => {},
+    sendStatus = () => {},
     isMacTrusted = () => true,
     nativeFactory = () => new NativePushToTalkHook(),
     // Lazy by design: Windows/macOS packages exclude dbus-next, so importing
@@ -146,6 +147,7 @@ class PushToTalkController {
     this.platform = platform;
     this.env = env;
     this.sendState = sendState;
+    this.sendStatus = sendStatus;
     this.isMacTrusted = isMacTrusted;
     this.nativeFactory = nativeFactory;
     this.portalFactory = portalFactory;
@@ -162,6 +164,11 @@ class PushToTalkController {
     const next = Boolean(pressed);
     this.pressed = next;
     if (this.active) this.sendState(next);
+  };
+
+  handleStatusChanged = (status) => {
+    this.status = status;
+    this.sendStatus(status);
   };
 
   async configure(binding) {
@@ -203,7 +210,7 @@ class PushToTalkController {
 
       const backend = usePortal ? this.portalFactory() : this.nativeFactory();
       try {
-        const status = await backend.start(binding, this.handlePressed);
+        const status = await backend.start(binding, this.handlePressed, this.handleStatusChanged);
         if (generation !== this.generation) {
           await backend.stop();
           return status;
@@ -227,6 +234,18 @@ class PushToTalkController {
       if (generation === this.generation) this.pending = null;
     });
     return this.pending;
+  }
+
+  async openSystemSettings() {
+    if (this.status?.backend !== "portal" || typeof this.backend?.openSettings !== "function") {
+      return false;
+    }
+    this.cancelPress();
+    try {
+      return await this.backend.openSettings();
+    } catch {
+      return false;
+    }
   }
 
   setActive(active) {

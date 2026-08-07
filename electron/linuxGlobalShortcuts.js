@@ -144,10 +144,31 @@ function variantValue(value) {
   return value instanceof Variant ? value.value : value;
 }
 
+/** GNOME currently returns GTK accelerator text instead of a display label. */
+function formatShortcutDescription(value) {
+  const description = String(value || "");
+  if (!description.includes("<")) return description;
+  const modifiers = [];
+  const key = description.replace(/<([^>]+)>/g, (_match, modifier) => {
+    modifiers.push({
+      Alt: "Alt",
+      Control: "Ctrl",
+      Ctrl: "Ctrl",
+      Meta: "Meta",
+      Primary: "Ctrl",
+      Shift: "Shift",
+      Super: "Super",
+    }[modifier] || modifier);
+    return "";
+  });
+  const keyLabel = key.length === 1 ? key.toUpperCase() : key;
+  return [...modifiers, keyLabel].filter(Boolean).join(" + ") || description;
+}
+
 function shortcutDescription(shortcuts, fallback) {
   for (const [id, properties] of shortcuts || []) {
     if (id !== SHORTCUT_ID) continue;
-    return String(variantValue(properties?.trigger_description) || fallback);
+    return formatShortcutDescription(variantValue(properties?.trigger_description) || fallback);
   }
   return fallback;
 }
@@ -159,17 +180,20 @@ class LinuxGlobalShortcutsPortal {
     this.globalShortcuts = null;
     this.sessionHandle = null;
     this.onPressed = null;
+    this.onStatusChanged = null;
     this.onActivated = null;
     this.onDeactivated = null;
+    this.onShortcutsChanged = null;
   }
 
-  async start(binding, onPressed) {
+  async start(binding, onPressed, onStatusChanged = () => {}) {
     const preferredTrigger = bindingToXdgTrigger(binding);
     if (!preferredTrigger) throw new Error("That key cannot be registered on Linux");
 
     const bus = this.sessionBus();
     this.bus = bus;
     this.onPressed = onPressed;
+    this.onStatusChanged = onStatusChanged;
     try {
       const portalObject = await bus.getProxyObject(PORTAL_NAME, PORTAL_PATH);
       const globalShortcuts = portalObject.getInterface(GLOBAL_SHORTCUTS_INTERFACE);
@@ -181,8 +205,19 @@ class LinuxGlobalShortcutsPortal {
       this.onDeactivated = (sessionHandle, shortcutId) => {
         if (sessionHandle === this.sessionHandle && shortcutId === SHORTCUT_ID) this.onPressed?.(false);
       };
+      this.onShortcutsChanged = (sessionHandle, shortcuts) => {
+        if (sessionHandle !== this.sessionHandle) return;
+        this.release();
+        this.onStatusChanged?.({
+          supported: true,
+          backend: "portal",
+          bindingLabel: shortcutDescription(shortcuts, binding.label),
+          reason: null,
+        });
+      };
       globalShortcuts.on("Activated", this.onActivated);
       globalShortcuts.on("Deactivated", this.onDeactivated);
+      globalShortcuts.on("ShortcutsChanged", this.onShortcutsChanged);
 
       const token = `armada_ptt_${process.pid}_${nextToken++}`;
       const createResults = await portalRequest(bus, () => globalShortcuts.CreateSession({
@@ -218,6 +253,14 @@ class LinuxGlobalShortcutsPortal {
     }
   }
 
+  async openSettings() {
+    if (!this.globalShortcuts || !this.sessionHandle) return false;
+    if (typeof this.globalShortcuts.ConfigureShortcuts !== "function") return false;
+    this.release();
+    await this.globalShortcuts.ConfigureShortcuts(this.sessionHandle, "", {});
+    return true;
+  }
+
   async stop() {
     this.release();
     const bus = this.bus;
@@ -227,10 +270,15 @@ class LinuxGlobalShortcutsPortal {
     this.globalShortcuts = null;
     this.sessionHandle = null;
     this.onPressed = null;
+    this.onStatusChanged = null;
     if (globalShortcuts && this.onActivated) globalShortcuts.off("Activated", this.onActivated);
     if (globalShortcuts && this.onDeactivated) globalShortcuts.off("Deactivated", this.onDeactivated);
+    if (globalShortcuts && this.onShortcutsChanged) {
+      globalShortcuts.off("ShortcutsChanged", this.onShortcutsChanged);
+    }
     this.onActivated = null;
     this.onDeactivated = null;
+    this.onShortcutsChanged = null;
     if (!bus) return;
     try {
       if (sessionHandle) {
@@ -256,6 +304,7 @@ module.exports = {
   PORTAL_PATH,
   SHORTCUT_ID,
   bindingToXdgTrigger,
+  formatShortcutDescription,
   portalRequest,
   shortcutDescription,
   xdgKeyName,

@@ -6,7 +6,12 @@ import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
 const { Variant } = require("@jellybrick/dbus-next");
-const { bindingToXdgTrigger, shortcutDescription, xdgKeyName } = require("./linuxGlobalShortcuts.js");
+const {
+  bindingToXdgTrigger,
+  formatShortcutDescription,
+  shortcutDescription,
+  xdgKeyName,
+} = require("./linuxGlobalShortcuts.js");
 
 describe("Linux Global Shortcuts portal binding", () => {
   it("converts physical keys and modifiers to XDG shortcut identifiers", () => {
@@ -28,5 +33,11 @@ describe("Linux Global Shortcuts portal binding", () => {
     }]];
     expect(shortcutDescription(shortcuts, "Caps Lock")).toBe("Ctrl+F12");
     expect(shortcutDescription([], "Caps Lock")).toBe("Caps Lock");
+  });
+
+  it("renders GNOME accelerator descriptions as user-facing labels", () => {
+    expect(formatShortcutDescription("<Control>x")).toBe("Ctrl + X");
+    expect(formatShortcutDescription("<Shift><Alt>F12")).toBe("Shift + Alt + F12");
+    expect(formatShortcutDescription("Caps Lock")).toBe("Caps Lock");
   });
 });

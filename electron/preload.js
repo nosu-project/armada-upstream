@@ -59,6 +59,10 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
   configurePushToTalk: (binding) =>
     ipcRenderer.invoke("armada:push-to-talk-configure", binding),
 
+  /** Open the trusted Wayland portal UI that owns an existing global binding. */
+  openPushToTalkSystemSettings: () =>
+    ipcRenderer.invoke("armada:push-to-talk-open-system-settings"),
+
   /** Listen only while a connected room needs push-to-talk state. */
   setPushToTalkActive: (active) =>
     ipcRenderer.invoke("armada:push-to-talk-active", Boolean(active)),
@@ -69,6 +73,14 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
     const listener = (_event, pressed) => handler(Boolean(pressed));
     ipcRenderer.on("armada:push-to-talk-state", listener);
     return () => ipcRenderer.removeListener("armada:push-to-talk-state", listener);
+  },
+
+  /** Track a Wayland portal binding changed through the system dialog. */
+  onPushToTalkStatus: (handler) => {
+    if (typeof handler !== "function") return () => {};
+    const listener = (_event, status) => handler(status);
+    ipcRenderer.on("armada:push-to-talk-status", listener);
+    return () => ipcRenderer.removeListener("armada:push-to-talk-status", listener);
   },
 
   /**
