@@ -16,10 +16,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
 import { mintCommunity } from "@/concord-v2/lib/community";
-import { withChannelGitRepositoryAttachments, type ChannelMetadata } from "@/concord-v2/lib/types";
+import { STOCK_RELAYS } from "@/concord-v2/lib/stockRelays";
+import { MAX_COMMUNITY_RELAYS, withChannelGitRepositoryAttachments, type ChannelMetadata } from "@/concord-v2/lib/types";
 import { parseGitRepositoryAddress } from "@/lib/gitActivity";
 
-import { useCommunityActions2, useCommunityManagement2 } from "./useCommunityActions2";
+import { defaultCreateRelays, useCommunityActions2, useCommunityManagement2 } from "./useCommunityActions2";
 
 import type { NUser } from "@nostrify/react/login";
 
@@ -279,5 +280,34 @@ describe("create — genesis plus the starter rooms", () => {
     expect(add.entry.current.channels).toHaveLength(1);
     expect(add.entry.current.channels[0].name).toBe("private");
     expect(h.ops.indexOf("list:add")).toBeLessThan(h.ops.indexOf("edition:1"));
+  });
+});
+
+// ── The home relays a new community is minted on ─────────────────────────────
+
+/**
+ * `communityRelays` is the WHOLE answer. App relays and the creator's NIP-17
+ * DM relays used to be unioned in alongside an unconditional stock set, which
+ * is how communities ended up hosted on relays their creator never picked and
+ * could not see in any setting.
+ */
+describe("defaultCreateRelays", () => {
+  it("uses the configured set verbatim, adding nothing", () => {
+    expect(defaultCreateRelays(["wss://mine.example.com"])).toEqual(["wss://mine.example.com"]);
+  });
+
+  it("falls back to the stock set only when the list is empty", () => {
+    expect(defaultCreateRelays([])).toEqual(STOCK_RELAYS);
+  });
+
+  it("drops ws:// so https members aren't locked out (#47)", () => {
+    expect(defaultCreateRelays(["ws://localhost:5577", "wss://mine.example.com"])).toEqual([
+      "wss://mine.example.com",
+    ]);
+  });
+
+  it("dedupes and caps at the recommended community relay count", () => {
+    const many = Array.from({ length: 8 }, (_, i) => `wss://r${i}.example.com`);
+    expect(defaultCreateRelays([...many, many[0]])).toEqual(many.slice(0, MAX_COMMUNITY_RELAYS));
   });
 });

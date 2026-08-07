@@ -55,6 +55,7 @@ import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
 import { effectiveDmRelays } from "@/contexts/AppContext";
+import { STOCK_RELAYS } from "@/concord-v2/lib/stockRelays";
 import { APP_RELAYS, DM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
 import {
   getAudioProcessing,
@@ -80,6 +81,7 @@ type SectionId =
   | "voice"
   | "servers"
   | "app-relays"
+  | "community-relays"
   | "search-relays"
   | "dms"
   | "media"
@@ -173,6 +175,10 @@ export function SettingsPage() {
    */
   const setAppRelays = (relays: string[]) => {
     updateConfig((current) => ({ ...current, appRelays: relays }));
+  };
+
+  const setCommunityRelays = (relays: string[]) => {
+    updateConfig((current) => ({ ...current, communityRelays: relays }));
   };
 
   const setSearchRelays = (relays: string[]) => {
@@ -340,6 +346,7 @@ export function SettingsPage() {
       { id: "voice", title: "Voice", icon: Mic },
       { id: "servers", title: "Servers", icon: Server },
       { id: "app-relays", title: "App relays", icon: Waypoints },
+      { id: "community-relays", title: "Community relays", icon: ShieldCheck },
       { id: "search-relays", title: "Search relays", icon: Search },
       { id: "dms", title: "Direct messages", icon: MessageSquareLock },
       { id: "media", title: "Media servers", icon: Image },
@@ -510,6 +517,27 @@ export function SettingsPage() {
           </>
         );
       }
+      case "community-relays":
+        return (
+          <>
+            <SettingsRow>
+              <p className="text-xs text-muted-foreground leading-snug">
+                Where a community you create lives. Everyone in it reads and
+                posts here, so pick relays that will let your members post. You
+                can change the set for a single community when you create it,
+                and afterwards from the community's own settings.
+              </p>
+            </SettingsRow>
+            <SettingsRow>
+              <RelayListEditor
+                relays={config.communityRelays}
+                onChange={setCommunityRelays}
+                onReset={() => setCommunityRelays([...STOCK_RELAYS])}
+                emptyText="No community relays — new communities fall back to the shared Concord relays."
+              />
+            </SettingsRow>
+          </>
+        );
       case "search-relays":
         return (
           <>
