@@ -261,6 +261,13 @@ export const Webxdc = forwardRef<WebxdcHandle, WebxdcProps>(function Webxdc(
   const fileMapRef = useRef<Map<string, Uint8Array> | null>(null);
   // The generated bridge script, cached per webxdc instance.
   const bridgeScriptRef = useRef<string>("");
+  // The in-flight (or settled) archive load. The sandbox loader re-sends
+  // `ready` every 500ms until it receives `init` (which we only send once
+  // `onReady` resolves), so a slow download would otherwise spawn a new
+  // parallel fetch on every retry — dozens of overlapping downloads that
+  // starve each other and never finish. Caching the promise makes every
+  // repeat `ready` await the SAME single load.
+  const loadPromiseRef = useRef<Promise<void> | null>(null);
 
   // Realtime channel handles, keyed by channelId.
   const realtimeChannels = useRef<Map<string, RealtimeListener>>(new Map());
@@ -287,15 +294,21 @@ export const Webxdc = forwardRef<WebxdcHandle, WebxdcProps>(function Webxdc(
     };
   }, []);
 
-  // onReady: fetch and unzip the archive when the sandbox is ready.
-  const onReady = useCallback(async () => {
-    try {
-      const bytes = await resolveXdc(xdcRef.current, encryptionRef.current);
-      fileMapRef.current = unzipXdc(bytes);
-      bridgeScriptRef.current = generateWebxdcBridge(webxdcRef.current);
-    } catch (err) {
-      console.error("[Webxdc] Failed to initialise:", err);
-    }
+  // onReady: fetch and unzip the archive when the sandbox is ready. Re-entrant:
+  // repeated `ready` signals share one load instead of re-downloading.
+  const onReady = useCallback(() => {
+    loadPromiseRef.current ??= (async () => {
+      try {
+        const bytes = await resolveXdc(xdcRef.current, encryptionRef.current);
+        fileMapRef.current = unzipXdc(bytes);
+        bridgeScriptRef.current = generateWebxdcBridge(webxdcRef.current);
+      } catch (err) {
+        console.error("[Webxdc] Failed to initialise:", err);
+        // Allow a later `ready` to retry after a failure.
+        loadPromiseRef.current = null;
+      }
+    })();
+    return loadPromiseRef.current;
   }, []);
 
   const resolveFile = useCallback(async (pathname: string): Promise<FileResponse | null> => {
