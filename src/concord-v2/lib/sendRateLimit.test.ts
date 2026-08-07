@@ -153,6 +153,83 @@ describe("the escalating lockout", () => {
   });
 });
 
+describe("persistence", () => {
+  const KEY = "concord2:send-limit";
+
+  /** Forget everything this tab knows, keeping storage — i.e. a page reload. */
+  function reload(): void {
+    const saved = localStorage.getItem(KEY);
+    resetSendLimits();
+    if (saved !== null) localStorage.setItem(KEY, saved);
+  }
+
+  it("survives a reload, so refreshing doesn't clear the penalty", () => {
+    drain("a", 0);
+    expect(consumeSend("a", 0)).toBe(LOCKOUT_TIERS[0]);
+
+    reload();
+    // The bucket is fresh, but the lockout is not.
+    expect(consumeSend("a", 1_000)).toBe(LOCKOUT_TIERS[0] - 1_000);
+  });
+
+  it("restores the tier, so reloading to escape escalates instead", () => {
+    drain("a", 0);
+    consumeSend("a", 0); // tier 1
+    reload();
+    // Wait the lockout out; the restored tier means the next bout is the second.
+    const freed = LOCKOUT_TIERS[0];
+    drain("a", freed);
+    expect(consumeSend("a", freed)).toBe(LOCKOUT_TIERS[1]);
+  });
+
+  it("stores the penalty and nothing else", () => {
+    expect(localStorage.getItem(KEY)).toBeNull();
+    drain("a", 0);
+    // An ordinary send never writes.
+    expect(localStorage.getItem(KEY)).toBeNull();
+    consumeSend("a", 0);
+    expect(JSON.parse(localStorage.getItem(KEY) ?? "null")).toEqual({
+      a: { tier: 1, lockedUntil: LOCKOUT_TIERS[0] },
+    });
+  });
+
+  it("drops a community from storage once it is fully forgiven", () => {
+    drain("a", 0);
+    consumeSend("a", 0);
+    // Serve the lockout, then behave for a decay window.
+    const clean = LOCKOUT_TIERS[0] + TIER_DECAY_MS;
+    expect(consumeSend("a", clean)).toBe(0);
+    expect(localStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("adopts a lockout another tab wrote, taking the stricter of the two", () => {
+    // This tab is mid-conversation and has already read storage once.
+    expect(consumeSend("a", 1_000)).toBe(0);
+    localStorage.setItem(KEY, JSON.stringify({ a: { tier: 3, lockedUntil: 500_000 } }));
+    // An unrelated key changing is not this tab's business.
+    window.dispatchEvent(new StorageEvent("storage", { key: "something-else" }));
+    expect(consumeSend("a", 1_000)).toBe(0);
+    // Its own key changing is: opening a second tab must not be the bypass.
+    window.dispatchEvent(new StorageEvent("storage", { key: KEY }));
+    expect(consumeSend("a", 1_000)).toBe(499_000);
+  });
+
+  it("ignores a stored entry that isn't a penalty", () => {
+    for (const junk of ["", "not json", "[]", '{"a":null}', '{"a":{"tier":0,"lockedUntil":9}}', '{"a":{"tier":2}}']) {
+      resetSendLimits();
+      localStorage.setItem(KEY, junk);
+      expect(consumeSend("a", 1_000)).toBe(0);
+    }
+  });
+
+  it("clamps a lockout from a clock that was running fast", () => {
+    const forever = Number.MAX_SAFE_INTEGER;
+    localStorage.setItem(KEY, JSON.stringify({ a: { tier: 5, lockedUntil: forever } }));
+    // Held out for the longest tier, not until the heat death of the universe.
+    expect(consumeSend("a", 0)).toBe(LOCKOUT_TIERS[LOCKOUT_TIERS.length - 1]);
+  });
+});
+
 describe("attemptSend", () => {
   it("does not spend a token when it allows the send", () => {
     for (let i = 0; i < 20; i++) expect(attemptSend("a", 1_000)).toBe(0);

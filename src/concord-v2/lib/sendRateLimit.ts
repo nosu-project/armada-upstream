@@ -25,9 +25,14 @@
  * a clean slate rather than permanently on a short fuse.
  *
  * Scoped PER COMMUNITY, not per channel: the unit a person spams is the place,
- * and hopping channels to reset the budget would defeat the point. Deliberately
- * in-memory — a reload clears it, which is fine for something already
- * bypassable, and keeps the send path free of a storage round-trip.
+ * and hopping channels to reset the budget would defeat the point.
+ *
+ * Lockouts persist to localStorage, and only lockouts (see {@link STORAGE_KEY})
+ * — a penalty measured in minutes that a page reload erased would just teach
+ * the flooder to reload. localStorage rather than the ArmadaDB KV because the
+ * check is on the send path and synchronous, where the KV is async; the state
+ * is a few bytes of throwaway bookkeeping, not user data, so losing it costs
+ * nothing and none of the migration machinery in `db/schema.ts` applies.
  *
  * Only the kinds a reader sees as a post count ({@link RATE_LIMITED_KINDS}):
  * messages, thread replies and polls. Reactions, edits and deletes are exempt —
@@ -76,8 +81,101 @@ interface Bucket {
 
 const buckets = new Map<string, Bucket>();
 
+/**
+ * Where the penalties survive a reload. Only the PENALTY is persisted — tier
+ * and lockout — never the token bucket: it refills inside the shortest tier, so
+ * carrying it across a reload would buy nothing, and keeping it out means an
+ * ordinary send never touches storage. A reload during a lockout therefore
+ * costs the flooder five messages before the restored tier bites again, and
+ * escalates them a tier for the trouble.
+ */
+const STORAGE_KEY = "concord2:send-limit";
+
+/** The persisted form: `{ [communityIdHex]: { tier, lockedUntil } }`. */
+interface StoredPenalty {
+  tier: number;
+  lockedUntil: number;
+}
+
+let hydrated = false;
+
+function readStored(): Record<string, unknown> {
+  if (typeof localStorage === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return parsed as Record<string, unknown>;
+  } catch {
+    // Unparseable, or storage denied outright (private mode, blocked cookies).
+    return {};
+  }
+}
+
+/** A stored entry read back, or undefined when it isn't a penalty we'd write. */
+function parsePenalty(value: unknown, now: number): StoredPenalty | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const { tier, lockedUntil } = value as Partial<StoredPenalty>;
+  if (typeof tier !== "number" || !Number.isInteger(tier) || tier < 1) return undefined;
+  if (typeof lockedUntil !== "number" || !Number.isFinite(lockedUntil) || lockedUntil <= 0) return undefined;
+  // A lockout written while the clock was running fast (or edited by hand)
+  // could otherwise hold someone out for years. Nothing legitimate exceeds the
+  // longest tier, so that's the ceiling a restored penalty is clamped to.
+  const ceiling = now + LOCKOUT_TIERS[LOCKOUT_TIERS.length - 1];
+  return {
+    tier: Math.min(tier, LOCKOUT_TIERS.length),
+    lockedUntil: Math.min(lockedUntil, ceiling),
+  };
+}
+
+/**
+ * Fold the stored penalties into memory, taking the STRICTER of the two so it
+ * is safe to run more than once — which is what makes it a fix for a second tab
+ * as well as for a reload: a tab that was already open re-reads on the
+ * `storage` event and adopts the lockout the other one earned.
+ */
+function hydrate(now: number): void {
+  hydrated = true;
+  for (const [id, value] of Object.entries(readStored())) {
+    const stored = parsePenalty(value, now);
+    if (!stored) continue;
+    const bucket = buckets.get(id);
+    if (!bucket) {
+      buckets.set(id, { tokens: SEND_BURST, refilledAt: now, tier: stored.tier, lockedUntil: stored.lockedUntil });
+      continue;
+    }
+    bucket.tier = Math.max(bucket.tier, stored.tier);
+    bucket.lockedUntil = Math.max(bucket.lockedUntil, stored.lockedUntil);
+  }
+}
+
+/** Write the penalties back. Called only when one changes, never on a send. */
+function persist(): void {
+  if (typeof localStorage === "undefined") return;
+  const out: Record<string, StoredPenalty> = {};
+  for (const [id, bucket] of buckets) {
+    if (bucket.tier > 0) out[id] = { tier: bucket.tier, lockedUntil: bucket.lockedUntil };
+  }
+  try {
+    if (Object.keys(out).length === 0) localStorage.removeItem(STORAGE_KEY);
+    else localStorage.setItem(STORAGE_KEY, JSON.stringify(out));
+  } catch {
+    // Quota or a denied store: the limiter still holds for this session.
+  }
+}
+
+// Another tab's penalty is this tab's penalty — otherwise opening a second one
+// is the whole bypass.
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.key === STORAGE_KEY) hydrated = false;
+  });
+}
+
 /** Bring `id`'s bucket up to date at `now`, creating a clean one if unseen. */
 function sync(id: string, now: number): Bucket {
+  if (!hydrated) hydrate(now);
   const bucket = buckets.get(id);
   if (!bucket) {
     const fresh: Bucket = { tokens: SEND_BURST, refilledAt: now, tier: 0, lockedUntil: 0 };
@@ -97,6 +195,9 @@ function sync(id: string, now: number): Bucket {
       bucket.tier = Math.max(0, bucket.tier - steps);
       // Re-anchor so the leftover remainder doesn't decay a second step early.
       bucket.lockedUntil = bucket.tier === 0 ? 0 : bucket.lockedUntil + steps * TIER_DECAY_MS;
+      // Forgiveness has to reach storage too, or a reload restores the tier
+      // that was just walked back.
+      persist();
     }
   }
   return bucket;
@@ -125,6 +226,7 @@ function violate(bucket: Bucket, now: number): number {
   // every tier outlasts a full refill, so serving one hands back a whole burst.
   // The penalty is the wait, not a crippled bucket afterwards.
   bucket.tokens = 0;
+  persist();
   return lockMs;
 }
 
@@ -158,9 +260,16 @@ export function consumeSend(communityId: string, now: number = Date.now()): numb
   return violate(bucket, now);
 }
 
-/** Drop every bucket. Tests only. */
+/** Drop every bucket, in memory and in storage. Tests only. */
 export function resetSendLimits(): void {
   buckets.clear();
+  hydrated = false;
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Nothing to undo if the store was never writable.
+  }
 }
 
 /**
