@@ -273,6 +273,19 @@ export function useForegroundNotifications(): void {
         // OS notification. Errors are swallowed so one bad event never breaks
         // the sink for the rest of the batch.
         void (async () => {
+          // A hidden page no longer claims notification ownership (see
+          // answerNotificationOwnerQuery), so when Web Push is active the
+          // service worker presents this event — showing here too would
+          // duplicate it. Without a push subscription the page remains the
+          // only notifier for hidden tabs.
+          if (document.visibilityState !== "visible" && navigator.serviceWorker?.controller) {
+            try {
+              const reg = await navigator.serviceWorker.ready;
+              if (await reg.pushManager.getSubscription()) return;
+            } catch {
+              // No subscription info — fall through and show from the page.
+            }
+          }
           let title: string;
           let body = cand.body;
           const name = await displayNameFor(cand.author);
@@ -337,9 +350,15 @@ export function useForegroundNotifications(): void {
       ) return;
       const port = event.ports[0];
       if (!port) return;
+      // Only while visible: a hidden page may already be frozen by the
+      // platform (mobile PWAs especially), unable to receive from the wire or
+      // to display (`new Notification` throws on mobile) — claiming ownership
+      // there swallows the push entirely. Hidden pages hand presentation back
+      // to the service worker.
       const owns = foregroundNotifyIntent()
         && notificationsApiAvailable()
-        && Notification.permission === "granted";
+        && Notification.permission === "granted"
+        && document.visibilityState === "visible";
       port.postMessage({ owns });
     };
     navigator.serviceWorker?.addEventListener("message", answerNotificationOwnerQuery);
