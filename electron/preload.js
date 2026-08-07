@@ -53,6 +53,25 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
   openMicPrivacySettings: () => ipcRenderer.invoke("armada:open-mic-settings"),
 
   /**
+   * Register (or clear with null) the physical key used for desktop push to
+   * talk. Resolves { supported, backend, bindingLabel, reason }.
+   */
+  configurePushToTalk: (binding) =>
+    ipcRenderer.invoke("armada:push-to-talk-configure", binding),
+
+  /** Listen only while a connected room needs push-to-talk state. */
+  setPushToTalkActive: (active) =>
+    ipcRenderer.invoke("armada:push-to-talk-active", Boolean(active)),
+
+  /** Subscribe to global key-down/key-up state; returns an unsubscribe. */
+  onPushToTalkState: (handler) => {
+    if (typeof handler !== "function") return () => {};
+    const listener = (_event, pressed) => handler(Boolean(pressed));
+    ipcRenderer.on("armada:push-to-talk-state", listener);
+    return () => ipcRenderer.removeListener("armada:push-to-talk-state", listener);
+  },
+
+  /**
    * Whether OS-backed secret encryption is usable, and which backend provides
    * it: { available, backend }. `backend` is the Chromium password store on
    * Linux ("gnome_libsecret" | "kwallet*" | "basic_text" | "unknown") and the

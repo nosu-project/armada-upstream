@@ -18,6 +18,12 @@ directories:
   output: release
   buildResources: build
 
+# Both native integrations ship N-API prebuilds pinned in package-lock.json:
+# uiohook-napi for every desktop OS/architecture and venmic for Linux. Rebuild
+# would discard that portability and require platform SDK headers in release
+# jobs (and cross-compiling the Windows hook from Linux cannot work at all).
+npmRebuild: false
+
 # What ships inside the app: the shell's own files plus the bundled web build.
 # electron + node_modules are provided by the builder runtime and not listed.
 #
@@ -27,10 +33,16 @@ directories:
 # asar and the shell silently falls back: the default Electron window icon, and
 # an EMPTY tray image (a blank slot in the panel).
 files:
+  # flatpak-builder leaves an OSTree cache beside this config. It contains
+  # host-only absolute symlinks such as /app/bin/zypak-wrapper.sh and must
+  # never be traversed by cross-platform packaging.
+  - "!.flatpak-builder{,/**/*}"
   - main.js
   - appOrigin.js
   - linuxAudioSources.js
+  - linuxGlobalShortcuts.js
   - linuxStatusNotifier.js
+  - pushToTalk.js
   - traySupport.js
   - preload.js
   # The ArmadaDB store, built from src/lib/db by vite.config.electron.ts. main.js
@@ -47,6 +59,7 @@ files:
   - "!**/*.map"
 asarUnpack:
   - node_modules/@vencord/venmic/prebuilds/**/*
+  - node_modules/uiohook-napi/prebuilds/**/*
 
 # The release workflow uploads these installers plus electron-builder's
 # latest*.yml metadata to this static directory. electron-updater reads it on
@@ -76,6 +89,7 @@ linux:
 # ── Windows ────────────────────────────────────────────────────────────────────
 win:
   files:
+    - "!.flatpak-builder{,/**/*}"
     - "!node_modules/@vencord/venmic{,/**/*}"
     - "!node_modules/@jellybrick/dbus-next{,/**/*}"
   target:
@@ -98,6 +112,7 @@ nsis:
 mac:
   category: public.app-category.social-networking
   files:
+    - "!.flatpak-builder{,/**/*}"
     - "!node_modules/@vencord/venmic{,/**/*}"
     - "!node_modules/@jellybrick/dbus-next{,/**/*}"
   target:

@@ -75,6 +75,22 @@ interface ArmadaDesktopDb {
   call: (op: string, payload?: unknown) => Promise<unknown>;
 }
 
+export interface DesktopPushToTalkBinding {
+  code: string;
+  label: string;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+}
+
+export interface DesktopPushToTalkStatus {
+  supported: boolean;
+  backend: "native" | "portal" | null;
+  bindingLabel: string | null;
+  reason: string | null;
+}
+
 interface ArmadaDesktopBridge {
   isDesktop: true;
   setBadge: (count: number) => void;
@@ -87,6 +103,11 @@ interface ArmadaDesktopBridge {
   stopLinuxShareAudio?: () => Promise<void>;
   getMicAccessStatus: () => Promise<MicAccessStatus>;
   openMicPrivacySettings: () => Promise<boolean>;
+  configurePushToTalk?: (
+    binding: DesktopPushToTalkBinding | null,
+  ) => Promise<DesktopPushToTalkStatus>;
+  setPushToTalkActive?: (active: boolean) => Promise<boolean>;
+  onPushToTalkState?: (handler: (pressed: boolean) => void) => () => void;
   // Optional: a newer web bundle can run inside an older shell that predates
   // these, so every call site feature-detects rather than assuming.
   getSecretsStatus?: () => Promise<SecretsStatus>;

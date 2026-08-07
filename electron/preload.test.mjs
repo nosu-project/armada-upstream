@@ -12,6 +12,9 @@ function loadPreload() {
     invoke: vi.fn(),
     send: vi.fn(),
     on: vi.fn((channel, listener) => listeners.set(channel, listener)),
+    removeListener: vi.fn((channel, listener) => {
+      if (listeners.get(channel) === listener) listeners.delete(channel);
+    }),
   };
   const contextBridge = {
     exposeInMainWorld: vi.fn((_name, value) => {
@@ -53,5 +56,37 @@ describe("screen-share preload bridge", () => {
     await listeners.get("armada:pick-screen-source")({}, 7);
 
     expect(ipcRenderer.send).toHaveBeenCalledWith("armada:screen-source-picked", 7, null);
+  });
+});
+
+describe("push-to-talk preload bridge", () => {
+  it("forwards configuration and press/release state without exposing IPC", async () => {
+    const { api, ipcRenderer, listeners } = loadPreload();
+    const binding = {
+      code: "CapsLock",
+      label: "Caps Lock",
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+    };
+    const handler = vi.fn();
+
+    api.configurePushToTalk(binding);
+    api.setPushToTalkActive(true);
+    const unsubscribe = api.onPushToTalkState(handler);
+    listeners.get("armada:push-to-talk-state")({}, true);
+    listeners.get("armada:push-to-talk-state")({}, false);
+
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith("armada:push-to-talk-configure", binding);
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith("armada:push-to-talk-active", true);
+    expect(handler.mock.calls).toEqual([[true], [false]]);
+
+    const listener = listeners.get("armada:push-to-talk-state");
+    unsubscribe();
+    expect(ipcRenderer.removeListener).toHaveBeenCalledWith(
+      "armada:push-to-talk-state",
+      listener,
+    );
   });
 });

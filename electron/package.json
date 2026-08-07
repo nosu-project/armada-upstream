@@ -31,7 +31,8 @@
     "electron-updater": "^6.8.9"
   },
   "optionalDependencies": {
-    "@vencord/venmic": "^7.1.0"
+    "@vencord/venmic": "^7.1.0",
+    "uiohook-napi": "^1.5.5"
   },
   "overrides": {
     "js-yaml": "^4.3.1",

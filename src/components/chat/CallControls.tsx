@@ -25,6 +25,7 @@ import { useCallSignals } from "@/contexts/CallSignalsContext";
 import { useCall } from "@/hooks/useCall";
 import { toast } from "@/hooks/useToast";
 import { playLeaveSound, playMuteSound, playUnmuteSound } from "@/lib/callSounds";
+import { usePushToTalkRuntime } from "@/lib/pushToTalk";
 import { switchPublishedScreenShare } from "@/lib/screenShare";
 import { cn } from "@/lib/utils";
 
@@ -46,13 +47,22 @@ const CTRL = "inline-flex items-center justify-center rounded-md size-8 touch:si
 
 export function MicButton({ className }: { className?: string }) {
   const { localParticipant, isMicrophoneEnabled } = useLocalParticipant();
-  const label = isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone";
+  const pushToTalk = usePushToTalkRuntime();
+  const label = pushToTalk.ready
+    ? pushToTalk.pressed
+      ? "Talking — release to mute"
+      : `Hold ${pushToTalk.bindingLabel || "your shortcut"} to talk`
+    : isMicrophoneEnabled
+      ? "Mute microphone"
+      : "Unmute microphone";
   return (
     <button
       type="button"
       aria-label={label}
       title={label}
+      disabled={pushToTalk.ready}
       onClick={() => {
+        if (pushToTalk.ready) return;
         const enabling = !isMicrophoneEnabled;
         // Self-only feedback, on the click gesture (AudioContext unlocked).
         if (enabling) playUnmuteSound();
@@ -64,6 +74,7 @@ export function MicButton({ className }: { className?: string }) {
         isMicrophoneEnabled
           ? "bg-foreground/10 text-foreground hover:bg-foreground/20"
           : "bg-destructive/20 text-destructive hover:bg-destructive/30",
+        pushToTalk.ready && "cursor-default disabled:opacity-100",
         className,
       )}
     >

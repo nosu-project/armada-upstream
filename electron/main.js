@@ -53,6 +53,7 @@ const {
   systemPreferences,
   safeStorage,
   dialog,
+  powerMonitor,
 } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const { isArmadaAppUrl } = require("./appOrigin");
@@ -61,6 +62,7 @@ const {
   detectLinuxTrayEnvironment,
   queryStatusNotifierItems,
 } = require("./traySupport");
+const { PushToTalkController } = require("./pushToTalk");
 const createLinuxStatusNotifier =
   process.platform === "linux"
     ? require("./linuxStatusNotifier").createLinuxStatusNotifier
@@ -113,6 +115,18 @@ let isQuitting = false;
 // stay quiet when the installed build is already current or the feed is down.
 let manualUpdateCheck = false;
 let updateCheckInFlight = false;
+const pushToTalk = new PushToTalkController({
+  platform: process.platform,
+  env: process.env,
+  // Prompt only when the user explicitly enables/configures push to talk.
+  // macOS global input hooks require this OS-level Accessibility grant.
+  isMacTrusted: () =>
+    process.platform !== "darwin" || systemPreferences.isTrustedAccessibilityClient(true),
+  sendState: (pressed) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send("armada:push-to-talk-state", Boolean(pressed));
+  },
+});
 // Honour --hidden / --minimized (autostart "launch minimized to tray").
 const startHidden =
   process.argv.includes("--hidden") || process.argv.includes("--minimized");
@@ -1180,6 +1194,17 @@ function installIpc() {
       return false;
     }
   });
+
+  // True hold-to-talk needs both press and release events while Armada is in
+  // the background. Windows/macOS and Linux X11 use the native hook; Linux
+  // Wayland/Flatpak uses the Global Shortcuts portal's Activated/Deactivated
+  // signals. The renderer only marks this active while a LiveKit room exists.
+  ipcMain.handle("armada:push-to-talk-configure", (_event, binding) =>
+    pushToTalk.configure(binding),
+  );
+  ipcMain.handle("armada:push-to-talk-active", (_event, active) =>
+    pushToTalk.setActive(active),
+  );
 }
 
 // ── App lifecycle ────────────────────────────────────────────────────────────
@@ -1204,6 +1229,10 @@ if (!gotLock) {
     installDisplayMediaHandler();
     installLinuxShareAudioIpc();
     installAutoUpdater();
+    // A suspended or locked machine may never deliver the physical key-up.
+    // Fail closed instead of leaving the microphone live after wake/unlock.
+    powerMonitor.on("suspend", () => pushToTalk.cancelPress());
+    powerMonitor.on("lock-screen", () => pushToTalk.cancelPress());
     if (process.platform === "linux") {
       await refreshTraySupport();
     } else {
@@ -1221,6 +1250,7 @@ if (!gotLock) {
   app.on("before-quit", () => {
     isQuitting = true;
     stopHiddenTrayMonitor();
+    void pushToTalk.destroy();
   });
 
   // Closing the database is async, and quitting is not, so the first pass is
