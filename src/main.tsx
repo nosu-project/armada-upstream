@@ -36,9 +36,15 @@ if (document.documentElement.classList.contains("standalone")) {
 // and may evict it when the app is terminated — silently dropping the decrypted
 // NIP-17 rumor store (armada-dm17-rumors) and the kind-4 snapshots. A received
 // conversation then reads fine in-session but vanishes on the next cold launch.
-// Installed PWAs are typically granted automatically; this is a no-op on the
-// native (Capacitor) runtime, whose storage already survives across launches.
-if (!Capacitor.isNativePlatform() && navigator.storage?.persist) {
+// Installed PWAs are typically granted automatically.
+//
+// Skipped on ANDROID specifically, not on native: Android is where the store is
+// a native SQLite file (NativeArmadaDB → ArmadaDb plugin), so there is no
+// IndexedDB quota to defend. iOS has no such plugin and falls through to
+// IndexedDBArmadaDB inside WKWebView, so it wants the grant like any other
+// WebKit target. (Desktop already reaches this: Electron is not a Capacitor
+// native platform, and the request is harmless where the store is a file.)
+if (Capacitor.getPlatform() !== "android" && navigator.storage?.persist) {
   void navigator.storage
     .persisted()
     .then((already) => (already ? undefined : navigator.storage.persist()))

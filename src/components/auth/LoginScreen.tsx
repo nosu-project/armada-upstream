@@ -327,9 +327,12 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
   };
 
   // Progressive enhancement: attempt to retrieve a stored credential from the
-  // platform's password manager when the dialog opens.
-  // On Capacitor iOS this shows the iCloud Keychain credential picker.
-  // On Chromium browsers this shows the native credential chooser.
+  // platform's password manager when the dialog opens. On Chromium browsers
+  // this shows the native credential chooser; everywhere else it resolves null
+  // and nothing happens. Note this is the WEB Credential Management API only —
+  // WebKit implements no `PasswordCredential`, so it is inert on iOS (there is
+  // no iCloud Keychain picker here), and Android's Credential Manager is a
+  // separate native plugin used for saving, not for this read.
   useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;

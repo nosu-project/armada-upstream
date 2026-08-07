@@ -1,10 +1,14 @@
 /**
- * Web-only credential helpers for the nsec key, ported (and de-Capacitor-ed)
- * from Ditto's credentialManager.
+ * Credential helpers for the nsec key, ported from Ditto's credentialManager.
  *
  * Uses the Credential Management API where available (Chromium) so the
  * browser's password manager can store/offer the key. Always falls back
  * gracefully — callers must treat a `null` result as "not available".
+ *
+ * Every native branch here gates on `getPlatform() === "android"`, never on
+ * `isNativePlatform()`: the `ArmadaCredential` plugin is registered only in
+ * MainActivity, so an `isNativePlatform()` gate sends iOS into a call that can
+ * only reject. iOS takes the web path or an explicit iOS branch instead.
  */
 
 import { Capacitor, registerPlugin } from "@capacitor/core";
@@ -42,17 +46,22 @@ export type KeyringResult = "saved" | "cancelled" | "unavailable";
 /**
  * Store the nsec in the OS keyring / password manager, keyed by npub.
  *
- * Native: the Android Credential Manager's biometric-gated "Save password?"
- * sheet (real, recoverable, cross-device backup), on Android 14+ only — Armada
+ * Android: the Credential Manager's biometric-gated "Save password?" sheet
+ * (real, recoverable, cross-device backup), on Android 14+ only — Armada
  * doesn't bundle Google's pre-34 provider (see ArmadaCredentialPlugin). Web/
  * desktop: the browser Credential Management API (Chromium's password manager).
  * Returns which happened so the caller can decide whether to proceed, wait, or
  * fall back to exporting the key file — `"unavailable"` means there's no
- * keyring to save to (Firefox/Safari, an Android below 14, or an Android 14+
- * device with no credential provider configured).
+ * keyring to save to (Firefox/Safari, iOS, an Android below 14, or an Android
+ * 14+ device with no credential provider configured).
+ *
+ * The native check is for ANDROID specifically, not for native: `ArmadaCredential`
+ * is registered only in MainActivity, so on iOS the call rejects. iOS falls
+ * through to the web branch, where WebKit has no `PasswordCredential` and the
+ * answer is the same `"unavailable"` — without a rejected promise on the way.
  */
 export async function saveToKeyring(npub: string, nsec: string): Promise<KeyringResult> {
-  if (Capacitor.isNativePlatform()) {
+  if (Capacitor.getPlatform() === "android") {
     try {
       const { saved, cancelled, reason } = await ArmadaCredential.saveCredential({ id: npub, password: nsec });
       if (saved) return "saved";
@@ -94,18 +103,43 @@ interface SaveFilePicker {
 
 /**
  * Save the key to the FILESYSTEM: a real "Save as…" dialog where the browser
- * has one, a plain download where it doesn't, and the public Downloads folder
- * on native (blob downloads don't work in the Android WebView, so the native
- * plugin writes the file via MediaStore).
+ * has one, a plain download where it doesn't, the public Downloads folder on
+ * Android, and the app's Documents directory on iOS.
+ *
+ * Neither WebView can do the `<a download>` blob trick (see downloadFile.ts),
+ * so both native platforms need a real write — Android through MediaStore via
+ * the ArmadaCredential plugin, iOS through @capacitor/filesystem. Gating this
+ * on `isNativePlatform()` instead of the platform NAME is what made iOS return
+ * `"failed"` here: `ArmadaCredential` is registered only in MainActivity, so
+ * the call rejected and onboarding's key backup had no route left.
  *
  * `"cancelled"` is only ever returned for a save dialog the user dismissed —
  * a plain download has no dialog to dismiss, so it reports `"saved"`.
  */
 export async function exportNsec(nsec: string): Promise<ExportResult> {
-  if (Capacitor.isNativePlatform()) {
+  if (Capacitor.getPlatform() === "android") {
     try {
       const { location } = await ArmadaCredential.saveToFile({ filename: KEY_FILENAME, content: nsec });
       return { status: "saved", location };
+    } catch {
+      return { status: "failed" };
+    }
+  }
+
+  // iOS: Documents is surfaced to the user as the "Armada" folder in the Files
+  // app (LSSupportsOpeningDocumentsInPlace + UIFileSharingEnabled in
+  // Info.plist), so the key lands somewhere they can find it and move it into a
+  // password manager — which is what makes the returned location honest.
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const { Filesystem, Directory, Encoding } = await import("@capacitor/filesystem");
+      await Filesystem.writeFile({
+        path: KEY_FILENAME,
+        data: nsec,
+        directory: Directory.Documents,
+        encoding: Encoding.UTF8,
+      });
+      return { status: "saved", location: `the Armada folder in Files (${KEY_FILENAME})` };
     } catch {
       return { status: "failed" };
     }
@@ -144,15 +178,15 @@ export type ExportResult =
  * Back the key up during onboarding, by whatever route the platform can SHOW
  * the user happening.
  *
- * Native gets the Credential Manager sheet first: it's a visible, biometric-
+ * Android gets the Credential Manager sheet first: it's a visible, biometric-
  * gated, syncing backup, and the user watches it appear. The web
  * Credential Management API is deliberately not used here — Chromium stores
  * silently, so a "saved to your password manager" confirmation names a place
  * the user never saw and may not have. On web the file dialog IS the
- * confirmation.
+ * confirmation, and on iOS the file in Files is.
  */
 export async function backUpNsec(npub: string, nsec: string): Promise<ExportResult> {
-  if (Capacitor.isNativePlatform()) {
+  if (Capacitor.getPlatform() === "android") {
     const result = await saveToKeyring(npub, nsec);
     if (result === "saved") return { status: "saved", location: "your password manager" };
     if (result === "cancelled") return { status: "cancelled" };
@@ -195,11 +229,11 @@ export async function getNsecCredential(): Promise<NsecCredential | null> {
 }
 
 /**
- * Save the nsec to the OS keyring / password manager, falling back to a file
- * download (web) or the share sheet (native) when there's no keyring or the
- * user dismisses it. Fire-and-forget helper for callers that don't need to
- * distinguish the outcome; onboarding uses {@link backUpNsec} so it can gate
- * on a backup the user actually saw happen.
+ * Save the nsec to the OS keyring / password manager, falling back to
+ * {@link exportNsec} when there's no keyring or the user dismisses it.
+ * Fire-and-forget helper for callers that don't need to distinguish the
+ * outcome; onboarding uses {@link backUpNsec} so it can gate on a backup the
+ * user actually saw happen.
  */
 export async function saveNsec(npub: string, nsec: string): Promise<void> {
   if ((await saveToKeyring(npub, nsec)) === "saved") return;
