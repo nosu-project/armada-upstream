@@ -822,12 +822,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
     </>
   );
 
-  return (
-    <>
-    <ContextMenu>
-      {/* On touch the long-press gesture belongs to the action sheet; Radix's
-          own long-press would otherwise open this menu at the same time. */}
-      <ContextMenuTrigger className="block" disabled={isTouch}>
+  const row = (
         <MessageRow
           pubkey={event.pubkey}
           identityOverride={identityOverride}
@@ -868,24 +863,36 @@ const ChatMessageInner = memo(function ChatMessageInner({
         >
           {body}
         </MessageRow>
-      </ContextMenuTrigger>
-      {/* Discord-style right-click menu: the same actions as the `⋯` overflow
-          and the touch sheet, from one list. */}
-      <ContextMenuContent className="w-52" collisionPadding={getComposerCollisionPadding(composerBoundsRef)}>
-        {menuActions.map((action) => (
-          <div key={action.id}>
-            {action.groupStart && <ContextMenuSeparator />}
-            <ContextMenuItem
-              className={action.destructive ? "text-destructive focus:text-destructive" : undefined}
-              onSelect={action.onSelect}
-            >
-              <action.icon className="mr-2 size-4" />
-              {action.label}
-            </ContextMenuItem>
-          </div>
-        ))}
-      </ContextMenuContent>
-    </ContextMenu>
+  );
+
+  return (
+    <>
+    {/* On touch the long-press gesture belongs to the action sheet, so the
+        Discord-style right-click ContextMenu isn't mounted at all — one fewer
+        Radix root per row on the platform whose per-row render budget is
+        tightest. Desktop keeps the right-click menu, built from the same
+        action list as the touch sheet and the `⋯` overflow. */}
+    {isTouch ? (
+      row
+    ) : (
+      <ContextMenu>
+        <ContextMenuTrigger className="block">{row}</ContextMenuTrigger>
+        <ContextMenuContent className="w-52" collisionPadding={getComposerCollisionPadding(composerBoundsRef)}>
+          {menuActions.map((action) => (
+            <div key={action.id}>
+              {action.groupStart && <ContextMenuSeparator />}
+              <ContextMenuItem
+                className={action.destructive ? "text-destructive focus:text-destructive" : undefined}
+                onSelect={action.onSelect}
+              >
+                <action.icon className="mr-2 size-4" />
+                {action.label}
+              </ContextMenuItem>
+            </div>
+          ))}
+        </ContextMenuContent>
+      </ContextMenu>
+    )}
     {isTouch && (
       <MessageActionSheet
         open={sheetOpen}
