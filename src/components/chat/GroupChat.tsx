@@ -1,12 +1,12 @@
 import { Hash, Loader2, Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage, ReplyContextLine, ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
 import { firstImageRef, getReplyToId } from "@/components/chat/messageHelpers";
-import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
+import { MessageTimeline } from "@/components/chat/MessageTimeline";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
+import { ThreadPanelSlot } from "@/components/chat/ThreadPanelSlot";
 import LoginScreen from "@/components/auth/LoginScreen";
 import SignupDialog from "@/components/auth/SignupDialog";
 import { Button } from "@/components/ui/button";
@@ -27,12 +27,12 @@ import { useZapReceipts } from "@/hooks/useZapReceipts";
 import { useGroupThreads, useSendThreadReply } from "@/hooks/useThread";
 import { useRepublish } from "@/hooks/useNostrPublish";
 import { useActiveRoom } from "@/hooks/useActiveRoom";
-import { useMessagePermalink } from "@/hooks/useMessagePermalink";
 import { useNewMessagesDivider } from "@/hooks/useNewMessagesDivider";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
+import { useThreadPanel } from "@/hooks/useThreadPanel";
+import { useTimelineFocus } from "@/hooks/useTimelineFocus";
 import { toast } from "@/hooks/useToast";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
-import { chatRoute, parseChatRoute } from "@/lib/routes";
 import { useLegacyFocusParams } from "@/hooks/useLegacyFocusParams";
 import { withSignature } from "@/lib/publishOutbox";
 import { type SlashAction } from "@/lib/slashCommands";
@@ -290,24 +290,23 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
   const { replyCountFor, threadRepliesFor } = useGroupThreads(relayUrl, groupId, visibleIds);
   const sendThreadReply = useSendThreadReply(relayUrl, groupId);
 
-  const [activeId, setActiveId] = useState<string | undefined>(undefined);
-  const toggleActive = useCallback(
-    (id: string) => setActiveId((cur) => (cur === id ? undefined : id)),
-    [],
+  // The room as a route: what the thread panel pushes `/t/<root>` onto, what
+  // "Copy message link" stamps a message id onto, and what the legacy
+  // `?m=`/`?thread=` translation redirects into.
+  const room = useMemo(
+    () => (relayUrl && groupId ? ({ kind: "nip29", relayUrl, groupId } as const) : undefined),
+    [relayUrl, groupId],
   );
-  // The open thread is whichever one the route names, resolved against loaded
-  // history — so it survives a refresh, closes on Back, and opens straight
-  // from a notification without a second code path.
-  const location = useLocation();
-  const navigate = useNavigate();
-  const routeThreadRoot = useMemo(() => {
-    const parsed = parseChatRoute(location.pathname);
-    return parsed?.kind === "nip29" ? parsed.threadRoot : undefined;
-  }, [location.pathname]);
-  const threadRoot = useMemo(
-    () => (routeThreadRoot ? messages.find((m) => m.id === routeThreadRoot) : undefined),
-    [routeThreadRoot, messages],
-  );
+  const {
+    threadRoot,
+    lastThreadRoot,
+    expanded: threadExpanded,
+    setExpanded: setThreadExpanded,
+    autoFocus: threadAutoFocus,
+    chatColumnClass,
+    openThread,
+    closeThread,
+  } = useThreadPanel({ room, messages });
 
   // Tell the native notification service this NIP-29 room (and, if a thread
   // panel is open, that specific thread) is on screen, so it suppresses
@@ -321,12 +320,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
 
   // Pre-path deep links (`?thread=`, `?m=`) become their route equivalents.
   // Old tray notifications and copied links still carry them.
-  useLegacyFocusParams(
-    useMemo(
-      () => (relayUrl && groupId ? ({ kind: "nip29", relayUrl, groupId } as const) : undefined),
-      [relayUrl, groupId],
-    ),
-  );
+  useLegacyFocusParams(room);
 
   // Reaction and zap tallies resolve over the timeline PLUS the open thread's
   // replies (kind-1111 comments, which aren't in the timeline), so a reply's
@@ -346,36 +340,22 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     relayUrl && groupId ? `nip29:${relayUrl}:${groupId}` : undefined,
     tallyIds,
   );
-  // Whether the reply composer takes focus on open: an intent belonging to the
-  // click that navigated, not to the location, so it rides in history state
-  // and a shared link never steals focus.
-  const threadAutoFocus = Boolean((location.state as { threadAutoFocus?: boolean } | null)?.threadAutoFocus);
-  const [threadExpanded, setThreadExpanded] = useState(false);
-  const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);
   const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
   const [editingId, setEditingId] = useState<string | undefined>(undefined);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
   const [signupDialogOpen, setSignupDialogOpen] = useState(false);
-  const timelineRef = useRef<MessageTimelineHandle | null>(null);
 
-  // Stable: clicking a reply-context line jumps the timeline to the original.
-  const jumpToReply = useCallback((id: string) => {
-    timelineRef.current?.scrollToMessage(id);
-  }, []);
-
-  // Message permalinks (`?m=<id>` — notification taps, copied links): scroll
-  // to the target with the focus indicator once it's loaded, pulling older
-  // pages when it's further back than the loaded history.
-  const permalinkScroll = useCallback(
-    (id: string) => timelineRef.current?.scrollToMessage(id, true) ?? false,
-    [],
-  );
-  const clearMessageFocus = useMessagePermalink({
+  const {
+    timelineRef,
+    jumpToMessage: jumpToReply,
+    pinToPresent,
+    activeId,
+    toggleActive,
+  } = useTimelineFocus({
     messages,
     isLoading,
     hasMore,
     loadOlder,
-    scrollTo: permalinkScroll,
     // While search results replace the timeline there is nothing to jump.
     enabled: !searching,
   });
@@ -383,16 +363,6 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
   // Stable identities so an unchanged row's props don't churn (React.memo).
   const startEditing = useCallback((e: ChatMsg) => setEditingId(e.id), []);
   const cancelEditing = useCallback(() => setEditingId(undefined), []);
-
-  // Keep the thread panel content mounted through its slide-out animation.
-  useEffect(() => {
-    if (threadRoot) {
-      setLastThreadRoot(threadRoot);
-      return;
-    }
-    const t = setTimeout(() => setLastThreadRoot(undefined), 200);
-    return () => clearTimeout(t);
-  }, [threadRoot]);
 
   // Mark the channel read up to the newest message while it's on screen.
   useEffect(() => {
@@ -415,32 +385,6 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
   // the timeline. Nothing to do here: the timeline observes its own scroller and
   // content, so it holds the reading position across every frame of both — this
   // used to be a rAF loop polling `maintainBottom` for 260ms.
-
-  // Sending is an explicit "I'm at the present": follow the new message, and
-  // drop any `/m/` focus so the location stops claiming the reader is parked
-  // at an older one (a remount would otherwise snap them back to it).
-  const handleSent = useCallback(() => {
-    timelineRef.current?.pinToBottom();
-    clearMessageFocus();
-  }, [clearMessageFocus]);
-
-  // Opening a thread pushes `/t/<root>` onto the room route, so Back closes
-  // the panel and the panel survives a refresh.
-  const openThread = useCallback(
-    (event: ChatMsg, focusReply = false) => {
-      navigate(chatRoute({ kind: "nip29", relayUrl, groupId, threadRoot: event.id }), {
-        state: { threadAutoFocus: focusReply },
-      });
-    },
-    [navigate, relayUrl, groupId],
-  );
-  // A no-op when no thread is routed, so a stray close (the panel stays
-  // mounted through its slide-out) can't stack duplicate history entries.
-  const closeThread = useCallback(() => {
-    if (!routeThreadRoot) return;
-    setThreadExpanded(false);
-    navigate(chatRoute({ kind: "nip29", relayUrl, groupId }));
-  }, [routeThreadRoot, navigate, relayUrl, groupId]);
 
   const handleSlashAction = useCallback(
     async (action: SlashAction) => {
@@ -617,11 +561,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
   return (
     <div className="relative flex flex-1 min-h-0 min-w-0">
       <ComposerBoundsProvider value={composerBoundsRef}>
-      <div className={cn(
-        "relative flex flex-col flex-1 min-h-0 min-w-0",
-        "thread:transition-[width,opacity] thread:duration-300 thread:ease-out",
-        threadRoot && threadExpanded && "thread:flex-none thread:w-0 thread:opacity-0 thread:overflow-hidden thread:pointer-events-none",
-      )}>
+      <div className={cn("relative flex flex-col flex-1 min-h-0 min-w-0", chatColumnClass)}>
         {/* Search results replace the timeline in-place when searching. */}
         {searching ? (
           <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable px-3 py-4">
@@ -704,7 +644,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
             replyTo={replyTo}
             placeholder={channelName ? `Message ${channelName}` : undefined}
             onCancelReply={() => setReplyTo(undefined)}
-            onSent={handleSent}
+            onSent={pinToPresent}
             onOptimisticInsert={insertOptimistic}
             onOptimisticSent={markSent}
             onOptimisticFailed={markFailed}
@@ -754,50 +694,23 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
       </div>
       </ComposerBoundsProvider>
 
-      {/* Thread panel. Wide (≥1200px `thread:`): in-flow sibling whose width
-          animates open. Narrower (incl. the 900–1200 band where the rail +
-          channel list are shown but there's no room for a 23rem push): overlays
-          the chat (absolute) and slides in. */}
-      <div
-        className={cn(
-          "overflow-hidden",
-          "absolute inset-0 z-20 thread:static thread:z-auto",
-          "thread:transition-[width] thread:duration-200 thread:ease-out",
-          threadRoot
-            ? (threadExpanded ? "thread:flex-1 thread:w-full" : "thread:shrink-0 thread:w-[23rem]")
-            : "thread:shrink-0 thread:w-0 pointer-events-none thread:pointer-events-auto",
+      <ThreadPanelSlot open={Boolean(threadRoot)} expanded={threadExpanded}>
+        {lastThreadRoot && (
+          <ThreadPanel
+            root={lastThreadRoot}
+            transport={transport}
+            relayUrl={relayUrl}
+            groupId={groupId}
+            canWrite={Boolean(user && canWrite)}
+            botCommands
+            autoFocus={threadAutoFocus}
+            open={Boolean(threadRoot)}
+            permalink={{ kind: "nip29", relayUrl, groupId, threadRoot: lastThreadRoot.id }}
+            onClose={closeThread}
+            onExpandChange={setThreadExpanded}
+          />
         )}
-      >
-        <div
-          className={cn(
-            "absolute inset-0 bg-background transition-opacity duration-200 ease-out thread:hidden",
-            threadRoot ? "opacity-100" : "opacity-0",
-          )}
-        />
-        <div
-          className={cn(
-            "relative h-full flex w-full transition-transform duration-200 ease-out",
-            threadRoot ? "translate-x-0" : "translate-x-full",
-            threadExpanded ? "thread:w-full" : "thread:w-[23rem]",
-          )}
-        >
-          {lastThreadRoot && (
-            <ThreadPanel
-              root={lastThreadRoot}
-              transport={transport}
-              relayUrl={relayUrl}
-              groupId={groupId}
-              canWrite={Boolean(user && canWrite)}
-              botCommands
-              autoFocus={threadAutoFocus}
-              open={Boolean(threadRoot)}
-              permalink={{ kind: "nip29", relayUrl, groupId, threadRoot: lastThreadRoot.id }}
-              onClose={closeThread}
-              onExpandChange={setThreadExpanded}
-            />
-          )}
-        </div>
-      </div>
+      </ThreadPanelSlot>
     </div>
   );
 }

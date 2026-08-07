@@ -5,8 +5,9 @@ import { Navigate, useLocation, useNavigate, useSearchParams } from "react-route
 import { AppStageSlot } from "@/components/chat/AppStage";
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { ChatComposer } from "@/components/chat/ChatComposer";
-import { ChatMessage, ReplyContextLine, ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
-import { firstImageRef, getQuoteReplyToId } from "@/components/chat/messageHelpers";
+import { ChatMessage } from "@/components/chat/ChatMessage";
+import { getQuoteReplyToId } from "@/components/chat/messageHelpers";
+import { ReplyContext } from "@/components/chat/ReplyContext";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { JoinButton } from "@/components/auth/JoinButton";
 import { MemberList } from "@/components/chat/MemberList";
@@ -22,8 +23,10 @@ import {
   type PendingArrangement,
 } from "@/concord-v2/lib/channelArrangement";
 import { useChannelDrag, type ChannelDrop, type ChannelDropSlot } from "@/concord-v2/hooks/useChannelDrag";
-import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
-import { useMessagePermalink } from "@/hooks/useMessagePermalink";
+import { MessageTimeline } from "@/components/chat/MessageTimeline";
+import { ThreadPanelSlot } from "@/components/chat/ThreadPanelSlot";
+import { useThreadPanel } from "@/hooks/useThreadPanel";
+import { useTimelineFocus } from "@/hooks/useTimelineFocus";
 import { CalendarEventsBar } from "@/components/chat/CalendarEventsBar";
 import { PinnedBar2 } from "@/concord-v2/components/PinnedBar2";
 import { CreateEventDialog } from "@/components/dialogs/CreateEventDialog";
@@ -95,7 +98,6 @@ import { ProjectsView } from "@/components/projects/ProjectsView";
 import type { ProjectWorkItem } from "@/components/projects/projectData";
 import { useCommunityGitActivity } from "@/hooks/useCommunityGitActivity";
 import { useNewMessagesDivider } from "@/hooks/useNewMessagesDivider";
-import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { useSyncTasks } from "@/hooks/useSyncActivity";
 import { useSyncTopicState } from "@/sync/useSyncTopic";
@@ -197,22 +199,6 @@ function Banner2({ banner }: { banner: ImagePointer | undefined }) {
 /** Concord V2 inline-reply context: resolve the replied-to rumor from the
  *  in-memory decoded set (rumors aren't relay-fetchable) and render the shared
  *  "replying to …" chrome. Clicking jumps the timeline to the parent. */
-function ReplyContext2({ parent, onJump }: { parent: ChatMsg | undefined; onJump: (id: string) => void }) {
-  const author = useAuthor(parent?.pubkey);
-  const name = useScopedDisplayName(parent?.pubkey, author.data?.metadata);
-  if (!parent) return null;
-  const image = firstImageRef(parent);
-  return (
-    <ReplyContextLine
-      name={name}
-      pubkey={parent.pubkey}
-      preview={<ReplyPreview content={parent.content} hideMediaPlaceholder={!!image} />}
-      thumbnail={image ? <ReplyThumbnail image={image} /> : undefined}
-      onClick={() => onJump(parent.id)}
-    />
-  );
-}
-
 interface ChatMessage2Props {
   /** Channel route for "Copy message link" (see ChatMessage.permalink). */
   permalink?: ChatRoute;
@@ -292,7 +278,7 @@ const ChatMessage2 = memo(function ChatMessage2({
 }: ChatMessage2Props) {
   const threadInfo = threadSummary(replies);
   const replyContext = replyToId ? (
-    <ReplyContext2 parent={replyParent} onJump={onJumpToReply} />
+    <ReplyContext parent={replyParent} onJump={onJumpToReply} />
   ) : undefined;
   // Concord V2 messages are unsigned rumors sealed at the channel's stream
   // address — there's no relay-addressable event id, so the "Copy message ID" /
@@ -930,14 +916,8 @@ export function ConcordV2Page() {
   const communityId = route?.communityId;
   const routeChannelId = route?.channelId;
   const routePane = route?.pane;
-  const routeThreadRoot = route?.threadRoot;
   const { user } = useCurrentUser();
   const navigateTo = useNavigate();
-  // Whether the reply composer should take focus when the thread panel opens.
-  // An intent belonging to the click that navigated, not to the location — a
-  // shared link must not steal focus — so it rides in history state, which
-  // stays out of the URL and survives Back/Forward.
-  const threadAutoFocus = Boolean((location.state as { threadAutoFocus?: boolean } | null)?.threadAutoFocus);
   const isTouchDevice = useIsTouch();
   const composerBoundsRef = useRef<HTMLElement | null>(null);
   const { config, updateConfig } = useAppContext();
@@ -1182,7 +1162,6 @@ export function ConcordV2Page() {
   const [openTicket, setOpenTicket] = useState<GitTicket | undefined>();
   const channelNameById = useMemo(() => new Map(channels.map((c) => [c.idHex, c.name])), [channels]);
   const projects = useGitProjects(gitAttachmentsByChannel, channelNameById, projectsTouched || Boolean(openTicket));
-  const timelineRef = useRef<MessageTimelineHandle | null>(null);
   // Clicking a mention: navigate to its channel with the message focused. The
   // cross-channel wait is the permalink's — `/m/<id>` names the target, and
   // the hunt resolves it once that channel's timeline has it — so there is no
@@ -1818,34 +1797,28 @@ export function ConcordV2Page() {
     setNavKey(communityId);
     setChannelsOpen(!routeChannelId);
   }
-  // The open thread is the one the route names, resolved against loaded
-  // history. Deriving it (rather than mirroring the id into state) is what
-  // makes the panel survive a refresh, close on Back, and open from a
-  // notification without a second code path: there is one answer to "which
-  // thread is open", and the URL is it.
-  //
-  // An unresolved id — a deep link into a thread whose root is older than the
-  // loaded window — simply leaves the panel closed while the hunt in
-  // `usePermalinkTarget` pages back toward it.
-  const threadRoot = useMemo(
-    () => (routeThreadRoot ? allMessages.find((m) => m.id === routeThreadRoot) : undefined),
-    [routeThreadRoot, allMessages],
+  // The open channel as a route: what the thread panel pushes `/t/<root>`
+  // onto, what "Copy message link" stamps a message id onto, and what the
+  // legacy `?m=`/`?thread=` translation redirects into.
+  const channelRoute = useMemo(
+    () =>
+      communityId && channel
+        ? ({ kind: "concord2", communityId, channelId: channel.idHex } as const)
+        : undefined,
+    [communityId, channel],
   );
-  const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);
-  const [threadExpanded, setThreadExpanded] = useState(false);
-  // Drop the slide-out keepalive when the channel or community changes. The
-  // panel itself needs no closing — leaving a channel drops the `/t/` segment,
-  // so `threadRoot` resolves to nothing — but `lastThreadRoot` is cleared here
-  // rather than only by the animation timeout, which re-runs on `threadRoot`
-  // changes and so wouldn't fire for an already-closed panel. The scope key
-  // includes `communityId` because the page is reused across community
-  // switches (no route `key`) and `channel?.idHex` alone can lag the change.
-  const threadScopeKey = `${communityId}\u0000${channel?.idHex ?? ""}`;
-  const [threadChannelKey, setThreadChannelKey] = useState(threadScopeKey);
-  if (threadChannelKey !== threadScopeKey) {
-    setThreadChannelKey(threadScopeKey);
-    setLastThreadRoot(undefined);
-  }
+  const {
+    threadRoot,
+    lastThreadRoot,
+    expanded: threadExpanded,
+    setExpanded: setThreadExpanded,
+    autoFocus: threadAutoFocus,
+    chatColumnClass,
+    openThread,
+    onOpenThread: onOpenThreadCb,
+    closeThread,
+  } = useThreadPanel({ room: channelRoute, messages: allMessages, canWrite });
+
   // Search is community-wide, so it survives channel switches but resets when
   // the community changes.
   const [searchCommunityKey, setSearchCommunityKey] = useState(communityId);
@@ -1855,9 +1828,7 @@ export function ConcordV2Page() {
     setSearchFilters(EMPTY_SEARCH_FILTERS);
   }
   const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
-  const [activeId, setActiveId] = useState<string | undefined>(undefined);
   const [editingId, setEditingId] = useState<string | undefined>(undefined);
-  const toggleActive = useCallback((id: string) => setActiveId((cur) => (cur === id ? undefined : id)), []);
 
   // Tell the native notification service this channel (and, if a thread panel
   // is open, that specific thread) is on screen, so it suppresses redundant
@@ -2113,42 +2084,13 @@ export function ConcordV2Page() {
   }, [folded, privatiseChannel]);
 
 
-  // Opening a thread is a navigation: it pushes `/t/<root>` onto the channel
-  // route. Back therefore closes the panel, the panel survives a refresh, and
-  // "Copy message link" inside it can name where the reader actually is.
-  //
-  // Read-stamping stays out of this: the effect below marks whatever thread is
-  // open, which covers arriving by link or by Back as well as by click.
-  const openThread = useCallback(
-    (event: ChatMsg, focusReply = false) => {
-      if (!communityId || !channel) return;
-      navigateTo(
-        chatRoute({ kind: "concord2", communityId, channelId: channel.idHex, threadRoot: event.id }),
-        { state: { threadAutoFocus: focusReply } },
-      );
-    },
-    [communityId, channel, navigateTo],
-  );
-  // Closing when no thread is routed is a no-op rather than a second push, so
-  // a stray close (the panel is still mounted through its slide-out) can't
-  // stack duplicate history entries.
-  const closeThread = useCallback(() => {
-    if (!communityId || !channel || !routeThreadRoot) return;
-    setThreadExpanded(false);
-    navigateTo(chatRoute({ kind: "concord2", communityId, channelId: channel.idHex }));
-  }, [communityId, channel, routeThreadRoot, navigateTo]);
-
   // Inline-reply plumbing: a by-id lookup over the decoded set (rumors aren't
-  // relay-fetchable, so the "replying to …" line resolves the parent locally),
-  // and a jump-to-message handler for clicking that line.
+  // relay-fetchable, so the "replying to …" line resolves the parent locally).
   const messagesById = useMemo(() => {
     const m = new Map<string, ChatMsg>();
     for (const msg of allMessages) m.set(msg.id, msg);
     return m;
   }, [allMessages]);
-  const jumpWithinChannel = useCallback((id: string) => {
-    timelineRef.current?.scrollToMessage(id);
-  }, []);
 
   // Focus the search field when it expands. `preventScroll` matters: the input
   // starts off-screen (translated right) and slides in, so a default focus()
@@ -2192,25 +2134,7 @@ export function ConcordV2Page() {
   }, [ticketParam, openTicket, gitActivity.activities, setSearchParams]);
   // Pre-path deep links (`?thread=`, `?m=`) become their route equivalents.
   // Old tray notifications and copied links still carry them.
-  useLegacyFocusParams(
-    useMemo(
-      () =>
-        communityId && channel
-          ? ({ kind: "concord2", communityId, channelId: channel.idHex } as const)
-          : undefined,
-      [communityId, channel],
-    ),
-  );
-
-  // Keep the thread panel content mounted through its slide-out animation.
-  useEffect(() => {
-    if (threadRoot) {
-      setLastThreadRoot(threadRoot);
-      return;
-    }
-    const t = setTimeout(() => setLastThreadRoot(undefined), 200);
-    return () => clearTimeout(t);
-  }, [threadRoot]);
+  useLegacyFocusParams(channelRoute);
 
   // Inject `openThread` (page-owned panel state) onto the data transport.
   const transport = useMemo(() => ({
@@ -2241,19 +2165,17 @@ export function ConcordV2Page() {
   // hands its timeline to ChatComposer as `messages: []`, so it must supply this.
   const recentAuthors = useMemo(() => authorsByRecency(transport.messages), [transport.messages]);
 
-  // Message permalinks (`?m=<id>` — notification taps, copied links): scroll
-  // to the target with the focus indicator once it's loaded, pulling older
-  // pages when it's further back than the loaded history.
-  const permalinkScroll = useCallback(
-    (id: string) => timelineRef.current?.scrollToMessage(id, true) ?? false,
-    [],
-  );
-  const clearMessageFocus = useMessagePermalink({
+  const {
+    timelineRef,
+    jumpToMessage: jumpWithinChannel,
+    clearMessageFocus,
+    activeId,
+    toggleActive,
+  } = useTimelineFocus({
     messages: allMessages,
     isLoading: Boolean(baseTransport.isLoading),
     hasMore: transport.hasMore,
     loadOlder: transport.loadOlder,
-    scrollTo: permalinkScroll,
     enabled: view === "channel",
   });
 
@@ -2297,11 +2219,6 @@ export function ConcordV2Page() {
     if (channelTopic.status === "error") setChannelSyncFailed(true);
     else if (channelTopic.status === "settled") setChannelSyncFailed(false);
   }, [channelTopic.status]);
-
-  const onOpenThreadCb = useMemo(
-    () => (canWrite ? (event: ChatMsg) => openThread(event, true) : undefined),
-    [canWrite, openThread],
-  );
 
   // Stable identities so an unchanged message row's props don't churn and its
   // `memo` can bail out. `transport` is rebuilt on every message, so reach it
@@ -3351,11 +3268,7 @@ export function ConcordV2Page() {
           <ChatScopeContext.Provider value={appScope}>
           <div className="relative flex flex-1 min-h-0">
             <ComposerBoundsProvider value={composerBoundsRef}>
-            <div className={cn(
-              "flex-1 min-w-0 flex flex-col",
-              "thread:transition-[width,opacity] thread:duration-300 thread:ease-out",
-              threadRoot && threadExpanded && "thread:flex-none thread:w-0 thread:opacity-0 thread:overflow-hidden thread:pointer-events-none",
-            )}>
+            <div className={cn("flex-1 min-w-0 flex flex-col", chatColumnClass)}>
               {view === "mentions" ? (
                 <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
                   <MentionsView
@@ -3658,51 +3571,24 @@ export function ConcordV2Page() {
             />
             </ComposerBoundsProvider>
 
-            {/* Thread panel. Wide (≥1200px `thread:`): in-flow sibling whose width
-                animates open. Narrower (incl. the 900–1200 band where the rail +
-                channel list are shown but there's no room for a 23rem push):
-                overlays the chat and slides in. Mirrors GroupChat. */}
-            <div
-              className={cn(
-                "overflow-hidden",
-                "absolute inset-0 z-20 thread:static thread:z-auto",
-                "thread:transition-[width] thread:duration-200 thread:ease-out",
-                threadRoot
-                  ? (threadExpanded ? "thread:flex-1 thread:w-full" : "thread:shrink-0 thread:w-[23rem]")
-                  : "thread:shrink-0 thread:w-0 pointer-events-none thread:pointer-events-auto",
+            <ThreadPanelSlot open={Boolean(threadRoot)} expanded={threadExpanded}>
+              {lastThreadRoot && channel && (
+                <ThreadPanel
+                  root={lastThreadRoot}
+                  transport={transport}
+                  relayUrl="dm"
+                  groupId={channel.idHex}
+                  canWrite={canWrite}
+                  mentionPubkeys={memberPubkeys}
+                  botCommands
+                  conversationRelays={community?.relays}
+                  autoFocus={threadAutoFocus}
+                  open={Boolean(threadRoot)}
+                  onClose={closeThread}
+                  onExpandChange={setThreadExpanded}
+                />
               )}
-            >
-              <div
-                className={cn(
-                  "absolute inset-0 bg-background transition-opacity duration-200 ease-out thread:hidden",
-                  threadRoot ? "opacity-100" : "opacity-0",
-                )}
-              />
-              <div
-                className={cn(
-                  "relative h-full flex w-full transition-transform duration-200 ease-out",
-                  threadRoot ? "translate-x-0" : "translate-x-full",
-                  threadExpanded ? "thread:w-full" : "thread:w-[23rem]",
-                )}
-              >
-                {lastThreadRoot && channel && (
-                  <ThreadPanel
-                    root={lastThreadRoot}
-                    transport={transport}
-                    relayUrl="dm"
-                    groupId={channel.idHex}
-                    canWrite={canWrite}
-                    mentionPubkeys={memberPubkeys}
-                    botCommands
-                    conversationRelays={community?.relays}
-                    autoFocus={threadAutoFocus}
-                    open={Boolean(threadRoot)}
-                    onClose={closeThread}
-                    onExpandChange={setThreadExpanded}
-                  />
-                )}
-              </div>
-            </div>
+            </ThreadPanelSlot>
 
             {/* Member panel: width-animated on desktop, slide overlay on mobile. */}
             <div

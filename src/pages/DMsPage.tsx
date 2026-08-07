@@ -6,12 +6,13 @@ import { useNavigate, useParams, Navigate } from "react-router-dom";
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { DittoIcon } from "@/components/brand/DittoIcon";
 import { ChatComposer } from "@/components/chat/ChatComposer";
-import { ChatMessage, ReplyContextLine, ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
+import { ChatMessage } from "@/components/chat/ChatMessage";
 import type { ChatMsg } from "@/components/chat/transport";
-import { firstImageRef, getQuoteReplyToId } from "@/components/chat/messageHelpers";
+import { getQuoteReplyToId } from "@/components/chat/messageHelpers";
+import { ReplyContext } from "@/components/chat/ReplyContext";
 import { MessageRow } from "@/components/chat/MessageRow";
-import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
-import { useMessagePermalink } from "@/hooks/useMessagePermalink";
+import { MessageTimeline } from "@/components/chat/MessageTimeline";
+import { useTimelineFocus } from "@/hooks/useTimelineFocus";
 import { TypingIndicator } from "@/components/chat/TypingIndicator";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { ServerRail } from "@/components/layout/ServerRail";
@@ -556,22 +557,6 @@ function DmTimerNotice({ author, seconds, self, name }: { author: string; second
   );
 }
 
-function DmReplyContext({ parent, onJump }: { parent: NostrRumor | undefined; onJump: (id: string) => void }) {
-  const author = useAuthor(parent?.pubkey);
-  const name = parent ? getDisplayName(author.data?.metadata, parent.pubkey) : "";
-  if (!parent) return null;
-  const image = firstImageRef(parent);
-  return (
-    <ReplyContextLine
-      name={name}
-      pubkey={parent.pubkey}
-      preview={<ReplyPreview content={parent.content} hideMediaPlaceholder={!!image} />}
-      thumbnail={image ? <ReplyThumbnail image={image} /> : undefined}
-      onClick={() => onJump(parent.id)}
-    />
-  );
-}
-
 /**
  * The message a DM replies to, if any. Our own sends carry a NIP-C7 `q`
  * (rich quote, shared with Concord's renderer); foreign NIP-17 clients use a
@@ -737,17 +722,6 @@ function Conversation({
   const [replyTo, setReplyTo] = useState<NostrRumor | undefined>(undefined);
   useEffect(() => setReplyTo(undefined), [peer]);
 
-  // Mobile tap-to-reveal for the per-message action toolbar (react/quote/etc.).
-  // On touch devices the toolbar is inert until the row is tapped active; a
-  // second tap on a control fires it. Mirrors Concord chats' behavior so DMs
-  // can be reacted to / quoted on mobile.
-  const [activeId, setActiveId] = useState<string | undefined>(undefined);
-  const toggleActive = useCallback(
-    (id: string) => setActiveId((cur) => (cur === id ? undefined : id)),
-    [],
-  );
-  useEffect(() => setActiveId(undefined), [peer]);
-
   // Legacy-encryption opt-in. When the peer can't receive private (NIP-17)
   // DMs, we DON'T silently downgrade to kind-4 (which leaks who's talking and
   // when). The composer is replaced by a notice until the user explicitly
@@ -762,23 +736,22 @@ function Conversation({
   // never "blocked" — the composer is shown as-is.
   const legacyBlocked = !legacyPinned && !dm17Enabled && !transport.isLoading && !legacyAllowed;
 
-  // Jump-to-quoted-message support (the reply context line is clickable).
-  const timelineRef = useRef<MessageTimelineHandle | null>(null);
-  const jumpToMessage = useCallback((id: string) => {
-    timelineRef.current?.scrollToMessage(id);
-  }, []);
-
-  // Message permalinks (`?m=<id>` — notification taps, copied links).
-  const permalinkScroll = useCallback(
-    (id: string) => timelineRef.current?.scrollToMessage(id, true) ?? false,
-    [],
-  );
-  const clearMessageFocus = useMessagePermalink({
+  // Jump-to-quoted-message support (the reply context line is clickable),
+  // message permalinks, and the mobile tap-to-reveal row. On touch devices the
+  // per-message action toolbar is inert until the row is tapped active; a
+  // second tap on a control fires it.
+  const {
+    timelineRef,
+    jumpToMessage,
+    pinToPresent,
+    activeId,
+    toggleActive,
+  } = useTimelineFocus({
     messages,
     isLoading: transport.isLoading,
     hasMore: transport.hasMore,
     loadOlder: transport.loadOlder,
-    scrollTo: permalinkScroll,
+    resetKey: peer,
   });
 
   // The loaded thread by id, for resolving quoted parents locally (NIP-17
@@ -948,10 +921,9 @@ function Conversation({
         // Sending is an explicit "I'm at the present", so follow the new
         // message even from a reader who had scrolled up — the timeline's own
         // stick-to-bottom deliberately won't, and group and Buzz chat both pin
-        // here too.
-        timelineRef.current?.pinToBottom();
-        // …and the location must stop claiming they're parked at an older one.
-        clearMessageFocus();
+        // here too — and the location must stop claiming they're parked at an
+        // older one.
+        pinToPresent();
         setReplyTo(undefined);
       } catch (e) {
         // The peer can't receive private DMs and legacy hasn't been enabled —
@@ -972,7 +944,7 @@ function Conversation({
         throw e;
       }
     },
-    [send, toast, replyTo, legacyAllowed, isRequest, onAccept, clearMessageFocus],
+    [send, toast, replyTo, legacyAllowed, isRequest, onAccept, pinToPresent],
   );
 
   const handleMute = useCallback(async () => {
@@ -1390,7 +1362,7 @@ function Conversation({
                 replyContext={(() => {
                   const replyId = dmReplyToId(msg);
                   return replyId ? (
-                    <DmReplyContext parent={messagesById.get(replyId)} onJump={jumpToMessage} />
+                    <ReplyContext parent={messagesById.get(replyId)} onJump={jumpToMessage} />
                   ) : undefined;
                 })()}
                 // Reactions ride the NIP-17 plane (kind-7 rumors sealed into

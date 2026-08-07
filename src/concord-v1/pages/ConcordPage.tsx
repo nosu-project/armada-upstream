@@ -7,13 +7,15 @@ import { AppStageSlot } from "@/components/chat/AppStage";import { ChannelNavCon
 import { ChatScopeContext } from "@/contexts/ChatScopeContext";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
 import { ChatComposer } from "@/components/chat/ChatComposer";
-import { ChatMessage, ReplyContextLine, ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
-import { firstImageRef, getQuoteReplyToId } from "@/components/chat/messageHelpers";
+import { ChatMessage } from "@/components/chat/ChatMessage";
+import { getQuoteReplyToId } from "@/components/chat/messageHelpers";
+import { ReplyContext } from "@/components/chat/ReplyContext";
 import { LoginArea } from "@/components/auth/LoginArea";
 import { JoinButton } from "@/components/auth/JoinButton";
 import { MemberList } from "@/components/chat/MemberList";
-import { MessageTimeline, type MessageTimelineHandle } from "@/components/chat/MessageTimeline";
+import { MessageTimeline } from "@/components/chat/MessageTimeline";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
+import { ThreadPanelSlot } from "@/components/chat/ThreadPanelSlot";
 import { TypingIndicator } from "@/components/chat/TypingIndicator";
 import { InviteConcordDialog } from "@/concord-v1/components/InviteConcordDialog";
 import { useConcord1Unread, type Concord1Unread } from "@/concord-v1/hooks/useConcord1Unread";
@@ -49,8 +51,6 @@ import { useConcordTransport } from "@/concord-v1/hooks/useConcordTransport";
 import { useSendConcordMessage } from "@/concord-v1/hooks/useConcordChannel";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useIsTouch } from "@/hooks/useIsMobile";
-import { useAuthor } from "@/hooks/useAuthor";
-import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { useDecryptedCommunityImage } from "@/concord-v1/hooks/useDecryptedCommunityImage";
 import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
@@ -63,7 +63,8 @@ import { type Channel, type Community, type CommunityImage } from "@/concord-v1/
 import { cn, pickDefaultChannel } from "@/lib/utils";
 import { chatRoute, parseChatRoute, type ChatRoute } from "@/lib/routes";
 import { useLegacyFocusParams } from "@/hooks/useLegacyFocusParams";
-import { useMessagePermalink } from "@/hooks/useMessagePermalink";
+import { useThreadPanel } from "@/hooks/useThreadPanel";
+import { useTimelineFocus } from "@/hooks/useTimelineFocus";
 
 import { authorsByRecency, threadSummary } from "@/components/chat/transport";
 import type { ChatMsg, MessageReactions, SendStatus } from "@/components/chat/transport";
@@ -94,22 +95,6 @@ function CommunityBanner({ banner }: { banner: CommunityImage | undefined }) {
 
 /** Concord V1 inline-reply context: resolve the replied-to message from the
  *  in-memory decoded set and render the shared "replying to …" chrome. */
-function ReplyContext1({ parent, onJump }: { parent: ChatMsg | undefined; onJump: (id: string) => void }) {
-  const author = useAuthor(parent?.pubkey);
-  const name = useScopedDisplayName(parent?.pubkey, author.data?.metadata);
-  if (!parent) return null;
-  const image = firstImageRef(parent);
-  return (
-    <ReplyContextLine
-      name={name}
-      pubkey={parent.pubkey}
-      preview={<ReplyPreview content={parent.content} hideMediaPlaceholder={!!image} />}
-      thumbnail={image ? <ReplyThumbnail image={image} /> : undefined}
-      onClick={() => onJump(parent.id)}
-    />
-  );
-}
-
 interface ConcordChatMessageProps {
   event: ChatMsg;
   reactions: MessageReactions;  /** This message's thread replies (stable ref from the transport), for the badge. */
@@ -172,7 +157,7 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
 }: ConcordChatMessageProps) {
   const threadInfo = threadSummary(replies);
   const replyContext = replyToId ? (
-    <ReplyContext1 parent={replyParent} onJump={onJumpToReply} />
+    <ReplyContext parent={replyParent} onJump={onJumpToReply} />
   ) : undefined;
   return (
     <ChatMessage
@@ -323,11 +308,6 @@ export function ConcordPage() {
   }, [location.pathname]);
   const communityId = parsedRoute?.communityId;
   const routeChannelId = parsedRoute?.channelId;
-  const routeThreadRoot = parsedRoute?.threadRoot;
-  // Whether the reply composer takes focus when the thread panel opens: an
-  // intent belonging to the click that navigated, not to the location, so it
-  // rides in history state and a shared link never steals focus.
-  const threadAutoFocus = Boolean((location.state as { threadAutoFocus?: boolean } | null)?.threadAutoFocus);
   const { user } = useCurrentUser();
   const isTouchDevice = useIsTouch();
   const composerBoundsRef = useRef<HTMLElement | null>(null);
@@ -568,73 +548,23 @@ export function ConcordPage() {
   }
   // Slack-style threads: the open one is whichever the route names, resolved
   // against loaded history, so it survives a refresh and closes on Back.
-  const threadRoot = useMemo(
-    () => (routeThreadRoot ? allMessages.find((m) => m.id === routeThreadRoot) : undefined),
-    [routeThreadRoot, allMessages],
-  );
-  const [lastThreadRoot, setLastThreadRoot] = useState<ChatMsg | undefined>(undefined);
-  const [threadExpanded, setThreadExpanded] = useState(false);
-  // Drop the slide-out keepalive when the channel or community changes. The
-  // panel needs no closing — leaving a channel drops the `/t/` segment — but
-  // `lastThreadRoot` is cleared here rather than only by the animation
-  // timeout, which re-runs on `threadRoot` changes and so wouldn't fire for an
-  // already-closed panel. The scope key includes `communityId` because the
-  // page is reused across community switches (no route `key`) and
-  // `currentChannelIdHex` alone can lag the change.
-  const threadScopeKey = `${communityId} ${currentChannelIdHex ?? ""}`;
-  const [threadChannelKey, setThreadChannelKey] = useState(threadScopeKey);
-  if (threadChannelKey !== threadScopeKey) {
-    setThreadChannelKey(threadScopeKey);
-    setLastThreadRoot(undefined);
-  }
-  const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
-  // The single message whose tap-to-reveal toolbar is open (touch only). Mirrors
-  // GroupChat: without this, the action toolbar stays `touch:pointer-events-none`
-  // and the react/reply/delete buttons never become tappable on the APK.
-  const [activeId, setActiveId] = useState<string | undefined>(undefined);
-  const toggleActive = useCallback(
-    (id: string) => setActiveId((cur) => (cur === id ? undefined : id)),
-    [],
-  );
+  const {
+    threadRoot,
+    lastThreadRoot,
+    expanded: threadExpanded,
+    setExpanded: setThreadExpanded,
+    autoFocus: threadAutoFocus,
+    chatColumnClass,
+    openThread,
+    onOpenThread: onOpenThreadCb,
+    closeThread,
+  } = useThreadPanel({ room: channelRoute, messages: allMessages, canWrite });
 
-  // Opening a thread pushes `/t/<root>` onto the channel route, so Back closes
-  // the panel and the panel survives a refresh.
-  const openThread = useCallback(
-    (event: ChatMsg, focusReply = false) => {
-      if (!communityId || !currentChannelIdHex) return;
-      navigateTo(
-        chatRoute({
-          kind: "concord1",
-          communityId,
-          channelId: currentChannelIdHex,
-          threadRoot: event.id,
-        }),
-        { state: { threadAutoFocus: focusReply } },
-      );
-    },
-    [communityId, currentChannelIdHex, navigateTo],
-  );
-  // A no-op when no thread is routed, so a stray close (the panel stays
-  // mounted through its slide-out) can't stack duplicate history entries.
-  const closeThread = useCallback(() => {
-    if (!communityId || !currentChannelIdHex || !routeThreadRoot) return;
-    setThreadExpanded(false);
-    navigateTo(chatRoute({ kind: "concord1", communityId, channelId: currentChannelIdHex }));
-  }, [communityId, currentChannelIdHex, routeThreadRoot, navigateTo]);
+  const [replyTo, setReplyTo] = useState<ChatMsg | undefined>(undefined);
 
   // Pre-path deep links (`?thread=`, `?m=`) become their route equivalents.
   // Old tray notifications and copied links still carry them.
   useLegacyFocusParams(channelRoute);
-
-  // Keep the thread panel content mounted through its slide-out animation.
-  useEffect(() => {
-    if (threadRoot) {
-      setLastThreadRoot(threadRoot);
-      return;
-    }
-    const t = setTimeout(() => setLastThreadRoot(undefined), 200);
-    return () => clearTimeout(t);
-  }, [threadRoot]);
 
   // Inject `openThread` (page-owned panel state) onto the data transport, so the
   // shared ChatMessage's reply action opens the thread.
@@ -670,15 +600,6 @@ export function ConcordPage() {
     return [...set];
   }, [roster, allMessages, user]);
 
-  // Stable open-thread callback so a per-message `ConcordChatMessage` doesn't
-  // re-render just because the page did.
-  const onOpenThreadCb = useMemo(
-    () => (canWrite ? (event: ChatMsg) => openThread(event, true) : undefined),
-    [canWrite, openThread],
-  );
-
-  const timelineRef = useRef<MessageTimelineHandle | null>(null);
-
   // Inline-reply plumbing: a by-id lookup over the decoded set (the "replying
   // to …" line resolves the parent locally) and a jump-to-message handler.
   const messagesById = useMemo(() => {
@@ -686,23 +607,18 @@ export function ConcordPage() {
     for (const msg of allMessages) m.set(msg.id, msg);
     return m;
   }, [allMessages]);
-  const jumpWithinChannel = useCallback((id: string) => {
-    timelineRef.current?.scrollToMessage(id);
-  }, []);
 
-  // Message permalinks (`/m/<id>` — notification taps, copied links): scroll to
-  // the target with the focus indicator once it's loaded, pulling older pages
-  // when it's further back than the loaded history.
-  const permalinkScroll = useCallback(
-    (id: string) => timelineRef.current?.scrollToMessage(id, true) ?? false,
-    [],
-  );
-  const clearMessageFocus = useMessagePermalink({
+  const {
+    timelineRef,
+    jumpToMessage: jumpWithinChannel,
+    clearMessageFocus,
+    activeId,
+    toggleActive,
+  } = useTimelineFocus({
     messages: allMessages,
     isLoading: baseTransport.isLoading,
     hasMore: baseTransport.hasMore,
     loadOlder: baseTransport.loadOlder,
-    scrollTo: permalinkScroll,
   });
 
   // Moderation: ban (read-cut), kick (cooperative), unban. The recipient set for
@@ -1095,11 +1011,7 @@ export function ConcordPage() {
         >
         <div className="relative flex flex-1 min-h-0">
           <ComposerBoundsProvider value={composerBoundsRef}>
-          <div className={cn(
-            "flex-1 min-w-0 flex flex-col",
-            "thread:transition-[width,opacity] thread:duration-300 thread:ease-out",
-            threadRoot && threadExpanded && "thread:flex-none thread:w-0 thread:opacity-0 thread:overflow-hidden thread:pointer-events-none",
-          )}>
+          <div className={cn("flex-1 min-w-0 flex flex-col", chatColumnClass)}>
             <MessageTimeline
               key={channel ? bytesToHex(channel.id) : "none"}
               transport={transport}
@@ -1162,54 +1074,27 @@ export function ConcordPage() {
           </div>
           </ComposerBoundsProvider>
 
-          {/* Thread panel. Wide (≥1200px `thread:`): in-flow sibling whose width
-              animates open. Narrower (incl. the 900–1200 band where the rail +
-              channel list are shown but there's no room for a 23rem push):
-              overlays the chat (absolute) and slides in. Mirrors GroupChat. */}
-          <div
-            className={cn(
-              "overflow-hidden",
-              "absolute inset-0 z-20 thread:static thread:z-auto",
-              "thread:transition-[width] thread:duration-200 thread:ease-out",
-              threadRoot
-                ? (threadExpanded ? "thread:flex-1 thread:w-full" : "thread:shrink-0 thread:w-[23rem]")
-                : "thread:shrink-0 thread:w-0 pointer-events-none thread:pointer-events-auto",
+          <ThreadPanelSlot open={Boolean(threadRoot)} expanded={threadExpanded}>
+            {lastThreadRoot && (
+              <ThreadPanel
+                root={lastThreadRoot}
+                transport={transport}
+                relayUrl="dm"
+                groupId={channel ? bytesToHex(channel.id) : "concord"}
+                canWrite={canWrite}
+                mentionPubkeys={memberPubkeys}
+                botCommands
+                conversationRelays={community?.relays}
+                autoFocus={threadAutoFocus}
+                open={Boolean(threadRoot)}
+                permalink={
+                  channelRoute ? { ...channelRoute, threadRoot: lastThreadRoot.id } : undefined
+                }
+                onClose={closeThread}
+                onExpandChange={setThreadExpanded}
+              />
             )}
-          >
-            <div
-              className={cn(
-                "absolute inset-0 bg-background transition-opacity duration-200 ease-out thread:hidden",
-                threadRoot ? "opacity-100" : "opacity-0",
-              )}
-            />
-            <div
-              className={cn(
-                "relative h-full flex w-full transition-transform duration-200 ease-out",
-                threadRoot ? "translate-x-0" : "translate-x-full",
-                threadExpanded ? "thread:w-full" : "thread:w-[23rem]",
-              )}
-            >
-              {lastThreadRoot && (
-                <ThreadPanel
-                  root={lastThreadRoot}
-                  transport={transport}
-                  relayUrl="dm"
-                  groupId={channel ? bytesToHex(channel.id) : "concord"}
-                  canWrite={canWrite}
-                  mentionPubkeys={memberPubkeys}
-                  botCommands
-                  conversationRelays={community?.relays}
-                  autoFocus={threadAutoFocus}
-                  open={Boolean(threadRoot)}
-                  permalink={
-                    channelRoute ? { ...channelRoute, threadRoot: lastThreadRoot.id } : undefined
-                  }
-                  onClose={closeThread}
-                  onExpandChange={setThreadExpanded}
-                />
-              )}
-            </div>
-          </div>
+          </ThreadPanelSlot>
 
           {/* Member panel: width-animated on desktop, slide overlay on mobile.
               Mirrors the NIP-29 GroupPage member panel. */}
