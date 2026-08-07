@@ -7,14 +7,13 @@ import { ArmadaNotification } from "@/lib/nativeNotifications";
 /**
  * Tell the native background notification service which room(s) the WebView is
  * currently showing, so it can suppress redundant notifications for that room
- * (the live `relayEvent`/`concordMessage` feed already paints the message in
+ * (the live `relayEvent` feed already paints the message in
  * the timeline).
  *
  * The roomKeys are the service's stable per-conversation identifiers (the same
  * shapes `enqueueRoomMessage` uses on the Java side):
  *   - NIP-29 group: `h:<relayUrl>|<groupId>`
- *   - Concord V1:   `z:<pseudonym>` (one per held epoch)
- *   - Concord V2:   `c2:<channelIdHex>`
+ *   - Concord:      `c2:<channelIdHex>`
  *   - DM:           `dm:<peerPubkey>`
  *
  * Thread-level keys (`<roomKey>:t:<rootId>`) suppress notifications for a

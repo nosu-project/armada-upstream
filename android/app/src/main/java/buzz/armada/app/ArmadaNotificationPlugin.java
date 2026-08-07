@@ -93,7 +93,7 @@ public class ArmadaNotificationPlugin extends Plugin {
      * SharedPreferences file holding pending "Mark read" markers the service
      * recorded from notification-action taps, for the WebView to drain and apply
      * to the in-app read state on its next open/resume. One JSON object under
-     * key "markers": {@code {roomKey: {ts, channelId?}, …}} — keyed by room so a
+     * key "markers": {@code {roomKey: {ts}, …}} — keyed by room so a
      * later tap in the same room just raises the (monotonic) timestamp.
      */
     static final String READ_MARKERS_PREFS = "armada_read_markers";
@@ -103,11 +103,10 @@ public class ArmadaNotificationPlugin extends Plugin {
 
     /**
      * Record a "Mark read" marker (called by the service on an action tap). Keyed
-     * by room, monotonic in timestamp. {@code channelId} carries the Concord V1
-     * channel id (the roomKey holds only the per-epoch `z` pseudonym); null for
-     * every other room type, which the WebView derives from the room key itself.
+     * by room, monotonic in timestamp; the WebView derives the conversation
+     * from the room key itself.
      */
-    static void enqueueReadMarker(Context ctx, String roomKey, long tsSec, String channelId) {
+    static void enqueueReadMarker(Context ctx, String roomKey, long tsSec) {
         if (ctx == null || roomKey == null || roomKey.isEmpty()) return;
         synchronized (READ_MARKERS_LOCK) {
             SharedPreferences sp = ctx.getSharedPreferences(READ_MARKERS_PREFS, Context.MODE_PRIVATE);
@@ -123,7 +122,6 @@ public class ArmadaNotificationPlugin extends Plugin {
                 if (tsSec >= prev) {
                     JSONObject entry = new JSONObject();
                     entry.put("ts", tsSec);
-                    if (channelId != null && !channelId.isEmpty()) entry.put("channelId", channelId);
                     map.put(roomKey, entry);
                     sp.edit().putString(READ_MARKERS_KEY, map.toString()).apply();
                 }
@@ -142,7 +140,7 @@ public class ArmadaNotificationPlugin extends Plugin {
 
     /**
      * Rolling per-room cache of raw outer events, keyed by room
-     * ("h:<groupId>" / "z:<pseudonym>" / "c2:<channelId>" / "dm"), newest last.
+     * ("h:<groupId>" / "c2:<channelId>" / "dm"), newest last.
      * Unlike {@link #eventBuffer} (a one-shot drain of what arrived while the
      * WebView was down, shared across ALL rooms), this survives drains and
      * retains the last screenful per room for the service's lifetime — so
@@ -180,11 +178,11 @@ public class ArmadaNotificationPlugin extends Plugin {
      * NotificationRelayService.handleEvent), which the WebView drains by cursor
      * on open/resume. Also recorded in the per-room rolling cache regardless of
      * bridge state. Same event for NIP-29 (kind 9/1068/…), DMs (kind 4,
-     * ciphertext) and Concord (sealed kind 3300 / wrapped kind 1059) — the
+     * ciphertext) and Concord (wrapped kind 1059) — the
      * WebView routes it through wire ingest and its read path decodes it.
      *
-     * @param roomKey per-room cache key ("h:<groupId>" / "z:<z>" / "dm"), or
-     *                null to skip the room cache.
+     * @param roomKey per-room cache key ("h:<groupId>" / "c2:<channelId>" /
+     *                "dm"), or null to skip the room cache.
      * @param relayUrl the relay it arrived from, which the WebView's ingest needs
      *                 to file a NIP-29 event under the right server (see
      *                 RelayScope). May be null for events with no relay scope.
@@ -202,46 +200,11 @@ public class ArmadaNotificationPlugin extends Plugin {
     }
 
     /**
-     * Concord inner events the service ALREADY decrypted (it holds the channel
-     * key to render the notification). Buffered like {@link #eventBuffer} so a
-     * cold-launched app drains them too. Each entry is a 3-line tuple:
-     * inner-event JSON, the outer `z` pseudonym, and the outer event id — enough
-     * for the WebView to bind it to a held epoch, verify the inner Schnorr
-     * signature, and fold it in WITHOUT re-decrypting or hitting the relay.
-     */
-    private static final java.util.ArrayDeque<String[]> concordBuffer = new java.util.ArrayDeque<>();
-    private static final int CONCORD_BUFFER_MAX = 200;
-
-    /**
-     * Hand a decrypted Concord inner event to the WebView. The WebView still
-     * fully verifies it (the service only checked HMAC + channel/epoch binding,
-     * not the author's Schnorr signature), so a forged inner is dropped there.
-     * Emits live if the bridge is up; otherwise buffers for the next drain.
-     */
-    static void feedConcordInner(String innerJson, String z, String outerId) {
-        if (innerJson == null || z == null || outerId == null) return;
-        ArmadaNotificationPlugin p = instance;
-        if (p != null) {
-            JSObject data = new JSObject();
-            data.put("inner", innerJson);
-            data.put("z", z);
-            data.put("outerId", outerId);
-            p.notifyListeners("concordMessage", data);
-            return;
-        }
-        synchronized (concordBuffer) {
-            if (concordBuffer.size() >= CONCORD_BUFFER_MAX) concordBuffer.pollFirst();
-            concordBuffer.addLast(new String[] { innerJson, z, outerId });
-        }
-    }
-
-    /**
      * Drain a page of the events the service ingested, oldest first. Returns
      * { events: [json, …], ids, relay }; the JS layer routes them through wire
      * ingest and then calls {@link #ackDrain} with those ids AND that relay —
      * peek+ack, so a WebView crash mid-page replays instead of losing events, and
      * a service restart loses nothing (the queue is a durable ArmadaDB tenant).
-     * Concord decrypted inners are a SEPARATE buffer — see drainConcord.
      *
      * A page is one relay's worth, and `relay` names it, because the WebView
      * routes NIP-29 events into the tenant for the relay that served them and a
@@ -289,7 +252,7 @@ public class ArmadaNotificationPlugin extends Plugin {
     /**
      * Return (without consuming) the rolling per-room cache for one room —
      * the newest raw outer events the service received for it this service
-     * lifetime. Keys: "h:<groupId>", "z:<pseudonym>", "c2:<channelId>", "dm".
+     * lifetime. Keys: "h:<groupId>", "c2:<channelId>", "dm".
      * The JS layer merges them by event id, so re-reads are idempotent.
      */
     @PluginMethod
@@ -310,33 +273,9 @@ public class ArmadaNotificationPlugin extends Plugin {
     }
 
     /**
-     * Drain buffered Concord inner events the service already decrypted. Returns
-     * { concord: [{ inner, z, outerId }, …] }. The open channel verifies each
-     * inner's signature + binding and folds it straight in — no second decrypt,
-     * no relay round-trip.
-     */
-    @PluginMethod
-    public void drainConcord(PluginCall call) {
-        JSArray concord = new JSArray();
-        synchronized (concordBuffer) {
-            String[] c;
-            while ((c = concordBuffer.pollFirst()) != null) {
-                JSObject o = new JSObject();
-                o.put("inner", c[0]);
-                o.put("z", c[1]);
-                o.put("outerId", c[2]);
-                concord.put(o);
-            }
-        }
-        JSObject ret = new JSObject();
-        ret.put("concord", concord);
-        call.resolve(ret);
-    }
-
-    /**
      * Drain (and clear) the pending "Mark read" markers the service recorded
-     * from notification-action taps. Returns { markers: [{ room, ts, channelId? },
-     * …] }; the JS layer maps each room key to the right per-protocol read-state
+     * from notification-action taps. Returns { markers: [{ room, ts }, …] };
+     * the JS layer maps each room key to the right per-protocol read-state
      * write. Consumed once — a clean drain, since read state is monotonic so a
      * lost marker is at worst a stale badge the next real read corrects.
      */
@@ -357,8 +296,6 @@ public class ArmadaNotificationPlugin extends Plugin {
                         JSObject o = new JSObject();
                         o.put("room", room);
                         o.put("ts", entry.optLong("ts", 0L));
-                        String channelId = entry.optString("channelId", null);
-                        if (channelId != null && !channelId.isEmpty()) o.put("channelId", channelId);
                         markers.put(o);
                     }
                 } catch (Exception e) {
@@ -477,14 +414,9 @@ public class ArmadaNotificationPlugin extends Plugin {
      * volatile: it lives only on the running service instance, so killing the
      * app or the service immediately resumes notifications.
      *
-     * A set (not a single key) because a Concord V1 channel can span multiple
-     * rekey epochs, each with its own {@code z} pseudonym — and thus multiple
-     * roomKeys — all of which are "active" simultaneously.
-     *
      * Room-key shapes (must match the service's enqueueRoomMessage keys):
      *   - NIP-29 group: {@code "h:<relayUrl>|<groupId>"}
-     *   - Concord V1:   {@code "z:<pseudonym>"}
-     *   - Concord V2:   {@code "c2:<channelIdHex>"}
+     *   - Concord:      {@code "c2:<channelIdHex>"}
      *   - DM:           {@code "dm:<peerPubkey>"}
      */
     @PluginMethod
@@ -508,7 +440,7 @@ public class ArmadaNotificationPlugin extends Plugin {
     /**
      * Cancel tray notifications for conversations the WebView reports as read.
      * Payload: {@code { markers: [{ room, ts }, …] }} where {@code room} is the
-     * WebView's read-state key (`dm:<pk>` / `c2:<id>` / `c1:<id>` /
+     * WebView's read-state key (`dm:<pk>` / `c2:<id>` /
      * `<relayUrl>::<groupId>`) and {@code ts} the last-read unix seconds. The
      * running service cancels each matching room whose newest notified message
      * is at/older than that stamp — the reverse of a "Mark read" tap. No-op when
@@ -549,7 +481,6 @@ public class ArmadaNotificationPlugin extends Plugin {
         String dmRelaysRaw = arrayToString(call.getArray("dmRelays"));
         String dmFollowsRaw = arrayToString(call.getArray("dmFollows"));
         String selfRelaysRaw = arrayToString(call.getArray("selfRelays"));
-        String concordSubsRaw = arrayToString(call.getArray("concordSubs"));
         String concord2SubsRaw = arrayToString(call.getArray("concord2Subs"));
         String gitSubsRaw = arrayToString(call.getArray("gitSubs"));
         // prefs is a flat object of booleans; store its JSON verbatim.
@@ -576,7 +507,7 @@ public class ArmadaNotificationPlugin extends Plugin {
         }
 
         SharedPreferences prefs = getContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        boolean hasWatch = relayUrlsRaw != null || concordSubsRaw != null || concord2SubsRaw != null
+        boolean hasWatch = relayUrlsRaw != null || concord2SubsRaw != null
                 || dmRelaysRaw != null;
         boolean hasConfig = enabled && userPubkey != null && hasWatch;
 
@@ -595,8 +526,6 @@ public class ArmadaNotificationPlugin extends Plugin {
             else editor.remove("dmFollows");
             if (selfRelaysRaw != null) editor.putString("selfRelays", selfRelaysRaw);
             else editor.remove("selfRelays");
-            if (concordSubsRaw != null) editor.putString("concordSubs", concordSubsRaw);
-            else editor.remove("concordSubs");
             if (concord2SubsRaw != null) editor.putString("concord2Subs", concord2SubsRaw);
             else editor.remove("concord2Subs");
             if (signerSealed != null) editor.putString("signerSealed", signerSealed);
@@ -613,7 +542,6 @@ public class ArmadaNotificationPlugin extends Plugin {
             editor.apply();
             if (BuildConfig.DEBUG) Log.d(TAG, "Configured: relays=" + relayUrlsRaw + " groups=" + groupIdsRaw
                     + " dmRelays=" + dmRelaysRaw
-                    + " concordSubs=" + (concordSubsRaw != null ? "yes" : "none")
                     + " concord2Subs=" + (concord2SubsRaw != null ? "yes" : "none"));
         } else {
             prefs.edit().clear().apply();

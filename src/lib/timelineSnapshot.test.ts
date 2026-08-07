@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
-  concordSnapshotScope,
   dmThreadSnapshotScope,
   nip29SnapshotScope,
   readTimelineSnapshot,
@@ -43,7 +42,7 @@ describe("timelineSnapshot", () => {
   });
 
   it("keeps only the newest items (tail slice)", () => {
-    const scope = concordSnapshotScope("abcd");
+    const scope = "test:abcd";
     writeTimelineSnapshot(scope, msgs(50));
     const read = readTimelineSnapshot<FakeMsg>(scope)!;
     expect(read.length).toBe(30);
@@ -53,7 +52,7 @@ describe("timelineSnapshot", () => {
   });
 
   it("round-trips Uint8Array and bigint fields (Concord shapes)", () => {
-    const scope = concordSnapshotScope("beef");
+    const scope = "test:beef";
     const item = {
       messageId: "m1",
       channelId: new Uint8Array([1, 2, 3]),

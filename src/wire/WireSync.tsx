@@ -5,8 +5,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useBootGateOpen } from "@/lib/bootGate";
 
-import { useConcordList } from "@/concord-v1/hooks/useConcordList";
-import { buildConcordSubs, buildConcordControlSubs } from "@/concord-v1/lib/concordNotifications";
 import { useCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
 import { dissolvedAt } from "@/concord-v2/hooks/useControlPlane2";
 import { openChatBatch } from "@/concord-v2/lib/chat";
@@ -162,7 +160,7 @@ const catchUpsInFlight = new Set<string>();
 interface DotContext {
   pubkey: string | undefined;
   readState: Record<string, number>;
-  isMuted: (protocol: "c1" | "c2", communityId: string, channelIdHex: string) => boolean;
+  isMuted: (protocol: "c2", communityId: string, channelIdHex: string) => boolean;
 }
 
 /**
@@ -654,7 +652,6 @@ function WireSyncInner() {
   const eventStore = useEventStore();
   const { data: groupList } = useUserGroupList();
   const { data: followData } = useFollowList();
-  const { data: concordData } = useConcordList();
   const { relays: publishedDmRelays } = useDmRelayList();
   const concord2 = useWireConcord2Channels();
   const concord2Control = useWireConcord2Control();
@@ -703,14 +700,12 @@ function WireSyncInner() {
         groups,
         dmRelays,
         dmFollows: followData?.pubkeys ?? [],
-        concord1: buildConcordSubs(concordData?.list),
-        concord1Control: buildConcordControlSubs(concordData?.list),
         concord2,
         concord2Control,
         gitRepositories,
         gitTicketRoots,
       }),
-    [user?.pubkey, groups, dmRelays, followData?.pubkeys, concordData, concord2, concord2Control, gitRepositories, gitTicketRoots],
+    [user?.pubkey, groups, dmRelays, followData?.pubkeys, concord2, concord2Control, gitRepositories, gitTicketRoots],
   );
 
   // The ingest path reads the spec lazily so long-lived subscriptions always

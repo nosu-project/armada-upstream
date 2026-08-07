@@ -119,13 +119,13 @@ describe("useMessagePermalink", () => {
   });
 
   it("returns a callback that drops the focus (what a send calls)", () => {
-    const { wrapper, at } = harness("/c1/comm/ch/m/m2");
+    const { wrapper, at } = harness("/c/comm/ch/m/m2");
     const { result } = renderHook((props: Opts) => useMessagePermalink(props), {
       initialProps: { messages: [{ id: "m2" }], isLoading: false, scrollTo: () => true },
       wrapper,
     });
 
     act(() => result.current());
-    expect(at()).toBe("/c1/comm/ch");
+    expect(at()).toBe("/c/comm/ch");
   });
 });

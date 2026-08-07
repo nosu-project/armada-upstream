@@ -13,7 +13,7 @@
  *     mentions-only group only wakes on messages that `#p`-tag the user.
  *   - NIP-17 DMs (kind 1059) addressed to the user, plus friends-only legacy
  *     kind-4 DMs scoped to the follow set.
- *   - Concord V1 (`#z`) and V2 (kind-1059 stream authors), merged by relay set
+ *   - Concord (kind-1059 stream authors), merged by relay set
  *     to keep the subscription count under the server's per-user quota.
  *   - deterministic subscription ids and sorted tag/author arrays, so an
  *     unrelated refetch that merely reorders doesn't churn the server.
@@ -27,7 +27,6 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 
 import type { PushPrefs } from "@/lib/pushPrefs";
 import type { NostrFilter } from "@nostrify/types";
-import type { ConcordSub } from "@/concord-v1/lib/concordNotifications";
 import type { Concord2Sub } from "@/concord-v2/lib/concordNotifications2";
 
 // Kinds we key notifications off (all plaintext-or-encrypted matched by tag).
@@ -36,10 +35,9 @@ const KIND_GROUP_REPLY = 1111;
 const KIND_REACTION = 7;
 const KIND_DM_NIP04 = 4;
 const KIND_GIFT_WRAP = 1059;
-const KIND_CONCORD_V1 = 3300;
 
 /** How the service worker should fetch + render the referenced event. */
-export type PushScope = "group" | "group-mention" | "dm" | "c1" | "c2";
+export type PushScope = "group" | "group-mention" | "dm" | "c2";
 
 /** Routing hints carried in the push payload's `data` for the service worker. */
 export interface PushNotifData {
@@ -75,7 +73,6 @@ export interface PushSubscriptionInput {
   dmRelays: string[];
   /** Follows — friends-only kind-4 DM authors. */
   dmFollows: string[];
-  concordV1: ConcordSub[];
   concordV2: Concord2Sub[];
 }
 
@@ -194,25 +191,7 @@ export function buildPushSubscriptions(input: PushSubscriptionInput): PushSubscr
     });
   }
 
-  // Concord V1 (#z pseudonyms), merged by relay set.
-  for (const spec of mergeByRelaySet(
-    input.concordV1.map((s) => ({ relays: s.relays, values: s.zs })),
-    "c1",
-    (values, relays) => ({
-      id: `armada-c1-${relaySetTag(relays)}`,
-      relays,
-      filter: { kinds: [KIND_CONCORD_V1], "#z": values },
-      notification: {
-        title: "New message",
-        body: "New message in a community",
-        data: { scope: "c1", relays },
-      },
-    }),
-  )) {
-    specs.push(spec);
-  }
-
-  // Concord V2 (kind-1059 stream authors), merged by relay set.
+  // Concord (kind-1059 stream authors), merged by relay set.
   for (const spec of mergeByRelaySet(
     input.concordV2.map((s) => ({ relays: s.relays, values: s.streams.map((st) => st.pk) })),
     "c2",

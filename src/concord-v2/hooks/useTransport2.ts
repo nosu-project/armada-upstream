@@ -54,10 +54,9 @@ export function openedToChatMsg(m: OpenedChat): ChatMsg {
 }
 
 /**
- * Build a {@link ChatTransport} for one Concord V2 channel — V2's binding to
- * the SAME chat components NIP-29, DMs, and Concord V1 render through. Only
- * the transport (CORD-01 streams vs relay kind-9 vs V1 `#z` envelopes)
- * differs.
+ * Build a {@link ChatTransport} for one Concord channel — Concord's binding
+ * to the SAME chat components NIP-29 and DMs render through. Only the
+ * transport (CORD-01 streams vs relay kind-9) differs.
  */
 export function useTransport2(
   community: CommunityV2 | undefined,

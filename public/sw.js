@@ -58,7 +58,7 @@ self.addEventListener("activate", (event) => {
 //    first (synchronously, so the userVisibleOnly contract is never broken —
 //    iOS revokes the subscription after a few silent pushes), then, for
 //    plaintext group messages, replace it in place with the message preview
-//    using the same `tag`. Encrypted scopes (dm/c1/c2) can't be opened
+//    using the same `tag`. Encrypted scopes (dm/c2) can't be opened
 //    here without bundled crypto, so they keep the generic wake-up.
 
 const PLAINTEXT_SCOPES = new Set(["group", "group-mention"]);
@@ -166,7 +166,7 @@ function clientOwnsNotification(client) {
 /** Whether this push is locally authored or owned by a live page. */
 async function suppressPush(data) {
   if (await isOwnPush(data)) return true;
-  if (!data.scope || !["dm", "group", "group-mention", "c1", "c2"].includes(data.scope)) {
+  if (!data.scope || !["dm", "group", "group-mention", "c2"].includes(data.scope)) {
     return false;
   }
 

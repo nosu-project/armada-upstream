@@ -9,7 +9,7 @@
  * thin view over them.
  *
  * Keys are the rail's stable item keys: a normalized relay URL for NIP-29
- * servers, `c1:${communityId}` / `c2:${communityId}` for Concord communities,
+ * servers, `c2:${communityId}` for Concord communities,
  * `dm:${pubkey}` for a direct-message conversation the user put on the rail.
  *
  * DM keys are the one kind whose presence here IS the fact: a server or a
@@ -120,12 +120,9 @@ export function flattenLayout(nodes: RailLayoutNode[]): string[] {
 /**
  * Map a stable rail item key to its React Router path, or `null` if the key
  * isn't a recognized community/server key. NIP-29 servers use their normalized
- * relay URL as the key; Concord V1/V2 use `c1:`/`c2:`-prefixed community ids.
+ * relay URL as the key; Concord uses `c2:`-prefixed community ids.
  */
 export function railKeyToRoute(key: string): string | null {
-  if (key.startsWith("c1:")) {
-    return `/c1/${encodeURIComponent(key.slice("c1:".length))}`;
-  }
   if (key.startsWith("c2:")) {
     return `/c/${encodeURIComponent(key.slice("c2:".length))}`;
   }

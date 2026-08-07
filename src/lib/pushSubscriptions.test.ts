@@ -18,7 +18,6 @@ function baseInput(overrides: Partial<PushSubscriptionInput> = {}): PushSubscrip
     prefs: { ...DEFAULT_PUSH_PREFS },
     dmRelays: [],
     dmFollows: [],
-    concordV1: [],
     concordV2: [],
     ...overrides,
   };
@@ -152,34 +151,6 @@ describe("buildPushSubscriptions", () => {
     expect(specs.some((s) => s.id.startsWith("armada-dm"))).toBe(false);
   });
 
-  it("merges Concord V1 channels that share a relay set into one #z filter", () => {
-    const specs = byId(
-      buildPushSubscriptions(
-        baseInput({
-          concordV1: [
-            { relays: ["wss://c"], zs: ["z1"], keys: [], communityId: "c", communityName: "", channelName: "" },
-            { relays: ["wss://c"], zs: ["z2"], keys: [], communityId: "c", communityName: "", channelName: "" },
-          ],
-        }),
-      ),
-    );
-    const c1 = [...specs.values()].filter((s) => s.id.startsWith("armada-c1-"));
-    expect(c1).toHaveLength(1);
-    expect(c1[0].filter).toEqual({ kinds: [3300], "#z": ["z1", "z2"] });
-  });
-
-  it("splits Concord V1 channels on different relay sets", () => {
-    const specs = buildPushSubscriptions(
-      baseInput({
-        concordV1: [
-          { relays: ["wss://a"], zs: ["z1"], keys: [], communityId: "c", communityName: "", channelName: "" },
-          { relays: ["wss://b"], zs: ["z2"], keys: [], communityId: "c", communityName: "", channelName: "" },
-        ],
-      }),
-    );
-    expect(specs.filter((s) => s.id.startsWith("armada-c1-"))).toHaveLength(2);
-  });
-
   it("maps Concord V2 streams to a kind-1059 authors filter", () => {
     const specs = byId(
       buildPushSubscriptions(
@@ -204,6 +175,29 @@ describe("buildPushSubscriptions", () => {
     );
     const c2 = [...specs.values()].find((s) => s.id.startsWith("armada-c2-"))!;
     expect(c2.filter).toEqual({ kinds: [1059], authors: ["s1", "s2"] });
+  });
+
+  it("merges Concord channels that share a relay set into one authors filter", () => {
+    const sub = (relays: string[], pk: string) => ({
+      relays,
+      communityId: "c",
+      communityName: "",
+      channelId: pk,
+      channelName: "",
+      streams: [{ pk, convKey: "k", epoch: "0" }],
+      timerSecs: 0,
+      gitAttachments: [],
+    });
+    const merged = buildPushSubscriptions(
+      baseInput({ concordV2: [sub(["wss://c"], "s1"), sub(["wss://c"], "s2")] }),
+    ).filter((s) => s.id.startsWith("armada-c2-"));
+    expect(merged).toHaveLength(1);
+    expect(merged[0].filter).toEqual({ kinds: [1059], authors: ["s1", "s2"] });
+
+    const split = buildPushSubscriptions(
+      baseInput({ concordV2: [sub(["wss://a"], "s1"), sub(["wss://b"], "s2")] }),
+    ).filter((s) => s.id.startsWith("armada-c2-"));
+    expect(split).toHaveLength(2);
   });
 
   it("is deterministic under reordered inputs", () => {

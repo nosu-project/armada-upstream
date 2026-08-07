@@ -84,8 +84,6 @@ function makeSinks(spec: Partial<WireSpec>, store = new FakeStore()) {
     v2ByPk: new Map(),
     v2CommunityByChannel: new Map(),
     v2CtlByPk: new Map(),
-    v1ByZ: new Map(),
-    v1CtlByZ: new Map(),
     gitByRepository: new Map(),
     gitRootById: new Map(),
     gitRootAuthorById: new Map(),
@@ -178,25 +176,6 @@ describe("ingestWireEvents", () => {
     const scopes = await collectScopes(() => ingestWireEvents(sinks, [comment, status, unrelated]));
     expect(store.events.map((event) => event.id)).toEqual([comment.id, status.id]);
     expect(scopes).toEqual(new Set([`git:${address}`]));
-  });
-
-  it("routes sealed V1 outers to the store, scoped by the z → channel map", async () => {
-    const { store, sinks } = makeSinks({ v1ByZ: new Map([["z1", "chan1"]]) });
-    const scopes = await collectScopes(() =>
-      ingestWireEvents(sinks, [plainEvent(3300, [["z", "z1"]])]),
-    );
-    expect(store.events).toHaveLength(1);
-    expect(scopes.has("c1:chan1")).toBe(true);
-  });
-
-  it("routes a sealed V1 control edition to the store, scoped c1ctl:<community>", async () => {
-    const { store, sinks } = makeSinks({ v1CtlByZ: new Map([["ctlZ", "comm1"]]) });
-    const scopes = await collectScopes(() =>
-      ingestWireEvents(sinks, [plainEvent(3308, [["z", "ctlZ"]])]),
-    );
-    expect(store.events).toHaveLength(1);
-    expect(scopes.has("c1ctl:comm1")).toBe(true);
-    expect(scopes.has("c1:ctlZ")).toBe(false);
   });
 
   it("decrypts V2 wraps for held streams into the rumor store (never armada-events)", async () => {
@@ -371,25 +350,6 @@ describe("ingestWireEvents — foreground notify candidates", () => {
     }
     expect(captured).toHaveLength(1);
     expect(captured[0]).toMatchObject({ plane: "dm", peer: PEER, mention: true });
-    expect(captured[0].body).toBeUndefined();
-  });
-
-  it("emits a c1 candidate keyed by the resolved channel id, no body/mention", async () => {
-    const { captured, off, sinks } = withSink({ v1ByZ: new Map([["z1", "chan1"]]) });
-    const ev = plainEvent(3300, [["z", "z1"]]);
-    ev.pubkey = PEER;
-    try {
-      await ingestWireEvents(sinks, [ev]);
-    } finally {
-      off();
-    }
-    expect(captured).toHaveLength(1);
-    expect(captured[0]).toMatchObject({
-      plane: "c1",
-      v1ChannelIdHex: "chan1",
-      roomKey: "z:z1",
-      mention: false,
-    });
     expect(captured[0].body).toBeUndefined();
   });
 

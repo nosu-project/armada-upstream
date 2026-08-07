@@ -18,7 +18,6 @@ import {
   Smile,
   UserCircle,
   Waypoints,
-  Wrench,
   Zap,
 } from "lucide-react";
 import { useNostrLogin } from "@nostrify/react/login";
@@ -27,7 +26,6 @@ import { Link, useNavigate } from "react-router-dom";
 import { lazy, Suspense } from "react";
 
 import { LoginArea } from "@/components/auth/LoginArea";
-import { ConcordResyncCard } from "@/concord-v1/components/ConcordResyncCard";
 import { BlossomServerListEditor } from "@/components/BlossomServerListEditor";
 import { EmojiPackSettings } from "@/components/settings/EmojiPackSettings";
 import { ProfileSettings } from "@/components/ProfileSettings";
@@ -52,7 +50,6 @@ import { usePublishPortableSetup } from "@/hooks/usePublishPortableSetup";
 import { useSearchRelayList } from "@/hooks/useSearchRelayList";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
-import { CONCORD_ENABLED } from "@/concord-v1/lib/concord";
 import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { APP_RELAYS, DM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
@@ -85,7 +82,6 @@ type SectionId =
   | "discover"
   | "emojis"
   | "wallet"
-  | "advanced"
   | "install"
   | "danger";
 
@@ -131,7 +127,6 @@ export function SettingsPage() {
   const [voiceProcessing, setVoiceProcessing] = useState<AudioProcessingPrefs>(() =>
     getAudioProcessing(),
   );
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
   const { canInstall, install, needsManualInstall } = useInstallPrompt();
   const setVoiceToggle = (key: keyof AudioProcessingPrefs) => (value: boolean) => {
@@ -318,9 +313,6 @@ export function SettingsPage() {
     }
     if (user && config.zapsEnabled) {
       appItems.push({ id: "wallet", title: "Wallet", icon: Zap });
-    }
-    if (user && CONCORD_ENABLED) {
-      appItems.push({ id: "advanced", title: "Advanced", icon: Wrench, inline: true });
     }
     if (canInstall || needsManualInstall) {
       appItems.push({ id: "install", title: "Install app", icon: Download, inline: true });
@@ -652,33 +644,6 @@ export function SettingsPage() {
         return <EmojiPackSettings />;
       case "wallet":
         return <WalletSettings />;
-      case "advanced":
-        return (
-          <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
-            <CollapsibleTrigger asChild>
-              <button
-                type="button"
-                className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/40"
-                aria-expanded={showAdvanced}
-              >
-                <div className="min-w-0 flex-1 space-y-0.5">
-                  <div className="text-sm font-medium leading-tight">Recover communities</div>
-                  <div className="text-xs text-muted-foreground leading-snug">
-                    Find and restore encrypted rooms missing from your list.
-                  </div>
-                </div>
-                <ChevronDown
-                  className="size-4 text-muted-foreground shrink-0 transition-transform duration-200 [[data-state=open]_&]:rotate-180"
-                />
-              </button>
-            </CollapsibleTrigger>
-            <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
-              <div className="border-t border-chrome px-4 py-3.5">
-                <ConcordResyncCard />
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
-        );
       case "install":
         return (
           <SettingsRow

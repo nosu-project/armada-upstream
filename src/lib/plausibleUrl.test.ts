@@ -48,10 +48,6 @@ describe("sanitizePlausibleUrl", () => {
   });
 
   it("collapses Concord community and channel ids", () => {
-    expect(sanitizePlausibleUrl("https://armada.buzz/c1/comm")).toBe("https://armada.buzz/c1/:communityId");
-    expect(sanitizePlausibleUrl("https://armada.buzz/c1/comm/chan")).toBe(
-      "https://armada.buzz/c1/:communityId/:channelId",
-    );
     expect(sanitizePlausibleUrl("https://armada.buzz/c/comm")).toBe("https://armada.buzz/c/:communityId");
     expect(sanitizePlausibleUrl("https://armada.buzz/c/comm/chan")).toBe(
       "https://armada.buzz/c/:communityId/:channelId",
@@ -73,9 +69,6 @@ describe("sanitizePlausibleUrl", () => {
     );
     expect(sanitizePlausibleUrl("https://armada.buzz/s/relay/group123/t/root/m/evid")).toBe(
       "https://armada.buzz/s/:server/:groupId/t/:threadRoot/m/:messageId",
-    );
-    expect(sanitizePlausibleUrl("https://armada.buzz/c1/comm/chan/m/evid")).toBe(
-      "https://armada.buzz/c1/:communityId/:channelId/m/:messageId",
     );
     expect(sanitizePlausibleUrl("https://armada.buzz/dm/npub1abc123/m/evid")).toBe(
       "https://armada.buzz/dm/:peer/m/:messageId",

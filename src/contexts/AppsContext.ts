@@ -1,19 +1,15 @@
 import { createContext } from "react";
 
-import { bytesToHex } from "@noble/hashes/utils.js";
-
-import type { Channel, Community } from "@/concord-v1/lib/types";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
 import type { ImetaEncryption } from "@/lib/imeta";
 
 /**
  * Which chat surface an app is running in. NIP-29 groups are addressed by
- * `relayUrl` + `groupId`; Concord channels (v1 and v2) carry their decrypted
- * key material. Each variant maps onto its own {@link AppSync} backend.
+ * `relayUrl` + `groupId`; Concord channels carry their decrypted key
+ * material. Each variant maps onto its own {@link AppSync} backend.
  */
 export type AppScope =
   | { kind: "nip29"; relayUrl: string; groupId: string }
-  | { kind: "concord"; community: Community; channel: Channel }
   | { kind: "concord2"; community: CommunityV2; channel: ChannelV2 };
 
 /**
@@ -27,8 +23,6 @@ export function appScopeKey(scope: AppScope): string {
   switch (scope.kind) {
     case "nip29":
       return `nip29|${scope.relayUrl}|${scope.groupId}`;
-    case "concord":
-      return `concord|${bytesToHex(scope.channel.id)}`;
     case "concord2":
       return `concord2|${scope.channel.idHex}`;
   }

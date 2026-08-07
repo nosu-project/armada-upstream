@@ -28,11 +28,6 @@ export function dmReadKey(pubkey: string): string {
   return `dm:${pubkey}`;
 }
 
-/** Stable conversation key for a Concord V1 channel. */
-export function concord1ReadKey(channelIdHex: string): string {
-  return `c1:${channelIdHex}`;
-}
-
 /** Stable conversation key for a Concord V2 channel. */
 export function concord2ReadKey(channelIdHex: string): string {
   return `c2:${channelIdHex}`;

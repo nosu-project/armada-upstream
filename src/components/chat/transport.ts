@@ -300,7 +300,7 @@ export interface ChatTransport {
   //
   // A reply is NOT a top-level timeline message: it's nested under its root and
   // only shown in the thread panel. Every protocol implements these three the
-  // same way — NIP-29 via kind-1111 comments, Concord V1/V2 via a parent-tagged
+  // same way — NIP-29 via kind-1111 comments, Concord via a parent-tagged
   // sealed chat message — so the shared {@link ThreadPanel} is transport-driven.
 
   /** Ascending (oldest-first) replies to a root message id. */

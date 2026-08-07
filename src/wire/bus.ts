@@ -17,9 +17,6 @@
  *     thread needs to re-read
  *   - `dm:wrap`              — the wire saw a live inbound NIP-17 gift wrap it
  *     can't decrypt itself; useDm17 force-syncs to fetch + decrypt + store it
- *   - `c1:<channelIdHex>`    — a Concord V1 channel's sealed history changed
- *   - `c1ctl:<communityIdHex>` — a Concord V1 community's control plane changed
- *     (a new sealed kind-3308 roster/metadata/banlist edition landed)
  *   - `c2:<channelIdHex>`    — a Concord V2 channel's rumor store changed
  *   - `c2park:<streamPk>`    — a V2 wrap for this stream address was PARKED
  *     (the wire held no key for it); a hook holding that stream's key should

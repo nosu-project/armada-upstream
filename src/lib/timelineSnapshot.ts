@@ -54,11 +54,6 @@ export function nip29SnapshotScope(relayUrl: string, groupId: string): string {
   return `nip29:${relayUrl}|${groupId}`;
 }
 
-/** Snapshot scope for a Concord channel timeline. */
-export function concordSnapshotScope(channelIdHex: string): string {
-  return `concord:${channelIdHex}`;
-}
-
 /** Snapshot scope for a 1:1 DM thread (self-scoped: DMs are per-account). */
 export function dmThreadSnapshotScope(self: string, peer: string): string {
   return `dm:${self}|${peer}`;

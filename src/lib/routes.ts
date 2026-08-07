@@ -2,7 +2,7 @@
  * The one place a chat route is spelled.
  *
  * Every chat surface — NIP-29 relay groups (and Buzz, which shares their
- * routes), Concord V1, Concord V2, DMs — names a location with the same four
+ * routes), Concord, DMs — names a location with the same four
  * things: the surface, the room, an optionally open thread, and an optionally
  * focused message. Before this module those paths were ~60 ad-hoc template
  * literals, the community id was recovered from notification paths by
@@ -64,14 +64,6 @@ export interface Nip29Route {
   messageId?: string;
 }
 
-export interface Concord1Route {
-  kind: "concord1";
-  communityId: string;
-  channelId?: string;
-  threadRoot?: string;
-  messageId?: string;
-}
-
 export interface Concord2Route {
   kind: "concord2";
   communityId: string;
@@ -89,7 +81,7 @@ export interface DmRoute {
   messageId?: string;
 }
 
-export type ChatRoute = Nip29Route | Concord1Route | Concord2Route | DmRoute;
+export type ChatRoute = Nip29Route | Concord2Route | DmRoute;
 
 function isConcord2Pane(value: string): value is Concord2Pane {
   return (CONCORD2_PANES as readonly string[]).includes(value);
@@ -124,11 +116,6 @@ export function chatRoute(route: ChatRoute): string {
       if (!route.groupId) return base;
       return withFocus(`${base}/${encodeURIComponent(route.groupId)}`, route);
     }
-    case "concord1": {
-      const base = `/c1/${encodeURIComponent(route.communityId)}`;
-      if (!route.channelId) return base;
-      return withFocus(`${base}/${encodeURIComponent(route.channelId)}`, route);
-    }
     case "concord2": {
       const base = `/c/${encodeURIComponent(route.communityId)}`;
       if (route.pane) return `${base}/${route.pane}`;
@@ -157,8 +144,6 @@ export function roomRoute(route: ChatRoute): ChatRoute {
   switch (route.kind) {
     case "nip29":
       return { kind: "nip29", relayUrl: route.relayUrl, groupId: route.groupId, pane: route.pane };
-    case "concord1":
-      return { kind: "concord1", communityId: route.communityId, channelId: route.channelId };
     case "concord2":
       return {
         kind: "concord2",
@@ -235,14 +220,6 @@ export function parseChatRoute(pathname: string): ChatRoute | null {
       if (!focus) return null;
       return { kind: "nip29", relayUrl, groupId: room, ...focus };
     }
-    case "c1": {
-      if (seg.length < 2) return null;
-      const communityId = decodeURIComponent(seg[1]);
-      if (seg.length === 2) return { kind: "concord1", communityId };
-      const focus = parseFocus(seg.slice(3));
-      if (!focus) return null;
-      return { kind: "concord1", communityId, channelId: decodeURIComponent(seg[2]), ...focus };
-    }
     case "c": {
       if (seg.length < 2) return null;
       const communityId = decodeURIComponent(seg[1]);
@@ -290,10 +267,6 @@ export function chatRouteTemplate(route: ChatRoute): string {
       if (!route.groupId) return "/s/:server";
       return focusTemplate("/s/:server/:groupId", route);
     }
-    case "concord1":
-      return route.channelId
-        ? focusTemplate("/c1/:communityId/:channelId", route)
-        : "/c1/:communityId";
     case "concord2": {
       if (route.pane) return `/c/:communityId/${route.pane}`;
       if (!route.channelId) return "/c/:communityId";

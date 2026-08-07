@@ -248,13 +248,13 @@ function countEmojiUnits(text: string): number {
 
 /**
  * Kinds whose imeta tags describe attached media for the content body.
- * Includes NIP-17 DM rumors (14 chat, 15 file): like Concord (3300), an
- * encrypted DM attachment lives only in the `imeta` (ciphertext Blossom URL +
+ * Includes NIP-17 DM rumors (14 chat, 15 file): like Concord, an encrypted
+ * DM attachment lives only in the `imeta` (ciphertext Blossom URL +
  * `decryption-key`/`decryption-nonce`), so it must be parsed for the body to
  * emit — and decrypt — the embed.
  */
 // 1618/1621: NIP-34 pull requests and issues carry imeta for their attachments.
-const MEDIA_IMETA_KINDS = new Set([1, 9, 11, 14, 15, 1111, 1222, 1244, 1618, 1621, 3300]);
+const MEDIA_IMETA_KINDS = new Set([1, 9, 11, 14, 15, 1111, 1222, 1244, 1618, 1621]);
 
 /**
  * Plain-text length (of the raw content, before tokenizing/rendering) past
@@ -355,8 +355,8 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
     // Parse imeta tags for media URLs declared out-of-band. Vector/0xChat send
     // chat attachments by uploading AES-GCM ciphertext to Blossom and putting
     // the (often extension-less) URL + decryption key/nonce inside an `imeta`
-    // tag — for Concord (kind 3300) the URL is ONLY in the imeta, not in the
-    // content body. We use these to (a) classify extension-less URLs as media
+    // tag — for Concord the URL is ONLY in the imeta, not in the content
+    // body. We use these to (a) classify extension-less URLs as media
     // and (b) emit embeds for imeta media not present inline.
     const isMediaImetaKind = MEDIA_IMETA_KINDS.has(event.kind);
     const imetaByUrl = isMediaImetaKind

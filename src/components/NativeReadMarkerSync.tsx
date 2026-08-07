@@ -5,7 +5,6 @@ import { Capacitor } from "@capacitor/core";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
   channelReadKey,
-  concord1ReadKey,
   concord2ReadKey,
   dmReadKey,
   useReadState,
@@ -21,7 +20,7 @@ import { ArmadaNotification } from "@/lib/nativeNotifications";
  *
  * Every room type routes into the one shared ReadStateProvider map (which
  * persists locally and syncs via the encrypted NIP-78 settings event), keyed
- * by `c1:<channelId>` / `c2:<channelId>` / `relayUrl::groupId` / `dm:<peer>`.
+ * by `c2:<channelId>` / `relayUrl::groupId` / `dm:<peer>`.
  * All stamps are monotonic, so a lost or replayed marker is harmless. Inert
  * off Android (the plugin call no-ops). Must sit under ReadStateProvider.
  */
@@ -34,7 +33,7 @@ export function NativeReadMarkerSync() {
     let cancelled = false;
 
     const apply = async () => {
-      let markers: Array<{ room: string; ts: number; channelId?: string }>;
+      let markers: Array<{ room: string; ts: number }>;
       try {
         ({ markers } = await ArmadaNotification.drainReadMarkers());
       } catch {
@@ -49,10 +48,6 @@ export function NativeReadMarkerSync() {
         try {
           if (room.startsWith("c2:")) {
             markRead(concord2ReadKey(room.slice(3)), ts);
-          } else if (room.startsWith("z:")) {
-            // The V1 room key is a per-epoch pseudonym; the native side resolves
-            // it to the channel id (read state is keyed by channel).
-            if (m.channelId) markRead(concord1ReadKey(m.channelId), ts);
           } else if (room.startsWith("h:")) {
             // `h:<relayUrl>|<groupId>` — split on the last `|` (relay URLs and
             // group ids don't contain it) and rebuild the `relayUrl::groupId` key.
@@ -93,7 +88,7 @@ export function NativeReadMarkerSync() {
 
 /**
  * Read-state keys the Android service can attribute to a posted notification:
- * DMs, Concord V1/V2 channels, and NIP-29 channels (`<relayUrl>::<groupId>`).
+ * DMs, Concord channels, and NIP-29 channels (`<relayUrl>::<groupId>`).
  * The Concord V2 mention (`c2m:`) and thread (`c2t:`) sub-keys never key a
  * notification room, so they're dropped (a channel's notifications clear on its
  * channel-level `c2:` read). `c2:`.startsWith excludes both by construction.
@@ -101,7 +96,6 @@ export function NativeReadMarkerSync() {
 function dismissibleReadKey(key: string): boolean {
   return (
     key.startsWith("dm:") ||
-    key.startsWith("c1:") ||
     key.startsWith("c2:") ||
     key.includes("::")
   );

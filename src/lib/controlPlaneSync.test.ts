@@ -106,7 +106,7 @@ describe("syncControlPlane — batched V2 sweep", () => {
     const queryClient = new QueryClient();
     const invalidated = vi.spyOn(queryClient, "invalidateQueries");
 
-    const result = await syncControlPlane(nostr, queryClient, [], [a, b]);
+    const result = await syncControlPlane(nostr, queryClient, [a, b]);
 
     // 2 communities × 2 planes = 4 filters, ONE opening query call per relay.
     // The completeness pager then issues its own `until`-bearing probes per
@@ -168,7 +168,7 @@ describe("syncControlPlane — batched V2 sweep", () => {
       const queryClient = new QueryClient();
 
       // First sweep: E2 lands from relay A; relay B fails (its cursor stays put).
-      const first = await syncControlPlane(nostr, queryClient, [], [community]);
+      const first = await syncControlPlane(nostr, queryClient, [community]);
       expect(first.v2Touched).toEqual(new Set([community.idHex]));
       let stored = await queryPlane(community.idHex, "control");
       expect(stored.map((e) => e.rumorId)).toContain(e2.rumorId);
@@ -180,7 +180,7 @@ describe("syncControlPlane — batched V2 sweep", () => {
       // A later sweep must pick E1 up — relay B is asked from its own cursor
       // (never advanced), not the newer A-driven one, so the older edition is
       // not skipped.
-      const second = await syncControlPlane(nostr, queryClient, [], [community]);
+      const second = await syncControlPlane(nostr, queryClient, [community]);
       expect(second.v2Touched).toEqual(new Set([community.idHex]));
       stored = await queryPlane(community.idHex, "control");
       expect(stored.map((e) => e.rumorId), "the late older edition E1 must eventually land").toContain(

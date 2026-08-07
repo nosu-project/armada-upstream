@@ -80,7 +80,7 @@ function dTagOf(event: NostrEvent): string | undefined {
  * A. Transport / freshness (the standing subscription). A single long-lived REQ
  *    `{ authors:[me], kinds:[…] }` (plus scoped filters for Armada's
  *    addressable kind-30078 documents) streams every new version of the user's
- *    own lists: follow, mute, NIP-29 servers/channels (10009), Concord V1/V2
+ *    own lists: follow, mute, NIP-29 servers/channels (10009), Concord
  *    vaults, DM/Blossom relay lists, and Armada's NIP-78 settings. Events land
  *    in the `armada-events` cache first (the NostrBatcher mirrors `.req()`
  *    output), then the owning hook's query key is invalidated so it re-reads and

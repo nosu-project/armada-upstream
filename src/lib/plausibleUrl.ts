@@ -7,7 +7,7 @@
  *
  * - `/dm/:peer` leaks the DM counterparty's pubkey.
  * - `/s/:server`, `/s/:server/:groupId` leak which relay/server + group.
- * - `/c1/:communityId`, `/c/:communityId/:channelId` leak which community/channel.
+ * - `/c/:communityId/:channelId` leaks which community/channel.
  * - `/c/…/m/:messageId` and `/c/…/t/:threadRoot` leak individual event ids.
  * - `/invite/:naddr` leaks the invited resource; an invite **secret** may also
  *   ride along in the query string or `#` fragment.

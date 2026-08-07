@@ -29,14 +29,12 @@ import {
 } from "@/components/ui/tooltip";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { RelayListEditor } from "@/components/RelayListEditor";
-import { useConcordActions } from "@/concord-v1/hooks/useConcordActions";
 import { useCommunityActions2, useCreateRelayCandidates2 } from "@/concord-v2/hooks/useCommunityActions2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { readClipboardText } from "@/lib/clipboard";
 import { claimBuzzInvite, fetchBuzzJoinPolicy, parseBuzzInviteUrl, type BuzzInvite, type BuzzJoinPolicy } from "@/buzz/invite";
-import { classifyAddInput, type ConcordInvite } from "@/concord-v1/lib/concord";
 import { parseInviteLink, type ParsedInviteLink } from "@/concord-v2/lib/invite";
 import { parseGroupNaddr } from "@/lib/nip29";
 import { bridgePortalUrl, normalizeRelayUrl, relayToHttpUrl, relayToRouteParam } from "@/lib/platform";
@@ -279,14 +277,12 @@ function ImportFromDiscordSection({ onOpen }: { onOpen: () => void }) {
  * The "I already have something" path. One field, one classifier — checked in
  * order: a NIP-29 group identifier (`naddr1...` for kind 39000, optionally with
  * the standardized `?invite=<code>` suffix), a Buzz relay invite
- * (`https://<host>/invite/<code>` with a dotted HMAC code), a Concord V2 invite
- * (`…/invite/<naddr>#…` or bare `naddr#fragment`), a Concord V1 invite (link or
- * bare token), or a NIP-29 relay URL.
+ * (`https://<host>/invite/<code>` with a dotted HMAC code), a Concord invite
+ * (`…/invite/<naddr>#…` or bare `naddr#fragment`), or a NIP-29 relay URL.
  */
 type Classified =
   | { kind: "buzz"; invite: BuzzInvite; identity: string }
   | { kind: "concord2"; invite: ParsedInviteLink; identity: string }
-  | { kind: "concord1"; invite: ConcordInvite; identity: string }
   | { kind: "nip29-group"; group: { relay: string; groupId: string; inviteCode?: string }; identity: string }
   | { kind: "nip29"; relay: string; identity: string }
   | { kind: "unknown"; identity: "" };
@@ -294,10 +290,10 @@ type Classified =
 function classify(input: string): Classified {
   const trimmed = input.trim();
   if (!trimmed) return { kind: "unknown", identity: "" };
-  // A NIP-29 group naddr must be checked before the relay-URL fallback (inside
-  // classifyAddInput), which would otherwise swallow a bare naddr as a garbage
-  // hostname. Concord V2 bundle naddrs are a different kind (33301), so they
-  // fall through to the V2 check below.
+  // A NIP-29 group naddr must be checked before the relay-URL fallback below,
+  // which would otherwise swallow a bare naddr as a garbage hostname. Concord
+  // bundle naddrs are a different kind (33301), so they fall through to the
+  // Concord check below.
   const groupNaddr = parseGroupNaddr(trimmed);
   if (groupNaddr?.relay) {
     const relay = normalizeRelayUrl(groupNaddr.relay);
@@ -313,9 +309,8 @@ function classify(input: string): Classified {
   if (buzz) return { kind: "buzz", invite: buzz, identity: `buzz:${buzz.host}:${buzz.code}` };
   const v2 = parseInviteLink(trimmed);
   if (v2) return { kind: "concord2", invite: v2, identity: `c2:${v2.naddr}` };
-  const v1 = classifyAddInput(trimmed);
-  if (v1.kind === "concord") return { kind: "concord1", invite: v1.invite, identity: `c1:${v1.invite.token}` };
-  if (v1.kind === "nip29") return { kind: "nip29", relay: v1.relay, identity: `n:${v1.relay}` };
+  const relay = normalizeRelayUrl(trimmed);
+  if (relay) return { kind: "nip29", relay, identity: `n:${relay}` };
   return { kind: "unknown", identity: "" };
 }
 
@@ -323,7 +318,6 @@ function classify(input: string): Classified {
 type Target =
   | { kind: "buzz"; relay: string; name?: string; description?: string; policy?: BuzzJoinPolicy; origin: string }
   | { kind: "concord2"; name: string; channelCount: number; relays: string[] }
-  | { kind: "concord1"; name: string; about?: string; channelCount: number; relays: string[] }
   | { kind: "nip29-group"; relay: string; groupId: string; inviteCode?: string }
   | { kind: "nip29"; relay: string; name?: string; description?: string };
 
@@ -332,7 +326,6 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
   const { user } = useCurrentUser();
   const navigate = useNavigate();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
-  const v1 = useConcordActions();
   const v2 = useCommunityActions2();
 
   const [open, setOpen] = useState(false);
@@ -407,16 +400,6 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
           const p = await v2.preview({ invite: classified.invite });
           if (cancelled) return;
           setTarget({ kind: "concord2", name: p.name, channelCount: p.channelCount, relays: p.relays });
-        } else if (classified.kind === "concord1") {
-          const { community, channelCount } = await v1.previewInvite({ invite: classified.invite });
-          if (cancelled) return;
-          setTarget({
-            kind: "concord1",
-            name: community.name,
-            about: community.about,
-            channelCount,
-            relays: community.relays,
-          });
         } else if (classified.kind === "nip29-group") {
           // Nothing to fetch: the naddr itself carries the relay + group id,
           // and the channel page resolves (and joins) the rest.
@@ -510,14 +493,6 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
         navigate(`/c/${encodeURIComponent(communityId)}`);
         return;
       }
-      if (target.kind === "concord1") {
-        if (classified.kind !== "concord1") return;
-        const community = await v1.joinViaInvite({ invite: classified.invite });
-        onDone();
-        toast({ title: "Encrypted chat joined", description: community.name });
-        navigate(`/c1/${encodeURIComponent(community.communityId)}`);
-        return;
-      }
       if (target.kind === "nip29-group") {
         // Route to the channel page: joining there is what puts the server on
         // the rail (`add-group` carries it into the 10009 list), and when the
@@ -545,7 +520,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
     }
   };
 
-  const busy = v1.isWorking || v2.isJoining || committing;
+  const busy = v2.isJoining || committing;
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="w-full max-w-sm">
@@ -703,7 +678,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
 
 /** The "here's where you're going" card shown once a target resolves. */
 function TargetPreview({ target }: { target: Target }) {
-  const isConcord = target.kind === "concord1" || target.kind === "concord2";
+  const isConcord = target.kind === "concord2";
   const Icon = isConcord ? ShieldCheck : target.kind === "nip29-group" ? Hash : Server;
   const title =
     target.kind === "nip29-group"
@@ -718,8 +693,7 @@ function TargetPreview({ target }: { target: Target }) {
         ? target.description || `Buzz workspace · ${target.relay}`
         : target.kind === "nip29"
           ? target.description || target.relay
-          : (target.kind === "concord1" && target.about) ||
-            `Encrypted community · ${target.channelCount} ${target.channelCount === 1 ? "channel" : "channels"}`;
+          : `Encrypted community · ${target.channelCount} ${target.channelCount === 1 ? "channel" : "channels"}`;
 
   return (
     <div className="mt-3 flex items-start gap-3 rounded-lg bg-secondary/50 p-3 text-left">

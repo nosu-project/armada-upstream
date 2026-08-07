@@ -282,9 +282,8 @@ function ConversationRow({
               </div>
             )}
             {/* Positive assertion only. No label means we have no membership
-                data for this peer (Concord v1 can't enumerate members, and
-                many NIP-29 relays publish no member list) — never that they
-                share nothing with you. */}
+                data for this peer (many NIP-29 relays publish no member
+                list) — never that they share nothing with you. */}
             {request && sharedCommunity && (
               <div className="flex items-center gap-1 text-[11px] text-muted-foreground/80">
                 <Users className="size-3 shrink-0" aria-hidden />

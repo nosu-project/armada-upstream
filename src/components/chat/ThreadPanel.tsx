@@ -469,8 +469,8 @@ interface ThreadPanelProps {
 /**
  * Side panel showing a message thread: the root message, its replies, and a
  * composer for posting a new reply. Sits beside the channel timeline
- * (Slack/Discord style). It is transport-driven — NIP-29, Concord V1, and
- * Concord V2 all render through it, each supplying its own replies + reply-send
+ * (Slack/Discord style). It is transport-driven — NIP-29 and Concord
+ * both render through it, each supplying its own replies + reply-send
  * via the {@link ChatTransport} (`threadRepliesFor`/`sendThreadReply`), so
  * replies never appear in the main timeline (they're nested here instead).
  */

@@ -22,10 +22,8 @@ import type { CommunityV2 } from "@/concord-v2/lib/types";
  * joined community (including ones never opened), so this is one indexed
  * IndexedDB read per joined community — no network, no decrypt, no signer.
  *
- * COVERAGE IS PARTIAL, BY DESIGN OF THE PROTOCOLS — Concord v1 has no
- * membership plane at all (plain key-holders aren't enumerable), and NIP-29
- * relays frequently publish no kind-39002 member list. So this answers for
- * Concord v2 only.
+ * COVERAGE IS PARTIAL, BY DESIGN OF THE PROTOCOLS — NIP-29 relays frequently
+ * publish no kind-39002 member list. So this answers for Concord only.
  *
  * That is safe ONLY because the result is a label, never a gate: a hit promotes
  * a request out of the anonymous pile, and a miss leaves it exactly where it

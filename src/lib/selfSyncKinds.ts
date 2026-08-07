@@ -53,8 +53,6 @@ export const KIND_APP_SPECIFIC = 30078;
 
 /** `d` tag identifying Armada's own encrypted settings document. */
 export const D_ARMADA_METADATA = "armada/metadata";
-/** `d` tag identifying the Concord V1 membership list document. */
-export const D_ARMADA_CONCORD = "armada/concord";
 /** Tag shared by per-installation encrypted GIF-favorite shards. */
 export const T_ARMADA_GIF_FAVORITES = "armada-gif-favorites";
 
@@ -76,16 +74,15 @@ export const SELF_SYNC_REPLACEABLE_KINDS: number[] = [
 ];
 
 /**
- * The `d` tags to sync on the addressable kind-30078 document. Both the Concord
- * V1 vault and Armada's settings are the same kind, distinguished by `d`.
+ * The `d` tags to sync on the addressable kind-30078 document (distinguished
+ * from other apps' kind-30078 data by `d`).
  */
-export const SELF_SYNC_DTAGS: string[] = [D_ARMADA_METADATA, D_ARMADA_CONCORD];
+export const SELF_SYNC_DTAGS: string[] = [D_ARMADA_METADATA];
 
 /**
  * Resolve the query-key prefix(es) to invalidate for an incoming self event.
  * Returns an empty array for anything we don't recognise (never invalidate
- * blindly). For kind 30078 the `d` tag selects between the Concord V1 vault and
- * the Armada settings document.
+ * blindly). For kind 30078 the `d` tag selects the Armada settings document.
  */
 export function queryKeysForSelfEvent(
   kind: number,
@@ -115,7 +112,6 @@ export function queryKeysForSelfEvent(
       return [["concord2", "invite-list"]];
     case KIND_APP_SPECIFIC:
       if (dTag === D_ARMADA_METADATA) return [["encrypted-settings"]];
-      if (dTag === D_ARMADA_CONCORD) return [["concord", "list"]];
       if (topicTag === T_ARMADA_GIF_FAVORITES) return [["favorite-gifs-sync"]];
       return [];
     default:

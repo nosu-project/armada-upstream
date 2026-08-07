@@ -122,7 +122,7 @@ export const EncryptedSettingsSchema = z.looseObject({
   // NOTE: `addedRelays` is gone. The NIP-29 server set is read from the kind
   // 10009 list only. The schema is loose, so an `addedRelays` key left in an
   // older device's blob passes through untouched and is simply ignored.
-  /** Unified community-rail order (relay URLs + `c1:`/`c2:` community keys). */
+  /** Unified community-rail order (relay URLs + `c2:` community keys). */
   railOrder: z.array(z.string()).optional(),
   /** Structured rail layout: ordered items + folders (supersedes railOrder). */
   railLayout: z.array(RailLayoutNodeSchema).optional(),

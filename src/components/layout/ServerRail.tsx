@@ -28,13 +28,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
-import { useConcordList, useConcordCommunity } from "@/concord-v1/hooks/useConcordList";
-import { useConcordCommunityActions } from "@/concord-v1/hooks/useConcordCommunityActions";
 import { useCommunityManagement2 } from "@/concord-v2/hooks/useCommunityActions2";
-import { useConcord1Unread } from "@/concord-v1/hooks/useConcord1Unread";
-import { useConcordMetadata } from "@/concord-v1/hooks/useConcordMetadata";
-import { useCommunityImageDescriptors } from "@/concord-v1/hooks/useCommunityImageDescriptors";
-import { useDecryptedCommunityImage } from "@/concord-v1/hooks/useDecryptedCommunityImage";
 import { useCommunity2, useIsExcluded2, useLiveCommunities2 } from "@/concord-v2/hooks/useCommunityList2";
 import { useChannels2, useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
 import { useConcord2Unread } from "@/concord-v2/hooks/useConcord2Unread";
@@ -101,13 +95,10 @@ function relayHost(url: string): string {
  */
 type RailItem =
   | { kind: "server"; key: string; url: string }
-  | { kind: "concord1"; key: string; communityId: string; name: string }
   | { kind: "concord2"; key: string; communityId: string; name: string }
   | { kind: "dm"; key: string; pubkey: string };
 
-/** Stable rail key for a Concord V1 community. */
-const concord1Key = (communityId: string) => `c1:${communityId}`;
-/** Stable rail key for a Concord V2 community. */
+/** Stable rail key for a Concord community. */
 const concord2Key = (communityId: string) => `c2:${communityId}`;
 
 /**
@@ -187,29 +178,6 @@ function ServerMiniIcon({ url }: { url: string }) {
   );
 }
 
-function Concord1MiniIcon({ communityId, name }: { communityId: string; name: string }) {
-  const community = useConcordCommunity(communityId);
-  const { data: folded } = useConcordMetadata(community, false);
-  const { icon } = useCommunityImageDescriptors(community, folded);
-  const iconUrl = useDecryptedCommunityImage(icon);
-  const initial = name.trim().charAt(0).toUpperCase() || "·";
-  const { byChannel } = useConcord1Unread(community);
-  const { isConcordChannelMuted } = useMutes();
-  return (
-    <span className="relative flex items-center justify-center overflow-hidden rounded-sm bg-muted text-success">
-      {iconUrl ? (
-        <img src={iconUrl} alt="" draggable={false} className="size-full object-cover" />
-      ) : (
-        <span className="text-[9px] font-semibold leading-none">{initial}</span>
-      )}
-      <MiniUnreadDot
-        mention={Object.values(byChannel).some((u) => u.mention)}
-        unread={Object.keys(byChannel).some((id) => !isConcordChannelMuted("c1", communityId, id))}
-      />
-    </span>
-  );
-}
-
 function Concord2MiniIcon({ communityId, name }: { communityId: string; name: string }) {
   const community = useCommunity2(communityId);
   const { data: folded } = useControlFold2(community, false);
@@ -264,9 +232,6 @@ function DmMiniIcon({ pubkey }: { pubkey: string }) {
 
 function RailMiniIcon({ item }: { item: RailItem }) {
   if (item.kind === "server") return <ServerMiniIcon url={item.url} />;
-  if (item.kind === "concord1") {
-    return <Concord1MiniIcon communityId={item.communityId} name={item.name} />;
-  }
   if (item.kind === "dm") return <DmMiniIcon pubkey={item.pubkey} />;
   return <Concord2MiniIcon communityId={item.communityId} name={item.name} />;
 }
@@ -312,24 +277,6 @@ function Concord2UnreadProbe({
   return null;
 }
 
-function Concord1UnreadProbe({
-  communityId,
-  onChange,
-}: {
-  communityId: string;
-  onChange: (unread: boolean, mention: boolean) => void;
-}) {
-  const community = useConcordCommunity(communityId);
-  const { byChannel } = useConcord1Unread(community);
-  const { isConcordChannelMuted } = useMutes();
-  const unread = Object.keys(byChannel).some(
-    (id) => !isConcordChannelMuted("c1", communityId, id),
-  );
-  const mention = Object.values(byChannel).some((u) => u.mention);
-  useEffect(() => onChange(unread, mention), [unread, mention, onChange]);
-  return null;
-}
-
 function DmUnreadProbe({
   pubkey,
   onChange,
@@ -350,11 +297,8 @@ function RailItemUnreadProbe({
   onChange: (unread: boolean, mention: boolean) => void;
 }) {
   if (item.kind === "server") return <ServerUnreadProbe url={item.url} onChange={onChange} />;
-  if (item.kind === "concord2") {
-    return <Concord2UnreadProbe communityId={item.communityId} onChange={onChange} />;
-  }
   if (item.kind === "dm") return <DmUnreadProbe pubkey={item.pubkey} onChange={onChange} />;
-  return <Concord1UnreadProbe communityId={item.communityId} onChange={onChange} />;
+  return <Concord2UnreadProbe communityId={item.communityId} onChange={onChange} />;
 }
 
 /**
@@ -391,23 +335,6 @@ function ServerDragGhost({ url }: { url: string }) {
           {initial}
         </AvatarFallback>
       </Avatar>
-    </span>
-  );
-}
-
-function Concord1DragGhost({ communityId, name }: { communityId: string; name: string }) {
-  const initials = name.trim().slice(0, 2).toUpperCase() || "··";
-  const community = useConcordCommunity(communityId);
-  const { data: folded } = useConcordMetadata(community, false);
-  const { icon } = useCommunityImageDescriptors(community, folded);
-  const iconUrl = useDecryptedCommunityImage(icon);
-  return (
-    <span className="flex items-center justify-center size-12 rotate-[-6deg] scale-110 clip-corner-lg overflow-hidden bg-muted text-success ring-2 ring-primary [filter:drop-shadow(0_8px_16px_rgba(0,0,0,0.55))_drop-shadow(0_0_8px_hsl(var(--primary)/0.6))]">
-      {iconUrl ? (
-        <img src={iconUrl} alt="" draggable={false} className="size-full object-cover" />
-      ) : (
-        <span className="text-sm font-semibold">{initials}</span>
-      )}
     </span>
   );
 }
@@ -474,8 +401,6 @@ function DragGhost({
         </span>
       ) : item?.kind === "server" ? (
         <ServerDragGhost url={item.url} />
-      ) : item?.kind === "concord1" ? (
-        <Concord1DragGhost communityId={item.communityId} name={item.name} />
       ) : item?.kind === "dm" ? (
         <DmDragGhost pubkey={item.pubkey} />
       ) : item ? (
@@ -696,176 +621,10 @@ const ServerButton = memo(function ServerButton({
 });
 
 /**
- * A rail button for an end-to-end-encrypted Concord community. Visually
- * distinguished from NIP-29 servers by the shield accent (different trust model).
- */
-const ConcordButton = memo(function ConcordButton({
-  communityId,
-  name,
-  onNavigate,
-  draggable,
-  dragging,
-  reordering,
-  highlight,
-  dragParent,
-  onDragPointerDown,
-  shouldSuppressClick,
-}: {
-  communityId: string;
-  name: string;
-  onNavigate?: () => void;
-} & RailDragProps) {
-  const triggerRef = useRef<HTMLAnchorElement | null>(null);
-  useDragPointerDown(triggerRef, draggable, onDragPointerDown);
-
-  const { communityLevel, setLevel: setNotifLevel } = useNotifLevels();
-
-  const initials = name.trim().slice(0, 2).toUpperCase() || "··";
-  // Resolve the community's authoritative GroupRoot icon: rehydrate from the
-  // membership bundle, overlay the folded metadata (the owner-controlled icon),
-  // then decrypt the encrypted Blossom blob for display. Falls back to initials.
-  const community = useConcordCommunity(communityId);
-  // Rail buttons only need the icon/name, served by the fold's persisted
-  // snapshot. Pass active=false so pageload doesn't fan out a per-relay 3308
-  // control-plane query for every community — the community's page (active=true)
-  // syncs it on navigation, sharing this query key.
-  const { data: folded } = useConcordMetadata(community, false);
-  // Resolve the icon descriptor with a synchronous, disk-backed fallback so it's
-  // present on the first frame after reload (the folded metadata that normally
-  // carries it lands asynchronously, which is what made the avatar flicker).
-  const { icon } = useCommunityImageDescriptors(community, folded);
-  const iconUrl = useDecryptedCommunityImage(icon);
-
-  // Leave from the rail's right-click menu. Pass the raw id as a fallback so a
-  // room whose bundle can't be rehydrated can still be removed. Go home after.
-  const navigate = useNavigate();
-  const { leave } = useConcordCommunityActions(community, communityId);
-  const handleLeave = async () => {
-    try {
-      await leave();
-      navigate("/");
-    } catch (e) {
-      toast({
-        title: "Couldn't leave",
-        description: e instanceof Error ? e.message : undefined,
-        variant: "destructive",
-      });
-    }
-  };
-
-  // Per-channel unread from the wire-fed event store (same model as V2).
-  const { byChannel: c1ByChannel } = useConcord1Unread(community);
-  const { isConcordChannelMuted } = useMutes();
-  const c1AnyUnread = Object.keys(c1ByChannel).some(
-    (id) => !isConcordChannelMuted("c1", communityId, id),
-  );
-  const c1AnyMention = Object.values(c1ByChannel).some((u) => u.mention);
-
-  return (
-    <ContextMenu>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <ContextMenuTrigger asChild>
-            <NavLink
-              ref={triggerRef}
-              to={`/c1/${encodeURIComponent(communityId)}`}
-              aria-label={name}
-              onClick={(e) => {
-                if (shouldSuppressClick?.()) {
-                  e.preventDefault();
-                  return;
-                }
-                onNavigate?.();
-              }}
-              className={cn(
-                "group relative flex items-center justify-center shrink-0 touch-none",
-                dragging && "cursor-grabbing",
-                reordering && "touch-none",
-              )}
-              {...(draggable ? dragAttrs(itemAnchor(concord1Key(communityId)), dragParent) : {})}
-            >
-              {({ isActive }) => (
-                <DragSlot dragging={dragging}>
-                  <>
-                    {/* Active marker: the same neon blade servers get, so the
-                        open room keeps its left-bar highlight (incl. in folders). */}
-                    <span
-                      className={cn(
-                        "absolute -left-2 w-[3px] bg-primary transition-all",
-                        isActive
-                          ? "h-12 opacity-100"
-                          : "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
-                      )}
-                    />
-                    <span
-                      className={cn(
-                        "relative block size-12",
-                        highlight && "rounded-xl ring-2 ring-primary scale-110 transition-all duration-150",
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          "flex items-center justify-center size-12 clip-corner-lg overflow-hidden transition-all duration-150",
-                          "bg-muted text-success opacity-60 saturate-50",
-                          "group-hover:opacity-100 group-hover:saturate-100",
-                          (isActive || highlight) && "opacity-100 saturate-100",
-                          isActive && "is-active",
-                        )}
-                      >
-                        {iconUrl ? (
-                          <img src={iconUrl} alt="" draggable={false} className="size-full object-cover" />
-                        ) : (
-                          <span className="text-sm font-semibold">{initials}</span>
-                        )}
-                      </span>
-                      {/* Unread / mention indicator (hidden while active — you're reading it). */}
-                      {!isActive && c1AnyMention ? (
-                        <span
-                          className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none ring-2 ring-background"
-                          aria-label="You were mentioned"
-                        >
-                          @
-                        </span>
-                      ) : !isActive && c1AnyUnread ? (
-                        <span
-                          className="absolute -top-0.5 -right-0.5 z-10 size-3 rounded-full bg-foreground ring-2 ring-background"
-                          aria-label="Unread messages"
-                        />
-                      ) : null}
-                    </span>
-                  </>
-                </DragSlot>
-              )}
-            </NavLink>
-          </ContextMenuTrigger>
-        </TooltipTrigger>
-        <RailTooltipContent side="right" className="font-medium">
-          {name}
-        </RailTooltipContent>
-      </Tooltip>
-      <ContextMenuContent>
-        <NotifLevelMenu
-          label="Community notifications"
-          level={communityLevel(concord1Key(communityId))}
-          onChange={(lvl) => setNotifLevel(concord1Key(communityId), lvl)}
-          allowMentions={false}
-        />
-        <ContextMenuItem
-          className="gap-2 text-destructive focus:text-destructive"
-          onSelect={handleLeave}
-        >
-          <LogOut className="size-4" />
-          Leave community
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
-  );
-});
-
-/**
- * A rail button for an end-to-end-encrypted Concord V2 community (CORD-02).
- * Same shield accent as V1 (same trust model); navigates to `/c/…` and pulls
- * its authoritative icon from the folded Control Plane metadata.
+ * A rail button for an end-to-end-encrypted Concord community (CORD-02).
+ * Visually distinguished from NIP-29 servers by the shield accent (different
+ * trust model); navigates to `/c/…` and pulls its authoritative icon from the
+ * folded Control Plane metadata.
  */
 const Concord2Button = memo(function Concord2Button({
   communityId,
@@ -1439,7 +1198,6 @@ function ServerRailInner({
   const { mesh } = useMeshTransport();
   const hasUnreadDMs = useHasUnreadDMs();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
-  const { data: concord } = useConcordList();
   const concord2 = useLiveCommunities2();
   const [addOpen, setAddOpen] = useState(false);
 
@@ -1457,7 +1215,7 @@ function ServerRailInner({
     [config.railLayout, config.railOrder],
   );
 
-  // Every live rail item (NIP-29 servers, Concord V1/V2 communities and pinned
+  // Every live rail item (NIP-29 servers, Concord communities and pinned
   // DMs) in discovery order. The persisted layout arranges these into the
   // visible ordered list + folders.
   const items = useMemo<RailItem[]>(() => {
@@ -1467,14 +1225,6 @@ function ServerRailInner({
       base.push(
         ...railDms.map((pubkey) => ({ kind: "dm" as const, key: dmRailKey(pubkey), pubkey })),
       );
-      for (const entry of concord?.list.entries ?? []) {
-        base.push({
-          kind: "concord1",
-          key: concord1Key(entry.communityId),
-          communityId: entry.communityId,
-          name: entry.current.name,
-        });
-      }
       for (const entry of concord2) {
         base.push({
           kind: "concord2",
@@ -1485,7 +1235,7 @@ function ServerRailInner({
       }
     }
     return base;
-  }, [servers, concord, concord2, railDms, user]);
+  }, [servers, concord2, railDms, user]);
 
   const liveByKey = useMemo(() => new Map(items.map((it) => [it.key, it])), [items]);
 
@@ -1538,11 +1288,9 @@ function ServerRailInner({
       const base =
         item.kind === "server"
           ? `/s/${relayToRouteParam(item.url)}`
-          : item.kind === "concord1"
-            ? `/c1/${encodeURIComponent(item.communityId)}`
-            : item.kind === "dm"
-              ? dmRoute(item.pubkey)
-              : `/c/${encodeURIComponent(item.communityId)}`;
+          : item.kind === "dm"
+            ? dmRoute(item.pubkey)
+            : `/c/${encodeURIComponent(item.communityId)}`;
       return location.pathname === base || location.pathname.startsWith(`${base}/`);
     },
     [location.pathname, onServerSelect, selectedServer],
@@ -1568,7 +1316,7 @@ function ServerRailInner({
       // Only relay URLs qualify — every other kind's key would arrive there as
       // a relay the user never added.
       const addedOrder = keys.filter(
-        (k) => !k.startsWith("c1:") && !k.startsWith("c2:") && !k.startsWith("dm:"),
+        (k) => !k.startsWith("c2:") && !k.startsWith("dm:"),
       );
       if (user && addedOrder.length > 0) {
         updateList({ type: "reorder-servers", urls: addedOrder }).catch((err) =>
@@ -1711,17 +1459,6 @@ function ServerRailInner({
           onSelect={onServerSelect}
           selected={onServerSelect ? selectedServer === item.url : undefined}
           inCall={!activeCall?.dmPeer && activeCall?.relayUrl === item.url}
-          {...common}
-        />
-      );
-    }
-    if (item.kind === "concord1") {
-      return (
-        <ConcordButton
-          key={item.key}
-          communityId={item.communityId}
-          name={item.name}
-          onNavigate={onNavigate}
           {...common}
         />
       );
@@ -1899,7 +1636,7 @@ function ServerRailInner({
         )}
 
         {/* One unified, user-arranged community list: NIP-29 servers and Concord
-            (V1/V2) communities intermixed, with Discord-style folders. */}
+            communities intermixed, with Discord-style folders. */}
         {renderNodes.map((node) =>
           node.type === "item" ? (
             renderItem(node.item)

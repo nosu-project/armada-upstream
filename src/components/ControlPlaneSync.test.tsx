@@ -16,14 +16,12 @@ import { ControlPlaneSync } from "./ControlPlaneSync";
 // ── Module mocks ─────────────────────────────────────────────────────────────
 
 const h = vi.hoisted(() => ({
-  syncSpy: vi.fn(async () => ({ v1Touched: new Set(), v2Touched: new Set() })),
+  syncSpy: vi.fn(async () => ({ v2Touched: new Set() })),
   entries: [] as unknown[],
   v2Data: undefined as unknown,
 }));
 
 vi.mock("@nostrify/react", () => ({ useNostr: () => ({ nostr: {} }) }));
-vi.mock("@/hooks/useAppContext", () => ({ useAppContext: () => ({ config: { appRelays: [] } }) }));
-vi.mock("@/concord-v1/hooks/useConcordList", () => ({ useConcordList: () => ({ data: undefined }) }));
 vi.mock("@/concord-v2/hooks/useCommunityList2", () => ({
   useCommunityList2: () => ({ data: h.v2Data }),
 }));

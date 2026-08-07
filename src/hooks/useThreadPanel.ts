@@ -5,10 +5,10 @@ import { chatRoute, parseChatRoute, roomPath } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 import type { ChatMsg } from "@/components/chat/transport";
-import type { Concord1Route, Concord2Route, Nip29Route } from "@/lib/routes";
+import type { Concord2Route, Nip29Route } from "@/lib/routes";
 
 /** The surfaces that have a thread panel. DMs have no threads (see `parseChatRoute`). */
-export type ThreadCapableRoute = Nip29Route | Concord1Route | Concord2Route;
+export type ThreadCapableRoute = Nip29Route | Concord2Route;
 
 /** How long the panel stays mounted after closing, matching its slide-out. */
 const SLIDE_OUT_MS = 200;
@@ -47,7 +47,7 @@ export interface ThreadPanelState {
  * loaded window) simply leaves the panel closed while the timeline pages back
  * toward it.
  *
- * NIP-29, Concord V1 and Concord V2 each implemented this identically down to
+ * NIP-29 and Concord each implemented this identically down to
  * the animation timings, differing only in which route kind they spelled — so
  * it takes the room as a {@link ThreadCapableRoute} and builds every path from
  * that one value.

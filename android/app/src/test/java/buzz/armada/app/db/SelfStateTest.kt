@@ -33,14 +33,13 @@ class SelfStateTest {
         // still syncs, and only ever show up as "that one setting doesn't
         // travel between my devices".
         assertEquals(setOf(3, 10000, 10009, 10050, 10063, 10030, 13302, 13303), SelfState.KINDS)
-        assertEquals(setOf("armada/metadata", "armada/concord"), SelfState.D_TAGS)
+        assertEquals(setOf("armada/metadata"), SelfState.D_TAGS)
     }
 
     @Test
     fun `keeps Armada's own NIP-78 documents`() {
         // The settings blob carries the community rail's arrangement.
         assertTrue(SelfState.storable(self, rumor(kind = 30078, tags = listOf(listOf("d", "armada/metadata")))))
-        assertTrue(SelfState.storable(self, rumor(kind = 30078, tags = listOf(listOf("d", "armada/concord")))))
     }
 
     @Test

@@ -7,11 +7,11 @@ import { normalizeRelayUrl } from "@/lib/platform";
 
 /**
  * Stable mute key for a community: a normalized relay URL for NIP-29 servers,
- * `c1:${communityId}` / `c2:${communityId}` for Concord — the same stable key
+ * `c2:${communityId}` for Concord — the same stable key
  * scheme the server rail uses (`railOrder` / `railLayout`).
  */
 export function communityMuteKey(relayUrlOrRailKey: string): string {
-  if (relayUrlOrRailKey.startsWith("c1:") || relayUrlOrRailKey.startsWith("c2:")) {
+  if (relayUrlOrRailKey.startsWith("c2:")) {
     return relayUrlOrRailKey;
   }
   return normalizeRelayUrl(relayUrlOrRailKey) ?? relayUrlOrRailKey;
@@ -28,12 +28,12 @@ export function channelMuteKey(relayUrl: string, groupId: string): string {
 
 /**
  * Stable mute key for a Concord channel:
- * `c1:${communityId}::${channelIdHex}` / `c2:${communityId}::${channelIdHex}`
+ * `c2:${communityId}::${channelIdHex}`
  * — the community's rail key plus the channel id, mirroring the NIP-29
  * `${relayUrl}::${groupId}` shape.
  */
 export function concordChannelMuteKey(
-  protocol: "c1" | "c2",
+  protocol: "c2",
   communityId: string,
   channelIdHex: string,
 ): string {
@@ -57,7 +57,7 @@ export interface UseMutesReturn {
    * whole community is muted.
    */
   isConcordChannelMuted: (
-    protocol: "c1" | "c2",
+    protocol: "c2",
     communityId: string,
     channelIdHex: string,
   ) => boolean;
@@ -67,7 +67,7 @@ export interface UseMutesReturn {
   toggleChannelMute: (relayUrl: string, groupId: string) => void;
   /** Toggle an individual Concord channel mute. */
   toggleConcordChannelMute: (
-    protocol: "c1" | "c2",
+    protocol: "c2",
     communityId: string,
     channelIdHex: string,
   ) => void;
@@ -115,7 +115,7 @@ export function useMutes(): UseMutesReturn {
   );
 
   const isConcordChannelMuted = useCallback(
-    (protocol: "c1" | "c2", communityId: string, channelIdHex: string) =>
+    (protocol: "c2", communityId: string, channelIdHex: string) =>
       getLevel(concordChannelMuteKey(protocol, communityId, channelIdHex)) === "nothing" ||
       getLevel(`${protocol}:${communityId}`) === "nothing",
     [getLevel],
@@ -138,7 +138,7 @@ export function useMutes(): UseMutesReturn {
   );
 
   const toggleConcordChannelMute = useCallback(
-    (protocol: "c1" | "c2", communityId: string, channelIdHex: string) => {
+    (protocol: "c2", communityId: string, channelIdHex: string) => {
       const key = concordChannelMuteKey(protocol, communityId, channelIdHex);
       setLevel(key, getLevel(key) === "nothing" ? undefined : "nothing");
     },

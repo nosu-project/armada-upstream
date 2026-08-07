@@ -100,7 +100,7 @@ describe("Web Push suppression", () => {
     expect(worker.showNotification).not.toHaveBeenCalled();
   });
 
-  it.each(["group", "group-mention", "c1", "c2"])(
+  it.each(["group", "group-mention", "c2"])(
     "suppresses a locally-authored %s community event",
     async (scope) => {
       const worker = loadWorker({ ownEventId: "own-community-event" });
@@ -171,7 +171,7 @@ describe("Web Push suppression", () => {
     expect(worker.showNotification).not.toHaveBeenCalled();
   });
 
-  it.each(["group", "group-mention", "c1", "c2"])(
+  it.each(["group", "group-mention", "c2"])(
     "hands an open-app %s push to the room-aware foreground notifier",
     async (scope) => {
       const worker = loadWorker({
@@ -187,7 +187,7 @@ describe("Web Push suppression", () => {
     },
   );
 
-  it.each(["group", "group-mention", "c1", "c2"])(
+  it.each(["group", "group-mention", "c2"])(
     "keeps the service-worker %s fallback when no page owns presentation",
     async (scope) => {
       const worker = loadWorker();

@@ -7,23 +7,20 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
- * Minimal, dependency-free NIP-44 v2 <em>decryption</em> under a raw conversation
- * key — exactly enough to open a Concord sealed message in the background
- * notification service and recover the inner author + plaintext for a rich
- * notification.
+ * Minimal, dependency-free NIP-44 v2 encryption/decryption under a raw
+ * conversation key — the service's shared NIP-44 core, used to open Concord
+ * (CORD-02) stream wraps and NIP-17 DM seals in the background notification
+ * service, and by {@code NativeSigner}/{@code NostrCrypto} for the reverse
+ * (encrypt) direction of native quick replies.
  *
- * <p>Concord channel messages (kind 3300) carry, as the outer event's string
- * {@code content}, a base64 NIP-44 v2 payload encrypted under the channel's raw
- * 32-byte key (the channel key IS the NIP-44 conversation key — no ECDH; see
- * {@code lib/concord/cipher.ts}). The decrypted plaintext is the JSON of the
- * inner authorship event, whose {@code pubkey} is the real author and whose
- * {@code content} is the message text.
+ * <p>A Concord wrap carries, as the outer event's string {@code content}, a
+ * base64 NIP-44 v2 payload encrypted under the stream's raw 32-byte
+ * conversation key (no ECDH). The decrypted plaintext is the JSON of the seal
+ * / rumor, whose {@code pubkey} is the real author and whose {@code content}
+ * is the message text.
  *
- * <p>We intentionally do <strong>not</strong> verify the inner Schnorr signature
- * here (that needs secp256k1, and would only defend against an insider splicing
- * across channels/epochs — irrelevant for a best-effort, non-authoritative
- * notification preview). The HMAC over the ciphertext already authenticates the
- * payload against the channel key: a party without the key cannot forge a
+ * <p>The HMAC over the ciphertext authenticates the
+ * payload against the conversation key: a party without the key cannot forge a
  * payload that decrypts, so the recovered author/content are key-authenticated.
  * The WebView performs the full binding-triad verification when the user opens
  * the app.

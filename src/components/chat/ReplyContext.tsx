@@ -9,7 +9,7 @@ import type { ChatMsg } from "@/components/chat/transport";
  * The "replying to …" line above an inline reply, for a parent the caller has
  * ALREADY resolved.
  *
- * Concord V1/V2 and DMs all resolve it the same way — a by-id lookup over the
+ * Concord and DMs both resolve it the same way — a by-id lookup over the
  * decoded set, because a sealed rumor is not relay-fetchable — so the only
  * thing left is to name the author and preview the content, which is this.
  * (NIP-29's parent lives on a relay, so {@link GroupChat} keeps its own

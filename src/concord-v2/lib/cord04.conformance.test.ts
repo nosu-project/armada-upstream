@@ -325,7 +325,7 @@ describe("CORD-04 §1 — Editions", () => {
   });
 
   it("O-9: edition_hash matches the length-prefixed domain-separated preimage", () => {
-    // The golden vector, shared with Vector and with concord-v1's own copy.
+    // The golden vector, shared with Vector (and the retired concord-v1 tree).
     // Renaming the domain label or reordering the preimage re-hashes every
     // chain in existence, so this value is frozen.
     const h = editionHash(new Uint8Array(32).fill(0x11), 1n, undefined, new TextEncoder().encode("hello"));

@@ -62,16 +62,16 @@ export interface AppConfig {
    */
   /**
    * User-defined display order for the *entire* community rail as one list —
-   * NIP-29 servers and Concord (V1/V2) communities intermixed in any order.
+   * NIP-29 servers and Concord communities intermixed in any order.
    * Entries are stable rail keys: a relay URL for NIP-29 servers,
-   * `c1:${communityId}` for Concord V1, `c2:${communityId}` for Concord V2.
+   * `c2:${communityId}` for Concord communities.
    * Any item not listed falls back to its default position (appended in
    * discovery order). Stored locally in app config.
    */
   railOrder: string[];
   /**
    * The community rail's structured layout: an ordered list of items (by
-   * stable rail key — relay URLs and `c1:`/`c2:` community keys) and
+   * stable rail key — relay URLs and `c2:` community keys) and
    * Discord-style folders grouping them. Supersedes `railOrder` (which is
    * still written as the flattened order for backward compatibility, and read
    * only to seed this layout on first migration). Synced across devices via
@@ -193,7 +193,7 @@ export interface AppConfig {
   lastChannelByServer: Record<string, string>;
   /**
    * Muted communities, by stable rail key: a relay URL for NIP-29 servers,
-   * `c1:${communityId}` for Concord V1, `c2:${communityId}` for Concord V2.
+   * `c2:${communityId}` for Concord communities.
    * Muting silences all notifications from every room in the community
    * (push, native background service) and suppresses its unread badge —
    * without leaving. Synced across devices.
@@ -209,9 +209,9 @@ export interface AppConfig {
   /**
    * Discord-style per-conversation notification level, keyed by the SAME stable
    * scope keys as the mute sets:
-   *   - community: a normalized relay URL (NIP-29) or `c1:`/`c2:${communityId}`
+   *   - community: a normalized relay URL (NIP-29) or `c2:${communityId}`
    *   - NIP-29 channel: `${relayUrl}::${groupId}`
-   *   - Concord channel: `c1:`/`c2:${communityId}::${channelIdHex}`
+   *   - Concord channel: `c2:${communityId}::${channelIdHex}`
    *   - DM: `dm:${pubkey}`
    *
    * Levels:

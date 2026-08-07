@@ -303,7 +303,7 @@ export function WelcomePage() {
 
   // A signed-in user with a community never sees onboarding: redirect onto
   // the FIRST item of their arranged community rail — NIP-29 servers AND
-  // Concord V1/V2 communities intermixed in the order they chose (the same
+  // Concord communities intermixed in the order they chose (the same
   // list the far-left rail renders). The persisted `railLayout` (seeded from
   // the legacy flat `railOrder`) lives in app config and is available
   // synchronously, so the redirect commits without racing the rail's async
@@ -316,7 +316,7 @@ export function WelcomePage() {
       mergeLayout(config.railLayout, config.railOrder, liveServers),
     );
     for (const key of ordered) {
-      if (!key.startsWith("c1:") && !key.startsWith("c2:") && !servers.has(key)) continue;
+      if (!key.startsWith("c2:") && !servers.has(key)) continue;
       const route = railKeyToRoute(key);
       if (route) return route;
     }

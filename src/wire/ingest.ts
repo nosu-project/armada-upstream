@@ -6,7 +6,6 @@ import { parkPendingWraps, writeOpened, writeRumors } from "@/concord-v2/lib/rum
 import { bufferLiveDmWraps } from "@/lib/nip17/dm17Store";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { KIND_STREAM_MESSAGE_V2 } from "@/buzz/kinds";
-import { KIND_COMMUNITY_MESSAGE } from "@/concord-v1/lib/kinds";
 import { reactionContentKey } from "@/hooks/useReactions";
 import { dmThreadScope, emitWireScopes } from "@/wire/bus";
 import { feedNotifyCandidates, type NotifyCandidate } from "@/wire/notify";
@@ -93,14 +92,6 @@ function scopeOf(ev: NostrEvent, spec: WireSpec | undefined): string | undefined
   const h = tagValue(ev, "h");
   if (h) return `nip29:${h}`;
   if (ev.kind === 4) return "dm";
-  const z = tagValue(ev, "z");
-  if (z) {
-    // A control edition (kind-3308) carries the community's control `#z`, which
-    // wakes the roster/metadata/banlist fold, NOT a channel timeline.
-    const ctlCommunity = spec?.v1CtlByZ.get(z);
-    if (ctlCommunity) return `c1ctl:${ctlCommunity}`;
-    return `c1:${spec?.v1ByZ.get(z) ?? z}`;
-  }
   return undefined;
 }
 
@@ -112,7 +103,7 @@ function scopeOf(ev: NostrEvent, spec: WireSpec | undefined): string | undefined
  *   - Concord V2 wraps whose stream key we hold → decrypt → rumor store.
  *   - V2 wraps we can't open yet (control/invite planes, key not derived yet)
  *     → parked pending store, drained later by whoever holds the key.
- *   - Everything else (NIP-29 kinds, DMs, sealed V1 outers) → the event store,
+ *   - Everything else (NIP-29 kinds, DMs) → the event store,
  *     which routes by scope: NIP-29 to `opts.relay`'s own tenant, the rest to
  *     the shared cache. The store applies NIP-09 deletions itself.
  *
@@ -381,8 +372,8 @@ function v2Candidates(
 }
 
 /**
- * Build a notify candidate for a plaintext event (NIP-29 chat, DM, or a sealed
- * V1 outer). Returns undefined for events that shouldn't notify (self-authored,
+ * Build a notify candidate for a plaintext event (NIP-29 chat or DM).
+ * Returns undefined for events that shouldn't notify (self-authored,
  * non-activity kinds, deletions).
  */
 function plaintextCandidates(
@@ -432,28 +423,6 @@ function plaintextCandidates(
       path: chatRoute({ kind: "dm", peer, messageId: ev.id }),
       eventId: ev.id,
       peer,
-    }];
-  }
-
-  // Concord V1 sealed outer (kind-3300 with a `#z` pseudonym): content stays
-  // sealed at ingest, so we can't recover author/body/mention here. Emit a
-  // channel-level candidate; the notifier hook resolves the community route +
-  // names from the V1 list and treats it as an "all messages" signal only.
-  // ONLY the message kind notifies — edits/deletes/reactions and control
-  // editions (3308, which carry a control `#z`, not a channel one) stay silent.
-  const z = tagValue(ev, "z");
-  if (z && ev.kind === KIND_COMMUNITY_MESSAGE && !spec?.v1CtlByZ.has(z)) {
-    const channelId = spec?.v1ByZ.get(z) ?? z;
-    return [{
-      plane: "c1",
-      author: "",
-      createdAt: ev.created_at,
-      mention: false,
-      kind: ev.kind,
-      roomKey: `z:${z}`,
-      readKey: "", // filled by the hook (V1 read state)
-      path: "",
-      v1ChannelIdHex: channelId,
     }];
   }
 

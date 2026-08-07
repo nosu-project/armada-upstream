@@ -34,9 +34,9 @@
  * unscoped, one challenge burned 1.5-2s of main-thread signing per relay (see
  * streamAuth.perf.test.ts) for keys the relay would never see queried.
  *
- * Kept out of `concord-v1` and imported by only two shared files
+ * Imported by only two shared files
  * (NostrProvider for the WebView's own sockets, useNativeNotifications for
- * the Android service's bridged AUTH challenges) so the V2 tree stays
+ * the Android service's bridged AUTH challenges) so the concord-v2 tree stays
  * independently deletable.
  */
 

@@ -118,8 +118,8 @@ function cachedGroups(queryClient: QueryClient, relayUrl: string): Nip29Group[] 
 }
 
 const nip29Transport: Transport = {
-  // A NIP-29 rail key is a bare relay URL; the Concord prefixes are not ours.
-  owns: (key) => !key.startsWith("c1:") && !key.startsWith("c2:"),
+  // A NIP-29 rail key is a bare relay URL; the Concord prefix is not ours.
+  owns: (key) => !key.startsWith("c2:"),
   space(key, { queryClient }) {
     return { key, name: serverName(queryClient, key), route: `/s/${relayToRouteParam(key)}` };
   },

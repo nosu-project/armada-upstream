@@ -62,12 +62,6 @@ vi.mock("@/lib/nip65", () => ({
   uniqueRelayUrls: (urls: Iterable<string>) => [...new Set(urls)],
 }));
 
-vi.mock("@/concord-v1/lib/concord", () => ({
-  CONCORD_ENABLED: false,
-  CONCORD_LIST_D_TAG: "armada/concord",
-  CONCORD_LIST_KIND: 30078,
-}));
-
 describe("useInitialSync", () => {
   beforeEach(() => {
     h.config = {

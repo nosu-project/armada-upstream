@@ -19,15 +19,14 @@ import { chatRoute } from "@/lib/routes";
 /** A candidate the notifier may surface, normalized across planes. */
 export interface NotifyCandidate {
   /** Which plane the message arrived on. */
-  plane: "nip29" | "dm" | "c1" | "c2";
-  /** Author pubkey (hex). Empty for planes where it isn't recovered (V1). */
+  plane: "nip29" | "dm" | "c2";
+  /** Author pubkey (hex). */
   author: string;
   /** Unix seconds the message was created. */
   createdAt: number;
   /**
    * Whether this event `p`-tags the current user (a mention). DMs are always
-   * treated as directed at the user, so this is irrelevant there. Always false
-   * for V1 (sealed at ingest — mentions can't be detected without decrypt).
+   * treated as directed at the user, so this is irrelevant there.
    */
   mention: boolean;
   /**
@@ -46,7 +45,7 @@ export interface NotifyCandidate {
   kind: number;
   /**
    * Plaintext body when safely available (NIP-29 chat, decrypted c2 rumor).
-   * Undefined for encrypted DMs and sealed V1 outers.
+   * Undefined for encrypted DMs.
    */
   body?: string;
   /**
@@ -55,7 +54,6 @@ export interface NotifyCandidate {
    * Some planes leave this for the notifier hook to fill in once it resolves
    * the relay/community the event belongs to:
    *   - NIP-29 group: `h:<relayUrl>|<groupId>`
-   *   - Concord V1:   `z:<pseudonym>` (per held epoch)
    *   - Concord V2:   `c2:<channelIdHex>`
    *   - DM:           `dm:<peerPubkey>`
    */
@@ -70,8 +68,6 @@ export interface NotifyCandidate {
   groupId?: string;
   /** Concord V2 channel id hex; set only for `plane === "c2"`. */
   channelIdHex?: string;
-  /** Concord V1 channel id hex; set only for `plane === "c1"`. */
-  v1ChannelIdHex?: string;
   /** DM peer pubkey; set only for `plane === "dm"`. */
   peer?: string;
   /** Git activity details, when this is a repository event routed into a C2 channel. */

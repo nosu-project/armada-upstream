@@ -30,9 +30,6 @@ import type { NotifLevel } from "@/hooks/useNotifLevels";
  * the value is inherited. Selecting a row writes an explicit override for this
  * scope; selecting the row that already matches an inherited value still writes
  * the override (harmless, and makes the choice sticky).
- *
- * Concord V1 channels are all-or-nothing (mentions can't be detected in a
- * sealed message), so pass `allowMentions={false}` to hide the mentions row.
  */
 export function NotifLevelMenu(props: {
   /** Menu label, e.g. "Notifications" or "Channel notifications". */
@@ -41,10 +38,8 @@ export function NotifLevelMenu(props: {
   level: NotifLevel;
   /** Called with the chosen level. */
   onChange: (level: NotifLevel) => void;
-  /** Whether to offer the "Only @mentions" row (false for Concord V1). */
-  allowMentions?: boolean;
 }) {
-  const { label = "Notifications", level, onChange, allowMentions = true } = props;
+  const { label = "Notifications", level, onChange } = props;
   return (
     <ContextMenuSub>
       <ContextMenuSubTrigger>
@@ -62,11 +57,9 @@ export function NotifLevelMenu(props: {
           <ContextMenuRadioItem value="all">
             <Bell className="mr-2 size-4" /> All messages
           </ContextMenuRadioItem>
-          {allowMentions && (
-            <ContextMenuRadioItem value="mentions">
-              <AtSign className="mr-2 size-4" /> Only @mentions
-            </ContextMenuRadioItem>
-          )}
+          <ContextMenuRadioItem value="mentions">
+            <AtSign className="mr-2 size-4" /> Only @mentions
+          </ContextMenuRadioItem>
           <ContextMenuRadioItem value="nothing">
             <BellOff className="mr-2 size-4" /> Nothing
           </ContextMenuRadioItem>
@@ -91,12 +84,11 @@ export function NotifLevelIcon({ level }: { level: NotifLevel }) {
 export function NotifLevelDropdown(props: {
   level: NotifLevel;
   onChange: (level: NotifLevel) => void;
-  allowMentions?: boolean;
   /** Accessible label for the trigger, e.g. "Notification settings for Alice". */
   ariaLabel?: string;
   className?: string;
 }) {
-  const { level, onChange, allowMentions = true, ariaLabel = "Notifications", className } = props;
+  const { level, onChange, ariaLabel = "Notifications", className } = props;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -123,11 +115,9 @@ export function NotifLevelDropdown(props: {
           <DropdownMenuRadioItem value="all">
             <Bell className="mr-2 size-4" /> All messages
           </DropdownMenuRadioItem>
-          {allowMentions && (
-            <DropdownMenuRadioItem value="mentions">
-              <AtSign className="mr-2 size-4" /> Only @mentions
-            </DropdownMenuRadioItem>
-          )}
+          <DropdownMenuRadioItem value="mentions">
+            <AtSign className="mr-2 size-4" /> Only @mentions
+          </DropdownMenuRadioItem>
           <DropdownMenuRadioItem value="nothing">
             <BellOff className="mr-2 size-4" /> Nothing
           </DropdownMenuRadioItem>

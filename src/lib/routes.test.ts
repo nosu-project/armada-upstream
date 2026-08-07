@@ -44,18 +44,6 @@ const ROUNDTRIPS: Array<[ChatRoute, string, string]> = [
     "/s/relay.example/abc/t/r1/m/m1",
     "/s/:server/:groupId/t/:threadRoot/m/:messageId",
   ],
-  // Concord V1.
-  [{ kind: "concord1", communityId: "c" }, "/c1/c", "/c1/:communityId"],
-  [
-    { kind: "concord1", communityId: "c", channelId: "ch" },
-    "/c1/c/ch",
-    "/c1/:communityId/:channelId",
-  ],
-  [
-    { kind: "concord1", communityId: "c", channelId: "ch", threadRoot: "r1", messageId: "m1" },
-    "/c1/c/ch/t/r1/m/m1",
-    "/c1/:communityId/:channelId/t/:threadRoot/m/:messageId",
-  ],
   // Concord V2.
   [{ kind: "concord2", communityId: "c" }, "/c/c", "/c/:communityId"],
   [
@@ -212,7 +200,7 @@ describe("withoutMessage", () => {
   });
 
   it("leaves a location with no message focus alone", () => {
-    const route: ChatRoute = { kind: "concord1", communityId: "c", channelId: "ch" };
+    const route: ChatRoute = { kind: "concord2", communityId: "c", channelId: "ch" };
     expect(chatRoute(withoutMessage(route))).toBe(chatRoute(route));
   });
 });

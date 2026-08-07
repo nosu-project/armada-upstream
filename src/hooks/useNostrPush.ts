@@ -14,8 +14,6 @@ import {
   type UsePushNotificationsReturn,
 } from "@/lib/pushPrefs";
 import { effectiveDmRelays } from "@/contexts/AppContext";
-import { useConcordList } from "@/concord-v1/hooks/useConcordList";
-import { buildConcordSubs, type ConcordSub } from "@/concord-v1/lib/concordNotifications";
 import { useConcord2Subs } from "@/concord-v2/hooks/useConcord2Subs";
 import { NostrPushClient, type PushRelayPool, type PushSigner } from "@/lib/nostrPush";
 import {
@@ -45,7 +43,7 @@ import {
  *
  * This hook mirrors the native Android background service's watch set
  * (`useNativeNotifications`): the same groups, mentions-only levels, addressed
- * NIP-17 wraps, friends-only legacy DMs, and Concord V1/V2 channels — turned
+ * NIP-17 wraps, friends-only legacy DMs, and Concord channels — turned
  * into content-blind subscriptions by `buildPushSubscriptions`, then registered
  * with the server.
  * It self-gates: `supported` is false unless a nostr-push server is configured
@@ -163,7 +161,6 @@ export function useNostrPush(): UsePushNotificationsReturn {
   const { config } = useAppContext();
   const { data: groupList } = useUserGroupList();
   const { data: followData } = useFollowList();
-  const { data: concordData } = useConcordList();
   const { channelLevel, concordChannelLevel } = useNotifLevels();
   const { relays: publishedDmRelays } = useDmRelayList();
   const allConcord2Subs = useConcord2Subs();
@@ -237,16 +234,6 @@ export function useNostrPush(): UsePushNotificationsReturn {
     [followData?.pubkeys],
   );
 
-  const concordV1 = useMemo<ConcordSub[]>(
-    () =>
-      buildConcordSubs(concordData?.list).filter((sub) => {
-        const channelId = sub.keys[0]?.channelId;
-        if (!channelId) return true;
-        return concordChannelLevel("c1", sub.communityId, channelId) === "all";
-      }),
-    [concordData, concordChannelLevel],
-  );
-
   const concordV2 = useMemo(
     () =>
       allConcord2Subs.filter(
@@ -265,7 +252,6 @@ export function useNostrPush(): UsePushNotificationsReturn {
       prefs,
       dmRelays,
       dmFollows,
-      concordV1,
       concordV2,
     });
   }, [
@@ -276,7 +262,6 @@ export function useNostrPush(): UsePushNotificationsReturn {
     prefs,
     dmRelays,
     dmFollows,
-    concordV1,
     concordV2,
   ]);
 

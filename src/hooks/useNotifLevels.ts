@@ -36,9 +36,9 @@ export type NotifLevel = "all" | "mentions" | "nothing";
 
 // ── Stable scope keys (identical scheme to useMutes) ─────────────────────────
 
-/** Community scope key: normalized relay URL (NIP-29) or `c1:`/`c2:` rail key. */
+/** Community scope key: normalized relay URL (NIP-29) or `c2:` rail key. */
 export function communityScopeKey(relayUrlOrRailKey: string): string {
-  if (relayUrlOrRailKey.startsWith("c1:") || relayUrlOrRailKey.startsWith("c2:")) {
+  if (relayUrlOrRailKey.startsWith("c2:")) {
     return relayUrlOrRailKey;
   }
   return normalizeRelayUrl(relayUrlOrRailKey) ?? relayUrlOrRailKey;
@@ -49,9 +49,9 @@ export function channelScopeKey(relayUrl: string, groupId: string): string {
   return channelReadKey(normalizeRelayUrl(relayUrl) ?? relayUrl, groupId);
 }
 
-/** Concord channel scope key: `c1:`/`c2:${communityId}::${channelIdHex}`. */
+/** Concord channel scope key: `c2:${communityId}::${channelIdHex}`. */
 export function concordChannelScopeKey(
-  protocol: "c1" | "c2",
+  protocol: "c2",
   communityId: string,
   channelIdHex: string,
 ): string {
@@ -98,7 +98,7 @@ export interface UseNotifLevelsReturn {
   channelLevel: (relayUrl: string, groupId: string) => NotifLevel;
   /** The resolved level for a Concord channel (channel → community → global). */
   concordChannelLevel: (
-    protocol: "c1" | "c2",
+    protocol: "c2",
     communityId: string,
     channelIdHex: string,
   ) => NotifLevel;
@@ -143,7 +143,7 @@ export function useNotifLevels(): UseNotifLevelsReturn {
         // push gateway (which reads `muted_groups`) still honor a `nothing`
         // level, and drop a scope from them when it's no longer `nothing`.
         // Channel keys contain `::`; community keys are a bare relay URL or a
-        // `c1:`/`c2:` rail key; DM keys (`dm:…`) belong to neither mute set.
+        // `c2:` rail key; DM keys (`dm:…`) belong to neither mute set.
         const isChannel = scopeKey.includes("::");
         const isDm = scopeKey.startsWith("dm:");
         const muteSetKey: "mutedCommunities" | "mutedChannels" | null = isDm
@@ -188,7 +188,7 @@ export function useNotifLevels(): UseNotifLevelsReturn {
   );
 
   const concordChannelLevel = useCallback(
-    (protocol: "c1" | "c2", communityId: string, channelIdHex: string): NotifLevel => {
+    (protocol: "c2", communityId: string, channelIdHex: string): NotifLevel => {
       const own = map.get(concordChannelScopeKey(protocol, communityId, channelIdHex));
       if (own) return own;
       const community = map.get(`${protocol}:${communityId}`);

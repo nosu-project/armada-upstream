@@ -6,7 +6,7 @@ package buzz.armada.app.db
  *
  * These are the events that describe who you are and what you've joined: follow
  * and mute lists, the NIP-29 server/channel list, the Concord membership
- * vaults, DM/Blossom/emoji relay lists, and Armada's own NIP-78 settings
+ * vault, DM/Blossom/emoji relay lists, and Armada's own NIP-78 settings
  * document (which carries the community rail's arrangement).
  *
  * The WebView keeps them fresh with a standing REQ while it is alive. It isn't,
@@ -27,14 +27,14 @@ package buzz.armada.app.db
  */
 object SelfState {
 
-    /** NIP-78 application-specific data — settings, and the Concord V1 vault. */
+    /** NIP-78 application-specific data — Armada's settings document. */
     const val KIND_APP_SPECIFIC = 30078
 
     /**
      * The bare replaceable kinds, synced with a plain `{authors:[me], kinds:[…]}`
      * filter: follow (3), mute (10000), NIP-29 servers/channels (10009), DM
      * relays (10050), Blossom servers (10063), custom emoji (10030), and the
-     * Concord V2 community (13302) and invite (13303) lists.
+     * Concord community (13302) and invite (13303) lists.
      */
     @JvmField
     val KINDS: Set<Int> = setOf(3, 10000, 10009, 10050, 10063, 10030, 13302, 13303)
@@ -46,7 +46,7 @@ object SelfState {
      * blob is none of our business and would only cost space.
      */
     @JvmField
-    val D_TAGS: Set<String> = setOf("armada/metadata", "armada/concord")
+    val D_TAGS: Set<String> = setOf("armada/metadata")
 
     /** Tag shared by the per-installation encrypted GIF-favorite shards. */
     const val TOPIC_GIF_FAVORITES = "armada-gif-favorites"

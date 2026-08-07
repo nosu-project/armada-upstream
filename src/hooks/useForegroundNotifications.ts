@@ -3,8 +3,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { buildConcordSubs } from "@/concord-v1/lib/concordNotifications";
-import { useConcordList } from "@/concord-v1/hooks/useConcordList";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useNotifLevels, type NotifLevel } from "@/hooks/useNotifLevels";
@@ -81,7 +79,6 @@ export function useForegroundNotifications(): void {
   const { readState } = useReadState();
   const { channelLevel, concordChannelLevel, dmLevel } = useNotifLevels();
   const { data: groupList } = useUserGroupList();
-  const { data: concordList } = useConcordList();
 
   // groupId → host relay URL (NIP-29 events don't carry their relay). The
   // kind-10009 list covers explicit joins; the wire's per-server directory
@@ -100,25 +97,6 @@ export function useForegroundNotifications(): void {
     return m;
   }, [groupList, wireGroups]);
 
-  // V1 channel id hex → its community route + display names + `z` set.
-  const v1ByChannel = useMemo(() => {
-    const m = new Map<
-      string,
-      { communityId: string; communityName: string; channelName: string; zs: Set<string> }
-    >();
-    for (const sub of buildConcordSubs(concordList?.list)) {
-      for (const k of sub.keys) {
-        m.set(k.channelId, {
-          communityId: sub.communityId,
-          communityName: sub.communityName,
-          channelName: sub.channelName,
-          zs: new Set(sub.zs),
-        });
-      }
-    }
-    return m;
-  }, [concordList]);
-
   // Refs so the (stable) sink reads current values without re-registering on
   // every render — a re-register would drop the wire's reference to the sink.
   const ctx = useRef({
@@ -127,7 +105,6 @@ export function useForegroundNotifications(): void {
     concordChannelLevel,
     dmLevel,
     relayByGroup,
-    v1ByChannel,
     navigate,
     queryClient,
     eventStore,
@@ -138,7 +115,6 @@ export function useForegroundNotifications(): void {
     concordChannelLevel,
     dmLevel,
     relayByGroup,
-    v1ByChannel,
     navigate,
     queryClient,
     eventStore,
@@ -205,8 +181,8 @@ export function useForegroundNotifications(): void {
         // event or another candidate source is added.
         if (cand.author && cand.author === user.pubkey) continue;
 
-        // Resolve the fields ingest left for the hook (relay-dependent routing,
-        // V1 community routing) and the conversation's notification level.
+        // Resolve the fields ingest left for the hook (relay-dependent
+        // routing) and the conversation's notification level.
         let roomKey = cand.roomKey;
         let readKey = cand.readKey;
         let path = cand.path;
@@ -226,7 +202,7 @@ export function useForegroundNotifications(): void {
           level = c.channelLevel(relay, cand.groupId);
         } else if (cand.plane === "dm") {
           level = cand.peer ? c.dmLevel(cand.peer) : "all";
-        } else if (cand.plane === "c2") {
+        } else {
           if (!path) continue; // couldn't resolve the community route
           // Recover the community id from the route, to resolve the
           // per-channel level. Parsed rather than split on "/": the route may
@@ -240,25 +216,9 @@ export function useForegroundNotifications(): void {
             communityId && cand.channelIdHex
               ? c.concordChannelLevel("c2", communityId, cand.channelIdHex)
               : "all";
-        } else {
-          // c1: sealed at ingest — generic, no mention detection possible.
-          const info = cand.v1ChannelIdHex ? c.v1ByChannel.get(cand.v1ChannelIdHex) : undefined;
-          if (!info) continue;
-          roomKey = cand.roomKey; // `z:<pseudonym>`
-          // No `/m/` here: a V1 outer is sealed at ingest, so the id we have
-          // is the carrier's, not the rumor's — the id the timeline holds is
-          // only known after decrypt.
-          path = chatRoute({
-            kind: "concord1",
-            communityId: info.communityId,
-            channelId: cand.v1ChannelIdHex!,
-          });
-          level = c.concordChannelLevel("c1", info.communityId, cand.v1ChannelIdHex!);
         }
 
-        // Notification-level gate (Discord-style all/mentions/nothing). For V1,
-        // `mention` is always false (sealed), so a `mentions`-level V1 channel
-        // never foreground-notifies — matching that we can't see its mentions.
+        // Notification-level gate (Discord-style all/mentions/nothing).
         if (!levelAdmits(level, cand.mention)) continue;
 
         // Read-state gate (NIP-29 / DM have a useReadState entry). If the user
@@ -298,25 +258,20 @@ export function useForegroundNotifications(): void {
         void (async () => {
           let title: string;
           let body = cand.body;
-          if (cand.plane === "c1") {
-            const info = cand.v1ChannelIdHex ? c.v1ByChannel.get(cand.v1ChannelIdHex) : undefined;
-            title = `New message in ${info?.channelName || info?.communityName || "a channel"}`;
+          const name = await displayNameFor(cand.author);
+          if (cand.plane === "dm") {
+            title = `${name} sent you a message`;
+            body = body ?? "New direct message";
+          } else if (cand.reaction) {
+            // A reaction to your own message (V2). Mirrors the NIP-29 native
+            // string: "Reacted 👍 to your message".
+            title = name;
+            body = `Reacted ${cand.reactionEmoji ?? "👍"} to your message`;
+          } else if (cand.git) {
+            title = `${name} ${cand.git.action} in ${cand.git.repository}`;
+            body = cand.git.ticketTitle ?? `New activity in the destination channel`;
           } else {
-            const name = await displayNameFor(cand.author);
-            if (cand.plane === "dm") {
-              title = `${name} sent you a message`;
-              body = body ?? "New direct message";
-            } else if (cand.reaction) {
-              // A reaction to your own message (V2). Mirrors the NIP-29 native
-              // string: "Reacted 👍 to your message".
-              title = name;
-              body = `Reacted ${cand.reactionEmoji ?? "👍"} to your message`;
-            } else if (cand.git) {
-              title = `${name} ${cand.git.action} in ${cand.git.repository}`;
-              body = cand.git.ticketTitle ?? `New activity in the destination channel`;
-            } else {
-              title = cand.mention ? `${name} mentioned you` : name;
-            }
+            title = cand.mention ? `${name} mentioned you` : name;
           }
 
           try {

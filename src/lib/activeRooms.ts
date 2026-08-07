@@ -12,8 +12,7 @@
  * Room keys use the SAME stable shapes the native service uses (see
  * useActiveRoom's docstring):
  *   - NIP-29 group: `h:<relayUrl>|<groupId>`
- *   - Concord V1:   `z:<pseudonym>`
- *   - Concord V2:   `c2:<channelIdHex>`
+ *   - Concord:      `c2:<channelIdHex>`
  *   - DM:           `dm:<peerPubkey>`
  *
  * The set is cleared whenever the document is backgrounded or its window loses

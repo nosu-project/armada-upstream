@@ -10,13 +10,11 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useFollowList } from "@/hooks/useFollowList";
 import { useNotifLevels } from "@/hooks/useNotifLevels";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
-import { useConcordList } from "@/concord-v1/hooks/useConcordList";
 import {
   DEFAULT_PUSH_PREFS,
   type PushPrefs,
 } from "@/lib/pushPrefs";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
-import { buildConcordSubs, type ConcordSub } from "@/concord-v1/lib/concordNotifications";
 import { useConcord2Subs } from "@/concord-v2/hooks/useConcord2Subs";
 import { signStreamAuthsChunked } from "@/concord-v2/lib/streamAuth";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
@@ -167,7 +165,6 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   const { user } = useCurrentUser();
   const { config } = useAppContext();
   const { data: groupList } = useUserGroupList();
-  const { data: concordData } = useConcordList();
   const { data: followData } = useFollowList();
   const { channelLevel, concordChannelLevel } = useNotifLevels();
 
@@ -348,23 +345,6 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     [prefs],
   );
 
-  // Concord (E2E) V1 channel subscriptions: relays + #z pseudonyms + display
-  // names. Computed here (we hold the channel keys); the native service can't
-  // decrypt so it only fires generic "New message in <community>/#<channel>".
-  // V1 is all-or-nothing: mentions can't be detected in a sealed outer, so a
-  // channel/community is either watched (`all`) or dropped (`nothing` — or a
-  // `mentions` level, which for V1 means the same as nothing since we can never
-  // see the mention).
-  const concordSubs = useMemo<ConcordSub[]>(
-    () =>
-      buildConcordSubs(concordData?.list).filter((sub) => {
-        const channelId = sub.keys[0]?.channelId;
-        if (!channelId) return true;
-        return concordChannelLevel("c1", sub.communityId, channelId) === "all";
-      }),
-    [concordData, concordChannelLevel],
-  );
-
   // Concord V2 channel subscriptions: kind-1059 stream addresses + the
   // conversation keys that open their wraps (see useConcord2Subs). Channels at
   // `nothing` are dropped; `mentions` are watched but flagged `mentionOnly` so
@@ -439,7 +419,6 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     const turnedOff = !enabled;
     const nothingToWatch =
       relayUrls.length === 0 &&
-      concordSubs.length === 0 &&
       concord2Subs.length === 0 &&
       dmRelays.length === 0;
 
@@ -458,7 +437,6 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
         groupSubs,
         mentionOnlyGroupIds,
         prefs: prefsRecord,
-        concordSubs,
         concord2Subs,
         dmRelays,
         dmFollows,
@@ -476,7 +454,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     ArmadaNotification.configure(payload).catch((err) => {
       console.warn("[native-notif] configure failed:", err);
     });
-  }, [supported, enabled, user, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, concord2Subs, dmRelays, dmFollows, selfRelays, signerCfg, gitSubs]);
+  }, [supported, enabled, user, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concord2Subs, dmRelays, dmFollows, selfRelays, signerCfg, gitSubs]);
 
   // Auto-enable on launch (opt-out, like Ditto): if the user hasn't turned it
   // off AND the OS permission is already granted, start the background service
@@ -506,12 +484,6 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   const knownRelays = useMemo(() => {
     const set = new Set<string>(relayUrls);
     for (const url of dmRelays) set.add(url);
-    for (const sub of concordSubs) {
-      for (const url of sub.relays) {
-        const n = normalizeRelayUrl(url);
-        if (n) set.add(n);
-      }
-    }
     for (const sub of concord2Subs) {
       for (const url of sub.relays) {
         const n = normalizeRelayUrl(url);
@@ -519,7 +491,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
       }
     }
     return set;
-  }, [relayUrls, dmRelays, concordSubs, concord2Subs]);
+  }, [relayUrls, dmRelays, concord2Subs]);
 
   // NIP-42: the service can't sign, so it bridges each relay's AUTH challenge
   // here. We sign a kind-22242 with the user's signer (nsec / bunker /

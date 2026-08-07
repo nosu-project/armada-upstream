@@ -3,11 +3,9 @@ import { isGitAnnouncementDiscoveryRelay, normalizeRelayUrl } from "@/lib/platfo
 import { BUZZ_WIRE_KINDS } from "@/buzz/kinds";
 import { MAX_WRAP_BACKDATE_SECS } from "@/lib/nip17/protocol";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
-import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_EDIT, KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_REACTION, KIND_COMMUNITY_CONTROL } from "@/concord-v1/lib/kinds";
 import { KIND_WRAP } from "@/concord-v2/lib/kinds";
 import { GIT_ISSUE_KIND, GIT_PULL_REQUEST_KIND, GIT_STATUS_KINDS, matchGitTicketRepository, NIP22_COMMENT_KIND, parseGitTicket, type GitRepositoryAttachment } from "@/lib/gitActivity";
 
-import type { ConcordControlSub, ConcordSub } from "@/concord-v1/lib/concordNotifications";
 import type { StreamKeyView } from "@/concord-v2/lib/derive";
 import type { ChannelV2 } from "@/concord-v2/lib/types";
 import type { NostrFilter } from "@nostrify/nostrify";
@@ -97,16 +95,6 @@ export interface WireInputs {
   dmRelays: string[];
   /** Friends-only DM senders (kind-3 follows). */
   dmFollows: string[];
-  /** Concord V1 channel subscriptions (relays + `#z` pseudonyms + bindings). */
-  concord1: ConcordSub[];
-  /**
-   * Concord V1 CONTROL planes (relays + control `#z` per community). A standing
-   * subscription lands new control editions — roster/metadata/banlist changes —
-   * LIVE for every community, not only the one you have open, mirroring the V2
-   * control plane. Control editions stay sealed in the store (the fold opens
-   * them), so no decrypt key is needed here.
-   */
-  concord1Control?: ConcordControlSub[];
   /** Concord V2 channels (each carries its stream GroupKeys for decrypt). */
   concord2: Array<{ relays: string[]; channel: ChannelV2; communityIdHex: string }>;
   /**
@@ -154,10 +142,6 @@ export interface WireSpec {
   v2CommunityByChannel: Map<string, string>;
   /** V2 CONTROL stream address (wrap author) → its community, for decrypt + fold wake. */
   v2CtlByPk: Map<string, { idHex: string; groups: StreamKeyView[]; refounded: boolean }>;
-  /** V1 `#z` pseudonym → channel id hex, for scope naming. */
-  v1ByZ: Map<string, string>;
-  /** V1 CONTROL `#z` pseudonym → its community id hex, for the fold-wake scope. */
-  v1CtlByZ: Map<string, string>;
   /** Repository address → channels/intervals that reference it. */
   gitByRepository: Map<string, Array<{ channelId: string; communityId?: string; attachment: GitRepositoryAttachment }>>;
   /** Known ticket root id → repository address, for validating child activity. */
@@ -227,47 +211,6 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
       // fetching + decrypting these wraps.
       add(url, { kinds: [KIND_GIFT_WRAP], "#p": [inputs.pubkey] });
     }
-  }
-
-  // ── Concord V1: merged `#z` filter per community relay ───────────────────
-  const v1ByZ = new Map<string, string>();
-  const zsByRelay = new Map<string, Set<string>>();
-  for (const sub of inputs.concord1) {
-    for (const k of sub.keys) v1ByZ.set(k.z, k.channelId);
-    for (const url of sub.relays) {
-      const relay = normalizeRelayUrl(url);
-      if (!relay) continue;
-      let set = zsByRelay.get(relay);
-      if (!set) zsByRelay.set(relay, (set = new Set()));
-      for (const z of sub.zs) set.add(z);
-    }
-  }
-  for (const [relay, zs] of zsByRelay) {
-    add(relay, {
-      kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_EDIT, KIND_COMMUNITY_DELETE, KIND_COMMUNITY_REACTION],
-      "#z": [...zs].sort(),
-    });
-  }
-
-  // ── Concord V1 CONTROL: merged control-`#z` filter per community relay ────
-  // Kept SEPARATE from the message-plane filter above: control editions carry a
-  // DIFFERENT `#z` (the control pseudonym, not a channel one) and wake the fold
-  // (roster/metadata/banlist) rather than a chat timeline. ingest.ts rings
-  // `c1ctl:<communityId>` for these (see v1CtlByZ), mirroring V2's `c2ctl`.
-  const v1CtlByZ = new Map<string, string>();
-  const ctlZsByRelay = new Map<string, Set<string>>();
-  for (const sub of inputs.concord1Control ?? []) {
-    v1CtlByZ.set(sub.z, sub.communityId);
-    for (const url of sub.relays) {
-      const relay = normalizeRelayUrl(url);
-      if (!relay) continue;
-      let set = ctlZsByRelay.get(relay);
-      if (!set) ctlZsByRelay.set(relay, (set = new Set()));
-      set.add(sub.z);
-    }
-  }
-  for (const [relay, zs] of ctlZsByRelay) {
-    add(relay, { kinds: [KIND_COMMUNITY_CONTROL], "#z": [...zs].sort() });
   }
 
   // ── Concord V2: merged wrap-author filter per community relay ────────────
@@ -402,5 +345,5 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     .map(([relay, filters]) => ({ relay, filters }))
     .sort((a, b) => (a.relay < b.relay ? -1 : 1));
 
-  return { subs, v2ByPk, v2CommunityByChannel, v2CtlByPk, v1ByZ, v1CtlByZ, gitByRepository, gitRootById, gitRootAuthorById, sig: JSON.stringify(subs) };
+  return { subs, v2ByPk, v2CommunityByChannel, v2CtlByPk, gitByRepository, gitRootById, gitRootAuthorById, sig: JSON.stringify(subs) };
 }

@@ -7,7 +7,7 @@ import { removeKey } from "@/lib/railLayout";
  * Purge a community from the rail's arrangement.
  *
  * Removing a community has to hit BOTH the source list (kind 10009, the
- * Concord V1/V2 Community Lists) and the arrangement, or the key lingers in
+ * Concord Community List) and the arrangement, or the key lingers in
  * `railLayout`/`railOrder` — invisible, because rendering filters against the
  * live lists, right up until the user rejoins and finds the community back in
  * its old folder at its old position.

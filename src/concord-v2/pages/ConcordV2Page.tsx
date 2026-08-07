@@ -899,7 +899,7 @@ function TimerNotice2({ author, seconds, self }: { author: string; seconds: numb
  * relays, no host, no `#z` tags: every plane is kind-1059 traffic at derived
  * stream addresses. Lives at `/c/:communityId`, rehydrated from the
  * self-encrypted Community List. Renders through the SAME shared chat
- * components as NIP-29 / DMs / Concord V1; only the transport differs.
+ * components as NIP-29 / DMs; only the transport differs.
  */
 export function ConcordV2Page() {
   // The whole location, parsed once: which channel, which community-wide pane,
@@ -1291,8 +1291,8 @@ export function ConcordV2Page() {
 
   // The chat scope for in-message app affordances (a `.xdc` launch card) and
   // the top-of-chat app stage. Present only once both community + channel
-  // resolve; drives `useChatScope()` and `<AppStageSlot>` like the NIP-29 /
-  // Concord v1 pages do.
+  // resolve; drives `useChatScope()` and `<AppStageSlot>` like the NIP-29
+  // page does.
   const appScope = useMemo<AppScope | undefined>(
     () => (community && channel ? { kind: "concord2", community, channel } : undefined),
     [community, channel],

@@ -80,8 +80,7 @@ import okhttp3.WebSocketListener;
  *     NIP-29 group lives on one relay, so #h is scoped per relay)
  *   - {@code {kinds:[7,1111], #h:[...ids-hosted-here], #p:[userPubkey], since}} reactions/replies
  *   - {@code {kinds:[4], authors:[...follows], #p:[userPubkey], since}} DMs (friends only)
- *   - {@code {kinds:[3300], #z:[...pseudonyms], since}}  Concord V1 sealed messages
- *   - {@code {kinds:[1059], authors:[...stream pks], since}} Concord V2 wraps
+ *   - {@code {kinds:[1059], authors:[...stream pks], since}} Concord wraps
  *
  * On each EVENT we apply the user's prefs (mention vs all-group, per-type
  * toggles), dedupe by id, skip self, and post it into its room's conversation
@@ -113,7 +112,7 @@ public class NotificationRelayService extends Service {
     private static final int ROOM_ID_MODULUS = 2_000_000_000;
     private static final int CONTENT_CAP = 140;
     // ── Per-channel conversation notifications ────────────────────────────────
-    // Each CHANNEL (a Concord V1/V2 channel, a NIP-29 group) and each DM peer
+    // Each CHANNEL (a Concord channel, a NIP-29 group) and each DM peer
     // gets ONE standalone conversation notification that accumulates its recent
     // messages via MessagingStyle — the community image (sender avatar for DMs)
     // on the left, "Community / #channel" (peer name) as the title. A busy
@@ -151,7 +150,7 @@ public class NotificationRelayService extends Service {
     static final String EXTRA_CHANNEL_TS = "armada_channel_ts";
     // "Reply" notification action: a RemoteInput whose text the service sends
     // back into the conversation ITSELF — a NIP-29 kind 9, a NIP-17
-    // gift-wrapped DM, or a Concord V1/V2 sealed message — with the shared
+    // gift-wrapped DM, or a Concord sealed message — with the shared
     // signer credential, so a reply typed on the lockscreen goes out with the
     // app dead. Delivered as a start intent, exactly like Mark read. Rooms
     // with no native send path don't get the action at all.
@@ -191,7 +190,7 @@ public class NotificationRelayService extends Service {
     // relay URL → the NIP-29 group ids hosted on THAT relay. A NIP-29 group is
     // intrinsically tied to a single relay (its `h` id is only meaningful on
     // its host), so each relay's kind-9 REQ is scoped to just its own groups —
-    // the same relay→subscription model as Concord's relayToZs, never a
+    // the same relay→subscription model as Concord's relayToPks2, never a
     // broadcast of every joined id to every relay. Built in loadConfig from the
     // `groupSubs` config; falls back to relayUrls × groupIds for a config
     // written by an older build that shipped only the flat arrays.
@@ -209,22 +208,7 @@ public class NotificationRelayService extends Service {
     // settings are actually published to.
     private final Set<String> selfRelays = new LinkedHashSet<>();
     private JSONObject prefs = new JSONObject();
-    // Concord (E2E) channel subscriptions, keyed for fast lookup:
-    //   zToName: #z pseudonym (hex) → "Community / #channel" display name
-    //   zToUrl:  #z pseudonym (hex) → in-app deep-link base (/c1/<communityId>);
-    //            the channel id is appended per-event at notify time
-    //            (/c1/<communityId>/<channelId>) so a tap opens the right channel
-    //   zToKey:  #z pseudonym (hex) → decrypt material (raw key + channel/epoch
-    //            binding) so the service can open the sealed message
-    //   relayToZs: relay url → the #z values that live on that relay
-    private final java.util.Map<String, String> zToName = new java.util.HashMap<>();
-    private final java.util.Map<String, String> zToUrl = new java.util.HashMap<>();
-    private final java.util.Map<String, ConcordKey> zToKey = new java.util.HashMap<>();
-    private final java.util.Map<String, Set<String>> relayToZs = new java.util.HashMap<>();
-    //   zToCommunity: #z pseudonym (hex) → the community it belongs to
-    //                 (title/icon), the branding on its channel's notification
-    private final java.util.Map<String, CommunityRef> zToCommunity = new java.util.HashMap<>();
-    // Concord V2 (CORD-02) channel subscriptions, keyed for fast lookup:
+    // Concord (CORD-02) channel subscriptions, keyed for fast lookup:
     //   pkToStream2: stream pubkey (the kind-1059 wrap's author, hex) → decrypt
     //                material + display name + deep link for that channel/epoch
     //   relayToPks2: relay url → the stream pubkeys that live on that relay
@@ -259,7 +243,7 @@ public class NotificationRelayService extends Service {
 
     // roomKey → the accumulating per-room notification (Signal/Discord style).
     // The roomKey is a stable identifier for the conversation (NIP-29 groupId,
-    // Concord `z` pseudonym / channel id, or "dm:<peer>"), so successive
+    // Concord channel id, or "dm:<peer>"), so successive
     // messages UPDATE the same notification instead of stacking a new one per
     // event.
     private final Map<String, RoomNotif> roomNotifs = new HashMap<>();
@@ -282,10 +266,6 @@ public class NotificationRelayService extends Service {
      * suppress the notification (it's redundant: the live timeline already
      * shows it). Mentions are still surfaced, since a mention is a deliberate
      * @-ping even on the visible channel.
-     *
-     * A Set (not a single String) because a Concord V1 channel can span
-     * multiple rekey epochs, each with its own {@code z} pseudonym — and thus
-     * multiple roomKeys — all of which are "active" simultaneously.
      */
     private static volatile Set<String> activeRoomKeys =
             java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
@@ -375,28 +355,12 @@ public class NotificationRelayService extends Service {
         }
     }
 
-    /**
-     * Per-`z` Concord decrypt material: the raw NIP-44 channel key and the
-     * channel id + epoch the sealed message is bound to. Used to open a kind-3300
-     * outer event and recover the inner author + plaintext.
-     */
-    private static final class ConcordKey {
-        final byte[] key;        // raw 32-byte channel key (NIP-44 conversation key)
-        final String channelId;  // hex; the inner `channel` tag must match (best-effort)
-        final String epoch;      // decimal string; the inner `epoch` tag must match
-        ConcordKey(byte[] key, String channelId, String epoch) {
-            this.key = key;
-            this.channelId = channelId;
-            this.epoch = epoch;
-        }
-    }
-
     private interface ProfileCallback {
         void onProfile(Profile profile);
     }
 
     /**
-     * Per-stream Concord V2 decrypt material: the NIP-44 conversation key that
+     * Per-stream Concord decrypt material: the NIP-44 conversation key that
      * opens the stream's kind-1059 wraps (wrap → seal → rumor), the channel id
      * + epoch the rumor must bind to, and the display/deep-link strings for
      * the notification. One entry per (channel, epoch) — each epoch has its
@@ -457,7 +421,7 @@ public class NotificationRelayService extends Service {
      * conversation avatar source (the channel notification's left icon). The
      * icon is either a plain https URL (a NIP-29 kind-39000 `picture`) or an
      * encrypted-blob pointer the service fetches and AES-GCM decrypts itself
-     * (Concord V1/V2 community icons — key/nonce/hash are shipped from the
+     * (Concord community icons — key/nonce/hash are shipped from the
      * WebView, the same trust model as the channel decrypt keys). A null/empty
      * image url ⇒ the notification shows the app icon only.
      */
@@ -588,7 +552,7 @@ public class NotificationRelayService extends Service {
      * instead of a tray tap → read state.
      *
      * @param readByKey WebView read-state key → last-read unix seconds
-     *                  ({@code dm:<pk>}, {@code c2:<id>}, {@code c1:<id>},
+     *                  ({@code dm:<pk>}, {@code c2:<id>},
      *                  {@code <relayUrl>::<groupId>}).
      */
     static void dismissRead(java.util.Map<String, Long> readByKey) {
@@ -630,8 +594,6 @@ public class NotificationRelayService extends Service {
      *   {@code dm:<pk>}            → {@code dm:<pk>}            (unchanged)
      *   {@code c2:<channelId>}     → {@code c2:<channelId>}    (unchanged)
      *   {@code h:<relayUrl>|<gid>} → {@code <relayUrl>::<gid>}
-     *   {@code z:<pseudonym>}      → {@code c1:<channelId>}    (per-epoch `z`
-     *                               resolved to its channel id via zToKey)
      */
     private String readKeyForRoom(String roomKey) {
         if (roomKey == null) return null;
@@ -640,11 +602,6 @@ public class NotificationRelayService extends Service {
             String rest = roomKey.substring(2);
             int i = rest.lastIndexOf('|');
             return i > 0 ? rest.substring(0, i) + "::" + rest.substring(i + 1) : null;
-        }
-        if (roomKey.startsWith("z:")) {
-            ConcordKey ck = zToKey.get(roomKey.substring(2));
-            return (ck != null && ck.channelId != null && !ck.channelId.isEmpty())
-                    ? "c1:" + ck.channelId : null;
         }
         return null;
     }
@@ -876,7 +833,6 @@ public class NotificationRelayService extends Service {
         } catch (JSONException e) {
             prefs = new JSONObject();
         }
-        parseConcordSubs(sp.getString("concordSubs", null));
         parseConcord2Subs(sp.getString("concord2Subs", null));
         parseGitSubs(sp.getString("gitSubs", null));
 
@@ -906,7 +862,6 @@ public class NotificationRelayService extends Service {
         allRelays.addAll(relayToGroupIds.keySet());
         allRelays.addAll(dmRelays);
         allRelays.addAll(selfRelays);
-        allRelays.addAll(relayToZs.keySet());
         allRelays.addAll(relayToPks2.keySet());
         allRelays.addAll(gitRepositoriesByRelay.keySet());
 
@@ -1005,78 +960,6 @@ public class NotificationRelayService extends Service {
 
     /**
      * Parse the Concord subscriptions JSON
-     * ([{relays:[],zs:[],keys:[{z,key,channelId,epoch}],communityName,channelName}, …])
-     * into the lookup maps: z→display-name, z→deep-link, z→decrypt-key, and
-     * relay→{z…}. Concord messages are E2E-encrypted; the per-`z` key lets the
-     * service open the sealed message for a rich "<sender>: <preview>" body.
-     */
-    private void parseConcordSubs(String json) {
-        zToName.clear();
-        zToUrl.clear();
-        zToKey.clear();
-        relayToZs.clear();
-        zToCommunity.clear();
-        if (json == null) return;
-        try {
-            JSONArray arr = new JSONArray(json);
-            for (int i = 0; i < arr.length(); i++) {
-                JSONObject sub = arr.optJSONObject(i);
-                if (sub == null) continue;
-                String community = sub.optString("communityName", "Community");
-                String channel = sub.optString("channelName", "channel");
-                String communityId = sub.optString("communityId", "");
-                String name = community + " / #" + channel;
-                String url = communityId.isEmpty() ? "/" : "/c1/" + uriEncode(communityId);
-                JSONArray zs = sub.optJSONArray("zs");
-                JSONArray relays = sub.optJSONArray("relays");
-                if (zs == null || relays == null) continue;
-
-                // The community this channel belongs to — its image/name
-                // brand the channel's notification. Keyed by community id so
-                // every channel of one community shares one cached icon.
-                CommunityRef ref = communityRefFromSub(
-                        sub, GROUP_PREFIX + "c1:" + communityId, community, url);
-
-                List<String> zList = new ArrayList<>();
-                for (int j = 0; j < zs.length(); j++) {
-                    String z = zs.optString(j);
-                    if (z != null && !z.isEmpty()) {
-                        zList.add(z);
-                        zToName.put(z, name);
-                        zToUrl.put(z, url);
-                        zToCommunity.put(z, ref);
-                    }
-                }
-                // Per-`z` decrypt material (key + channel/epoch binding).
-                JSONArray keys = sub.optJSONArray("keys");
-                if (keys != null) {
-                    for (int j = 0; j < keys.length(); j++) {
-                        JSONObject k = keys.optJSONObject(j);
-                        if (k == null) continue;
-                        String z = k.optString("z", null);
-                        byte[] raw = ConcordCrypto.hexToBytes(k.optString("key", null));
-                        if (z == null || z.isEmpty() || raw == null || raw.length != 32) continue;
-                        zToKey.put(z, new ConcordKey(raw, k.optString("channelId", ""), k.optString("epoch", "")));
-                    }
-                }
-                for (int j = 0; j < relays.length(); j++) {
-                    String relay = relays.optString(j);
-                    if (relay == null || relay.isEmpty()) continue;
-                    Set<String> set = relayToZs.get(relay);
-                    if (set == null) {
-                        set = new LinkedHashSet<>();
-                        relayToZs.put(relay, set);
-                    }
-                    set.addAll(zList);
-                }
-            }
-        } catch (JSONException e) {
-            Log.w(TAG, "Failed to parse concordSubs", e);
-        }
-    }
-
-    /**
-     * Parse the Concord V2 subscriptions JSON
      * ([{relays:[],communityId,communityName,channelId,channelName,
      *    streams:[{pk,convKey,epoch}]}, …])
      * into the lookup maps: stream-pubkey→decrypt-material and relay→{pk…}.
@@ -1211,7 +1094,6 @@ public class NotificationRelayService extends Service {
 
         final String subGroups = "ag-" + Long.toHexString(System.nanoTime());
         final String subDirect = "ad-" + Long.toHexString(System.nanoTime() + 1);
-        final String subConcord = "ac-" + Long.toHexString(System.nanoTime() + 2);
         final String subDm = "am-" + Long.toHexString(System.nanoTime() + 3);
         // Prefix for one-shot kind-0 profile lookups. The sub id embeds only a
         // TRUNCATED key (see shortKey) so it stays within NIP-01's customary
@@ -1376,18 +1258,7 @@ public class NotificationRelayService extends Service {
                     f6.put("limit", 0);
                     webSocket.send(reqMessage(subDm17, f6));
                 }
-                // Concord (E2E) channel messages on this relay, by #z pseudonym.
-                Set<String> zs = relayToZs.get(relayUrl);
-                if (zs != null && !zs.isEmpty()) {
-                    JSONObject f3 = new JSONObject();
-                    f3.put("kinds", new JSONArray().put(3300));
-                    JSONArray z = new JSONArray();
-                    for (String v : zs) z.put(v);
-                    f3.put("#z", z);
-                    f3.put("since", sinceSec);
-                    webSocket.send(reqMessage(subConcord, f3));
-                }
-                // Concord V2 channel wraps on this relay: kind-1059 events
+                // Concord channel wraps on this relay: kind-1059 events
                 // AUTHORED BY the derived stream keys (no routing tag at all).
                 Set<String> pks = relayToPks2.get(relayUrl);
                 if (pks != null && !pks.isEmpty()) {
@@ -2285,40 +2156,7 @@ public class NotificationRelayService extends Service {
     // ── Event → notification ──────────────────────────────────────────────────
 
     /**
-     * Open a Concord sealed outer event with the supplied channel key: NIP-44
-     * v2-decrypt the {@code content}, parse the inner authorship event, and
-     * return it (with {@code pubkey} = real author, {@code content} = message).
-     * Best-effort: returns {@code null} on decrypt/parse failure, a bad inner
-     * signature, or if the inner channel/epoch binding doesn't match (a
-     * spliced/foreign payload).
-     */
-    private static JSONObject openConcord(JSONObject outer, ConcordKey ck) {
-        try {
-            String payload = outer.optString("content", "");
-            if (payload.isEmpty()) return null;
-            String json = ConcordCrypto.decrypt(ck.key, payload);
-            if (json == null) return null;
-            JSONObject inner = new JSONObject(json);
-            // The inner authorship event is signed by the real author's key; a
-            // channel-key holder could otherwise forge `pubkey`. Verify it —
-            // the outer's ephemeral signature proves nothing about identity.
-            if (!NostrCrypto.verifyEvent(inner)) return null;
-            // Binding: the inner kind must equal the outer's, and the inner
-            // channel/epoch tags must match the key we decrypted with — cheap
-            // anti-splice checks.
-            if (inner.optInt("kind", -1) != outer.optInt("kind", -2)) return null;
-            String ch = tagValue(inner, "channel");
-            String ep = tagValue(inner, "epoch");
-            if (!ck.channelId.isEmpty() && ch != null && !ck.channelId.equals(ch)) return null;
-            if (!ck.epoch.isEmpty() && ep != null && !ck.epoch.equals(ep)) return null;
-            return inner;
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    /**
-     * Open a Concord V2 stream wrap with the supplied conversation key:
+     * Open a Concord stream wrap with the supplied conversation key:
      * NIP-44-decrypt the wrap's {@code content} → the seal (kind 20013
      * encrypted / 20014 plaintext), recover the rumor (decrypting again for
      * 20013), and return it ({@code pubkey} = real author, {@code content} =
@@ -2561,17 +2399,12 @@ public class NotificationRelayService extends Service {
     /**
      * Per-room cache key for the plugin's rolling event cache (see
      * ArmadaNotificationPlugin.getRoomEvents): NIP-29 events key by their group
-     * (`h` tag), Concord V1 sealed outers by pseudonym (`z` tag), Concord V2
-     * wraps by the channel their stream author maps to, DMs share one bucket
-     * (the WebView splits threads by counterparty itself). Null when the event
-     * carries no usable room scope.
+     * (`h` tag), Concord wraps by the channel their stream author maps to,
+     * DMs share one bucket (the WebView splits threads by counterparty
+     * itself). Null when the event carries no usable room scope.
      */
     private String roomKeyFor(JSONObject event, int kind) {
         if (kind == 4) return "dm";
-        if (kind == 3300) {
-            String z = tagValue(event, "z");
-            return z != null ? "z:" + z : null;
-        }
         if (kind == 1059) {
             Concord2Stream st = pkToStream2.get(event.optString("pubkey"));
             if (st != null) return "c2:" + st.channelId;
@@ -2709,10 +2542,9 @@ public class NotificationRelayService extends Service {
         // outer key whose signature proves no sender identity (matching the
         // WebView's verifyEventSkippingWraps), so the outer sig is skipped
         // here and the INNER seal is Schnorr-verified at decrypt time instead
-        // (see openConcord/openConcord2/handleDm17Wrap). Everything else — NIP-29
-        // chat/reactions/replies, kind-4 DMs, and the Concord V1 kind-3300
-        // outer — must be verified before it is stored, fed to the WebView,
-        // or turned into a notification.
+        // (see openConcord2/handleDm17Wrap). Everything else — NIP-29
+        // chat/reactions/replies and kind-4 DMs — must be verified before it
+        // is stored, fed to the WebView, or turned into a notification.
         if (!passesFilter(event, kind, relayUrl)) {
             return;
         }
@@ -2754,8 +2586,8 @@ public class NotificationRelayService extends Service {
         // "wait for the chat to catch up".
         //
         // Covers the timeline kinds the WebView renders: NIP-29 chat/polls/
-        // reactions/replies/deletes, Concord V1 sealed outers (kind 3300) and V2
-        // wraps (kind 1059, both decrypted below or in the WebView) and DMs
+        // reactions/replies/deletes, Concord wraps (kind 1059, decrypted
+        // below or in the WebView) and DMs
         // (kind 4 — ciphertext; the WebView holds the NIP-04 keys). Each is also
         // recorded in the plugin's per-room rolling cache (see getRoomEvents) so
         // opening a room can pull its natively-received history directly.
@@ -2767,7 +2599,7 @@ public class NotificationRelayService extends Service {
         // published self-copy) must not re-notify.
         boolean storedBefore = false;
         switch (kind) {
-            case 9: case 1068: case 7: case 1111: case 5: case 3300: case 1059: case 4:
+            case 9: case 1068: case 7: case 1111: case 5: case 1059: case 4:
                 // The relay is passed through because it decides the tenant for
                 // NIP-29 kinds (see RelayScope) and which handoff queue carries
                 // the event, so the WebView's ingest can route it to the same
@@ -2780,88 +2612,7 @@ public class NotificationRelayService extends Service {
                 break;
         }
 
-        // Concord (E2E): the outer event is signed by an ephemeral key with
-        // NIP-44-encrypted content. Open it with the channel key we were handed
-        // (derived in the WebView, where membership lives) to recover the inner
-        // author + plaintext, then notify just like a group message. If we have
-        // no key (or decryption fails) fall back to a keyless room notification.
-        if (kind == 3300) {
-            String z = tagValue(event, "z");
-            String room = z != null ? zToName.get(z) : null;
-            if (room == null) {
-                return;
-            }
-            String url = zToUrl.get(z);
-            long cts = event.optLong("created_at", 0);
-            if (cts + 1 > sinceSec) sinceSec = cts + 1;
-            notifiedIds.add(id);
-
-            ConcordKey ck = zToKey.get(z);
-            // Deep-link to the SPECIFIC channel (not just the community), so a
-            // tap opens the room the notification is about instead of falling
-            // back to the last-opened channel. The community-only url is the
-            // base; append the channel id when the key carries one.
-            if (ck != null && url != null && !url.equals("/") && !ck.channelId.isEmpty()) {
-                url = url + "/" + uriEncode(ck.channelId);
-            }
-            JSONObject inner = ck != null ? openConcord(event, ck) : null;
-            if (inner == null) {
-                // Couldn't decrypt — still tell the user something arrived, and
-                // where. (Generic body, but a real room title.)
-                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord (opaque): " + room);
-                if (!prefBool("allGroupMessages", true)) return;
-                enqueueRoomMessage(
-                        zToCommunity.get(z), "z:" + z, room, url != null ? url : "/",
-                        /*senderPubkey=*/null, "Someone", /*picture=*/null,
-                        "New message", System.currentTimeMillis(), /*mention=*/false);
-                return;
-            }
-
-            // Feed the DECRYPTED inner straight to the WebView so the message
-            // renders the instant the app opens — no second NIP-44 decrypt, no
-            // relay round-trip. openConcord already verified the inner's Schnorr
-            // signature natively; the WebView re-verifies as defence in depth.
-            ArmadaNotificationPlugin.feedConcordInner(inner.toString(), z, id);
-
-            String author = inner.optString("pubkey");
-            if (author.equals(userPubkey)) {
-                return; // our own message echoed back
-            }
-            boolean mentionsMe = isMentioned(inner, userPubkey);
-            // Concord rooms reuse the group-message prefs: always notify on a
-            // mention; otherwise honour the all-messages toggle.
-            if (!(mentionsMe ? prefBool("mentions", true) : prefBool("allGroupMessages", true))) {
-                return;
-            }
-            final String fZ = z;
-            final String fRoom = room;
-            final String fUrl = url != null ? url : "/";
-            final boolean fMention = mentionsMe;
-            final String preview = messagePreview(inner);
-            final long fTs = (cts > 0 ? cts * 1000L : System.currentTimeMillis());
-            // A kind-1111 comment (threaded reply) carries its thread root in the
-            // uppercase `E` tag. Append it to the deep-link so the WebView can
-            // open the thread panel on tap instead of just the channel.
-            final String threadRoot = innerKindCommentRoot(inner);
-            // SYNCHRONOUS active-room suppression: check before the async profile
-            // fetch so the decision is immediate (no race with the Capacitor
-            // bridge). A mention always breaks through.
-            if (isActivelyViewed("z:" + fZ, threadRoot, fMention)) {
-                return;
-            }
-            resolveAuthor(author, relayUrl, profile -> {
-                String name = displayName(profile);
-                String picture = profile != null ? profile.picture : null;
-                String text = buildMessageText(preview, fMention, threadRoot != null);
-                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord: " + fRoom + " / " + name);
-                enqueueRoomMessage(
-                        zToCommunity.get(fZ), "z:" + fZ, fRoom, appendThreadSegment(fUrl, threadRoot),
-                        author, name, picture, text, fTs, fMention);
-            });
-            return;
-        }
-
-        // Concord V2 (E2E): the outer event is a kind-1059 wrap SIGNED BY a
+        // Concord (E2E): the outer event is a kind-1059 wrap SIGNED BY a
         // derived stream key with NIP-44-encrypted content. Open wrap → seal →
         // rumor with the stream's conversation key (derived in the WebView,
         // where membership lives) to recover the real author + plaintext, then
@@ -2922,10 +2673,9 @@ public class NotificationRelayService extends Service {
             // message notify — a reaction only when its `p` tag names you
             // (NIP-25, carried on the encrypted rumor). Edits (5/3302), deletes
             // (5), reactions to others' messages, and other chat-plane kinds
-            // stay silent. V1 has no such filter (it notifies for every
-            // decrypted inner); V2 is tighter because it subscribes to ALL
-            // kind-1059 wraps, including non-message chat-plane traffic the
-            // WebView handles silently.
+            // stay silent — the subscription covers ALL kind-1059 wraps,
+            // including non-message chat-plane traffic the WebView handles
+            // silently.
             int rumorKind = rumor.optInt("kind", -1);
             final String author2 = rumor.optString("pubkey");
             if (author2.equals(userPubkey)) {
@@ -3306,13 +3056,8 @@ public class NotificationRelayService extends Service {
                 return dmRelays.contains(relayUrl)
                         && dmFollows.contains(event.optString("pubkey"))
                         && pTags(event).contains(userPubkey);
-            case 3300: {
-                // {kinds:[3300], "#z":zs} — the #z values subscribed on THIS relay.
-                Set<String> zs = relayToZs.get(relayUrl);
-                return zs != null && zs.contains(tagValue(event, "z"));
-            }
             case 1059: {
-                // Two filters carry kind 1059: the Concord V2 wrap sub is
+                // Two filters carry kind 1059: the Concord wrap sub is
                 // authors-scoped to this relay's stream keys; the NIP-17 DM
                 // wrap sub is the broad "#p":[me] inbox on the DM relays.
                 Set<String> pks = relayToPks2.get(relayUrl);
@@ -3366,7 +3111,7 @@ public class NotificationRelayService extends Service {
      * @param community the community this room belongs to — its image/name
      *                  brand the notification. {@code null} for 1:1 DMs, which
      *                  render without a conversation title.
-     * @param roomKey   stable conversation id (groupId / Concord `z` / "dm:<peer>"),
+     * @param roomKey   stable conversation id (groupId / Concord channel / "dm:<peer>"),
      *                  used for active-room suppression and Mark-read markers
      * @param roomTitle conversation display name ("Community / #channel", or
      *                  peer name for DMs)
@@ -3385,7 +3130,7 @@ public class NotificationRelayService extends Service {
             String senderPubkey, String senderName, String senderPicture,
             String text, long timestampMs, boolean mention) {
         // Suppress the notification entirely when the user is already looking at
-        // this room — the live `relayEvent`/`concordMessage` feed already
+        // this room — the live `relayEvent` feed already
         // painted the message in the timeline, so a tray entry would be
         // redundant. A mention still fires: it's an explicit @-ping that
         // deserves attention even on the visible channel. The active-room keys
@@ -3805,15 +3550,7 @@ public class NotificationRelayService extends Service {
             String key = channelKeys[i];
             if (key == null || key.isEmpty()) continue;
             long tsMs = channelTs[i] > 0 ? channelTs[i] : System.currentTimeMillis();
-            // Concord V1 read state is keyed by channel id, not the `z`
-            // pseudonym (which is per-epoch); resolve it from the decrypt-key
-            // map so the WebView can mark the right channel read.
-            String channelId = null;
-            if (key.startsWith("z:")) {
-                ConcordKey ck = zToKey.get(key.substring(2));
-                if (ck != null && !ck.channelId.isEmpty()) channelId = ck.channelId;
-            }
-            ArmadaNotificationPlugin.enqueueReadMarker(this, key, tsMs / 1000L, channelId);
+            ArmadaNotificationPlugin.enqueueReadMarker(this, key, tsMs / 1000L);
             if (BuildConfig.DEBUG) Log.d(TAG, "MARK READ " + key);
         }
     }
@@ -3824,9 +3561,8 @@ public class NotificationRelayService extends Service {
      * Whether a native send path exists for this room: a shared signer, plus a
      * protocol the service can build end-to-end. DMs go out as NIP-17 (rumor →
      * seal → wrap; the signer covers the seal's encrypt + sign for every login
-     * type), NIP-29 rooms as a plain kind 9 to the group's host relay, Concord
-     * V1 rooms as an inner signed by the user sealed under the channel key the
-     * config already ships, and Concord V2 rooms as a CORD-02 rumor → seal →
+     * type), NIP-29 rooms as a plain kind 9 to the group's host relay, and
+     * Concord rooms as a CORD-02 rumor → seal →
      * wrap — the seal signed through the shared signer, the wrap by the stream
      * secret read from the group-key memo the WebView persists in the shared
      * ArmadaDB (no key crosses the plugin bridge; see streamSecretFor).
@@ -3836,7 +3572,6 @@ public class NotificationRelayService extends Service {
         String key = room.roomKey;
         if (key.startsWith("dm:")) return key.length() == 3 + 64;
         if (key.startsWith("h:")) return key.substring(2).lastIndexOf('|') > 0;
-        if (key.startsWith("z:")) return v1ReplyTarget(key.substring(2)) != null;
         // Config-only check (no DB read on every post); the stream secret is
         // resolved from the store at send time and fails the reply visibly if
         // the memo lacks it (possible only if the WebView never derived it —
@@ -3898,8 +3633,6 @@ public class NotificationRelayService extends Service {
             sendDmReply(signer, roomKey.substring(3), text, roomKey, sent);
         } else if (roomKey.startsWith("h:")) {
             sendNip29Reply(signer, roomKey, text, sent);
-        } else if (roomKey.startsWith("z:")) {
-            sendConcord1Reply(signer, roomKey, text, sent);
         } else if (roomKey.startsWith("c2:")) {
             sendConcord2Reply(signer, roomKey, text, sent);
         } else {
@@ -3945,12 +3678,7 @@ public class NotificationRelayService extends Service {
         RoomNotif room = roomNotifs.get(roomKey);
         long tsMs = room != null && room.lastTimestampMs > 0
                 ? room.lastTimestampMs : System.currentTimeMillis();
-        String channelId = null;
-        if (roomKey.startsWith("z:")) {
-            ConcordKey ck = zToKey.get(roomKey.substring(2));
-            if (ck != null && !ck.channelId.isEmpty()) channelId = ck.channelId;
-        }
-        ArmadaNotificationPlugin.enqueueReadMarker(this, roomKey, tsMs / 1000L, channelId);
+        ArmadaNotificationPlugin.enqueueReadMarker(this, roomKey, tsMs / 1000L);
     }
 
     /**
@@ -3994,104 +3722,6 @@ public class NotificationRelayService extends Service {
                 }));
     }
 
-    /**
-     * Concord V1: an inner kind-3300 authorship event signed by the user
-     * (channel/epoch/ms binding tags, mirroring envelope.ts buildInnerEvent),
-     * NIP-44-sealed under the channel key, wrapped in an ephemeral-signed
-     * outer tagged with the epoch's pseudonym. Replies target the NEWEST epoch
-     * held for the channel — a room can be notified on an old epoch's
-     * pseudonym after a rekey, but members read the current one.
-     */
-    private void sendConcord1Reply(NativeSigner signer, String roomKey, String text, MsgEntry sent) {
-        final V1ReplyTarget target = v1ReplyTarget(roomKey.substring(2));
-        if (target == null) {
-            finishReply(roomKey, sent, false);
-            return;
-        }
-        final long nowMs = System.currentTimeMillis();
-        JSONArray innerTags = new JSONArray()
-                .put(new JSONArray().put("channel").put(target.key.channelId))
-                .put(new JSONArray().put("epoch").put(target.key.epoch))
-                .put(new JSONArray().put("ms").put(String.valueOf(nowMs % 1000)));
-        signer.signEvent(3300, text, innerTags, nowMs / 1000, inner ->
-                handler.post(() -> {
-                    JSONObject built = null;
-                    if (inner != null) {
-                        String ciphertext = ConcordCrypto.encrypt(target.key.key, inner.toString());
-                        if (ciphertext != null) {
-                            try {
-                                JSONArray outerTags = new JSONArray()
-                                        .put(new JSONArray().put("z").put(target.z))
-                                        .put(new JSONArray().put("v").put("1"));
-                                built = NostrCrypto.finalizeEvent(
-                                        3300, ciphertext, outerTags, nowMs / 1000, randomSecretKey());
-                            } catch (Exception ignored) {
-                                // Falls through to the failure resolve below.
-                            }
-                        }
-                    }
-                    if (built == null) {
-                        finishReply(roomKey, sent, false);
-                        return;
-                    }
-                    final JSONObject outer = built;
-                    final List<String> relays = relaysForZ(target.z);
-                    publishEvent(outer, relays, ok -> {
-                        if (ok) {
-                            String outerId = outer.optString("id");
-                            notifiedIds.add(outerId);
-                            ServiceStore.ingest(this, outer, relays.get(0));
-                            // Feed the decrypted inner live, like a received
-                            // one, so an open WebView paints it at once.
-                            ArmadaNotificationPlugin.feedConcordInner(
-                                    inner.toString(), target.z, outerId);
-                        }
-                        finishReply(roomKey, sent, ok);
-                    });
-                }));
-    }
-
-    /** A Concord V1 reply's destination: the newest held epoch's pseudonym + key. */
-    private static final class V1ReplyTarget {
-        final String z;
-        final ConcordKey key;
-
-        V1ReplyTarget(String z, ConcordKey key) {
-            this.z = z;
-            this.key = key;
-        }
-    }
-
-    /**
-     * The V1 send target for a notified room's pseudonym: the same CHANNEL, at
-     * the newest epoch the config holds a key for. Null when the binding is
-     * incomplete or no relay hosts the pseudonym — no Reply action then.
-     */
-    private V1ReplyTarget v1ReplyTarget(String z) {
-        ConcordKey held = zToKey.get(z);
-        if (held == null || held.channelId.isEmpty() || held.epoch.isEmpty()) return null;
-        String bestZ = z;
-        ConcordKey best = held;
-        for (Map.Entry<String, ConcordKey> e : zToKey.entrySet()) {
-            ConcordKey cand = e.getValue();
-            if (!held.channelId.equals(cand.channelId)) continue;
-            if (parseEpoch(cand.epoch) > parseEpoch(best.epoch)) {
-                best = cand;
-                bestZ = e.getKey();
-            }
-        }
-        return relaysForZ(bestZ).isEmpty() ? null : new V1ReplyTarget(bestZ, best);
-    }
-
-    /** The relays whose Concord V1 subscription carries this pseudonym. */
-    private List<String> relaysForZ(String z) {
-        List<String> out = new ArrayList<>();
-        for (Map.Entry<String, Set<String>> e : relayToZs.entrySet()) {
-            if (e.getValue().contains(z)) out.add(e.getKey());
-        }
-        return out;
-    }
-
     private static long parseEpoch(String epoch) {
         try {
             return Long.parseLong(epoch);
@@ -4101,7 +3731,7 @@ public class NotificationRelayService extends Service {
     }
 
     /**
-     * Concord V2 (CORD-02): rumor (kind 9, channel/epoch/ms binding tags,
+     * Concord (CORD-02): rumor (kind 9, channel/epoch/ms binding tags,
      * mirroring useChannel2's send) → seal (kind 20013, the rumor NIP-44'd
      * under the STREAM conversation key, signed by the user through the shared
      * signer) → wrap (kind 1059, random ephemeral `p`, real timestamp, signed
@@ -4600,7 +4230,7 @@ public class NotificationRelayService extends Service {
     /**
      * AES-256-GCM decrypt an encrypted community-image blob and verify its
      * plaintext SHA-256 (128-bit tag, matching the encrypt side in
-     * concord-v2/lib/image.ts and concord-v1/lib/communityImage.ts). Returns
+     * concord-v2/lib/image.ts). Returns
      * null on any crypto failure or a hash mismatch (a swapped blob fails
      * closed), so the icon simply doesn't render rather than showing a forgery.
      */
@@ -4666,8 +4296,7 @@ public class NotificationRelayService extends Service {
             // The shortcut id is the conversation's stable in-app ROUTE, not
             // the roomKey: it doubles as the Direct Share target id
             // (EXTRA_SHORTCUT_ID on an incoming share), and a route is the one
-            // spelling the web layer can navigate without service state — a
-            // "z:<z>" roomKey is a per-epoch pseudonym only zToUrl can map.
+            // spelling the web layer can navigate without service state.
             // Must match ShareTargetPlugin.publishShortcuts, the other writer
             // of these shortcuts.
             String id = shortcutIdFor(room);
@@ -5067,7 +4696,7 @@ public class NotificationRelayService extends Service {
     }
 
     /**
-     * For a decrypted Concord inner (V1 or V2), return the thread-root id when
+     * For a decrypted Concord inner, return the thread-root id when
      * the inner is a NIP-22 kind-1111 comment (uppercase `E` tag), else null.
      * Used to deep-link a thread-reply notification to its thread panel.
      */

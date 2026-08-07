@@ -15,16 +15,6 @@ import {
   KIND_BLOSSOM_SERVERS,
   type BlossomServerListQuery,
 } from "@/hooks/useBlossomServerList";
-import {
-  CONCORD_ENABLED,
-  CONCORD_LIST_D_TAG,
-  CONCORD_LIST_KIND,
-  type ConcordList,
-} from "@/concord-v1/lib/concord";
-import { channelPseudonym } from "@/concord-v1/lib/derive";
-import { acceptInvite, type CommunityInvite } from "@/concord-v1/lib/invite";
-import { KIND_COMMUNITY_DELETE, KIND_COMMUNITY_MESSAGE } from "@/concord-v1/lib/kinds";
-import type { Channel, Community } from "@/concord-v1/lib/types";
 import { listQueryKey, syncCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
 import { liveEntries } from "@/concord-v2/lib/communityList";
 import { warmupCommunities2 } from "@/concord-v2/lib/loginWarmup";
@@ -50,7 +40,6 @@ import {
 } from "@/lib/nip65";
 import { RELAY_LIST_DISCOVERY_RELAYS } from "@/lib/platform";
 
-import { bytesToHex } from "@noble/hashes/utils.js";
 import type { NostrEvent } from "@nostrify/nostrify";
 
 /** NIP-78 application-data kind (Armada's encrypted settings). */
@@ -72,8 +61,6 @@ const PAGE_SIZE = 50;
 const CATCHUP_WINDOW_SECONDS = 7 * 24 * 60 * 60;
 /** Cap on channels we eagerly catch up, so a user in dozens of groups isn't blocked forever. */
 const MAX_CATCHUP_CHANNELS = 8;
-/** Cap on Concord communities we eagerly catch up. */
-const MAX_CATCHUP_COMMUNITIES = 6;
 
 /**
  * Overall timeout for the whole sync so a dead relay never traps the user.
@@ -91,7 +78,6 @@ export type SyncPhase =
   | "settings"
   | "groups"
   | "messages"
-  | "concord"
   | "communities"
   | "channels"
   | "done";
@@ -118,49 +104,9 @@ const PHASE_OPENING: Record<Exclude<SyncPhase, "done">, string> = {
   settings: "establishing secure channel",
   groups: "mounting channel directory",
   messages: "syncing recent transmissions",
-  concord: "decrypting community vault",
   communities: "restoring encrypted communities",
   channels: "decrypting channel history",
 };
-
-/** Held epoch keys for a channel, newest-first (mirrors useConcordChannel). */
-function readEpochKeys(channel: Channel): Array<{ epoch: bigint; key: Uint8Array }> {
-  const keys = channel.epochKeys.length ? channel.epochKeys : [{ epoch: channel.epoch, key: channel.key }];
-  return [...keys].sort((a, b) => (a.epoch > b.epoch ? -1 : a.epoch < b.epoch ? 1 : 0));
-}
-
-/** The `#z` pseudonyms to query for a channel (one per held epoch). */
-function channelPseudonyms(channel: Channel): string[] {
-  return readEpochKeys(channel).map((ek) => bytesToHex(channelPseudonym(ek.key, channel.id, ek.epoch)));
-}
-
-/**
- * Fetch one Concord channel's newest sealed events from the community's
- * relays. The relay() wrapper mirrors every returned outer into the shared
- * IndexedDB store — which is all catch-up needs: the channel hooks (and the
- * V1 unread scan) hydrate from the store and decrypt on demand. Best-effort:
- * a relay miss is skipped, never thrown past the caller.
- */
-async function catchUpConcordChannel(
-  nostr: ReturnType<typeof useNostr>["nostr"],
-  community: Community,
-  channel: Channel,
-  since: number,
-  signal: AbortSignal,
-): Promise<void> {
-  const zs = channelPseudonyms(channel);
-  await Promise.all(
-    community.relays.map((url) =>
-      nostr
-        .relay(url)
-        .query(
-          [{ kinds: [KIND_COMMUNITY_MESSAGE, KIND_COMMUNITY_DELETE], "#z": zs, since, limit: 500 }],
-          { signal },
-        )
-        .catch(() => [] as NostrEvent[]),
-    ),
-  );
-}
 
 /**
  * Runs the one-time post-login sync for `pubkey` and reports live progress:
@@ -175,9 +121,6 @@ async function catchUpConcordChannel(
  *   4. Catch up on the newest page of messages for each joined channel (capped),
  *      priming the same caches useGroupMessages reads so timelines render
  *      instantly once the gate lifts.
- *   4. Catch up on Concord (encrypted communities): decrypt the membership list,
- *      rehydrate each community, and decrypt its channels' newest messages,
- *      priming the ["concord","channel",…] caches useConcordChannelMessages reads.
  *   5. Fetch + decrypt the Concord V2 Community List (kind 13302), seed the
  *      ["concord2","list"] cache, then WARM the communities themselves:
  *      register stream keys, sweep the control/guestbook planes, persist the
@@ -608,70 +551,6 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
           }),
         );
         resolve(mId, `${messageCount} cached`);
-      }
-      if (cancelled) return;
-
-      // ── 4. Warm the store with recent Concord (V1) traffic ──────────────
-      // Concord membership is a self-encrypted list (kind 30078, d=armada/concord)
-      // that carries the room KEYS. Rehydrate each community and pull its
-      // channels' newest sealed events — the relay() wrapper mirrors them into
-      // the shared store, which the channel hooks decrypt on demand.
-      if (CONCORD_ENABLED && user.signer.nip44) {
-        const cId = begin("concord");
-        let communityCount = 0;
-        try {
-          const listEvents = await nostr.query(
-            [{ kinds: [CONCORD_LIST_KIND], authors: [pubkey], "#d": [CONCORD_LIST_D_TAG], limit: 1 }],
-            { signal: stepSignal() },
-          );
-          const latest = listEvents.sort((a, b) => b.created_at - a.created_at)[0];
-          let list: ConcordList | undefined;
-          if (latest?.content) {
-            const decrypted = await user.signer.nip44.decrypt(pubkey, latest.content);
-            const parsed = JSON.parse(decrypted) as Partial<ConcordList>;
-            list = {
-              entries: Array.isArray(parsed.entries) ? parsed.entries : [],
-              tombstones: Array.isArray(parsed.tombstones) ? parsed.tombstones : [],
-            };
-            // Seed the membership list so the Concord UI opens instantly.
-            if (!cancelled) {
-              queryClient.setQueryData(["concord", "list", pubkey], { event: latest, list });
-            }
-          }
-
-          // Rehydrate communities and catch up each channel's messages.
-          const communities: Community[] = [];
-          for (const entry of list?.entries.slice(0, MAX_CATCHUP_COMMUNITIES) ?? []) {
-            const invite = entry.current.keys.invite as CommunityInvite | undefined;
-            if (!invite) continue;
-            try {
-              communities.push(acceptInvite(invite));
-            } catch {
-              // Unreadable bundle — skip.
-            }
-          }
-          communityCount = communities.length;
-
-          const since = Math.floor(Date.now() / 1000) - CATCHUP_WINDOW_SECONDS;
-          await Promise.all(
-            communities.flatMap((community) =>
-              community.channels.map((channel) =>
-                catchUpConcordChannel(nostr, community, channel, since, stepSignal()).catch(
-                  () => {
-                    // Best-effort per channel.
-                  },
-                ),
-              ),
-            ),
-          );
-        } catch {
-          // Best-effort; never block login on Concord.
-        }
-        if (communityCount > 0) {
-          resolve(cId, `${communityCount} ${communityCount === 1 ? "community" : "communities"}`);
-        } else {
-          drop(cId);
-        }
       }
       if (cancelled) return;
 

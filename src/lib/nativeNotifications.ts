@@ -48,8 +48,7 @@ export interface ArmadaNotificationPlugin {
    * Drain raw outer wire events the background service received, oldest first.
    * The JS layer routes each through wire ingest, then calls {@link ackDrain}
    * with the returned ids so the page isn't replayed. Loss-proof across service
-   * restarts and webview crashes (peek+ack, database-backed). Concord decrypted
-   * inners are drained separately via {@link drainConcord}.
+   * restarts and webview crashes (peek+ack, database-backed).
    *
    * This is ROUTING, not storage. The events themselves are already in ArmadaDB
    * — the service and the WebView share one native store, so it wrote them into
@@ -73,23 +72,14 @@ export interface ArmadaNotificationPlugin {
    */
   ackDrain(options: { ids: string[]; relay?: string }): Promise<void>;
   /**
-   * Drain Concord inner events the service already decrypted (it holds the
-   * channel key for the notification), each with the outer `z` pseudonym and
-   * outer id. The open channel verifies the inner signature + binding and folds
-   * it straight in — no second decrypt, no relay round-trip — so a tapped
-   * notification's message is on screen at once.
-   */
-  drainConcord(): Promise<{ concord: Array<{ inner: string; z: string; outerId: string }> }>;
-  /**
    * Drain (and clear) the pending "Mark read" markers the background service
    * recorded when the user tapped a notification's "Mark read" action. Each
-   * carries the room key, the unix-seconds timestamp to mark read up to, and —
-   * for Concord V1 only — the resolved channel id (its room key holds a
-   * per-epoch pseudonym, not the channel id). The JS layer maps each to the
-   * right per-protocol read-state write. No-ops (empty array) on web/iOS.
+   * carries the room key and the unix-seconds timestamp to mark read up to.
+   * The JS layer maps each to the right per-protocol read-state write.
+   * No-ops (empty array) on web/iOS.
    */
   drainReadMarkers(): Promise<{
-    markers: Array<{ room: string; ts: number; channelId?: string }>;
+    markers: Array<{ room: string; ts: number }>;
   }>;
   /**
    * The service's rolling per-room cache of raw outer wire events (newest
@@ -97,8 +87,8 @@ export interface ArmadaNotificationPlugin {
    * arrived while the WebView was down — this retains the last screenful PER
    * ROOM for the whole service lifetime, so opening a room from a notification
    * can paint natively-received history even if the global buffer overflowed.
-   * Room keys: `h:<groupId>` (NIP-29), `z:<pseudonym>` (Concord V1),
-   * `c2:<channelId>` (Concord V2), `dm` (kind 4).
+   * Room keys: `h:<groupId>` (NIP-29), `c2:<channelId>` (Concord),
+   * `dm` (kind 4).
    */
   getRoomEvents(options: { room: string }): Promise<{ events: string[] }>;
   /**
@@ -114,8 +104,8 @@ export interface ArmadaNotificationPlugin {
   ): Promise<PluginListenerHandle>;
   /**
    * Fired when the background service receives a raw outer event (NIP-29 kind
-   * 9/1068/7/1111/5, a kind-4 DM, a Concord V1 sealed kind 3300, or a Concord
-   * V2 kind-1059 wrap) while the WebView is up. The JS layer writes it
+   * 9/1068/7/1111/5, a kind-4 DM, or a Concord kind-1059 wrap) while the
+   * WebView is up. The JS layer writes it
    * straight into its event store, so the live timeline shows it with zero
    * relay latency — the same message the notification was about.
    *
@@ -127,18 +117,6 @@ export interface ArmadaNotificationPlugin {
     listener: (data: { event: string; relay?: string }) => void,
   ): Promise<PluginListenerHandle>;
   /**
-   * Fired when the background service receives AND decrypts a Concord message
-   * (kind 3300) while the WebView is up. Carries the decrypted inner event JSON,
-   * the outer `z` pseudonym, and the outer event id. The WebView verifies the
-   * inner Schnorr signature + channel/epoch binding (the service only checked
-   * HMAC + binding) and folds it into the open channel — instant render, no
-   * second decrypt, no relay round-trip.
-   */
-  addListener(
-    eventName: "concordMessage",
-    listener: (data: { inner: string; z: string; outerId: string }) => void,
-  ): Promise<PluginListenerHandle>;
-  /**
    * Tell the running service which roomKey(s) the WebView is currently showing
    * (so it can suppress redundant notifications for those rooms — the live
    * timeline already paints the message). Pass an empty array when the app is
@@ -147,27 +125,20 @@ export interface ArmadaNotificationPlugin {
    * immediately resumes notifications. Mentions still notify on an active
    * room (a deliberate @-ping deserves attention even on the visible channel).
    *
-   * A set (not a single key) because a Concord V1 channel can span multiple
-   * rekey epochs, each with its own `z` pseudonym — and thus multiple
-   * roomKeys — all of which are "active" simultaneously.
-   *
    * Room-key shapes (must match the service's enqueueRoomMessage keys):
    *   - NIP-29 group: `h:<relayUrl>|<groupId>`
-   *   - Concord V1:   `z:<pseudonym>`
-   *   - Concord V2:   `c2:<channelIdHex>`
+   *   - Concord:      `c2:<channelIdHex>`
    *   - DM:           `dm:<peerPubkey>`
    */
   setActiveRooms(options: { roomKeys: string[] }): Promise<void>;
   /**
    * Cancel tray notifications for conversations the in-app read state now
    * covers (read here, or synced in from another device). Each marker is a
-   * read-state key (`dm:<pk>` / `c2:<id>` / `c1:<id>` / `<relayUrl>::<groupId>`)
+   * read-state key (`dm:<pk>` / `c2:<id>` / `<relayUrl>::<groupId>`)
    * and its last-read unix seconds; the running service cancels the matching
    * room's notification when the room's newest notified message is at/older than
    * that stamp — the reverse of a notification's "Mark read" tap. No-ops on
-   * web/iOS and when the service posted nothing. Concord V1's `c1:<id>` is
-   * resolved to its per-epoch `z` room(s) natively (the WebView doesn't hold
-   * the pseudonyms).
+   * web/iOS and when the service posted nothing.
    */
   dismissRead(options: { markers: Array<{ room: string; ts: number }> }): Promise<void>;
   /**
@@ -221,29 +192,6 @@ export interface ArmadaNotificationPlugin {
     selfRelays?: string[];
     /** Per-type notification prefs (mentions/reactions/replies/directMessages/allGroupMessages). */
     prefs?: Record<string, boolean>;
-    /**
-     * Concord (E2E) channel subscriptions. The service subscribes by `#z`
-     * pseudonym (kind 3300) and uses the supplied per-`z` channel key to open
-     * the sealed message (NIP-44 v2) for a rich "<sender>: <preview>"
-     * notification in <community> / #<channel>.
-     */
-    concordSubs?: Array<{
-      relays: string[];
-      zs: string[];
-      keys: Array<{ z: string; key: string; channelId: string; epoch: string }>;
-      communityId: string;
-      communityName: string;
-      channelName: string;
-      /**
-       * The community's icon for the per-community group summary. An encrypted
-       * blob pointer ({@link CommunityNotifImage}) the service fetches + AES-GCM
-       * decrypts itself (key/nonce/hash hex), or a plain https url (`url` only).
-       * Omitted when the community has no icon.
-       */
-      communityImage?: CommunityNotifImage;
-      /** "mentions only" — suppress non-mention messages (older binaries notify all). */
-      mentionOnly?: boolean;
-    }>;
     /**
      * Concord V2 (CORD-02) channel subscriptions. The service subscribes
      * `{kinds:[1059], authors:[…stream pk]}` per relay and uses the supplied

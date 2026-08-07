@@ -60,19 +60,6 @@ vi.mock("@/hooks/useNip29Servers", () => ({
     ...extraServers,
   ],
 }));
-vi.mock("@/concord-v1/hooks/useConcordList", () => ({
-  useConcordList: () => ({ data: undefined }),
-  useConcordCommunity: () => undefined,
-}));
-vi.mock("@/concord-v1/hooks/useConcordMetadata", () => ({
-  useConcordMetadata: () => ({ data: undefined }),
-}));
-vi.mock("@/concord-v1/hooks/useCommunityImageDescriptors", () => ({
-  useCommunityImageDescriptors: () => ({ icon: undefined }),
-}));
-vi.mock("@/concord-v1/hooks/useDecryptedCommunityImage", () => ({
-  useDecryptedCommunityImage: () => undefined,
-}));
 vi.mock("@/concord-v2/hooks/useCommunityList2", () => ({
   useCommunity2: () => undefined,
   useLiveCommunities2: () => [],
