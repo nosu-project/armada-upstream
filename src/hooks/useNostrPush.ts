@@ -14,6 +14,7 @@ import { usePinnedDms } from "@/hooks/usePinnedDms";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { clearSwDmConfig, writeSwDmConfig } from "@/lib/swDmConfig";
+import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
 import {
   DEFAULT_PUSH_PREFS,
   type PushPrefs,
@@ -166,7 +167,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
   const { nostr } = useNostr();
   const { config } = useAppContext();
   const { data: groupList } = useUserGroupList();
-  const { data: followData } = useFollowList();
+  const { data: followData, isLoading: followsLoading } = useFollowList();
   const { accepted } = useAcceptedDms();
   const { pinned } = usePinnedDms();
   const { logins } = useNostrLogin();
@@ -306,13 +307,35 @@ export function useNostrPush(): UsePushNotificationsReturn {
       void clearSwDmConfig();
       return;
     }
-    void writeSwDmConfig({
-      policy: prefs.dmRequests,
-      self: user.pubkey,
-      knownPeers: dmKnownPeers,
-      ...(dmSk ? { sk: dmSk } : {}),
-    });
-  }, [supported, user, enabled, prefs.dmRequests, dmKnownPeers, dmSk]);
+    // Wait for the follow list: sealing a config while it loads would freeze
+    // an empty known set on disk, reclassifying every known conversation as a
+    // request until the next rewrite.
+    if (followsLoading) return;
+    let cancelled = false;
+    (async () => {
+      // Mirror useKnownDmPeers' `mine` dimension: a conversation the viewer
+      // has authored a message in is known even where `acceptedDms` can't say
+      // so (it is device-local, so a fresh install starts it empty while the
+      // synced history still shows the viewer's own messages).
+      let minePeers: string[] = [];
+      try {
+        const rows = await queryDm17Conversations(user.pubkey);
+        minePeers = rows.filter((row) => row.mine).map((row) => row.peer);
+      } catch {
+        // Store unavailable — follows ∪ accepted ∪ pinned still apply.
+      }
+      if (cancelled) return;
+      await writeSwDmConfig({
+        policy: prefs.dmRequests,
+        self: user.pubkey,
+        knownPeers: [...new Set([...dmKnownPeers, ...minePeers])].sort(),
+        ...(dmSk ? { sk: dmSk } : {}),
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [supported, user, enabled, followsLoading, prefs.dmRequests, dmKnownPeers, dmSk]);
 
   // ── Sync ───────────────────────────────────────────────────────────────────
 
