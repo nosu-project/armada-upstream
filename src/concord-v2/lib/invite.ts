@@ -22,6 +22,7 @@ import * as nip19 from "nostr-tools/nip19";
 
 import { inviteBundleKey, verifyCommunityId } from "@/concord-v2/lib/derive";
 import { KIND_INVITE_BUNDLE, VSK_INVITE_LIVE, VSK_INVITE_REVOKED } from "@/concord-v2/lib/kinds";
+import { RELAY_DICTIONARY, STOCK_RELAYS } from "@/concord-v2/lib/stockRelays";
 import { MAX_BUNDLE_CHANNELS, capRelays, type ImagePointer } from "@/concord-v2/lib/types";
 
 /** The link's unlock token: 16 random bytes (CORD-05 §2). */
@@ -230,19 +231,12 @@ export function parseBundleEvent(
 // ── The fragment codec (CORD-05 §3) ──────────────────────────────────────────
 
 /**
- * The stock relay dictionary, generation 4: four primaries every client knows,
- * referenced by a single byte. Versioned — it grows without breaking older
- * links; both Vector and Soapbox ship it identically.
+ * The stock relay dictionary and the set the flags bit selects. Defined in
+ * `stockRelays.ts` (a leaf module, so the app config and landing page can read
+ * the set without this file's crypto dependencies) and re-exported here
+ * because both are part of the CORD-05 codec's public surface.
  */
-export const RELAY_DICTIONARY: Record<number, string> = {
-  1: "wss://jskitty.com/nostr",
-  2: "wss://asia.vectorapp.io/nostr",
-  3: "wss://relay.ditto.pub",
-  4: "wss://relay.dreamith.to",
-};
-
-/** The stock set selected by the flags bit (dictionary ids 1–4, in order). */
-export const STOCK_RELAYS: string[] = [1, 2, 3, 4].map((i) => RELAY_DICTIONARY[i]);
+export { RELAY_DICTIONARY, STOCK_RELAYS } from "@/concord-v2/lib/stockRelays";
 
 /** flags bit 0: the stock set is in use, zero relay bytes follow. */
 const FLAG_STOCK_SET = 0x01;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { STOCK_RELAYS } from "@/concord-v2/lib/stockRelays";
 import { defaultConfig, SYNCED_CONFIG_KEYS } from "@/contexts/AppContext";
 import { AppConfigSchema } from "@/lib/schemas";
 
@@ -26,5 +27,20 @@ describe("AppConfigSchema", () => {
     const collapsed = { abcdef: ["voice", "team"] };
     expect(AppConfigSchema.shape.collapsedChannelCategories.parse(collapsed)).toEqual(collapsed);
     expect(AppConfigSchema.shape.collapsedChannelCategories.parse("nonsense")).toEqual({});
+  });
+
+  /**
+   * Community relays default to the stock set and are their own key: folding
+   * them back into `appRelays` is what put communities on relays their creator
+   * never chose. A config predating the key picks the default up for free
+   * (`deserializeConfig` starts from `defaultConfig`), so there is no
+   * migration to keep in step.
+   */
+  it("keeps community relays separate from app relays, defaulting to the stock set", () => {
+    expect(defaultConfig.communityRelays).toEqual(STOCK_RELAYS);
+    expect(defaultConfig.communityRelays).not.toEqual(defaultConfig.appRelays);
+    const mine = ["wss://mine.example.com"];
+    expect(AppConfigSchema.shape.communityRelays.parse(mine)).toEqual(mine);
+    expect(AppConfigSchema.shape.communityRelays.parse("nonsense")).toEqual(STOCK_RELAYS);
   });
 });

@@ -1,7 +1,7 @@
 import { useNostr } from "@nostrify/react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { verifyEvent } from "nostr-tools/pure";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCommunityEntry2, useUpdateCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
 import { useControlFold2, citationFor, invalidateControl2, publishEdition2 } from "@/concord-v2/hooks/useControlPlane2";
@@ -9,9 +9,7 @@ import { useGuestbookPublisher2 } from "@/concord-v2/hooks/useGuestbook2";
 import { buildJoinRumor, currentGuestbookGroup, sealGuestbook } from "@/concord-v2/lib/guestbook";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { fetchCreatorDmRelays } from "@/lib/creatorRelays";
 import { getArmadaDB } from "@/lib/db/armadaDB";
-import { APP_RELAYS } from "@/lib/platform";
 import { preferPortableRelays, unusableRelaysReason } from "@/lib/relayUsability";
 import { channelKeysToWire, nextChannelEpoch, toJoinMaterial, rehydrateCommunity, type CommunityListEntry, type JoinMaterial } from "@/concord-v2/lib/communityList";
 import { mintCommunity } from "@/concord-v2/lib/community";
@@ -386,41 +384,34 @@ export function inviteRefOf(invite: ParsedInviteLink): string {
 }
 
 /**
- * The default home-relay set for a NEW community: the app relays and the CORD
- * stock set (the wss:// interop relays every CORD client shares — jskitty,
- * asia.vectorapp, ditto, dreamith) as the reliable base, then the creator's
- * NIP-17 DM relays. A creator's inbox relays alone can be a poor community
- * home: an auth-gated or DM-only relay rejects the genesis gift wrap (kind
- * 1059), and if that's the whole set the create strands with "No relay accepted
- * the change." Leading with known write-open CORD relays guarantees the genesis
- * lands. Portable-filtered so a stray `ws://` dev relay can't lock https members
- * out (#47), deduped, and capped to the recommended community relay count.
+ * The home-relay set for a NEW community: the user's configured community
+ * relays (`AppConfig.communityRelays`, editable in Settings and per-mint in
+ * the create dialog), falling back to the CORD stock set — the wss:// interop
+ * relays every CORD client shares — when they have emptied the list, since a
+ * community with no relays has no home at all. Portable-filtered so a stray
+ * `ws://` dev relay can't lock https members out (#47), deduped, and capped to
+ * the recommended community relay count.
+ *
+ * Nothing else is folded in. The app relays carry the user's own account
+ * traffic and have no bearing on where a community lives; the creator's NIP-17
+ * DM relays are curated for their inbox, not for hosting. Both used to be
+ * unioned in alongside an unconditional stock set, which is how communities
+ * ended up on relays their creator never picked and could not see in any
+ * setting. This one list is now the whole answer.
  */
-export function defaultCreateRelays(appRelays: string[], dmRelays: string[]): string[] {
-  return capRelays(preferPortableRelays([...appRelays, ...STOCK_RELAYS, ...dmRelays]));
+export function defaultCreateRelays(communityRelays: string[]): string[] {
+  return capRelays(preferPortableRelays(communityRelays.length > 0 ? communityRelays : STOCK_RELAYS));
 }
 
 /**
- * The candidate relays the advanced create menu pre-selects: the same set
- * {@link defaultCreateRelays} the create path would pick on its own, resolved
- * for display so the user can pare it down or add to it before minting. Gated
- * behind `enabled` so a user who never opens the advanced menu pays no DM-relay
- * lookup.
+ * The relays the create dialog pre-selects — {@link defaultCreateRelays} over
+ * the user's configured set, which the picker can then pare down or add to
+ * before minting. Resolved synchronously: with no DM-relay lookup left, the
+ * dialog paints its relay list on first render instead of after a round trip.
  */
-export function useCreateRelayCandidates2(enabled = true) {
-  const { nostr } = useNostr();
-  const { user } = useCurrentUser();
+export function useCreateRelayCandidates2(): string[] {
   const { config } = useAppContext();
-  const appRelays = config.appRelays.length > 0 ? config.appRelays : APP_RELAYS;
-  return useQuery<string[]>({
-    queryKey: ["concord2", "create-relays", user?.pubkey ?? null, appRelays],
-    enabled: enabled && Boolean(user),
-    staleTime: 60_000,
-    queryFn: async () => {
-      const dm = user ? await fetchCreatorDmRelays(nostr, user.pubkey).catch(() => []) : [];
-      return defaultCreateRelays(appRelays, dm);
-    },
-  });
+  return useMemo(() => defaultCreateRelays(config.communityRelays), [config.communityRelays]);
 }
 
 /**
@@ -456,20 +447,15 @@ export function useCommunityActions2() {
       const trimmed = name.trim();
       if (!trimmed) throw new Error("Name your community first.");
 
-      // The community's home relays. When the advanced menu supplied an
-      // explicit set, honor it (portable-filtered all the same). Otherwise seed
-      // the app relays UNIONED with the creator's NIP-17 DM relays: inbox
-      // relays are curated for sealed, privacy-expecting traffic like Concord's,
-      // but a creator whose only DM relays are auth-gated or DM-only will have
-      // the genesis gift wrap rejected everywhere, so always including the app
-      // relays guarantees a write-open home. Prefer the wss:// subset: a stray
-      // ws:// dev relay sealed into the bundle is permanently unreachable for
-      // every member on a secure origin, however reachable it is for the
+      // The community's home relays. When the create dialog supplied an
+      // explicit set, honor it (portable-filtered all the same); otherwise the
+      // configured community relays. Prefer the wss:// subset either way: a
+      // stray ws:// dev relay sealed into the bundle is permanently unreachable
+      // for every member on a secure origin, however reachable it is for the
       // creator (#47).
-      const appRelays = config.appRelays.length > 0 ? config.appRelays : APP_RELAYS;
       const relays = chosen && chosen.length > 0
         ? preferPortableRelays(chosen)
-        : defaultCreateRelays(appRelays, await fetchCreatorDmRelays(nostr, user.pubkey));
+        : defaultCreateRelays(config.communityRelays);
       const { community, generalChannelId } = mintCommunity(trimmed, user.pubkey, relays);
 
       // Disappearing messages (CORD-08): default 30 days unless the creation

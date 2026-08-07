@@ -86,6 +86,7 @@ export const AppConfigSchema = z.object({
   collapsedChannelCategories: z.record(z.string(), z.array(z.string())).catch({}),
   memberListVisible: z.boolean().optional().catch(undefined),
   appRelays: z.array(z.string()).catch(defaultConfig.appRelays),
+  communityRelays: z.array(z.string()).catch(defaultConfig.communityRelays),
   searchRelays: z.array(z.string()).catch(defaultConfig.searchRelays),
   preferredVoiceServer: z.string().catch(defaultConfig.preferredVoiceServer),
   useAppRelays: z.boolean().catch(defaultConfig.useAppRelays),
@@ -129,6 +130,8 @@ export const EncryptedSettingsSchema = z.looseObject({
   railLayout: z.array(RailLayoutNodeSchema).optional(),
   /** General-purpose app relays. */
   appRelays: z.array(z.string()).optional(),
+  /** Default home relays for newly created Concord communities. */
+  communityRelays: z.array(z.string()).optional(),
   /** NIP-50 search relays. */
   searchRelays: z.array(z.string()).optional(),
   /** Portable Concord/DM voice host preference. */

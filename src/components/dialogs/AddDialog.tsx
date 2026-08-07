@@ -90,14 +90,13 @@ export function AddBody({ onDone }: { onDone: () => void }) {
   const [expiration, setExpiration] = useState(DEFAULT_MESSAGE_EXPIRATION_SECS);
 
   // Which relays the community is minted on. `null` = untouched (use the
-  // resolved default candidates); once the user edits the picker, `relays`
-  // holds the explicit set. Candidates resolve eagerly (not gated on the
-  // advanced menu) so the effective home-relay list is shown up front, and
-  // passing it at submit keeps what's shown identical to what's actually used.
+  // configured default candidates); once the user edits the picker, `relays`
+  // holds the explicit set for this mint only, leaving the standing setting
+  // alone. Passing it at submit keeps what's shown identical to what's used.
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [relays, setRelays] = useState<string[] | null>(null);
-  const { data: candidates } = useCreateRelayCandidates2();
-  const effectiveRelays = relays ?? candidates ?? [];
+  const candidates = useCreateRelayCandidates2();
+  const effectiveRelays = relays ?? candidates;
 
   const handleCreate = async () => {
     setCreateError(null);
@@ -105,11 +104,10 @@ export function AddBody({ onDone }: { onDone: () => void }) {
       // New communities are always Concord V2.
       const { communityId, name: created } = await create({
         name: name.trim(),
-        // Pass the resolved candidates when the picker wasn't touched, so the
-        // community is minted on exactly the relays shown below. Falls back to
-        // undefined only if candidates haven't resolved yet (create then picks
-        // its own default).
-        relays: relays ?? candidates ?? undefined,
+        // Always the set shown below, so the community is minted on exactly
+        // the relays the user was told about (create derives the same default
+        // from config when this is empty).
+        relays: effectiveRelays,
         messageExpirationSecs: expiration,
       });
       onDone();
@@ -235,7 +233,7 @@ export function AddBody({ onDone }: { onDone: () => void }) {
             <RelayListEditor
               relays={effectiveRelays}
               onChange={setRelays}
-              onReset={candidates ? () => setRelays(candidates) : undefined}
+              onReset={() => setRelays(candidates)}
               emptyText="Add at least one relay to host this community."
             />
           </CollapsibleContent>

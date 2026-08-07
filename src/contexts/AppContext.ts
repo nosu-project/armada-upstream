@@ -1,5 +1,6 @@
 import { createContext } from "react";
 
+import { STOCK_RELAYS } from "@/concord-v2/lib/stockRelays";
 import { APP_RELAYS, DM_RELAYS, normalizeRelayUrl, SEARCH_RELAYS } from "@/lib/platform";
 import { getPreferredVoiceServer } from "@/lib/voiceDevices";
 
@@ -114,6 +115,22 @@ export interface AppConfig {
    * Group-scoped events never route here.
    */
   appRelays: string[];
+  /**
+   * The home relays a NEW Concord community is minted on — the create dialog's
+   * pre-selected set, editable there per community and here as the standing
+   * default. Seeded from the CORD stock set; when emptied, the create path
+   * falls back to that same stock set rather than minting a homeless community.
+   *
+   * Deliberately SEPARATE from `appRelays`: those carry the user's own account
+   * traffic (profiles, lists, settings) and have no business deciding where a
+   * community lives, nor the reverse. It is equally separate from the three
+   * roles `STOCK_RELAYS` plays that are NOT preferences and must stay frozen —
+   * the CORD-05 fragment codec (the set `FLAG_STOCK_SET` names, shared
+   * byte-for-byte with other clients), the kind-13302 vault rescue floor (whose
+   * job is to work when the user's relay config doesn't), and invite
+   * bootstrap/delivery fallbacks (which are about reaching other people).
+   */
+  communityRelays: string[];
   /**
    * Search relays for NIP-50 queries (`search` filters: profile/mention
    * autocomplete, etc.). Ditto hardcodes these (DITTO_RELAYS); here they are
@@ -389,6 +406,7 @@ export const SYNCED_CONFIG_KEYS = [
   "railOrder",
   "railLayout",
   "appRelays",
+  "communityRelays",
   "preferredVoiceServer",
   "useAppRelays",
   "useUserRelays",
@@ -421,6 +439,7 @@ export const defaultConfig: AppConfig = {
   railOpenFolders: [],
   collapsedChannelCategories: {},
   appRelays: [...APP_RELAYS],
+  communityRelays: [...STOCK_RELAYS],
   searchRelays: [...SEARCH_RELAYS],
   preferredVoiceServer: getPreferredVoiceServer(),
   useAppRelays: true,
