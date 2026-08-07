@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { forwardableTags } from "./forwardMessage";
+import { forwardableTags, forwardedAttachment, stripUrlsFromText } from "./forwardMessage";
 
 const URL_A = "https://blossom.example/abc123";
 const URL_B = "https://blossom.example/def456.jpg";
@@ -165,6 +165,103 @@ describe("forwardableTags", () => {
   });
 
   it("prefers an existing imeta over synthesizing one for a kind-15", () => {
+    const tags = forwardableTags({
+      kind: 15,
+      content: URL_A,
+      tags: [["imeta", `url ${URL_A}`, "m image/png"], ["file-type", "image/jpeg"]],
+    });
+    expect(tags).toEqual([["imeta", `url ${URL_A}`, "m image/png"]]);
+  });
+});
+
+describe("forwardedAttachment", () => {
+  it("splits an imeta into NIP-94 pairs, keeping the url pair", () => {
+    expect(
+      forwardedAttachment(["imeta", `url ${URL_B}`, "m image/jpeg", "dim 800x600", "ox hash"]),
+    ).toEqual({
+      url: URL_B,
+      tags: [["url", URL_B], ["m", "image/jpeg"], ["dim", "800x600"], ["ox", "hash"]],
+      encryption: undefined,
+    });
+  });
+
+  it("lifts the encryption params (and ox) out of the pairs", () => {
+    const key = "c".repeat(64);
+    expect(
+      forwardedAttachment([
+        "imeta",
+        `url ${URL_A}`,
+        "m image/jpeg",
+        "encryption-algorithm aes-gcm",
+        `decryption-key ${key}`,
+        "decryption-nonce 0123456789abcdef",
+        "ox hash",
+      ]),
+    ).toEqual({
+      url: URL_A,
+      // No encryption/decryption/ox field survives here — the composer
+      // re-appends them from `encryption`, so keeping both would emit each twice.
+      tags: [["url", URL_A], ["m", "image/jpeg"]],
+      encryption: {
+        algorithm: "aes-gcm",
+        key,
+        nonce: "0123456789abcdef",
+        ox: "hash",
+      },
+    });
+  });
+
+  it("leaves ox undefined when the sender omitted it", () => {
+    const key = "d".repeat(64);
+    const att = forwardedAttachment([
+      "imeta",
+      `url ${URL_A}`,
+      "encryption-algorithm aes-gcm",
+      `decryption-key ${key}`,
+      "decryption-nonce abcd",
+    ]);
+    expect(att?.encryption?.ox).toBeUndefined();
+  });
+
+  it("keeps ox as an ordinary pair on a plaintext attachment", () => {
+    const att = forwardedAttachment(["imeta", `url ${URL_A}`, "ox hash"]);
+    expect(att?.tags).toEqual([["url", URL_A], ["ox", "hash"]]);
+    expect(att?.encryption).toBeUndefined();
+  });
+
+  it("returns null for an imeta naming no url", () => {
+    expect(forwardedAttachment(["imeta", "m image/png"])).toBeNull();
+  });
+});
+
+describe("stripUrlsFromText", () => {
+  it("removes the URL and tidies the gap it leaves", () => {
+    expect(stripUrlsFromText(`look at this ${URL_A} isn't it nice`, [URL_A])).toBe(
+      "look at this isn't it nice",
+    );
+  });
+
+  it("empties a message that was only a URL", () => {
+    expect(stripUrlsFromText(URL_A, [URL_A])).toBe("");
+  });
+
+  it("collapses the blank line a lone URL leaves behind", () => {
+    expect(stripUrlsFromText(`caption\n${URL_A}\nmore`, [URL_A])).toBe("caption\nmore");
+  });
+
+  it("removes every occurrence, and leaves other text alone", () => {
+    expect(stripUrlsFromText(`${URL_A} and ${URL_A} and ${URL_B}`, [URL_A])).toBe(
+      `and and ${URL_B}`,
+    );
+  });
+
+  it("is a no-op when no URL matches", () => {
+    expect(stripUrlsFromText("just words", [URL_A])).toBe("just words");
+  });
+});
+
+describe("forwardableTags kind-15 imeta precedence", () => {
+  it("prefers an existing imeta over synthesizing one", () => {
     const tags = forwardableTags({
       kind: 15,
       content: URL_A,

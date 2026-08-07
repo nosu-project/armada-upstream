@@ -63,7 +63,7 @@ import { buzzThreadRef } from "@/buzz/protocol";
 import { collectEmojiTags } from "@/lib/customEmoji";
 import { encryptFileForUpload, encryptFileWithParams } from "@/lib/encryptedMedia";
 import { extractWebxdcMeta } from "@/lib/webxdcMeta";
-import { contentTagsFor } from "@/lib/forwardMessage";
+import { contentTagsFor, forwardedAttachment, stripUrlsFromText } from "@/lib/forwardMessage";
 import { IMETA_MEDIA_URL_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
 import { resizeImage } from "@/lib/resizeImage";
@@ -550,7 +550,9 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
    * ciphertext blob is useless without them, so encrypted attachments are not
    * restorable from a saved draft.
    */
-  const attachmentEncryption = useRef<Map<string, ImetaEncryption & { ox: string }>>(new Map());
+  // `ox` (the plaintext hash) is optional: an upload always knows it, a
+  // forwarded attachment only has it if the original sender sent it.
+  const attachmentEncryption = useRef<Map<string, ImetaEncryption & { ox?: string }>>(new Map());
   /**
    * Content tags from a forwarded message (NIP-92 `imeta` / NIP-30 `emoji`),
    * carried verbatim so a forwarded attachment re-references the original blob
@@ -727,13 +729,17 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     // would delete the very draft still on its way in from KV.
     if (!draftsReady) return;
     const timer = setTimeout(() => {
-      const persistable = encryptAttachments
-        ? new Map([...uploadedFileGroups].filter(([url]) => !attachmentEncryption.current.has(url)))
-        : uploadedFileGroups;
+      // Keyed on the attachment actually having encryption params, not on this
+      // surface encrypting its own uploads: a FORWARDED attachment arrives
+      // already-encrypted wherever it's forwarded to, including surfaces that
+      // upload in the clear.
+      const persistable = new Map(
+        [...uploadedFileGroups].filter(([url]) => !attachmentEncryption.current.has(url)),
+      );
       writeDraft(draftKey, content, persistable);
     }, 300);
     return () => clearTimeout(timer);
-  }, [content, uploadedFileGroups, draftKey, encryptAttachments, draftsReady]);
+  }, [content, uploadedFileGroups, draftKey, draftsReady]);
 
   // Detect quote embeds in content (nevent, note, naddr) for preview + q tags.
   const detectedEmbeds = useMemo(() => {
@@ -1095,15 +1101,37 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     const consume = () => {
       const share = consumeShareFor(window.location.pathname);
       if (!share) return;
-      if (share.text) {
-        setContent((cur) => (cur ? `${cur}\n${share.text}` : share.text));
-      }
       // A forward's imeta/emoji tags (see forwardMessage.ts). Appended, not
       // replaced: several forwards can be staged into one draft before it's
       // sent, and buildMessageTags drops whichever the final text no longer
       // references.
       if (share.tags?.length) {
         forwardedContentTags.current = [...forwardedContentTags.current, ...share.tags];
+      }
+      // A forwarded attachment becomes a real attachment — a chip above the
+      // input, previewable and removable — rather than a bare URL pasted into
+      // the draft. Its URL is stripped from the text because the send path
+      // re-appends every attachment URL not already present, so leaving it in
+      // would send the link twice.
+      const forwarded = (share.tags ?? [])
+        .filter((t) => t[0] === "imeta")
+        .map(forwardedAttachment)
+        .filter((a): a is NonNullable<typeof a> => a !== null);
+      if (forwarded.length) {
+        for (const att of forwarded) {
+          if (att.encryption) attachmentEncryption.current.set(att.url, att.encryption);
+        }
+        setUploadedFileGroups((prev) => {
+          const next = new Map(prev);
+          for (const att of forwarded) next.set(att.url, att.tags);
+          return next;
+        });
+      }
+      const text = forwarded.length
+        ? stripUrlsFromText(share.text, forwarded.map((a) => a.url))
+        : share.text;
+      if (text) {
+        setContent((cur) => (cur ? `${cur}\n${text}` : text));
       }
       textareaRef.current?.focus();
       void (async () => {
@@ -1284,7 +1312,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         fields.push(`encryption-algorithm ${enc.algorithm}`);
         fields.push(`decryption-key ${enc.key}`);
         fields.push(`decryption-nonce ${enc.nonce}`);
-        fields.push(`ox ${enc.ox}`);
+        // Absent on a forwarded attachment whose sender didn't include it.
+        if (enc.ox) fields.push(`ox ${enc.ox}`);
       }
       tags.push(["imeta", ...fields]);
     }

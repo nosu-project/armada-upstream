@@ -116,6 +116,82 @@ export function contentTagsFor(
 }
 
 /**
+ * A forwarded `imeta` decomposed into the shape the composer already holds
+ * uploads in: NIP-94 `[key, value]` pairs plus, separately, the AES-GCM params.
+ *
+ * A forwarded attachment is an ATTACHMENT, not a URL in the message text — it
+ * gets a chip above the input (previewable, removable, and for an encrypted
+ * blob decrypted for that preview) exactly like a file picked here, and its
+ * URL is re-appended to the body on send. That's why this splits rather than
+ * passing the tag through: the composer's chip rendering, draft persistence
+ * and imeta regeneration all read these two structures, and reconstruct an
+ * equivalent imeta from them.
+ *
+ * The encryption params are lifted OUT of the pairs because the composer
+ * re-appends them from the encryption map; leaving them in both would emit
+ * each field twice.
+ */
+export interface ForwardedAttachment {
+  url: string;
+  /** NIP-94 pairs, including `["url", …]` — the composer's upload shape. */
+  tags: string[][];
+  encryption?: { algorithm: string; key: string; nonce: string; ox?: string };
+}
+
+/**
+ * Decompose an `imeta` tag into a {@link ForwardedAttachment}, or `null` when
+ * it names no URL.
+ */
+export function forwardedAttachment(tag: string[]): ForwardedAttachment | null {
+  const fields = imetaFields(tag);
+  if (!fields.url) return null;
+
+  const algorithm = fields["encryption-algorithm"];
+  const key = fields["decryption-key"];
+  const nonce = fields["decryption-nonce"];
+  const encrypted = Boolean(algorithm && key && nonce);
+
+  const tags: string[][] = [];
+  for (const [name, value] of Object.entries(fields)) {
+    // `ox` rides with the encryption params (the composer re-appends it there),
+    // but is an ordinary NIP-94 field on a plaintext attachment.
+    if (encrypted && (name === "ox" || name.startsWith("encryption-") || name.startsWith("decryption-"))) {
+      continue;
+    }
+    tags.push([name, value]);
+  }
+
+  return {
+    url: fields.url,
+    tags,
+    encryption: encrypted ? { algorithm, key, nonce, ox: fields.ox } : undefined,
+  };
+}
+
+/**
+ * Remove `urls` from `text` and tidy the whitespace they leave behind.
+ *
+ * Forwarded media moves out of the body and into an attachment chip, so the
+ * bare URL must not also sit in the draft — the composer re-appends it on
+ * send, and leaving it would send it twice.
+ */
+export function stripUrlsFromText(text: string, urls: Iterable<string>): string {
+  const list = [...urls];
+  const kept: string[] = [];
+  for (const line of text.split("\n")) {
+    let stripped = line;
+    for (const url of list) stripped = stripped.split(url).join("");
+    stripped = stripped.replace(/[^\S\n]{2,}/g, " ").trim();
+    // A line that held nothing but the URL goes with it — the common shape,
+    // where the media was the whole message or sat under a caption. A line
+    // that was ALREADY blank is the author's paragraph break, and stays.
+    if (!stripped && line.trim()) continue;
+    kept.push(stripped);
+  }
+  return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
  * The tags a forward of `event` should carry, given the text actually being
  * sent (the user may edit the draft before sending it).
  */
