@@ -85,7 +85,7 @@ function ReplyContext({ eventId, relayUrl, onJump }: { eventId: string; relayUrl
     <ReplyContextLine
       name={displayName}
       pubkey={event.pubkey}
-      preview={<ReplyPreview content={event.content} hideMediaPlaceholder={!!image} />}
+      preview={<ReplyPreview content={event.content} tags={event.tags} hideMediaPlaceholder={!!image} />}
       thumbnail={image ? <ReplyThumbnail image={image} /> : undefined}
       onClick={() => onJump(eventId)}
     />

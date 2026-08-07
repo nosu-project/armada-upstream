@@ -3,6 +3,7 @@ import { nip19 } from "nostr-tools";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
 import { ChatContent } from "@/components/chat/ChatContent";
+import { emojify } from "@/components/chat/emojify";
 import { MessageActionSheet } from "@/components/chat/MessageActionSheet";
 import { MessageActionToolbar } from "@/components/chat/MessageActionToolbar";
 import { MessageRow, type MessageIdentity } from "@/components/chat/MessageRow";
@@ -48,6 +49,7 @@ import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { getComposerCollisionPadding, useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
 import { getAvatarShape } from "@/lib/avatarShape";
+import { buildEmojiMap } from "@/lib/customEmoji";
 import { writeClipboardText } from "@/lib/clipboard";
 import { chatUrl, type ChatRoute } from "@/lib/routes";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
@@ -85,18 +87,26 @@ function InvokedBotName({ pubkey }: { pubkey: string }) {
  * A one-line reply preview that renders `@mentions` as resolved display names
  * (via {@link ReplyMentionName}) instead of a raw `nostr:npub…`/hex string, and
  * collapses URLs to 📎 — matching how the message body shows them. Falls back to
- * 📎 for an all-URL/empty body. Used inside the reply-context line and the
- * composer's reply banner.
+ * 📎 for an all-URL/empty body. Used inside the reply-context line, the
+ * composer's reply banner and the composer's quote bar.
  *
  * `hideMediaPlaceholder` drops the 📎 placeholder (used when a {@link
  * ReplyThumbnail} already shows the image, so an image-only reply reads as just
- * the thumbnail, not "📎").
+ * the thumbnail, not "📎"). When `tags` are supplied, NIP-30 `:shortcode:`
+ * custom emojis in the text are rendered as inline images (matching the body).
  */
-export function ReplyPreview({ content, hideMediaPlaceholder = false }: { content: string; hideMediaPlaceholder?: boolean }) {
+export function ReplyPreview({ content, hideMediaPlaceholder = false, tags }: { content: string; hideMediaPlaceholder?: boolean; tags?: string[][] }) {
   // Collapse URLs first (they'd blow out the single line), then split on
   // mentions so each resolves to @name.
   const placeholder = hideMediaPlaceholder ? "" : "📎";
   const withoutUrls = content.replace(/https?:\/\/\S+/g, placeholder);
+  // NIP-30 custom emojis, when the caller passes the event's tags: each plain
+  // text run is emojified so `:shortcode:` shows the image, not the raw code.
+  const emojiMap = tags ? buildEmojiMap(tags) : undefined;
+  const renderText = (text: string): ReactNode =>
+    emojiMap && emojiMap.size > 0
+      ? emojify(text, emojiMap, "inline h-[1.15em] w-[1.15em] object-contain align-text-bottom")
+      : text;
   const parts: ReactNode[] = [];
   let last = 0;
   let key = 0;
@@ -106,7 +116,7 @@ export function ReplyPreview({ content, hideMediaPlaceholder = false }: { conten
     if (start > last) {
       const text = withoutUrls.slice(last, start);
       if (text.trim()) hasText = true;
-      parts.push(<span key={key++}>{text}</span>);
+      parts.push(<span key={key++}>{renderText(text)}</span>);
     }
     try {
       const decoded = nip19.decode(`${m[1]}${m[2]}`);
@@ -127,7 +137,7 @@ export function ReplyPreview({ content, hideMediaPlaceholder = false }: { conten
   if (last < withoutUrls.length) {
     const text = withoutUrls.slice(last);
     if (text.trim()) hasText = true;
-    parts.push(<span key={key++}>{text}</span>);
+    parts.push(<span key={key++}>{renderText(text)}</span>);
   }
   if (!hasText) return hideMediaPlaceholder ? null : <>📎</>;
   return <>{parts}</>;
@@ -146,21 +156,26 @@ export function ReplyThumbnail({ image }: { image: EncryptedRef }) {
     <img
       src={resolved.src}
       alt=""
-      className="h-10 w-auto max-w-[6rem] shrink-0 rounded object-cover"
+      className="size-4 shrink-0 rounded-[3px] object-cover"
       loading="lazy"
     />
   );
 }
 
 /**
- * The compact "replying to …" context line shown above a reply message. Purely
- * presentational: the transport resolves WHO is replied to (and optionally a
- * content preview) — relay-fetched for NIP-29, the in-memory sealed author for
- * Concord — and hands the resolved `name`/`preview` here so the chrome (a
- * Discord-style quoted bar with the bold name + truncated preview) is defined
- * once. Renders nothing until a name is resolved (avoids a flash of an empty
- * line). When `onClick` is supplied the line jumps the timeline to the
- * replied-to message.
+ * The "replying to …" context line shown ABOVE a reply message: the replied-to
+ * author's round avatar, their name (accent-highlighted) and a one-line
+ * snippet, tied down to the replying message's own avatar by a thin
+ * `.chat-reply-connector` elbow. The `pl-[3.25rem]` indent aligns it with the
+ * message body (past the avatar gutter) so the connector has the gutter to run
+ * in; `mb-1` keeps it off the avatar below. Purely presentational: the
+ * transport resolves WHO is replied to and hands the resolved `name` /
+ * `preview` here so the chrome is defined once. Renders nothing until a name is
+ * resolved (avoids a flash of an empty line). When `onClick` is supplied the
+ * line jumps the timeline to the replied-to message.
+ *
+ * Must be placed in the row directly above the avatar (see MessageRow) for the
+ * connector geometry to land.
  */
 export function ReplyContextLine({
   name,
@@ -170,27 +185,36 @@ export function ReplyContextLine({
   onClick,
 }: {
   name: string | undefined;
-  /** The replied-to author, when known — supplies their custom emoji tags. */
+  /** The replied-to author, when known — supplies their avatar + emoji tags. */
   pubkey?: string;
   preview?: ReactNode;
   /** Optional media thumbnail shown before the preview (e.g. an image reply). */
   thumbnail?: ReactNode;
   onClick?: () => void;
 }) {
+  const author = useAuthor(pubkey);
+  const metadata = author.data?.metadata;
   if (!name) return null;
   const content = (
     <>
-      <span className="flex items-baseline gap-1.5 min-w-0 max-w-full">
-        <span className="font-semibold shrink-0">
-          {pubkey ? <DisplayName pubkey={pubkey} name={name} /> : name}
-        </span>
-        {preview && <span className="line-clamp-2 break-words min-w-0">{preview}</span>}
+      <span aria-hidden className="chat-reply-connector" />
+      {pubkey && (
+        <Avatar shape={getAvatarShape(metadata)} className="size-4 shrink-0">
+          <AvatarImage src={metadata?.picture} alt="" />
+          <AvatarFallback className="bg-primary/20 text-primary text-[8px]">
+            {name[0]?.toUpperCase()}
+          </AvatarFallback>
+        </Avatar>
+      )}
+      <span className="font-semibold shrink-0 text-primary group-hover/reply:underline">
+        {pubkey ? <DisplayName pubkey={pubkey} name={name} /> : name}
       </span>
-      {thumbnail && <span className="mt-0.5">{thumbnail}</span>}
+      {thumbnail}
+      {preview && <span className="line-clamp-1 break-words min-w-0 text-muted-foreground/70">{preview}</span>}
     </>
   );
   const className =
-    "flex flex-col text-xs text-muted-foreground/80 mb-0.5 min-w-0 max-w-full border-l-2 border-muted-foreground/30 pl-2";
+    "chat-reply group/reply relative flex items-center gap-1.5 min-w-0 max-w-full pl-[3.25rem] pr-2 pt-1.5 pb-1 mb-1 text-xs";
   if (!onClick) {
     return <div className={className}>{content}</div>;
   }
@@ -198,7 +222,7 @@ export function ReplyContextLine({
     <button
       type="button"
       onClick={onClick}
-      className={cn(className, "items-start text-left hover:text-foreground hover:border-muted-foreground/60 transition-colors cursor-pointer")}
+      className={cn(className, "text-left cursor-pointer")}
     >
       {content}
     </button>

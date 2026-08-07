@@ -8,6 +8,7 @@ import {
   MonitorPlay,
   Paperclip,
   Plus,
+  Quote,
   Reply,
   Smile,
   Square,
@@ -21,9 +22,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { BotCommandComposer } from "@/components/chat/BotCommandComposer";
 import { authorsByRecency } from "@/components/chat/transport";
 import type { PollDraft } from "@/components/chat/transport";
-import { EmbeddedNaddr, EmbeddedNote } from "@/components/chat/EmbeddedNote";
-import { ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
-import { firstImageRef } from "@/components/chat/messageHelpers";
+import { ReplyPreview } from "@/components/chat/ChatMessage";
 import { EmojiShortcodeAutocomplete } from "@/components/chat/EmojiShortcodeAutocomplete";
 import { GifPicker } from "@/components/chat/GifPicker";
 import { Lightbox } from "@/components/chat/Lightbox";
@@ -32,6 +31,7 @@ import { SlashCommandAutocomplete } from "@/components/chat/SlashCommandAutocomp
 import { StickerPicker } from "@/components/chat/StickerPicker";
 import { WebxdcGamePicker } from "@/components/chat/WebxdcGamePicker";
 import { DisplayName } from "@/components/DisplayName";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -55,6 +55,7 @@ import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import { useToast } from "@/hooks/useToast";
 import { useUploadFile } from "@/hooks/useUploadFile";
 import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
+import { getAvatarShape } from "@/lib/avatarShape";
 import { KvPrefixCache } from "@/lib/db/kvCache";
 import { formatTime } from "@/lib/formatTime";
 import { extractHashtags } from "@/lib/hashtag";
@@ -71,6 +72,7 @@ import { invocationTags, parseInvocation, usageLine, validateInvocation, type Bo
 import { executeSlashCommand, parseSlashCommand, resolveNpubArg, type SlashAction, type SlashCapability, type SlashCommand } from "@/lib/slashCommands";
 import { buildPollTags, KIND_POLL } from "@/lib/polls";
 import { cn } from "@/lib/utils";
+import { useAddrEvent, useEvent } from "@/hooks/useEvent";
 
 import type { AddrCoords } from "@/hooks/useEvent";
 import type { WebxdcApp } from "@/hooks/useWebxdcApps";
@@ -657,6 +659,18 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   useEffect(() => {
     if (replyTo) textareaRef.current?.focus();
   }, [replyTo]);
+
+  // Clear a pending reply when the composer moves to another channel or group:
+  // the replied-to message lived in the conversation we just left, so a stale
+  // reply banner (and its NIP-10/NIP-C7 marker) must not carry over. Keyed on
+  // the scope (relayUrl + groupId); the live onCancelReply is read from a ref so
+  // this fires only on a real switch, not on every render (the handler is a
+  // fresh closure each time).
+  const onCancelReplyRef = useRef(onCancelReply);
+  onCancelReplyRef.current = onCancelReply;
+  useEffect(() => {
+    onCancelReplyRef.current?.();
+  }, [relayUrl, groupId]);
 
   // Focus on mount when requested (e.g. the thread panel opening via /thread).
   useEffect(() => {
@@ -1705,32 +1719,21 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       )}
 
       {/* Reply banner */}
-      {replyTo && <ReplyBanner event={replyTo} onCancel={onCancelReply} />}
+      {replyTo && (
+        <div className="px-3 pt-2">
+          <ReplyBanner event={replyTo} onCancel={onCancelReply} />
+        </div>
+      )}
 
       {/* Detected quote embeds */}
       {visibleEmbeds.length > 0 && (
-        <div className="px-3 pt-2 space-y-1 max-h-44 overflow-y-auto animate-in slide-in-from-top-2 fade-in-0 duration-200">
+        <div className="px-3 pt-2 space-y-1 max-h-40 overflow-y-auto animate-in slide-in-from-top-2 fade-in-0 duration-200">
           {visibleEmbeds.map((embed) => (
-            <div key={embed.value} className="relative">
-              {embed.type === "naddr" && embed.addr ? (
-                <EmbeddedNaddr addr={embed.addr} className="my-0" />
-              ) : (
-                <EmbeddedNote
-                  eventId={embed.eventId!}
-                  relays={embed.relay ? [embed.relay] : undefined}
-                  authorHint={embed.author}
-                  className="my-0"
-                />
-              )}
-              <button
-                type="button"
-                aria-label="Remove embed"
-                className="absolute top-1.5 right-1.5 p-1 touch:p-2 rounded-full bg-background/80 text-muted-foreground hover:text-foreground transition-colors"
-                onClick={() => setRemovedEmbeds((prev) => new Set(prev).add(embed.value))}
-              >
-                <X className="size-3.5" />
-              </button>
-            </div>
+            <QuoteBanner
+              key={embed.value}
+              embed={embed}
+              onRemove={() => setRemovedEmbeds((prev) => new Set(prev).add(embed.value))}
+            />
           ))}
         </div>
       )}
@@ -2364,35 +2367,99 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 /** Compact banner above the composer showing the message being replied to. */
 function ReplyBanner({ event, onCancel }: { event: NostrRumor; onCancel?: () => void }) {
   const author = useAuthor(event.pubkey);
-  const displayName = useScopedDisplayName(event.pubkey, author.data?.metadata);
-  const image = firstImageRef(event);
+  const metadata = author.data?.metadata;
+  const displayName = useScopedDisplayName(event.pubkey, metadata);
 
   return (
-    <div className="flex items-start gap-2 px-3 py-1.5 bg-secondary/40 border-b text-xs animate-in slide-in-from-top-2 fade-in-0 duration-200">
-      <Reply className="size-3.5 text-muted-foreground shrink-0 mt-0.5" />
-      <div className="flex flex-col min-w-0 flex-1 gap-0.5">
-        <span className="flex items-center gap-1 min-w-0">
-          <span className="text-muted-foreground shrink-0">
-            Replying to{" "}
-            <span className="font-semibold text-foreground">
-              <DisplayName pubkey={event.pubkey} name={displayName} />
-            </span>
-          </span>
-          <span className="text-muted-foreground/70 truncate">
-            <ReplyPreview content={event.content} hideMediaPlaceholder={!!image} />
-          </span>
+    <div className="flex items-center gap-2 rounded-md bg-secondary/50 py-2 pl-2.5 pr-1 text-sm animate-in slide-in-from-top-2 fade-in-0 duration-200">
+      <Reply className="size-4 text-muted-foreground shrink-0" />
+      <span className="min-w-0 flex-1 flex items-center gap-1.5 text-muted-foreground">
+        <span className="shrink-0">Replying to</span>
+        <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
+          <AvatarImage src={metadata?.picture} alt="" />
+          <AvatarFallback className="bg-primary/20 text-primary text-[9px]">
+            {displayName[0]?.toUpperCase()}
+          </AvatarFallback>
+        </Avatar>
+        <span className="font-semibold text-primary truncate min-w-0">
+          <DisplayName pubkey={event.pubkey} name={displayName} />
         </span>
-        {image && <ReplyThumbnail image={image} />}
-      </div>
+      </span>
       <button
         type="button"
         aria-label="Cancel reply"
         onClick={onCancel}
-        className="p-1.5 touch:p-3 rounded-full text-muted-foreground hover:text-foreground transition-colors shrink-0"
+        className="-mr-0.5 flex size-8 touch:size-11 items-center justify-center rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors shrink-0"
       >
-        <X className="size-3.5 touch:size-4" />
+        <X className="size-4" />
       </button>
     </div>
+  );
+}
+
+/**
+ * Compact single-line bar above the composer for a quoted post (nevent / note /
+ * naddr detected in the draft). Resolves the referenced event the same way the
+ * inline {@link EmbeddedNote} card does, then shows just "Quoting <Name>:
+ * <snippet>" — matching the reply banner — rather than a full note card.
+ */
+function QuoteBanner({ embed, onRemove }: { embed: DetectedEmbed; onRemove: () => void }) {
+  const isAddr = embed.type === "naddr";
+  const noteQuery = useEvent(
+    isAddr ? undefined : embed.eventId,
+    embed.relay ? [embed.relay] : undefined,
+    embed.author,
+  );
+  const addrQuery = useAddrEvent(isAddr ? embed.addr : undefined);
+  const event = isAddr ? addrQuery.data : noteQuery.data;
+  const isLoading = isAddr ? addrQuery.isLoading : noteQuery.isLoading;
+
+  return (
+    <div className="flex items-center gap-2 rounded-md bg-secondary/50 py-2 pl-2.5 pr-1 text-sm animate-in slide-in-from-top-2 fade-in-0 duration-200">
+      <Quote className="size-4 text-muted-foreground shrink-0" />
+      {event ? (
+        <QuoteBannerBody event={event} />
+      ) : (
+        <span className="min-w-0 flex-1 truncate text-muted-foreground">
+          {isLoading ? "Loading quoted post…" : "Quoted post unavailable"}
+        </span>
+      )}
+      <button
+        type="button"
+        aria-label="Remove quote"
+        onClick={onRemove}
+        className="-mr-0.5 flex size-8 touch:size-11 items-center justify-center rounded-full text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors shrink-0"
+      >
+        <X className="size-4" />
+      </button>
+    </div>
+  );
+}
+
+/** The resolved "Quoting <Name>: <snippet>" line — split out so the author
+ * hooks only run once the quoted event exists. */
+function QuoteBannerBody({ event }: { event: NostrRumor }) {
+  const author = useAuthor(event.pubkey);
+  const metadata = author.data?.metadata;
+  const displayName = useScopedDisplayName(event.pubkey, metadata);
+  const title = event.tags.find(([name]) => name === "title")?.[1];
+
+  return (
+    <span className="min-w-0 flex-1 flex items-center gap-1.5 text-muted-foreground">
+      <span className="shrink-0">Quoting</span>
+      <Avatar shape={getAvatarShape(metadata)} className="size-5 shrink-0">
+        <AvatarImage src={metadata?.picture} alt="" />
+        <AvatarFallback className="bg-primary/20 text-primary text-[9px]">
+          {displayName[0]?.toUpperCase()}
+        </AvatarFallback>
+      </Avatar>
+      <span className="font-semibold text-primary shrink-0 truncate max-w-[45%]">
+        <DisplayName pubkey={event.pubkey} name={displayName} />
+      </span>
+      <span className="min-w-0 flex-1 truncate text-muted-foreground/70">
+        {title ? title : <ReplyPreview content={event.content} tags={event.tags} />}
+      </span>
+    </span>
   );
 }
 
