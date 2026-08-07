@@ -4,6 +4,32 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.47.0] - 2026-08-06
+
+Edit a direct message after you've sent it, search a community's member list by name or npub, and share your screen on a voice call with louder playback. New accounts can be seeded onto an operator's relays from a /join link and discover recommended relays automatically, and invites now carry a short description that shows on discover cards. The desktop app keeps your servers in a persistent rail, stores its data more reliably, encrypts your login, and picks up a theme-aware tray icon.
+
+### Added
+- Edit a direct message after sending it
+- Search a community's member list by name or npub
+- Share your screen on a voice call, with a boosted playback volume control
+- A /join referral link that seeds a new account onto an operator's relays, plus automatic discovery of recommended relays during setup
+- Invites carry a short description that appears on discover cards
+- The desktop app keeps your servers in a persistent side rail
+
+### Changed
+- Switching channels in a community updates the timeline in place instead of tearing it down and rebuilding it, so it's smoother
+- Relay setup and recovery use plain language, with a help popover explaining the relay address field
+- The desktop tray uses a dedicated, theme-aware monochrome icon
+
+### Fixed
+- Direct messages update live more smoothly
+- Large member rosters stay responsive when opened
+- The chat thread panel lays out correctly on medium-width windows
+- Desktop: the app loads reliably at its root and no longer breaks Linux desktop integration
+
+### Security
+- The desktop login is encrypted at rest, and the desktop database file is readable only by its owner
+
 ## [0.46.5] - 2026-08-05
 
 Pin a direct message to the rail beside your communities, so a conversation you're in all day is one tap away, and the conversation with yourself now reads as Note to Self. Armada installed to the Home Screen shows an unread badge on its icon while it's closed, keeps its background notifications alive when the browser's subscription expires, and says plainly when a device can't deliver them at all.
