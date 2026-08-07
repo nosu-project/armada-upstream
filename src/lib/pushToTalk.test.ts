@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   bindingFromKeyboardEvent,
   configureDesktopPushToTalk,
+  formatPushToTalkLabel,
   getPushToTalkPreferences,
   onDesktopPushToTalkStatus,
   openDesktopPushToTalkSystemSettings,
@@ -40,6 +41,11 @@ describe("push-to-talk preferences", () => {
       metaKey: false,
       shiftKey: true,
     })?.label).toBe("Ctrl + Shift + Space");
+  });
+
+  it("normalizes GNOME's verbose shortcut label", () => {
+    expect(formatPushToTalkLabel("Ctrl + Press d")).toBe("Ctrl + D");
+    expect(formatPushToTalkLabel("Caps Lock")).toBe("Caps Lock");
   });
 
   it("persists the preference locally", () => {

@@ -10,6 +10,8 @@ const PROPERTIES_INTERFACE = "org.freedesktop.DBus.Properties";
 const REQUEST_INTERFACE = "org.freedesktop.portal.Request";
 const SESSION_INTERFACE = "org.freedesktop.portal.Session";
 const SHORTCUT_ID = "push_to_talk";
+const ALTERNATE_SHORTCUT_ID = "push_to_talk_alternate";
+const SHORTCUT_IDS = [SHORTCUT_ID, ALTERNATE_SHORTCUT_ID];
 
 let nextToken = 1;
 
@@ -160,13 +162,15 @@ function portalSettingsHint(desktop, portalVersion) {
   if (portalVersion >= 2) {
     return "Click the assigned shortcut above to change it in your desktop's trusted editor.";
   }
-  if (desktop === "gnome") {
-    return "To change it, open Settings → Apps → Armada → Global Shortcuts.";
-  }
-  if (desktop === "kde") {
-    return "To change it, open System Settings → Keyboard → Shortcuts → Armada.";
-  }
-  return "Your desktop can use this shortcut, but its portal cannot open a shortcut editor. Change it in your desktop's keyboard settings.";
+  return "Click the assigned shortcut above to reopen your desktop's trusted shortcut chooser.";
+}
+
+function nextLegacyShortcutId(shortcutId) {
+  return shortcutId === SHORTCUT_ID ? ALTERNATE_SHORTCUT_ID : SHORTCUT_ID;
+}
+
+function knownShortcutId(shortcutId) {
+  return SHORTCUT_IDS.includes(shortcutId) ? shortcutId : SHORTCUT_ID;
 }
 
 async function readPortalVersion(portalObject) {
@@ -211,22 +215,36 @@ function formatShortcutDescription(value) {
   return [...modifiers, keyLabel].filter(Boolean).join(" + ") || description;
 }
 
-function shortcutDescription(shortcuts, fallback) {
+function propertyValue(properties, key) {
+  return variantValue(properties instanceof Map ? properties.get(key) : properties?.[key]);
+}
+
+function shortcutDescription(shortcuts, fallback, shortcutId = SHORTCUT_ID) {
   for (const [id, properties] of shortcuts || []) {
-    if (id !== SHORTCUT_ID) continue;
-    return formatShortcutDescription(variantValue(properties?.trigger_description) || fallback);
+    if (id !== shortcutId) continue;
+    return formatShortcutDescription(propertyValue(properties, "trigger_description") || fallback);
   }
   return fallback;
 }
 
 class LinuxGlobalShortcutsPortal {
-  constructor({ sessionBus = dbus.sessionBus, env = process.env } = {}) {
+  constructor({
+    sessionBus = dbus.sessionBus,
+    env = process.env,
+    loadShortcutId = () => SHORTCUT_ID,
+    saveShortcutId = () => {},
+  } = {}) {
     this.sessionBus = sessionBus;
     this.desktop = desktopEnvironment(env);
+    this.loadShortcutId = loadShortcutId;
+    this.saveShortcutId = saveShortcutId;
     this.bus = null;
     this.globalShortcuts = null;
     this.portalVersion = 0;
     this.sessionHandle = null;
+    this.shortcutId = SHORTCUT_ID;
+    this.binding = null;
+    this.suspended = false;
     this.onPressed = null;
     this.onStatusChanged = null;
     this.onActivated = null;
@@ -242,6 +260,12 @@ class LinuxGlobalShortcutsPortal {
     this.bus = bus;
     this.onPressed = onPressed;
     this.onStatusChanged = onStatusChanged;
+    this.binding = binding;
+    try {
+      this.shortcutId = knownShortcutId(this.loadShortcutId());
+    } catch {
+      this.shortcutId = SHORTCUT_ID;
+    }
     try {
       const portalObject = await bus.getProxyObject(PORTAL_NAME, PORTAL_PATH);
       const globalShortcuts = portalObject.getInterface(GLOBAL_SHORTCUTS_INTERFACE);
@@ -249,10 +273,14 @@ class LinuxGlobalShortcutsPortal {
       this.portalVersion = await readPortalVersion(portalObject);
 
       this.onActivated = (sessionHandle, shortcutId) => {
-        if (sessionHandle === this.sessionHandle && shortcutId === SHORTCUT_ID) this.onPressed?.(true);
+        if (!this.suspended && sessionHandle === this.sessionHandle && shortcutId === this.shortcutId) {
+          this.onPressed?.(true);
+        }
       };
       this.onDeactivated = (sessionHandle, shortcutId) => {
-        if (sessionHandle === this.sessionHandle && shortcutId === SHORTCUT_ID) this.onPressed?.(false);
+        if (!this.suspended && sessionHandle === this.sessionHandle && shortcutId === this.shortcutId) {
+          this.onPressed?.(false);
+        }
       };
       this.onShortcutsChanged = (sessionHandle, shortcuts) => {
         if (sessionHandle !== this.sessionHandle) return;
@@ -260,9 +288,9 @@ class LinuxGlobalShortcutsPortal {
         this.onStatusChanged?.({
           supported: true,
           backend: "portal",
-          bindingLabel: shortcutDescription(shortcuts, binding.label),
+          bindingLabel: shortcutDescription(shortcuts, binding.label, this.shortcutId),
           reason: null,
-          settingsAvailable: this.portalVersion >= 2,
+          settingsAvailable: true,
           settingsHint: portalSettingsHint(this.desktop, this.portalVersion),
         });
       };
@@ -270,34 +298,26 @@ class LinuxGlobalShortcutsPortal {
       globalShortcuts.on("Deactivated", this.onDeactivated);
       globalShortcuts.on("ShortcutsChanged", this.onShortcutsChanged);
 
-      const token = `armada_ptt_${process.pid}_${nextToken++}`;
-      const createResults = await portalRequest(bus, () => globalShortcuts.CreateSession({
-        handle_token: new Variant("s", `${token}_create`),
-        session_handle_token: new Variant("s", `${token}_session`),
-      }));
-      this.sessionHandle = String(variantValue(createResults.session_handle) || "");
-      if (!this.sessionHandle) throw new Error("Global shortcut portal returned no session");
-
-      const bindResults = await portalRequest(bus, () => globalShortcuts.BindShortcuts(
+      const token = this.nextToken();
+      this.sessionHandle = await this.createSession(token);
+      const bindResults = await this.bindSession(
         this.sessionHandle,
-        [[SHORTCUT_ID, {
-          description: new Variant("s", "Hold to talk in Armada"),
-          preferred_trigger: new Variant("s", preferredTrigger),
-        }]],
-        "",
-        { handle_token: new Variant("s", `${token}_bind`) },
-      ));
+        this.shortcutId,
+        preferredTrigger,
+        token,
+      );
       const shortcuts = variantValue(bindResults.shortcuts) || [];
-      if (!shortcuts.some(([id]) => id === SHORTCUT_ID)) {
+      if (!shortcuts.some(([id]) => id === this.shortcutId)) {
         throw new Error("No push-to-talk shortcut was assigned");
       }
+      this.persistShortcutId(this.shortcutId);
 
       return {
         supported: true,
         backend: "portal",
-        bindingLabel: shortcutDescription(shortcuts, binding.label),
+        bindingLabel: shortcutDescription(shortcuts, binding.label, this.shortcutId),
         reason: null,
-        settingsAvailable: this.portalVersion >= 2,
+        settingsAvailable: true,
         settingsHint: portalSettingsHint(this.desktop, this.portalVersion),
       };
     } catch (error) {
@@ -308,11 +328,102 @@ class LinuxGlobalShortcutsPortal {
 
   async openSettings() {
     if (!this.globalShortcuts || !this.sessionHandle) return false;
-    if (this.portalVersion < 2) return false;
-    if (typeof this.globalShortcuts.ConfigureShortcuts !== "function") return false;
     this.release();
-    await this.globalShortcuts.ConfigureShortcuts(this.sessionHandle, "", {});
-    return true;
+    if (this.portalVersion >= 2) {
+      if (typeof this.globalShortcuts.ConfigureShortcuts !== "function") return false;
+      await this.globalShortcuts.ConfigureShortcuts(this.sessionHandle, "", {});
+      return true;
+    }
+    if (!this.bus || !this.binding) return false;
+
+    const previousSession = this.sessionHandle;
+    const replacementId = nextLegacyShortcutId(this.shortcutId);
+    const token = this.nextToken();
+    const replacementSession = await this.createSession(token);
+    this.suspended = true;
+    try {
+      // A v1 portal has no ConfigureShortcuts method. A replacement action ID
+      // makes BindShortcuts show the same trusted chooser used on first setup.
+      // The old session stays live until the user accepts, so cancel is safe.
+      const bindResults = await this.bindSession(
+        replacementSession,
+        replacementId,
+        null,
+        token,
+      );
+      const shortcuts = variantValue(bindResults.shortcuts) || [];
+      if (!shortcuts.some(([id]) => id === replacementId)) {
+        await this.closeSession(replacementSession);
+        return false;
+      }
+
+      this.shortcutId = replacementId;
+      this.sessionHandle = replacementSession;
+      this.persistShortcutId(replacementId);
+      await this.closeSession(previousSession);
+      this.onStatusChanged?.({
+        supported: true,
+        backend: "portal",
+        bindingLabel: shortcutDescription(shortcuts, this.binding.label, this.shortcutId),
+        reason: null,
+        settingsAvailable: true,
+        settingsHint: portalSettingsHint(this.desktop, this.portalVersion),
+      });
+      return true;
+    } catch (error) {
+      await this.closeSession(replacementSession);
+      if (error instanceof Error && error.message.includes("cancelled")) return true;
+      throw error;
+    } finally {
+      this.suspended = false;
+    }
+  }
+
+  nextToken() {
+    return `armada_ptt_${process.pid}_${nextToken++}`;
+  }
+
+  async createSession(token) {
+    const createResults = await portalRequest(this.bus, () => this.globalShortcuts.CreateSession({
+      handle_token: new Variant("s", `${token}_create`),
+      session_handle_token: new Variant("s", `${token}_session`),
+    }));
+    const sessionHandle = String(variantValue(createResults.session_handle) || "");
+    if (!sessionHandle) throw new Error("Global shortcut portal returned no session");
+    return sessionHandle;
+  }
+
+  async bindSession(sessionHandle, shortcutId, preferredTrigger, token) {
+    const properties = {
+      description: new Variant("s", "Hold to talk in Armada"),
+    };
+    if (preferredTrigger) {
+      properties.preferred_trigger = new Variant("s", preferredTrigger);
+    }
+    return portalRequest(this.bus, () => this.globalShortcuts.BindShortcuts(
+      sessionHandle,
+      [[shortcutId, properties]],
+      "",
+      { handle_token: new Variant("s", `${token}_bind`) },
+    ));
+  }
+
+  async closeSession(sessionHandle, bus = this.bus) {
+    if (!bus || !sessionHandle) return;
+    try {
+      const sessionObject = await bus.getProxyObject(PORTAL_NAME, sessionHandle);
+      await sessionObject.getInterface(SESSION_INTERFACE).Close();
+    } catch {
+      // The compositor may already have closed the session.
+    }
+  }
+
+  persistShortcutId(shortcutId) {
+    try {
+      this.saveShortcutId(shortcutId);
+    } catch {
+      // Losing this hint only makes a legacy portal ask again after restart.
+    }
   }
 
   async stop() {
@@ -324,6 +435,9 @@ class LinuxGlobalShortcutsPortal {
     this.globalShortcuts = null;
     this.portalVersion = 0;
     this.sessionHandle = null;
+    this.shortcutId = SHORTCUT_ID;
+    this.binding = null;
+    this.suspended = false;
     this.onPressed = null;
     this.onStatusChanged = null;
     if (globalShortcuts && this.onActivated) globalShortcuts.off("Activated", this.onActivated);
@@ -335,16 +449,8 @@ class LinuxGlobalShortcutsPortal {
     this.onDeactivated = null;
     this.onShortcutsChanged = null;
     if (!bus) return;
-    try {
-      if (sessionHandle) {
-        const sessionObject = await bus.getProxyObject(PORTAL_NAME, sessionHandle);
-        await sessionObject.getInterface(SESSION_INTERFACE).Close();
-      }
-    } catch {
-      // The compositor may already have closed the session.
-    } finally {
-      bus.disconnect();
-    }
+    await this.closeSession(sessionHandle, bus);
+    bus.disconnect();
   }
 
   release() {
@@ -359,9 +465,12 @@ module.exports = {
   PORTAL_PATH,
   PROPERTIES_INTERFACE,
   SHORTCUT_ID,
+  ALTERNATE_SHORTCUT_ID,
   bindingToXdgTrigger,
   desktopEnvironment,
   formatShortcutDescription,
+  knownShortcutId,
+  nextLegacyShortcutId,
   portalSettingsHint,
   portalRequest,
   readPortalVersion,

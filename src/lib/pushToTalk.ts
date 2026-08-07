@@ -201,6 +201,19 @@ export function bindingFromKeyboardEvent(
   };
 }
 
+export function formatPushToTalkLabel(value: string | null): string | null {
+  if (!value || !/\bPress\s+/i.test(value)) return value;
+  return value
+    .replace(/\bPress\s+/gi, "")
+    .split(/\s*\+\s*/)
+    .map((part) => part.length === 1 ? part.toUpperCase() : part)
+    .join(" + ");
+}
+
+function normalizePushToTalkStatus(status: PushToTalkStatus): PushToTalkStatus {
+  return { ...status, bindingLabel: formatPushToTalkLabel(status.bindingLabel) };
+}
+
 export async function configureDesktopPushToTalk(
   binding: PushToTalkBinding | null,
 ): Promise<PushToTalkStatus> {
@@ -214,7 +227,7 @@ export async function configureDesktopPushToTalk(
     };
   }
   try {
-    return await bridge.configurePushToTalk(binding);
+    return normalizePushToTalkStatus(await bridge.configurePushToTalk(binding));
   } catch {
     return {
       supported: false,
@@ -253,7 +266,7 @@ export function onDesktopPushToTalkStatus(
   listener: (status: PushToTalkStatus) => void,
 ): () => void {
   try {
-    return desktop()?.onPushToTalkStatus?.(listener) ?? (() => {});
+    return desktop()?.onPushToTalkStatus?.((status) => listener(normalizePushToTalkStatus(status))) ?? (() => {});
   } catch {
     return () => {};
   }

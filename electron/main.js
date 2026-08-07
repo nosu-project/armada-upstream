@@ -118,6 +118,14 @@ let updateCheckInFlight = false;
 const pushToTalk = new PushToTalkController({
   platform: process.platform,
   env: process.env,
+  portalFactory: () => {
+    const { LinuxGlobalShortcutsPortal } = require("./linuxGlobalShortcuts");
+    const shortcutIdFile = path.join(app.getPath("userData"), "push-to-talk-portal-action");
+    return new LinuxGlobalShortcutsPortal({
+      loadShortcutId: () => fs.readFileSync(shortcutIdFile, "utf8").trim(),
+      saveShortcutId: (shortcutId) => fs.writeFileSync(shortcutIdFile, shortcutId, { mode: 0o600 }),
+    });
+  },
   // Prompt only when the user explicitly enables/configures push to talk.
   // macOS global input hooks require this OS-level Accessibility grant.
   isMacTrusted: () =>
