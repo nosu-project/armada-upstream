@@ -6,6 +6,16 @@ import { impact } from "@/lib/haptics";
 const PICKUP_MS = 300;
 /** Past this much movement, a touch that started on an entry is a scroll. */
 const SCROLL_SLOP_PX = 10;
+/**
+ * Travel from the press origin (at ANY point in the gesture — the pointer can
+ * wander during the hold before pickup) past which a press-and-hold is a real
+ * drag. A pickup that never leaves this radius is a tap the user simply held a
+ * beat too long: it must NOT apply a (no-op) drop or suppress the navigation
+ * click — the reported "held the community icon and nothing opened" lost tap.
+ * Matched to the scroll slop so a touch wobble that would set it has already
+ * become a scroll (and never picked up).
+ */
+const DRAG_MOVE_SLOP_PX = 10;
 
 export interface PressDragOptions<T> {
   /**
@@ -127,6 +137,11 @@ export function usePressDrag<T>({
       // Set once the gesture is classified as a scroll rather than a drag.
       let manualScroll = false;
       let lastScrollY = startY;
+      // Whether the pointer ever travelled past the drag slop from the press
+      // origin (measured across the WHOLE gesture, before pickup included — a
+      // mouse can drag to the target during the hold). A pickup that never did
+      // is a long-held tap that must still navigate, not a (no-op) reorder.
+      let everMovedFar = false;
 
       const clear = () => {
         if (timer.current) clearTimeout(timer.current);
@@ -149,6 +164,9 @@ export function usePressDrag<T>({
 
       const onMove = (ev: PointerEvent) => {
         if (ev.pointerId !== pointerId) return;
+        if (!everMovedFar && Math.hypot(ev.clientX - startX, ev.clientY - startY) > DRAG_MOVE_SLOP_PX) {
+          everMovedFar = true;
+        }
         if (active.current === null) {
           lastX = ev.clientX;
           lastY = ev.clientY;
@@ -182,6 +200,14 @@ export function usePressDrag<T>({
         clear();
         setSource(null);
         if (dragged === null) return;
+        // A pickup that never travelled past the slop is a long-held TAP, not a
+        // reorder: abort the no-op drop and leave the click un-suppressed so
+        // navigation still fires. Otherwise holding an entry past PICKUP_MS
+        // swallows the tap (the reported "held the icon, nothing opened").
+        if (!everMovedFar) {
+          handlers.current.onAbort();
+          return;
+        }
         try {
           handlers.current.onDrop(dragged);
         } catch (err) {

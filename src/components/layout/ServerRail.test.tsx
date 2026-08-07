@@ -194,7 +194,9 @@ function renderRail(initialEntries: string[] = ["/"]) {
   return render(
     <MemoryRouter initialEntries={initialEntries}>
       <TooltipProvider>
-        <ServerRail />
+        {/* jsdom's matchMedia reports matches:false, so the layout reads as the
+            desktop side-by-side one — the shell variant is the live rail there. */}
+        <ServerRail variant="shell" />
       </TooltipProvider>
     </MemoryRouter>,
   );
@@ -331,7 +333,7 @@ describe("ServerRail drag wiring", () => {
     expect(config.railLayout).toEqual([]); // nothing persisted
   });
 
-  it("mouse press-and-hold released in place is a layout no-op", async () => {
+  it("mouse press-and-hold released in place aborts, so the tap still navigates", async () => {
     renderRail();
     const el = document.querySelector(`[data-rail-anchor="item:${RELAY_A}"]`)!;
     firePointer(el, "pointerdown", { x: 36, y: slotCenter(0) });
@@ -340,9 +342,11 @@ describe("ServerRail drag wiring", () => {
     });
     firePointer(window, "pointerup", { x: 36, y: slotCenter(0) });
     expect(document.body.style.cursor).toBe("");
-    // Dropping back where it started must not fold anything or reorder.
+    // A pickup that never travelled is a long-held TAP, not a reorder: it must
+    // NOT apply a (no-op) drop or suppress the navigation click. Nothing is
+    // persisted (no fold, no materialised order) and the click navigates.
     expect(config.railLayout.filter((n) => n.type === "folder")).toEqual([]);
-    expect(config.railOrder).toEqual([RELAY_A, RELAY_B, RELAY_C]);
+    expect(config.railOrder).toEqual([]);
   });
 
   it("touch long-press picks up, claims touchmove from the browser, and drops", async () => {

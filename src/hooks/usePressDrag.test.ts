@@ -59,16 +59,34 @@ describe("usePressDrag", () => {
     expect(result.current.dragging).toBe(false);
   });
 
-  it("suppresses the click the browser synthesizes after a drop", () => {
+  it("suppresses the click the browser synthesizes after a drop that moved", () => {
     const { result } = setup();
     act(() => {
-      result.current.begin("row-a")(pointer("pointerdown"));
+      result.current.begin("row-a")(pointer("pointerdown", { clientY: 50 }));
       vi.advanceTimersByTime(300);
-      window.dispatchEvent(pointer("pointerup"));
+      // A real drag travels before release; that's what makes it a drop.
+      window.dispatchEvent(pointer("pointermove", { clientY: 120 }));
+      window.dispatchEvent(pointer("pointerup", { clientY: 120 }));
     });
     expect(result.current.shouldSuppressClick()).toBe(true);
     act(() => void vi.advanceTimersByTime(300));
     expect(result.current.shouldSuppressClick()).toBe(false);
+  });
+
+  it("a stationary hold navigates: no drop, no click suppression", () => {
+    // The lost-tap fix: holding an entry past PICKUP_MS then releasing WITHOUT
+    // moving is a tap the user held too long, not a reorder. It must not swallow
+    // the navigation click.
+    const { result, calls } = setup();
+    act(() => {
+      result.current.begin("row-a")(pointer("pointerdown", { clientY: 50 }));
+      vi.advanceTimersByTime(300);
+      window.dispatchEvent(pointer("pointerup", { clientY: 50 }));
+    });
+    expect(calls.onPickup).toHaveBeenCalled(); // it did pick up (the hold elapsed)
+    expect(calls.onDrop).not.toHaveBeenCalled(); // but never applied a drop
+    expect(calls.onAbort).toHaveBeenCalled(); // it aborted the in-place pickup
+    expect(result.current.shouldSuppressClick()).toBe(false); // click navigates
   });
 
   it("aborts without dropping when the browser reclaims the pointer", () => {
