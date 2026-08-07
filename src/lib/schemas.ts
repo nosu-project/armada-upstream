@@ -106,6 +106,7 @@ export const AppConfigSchema = z.object({
   acceptedDms: z.array(z.string()).catch([]),
   startedDms: z.array(z.string()).catch([]),
   discoverAllContent: z.boolean().catch(defaultConfig.discoverAllContent),
+  accountStandingSeen: z.boolean().catch(defaultConfig.accountStandingSeen),
   meshIncognito: z.boolean().catch(defaultConfig.meshIncognito),
   meshEnabled: z.boolean().catch(defaultConfig.meshEnabled),
 });
@@ -170,6 +171,8 @@ export const EncryptedSettingsSchema = z.looseObject({
   showDmRequests: z.boolean().optional(),
   /** Whether Discover shows the unfiltered firehose vs the allow-list (see AppConfig). */
   discoverAllContent: z.boolean().optional(),
+  /** Whether Account Standing has been opened, retiring its nag (see AppConfig). */
+  accountStandingSeen: z.boolean().optional(),
   /**
    * The user's quick-reaction frequency table. Merged per key on the way in
    * (highest count / most recent use wins) rather than replaced, so two

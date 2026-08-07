@@ -15,18 +15,21 @@ import {
   Search,
   Server,
   Shield,
+  ShieldAlert,
+  ShieldCheck,
   Smile,
   UserCircle,
   Waypoints,
   Zap,
 } from "lucide-react";
 import { useNostrLogin } from "@nostrify/react/login";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { lazy, Suspense } from "react";
 
 import { LoginArea } from "@/components/auth/LoginArea";
 import { BlossomServerListEditor } from "@/components/BlossomServerListEditor";
+import { AccountStandingDialog } from "@/components/settings/AccountStandingDialog";
 import { EmojiPackSettings } from "@/components/settings/EmojiPackSettings";
 import { ProfileSettings } from "@/components/ProfileSettings";
 import { NotificationSettings } from "@/components/NotificationSettings";
@@ -69,6 +72,7 @@ const RequestToVanishDialog = lazy(() =>
 
 type SectionId =
   | "account"
+  | "standing"
   | "keys"
   | "profile"
   | "notifications"
@@ -96,7 +100,20 @@ interface NavItem {
    * collapsible) — where a header would just hide a single tap target.
    */
   inline?: boolean;
+  /**
+   * Open something instead of expanding. The entry still renders as a section
+   * header (icon, title, chevron) so it sits in the list like its neighbours;
+   * only what happens on tap differs.
+   */
+  action?: () => void;
 }
+
+/**
+ * The row that heads a section. Shared by the collapsible sections and the
+ * ones that open a dialog, so the two can't drift apart visually.
+ */
+const SECTION_HEADER_CLASS =
+  "flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-accent/40";
 
 interface NavGroup {
   heading: string;
@@ -128,6 +145,18 @@ export function SettingsPage() {
     getAudioProcessing(),
   );
   const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
+  const [standingOpen, setStandingOpen] = useState(false);
+
+  /**
+   * Opening Account Standing retires its nag dot for good. Written on the way
+   * in rather than on close, so a dismissed dialog doesn't nag again.
+   */
+  const openStanding = useCallback(() => {
+    setStandingOpen(true);
+    updateConfig((current) =>
+      current.accountStandingSeen ? current : { ...current, accountStandingSeen: true },
+    );
+  }, [updateConfig]);
   const { canInstall, install, needsManualInstall } = useInstallPrompt();
   const setVoiceToggle = (key: keyof AudioProcessingPrefs) => (value: boolean) => {
     setVoiceProcessing((prev) => {
@@ -290,6 +319,14 @@ export function SettingsPage() {
       // Only an nsec login has a key this client can show/back up. Remote,
       // extension and Android-signer logins keep the key inside the signer.
       const activeLogin = logins[0];
+      // Until it's been opened the entry wears an alert shield, which the
+      // dialog then reveals to be a joke. Afterwards it settles into the check.
+      userItems.push({
+        id: "standing",
+        title: "Account standing",
+        icon: config.accountStandingSeen ? ShieldCheck : ShieldAlert,
+        action: openStanding,
+      });
       if (activeLogin?.type === "nsec") {
         userItems.push({ id: "keys", title: "Keys", icon: KeyRound });
       }
@@ -325,7 +362,7 @@ export function SettingsPage() {
       groups.push({ heading: "Danger zone", items: [{ id: "danger", title: "Delete account", icon: AlertTriangle, inline: true }] });
     }
     return groups;
-  }, [user, logins, canInstall, needsManualInstall, config.zapsEnabled]);
+  }, [user, logins, canInstall, needsManualInstall, config.zapsEnabled, config.accountStandingSeen, openStanding]);
 
   /** The row(s) inside one section's chrome card. */
   const sectionBody = (id: SectionId): ReactNode => {
@@ -336,6 +373,10 @@ export function SettingsPage() {
             <LoginArea className="w-full flex" />
           </SettingsRow>
         );
+      case "standing":
+        // Header-only: its trigger opens AccountStandingDialog, so there's
+        // nothing to expand into.
+        return null;
       case "keys": {
         const activeLogin = logins[0];
         if (activeLogin?.type !== "nsec") return null;
@@ -696,7 +737,21 @@ export function SettingsPage() {
               </h2>
               <div className="space-y-1.5">
                 {group.items.map((item) =>
-                  item.inline ? (
+                  item.action ? (
+                    /* Dressed as a section header, but it opens a dialog. */
+                    <div
+                      key={item.id}
+                      className="bg-chrome clip-corner-lg overflow-hidden"
+                    >
+                      <button type="button" onClick={item.action} className={SECTION_HEADER_CLASS}>
+                        <item.icon className="size-4 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 flex-1 text-sm font-medium truncate">
+                          {item.title}
+                        </span>
+                        <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+                      </button>
+                    </div>
+                  ) : item.inline ? (
                     /* Single-item section: its row IS the list entry. */
                     <div
                       key={item.id}
@@ -711,10 +766,7 @@ export function SettingsPage() {
                       className="bg-chrome clip-corner-lg overflow-hidden"
                     >
                       <CollapsibleTrigger asChild>
-                        <button
-                          type="button"
-                          className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-accent/40"
-                        >
+                        <button type="button" className={SECTION_HEADER_CLASS}>
                           <item.icon className="size-4 shrink-0 text-muted-foreground" />
                           <span className="min-w-0 flex-1 text-sm font-medium truncate">
                             {item.title}
@@ -733,6 +785,10 @@ export function SettingsPage() {
               </div>
             </section>
           ))}
+
+          {user && (
+            <AccountStandingDialog open={standingOpen} onOpenChange={setStandingOpen} />
+          )}
 
           {user && (
             <Suspense fallback={null}>

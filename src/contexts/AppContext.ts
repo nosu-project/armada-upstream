@@ -351,6 +351,12 @@ export interface AppConfig {
    * hidden. Synced across devices so a deployment-wide preference propagates.
    */
   zapsEnabled: boolean;
+  /**
+   * Whether the user has opened Account Standing. Starts false, which is what
+   * puts the nag dot on the settings entry; the first open sets it and the dot
+   * never comes back. Synced so seeing the joke once settles it everywhere.
+   */
+  accountStandingSeen: boolean;
 }
 
 /**
@@ -403,6 +409,7 @@ export const SYNCED_CONFIG_KEYS = [
   "defaultZapAmount",
   "defaultZapMethod",
   "zapsEnabled",
+  "accountStandingSeen",
 ] as const satisfies ReadonlyArray<keyof AppConfig>;
 
 export type SyncedConfigKey = (typeof SYNCED_CONFIG_KEYS)[number];
@@ -441,6 +448,7 @@ export const defaultConfig: AppConfig = {
   defaultZapAmount: 100,
   defaultZapMethod: "lightning",
   zapsEnabled: true,
+  accountStandingSeen: false,
 };
 
 export const AppContext = createContext<AppContextType | undefined>(undefined);
