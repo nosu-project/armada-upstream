@@ -89,6 +89,9 @@ import { effectiveDmRelays } from "@/contexts/AppContext";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { deriveDmRoomId } from "@/lib/dmVoice";
+import { forwardableTags } from "@/lib/forwardMessage";
+import { chatRoute } from "@/lib/routes";
+import { stashShare } from "@/lib/shareTarget";
 import { dittoProfileUrl } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { DISAPPEARING_PRESETS, disappearingNotice, formatDisappearingDuration } from "@/lib/nip17/disappearing";
@@ -641,6 +644,7 @@ function Conversation({
   onBack: () => void;
 }) {
   const { user } = useCurrentUser();
+  const navigate = useNavigate();
   const author = useAuthor(peer);
   // See ConversationRow: a thread with yourself is Note to Self throughout —
   // header, composer and empty state — not a thread with your own profile.
@@ -720,6 +724,18 @@ function Conversation({
   // in-band convention, so the control is hidden on legacy threads).
   const [replyTo, setReplyTo] = useState<NostrRumor | undefined>(undefined);
   useEffect(() => setReplyTo(undefined), [peer]);
+
+  // Forward: hand the message's CONTENT (never its author, reply context or
+  // this thread's disappearing timer — see forwardableTags) to the share
+  // destination picker. From there it takes the path an OS share already
+  // takes: stashed against the chosen conversation, picked up by the composer
+  // mounted there, and sent as an ordinary new message by this user. Landing
+  // in the composer rather than sending on pick is deliberate — it's the one
+  // chance to add a word or drop something before it goes.
+  const handleForward = useCallback((event: ChatMsg) => {
+    stashShare({ text: event.content, files: [], tags: forwardableTags(event) }, null);
+    navigate("/share", { state: { forwardFrom: chatRoute({ kind: "dm", peer }) } });
+  }, [navigate, peer]);
 
   // Legacy-encryption opt-in. When the peer can't receive private (NIP-17)
   // DMs, we DON'T silently downgrade to kind-4 (which leaks who's talking and
@@ -1350,6 +1366,7 @@ function Conversation({
                 // "Quote" primes the composer; the quoted parent renders above
                 // the body and clicking it jumps the timeline.
                 onReply={dm17Enabled ? setReplyTo : undefined}
+                onForward={handleForward}
                 isEditing={editingId === msg.id}
                 onEdit={
                   dm17Ids.has(msg.id) && msg.pubkey === user?.pubkey && transport.editMessage

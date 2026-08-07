@@ -63,6 +63,7 @@ import { buzzThreadRef } from "@/buzz/protocol";
 import { collectEmojiTags } from "@/lib/customEmoji";
 import { encryptFileForUpload, encryptFileWithParams } from "@/lib/encryptedMedia";
 import { extractWebxdcMeta } from "@/lib/webxdcMeta";
+import { contentTagsFor } from "@/lib/forwardMessage";
 import { IMETA_MEDIA_URL_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
 import { resizeImage } from "@/lib/resizeImage";
@@ -551,6 +552,15 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
    */
   const attachmentEncryption = useRef<Map<string, ImetaEncryption & { ox: string }>>(new Map());
   /**
+   * Content tags from a forwarded message (NIP-92 `imeta` / NIP-30 `emoji`),
+   * carried verbatim so a forwarded attachment re-references the original blob
+   * instead of being re-uploaded — and, when it's client-encrypted, keeps the
+   * key that is nowhere else. Held in a ref for the same reason as
+   * `attachmentEncryption`: those keys must never reach a persisted draft.
+   * Emitted by `buildMessageTags` only while the text still references them.
+   */
+  const forwardedContentTags = useRef<string[][]>([]);
+  /**
    * In-flight attachments. An entry is added the instant a file is selected and
    * removed once its upload finishes (or fails), so a placeholder tile shows
    * immediately — through the slow local pre-upload work (resize, blurhash,
@@ -896,6 +906,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     setRemovedEmbeds(new Set());
     setUploadedFileGroups(new Map());
     attachmentEncryption.current.clear();
+    forwardedContentTags.current = [];
     setLightboxUrl(null);
     setMode("post");
     setPollOptions([{ id: pollOptionId(), label: "" }, { id: pollOptionId(), label: "" }]);
@@ -1087,6 +1098,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       if (share.text) {
         setContent((cur) => (cur ? `${cur}\n${share.text}` : share.text));
       }
+      // A forward's imeta/emoji tags (see forwardMessage.ts). Appended, not
+      // replaced: several forwards can be staged into one draft before it's
+      // sent, and buildMessageTags drops whichever the final text no longer
+      // references.
+      if (share.tags?.length) {
+        forwardedContentTags.current = [...forwardedContentTags.current, ...share.tags];
+      }
       textareaRef.current?.focus();
       void (async () => {
         for (const file of share.files) await handleFileUpload(file);
@@ -1244,7 +1262,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     }
 
     // NIP-30 emoji tags for custom emojis referenced in content
-    tags.push(...collectEmojiTags(finalContent, customEmojis));
+    const emojiTags = collectEmojiTags(finalContent, customEmojis);
+    tags.push(...emojiTags);
 
     // NIP-92 imeta tags. Uploaded attachments are matched by their EXACT URL —
     // never by extension regex — because Blossom servers name content-addressed
@@ -1268,6 +1287,25 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         fields.push(`ox ${enc.ox}`);
       }
       tags.push(["imeta", ...fields]);
+    }
+
+    // Forwarded content tags, carried verbatim from the original message.
+    // BEFORE the extension-derived pass below, and recorded in `processedUrls`,
+    // so a forwarded encrypted attachment isn't also given a bare `url`+`m`
+    // imeta — the renderer keys imeta by URL and the later tag would win,
+    // dropping the decryption params and breaking exactly what this preserves.
+    if (forwardedContentTags.current.length) {
+      const forwarded = contentTagsFor(forwardedContentTags.current, finalContent, {
+        urls: processedUrls,
+        shortcodes: new Set(emojiTags.map(([, shortcode]) => shortcode)),
+      });
+      for (const tag of forwarded) {
+        if (tag[0] === "imeta") {
+          const url = tag.find((f) => f.startsWith("url "))?.slice(4);
+          if (url) processedUrls.add(url);
+        }
+        tags.push(tag);
+      }
     }
 
     // Typed/pasted media URLs (not from an upload in this composer session)

@@ -76,6 +76,17 @@ export function hasShareTarget(): boolean {
 export interface SharePayload {
   text: string;
   files: File[];
+  /**
+   * Content tags to send alongside the text — NIP-92 `imeta` and NIP-30
+   * `emoji`, set by a message forward (see `forwardableTags`). They describe
+   * content the text REFERENCES but cannot carry: an attachment's MIME/dims
+   * and, for a client-encrypted blob, the only copy of its decryption key.
+   *
+   * Never persisted (drafts drop them), because an encrypted attachment's key
+   * is an ephemeral secret — same reasoning as the composer's per-upload
+   * encryption ref. Absent for OS shares, which carry files, not references.
+   */
+  tags?: string[][];
 }
 
 /**

@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { File as FileIcon, Hash, Pin, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -94,6 +94,9 @@ function DmDestination({
 export function SharePage() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
+  // Set when an in-app forward sent us here (the conversation it came from).
+  // An OS share has no origin to return to, hence the "/" fallback.
+  const forwardFrom = (useLocation().state as { forwardFrom?: string } | null)?.forwardFrom;
   const queryClient = useQueryClient();
   const eventStore = useEventStore();
   const { user } = useCurrentUser();
@@ -176,14 +179,16 @@ export function SharePage() {
 
   const dismiss = () => {
     discardShare();
-    navigate("/", { replace: true });
+    navigate(forwardFrom ?? "/", { replace: true });
   };
 
   return (
     <main className="flex-1 min-w-0 overflow-y-auto safe-area-top safe-area-bottom">
       <div className="mx-auto flex min-h-full max-w-xl flex-col gap-4 px-4 py-6">
         <div className="flex items-center justify-between gap-2">
-          <h1 className="text-lg font-semibold leading-tight">Share to…</h1>
+          <h1 className="text-lg font-semibold leading-tight">
+            {forwardFrom ? "Forward to…" : "Share to…"}
+          </h1>
           <Button
             variant="ghost"
             size="icon"

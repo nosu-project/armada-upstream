@@ -1,4 +1,4 @@
-import { AlertCircle, Braces, Copy, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, Zap } from "lucide-react";
+import { AlertCircle, Braces, Copy, Forward, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
@@ -369,6 +369,13 @@ export interface ChatMessageProps {
    * timeline, distinct from a thread reply). Hidden when absent.
    */
   onReply?: (event: ChatMsg) => void;
+  /**
+   * Forward this message's content to another conversation — Signal's
+   * semantics: the text (and its attachments) are re-sent as a NEW message
+   * authored by the forwarder, with nothing identifying the original sender or
+   * the thread it came from. Hidden when absent.
+   */
+  onForward?: (event: ChatMsg) => void;
   /** Begin editing this message (own, non-poll messages only; hidden when absent). */
   onEdit?: (event: ChatMsg) => void;
   /** Submit an inline edit with new content. */
@@ -466,6 +473,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   onDelete,
   onOpenThread,
   onReply,
+  onForward,
   onEdit,
   onEditSubmit,
   onEditCancel,
@@ -585,6 +593,18 @@ const ChatMessageInner = memo(function ChatMessageInner({
       label: "Reply in thread",
       icon: MessagesSquare,
       onSelect: () => onOpenThread(event),
+    });
+  }
+  // Not gated on `canWrite`: the forward is composed in the DESTINATION
+  // conversation, so being read-only here is irrelevant. Suppressed for polls
+  // and other structured rows, whose text alone (the question, without its
+  // options or tally) would forward as something misleading.
+  if (onForward && !isEditing && !poll && event.content.trim().length > 0) {
+    menuActions.push({
+      id: "forward",
+      label: "Forward message",
+      icon: Forward,
+      onSelect: () => onForward(event),
     });
   }
   if (canZap && !isEditing && !zapDisabled) {
