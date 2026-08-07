@@ -288,7 +288,10 @@ async function showDmNotification(base, data) {
     const preview = opened.kind === 15
       ? "Sent a file"
       : (truncate(opened.content, 140) || "New direct message");
-    await self.registration.showNotification("New message", {
+    // The page seals display names for known peers beside the peer set; a
+    // sender without one (or a pre-names config) keeps the generic title.
+    const name = (cfg.peerNames && cfg.peerNames[opened.sender]) || "";
+    await self.registration.showNotification(name ? `${name} sent you a message` : "New message", {
       ...base,
       body: preview,
       // Per-peer tag: a conversation collapses into one entry, distinct

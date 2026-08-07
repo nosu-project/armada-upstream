@@ -15,6 +15,9 @@ import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { clearSwDmConfig, writeSwDmConfig } from "@/lib/swDmConfig";
 import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
+import { useEventStore } from "@/hooks/useEventStore";
+import { parseAuthorEvent } from "@/lib/authorCache";
+import { getDisplayName } from "@/lib/getDisplayName";
 import {
   DEFAULT_PUSH_PREFS,
   type PushPrefs,
@@ -174,6 +177,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
   const { channelLevel, concordChannelLevel } = useNotifLevels();
   const { relays: publishedDmRelays } = useDmRelayList();
   const allConcord2Subs = useConcord2Subs();
+  const eventStore = useEventStore();
 
   const unavailableReason = isNativeRuntime()
     ? "native-runtime" as const
@@ -324,18 +328,34 @@ export function useNostrPush(): UsePushNotificationsReturn {
       } catch {
         // Store unavailable — follows ∪ accepted ∪ pinned still apply.
       }
+      const knownPeers = [...new Set([...dmKnownPeers, ...minePeers])].sort();
+      // The worker has no profile store, so notification titles need the
+      // display names sealed alongside the peers. Local kind-0 read only —
+      // never a relay round.
+      const peerNames: Record<string, string> = {};
+      try {
+        const store = await eventStore;
+        const profiles = await store.query([{ kinds: [0], authors: knownPeers }]);
+        for (const ev of profiles) {
+          const { metadata } = parseAuthorEvent(ev);
+          if (metadata) peerNames[ev.pubkey] = getDisplayName(metadata, ev.pubkey);
+        }
+      } catch {
+        // No profiles readable — the worker titles generically.
+      }
       if (cancelled) return;
       await writeSwDmConfig({
         policy: prefs.dmRequests,
         self: user.pubkey,
-        knownPeers: [...new Set([...dmKnownPeers, ...minePeers])].sort(),
+        knownPeers,
+        peerNames,
         ...(dmSk ? { sk: dmSk } : {}),
       });
     })();
     return () => {
       cancelled = true;
     };
-  }, [supported, user, enabled, followsLoading, prefs.dmRequests, dmKnownPeers, dmSk]);
+  }, [supported, user, enabled, followsLoading, prefs.dmRequests, dmKnownPeers, dmSk, eventStore]);
 
   // ── Sync ───────────────────────────────────────────────────────────────────
 

@@ -35,6 +35,12 @@ export interface SwDmConfig {
   self: string;
   /** follows ∪ accepted ∪ pinned (hex) — the "known" senders. */
   knownPeers: string[];
+  /**
+   * Display names for known peers (hex → name). The worker has no profile
+   * store, so notification titles resolve from this snapshot; a missing entry
+   * falls back to a generic title.
+   */
+  peerNames?: Record<string, string>;
   /** Decrypt key (hex). Present for nsec logins only. */
   sk?: string;
 }

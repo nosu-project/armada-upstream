@@ -277,6 +277,18 @@ describe("Web Push DM gating (inlined wrap)", () => {
     expect(opts.data.url).toBe("/dm/peer");
   });
 
+  it("titles a known sender's message with their sealed display name", async () => {
+    const worker = dmPush(
+      { policy: "generic", self: "me", knownPeers: ["peer"], peerNames: { peer: "Alice" }, sk: "aa" },
+      opened("peer"),
+    );
+    await worker.push({ scope: "dm", event_id: "w", url: "/dm", event: wrapEvent });
+    expect(worker.showNotification).toHaveBeenCalledTimes(1);
+    const [title, opts] = worker.showNotification.mock.calls[0] as unknown as [string, { body: string }];
+    expect(title).toBe("Alice sent you a message");
+    expect(opts.body).toContain("meet at 8");
+  });
+
   it("shows a content-blind request for an unknown sender under `generic`", async () => {
     const worker = dmPush(
       { policy: "generic", self: "me", knownPeers: [], sk: "aa" },
