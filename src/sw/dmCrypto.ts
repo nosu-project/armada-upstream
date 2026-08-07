@@ -35,6 +35,9 @@ export interface OpenedDmNotification {
   kind: number;
   /** Plaintext message content (chat), or "" for a file. */
   content: string;
+  /** The rumor's own `created_at` (seconds), 0 when absent — the rumor is the
+   * only un-backdated timestamp in the wrap (NIP-17). */
+  createdAt: number;
 }
 
 /** Whether any NIP-40 `expiration` tag has already passed. */
@@ -80,12 +83,19 @@ export function unwrapDm(
 
     const rumor = JSON.parse(
       nip44Decrypt(seal.content, getConversationKey(sk, seal.pubkey)),
-    ) as { pubkey?: string; kind?: unknown; content?: unknown; tags?: unknown };
+    ) as { pubkey?: string; kind?: unknown; content?: unknown; tags?: unknown; created_at?: unknown };
     if (rumor.pubkey !== seal.pubkey) return null; // NIP-59 anti-spoof
     if (typeof rumor.kind !== "number" || typeof rumor.content !== "string") return null;
     if (expiredByTags(rumor.tags, now)) return null;
 
-    return { sender: seal.pubkey, kind: rumor.kind, content: rumor.content };
+    return {
+      sender: seal.pubkey,
+      kind: rumor.kind,
+      content: rumor.content,
+      createdAt: typeof rumor.created_at === "number" && Number.isFinite(rumor.created_at)
+        ? rumor.created_at
+        : 0,
+    };
   } catch {
     // Crypto/JSON failure → not a readable DM for us. Silent.
     return null;

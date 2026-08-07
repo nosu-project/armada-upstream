@@ -27,6 +27,7 @@ function loadWorker(options: {
   dmCrypto?: { unwrapDm: (...args: unknown[]) => unknown };
   dmConfig?: Record<string, unknown>;
   pushEndpoint?: string;
+  priorNotifications?: Array<{ tag: string; data: Record<string, unknown> }>;
 } = {}) {
   const handlers = new Map<string, (event: unknown) => unknown>();
   const showNotification = vi.fn(async () => undefined);
@@ -63,6 +64,12 @@ function loadWorker(options: {
       showNotification,
       ...(options.pushEndpoint
         ? { pushManager: { getSubscription: async () => ({ endpoint: options.pushEndpoint }) } }
+        : {}),
+      ...(options.priorNotifications
+        ? {
+          getNotifications: async ({ tag }: { tag: string }) =>
+            options.priorNotifications!.filter((n) => n.tag === tag),
+        }
         : {}),
     },
     // The worker opens the sealed config via ArmadaDmCrypto.openConfig; stub it
@@ -277,16 +284,43 @@ describe("Web Push DM gating (inlined wrap)", () => {
     expect(opts.data.url).toBe("/dm/peer");
   });
 
-  it("titles a known sender's message with their sealed display name", async () => {
+  it("presents a known sender natively: name title, avatar icon, timestamp", async () => {
     const worker = dmPush(
-      { policy: "generic", self: "me", knownPeers: ["peer"], peerNames: { peer: "Alice" }, sk: "aa" },
-      opened("peer"),
+      {
+        policy: "generic",
+        self: "me",
+        knownPeers: ["peer"],
+        peerNames: { peer: "Alice" },
+        peerAvatars: { peer: "https://cdn.example/alice.jpg" },
+        sk: "aa",
+      },
+      opened("peer", { createdAt: 1700000000 }),
     );
     await worker.push({ scope: "dm", event_id: "w", url: "/dm", event: wrapEvent });
     expect(worker.showNotification).toHaveBeenCalledTimes(1);
-    const [title, opts] = worker.showNotification.mock.calls[0] as unknown as [string, { body: string }];
-    expect(title).toBe("Alice sent you a message");
+    const [title, opts] = worker.showNotification.mock.calls[0] as unknown as [
+      string,
+      { body: string; icon: string; timestamp: number },
+    ];
+    expect(title).toBe("Alice");
+    expect(opts.icon).toBe("https://cdn.example/alice.jpg");
+    expect(opts.timestamp).toBe(1700000000000);
     expect(opts.body).toContain("meet at 8");
+  });
+
+  it("accumulates a conversation's recent lines like the MessagingStyle expansion", async () => {
+    const worker = loadWorker({
+      dmConfig: { policy: "generic", self: "me", knownPeers: ["peer"], sk: "aa" },
+      dmCrypto: opened("peer"),
+      priorNotifications: [{ tag: "dm-peer", data: { lines: ["you up?"] } }],
+    });
+    await worker.push({ scope: "dm", event_id: "w", url: "/dm", event: wrapEvent });
+    const [, opts] = worker.showNotification.mock.calls[0] as unknown as [
+      string,
+      { body: string; data: { lines: string[] } },
+    ];
+    expect(opts.body).toBe("you up?\nmeet at 8 by the pier");
+    expect(opts.data.lines).toEqual(["you up?", "meet at 8 by the pier"]);
   });
 
   it("shows a content-blind request for an unknown sender under `generic`", async () => {
@@ -297,7 +331,7 @@ describe("Web Push DM gating (inlined wrap)", () => {
     await worker.push({ scope: "dm", event_id: "w", url: "/dm", event: wrapEvent });
     expect(worker.showNotification).toHaveBeenCalledTimes(1);
     const [title, opts] = worker.showNotification.mock.calls[0] as unknown as [string, Record<string, unknown>];
-    expect(title).toBe("Message request");
+    expect(title).toBe("Message requests");
     // Nothing the sender controls (their text) reaches the notification.
     expect(JSON.stringify([title, opts])).not.toContain("slur");
   });

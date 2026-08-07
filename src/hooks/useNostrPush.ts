@@ -333,12 +333,17 @@ export function useNostrPush(): UsePushNotificationsReturn {
       // display names sealed alongside the peers. Local kind-0 read only —
       // never a relay round.
       const peerNames: Record<string, string> = {};
+      const peerAvatars: Record<string, string> = {};
       try {
         const store = await eventStore;
         const profiles = await store.query([{ kinds: [0], authors: knownPeers }]);
         for (const ev of profiles) {
           const { metadata } = parseAuthorEvent(ev);
-          if (metadata) peerNames[ev.pubkey] = getDisplayName(metadata, ev.pubkey);
+          if (!metadata) continue;
+          peerNames[ev.pubkey] = getDisplayName(metadata, ev.pubkey);
+          if (typeof metadata.picture === "string" && /^https:\/\//.test(metadata.picture)) {
+            peerAvatars[ev.pubkey] = metadata.picture;
+          }
         }
       } catch {
         // No profiles readable — the worker titles generically.
@@ -349,6 +354,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
         self: user.pubkey,
         knownPeers,
         peerNames,
+        peerAvatars,
         ...(dmSk ? { sk: dmSk } : {}),
       });
     })();

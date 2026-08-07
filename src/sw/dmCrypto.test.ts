@@ -54,9 +54,14 @@ describe("unwrapDm", () => {
     created_at: now(),
   };
 
-  it("returns the real sender and message preview", () => {
+  it("returns the real sender, message preview and rumor timestamp", () => {
     const opened = unwrapDm(wrap(seal(rumor, senderSk, recipientPk), recipientPk), sk, recipientPk);
-    expect(opened).toEqual({ sender: senderPk, kind: 14, content: "are you coming tonight?" });
+    expect(opened).toEqual({
+      sender: senderPk,
+      kind: 14,
+      content: "are you coming tonight?",
+      createdAt: rumor.created_at,
+    });
   });
 
   it("returns null for a wrap this key can't open", () => {

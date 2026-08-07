@@ -41,6 +41,12 @@ export interface SwDmConfig {
    * falls back to a generic title.
    */
   peerNames?: Record<string, string>;
+  /**
+   * Avatar URLs for known peers (hex → https URL), the notification icon —
+   * mirroring the native service's sender avatar. Missing entries keep the
+   * app icon (iOS always shows the app icon regardless).
+   */
+  peerAvatars?: Record<string, string>;
   /** Decrypt key (hex). Present for nsec logins only. */
   sk?: string;
 }

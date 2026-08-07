@@ -287,17 +287,27 @@ async function showDmNotification(base, data) {
   if (known || cfg.policy === "full") {
     const preview = opened.kind === 15
       ? "Sent a file"
-      : (truncate(opened.content, 140) || "New direct message");
-    // The page seals display names for known peers beside the peer set; a
-    // sender without one (or a pre-names config) keeps the generic title.
+      : (truncate(opened.content, 140) || "Sent you a direct message");
+    // Mirror the native (Android service) DM presentation: the conversation
+    // title is just the sender's name, the icon is their avatar, and the body
+    // accumulates the room's recent lines like a MessagingStyle expansion.
+    // The page seals names/avatars for known peers beside the peer set; a
+    // sender without them (or a pre-names config) keeps the generic look.
     const name = (cfg.peerNames && cfg.peerNames[opened.sender]) || "";
-    await self.registration.showNotification(name ? `${name} sent you a message` : "New message", {
+    const avatar = (cfg.peerAvatars && cfg.peerAvatars[opened.sender]) || "";
+    const tag = `dm-${opened.sender}`;
+    const lines = await appendRoomLine(tag, preview);
+    await self.registration.showNotification(name || "New message", {
       ...base,
-      body: preview,
+      ...(avatar ? { icon: avatar } : {}),
+      body: lines.join("\n"),
       // Per-peer tag: a conversation collapses into one entry, distinct
       // conversations stay distinct.
-      tag: `dm-${opened.sender}`,
-      data: { ...routeData, url: `/dm/${opened.sender}` },
+      tag,
+      ...(Number.isFinite(opened.createdAt) && opened.createdAt > 0
+        ? { timestamp: opened.createdAt * 1000 }
+        : {}),
+      data: { ...routeData, url: `/dm/${opened.sender}`, lines },
     });
     return true;
   }
@@ -305,14 +315,38 @@ async function showDmNotification(base, data) {
   // Unknown sender.
   if (cfg.policy === "off") return showQuietRequest(base);
 
-  // policy === "generic": content-blind request ping (nothing the sender picks).
-  await self.registration.showNotification("Message request", {
+  // policy === "generic": content-blind request ping (nothing the sender
+  // picks). Strings match the native service's request room.
+  await self.registration.showNotification("Message requests", {
     ...base,
-    body: "New message request",
+    body: "You have a new message request",
     tag: "armada-dm-requests",
     data: { ...routeData, url: "/dm" },
   });
   return true;
+}
+
+/**
+ * The room's recent notification lines plus `line`, capped at 5 — the closest
+ * Web Notifications get to the native MessagingStyle expansion. The previous
+ * notification for `tag` carries its lines in `data`; replacing it with the
+ * appended list keeps a busy conversation readable instead of showing only
+ * the newest message. Browsers without notification introspection just get
+ * the single line.
+ */
+async function appendRoomLine(tag, line) {
+  let lines = [];
+  try {
+    if (typeof self.registration.getNotifications === "function") {
+      const [prior] = await self.registration.getNotifications({ tag });
+      const held = prior && prior.data && Array.isArray(prior.data.lines) ? prior.data.lines : [];
+      lines = held.slice(-4);
+    }
+  } catch {
+    // No introspection — single-line body.
+  }
+  lines.push(line);
+  return lines;
 }
 
 /**
