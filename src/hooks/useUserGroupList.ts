@@ -28,7 +28,7 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 const EMPTY_LIST: UserGroupList = { groups: [], servers: [] };
 
 /** Result of reading a 10009 event, with a flag for a failed private-item decrypt. */
-interface ReadGroupListResult extends UserGroupList {
+export interface ReadGroupListResult extends UserGroupList {
   /**
    * True when the event had encrypted private items but decryption failed (no
    * signer, signer refused, or transient error). The parsed list is then only
@@ -55,7 +55,7 @@ const groupListDecryptMemo = new Map<string, Promise<ReadGroupListResult>>();
  * signer or decryption fails. Memoized by event id so concurrent callers share
  * one signer round-trip.
  */
-async function readGroupListEvent(
+export async function readGroupListEvent(
   event: NostrRumor | null,
   signer: NUser["signer"] | undefined,
 ): Promise<ReadGroupListResult> {
