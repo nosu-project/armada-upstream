@@ -341,14 +341,25 @@ export function useNostrPush(): UsePushNotificationsReturn {
     setError(undefined);
     (async () => {
       const domain = pushDomain();
+      let cached = "";
+      try {
+        cached = localStorage.getItem(`${VAPID_KEY}:${domain}`) || "";
+      } catch {
+        // Storage can be unavailable in private browsing; the RPC covers it.
+      }
+      // Always ask the gateway for the CURRENT key: the server can rotate a
+      // domain's VAPID pair (e.g. regenerated key storage), and trusting the
+      // cache would keep this install subscribed — and the gateway signing —
+      // with keys that no longer match, which push services reject with 403
+      // forever. The cache is only a fallback for an unreachable gateway.
       let vapid = "";
       try {
-        vapid = localStorage.getItem(`${VAPID_KEY}:${domain}`) || "";
-      } catch {
-        // Storage can be unavailable in private browsing; fetch it below.
-      }
-      if (!vapid) {
         vapid = await client.getVapidKey(domain);
+      } catch (err) {
+        if (!cached) throw err;
+        vapid = cached;
+      }
+      if (vapid && vapid !== cached) {
         try {
           localStorage.setItem(`${VAPID_KEY}:${domain}`, vapid);
         } catch {
