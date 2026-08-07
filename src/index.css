@@ -465,6 +465,33 @@
   }
 
   /*
+   * Reply connector — a thin elbow that runs up from the replying message's
+   * round avatar to the quoted-reply preview above it, anchoring the two
+   * WITHOUT sitting on either. Geometry tracks MessageRow: the avatar is
+   * size-10 (2.5rem, centre 1.25rem from the row's left) and the body starts
+   * after gap-3 at 3.25rem. The preview is relatively positioned ABOVE the
+   * avatar with room around it (its own padding + margin); the vertical stops at
+   * the preview's bottom (a clear gap to the avatar below) and the horizontal
+   * stops short of the preview avatar — it never overlaps a round avatar. A
+   * hairline accent, not a full-bleed block — the same restraint as .gutter-tick.
+   */
+  .chat-reply-connector {
+    position: absolute;
+    left: 1.25rem;               /* centre of the message avatar below */
+    top: 50%;                    /* meet the preview at the name's baseline */
+    bottom: 0;                   /* stop at the preview bottom, clear of the avatar */
+    width: 1.5rem;               /* run toward — but short of — the preview avatar */
+    border-left: 2px solid hsl(var(--muted-foreground) / 0.3);
+    border-top: 2px solid hsl(var(--muted-foreground) / 0.3);
+    border-top-left-radius: 0.5rem;
+    pointer-events: none;
+    transition: border-color 120ms ease;
+  }
+  .chat-reply:hover .chat-reply-connector {
+    border-color: hsl(var(--primary) / 0.7);
+  }
+
+  /*
    * ── Cut-corner chrome dialog ──────────────────────────────────────────
    * The single modal idiom: a "terminal square with cut edges" vessel card.
    * `.chrome-dialog` establishes an inline-size container so its contents can

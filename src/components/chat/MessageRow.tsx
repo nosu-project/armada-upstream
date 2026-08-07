@@ -278,7 +278,7 @@ export const MessageRow = memo(function MessageRow({
       )}
       {/* Sliding content wrapper */}
       <div
-        className="flex items-start gap-3 flex-1 min-w-0 relative"
+        className="flex flex-col flex-1 min-w-0"
         style={
           onSwipeReply && swipe.offset !== 0
             ? {
@@ -288,6 +288,12 @@ export const MessageRow = memo(function MessageRow({
             : undefined
         }
       >
+      {/* The reply-context preview sits ABOVE the avatar/name row so the avatar
+          lines up with the name and the preview clears the avatar gutter. */}
+      {beforeBody}
+      {/* Avatar + content. Relatively positioned so the floated action toolbar
+          and continuation markers anchor to the MESSAGE, not the preview. */}
+      <div className="flex items-start gap-3 relative">
       {continuation ? (
         <span className="shrink-0 w-10 self-stretch flex items-start justify-end pr-0.5 pt-0.5 text-[10px] leading-none text-muted-foreground/60 opacity-0 group-hover:opacity-100 transition-opacity tabular-nums select-none">
           {shortClockTime(createdAt)}
@@ -426,9 +432,9 @@ export const MessageRow = memo(function MessageRow({
             )}
           </div>
         )}
-        {beforeBody}
         {children}
         {afterBody}
+      </div>
       </div>
       </div>
     </div>
