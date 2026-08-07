@@ -11,7 +11,9 @@ name: Desktop release
 # Every installer is published twice: as run artifacts (Blossom-backed, shown
 # on gitworkshop.dev against the tag) and by rsync into the web deploy's
 # downloads/ directory, so https://armada.buzz/downloads/Armada-vX.Y.Z.AppImage
-# is a stable public URL. The artifact channel is best-effort — the coordinator
+# is a stable public URL. The same deploy also publishes the exact Windows and
+# AppImage updater payloads under /desktop and the Flatpak OSTree repository
+# under /flatpak. The artifact channel is best-effort — the coordinator
 # skips any file over NGIT_CI_BLOSSOM_MAX_ARTIFACT_BYTES (64 MB by default,
 # which an Electron installer exceeds) with a warning rather than a failure —
 # so the rsync is the channel users actually download from.
@@ -44,7 +46,7 @@ permissions:
 jobs:
   desktop:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -99,13 +101,40 @@ jobs:
       - name: Build Linux + Windows installers
         env:
           TAG: ${{ github.ref_name }}
+          # Optional Authenticode identity. An unprovisioned coordinator still
+          # produces a testable installer, but production Windows updates
+          # should keep one stable certificate across releases.
+          CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
         run: |
           set -eu
-          VERSION="${TAG#v}"
+          case "$TAG" in
+            v[0-9]*) VERSION="${TAG#v}" ;;
+            *) VERSION=0.0.0 ;;
+          esac
           cd electron
           sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" package.json
           npm ci --no-audit --no-fund
           npx electron-builder --linux --win --config electron-builder.yml --publish never
+
+      # Flatpak is deliberately derived from the just-built AppImage, so it
+      # contains the identical application bundle. build.sh emits both a
+      # sideloadable bundle and an OSTree repository that Flatpak can track.
+      - name: Install Flatpak tooling (fallback for stock runner images)
+        run: |
+          set -eu
+          if ! command -v flatpak-builder >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends flatpak flatpak-builder >/dev/null
+          fi
+          flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install -y flathub \
+            org.freedesktop.Platform//25.08 \
+            org.freedesktop.Sdk//25.08 \
+            org.electronjs.Electron2.BaseApp//25.08
+
+      - name: Build Flatpak bundle and repository
+        run: cd electron && npm run dist:flatpak
 
       # macOS is cross-built rather than skipped: assembling a .app needs no
       # Apple tooling (it is the prebuilt darwin Electron with our app.asar
@@ -166,12 +195,10 @@ jobs:
           done
           ls -lh ./*.zip
 
-      # Stage everything under ONE downloads/ directory, named exactly as it is
-      # served: the artifact upload and the rsync then publish the same bytes
-      # under the same name, so a gitworkshop artifact and a armada.buzz URL
-      # can't drift apart. The extension identifies the platform where it can
-      # (.AppImage / .deb = Linux, .exe = Windows); the Windows portable build
-      # and the mac zips carry a suffix because theirs doesn't.
+      # Stage human-facing installers separately from machine update feeds.
+      # Updater payloads retain electron-builder's exact basename because each
+      # latest*.yml refers to that name; the friendly /downloads names may be
+      # stable without breaking those references.
       - name: Collect installers
         id: collect
         env:
@@ -180,19 +207,40 @@ jobs:
           set -eu
           root="$RUNNER_TEMP/deploy"
           out="$root/downloads"
+          feed="$root/desktop"
+          flatpak_repo="$root/flatpak"
           rm -rf "$root"
-          mkdir -p "$out"
+          mkdir -p "$out" "$feed" "$flatpak_repo"
           cp electron/release/*.AppImage "$out/Armada-$TAG.AppImage"
           cp electron/release/*.deb "$out/Armada-$TAG.deb"
+          cp electron/release/Armada-flatpak-*.flatpak "$out/Armada-$TAG.flatpak"
           cp electron/release/*Setup*.exe "$out/Armada-$TAG.exe"
           # The portable build is the non-Setup .exe.
           cp "$(ls electron/release/*.exe | grep -iv setup | head -n1)" "$out/Armada-$TAG-portable.exe"
           # .zip names its platform, since the extension doesn't.
           cp electron/release/mac/Armada-mac-x64.zip "$out/Armada-$TAG-mac-x64.zip"
           cp electron/release/mac/Armada-mac-arm64.zip "$out/Armada-$TAG-mac-arm64.zip"
+
+          # Windows NSIS and Linux AppImage self-update from these files. The
+          # portable exe, deb and Flatpak editions remain externally managed.
+          cp electron/release/latest.yml electron/release/latest-linux.yml "$feed/"
+          cp electron/release/*.AppImage electron/release/*Setup*.exe "$feed/"
+          for file in electron/release/*.blockmap; do
+            [ -e "$file" ] || continue
+            cp "$file" "$feed/"
+          done
+          node electron/scripts/validate-update-feed.mjs "$feed/latest.yml" "$feed/latest-linux.yml"
+
+          # Preserve the repository layout produced by flatpak-builder. Its
+          # objects are content addressed; old objects may remain available for
+          # clients updating from older releases.
+          cp -a electron/release/flatpak-repo/. "$flatpak_repo/"
           ls -lh "$out"
+          ls -lh "$feed"
           echo "root=$root" >> "$GITHUB_OUTPUT"
           echo "dir=$out" >> "$GITHUB_OUTPUT"
+          echo "feed=$feed" >> "$GITHUB_OUTPUT"
+          echo "flatpak_repo=$flatpak_repo" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -200,6 +248,7 @@ jobs:
           path: |
             ${{ steps.collect.outputs.dir }}/*.AppImage
             ${{ steps.collect.outputs.dir }}/*.deb
+            ${{ steps.collect.outputs.dir }}/*.flatpak
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
@@ -214,6 +263,12 @@ jobs:
           path: ${{ steps.collect.outputs.dir }}/*.zip
           if-no-files-found: error
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: armada-desktop-update-feed-${{ github.ref_name }}
+          path: ${{ steps.collect.outputs.feed }}
+          if-no-files-found: error
+
       # Publish to https://armada.buzz/downloads/ over the SAME rrsync-jailed
       # deploy user the web build uses (deploy-web.yml). Pushing the staged
       # `downloads` DIRECTORY (no trailing slash) into the jail root ":/" is
@@ -226,7 +281,7 @@ jobs:
       # DEPLOY_SSH_KEY_BASE64, DEPLOY_SSH_CONFIG_BASE64, DEPLOY_TARGET. With no
       # key provisioned the installers are still built and uploaded as run
       # artifacts; only the publish is skipped.
-      - name: Deploy installers to downloads/
+      - name: Deploy desktop installers and update repositories
         env:
           DEPLOY_SSH_KEY_BASE64: ${{ secrets.DEPLOY_SSH_KEY_BASE64 }}
           DEPLOY_SSH_CONFIG_BASE64: ${{ secrets.DEPLOY_SSH_CONFIG_BASE64 }}
@@ -240,12 +295,12 @@ jobs:
           # publish only real version tags.
           case "$TAG" in
             v*) ;;
-            *) echo "ref '$TAG' is not a version tag; skipping downloads deploy."; exit 0 ;;
+            *) echo "ref '$TAG' is not a version tag; skipping desktop deploy."; exit 0 ;;
           esac
 
           # No key provisioned (or non-maintainer trigger): artifacts only.
           if [ -z "${DEPLOY_SSH_KEY_BASE64:-}" ]; then
-            echo "DEPLOY_SSH_KEY_BASE64 not set; skipping downloads deploy (artifacts uploaded)."
+            echo "DEPLOY_SSH_KEY_BASE64 not set; skipping desktop deploy (artifacts uploaded)."
             exit 0
           fi
 
@@ -270,5 +325,14 @@ jobs:
 
           TARGET="${DEPLOY_TARGET:-web}"
 
-          # Additive: past releases stay downloadable at their own URLs.
+          # Additive: past releases stay downloadable at their own URLs and old
+          # Flatpak objects remain available to clients crossing releases.
           rsync -av -e ssh "$DEPLOY_ROOT/downloads" "${TARGET}:/"
+          rsync -av -e ssh "$DEPLOY_ROOT/flatpak" "${TARGET}:/"
+
+          # Publish immutable updater payloads before the mutable latest*.yml
+          # pointers. A client can therefore never observe metadata naming a
+          # file that has not reached the server yet.
+          rsync -av -e ssh --exclude='latest*.yml' "$DEPLOY_ROOT/desktop" "${TARGET}:/"
+          rsync -av -e ssh --include='latest*.yml' --exclude='*' \
+            "$DEPLOY_ROOT/desktop/" "${TARGET}:/desktop/"

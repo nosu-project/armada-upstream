@@ -24,6 +24,11 @@ directories:
 # jobs (and cross-compiling the Windows hook from Linux cannot work at all).
 npmRebuild: false
 
+# Refuse to create an installer from a stale/partial staging directory. CI and
+# npm lifecycle scripts build these first; the hook protects direct `npx
+# electron-builder` invocations as well.
+beforePack: scripts/before-pack.cjs
+
 # What ships inside the app: the shell's own files plus the bundled web build.
 # electron + node_modules are provided by the builder runtime and not listed.
 #
@@ -39,6 +44,7 @@ files:
   - "!.flatpak-builder{,/**/*}"
   - main.js
   - appOrigin.js
+  - updateSupport.js
   - linuxAudioSources.js
   - linuxGlobalShortcuts.js
   - linuxStatusNotifier.js
@@ -53,7 +59,6 @@ files:
   # main.js uses these at runtime. buildResources alone supplies installer
   # artwork; it does not put the files inside app.asar.
   - build/icon.png
-  - build/tray.png
   - dist/**/*
   - build/**/*
   - "!**/*.map"

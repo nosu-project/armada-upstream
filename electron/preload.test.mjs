@@ -5,12 +5,15 @@ import vm from "node:vm";
 
 import { describe, expect, it, vi } from "vitest";
 
-function loadPreload() {
+function loadPreload({ dbAvailable = true } = {}) {
   let api;
   const listeners = new Map();
   const ipcRenderer = {
     invoke: vi.fn(),
     send: vi.fn(),
+    sendSync: vi.fn((channel) =>
+      channel === "armada:db-available" ? dbAvailable : undefined,
+    ),
     on: vi.fn((channel, listener) => listeners.set(channel, listener)),
     removeListener: vi.fn((channel, listener) => {
       if (listeners.get(channel) === listener) listeners.delete(channel);
@@ -30,6 +33,25 @@ function loadPreload() {
   });
   return { api, ipcRenderer, listeners };
 }
+
+describe("desktop database preload bridge", () => {
+  it("selects the native adapter synchronously and forwards database calls", () => {
+    const { api, ipcRenderer } = loadPreload({ dbAvailable: true });
+
+    expect(api.armadaDb.available).toBe(true);
+    expect(ipcRenderer.sendSync).toHaveBeenCalledWith("armada:db-available");
+    api.armadaDb.call("query", { tenant: "main", filters: [] });
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith("armada:db", "query", {
+      tenant: "main",
+      filters: [],
+    });
+  });
+
+  it("keeps the renderer on IndexedDB when the main-process store is unavailable", () => {
+    const { api } = loadPreload({ dbAvailable: false });
+    expect(api.armadaDb.available).toBe(false);
+  });
+});
 
 describe("screen-share preload bridge", () => {
   it("returns the React picker's source to main over IPC", async () => {

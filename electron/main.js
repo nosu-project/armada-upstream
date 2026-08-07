@@ -57,6 +57,10 @@ const {
 } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const { isArmadaAppUrl } = require("./appOrigin");
+const {
+  hasDeveloperIdUpdateSignature,
+  supportsSelfUpdate,
+} = require("./updateSupport");
 const { listLinuxAudioApplications } = require("./linuxAudioSources");
 const {
   detectLinuxTrayEnvironment,
@@ -69,6 +73,7 @@ const createLinuxStatusNotifier =
     : null;
 const path = require("node:path");
 const fs = require("node:fs");
+const { spawnSync } = require("node:child_process");
 
 // Keep Linux's desktop-file identity stable in both the AppImage and Flatpak.
 // Electron must receive this before ready so notifications and tray hosts can
@@ -115,6 +120,7 @@ let isQuitting = false;
 // stay quiet when the installed build is already current or the feed is down.
 let manualUpdateCheck = false;
 let updateCheckInFlight = false;
+let macSelfUpdateEligible;
 const pushToTalk = new PushToTalkController({
   platform: process.platform,
   env: process.env,
@@ -561,14 +567,34 @@ function hideWindowToTray() {
 
 function autoUpdatesSupported() {
   if (!app.isPackaged) return false;
-  if (process.platform === "win32") {
-    return !process.env.PORTABLE_EXECUTABLE_FILE && !process.env.PORTABLE_EXECUTABLE_DIR;
+  if (process.platform === "darwin" && macSelfUpdateEligible === undefined) {
+    const disabledMarker = fs.existsSync(
+      path.join(process.resourcesPath, "armada-no-self-update"),
+    );
+    if (disabledMarker) {
+      macSelfUpdateEligible = false;
+    } else {
+      const result = spawnSync(
+        "/usr/bin/codesign",
+        ["-dv", "--verbose=4", process.execPath],
+        { encoding: "utf8" },
+      );
+      macSelfUpdateEligible =
+        result.status === 0 &&
+        hasDeveloperIdUpdateSignature(`${result.stdout || ""}\n${result.stderr || ""}`);
+    }
   }
-  if (process.platform === "darwin") return !process.mas;
-  if (process.platform === "linux") {
-    return Boolean(process.env.APPIMAGE) && !process.env.FLATPAK_ID;
-  }
-  return false;
+  return supportsSelfUpdate({
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    env: process.env,
+    isMas: process.mas,
+    isWindowsStore: process.windowsStore,
+    // The Linux-cross-built macOS archives are ad-hoc signed and cannot safely
+    // replace themselves. A real Developer ID build made on macOS has no marker
+    // and uses electron-builder's signed zip feed normally.
+    macUpdateDisabled: process.platform === "darwin" && !macSelfUpdateEligible,
+  });
 }
 
 async function showUpdateMessage(options) {

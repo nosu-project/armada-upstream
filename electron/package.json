@@ -12,7 +12,7 @@
   "license": "AGPL-3.0-only",
   "main": "main.js",
   "scripts": {
-    "stage:web": "npm --prefix .. run build && node scripts/stage-web.mjs",
+    "stage:web": "npm --prefix .. run build && npm --prefix .. run build:electron-db && node scripts/stage-web.mjs",
     "prestart": "npm run stage:web",
     "start": "electron .",
     "predist": "npm run stage:web",
@@ -41,7 +41,6 @@
     "uiohook-napi": "^1.5.5"
   },
   "overrides": {
-    "js-yaml": "^4.3.1",
     "tar": "^7.5.21"
   }
 }
