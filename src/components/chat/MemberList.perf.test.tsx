@@ -1,36 +1,22 @@
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 import { generateSecretKey, getPublicKey } from "nostr-tools/pure";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ReactNode } from "react";
 
 /**
- * Characterization / perf evidence for the MemberList "resource heavy" claim.
+ * Characterization + effect-verification for MemberList's render cost.
  *
- * These tests pin two concrete, architectural facts (and double as regression
- * guards if the component is later virtualized — the row-count assertions would
- * flip):
+ * Originally this pinned the "every member mounts eagerly" cost. MemberList now
+ * viewport-gates rows on a large roster (VIRTUALIZE_THRESHOLD): offscreen rows
+ * render a placeholder and mount their 4 query hooks + profile popovers +
+ * context menu only when they scroll near the viewport. These tests verify that
+ * effect — a large roster mounts NO offscreen rows until they intersect, while
+ * a small roster (and an active search, whose matcher needs every name) still
+ * renders in full.
  *
- *  1. The roster is NOT virtualized/windowed: N members → N mounted MemberRow
- *     subtrees in the DOM at once, regardless of scroll position
- *     (MemberList.tsx:754/795/841 map the whole roster).
- *  2. Each row mounts four query-backed hooks — useAuthor (1×,
- *     useAuthor.ts:76), useScopedIdentity→useServerProfile (1×), and
- *     useUserStatus (2×: general + music, useUserStatus.ts:160-161). So an
- *     N-member channel stands up ~4N react-query observers plus 2N DOM menu
- *     roots.
- *
- * IMPORTANT / honest scoping: the cost proven here is React observers + DOM,
- * NOT N network subscriptions. The relay REQs behind these hooks are batched —
- * `NostrBatcher` merges the per-author status REQs (useUserStatus.ts:76-88) and
- * `profileSync` coalesces author demand (useAuthor.ts:68-74). So virtualizing
- * the list attacks the render/observer/DOM cost, which is what these numbers
- * measure; it would not change network traffic (already batched).
- *
- * The four leaf hooks and the heavy per-row children are stubbed to counting
- * spies so the measurement isolates MemberList's own structure (row fan-out),
- * not the profile/query stack. Each stubbed hook stands in 1:1 for a real
- * `useQuery` in production (see line refs above).
+ * The four leaf hooks and heavy children are stubbed to counting spies so the
+ * assertions are about which rows MOUNT, isolated from the query/profile stack.
  */
 
 const spies = vi.hoisted(() => ({
@@ -46,7 +32,6 @@ vi.mock("@/hooks/useAuthor", () => ({
     return { data: undefined };
   },
 }));
-
 vi.mock("@/hooks/useUserStatus", () => ({
   useUserStatus: (pubkey?: string, type = "general") => {
     spies.useUserStatus(pubkey, type);
@@ -54,24 +39,18 @@ vi.mock("@/hooks/useUserStatus", () => ({
   },
   isStatusExpired: () => false,
 }));
-
 vi.mock("@/hooks/useScopedDisplayName", () => ({
   useScopedIdentity: (pubkey: string) => {
     spies.useScopedIdentity(pubkey);
     return { displayName: pubkey.slice(0, 8) };
   },
 }));
-
 vi.mock("@/hooks/useMemberSearch", () => ({
-  // null = "no search active, show everyone" (useMemberSearch.ts:85).
   useMemberSearch: (roster: string[], query: string) => {
     spies.useMemberSearch(roster, query);
-    return null;
+    return null; // no search active
   },
 }));
-
-// Heavy per-row children replaced with trivial stubs: the point is to measure
-// MemberList's own row structure, not these subtrees.
 vi.mock("@/components/chat/ProfilePreviewCard", () => ({
   ProfilePreviewCard: ({ children }: { children?: ReactNode }) => <>{children}</>,
 }));
@@ -86,78 +65,116 @@ vi.mock("@/components/chat/CustomEmoji", () => ({
 
 import { MemberList } from "@/components/chat/MemberList";
 
-/** N distinct hex pubkeys — exactly the shape MemberList.members consumes. */
+// Controllable IntersectionObserver: it never fires on its own (offscreen), and
+// a test can `fireAll()` to simulate every observed row scrolling into view.
+const observers: MockIO[] = [];
+class MockIO {
+  els = new Set<Element>();
+  root = null;
+  rootMargin = "";
+  thresholds: number[] = [];
+  constructor(private cb: IntersectionObserverCallback) {
+    observers.push(this);
+  }
+  observe(el: Element) {
+    this.els.add(el);
+  }
+  unobserve(el: Element) {
+    this.els.delete(el);
+  }
+  disconnect() {
+    this.els.clear();
+  }
+  takeRecords() {
+    return [];
+  }
+  fire() {
+    const entries = [...this.els].map(
+      (target) => ({ isIntersecting: true, target }) as IntersectionObserverEntry,
+    );
+    this.cb(entries, this as unknown as IntersectionObserver);
+  }
+}
+
+function fireAll() {
+  act(() => {
+    for (const io of [...observers]) io.fire();
+  });
+}
+
 function pubkeys(n: number): string[] {
   return Array.from({ length: n }, () => getPublicKey(generateSecretKey()));
 }
 
-/** Every rendered row carries the `gutter-tick` class (MemberList.tsx:339). */
 function rowCount(container: HTMLElement): number {
   return container.querySelectorAll(".gutter-tick").length;
 }
 
+beforeEach(() => {
+  observers.length = 0;
+  vi.stubGlobal("IntersectionObserver", MockIO);
+});
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
-describe("MemberList resource profile", () => {
-  it("renders every member — no windowing/virtualization", () => {
+describe("MemberList viewport gating", () => {
+  it("mounts NO offscreen rows on a large roster until they intersect", () => {
     const members = pubkeys(500);
     const { container } = render(
       <MemberList admins={[]} members={members} canModerate={false} />,
     );
 
-    // All 500 rows are in the DOM simultaneously: a virtualizer would mount
-    // only the ~visible slice. This assertion FLIPS if the list is windowed.
+    // Nothing visible yet ⇒ no rows mounted, no per-row query hooks stood up.
+    expect(rowCount(container)).toBe(0);
+    expect(spies.useAuthor).not.toHaveBeenCalled();
+    // The gate is real: 500 rows were handed to observers, not the DOM.
+    expect(observers.length).toBe(500);
+
+    // Scroll them all into view ⇒ they mount (no rows are lost).
+    fireAll();
     expect(rowCount(container)).toBe(500);
     expect(spies.useAuthor).toHaveBeenCalledTimes(500);
+    expect(spies.useUserStatus).toHaveBeenCalledTimes(1000); // general + music per row
+  }, 30_000);
+
+  it("renders a small roster in full (no gating below threshold)", () => {
+    const members = pubkeys(40);
+    const { container } = render(
+      <MemberList admins={[]} members={members} canModerate={false} />,
+    );
+
+    // Under the threshold: all rows mount immediately, no observers created.
+    expect(rowCount(container)).toBe(40);
+    expect(spies.useAuthor).toHaveBeenCalledTimes(40);
+    expect(observers.length).toBe(0);
   });
 
-  it("mounts four query-backed hooks per member row", () => {
-    const members = pubkeys(120);
-    render(<MemberList admins={[]} members={members} canModerate={false} />);
+  it("[perf] gated first paint of a large roster is cheap (few rows mounted)", () => {
+    const members = pubkeys(800);
 
-    // 1 useAuthor + 1 useScopedIdentity + 2 useUserStatus = 4 useQuery
-    // observers per row → 480 for a 120-member channel.
-    expect(spies.useAuthor).toHaveBeenCalledTimes(120);
-    expect(spies.useScopedIdentity).toHaveBeenCalledTimes(120);
-    expect(spies.useUserStatus).toHaveBeenCalledTimes(240);
+    const t0 = performance.now();
+    const { container } = render(
+      <MemberList admins={[]} members={members} canModerate={false} />,
+    );
+    const gatedMs = performance.now() - t0;
 
-    // The 2× is general + music status, per row (MemberList.tsx:160-161).
-    const musicCalls = spies.useUserStatus.mock.calls.filter((c) => c[1] === "music");
-    const generalCalls = spies.useUserStatus.mock.calls.filter((c) => c[1] === "general");
-    expect(musicCalls).toHaveLength(120);
-    expect(generalCalls).toHaveLength(120);
-  });
+    // First paint mounts zero heavy rows regardless of roster size.
+    expect(rowCount(container)).toBe(0);
 
-  it(
-    "[perf] render cost grows with roster size (all rows eager)",
-    () => {
-      const small = pubkeys(50);
-      const big = pubkeys(800);
+    const t1 = performance.now();
+    fireAll();
+    const fullMs = performance.now() - t1;
+    expect(rowCount(container)).toBe(800);
 
-      const t0 = performance.now();
-      const r1 = render(<MemberList admins={[]} members={small} canModerate={false} />);
-      const tSmall = performance.now() - t0;
-      expect(rowCount(r1.container)).toBe(50);
-      cleanup();
-
-      const t1 = performance.now();
-      const r2 = render(<MemberList admins={[]} members={big} canModerate={false} />);
-      const tBig = performance.now() - t1;
-      expect(rowCount(r2.container)).toBe(800);
-
-      // Evidence, not a tight bound — jsdom timings are noisy and machine
-      // dependent. The regression guard is only that a large roster renders at
-      // all within a generous ceiling; the printed numbers are the signal.
-      console.log(
-        `[perf] MemberList eager render: 50 members ${tSmall.toFixed(1)}ms, ` +
-          `800 members ${tBig.toFixed(1)}ms ` +
-          `(${(tBig / Math.max(tSmall, 0.01)).toFixed(1)}× for 16× the rows)`,
-      );
-      expect(tBig).toBeLessThan(15_000);
-    },
-    30_000,
-  );
+    console.log(
+      `[perf] MemberList(800): gated first paint ${gatedMs.toFixed(1)}ms, ` +
+        `full mount on scroll-in ${fullMs.toFixed(1)}ms`,
+    );
+    // The gated first paint is the interactive cost now; it must be far below
+    // the ~1.2s all-eager render this replaced.
+    expect(gatedMs).toBeLessThan(400);
+  }, 30_000);
 });

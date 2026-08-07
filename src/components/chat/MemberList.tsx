@@ -91,6 +91,54 @@ export interface RolePickerOption {
 
 const roleTint = (color: number) => `#${(color & 0xffffff).toString(16).padStart(6, "0")}`;
 
+/** Approx height of one member row (avatar size-8 + py-2), for the gate placeholder. */
+const ROW_MIN_H = 48;
+/**
+ * Roster size above which offscreen rows are viewport-gated. Below it a roster
+ * renders fully (a small member list is already cheap, and gating would only
+ * add a first-frame placeholder swap for no benefit). Each mounted row stands
+ * up ~4 query hooks + two profile-card popovers + a context menu; on a large
+ * server that DOM is the member panel's whole cost, so rows the reader can't
+ * see aren't built until they scroll near the viewport.
+ */
+const VIRTUALIZE_THRESHOLD = 60;
+
+/**
+ * Defer mounting `children` until the placeholder scrolls near the viewport,
+ * then keep it mounted (latched, like MessageRow's action toolbar). When
+ * `active` is false it renders `children` immediately — used so a small roster,
+ * or a roster being searched (whose matcher needs every member's name resolved,
+ * `useMemberSearch`), is never gated.
+ */
+function DeferredRow({ active, children }: { active: boolean; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [shown, setShown] = useState(!active);
+
+  useEffect(() => {
+    if (!active) {
+      setShown(true);
+      return;
+    }
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setShown(true);
+          io.disconnect();
+        }
+      },
+      // Preload a screenful ahead so rows are mounted before they're scrolled to.
+      { rootMargin: "300px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [active]);
+
+  if (shown) return <>{children}</>;
+  return <div ref={ref} aria-hidden style={{ height: ROW_MIN_H }} />;
+}
+
 interface MemberRowProps {
   pubkey: string;
   roles?: string[];
@@ -615,6 +663,10 @@ export function MemberList({
   );
   const matched = useMemberSearch(roster, query);
   const searching = matched !== null;
+  // Gate offscreen rows only on a large roster, and never while searching (the
+  // matcher reads each member's resolved name from the query cache, which a
+  // row populates only once mounted).
+  const virtualize = roster.length > VIRTUALIZE_THRESHOLD && !searching;
 
   // A member hoisted into a role section renders only there; when a query is
   // active every section is also narrowed to the matches.
@@ -752,8 +804,8 @@ export function MemberList({
             {toggleHost === "admins" && searchToggle}
           </div>
           {visibleAdmins.map((admin) => (
+            <DeferredRow key={admin.pubkey} active={virtualize}>
             <MemberRow
-              key={admin.pubkey}
               pubkey={admin.pubkey}
               roles={admin.roles}
               presence={presence?.[admin.pubkey]}
@@ -776,6 +828,7 @@ export function MemberList({
               isRoleToggling={isRoleToggling}
               customBadge={customBadgeOf(admin.pubkey)}
             />
+            </DeferredRow>
           ))}
         </>
       )}
@@ -793,8 +846,8 @@ export function MemberList({
               {toggleHost === `section:${section.id}` && searchToggle}
             </div>
             {section.members.map((pubkey) => (
+              <DeferredRow key={pubkey} active={virtualize}>
               <MemberRow
-                key={pubkey}
                 pubkey={pubkey}
                 roles={adminMap.get(pubkey)}
                 presence={presence?.[pubkey]}
@@ -816,6 +869,7 @@ export function MemberList({
                 onToggleRole={onToggleRole}
                 isRoleToggling={isRoleToggling}
               />
+              </DeferredRow>
             ))}
           </div>
         ) : null,
@@ -839,8 +893,8 @@ export function MemberList({
         )
       ) : (
         regulars.map((pubkey) => (
+          <DeferredRow key={pubkey} active={virtualize}>
           <MemberRow
-            key={pubkey}
             pubkey={pubkey}
             roles={buzzRoles.get(pubkey)}
             presence={presence?.[pubkey]}
@@ -863,6 +917,7 @@ export function MemberList({
             isRoleToggling={isRoleToggling}
             customBadge={customBadgeOf(pubkey)}
           />
+          </DeferredRow>
         ))
       )}
       </div>
