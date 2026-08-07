@@ -7,6 +7,26 @@
 
 const { contextBridge, ipcRenderer } = require("electron");
 
+let screenSourcePicker = null;
+
+// Main → preload → renderer request/response bridge for getDisplayMedia.
+// Context isolation gives preload and the page different global objects, so a
+// callback stored directly on preload's `window` is not visible to main-world
+// JavaScript. IPC is the deliberate bridge between those contexts.
+ipcRenderer.on("armada:pick-screen-source", async (_event, requestId) => {
+  let sourceId = null;
+  try {
+    sourceId = screenSourcePicker ? await screenSourcePicker() : null;
+  } catch {
+    sourceId = null;
+  }
+  ipcRenderer.send(
+    "armada:screen-source-picked",
+    requestId,
+    typeof sourceId === "string" && sourceId ? sourceId : null,
+  );
+});
+
 contextBridge.exposeInMainWorld("armadaDesktop", {
   /** True so the web app can detect it's running inside the desktop shell. */
   isDesktop: true,
@@ -81,13 +101,12 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
   stopLinuxShareAudio: () => ipcRenderer.invoke("armada:linux-share-audio-stop"),
 
   /**
-   * Register the callback the main process invokes when getDisplayMedia() is
-   * called. It must resolve to the chosen source id (from getScreenSources),
-   * or null/undefined to cancel. Stored on window so the main process can call
-   * it via executeJavaScript.
+   * Register the callback the main process invokes over IPC when
+   * getDisplayMedia() is called. It must resolve to the chosen source id (from
+   * getScreenSources), or null/undefined to cancel.
    */
   onPickScreenSource: (handler) => {
-    window.__armadaPickScreenSource = () => Promise.resolve(handler());
+    screenSourcePicker = handler;
   },
 
   /**

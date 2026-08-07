@@ -487,8 +487,38 @@ const UNREAD_OVERLAY_DATA_URL =
 // the in-app picker would start a second portal session and lose the authorized
 // PipeWire stream, so the display-media handler must grant this exact object.
 const screenShareSources = new Map();
+const pendingScreenSharePicks = new Map();
+let nextScreenSharePickId = 1;
+
+function resolveScreenSharePick(requestId, sourceId) {
+  const pending = pendingScreenSharePicks.get(requestId);
+  if (!pending) return;
+  pendingScreenSharePicks.delete(requestId);
+  clearTimeout(pending.timer);
+  pending.resolve(typeof sourceId === "string" && sourceId ? sourceId : null);
+}
+
+function requestScreenSharePick() {
+  if (!mainWindow || mainWindow.isDestroyed()) return Promise.resolve(null);
+  const requestId = nextScreenSharePickId++;
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolveScreenSharePick(requestId, null), 5 * 60_000);
+    pendingScreenSharePicks.set(requestId, { resolve, timer });
+    try {
+      mainWindow.webContents.send("armada:pick-screen-source", requestId);
+    } catch {
+      resolveScreenSharePick(requestId, null);
+    }
+  });
+}
 
 function installDisplayMediaHandler() {
+  ipcMain.on("armada:screen-source-picked", (event, requestId, sourceId) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents) return;
+    if (!Number.isSafeInteger(requestId)) return;
+    resolveScreenSharePick(requestId, sourceId);
+  });
+
   // The renderer asks for the source list and returns the chosen id; we cache
   // it for the duration of one getDisplayMedia call.
   ipcMain.handle("armada:get-screen-sources", async () => {
@@ -517,29 +547,42 @@ function installDisplayMediaHandler() {
 
   session.defaultSession.setDisplayMediaRequestHandler(
     (request, callback) => {
-      // Ask the renderer to pick a source via the in-app picker.
+      // Electron's callback is one-shot and throws synchronously when an empty
+      // result cancels a video request. Mark it complete BEFORE invoking it so
+      // that a thrown cancellation can never result in a second callback.
+      let completed = false;
+      const complete = (streams, reportError = true) => {
+        if (completed) return;
+        completed = true;
+        try {
+          callback(streams);
+        } catch (error) {
+          if (reportError) console.warn("[screen-share] Electron rejected display source", error);
+        }
+      };
+
+      // Ask the renderer to pick a source via the context-isolated preload IPC
+      // bridge. A property written on preload's window is invisible to the
+      // page, so executeJavaScript cannot be used to call the React handler.
       const pick = async () => {
         try {
-          const chosenId = await mainWindow.webContents.executeJavaScript(
-            "window.__armadaPickScreenSource && window.__armadaPickScreenSource()",
-            true,
-          );
+          const chosenId = await requestScreenSharePick();
           if (!chosenId) {
             screenShareSources.clear();
-            callback({}); // user cancelled
+            complete({}, false); // user cancelled
             return;
           }
           const source = screenShareSources.get(chosenId);
           screenShareSources.clear();
           if (!source) {
             console.warn("[screen-share] selected display source is no longer available");
-            callback({});
+            complete({}, false);
             return;
           }
           // Electron's loopback capture is Windows-only. Linux audio is added
           // by the PipeWire virtual microphone below after this video stream
           // reaches the renderer.
-          callback({
+          complete({
             video: source,
             ...(process.platform === "win32" && request.audioRequested
               ? { audio: "loopback" }
@@ -548,10 +591,10 @@ function installDisplayMediaHandler() {
         } catch (error) {
           screenShareSources.clear();
           console.warn("[screen-share] display capture request failed", error);
-          callback({});
+          complete({}, false);
         }
       };
-      pick();
+      void pick();
     },
     // useSystemPicker: true would defer to the OS picker on platforms that have
     // one (Windows/macOS recents); we use our own picker for consistency.
