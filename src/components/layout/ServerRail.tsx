@@ -1414,8 +1414,14 @@ export interface ServerRailProps {
 
 export function ServerRail({ variant = "page", ...props }: ServerRailProps) {
   const sideBySide = useSideBySideLayout();
+  const { user } = useCurrentUser();
   // shell lives only in the side-by-side layout; page only in the drill-down.
   if (variant === "shell" ? !sideBySide : sideBySide) return null;
+  // The persistent shell rail is part of the logged-in app frame; a logged-out
+  // visitor sitting on /welcome (nested under MainLayout) has no communities and
+  // must not see the rail's +/Discover/Settings chrome. The page-variant rail is
+  // owned by pages that manage their own logged-out state, so leave it alone.
+  if (variant === "shell" && !user) return null;
   return <ServerRailInner {...props} />;
 }
 
