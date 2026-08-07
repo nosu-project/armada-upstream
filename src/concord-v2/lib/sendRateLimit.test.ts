@@ -2,13 +2,15 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { KIND_COMMENT, KIND_DELETE, KIND_MESSAGE, KIND_POLL, KIND_REACTION } from "@/concord-v2/lib/kinds";
 import {
+  LOCKOUT_TIERS,
   SEND_BURST,
   SEND_REFILL_MS,
   SendRateLimitError,
+  TIER_DECAY_MS,
+  attemptSend,
   consumeSend,
   formatRetryAfter,
   isRateLimitedKind,
-  peekSend,
   resetSendLimits,
   sendRefusal,
 } from "@/concord-v2/lib/sendRateLimit";
@@ -16,6 +18,13 @@ import {
 beforeEach(() => {
   resetSendLimits();
 });
+
+/** Spend the whole bucket at `now`, leaving it empty but un-violated. */
+function drain(id: string, now: number): void {
+  for (let i = 0; i < SEND_BURST; i++) {
+    expect(consumeSend(id, now)).toBe(0);
+  }
+}
 
 describe("isRateLimitedKind", () => {
   it("charges the kinds a reader sees as a post", () => {
@@ -31,64 +40,132 @@ describe("isRateLimitedKind", () => {
   });
 });
 
-describe("consumeSend", () => {
+describe("the token bucket", () => {
   it("allows a full burst back-to-back", () => {
-    for (let i = 0; i < SEND_BURST; i++) {
-      expect(consumeSend("a", 1_000)).toBe(0);
-    }
+    drain("a", 1_000);
   });
 
-  it("refuses the send past the burst, with a wait of one refill", () => {
-    for (let i = 0; i < SEND_BURST; i++) consumeSend("a", 1_000);
-    expect(consumeSend("a", 1_000)).toBe(SEND_REFILL_MS);
-  });
-
-  it("spends nothing on a refusal, so the wait doesn't grow by retrying", () => {
-    for (let i = 0; i < SEND_BURST; i++) consumeSend("a", 1_000);
-    consumeSend("a", 1_000);
-    consumeSend("a", 1_000);
-    // A whole refill after the burst: one token, regardless of the two refusals.
-    expect(consumeSend("a", 1_000 + SEND_REFILL_MS)).toBe(0);
-    expect(consumeSend("a", 1_000 + SEND_REFILL_MS)).toBe(SEND_REFILL_MS);
-  });
-
-  it("counts down as the bucket refills", () => {
-    for (let i = 0; i < SEND_BURST; i++) consumeSend("a", 0);
-    expect(consumeSend("a", SEND_REFILL_MS / 4)).toBe(SEND_REFILL_MS * 0.75);
-    expect(consumeSend("a", SEND_REFILL_MS / 2)).toBe(SEND_REFILL_MS / 2);
+  it("hands a token back per refill interval", () => {
+    drain("a", 0);
+    // Empty but not yet in violation: waiting out the refill is enough.
     expect(consumeSend("a", SEND_REFILL_MS)).toBe(0);
+    expect(consumeSend("a", 2 * SEND_REFILL_MS)).toBe(0);
   });
 
   it("refills to the burst cap and no further", () => {
-    for (let i = 0; i < SEND_BURST; i++) consumeSend("a", 0);
-    // An hour idle buys back a burst, not an hour's worth of tokens.
+    drain("a", 0);
     const later = 3_600_000;
-    for (let i = 0; i < SEND_BURST; i++) expect(consumeSend("a", later)).toBe(0);
-    expect(consumeSend("a", later)).toBe(SEND_REFILL_MS);
+    // An hour idle buys back a burst, not an hour's worth of tokens.
+    drain("a", later);
+    expect(consumeSend("a", later)).toBe(LOCKOUT_TIERS[0]);
   });
 
   it("keeps communities independent", () => {
-    for (let i = 0; i < SEND_BURST; i++) consumeSend("a", 1_000);
-    expect(consumeSend("a", 1_000)).toBe(SEND_REFILL_MS);
+    drain("a", 1_000);
+    expect(consumeSend("a", 1_000)).toBe(LOCKOUT_TIERS[0]);
     expect(consumeSend("b", 1_000)).toBe(0);
   });
 
   it("treats a backwards clock as no elapsed time rather than free tokens", () => {
-    for (let i = 0; i < SEND_BURST; i++) consumeSend("a", 10_000);
-    expect(consumeSend("a", 5_000)).toBe(SEND_REFILL_MS);
-    // Re-anchored at the earlier reading: a refill from THERE is what pays.
-    expect(consumeSend("a", 5_000 + SEND_REFILL_MS)).toBe(0);
+    drain("a", 10_000);
+    expect(consumeSend("a", 5_000)).toBe(LOCKOUT_TIERS[0]);
   });
 });
 
-describe("peekSend", () => {
-  it("reports the wait without spending a token", () => {
-    for (let i = 0; i < SEND_BURST - 1; i++) consumeSend("a", 1_000);
-    expect(peekSend("a", 1_000)).toBe(0);
-    expect(peekSend("a", 1_000)).toBe(0);
-    // The one remaining token survived both peeks.
-    expect(consumeSend("a", 1_000)).toBe(0);
-    expect(peekSend("a", 1_000)).toBe(SEND_REFILL_MS);
+describe("the escalating lockout", () => {
+  it("locks for the first tier when the bucket runs dry", () => {
+    drain("a", 0);
+    expect(consumeSend("a", 0)).toBe(LOCKOUT_TIERS[0]);
+  });
+
+  it("counts down the lockout rather than restarting it on every attempt", () => {
+    drain("a", 0);
+    consumeSend("a", 0);
+    expect(consumeSend("a", 5_000)).toBe(LOCKOUT_TIERS[0] - 5_000);
+    expect(consumeSend("a", 10_000)).toBe(LOCKOUT_TIERS[0] - 10_000);
+    // Hammering through the lockout is ONE bout: the next tier is still the
+    // second, not the fiftieth.
+    expect(consumeSend("a", LOCKOUT_TIERS[0])).toBe(0);
+  });
+
+  it("walks up a tier per fresh bout of flooding", () => {
+    let now = 0;
+    for (const tier of LOCKOUT_TIERS) {
+      // Serve the previous penalty, refill, flood again.
+      drain("a", now);
+      expect(consumeSend("a", now)).toBe(tier);
+      now += tier;
+    }
+    // Past the last tier the ceiling holds rather than growing without bound.
+    drain("a", now);
+    expect(consumeSend("a", now)).toBe(LOCKOUT_TIERS[LOCKOUT_TIERS.length - 1]);
+  });
+
+  it("empties the bucket, but every tier outlasts a full refill", () => {
+    drain("a", 0);
+    consumeSend("a", 0);
+    // The shortest lockout is five refill intervals, so serving any penalty
+    // hands back a whole burst — the lockout is the punishment, not a
+    // half-empty bucket afterwards.
+    expect(LOCKOUT_TIERS[0]).toBeGreaterThanOrEqual(SEND_BURST * SEND_REFILL_MS);
+    drain("a", LOCKOUT_TIERS[0]);
+  });
+
+  it("decays a tier per stretch of clean time after the penalty is served", () => {
+    drain("a", 0);
+    consumeSend("a", 0); // tier 1
+    let now = LOCKOUT_TIERS[0];
+    drain("a", now);
+    expect(consumeSend("a", now)).toBe(LOCKOUT_TIERS[1]); // tier 2
+    now += LOCKOUT_TIERS[1];
+
+    // Behave for one decay window: the next slip is a first-tier slip again.
+    now += TIER_DECAY_MS;
+    drain("a", now);
+    expect(consumeSend("a", now)).toBe(LOCKOUT_TIERS[1]);
+  });
+
+  it("does not credit time spent locked out toward the decay", () => {
+    // Climb to a lockout LONGER than the decay window (15 min vs 10), so
+    // serving it would forgive a tier if serving counted as behaving.
+    let now = 0;
+    for (const tier of LOCKOUT_TIERS.slice(0, 4)) {
+      drain("a", now);
+      expect(consumeSend("a", now)).toBe(tier);
+      now += tier;
+    }
+    expect(LOCKOUT_TIERS[3]).toBeGreaterThan(TIER_DECAY_MS);
+    // Back the instant it lifts: no clean time has accrued, so the climb
+    // continues rather than resuming a tier lower.
+    drain("a", now);
+    expect(consumeSend("a", now)).toBe(LOCKOUT_TIERS[4]);
+  });
+
+  it("returns to a clean slate after enough clean time", () => {
+    drain("a", 0);
+    consumeSend("a", 0);
+    let now = LOCKOUT_TIERS[0];
+    drain("a", now);
+    expect(consumeSend("a", now)).toBe(LOCKOUT_TIERS[1]); // tier 2
+    now += LOCKOUT_TIERS[1] + 2 * TIER_DECAY_MS;
+    drain("a", now);
+    expect(consumeSend("a", now)).toBe(LOCKOUT_TIERS[0]);
+  });
+});
+
+describe("attemptSend", () => {
+  it("does not spend a token when it allows the send", () => {
+    for (let i = 0; i < 20; i++) expect(attemptSend("a", 1_000)).toBe(0);
+    // All five are still there for the publish path.
+    drain("a", 1_000);
+  });
+
+  it("counts a refusal, so the composer's pre-flight escalates too", () => {
+    drain("a", 0);
+    expect(attemptSend("a", 0)).toBe(LOCKOUT_TIERS[0]);
+    const freed = LOCKOUT_TIERS[0];
+    drain("a", freed);
+    expect(attemptSend("a", freed)).toBe(LOCKOUT_TIERS[1]);
   });
 });
 
@@ -98,8 +175,8 @@ describe("sendRefusal", () => {
   });
 
   it("names the wait once the budget is spent", () => {
-    for (let i = 0; i < SEND_BURST; i++) consumeSend("a", 1_000);
-    expect(sendRefusal("a", 1_000)).toBe("You're sending messages too quickly. Try again in 3 seconds.");
+    drain("a", 1_000);
+    expect(sendRefusal("a", 1_000)).toBe("You're sending messages too quickly. Try again in 15 seconds.");
   });
 });
 
@@ -108,7 +185,25 @@ describe("formatRetryAfter", () => {
     expect(formatRetryAfter(1)).toBe("1 second");
     expect(formatRetryAfter(1_000)).toBe("1 second");
     expect(formatRetryAfter(1_001)).toBe("2 seconds");
-    expect(formatRetryAfter(3_000)).toBe("3 seconds");
+  });
+
+  it("switches to the largest whole unit that reads naturally", () => {
+    expect(formatRetryAfter(59_000)).toBe("59 seconds");
+    expect(formatRetryAfter(60_000)).toBe("1 minute");
+    expect(formatRetryAfter(90_000)).toBe("2 minutes");
+    expect(formatRetryAfter(15 * 60_000)).toBe("15 minutes");
+    expect(formatRetryAfter(60 * 60_000)).toBe("1 hour");
+    expect(formatRetryAfter(90 * 60_000)).toBe("2 hours");
+  });
+
+  it("renders every tier as something a person can act on", () => {
+    expect(LOCKOUT_TIERS.map(formatRetryAfter)).toEqual([
+      "15 seconds",
+      "1 minute",
+      "5 minutes",
+      "15 minutes",
+      "1 hour",
+    ]);
   });
 });
 

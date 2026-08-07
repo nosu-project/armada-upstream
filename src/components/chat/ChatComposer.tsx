@@ -285,8 +285,11 @@ interface ChatComposerProps {
    * reason to block this send (shown as a toast), or null to allow it. Concord
    * uses it for its per-community send rate limit — the limit is enforced at
    * the publish path either way, but a refusal thrown from there arrives after
-   * `resetComposeState`, i.e. after the user's text is already gone. Must not
-   * consume anything: it may be called for a send that never happens.
+   * `resetComposeState`, i.e. after the user's text is already gone.
+   *
+   * Called exactly ONCE per send the user actually asked for, and never merely
+   * to ask: a refusal is counted against the sender, and Concord lengthens its
+   * lockout for repeat flooding.
    */
   canSend?: () => string | null;
   /**

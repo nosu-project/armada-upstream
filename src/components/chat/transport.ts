@@ -299,8 +299,11 @@ export interface ChatTransport {
   /**
    * Pre-flight refusal for a send, checked before the composer clears itself:
    * a reason to block, or null to allow. Concord returns its per-community
-   * rate-limit message here; transports without a send policy omit it. Must be
-   * side-effect free — it runs for sends that never happen.
+   * rate-limit message here; transports without a send policy omit it.
+   *
+   * Call it exactly ONCE per send the user actually asked for: a refusal counts
+   * against the sender (Concord escalates its lockout on repeat flooding), so
+   * this is not a predicate to poll from render or to disable a button with.
    */
   canSend?: () => string | null;
 

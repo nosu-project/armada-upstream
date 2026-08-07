@@ -526,8 +526,9 @@ export function useTransport2(
   // message rows as props — which would re-render the whole mounted window on
   // every arriving message and every backfilled page.
   const sendStatusFor = useCallback((id: string) => sendStatus[id], [sendStatus]);
-  // Peek only — `useSendMessage2` is what spends from the budget. This runs
-  // ahead of the composer's reset so a refused send keeps the user's draft.
+  // Spends no token — `useSendMessage2` does that — but a refusal here DOES
+  // count as a flooding attempt, so this runs once per send the user asked
+  // for, ahead of the composer's reset so a refusal keeps their draft.
   const canSend = useCallback(
     () => (community ? sendRefusal(community.idHex) : null),
     [community],
