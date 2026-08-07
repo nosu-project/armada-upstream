@@ -89,6 +89,8 @@ export interface DesktopPushToTalkStatus {
   backend: "native" | "portal" | null;
   bindingLabel: string | null;
   reason: string | null;
+  settingsAvailable?: boolean;
+  settingsHint?: string | null;
 }
 
 interface ArmadaDesktopBridge {

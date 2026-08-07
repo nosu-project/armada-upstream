@@ -117,13 +117,20 @@ function needsLinuxPortal(env) {
   );
 }
 
-function errorReason(error, platform, portal) {
+function errorReason(error, platform, portal, env = process.env) {
   const message = error instanceof Error ? error.message : String(error || "");
   if (message.includes("cancelled")) return "Push-to-talk shortcut setup was cancelled.";
   if (platform === "darwin") {
     return "Allow Armada in macOS Accessibility settings, then try again.";
   }
   if (portal) {
+    const desktop = [env.XDG_CURRENT_DESKTOP, env.XDG_SESSION_DESKTOP, env.DESKTOP_SESSION]
+      .filter(Boolean)
+      .join(":")
+      .toLowerCase();
+    if (desktop.includes("cosmic")) {
+      return "This COSMIC release does not provide the Global Shortcuts portal required for push to talk.";
+    }
     return "This Linux desktop does not provide the Global Shortcuts portal required for push to talk on Wayland.";
   }
   return message || "The global push-to-talk shortcut could not be registered.";
@@ -224,7 +231,9 @@ class PushToTalkController {
           supported: false,
           backend: usePortal ? "portal" : "native",
           bindingLabel: binding.label,
-          reason: errorReason(error, this.platform, usePortal),
+          reason: errorReason(error, this.platform, usePortal, this.env),
+          settingsAvailable: false,
+          settingsHint: null,
         };
         if (generation === this.generation) this.status = status;
         return status;

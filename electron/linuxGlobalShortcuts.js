@@ -6,6 +6,7 @@ const { Message, Variant } = dbus;
 const PORTAL_NAME = "org.freedesktop.portal.Desktop";
 const PORTAL_PATH = "/org/freedesktop/portal/desktop";
 const GLOBAL_SHORTCUTS_INTERFACE = "org.freedesktop.portal.GlobalShortcuts";
+const PROPERTIES_INTERFACE = "org.freedesktop.DBus.Properties";
 const REQUEST_INTERFACE = "org.freedesktop.portal.Request";
 const SESSION_INTERFACE = "org.freedesktop.portal.Session";
 const SHORTCUT_ID = "push_to_talk";
@@ -144,10 +145,55 @@ function variantValue(value) {
   return value instanceof Variant ? value.value : value;
 }
 
+function desktopEnvironment(env = process.env) {
+  const value = [env.XDG_CURRENT_DESKTOP, env.XDG_SESSION_DESKTOP, env.DESKTOP_SESSION]
+    .filter(Boolean)
+    .join(":")
+    .toLowerCase();
+  if (value.includes("cosmic")) return "cosmic";
+  if (value.includes("kde") || value.includes("plasma")) return "kde";
+  if (value.includes("gnome")) return "gnome";
+  return "unknown";
+}
+
+function portalSettingsHint(desktop, portalVersion) {
+  if (portalVersion >= 2) {
+    return "Click the assigned shortcut above to change it in your desktop's trusted editor.";
+  }
+  if (desktop === "gnome") {
+    return "To change it, open Settings → Apps → Armada → Global Shortcuts.";
+  }
+  if (desktop === "kde") {
+    return "To change it, open System Settings → Keyboard → Shortcuts → Armada.";
+  }
+  return "Your desktop can use this shortcut, but its portal cannot open a shortcut editor. Change it in your desktop's keyboard settings.";
+}
+
+async function readPortalVersion(portalObject) {
+  try {
+    const properties = portalObject.getInterface(PROPERTIES_INTERFACE);
+    const version = Number(variantValue(
+      await properties.Get(GLOBAL_SHORTCUTS_INTERFACE, "version"),
+    ));
+    return Number.isInteger(version) && version > 0 ? version : 1;
+  } catch {
+    // Global Shortcuts v1 predates ConfigureShortcuts. Treat an old portal
+    // that omits or cannot read the property conservatively as v1.
+    return 1;
+  }
+}
+
 /** GNOME currently returns GTK accelerator text instead of a display label. */
 function formatShortcutDescription(value) {
   const description = String(value || "");
-  if (!description.includes("<")) return description;
+  if (!description.includes("<")) {
+    if (!/\bPress\s+/i.test(description)) return description;
+    return description
+      .replace(/\bPress\s+/gi, "")
+      .split(/\s*\+\s*/)
+      .map((part) => part.length === 1 ? part.toUpperCase() : part)
+      .join(" + ");
+  }
   const modifiers = [];
   const key = description.replace(/<([^>]+)>/g, (_match, modifier) => {
     modifiers.push({
@@ -174,10 +220,12 @@ function shortcutDescription(shortcuts, fallback) {
 }
 
 class LinuxGlobalShortcutsPortal {
-  constructor({ sessionBus = dbus.sessionBus } = {}) {
+  constructor({ sessionBus = dbus.sessionBus, env = process.env } = {}) {
     this.sessionBus = sessionBus;
+    this.desktop = desktopEnvironment(env);
     this.bus = null;
     this.globalShortcuts = null;
+    this.portalVersion = 0;
     this.sessionHandle = null;
     this.onPressed = null;
     this.onStatusChanged = null;
@@ -198,6 +246,7 @@ class LinuxGlobalShortcutsPortal {
       const portalObject = await bus.getProxyObject(PORTAL_NAME, PORTAL_PATH);
       const globalShortcuts = portalObject.getInterface(GLOBAL_SHORTCUTS_INTERFACE);
       this.globalShortcuts = globalShortcuts;
+      this.portalVersion = await readPortalVersion(portalObject);
 
       this.onActivated = (sessionHandle, shortcutId) => {
         if (sessionHandle === this.sessionHandle && shortcutId === SHORTCUT_ID) this.onPressed?.(true);
@@ -213,6 +262,8 @@ class LinuxGlobalShortcutsPortal {
           backend: "portal",
           bindingLabel: shortcutDescription(shortcuts, binding.label),
           reason: null,
+          settingsAvailable: this.portalVersion >= 2,
+          settingsHint: portalSettingsHint(this.desktop, this.portalVersion),
         });
       };
       globalShortcuts.on("Activated", this.onActivated);
@@ -246,6 +297,8 @@ class LinuxGlobalShortcutsPortal {
         backend: "portal",
         bindingLabel: shortcutDescription(shortcuts, binding.label),
         reason: null,
+        settingsAvailable: this.portalVersion >= 2,
+        settingsHint: portalSettingsHint(this.desktop, this.portalVersion),
       };
     } catch (error) {
       await this.stop();
@@ -255,6 +308,7 @@ class LinuxGlobalShortcutsPortal {
 
   async openSettings() {
     if (!this.globalShortcuts || !this.sessionHandle) return false;
+    if (this.portalVersion < 2) return false;
     if (typeof this.globalShortcuts.ConfigureShortcuts !== "function") return false;
     this.release();
     await this.globalShortcuts.ConfigureShortcuts(this.sessionHandle, "", {});
@@ -268,6 +322,7 @@ class LinuxGlobalShortcutsPortal {
     const sessionHandle = this.sessionHandle;
     this.bus = null;
     this.globalShortcuts = null;
+    this.portalVersion = 0;
     this.sessionHandle = null;
     this.onPressed = null;
     this.onStatusChanged = null;
@@ -302,10 +357,14 @@ module.exports = {
   LinuxGlobalShortcutsPortal,
   PORTAL_NAME,
   PORTAL_PATH,
+  PROPERTIES_INTERFACE,
   SHORTCUT_ID,
   bindingToXdgTrigger,
+  desktopEnvironment,
   formatShortcutDescription,
+  portalSettingsHint,
   portalRequest,
+  readPortalVersion,
   shortcutDescription,
   xdgKeyName,
 };

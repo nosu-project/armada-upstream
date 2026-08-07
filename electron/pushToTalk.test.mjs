@@ -68,6 +68,25 @@ describe("push-to-talk controller", () => {
     expect(needsLinuxPortal({ XDG_SESSION_TYPE: "x11", DISPLAY: ":0" })).toBe(false);
   });
 
+  it("reports COSMIC's missing Global Shortcuts portal explicitly", async () => {
+    const backend = {
+      start: vi.fn(async () => { throw new Error("UnknownInterface"); }),
+      stop: vi.fn(async () => {}),
+    };
+    const controller = new PushToTalkController({
+      platform: "linux",
+      env: { XDG_SESSION_TYPE: "wayland", XDG_CURRENT_DESKTOP: "COSMIC" },
+      portalFactory: () => backend,
+    });
+
+    await expect(controller.configure(capsLock)).resolves.toMatchObject({
+      supported: false,
+      backend: "portal",
+      settingsAvailable: false,
+      reason: "This COSMIC release does not provide the Global Shortcuts portal required for push to talk.",
+    });
+  });
+
   it("only forwards key state while a call marks push to talk active", async () => {
     const sendState = vi.fn();
     let emit;

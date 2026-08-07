@@ -359,11 +359,12 @@ export function VoiceDeviceSettings() {
   };
 
   const choosePushToTalkBinding = async () => {
-    if (pushToTalkStatus?.backend !== "portal") {
+    if (pushToTalkStatus?.backend !== "portal" || !pushToTalkStatus.supported) {
       pushToTalkModifierRef.current = null;
       setRecordingPushToTalk(true);
       return;
     }
+    if (pushToTalkStatus.settingsAvailable === false) return;
     setPushToTalkSettingsError(null);
     setOpeningPushToTalkSettings(true);
     const opened = await openDesktopPushToTalkSystemSettings();
@@ -537,6 +538,11 @@ export function VoiceDeviceSettings() {
           <button
             type="button"
             onClick={() => void choosePushToTalkBinding()}
+            disabled={
+              pushToTalkStatus?.backend === "portal" &&
+              pushToTalkStatus.supported &&
+              pushToTalkStatus.settingsAvailable === false
+            }
             onKeyDown={recordPushToTalk}
             onKeyUp={finishPushToTalkModifier}
             onBlur={() => {
@@ -547,7 +553,7 @@ export function VoiceDeviceSettings() {
               "flex min-h-10 touch:min-h-11 w-full items-center justify-center rounded-md border px-3 text-sm font-medium transition-colors",
               recordingPushToTalk
                 ? "border-primary bg-primary/10 text-primary"
-                : "border-transparent bg-background/40 hover:bg-background/70",
+                : "border-transparent bg-background/40 hover:bg-background/70 disabled:cursor-default disabled:opacity-80",
             )}
           >
             {recordingPushToTalk
@@ -573,10 +579,10 @@ export function VoiceDeviceSettings() {
               is in the background. Press Escape while recording to cancel.
             </p>
           )}
-          {pushToTalkStatus?.backend === "portal" && (
+          {pushToTalkStatus?.backend === "portal" && pushToTalkStatus.supported && (
             <p className="text-xs text-muted-foreground">
-              Wayland requires the trusted system dialog to change global shortcuts. Click the
-              assigned shortcut above to change it.
+              {pushToTalkStatus.settingsHint ||
+                "Wayland requires your desktop's Global Shortcuts portal for push to talk."}
             </p>
           )}
           {pushToTalkSettingsError && (

@@ -24,6 +24,8 @@ export interface PushToTalkStatus {
   backend: "native" | "portal" | null;
   bindingLabel: string | null;
   reason: string | null;
+  settingsAvailable?: boolean;
+  settingsHint?: string | null;
 }
 
 export interface PushToTalkRuntime {
