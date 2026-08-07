@@ -32,6 +32,7 @@ import { citationToTag, type AuthorityCitation } from "@/concord-v2/lib/edition"
 import { citationSatisfied } from "@/concord-v2/lib/control";
 import { canActOnMember, isAuthorized, Permissions } from "@/concord-v2/lib/roles";
 import { chatExpiresAt, messageExpirationOf } from "@/concord-v2/lib/disappearing";
+import { consumeSend, isRateLimitedKind, SendRateLimitError } from "@/concord-v2/lib/sendRateLimit";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
@@ -491,6 +492,7 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
       targetPubkey,
       extraTags,
       ms,
+      bypassRateLimit,
     }: {
       content: string;
       /** 9 message (default), 7 reaction, 5 delete, 3302 edit, 1111 thread reply. */
@@ -519,6 +521,12 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
        * Defaults to the current time.
        */
       ms?: number;
+      /**
+       * Skip the community send budget. Set by `retry`: re-sending a message a
+       * relay hiccup already failed is recovery, not new content, and a burst
+       * of failures must not spend the budget its own repair needs.
+       */
+      bypassRateLimit?: boolean;
     }) => {
       if (!user) throw new Error("Sign in to send a message.");
       if (!community || !channel) throw new Error("No channel selected.");
@@ -532,6 +540,15 @@ export function useSendMessage2(community: CommunityV2 | undefined, channel: Cha
 
       // A threaded reply is a NIP-22 comment (kind 1111), not a kind-9 message.
       const effectiveKind = replyTo ? KIND_COMMENT : kind;
+      // Client-side spam speed bump, per community. Refused BEFORE the
+      // optimistic insert and the seal, so a blocked send leaves nothing in the
+      // timeline or the store to reconcile. The composer runs the same check
+      // (without spending) before it clears itself, so this throw is the
+      // backstop for the paths that don't — polls, thread replies, bots.
+      if (!bypassRateLimit && isRateLimitedKind(effectiveKind)) {
+        const waitMs = consumeSend(community.idHex);
+        if (waitMs > 0) throw new SendRateLimitError(waitMs);
+      }
       const effectiveMs = ms ?? Date.now();
       const tags: string[][] = [...channelBindingTags(channel.idHex, channel.current.epoch)];
       if (replyTo) tags.push(...buildV2CommentTags(replyTo));
@@ -658,6 +675,9 @@ export function useMessageActions2(community: CommunityV2 | undefined, channel: 
         content: msg.content,
         kind: msg.kind,
         extraTags: threadTags,
+        // Repairing a failed send is not new content; a relay outage that
+        // failed a burst must not also exhaust the budget for retrying it.
+        bypassRateLimit: true,
       }).catch(() => undefined);
     },
     [user, community, channel, channelIdHex, queryClient, setStatus, send],

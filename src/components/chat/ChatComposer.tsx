@@ -281,6 +281,15 @@ interface ChatComposerProps {
    */
   sendOverride?: (finalText: string, tags: string[][]) => Promise<void>;
   /**
+   * Pre-flight refusal, checked BEFORE the composer clears itself: return a
+   * reason to block this send (shown as a toast), or null to allow it. Concord
+   * uses it for its per-community send rate limit — the limit is enforced at
+   * the publish path either way, but a refusal thrown from there arrives after
+   * `resetComposeState`, i.e. after the user's text is already gone. Must not
+   * consume anything: it may be called for a send that never happens.
+   */
+  canSend?: () => string | null;
+  /**
    * Publish a composed poll through a delegated path (Concord v2 seals it as a
    * Chat Plane rumor). Its presence re-enables poll mode alongside
    * `sendOverride` — without it, `sendOverride` hides poll mode (a plain DM has
@@ -406,7 +415,7 @@ interface ChatComposerProps {
  * same input/upload/picker UX, but sending is delegated to the caller and
  * group-only features (polls, NIP-29 tagging) are disabled.
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, sendOverride, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, replyExtraTags, messageKind = KIND_GROUP_CHAT }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, sendOverride, canSend, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, replyExtraTags, messageKind = KIND_GROUP_CHAT }: ChatComposerProps) {
   const { user } = useCurrentUser();
   const composerBoundsRef = useComposerBoundsRef();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
@@ -1287,6 +1296,13 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     // signer crypto is serialized by the per-identity signer queue instead.
     if (!sendOverride && !onOptimisticInsert && isSending) return;
 
+    // Refused before anything is built or cleared, so the draft survives.
+    const refusal = canSend?.();
+    if (refusal) {
+      toast({ title: "Message not sent", description: refusal, variant: "destructive" });
+      return;
+    }
+
     // Build the tags BEFORE resetting the composer. `resetComposeState` clears
     // the per-upload encryption ref (`attachmentEncryption`), so building tags
     // after the reset would drop every encrypted attachment's
@@ -1376,7 +1392,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         variant: "destructive",
       });
     }
-  }, [user, isSending, sendOverride, createEvent, buildMessageTags, relayUrl, resetComposeState, onSent, toast, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, messageKind]);
+  }, [user, isSending, sendOverride, canSend, createEvent, buildMessageTags, relayUrl, resetComposeState, onSent, toast, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, messageKind]);
 
   /** Execute a parsed slash command's result (run action / send rewritten text). */
   const executeSlash = useCallback(async (command: SlashCommand, arg: string) => {
@@ -1567,6 +1583,14 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       .map((o) => ({ id: o.id, label: o.label.trim() }));
     if (!finalContent || filledOptions.length < 2 || !user || isSending || isUploading) return;
 
+    // A poll spends from the same budget as a message; check it here so the
+    // refusal names the wait instead of the generic publish failure below.
+    const refusal = canSend?.();
+    if (refusal) {
+      toast({ title: "Poll not published", description: refusal, variant: "destructive" });
+      return;
+    }
+
     try {
       if (onPollSubmit) {
         // Delegated path (Concord v2): the transport seals the poll as a Chat
@@ -1587,11 +1611,19 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     } catch {
       toast({ title: "Error", description: "Failed to publish poll.", variant: "destructive" });
     }
-  }, [content, pollOptions, user, isSending, isUploading, buildMessageTags, pollType, pollDuration, createEvent, relayUrl, resetComposeState, onSent, toast, onPollSubmit]);
+  }, [content, pollOptions, user, isSending, isUploading, canSend, buildMessageTags, pollType, pollDuration, createEvent, relayUrl, resetComposeState, onSent, toast, onPollSubmit]);
 
   /** Stop recording, upload, and send as a voice message (kind 9 + imeta). */
   const handleStopAndSendVoice = useCallback(async () => {
     if (!user) return;
+    // Before `stopRecording`, which consumes the take, and before the upload —
+    // a refused send should neither discard the recording nor spend a Blossom
+    // round-trip on a blob nothing will reference.
+    const refusal = canSend?.();
+    if (refusal) {
+      toast({ title: "Message not sent", description: refusal, variant: "destructive" });
+      return;
+    }
     setIsPublishingVoice(true);
     try {
       const recording = await voiceRecorder.stopRecording();
@@ -1666,7 +1698,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     } finally {
       setIsPublishingVoice(false);
     }
-  }, [user, voiceRecorder, uploadFile, buildMessageTags, createEvent, relayUrl, sendOverride, encryptAttachments, onCancelReply, onSent, toast, messageKind]);
+  }, [user, voiceRecorder, uploadFile, buildMessageTags, createEvent, relayUrl, sendOverride, canSend, encryptAttachments, onCancelReply, onSent, toast, messageKind]);
 
   const handleStartRecording = useCallback(async () => {
     try {

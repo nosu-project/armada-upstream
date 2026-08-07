@@ -12,6 +12,7 @@ import { customEmojiReactionTags } from "@/hooks/useReactions";
 import { KIND_CALENDAR_RSVP, KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_ONCHAIN_ZAP, KIND_POLL, KIND_POLL_VOTE, KIND_REACTION, KIND_ZAP } from "@/concord-v2/lib/kinds";
 import { markReactionDeleted, type OpenedChat } from "@/concord-v2/lib/chat";
 import { timerNoticeSeconds } from "@/concord-v2/lib/disappearing";
+import { sendRefusal } from "@/concord-v2/lib/sendRateLimit";
 import { channelKey } from "@/concord-v2/hooks/useChannel2";
 import type { DmTimerTimelineEntry } from "@/components/chat/channelTimeline";
 import { buildCalendarTags, type CalendarEvent, type CalendarEventInput, type CalendarTransport, parseCalendarEvents, type RsvpStatus, type RsvpTally, tallyRsvps } from "@/lib/calendar";
@@ -525,6 +526,12 @@ export function useTransport2(
   // message rows as props — which would re-render the whole mounted window on
   // every arriving message and every backfilled page.
   const sendStatusFor = useCallback((id: string) => sendStatus[id], [sendStatus]);
+  // Peek only — `useSendMessage2` is what spends from the budget. This runs
+  // ahead of the composer's reset so a refused send keeps the user's draft.
+  const canSend = useCallback(
+    () => (community ? sendRefusal(community.idHex) : null),
+    [community],
+  );
   const retryEvent = useCallback((event: ChatMsg) => retry(event.id), [retry]);
   const deleteEvent = useCallback((event: ChatMsg) => deleteMessage(event.id), [deleteMessage]);
 
@@ -554,8 +561,9 @@ export function useTransport2(
       calendarFor,
       threadRepliesFor,
       sendThreadReply,
+      canSend,
     }),
-    [timeline, isLoading, canWrite, canModerate, rotationDividerIds, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, calendarFor, threadRepliesFor, sendThreadReply],
+    [timeline, isLoading, canWrite, canModerate, rotationDividerIds, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, calendarFor, threadRepliesFor, sendThreadReply, canSend],
   );
 
   // Built from the RAW rows, not the folded ones: pinning needs the original

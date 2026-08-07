@@ -296,6 +296,14 @@ export interface ChatTransport {
   /** Open the threaded-replies panel for a message. */
   openThread?: (event: ChatMsg, focusReply?: boolean) => void;
 
+  /**
+   * Pre-flight refusal for a send, checked before the composer clears itself:
+   * a reason to block, or null to allow. Concord returns its per-community
+   * rate-limit message here; transports without a send policy omit it. Must be
+   * side-effect free — it runs for sends that never happen.
+   */
+  canSend?: () => string | null;
+
   // ── Threading (Slack-style; shared ThreadPanel reads these) ──────────────
   //
   // A reply is NOT a top-level timeline message: it's nested under its root and

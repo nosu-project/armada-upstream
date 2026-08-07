@@ -3550,6 +3550,7 @@ export function ConcordV2Page() {
                         conversationRelays={community?.relays}
                         placeholder={user ? `Message #${channel.name}` : "Sign in to send"}
                         sendOverride={handleSend}
+                        canSend={transport.canSend}
                         onPollSubmit={transport.sendPoll}
                         replyTo={replyTo}
                         replyMarker="nipc7"

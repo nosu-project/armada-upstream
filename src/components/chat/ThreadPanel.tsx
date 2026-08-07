@@ -716,6 +716,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
           placeholder="Reply in thread…"
           draftScope={`thread:${root.id}`}
           autoFocus={autoFocus}
+          canSend={transport.canSend}
           sendOverride={async (text, tags) => {
             await transport.sendThreadReply?.(root, text, tags);
             // Replying is an explicit "I'm at the present", so the panel
