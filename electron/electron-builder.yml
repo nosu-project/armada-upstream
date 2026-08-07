@@ -30,12 +30,18 @@ files:
   - main.js
   - appOrigin.js
   - linuxAudioSources.js
+  - linuxStatusNotifier.js
+  - traySupport.js
   - preload.js
   # The ArmadaDB store, built from src/lib/db by vite.config.electron.ts. main.js
   # requires it at startup; unlisted, the require fails inside the asar and the
   # app silently falls back to IndexedDB with the user's data in the wrong place.
   - db.cjs
   - package.json
+  # main.js uses these at runtime. buildResources alone supplies installer
+  # artwork; it does not put the files inside app.asar.
+  - build/icon.png
+  - build/tray.png
   - dist/**/*
   - build/**/*
   - "!**/*.map"
@@ -68,6 +74,7 @@ linux:
 win:
   files:
     - "!node_modules/@vencord/venmic{,/**/*}"
+    - "!node_modules/@jellybrick/dbus-next{,/**/*}"
   target:
     - target: nsis
       arch: [x64]
@@ -89,6 +96,7 @@ mac:
   category: public.app-category.social-networking
   files:
     - "!node_modules/@vencord/venmic{,/**/*}"
+    - "!node_modules/@jellybrick/dbus-next{,/**/*}"
   target:
     - target: dmg
       arch: [x64, arm64]

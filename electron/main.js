@@ -57,8 +57,23 @@ const {
 const { autoUpdater } = require("electron-updater");
 const { isArmadaAppUrl } = require("./appOrigin");
 const { listLinuxAudioApplications } = require("./linuxAudioSources");
+const {
+  detectLinuxTrayEnvironment,
+  queryStatusNotifierItems,
+} = require("./traySupport");
+const createLinuxStatusNotifier =
+  process.platform === "linux"
+    ? require("./linuxStatusNotifier").createLinuxStatusNotifier
+    : null;
 const path = require("node:path");
 const fs = require("node:fs");
+
+// Keep Linux's desktop-file identity stable in both the AppImage and Flatpak.
+// Electron must receive this before ready so notifications and tray hosts can
+// associate the process with buzz.armada.app.desktop.
+if (process.platform === "linux") {
+  app.setDesktopName("buzz.armada.app.desktop");
+}
 
 // Where the bundled web build lives inside the packaged app.
 const DIST = path.join(__dirname, "dist");
@@ -84,6 +99,14 @@ const TRAY_DIR = path.join(__dirname, "build");
 let mainWindow = null;
 /** @type {Tray | null} */
 let tray = null;
+let registeredTrayItem = null;
+// Closing may hide the window only while a usable tray host exists. Linux
+// desktops can accept a Tray object without displaying it (notably stock
+// GNOME), so this is established through the session bus before it is trusted.
+let closeToTraySupported = process.platform !== "linux";
+let traySupportCheck = null;
+let linuxCloseCheckInFlight = false;
+let hiddenTrayMonitor = null;
 // True once the user has actually chosen to quit (vs. closing to tray).
 let isQuitting = false;
 // True while a user-requested update check is in flight. Background checks
@@ -189,13 +212,13 @@ function registerAppProtocol() {
 
 // ── Window ───────────────────────────────────────────────────────────────────
 
-function createWindow() {
+function createWindow({ show = !startHidden || !closeToTraySupported } = {}) {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 832,
     minWidth: 480,
     minHeight: 600,
-    show: !startHidden,
+    show,
     backgroundColor: BACKGROUND,
     autoHideMenuBar: true,
     title: "Armada",
@@ -235,12 +258,37 @@ function createWindow() {
     }
   });
 
-  // Close → hide to tray instead of quitting (unless the user chose Quit).
+  // Close → hide only when the tray is known to be visible. On Linux we
+  // re-check at the moment of closing because a shell extension or tray host
+  // can disappear during the session; without one, normal close quits and
+  // tears down calls instead of leaving an invisible process behind.
   mainWindow.on("close", (event) => {
-    if (!isQuitting) {
-      event.preventDefault();
-      mainWindow.hide();
+    if (isQuitting) return;
+    event.preventDefault();
+
+    if (process.platform !== "linux") {
+      if (closeToTraySupported && tray) {
+        hideWindowToTray();
+      } else {
+        isQuitting = true;
+        app.quit();
+      }
+      return;
     }
+    if (linuxCloseCheckInFlight) return;
+    linuxCloseCheckInFlight = true;
+    void refreshTraySupport()
+      .then((supported) => {
+        if (supported) {
+          hideWindowToTray();
+        } else {
+          isQuitting = true;
+          app.quit();
+        }
+      })
+      .finally(() => {
+        linuxCloseCheckInFlight = false;
+      });
   });
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -250,8 +298,9 @@ function createWindow() {
 }
 
 function showWindow() {
+  stopHiddenTrayMonitor();
   if (!mainWindow) {
-    createWindow();
+    createWindow({ show: true });
     return;
   }
   if (mainWindow.isMinimized()) mainWindow.restore();
@@ -286,48 +335,195 @@ function trayImage() {
   return image;
 }
 
-function createTray() {
-  const image = trayImage();
-  tray = new Tray(image.isEmpty() ? nativeImage.createEmpty() : image);
+function trayMenuEntries() {
+  return [
+    { id: 1, label: "Show Armada", activate: showWindow },
+    autoUpdatesSupported()
+      ? {
+          id: 2,
+          label: "Check for Updates…",
+          activate: () => void checkForDesktopUpdates(true),
+        }
+      : {
+          id: 2,
+          label:
+            process.platform === "linux" && app.isPackaged
+              ? "Updates are managed by your package manager"
+              : "Automatic updates unavailable",
+          enabled: false,
+        },
+    { id: 3, type: "separator" },
+    {
+      id: 4,
+      label: "Quit",
+      activate: () => {
+        isQuitting = true;
+        app.quit();
+      },
+    },
+  ];
+}
+
+function buildTrayContextMenu() {
+  return Menu.buildFromTemplate(
+    trayMenuEntries().map(({ activate, ...entry }) => ({
+      ...entry,
+      id: String(entry.id),
+      click: activate,
+    })),
+  );
+}
+
+function toggleWindowFromTray() {
+  if (mainWindow && mainWindow.isVisible() && !mainWindow.isMinimized()) {
+    hideWindowToTray();
+  } else {
+    showWindow();
+  }
+}
+
+async function createTray({ statusNotifier = false } = {}) {
+  if (tray && !tray.isDestroyed()) return true;
+  let image = trayImage();
+  if (image.isEmpty()) {
+    console.warn("[tray] packaged tray icon is missing");
+    return false;
+  }
+
+  if (statusNotifier && createLinuxStatusNotifier) {
+    try {
+      tray = await createLinuxStatusNotifier({
+        image,
+        tooltip: "Armada",
+        getMenuEntries: trayMenuEntries,
+        onActivate: toggleWindowFromTray,
+        onContextMenu: (x, y) => {
+          const options = {};
+          if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+            options.window = mainWindow;
+          }
+          if (Number.isInteger(x)) options.x = x;
+          if (Number.isInteger(y)) options.y = y;
+          buildTrayContextMenu().popup(options);
+        },
+      });
+      return true;
+    } catch (error) {
+      tray = null;
+      console.warn("[tray] failed to create StatusNotifierItem", error);
+      return false;
+    }
+  }
+
+  if (!image.isEmpty()) {
+    image = image.resize({ width: 22, height: 22 });
+  }
+  try {
+    tray = new Tray(image.isEmpty() ? nativeImage.createEmpty() : image);
+  } catch (error) {
+    tray = null;
+    console.warn("[tray] failed to create system tray icon", error);
+    return false;
+  }
   if (process.platform === "win32") {
     nativeTheme.on("updated", () => {
-      if (tray && !tray.isDestroyed()) tray.setImage(trayImage());
+      if (!tray || tray.isDestroyed()) return;
+      tray.setImage(trayImage().resize({ width: 22, height: 22 }));
     });
   }
   tray.setToolTip("Armada");
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: "Show Armada", click: showWindow },
-      autoUpdatesSupported()
-        ? {
-            label: "Check for Updates…",
-            click: () => void checkForDesktopUpdates(true),
-          }
-        : {
-            label:
-              process.platform === "linux" && app.isPackaged
-                ? "Updates are managed by your package manager"
-                : "Automatic updates unavailable",
-            enabled: false,
-          },
-      { type: "separator" },
-      {
-        label: "Quit",
-        click: () => {
-          isQuitting = true;
-          app.quit();
-        },
-      },
-    ]),
-  );
+  tray.setContextMenu(buildTrayContextMenu());
   // Left-click toggles the window (common desktop-chat behavior).
-  tray.on("click", () => {
-    if (mainWindow && mainWindow.isVisible() && !mainWindow.isMinimized()) {
-      mainWindow.hide();
-    } else {
-      showWindow();
+  tray.on("click", toggleWindowFromTray);
+  return true;
+}
+
+function destroyTray() {
+  tray?.destroy();
+  tray = null;
+  registeredTrayItem = null;
+}
+
+async function refreshTraySupport() {
+  if (process.platform !== "linux") return closeToTraySupported;
+  if (traySupportCheck) return traySupportCheck;
+
+  traySupportCheck = detectLinuxTrayEnvironment()
+    .then(async ({ supported, watcherOwned, registeredItems }) => {
+      if (!supported) {
+        closeToTraySupported = false;
+        destroyTray();
+        return false;
+      }
+
+      if (tray && !tray.isDestroyed()) {
+        if (!watcherOwned || registeredItems?.includes(registeredTrayItem)) {
+          closeToTraySupported = true;
+          return true;
+        }
+        destroyTray();
+      }
+
+      const itemsBeforeCreation = new Set(registeredItems || []);
+      closeToTraySupported = await createTray({ statusNotifier: watcherOwned });
+      // Verify the watcher actually accepted Armada's item, not merely that a
+      // host exists. This catches sandbox filters and shell incompatibilities
+      // before close-to-tray can strand an invisible process. X11's legacy
+      // GtkStatusIcon fallback has no watcher entry and skips this check.
+      if (closeToTraySupported && watcherOwned) {
+        for (let attempt = 0; attempt < 5 && !registeredTrayItem; attempt += 1) {
+          const currentItems = await queryStatusNotifierItems();
+          registeredTrayItem = currentItems?.find((item) => !itemsBeforeCreation.has(item)) || null;
+          if (!registeredTrayItem && attempt < 4) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+        }
+        if (!registeredTrayItem) {
+          console.warn("[tray] StatusNotifier host did not register Armada's tray item");
+          closeToTraySupported = false;
+          destroyTray();
+        }
+      }
+      return closeToTraySupported;
+    })
+    .catch((error) => {
+      console.warn("[tray] failed to detect a Linux tray host", error);
+      closeToTraySupported = false;
+      destroyTray();
+      return false;
+    })
+    .finally(() => {
+      traySupportCheck = null;
+    });
+  return traySupportCheck;
+}
+
+function stopHiddenTrayMonitor() {
+  if (!hiddenTrayMonitor) return;
+  clearInterval(hiddenTrayMonitor);
+  hiddenTrayMonitor = null;
+}
+
+function startHiddenTrayMonitor() {
+  if (process.platform !== "linux" || hiddenTrayMonitor) return;
+  hiddenTrayMonitor = setInterval(() => {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isVisible()) {
+      stopHiddenTrayMonitor();
+      return;
     }
-  });
+    void refreshTraySupport().then((supported) => {
+      if (!supported && mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+        showWindow();
+      }
+    });
+  }, 15_000);
+  hiddenTrayMonitor.unref?.();
+}
+
+function hideWindowToTray() {
+  if (!mainWindow || mainWindow.isDestroyed() || !closeToTraySupported || !tray) return;
+  mainWindow.hide();
+  startHiddenTrayMonitor();
 }
 
 // ── Application updates ────────────────────────────────────────────────────
@@ -994,7 +1190,7 @@ if (!gotLock) {
 } else {
   app.on("second-instance", () => showWindow());
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     Menu.setApplicationMenu(null);
     registerAppProtocol();
     installPermissionHandlers();
@@ -1008,17 +1204,23 @@ if (!gotLock) {
     installDisplayMediaHandler();
     installLinuxShareAudioIpc();
     installAutoUpdater();
-    createTray();
-    createWindow();
+    if (process.platform === "linux") {
+      await refreshTraySupport();
+    } else {
+      closeToTraySupported = await createTray();
+    }
+    // --hidden is safe only when the process has a visible way back in.
+    createWindow({ show: !startHidden || !closeToTraySupported });
 
     app.on("activate", () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      if (BrowserWindow.getAllWindows().length === 0) createWindow({ show: true });
       else showWindow();
     });
   });
 
   app.on("before-quit", () => {
     isQuitting = true;
+    stopHiddenTrayMonitor();
   });
 
   // Closing the database is async, and quitting is not, so the first pass is
@@ -1030,9 +1232,8 @@ if (!gotLock) {
     closeDb().finally(() => app.quit());
   });
 
-  // With a tray, the app keeps running when all windows are closed.
+  // With a usable tray, the app keeps running when all windows are closed.
   app.on("window-all-closed", () => {
-    // Intentionally do nothing: the tray keeps the app alive. Quit is explicit
-    // (tray menu / Cmd+Q), which sets isQuitting and lets the app exit.
+    if (!closeToTraySupported) app.quit();
   });
 }

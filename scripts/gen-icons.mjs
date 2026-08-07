@@ -81,5 +81,10 @@ for (const s of ["splash-2732x2732.png", "splash-2732x2732-1.png", "splash-2732x
 
 console.log("electron/:");
 icon(join(ROOT, "electron/build/icon.png"), 1024, { frac: 0.72 });
+// A transparent, full-canvas raster for the small Linux tray slot. The normal
+// app icon has an opaque near-black background and generous launcher padding,
+// which makes it look like an empty square when reduced to ~22 px.
+inkscape(LOGO, 64, 64, join(ROOT, "electron/build/tray.png"));
+console.log("  electron/build/tray.png");
 
 console.log("Done.");
