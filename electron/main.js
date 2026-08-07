@@ -536,11 +536,55 @@ function installSecretIpc() {
 /** @type {{ call: (op: string, payload?: unknown) => Promise<unknown>, close: () => Promise<void> } | null} */
 let dbServer = null;
 
+/**
+ * Narrow the store to its owner before anything opens it.
+ *
+ * The file holds decrypted message history, and Node creates it at the umask
+ * default — 0644 on most Linux setups, i.e. readable by every other account on
+ * the machine. That is the one way this store is worse than the Chromium
+ * profile it replaces, and it costs two syscalls to close. It is NOT a defence
+ * against malware running as the user: that process can read the file whatever
+ * its mode, and could read the IndexedDB tree too.
+ *
+ * Done BEFORE the open because SQLite gives a new -wal/-shm the mode it finds
+ * on the database, so fixing the database first fixes the pair it creates; the
+ * explicit pass afterwards catches a -wal left at 0644 by an earlier build.
+ *
+ * Skipped on Windows, where fs.chmod only toggles the read-only flag and the
+ * per-user ACL on %APPDATA% is the control that actually applies. Every step is
+ * best-effort: a filesystem without POSIX modes (a FAT mount, some network
+ * homes) must not cost the user their database.
+ */
+function restrictToOwner(file) {
+  if (process.platform === "win32") return;
+  const attempt = (fn) => {
+    try {
+      fn();
+    } catch {
+      // Advisory hardening; the store still opens without it.
+    }
+  };
+  attempt(() => fs.chmodSync(path.dirname(file), 0o700));
+  // Create it here if it is absent, so the mode is right from the first byte
+  // rather than after a window in which it sat readable.
+  attempt(() => fs.closeSync(fs.openSync(file, "a", 0o600)));
+  attempt(() => fs.chmodSync(file, 0o600));
+}
+
 function installDbIpc() {
   const file = path.join(app.getPath("userData"), "armada.db");
+  restrictToOwner(file);
   try {
     const { openArmadaDbServer } = require("./db.cjs");
     dbServer = openArmadaDbServer(file);
+    for (const sidecar of [`${file}-wal`, `${file}-shm`]) {
+      if (process.platform === "win32") break;
+      try {
+        fs.chmodSync(sidecar, 0o600);
+      } catch {
+        // Absent (no WAL yet) or not chmod-able; neither is fatal.
+      }
+    }
   } catch (error) {
     // A read-only profile directory, a full disk, a database written by a
     // build whose schema this one can't open. Reported to the renderer as
