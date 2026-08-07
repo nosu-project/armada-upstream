@@ -4,6 +4,25 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.48.0] - 2026-08-07
+
+Armada now ships a macOS desktop app alongside Linux and Windows, and every release keeps a stable download link at armada.buzz/downloads. Replies and quotes were redesigned throughout: the composer shows who you're replying to with their avatar and highlighted name, and a reply in the timeline shows a one-line snippet joined to the message it answers. The original generation of Concord communities has been removed; communities created in current versions are unaffected.
+
+### Added
+- A macOS desktop app, alongside the existing Linux and Windows builds (ad-hoc signed, so the first launch needs Open Anyway)
+- Every release has a stable download link under armada.buzz/downloads
+- An Account standing page in Settings
+
+### Changed
+- Reply and quote previews redesigned: the composer bar leads with the author's avatar and an accent-highlighted name, and a reply in the timeline shows the author, avatar and a one-line snippet tied to the message by a connector
+- Custom emojis render inside reply and quote previews
+
+### Fixed
+- A reply you started is cleared when you switch channel or community, instead of carrying over
+
+### Removed
+- The first generation of Concord communities, along with their invites, notifications and the Settings "Recover communities" section. Communities created in current versions are unaffected.
+
 ## [0.47.0] - 2026-08-06
 
 Edit a direct message after you've sent it, search a community's member list by name or npub, and share your screen on a voice call with louder playback. New accounts can be seeded onto an operator's relays from a /join link and discover recommended relays automatically, and invites now carry a short description that shows on discover cards. The desktop app keeps your servers in a persistent rail, stores its data more reliably, encrypts your login, and picks up a theme-aware tray icon.
