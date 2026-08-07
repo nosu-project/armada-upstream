@@ -192,7 +192,8 @@ Android-only pieces that are simply absent on iOS, and are gated so they don't
 surface dead UI or throw: the `ArmadaNotification` background relay service
 (use `hasNativeNotificationService()`, not `isNativeRuntime()`, for anything
 touching it), NIP-55 external signers (Amber), the Bluetooth mesh, and
-the Credential Manager nsec export. **iOS therefore has no notifications at
+the Credential Manager nsec export (itself Android 14+ only — see Conventions).
+**iOS therefore has no notifications at
 all** — no background service, and no Web Push in WKWebView; that needs APNs or
 a native iOS equivalent. Deep links are also unhandled: there is no
 `CFBundleURLTypes` entry and no `applinks:armada.buzz` associated-domains
@@ -349,6 +350,24 @@ Things to know before touching it:
   published a list, so there is no existing/failed-read list to clobber. It is
   scoped structurally to the generate path (existing-key logins never reach it)
   and is the only place an unsolicited list publish is allowed.
+- **No Google Play Services in the Android build.** The APK ships zero
+  `com.google.android.gms` / `googleid` artifacts, and the merged manifest has
+  zero Google components — verify with
+  `grep -icE "gms|googleid" android/app/build/intermediates/merged_manifests/debug/*/AndroidManifest.xml`
+  after any dependency change. The trap is that one innocuous-looking AndroidX
+  line pulls the whole subtree: `androidx.credentials:credentials-play-services-auth`
+  alone brought in eight proprietary artifacts, which is why it was removed and
+  why Credential Manager is Android 14+ only here (the platform service exists
+  from API 34; below that androidx.credentials has no provider, and Google's is
+  the only one that ships). Older devices fall back to the key-file export, which
+  `backUpNsec` already does — don't "fix" them by re-adding the dependency.
+  Likewise `com.google.gms:google-services` is off the buildscript classpath:
+  notifications are an okhttp WebSocket to the user's relays, never FCM.
+  (`androidx.profileinstaller` is fine — Apache-2.0 AndroidX, pulled by
+  activity/appcompat/fragment/lifecycle. Its `ProfileInstallReceiver` names
+  `android.permission.DUMP` as the permission a *caller* must hold; the app does
+  not request DUMP and could not be granted it.) `com.google.code.gson` is also
+  fine: Apache-2.0, no network.
 - Commit messages: concise, imperative, sentence case (see `git log`).
   Describe the technical change only — what was changed. Don't embed a
   confident problem diagnosis, root-cause narrative, or prescribed "this fixes

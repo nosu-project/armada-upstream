@@ -29,19 +29,30 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * Saves the account's secret key to the Android Credential Manager (the system
- * "Save password?" sheet, backed by Google Password Manager / the user's chosen
- * provider), so onboarding can offer a real, biometric-gated, cross-device
- * backup instead of a WebView file download that silently does nothing.
+ * "Save password?" sheet, backed by whichever provider the user has chosen), so
+ * onboarding can offer a real, biometric-gated, cross-device backup instead of
+ * a WebView file download that silently does nothing.
  *
  * The web layer stores the nsec as a password credential keyed by the npub. The
  * OS sheet is provider- and lock-screen-gated; we never see the biometric. This
  * mirrors the web's `navigator.credentials.store(PasswordCredential)` path.
  *
+ * ANDROID 14 (API 34) AND UP ONLY, by choice. androidx.credentials routes to
+ * the platform CredentialManager system service, which exists only from 34.
+ * Below that it needs a provider implementation on the classpath, and the one
+ * Google ships (credentials-play-services-auth) is the root of the entire
+ * proprietary Play Services auth subtree, which Armada does not bundle. So on
+ * API 24-33 the create call fails with
+ * CreateCredentialProviderConfigurationException. That is a routine, expected
+ * outcome here, not a bug to fix by adding the dependency back: it lands in
+ * onError below as `saved=false, cancelled=false`, and the web layer falls back
+ * to writing the key to a file (see `backUpNsec` in credentialManager.ts).
+ *
  * `saveCredential` never rejects for an expected outcome: it resolves
  * `{ saved, cancelled }` so the web layer can decide whether to proceed
  * (`saved`), stay put (`cancelled` — the user dismissed the sheet), or fall
  * back to exporting the key another way (`saved=false, cancelled=false` — no
- * provider available).
+ * provider available, which is every device below API 34).
  */
 @CapacitorPlugin(name = "ArmadaCredential")
 public class ArmadaCredentialPlugin extends Plugin {

@@ -43,11 +43,13 @@ export type KeyringResult = "saved" | "cancelled" | "unavailable";
  * Store the nsec in the OS keyring / password manager, keyed by npub.
  *
  * Native: the Android Credential Manager's biometric-gated "Save password?"
- * sheet (real, recoverable, cross-device backup). Web/desktop: the browser
- * Credential Management API (Chromium's password manager). Returns which
- * happened so the caller can decide whether to proceed, wait, or fall back to
- * exporting the key file — `"unavailable"` means there's no keyring to save to
- * (e.g. Firefox/Safari, or an Android device with no credential provider).
+ * sheet (real, recoverable, cross-device backup), on Android 14+ only — Armada
+ * doesn't bundle Google's pre-34 provider (see ArmadaCredentialPlugin). Web/
+ * desktop: the browser Credential Management API (Chromium's password manager).
+ * Returns which happened so the caller can decide whether to proceed, wait, or
+ * fall back to exporting the key file — `"unavailable"` means there's no
+ * keyring to save to (Firefox/Safari, an Android below 14, or an Android 14+
+ * device with no credential provider configured).
  */
 export async function saveToKeyring(npub: string, nsec: string): Promise<KeyringResult> {
   if (Capacitor.isNativePlatform()) {

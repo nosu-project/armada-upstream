@@ -8,7 +8,10 @@ buildscript {
     }
     dependencies {
         classpath 'com.android.tools.build:gradle:8.13.0'
-        classpath 'com.google.gms:google-services:4.4.4'
+        // NOTE: no com.google.gms:google-services here. Capacitor's template
+        // carries it for FCM; Armada has no google-services.json, and the app
+        // module's matching `apply plugin` probe is gone too. (`google()` stays
+        // — it is the Maven repo AndroidX and AGP are published to, not code.)
         // Kotlin: required by the vendored bitchat Bluetooth mesh layer
         // (com.bitchat.android.*) and the BluetoothMesh Capacitor plugin.
         classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.2.0'
