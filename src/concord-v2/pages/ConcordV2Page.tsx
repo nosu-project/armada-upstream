@@ -3396,7 +3396,14 @@ export function ConcordV2Page() {
                     onDelete={(event) => { void calendar.remove(event); }}
                   />
                   <MessageTimeline
-                    key={channel?.idHex ?? channelIdHex ?? "none"}
+                    // No per-channel `key`: a channel switch updates the
+                    // timeline in place (as the NIP-29 GroupChat path already
+                    // does) instead of tearing down and rebuilding the scroller,
+                    // its ResizeObserver and scroll listeners, and flashing a
+                    // skeleton. A switch changes `transport`/`entries` to the new
+                    // channel; the old window anchor no longer resolves, so the
+                    // timeline's own `anchorLost` path resets the ramp and pins
+                    // to the newest messages (MessageTimeline.tsx:607).
                     transport={transport}
                     entries={mixedEntries}
                     newDividerId={newDividerId}
