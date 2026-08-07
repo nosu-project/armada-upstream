@@ -18,7 +18,10 @@
     "dist:mac": "electron-builder --mac"
   },
   "devDependencies": {
+    "@electron/packager": "^18.4.4",
     "electron": "^43.3.0",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "js-yaml": "^5.2.3",
+    "png2icons": "^2.0.1"
   }
 }

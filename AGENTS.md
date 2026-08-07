@@ -46,7 +46,7 @@ commit/PR.
 | `test.yml` | push (any branch) + PR | `npm run test` (tsc + eslint + vitest + build) and `npm audit --audit-level=high` |
 | `deploy-web.yml` | push to `main` | build + rsync-over-SSH deploy of the hosted client (armada.buzz); skips deploy if the SSH secret isn't provisioned |
 | `release.yml` | tag `v*` | signed Android APK + AAB, published as run artifacts, then Zapstore publish, then Google Play publish (draft release while the app is unpublished in Play Console; skips Play if the service-account secret isn't provisioned) |
-| `desktop.yml` | tag `v*` | Electron Linux (AppImage + deb) and Windows (NSIS + portable) |
+| `desktop.yml` | tag `v*` | Electron Linux (AppImage + deb), Windows (NSIS + portable) and macOS (ad-hoc signed .app zips, cross-built); published as run artifacts and rsynced to `armada.buzz/downloads/` |
 
 Notes specific to ngit-ci (vs the old GitLab pipeline):
 
@@ -70,10 +70,17 @@ Notes specific to ngit-ci (vs the old GitLab pipeline):
   service-account JSON for `buzz.armada.app`; unprovisioned skips the Play
   publish); `KLIPY_API_KEY` (switches GIF search from the keyless GIFverse
   default to KLIPY; unprovisioned keeps GIFverse).
-- **No macOS.** act runs Linux containers only; the macOS `.dmg` and the GitLab
-  Release / generic-package links stay on the GitLab mirror (`.gitlab-ci.yml`)
-  until switch-over. Keep `.gitlab-ci.yml` working as a mirror; do not delete it
-  yet.
+- **No macOS runner, which is not the same as no macOS build.** act runs Linux
+  containers only, and ngit-ci leaves a workflow unclaimed if its `runs-on`
+  label isn't one the coordinator serves — so nothing here ever executes on a
+  Mac. The desktop app is shipped for macOS anyway, cross-built:
+  `electron/scripts/package-mac.mjs` assembles the `.app` from the prebuilt
+  darwin Electron plus the asar electron-builder already staged, and
+  `rcodesign` ad-hoc signs it so an arm64 Mac will exec it at all. What genuinely
+  needs Apple is a Developer ID signature + notarization (so a first launch
+  still needs the user's Open Anyway), and `.dmg` packaging — hence `.zip`.
+  Reach for this shape before assuming a target is out of reach: the blocker is
+  usually Apple's *signing* tooling, not the bundle format.
 - **act images are minimal.** They are not full GitHub-hosted runners: use setup
   actions (`actions/setup-node`, `setup-java`, `android-actions/setup-android`)
   and install anything else explicitly (e.g. `rsync`, `wine`).
@@ -100,7 +107,7 @@ Notes specific to ngit-ci (vs the old GitLab pipeline):
   runs at once, each in its own `/data/work/<run_id>/repo` checkout — but all
   jobs of ONE workflow share that single bind-mounted checkout, so
   multi-job workflows race on the working tree (why desktop.yml is one job
-  building both platforms). Job containers are capped by
+  building all three platforms). Job containers are capped by
   `NGIT_CI_ACT_CONTAINER_OPTIONS` (currently `--cpus=8 --memory=10g`).
 
 ## How the client reaches backends (no build-time coupling)

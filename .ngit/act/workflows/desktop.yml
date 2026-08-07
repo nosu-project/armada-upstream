@@ -1,9 +1,20 @@
 name: Desktop release
 
-# Electron desktop installers on version tags (vX.Y.Z): Linux (AppImage + deb)
-# and Windows (NSIS Setup + portable, cross-built from Linux via wine). macOS
-# .dmg is NOT built here — act runs jobs in Linux containers only; the macOS
-# build stays on the GitLab mirror (.gitlab-ci.yml, manual `macos` runner).
+# Electron desktop builds on version tags (vX.Y.Z), all three platforms from
+# one Linux container: Linux (AppImage + deb), Windows (NSIS Setup + portable,
+# via wine) and macOS (ad-hoc signed .app zips per arch, via @electron/packager
+# + rcodesign — electron-builder refuses mac targets off darwin, and ngit-ci
+# has no macOS runner since act runs Linux containers only). The macOS output
+# is .zip rather than .dmg; see the steps below for why, and for what an
+# unsigned-by-Apple build costs the user on first launch.
+#
+# Every installer is published twice: as run artifacts (Blossom-backed, shown
+# on gitworkshop.dev against the tag) and by rsync into the web deploy's
+# downloads/ directory, so https://armada.buzz/downloads/Armada-vX.Y.Z.AppImage
+# is a stable public URL. The artifact channel is best-effort — the coordinator
+# skips any file over NGIT_CI_BLOSSOM_MAX_ARTIFACT_BYTES (64 MB by default,
+# which an Electron installer exceeds) with a warning rather than a failure —
+# so the rsync is the channel users actually download from.
 #
 # Armada desktop is a SOVEREIGN, standalone client: it bundles the web build
 # and serves it over a custom secure scheme (electron/main.js). The bundle is
@@ -96,29 +107,168 @@ jobs:
           npm ci --no-audit --no-fund
           npx electron-builder --linux --win --config electron-builder.yml --publish never
 
-      - name: Collect artifacts
+      # macOS is cross-built rather than skipped: assembling a .app needs no
+      # Apple tooling (it is the prebuilt darwin Electron with our app.asar
+      # dropped in), which is what @electron/packager does — electron-builder's
+      # refusal off darwin is about SIGNING, not about the bundle. The script
+      # reuses the asar electron-builder just staged, so it has to run after the
+      # step above. See electron/scripts/package-mac.mjs.
+      #
+      # Pulls the darwin Electron release (~90 MB per arch) into ~/.cache/
+      # electron, which the runner image warms for the platforms it has already
+      # built — the first run after this landed pays the download.
+      - name: Cross-build macOS app bundles
+        run: node electron/scripts/package-mac.mjs
+
+      # An arm64 Mac refuses to exec a binary with no signature at all, so the
+      # bundles are ad-hoc signed with rcodesign (Apple's codesign reimplemented
+      # in Rust, runs off darwin). This is NOT a Developer ID signature and is
+      # not notarized: the app launches, but the first open still needs the user
+      # to approve it in System Settings → Privacy & Security → Open Anyway.
+      # Real signing would need Apple credentials (rcodesign can do both with a
+      # .p12 and an App Store Connect key, if that's ever set up).
+      #
+      # .zip, not .dmg: a disk image needs HFS+ tooling no act container has.
+      # Zip is a first-class macOS distribution format — it's what Electron's
+      # own auto-updater consumes.
+      - name: Sign and zip the macOS bundles
+        env:
+          # NOT named RCODESIGN_*: rcodesign reads every RCODESIGN_-prefixed
+          # environment variable as a config key and aborts on ones it doesn't
+          # know ("UnknownField"), so RCODESIGN_VERSION here would fail the
+          # signing command below rather than configure this step.
+          CODESIGN_TOOL_VERSION: "0.29.0"
+          CODESIGN_TOOL_SHA256: dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002
+        run: |
+          set -eu
+          if ! command -v zip >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends zip >/dev/null
+          fi
+
+          name="apple-codesign-${CODESIGN_TOOL_VERSION}-x86_64-unknown-linux-musl"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$name.tar.gz" \
+            "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F${CODESIGN_TOOL_VERSION}/${name}.tar.gz"
+          echo "${CODESIGN_TOOL_SHA256}  $RUNNER_TEMP/$name.tar.gz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/$name.tar.gz" -C "$RUNNER_TEMP"
+
+          cd electron/release/mac
+          for dir in Armada-darwin-*; do
+            arch="${dir##*-}"
+            # --config-file /dev/null: sign only from these arguments, never
+            # from an ambient user/cwd rcodesign.toml.
+            "$RUNNER_TEMP/$name/rcodesign" --config-file /dev/null \
+              sign "$dir/Armada.app" >/dev/null
+            # -y keeps symlinks as symlinks: an Electron .app is full of
+            # framework Versions/Current links, and dereferencing them inflates
+            # the archive and lands a bundle whose signature no longer verifies.
+            (cd "$dir" && zip -qry "../Armada-mac-$arch.zip" Armada.app)
+          done
+          ls -lh ./*.zip
+
+      # Stage everything under ONE downloads/ directory, named exactly as it is
+      # served: the artifact upload and the rsync then publish the same bytes
+      # under the same name, so a gitworkshop artifact and a armada.buzz URL
+      # can't drift apart. The extension identifies the platform where it can
+      # (.AppImage / .deb = Linux, .exe = Windows); the Windows portable build
+      # and the mac zips carry a suffix because theirs doesn't.
+      - name: Collect installers
+        id: collect
         env:
           TAG: ${{ github.ref_name }}
         run: |
           set -eu
-          out_linux="$RUNNER_TEMP/armada-linux-$TAG"
-          out_windows="$RUNNER_TEMP/armada-windows-$TAG"
-          mkdir -p "$out_linux" "$out_windows"
-          cp electron/release/*.AppImage "$out_linux/Armada-$TAG-linux-x86_64.AppImage"
-          cp electron/release/*.deb "$out_linux/Armada-$TAG-linux-amd64.deb"
-          cp electron/release/*Setup*.exe "$out_windows/Armada-$TAG-Setup.exe"
+          root="$RUNNER_TEMP/deploy"
+          out="$root/downloads"
+          rm -rf "$root"
+          mkdir -p "$out"
+          cp electron/release/*.AppImage "$out/Armada-$TAG.AppImage"
+          cp electron/release/*.deb "$out/Armada-$TAG.deb"
+          cp electron/release/*Setup*.exe "$out/Armada-$TAG.exe"
           # The portable build is the non-Setup .exe.
-          cp "$(ls electron/release/*.exe | grep -iv setup | head -n1)" "$out_windows/Armada-$TAG-windows-portable.exe"
-          ls -lh "$out_linux" "$out_windows"
+          cp "$(ls electron/release/*.exe | grep -iv setup | head -n1)" "$out/Armada-$TAG-portable.exe"
+          # .zip names its platform, since the extension doesn't.
+          cp electron/release/mac/Armada-mac-x64.zip "$out/Armada-$TAG-mac-x64.zip"
+          cp electron/release/mac/Armada-mac-arm64.zip "$out/Armada-$TAG-mac-arm64.zip"
+          ls -lh "$out"
+          echo "root=$root" >> "$GITHUB_OUTPUT"
+          echo "dir=$out" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
           name: armada-desktop-linux-${{ github.ref_name }}
-          path: ${{ runner.temp }}/armada-linux-${{ github.ref_name }}/*
+          path: |
+            ${{ steps.collect.outputs.dir }}/*.AppImage
+            ${{ steps.collect.outputs.dir }}/*.deb
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
         with:
           name: armada-desktop-windows-${{ github.ref_name }}
-          path: ${{ runner.temp }}/armada-windows-${{ github.ref_name }}/*
+          path: ${{ steps.collect.outputs.dir }}/*.exe
           if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: armada-desktop-mac-${{ github.ref_name }}
+          path: ${{ steps.collect.outputs.dir }}/*.zip
+          if-no-files-found: error
+
+      # Publish to https://armada.buzz/downloads/ over the SAME rrsync-jailed
+      # deploy user the web build uses (deploy-web.yml). Pushing the staged
+      # `downloads` DIRECTORY (no trailing slash) into the jail root ":/" is
+      # what creates/updates the directory there, mirroring how the web job
+      # pushes `dist/`. Note the web deploy runs without `--delete`, which is
+      # what lets downloads/ survive every subsequent site deploy — don't add
+      # one there without excluding /downloads.
+      #
+      # Secrets are the web deploy's (operator-provisioned, maintainer-gated):
+      # DEPLOY_SSH_KEY_BASE64, DEPLOY_SSH_CONFIG_BASE64, DEPLOY_TARGET. With no
+      # key provisioned the installers are still built and uploaded as run
+      # artifacts; only the publish is skipped.
+      - name: Deploy installers to downloads/
+        env:
+          DEPLOY_SSH_KEY_BASE64: ${{ secrets.DEPLOY_SSH_KEY_BASE64 }}
+          DEPLOY_SSH_CONFIG_BASE64: ${{ secrets.DEPLOY_SSH_CONFIG_BASE64 }}
+          DEPLOY_TARGET: ${{ secrets.DEPLOY_TARGET }}
+          DEPLOY_ROOT: ${{ steps.collect.outputs.root }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+
+          # workflow_dispatch off a branch names the files after the branch;
+          # publish only real version tags.
+          case "$TAG" in
+            v*) ;;
+            *) echo "ref '$TAG' is not a version tag; skipping downloads deploy."; exit 0 ;;
+          esac
+
+          # No key provisioned (or non-maintainer trigger): artifacts only.
+          if [ -z "${DEPLOY_SSH_KEY_BASE64:-}" ]; then
+            echo "DEPLOY_SSH_KEY_BASE64 not set; skipping downloads deploy (artifacts uploaded)."
+            exit 0
+          fi
+
+          # Install rsync + ssh client (act images are minimal).
+          if ! command -v rsync >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends rsync openssh-client >/dev/null
+          fi
+
+          # Materialize the SSH environment. Key/config arrive base64 (single
+          # line) to fit masking rules; ssh reads ~/.ssh/config automatically.
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s' "$DEPLOY_SSH_KEY_BASE64" | base64 -d > ~/.ssh/id_ed25519
+          if [ -n "${DEPLOY_SSH_CONFIG_BASE64:-}" ]; then
+            printf '%s' "$DEPLOY_SSH_CONFIG_BASE64" | base64 -d > ~/.ssh/config
+          fi
+          # A CLI -o StrictHostKeyChecking is NOT inherited by the ProxyJump
+          # child connection, so put host defaults in the config so every hop
+          # (including a bastion) picks them up.
+          printf 'Host *\n\tIdentityFile ~/.ssh/id_ed25519\n\tBatchMode yes\n\tStrictHostKeyChecking accept-new\n' >> ~/.ssh/config
+
+          TARGET="${DEPLOY_TARGET:-web}"
+
+          # Additive: past releases stay downloadable at their own URLs.
+          rsync -av -e ssh "$DEPLOY_ROOT/downloads" "${TARGET}:/"

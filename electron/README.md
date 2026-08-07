@@ -69,6 +69,9 @@ npm start            # run the bundled app
 npm run dist:linux   # AppImage + deb
 npm run dist:win     # NSIS installer + portable .exe (needs wine on Linux)
 npm run dist:mac     # .dmg (must run on macOS)
+
+# macOS .app bundles from any OS, after a dist:linux (see below):
+node scripts/package-mac.mjs
 ```
 
 The app icon lives at `build/icon.png` (1024×1024, committed); electron-builder
@@ -91,19 +94,42 @@ listed in `electron-builder.yml`'s `files`.
 
 ## CI
 
-`.gitlab-ci.yml`, on version tags (`vX.Y.Z`):
+`.ngit/act/workflows/desktop.yml`, on version tags (`vX.Y.Z`). One job builds
+the web bundle (with no servers baked in) and then all three platforms from a
+single Linux container, publishing each file twice: as ngit-ci run artifacts,
+and by rsync into the web deploy's `downloads/` directory, so every build has a
+stable URL like `https://armada.buzz/downloads/Armada-v1.2.3.AppImage`.
 
-- `build-desktop-web` builds the web bundle once (empty platform relays) and
-  passes `electron/dist/` to the platform jobs as an artifact.
-- `build-desktop-linux` / `build-desktop-windows` package the installers, upload
-  them to the generic package registry, and the `release` job links them on the
-  GitLab Release — alongside the Android APK/AAB.
-- `build-desktop-macos` is a manual, `allow_failure` job that needs a runner
-  tagged `macos`.
+| File | Built by |
+|------|----------|
+| `Armada-vX.Y.Z.AppImage`, `.deb` | electron-builder `--linux` |
+| `Armada-vX.Y.Z.exe` (NSIS), `-portable.exe` | electron-builder `--win`, via wine |
+| `Armada-vX.Y.Z-mac-x64.zip`, `-mac-arm64.zip` | `scripts/package-mac.mjs` + rcodesign |
 
-### macOS signing (optional)
+### macOS is cross-built
 
-Unsigned `.dmg` builds run only after a Gatekeeper override (right-click → Open).
-For a distributable build, add the standard electron-builder signing secrets as
-CI/CD variables: `CSC_LINK`, `CSC_KEY_PASSWORD`, and for notarization
-`APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`.
+There is no macOS runner (ngit-ci executes Linux containers), and
+electron-builder refuses mac targets off darwin. But that refusal is about
+*signing*, not about the bundle: a `.app` is the prebuilt darwin Electron with
+our `app.asar` in `Contents/Resources` and a rewritten `Info.plist`, which
+`@electron/packager` assembles anywhere. `scripts/package-mac.mjs` does that,
+reusing the asar electron-builder staged for Linux — so the mac bundles ship
+byte-identical app code, with no second file list to drift. That reuse holds
+only while the app has no native modules (it has no runtime `dependencies` at
+all).
+
+Two Apple-only pieces are handled honestly rather than faked:
+
+- **Signing.** An arm64 Mac won't exec a binary with *no* signature, so CI
+  ad-hoc signs with [rcodesign](https://github.com/indygreg/apple-platform-rs),
+  which runs off darwin. That makes the app launchable, not trusted: it is
+  neither Developer ID signed nor notarized, so a first open still needs
+  System Settings → Privacy & Security → Open Anyway. Real signing needs Apple
+  credentials — either electron-builder on a Mac (`CSC_LINK`,
+  `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`,
+  `APPLE_TEAM_ID`) or rcodesign with a `.p12` plus an App Store Connect key.
+- **`.zip`, not `.dmg`.** A disk image needs HFS+ tooling that isn't in the
+  container (Firefox cross-builds `.dmg` on Linux with `libdmg-hfsplus`, if
+  that's ever wanted). Zip is a first-class macOS distribution format — it's
+  what Electron's own auto-updater consumes — and an unsigned `.dmg` would buy
+  nothing but the drag-to-Applications ritual.
