@@ -32,6 +32,11 @@ modules:
     build-commands:
       - chmod +x Armada.AppImage
       - ./Armada.AppImage --appimage-extract
+      # venmic 7.x's published addon requires GLIBCXX_3.4.35, newer than the
+      # 25.08 runtime (3.4.34). Its 6.1 addon exposes the capture API Armada
+      # uses and was built against GLIBCXX_3.4.32, so replace only the native
+      # prebuild; AppImage/deb continue using the package-lock-pinned 7.x addon.
+      - cp -a venmic-compat/prebuilds/. squashfs-root/resources/app.asar.unpacked/node_modules/@vencord/venmic/prebuilds/
       - mv squashfs-root /app/armada
       - install -Dm755 armada-wrapper /app/bin/armada
       - install -Dm644 buzz.armada.app.desktop /app/share/applications/buzz.armada.app.desktop
@@ -40,6 +45,11 @@ modules:
     sources:
       - type: file
         path: ../release/Armada.AppImage
+      - type: archive
+        url: https://registry.npmjs.org/@vencord/venmic/-/venmic-6.1.0.tgz
+        sha256: 7d8694997ff2eeffe1dea6205df1af56df8f2d2656d9ba966bc884b23cb08c1f
+        strip-components: 1
+        dest: venmic-compat
       - type: file
         path: armada-wrapper
       - type: file

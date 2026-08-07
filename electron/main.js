@@ -725,7 +725,9 @@ function startLinuxShareAudio(selection) {
       only_default_speakers: true,
       // Stay muted until the renderer has attached the virtual microphone;
       // this avoids a short burst through the user's normal mic path.
-      mute: true,
+      // venmic 6.x (used only for the Flatpak-compatible native addon) starts
+      // unmuted and has no unmute() method; unknown options are harmless.
+      mute: typeof patchBay.unmute === "function",
     };
     if (selection?.mode === "system") {
       return patchBay.link({ ...common, include: [] });
@@ -751,7 +753,10 @@ function installLinuxShareAudioIpc() {
   );
   ipcMain.handle("armada:linux-share-audio-unmute", () => {
     try {
-      linuxAudioPatchBay?.unmute();
+      if (!linuxAudioPatchBay) return false;
+      // The Flatpak-compatible venmic 6.x addon is already live after link().
+      if (typeof linuxAudioPatchBay.unmute !== "function") return true;
+      linuxAudioPatchBay.unmute();
       return true;
     } catch {
       return false;
