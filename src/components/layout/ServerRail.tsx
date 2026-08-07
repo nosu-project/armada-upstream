@@ -42,6 +42,7 @@ import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDmPeerUnread, useHasUnreadDMs } from "@/hooks/useDirectMessages";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
+import { useIsTouch } from "@/hooks/useIsMobile";
 import { useMutes } from "@/hooks/useMutes";
 import { useNotifLevels, communityScopeKey, dmScopeKey } from "@/hooks/useNotifLevels";
 import { useRailDms } from "@/hooks/useRailDms";
@@ -1371,19 +1372,59 @@ function RailFolder({
  *   drop onto a folder to move it inside; drag out of a folder to remove it.
  *   Folders holding a single item dissolve automatically.
  */
-export function ServerRail({
-  onNavigate,
-  onServerSelect,
-  selectedServer,
-  className,
-}: {
+/**
+ * The side-by-side (desktop) layout — where the rail is a PERSISTENT left
+ * column owned by {@link MainLayout} — versus the touch drill-down (<900px on a
+ * touch device) where each page owns the rail inside its `SwipeReveal` underlay.
+ * Mirrors `SwipeReveal`'s `swipeEnabled = isTouch && narrow`; this is its
+ * negation, so the two agree on which layout is live at every width.
+ */
+function useSideBySideLayout(): boolean {
+  const isTouch = useIsTouch();
+  const [narrow, setNarrow] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(max-width: 899px)").matches,
+  );
+  useEffect(() => {
+    const mql = window.matchMedia("(max-width: 899px)");
+    const onChange = () => setNarrow(mql.matches);
+    mql.addEventListener("change", onChange);
+    setNarrow(mql.matches);
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
+  return !(isTouch && narrow);
+}
+
+export interface ServerRailProps {
   onNavigate?: () => void;
   /** When set, tapping a server fires this instead of navigating (drawer mode). */
   onServerSelect?: (url: string) => void;
   /** The currently-selected server in drawer mode. */
   selectedServer?: string;
   className?: string;
-}) {
+  /**
+   * `shell` = the single persistent rail MainLayout renders on the desktop
+   * side-by-side layout. `page` (default) = the rail a page renders inside its
+   * mobile drill-down. Exactly one is live per layout — the other renders
+   * nothing — so navigating between communities on desktop no longer unmounts
+   * and rebuilds the rail (its whole per-item hook fan-out) on every switch,
+   * and the tap target the user is clicking stays mounted.
+   */
+  variant?: "shell" | "page";
+}
+
+export function ServerRail({ variant = "page", ...props }: ServerRailProps) {
+  const sideBySide = useSideBySideLayout();
+  // shell lives only in the side-by-side layout; page only in the drill-down.
+  if (variant === "shell" ? !sideBySide : sideBySide) return null;
+  return <ServerRailInner {...props} />;
+}
+
+function ServerRailInner({
+  onNavigate,
+  onServerSelect,
+  selectedServer,
+  className,
+}: ServerRailProps) {
   const { config, updateConfig } = useAppContext();
   const navigate = useNavigate();
   const location = useLocation();

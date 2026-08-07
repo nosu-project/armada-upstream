@@ -4,6 +4,7 @@ import { AppsProvider } from "@/components/AppsProvider";
 import { CallProvider } from "@/components/CallProvider";
 import { DirectInvitesPrompt2 } from "@/concord-v2/components/DirectInvitesPrompt2";
 import { QuickSwitcher } from "@/components/QuickSwitcher";
+import { ServerRail } from "@/components/layout/ServerRail";
 import { useRegisterAllStreamKeys2 } from "@/concord-v2/hooks/useStreamAuth2";
 import { useShareShortcuts } from "@/hooks/useShareShortcuts";
 
@@ -28,6 +29,15 @@ export function MainLayout() {
   return (
     <CallProvider>
       <AppsProvider>
+        {/* The persistent server rail on the desktop side-by-side layout: a
+            sibling of the routed page (not a child), so navigating between
+            communities no longer unmounts and rebuilds the whole rail — its
+            per-item hook fan-out and the tap target — on every switch. On the
+            touch drill-down it renders nothing; there each page still owns its
+            own rail inside its SwipeReveal underlay. `AppsProvider` passes
+            children straight through, so this lands as the first flex child of
+            CallProvider's row — exactly where the page-owned rail sat. */}
+        <ServerRail variant="shell" />
         <Outlet />
         <DirectInvitesPrompt2 />
         <QuickSwitcher />

@@ -194,7 +194,9 @@ function renderRail(initialEntries: string[] = ["/"]) {
   return render(
     <MemoryRouter initialEntries={initialEntries}>
       <TooltipProvider>
-        <ServerRail />
+        {/* jsdom's matchMedia reports matches:false, so the layout reads as the
+            desktop side-by-side one — the shell variant is the live rail there. */}
+        <ServerRail variant="shell" />
       </TooltipProvider>
     </MemoryRouter>,
   );
