@@ -480,22 +480,38 @@ const UNREAD_OVERLAY_DATA_URL =
 // renderer (preload exposes pickScreenShareSource) and let the in-app UI choose,
 // then hand the chosen source back to Electron.
 
+// Keep the native DesktopCapturerSource objects from the list shown to the
+// renderer. On Linux/Wayland, getSources() enters the ScreenCast portal and
+// returns the ONE source the user authorized. Calling getSources() again after
+// the in-app picker would start a second portal session and lose the authorized
+// PipeWire stream, so the display-media handler must grant this exact object.
+const screenShareSources = new Map();
+
 function installDisplayMediaHandler() {
   // The renderer asks for the source list and returns the chosen id; we cache
   // it for the duration of one getDisplayMedia call.
   ipcMain.handle("armada:get-screen-sources", async () => {
-    const sources = await desktopCapturer.getSources({
-      types: ["screen", "window"],
-      thumbnailSize: { width: 320, height: 200 },
-      fetchWindowIcons: true,
-    });
-    return sources.map((s) => ({
-      id: s.id,
-      name: s.name,
-      thumbnail: s.thumbnail?.toDataURL() ?? "",
-      appIcon: s.appIcon && !s.appIcon.isEmpty() ? s.appIcon.toDataURL() : "",
-      isScreen: s.id.startsWith("screen:"),
-    }));
+    try {
+      const sources = await desktopCapturer.getSources({
+        types: ["screen", "window"],
+        thumbnailSize: { width: 320, height: 200 },
+        fetchWindowIcons: true,
+      });
+      screenShareSources.clear();
+      for (const source of sources) screenShareSources.set(source.id, source);
+      return sources.map((source) => ({
+        id: source.id,
+        name: source.name,
+        thumbnail: source.thumbnail?.toDataURL() ?? "",
+        appIcon:
+          source.appIcon && !source.appIcon.isEmpty() ? source.appIcon.toDataURL() : "",
+        isScreen: source.id.startsWith("screen:"),
+      }));
+    } catch (error) {
+      screenShareSources.clear();
+      console.warn("[screen-share] failed to list display sources", error);
+      throw error;
+    }
   });
 
   session.defaultSession.setDisplayMediaRequestHandler(
@@ -508,13 +524,17 @@ function installDisplayMediaHandler() {
             true,
           );
           if (!chosenId) {
+            screenShareSources.clear();
             callback({}); // user cancelled
             return;
           }
-          const sources = await desktopCapturer.getSources({
-            types: ["screen", "window"],
-          });
-          const source = sources.find((s) => s.id === chosenId) || sources[0];
+          const source = screenShareSources.get(chosenId);
+          screenShareSources.clear();
+          if (!source) {
+            console.warn("[screen-share] selected display source is no longer available");
+            callback({});
+            return;
+          }
           // Electron's loopback capture is Windows-only. Linux audio is added
           // by the PipeWire virtual microphone below after this video stream
           // reaches the renderer.
@@ -524,7 +544,9 @@ function installDisplayMediaHandler() {
               ? { audio: "loopback" }
               : {}),
           });
-        } catch {
+        } catch (error) {
+          screenShareSources.clear();
+          console.warn("[screen-share] display capture request failed", error);
           callback({});
         }
       };

@@ -37,6 +37,7 @@ import {
 export function ScreenSharePicker() {
   const [open, setOpen] = useState(false);
   const [sources, setSources] = useState<ScreenSource[]>([]);
+  const [sourceError, setSourceError] = useState<string | null>(null);
   const [audio, setAudio] = useState<LinuxShareAudioSources | null>(null);
   const [audioChoice, setAudioChoice] = useState("system");
   const [audioError, setAudioError] = useState<string | null>(null);
@@ -49,12 +50,23 @@ export function ScreenSharePicker() {
     if (!bridge) return;
 
     bridge.onPickScreenSource(async () => {
-      const [screenSources, audioSources] = await Promise.all([
-        bridge.getScreenSources(),
-        desktopShareAudioSources(),
-      ]);
-      setSources(screenSources);
-      setAudio(audioSources.reason === null && !audioSources.supported ? null : audioSources);
+      try {
+        const [screenSources, audioSources] = await Promise.all([
+          bridge.getScreenSources(),
+          desktopShareAudioSources(),
+        ]);
+        setSources(screenSources);
+        setSourceError(
+          screenSources.length === 0 ? "No screens or windows are available to share." : null,
+        );
+        setAudio(audioSources.reason === null && !audioSources.supported ? null : audioSources);
+      } catch {
+        setSources([]);
+        setSourceError(
+          "Armada couldn't open the system screen picker. Check your desktop's screen-capture portal and try again.",
+        );
+        setAudio(null);
+      }
       setAudioChoice("system");
       setAudioError(null);
       setChoosing(false);
@@ -134,10 +146,8 @@ export function ScreenSharePicker() {
               </div>
             </button>
           ))}
-          {sources.length === 0 && (
-            <p className="col-span-full text-sm text-muted-foreground">
-              No screens or windows available to share.
-            </p>
+          {sourceError && (
+            <p className="col-span-full text-sm text-destructive">{sourceError}</p>
           )}
         </div>
         {audio && (
