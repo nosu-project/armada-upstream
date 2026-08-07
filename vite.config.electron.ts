@@ -28,6 +28,10 @@ export default defineConfig({
     // The web build's output is copied into electron/dist, and the shell's own
     // main.js/preload.js live here too.
     emptyOutDir: false,
+    // This build emits ONE file into a source directory. public/ belongs to the
+    // web build and already ships inside electron/dist; copied here as well it
+    // would only spill untracked duplicates beside main.js that nothing loads.
+    copyPublicDir: false,
     // Readable on purpose: this file ships inside the asar, and a stack trace
     // out of the main process is the only diagnostic a packaged app gives.
     minify: false,
