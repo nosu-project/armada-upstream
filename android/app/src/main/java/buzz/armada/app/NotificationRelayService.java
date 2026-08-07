@@ -200,6 +200,18 @@ public class NotificationRelayService extends Service {
     // are scoped to `authors:[...dmFollows]` so notifications only fire for DMs
     // from friends — matching the client's permanent friends-only DM view.
     private final Set<String> dmFollows = new LinkedHashSet<>();
+    // The "known" DM peers (hex): follows ∪ accepted ∪ pinned, the WebView's
+    // `useKnownDmPeers` set. A NIP-17 wrap's author is ephemeral, so its inbox
+    // subscription can't be author-scoped like kind 4 — the friend-vs-stranger
+    // test happens here, after the wrap is opened. A peer NOT in this set is a
+    // request, notified per `dmRequests`.
+    private final Set<String> dmKnownPeers = new LinkedHashSet<>();
+    // How to notify for a DM from a peer NOT in dmKnownPeers: "off" (silent),
+    // "generic" (a content-blind request ping) or "full" (name/avatar/preview).
+    // A stranger controls the message text, their display name and their avatar,
+    // so the default keeps all three off the lock screen. Empty/unknown value ⇒
+    // "generic". Only consulted when the `directMessages` pref is on.
+    private String dmRequests = "generic";
     // Relays carrying the user's OWN replaceable documents (see SelfState) —
     // the client's general pool: app relays + the user's NIP-65 read relays.
     // Kept separate from `relayUrls`, which is derived from the kind-10009 list
@@ -825,6 +837,9 @@ public class NotificationRelayService extends Service {
         dmRelays.addAll(parseStringArray(sp.getString("dmRelays", null)));
         dmFollows.clear();
         dmFollows.addAll(parseStringArray(sp.getString("dmFollows", null)));
+        dmKnownPeers.clear();
+        dmKnownPeers.addAll(parseStringArray(sp.getString("dmKnownPeers", null)));
+        dmRequests = sp.getString("dmRequests", "generic");
         selfRelays.clear();
         selfRelays.addAll(parseStringArray(sp.getString("selfRelays", null)));
         try {
@@ -2312,6 +2327,23 @@ public class NotificationRelayService extends Service {
                         // silent, matching the WebView's DM rumor kinds.
                         final int rumorKind = rumor.optInt("kind", -1);
                         if (rumorKind != 14 && rumorKind != 15) return;
+                        // Unknown sender — not followed, accepted, or pinned. A
+                        // NIP-17 wrap can come from anyone, and a stranger picks
+                        // the message text, the display name AND the avatar that a
+                        // full DM notification would put on the lock screen.
+                        // `dmRequests` decides how much of that reaches it; the
+                        // rumor is already stored, so a request is still there
+                        // in-app (the DM requests tier) on open regardless.
+                        if (!dmKnownPeers.contains(peer)) {
+                            if ("off".equals(dmRequests)) return;
+                            if (!"full".equals(dmRequests)) { // "generic" / unset
+                                long reqTs = rumor.optLong("created_at", 0);
+                                notifyDmRequest(reqTs > 0 ? reqTs * 1000L
+                                        : System.currentTimeMillis());
+                                return;
+                            }
+                            // "full" falls through and notifies like a friend.
+                        }
                         final String preview =
                                 rumorKind == 15 ? "Sent a file" : messagePreview(rumor);
                         final long rts = rumor.optLong("created_at", 0);
@@ -2394,6 +2426,26 @@ public class NotificationRelayService extends Service {
         enqueueRoomMessage(/*community=*/null, "dm17:opaque", "Direct messages", "/dm",
                 /*senderPubkey=*/null, "Someone", /*picture=*/null,
                 "New direct message", System.currentTimeMillis(), /*mention=*/true);
+    }
+
+    /**
+     * The content-blind ping for a DM from an unknown sender when `dmRequests`
+     * is "generic". Deliberately carries NOTHING the sender controls — no
+     * display name, no avatar, no message preview — so a stranger can't push
+     * slurs (in the text OR their profile) onto the lock screen. All pending
+     * requests collapse into one "Message requests" conversation; the WebView's
+     * DM requests tier shows who they actually are on open.
+     */
+    private void notifyDmRequest(long timestampMs) {
+        // Viewing any DM thread suppresses, as for the opaque ping: the request
+        // tier is a DM surface, and the peer isn't tied to a single thread here.
+        for (String roomKey : activeRoomKeys) {
+            if (roomKey.startsWith("dm:")) return;
+        }
+        if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY dm17 (request)");
+        enqueueRoomMessage(/*community=*/null, "dm:requests", "Message requests", "/dm",
+                /*senderPubkey=*/null, "Message requests", /*picture=*/null,
+                "You have a new message request", timestampMs, /*mention=*/true);
     }
 
     /**

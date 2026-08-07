@@ -14,7 +14,7 @@ import {
   type NotificationSoundId,
   type NotificationSoundSettings as NotificationSoundSettingsValue,
 } from "@/lib/notificationSounds";
-import { type PushPrefs } from "@/lib/pushPrefs";
+import { type DmRequestLevel, type PushPrefs } from "@/lib/pushPrefs";
 import type { WebPushUnavailableReason } from "@/lib/webPushSupport";
 import {
   isIgnoringBatteryOptimizations,
@@ -467,6 +467,10 @@ function NotificationToggles(props: {
     props.onSetPrefs({ ...prefs, [key]: value });
   };
 
+  const setDmRequests = (value: DmRequestLevel) => {
+    props.onSetPrefs({ ...prefs, dmRequests: value });
+  };
+
   return (
     <div className="space-y-5">
       <label className="flex items-center justify-between gap-4 cursor-pointer">
@@ -514,6 +518,31 @@ function NotificationToggles(props: {
             disabled={busy}
             onChange={setPref("directMessages")}
           />
+          {prefs.directMessages && (
+            <label className="flex items-center justify-between gap-4 pl-4">
+              <span className="min-w-0">
+                <span className="block text-sm font-medium">Message requests</span>
+                <span className="block text-xs font-normal text-muted-foreground">
+                  DMs from people you don't follow. A stranger controls the text,
+                  name and picture a notification shows.
+                </span>
+              </span>
+              <Select
+                value={prefs.dmRequests}
+                onValueChange={(v) => setDmRequests(v as DmRequestLevel)}
+                disabled={busy}
+              >
+                <SelectTrigger className="w-36 shrink-0">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="full">Show fully</SelectItem>
+                  <SelectItem value="generic">Hide content</SelectItem>
+                  <SelectItem value="off">Don't notify</SelectItem>
+                </SelectContent>
+              </Select>
+            </label>
+          )}
           <PrefRow
             label="All channel messages"
             description="Every message in your channels, not just mentions. Noisy in busy servers."

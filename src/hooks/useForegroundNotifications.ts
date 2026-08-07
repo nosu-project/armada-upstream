@@ -5,7 +5,9 @@ import { useNavigate } from "react-router-dom";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
+import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
 import { useNotifLevels, type NotifLevel } from "@/hooks/useNotifLevels";
+import { loadPushPrefs } from "@/lib/pushPrefs";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { parseAuthorEvent, seedAuthorCache, type AuthorResult } from "@/hooks/useAuthor";
@@ -78,6 +80,7 @@ export function useForegroundNotifications(): void {
 
   const { readState } = useReadState();
   const { channelLevel, concordChannelLevel, dmLevel } = useNotifLevels();
+  const { isKnown } = useKnownDmPeers();
   const { data: groupList } = useUserGroupList();
 
   // groupId → host relay URL (NIP-29 events don't carry their relay). The
@@ -104,6 +107,7 @@ export function useForegroundNotifications(): void {
     channelLevel,
     concordChannelLevel,
     dmLevel,
+    isKnown,
     relayByGroup,
     navigate,
     queryClient,
@@ -114,6 +118,7 @@ export function useForegroundNotifications(): void {
     channelLevel,
     concordChannelLevel,
     dmLevel,
+    isKnown,
     relayByGroup,
     navigate,
     queryClient,
@@ -187,6 +192,9 @@ export function useForegroundNotifications(): void {
         let readKey = cand.readKey;
         let path = cand.path;
         let level: NotifLevel;
+        // Set when this is a DM from an unknown sender and the request policy is
+        // "generic": still cue, but present nothing the sender controls.
+        let dmGeneric = false;
 
         if (cand.plane === "nip29") {
           const relay = cand.groupId ? c.relayByGroup.get(cand.groupId) : undefined;
@@ -202,6 +210,15 @@ export function useForegroundNotifications(): void {
           level = c.channelLevel(relay, cand.groupId);
         } else if (cand.plane === "dm") {
           level = cand.peer ? c.dmLevel(cand.peer) : "all";
+          // Unknown sender (not followed / accepted / pinned): a stranger picks
+          // the message text, their display name and their avatar. Apply the
+          // message-request policy before any of it is surfaced — "off" stays
+          // silent, "generic" cues without content, "full" notifies as normal.
+          if (cand.peer && !c.isKnown(cand.peer, false)) {
+            const policy = loadPushPrefs().dmRequests;
+            if (policy === "off") continue;
+            if (policy !== "full") dmGeneric = true;
+          }
         } else {
           if (!path) continue; // couldn't resolve the community route
           // Recover the community id from the route, to resolve the
@@ -260,8 +277,14 @@ export function useForegroundNotifications(): void {
           let body = cand.body;
           const name = await displayNameFor(cand.author);
           if (cand.plane === "dm") {
-            title = `${name} sent you a message`;
-            body = body ?? "New direct message";
+            if (dmGeneric) {
+              // Content-blind: nothing the sender controls (name/avatar/text).
+              title = "Message request";
+              body = "You have a new message request";
+            } else {
+              title = `${name} sent you a message`;
+              body = body ?? "New direct message";
+            }
           } else if (cand.reaction) {
             // A reaction to your own message (V2). Mirrors the NIP-29 native
             // string: "Reacted 👍 to your message".

@@ -12,6 +12,24 @@
 
 import type { WebPushUnavailableReason } from "@/lib/webPushSupport";
 
+/**
+ * How to notify for a DM from someone the user doesn't know — not followed,
+ * not accepted (never replied to / composed to), not pinned. A stranger
+ * controls every field a full DM notification surfaces: the message text, their
+ * display name AND their avatar. So the default is a content-blind "message
+ * request" ping that reveals none of it, rather than letting a random push
+ * whatever they wrote (and named themselves) straight onto the lock screen.
+ *
+ *   off     — no notification at all for unknown senders
+ *   generic — a fixed "message request" ping: no sender name, avatar, or preview
+ *   full    — notify exactly like a known sender (name + avatar + preview)
+ *
+ * Only consulted when `directMessages` is on; known senders always notify in
+ * full. The message is stored either way and appears in the DM requests tier on
+ * open — this governs only whether/how it interrupts.
+ */
+export type DmRequestLevel = "off" | "generic" | "full";
+
 /** Discord-style per-type notification preferences. */
 export interface PushPrefs {
   /** Messages that mention you (p-tag). Default on. */
@@ -24,6 +42,8 @@ export interface PushPrefs {
   directMessages: boolean;
   /** Every message in your groups (not just mentions). Default on. */
   allGroupMessages: boolean;
+  /** How to notify for DMs from unknown senders. Default `generic`. */
+  dmRequests: DmRequestLevel;
 }
 
 export const DEFAULT_PUSH_PREFS: PushPrefs = {
@@ -32,7 +52,19 @@ export const DEFAULT_PUSH_PREFS: PushPrefs = {
   replies: true,
   directMessages: true,
   allGroupMessages: true,
+  dmRequests: "generic",
 };
+
+/** Read the account-global per-type prefs from localStorage, defaults merged. */
+export function loadPushPrefs(): PushPrefs {
+  try {
+    const raw = localStorage.getItem("armada:push-prefs");
+    if (raw) return { ...DEFAULT_PUSH_PREFS, ...JSON.parse(raw) };
+  } catch {
+    // ignore — fall through to defaults
+  }
+  return { ...DEFAULT_PUSH_PREFS };
+}
 
 /** What a push-notifications hook hands the settings UI. */
 export interface UsePushNotificationsReturn {

@@ -177,6 +177,22 @@ export interface ArmadaNotificationPlugin {
      */
     dmFollows?: string[];
     /**
+     * The "known" DM peers (hex): follows ∪ accepted ∪ pinned — the WebView's
+     * `useKnownDmPeers` set. A NIP-17 wrap can come from anyone, so this is what
+     * lets the service tell a friend's DM from a stranger's AFTER decrypting it
+     * (the kind-4 sub is already follows-scoped at the relay; kind-1059 can't
+     * be). A peer NOT in this set is a request, gated by `dmRequests`. Older
+     * native binaries ignore this field and notify every DM in full.
+     */
+    dmKnownPeers?: string[];
+    /**
+     * How to notify for a DM from an unknown sender (not in `dmKnownPeers`):
+     * `"off"` (silent), `"generic"` (a content-blind request ping), or `"full"`
+     * (name + avatar + preview, as for a known sender). Absent/unknown ⇒ the
+     * service treats it as `"generic"`, the safe default.
+     */
+    dmRequests?: string;
+    /**
      * The relays carrying the user's OWN replaceable documents — the general
      * pool (app relays + their NIP-65 read relays). On these the service also
      * subscribes to the self-state catalogue (follow/mute lists, the kind-10009
