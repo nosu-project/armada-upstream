@@ -10,8 +10,16 @@ build_dir="$release_dir/flatpak-build"
 repo_dir="$release_dir/flatpak-repo"
 bundle="$release_dir/Armada-flatpak-$(uname -m).flatpak"
 
-if ! command -v flatpak-builder >/dev/null 2>&1; then
-  echo "flatpak-builder is required (install it from your Linux distribution)." >&2
+builder=system
+if command -v flatpak-builder >/dev/null 2>&1; then
+  builder=system
+elif command -v flatpak >/dev/null 2>&1 && flatpak info --user org.flatpak.Builder >/dev/null 2>&1; then
+  builder=flatpak-user
+elif command -v flatpak >/dev/null 2>&1 && flatpak info --system org.flatpak.Builder >/dev/null 2>&1; then
+  builder=flatpak-system
+else
+  echo "flatpak-builder is required." >&2
+  echo "Install the distro package, or: flatpak install --user flathub org.flatpak.Builder" >&2
   exit 1
 fi
 
@@ -38,8 +46,40 @@ set -- --force-clean --disable-rofiles-fuse --default-branch=stable --repo="$rep
 if [ -n "${FLATPAK_GPG_KEY:-}" ]; then
   set -- "$@" --gpg-sign="$FLATPAK_GPG_KEY"
 fi
-flatpak-builder "$@" "$build_dir" "$manifest"
-flatpak build-bundle "$repo_dir" "$bundle" buzz.armada.app stable
+case "$builder" in
+  system)
+    flatpak-builder "$@" "$build_dir" "$manifest"
+    flatpak build-bundle "$repo_dir" "$bundle" buzz.armada.app stable
+    ;;
+  flatpak-user)
+    flatpak run --user --command=sh \
+      --env=ARMADA_FLATPAK_BUILD_DIR="$build_dir" \
+      --env=ARMADA_FLATPAK_MANIFEST="$manifest" \
+      --env=ARMADA_FLATPAK_REPO_DIR="$repo_dir" \
+      --env=ARMADA_FLATPAK_BUNDLE="$bundle" \
+      org.flatpak.Builder -c '
+        set -eu
+        export XDG_DATA_HOME="$HOME/.local/share"
+        flatpak-builder "$@" "$ARMADA_FLATPAK_BUILD_DIR" "$ARMADA_FLATPAK_MANIFEST" &
+        wait "$!"
+        flatpak build-bundle "$ARMADA_FLATPAK_REPO_DIR" "$ARMADA_FLATPAK_BUNDLE" buzz.armada.app stable
+      ' sh "$@"
+    ;;
+  flatpak-system)
+    flatpak run --system --command=sh \
+      --env=ARMADA_FLATPAK_BUILD_DIR="$build_dir" \
+      --env=ARMADA_FLATPAK_MANIFEST="$manifest" \
+      --env=ARMADA_FLATPAK_REPO_DIR="$repo_dir" \
+      --env=ARMADA_FLATPAK_BUNDLE="$bundle" \
+      org.flatpak.Builder -c '
+        set -eu
+        export XDG_DATA_HOME="$HOME/.local/share"
+        flatpak-builder "$@" "$ARMADA_FLATPAK_BUILD_DIR" "$ARMADA_FLATPAK_MANIFEST" &
+        wait "$!"
+        flatpak build-bundle "$ARMADA_FLATPAK_REPO_DIR" "$ARMADA_FLATPAK_BUNDLE" buzz.armada.app stable
+      ' sh "$@"
+    ;;
+esac
 
 echo "Flatpak bundle: $bundle"
 echo "Update repository: $repo_dir"

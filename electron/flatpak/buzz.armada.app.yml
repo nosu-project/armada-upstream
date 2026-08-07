@@ -47,5 +47,5 @@ modules:
       - type: file
         path: buzz.armada.app.metainfo.xml
       - type: file
-        path: ../build/icon.png
+        path: ../../public/logo-512.png
         dest-filename: armada.png
