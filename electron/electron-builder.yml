@@ -60,6 +60,9 @@ publish:
 linux:
   category: Network
   maintainer: Armada <chad@chadwick.site>
+  # Preserve Armada's clipped-corner tile instead of letting launchers wrap
+  # the plain square logo in their generic application background.
+  icon: build/linux-icon.png
   syncDesktopName: true
   target:
     - AppImage
