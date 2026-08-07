@@ -313,6 +313,22 @@ async function showDmNotification(base, data) {
 }
 
 /**
+ * Whether this install's push endpoint is Apple's. iOS revokes a site's web
+ * push after a few pushes that display nothing, so on Apple endpoints a
+ * suppressed push must still show SOMETHING. Other push services don't
+ * penalize silent handling, and a suppressed push (own sent message, focused
+ * thread) staying invisible is the better UX there.
+ */
+async function isApplePushEndpoint() {
+  try {
+    const sub = await self.registration.pushManager.getSubscription();
+    return Boolean(sub && new URL(sub.endpoint).hostname.endsWith("push.apple.com"));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The quietest notification iOS lets us get away with for a DM we don't want to
  * surface (unknown sender under `off`, or a non-message rumor): one "Message
  * requests" entry that collapses all of them, never re-alerts, and reveals
@@ -351,7 +367,22 @@ self.addEventListener("push", (event) => {
 
   event.waitUntil(
     (async () => {
-      if (await suppressPush(data)) return;
+      if (await suppressPush(data)) {
+        // A suppressed push displays nothing, which iOS counts toward
+        // revoking the subscription — keep Apple installs alive with one
+        // silent, collapsing, never-realerting entry.
+        if (await isApplePushEndpoint()) {
+          await self.registration.showNotification("Armada", {
+            ...base,
+            body: "Messages synced",
+            tag: "armada-quiet-sync",
+            renotify: false,
+            silent: true,
+            data: { url: data.url || "/" },
+          });
+        }
+        return;
+      }
 
       // DMs: decide from the wrap the server inlined and show exactly once (see
       // showDmNotification), so an unknown sender is gated BEFORE anything they

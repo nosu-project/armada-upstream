@@ -26,6 +26,7 @@ function loadWorker(options: {
   badging?: boolean;
   dmCrypto?: { unwrapDm: (...args: unknown[]) => unknown };
   dmConfig?: Record<string, unknown>;
+  pushEndpoint?: string;
 } = {}) {
   const handlers = new Map<string, (event: unknown) => unknown>();
   const showNotification = vi.fn(async () => undefined);
@@ -58,7 +59,12 @@ function loadWorker(options: {
   const self = {
     location: { origin: "https://armada.buzz" },
     navigator: options.badging ? { setAppBadge, clearAppBadge: vi.fn() } : undefined,
-    registration: { showNotification },
+    registration: {
+      showNotification,
+      ...(options.pushEndpoint
+        ? { pushManager: { getSubscription: async () => ({ endpoint: options.pushEndpoint }) } }
+        : {}),
+    },
     // The worker opens the sealed config via ArmadaDmCrypto.openConfig; stub it
     // to hand back the injected config directly (the vault crypto is unit-tested
     // separately in swSecretVault.test.ts).
@@ -121,6 +127,33 @@ describe("Web Push suppression", () => {
       expect(worker.showNotification).not.toHaveBeenCalled();
     },
   );
+
+  it("shows a silent placeholder instead of nothing on an Apple endpoint", async () => {
+    // iOS revokes web push after a few pushes that display nothing, so a
+    // suppressed push on an Apple endpoint must still show SOMETHING.
+    const worker = loadWorker({
+      ownEventId: "own-wrap",
+      pushEndpoint: "https://web.push.apple.com/QKw71NdV3vO",
+    });
+    await worker.push({ scope: "dm", event_id: "own-wrap", url: "/dm" });
+    expect(worker.showNotification).toHaveBeenCalledTimes(1);
+    const [, opts] = worker.showNotification.mock.calls[0] as unknown as [
+      string,
+      { silent: boolean; renotify: boolean; tag: string },
+    ];
+    expect(opts.silent).toBe(true);
+    expect(opts.renotify).toBe(false);
+    expect(opts.tag).toBe("armada-quiet-sync");
+  });
+
+  it("keeps full suppression on non-Apple endpoints", async () => {
+    const worker = loadWorker({
+      ownEventId: "own-wrap",
+      pushEndpoint: "https://fcm.googleapis.com/fcm/send/abc",
+    });
+    await worker.push({ scope: "dm", event_id: "own-wrap", url: "/dm" });
+    expect(worker.showNotification).not.toHaveBeenCalled();
+  });
 
   it("suppresses generic DM push while a specific DM thread is focused", async () => {
     const worker = loadWorker({
