@@ -201,8 +201,13 @@ different engine per platform:
 
 | Platform | Engine |
 |----------|--------|
-| Web / desktop / iOS | `IndexedDBArmadaDB` (Nostrify's `NIndexedDB` per tenant) |
+| Web / iOS | `IndexedDBArmadaDB` (Nostrify's `NIndexedDB` per tenant) |
 | **Android** | `NativeArmadaDB` → `ArmadaDbPlugin` → **Kotlin** (`android/…/app/db/`) |
+| **Desktop** | `NativeArmadaDB` → Electron IPC → `SqliteArmadaDB` on `node:sqlite`, in the main process (`electronMain.ts`, `nodeSqlDriver.ts`) |
+
+Both native rows are the SAME adapter with a different transport under it, so
+the write coalescing, the KV `kvOps` batching and the read-your-writes ordering
+are written once. A new platform adds a bridge, not an adapter.
 
 On Android the query engine is native and there is exactly one database file.
 The background notification service writes an event into the same tenant the
@@ -239,10 +244,26 @@ Things to know before touching it:
   minSdk 24 and has neither. `androidx.sqlite:sqlite-bundled` ships 3.50.1 per
   ABI (~1.2 MB each, ~5 MB on a universal APK) and the same build for the JVM,
   which is what lets the conformance suite run the real engine as a plain unit
-  test.
+  test. Desktop gets its engine from Electron's embedded Node (`node:sqlite`),
+  which is why the Electron major is a storage dependency, not just a Chromium
+  one: `node:sqlite` landed in Node 22.5, so Electron 33 (Node 20) could not
+  host the store at all. Electron 43 is Node 24 / SQLite 3.53. Check both when
+  bumping, and don't drop below a major that has it.
+- **The desktop store is the same TypeScript engine the tests run.**
+  `src/lib/db/electronMain.ts` is bundled to `electron/db.cjs`
+  (`vite.config.electron.ts`, `npm run build:electron-db`) and `require`d by
+  `main.js`, so there is no hand-written JS copy of the store to drift. Two
+  consequences: the bundle is a BUILD ARTIFACT (gitignored, and `desktop.yml`
+  must build it — a missing `db.cjs` is not a build failure, it is a shipped app
+  quietly storing data in the wrong place), and it must stay free of Electron
+  imports so `tsc`/eslint cover it as ordinary `src/` code. The file lives at
+  `app.getPath("userData")/armada.db`, and `preload.js` answers
+  `armada:db-available` SYNCHRONOUSLY because the renderer picks its adapter
+  before anything reads.
 - **The adapter is chosen before anything reads.** The legacy drains in
-  `migrations.ts` write through `getArmadaDB()`, so on Android they land in the
-  native store directly — there is no IndexedDB ArmadaDB to move, and adding a
+  `migrations.ts` write through `getArmadaDB()`, so on Android and desktop they
+  land in the native store directly — there is no IndexedDB ArmadaDB to move
+  (the desktop shell had no released build storing data), and adding a
   second hop would be a second chance to strand decrypted Concord and NIP-17
   history that exists nowhere else.
 - **The service is a second writer, so it obeys the same store rules.** `Dm17.kt`

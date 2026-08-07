@@ -7,7 +7,8 @@
     "dev": "vite",
     "gen:icons": "node scripts/gen-icons.mjs",
     "build": "vite build -l error && cp dist/index.html dist/404.html",
-    "test": "tsc --noEmit && eslint --cache . && vitest run --passWithNoTests --reporter=dot && vite build -l error"
+    "build:electron-db": "vite build -l error -c vite.config.electron.ts",
+    "test": "tsc --noEmit && eslint --cache . && vitest run --passWithNoTests --reporter=dot && vite build -l error && npm run build:electron-db"
   },
   "engines": {
     "node": ">=22"

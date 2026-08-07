@@ -7,8 +7,13 @@
  *    the tenant the app reads it from, so a message received while the app was
  *    dead is simply there on open, rather than being replayed out of a private
  *    database the service kept to itself.
- *  - **Everywhere else** uses IndexedDB. The SQLite adapter in
- *    `SqliteArmadaDB.ts` passes the same conformance suite and would serve a
+ *  - **Desktop (Electron)** is arranged the same way, for the same reason one
+ *    layer down: the engine is `SqliteArmadaDB` in the shell's main process,
+ *    over one file in the OS's per-app config directory. That puts a desktop
+ *    user's messages somewhere they can find, back up and move between
+ *    machines, rather than inside a Chromium profile keyed by the renderer's
+ *    origin — and it runs the engine the conformance suite actually exercises.
+ *  - **Everywhere else** uses IndexedDB. The SQLite adapter would serve a
  *    SQLite-WASM worker too, but no driver for one exists yet.
  *
  * The choice is made once, before anything reads, and never revisited: an
@@ -19,6 +24,7 @@
  * non-React code (sync loops, the wire bus, the logout purge) reaches the same
  * connections, and so React StrictMode's double-render can't open two.
  */
+import { createElectronArmadaDB, hasElectronArmadaDB } from "./ElectronArmadaDB";
 import { IndexedDBArmadaDB } from "./IndexedDBArmadaDB";
 import { hasNativeArmadaDB, NativeArmadaDB } from "./NativeArmadaDB";
 
@@ -56,9 +62,19 @@ export const ARMADA_TENANTS = {
 
 let instance: IndexedDBArmadaDB | NativeArmadaDB | undefined;
 
-/** The app-wide database, opened on first use. */
+/**
+ * The app-wide database, opened on first use.
+ *
+ * Both native branches produce a {@link NativeArmadaDB} — the same store over a
+ * different transport — so everything downstream, the purge below included,
+ * only ever has two cases to think about.
+ */
 export function getArmadaDB(): ArmadaDB {
-  instance ??= hasNativeArmadaDB() ? new NativeArmadaDB() : new IndexedDBArmadaDB(ARMADA_DB_NAME);
+  if (!instance) {
+    if (hasNativeArmadaDB()) instance = new NativeArmadaDB();
+    else if (hasElectronArmadaDB()) instance = createElectronArmadaDB();
+    else instance = new IndexedDBArmadaDB(ARMADA_DB_NAME);
+  }
   return instance;
 }
 
@@ -73,10 +89,11 @@ export function getArmadaDB(): ArmadaDB {
  * an open connection is blocked, not applied.
  */
 export async function purgeArmadaDB(): Promise<void> {
-  // The native store is one file on one connection, shared with a background
-  // service that goes on writing to it, so it is EMPTIED rather than deleted
-  // and the connection stays open. Nothing else to sweep: an Android install
-  // never opens the IndexedDB adapter, so there are no databases to delete.
+  // The native store is one file on one connection — shared, on Android, with
+  // a background service that goes on writing to it — so it is EMPTIED rather
+  // than deleted and the connection stays open. Nothing else to sweep: neither
+  // an Android nor a desktop install ever opens the IndexedDB adapter, so there
+  // are no databases to delete.
   if (instance instanceof NativeArmadaDB) {
     await instance.wipe().catch(() => undefined);
     return;

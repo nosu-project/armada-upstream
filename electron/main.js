@@ -514,6 +514,68 @@ function installSecretIpc() {
   });
 }
 
+// ── Local storage (ArmadaDB over SQLite) ────────────────────────────────────
+//
+// Desktop stores its data the way Android does, not the way the web does: one
+// SQLite file, with the query engine out here in the main process, reached by
+// the renderer over IPC. `db.cjs` is the bundled build of the app's own store
+// (src/lib/db — see vite.config.electron.ts), so this is the same engine and
+// the same schema the test suite exercises, not a second implementation.
+//
+// The alternative was Chromium's IndexedDB, which is what the web build uses.
+// In a browser tab that's the only option; in a desktop app it puts the user's
+// messages inside a profile directory keyed by the renderer's origin, where
+// they can't be found, backed up, or carried to another machine — and it ties
+// their survival to a storage area the browser engine treats as evictable.
+//
+// The file lives in the OS's per-app config directory (app.getPath("userData"),
+// i.e. ~/.config/Armada on Linux, %APPDATA%\Armada on Windows,
+// ~/Library/Application Support/Armada on macOS) alongside everything else the
+// app owns.
+
+/** @type {{ call: (op: string, payload?: unknown) => Promise<unknown>, close: () => Promise<void> } | null} */
+let dbServer = null;
+
+function installDbIpc() {
+  const file = path.join(app.getPath("userData"), "armada.db");
+  try {
+    const { openArmadaDbServer } = require("./db.cjs");
+    dbServer = openArmadaDbServer(file);
+  } catch (error) {
+    // A read-only profile directory, a full disk, a database written by a
+    // build whose schema this one can't open. Reported to the renderer as
+    // "unavailable" rather than left to fail on first read, so it can fall
+    // back to IndexedDB and still run.
+    console.error("[db] could not open", file, error);
+    dbServer = null;
+  }
+
+  // Answered synchronously at preload time: the renderer picks its storage
+  // adapter before anything reads, so the answer has to be ready before the
+  // window loads. It is — the file is opened above, during whenReady.
+  ipcMain.on("armada:db-available", (event) => {
+    event.returnValue = dbServer !== null;
+  });
+
+  ipcMain.handle("armada:db", async (_event, op, payload) => {
+    if (!dbServer) throw new Error("The ArmadaDB store is unavailable");
+    return await dbServer.call(String(op), payload ?? {});
+  });
+}
+
+// Release the connection on the way out so SQLite checkpoints the WAL and the
+// next launch opens a settled file rather than replaying one.
+async function closeDb() {
+  const server = dbServer;
+  dbServer = null;
+  if (!server) return;
+  try {
+    await server.close();
+  } catch {
+    // shutting down anyway
+  }
+}
+
 // ── IPC from the renderer (preload bridge) ──────────────────────────────────
 
 function installIpc() {
@@ -571,6 +633,10 @@ if (!gotLock) {
     installIpc();
     // After whenReady: on Linux safeStorage has no key until the app is ready.
     installSecretIpc();
+    // Before createWindow(): the preload asks whether the store opened, and it
+    // asks synchronously, because the renderer chooses its storage adapter
+    // before it reads anything.
+    installDbIpc();
     installDisplayMediaHandler();
     createTray();
     createWindow();
@@ -583,6 +649,15 @@ if (!gotLock) {
 
   app.on("before-quit", () => {
     isQuitting = true;
+  });
+
+  // Closing the database is async, and quitting is not, so the first pass is
+  // deferred until the connection is released. `closeDb` clears the handle
+  // before it awaits, so the re-entrant quit falls straight through.
+  app.on("will-quit", (event) => {
+    if (!dbServer) return;
+    event.preventDefault();
+    closeDb().finally(() => app.quit());
   });
 
   // With a tray, the app keeps running when all windows are closed.

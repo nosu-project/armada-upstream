@@ -1,23 +1,39 @@
 /**
- * The {@link ArmadaDB} adapter for Android: a transport onto the native store.
+ * The {@link ArmadaDB} adapter for the platforms that keep their data in a
+ * SQLite file outside the web layer: a transport onto that store.
  *
- * There is no query engine here. Filters go over the Capacitor bridge as JSON
- * and rumors come back as JSON; the planning, the tag tokenizing, the NIP-09
- * pass and the replaceable supersession all happen in Kotlin
- * (`buzz.armada.app.db.SqliteArmadaDb`), against the same SQLite file the
- * background notification service writes into.
+ * There is no query engine here. Filters go over a bridge as JSON and rumors
+ * come back as JSON; the planning, the tag tokenizing, the NIP-09 pass and the
+ * replaceable supersession all happen on the other side.
  *
- * That sharing is the point. The service used to keep a private database with
- * its own schema, and the only way an event it received reached the app was a
- * cursor drain that replayed it into a second store — so a message could be
- * notified, be durable, and still not be *in the app* until the WebView had
- * caught up. Now the service writes the rumor where the app reads it, and the
- * drain is left doing only the part that was ever really routing.
+ * Two bridges implement the same surface, and the difference between them ends
+ * at the transport:
  *
- * Everything crosses as JSON text rather than as structured plugin arguments:
+ *  - **Android** (default) — the Capacitor plugin, onto Kotlin
+ *    (`buzz.armada.app.db.SqliteArmadaDb`), against the same SQLite file the
+ *    background notification service writes into.
+ *  - **Desktop** — Electron IPC, onto `SqliteArmadaDB` running on
+ *    `node:sqlite` in the shell's main process (see `ElectronArmadaDB.ts` and
+ *    `electronMain.ts`).
+ *
+ * Sharing this class rather than writing a second adapter is deliberate: the
+ * batching and ordering below are the expensive part to get right, and a
+ * per-platform copy is a per-platform chance to get it wrong.
+ *
+ * On Android, sharing the FILE with the notification service is the point. The
+ * service used to keep a private database with its own schema, and the only way
+ * an event it received reached the app was a cursor drain that replayed it into
+ * a second store — so a message could be notified, be durable, and still not be
+ * *in the app* until the WebView had caught up. Now the service writes the rumor
+ * where the app reads it, and the drain is left doing only the part that was
+ * ever really routing.
+ *
+ * Everything crosses as JSON text rather than as structured arguments:
  * Capacitor's marshalling would have to guess between an integer `kind` and a
  * float, and a page of rumors is far cheaper as one string this side parses than
- * as a few thousand marshalled objects.
+ * as a few thousand marshalled objects. Electron's IPC would carry the integer
+ * faithfully, but keeps the text format anyway — the size argument holds there
+ * too, and one wire format is what lets both platforms share this adapter.
  *
  * Writes are coalesced per tenant on a microtask, mirroring the SQLite store's
  * own batching: every `event()` call made before the caller next awaits crosses
@@ -101,13 +117,28 @@ export function hasNativeArmadaDB(): boolean {
 
 export class NativeArmadaDB implements ArmadaDB {
   private readonly stores = new Map<string, NativeRumorStore>();
-  readonly kv: ArmadaKV = new NativeKV();
+  private readonly bridge: ArmadaDBPlugin;
+  readonly kv: ArmadaKV;
+
+  /**
+   * @param bridge The transport to the native store. Defaults to the Capacitor
+   * plugin (Android); the Electron desktop shell passes its own IPC bridge
+   * onto the main process, which runs the same SQLite store over `node:sqlite`
+   * (see `ElectronArmadaDB.ts`). Everything below the transport — the write
+   * coalescing, the KV op batching, the ordering guarantees — is identical on
+   * both, which is the reason this takes a parameter rather than the two
+   * platforms each growing an adapter.
+   */
+  constructor(bridge?: ArmadaDBPlugin) {
+    this.bridge = bridge ?? ArmadaDBBridge();
+    this.kv = new NativeKV(this.bridge);
+  }
 
   tenant(id: string): NRumorStore {
     let store = this.stores.get(id);
     if (!store) {
       perfMark("db.tenant open", id);
-      store = new NativeRumorStore(id);
+      store = new NativeRumorStore(id, this.bridge);
       this.stores.set(id, store);
     }
     return store;
@@ -115,13 +146,13 @@ export class NativeArmadaDB implements ArmadaDB {
 
   /** Every tenant the native store has ever been written to. */
   async tenantIds(): Promise<string[]> {
-    const { tenants } = await ArmadaDBBridge().tenants();
+    const { tenants } = await this.bridge.tenants();
     return JSON.parse(tenants) as string[];
   }
 
   /** Empty every table. Unlike the IndexedDB purge this keeps the connection. */
   async wipe(): Promise<void> {
-    await ArmadaDBBridge().wipe();
+    await this.bridge.wipe();
   }
 
   /** Nothing to close: the native store owns the connection, for the service too. */
@@ -148,7 +179,7 @@ class NativeRumorStore implements NRumorStore {
   /** Ids already committed, so the relay cache's re-writes cost nothing. */
   private readonly written = new WrittenIds();
 
-  constructor(private readonly id: string) {
+  constructor(private readonly id: string, private readonly bridge: ArmadaDBPlugin) {
     this.label = tenantClass(id);
   }
 
@@ -159,7 +190,7 @@ class NativeRumorStore implements NRumorStore {
     // other AND against the notification service. The call count matters as much
     // as the total.
     const { rumors } = await perfTime(`db.query ${this.label}`, () =>
-      ArmadaDBBridge().query({ tenant: this.id, filters: JSON.stringify(filters) }),
+      this.bridge.query({ tenant: this.id, filters: JSON.stringify(filters) }),
     );
     opts?.signal?.throwIfAborted();
     return perfTime(
@@ -194,7 +225,7 @@ class NativeRumorStore implements NRumorStore {
   ): Promise<{ count: number; approximate: boolean }> {
     opts?.signal?.throwIfAborted();
     const result = await perfTime(`db.count ${this.label}`, () =>
-      ArmadaDBBridge().count({ tenant: this.id, filters: JSON.stringify(filters) }),
+      this.bridge.count({ tenant: this.id, filters: JSON.stringify(filters) }),
     );
     return { count: result.count, approximate: result.approximate ?? false };
   }
@@ -205,7 +236,7 @@ class NativeRumorStore implements NRumorStore {
     // the filter that removed it.
     this.written.forget();
     await perfTime(`db.remove ${this.label}`, () =>
-      ArmadaDBBridge().remove({ tenant: this.id, filters: JSON.stringify(filters) }),
+      this.bridge.remove({ tenant: this.id, filters: JSON.stringify(filters) }),
     );
   }
 
@@ -229,7 +260,7 @@ class NativeRumorStore implements NRumorStore {
       await perfTime(
         `db.write ${this.label}`,
         () =>
-          ArmadaDBBridge().event({
+          this.bridge.event({
             tenant: this.id,
             rumors: JSON.stringify(writes.map((write) => write.rumor)),
           }),
@@ -286,6 +317,8 @@ class NativeKV implements ArmadaKV {
   private pendingOps: PendingKvOp[] = [];
   private flushScheduled = false;
 
+  constructor(private readonly bridge: ArmadaDBPlugin) {}
+
   private schedule(): void {
     if (this.flushScheduled) return;
     this.flushScheduled = true;
@@ -310,7 +343,7 @@ class NativeKV implements ArmadaKV {
       });
       const response = await perfTime(
         "kv.ops",
-        () => ArmadaDBBridge().kvOps({ ops: JSON.stringify(wire) }),
+        () => this.bridge.kvOps({ ops: JSON.stringify(wire) }),
         () => ops.length,
         "ops",
       );

@@ -70,4 +70,22 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
   onPickScreenSource: (handler) => {
     window.__armadaPickScreenSource = () => Promise.resolve(handler());
   },
+
+  /**
+   * The desktop ArmadaDB store: one SQLite file in the OS's per-app config
+   * directory, with the query engine in the main process (see main.js).
+   *
+   * `available` is resolved HERE, synchronously, and not by the renderer later:
+   * the web app picks its storage adapter before anything reads, so a promise
+   * would be too late and a wrong guess would mean two stores. sendSync is one
+   * round trip at preload, against a value the main process already computed
+   * during whenReady.
+   *
+   * `call` dispatches one method of the store's surface — the same surface the
+   * Android plugin exposes, so the web app drives both through one adapter.
+   */
+  armadaDb: {
+    available: ipcRenderer.sendSync("armada:db-available") === true,
+    call: (op, payload) => ipcRenderer.invoke("armada:db", op, payload),
+  },
 });

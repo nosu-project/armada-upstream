@@ -28,6 +28,10 @@ directories:
 files:
   - main.js
   - preload.js
+  # The ArmadaDB store, built from src/lib/db by vite.config.electron.ts. main.js
+  # requires it at startup; unlisted, the require fails inside the asar and the
+  # app silently falls back to IndexedDB with the user's data in the wrong place.
+  - db.cjs
   - package.json
   - dist/**/*
   - build/**/*

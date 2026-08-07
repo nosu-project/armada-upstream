@@ -46,6 +46,20 @@ export interface SecretsStatus {
     | string;
 }
 
+/**
+ * The desktop shell's ArmadaDB store: one SQLite file in the OS's per-app
+ * config directory, with the query engine in the main process.
+ *
+ * `available` is resolved by the shell at preload time — the file is opened
+ * before the window loads — so the renderer can decide which adapter to build
+ * synchronously, and can fall back to IndexedDB when the shell couldn't open
+ * it. `call` dispatches one `ArmadaDbPlugin` method; see `ElectronArmadaDB.ts`.
+ */
+interface ArmadaDesktopDb {
+  available: boolean;
+  call: (op: string, payload?: unknown) => Promise<unknown>;
+}
+
 interface ArmadaDesktopBridge {
   isDesktop: true;
   setBadge: (count: number) => void;
@@ -59,6 +73,7 @@ interface ArmadaDesktopBridge {
   getSecretsStatus?: () => Promise<SecretsStatus>;
   encryptSecret?: (plaintext: string) => Promise<string | null>;
   decryptSecret?: (base64: string) => Promise<string | null>;
+  armadaDb?: ArmadaDesktopDb;
 }
 
 declare global {

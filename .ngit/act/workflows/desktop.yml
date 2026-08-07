@@ -66,6 +66,12 @@ jobs:
           mkdir -p electron/dist
           find electron/dist -mindepth 1 -delete
           cp -rT dist electron/dist
+          # The shell's ArmadaDB store (electron/db.cjs), built from src/lib/db.
+          # main.js requires it at startup, so a missing bundle is not a build
+          # failure — it is a shipped app that silently stores the user's data
+          # in the wrong place.
+          npx vite build -c vite.config.electron.ts
+          test -f electron/db.cjs || { echo "no electron/db.cjs" >&2; exit 1; }
 
       # electron-builder needs wine for the Windows targets. wine is baked into
       # the armada-ci runner image; this fallback only runs on a stock act
