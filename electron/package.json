@@ -12,11 +12,17 @@
   "license": "AGPL-3.0-only",
   "main": "main.js",
   "scripts": {
+    "stage:web": "npm --prefix .. run build && node scripts/stage-web.mjs",
+    "prestart": "npm run stage:web",
     "start": "electron .",
+    "predist": "npm run stage:web",
     "dist": "electron-builder",
+    "predist:linux": "npm run stage:web",
     "dist:linux": "electron-builder --linux",
     "dist:flatpak": "./flatpak/build.sh",
+    "predist:win": "npm run stage:web",
     "dist:win": "electron-builder --win",
+    "predist:mac": "npm run stage:web",
     "dist:mac": "electron-builder --mac"
   },
   "devDependencies": {
