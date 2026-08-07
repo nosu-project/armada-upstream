@@ -19,6 +19,8 @@
 import { getConversationKey, decrypt as nip44Decrypt } from "nostr-tools/nip44";
 import { hexToBytes } from "@noble/hashes/utils.js";
 
+import { openSealedConfig } from "@/lib/swSecretVault";
+
 interface WrapEvent {
   pubkey: string;
   content: string;
@@ -94,6 +96,13 @@ export function unwrapDm(
 // importScripts and can't consume ES exports). Assigned as a top-level side
 // effect so rollup keeps it in the IIFE build even though nothing imports it
 // there; the named export above is what vitest drives.
-(globalThis as unknown as { ArmadaDmCrypto?: { unwrapDm: typeof unwrapDm } }).ArmadaDmCrypto = {
+(
+  globalThis as unknown as {
+    ArmadaDmCrypto?: { unwrapDm: typeof unwrapDm; openConfig: typeof openSealedConfig };
+  }
+).ArmadaDmCrypto = {
   unwrapDm,
+  // The DM gating config is AES-GCM sealed at rest under a non-extractable key
+  // (swSecretVault); the worker opens it here per push before decrypting.
+  openConfig: openSealedConfig,
 };

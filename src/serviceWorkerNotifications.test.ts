@@ -36,7 +36,9 @@ function loadWorker(options: {
       if (options.ownEventId && request.includes(`/own/${options.ownEventId}`)) return {};
       if (request.endsWith("/.armada-push-state/badge")) return badgeResponse;
       if (options.dmConfig && request.endsWith("/.armada-push-state/dm-config")) {
-        return { json: async () => options.dmConfig };
+        // The worker reads sealed bytes and decrypts via ArmadaDmCrypto.openConfig
+        // (stubbed below); the bytes themselves are opaque here.
+        return { arrayBuffer: async () => new ArrayBuffer(16) };
       }
       return undefined;
     }),
@@ -57,7 +59,12 @@ function loadWorker(options: {
     location: { origin: "https://armada.buzz" },
     navigator: options.badging ? { setAppBadge, clearAppBadge: vi.fn() } : undefined,
     registration: { showNotification },
-    ArmadaDmCrypto: options.dmCrypto,
+    // The worker opens the sealed config via ArmadaDmCrypto.openConfig; stub it
+    // to hand back the injected config directly (the vault crypto is unit-tested
+    // separately in swSecretVault.test.ts).
+    ArmadaDmCrypto: (options.dmCrypto || options.dmConfig)
+      ? { ...(options.dmCrypto ?? {}), openConfig: async () => options.dmConfig ?? null }
+      : undefined,
     clients: {
       matchAll: vi.fn(async () => clients),
       claim: vi.fn(async () => undefined),

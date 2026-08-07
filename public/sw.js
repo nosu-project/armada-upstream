@@ -231,13 +231,21 @@ async function suppressPush(data) {
   }
 }
 
-/** The page-provided DM gating config, or null if none/unavailable. */
+/**
+ * The page-provided DM gating config, or null if none/unavailable. The blob is
+ * AES-GCM sealed at rest under a non-extractable key; the crypto bundle opens it
+ * (swSecretVault.openSealedConfig), so a config we can't decrypt — or a build
+ * without the bundle — safely degrades to the generic wake-up.
+ */
 async function readDmConfig() {
   try {
+    const crypto = self.ArmadaDmCrypto;
+    if (!crypto || typeof crypto.openConfig !== "function") return null;
     const cache = await caches.open(PUSH_STATE_CACHE);
     const stored = await cache.match(DM_CONFIG_URL);
     if (!stored) return null;
-    return await stored.json();
+    const sealed = new Uint8Array(await stored.arrayBuffer());
+    return await crypto.openConfig(sealed);
   } catch {
     return null;
   }
