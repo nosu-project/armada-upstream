@@ -4,6 +4,16 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.48.1] - 2026-08-07
+
+Community relays now have their own dedicated setting, so new communities are created on relays you choose rather than an unlabeled mix of app and DM relays.
+
+### Added
+- A Community relays section in Settings to choose which relays new communities are created on
+
+### Changed
+- On Android, the nsec keyring backup during onboarding now requires Android 14 or newer; older devices fall back to the existing key file export
+
 ## [0.48.0] - 2026-08-07
 
 Armada now ships a macOS desktop app alongside Linux and Windows, and every release keeps a stable download link at armada.buzz/downloads. Replies and quotes were redesigned throughout: the composer shows who you're replying to with their avatar and highlighted name, and a reply in the timeline shows a one-line snippet joined to the message it answers. The original generation of Concord communities has been removed; communities created in current versions are unaffected.
