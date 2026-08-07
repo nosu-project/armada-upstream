@@ -121,6 +121,7 @@ describe("buildPushSubscriptions", () => {
       scope: "dm",
       relays: ["wss://one", "wss://two"],
       url: "/dm",
+      inline_event: true,
     });
   });
 

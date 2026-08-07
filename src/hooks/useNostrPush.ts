@@ -1,13 +1,19 @@
 import { useNostr } from "@nostrify/react";
+import { useNostrLogin } from "@nostrify/react/login";
+import { bytesToHex } from "@noble/hashes/utils.js";
+import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useAcceptedDms } from "@/hooks/useAcceptedDms";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useFollowList } from "@/hooks/useFollowList";
 import { useNotifLevels } from "@/hooks/useNotifLevels";
+import { usePinnedDms } from "@/hooks/usePinnedDms";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
+import { clearSwDmConfig, writeSwDmConfig } from "@/lib/swDmConfig";
 import {
   DEFAULT_PUSH_PREFS,
   type PushPrefs,
@@ -161,6 +167,9 @@ export function useNostrPush(): UsePushNotificationsReturn {
   const { config } = useAppContext();
   const { data: groupList } = useUserGroupList();
   const { data: followData } = useFollowList();
+  const { accepted } = useAcceptedDms();
+  const { pinned } = usePinnedDms();
+  const { logins } = useNostrLogin();
   const { channelLevel, concordChannelLevel } = useNotifLevels();
   const { relays: publishedDmRelays } = useDmRelayList();
   const allConcord2Subs = useConcord2Subs();
@@ -234,6 +243,29 @@ export function useNostrPush(): UsePushNotificationsReturn {
     [followData?.pubkeys],
   );
 
+  // The service worker gates DM push from the wrap the server inlines. It needs
+  // the "known" peer set (follows ∪ accepted ∪ pinned, mirroring
+  // useKnownDmPeers) and — for nsec logins only — the key to unseal the wrap.
+  // Bunker (NIP-46) / extension (NIP-07) keys stay off-device, so those logins
+  // pass no key and their DM push stays the generic wake-up.
+  const dmKnownPeers = useMemo(
+    () => [...new Set([...(followData?.pubkeys ?? []), ...accepted, ...pinned])].sort(),
+    [followData?.pubkeys, accepted, pinned],
+  );
+
+  const dmSk = useMemo(() => {
+    const login = logins[0];
+    try {
+      if (login?.type === "nsec") {
+        const decoded = nip19.decode(login.data.nsec);
+        if (decoded.type === "nsec") return bytesToHex(decoded.data);
+      }
+    } catch {
+      // Malformed login data — no key, and DM push stays generic.
+    }
+    return undefined;
+  }, [logins]);
+
   const concordV2 = useMemo(
     () =>
       allConcord2Subs.filter(
@@ -264,6 +296,23 @@ export function useNostrPush(): UsePushNotificationsReturn {
     dmFollows,
     concordV2,
   ]);
+
+  // Keep the service worker's DM gating config current — policy + known set for
+  // every enabled web-push session, plus the decrypt key for nsec logins.
+  // Cleared whenever push is off or logged out, so the key never lingers past a
+  // session that can use it.
+  useEffect(() => {
+    if (!supported || !user || !enabled) {
+      void clearSwDmConfig();
+      return;
+    }
+    void writeSwDmConfig({
+      policy: prefs.dmRequests,
+      self: user.pubkey,
+      knownPeers: dmKnownPeers,
+      ...(dmSk ? { sk: dmSk } : {}),
+    });
+  }, [supported, user, enabled, prefs.dmRequests, dmKnownPeers, dmSk]);
 
   // ── Sync ───────────────────────────────────────────────────────────────────
 

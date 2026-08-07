@@ -171,7 +171,14 @@ export function buildPushSubscriptions(input: PushSubscriptionInput): PushSubscr
       notification: {
         title: "New message",
         body: "New direct message",
-        data: { scope: "dm", relays: dmRelays, url: "/dm" },
+        // `inline_event` asks the server to embed the matched gift wrap in the
+        // push payload (see nostr-push). A NIP-17 wrap's sender is hidden until
+        // it's unsealed, so the request-vs-known decision — and any decrypted
+        // preview — has to happen in the service worker; inlining lets it do
+        // that without a relay round-trip, which is what keeps the work inside
+        // a mobile push handler's execution window. The server drops it (and the
+        // SW falls back to this static wake-up) if the wrap is too big to fit.
+        data: { scope: "dm", relays: dmRelays, url: "/dm", inline_event: true },
       },
     });
   }

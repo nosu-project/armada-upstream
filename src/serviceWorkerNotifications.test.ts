@@ -24,6 +24,8 @@ function loadWorker(options: {
   clients?: WindowClientStub[];
   ownEventId?: string;
   badging?: boolean;
+  dmCrypto?: { unwrapDm: (...args: unknown[]) => unknown };
+  dmConfig?: Record<string, unknown>;
 } = {}) {
   const handlers = new Map<string, (event: unknown) => unknown>();
   const showNotification = vi.fn(async () => undefined);
@@ -33,6 +35,9 @@ function loadWorker(options: {
     match: vi.fn(async (request: string) => {
       if (options.ownEventId && request.includes(`/own/${options.ownEventId}`)) return {};
       if (request.endsWith("/.armada-push-state/badge")) return badgeResponse;
+      if (options.dmConfig && request.endsWith("/.armada-push-state/dm-config")) {
+        return { json: async () => options.dmConfig };
+      }
       return undefined;
     }),
     put: vi.fn(async (_request: string, response: Response) => { badgeResponse = response; }),
@@ -52,6 +57,7 @@ function loadWorker(options: {
     location: { origin: "https://armada.buzz" },
     navigator: options.badging ? { setAppBadge, clearAppBadge: vi.fn() } : undefined,
     registration: { showNotification },
+    ArmadaDmCrypto: options.dmCrypto,
     clients: {
       matchAll: vi.fn(async () => clients),
       claim: vi.fn(async () => undefined),
@@ -206,5 +212,109 @@ describe("Web Push suppression", () => {
     const worker = loadWorker({ badging: true });
     await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dm" });
     expect(worker.setAppBadge).toHaveBeenCalledWith(1);
+  });
+});
+
+describe("Web Push DM gating (inlined wrap)", () => {
+  const wrapEvent = { pubkey: "wrapper", content: "ciphertext", tags: [] };
+  const opened = (sender: string, over: Record<string, unknown> = {}) => ({
+    unwrapDm: () => ({ sender, kind: 14, content: "meet at 8 by the pier", ...over }),
+  });
+
+  const dmPush = (config: Record<string, unknown>, crypto: { unwrapDm: (...a: unknown[]) => unknown }) =>
+    loadWorker({ dmConfig: config, dmCrypto: crypto });
+
+  it("shows decrypted content for a known sender", async () => {
+    const worker = dmPush(
+      { policy: "generic", self: "me", knownPeers: ["peer"], sk: "aa" },
+      opened("peer"),
+    );
+    await worker.push({ scope: "dm", event_id: "w", url: "/dm", event: wrapEvent });
+    expect(worker.showNotification).toHaveBeenCalledTimes(1);
+    const [title, opts] = worker.showNotification.mock.calls[0] as unknown as [string, { body: string; data: { url: string } }];
+    expect(title).toBe("New message");
+    expect(opts.body).toContain("meet at 8");
+    expect(opts.data.url).toBe("/dm/peer");
+  });
+
+  it("shows a content-blind request for an unknown sender under `generic`", async () => {
+    const worker = dmPush(
+      { policy: "generic", self: "me", knownPeers: [], sk: "aa" },
+      opened("stranger", { content: "vile slur from a random" }),
+    );
+    await worker.push({ scope: "dm", event_id: "w", url: "/dm", event: wrapEvent });
+    expect(worker.showNotification).toHaveBeenCalledTimes(1);
+    const [title, opts] = worker.showNotification.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(title).toBe("Message request");
+    // Nothing the sender controls (their text) reaches the notification.
+    expect(JSON.stringify([title, opts])).not.toContain("slur");
+  });
+
+  it("still shows (quietly) for an unknown sender under `off`, to satisfy userVisibleOnly", async () => {
+    const worker = dmPush(
+      { policy: "off", self: "me", knownPeers: [], sk: "aa" },
+      opened("stranger"),
+    );
+    await worker.push({ scope: "dm", event_id: "w", url: "/dm", event: wrapEvent });
+    // Never zero notifications (iOS revokes the subscription otherwise) — but
+    // silent, non-re-alerting, and content-blind.
+    expect(worker.showNotification).toHaveBeenCalledTimes(1);
+    const [title, opts] = worker.showNotification.mock.calls[0] as unknown as [string, { silent: boolean; renotify: boolean }];
+    expect(title).toBe("Message requests");
+    expect(opts.silent).toBe(true);
+    expect(opts.renotify).toBe(false);
+  });
+
+  it("shows full content for an unknown sender under `full`", async () => {
+    const worker = dmPush(
+      { policy: "full", self: "me", knownPeers: [], sk: "aa" },
+      opened("stranger"),
+    );
+    await worker.push({ scope: "dm", event_id: "w", url: "/dm", event: wrapEvent });
+    const [title, opts] = worker.showNotification.mock.calls[0] as unknown as [string, { body: string }];
+    expect(title).toBe("New message");
+    expect(opts.body).toContain("meet at 8");
+  });
+
+  it("treats a non-message rumor (reaction/delete) as a quiet request", async () => {
+    const worker = dmPush(
+      { policy: "full", self: "me", knownPeers: ["peer"], sk: "aa" },
+      { unwrapDm: () => ({ sender: "peer", kind: 7, content: "+" }) },
+    );
+    await worker.push({ scope: "dm", event_id: "w", url: "/dm", event: wrapEvent });
+    expect((worker.showNotification.mock.calls[0] as unknown as [string])[0]).toBe("Message requests");
+  });
+
+  it("falls back to the generic wake-up for a login the worker has no key for", async () => {
+    const unwrapDm = vi.fn(() => ({ sender: "peer", kind: 14, content: "x" }));
+    const worker = loadWorker({
+      dmConfig: { policy: "off", self: "me", knownPeers: [] }, // no sk (bunker/NIP-07)
+      dmCrypto: { unwrapDm },
+    });
+    await worker.push({ scope: "dm", event_id: "w", url: "/dm", event: wrapEvent });
+    expect(unwrapDm).not.toHaveBeenCalled(); // never decrypts without a key
+    expect(worker.showNotification).toHaveBeenCalledTimes(1);
+    const [, opts] = worker.showNotification.mock.calls[0] as unknown as [string, { body: string }];
+    expect(opts.body).toBe("New direct message");
+  });
+
+  it("falls back to the generic wake-up when the wrap can't be opened", async () => {
+    const worker = dmPush(
+      { policy: "off", self: "me", knownPeers: [], sk: "aa" },
+      { unwrapDm: () => null },
+    );
+    await worker.push({ scope: "dm", event_id: "w", url: "/dm", event: wrapEvent });
+    const [, opts] = worker.showNotification.mock.calls[0] as unknown as [string, { body: string }];
+    expect(opts.body).toBe("New direct message");
+  });
+
+  it("falls back to generic when no wrap was inlined (oversized / older server)", async () => {
+    const worker = dmPush(
+      { policy: "off", self: "me", knownPeers: [], sk: "aa" },
+      opened("stranger"),
+    );
+    await worker.push({ scope: "dm", event_id: "w", url: "/dm" }); // no `event`
+    const [, opts] = worker.showNotification.mock.calls[0] as unknown as [string, { body: string }];
+    expect(opts.body).toBe("New direct message");
   });
 });

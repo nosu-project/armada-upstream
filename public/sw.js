@@ -20,6 +20,20 @@
 const BUILD = "__BUILD_STAMP__";
 void BUILD;
 
+// NIP-17 unwrap for the DM push path (below). A classic worker can't `import`,
+// and WebCrypto has no secp256k1, so this is a separately-built bundle
+// (vite.config.sw-crypto.ts → dist/sw-crypto.js) exposing self.ArmadaDmCrypto.
+// Guarded: it's absent in the unit-test VM and in any build that didn't ship
+// it, in which case DM push simply degrades to the generic wake-up. `typeof` is
+// safe on the undeclared name in that VM.
+try {
+  if (typeof importScripts === "function") {
+    importScripts(new URL("sw-crypto.js", self.location.href).href);
+  }
+} catch {
+  // Bundle missing/unparseable — self.ArmadaDmCrypto stays undefined.
+}
+
 self.addEventListener("install", () => {
   // Take over immediately: this worker holds no per-build state, so there is
   // no old-build/new-build consistency to preserve across a swap.
@@ -65,6 +79,10 @@ const PLAINTEXT_SCOPES = new Set(["group", "group-mention"]);
 const PUSH_STATE_CACHE = "armada-push-state-v1";
 const PUSH_STATE_PREFIX = "/.armada-push-state/";
 const BADGE_STATE_URL = new URL(`${PUSH_STATE_PREFIX}badge`, self.location.origin).href;
+// The page-provided DM gating config: request policy, known-peer set, the
+// viewer's pubkey, and (nsec logins only) the decrypt key. Written by
+// swDmConfig.ts; read here per DM push. Must match that module's path.
+const DM_CONFIG_URL = new URL(`${PUSH_STATE_PREFIX}dm-config`, self.location.origin).href;
 
 /** Increment the Home-Screen badge without needing a live page. */
 async function incrementAppBadge() {
@@ -213,6 +231,97 @@ async function suppressPush(data) {
   }
 }
 
+/** The page-provided DM gating config, or null if none/unavailable. */
+async function readDmConfig() {
+  try {
+    const cache = await caches.open(PUSH_STATE_CACHE);
+    const stored = await cache.match(DM_CONFIG_URL);
+    if (!stored) return null;
+    return await stored.json();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Show the notification for a NIP-17 DM push, deciding UP FRONT from the wrap
+ * the server inlined (`data.event`) so we call showNotification exactly once,
+ * within the mobile push window and with no relay fetch. Returns true when it
+ * handled the push; false to fall back to the generic wake-up (no inlined wrap,
+ * no bundled crypto, a login whose key the worker doesn't hold, or an
+ * undecryptable/foreign/expired wrap).
+ *
+ * iOS revokes the whole push subscription after a few pushes that show nothing,
+ * so every branch shows SOMETHING: `off` for an unknown sender is the quietest
+ * we can be (one collapsing entry, no sound, no re-alert), never true silence.
+ */
+async function showDmNotification(base, data) {
+  const wrap = data.event;
+  const crypto = self.ArmadaDmCrypto;
+  if (!wrap || !crypto) return false;
+  const cfg = await readDmConfig();
+  if (!cfg || !cfg.sk) return false; // non-nsec login → the worker can't decrypt
+  const opened = crypto.unwrapDm(wrap, cfg.sk, cfg.self);
+  if (!opened) return false; // undecryptable / not for us / expired
+
+  // Drop the (large) inlined event from the data we attach to the notification.
+  const routeData = { ...data };
+  delete routeData.event;
+
+  // Reactions/deletes/timer changes aren't messages, but the push must still
+  // show something on iOS — the content-blind request ping.
+  if (opened.kind !== 14 && opened.kind !== 15) {
+    return showQuietRequest(base);
+  }
+
+  const known = Array.isArray(cfg.knownPeers) && cfg.knownPeers.indexOf(opened.sender) !== -1;
+
+  if (known || cfg.policy === "full") {
+    const preview = opened.kind === 15
+      ? "Sent a file"
+      : (truncate(opened.content, 140) || "New direct message");
+    await self.registration.showNotification("New message", {
+      ...base,
+      body: preview,
+      // Per-peer tag: a conversation collapses into one entry, distinct
+      // conversations stay distinct.
+      tag: `dm-${opened.sender}`,
+      data: { ...routeData, url: `/dm/${opened.sender}` },
+    });
+    return true;
+  }
+
+  // Unknown sender.
+  if (cfg.policy === "off") return showQuietRequest(base);
+
+  // policy === "generic": content-blind request ping (nothing the sender picks).
+  await self.registration.showNotification("Message request", {
+    ...base,
+    body: "New message request",
+    tag: "armada-dm-requests",
+    data: { ...routeData, url: "/dm" },
+  });
+  return true;
+}
+
+/**
+ * The quietest notification iOS lets us get away with for a DM we don't want to
+ * surface (unknown sender under `off`, or a non-message rumor): one "Message
+ * requests" entry that collapses all of them, never re-alerts, and reveals
+ * nothing the sender controls.
+ */
+async function showQuietRequest(base) {
+  await self.registration.showNotification("Message requests", {
+    ...base,
+    body: "You have new message requests",
+    tag: "armada-dm-requests",
+    renotify: false,
+    silent: true,
+    data: { url: "/dm" },
+  });
+  return true;
+}
+
 self.addEventListener("push", (event) => {
   if (!event.data) return;
 
@@ -235,6 +344,18 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     (async () => {
       if (await suppressPush(data)) return;
+
+      // DMs: decide from the wrap the server inlined and show exactly once (see
+      // showDmNotification), so an unknown sender is gated BEFORE anything they
+      // control reaches the screen and a known sender's message can be shown —
+      // all without a relay fetch. Falls through to the generic wake-up below
+      // when the worker can't decrypt (no inlined wrap, non-nsec login, etc.).
+      if (data.scope === "dm") {
+        if (await showDmNotification(base, data)) {
+          await incrementAppBadge();
+          return;
+        }
+      }
 
       // 1. Guaranteed visible notification, immediately.
       await self.registration.showNotification(title, {
