@@ -94,7 +94,33 @@ describe("Electron Linux display audio", () => {
     expect(bridge.stopLinuxShareAudio).toHaveBeenCalledOnce();
   });
 
-  it("unlinks venmic when display capture fails after a source was chosen", async () => {
+  it("unlinks a newly prepared venmic route when display capture fails", async () => {
+    const bridge = installBridge();
+    const getDisplayMedia = vi.fn<() => Promise<MediaStream>>();
+    const mediaDevices = {
+      enumerateDevices: vi.fn(async () => []),
+      getDisplayMedia,
+      getUserMedia: vi.fn(),
+    } as unknown as MediaDevices;
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: mediaDevices,
+    });
+
+    const desktop = await import("@/lib/desktop");
+    desktop.installDesktopDisplayMediaAudio();
+    getDisplayMedia.mockImplementation(async () => {
+      await desktop.prepareDesktopShareAudio({ mode: "system" });
+      throw new DOMException("capture failed", "NotAllowedError");
+    });
+
+    await expect(navigator.mediaDevices.getDisplayMedia({ video: true })).rejects.toMatchObject({
+      name: "NotAllowedError",
+    });
+    expect(bridge.stopLinuxShareAudio).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the current venmic route when a source switch is cancelled", async () => {
     const bridge = installBridge();
     const mediaDevices = {
       enumerateDevices: vi.fn(async () => []),
@@ -115,6 +141,77 @@ describe("Electron Linux display audio", () => {
     await expect(navigator.mediaDevices.getDisplayMedia({ video: true })).rejects.toMatchObject({
       name: "NotAllowedError",
     });
+    expect(bridge.stopLinuxShareAudio).not.toHaveBeenCalled();
+  });
+
+  it("does not let the old video cleanup unlink a replacement audio route", async () => {
+    const bridge = installBridge();
+    const firstVideoStop = vi.fn();
+    const secondVideoStop = vi.fn();
+    const firstVideo = {
+      addEventListener: vi.fn(),
+      stop: firstVideoStop,
+    } as unknown as MediaStreamTrack;
+    const secondVideo = {
+      addEventListener: vi.fn(),
+      stop: secondVideoStop,
+    } as unknown as MediaStreamTrack;
+    const firstAudio = {
+      addEventListener: vi.fn(),
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const secondAudio = {
+      addEventListener: vi.fn(),
+      stop: vi.fn(),
+    } as unknown as MediaStreamTrack;
+    const displayStreams = [firstVideo, secondVideo].map((video) => {
+      const audioTracks: MediaStreamTrack[] = [];
+      return {
+        addTrack: (track: MediaStreamTrack) => audioTracks.push(track),
+        getAudioTracks: () => audioTracks,
+        getVideoTracks: () => [video],
+      } as unknown as MediaStream;
+    });
+    const audioStreams = [firstAudio, secondAudio].map(
+      (audio) => ({ getAudioTracks: () => [audio] }) as unknown as MediaStream,
+    );
+    const mediaDevices = {
+      enumerateDevices: vi.fn(async () => [{
+        deviceId: "venmic-id",
+        groupId: "",
+        kind: "audioinput" as const,
+        label: "vencord-screen-share",
+        toJSON: () => ({}),
+      }]),
+      getDisplayMedia: vi
+        .fn<() => Promise<MediaStream>>()
+        .mockResolvedValueOnce(displayStreams[0])
+        .mockResolvedValueOnce(displayStreams[1]),
+      getUserMedia: vi
+        .fn<() => Promise<MediaStream>>()
+        .mockResolvedValueOnce(audioStreams[0])
+        .mockResolvedValueOnce(audioStreams[1]),
+    } as unknown as MediaDevices;
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: mediaDevices,
+    });
+
+    const desktop = await import("@/lib/desktop");
+    desktop.installDesktopDisplayMediaAudio();
+    await desktop.prepareDesktopShareAudio({ mode: "system" });
+    await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true });
+    await desktop.prepareDesktopShareAudio({ mode: "applications", sourceIds: ["game"] });
+    await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true });
+
+    firstVideo.stop();
+    expect(firstVideoStop).toHaveBeenCalledOnce();
+    expect(firstAudio.stop).toHaveBeenCalledOnce();
+    expect(bridge.stopLinuxShareAudio).not.toHaveBeenCalled();
+
+    secondVideo.stop();
+    expect(secondVideoStop).toHaveBeenCalledOnce();
+    expect(secondAudio.stop).toHaveBeenCalledOnce();
     expect(bridge.stopLinuxShareAudio).toHaveBeenCalledOnce();
   });
 });

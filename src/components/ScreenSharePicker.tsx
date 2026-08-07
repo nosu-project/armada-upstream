@@ -86,7 +86,6 @@ export function ScreenSharePicker() {
 
   const cancel = () => {
     if (!resolveRef.current) return;
-    void stopDesktopShareAudio();
     finish(null);
   };
 

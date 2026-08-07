@@ -193,7 +193,8 @@ export async function desktopDecryptSecret(base64: string): Promise<string | nul
   }
 }
 
-let linuxShareAudioPrepared = false;
+let nextLinuxShareAudioGeneration = 1;
+let linuxShareAudioGeneration: number | null = null;
 let displayMediaAudioInstalled = false;
 
 /** List the applications PipeWire can route into a Linux screen share. */
@@ -216,17 +217,23 @@ export async function prepareDesktopShareAudio(
   const bridge = desktop();
   if (!bridge?.startLinuxShareAudio) return false;
   try {
-    linuxShareAudioPrepared = await bridge.startLinuxShareAudio(selection);
-    return linuxShareAudioPrepared;
+    const prepared = await bridge.startLinuxShareAudio(selection);
+    linuxShareAudioGeneration = prepared ? nextLinuxShareAudioGeneration++ : null;
+    return prepared;
   } catch {
-    linuxShareAudioPrepared = false;
+    linuxShareAudioGeneration = null;
     return false;
   }
 }
 
 /** Tear down any PipeWire virtual microphone created for a share. */
 export async function stopDesktopShareAudio(): Promise<void> {
-  linuxShareAudioPrepared = false;
+  return stopDesktopShareAudioGeneration();
+}
+
+async function stopDesktopShareAudioGeneration(expected?: number): Promise<void> {
+  if (expected !== undefined && linuxShareAudioGeneration !== expected) return;
+  linuxShareAudioGeneration = null;
   try {
     await desktop()?.stopLinuxShareAudio?.();
   } catch {
@@ -279,18 +286,24 @@ export function installDesktopDisplayMediaAudio(): void {
   displayMediaAudioInstalled = true;
   const originalGetDisplayMedia = mediaDevices.getDisplayMedia.bind(mediaDevices);
   mediaDevices.getDisplayMedia = async (constraints?: DisplayMediaStreamOptions) => {
+    const generationBeforeCapture = linuxShareAudioGeneration;
     let stream: MediaStream;
     try {
       stream = await originalGetDisplayMedia(constraints);
     } catch (error) {
-      await stopDesktopShareAudio();
+      // Cancelling a switch must leave the existing share's route alone. Only
+      // tear down audio when the picker prepared a NEW route before failing.
+      if (linuxShareAudioGeneration !== generationBeforeCapture) {
+        await stopDesktopShareAudio();
+      }
       throw error;
     }
-    if (!linuxShareAudioPrepared) {
+    const captureGeneration = linuxShareAudioGeneration;
+    if (captureGeneration === null) {
       return stream;
     }
     if (constraints?.audio === false || stream.getAudioTracks().length > 0) {
-      await stopDesktopShareAudio();
+      await stopDesktopShareAudioGeneration(captureGeneration);
       return stream;
     }
 
@@ -318,7 +331,7 @@ export function installDesktopDisplayMediaAudio(): void {
         if (stopped) return;
         stopped = true;
         audioTrack.stop();
-        void stopDesktopShareAudio();
+        void stopDesktopShareAudioGeneration(captureGeneration);
       };
       const videoTrack = stream.getVideoTracks()[0];
       if (videoTrack) {
@@ -331,9 +344,11 @@ export function installDesktopDisplayMediaAudio(): void {
           stopVideo();
         };
       }
-      audioTrack.addEventListener("ended", () => void stopDesktopShareAudio(), {
-        once: true,
-      });
+      audioTrack.addEventListener(
+        "ended",
+        () => void stopDesktopShareAudioGeneration(captureGeneration),
+        { once: true },
+      );
       return stream;
     } catch (error) {
       console.warn("[screen-share] failed to attach Linux application audio", error);
