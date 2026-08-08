@@ -16,6 +16,39 @@ afterEach(() => {
 });
 
 describe("push-to-talk preferences", () => {
+  it("survives blocked storage in the render-phase snapshot", () => {
+    // getPushToTalkPreferences is the useSyncExternalStore getSnapshot, so it
+    // runs DURING render. localStorage throws a SecurityError when the user
+    // blocks storage or the app runs in a sandboxed frame, and an unguarded
+    // read there takes out the error boundary rather than the feature.
+    const real = window.localStorage;
+    const denied = () => {
+      throw new DOMException("denied", "SecurityError");
+    };
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: { getItem: denied, setItem: denied, removeItem: denied, clear: denied },
+    });
+
+    try {
+      expect(() => getPushToTalkPreferences()).not.toThrow();
+      expect(getPushToTalkPreferences().enabled).toBe(false);
+      expect(() => setPushToTalkPreferences({
+        enabled: true,
+        binding: {
+          code: "CapsLock",
+          label: "Caps Lock",
+          altKey: false,
+          ctrlKey: false,
+          metaKey: false,
+          shiftKey: false,
+        },
+      })).not.toThrow();
+    } finally {
+      Object.defineProperty(window, "localStorage", { configurable: true, value: real });
+    }
+  });
+
   it("records the physical trigger key without duplicating a modifier trigger", () => {
     expect(bindingFromKeyboardEvent({
       code: "ControlLeft",

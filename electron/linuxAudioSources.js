@@ -26,6 +26,13 @@ function listLinuxAudioApplications(patchBay, electronAudioProcessId) {
     const name = node["application.name"];
     if (!name || applications.has(name)) continue;
     applications.set(name, {
+      // The id names the application itself rather than its position in this
+      // listing. The picker hands an id back later to start the share, and any
+      // second listing in between would renumber a positional id onto whichever
+      // application now occupies that slot — routing the wrong program's audio
+      // into the call. A name-derived id survives a re-list or resolves to
+      // nothing, and nothing is the safe answer.
+      id: name,
       name,
       matcher: { "application.name": name },
     });

@@ -220,6 +220,8 @@ export async function desktopDecryptSecret(base64: string): Promise<string | nul
 
 let nextLinuxShareAudioGeneration = 1;
 let linuxShareAudioGeneration: number | null = null;
+// Set when the picker chose "No audio"; consumed by the next capture.
+let shareAudioDeclined = false;
 let displayMediaAudioInstalled = false;
 
 /** List the applications PipeWire can route into a Linux screen share. */
@@ -243,6 +245,7 @@ export async function prepareDesktopShareAudio(
   if (!bridge?.startLinuxShareAudio) return false;
   try {
     const prepared = await bridge.startLinuxShareAudio(selection);
+    shareAudioDeclined = false;
     linuxShareAudioGeneration = prepared ? nextLinuxShareAudioGeneration++ : null;
     return prepared;
   } catch {
@@ -254,6 +257,18 @@ export async function prepareDesktopShareAudio(
 /** Tear down any PipeWire virtual microphone created for a share. */
 export async function stopDesktopShareAudio(): Promise<void> {
   return stopDesktopShareAudioGeneration();
+}
+
+/**
+ * Record that the next capture is to carry no share audio.
+ *
+ * The teardown is deferred to that capture rather than done here, because the
+ * picker may still be cancelled. Unlinking at selection time silences the share
+ * the user currently has published and leaves nothing to restore it — the same
+ * acquire-before-replace rule the rest of this module follows.
+ */
+export function declineDesktopShareAudio(): void {
+  shareAudioDeclined = true;
 }
 
 async function stopDesktopShareAudioGeneration(expected?: number): Promise<void> {
@@ -323,6 +338,12 @@ export function installDesktopDisplayMediaAudio(): void {
       }
       throw error;
     }
+    if (shareAudioDeclined) {
+      // The capture succeeded, so the share this route belonged to is gone.
+      shareAudioDeclined = false;
+      await stopDesktopShareAudio();
+      return stream;
+    }
     const captureGeneration = linuxShareAudioGeneration;
     if (captureGeneration === null) {
       return stream;
@@ -377,7 +398,10 @@ export function installDesktopDisplayMediaAudio(): void {
       return stream;
     } catch (error) {
       console.warn("[screen-share] failed to attach Linux application audio", error);
-      await stopDesktopShareAudio();
+      // Scope the teardown like every other one here: findVenmicDevice retries
+      // for about a second and getUserMedia can stall, which is long enough for
+      // a newer share to have prepared its own route.
+      await stopDesktopShareAudioGeneration(captureGeneration);
       return stream;
     }
   };

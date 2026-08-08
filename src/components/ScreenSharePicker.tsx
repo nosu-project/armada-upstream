@@ -17,9 +17,9 @@ import {
 } from "@/components/ui/select";
 import {
   desktop,
+  declineDesktopShareAudio,
   desktopShareAudioSources,
   prepareDesktopShareAudio,
-  stopDesktopShareAudio,
   type LinuxShareAudioSources,
   type ScreenSource,
 } from "@/lib/desktop";
@@ -106,7 +106,10 @@ export function ScreenSharePicker() {
         return;
       }
     } else {
-      await stopDesktopShareAudio();
+      // Record the choice; the route is retired by the capture that replaces
+      // this share. Unlinking here would silence a live share that the user can
+      // still cancel back into, with nothing left to restore it.
+      declineDesktopShareAudio();
     }
 
     finish(id);

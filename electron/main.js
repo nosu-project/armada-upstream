@@ -975,12 +975,14 @@ function listLinuxAudioSources() {
       patchBay,
       audioService?.["application.process.id"],
     );
+    // Rebuilt rather than merged: the table only has to resolve ids the picker
+    // is still holding, and those ids name the application, so a re-list either
+    // yields the same entry or drops one that has gone away.
     linuxAudioMatchers.clear();
 
-    const sources = applications.map((source, index) => {
-      const id = `app-${index}`;
-      linuxAudioMatchers.set(id, source.matcher);
-      return { id, name: source.name };
+    const sources = applications.map((source) => {
+      linuxAudioMatchers.set(source.id, source.matcher);
+      return { id: source.id, name: source.name };
     });
     return { supported: true, reason: null, sources };
   } catch (error) {

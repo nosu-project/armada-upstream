@@ -86,9 +86,24 @@ function parsePreferences(raw: string | null): PushToTalkPreferences {
   }
 }
 
+/**
+ * localStorage throws rather than returning null when storage is blocked
+ * (denied cookies, a sandboxed frame, some private-browsing modes). This is
+ * the useSyncExternalStore getSnapshot, so it runs during render and an
+ * unguarded read would take the error boundary down instead of the feature —
+ * every other voice preference in this codebase guards for the same reason.
+ */
+function readStoredPreferences(): string | null {
+  try {
+    return window.localStorage.getItem(STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
 export function getPushToTalkPreferences(): PushToTalkPreferences {
   if (typeof window === "undefined") return DEFAULT_PREFERENCES;
-  const raw = window.localStorage.getItem(STORAGE_KEY);
+  const raw = readStoredPreferences();
   if (raw !== cachedRaw) {
     cachedRaw = raw;
     cachedPreferences = parsePreferences(raw);
@@ -105,7 +120,11 @@ export function setPushToTalkPreferences(preferences: PushToTalkPreferences): vo
       : DEFAULT_PUSH_TO_TALK_BINDING,
   };
   const raw = JSON.stringify(normalized);
-  window.localStorage.setItem(STORAGE_KEY, raw);
+  try {
+    window.localStorage.setItem(STORAGE_KEY, raw);
+  } catch {
+    // Blocked or full storage: keep the choice for this session anyway.
+  }
   cachedRaw = raw;
   cachedPreferences = normalized;
   window.dispatchEvent(new Event(CHANGE_EVENT));

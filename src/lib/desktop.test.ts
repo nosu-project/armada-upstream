@@ -214,4 +214,94 @@ describe("Electron Linux display audio", () => {
     expect(secondAudio.stop).toHaveBeenCalledOnce();
     expect(bridge.stopLinuxShareAudio).toHaveBeenCalledOnce();
   });
+
+  it("defers a declined audio route until the replacement capture succeeds", async () => {
+    const bridge = installBridge();
+    const displayStream = {
+      addTrack: vi.fn(),
+      getAudioTracks: () => [],
+      getVideoTracks: () => [],
+    } as unknown as MediaStream;
+    const getDisplayMedia = vi
+      .fn<() => Promise<MediaStream>>()
+      .mockRejectedValueOnce(new Error("user cancelled"))
+      .mockResolvedValueOnce(displayStream);
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        enumerateDevices: vi.fn(async () => []),
+        getDisplayMedia,
+        getUserMedia: vi.fn(),
+      } as unknown as MediaDevices,
+    });
+
+    const desktop = await import("@/lib/desktop");
+    desktop.installDesktopDisplayMediaAudio();
+    // A share is live with system audio routed.
+    await desktop.prepareDesktopShareAudio({ mode: "system" });
+    bridge.stopLinuxShareAudio.mockClear();
+
+    // The user opens the picker again and chooses "No audio". Nothing may be
+    // torn down yet: they can still cancel back to the share they have.
+    desktop.declineDesktopShareAudio();
+    expect(bridge.stopLinuxShareAudio).not.toHaveBeenCalled();
+
+    await expect(
+      navigator.mediaDevices.getDisplayMedia({ audio: true, video: true }),
+    ).rejects.toThrow(/cancelled/);
+    expect(bridge.stopLinuxShareAudio).not.toHaveBeenCalled();
+
+    // Only a capture that actually replaces the share retires the old route.
+    desktop.declineDesktopShareAudio();
+    await expect(
+      navigator.mediaDevices.getDisplayMedia({ audio: true, video: true }),
+    ).resolves.toBe(displayStream);
+    expect(bridge.stopLinuxShareAudio).toHaveBeenCalledOnce();
+  });
+
+  it("does not let a failed attach unlink a route prepared after it", async () => {
+    const bridge = installBridge();
+    const displayStream = {
+      addTrack: vi.fn(),
+      getAudioTracks: () => [],
+      getVideoTracks: () => [],
+    } as unknown as MediaStream;
+
+    let releaseUserMedia: (() => void) | undefined;
+    const getUserMedia = vi.fn(() => new Promise<MediaStream>((_resolve, reject) => {
+      releaseUserMedia = () => reject(new Error("device disappeared"));
+    }));
+    const mediaDevices = {
+      enumerateDevices: vi.fn(async () => [{
+        deviceId: "venmic-id",
+        groupId: "",
+        kind: "audioinput" as const,
+        label: "vencord-screen-share",
+        toJSON: () => ({}),
+      }]),
+      getDisplayMedia: vi.fn(async () => displayStream),
+      getUserMedia,
+    } as unknown as MediaDevices;
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: mediaDevices,
+    });
+
+    const desktop = await import("@/lib/desktop");
+    desktop.installDesktopDisplayMediaAudio();
+    await desktop.prepareDesktopShareAudio({ mode: "system" });
+
+    // The attach stalls in getUserMedia. Everywhere else in this file that
+    // window is treated as a place a NEWER share can appear; the failure path
+    // was the one teardown that ignored which route it was tearing down.
+    const capture = navigator.mediaDevices.getDisplayMedia({ audio: true, video: true });
+    await vi.waitFor(() => expect(releaseUserMedia).toBeDefined());
+    await desktop.prepareDesktopShareAudio({ mode: "applications", sourceIds: ["game"] });
+    bridge.stopLinuxShareAudio.mockClear();
+
+    releaseUserMedia?.();
+    await expect(capture).resolves.toBe(displayStream);
+
+    expect(bridge.stopLinuxShareAudio).not.toHaveBeenCalled();
+  });
 });
