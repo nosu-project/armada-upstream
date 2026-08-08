@@ -17,6 +17,7 @@ const {
   formatShortcutDescription,
   knownShortcutId,
   nextLegacyShortcutId,
+  portalRequest,
   portalSettingsHint,
   readPortalVersion,
   shortcutDescription,
@@ -60,9 +61,13 @@ async function startPortal({ portalVersion = 1 } = {}) {
   return { portal, shortcuts, pressed };
 }
 
+/**
+ * Echo back whichever action ID openSettings minted. Hardcoding one here would
+ * pin the test to a particular ID scheme rather than to the behaviour.
+ */
 function replacementBind() {
-  return vi.fn(async () => ({
-    shortcuts: [[ALTERNATE_SHORTCUT_ID, {
+  return vi.fn(async (_session, shortcutId) => ({
+    shortcuts: [[shortcutId, {
       trigger_description: new Variant("s", "Ctrl + Press d"),
     }]],
   }));
@@ -116,11 +121,31 @@ describe("Linux Global Shortcuts portal binding", () => {
     expect(portalSettingsHint("gnome", 1)).toContain("trusted shortcut chooser");
   });
 
-  it("recognizes and alternates the two persisted legacy action IDs", () => {
+  it("recognizes persisted legacy action IDs", () => {
     expect(knownShortcutId(ALTERNATE_SHORTCUT_ID)).toBe(ALTERNATE_SHORTCUT_ID);
+    expect(knownShortcutId("push_to_talk_4")).toBe("push_to_talk_4");
     expect(knownShortcutId("unknown")).toBe("push_to_talk");
-    expect(nextLegacyShortcutId("push_to_talk")).toBe(ALTERNATE_SHORTCUT_ID);
-    expect(nextLegacyShortcutId(ALTERNATE_SHORTCUT_ID)).toBe("push_to_talk");
+    expect(knownShortcutId(undefined)).toBe("push_to_talk");
+  });
+
+  it("never reuses an action ID the portal has already bound", () => {
+    // BindShortcuts only shows the trusted chooser for an action the portal has
+    // no binding for, and bindings are keyed by (app id, shortcut id) and
+    // outlive the session. Alternating between two IDs therefore stops
+    // prompting on the second "change shortcut": the user sees no dialog and
+    // their key silently reverts to the older assignment.
+    let shortcutId = "push_to_talk";
+    const seen = new Set([shortcutId]);
+    for (let round = 0; round < 6; round += 1) {
+      shortcutId = nextLegacyShortcutId(shortcutId);
+      expect(seen.has(shortcutId)).toBe(false);
+      expect(knownShortcutId(shortcutId)).toBe(shortcutId);
+      seen.add(shortcutId);
+    }
+    // A value persisted by an older build still advances into the counted
+    // series rather than sticking on itself.
+    expect(nextLegacyShortcutId(ALTERNATE_SHORTCUT_ID)).toMatch(/^push_to_talk_\d+$/);
+    expect(nextLegacyShortcutId(ALTERNATE_SHORTCUT_ID)).not.toBe(ALTERNATE_SHORTCUT_ID);
   });
 
   it("uses ConfigureShortcuts for a version-2 portal", async () => {
@@ -148,17 +173,14 @@ describe("Linux Global Shortcuts portal binding", () => {
     portal.onStatusChanged = reportStatus;
     portal.portalVersion = 1;
     portal.createSession = vi.fn(async () => "/org/freedesktop/portal/desktop/session/new");
-    portal.bindSession = vi.fn(async () => ({
-      shortcuts: [[ALTERNATE_SHORTCUT_ID, {
-        trigger_description: new Variant("s", "Ctrl + Press d"),
-      }]],
-    }));
+    portal.bindSession = replacementBind();
     portal.closeSession = vi.fn(async () => {});
 
+    const replacementId = nextLegacyShortcutId("push_to_talk");
     await expect(portal.openSettings()).resolves.toBe(true);
     expect(portal.bindSession).toHaveBeenCalledWith(
       "/org/freedesktop/portal/desktop/session/new",
-      ALTERNATE_SHORTCUT_ID,
+      replacementId,
       null,
       expect.stringContaining("armada_ptt_"),
     );
@@ -166,8 +188,8 @@ describe("Linux Global Shortcuts portal binding", () => {
       "/org/freedesktop/portal/desktop/session/old",
     );
     expect(portal.sessionHandle).toContain("/new");
-    expect(portal.shortcutId).toBe(ALTERNATE_SHORTCUT_ID);
-    expect(saveShortcutId).toHaveBeenCalledWith(ALTERNATE_SHORTCUT_ID);
+    expect(portal.shortcutId).toBe(replacementId);
+    expect(saveShortcutId).toHaveBeenCalledWith(replacementId);
     expect(reportStatus).toHaveBeenCalledWith(expect.objectContaining({
       bindingLabel: "Ctrl + D",
       settingsAvailable: true,
@@ -198,6 +220,52 @@ describe("Linux Global Shortcuts portal binding", () => {
     expect(portal.suspended).toBe(false);
   });
 
+  it("ignores a portal Response forged by another peer on the session bus", async () => {
+    const bus = new EventEmitter();
+    bus.call = vi.fn(async () => {});
+    const requestPath = "/org/freedesktop/portal/desktop/request/1/armada_ptt_1";
+
+    const settled = portalRequest(
+      bus,
+      async () => requestPath,
+      { sender: ":1.7" },
+    );
+    // The listener is installed after AddMatch resolves; emitting before that
+    // would drop the message and pass this test for the wrong reason.
+    await vi.waitFor(() => expect(bus.listenerCount("message")).toBe(1));
+    await Promise.resolve();
+
+    // Request object paths are derived from the pid and a counter, so another
+    // application on the bus can guess one and unicast a Response straight at
+    // this connection. The AddMatch sender= clause only filters what the BUS
+    // broadcasts; it does not authenticate a directed message.
+    bus.emit("message", {
+      interface: "org.freedesktop.portal.Request",
+      member: "Response",
+      path: requestPath,
+      sender: ":1.99",
+      body: [0, { forged: true }],
+    });
+    await Promise.resolve();
+
+    let resolved = false;
+    void settled.then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    bus.emit("message", {
+      interface: "org.freedesktop.portal.Request",
+      member: "Response",
+      path: requestPath,
+      sender: ":1.7",
+      body: [0, { shortcuts: [] }],
+    });
+
+    await expect(settled).resolves.toEqual({ shortcuts: [] });
+  });
+
   it("stays muted when a press lands while the replacement chooser is opening", async () => {
     const { portal, shortcuts, pressed } = await startPortal();
 
@@ -224,11 +292,11 @@ describe("Linux Global Shortcuts portal binding", () => {
     expect(pressed).toEqual([true]);
 
     portal.createSession = vi.fn(async () => SESSION_B);
-    portal.bindSession = vi.fn(async () => {
+    portal.bindSession = vi.fn(async (_session, shortcutId) => {
       // The user let go while the trusted chooser had the keyboard grabbed.
       shortcuts.emit("Deactivated", SESSION_A, SHORTCUT_ID);
       return {
-        shortcuts: [[ALTERNATE_SHORTCUT_ID, {
+        shortcuts: [[shortcutId, {
           trigger_description: new Variant("s", "Ctrl + Press d"),
         }]],
       };

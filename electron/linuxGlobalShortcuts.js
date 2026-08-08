@@ -12,6 +12,9 @@ const SESSION_INTERFACE = "org.freedesktop.portal.Session";
 const SHORTCUT_ID = "push_to_talk";
 const ALTERNATE_SHORTCUT_ID = "push_to_talk_alternate";
 const SHORTCUT_IDS = [SHORTCUT_ID, ALTERNATE_SHORTCUT_ID];
+// IDs minted by nextLegacyShortcutId. ALTERNATE_SHORTCUT_ID predates them and
+// is still accepted so a value persisted by an older build keeps working.
+const GENERATED_SHORTCUT_ID = /^push_to_talk_(\d+)$/;
 
 let nextToken = 1;
 
@@ -88,6 +91,30 @@ function requestMatchRule() {
   ].join(",");
 }
 
+/**
+ * The portal's unique connection name (":1.n"). Signals carry the unique name
+ * of the sender, never the well-known one, so this is what an inbound Response
+ * has to be checked against.
+ */
+async function portalOwnerName(bus) {
+  try {
+    const reply = await bus.call(new Message({
+      destination: "org.freedesktop.DBus",
+      path: "/org/freedesktop/DBus",
+      interface: "org.freedesktop.DBus",
+      member: "GetNameOwner",
+      signature: "s",
+      body: [PORTAL_NAME],
+    }));
+    const owner = reply?.body?.[0];
+    return typeof owner === "string" && owner ? owner : null;
+  } catch {
+    // Without an owner the sender check is skipped rather than failing setup;
+    // the portal itself will refuse anything it did not issue.
+    return null;
+  }
+}
+
 async function changeMatch(bus, member, rule) {
   await bus.call(new Message({
     destination: "org.freedesktop.DBus",
@@ -104,7 +131,7 @@ async function changeMatch(bus, member, rule) {
  * signal. The match is installed before the method call; responses that arrive
  * before the returned request path is known are queued and matched afterwards.
  */
-async function portalRequest(bus, invoke, timeoutMs = 120_000) {
+async function portalRequest(bus, invoke, { sender = null, timeoutMs = 120_000 } = {}) {
   const rule = requestMatchRule();
   await changeMatch(bus, "AddMatch", rule);
   const queued = [];
@@ -118,6 +145,11 @@ async function portalRequest(bus, invoke, timeoutMs = 120_000) {
       message.interface !== REQUEST_INTERFACE ||
       message.member !== "Response"
     ) return;
+    // The sender= clause in the match rule governs only what the bus
+    // BROADCASTS to us; dbus-next surfaces every inbound message, including one
+    // a peer unicasts straight at this connection. Request paths are derived
+    // from the pid and a counter, so they are guessable — check the sender.
+    if (sender && message.sender !== sender) return;
     if (!requestPath) {
       queued.push(message);
       return;
@@ -165,12 +197,25 @@ function portalSettingsHint(desktop, portalVersion) {
   return "Click the assigned shortcut above to reopen your desktop's trusted shortcut chooser.";
 }
 
+/**
+ * The action ID to offer the chooser next.
+ *
+ * A v1 portal shows its trusted chooser only for an action it has no binding
+ * for, and those bindings are keyed by (app id, shortcut id) and deliberately
+ * outlive the session — persistence across restarts is the point of the API.
+ * So the ID has to keep advancing: alternating between two of them made every
+ * second "change shortcut" reuse an ID the portal already knew, which returns
+ * the old assignment with no dialog shown at all.
+ */
 function nextLegacyShortcutId(shortcutId) {
-  return shortcutId === SHORTCUT_ID ? ALTERNATE_SHORTCUT_ID : SHORTCUT_ID;
+  const generation = GENERATED_SHORTCUT_ID.exec(String(shortcutId || ""));
+  return `${SHORTCUT_ID}_${(generation ? Number(generation[1]) : 0) + 1}`;
 }
 
 function knownShortcutId(shortcutId) {
-  return SHORTCUT_IDS.includes(shortcutId) ? shortcutId : SHORTCUT_ID;
+  const value = String(shortcutId || "");
+  if (SHORTCUT_IDS.includes(value)) return value;
+  return GENERATED_SHORTCUT_ID.test(value) ? value : SHORTCUT_ID;
 }
 
 async function readPortalVersion(portalObject) {
@@ -242,6 +287,7 @@ class LinuxGlobalShortcutsPortal {
     this.globalShortcuts = null;
     this.portalVersion = 0;
     this.sessionHandle = null;
+    this.portalOwner = null;
     this.shortcutId = SHORTCUT_ID;
     this.binding = null;
     this.suspended = false;
@@ -267,6 +313,7 @@ class LinuxGlobalShortcutsPortal {
       this.shortcutId = SHORTCUT_ID;
     }
     try {
+      this.portalOwner = await portalOwnerName(bus);
       const portalObject = await bus.getProxyObject(PORTAL_NAME, PORTAL_PATH);
       const globalShortcuts = portalObject.getInterface(GLOBAL_SHORTCUTS_INTERFACE);
       this.globalShortcuts = globalShortcuts;
@@ -397,7 +444,7 @@ class LinuxGlobalShortcutsPortal {
     const createResults = await portalRequest(this.bus, () => this.globalShortcuts.CreateSession({
       handle_token: new Variant("s", `${token}_create`),
       session_handle_token: new Variant("s", `${token}_session`),
-    }));
+    }), { sender: this.portalOwner });
     const sessionHandle = String(variantValue(createResults.session_handle) || "");
     if (!sessionHandle) throw new Error("Global shortcut portal returned no session");
     return sessionHandle;
@@ -415,7 +462,7 @@ class LinuxGlobalShortcutsPortal {
       [[shortcutId, properties]],
       "",
       { handle_token: new Variant("s", `${token}_bind`) },
-    ));
+    ), { sender: this.portalOwner });
   }
 
   async closeSession(sessionHandle, bus = this.bus) {
@@ -445,6 +492,7 @@ class LinuxGlobalShortcutsPortal {
     this.globalShortcuts = null;
     this.portalVersion = 0;
     this.sessionHandle = null;
+    this.portalOwner = null;
     this.shortcutId = SHORTCUT_ID;
     this.binding = null;
     this.suspended = false;
