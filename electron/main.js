@@ -66,7 +66,33 @@ const ORIGIN = `${SCHEME}://armada`;
 // `/:user` profile route, so a pathname of "/index.html" boots the app into a
 // Nostr lookup for "index.html" ("No such person") instead of the app. The
 // protocol handler below maps "/" to index.html.
-const START_URL = `${ORIGIN}/`;
+const APP_START_URL = `${ORIGIN}/`;
+
+// Dev mode (`npm run electron:dev` → scripts/dev-electron.sh): load the Vite
+// dev server instead of the bundled dist/, so the renderer gets HMR and React
+// fast refresh while the shell around it — tray, screen picker, safeStorage,
+// the SQLite store — is the same code the packaged app runs. http://localhost
+// is a secure context too, so the service worker and PushManager behave as
+// they do on app://.
+//
+// The cost is a SECOND ORIGIN: everything the renderer keys to its origin
+// (localStorage, and so the login store) is separate from a packaged install's,
+// which is why the dev script also points --user-data-dir at its own profile
+// rather than letting a work-in-progress build write the real armada.db.
+// Anything origin-gated below has to accept this origin; with the variable
+// unset there is no second origin and nothing changes.
+const DEV_URL = (() => {
+  const raw = process.env.ARMADA_DEV_URL;
+  if (!raw) return "";
+  try {
+    return new URL(raw).href;
+  } catch {
+    console.error("[dev] ignoring unparseable ARMADA_DEV_URL:", raw);
+    return "";
+  }
+})();
+const DEV_ORIGIN = DEV_URL ? new URL(DEV_URL).origin : "";
+const START_URL = DEV_URL || APP_START_URL;
 
 // Dark background matching the app theme (index.html theme-color #100b15).
 const BACKGROUND = "#100b15";
@@ -206,15 +232,9 @@ function createWindow() {
     },
   });
 
-  // External links (anything not on our app:// origin) open in the system
+  // External links (anything not on our own origin) open in the system
   // browser; in-app navigation stays in the window.
-  const isInternal = (target) => {
-    try {
-      return new URL(target).origin === ORIGIN;
-    } catch {
-      return false;
-    }
-  };
+  const isInternal = isAppOrigin;
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isInternal(url)) return { action: "allow" };
     shell.openExternal(url);
@@ -237,6 +257,18 @@ function createWindow() {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+
+  // The app menu is removed (Menu.setApplicationMenu(null)), and the default
+  // DevTools accelerators come from that menu — so in dev mode bind them
+  // directly, or there is no way into the inspector at all.
+  if (DEV_URL) {
+    mainWindow.webContents.on("before-input-event", (_event, input) => {
+      if (input.type !== "keyDown") return;
+      const toggle = input.key === "F12" ||
+        ((input.control || input.meta) && input.shift && input.key === "I");
+      if (toggle) mainWindow.webContents.toggleDevTools();
+    });
+  }
 
   mainWindow.loadURL(START_URL);
 }
@@ -429,9 +461,20 @@ const ALLOWED_PERMISSIONS = new Set([
   "pointerLock",
 ]);
 
+// Our own origin: app://armada, plus the Vite dev server in dev mode.
+//
+// Compared as scheme+host, NOT via `URL.origin`: `app:` is a non-special scheme
+// to a URL parser, so `new URL("app://armada/").origin` serializes to the
+// string "null" and an `=== ORIGIN` test is false for every URL this is asked
+// about — including the ones it exists to allow. Chromium gives the scheme a
+// real origin because registerSchemesAsPrivileged marks it `standard`, and
+// hands us "app://armada" as the requesting origin; Node's parser, which is
+// what runs here, knows nothing of that registration.
 function isAppOrigin(url) {
   try {
-    return new URL(url).origin === ORIGIN;
+    const u = new URL(url);
+    const origin = `${u.protocol}//${u.host}`;
+    return origin === ORIGIN || (DEV_ORIGIN !== "" && origin === DEV_ORIGIN);
   } catch {
     return false;
   }
@@ -671,6 +714,9 @@ if (!gotLock) {
   app.on("second-instance", () => showWindow());
 
   app.whenReady().then(() => {
+    if (DEV_URL) {
+      console.log(`[dev] ${DEV_URL} — profile ${app.getPath("userData")}`);
+    }
     Menu.setApplicationMenu(null);
     registerAppProtocol();
     installPermissionHandlers();

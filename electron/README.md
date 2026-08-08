@@ -52,13 +52,35 @@ The web client talks to the shell through a small, explicit bridge
 (`window.armadaDesktop`, see `preload.js`); on the web that object is absent and
 every integration no-ops.
 
+## Development
+
+```sh
+npm run electron:dev     # from the repo root
+```
+
+`scripts/dev-electron.sh` starts the Vite dev server and launches this shell
+against it (`ARMADA_DEV_URL`), so the renderer has HMR and React fast refresh
+while the main process is the same `main.js` the packaged app runs — tray,
+screen picker, `safeStorage`, the SQLite store all behave as they do in a
+build. Ctrl-C stops both. `PORT` overrides 8080; F12 / Ctrl+Shift+I open the
+inspector (the app menu is removed, so the default accelerators are gone with
+it).
+
+Two things dev mode does *not* share with an installed Armada, both deliberate:
+the **profile** (`--user-data-dir` points at `electron/.dev-profile`, so a
+work-in-progress build can't write the real `armada.db`; set
+`ARMADA_DEV_USER_DATA` if you want the real one), and the **origin**
+(`http://localhost:8080` vs `app://armada`, and localStorage — hence the login
+store — is per-origin, so you log in again here).
+
 ## Local build / run
 
 ```sh
-# 1. Build the standalone web bundle and stage it.
-cd client
+# 1. From the repo root: build the standalone web bundle and stage it,
+#    plus electron/db.cjs (the shell's ArmadaDB store, bundled from src/lib/db).
 npx vite build
-rm -rf electron/dist && cp -r dist electron/dist
+mkdir -p electron/dist && find electron/dist -mindepth 1 -delete && cp -rT dist electron/dist
+npm run build:electron-db
 
 # 2. Build / run the desktop app.
 cd electron
@@ -73,6 +95,10 @@ npm run dist:mac     # .dmg (must run on macOS)
 # macOS .app bundles from any OS, after a dist:linux (see below):
 node scripts/package-mac.mjs
 ```
+
+`main.js` requires `db.cjs` at startup and it is gitignored, so a build that
+skipped step 1's last line is not a failure — it is an app quietly storing the
+user's data somewhere else.
 
 The app icon lives at `build/icon.png` (1024×1024, committed); electron-builder
 derives `.ico`/`.icns` from it.
