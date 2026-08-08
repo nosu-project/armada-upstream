@@ -12,6 +12,9 @@
  *  - **Android** (default) — the Capacitor plugin, onto Kotlin
  *    (`buzz.armada.app.db.SqliteArmadaDb`), against the same SQLite file the
  *    background notification service writes into.
+ *  - **iOS** — the same Capacitor plugin, onto Swift (`ios/ArmadaDB`), against
+ *    a file in the App Group container so a future notification extension —
+ *    a separate process — can open the one the app already wrote.
  *  - **Desktop** — Electron IPC, onto `SqliteArmadaDB` running on
  *    `node:sqlite` in the shell's main process (see `ElectronArmadaDB.ts` and
  *    `electronMain.ts`).
@@ -106,13 +109,22 @@ function ArmadaDBBridge(): ArmadaDBPlugin {
   return (bridge ??= registerPlugin<ArmadaDBPlugin>("ArmadaDB"));
 }
 
+/** The platforms that ship a native ArmadaDB implementation. */
+const NATIVE_DB_PLATFORMS = new Set(["android", "ios"]);
+
 /**
- * Whether the native store is present. Android-only: the plugin is registered
- * in `MainActivity`, and iOS has no implementation, so the check has to be for
- * the plugin rather than for "native".
+ * Whether the native store is present.
+ *
+ * Both checks earn their keep. The platform list is the rule from AGENTS.md —
+ * a plugin is gated on the platforms that actually implement it, never on
+ * `isNativePlatform()`, which would route a call into a `registerPlugin` proxy
+ * with nothing behind it. The plugin check is what makes the rest of the app
+ * indifferent to build skew: an iOS build whose plugin failed to register
+ * answers `false` and opens IndexedDB, rather than every read rejecting.
  */
 export function hasNativeArmadaDB(): boolean {
-  return Capacitor.getPlatform() === "android" && Capacitor.isPluginAvailable("ArmadaDB");
+  return NATIVE_DB_PLATFORMS.has(Capacitor.getPlatform()) &&
+    Capacitor.isPluginAvailable("ArmadaDB");
 }
 
 export class NativeArmadaDB implements ArmadaDB {

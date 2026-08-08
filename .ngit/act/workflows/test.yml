@@ -16,7 +16,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 15 before the Swift suite; the vendored SQLite amalgamation is a ~9 MB C
+    # file compiled from scratch on a cold .build.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -28,6 +30,17 @@ jobs:
 
       # tsc + eslint + vitest + production build (see package.json "test").
       - run: npm run test
+
+      # The Swift ArmadaDB engine's conformance suite (ios/ArmadaDB), ported
+      # from ArmadaDbTest.kt. The engine is a SwiftPM package with SQLite
+      # vendored so it builds on Linux — act runs Linux containers only, so
+      # this is the one place iOS storage is tested at all.
+      #
+      # The toolchain is baked into the armada-ci image (.ngit/ci-image), NOT
+      # installed here: it is ~1 GB, and there is no setup-swift step to heal a
+      # stale image. A "swift: command not found" here means the coordinator's
+      # image predates this step and needs .ngit/ci-image/build.sh.
+      - run: swift test --package-path ios/ArmadaDB
 
       # Fail on known high/critical advisories in dependencies.
       - run: npm audit --audit-level=high

@@ -116,6 +116,35 @@ RUN set -eux; \
 COPY --from=zsp-builder /out/zsp /usr/local/bin/zsp
 RUN zsp --version
 
+# ── Swift toolchain (ios/ArmadaDB conformance suite in test.yml) ─────────────
+# The iOS store's engine is a SwiftPM package precisely so its suite runs on
+# Linux — act has no macOS runner and never will, so this is the ONLY place
+# iOS storage gets tested at all. Installed under /usr/local/swift with
+# binstubs in /usr/local/bin: outside /opt/hostedtoolcache, which the
+# act-toolcache volume shadows at job time (see the header), and there is no
+# setup-swift in the workflow to self-heal a stale image.
+#
+# The platform slug has to match the base image's Ubuntu release, so it is read
+# from /etc/os-release rather than pinned alongside the version.
+ARG SWIFT_VERSION=6.3.3
+RUN set -eux; \
+    apt-get update -qq; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      binutils libcurl4-openssl-dev libedit2 libpython3-dev libsqlite3-0 \
+      libxml2-dev libz3-dev pkg-config tzdata zlib1g-dev; \
+    rm -rf /var/lib/apt/lists/*; \
+    . /etc/os-release; \
+    slug="ubuntu${VERSION_ID//./}"; \
+    curl -fsSL "https://download.swift.org/swift-${SWIFT_VERSION}-release/${slug}/swift-${SWIFT_VERSION}-RELEASE/swift-${SWIFT_VERSION}-RELEASE-ubuntu${VERSION_ID}.tar.gz" \
+      -o /tmp/swift.tar.gz; \
+    mkdir -p /usr/local/swift; \
+    tar -xzf /tmp/swift.tar.gz -C /usr/local/swift --strip-components=1; \
+    rm /tmp/swift.tar.gz; \
+    ln -sf /usr/local/swift/usr/bin/swift /usr/local/bin/swift; \
+    ln -sf /usr/local/swift/usr/bin/swiftc /usr/local/bin/swiftc; \
+    swift --version; \
+    command -v swift | grep -qv hostedtoolcache
+
 # ── Warm dependency caches for this repo ─────────────────────────────────────
 # Mirrors release.yml's build path (npm ci + cap sync + gradle release build)
 # and desktop.yml's (electron npm ci + electron-builder --linux --win) so
@@ -165,4 +194,5 @@ RUN set -eux; \
     fastlane --version; \
     zsp --version; \
     wine --version; \
+    swift --version; \
     sdkmanager --version
