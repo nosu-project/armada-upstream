@@ -8,6 +8,7 @@ import {
   useSendStatus,
 } from "@/concord/hooks/useChannel";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { customEmojiReactionTags } from "@/hooks/useReactions";
 import { KIND_CALENDAR_RSVP, KIND_COMMENT, KIND_DELETE, KIND_EDIT, KIND_ONCHAIN_ZAP, KIND_POLL, KIND_POLL_VOTE, KIND_REACTION, KIND_ZAP } from "@/concord/lib/kinds";
 import { markReactionDeleted, type OpenedChat } from "@/concord/lib/chat";
@@ -86,6 +87,7 @@ export function useTransport(
   openedById: Map<string, OpenedChat>;
 } {
   const { user } = useCurrentUser();
+  const { mutedPubkeys } = useMutedPubkeys();
   const queryClient = useQueryClient();
   const { folded, raw, isLoading, loadOlder, hasMore, isLoadingOlder } = useChannelTimeline(community, channel, routeChannelIdHex);
   const { mutateAsync: send } = useSendMessage(community, channel);
@@ -181,11 +183,17 @@ export function useTransport(
       const tallies: ReactionTally[] = [];
       for (const [emoji, entry] of byEmoji) {
         const mine = Boolean(user && entry.reactors.has(user.pubkey));
+        // Concord folds its own reaction tallies rather than going through
+        // `tallyReactions`, so the mute filter has to be applied here too: a
+        // muted reactor must not contribute a count or a name to the hover
+        // list. A tally emptied by muting is dropped rather than shown as 0.
+        const reactors = [...entry.reactors.keys()].filter((pk) => !mutedPubkeys.has(pk));
+        if (reactors.length === 0) continue;
         tallies.push({
           key: emoji,
           url: entry.url,
-          count: entry.reactors.size,
-          pubkeys: [...entry.reactors.keys()],
+          count: reactors.length,
+          pubkeys: reactors,
           mine,
           mineEventId: mine ? entry.reactors.get(user!.pubkey) : undefined,
         });
@@ -194,7 +202,7 @@ export function useTransport(
       out.set(targetId, tallies);
     }
     return out;
-  }, [folded.reactions, user]);
+  }, [folded.reactions, user, mutedPubkeys]);
 
   const channelIdHex = channel?.idHex ?? null;
 

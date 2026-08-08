@@ -11,10 +11,11 @@ import {
 import { flashRow } from "@/components/chat/rowFlash";
 import { Skeleton } from "@/components/ui/skeleton";
 import { markBootPainted } from "@/lib/bootGate";
+import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { usePerfMilestone } from "@/hooks/usePerfMilestone";
 import { cn } from "@/lib/utils";
 
-import { isGitContinuation, type ChannelTimelineEntry } from "@/components/chat/channelTimeline";
+import { isGitContinuation, timelineEntryAuthor, type ChannelTimelineEntry } from "@/components/chat/channelTimeline";
 import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
 import type { ReactNode, RefObject } from "react";
 
@@ -418,7 +419,7 @@ export function MessageTimeline({
   // rows (Git activity) chronologically; everyone else gets the chat-only view.
   // Memoized because the row model and the prepend anchor both compare by
   // identity — a fresh array each render would look like a new conversation.
-  const timelineEntries = useMemo<readonly ChannelTimelineEntry[]>(
+  const allEntries = useMemo<readonly ChannelTimelineEntry[]>(
     () =>
       entries ??
       messages.map((message) => ({
@@ -430,6 +431,25 @@ export function MessageTimeline({
     [entries, messages],
   );
 
+  // Muted people are dropped here rather than in each transport, because this
+  // is the one place every timeline surface — Concord, NIP-29, Buzz, DMs, mesh
+  // — funnels through, and because the row model below compares by identity:
+  // filtering upstream per-caller would mean five chances to forget. Skipped
+  // entirely while the mute set is still cold (`!ready`), so the common warm
+  // case pays one Set lookup per row and the cold case can't hide a row it has
+  // no basis to hide yet.
+  const { mutedPubkeys, ready: mutesReady } = useMutedPubkeys();
+  const timelineEntries = useMemo<readonly ChannelTimelineEntry[]>(() => {
+    if (!mutesReady || mutedPubkeys.size === 0) return allEntries;
+    const kept = allEntries.filter((entry) => {
+      const author = timelineEntryAuthor(entry);
+      return !author || !mutedPubkeys.has(author);
+    });
+    // Preserve identity when nothing was removed: a fresh array on every mute
+    // set change would read as a new conversation to the prepend anchor.
+    return kept.length === allEntries.length ? allEntries : kept;
+  }, [allEntries, mutedPubkeys, mutesReady]);
+
   // Remember that we've shown a populated timeline. If `messages` then briefly
   // empties (a transient between a cache refresh and the merged result landing),
   // we render the skeleton rather than flashing the empty state / a blank gap —
@@ -437,10 +457,15 @@ export function MessageTimeline({
   // a render artifact, not an empty channel. Reset while a fresh load is in
   // flight (channel switch) so a genuinely-empty channel still shows its empty
   // state instead of a stale skeleton.
+  //
+  // Tracked against the UNFILTERED entries: a channel whose every visible row
+  // was muted away is not a source that briefly emptied, it is a channel with
+  // nothing left to show — and holding the skeleton over it would never come
+  // down, because no later poll will produce a row the filter admits.
   const hadMessagesRef = useRef(false);
   if (isLoading) hadMessagesRef.current = false;
-  if (timelineEntries.length > 0) hadMessagesRef.current = true;
-  const transientEmpty = timelineEntries.length === 0 && hadMessagesRef.current;
+  if (allEntries.length > 0) hadMessagesRef.current = true;
+  const transientEmpty = allEntries.length === 0 && hadMessagesRef.current;
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);

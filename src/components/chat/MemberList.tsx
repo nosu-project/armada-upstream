@@ -1,4 +1,4 @@
-import { AtSign, Ban, Bot, Copy, Crown, Flag, IdCard, MessageSquareText, MoreVertical, Music, Search, Shield, ShieldOff, Smile, UserCog, UserMinus, UserPlus, X } from "lucide-react";
+import { AtSign, Ban, Bot, Copy, Crown, Flag, IdCard, MessageSquareText, MoreVertical, Music, Search, Shield, ShieldOff, Smile, UserCheck, UserCog, UserMinus, UserPlus, UserX, X } from "lucide-react";
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -37,6 +37,7 @@ import { DisplayName } from "@/components/DisplayName";
 import { Input } from "@/components/ui/input";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useChatScope } from "@/hooks/useChatScope";
+import { useMutedPubkeys, useMuteToggle } from "@/hooks/useMuteList";
 import { useMemberSearch } from "@/hooks/useMemberSearch";
 import { useScopedIdentity } from "@/hooks/useScopedDisplayName";
 import { isStatusExpired, useUserStatus } from "@/hooks/useUserStatus";
@@ -233,6 +234,9 @@ const MemberRow = memo(function MemberRow({
   // Reporting is the affordance for everyone ELSE — it needs no permission,
   // only somewhere to send it and someone other than yourself to send it about.
   const canReport = Boolean(reportTo && currentUserPubkey && !isSelf);
+  // Muting is available on every roster, room or not: it writes to the user's
+  // own list rather than to anyone the room would have to provide.
+  const mute = useMuteToggle(pubkey);
 
   const copyNpub = () => {
     const npub = tryNpubEncode(pubkey);
@@ -389,17 +393,29 @@ const MemberRow = memo(function MemberRow({
         </>
       )}
 
+      {/* Mute and report close the menu as one group, so the separator belongs
+          to whichever of them is present rather than to either individually. */}
+      {(mute.canMute || canReport) && <Separator />}
+      {mute.canMute && (
+        <Item
+          className={cn(
+            "gap-3 px-3 py-2.5",
+            !mute.muted && "text-destructive focus:text-destructive",
+          )}
+          onSelect={() => void mute.toggle()}
+        >
+          {mute.muted ? <UserCheck className="size-4" /> : <UserX className="size-4" />}
+          {mute.label}
+        </Item>
+      )}
       {canReport && (
-        <>
-          <Separator />
-          <Item
-            className="gap-3 px-3 py-2.5 text-destructive focus:text-destructive"
-            onSelect={() => setReportOpen(true)}
-          >
-            <Flag className="size-4" />
-            Report
-          </Item>
-        </>
+        <Item
+          className="gap-3 px-3 py-2.5 text-destructive focus:text-destructive"
+          onSelect={() => setReportOpen(true)}
+        >
+          <Flag className="size-4" />
+          Report
+        </Item>
       )}
     </>
   );
@@ -640,6 +656,7 @@ export function MemberList({
   onAddMembers,
   className,
 }: MemberListProps) {
+  const { mutedPubkeys } = useMutedPubkeys();
   const [query, setQuery] = useState("");
   // The field is revealed by a button, mirroring the channel/DM header search.
   const [searchOpen, setSearchOpen] = useState(false);
@@ -677,21 +694,27 @@ export function MemberList({
   // members/admins events, so each 30s refetch could otherwise reshuffle the
   // roster. Sort the owner first, then by pubkey for a stable order.
   const isOwnerRole = (a: Nip29Admin) => a.roles.some((r) => r.toLowerCase() === "owner");
-  const sortedAdmins = [...admins].sort((a, b) => {
-    const ao = isOwnerRole(a) ? 0 : 1;
-    const bo = isOwnerRole(b) ? 0 : 1;
-    return ao - bo || a.pubkey.localeCompare(b.pubkey);
-  });
+  // Muted people leave the roster entirely — admin, regular or role section
+  // alike. Applied to the three source arrays rather than at the row, so the
+  // section counts, the "no matches" state and the virtualization threshold
+  // all agree with what is actually rendered.
+  const sortedAdmins = [...admins]
+    .filter((a) => !mutedPubkeys.has(a.pubkey))
+    .sort((a, b) => {
+      const ao = isOwnerRole(a) ? 0 : 1;
+      const bo = isOwnerRole(b) ? 0 : 1;
+      return ao - bo || a.pubkey.localeCompare(b.pubkey);
+    });
   const allRegulars = members
-    .filter((pubkey) => !adminMap.has(pubkey))
+    .filter((pubkey) => !adminMap.has(pubkey) && !mutedPubkeys.has(pubkey))
     .sort((a, b) => a.localeCompare(b));
 
   // One pass over the whole roster: every section filters against the same
   // match set, so a name only has to be resolved once.
   const roster = useMemo(
-    () => [...admins.map((a) => a.pubkey), ...allRegulars],
+    () => [...sortedAdmins.map((a) => a.pubkey), ...allRegulars],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [admins.map((a) => a.pubkey).join(","), allRegulars.join(",")],
+    [sortedAdmins.map((a) => a.pubkey).join(","), allRegulars.join(",")],
   );
   const matched = useMemberSearch(roster, query);
   const searching = matched !== null;
@@ -710,7 +733,9 @@ export function MemberList({
   );
   const visibleSections = (roleSections ?? []).map((section) => ({
     ...section,
-    members: matched ? section.members.filter((pubkey) => matched.has(pubkey)) : section.members,
+    members: section.members.filter(
+      (pubkey) => !mutedPubkeys.has(pubkey) && (!matched || matched.has(pubkey)),
+    ),
   }));
   const noMatches =
     searching &&

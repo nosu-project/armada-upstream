@@ -5,6 +5,7 @@ import { useMemo } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useFollowList } from "@/hooks/useFollowList";
+import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { seedAuthorCache } from "@/hooks/useAuthor";
 import { metadataSchema } from "@/lib/authorCache";
 
@@ -160,6 +161,7 @@ function useFollowProfiles(followedPubkeys: string[]) {
 export function useSearchProfiles(query: string) {
   const { nostr } = useNostr();
   const queryClient = useQueryClient();
+  const { mutedPubkeys } = useMutedPubkeys();
   const { data: followData } = useFollowList();
   const followedPubkeys = useMemo(
     () => new Set(followData?.pubkeys ?? []),
@@ -243,9 +245,17 @@ export function useSearchProfiles(query: string) {
     return merged;
   }, [relayResults.data, followProfiles, followedPubkeys, debouncedQuery, queryClient]);
 
+  // Applied to the MERGED result rather than to each of the three sources
+  // (follow matches, relay hits, the cache-wide widen), so no path can put a
+  // muted person back into an autocomplete or an invite picker.
+  const visible = useMemo(
+    () => (mutedPubkeys.size === 0 ? data : data?.filter((p) => !mutedPubkeys.has(p.pubkey))),
+    [data, mutedPubkeys],
+  );
+
   return {
     ...relayResults,
-    data,
+    data: visible,
     followedPubkeys,
   };
 }
@@ -259,11 +269,12 @@ export function useSearchProfiles(query: string) {
  */
 export function useMemberProfiles(pubkeys: string[], query: string) {
   const queryClient = useQueryClient();
+  const { mutedPubkeys } = useMutedPubkeys();
 
   return useMemo<SearchProfile[]>(() => {
     const lowerQuery = query.trim().toLowerCase();
 
-    const profiles: SearchProfile[] = pubkeys.map((pubkey) => {
+    const profiles: SearchProfile[] = pubkeys.filter((pk) => !mutedPubkeys.has(pk)).map((pubkey) => {
       const entry = queryClient
         .getQueryCache()
         .find({ queryKey: ["author", pubkey] });
@@ -290,5 +301,5 @@ export function useMemberProfiles(pubkeys: string[], query: string) {
     });
 
     return matched.slice(0, 10);
-  }, [pubkeys, query, queryClient]);
+  }, [pubkeys, query, queryClient, mutedPubkeys]);
 }

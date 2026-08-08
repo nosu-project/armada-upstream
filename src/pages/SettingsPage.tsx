@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   Smile,
   UserCircle,
+  UserX,
   Waypoints,
   Zap,
 } from "lucide-react";
@@ -36,6 +37,7 @@ import { NotificationSettings } from "@/components/NotificationSettings";
 import { RelayListEditor } from "@/components/RelayListEditor";
 import { RelayBootstrapForm } from "@/components/RelayBootstrapForm";
 import { KeyBackupSettings } from "@/components/settings/KeyBackupSettings";
+import { MutedPeopleSettings } from "@/components/settings/MutedPeopleSettings";
 import { SettingsRow } from "@/components/settings/SettingsSection";
 import { WalletSettings } from "@/components/settings/WalletSettings";
 import { ThemeSelector } from "@/components/ThemeSelector";
@@ -77,6 +79,7 @@ type SectionId =
   | "keys"
   | "profile"
   | "notifications"
+  | "muted"
   | "appearance"
   | "voice"
   | "servers"
@@ -339,6 +342,9 @@ export function SettingsPage() {
       userItems.push(
         { id: "profile", title: "Profile", icon: UserCircle },
         { id: "notifications", title: "Notifications", icon: Bell },
+        // The only route back from a mute: a muted person appears in no list
+        // anywhere else, so there is nowhere else an unmute could live.
+        { id: "muted", title: "Muted people", icon: UserX },
       );
     }
     const appItems: NavItem[] = [
@@ -395,6 +401,8 @@ export function SettingsPage() {
             <ProfileSettings />
           </SettingsRow>
         );
+      case "muted":
+        return <MutedPeopleSettings />;
       case "notifications":
         return (
           <SettingsRow>

@@ -1,4 +1,4 @@
-import { AlertCircle, Braces, Copy, Flag, Forward, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, Zap } from "lucide-react";
+import { AlertCircle, Braces, Copy, Flag, Forward, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, UserCheck, UserX, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
@@ -47,6 +47,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useChatScope } from "@/hooks/useChatScope";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useIsTouch } from "@/hooks/useIsMobile";
+import { useMuteToggle } from "@/hooks/useMuteList";
 import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { getComposerCollisionPadding, useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
@@ -554,6 +555,12 @@ const ChatMessageInner = memo(function ChatMessageInner({
   // message you sent isn't one you report.
   const canReport = Boolean(reportTo && user && !isOwn && !identityOverride);
 
+  // Muting, unlike reporting, needs no destination — it is a private list on
+  // the user's own account — so it is offered in every room, including the ones
+  // with nobody to report to. Same identity caveat: a mesh/proxied row isn't a
+  // Nostr pubkey the mute list can name.
+  const mute = useMuteToggle(identityOverride ? undefined : event.pubkey);
+
   // Zap dialog. The button shows on others' messages when the surface supports
   // zaps; it disables (with a hint) once the author's profile has loaded
   // without a lightning address. While the profile is still loading the button
@@ -684,16 +691,29 @@ const ChatMessageInner = memo(function ChatMessageInner({
     icon: Braces,
     onSelect: () => setJsonOpen(true),
   });
-  // Report and delete share the trailing destructive group, so only the first
-  // of them opens it — two adjacent separators would read as three groups.
+  // Mute, report and delete share the trailing destructive group, so only the
+  // first of them opens it — two adjacent separators would read as three groups.
+  const showMute = mute.canMute && !isEditing;
   const showReport = canReport && !isEditing;
+  if (showMute) {
+    menuActions.push({
+      id: "mute",
+      label: mute.muted ? "Unmute person" : "Mute person",
+      icon: mute.muted ? UserCheck : UserX,
+      // Unmuting restores someone rather than removing them; styling it
+      // destructive would read as the dangerous direction of the same switch.
+      destructive: !mute.muted,
+      groupStart: true,
+      onSelect: () => void mute.toggle(),
+    });
+  }
   if (showReport) {
     menuActions.push({
       id: "report",
       label: "Report message",
       icon: Flag,
       destructive: true,
-      groupStart: true,
+      groupStart: !showMute,
       onSelect: () => setReportOpen(true),
     });
   }
@@ -703,7 +723,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
       label: "Delete message",
       icon: Trash2,
       destructive: true,
-      groupStart: !showReport,
+      groupStart: !showMute && !showReport,
       onSelect: () => setConfirmDelete(true),
     });
   }

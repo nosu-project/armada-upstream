@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useCommunityRumors } from "@/concord/hooks/useCommunityRumors";
 import { foldTimeline, replyTargetOf, type OpenedChat } from "@/concord/lib/chat";
 import { openedToChatMsg } from "@/concord/hooks/useTransport";
@@ -61,6 +62,7 @@ export function useConcordThreads(communityIdHex: string | undefined, channels: 
 } {
   const { user } = useCurrentUser();
   const pubkey = user?.pubkey;
+  const { mutedPubkeys } = useMutedPubkeys();
   const { readState, markRead: sharedMarkRead } = useReadState();
 
   const channelSig = channels.map((c) => c.idHex).join(",");
@@ -83,7 +85,13 @@ export function useConcordThreads(communityIdHex: string | undefined, channels: 
     }> = [];
 
     for (const [idHex, rumors] of rumorsByChannel) {
-      const messages = foldTimeline(rumors).messages;
+      // Drop muted authors before folding, so a muted person contributes
+      // neither a listed thread, a reply count, an avatar in the participant
+      // stack, nor a "new replies" dot. A thread whose ROOT is muted vanishes
+      // with it: `byId` no longer resolves the root, and it degrades to the
+      // same tombstone an out-of-window root gets.
+      const messages = foldTimeline(rumors).messages
+        .filter((m) => !mutedPubkeys.has(m.author));
       const byId = new Map(messages.map((m) => [m.rumorId, m]));
 
       // Bucket thread replies by their root. A thread reply is a NIP-22
@@ -140,7 +148,7 @@ export function useConcordThreads(communityIdHex: string | undefined, channels: 
 
     out.sort((a, b) => b.lastReplyAt - a.lastReplyAt);
     return out;
-  }, [rumorsByChannel, pubkey]);
+  }, [rumorsByChannel, pubkey, mutedPubkeys]);
 
   // Layer per-thread "new" on top as pure arithmetic against the shared
   // read-state map (`c2t:<rootId>` stamps).

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
+import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { KIND_DELETE, KIND_REACTION } from "@/lib/nip29";
 
@@ -69,11 +70,23 @@ export function reactionContentKey(content: string): string {
   return content;
 }
 
-/** Tally a flat list of reaction events into per-key tallies for one message. */
-function tallyReactions(reactions: NostrRumor[], userPubkey: string | undefined): ReactionTally[] {
+/**
+ * Tally a flat list of reaction events into per-key tallies for one message.
+ *
+ * `muted` drops reactors the user has muted before anything is counted, so the
+ * pill's number, its hover list of names and `mine` all agree — a muted person
+ * shouldn't be able to put a name in a tooltip or a +1 on a count any more than
+ * they can put a message on the timeline.
+ */
+function tallyReactions(
+  reactions: NostrRumor[],
+  userPubkey: string | undefined,
+  muted: ReadonlySet<string>,
+): ReactionTally[] {
   // One reaction per (pubkey, key); the latest event wins.
   const latest = new Map<string, NostrRumor>();
   for (const reaction of reactions) {
+    if (muted.has(reaction.pubkey)) continue;
     const key = `${reaction.pubkey}:${reactionKey(reaction)}`;
     const existing = latest.get(key);
     if (!existing || reaction.created_at > existing.created_at) {
@@ -146,6 +159,7 @@ export function useGroupReactions(
 ): { reactionsFor: (id: string) => MessageReactions } {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const { mutedPubkeys } = useMutedPubkeys();
   const eventStore = useEventStore();
   const { mutateAsync: createEvent } = useNostrPublish();
   const queryClient = useQueryClient();
@@ -299,10 +313,10 @@ export function useGroupReactions(
     const map = reactionsQuery.data;
     if (!map) return out;
     for (const [targetId, reactions] of map) {
-      out.set(targetId, tallyReactions(reactions, user?.pubkey));
+      out.set(targetId, tallyReactions(reactions, user?.pubkey, mutedPubkeys));
     }
     return out;
-  }, [reactionsQuery.data, user?.pubkey]);
+  }, [reactionsQuery.data, user?.pubkey, mutedPubkeys]);
 
   // Stable `react` closures + `MessageReactions` objects per id, so a row whose
   // tally didn't change keeps a stable `reactions` prop (preserving React.memo).

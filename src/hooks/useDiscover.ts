@@ -8,6 +8,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useFollowList } from "@/hooks/useFollowList";
 import { KIND_EMOJI_SET, emojiPackEntries, emojiPackName } from "@/hooks/useEmojiPacks";
+import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { resolveBundle } from "@/concord/hooks/useCommunityActions";
 import { parseInviteLink } from "@/concord/lib/invite";
 import {
@@ -350,6 +351,7 @@ export function useDiscoverAuthors(): {
   isLoading: boolean;
 } {
   const { nostr } = useNostr();
+  const { mutedPubkeys } = useMutedPubkeys();
   const { config } = useAppContext();
   const relays = useDiscoverRelays();
   const { user } = useCurrentUser();
@@ -376,9 +378,14 @@ export function useDiscoverAuthors(): {
       set.add(user.pubkey);
       for (const pk of followList.data?.pubkeys ?? []) set.add(pk);
     }
+    // A muted person is dropped from the allow-list, so the server-side
+    // `authors` filter never asks for their content in the first place. This
+    // covers the restricted path only — `discoverAllContent` sends no author
+    // filter at all, which is why each feed also filters its results below.
+    for (const pk of mutedPubkeys) set.delete(pk);
     // Sorted for a stable react-query key across renders.
     return [...set].sort();
-  }, [pack.data, user, followList.data]);
+  }, [pack.data, user, followList.data, mutedPubkeys]);
 
   return {
     authors,
@@ -422,8 +429,25 @@ export function useDiscoverAuthors(): {
  */
 const NO_AUTHORS: string[] = [];
 
+/**
+ * Drop events authored by someone the user has muted.
+ *
+ * Discover's own gate is an author ALLOW-list, which `discoverAllContent`
+ * turns off wholesale — so the allow-list can't be the only place muting is
+ * honoured, or the setting that widens the directory would also un-mute
+ * everyone in it.
+ */
+function useMuteFiltered<T extends { pubkey: string }>(events: T[] | undefined): T[] | undefined {
+  const { mutedPubkeys } = useMutedPubkeys();
+  return useMemo(() => {
+    if (!events || mutedPubkeys.size === 0) return events;
+    return events.filter((e) => !mutedPubkeys.has(e.pubkey));
+  }, [events, mutedPubkeys]);
+}
+
 export function useDiscoverCommunities() {
   const { nostr } = useNostr();
+  const { mutedPubkeys } = useMutedPubkeys();
   const { config } = useAppContext();
   const relays = useDiscoverRelays();
   const { user } = useCurrentUser();
@@ -451,8 +475,9 @@ export function useDiscoverCommunities() {
       set.add(user.pubkey);
       for (const pk of followList.data?.pubkeys ?? []) set.add(pk);
     }
+    for (const pk of mutedPubkeys) set.delete(pk);
     return [...set].sort();
-  }, [result.data?.packAuthors, user, followList.data]);
+  }, [result.data?.packAuthors, user, followList.data, mutedPubkeys]);
 
   // Completeness fallback for the (rare) overflowed window — see the doc.
   const overflowed = !unrestricted && !!result.data?.overflow && authors.length > 0;
@@ -467,7 +492,9 @@ export function useDiscoverCommunities() {
     if (!result.data) return undefined;
     const allowed = unrestricted ? null : new Set(authors);
     const base = result.data.invites.filter(
-      (invite) => !allowed || allowed.has(invite.source.pubkey),
+      (invite) =>
+        !mutedPubkeys.has(invite.source.pubkey)
+        && (!allowed || allowed.has(invite.source.pubkey)),
     );
     if (!overflowed || !fallback.data) return base;
     // Union with the fallback's complete allow-listed set, newest-first,
@@ -480,7 +507,7 @@ export function useDiscoverCommunities() {
       if (!byLinkSigner.has(invite.linkSigner)) byLinkSigner.set(invite.linkSigner, invite);
     }
     return [...byLinkSigner.values()];
-  }, [result.data, unrestricted, authors, overflowed, fallback.data]);
+  }, [result.data, unrestricted, authors, overflowed, fallback.data, mutedPubkeys]);
 
   // A failed refresh over a grid already painted (KV seed or placeholder)
   // must not swap real cards for the error state — error only when there is
@@ -601,7 +628,10 @@ export function useDiscoverEmojiPacks(query: string) {
     },
   });
 
-  return { ...result, isLoading: result.isLoading || authorsLoading };
+  // Outside the query so it also covers `discoverAllContent`, where no author
+  // filter is sent to the relay at all.
+  const data = useMuteFiltered(result.data);
+  return { ...result, data, isLoading: result.isLoading || authorsLoading };
 }
 
 /** Shareable theme definitions (Ditto kind 36767). */
@@ -629,5 +659,6 @@ export function useDiscoverThemes(query: string) {
     },
   });
 
-  return { ...result, isLoading: result.isLoading || authorsLoading };
+  const data = useMuteFiltered(result.data);
+  return { ...result, data, isLoading: result.isLoading || authorsLoading };
 }

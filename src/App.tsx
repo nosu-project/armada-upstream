@@ -14,6 +14,7 @@ import { ControlPlaneSync } from "@/components/ControlPlaneSync";
 import { DeepLinkWarmup } from "@/components/DeepLinkWarmup";
 import { DesktopBadge } from "@/components/DesktopBadge";
 import { MeshProvider } from "@/components/MeshProvider";
+import { MutedPubkeysProvider } from "@/components/MutedPubkeysProvider";
 import { NativeNotifications } from "@/components/NativeNotifications";
 import { NativeReadDismiss, NativeReadMarkerSync } from "@/components/NativeReadMarkerSync";
 import NostrProvider from "@/components/NostrProvider";
@@ -86,6 +87,7 @@ export function App() {
                 <WalletProvider>
                   <TooltipProvider>
                     <ReadStateProvider>
+                      <MutedPubkeysProvider>
                       <WireSync />
                       <NostrSync />
                       <PublishOutbox />
@@ -104,6 +106,7 @@ export function App() {
                           <AppRouter />
                         </MeshProvider>
                       </WebPushNotifications>
+                      </MutedPubkeysProvider>
                     </ReadStateProvider>
                   </TooltipProvider>
                 </WalletProvider>

@@ -1,5 +1,6 @@
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { getAvatarShape } from "@/lib/avatarShape";
 
@@ -26,7 +27,15 @@ function TypingAvatar({ pubkey }: { pubkey: string }) {
  * next to a message-bubble pill containing three sequentially pulsing dots.
  * Beyond MAX_AVATARS typers the stack collapses into a "+N" chip.
  */
-export function TypingIndicator({ pubkeys }: { pubkeys: string[] }) {
+export function TypingIndicator({ pubkeys: allPubkeys }: { pubkeys: string[] }) {
+  // Filtered here rather than in each of the three producers (Concord, DM,
+  // Buzz typing hooks): this is the one component all of them render through,
+  // and a muted person's avatar bouncing at the bottom of the composer is
+  // exactly the presence the mute was meant to remove.
+  const { mutedPubkeys } = useMutedPubkeys();
+  const pubkeys = mutedPubkeys.size === 0
+    ? allPubkeys
+    : allPubkeys.filter((pk) => !mutedPubkeys.has(pk));
   if (pubkeys.length === 0) return null;
   const shown = pubkeys.slice(0, MAX_AVATARS);
   const overflow = pubkeys.length - shown.length;

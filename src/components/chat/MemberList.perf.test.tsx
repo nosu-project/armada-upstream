@@ -32,6 +32,19 @@ vi.mock("@/hooks/useAuthor", () => ({
     return { data: undefined };
   },
 }));
+// The mute menu item's mutations reach for the relay pool; this tree has none.
+// `useMutedPubkeys` would be safe (it reads a context with a no-mutes default),
+// but the module is mocked whole so the two can't disagree about the shape.
+vi.mock("@/hooks/useMuteList", () => ({
+  useMutedPubkeys: () => ({ mutedPubkeys: new Set<string>(), ready: true }),
+  useMuteToggle: () => ({
+    muted: false,
+    canMute: false,
+    pending: false,
+    label: "Mute",
+    toggle: async () => {},
+  }),
+}));
 vi.mock("@/hooks/useUserStatus", () => ({
   useUserStatus: (pubkey?: string, type = "general") => {
     spies.useUserStatus(pubkey, type);

@@ -6,6 +6,7 @@ import { useNavigate } from "react-router-dom";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
+import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useNotifLevels, type NotifLevel } from "@/hooks/useNotifLevels";
 import { loadPushPrefs } from "@/lib/pushPrefs";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
@@ -82,6 +83,13 @@ export function useForegroundNotifications(): void {
   const { channelLevel, concordChannelLevel, dmLevel } = useNotifLevels();
   const { isKnown } = useKnownDmPeers();
   const { data: groupList } = useUserGroupList();
+  const { mutedPubkeys } = useMutedPubkeys();
+
+  // Its own ref rather than a field on `ctx`: the sink reads it on every
+  // candidate, and it must reflect a mute made moments ago in another tab or
+  // surface without the sink being torn down and re-registered.
+  const mutedRef = useRef(mutedPubkeys);
+  mutedRef.current = mutedPubkeys;
 
   // groupId → host relay URL (NIP-29 events don't carry their relay). The
   // kind-10009 list covers explicit joins; the wire's per-server directory
@@ -225,6 +233,10 @@ export function useForegroundNotifications(): void {
         // presentation boundary safe when identity hydration races a live
         // event or another candidate source is added.
         if (cand.author && cand.author === user.pubkey) continue;
+        // A muted person must not be able to raise a toast, a sound, or an OS
+        // notification — the one place where hiding them from the UI isn't
+        // enough, because the notification is the UI coming to find you.
+        if (cand.author && mutedRef.current.has(cand.author)) continue;
 
         // Resolve the fields ingest left for the hook (relay-dependent
         // routing) and the conversation's notification level.

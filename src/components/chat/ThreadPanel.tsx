@@ -1,6 +1,6 @@
-import { Braces, ChevronDown, Copy, Flag, Link2, Link as LinkIcon, Loader2, Maximize2, MessagesSquare, Minimize2, Pencil, Trash2, X, Zap } from "lucide-react";
+import { Braces, ChevronDown, Copy, Flag, Link2, Link as LinkIcon, Loader2, Maximize2, MessagesSquare, Minimize2, Pencil, Trash2, UserCheck, UserX, X, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatContent } from "@/components/chat/ChatContent";
@@ -44,6 +44,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useAutosizeTextarea } from "@/hooks/useAutosizeTextarea";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useChatScope } from "@/hooks/useChatScope";
+import { useMutedPubkeys, useMuteToggle } from "@/hooks/useMuteList";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { useLongPress } from "@/hooks/useLongPress";
@@ -181,6 +182,8 @@ function ThreadMessage({
   const chatScope = useChatScope();
   const reportTo = reportDestination(chatScope);
   const canReport = Boolean(reportTo && user && !isOwn);
+  // Mute needs no destination, so it is offered wherever a reply is rendered.
+  const mute = useMuteToggle(event.pubkey);
   const reportTarget: ReportTarget =
     isRumor && reportTo?.kind === "network"
       ? { pubkey: event.pubkey }
@@ -229,16 +232,27 @@ function ThreadMessage({
     });
   }
   menuActions.push({ id: "json", label: "View event JSON", icon: Braces, onSelect: () => setJsonOpen(true) });
-  // Report and delete share the trailing destructive group; only the first of
-  // them opens it.
+  // Mute, report and delete share the trailing destructive group; only the
+  // first of them opens it.
+  const showMute = mute.canMute && !isEditing;
   const showReport = canReport && !isEditing;
+  if (showMute) {
+    menuActions.push({
+      id: "mute",
+      label: mute.muted ? "Unmute person" : "Mute person",
+      icon: mute.muted ? UserCheck : UserX,
+      destructive: !mute.muted,
+      groupStart: true,
+      onSelect: () => void mute.toggle(),
+    });
+  }
   if (showReport) {
     menuActions.push({
       id: "report",
       label: "Report message",
       icon: Flag,
       destructive: true,
-      groupStart: true,
+      groupStart: !showMute,
       onSelect: () => setReportOpen(true),
     });
   }
@@ -248,7 +262,7 @@ function ThreadMessage({
       label: "Delete message",
       icon: Trash2,
       destructive: true,
-      groupStart: !showReport,
+      groupStart: !showMute && !showReport,
       onSelect: () => setConfirmDelete(true),
     });
   }
@@ -510,8 +524,22 @@ interface ThreadPanelProps {
  * replies never appear in the main timeline (they're nested here instead).
  */
 export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, mentionPubkeys, botCommands, conversationRelays, autoFocus = false, open = true, permalink, onClose, onExpandChange }: ThreadPanelProps) {
-  const replies = transport.threadRepliesFor?.(root.id) ?? [];
+  const threadRepliesFor = transport.threadRepliesFor;
   const isLoading = transport.threadLoading?.(root.id) ?? false;
+  // Replies live outside the main timeline, so `MessageTimeline`'s filter never
+  // sees them — the thread has to drop muted authors itself. The reply COUNT
+  // below is derived from the filtered list on purpose: a count that includes
+  // replies the reader can't see is a permanent "1 reply" on an empty thread.
+  const { mutedPubkeys, ready: mutesReady } = useMutedPubkeys();
+  const replies = useMemo(() => {
+    const all = threadRepliesFor?.(root.id) ?? [];
+    if (!mutesReady || mutedPubkeys.size === 0) return all;
+    return all.filter((reply) => !mutedPubkeys.has(reply.pubkey));
+  }, [threadRepliesFor, root.id, mutedPubkeys, mutesReady]);
+  // A muted root is reachable only by permalink now that the timeline filters,
+  // but "reachable only by permalink" isn't "never" — treat it like a root that
+  // couldn't be loaded rather than rendering the person the reader muted.
+  const rootMuted = mutesReady && mutedPubkeys.has(root.pubkey);
   const { config } = useAppContext();
   const reactionsFor = transport.reactionsFor;
   const zapsFor = transport.zapsFor;
@@ -641,10 +669,14 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
   // tombstone), the reply-count divider, and the loading spinner.
   const listHeader = (
     <>
-      {isTombstoneRoot(root) ? (
+      {isTombstoneRoot(root) || rootMuted ? (
         <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground/70">
           <MessagesSquare className="size-4 shrink-0" />
-          <span className="italic">Original message not loaded — it may be older than the channel window.</span>
+          <span className="italic">
+            {rootMuted
+              ? "You muted the person who started this thread."
+              : "Original message not loaded — it may be older than the channel window."}
+          </span>
         </div>
       ) : (
         <div data-event-id={root.id}>

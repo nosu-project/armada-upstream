@@ -4,6 +4,7 @@ import { useMemo } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
+import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { BUZZ_UNREAD_KINDS } from "@/buzz/kinds";
 import { KIND_COMMENT, KIND_GROUP_CHAT } from "@/lib/nip29";
@@ -63,6 +64,7 @@ export function useRelayInbox(
 ): RelayInbox {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const { mutedPubkeys } = useMutedPubkeys();
   const { readState } = useReadState();
   const eventStore = useEventStore();
   const queryClient = useQueryClient();
@@ -123,6 +125,10 @@ export function useRelayInbox(
 
     for (const event of mentions ?? []) {
       if (event.pubkey === user.pubkey) continue; // your own message isn't inbox
+      // Filtered here rather than at render so the unread badge agrees with the
+      // list: a muted mention that still counted would leave a dot on the inbox
+      // nothing in it could ever clear.
+      if (mutedPubkeys.has(event.pubkey)) continue;
       const h = event.tags.find(([n]) => n === "h")?.[1];
       if (!h || !groupSet.has(h)) continue;
       if (!event.tags.some(([n, v]) => n === "p" && v === user.pubkey)) continue;
@@ -135,5 +141,5 @@ export function useRelayInbox(
 
     items.sort((a, b) => b.event.created_at - a.event.created_at);
     return { items, unreadCount };
-  }, [relayUrl, user, mentions, readState, groupIds]);
+  }, [relayUrl, user, mentions, readState, groupIds, mutedPubkeys]);
 }

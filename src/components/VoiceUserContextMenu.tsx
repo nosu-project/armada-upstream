@@ -1,4 +1,4 @@
-import { Copy, MoreVertical, Volume2, VolumeX } from "lucide-react";
+import { Copy, MoreVertical, UserCheck, UserX, Volume2, VolumeX } from "lucide-react";
 
 import { DisplayName } from "@/components/DisplayName";
 import {
@@ -20,6 +20,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Slider } from "@/components/ui/slider";
+import { useMuteToggle } from "@/hooks/useMuteList";
 import { toast } from "@/hooks/useToast";
 import { useScreenShareVolume, useUserVolume } from "@/hooks/useUserVolume";
 import { writeClipboardText } from "@/lib/clipboard";
@@ -88,6 +89,7 @@ function useVoiceMenuItems(
   verified: boolean,
   volumeTarget: PlaybackVolumeTarget,
 ) {
+  const mute = useMuteToggle(pubkey);
   const [userVolume, setUserVolume] = useUserVolume(pubkey);
   const [screenShareVolume, setScreenShareVolume] = useScreenShareVolume(pubkey);
   const volume = volumeTarget === "screenShare" ? screenShareVolume : userVolume;
@@ -148,6 +150,26 @@ function useVoiceMenuItems(
           <Copy className="size-4" />
           Copy npub
         </Item>
+        {/* The NIP-51 person mute, distinct from the local playback "Mute"
+            above — hence the wording, which matches the rest of the app. Only
+            offered for a VERIFIED pubkey: an unclaimed voice identity is a
+            name we haven't tied to a key, so muting it would write someone
+            else's pubkey to the user's list. */}
+        {verified && mute.canMute && (
+          <>
+            <Separator />
+            <Item
+              className={cn(
+                "gap-2",
+                !mute.muted && "text-destructive focus:text-destructive",
+              )}
+              onSelect={() => void mute.toggle()}
+            >
+              {mute.muted ? <UserCheck className="size-4" /> : <UserX className="size-4" />}
+              {mute.muted ? "Unmute person" : "Mute person"}
+            </Item>
+          </>
+        )}
       </>
     );
   };

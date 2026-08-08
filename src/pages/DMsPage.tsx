@@ -60,7 +60,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useMuteUser } from "@/hooks/useMuteList";
+import { useMuteToggle, useMuteUser } from "@/hooks/useMuteList";
 import { useActiveRoom } from "@/hooks/useActiveRoom";
 import {
   useDMConversations,
@@ -680,6 +680,7 @@ function Conversation({
   const { config } = useAppContext();
   const { activeCall, joinDmCall, voiceRoomPubkeys } = useCall();
   const muteUser = useMuteUser();
+  const mute = useMuteToggle(peer);
   const { pref: dmProtocol, setPref: setDmProtocol } = useDmProtocolPref(peer);
   const isTouch = useIsTouch();
   // Typing indicators ride the ephemeral NIP-17 plane, so they're only
@@ -1190,13 +1191,26 @@ function Conversation({
             {!noteToSelf && (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  className="px-3 py-2 text-destructive focus:text-destructive"
-                  onClick={() => setMuteConfirmOpen(true)}
-                >
-                  <UserX className="size-4" />
-                  Mute person
-                </DropdownMenuItem>
+                {/* Muting closes the thread, so it confirms first. Unmuting is
+                    reversible and costs nothing to undo — it just goes. */}
+                {mute.muted ? (
+                  <DropdownMenuItem
+                    className="px-3 py-2"
+                    disabled={mute.pending}
+                    onClick={() => void mute.toggle()}
+                  >
+                    <UserCheck className="size-4" />
+                    Unmute person
+                  </DropdownMenuItem>
+                ) : (
+                  <DropdownMenuItem
+                    className="px-3 py-2 text-destructive focus:text-destructive"
+                    onClick={() => setMuteConfirmOpen(true)}
+                  >
+                    <UserX className="size-4" />
+                    Mute person
+                  </DropdownMenuItem>
+                )}
                 {/* A DM has no moderator: there is no room, no operator, and
                     nobody but the two of you. So the only place a report can go
                     is the public network — which the dialog says plainly, since

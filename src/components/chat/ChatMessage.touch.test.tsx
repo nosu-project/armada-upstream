@@ -21,6 +21,17 @@ vi.mock("@/hooks/useIsMobile", () => ({
 }));
 vi.mock("@/hooks/useAuthor", () => ({ useAuthor: () => ({ data: undefined }) }));
 vi.mock("@/hooks/useCurrentUser", () => ({ useCurrentUser: () => ({ user: undefined }) }));
+// The mute menu item's mutations reach for the relay pool; this tree has none.
+vi.mock("@/hooks/useMuteList", () => ({
+  useMutedPubkeys: () => ({ mutedPubkeys: new Set<string>(), ready: true }),
+  useMuteToggle: () => ({
+    muted: false,
+    canMute: false,
+    pending: false,
+    label: "Mute",
+    toggle: async () => {},
+  }),
+}));
 vi.mock("@/hooks/useScopedDisplayName", () => ({
   useScopedDisplayName: (pubkey?: string) => (pubkey ?? "").slice(0, 8),
   useScopedIdentity: (pubkey?: string) => ({ displayName: (pubkey ?? "").slice(0, 8) }),

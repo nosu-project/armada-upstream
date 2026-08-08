@@ -2,6 +2,7 @@ import { useCallback, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { queryMentionRumors } from "@/concord/lib/rumorStore";
 import { openedToChatMsg } from "@/concord/hooks/useTransport";
 import type { Channel } from "@/concord/lib/types";
@@ -57,7 +58,9 @@ export function useConcordMentions(channels: Channel[], communityIdHex: string |
   const channelSig = channels.map((c) => c.idHex).join(",");
   const channelIds = useMemo(() => channels.map((c) => c.idHex), [channelSig]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const { data: mentions = [], isLoading } = useQuery<ChatMsg[]>({
+  const { mutedPubkeys } = useMutedPubkeys();
+
+  const { data: allMentions = [], isLoading } = useQuery<ChatMsg[]>({
     ...STORE_READ,
     queryKey: ["concord-mentions", communityIdHex ?? null, pubkey, channelSig],
     queryFn: async ({ signal }) => {
@@ -75,6 +78,15 @@ export function useConcordMentions(channels: Channel[], communityIdHex: string |
     refetchInterval: 30_000,
     staleTime: 0,
   });
+
+  // Outside the query so a mute takes effect without a re-scan of the store,
+  // and so `hasNew` below is derived from the same list the tab renders — a
+  // muted mention that still lit the badge would leave a dot the Mentions tab
+  // has nothing in it to clear.
+  const mentions = useMemo(
+    () => (mutedPubkeys.size === 0 ? allMentions : allMentions.filter((m) => !mutedPubkeys.has(m.pubkey))),
+    [allMentions, mutedPubkeys],
+  );
 
   // Re-scan the moment the wire ingests a rumor for any watched channel.
   useWireScopes((scopes) => {

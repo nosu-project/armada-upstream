@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
 import { useDebounce } from "@/hooks/useDebounce";
+import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { openedToChatMsg } from "@/concord/hooks/useTransport";
 import { searchRumors } from "@/concord/lib/rumorStore";
 import { searchIsActive, type SearchFilters } from "@/concord/lib/search";
@@ -62,7 +63,13 @@ export function useConcordSearch(
     },
   });
 
-  const results = useMemo(() => search.data ?? [], [search.data]);
+  // Search reads the store directly rather than the timeline, so it is its own
+  // path back to a muted person's messages — filter it here too.
+  const { mutedPubkeys } = useMutedPubkeys();
+  const results = useMemo(() => {
+    const all = search.data ?? [];
+    return mutedPubkeys.size === 0 ? all : all.filter((m) => !mutedPubkeys.has(m.pubkey));
+  }, [search.data, mutedPubkeys]);
 
   return {
     results,

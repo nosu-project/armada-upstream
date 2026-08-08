@@ -14,7 +14,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useMuteUser } from "@/hooks/useMuteList";
+import { useMuteUser, useUnmuteUser } from "@/hooks/useMuteList";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { ReactNode } from "react";
@@ -151,7 +151,7 @@ describe("useMuteUser (kind 10000 read-modify-write)", () => {
 
     const { result } = renderHook(() => useMuteUser(), { wrapper });
     await act(async () => {
-      await expect(result.current.mutateAsync(TARGET)).rejects.toThrow(/not muting/i);
+      await expect(result.current.mutateAsync(TARGET)).rejects.toThrow(/avoid losing/i);
     });
     expect(h.publish).not.toHaveBeenCalled();
   });
@@ -197,6 +197,108 @@ describe("useMuteUser (kind 10000 read-modify-write)", () => {
     const { result } = renderHook(() => useMuteUser(), { wrapper });
     await act(async () => {
       await expect(result.current.mutateAsync(TARGET)).rejects.toThrow(/avoid losing/i);
+    });
+    expect(h.publish).not.toHaveBeenCalled();
+  });
+
+  it("publishes strictly after the previous version's created_at", async () => {
+    // Wall-clock seconds are the same for two clicks in a row, and NIP-01
+    // breaks a created_at tie by lowest id — so a same-second edit can lose.
+    const prev = muteEvent({ privateTags: [["p", EXISTING_PRIVATE]] });
+    prev.created_at = Math.floor(Date.now() / 1000) + 60; // clock skew / recent write
+    h.query.mockResolvedValue([prev]);
+
+    const { result } = renderHook(() => useMuteUser(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync(TARGET);
+    });
+
+    const arg = h.publish.mock.calls[0][0] as { created_at: number };
+    expect(arg.created_at).toBeGreaterThan(prev.created_at);
+  });
+
+  it("serializes concurrent mutes so neither overwrites the other", async () => {
+    const OTHER = "e".repeat(64);
+    // Every read returns the list as of the last publish, so a second write
+    // that read before the first one landed would drop the first's pubkey.
+    let current = muteEvent({ privateTags: [] });
+    h.query.mockImplementation(async () => [current]);
+    h.publish.mockImplementation(async (arg: unknown) => {
+      const { content } = arg as { content: string };
+      current = { ...muteEvent({}), content };
+      return undefined;
+    });
+
+    const { result } = renderHook(() => useMuteUser(), { wrapper });
+    await act(async () => {
+      await Promise.all([
+        result.current.mutateAsync(TARGET),
+        result.current.mutateAsync(OTHER),
+      ]);
+    });
+
+    const last = h.publish.mock.calls.at(-1)![0] as { content: string };
+    const privateTags = JSON.parse(last.content.slice(4)) as string[][];
+    expect(privateTags).toContainEqual(["p", TARGET]);
+    expect(privateTags).toContainEqual(["p", OTHER]);
+  });
+});
+
+describe("useUnmuteUser (kind 10000 read-modify-write)", () => {
+  it("removes a private mute and keeps every other item", async () => {
+    h.query.mockResolvedValue([
+      muteEvent({
+        tags: [["p", EXISTING_PUBLIC], ["t", "spoilers"]],
+        privateTags: [["p", EXISTING_PRIVATE], ["p", TARGET], ["word", "crypto"]],
+      }),
+    ]);
+
+    const { result } = renderHook(() => useUnmuteUser(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync(TARGET);
+    });
+
+    const arg = h.publish.mock.calls[0][0] as { content: string; tags: string[][] };
+    expect(arg.tags).toEqual([["p", EXISTING_PUBLIC], ["t", "spoilers"]]);
+    const privateTags = JSON.parse(arg.content.slice(4)) as string[][];
+    expect(privateTags).toEqual([["p", EXISTING_PRIVATE], ["word", "crypto"]]);
+  });
+
+  it("removes a mute another client published as a public tag", async () => {
+    h.query.mockResolvedValue([
+      muteEvent({ tags: [["p", TARGET], ["p", EXISTING_PUBLIC]] }),
+    ]);
+
+    const { result } = renderHook(() => useUnmuteUser(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync(TARGET);
+    });
+
+    const arg = h.publish.mock.calls[0][0] as { content: string; tags: string[][] };
+    expect(arg.tags).toEqual([["p", EXISTING_PUBLIC]]);
+    // The list never had encrypted content; don't invent an empty ciphertext.
+    expect(arg.content).toBe("");
+  });
+
+  it("REFUSES to unmute on an empty read when a cached mute list exists", async () => {
+    h.query.mockResolvedValue([]);
+    h.readFolded.mockResolvedValue([EXISTING_PRIVATE, TARGET]);
+
+    const { result } = renderHook(() => useUnmuteUser(), { wrapper });
+    await act(async () => {
+      await expect(result.current.mutateAsync(TARGET)).rejects.toThrow(/avoid losing/i);
+    });
+    expect(h.publish).not.toHaveBeenCalled();
+  });
+
+  it("publishes nothing when the pubkey isn't muted", async () => {
+    h.query.mockResolvedValue([
+      muteEvent({ privateTags: [["p", EXISTING_PRIVATE]] }),
+    ]);
+
+    const { result } = renderHook(() => useUnmuteUser(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync(TARGET);
     });
     expect(h.publish).not.toHaveBeenCalled();
   });

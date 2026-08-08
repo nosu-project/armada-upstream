@@ -49,6 +49,34 @@ export function gitActivityEntry(activity: GitTimelineActivity): GitChannelTimel
   return { type: "git-status", id: `git:${activity.status.event.id}`, createdAt: activity.createdAt, activity };
 }
 
+/**
+ * The pubkey a timeline row is attributed to, whatever kind of row it is.
+ *
+ * Muting is a statement about a person, not about a message kind, so the one
+ * filter in `MessageTimeline` has to be able to ask any entry who it is from —
+ * and each variant keeps the author somewhere different (a chat rumor's own
+ * `pubkey`, a timer notice's `author`, a Git payload's `author`). Returns
+ * `undefined` only for a row genuinely attributable to nobody.
+ */
+export function timelineEntryAuthor(entry: ChannelTimelineEntry): string | undefined {
+  switch (entry.type) {
+    case "chat":
+      return entry.message.pubkey;
+    case "dm-timer":
+      return entry.author;
+    case "git-ticket-opened":
+      return entry.activity.ticket.author;
+    case "git-comment":
+      return entry.activity.comment.author;
+    case "git-status":
+      return entry.activity.status.author;
+    case "git-ci-run":
+      // The coordinator that signed the run, not a participant — but it is a
+      // key the user can have muted, and if they did we honour it.
+      return entry.activity.run.author;
+  }
+}
+
 /** Deterministic oldest-first merge. IDs break timestamp ties across sources.
  *  `extra` carries pre-built non-chat entries (e.g. Concord timer notices). */
 export function mergeChannelTimeline(chat: readonly ChatMsg[], git: readonly GitTimelineActivity[], extra: readonly ChannelTimelineEntry[] = []): ChannelTimelineEntry[] {

@@ -40,6 +40,7 @@ import { badgeOf } from "@/concord/lib/roles";
 import type { Community } from "@/concord/lib/types";
 import { authorQueryOptions, useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { profileMatches, type SearchProfile } from "@/hooks/useSearchProfiles";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { shortTimeAgo } from "@/lib/formatTime";
@@ -69,6 +70,7 @@ export function MembersView({
   canModerate: boolean;
 }) {
   const { user } = useCurrentUser();
+  const { mutedPubkeys } = useMutedPubkeys();
   const queryClient = useQueryClient();
   const eventStore = useEventStore();
   const channels = useChannels(community);
@@ -105,6 +107,12 @@ export function MembersView({
 
   const { members, coalesced } = useMembers(community, observed.seenMs);
 
+  // Muted people leave the roster like they leave every other list. This is
+  // the one place that costs something — a moderator can't ban someone they
+  // can't see — so the trade is stated rather than hidden: unmute from
+  // Settings › Muted people, act, and mute again. Hiding them here but not in
+  // the sidebar roster would be the worse answer, since this view is open to
+  // every member, not just staff.
   const allRows = useMemo(
     () =>
       buildMemberRows({
@@ -117,8 +125,8 @@ export function MembersView({
         ownerHex: folded?.ownerHex ?? community.owner,
         selfHex: user?.pubkey,
         suspicious: suspiciousSet,
-      }),
-    [members, coalesced, observed, folded, community, user, suspiciousSet],
+      }).filter((row) => !mutedPubkeys.has(row.pubkey)),
+    [members, coalesced, observed, folded, community, user, suspiciousSet, mutedPubkeys],
   );
 
   // ── Search / filter / sort state ──────────────────────────────────────────

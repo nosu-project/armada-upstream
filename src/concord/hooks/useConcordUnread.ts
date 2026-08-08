@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useCommunityRumors } from "@/concord/hooks/useCommunityRumors";
 import { KIND_MESSAGE } from "@/concord/lib/kinds";
 import type { Channel } from "@/concord/lib/types";
@@ -41,6 +42,7 @@ export function useConcordUnread(
 } {
   const { user } = useCurrentUser();
   const pubkey = user?.pubkey;
+  const { mutedPubkeys } = useMutedPubkeys();
   const {
     readState,
     getLastRead: sharedGetLastRead,
@@ -62,6 +64,9 @@ export function useConcordUnread(
       for (const r of rumors) {
         if (r.kind !== KIND_MESSAGE) continue;
         if (r.author === pubkey) continue; // never unread from self
+        // ...nor from someone muted: the timeline won't render their message,
+        // so a badge counting it would be one the channel can never clear.
+        if (mutedPubkeys.has(r.author)) continue;
         if (r.createdAt > latest) latest = r.createdAt;
         if (r.createdAt > latestMention && r.tags.some(([n, v]) => n === "p" && v === pubkey)) {
           latestMention = r.createdAt;
@@ -75,13 +80,13 @@ export function useConcordUnread(
             : activity.type === "ci-run"
               ? activity.run.author
               : activity.status.author;
-        if (author === pubkey) continue;
+        if (author === pubkey || mutedPubkeys.has(author)) continue;
         if (activity.createdAt > latest) latest = activity.createdAt;
       }
       if (latest > lastRead) next[idHex] = { latest, mention: latestMention > lastRead };
     }
     return next;
-  }, [rumorsByChannel, readState, pubkey, gitByChannel]);
+  }, [rumorsByChannel, readState, pubkey, gitByChannel, mutedPubkeys]);
 
   const markRead = useCallback(
     (channelIdHex: string, timestamp: number) => {

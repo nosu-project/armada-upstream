@@ -1,4 +1,4 @@
-import { AtSign, Check, Copy, Flag, MessageSquare, Music } from "lucide-react";
+import { AtSign, Check, Copy, Flag, MessageSquare, Music, UserCheck, UserX } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useChatScope } from "@/hooks/useChatScope";
+import { useMuteToggle } from "@/hooks/useMuteList";
 import { useMemberRoles } from "@/hooks/useMemberRoles";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { requestMention } from "@/hooks/useMentionBus";
@@ -58,6 +59,7 @@ function ProfilePreviewBody({
   const npub = tryNpubEncode(pubkey);
   const [copied, setCopied] = useState(false);
   const isSelf = user?.pubkey === pubkey;
+  const mute = useMuteToggle(pubkey);
 
   const copyNpub = () => {
     if (!npub) return;
@@ -251,8 +253,33 @@ function ProfilePreviewBody({
           </Button>
         )}
 
-        {/* Last, quiet, and never on yourself: the off-ramp for a person, as
-            opposed to the message-level report in the timeline's own menu. */}
+        {/* The two off-ramps for a person, as opposed to the message-level
+            actions in the timeline's own menu. Mute is offered wherever the
+            card is; report only where the surrounding room gives it somewhere
+            to go. */}
+        {mute.canMute && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className={cn(
+              "mt-2 w-full clip-corner-lg h-8",
+              !mute.muted && "text-destructive hover:text-destructive hover:bg-destructive/10",
+            )}
+            disabled={mute.pending}
+            onClick={() => {
+              // Muting hides the person, which unmounts the card mid-click if
+              // the popover is still open — close it first, as Report does.
+              onAction?.();
+              void mute.toggle();
+            }}
+          >
+            {mute.muted
+              ? <UserCheck className="size-3.5 mr-1.5" />
+              : <UserX className="size-3.5 mr-1.5" />}
+            {mute.label}
+          </Button>
+        )}
+
         {!isSelf && user && onReport && (
           <Button
             size="sm"
