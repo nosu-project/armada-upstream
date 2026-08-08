@@ -4,6 +4,24 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.49.1] - 2026-08-08
+
+The desktop app gains push-to-talk, application audio capture in screen shares on Linux, Flatpak packaging, and automatic updates. The Linux build now minimises to a system tray icon instead of quitting when the window is closed. Several notification fixes land alongside: duplicate pushes are filtered, the sender name fills in correctly, and the first tap on the send button now sends.
+
+### Added
+- Push-to-talk on desktop: a configurable global shortcut mutes and unmutes the microphone during a call, with Wayland portal support
+- Screen share audio on Linux: application audio sources appear alongside the display, and the active audio track switches when you pick a new source
+- Flatpak packaging for the Linux desktop app
+- Desktop auto-updates: the app checks for and downloads new releases in the background
+- System tray icon on Linux; closing the main window minimises to tray rather than quitting
+- Android store links and an iOS app teaser on the Downloads page, which has been redesigned with a platform-first layout
+
+### Fixed
+- Web push notifications are deduplicated when the same push is replayed, and the Apple silent-push keep-alive is rate-limited to avoid exhausting the daily quota
+- A notification from a sender with no profile now shows "Anonymous" instead of a blank name
+- The first tap on the send button now sends immediately instead of needing a second tap to focus the composer
+- The notification worker retains a generic conversation title until sender names resolve, preventing a momentary blank heading
+
 ## [0.49.0] - 2026-08-07
 
 Direct message notifications were rebuilt. A message from someone you know now arrives with their name, avatar and a preview, gathered into one entry per conversation, while a message from a stranger no longer puts sender-controlled text or pictures in front of you. You can now forward a message to another conversation, and a new Downloads page collects the desktop and Android installers in one place.
