@@ -145,6 +145,7 @@ let manualUpdateCheck = false;
 let updateCheckInFlight = false;
 let macSelfUpdateEligible;
 let windowsSelfUpdateEligible;
+let updateCheckTimer = null;
 const pushToTalk = new PushToTalkController({
   platform: process.platform,
   env: process.env,
@@ -426,11 +427,36 @@ function buildTrayContextMenu() {
 }
 
 function toggleWindowFromTray() {
-  if (mainWindow && mainWindow.isVisible() && !mainWindow.isMinimized()) {
+  // Every accessor on a destroyed BrowserWindow throws, and the tray outlives
+  // the window on close-to-quit paths.
+  if (
+    mainWindow &&
+    !mainWindow.isDestroyed() &&
+    mainWindow.isVisible() &&
+    !mainWindow.isMinimized()
+  ) {
     hideWindowToTray();
   } else {
     showWindow();
   }
+}
+
+/**
+ * Run a tray callback without letting it escape.
+ *
+ * linuxStatusNotifier dispatches these from queueMicrotask, so a throw is an
+ * uncaught main-process exception rather than a rejected promise — and
+ * Menu.popup() does throw when it cannot resolve a window, which is exactly
+ * the closed-to-tray case these callbacks exist to serve.
+ */
+function guardTrayCallback(run) {
+  return (...args) => {
+    try {
+      run(...args);
+    } catch (error) {
+      console.warn("[tray] callback failed", error);
+    }
+  };
 }
 
 async function createTray({ statusNotifier = false } = {}) {
@@ -447,8 +473,8 @@ async function createTray({ statusNotifier = false } = {}) {
         image,
         tooltip: "Armada",
         getMenuEntries: trayMenuEntries,
-        onActivate: toggleWindowFromTray,
-        onContextMenu: (x, y) => {
+        onActivate: guardTrayCallback(toggleWindowFromTray),
+        onContextMenu: guardTrayCallback((x, y) => {
           const options = {};
           if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
             options.window = mainWindow;
@@ -456,7 +482,7 @@ async function createTray({ statusNotifier = false } = {}) {
           if (Number.isInteger(x)) options.x = x;
           if (Number.isInteger(y)) options.y = y;
           buildTrayContextMenu().popup(options);
-        },
+        }),
       });
       return true;
     } catch (error) {
@@ -617,7 +643,11 @@ function autoUpdatesSupported() {
 }
 
 async function showUpdateMessage(options) {
-  if (mainWindow && !mainWindow.isDestroyed()) {
+  // Only parent to a VISIBLE window. Update checks run on a timer, so this can
+  // fire while the app sits in the tray or was autostarted hidden, and a
+  // window-modal sheet on a hidden macOS window is never shown at all — the
+  // awaited promise would simply never settle.
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
     return dialog.showMessageBox(mainWindow, options);
   }
   return dialog.showMessageBox(options);
@@ -752,8 +782,12 @@ function installAutoUpdater() {
   });
 
   // Let the UI and keyring finish booting before the first network request.
-  setTimeout(() => void checkForDesktopUpdates(false), 10_000);
-  setInterval(() => void checkForDesktopUpdates(false), 4 * 60 * 60 * 1000);
+  setTimeout(() => void checkForDesktopUpdates(false), 10_000).unref();
+  updateCheckTimer = setInterval(
+    () => void checkForDesktopUpdates(false),
+    4 * 60 * 60 * 1000,
+  );
+  updateCheckTimer.unref();
 }
 
 // ── Unread badge ─────────────────────────────────────────────────────────────
@@ -1349,13 +1383,20 @@ if (!gotLock) {
     // Fail closed instead of leaving the microphone live after wake/unlock.
     powerMonitor.on("suspend", () => pushToTalk.cancelPress());
     powerMonitor.on("lock-screen", () => pushToTalk.cancelPress());
+    // Create the window BEFORE probing the tray. On Linux that probe is a
+    // chain of gdbus round trips with 1.5s timeouts each, so a session whose
+    // D-Bus is slow or wedged would otherwise show no window at all for
+    // several seconds. Nothing about constructing the window depends on the
+    // answer — only whether a --hidden start is safe, reconciled below.
+    createWindow({ show: !startHidden });
+
     if (process.platform === "linux") {
       await refreshTraySupport();
     } else {
       closeToTraySupported = await createTray();
     }
     // --hidden is safe only when the process has a visible way back in.
-    createWindow({ show: !startHidden || !closeToTraySupported });
+    if (startHidden && !closeToTraySupported) showWindow();
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow({ show: true });
@@ -1366,7 +1407,9 @@ if (!gotLock) {
   app.on("before-quit", () => {
     isQuitting = true;
     stopHiddenTrayMonitor();
-    void pushToTalk.destroy();
+    // Not awaited: before-quit is synchronous. The catch keeps a bus teardown
+  // rejection from surfacing as an unhandled rejection during shutdown.
+  void pushToTalk.destroy().catch(() => {});
   });
 
   // Closing the database is async, and quitting is not, so the first pass is

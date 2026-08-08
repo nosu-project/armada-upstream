@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
 
 import { describe, expect, it, vi } from "vitest";
@@ -9,6 +10,7 @@ const {
   MENU_PATH,
   SERVICE_NAME,
   nativeImageToArgbPixmaps,
+  watchStatusNotifierWatcher,
 } = require("./linuxStatusNotifier.js");
 
 describe("Linux StatusNotifierItem", () => {
@@ -54,6 +56,37 @@ describe("Linux StatusNotifierItem", () => {
     menu.Event(4, "clicked");
     await new Promise((resolve) => queueMicrotask(resolve));
     expect(activate).toHaveBeenCalledOnce();
+  });
+
+  it("re-registers the item when the StatusNotifierWatcher restarts", async () => {
+    const bus = new EventEmitter();
+    bus.call = vi.fn(async () => {});
+    const register = vi.fn(async () => {});
+
+    const stop = watchStatusNotifierWatcher(bus, register);
+    await vi.waitFor(() => expect(bus.call).toHaveBeenCalled());
+
+    const ownerChanged = (name, oldOwner, newOwner) => bus.emit("message", {
+      interface: "org.freedesktop.DBus",
+      member: "NameOwnerChanged",
+      body: [name, oldOwner, newOwner],
+    });
+
+    // plasmashell or the GNOME AppIndicator extension restarting is routine,
+    // and the item registered with the previous instance is simply gone.
+    ownerChanged("org.kde.StatusNotifierWatcher", ":1.4", "");
+    expect(register).not.toHaveBeenCalled();
+
+    ownerChanged("org.kde.StatusNotifierWatcher", "", ":1.9");
+    await vi.waitFor(() => expect(register).toHaveBeenCalledOnce());
+
+    // Another service cycling on the bus is not our business.
+    ownerChanged("org.example.Unrelated", "", ":1.10");
+    expect(register).toHaveBeenCalledOnce();
+
+    stop();
+    ownerChanged("org.kde.StatusNotifierWatcher", "", ":1.11");
+    expect(register).toHaveBeenCalledOnce();
   });
 
   it("converts Electron BGRA pixels to SNI network-order ARGB", () => {

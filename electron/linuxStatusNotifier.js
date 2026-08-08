@@ -242,9 +242,10 @@ ArmadaDbusMenu.configureMembers({
 });
 
 class LinuxStatusNotifierTray {
-  constructor(bus, item) {
+  constructor(bus, item, unwatch = () => {}) {
     this.bus = bus;
     this.item = item;
+    this.unwatch = unwatch;
     this.destroyed = false;
   }
 
@@ -261,10 +262,59 @@ class LinuxStatusNotifierTray {
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.unwatch();
     this.bus.unexport(ITEM_PATH);
     this.bus.unexport(MENU_PATH);
     this.bus.disconnect();
   }
+}
+
+/**
+ * Re-register the tray item whenever the StatusNotifierWatcher comes back.
+ *
+ * The watcher keeps its registrations in memory, so a shell restart
+ * (plasmashell, the GNOME AppIndicator extension) drops ours permanently and
+ * the app disappears from the panel with no way back short of relaunching —
+ * which matters most for a window that has been closed to that tray.
+ *
+ * Returns a function that removes the subscription.
+ */
+function watchStatusNotifierWatcher(bus, register) {
+  const rule = [
+    "type='signal'",
+    "sender='org.freedesktop.DBus'",
+    "interface='org.freedesktop.DBus'",
+    "member='NameOwnerChanged'",
+    `arg0='${WATCHER_INTERFACE}'`,
+  ].join(",");
+
+  const onMessage = (message) => {
+    if (
+      message.interface !== "org.freedesktop.DBus" ||
+      message.member !== "NameOwnerChanged"
+    ) return;
+    const [name, , newOwner] = message.body || [];
+    // An empty new owner means the watcher went away; there is nothing to
+    // register with until one takes the name again.
+    if (name !== WATCHER_INTERFACE || !newOwner) return;
+    void Promise.resolve(register()).catch((error) => {
+      console.warn("[tray] could not re-register status notifier item", error);
+    });
+  };
+
+  bus.on("message", onMessage);
+  void bus.call(new dbus.Message({
+    destination: "org.freedesktop.DBus",
+    path: "/org/freedesktop/DBus",
+    interface: "org.freedesktop.DBus",
+    member: "AddMatch",
+    signature: "s",
+    body: [rule],
+  })).catch(() => {});
+
+  return () => {
+    bus.off("message", onMessage);
+  };
 }
 
 async function createLinuxStatusNotifier({
@@ -287,16 +337,23 @@ async function createLinuxStatusNotifier({
     bus.export(MENU_PATH, menu);
     await bus.requestName(SERVICE_NAME);
 
-    const watcherObject = await bus.getProxyObject(
-      "org.kde.StatusNotifierWatcher",
-      WATCHER_PATH,
-    );
-    const watcher = watcherObject.getInterface(WATCHER_INTERFACE);
     // Register by object path so the watcher associates the item with this
     // connection's unique name. This also works through Flatpak's session-bus
     // proxy without granting ownership of the generic SNI service namespace.
-    await watcher.RegisterStatusNotifierItem(ITEM_PATH);
-    return new LinuxStatusNotifierTray(bus, item);
+    const register = async () => {
+      const watcherObject = await bus.getProxyObject(
+        WATCHER_INTERFACE,
+        WATCHER_PATH,
+      );
+      await watcherObject
+        .getInterface(WATCHER_INTERFACE)
+        .RegisterStatusNotifierItem(ITEM_PATH);
+    };
+    await register();
+    // Subscribe only after the first registration succeeds, so a session with
+    // no watcher at all fails here rather than leaving a listener behind.
+    const unwatch = watchStatusNotifierWatcher(bus, register);
+    return new LinuxStatusNotifierTray(bus, item, unwatch);
   } catch (error) {
     bus.disconnect();
     throw error;
@@ -313,4 +370,5 @@ module.exports = {
   ArmadaStatusNotifierItem,
   createLinuxStatusNotifier,
   nativeImageToArgbPixmaps,
+  watchStatusNotifierWatcher,
 };
