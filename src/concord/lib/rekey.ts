@@ -37,6 +37,36 @@ import { readFolded, writeFolded } from "@/lib/foldedCache";
 export const REKEY_BLOBS_PER_EVENT = 120;
 
 /**
+ * Byte ceiling on one rekey rumor's serialized JSON, applied alongside the
+ * count cap.
+ *
+ * CORD-06 §1's 120 counts blobs, but a blob's width is set by its FORM: 72
+ * bytes for a channel rotation, 104 for a base member, 136 for staff. Chunking
+ * on the count alone therefore sizes an event by who is in it. 120 base blobs
+ * serialize past the point where the WRAP layer's NIP-44 plaintext —
+ * `JSON.stringify(seal)`, which already carries the seal layer's base64
+ * ciphertext — clears the 65,535-byte cap, so `wrapSeal` threw
+ * `StreamError("oversize")` and the Refounding failed at publish. Channel
+ * rotations stayed under it at any count, which is why only Refoundings (a
+ * ban, a staff key rotation) hit it.
+ *
+ * 40,960 is not a round number, it is the NIP-44 padding bucket the cap sits
+ * in: a plaintext this size pads up to a multiple of 8,192, so a rumor at or
+ * below it seals to 55,050 bytes and wraps to a 76,965-byte event — the
+ * largest event this path already publishes today, so nothing gets bigger
+ * than what relays already take from it. One byte more tips the rumor into
+ * the next bucket, the seal jumps to 65,974 and the wrap refuses it; there is
+ * no useful value between the two. Capacity is 126 blobs at 72 bytes (so the
+ * count cap still binds and channel rotations are unchanged), 99 at 104, 90
+ * at 136.
+ *
+ * Chunking finer is always wire-legal: a receiver correlates by holding all
+ * `n` chunks and only checks `1 <= i <= n` (see {@link parseRekey}), so the
+ * 120 is an upper bound rather than a shape peers agree on.
+ */
+export const REKEY_RUMOR_MAX_BYTES = 40_960;
+
+/**
  * How many channel epochs past the one I hold to watch for rotations.
  *
  * Watching only `held + 1` strands anyone who MISSES a rotation — offline
@@ -197,29 +227,71 @@ export function buildRekeyRumors(
    */
   authority?: AuthorityCitation,
 ): NostrRumor[] {
-  const chunks: RekeyBlob[][] = [];
-  for (let i = 0; i < blobs.length; i += REKEY_BLOBS_PER_EVENT) {
-    chunks.push(blobs.slice(i, i + REKEY_BLOBS_PER_EVENT));
-  }
-  if (chunks.length === 0) chunks.push([]);
-  const n = chunks.length;
   const scopeHex = bytesToHex(rekeyScopeId(rotation.scope));
+  const tagsFor = (i: string, n: string) => [
+    ["scope", scopeHex],
+    ["newepoch", rotation.newEpoch.toString()],
+    ["prevepoch", rotation.prevEpoch.toString()],
+    ["prevcommit", rotation.prevCommit],
+    ["chunk", i, n],
+    ...(authority ? [citationToTag(authority)] : []),
+  ];
+
+  // What a chunk's blobs may spend, measured against the rumor they land in.
+  // The envelope is content-independent (the id is 64 hex characters however
+  // long the content is), so it is measured ONCE — at the widest ["chunk", i,
+  // n] this rotation could mint, since a chunk carries at least one blob and
+  // the count therefore never exceeds the blob count. Over-reserving a few
+  // digits only ever makes a chunk smaller.
+  const widest = Math.max(1, blobs.length).toString();
+  const envelope = utf8Len(JSON.stringify(
+    buildRumor({ kind: KIND_REKEY, content: "", tags: tagsFor(widest, widest), pubkey: rotatorPubkey, ms }),
+  ));
+  const budget = REKEY_RUMOR_MAX_BYTES - envelope;
+
+  const chunks: RekeyBlob[][] = [];
+  let current: RekeyBlob[] = [];
+  let used = 2; // the content's own "[]"
+  for (const blob of blobs) {
+    const cost = escapedJsonLen(blob);
+    // `+ 1` for the separating comma. A lone blob over budget is kept rather
+    // than split — a blob is indivisible, and the fixed forms are ~440 bytes.
+    if (current.length > 0 && (current.length >= REKEY_BLOBS_PER_EVENT || used + 1 + cost > budget)) {
+      chunks.push(current);
+      current = [];
+      used = 2;
+    }
+    used += cost + (current.length > 0 ? 1 : 0);
+    current.push(blob);
+  }
+  if (current.length > 0) chunks.push(current);
+  if (chunks.length === 0) chunks.push([]);
+
+  const n = chunks.length;
   return chunks.map((chunk, i) =>
     buildRumor({
       kind: KIND_REKEY,
       content: JSON.stringify(chunk),
-      tags: [
-        ["scope", scopeHex],
-        ["newepoch", rotation.newEpoch.toString()],
-        ["prevepoch", rotation.prevEpoch.toString()],
-        ["prevcommit", rotation.prevCommit],
-        ["chunk", (i + 1).toString(), n.toString()],
-        ...(authority ? [citationToTag(authority)] : []),
-      ],
+      tags: tagsFor((i + 1).toString(), n.toString()),
       pubkey: rotatorPubkey,
       ms,
     }),
   );
+}
+
+const UTF8 = new TextEncoder();
+
+function utf8Len(s: string): number {
+  return UTF8.encode(s).length;
+}
+
+/**
+ * A blob's cost inside the rumor's JSON-escaped `content` string — its own
+ * JSON, then escaped as it will be re-serialized one level up (the two
+ * surrounding quotes `JSON.stringify` adds to a string are not part of it).
+ */
+function escapedJsonLen(blob: RekeyBlob): number {
+  return utf8Len(JSON.stringify(JSON.stringify(blob))) - 2;
 }
 
 export interface ParsedRekey {
