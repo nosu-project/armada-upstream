@@ -67,8 +67,40 @@ export function mergeChannelTimeline(chat: readonly ChatMsg[], git: readonly Git
     });
 }
 
+/**
+ * Whether an entry belongs to the run its predecessor started, and so should
+ * be folded into that row instead of taking one of its own.
+ *
+ * Adjacency does the gating: a chat message between two Git events breaks the
+ * run, because the reader's attention did too. What groups is what a reader
+ * would summarize as one thing —
+ *
+ * - tickets one author opened in one repository: one person filing, not one
+ *   avatar and one name repeated down the channel;
+ * - comments on one ticket: a burst of discussion, read as a thread;
+ * - status changes on one ticket: only the last one is the ticket's state, the
+ *   rest are a ticket that flapped;
+ * - CI runs, ACROSS workflows: a push fires every workflow at once, so
+ *   grouping per workflow would interleave three runs that never collapse.
+ *   The per-workflow fold happens inside the row (`groupCIRunsByWorkflow`),
+ *   where the latest outcome of each is what survives.
+ */
 export function isGitContinuation(previous: ChannelTimelineEntry | undefined, entry: ChannelTimelineEntry | undefined): boolean {
-  return Boolean(previous?.type === "git-comment" && entry?.type === "git-comment" && previous.activity.ticket.id === entry.activity.ticket.id);
+  if (!previous || !entry) return false;
+  if (previous.type === "git-ticket-opened" && entry.type === "git-ticket-opened") {
+    // Type and repository too, so the group's one sentence stays true of every
+    // ticket under it ("opened 3 issues in armada").
+    return previous.activity.ticket.author === entry.activity.ticket.author
+      && previous.activity.ticket.type === entry.activity.ticket.type
+      && previous.activity.repository.coordinate === entry.activity.repository.coordinate;
+  }
+  if (previous.type === "git-comment" && entry.type === "git-comment") {
+    return previous.activity.ticket.id === entry.activity.ticket.id;
+  }
+  if (previous.type === "git-status" && entry.type === "git-status") {
+    return previous.activity.ticket.id === entry.activity.ticket.id;
+  }
+  return previous.type === "git-ci-run" && entry.type === "git-ci-run";
 }
 
 /** Git repository roles are intentionally irrelevant to Concord membership. */

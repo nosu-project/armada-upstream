@@ -8,9 +8,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   assembleCIRuns,
+  ciGroupsOutcome,
+  ciGroupsSummary,
+  ciRunOutcome,
   CI_JOB_RESULT_KIND,
   CI_PROGRESS_KIND,
   CI_RESULT_KIND,
+  groupCIRunsByWorkflow,
   matchCIEventRepository,
   matchCIRepository,
   parseCIJobResult,
@@ -200,5 +204,58 @@ describe("timeline integration", () => {
       [{ address: other, relayHints: [], attachedAt: 0 }],
     );
     expect(activities).toHaveLength(0);
+  });
+});
+
+describe("folding a stretch of runs", () => {
+  /** A concluded run of `workflow` on its own commit. */
+  const run = (workflow: string, commit: string, conclusion: string, createdAt: number) =>
+    parseCIRun(event({
+      kind: CI_RESULT_KIND,
+      created_at: createdAt,
+      tags: [["a", OWNER_COORD], ["c", commit], ["w", `.ngit/act/workflows/${workflow}.yml`], ["o", "push"], ["conclusion", conclusion]],
+    }))!;
+
+  it("keeps one entry per workflow, holding its newest run", () => {
+    // Twenty pushes' worth of the same two jobs is two facts, not twenty.
+    const runs = Array.from({ length: 10 }, (_, i) => [
+      run("desktop", `c${i}`.padEnd(40, "0"), "success", 1_785_000_000 + i * 2),
+      run("test", `c${i}`.padEnd(40, "0"), i === 9 ? "failure" : "success", 1_785_000_000 + i * 2 + 1),
+    ]).flat();
+
+    const groups = groupCIRunsByWorkflow(runs);
+    expect(groups.map((group) => group.name)).toEqual(["test", "desktop"]);
+    expect(groups.map((group) => group.runs.length)).toEqual([10, 10]);
+    expect(ciRunOutcome(groups[0].latest)).toBe("failure");
+    // Newest first, so the strip of history reads backwards from now.
+    expect(groups[0].runs[0].createdAt).toBe(1_785_000_019);
+  });
+
+  it("reports the stretch as failing while any workflow's latest run failed", () => {
+    const groups = groupCIRunsByWorkflow([
+      run("test", "a".repeat(40), "failure", 10),
+      run("desktop", "a".repeat(40), "success", 11),
+    ]);
+    expect(ciGroupsOutcome(groups)).toBe("failure");
+    expect(ciGroupsSummary(groups)).toBe("1 failing, 1 passing");
+  });
+
+  it("prefers a failure over work still in flight", () => {
+    const progress = parseCIRun(event({
+      kind: CI_PROGRESS_KIND,
+      created_at: 12,
+      tags: [["a", OWNER_COORD], ["d", "x"], ["c", "b".repeat(40)], ["w", ".ngit/act/workflows/desktop.yml"], ["status", "in_progress"]],
+    }))!;
+    const groups = groupCIRunsByWorkflow([run("test", "a".repeat(40), "failure", 10), progress]);
+    expect(ciGroupsOutcome(groups)).toBe("failure");
+    expect(ciGroupsSummary(groups)).toBe("1 failing, 1 running");
+  });
+
+  it("orders workflows by how recently each last ran", () => {
+    const groups = groupCIRunsByWorkflow([
+      run("test", "a".repeat(40), "success", 10),
+      run("desktop", "a".repeat(40), "success", 20),
+    ]);
+    expect(groups.map((group) => group.name)).toEqual(["desktop", "test"]);
   });
 });

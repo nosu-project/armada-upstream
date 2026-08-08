@@ -1,14 +1,16 @@
-import { AtSign, Check, Copy, MessageSquare, Music } from "lucide-react";
+import { AtSign, Check, Copy, Flag, MessageSquare, Music } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { DittoIcon } from "@/components/brand/DittoIcon";
 import { BotPill } from "@/components/BotPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
+import { ReportDialog } from "@/components/ReportDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useChatScope } from "@/hooks/useChatScope";
 import { useMemberRoles } from "@/hooks/useMemberRoles";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { requestMention } from "@/hooks/useMentionBus";
@@ -18,6 +20,7 @@ import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { dittoProfileUrl } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
+import { reportDestination } from "@/lib/report";
 import { tryNpubEncode } from "@/lib/safeNip19";
 import { cn } from "@/lib/utils";
 import { writeClipboardText } from "@/lib/clipboard";
@@ -30,7 +33,16 @@ interface ProfilePreviewCardProps {
 }
 
 /** The body of the profile preview — banner, avatar, name, npub, bio, actions. */
-function ProfilePreviewBody({ pubkey, onAction }: { pubkey: string; onAction?: () => void }) {
+function ProfilePreviewBody({
+  pubkey,
+  onAction,
+  onReport,
+}: {
+  pubkey: string;
+  onAction?: () => void;
+  /** Absent when this surface has no one to report to (see `reportDestination`). */
+  onReport?: () => void;
+}) {
   const author = useAuthor(pubkey);
   const navigate = useNavigate();
   const { user } = useCurrentUser();
@@ -238,6 +250,20 @@ function ProfilePreviewBody({ pubkey, onAction }: { pubkey: string; onAction?: (
             </a>
           </Button>
         )}
+
+        {/* Last, quiet, and never on yourself: the off-ramp for a person, as
+            opposed to the message-level report in the timeline's own menu. */}
+        {!isSelf && user && onReport && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="mt-2 w-full clip-corner-lg h-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+            onClick={onReport}
+          >
+            <Flag className="size-3.5 mr-1.5" />
+            Report
+          </Button>
+        )}
       </div>
     </>
   );
@@ -251,19 +277,49 @@ function ProfilePreviewBody({ pubkey, onAction }: { pubkey: string; onAction?: (
  */
 export function ProfilePreviewCard({ pubkey, children }: ProfilePreviewCardProps) {
   const [open, setOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
   const prefetchTheme = usePrefetchProfileTheme();
+  // Where a report from this card goes is the surrounding room's business, not
+  // the card's; in a DM or on a bare profile there is no room, and it's public.
+  const chatScope = useChatScope();
+  const reportTo = reportDestination(chatScope);
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger
-        asChild
-        onPointerEnter={() => prefetchTheme(pubkey)}
-        onFocus={() => prefetchTheme(pubkey)}
-      >
-        {children}
-      </PopoverTrigger>
-      {open && <ThemedPreviewContent pubkey={pubkey} onClose={() => setOpen(false)} />}
-    </Popover>
+    <>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger
+          asChild
+          onPointerEnter={() => prefetchTheme(pubkey)}
+          onFocus={() => prefetchTheme(pubkey)}
+        >
+          {children}
+        </PopoverTrigger>
+        {open && (
+          <ThemedPreviewContent
+            pubkey={pubkey}
+            onClose={() => setOpen(false)}
+            onReport={
+              reportTo
+                ? () => {
+                    setOpen(false);
+                    setReportOpen(true);
+                  }
+                : undefined
+            }
+          />
+        )}
+      </Popover>
+      {/* Outside the popover: choosing Report closes the card, which would
+          otherwise unmount the dialog in the same tick. */}
+      {reportOpen && reportTo && (
+        <ReportDialog
+          open={reportOpen}
+          onOpenChange={setReportOpen}
+          destination={reportTo}
+          target={{ pubkey }}
+        />
+      )}
+    </>
   );
 }
 
@@ -272,7 +328,15 @@ export function ProfilePreviewCard({ pubkey, children }: ProfilePreviewCardProps
  * don't fire until the card is shown. Applies the profile owner's Ditto theme
  * (if any) as scoped CSS variables on the card element.
  */
-function ThemedPreviewContent({ pubkey, onClose }: { pubkey: string; onClose: () => void }) {
+function ThemedPreviewContent({
+  pubkey,
+  onClose,
+  onReport,
+}: {
+  pubkey: string;
+  onClose: () => void;
+  onReport?: () => void;
+}) {
   const dittoTheme = useProfileTheme(pubkey).data?.theme;
   const themeStyle = dittoTheme ? buildThemeVarStyle(dittoTheme.colors) : undefined;
 
@@ -285,7 +349,7 @@ function ThemedPreviewContent({ pubkey, onClose }: { pubkey: string; onClose: ()
       className="w-72 p-0 rounded-2xl overflow-hidden border border-border shadow-xl"
       onClick={(e) => e.stopPropagation()}
     >
-      <ProfilePreviewBody pubkey={pubkey} onAction={onClose} />
+      <ProfilePreviewBody pubkey={pubkey} onAction={onClose} onReport={onReport} />
     </PopoverContent>
   );
 }

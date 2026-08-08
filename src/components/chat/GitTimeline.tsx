@@ -1,9 +1,9 @@
 import { ArrowUpRight, Braces, CheckCircle2, ChevronDown, ChevronRight, CircleDot, CircleSlash, Clock, ExternalLink, GitPullRequest, Loader2, MessageCircle, Paperclip, Pencil, ScrollText, Trash2, X, XCircle } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 
-import type { GitChannelTimelineEntry } from "@/components/chat/channelTimeline";
+import type { ChannelTimelineEntry, GitChannelTimelineEntry } from "@/components/chat/channelTimeline";
 import { isCommunityGuest } from "@/components/chat/channelTimeline";
 import { ChatContent } from "@/components/chat/ChatContent";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -17,8 +17,9 @@ import { useGitAttachmentUploads } from "@/hooks/useGitAttachmentUploads";
 import { useIsDesktop } from "@/hooks/useIsDesktop";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { toast } from "@/hooks/useToast";
-import { ciRunOutcome, ciWorkflowName, type CIRunJob } from "@/lib/ci";
+import { ciGroupsOutcome, ciGroupsSummary, ciRunOutcome, ciWorkflowName, groupCIRunsByWorkflow, type CIRun, type CIRunJob, type CIWorkflowGroup } from "@/lib/ci";
 import { shortTimeAgo } from "@/lib/formatTime";
+import { gitBodyPreview } from "@/lib/gitSummary";
 import {
   GIT_ISSUE_KIND,
   GIT_STATUS_APPLIED_KIND,
@@ -34,6 +35,7 @@ import {
 } from "@/lib/gitActivity";
 import { cn } from "@/lib/utils";
 import type { NostrRumor } from "@/lib/nostrRumor";
+import type { ReactNode } from "react";
 
 /** Callbacks that make the conversation panel writable. All optional: absent means read-only. */
 export interface TicketPanelActions {
@@ -51,86 +53,248 @@ export interface TicketPanelActions {
   canSetStatus?: boolean;
 }
 
-function TicketIcon({ ticket }: { ticket: GitTicket }) {
+function TicketIcon({ ticket, className }: { ticket: GitTicket; className?: string }) {
   const Icon = ticket.type === "issue" ? CircleDot : GitPullRequest;
-  return <Icon className={cn("size-4 shrink-0", ticket.type === "issue" ? "text-emerald-500" : "text-violet-500")} />;
+  return <Icon className={cn("size-3.5 shrink-0", ticket.type === "issue" ? "text-emerald-500" : "text-violet-500", className)} />;
 }
 
 function ticketType(ticket: GitTicket) {
   return ticket.type === "issue" ? "Issue" : "Pull request";
 }
 
-export function WorkItemContextHeader({ ticket, repository, onOpen }: { ticket: GitTicket; repository: string; onOpen: () => void }) {
-  return <button type="button" onClick={onOpen} className="flex w-full items-center gap-2 rounded-t-lg border border-b-0 border-border bg-secondary/45 px-3 py-2 text-left transition-colors hover:bg-secondary"><TicketIcon ticket={ticket} /><span className="min-w-0 flex-1 truncate text-xs font-medium">{ticket.subject}</span><span className="shrink-0 font-mono text-[10px] text-muted-foreground">{repository}</span></button>;
+/**
+ * The gutter a chat row spends on its avatar (`size-10` plus a `gap-3`). Git
+ * rows reuse it so their text sits on the SAME column as every message around
+ * them: a second text column is what made this activity read as a separate,
+ * louder feed pasted into the conversation.
+ */
+const GUTTER = "flex w-[3.25rem] shrink-0 justify-end pr-3 pt-0.5";
+
+/**
+ * The quietest row the timeline has: an icon in the gutter and one muted line
+ * where a message's text would be. No border, no fill, no card — a fact about
+ * the repository stated at the volume of a fact, not of a message.
+ */
+function NoticeRow({ icon, onClick, label, children, detail }: { icon: ReactNode; onClick?: () => void; label?: string; children: ReactNode; detail?: ReactNode }) {
+  return (
+    <div data-git-entry className="px-2.5">
+      <div className={cn("flex items-start rounded py-1 transition-colors", onClick && "hover:bg-secondary/40")}>
+        <span className={GUTTER}>{icon}</span>
+        <div className="min-w-0 flex-1 pr-2">
+          {onClick
+            ? <button type="button" onClick={onClick} aria-label={label} className="block w-full text-left text-xs leading-5 text-muted-foreground">{children}</button>
+            : <p className="text-xs leading-5 text-muted-foreground">{children}</p>}
+          {detail}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface GitTimelineRowProps {
+  entry: GitChannelTimelineEntry;
+  onOpen: (ticket: GitTicket) => void;
+  /**
+   * The group the timeline built, passed through as-is. Deliberately the
+   * timeline's own entry type rather than a pre-filtered Git one: filtering at
+   * the call site would allocate a new array on every render and defeat the
+   * memo below. {@link sameType} does the narrowing instead, once, here.
+   */
+  related?: readonly ChannelTimelineEntry[];
+}
+
+/** What a timeline entry is ABOUT, under the wrapper the timeline rebuilds. */
+function activityOf(entry: ChannelTimelineEntry): unknown {
+  return "activity" in entry ? entry.activity : entry;
+}
+
+/**
+ * Whether two renders of a row describe the same activity.
+ *
+ * `mergeChannelTimeline` re-wraps every activity whenever anything in the
+ * conversation changes — a single new chat message is enough — so a shallow
+ * compare would re-render every Git row in the channel on each message,
+ * re-deriving previews and re-folding CI runs for activity that did not move.
+ * The wrapper is new; the activity inside it is the same object, and is
+ * rebuilt only when the underlying events actually change.
+ *
+ * NOT the entry's id: a CI run keeps the id of the event that announced it
+ * while its Job Results are still arriving, so a row keyed on the id would go
+ * on showing a run with no logs after the logs landed.
+ */
+function sameActivity(previous: GitTimelineRowProps, next: GitTimelineRowProps): boolean {
+  if (previous.entry.activity !== next.entry.activity) return false;
+  if (previous.onOpen !== next.onOpen) return false;
+  if (previous.related === next.related) return true;
+  if (!previous.related || !next.related || previous.related.length !== next.related.length) return false;
+  return previous.related.every((entry, index) => activityOf(entry) === activityOf(next.related![index]));
 }
 
 /** A Git event rendered as a contextual channel reference. The underlying NIP-34/NIP-22 event remains the source of truth. */
-export function GitTimelineRow(props: { entry: GitChannelTimelineEntry; members: ReadonlySet<string>; onOpen: (ticket: GitTicket) => void; commentEntries?: readonly Extract<GitChannelTimelineEntry, { type: "git-comment" }>[]; activities?: readonly GitTimelineActivity[] }) {
-  // A dispatcher, deliberately hook-free: a CI run shares no shape with a
-  // ticket row, and branching inside one component would reorder its hooks.
-  const { entry, members } = props;
-  if (entry.type === "git-ci-run") return <CIRunRow activity={entry.activity} members={members} />;
-  return <TicketTimelineRow {...props} entry={entry} />;
+export const GitTimelineRow = memo(function GitTimelineRow({ entry, related, onOpen }: GitTimelineRowProps) {
+  // A dispatcher, deliberately hook-free: the four shapes share no state, and
+  // branching inside one component would reorder its hooks.
+  if (entry.type === "git-ci-run") {
+    return <CIGroupRow entries={sameType(entry, related)} />;
+  }
+  if (entry.type === "git-status") {
+    return <StatusGroupRow entries={sameType(entry, related)} onOpen={onOpen} />;
+  }
+  if (entry.type === "git-comment") {
+    return <CommentGroupRow entries={sameType(entry, related)} onOpen={onOpen} />;
+  }
+  return <TicketOpenedGroupRow entries={sameType(entry, related)} onOpen={onOpen} />;
+}, sameActivity);
+
+/**
+ * The group a row renders, narrowed to the head's own variant. The timeline
+ * only ever groups like with like ({@link isGitContinuation}), so this is a
+ * cast the grouping rule already guarantees — but it is checked rather than
+ * asserted, because a future rule that groups two variants must not silently
+ * hand a row entries it will read the wrong fields off.
+ */
+function sameType<T extends GitChannelTimelineEntry["type"]>(
+  head: Extract<GitChannelTimelineEntry, { type: T }>,
+  related: readonly ChannelTimelineEntry[] | undefined,
+): readonly Extract<GitChannelTimelineEntry, { type: T }>[] {
+  if (!related || related.length === 0) return [head];
+  return related.filter((entry): entry is Extract<GitChannelTimelineEntry, { type: T }> => entry.type === head.type);
 }
 
-function TicketTimelineRow({ entry, members, onOpen, commentEntries, activities = [] }: { entry: Exclude<GitChannelTimelineEntry, { type: "git-ci-run" }>; members: ReadonlySet<string>; onOpen: (ticket: GitTicket) => void; commentEntries?: readonly Extract<GitChannelTimelineEntry, { type: "git-comment" }>[]; activities?: readonly GitTimelineActivity[] }) {
-  const { activity } = entry;
-  const ticket = activity.ticket;
-  const repository = activity.repository.identifier;
-  const actor = activity.type === "ticket-opened" ? ticket.author : activity.type === "comment" ? activity.comment.author : activity.status.author;
-  const { earlierComments, laterComments } = useMemo(() => {
-    if (entry.type !== "git-comment") return { earlierComments: 0, laterComments: 0 };
-    const ticketComments = activities
-      .filter((candidate): candidate is Extract<GitTimelineActivity, { type: "comment" }> => candidate.type === "comment" && candidate.ticket.id === ticket.id)
-      .sort((a, b) => a.createdAt - b.createdAt || a.comment.id.localeCompare(b.comment.id));
-    const shownIds = new Set((commentEntries ?? [entry]).map((commentEntry) => commentEntry.activity.comment.id));
-    const shownIndexes = ticketComments.flatMap((comment, index) => shownIds.has(comment.comment.id) ? [index] : []);
-    if (shownIndexes.length === 0) return { earlierComments: 0, laterComments: 0 };
-    return { earlierComments: Math.min(...shownIndexes), laterComments: ticketComments.length - Math.max(...shownIndexes) - 1 };
-  }, [activities, commentEntries, entry, ticket.id]);
+/**
+ * A body reduced to prose. Markdown, screenshots and screen recordings are
+ * dropped rather than shrunk — they are one click away in the panel, which is
+ * the only place they can be read without taking the channel over.
+ *
+ * Deliberately NOT captioned with what was dropped: "3 videos" is one more
+ * thing competing for the eye, and a reader who wants the attachments is
+ * already going to the panel.
+ */
+function BodyPreview({ content, onOpen, className }: { content: string; onOpen: () => void; className?: string }) {
+  const preview = useMemo(() => gitBodyPreview(content), [content]);
+  if (!preview.text) return null;
+  return (
+    <button type="button" onClick={onOpen} className={cn("block w-full text-left", className)}>
+      <span className="line-clamp-2 text-sm leading-5 text-muted-foreground">
+        {preview.text}
+        {preview.truncated && <span className="ml-1 text-muted-foreground/70 underline underline-offset-2">more</span>}
+      </span>
+    </button>
+  );
+}
 
-  if (entry.type === "git-ticket-opened") {
-    const action = ticket.type === "issue" ? "opened an issue" : "opened a pull request";
-    return (
-      <article data-git-entry className="my-4 flex gap-2.5 px-2.5">
-        <Avatar className="mt-1 size-8 shrink-0"><ActorAvatar pubkey={actor} /></Avatar>
-        <div className="min-w-0 flex-1">
-          <p className="text-sm"><ActorName pubkey={actor} members={members} /><span className="text-muted-foreground"> {action} in {repository} · {shortTimeAgo(entry.createdAt)}</span></p>
-          <button type="button" onClick={() => onOpen(ticket)} className="mt-2 block w-full rounded-lg border border-border bg-card p-3 text-left shadow-sm transition-colors hover:bg-secondary/30">
-            <div className="flex items-center gap-2"><TicketIcon ticket={ticket} /><span className="text-xs text-muted-foreground">{ticketType(ticket)}</span></div>
-            <p className="mt-2 text-sm font-semibold">{ticket.subject}</p>
-            <p className="mt-1 text-sm leading-5 text-muted-foreground">Follow the work item here without leaving the channel.</p>
-            <span className="mt-3 flex items-center gap-1.5 text-xs text-primary"><MessageCircle className="size-3.5" />Open conversation</span>
+/** A ticket named inline: the row's one piece of emphasis. */
+function TicketSubject({ ticket, onOpen }: { ticket: GitTicket; onOpen: () => void }) {
+  return (
+    <button type="button" onClick={onOpen} className="block w-full truncate text-left text-sm font-medium text-foreground/90 hover:underline">
+      {ticket.subject}
+    </button>
+  );
+}
+
+/**
+ * Tickets one author opened in one repository, back to back. Repeating the
+ * avatar and the name per ticket is what a chat row already knows not to do.
+ */
+function TicketOpenedGroupRow({ entries, onOpen }: { entries: readonly Extract<GitChannelTimelineEntry, { type: "git-ticket-opened" }>[]; onOpen: (ticket: GitTicket) => void }) {
+  const { ticket, repository } = entries[0].activity;
+  const tickets = entries.map((entry) => entry.activity.ticket);
+  const noun = ticket.type === "issue" ? "issue" : "pull request";
+  const action = tickets.length === 1 ? `opened ${ticket.type === "issue" ? "an" : "a"} ${noun}` : `opened ${tickets.length} ${noun}s`;
+  return (
+    <article data-git-entry className="px-2.5">
+      <div className="flex items-start gap-3 rounded py-1.5 transition-colors hover:bg-secondary/40">
+        <Avatar className="size-10 shrink-0"><ActorAvatar pubkey={ticket.author} /></Avatar>
+        <div className="min-w-0 flex-1 pr-2">
+          <p className="flex flex-wrap items-baseline gap-x-1.5">
+            <ActorName pubkey={ticket.author} className="text-[15px]" />
+            <span className="text-xs text-muted-foreground">{action} in {repository.identifier}</span>
+          </p>
+          {tickets.map((opened) => <TicketSubject key={opened.id} ticket={opened} onOpen={() => onOpen(opened)} />)}
+          {tickets.length === 1 && <BodyPreview content={ticket.content} onOpen={() => onOpen(ticket)} />}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function CommentGroupRow({ entries, onOpen }: { entries: readonly Extract<GitChannelTimelineEntry, { type: "git-comment" }>[]; onOpen: (ticket: GitTicket) => void }) {
+  const { ticket } = entries[0].activity;
+  const open = () => onOpen(ticket);
+  return (
+    <article data-git-entry className="px-2.5">
+      <div className="rounded py-1 transition-colors hover:bg-secondary/40">
+        <div className="flex items-start">
+          <span className={GUTTER} />
+          <button type="button" onClick={open} className="min-w-0 flex-1 truncate pr-2 text-left text-xs text-muted-foreground hover:text-foreground">
+            on {ticket.subject}
           </button>
         </div>
-      </article>
-    );
-  }
-
-  if (entry.type === "git-comment") {
-    const comments = commentEntries ?? [entry];
-    return (
-      <article data-git-entry className="my-4 px-2.5">
-        <WorkItemContextHeader ticket={ticket} repository={repository} onOpen={() => onOpen(ticket)} />
-        <div className="rounded-b-lg border border-border bg-card px-3 py-3 shadow-sm">
-          {earlierComments > 0 && <button type="button" onClick={() => onOpen(ticket)} className="mb-3 text-[10px] text-muted-foreground/70 hover:text-muted-foreground">↑ Earlier comments</button>}
-          <div className="space-y-3">{comments.map((commentEntry) => <GitCommentRow key={commentEntry.id} entry={commentEntry} members={members} />)}</div>
-          {laterComments > 0 && <button type="button" onClick={() => onOpen(ticket)} className="mt-3 text-[10px] text-muted-foreground/70 hover:text-muted-foreground">↓ Later comments</button>}
-          <button type="button" onClick={() => onOpen(ticket)} className="mt-3 flex items-center gap-1.5 text-xs text-primary hover:underline"><MessageCircle className="size-3.5" />View conversation in context</button>
-        </div>
-      </article>
-    );
-  }
-
-  const status = gitStatusFromKind(entry.activity.status.kind, ticket.kind);
-  // One flowing, truncating sentence: separate flex spans wrap internally on
-  // narrow layouts and stack the phrase three lines high.
-  return <div className="my-3 px-2.5"><button data-git-entry type="button" onClick={() => onOpen(ticket)} className="flex w-full items-center gap-2 rounded-md border border-border bg-secondary/30 px-3 py-2 text-left text-xs hover:bg-secondary"><TicketIcon ticket={ticket} /><p className="min-w-0 flex-1 truncate"><ActorName pubkey={actor} members={members} /><span className="text-muted-foreground"> changed status to </span><span className="font-medium capitalize">{status}</span><span className="text-muted-foreground"> · {ticket.subject}</span></p></button></div>;
+        {entries.map((entry, index) => (
+          <GitCommentRow
+            key={entry.id}
+            entry={entry}
+            onOpen={open}
+            continuation={entries[index - 1]?.activity.comment.author === entry.activity.comment.author}
+          />
+        ))}
+      </div>
+    </article>
+  );
 }
 
-function GitCommentRow({ entry, members }: { entry: Extract<GitChannelTimelineEntry, { type: "git-comment" }>; members: ReadonlySet<string> }) {
+function GitCommentRow({ entry, onOpen, continuation }: { entry: Extract<GitChannelTimelineEntry, { type: "git-comment" }>; onOpen: () => void; continuation: boolean }) {
   const { comment } = entry.activity;
-  return <div className="flex gap-2.5"><Avatar className="size-8 shrink-0"><ActorAvatar pubkey={comment.author} /></Avatar><div className="min-w-0 flex-1"><div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5"><ActorName pubkey={comment.author} members={members} /><span className="text-xs text-muted-foreground">commented · {shortTimeAgo(entry.createdAt)}</span></div><ChatContent event={comment.event} disableNoteEmbeds documentMarkdown className="mt-1 break-words text-sm leading-5" /></div></div>;
+  if (continuation) {
+    return (
+      <div className="flex items-start">
+        <span className={GUTTER} />
+        <div className="min-w-0 flex-1 pr-2"><BodyPreview content={comment.content} onOpen={onOpen} /></div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-start gap-3">
+      <Avatar className="size-10 shrink-0"><ActorAvatar pubkey={comment.author} /></Avatar>
+      <div className="min-w-0 flex-1 pr-2">
+        <p><ActorName pubkey={comment.author} className="text-[15px]" /></p>
+        <BodyPreview content={comment.content} onOpen={onOpen} />
+      </div>
+    </div>
+  );
+}
+
+/** Past tense for the state a ticket ended up in. */
+function statusVerb(status: GitTicketStatus): string {
+  switch (status) {
+    case "closed": return "closed";
+    case "merged": return "merged";
+    case "resolved": return "resolved";
+    case "draft": return "marked as draft";
+    default: return "reopened";
+  }
+}
+
+/**
+ * A stretch of status changes on one ticket, shown as its OUTCOME. A ticket
+ * closed, reopened and closed again is one fact — it is closed — and the three
+ * events that got there are the panel's business.
+ */
+function StatusGroupRow({ entries, onOpen }: { entries: readonly Extract<GitChannelTimelineEntry, { type: "git-status" }>[]; onOpen: (ticket: GitTicket) => void }) {
+  const last = entries[entries.length - 1];
+  const { ticket, status } = last.activity;
+  const resolved = gitStatusFromKind(status.kind, ticket.kind);
+  return (
+    <NoticeRow
+      icon={<TicketIcon ticket={ticket} />}
+      onClick={() => onOpen(ticket)}
+      label={`Open ${ticket.subject}`}
+    >
+      <ActorName pubkey={status.author} className="text-xs" /> {statusVerb(resolved)}{" "}
+      <span className="text-foreground/90">{ticket.subject}</span>
+      {entries.length > 1 && <span className="text-muted-foreground/70"> · {entries.length} status changes</span>}
+    </NoticeRow>
+  );
 }
 
 function ActorAvatar({ pubkey }: { pubkey: string }) {
@@ -238,35 +402,134 @@ function CIJobLog({ job }: { job: CIRunJob }) {
   );
 }
 
-function CIRunRow({ activity, members }: { activity: Extract<GitTimelineActivity, { type: "ci-run" }>; members: ReadonlySet<string> }) {
-  const { run } = activity;
-  const outcome = ciRunOutcome(run);
-  const { Icon, tone, label } = ciOutcomePresentation(outcome);
-  const logged = run.jobs.filter((job) => job.result?.logs || job.result?.event.content?.trim());
+/**
+ * The run's outcome as prose. The signer is part of the sentence, not a
+ * footnote: nothing on-relay binds a coordinator to a repository, so the row
+ * reports a claim and has to say whose.
+ *
+ * `time` is off in the timeline — the day separators and the reading order
+ * already place a row — and on inside the fold, where "when did this break"
+ * is the question being asked.
+ */
+function CIRunSentence({ run, time = false }: { run: CIRun; time?: boolean }) {
+  const { label } = ciOutcomePresentation(ciRunOutcome(run));
   return (
-    <div className="my-3 px-2.5">
-      <div className="w-full rounded-md border border-border bg-secondary/30 px-3 py-2 text-left text-xs">
-        <div className="flex items-center gap-2">
-          <Icon className={`size-3.5 shrink-0 ${tone}${outcome === "in_progress" ? " animate-spin" : ""}`} />
-          <p className="min-w-0 flex-1 truncate">
-            <span className="font-medium">{ciWorkflowName(run)}</span>
-            <span className="text-muted-foreground"> {label}</span>
-            {run.commit && <span className="text-muted-foreground"> on <span className="font-mono">{run.commit.slice(0, 7)}</span></span>}
-            {run.trigger && <span className="text-muted-foreground"> · {run.trigger}</span>}
-            <span className="text-muted-foreground"> · reported by </span>
-            <ActorName pubkey={run.author} members={members} />
-          </p>
-        </div>
-        {logged.map((job) => <CIJobLog key={job.eventId} job={job} />)}
-      </div>
+    <>
+      <span className="font-medium text-foreground/90">{ciWorkflowName(run)}</span>
+      <span> {label}</span>
+      {run.commit && <span> on <span className="font-mono">{run.commit.slice(0, 7)}</span></span>}
+      {time && <span> · {shortTimeAgo(run.createdAt)}</span>}
+      <span> · reported by </span>
+      <ActorName pubkey={run.author} className="text-xs" />
+    </>
+  );
+}
+
+/** One run's icon, in the tone its outcome earns. */
+function CIOutcomeIcon({ outcome, className }: { outcome: string; className?: string }) {
+  const { Icon, tone } = ciOutcomePresentation(outcome);
+  return <Icon className={cn("size-3.5 shrink-0", tone, outcome === "in_progress" && "animate-spin", className)} />;
+}
+
+/** The jobs of a run that have anything to show. */
+function loggedJobs(run: CIRun): CIRunJob[] {
+  return run.jobs.filter((job) => job.result?.logs || job.result?.event.content?.trim());
+}
+
+function CIRunLine({ run }: { run: CIRun }) {
+  const logged = loggedJobs(run);
+  return (
+    <NoticeRow
+      icon={<CIOutcomeIcon outcome={ciRunOutcome(run)} />}
+      detail={logged.length > 0 ? <div>{logged.map((job) => <CIJobLog key={job.eventId} job={job} />)}</div> : undefined}
+    >
+      <CIRunSentence run={run} />
+    </NoticeRow>
+  );
+}
+
+/** Outcomes of the runs a workflow's current state replaced, as a strip of dots. */
+function CIHistoryStrip({ runs }: { runs: readonly CIRun[] }) {
+  const shown = runs.slice(0, 12);
+  return (
+    <p className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] text-muted-foreground/70">
+      <span>before that</span>
+      {shown.map((run) => {
+        const outcome = ciRunOutcome(run);
+        return (
+          <span key={run.id} title={[run.commit?.slice(0, 7), ciOutcomePresentation(outcome).label, shortTimeAgo(run.createdAt)].filter(Boolean).join(" · ")}>
+            <CIOutcomeIcon outcome={outcome} className="size-3" />
+          </span>
+        );
+      })}
+      {runs.length > shown.length && <span>+{runs.length - shown.length}</span>}
+    </p>
+  );
+}
+
+/** One workflow inside an expanded stretch: its current state, then its history. */
+function CIWorkflowDetail({ group }: { group: CIWorkflowGroup }) {
+  const logged = loggedJobs(group.latest);
+  return (
+    <div className="min-w-0">
+      <p className="flex items-start gap-1.5 text-xs leading-5 text-muted-foreground">
+        <CIOutcomeIcon outcome={ciRunOutcome(group.latest)} className="mt-1" />
+        <span className="min-w-0"><CIRunSentence run={group.latest} time /></span>
+      </p>
+      {group.runs.length > 1 && <CIHistoryStrip runs={group.runs.slice(1)} />}
+      {logged.map((job) => <CIJobLog key={job.eventId} job={job} />)}
     </div>
   );
 }
 
-function ActorName({ pubkey, members }: { pubkey: string; members: ReadonlySet<string> }) {
+/**
+ * A stretch of CI activity, folded to the state each workflow is in NOW.
+ *
+ * Twenty rows of the same job passing and failing tell a reader one thing —
+ * where it stands — and cost them the conversation to find it out. So the
+ * stretch states that, and the runs behind it open on click.
+ */
+function CIGroupRow({ entries }: { entries: readonly Extract<GitChannelTimelineEntry, { type: "git-ci-run" }>[] }) {
+  const [open, setOpen] = useState(false);
+  const runs = useMemo(() => entries.map((entry) => entry.activity.run), [entries]);
+  const groups = useMemo(() => groupCIRunsByWorkflow(runs), [runs]);
+
+  // A lone run has nothing to fold: it reads as the sentence it already is.
+  if (runs.length === 1) return <CIRunLine run={runs[0]} />;
+
+  const only = groups.length === 1 ? groups[0] : undefined;
+  return (
+    <NoticeRow
+      icon={<CIOutcomeIcon outcome={ciGroupsOutcome(groups)} />}
+      onClick={() => setOpen((previous) => !previous)}
+      label={open ? "Hide CI runs" : "Show CI runs"}
+      detail={open ? <div className="mt-1 space-y-2 border-l border-border pl-2.5">{groups.map((group) => <CIWorkflowDetail key={group.name} group={group} />)}</div> : undefined}
+    >
+      {only
+        ? <>
+            <span className="font-medium text-foreground/90">{only.name}</span>
+            <span> {ciOutcomePresentation(ciRunOutcome(only.latest)).label}</span>
+            <span> · latest of {only.runs.length} runs</span>
+          </>
+        : <>
+            <span className="font-medium text-foreground/90">CI</span>
+            <span> · {runs.length} runs</span>
+            <span> · {ciGroupsSummary(groups)}</span>
+          </>}
+    </NoticeRow>
+  );
+}
+
+/**
+ * The actor's name. `members` is the panel's to pass: the Guest badge marks a
+ * commenter from outside the community, which is worth saying where a reader
+ * is reading the discussion — and is noise on every CI row in the channel,
+ * since a coordinator key is a guest by construction.
+ */
+function ActorName({ pubkey, members, className }: { pubkey: string; members?: ReadonlySet<string>; className?: string }) {
   const author = useAuthor(pubkey);
   const name = useScopedDisplayName(pubkey, author.data?.metadata);
-  return <><span className="text-sm font-semibold">{name}</span>{isCommunityGuest(pubkey, members) && <span className="ml-1 rounded border border-border px-1 py-px text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Guest</span>}</>;
+  return <><span className={cn("font-semibold text-foreground", className ?? "text-sm")}>{name}</span>{members && isCommunityGuest(pubkey, members) && <span className="ml-1 rounded border border-border px-1 py-px text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Guest</span>}</>;
 }
 
 function statusOptions(status: GitTicketStatus, ticket: GitTicket): Array<{ label: string; kind: GitStatusKind }> {

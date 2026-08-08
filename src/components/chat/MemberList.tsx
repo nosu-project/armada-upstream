@@ -1,10 +1,11 @@
-import { AtSign, Ban, Bot, Copy, Crown, IdCard, MessageSquareText, MoreVertical, Music, Search, Shield, ShieldOff, Smile, UserCog, UserMinus, UserPlus, X } from "lucide-react";
+import { AtSign, Ban, Bot, Copy, Crown, Flag, IdCard, MessageSquareText, MoreVertical, Music, Search, Shield, ShieldOff, Smile, UserCog, UserMinus, UserPlus, X } from "lucide-react";
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { BotPill } from "@/components/BotPill";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
+import { ReportDialog } from "@/components/ReportDialog";
 import { StatusDialog } from "@/components/dialogs/StatusDialog";
 import { Button } from "@/components/ui/button";
 import {
@@ -35,12 +36,14 @@ import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { DisplayName } from "@/components/DisplayName";
 import { Input } from "@/components/ui/input";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useChatScope } from "@/hooks/useChatScope";
 import { useMemberSearch } from "@/hooks/useMemberSearch";
 import { useScopedIdentity } from "@/hooks/useScopedDisplayName";
 import { isStatusExpired, useUserStatus } from "@/hooks/useUserStatus";
 import { requestMention } from "@/hooks/useMentionBus";
 import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
+import { reportDestination } from "@/lib/report";
 import { tryNpubEncode } from "@/lib/safeNip19";
 import { cn } from "@/lib/utils";
 import { writeClipboardText } from "@/lib/clipboard";
@@ -210,6 +213,11 @@ const MemberRow = memo(function MemberRow({
   // Hide a music status whose NIP-40 expiration has passed (track ended).
   const musicStatus = isStatusExpired(rawMusicStatus) ? undefined : rawMusicStatus;
   const [statusOpen, setStatusOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  // Where a report from this list goes — the surrounding room decides, and a
+  // legacy Concord epoch (no staff-only address) offers none.
+  const chatScope = useChatScope();
+  const reportTo = reportDestination(chatScope);
 
   const roleSet = new Set((roles ?? []).map((r) => r.toLowerCase()));
   const isOwner = roleSet.has(ROLE_OWNER);
@@ -222,6 +230,9 @@ const MemberRow = memo(function MemberRow({
   // Moderation acts on others only; the owner is never a valid target (they're
   // supreme and unremovable — mirrors canActOnMember in the roster engine).
   const canActOnUser = canModerate && !isSelf && !isOwner;
+  // Reporting is the affordance for everyone ELSE — it needs no permission,
+  // only somewhere to send it and someone other than yourself to send it about.
+  const canReport = Boolean(reportTo && currentUserPubkey && !isSelf);
 
   const copyNpub = () => {
     const npub = tryNpubEncode(pubkey);
@@ -377,6 +388,19 @@ const MemberRow = memo(function MemberRow({
           )}
         </>
       )}
+
+      {canReport && (
+        <>
+          <Separator />
+          <Item
+            className="gap-3 px-3 py-2.5 text-destructive focus:text-destructive"
+            onSelect={() => setReportOpen(true)}
+          >
+            <Flag className="size-4" />
+            Report
+          </Item>
+        </>
+      )}
     </>
   );
 
@@ -523,6 +547,14 @@ const MemberRow = memo(function MemberRow({
     </ContextMenuContent>
     </ContextMenu>
     {isSelf && <StatusDialog open={statusOpen} onOpenChange={setStatusOpen} />}
+    {reportOpen && reportTo && (
+      <ReportDialog
+        open={reportOpen}
+        onOpenChange={setReportOpen}
+        destination={reportTo}
+        target={{ pubkey }}
+      />
+    )}
     </>
   );
 });

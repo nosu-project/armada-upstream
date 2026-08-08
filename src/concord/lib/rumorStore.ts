@@ -291,6 +291,25 @@ export async function queryChannelRumors(
 }
 
 /**
+ * Read cached rumors by id, whatever plane or channel they arrived on.
+ *
+ * For surfaces that hold a POINTER to a message rather than a position in a
+ * timeline — a moderator's report queue, which knows only the `e` tag the
+ * reporter sent. An id that isn't in this member's store yields nothing, which
+ * is ordinary: it may be in a channel they don't hold, or older than what they
+ * have synced. Expired rows are dropped like every other read.
+ */
+export async function queryRumorsByIds(
+  communityIdHex: string,
+  ids: string[],
+  opts?: { signal?: AbortSignal },
+): Promise<OpenedEvent[]> {
+  if (ids.length === 0) return [];
+  const events = await rumorStore(communityIdHex).query([{ ids }], { signal: opts?.signal });
+  return notExpired(events).map(storedToOpened);
+}
+
+/**
  * Read a channel's cached WebXDC coordination rumors (kind {@link KIND_WEBXDC})
  * for one app session (`#i` = the webxdc uuid). Deliberately SEPARATE from
  * {@link queryChannelRumors}: 3310 is not in {@link CHAT_KINDS}, so these
