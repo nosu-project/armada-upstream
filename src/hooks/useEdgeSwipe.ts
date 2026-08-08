@@ -116,11 +116,30 @@ export function useEdgeSwipe({
     dragXRef.current = 0;
     touchTarget.current?.removeEventListener("touchmove", onNativeTouchMove);
     touchTarget.current = null;
-    setState({ dragX: 0, dragging: false });
+    // Functional + identity-preserving so calling this when nothing is in
+    // flight (the `enabled` teardown below runs on every disabled mount) is a
+    // true no-op rather than a wasted render.
+    setState((s) => (s.dragging || s.dragX !== 0 ? { dragX: 0, dragging: false } : s));
   }, [onNativeTouchMove]);
+
+  // Abandon an in-flight gesture the moment the hook is disabled. `enabled` is
+  // derived from the revealed/hidden state by the caller, so a NAVIGATION that
+  // flips it lands here mid-drag. Without this the gesture is stranded in a
+  // state nothing can leave: `onPointerDown` bails while disabled, and every
+  // later move/up bails on the pointer-id mismatch — so `dragging` stays true
+  // forever and pins the pane mid-slide.
+  useEffect(() => {
+    if (!enabled) reset();
+  }, [enabled, reset]);
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
+      // Clear an abandoned gesture BEFORE any bail. A drag whose pointerup
+      // never arrived (the WebView's touch stream is cut when the app is
+      // backgrounded — e.g. tapping a notification) otherwise survives with
+      // its non-passive touchmove listener still attached, and a fresh touch
+      // that bails below would leave it there permanently.
+      if (claimed.current || pointerId.current !== null) reset();
       if (!enabled) return;
       if (e.pointerType === "mouse") return;
       const x = e.clientX;
@@ -145,7 +164,7 @@ export function useEdgeSwipe({
       touchTarget.current = el;
       el.addEventListener("touchmove", onNativeTouchMove, { passive: false });
     },
-    [enabled, direction, onNativeTouchMove],
+    [enabled, direction, onNativeTouchMove, reset],
   );
 
   const onPointerMove = useCallback(
@@ -204,16 +223,44 @@ export function useEdgeSwipe({
     [onCommit, reset],
   );
 
-  // Safety net: if the gesture is interrupted (pointercancel) clean up.
+  // Safety net for a gesture that never gets a terminating event on the
+  // element itself. The element's own handlers are not enough: they are torn
+  // off when the caller stops rendering them, they're skipped once the hook is
+  // disabled, and the Android WebView can drop the tail of a touch stream
+  // outright when the app is backgrounded (tapping a notification) without
+  // ever dispatching pointercancel. Window-level `pointerup` is not a
+  // duplicate of the element path — React's listeners live on the root
+  // container, so `finish` has already run and nulled `pointerId` by the time
+  // these see the event, making them a no-op on the normal path.
   useEffect(() => {
     if (!state.dragging) return;
-    const onCancel = () => reset();
-    window.addEventListener("pointercancel", onCancel);
-    return () => window.removeEventListener("pointercancel", onCancel);
+    const onEnd = (e: PointerEvent) => {
+      if (pointerId.current === null || pointerId.current === e.pointerId) reset();
+    };
+    const onHide = () => {
+      if (document.visibilityState === "hidden") reset();
+    };
+    const onPageHide = () => reset();
+    window.addEventListener("pointercancel", onEnd);
+    window.addEventListener("pointerup", onEnd);
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      window.removeEventListener("pointercancel", onEnd);
+      window.removeEventListener("pointerup", onEnd);
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", onPageHide);
+    };
   }, [state.dragging, reset]);
 
   return {
     ...state,
+    /**
+     * Abandon any in-flight drag and spring back. Exposed so the caller can
+     * make a programmatic state change (navigation) win over a stale gesture.
+     * Stable across renders.
+     */
+    cancel: reset,
     handlers: {
       onPointerDown,
       onPointerMove,

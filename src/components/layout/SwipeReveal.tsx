@@ -117,13 +117,21 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
   // before paint so the snap applies on the same frame the new `open` lands.
   const prevOpen = useRef(open);
   const [snap, setSnap] = useState(false);
+  const cancelOpenSwipe = openSwipe.cancel;
+  const cancelCloseSwipe = closeSwipe.cancel;
   useLayoutEffect(() => {
     if (prevOpen.current !== open) {
       setSnap(!gestureCommit.current);
       prevOpen.current = open;
+      // A programmatic `open` change (navigation) is authoritative: abandon any
+      // drag still in flight so the pane settles at the position navigation
+      // asked for. A committing gesture has already reset itself before firing
+      // onReveal/onClose, so this is a no-op on that path.
+      cancelOpenSwipe();
+      cancelCloseSwipe();
     }
     gestureCommit.current = false;
-  }, [open]);
+  }, [open, cancelOpenSwipe, cancelCloseSwipe]);
   // Re-enable transitions on the next frame after a snap so subsequent gestures
   // still animate their settle.
   useEffect(() => {
@@ -166,18 +174,26 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
   }
 
   const width = typeof window !== "undefined" ? window.innerWidth : 1;
+  // Only a drag that pulls the pane AWAY from its current resting position can
+  // drive the offset: "open" drags the chat off a closed pane, "close" drags it
+  // back over an open one. Pairing each with the `open` it started from means a
+  // drag left over from before an `open` flip is inert rather than authoritative
+  // — the pane follows navigation instead of being pinned mid-slide by a gesture
+  // that can no longer end (the stuck sliver-of-channel-list state).
+  const openDragging = openSwipe.dragging && !open;
+  const closeDragging = closeSwipe.dragging && open;
   // Chat resting offset: fully out (= width) when revealed, else flush (0).
   // Live drags add/subtract from that rest position.
   let offset: number;
-  if (openSwipe.dragging) {
+  if (openDragging) {
     offset = openSwipe.dragX; // 0 → width as it slides out
-  } else if (closeSwipe.dragging) {
+  } else if (closeDragging) {
     offset = width - closeSwipe.dragX; // width → 0 as it slides back
   } else {
     offset = open ? width : 0;
   }
   offset = Math.max(0, Math.min(offset, width));
-  const dragging = openSwipe.dragging || closeSwipe.dragging;
+  const dragging = openDragging || closeDragging;
 
   const progress = width > 0 ? offset / width : 0;
   // Parallax the underlay in from the left (Discord slides the list slightly
@@ -189,9 +205,13 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
       {/* Underlay: the list, revealed as the chat slides away. While open it
           carries the leftward "close" swipe so you can drag the chat back.
           `contain` isolates its layout/paint so mounting the (heavy) chat tree
-          over it doesn't force the underlay to re-layout/repaint. */}
+          over it doesn't force the underlay to re-layout/repaint. The close
+          handlers stay mounted whether or not the list is revealed: the hook
+          self-gates on `enabled`, and detaching them mid-gesture (as an `open`
+          flip used to do) removed the very pointerup/pointercancel that ends
+          the drag, stranding it. */}
       <div
-        {...(open ? closeSwipe.handlers : {})}
+        {...closeSwipe.handlers}
         className={cn(
           "absolute inset-0 flex [contain:layout_paint]",
           dragging || snap ? "" : "transition-transform duration-200 ease-out",
