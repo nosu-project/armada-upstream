@@ -29,6 +29,13 @@ finish-args:
 modules:
   - name: armada
     buildsystem: simple
+    # The module is a repackaged Electron AppImage of prebuilt binaries, so a
+    # .Debug extension carries nothing useful. Skipping it also drops the hard
+    # dependency on elfutils' eu-strip/eu-elfcompress, which the build host is
+    # not required to have.
+    build-options:
+      strip: false
+      no-debuginfo: true
     build-commands:
       - chmod +x Armada.AppImage
       - ./Armada.AppImage --appimage-extract
