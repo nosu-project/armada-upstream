@@ -386,7 +386,10 @@ async function showDmNotification(base, data) {
     const avatar = (cfg.peerAvatars && cfg.peerAvatars[opened.sender]) || "";
     const tag = `dm-${opened.sender}`;
     const lines = await appendRoomLine(tag, preview);
-    await self.registration.showNotification(name || "New message", {
+    // A sender with no kind-0 sealed beside them reads "Anonymous", the same
+    // word the page's notifier and the Android service use, rather than a
+    // second spelling of "we don't know who this is" per transport.
+    await self.registration.showNotification(name || "Anonymous", {
       ...base,
       ...(avatar ? { icon: avatar } : {}),
       body: lines.join("\n"),

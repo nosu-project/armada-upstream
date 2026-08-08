@@ -25,7 +25,6 @@ import {
 } from "@/lib/notificationSounds";
 import { normalizeRelayUrl } from "@/lib/platform";
 import { chatRoute, parseChatRoute } from "@/lib/routes";
-import { tryNpubEncode } from "@/lib/safeNip19";
 import {
   installTabAttentionClearHandlers,
   markTabAttention,
@@ -152,11 +151,18 @@ export function useForegroundNotifications(): void {
     const removeTabAttentionHandlers = installTabAttentionClearHandlers();
 
     // Resolve a display name for an author. Tries, in order: the react-query
-    // author cache (populated when a profile has been viewed this session), the
-    // shared event store's kind-0 (the wire keeps profiles flowing in), and
-    // finally a shortened npub — never a bland "Someone", which was the bug.
+    // author cache (populated when a profile has been viewed this session) and
+    // the shared event store's kind-0 (the wire keeps profiles flowing in) —
+    // local reads only, so a missing profile can never delay the notification.
+    //
+    // An author with no profile held reads "Anonymous", matching the Android
+    // service (NotificationRelayService#displayName) and `getDisplayName`'s
+    // fallback for a profile that carries no name. A shortened npub here was
+    // the identity in name only: the notification is the one surface with no
+    // room to resolve it, no avatar beside it and no profile a tap reveals, so
+    // it showed a key blob where every other surface shows a word.
     const displayNameFor = async (pubkey: string): Promise<string> => {
-      if (!pubkey) return "Someone";
+      if (!pubkey) return "Anonymous";
       const qc = ctx.current.queryClient;
       const cached = qc.getQueryData<AuthorResult>(["author", pubkey]);
       if (cached?.metadata) return getDisplayName(cached.metadata, pubkey);
@@ -174,11 +180,10 @@ export function useForegroundNotifications(): void {
           if (parsed.metadata) return getDisplayName(parsed.metadata, pubkey);
         }
       } catch {
-        // Store unavailable — fall through to the npub.
+        // Store unavailable — fall through.
       }
 
-      const npub = tryNpubEncode(pubkey);
-      return npub ? `${npub.slice(0, 12)}…` : "Someone";
+      return "Anonymous";
     };
 
     // Reload the peers the viewer has authored a message to. Called once on

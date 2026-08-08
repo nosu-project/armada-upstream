@@ -311,7 +311,9 @@ describe("Web Push DM gating (inlined wrap)", () => {
     await worker.push({ scope: "dm", event_id: "w", url: "/dm", event: wrapEvent });
     expect(worker.showNotification).toHaveBeenCalledTimes(1);
     const [title, opts] = worker.showNotification.mock.calls[0] as unknown as [string, { body: string; data: { url: string } }];
-    expect(title).toBe("New message");
+    // No kind-0 sealed for this peer, so the title is the same "we don't know
+    // who this is" word the page's notifier and the Android service use.
+    expect(title).toBe("Anonymous");
     expect(opts.body).toContain("meet at 8");
     expect(opts.data.url).toBe("/dm/peer");
   });
@@ -390,7 +392,7 @@ describe("Web Push DM gating (inlined wrap)", () => {
     );
     await worker.push({ scope: "dm", event_id: "w", url: "/dm", event: wrapEvent });
     const [title, opts] = worker.showNotification.mock.calls[0] as unknown as [string, { body: string }];
-    expect(title).toBe("New message");
+    expect(title).toBe("Anonymous");
     expect(opts.body).toContain("meet at 8");
   });
 
