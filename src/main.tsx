@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { clearChunkReloadGuard, tryChunkReload } from "@/lib/chunkReload";
+import { signalDesktopWebReady } from "@/lib/desktop";
 import { signalWebReady } from "@/lib/webReady";
 import { perfMark, startLoopLagSampler } from "@/lib/perf";
 // Side-effect import: installs `window.__armadaDbCensus()`, the read-only store
@@ -66,6 +67,9 @@ createRoot(document.getElementById("root")!).render(
 // Tell the native launch splash the web layer has painted, so it lifts onto
 // real content instead of a blank WebView frame (Android only; no-op elsewhere).
 signalWebReady();
+// The same fact for the desktop shell, which uses it to tell a bundle that
+// boots from one that does not (no-op on web and mobile).
+signalDesktopWebReady();
 
 // After render() returns, so the inline boot splash in index.html has been
 // replaced. Everything between this and the first timeline paint is React,

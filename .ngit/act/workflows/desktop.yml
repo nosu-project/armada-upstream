@@ -171,7 +171,9 @@ jobs:
       # under the same name, so a gitworkshop artifact and a armada.buzz URL
       # can't drift apart. The extension identifies the platform where it can
       # (.AppImage / .deb = Linux, .exe = Windows); the Windows portable build
-      # and the mac zips carry a suffix because theirs doesn't.
+      # and the mac zips carry a suffix because theirs doesn't. Each file is
+      # then copied to an unversioned alias — that pair, versioned archive plus
+      # stable URL, is what /downloads links.
       - name: Collect installers
         id: collect
         env:
@@ -190,28 +192,77 @@ jobs:
           # .zip names its platform, since the extension doesn't.
           cp electron/release/mac/Armada-mac-x64.zip "$out/Armada-$TAG-mac-x64.zip"
           cp electron/release/mac/Armada-mac-arm64.zip "$out/Armada-$TAG-mac-arm64.zip"
+
+          # Stable aliases beside the versioned files. The versioned name is the
+          # archive — every past release stays at its own URL — while the alias
+          # is the URL a download page, a README or an install script can
+          # hardcode once and never revisit. Real copies rather than symlinks:
+          # rsync only preserves links with -l, and a link whose target was ever
+          # pruned would 404 under a name advertised as stable.
+          cp "$out/Armada-$TAG.AppImage"      "$out/Armada.AppImage"
+          cp "$out/Armada-$TAG.deb"           "$out/Armada.deb"
+          cp "$out/Armada-$TAG.exe"           "$out/Armada-Setup.exe"
+          cp "$out/Armada-$TAG-portable.exe"  "$out/Armada-portable.exe"
+          cp "$out/Armada-$TAG-mac-x64.zip"   "$out/Armada-mac-x64.zip"
+          cp "$out/Armada-$TAG-mac-arm64.zip" "$out/Armada-mac-arm64.zip"
+
+          # The manifest the /downloads page reads for its version label and
+          # file sizes. It is PER PLATFORM FAMILY (release.yml writes its own
+          # latest-android.json) because both workflows fire on the same v* tag
+          # and run concurrently: one shared latest.json would be a lost update,
+          # and worse, whichever wrote last would claim its version for a
+          # platform whose build had failed. The page hardcodes the stable
+          # filenames above and treats this file as decoration, so a missing or
+          # stale manifest costs a version label, never a working button.
+          node -e '
+            const fs = require("node:fs");
+            const [dir, tag] = process.argv.slice(1);
+            const names = {
+              "linux-appimage": "Armada.AppImage",
+              "linux-deb": "Armada.deb",
+              "windows-setup": "Armada-Setup.exe",
+              "windows-portable": "Armada-portable.exe",
+              "macos-x64": "Armada-mac-x64.zip",
+              "macos-arm64": "Armada-mac-arm64.zip",
+            };
+            const manifest = { tag, version: tag.replace(/^v/, ""), published: new Date().toISOString(), files: {} };
+            for (const [key, file] of Object.entries(names)) {
+              manifest.files[key] = { file, size: fs.statSync(dir + "/" + file).size };
+            }
+            fs.writeFileSync(dir + "/latest-desktop.json", JSON.stringify(manifest, null, 2) + "\n");
+          ' "$out" "$TAG"
+
           ls -lh "$out"
+          cat "$out/latest-desktop.json"
           echo "root=$root" >> "$GITHUB_OUTPUT"
           echo "dir=$out" >> "$GITHUB_OUTPUT"
 
+      # Named explicitly rather than by extension glob: the staging directory
+      # now also holds the stable aliases, which are the same bytes again and
+      # would double every artifact bundle. The archive keeps the versioned
+      # name; the alias exists only to be served.
       - uses: actions/upload-artifact@v4
         with:
           name: armada-desktop-linux-${{ github.ref_name }}
           path: |
-            ${{ steps.collect.outputs.dir }}/*.AppImage
-            ${{ steps.collect.outputs.dir }}/*.deb
+            ${{ steps.collect.outputs.dir }}/Armada-${{ github.ref_name }}.AppImage
+            ${{ steps.collect.outputs.dir }}/Armada-${{ github.ref_name }}.deb
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
         with:
           name: armada-desktop-windows-${{ github.ref_name }}
-          path: ${{ steps.collect.outputs.dir }}/*.exe
+          path: |
+            ${{ steps.collect.outputs.dir }}/Armada-${{ github.ref_name }}.exe
+            ${{ steps.collect.outputs.dir }}/Armada-${{ github.ref_name }}-portable.exe
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
         with:
           name: armada-desktop-mac-${{ github.ref_name }}
-          path: ${{ steps.collect.outputs.dir }}/*.zip
+          path: |
+            ${{ steps.collect.outputs.dir }}/Armada-${{ github.ref_name }}-mac-x64.zip
+            ${{ steps.collect.outputs.dir }}/Armada-${{ github.ref_name }}-mac-arm64.zip
           if-no-files-found: error
 
       # Publish to https://armada.buzz/downloads/ over the SAME rrsync-jailed

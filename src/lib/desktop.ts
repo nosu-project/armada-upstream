@@ -73,6 +73,7 @@ interface ArmadaDesktopBridge {
   getSecretsStatus?: () => Promise<SecretsStatus>;
   encryptSecret?: (plaintext: string) => Promise<string | null>;
   decryptSecret?: (base64: string) => Promise<string | null>;
+  signalWebReady?: () => void;
   armadaDb?: ArmadaDesktopDb;
 }
 
@@ -89,6 +90,24 @@ export function desktop(): ArmadaDesktopBridge | undefined {
 
 /** True when running inside the Armada desktop app. */
 export const isDesktop = (): boolean => Boolean(desktop()?.isDesktop);
+
+/**
+ * Tell the desktop shell this web bundle painted.
+ *
+ * The shell serves a swappable bundle out of userData, and silence past its
+ * grace period is how it learns the bundle it chose does not come up — which
+ * makes it look for a newer one immediately instead of waiting for the next
+ * scheduled check. Recovery is forward-only, so this signal is the difference
+ * between minutes and hours of a broken client.
+ */
+export function signalDesktopWebReady(): void {
+  try {
+    desktop()?.signalWebReady?.();
+  } catch {
+    // An older shell, or a bridge torn down mid-shutdown. The shell's grace
+    // period simply expires; never let this break first paint.
+  }
+}
 
 /** Reflect the unread count on the tray / OS badge (no-op on web). */
 export function setDesktopBadge(count: number): void {

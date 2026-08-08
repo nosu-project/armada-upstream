@@ -97,3 +97,27 @@ jobs:
           # haven't finished uploading. ":/" is the rrsync jail root.
           rsync -av --exclude=/sw.js --exclude=/index.html -e ssh dist/ "${TARGET}:/"
           rsync -av -e ssh dist/index.html dist/sw.js "${TARGET}:/"
+
+          # /downloads is a REAL DIRECTORY on the server (desktop.yml and
+          # release.yml rsync the installers into it), and it needs its own copy
+          # of the SPA shell as an index for two different reasons:
+          #
+          #   - armada.buzz (Caddy) serves /downloads/* from a `handle` block
+          #     with a bare file_server, so that the installers 404 properly
+          #     instead of falling through to the SPA. A bare /downloads/ then
+          #     resolves to this index rather than 404ing with them.
+          #   - A self-hosted nginx (the Dockerfile path) never reaches its SPA
+          #     fallback for the directory at all: `try_files $uri $uri/
+          #     /index.html` matches $uri/ and stops, and with no index and
+          #     autoindex off that is a 403 on reload or a shared link.
+          #
+          # Uploaded LAST, and only after the assets above, for the same reason
+          # the root index.html is: it references the same hashed chunks.
+          # Pushed as a staged DIRECTORY into the jail root (like desktop.yml
+          # does) so the first deploy creates downloads/ rather than failing on
+          # a destination that doesn't exist yet.
+          stage="$RUNNER_TEMP/downloads-index"
+          rm -rf "$stage"
+          mkdir -p "$stage/downloads"
+          cp dist/index.html "$stage/downloads/index.html"
+          rsync -av -e ssh "$stage/downloads" "${TARGET}:/"

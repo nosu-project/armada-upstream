@@ -55,9 +55,68 @@ const {
 } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
+const { resolveDistRoot } = require("./bundleStore");
 
-// Where the bundled web build lives inside the packaged app.
-const DIST = path.join(__dirname, "dist");
+// The web bundle that shipped inside the asar. This is the floor: a fresh
+// install serves it, and the shell falls back to it whenever it cannot host a
+// downloaded bundle. `activeDist` is what the app:// handler actually reads.
+const SHIPPED_DIST = path.join(__dirname, "dist");
+const BUNDLES_DIR = path.join(app.getPath("userData"), "bundles");
+let activeDist = SHIPPED_DIST;
+let activeBundleId = null;
+
+// How long the renderer has to report that it painted before the shell treats
+// the active bundle as suspect. Generous: a cold start on a slow disk with a
+// large store is not a failure.
+const BUNDLE_BOOT_GRACE_MS = 45_000;
+let bundleBooted = false;
+
+/**
+ * Notice a bundle that never comes up.
+ *
+ * Recovery is forward-only — the shell does not revert to an older bundle —
+ * so the only thing this can usefully do is stop waiting for the next
+ * scheduled poll and look for a newer bundle right now. That shortens a bad
+ * release from "until the next check" to "until the fix is published", which
+ * is why the bundle build is a separate, fast workflow.
+ *
+ * The check runs in the MAIN process, so a renderer that white-screens cannot
+ * take the update path down with it.
+ */
+function watchBundleBoot() {
+  if (bundleBooted) return;
+  setTimeout(() => {
+    if (bundleBooted) return;
+    console.warn(
+      `[bundle] renderer did not report ready within ${BUNDLE_BOOT_GRACE_MS}ms`,
+      activeBundleId ? `(bundle ${activeBundleId})` : "(shipped bundle)",
+    );
+    // TODO: trigger an immediate bundle check once the fetch path lands.
+  }, BUNDLE_BOOT_GRACE_MS).unref();
+}
+
+function installBundleIpc() {
+  // Sent by the renderer after React has painted a real frame. Only a message
+  // from the window we loaded counts; a subframe cannot vouch for the app.
+  ipcMain.on("armada:web-ready", (event) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents) return;
+    bundleBooted = true;
+  });
+}
+
+/**
+ * Choose the bundle to serve. Called once, before the window loads, because
+ * the app:// handler resolves every request against it.
+ */
+function selectActiveBundle() {
+  const selected = resolveDistRoot({
+    bundlesDir: BUNDLES_DIR,
+    shippedDist: SHIPPED_DIST,
+  });
+  activeDist = selected.root;
+  activeBundleId = selected.id;
+  console.log(`[bundle] serving ${selected.source}${selected.id ? ` ${selected.id}` : ""}`);
+}
 // Custom app scheme. Host segment "armada" keeps a stable origin
 // (app://armada) for the service worker + secure-context checks.
 const SCHEME = "app";
@@ -153,15 +212,16 @@ function serveFile(filePath) {
 function registerAppProtocol() {
   protocol.handle(SCHEME, (request) => {
     const url = new URL(request.url);
-    // Strip query/hash, resolve within DIST, prevent path traversal.
+    // Strip query/hash, resolve within the active bundle, prevent traversal.
     let pathname = decodeURIComponent(url.pathname);
     if (pathname === "/" || pathname === "") pathname = "/index.html";
 
-    const indexHtml = path.join(DIST, "index.html");
-    let filePath = path.normalize(path.join(DIST, pathname));
+    const dist = activeDist;
+    const indexHtml = path.join(dist, "index.html");
+    let filePath = path.normalize(path.join(dist, pathname));
     // Reject path traversal. Compare with a trailing separator so a sibling
-    // like `<DIST>-evil` can't pass the prefix check.
-    if (filePath !== DIST && !filePath.startsWith(DIST + path.sep)) {
+    // like `<dist>-evil` can't pass the prefix check.
+    if (filePath !== dist && !filePath.startsWith(dist + path.sep)) {
       return new Response("Forbidden", { status: 403 });
     }
 
@@ -672,6 +732,9 @@ if (!gotLock) {
 
   app.whenReady().then(() => {
     Menu.setApplicationMenu(null);
+    // Before registerAppProtocol(): the handler resolves every request against
+    // the bundle chosen here.
+    selectActiveBundle();
     registerAppProtocol();
     installPermissionHandlers();
     installIpc();
@@ -682,8 +745,10 @@ if (!gotLock) {
     // before it reads anything.
     installDbIpc();
     installDisplayMediaHandler();
+    installBundleIpc();
     createTray();
     createWindow();
+    watchBundleBoot();
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();

@@ -14,6 +14,14 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
   /** Report the current unread/mention count for the tray + OS badge. */
   setBadge: (count) => ipcRenderer.send("armada:set-badge", count),
 
+  /**
+   * Tell the shell the web bundle actually painted. The shell serves a
+   * swappable bundle from userData, and this is how it learns the one it chose
+   * comes up at all — silence past a grace period makes it look for a newer
+   * one immediately rather than waiting for the next scheduled check.
+   */
+  signalWebReady: () => ipcRenderer.send("armada:web-ready"),
+
   /** { platform, version } of the desktop shell. */
   getInfo: () => ipcRenderer.invoke("armada:platform"),
 

@@ -840,6 +840,11 @@ export function SettingsPage() {
               v{import.meta.env.VERSION}{import.meta.env.COMMIT_TAG ? "" : "+"} ({new Date(import.meta.env.BUILD_DATE).toLocaleDateString()})
             </Link>
             <span aria-hidden className="text-muted-foreground/30">·</span>
+            <Link to="/downloads" className="flex items-center gap-1 hover:text-muted-foreground transition-colors">
+              <Download className="size-3" />
+              Apps
+            </Link>
+            <span aria-hidden className="text-muted-foreground/30">·</span>
             <Link to="/terms" className="flex items-center gap-1 hover:text-muted-foreground transition-colors">
               <FileText className="size-3" />
               Terms

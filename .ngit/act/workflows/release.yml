@@ -1,7 +1,8 @@
 name: Android release
 
 # Signed Android APK + AAB on version tags (vX.Y.Z), published as run
-# artifacts, to Zapstore, and to Google Play — all in ONE job. Ported from the
+# artifacts, to armada.buzz/downloads/, to Zapstore, and to Google Play — all
+# in ONE job. Ported from the
 # GitLab `build-apk` + `publish-zapstore` jobs (+ ditto's `publish-google-play`)
 # to ngit-ci (act / GitHub Actions syntax). We keep build+publish in a single
 # job on purpose: act's local artifact server round-trips a multi-file wildcard
@@ -34,6 +35,14 @@ name: Android release
 #                            uses a single password, so the two must match)
 #   ZAPSTORE_BUNKER_URL      bunker:// URL of the NIP-46 signer for Zapstore
 #   ZAPSTORE_CLIENT_KEY      persistent zsp NIP-46 client key (hex) for it
+#   DEPLOY_SSH_KEY_BASE64    (optional) base64 (one line) of the deploy user's
+#                            private key, shared with deploy-web.yml and
+#                            desktop.yml. Publishes the APK to
+#                            armada.buzz/downloads/. Empty (unprovisioned)
+#                            skips only that publish; the run artifacts and the
+#                            store publishes are unaffected.
+#   DEPLOY_SSH_CONFIG_BASE64 (optional) base64 of an ssh_config -> ~/.ssh/config
+#   DEPLOY_TARGET            (optional) rsync destination; defaults to "web"
 #   GOOGLE_PLAY_SERVICE_ACCOUNT_JSON  (optional) base64 of the Play Console
 #                            service-account JSON key with release permission on
 #                            buzz.armada.app. Empty (unprovisioned) skips the
@@ -195,6 +204,91 @@ jobs:
           path: |
             ${{ steps.artifacts.outputs.dir }}/Armada-v${{ steps.version.outputs.name }}.apk
             ${{ steps.artifacts.outputs.dir }}/Armada-v${{ steps.version.outputs.name }}.aab
+
+      # Publish the APK to https://armada.buzz/downloads/, the way desktop.yml
+      # publishes the installers — same rrsync-jailed deploy user, same staged
+      # `downloads` directory pushed into the jail root ":/", same additive
+      # rsync (no --delete, so past releases and the desktop installers beside
+      # them survive). This is what gives /downloads a real Android button
+      # instead of only a link out to Zapstore and Play.
+      #
+      # The APK only: an .aab is Play's upload format and cannot be installed
+      # by a user, so hosting one would just be a trap.
+      #
+      # Done BEFORE the store publishes, for the same reason the artifact
+      # upload is: a Zapstore or Play failure shouldn't cost users the download.
+      - name: Deploy APK to downloads/
+        env:
+          DEPLOY_SSH_KEY_BASE64: ${{ secrets.DEPLOY_SSH_KEY_BASE64 }}
+          DEPLOY_SSH_CONFIG_BASE64: ${{ secrets.DEPLOY_SSH_CONFIG_BASE64 }}
+          DEPLOY_TARGET: ${{ secrets.DEPLOY_TARGET }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+          ARTIFACT_DIR: ${{ steps.artifacts.outputs.dir }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+
+          # workflow_dispatch off a branch names the files after the branch;
+          # publish only real version tags.
+          case "$TAG" in
+            v*) ;;
+            *) echo "ref '$TAG' is not a version tag; skipping downloads deploy."; exit 0 ;;
+          esac
+
+          # No key provisioned (or non-maintainer trigger): artifacts only.
+          if [ -z "${DEPLOY_SSH_KEY_BASE64:-}" ]; then
+            echo "DEPLOY_SSH_KEY_BASE64 not set; skipping downloads deploy (artifacts uploaded)."
+            exit 0
+          fi
+
+          root="$RUNNER_TEMP/downloads-deploy"
+          out="$root/downloads"
+          rm -rf "$root"
+          mkdir -p "$out"
+          # Versioned archive + the stable alias /downloads links. See the same
+          # pair, and the reasoning for copies over symlinks, in desktop.yml.
+          cp "$ARTIFACT_DIR/Armada-v$VERSION_NAME.apk" "$out/Armada-v$VERSION_NAME.apk"
+          cp "$ARTIFACT_DIR/Armada-v$VERSION_NAME.apk" "$out/Armada.apk"
+
+          # Android's own manifest. Kept separate from desktop.yml's
+          # latest-desktop.json because that workflow fires on the same tag and
+          # runs concurrently — see the note there.
+          node -e '
+            const fs = require("node:fs");
+            const [dir, tag] = process.argv.slice(1);
+            const manifest = {
+              tag,
+              version: tag.replace(/^v/, ""),
+              published: new Date().toISOString(),
+              files: { "android-apk": { file: "Armada.apk", size: fs.statSync(dir + "/Armada.apk").size } },
+            };
+            fs.writeFileSync(dir + "/latest-android.json", JSON.stringify(manifest, null, 2) + "\n");
+          ' "$out" "$TAG"
+          cat "$out/latest-android.json"
+
+          # Install rsync + ssh client (act images are minimal).
+          if ! command -v rsync >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends rsync openssh-client >/dev/null
+          fi
+
+          # Materialize the SSH environment. Key/config arrive base64 (single
+          # line) to fit masking rules; ssh reads ~/.ssh/config automatically.
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s' "$DEPLOY_SSH_KEY_BASE64" | base64 -d > ~/.ssh/id_ed25519
+          if [ -n "${DEPLOY_SSH_CONFIG_BASE64:-}" ]; then
+            printf '%s' "$DEPLOY_SSH_CONFIG_BASE64" | base64 -d > ~/.ssh/config
+          fi
+          # A CLI -o StrictHostKeyChecking is NOT inherited by the ProxyJump
+          # child connection, so put host defaults in the config so every hop
+          # (including a bastion) picks them up.
+          printf 'Host *\n\tIdentityFile ~/.ssh/id_ed25519\n\tBatchMode yes\n\tStrictHostKeyChecking accept-new\n' >> ~/.ssh/config
+
+          TARGET="${DEPLOY_TARGET:-web}"
+
+          # Additive: past releases stay downloadable at their own URLs.
+          rsync -av -e ssh "$root/downloads" "${TARGET}:/"
 
       # Publish to Zapstore in the SAME job. We deliberately do NOT hand the APK
       # off via upload/download-artifact: under act's local artifact server the
