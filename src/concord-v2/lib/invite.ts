@@ -376,6 +376,26 @@ export function buildInviteUrl(base: string, linkSignerPk: string, token: Uint8A
   return `${base.replace(/\/$/, "")}${INVITE_PATH_PREFIX}${bundleNaddr(linkSignerPk)}#${encodeFragment(token, relays)}`;
 }
 
+/**
+ * A stored invite URL as it should be handed out TODAY, re-based onto `base`
+ * when the origin it was minted on is one only the app that minted it can
+ * resolve — the desktop shell serves the SPA over its own `app://armada`
+ * scheme, so a link created there is dead for every recipient, and the Invite
+ * List syncs it to the creator's other devices to be handed out from there
+ * too. The naddr path and the `#fragment` secret ARE the link (the origin is
+ * cosmetic, CORD-05 §2), so such a link is repaired where it's shown rather
+ * than reminted — a remint is a second live door to revoke.
+ *
+ * An http(s) origin is left exactly as minted: a self-hosted or localhost
+ * deployment's links are meant to stay on that deployment.
+ */
+export function shareableInviteUrl(base: string, url: string): string {
+  if (/^https?:\/\//i.test(url.trim())) return url;
+  const at = url.indexOf(INVITE_PATH_PREFIX);
+  if (at < 0) return url;
+  return `${base.replace(/\/$/, "")}${url.slice(at)}`;
+}
+
 /** Decode a bare naddr into the link-signer pubkey, or undefined if it isn't one. */
 function naddrToSigner(naddr: string): string | undefined {
   try {

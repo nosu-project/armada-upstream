@@ -14,6 +14,7 @@ import {
   mintToken,
   parseBundleEvent,
   parseInviteLink,
+  shareableInviteUrl,
   STOCK_RELAYS,
   type InviteBundle,
 } from "@/concord-v2/lib/invite";
@@ -182,6 +183,35 @@ describe("invite links", () => {
     expect(parseInviteLink("https://armada.example.com/invite#sometokenpayload_here123")).toBeUndefined();
     expect(parseInviteLink("wss://relay.example.com")).toBeUndefined();
     expect(parseInviteLink("hello world")).toBeUndefined();
+  });
+
+  it("re-bases a link stored on an origin only its own app can resolve", () => {
+    const link = mintLinkSigner();
+    const token = mintToken();
+    // What the desktop shell minted: its private app:// scheme, which no
+    // recipient (and no other device of the creator's) can open.
+    const stored = buildInviteUrl("app://armada", link.pk, token, ["wss://a.example"]);
+    const shared = shareableInviteUrl("https://armada.buzz", stored);
+
+    expect(shared.startsWith("https://armada.buzz/invite/")).toBe(true);
+    // The naddr and the secret are the link: re-basing must not touch them.
+    expect(shared.slice("https://armada.buzz".length)).toBe(stored.slice("app://armada".length));
+    const parsed = parseInviteLink(shared);
+    expect(parsed?.linkSigner).toBe(link.pk);
+    expect(bytesToHex(parsed!.token)).toBe(bytesToHex(token));
+  });
+
+  it("leaves an http(s) link on the deployment it was minted for", () => {
+    const link = mintLinkSigner();
+    const token = mintToken();
+    for (const base of ["https://chat.example.com", "http://localhost:8080"]) {
+      const url = buildInviteUrl(base, link.pk, token, ["wss://a.example"]);
+      expect(shareableInviteUrl("https://armada.buzz", url)).toBe(url);
+    }
+  });
+
+  it("leaves anything that isn't an invite link alone", () => {
+    expect(shareableInviteUrl("https://armada.buzz", "hello world")).toBe("hello world");
   });
 });
 

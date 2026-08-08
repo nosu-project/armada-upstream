@@ -27,6 +27,7 @@ import {
   mintLinkSigner,
   mintToken,
   parseInviteLink,
+  shareableInviteUrl,
   type InviteBundle,
   type InviteList,
 } from "@/concord-v2/lib/invite";
@@ -582,8 +583,20 @@ export function useInviteActions2(community: CommunityV2 | undefined) {
     },
   });
 
-  /** This creator's live links for THIS community (from the private list). */
-  const myLinks = (inviteList.data?.entries ?? []).filter((e) => e.community_id === community?.idHex);
+  /**
+   * This creator's live links for THIS community (from the private list),
+   * each re-based onto the origin this build hands links out on. The list is
+   * a synced record of what was minted, wherever it was minted: a link created
+   * in the desktop shell was stored on its private `app://armada` origin, and
+   * it is these entries — not a fresh mint — that "Invite" reuses, the link
+   * list copies, and a Discover announcement publishes.
+   */
+  const myLinks = (inviteList.data?.entries ?? [])
+    .filter((e) => e.community_id === community?.idHex)
+    .map((e) => {
+      const url = shareableInviteUrl(shareOrigin(), e.url);
+      return url === e.url ? e : { ...e, url };
+    });
 
   /**
    * Re-post the CURRENT bundle at every live link coordinate I hold for this
