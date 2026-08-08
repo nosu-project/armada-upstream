@@ -238,10 +238,16 @@ jobs:
           flatpak_repo="$root/flatpak"
           rm -rf "$root"
           mkdir -p "$out" "$feed" "$flatpak_repo"
-          cp electron/release/*.AppImage "$out/Armada-$TAG.AppImage"
+          # Match electron-builder's versioned name specifically. flatpak/build.sh
+          # stages its input beside it as the unversioned Armada.AppImage, so a
+          # bare *.AppImage glob matches two files and cp then reads the last
+          # argument as a destination directory.
+          cp electron/release/Armada-*-linux-*.AppImage "$out/Armada-$TAG.AppImage"
           cp electron/release/*.deb "$out/Armada-$TAG.deb"
           cp electron/release/Armada-flatpak-*.flatpak "$out/Armada-$TAG.flatpak"
-          cp electron/release/*Setup*.exe "$out/Armada-$TAG.exe"
+          # Anchored to the trailing -Setup.exe so it can't also match the
+          # intermediate Armada-<ver>-Setup.__uninstaller.exe.
+          cp electron/release/Armada-*-Setup.exe "$out/Armada-$TAG.exe"
           # The portable build is the non-Setup .exe.
           cp "$(ls electron/release/*.exe | grep -iv setup | head -n1)" "$out/Armada-$TAG-portable.exe"
           # .zip names its platform, since the extension doesn't.
