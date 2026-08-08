@@ -127,11 +127,18 @@ jobs:
             sudo apt-get update -qq
             sudo apt-get install -y --no-install-recommends flatpak flatpak-builder >/dev/null
           fi
-          flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-          flatpak install -y flathub \
-            org.freedesktop.Platform//25.08 \
-            org.freedesktop.Sdk//25.08 \
-            org.electronjs.Electron2.BaseApp//25.08
+          # The armada-ci image bakes in the flathub remote and these runtimes,
+          # so on it this step must touch the network for NOTHING: a flaky
+          # flathub.org DNS lookup here otherwise fails the whole desktop release
+          # for a no-op (observed in CI). Only a stock runner image, which lacks
+          # the BaseApp, falls through to the networked remote-add + install.
+          if ! flatpak info org.electronjs.Electron2.BaseApp >/dev/null 2>&1; then
+            flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+            flatpak install -y flathub \
+              org.freedesktop.Platform//25.08 \
+              org.freedesktop.Sdk//25.08 \
+              org.electronjs.Electron2.BaseApp//25.08
+          fi
 
       - name: Build Flatpak bundle and repository
         run: cd electron && npm run dist:flatpak
