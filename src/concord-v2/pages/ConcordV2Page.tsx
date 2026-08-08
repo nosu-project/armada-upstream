@@ -1,4 +1,4 @@
-import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, Link as LinkIcon, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Phone, Pin, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Timer, Trash2, UserPlus, Users, X } from "lucide-react";
+import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, KeyRound, Link as LinkIcon, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Phone, Pin, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Timer, Trash2, UserPlus, Users, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
@@ -112,6 +112,7 @@ import { useCommunityManagement2, useStrandedRecovery2 } from "@/concord-v2/hook
 import { useChannels2, useControlFold2, useDissolved2 } from "@/concord-v2/hooks/useControlPlane2";
 import { usePins2 } from "@/concord-v2/hooks/usePins2";
 import { BanMemberDialog } from "@/concord-v2/components/BanMemberDialog2";
+import { RotateKeysDialog2 } from "@/concord-v2/components/RotateKeysDialog2";
 import type { BanPhase } from "@/concord-v2/hooks/useModeration2";
 import { hasForeignLiveLinks } from "@/concord-v2/lib/control";
 import { replyTargetOf } from "@/concord-v2/lib/chat";
@@ -1741,6 +1742,7 @@ export function ConcordV2Page() {
   const [shareDiscoverOpen, setShareDiscoverOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);
   const [banTarget, setBanTarget] = useState<string | null>(null);
+  const [rotateKeysOpen, setRotateKeysOpen] = useState(false);
   /**
    * The pending "name a category" prompt. A category has no id, so naming one
    * is the same act whether it is being created (file one channel under a new
@@ -2499,6 +2501,20 @@ export function ConcordV2Page() {
     }
   };
 
+  // The standalone rotation strands every OTHER creator's live links until
+  // they next open the app (only their signer_sk can refresh a bundle). Unlike
+  // a ban this doesn't veto the action — there is no banlist-only fallback
+  // that still answers a suspect key — so it is warned about instead.
+  const rotateStrandsForeignLinks = Boolean(folded && user && hasForeignLiveLinks(folded, user.pubkey));
+
+  const runRotateKeys = async () => {
+    await moderation.rotateKeys();
+    toast({
+      title: "Community keys rotated",
+      description: "Everyone still in the community keeps access. The previous keys can't read new messages.",
+    });
+  };
+
   const renderChannelRow = (c: ChannelV2) => {
     if (!community) return null;
     const index = renderedIndexOf.get(c.idHex) ?? 0;
@@ -2684,6 +2700,20 @@ export function ConcordV2Page() {
                 {user && (
                   <>
                     <div className="mx-1 my-1 h-px bg-border" />
+                    {moderation.canRotateKeys && !dissolved && (
+                      <button
+                        type="button"
+                        disabled={moderation.isRotatingKeys}
+                        className="flex w-full items-center gap-3 px-3 py-2 text-sm text-left text-destructive transition-colors clip-corner-lg hover:bg-destructive/10 disabled:opacity-50"
+                        onClick={() => {
+                          setRotateKeysOpen(true);
+                          setCommunityMenuOpen(false);
+                        }}
+                      >
+                        <KeyRound className="size-4" />
+                        Rotate community keys
+                      </button>
+                    )}
                     <button
                       type="button"
                       disabled={isLeaving}
@@ -3677,6 +3707,14 @@ export function ConcordV2Page() {
         willRotate={banWillRotate}
         onClose={() => setBanTarget(null)}
         onConfirm={runBan}
+      />
+      <RotateKeysDialog2
+        open={rotateKeysOpen}
+        memberCount={memberPubkeys.length}
+        privateChannelCount={community?.privateChannels.length ?? 0}
+        strandsForeignLinks={rotateStrandsForeignLinks}
+        onClose={() => setRotateKeysOpen(false)}
+        onConfirm={runRotateKeys}
       />
       <CommunityInfoDialog2
         community={community}

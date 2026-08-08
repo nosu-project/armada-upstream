@@ -238,6 +238,56 @@ describe("banMany", () => {
   });
 });
 
+describe("rotateKeys", () => {
+  it("is a Refounding with NOTHING excluded — no banlist, no strip, no read-cut intent", async () => {
+    const { result } = mount([owner, targetA, bystander]);
+    await waitFor(() => expect(result.current.canRotateKeys).toBe(true));
+
+    await result.current.rotateKeys();
+
+    const refounds = h.log.filter((e) => e.op === "refound");
+    expect(refounds).toHaveLength(1);
+    expect(refounds[0]).toMatchObject({ keep: [owner, targetA, bystander], exclude: [] });
+    // Nothing is being removed, so none of the ban's other steps may fire —
+    // and nothing is owed to the read-cut retry.
+    expect(editions(VSK_BANLIST)).toHaveLength(0);
+    expect(editions(VSK_GRANT)).toHaveLength(0);
+    expect(h.log.filter((e) => e.op === "readcut-add")).toHaveLength(0);
+  });
+
+  it("a foreign live link does NOT veto it, unlike a ban's rotation", async () => {
+    h.folded = foldedWith({ foreignLinks: [bystander] });
+    const { result } = mount([owner, bystander]);
+    await waitFor(() => expect(result.current.canRotateKeys).toBe(true));
+
+    await result.current.rotateKeys();
+    expect(h.log.filter((e) => e.op === "refound")).toHaveLength(1);
+  });
+
+  it("refuses without BAN authority, or without a NIP-44 signer", async () => {
+    h.user = { pubkey: bystander, signer: {} };
+    const unranked = mount([owner, bystander]);
+    await waitFor(() => expect(unranked.result.current.canRotateKeys).toBe(false));
+    await expect(unranked.result.current.rotateKeys()).rejects.toThrow(/permission/);
+
+    h.user = { pubkey: owner, signer: {} };
+    h.canRefound = false;
+    const unsigned = mount([owner]);
+    await waitFor(() => expect(unsigned.result.current.canRotateKeys).toBe(false));
+    await expect(unsigned.result.current.rotateKeys()).rejects.toThrow(/signer/);
+
+    expect(h.log).toHaveLength(0);
+  });
+
+  it("refuses on an unsettled fold rather than rotating to a thin keep-list", async () => {
+    h.folded = undefined;
+    const { result } = mount([owner]);
+    await waitFor(() => expect(result.current.canRotateKeys).toBe(false));
+    await expect(result.current.rotateKeys()).rejects.toThrow(/syncing/);
+    expect(h.log).toHaveLength(0);
+  });
+});
+
 describe("kickMany", () => {
   it("strips before the directive for EACH target, and continues past a failure", async () => {
     h.folded = foldedWith({
