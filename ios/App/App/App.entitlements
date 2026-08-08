@@ -17,5 +17,22 @@
 	<array>
 		<string>applinks:armada.buzz</string>
 	</array>
+
+	<!-- ArmadaDB lives in this App Group's container rather than in the app's
+	     own sandbox, because an extension can only see the group's. Nothing
+	     needs that yet — iOS has no notifications — but the choice is not
+	     reversible after a release: moving the file later would strand
+	     decrypted Concord and NIP-17 history that exists nowhere else, so the
+	     container is picked before anything is stored in it rather than after.
+	     ArmadaDbLocation refuses to fall back to the sandbox if this is
+	     missing, since a silent fallback is the same hazard deferred.
+
+	     Requires App Groups to be enabled on the App ID in the Apple developer
+	     portal, with this identifier registered; automatic signing then
+	     regenerates a profile carrying the capability. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.buzz.armada.app</string>
+	</array>
 </dict>
 </plist>

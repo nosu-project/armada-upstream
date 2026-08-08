@@ -22,6 +22,7 @@ client does not depend on it at build time.
 | `android/`   | Capacitor Android project (signed APK/AAB built in CI)          |
 | `android/…/app/db/` | ArmadaDB in Kotlin: the SQLite engine the Android build actually runs, shared by the WebView and the notification service |
 | `ios/`       | Capacitor iOS project (SwiftPM, no CocoaPods; built manually on a Mac — no CI) |
+| `ios/ArmadaDB/` | ArmadaDB in Swift: the SQLite engine the iOS build runs, with SQLite vendored. A SwiftPM package so it builds on **Linux**, where its conformance suite runs without a Mac |
 | `electron/`  | Electron desktop shell (loads the bundled web build; Linux/Windows/macOS installers built in CI) |
 | `Dockerfile` + `nginx.conf` | nginx-served static build for web hosting        |
 
@@ -43,7 +44,7 @@ commit/PR.
 
 | Workflow | Trigger | What |
 |----------|---------|------|
-| `test.yml` | push (any branch) + PR | `npm run test` (tsc + eslint + vitest + build) and `npm audit --audit-level=high` |
+| `test.yml` | push (any branch) + PR | `npm run test` (tsc + eslint + vitest + build), the Swift ArmadaDB conformance suite (`swift test --package-path ios/ArmadaDB`), and `npm audit --audit-level=high` |
 | `deploy-web.yml` | push to `main` | build + rsync-over-SSH deploy of the hosted client (armada.buzz); skips deploy if the SSH secret isn't provisioned |
 | `release.yml` | tag `v*` | signed Android APK + AAB, published as run artifacts, then Zapstore publish, then Google Play publish (draft release while the app is unpublished in Play Console; skips Play if the service-account secret isn't provisioned) |
 | `desktop.yml` | tag `v*` | Electron Linux (AppImage + deb), Windows (NSIS + portable) and macOS (ad-hoc signed .app zips, cross-built); published as run artifacts and rsynced to `armada.buzz/downloads/` |
@@ -87,14 +88,17 @@ Notes specific to ngit-ci (vs the old GitLab pipeline):
 - **`ubuntu-latest` runs in a pre-baked `armada-ci` image.** The coordinator
   maps the label to it via `NGIT_CI_ACT_PLATFORMS`; the Dockerfile lives in
   `.ngit/ci-image/` and pre-installs the JDK/node toolcaches (setup-* actions
-  no-op), the Android SDK, system ruby+fastlane, the zsp binary, wine, and
+  no-op),   the Android SDK, system ruby+fastlane, the zsp binary, wine, the Swift
+  toolchain (for `ios/ArmadaDB`'s suite), and
   warm `~/.gradle` (incl. build cache) / `~/.npm` /
   `~/.cache/electron{,-builder}` caches for this repo. Cold runs on the stock
   act image re-downloaded ~700 MB of toolchain+deps and blew the coordinator's
   30-min default job timeout (`NGIT_CI_JOB_TIMEOUT_SECS`, raised to 3600
   server-side). Rebuild with `.ngit/ci-image/build.sh` on the coordinator host
-  when `package-lock.json`, `electron/package-lock.json`, or the android/gradle
-  deps change; the setup-* actions self-heal version drift in between.
+  when `package-lock.json`, `electron/package-lock.json`, the android/gradle
+  deps, or the Swift pin change; the setup-* actions self-heal version drift in
+  between — but there is NO setup-swift step, so `swift test` fails outright on
+  an image that predates it.
 - **act mounts the persistent `act-toolcache` volume over
   `/opt/hostedtoolcache`** in every job container, seeded from the image only
   while empty. Toolcache content added by an image rebuild is invisible to
@@ -182,10 +186,23 @@ number doesn't exceed the previous one.
   Technology LLC), set in `project.pbxproj`. The Team ID is also baked into the
   `appIDs` of `public/.well-known/apple-app-site-association`, so a team change
   means changing both or universal links silently stop associating.
+- **Storage is ArmadaDB in Swift, in an App Group container.** `ios/ArmadaDB`
+  is the engine; `ArmadaDbPlugin.swift` is the transport, registered from
+  `ViewController.capacitorDidLoad()` rather than through
+  `capacitor.config.json`'s `packageClassList`, which `cap sync` regenerates
+  from npm packages and would drop an app-local plugin from. The file lives in
+  `group.buzz.armada.app`, NOT the app sandbox, because that is the only
+  container a notification extension can also open — and the choice stops being
+  reversible the moment a build ships, since moving it later strands decrypted
+  Concord and NIP-17 history that exists nowhere else. `ArmadaDbLocation`
+  refuses to fall back to the sandbox for the same reason. The App Group must
+  be enabled on the App ID in the developer portal, like Associated Domains.
 - The WebView origin is `capacitor://localhost` (Android uses
   `https://localhost`). Changing `server.iosScheme` later would move the
-  origin and orphan all IndexedDB/OPFS/localStorage data, so treat it as
-  fixed. `shareOrigin()` already returns the public web origin on native.
+  origin and orphan any OPFS/localStorage data, so treat it as
+  fixed. (ArmadaDB itself is no longer at risk — it is a file in the App Group
+  container, not storage keyed by the origin.) `shareOrigin()` already returns
+  the public web origin on native.
 - Safe-area insets are native on iOS (the safe-area plugin is an Android
   edge-to-edge polyfill), driven by `viewport-fit=cover` in `index.html`.
   `contentInset: 'never'` keeps UIKit from adding a second inset on top of the
@@ -231,13 +248,17 @@ different engine per platform:
 
 | Platform | Engine |
 |----------|--------|
-| Web / iOS | `IndexedDBArmadaDB` (Nostrify's `NIndexedDB` per tenant) |
+| Web | `IndexedDBArmadaDB` (Nostrify's `NIndexedDB` per tenant) |
 | **Android** | `NativeArmadaDB` → `ArmadaDbPlugin` → **Kotlin** (`android/…/app/db/`) |
+| **iOS** | `NativeArmadaDB` → `ArmadaDbPlugin` → **Swift** (`ios/ArmadaDB/`) |
 | **Desktop** | `NativeArmadaDB` → Electron IPC → `SqliteArmadaDB` on `node:sqlite`, in the main process (`electronMain.ts`, `nodeSqlDriver.ts`) |
 
-Both native rows are the SAME adapter with a different transport under it, so
-the write coalescing, the KV `kvOps` batching and the read-your-writes ordering
-are written once. A new platform adds a bridge, not an adapter.
+All three native rows are the SAME JS adapter with a different transport under
+it, so the write coalescing, the KV `kvOps` batching and the read-your-writes
+ordering are written once. A new platform adds a bridge, not an adapter — though
+one whose background writer needs the query engine in-process (Android's
+service, iOS's future notification extension) does add an engine port below the
+bridge.
 
 On Android the query engine is native and there is exactly one database file.
 The background notification service writes an event into the same tenant the
@@ -264,17 +285,32 @@ Things to know before touching it:
   relay, and a dropped cache row is refetchable from the one relay that has it.
   Don't relay-scope global data (profiles, the user's own lists, git): that forks
   one identity into a copy per relay.
-- **The Kotlin port must stay in step with `SqliteArmadaDB.ts`.** Same schema,
-  same `seq = created_at × 2²⁰ + n` rowid encoding, same tag-token escaping,
-  same planner. `ArmadaDbTest.kt` is the TS conformance suite ported over; run
-  it (`cd android && ./gradlew :app:testDebugUnitTest`) for any change to
-  either.
+- **The Kotlin and Swift ports must stay in step with `SqliteArmadaDB.ts`.**
+  Same schema, same `seq = created_at × 2²⁰ + n` rowid encoding, same tag-token
+  escaping, same planner. `ArmadaDbTest.kt` and `ArmadaDbTests.swift` are the TS
+  conformance suite ported over; run them (`cd android && ./gradlew
+  :app:testDebugUnitTest`, `cd ios/ArmadaDB && swift test`) for any change to
+  any of the three. The Swift suite needs no Mac — that is why the engine is a
+  SwiftPM package rather than files in the app target.
+  Where Swift needed more than transcription, and why: string ORDER is UTF-16
+  code units (Swift's `<` compares by canonical equivalence, so a decomposed
+  accent equals a composed one, and UTF-8 bytes sort astral characters on the
+  wrong side of U+E000..U+FFFF) — the `id ASC` tie-break and the KV range bounds
+  are contract, not detail; text binds with an explicit BYTE COUNT, since
+  SQLite reads a length of `-1` as "up to the first NUL" and would truncate any
+  user-controlled string containing one; and a KV prefix upper bound that lands
+  on an unpaired surrogate is reported as NO bound, because Swift strings can't
+  hold one — the scan widens and the range check does the filtering.
 - **SQLite is bundled, not borrowed.** The schema needs FTS5 with
   `contentless_delete` (3.43+) and JSON1; Android's platform SQLite is 3.9 on
   minSdk 24 and has neither. `androidx.sqlite:sqlite-bundled` ships 3.50.1 per
   ABI (~1.2 MB each, ~5 MB on a universal APK) and the same build for the JVM,
   which is what lets the conformance suite run the real engine as a plain unit
-  test. Desktop gets its engine from Electron's embedded Node (`node:sqlite`),
+  test. iOS vendors the amalgamation (`ios/ArmadaDB/Sources/CArmadaSQLite`,
+  compiled with `SQLITE_ENABLE_FTS5`) pinned to the SAME 3.50.1, so the two
+  native platforms run one SQLite rather than two that merely both pass; Apple's
+  `libsqlite3.dylib` only reaches 3.43 around iOS 17, two releases past the 15.0
+  deployment target. Desktop gets its engine from Electron's embedded Node (`node:sqlite`),
   which is why the Electron major is a storage dependency, not just a Chromium
   one: `node:sqlite` landed in Node 22.5, so Electron 33 (Node 20) could not
   host the store at all. Electron 43 is Node 24 / SQLite 3.53. Check both when
@@ -399,11 +435,16 @@ Things to know before touching it:
   exactly how `exportNsec` came to return `"failed"` on iOS, which took the
   onboarding key backup (`backUpNsec`, the only route the signup wizard has)
   down with it — a generated nsec the user could not save anywhere. The list of
-  plugins this applies to is `MainActivity.java`'s registrations:
-  `ArmadaNotification`, `ArmadaDb`, `ArmadaCredential`, `BluetoothMesh`,
-  `WebReady`, `ShareTarget`. Cross-platform plugins (Share, Haptics, Clipboard,
-  Filesystem, StatusBar, SecureStorage) are the case `isNativePlatform()` is
-  actually for.
+  plugins this applies to is `MainActivity.java`'s registrations MINUS the ones
+  iOS also implements: `ArmadaNotification`, `ArmadaCredential`,
+  `BluetoothMesh`, `WebReady`, `ShareTarget`. Cross-platform plugins (Share,
+  Haptics, Clipboard, Filesystem, StatusBar, SecureStorage) are the case
+  `isNativePlatform()` is actually for. `ArmadaDb` is now in neither group: it
+  is implemented on Android AND iOS but nowhere else, so `hasNativeArmadaDB()`
+  gates on an explicit platform SET plus `isPluginAvailable`. Gating it on
+  `isNativePlatform()` would be wrong the day a third native platform appears;
+  gating it on `"android"` would silently put iOS back on IndexedDB, with the
+  data already written to SQLite left where nothing reads it.
 - Commit messages: concise, imperative, sentence case (see `git log`).
   Describe the technical change only — what was changed. Don't embed a
   confident problem diagnosis, root-cause narrative, or prescribed "this fixes

@@ -1,12 +1,13 @@
 // @vitest-environment node
 /**
- * The Android bridge adapter, against a stand-in for the native store.
+ * The native bridge adapter, against a stand-in for the native store.
  *
  * What is under test here is the TRANSPORT, not the query engine: the engine is
- * Kotlin, and `ArmadaDbTest.kt` runs the conformance suite against it directly.
- * What can go wrong on this side is everything around it — a filter that doesn't
- * survive `JSON.stringify`, a burst that crosses the bridge a thousand times
- * instead of once, a KV value that comes back as a string.
+ * Kotlin on Android and Swift on iOS, and `ArmadaDbTest.kt` / `ArmadaDbTests.swift`
+ * run the conformance suite against each directly. What can go wrong on this
+ * side is everything around it — a filter that doesn't survive
+ * `JSON.stringify`, a burst that crosses the bridge a thousand times instead of
+ * once, a KV value that comes back as a string.
  *
  * The stand-in is the TypeScript SQLite adapter, which is the same design and
  * the same schema, so a protocol mismatch shows up as a wrong answer rather than
@@ -45,6 +46,9 @@ const native = vi.hoisted(() => {
 
   return {
     calls,
+    /** Mutable so the adapter's platform gate can be tested on both natives. */
+    platform: "android" as string,
+    pluginAvailable: true,
     use(next: typeof store) {
       store = next;
       for (const key of Object.keys(calls) as (keyof typeof calls)[]) calls[key] = 0;
@@ -134,9 +138,9 @@ const native = vi.hoisted(() => {
 
 vi.mock("@capacitor/core", () => ({
   Capacitor: {
-    getPlatform: () => "android",
-    isPluginAvailable: () => true,
-    isNativePlatform: () => true,
+    getPlatform: () => native.platform,
+    isPluginAvailable: () => native.pluginAvailable,
+    isNativePlatform: () => native.platform !== "web",
   },
   registerPlugin: () => native.plugin,
 }));
@@ -190,8 +194,27 @@ describe("NativeArmadaDB", () => {
     await backing.close().catch(() => undefined);
   });
 
-  it("is selected on Android when the plugin is present", () => {
-    expect(hasNativeArmadaDB()).toBe(true);
+  it("is selected on the platforms that implement it, when the plugin is present", () => {
+    for (const platform of ["android", "ios"]) {
+      native.platform = platform;
+      expect(hasNativeArmadaDB()).toBe(true);
+    }
+
+    // A platform with no implementation must fall through to IndexedDB rather
+    // than reach a `registerPlugin` proxy with nothing behind it.
+    for (const platform of ["web", "electron"]) {
+      native.platform = platform;
+      expect(hasNativeArmadaDB()).toBe(false);
+    }
+
+    // And so must a build whose plugin failed to register: answering `true`
+    // here would make every read reject instead of opening the web store.
+    native.platform = "ios";
+    native.pluginAvailable = false;
+    expect(hasNativeArmadaDB()).toBe(false);
+
+    native.platform = "android";
+    native.pluginAvailable = true;
   });
 
   it("returns the same store for a tenant id", () => {

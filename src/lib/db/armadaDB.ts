@@ -7,6 +7,10 @@
  *    the tenant the app reads it from, so a message received while the app was
  *    dead is simply there on open, rather than being replayed out of a private
  *    database the service kept to itself.
+ *  - **iOS** uses the same native store, with the query engine in Swift
+ *    (`ios/ArmadaDB`) and its file in the App Group container — the one place
+ *    an extension can also read, which is what a notification extension will
+ *    need for the same reason Android's service does.
  *  - **Desktop (Electron)** is arranged the same way, for the same reason one
  *    layer down: the engine is `SqliteArmadaDB` in the shell's main process,
  *    over one file in the OS's per-app config directory. That puts a desktop
@@ -17,8 +21,8 @@
  *    SQLite-WASM worker too, but no driver for one exists yet.
  *
  * The choice is made once, before anything reads, and never revisited: an
- * Android install never opens the IndexedDB adapter, so there is never a second
- * store to reconcile against.
+ * Android or iOS install never opens the IndexedDB adapter, so there is never a
+ * second store to reconcile against.
  *
  * Kept as a lazy singleton rather than being built in the provider so that
  * non-React code (sync loops, the wire bus, the logout purge) reaches the same
@@ -91,8 +95,8 @@ export function getArmadaDB(): ArmadaDB {
 export async function purgeArmadaDB(): Promise<void> {
   // The native store is one file on one connection — shared, on Android, with
   // a background service that goes on writing to it — so it is EMPTIED rather
-  // than deleted and the connection stays open. Nothing else to sweep: neither
-  // an Android nor a desktop install ever opens the IndexedDB adapter, so there
+  // than deleted and the connection stays open. Nothing else to sweep: an
+  // Android, iOS or desktop install never opens the IndexedDB adapter, so there
   // are no databases to delete.
   if (instance instanceof NativeArmadaDB) {
     await instance.wipe().catch(() => undefined);
