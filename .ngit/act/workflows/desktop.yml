@@ -127,6 +127,17 @@ jobs:
             sudo apt-get update -qq
             sudo apt-get install -y --no-install-recommends flatpak flatpak-builder >/dev/null
           fi
+          # flatpak-builder shells out to elfutils' eu-strip to extract a
+          # module's debuginfo, and the armada-ci image has no elfutils. The
+          # manifest turns that phase off, so this is the belt to that braces:
+          # non-fatal, because if the manifest option holds these binaries are
+          # never invoked, and a transient apt failure must not cost a release.
+          # Guarded, so an image with elfutils baked in touches nothing.
+          if ! command -v eu-strip >/dev/null 2>&1; then
+            (sudo apt-get update -qq && \
+             sudo apt-get install -y --no-install-recommends elfutils >/dev/null) \
+              || echo "warning: elfutils unavailable; relying on the manifest's no-debuginfo"
+          fi
           # The armada-ci image bakes in the flathub remote and these runtimes,
           # so on it this step must touch the network for NOTHING: a flaky
           # flathub.org DNS lookup here otherwise fails the whole desktop release

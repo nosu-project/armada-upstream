@@ -10,6 +10,15 @@ base-version: *runtime-version
 command: armada
 separate-locales: false
 
+# Everything shipped here is a prebuilt Electron binary, so a .Debug extension
+# carries nothing useful and the debuginfo phase is pure cost. Set at the top
+# level AND on the module: which scope flatpak-builder resolves this from for
+# the post-process phase is not something we can verify on the build host, and
+# the two spellings are free.
+build-options:
+  strip: false
+  no-debuginfo: true
+
 finish-args:
   - --share=network
   - --share=ipc
