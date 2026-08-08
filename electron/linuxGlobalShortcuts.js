@@ -339,9 +339,15 @@ class LinuxGlobalShortcutsPortal {
     const previousSession = this.sessionHandle;
     const replacementId = nextLegacyShortcutId(this.shortcutId);
     const token = this.nextToken();
-    const replacementSession = await this.createSession(token);
+    // Arm the guard before ANY awaited portal work. The old session stays live
+    // for the whole exchange, so the compositor keeps delivering its signals;
+    // a press landing in an unguarded await is honoured as Activated while its
+    // Deactivated is later dropped, which leaves the microphone open for the
+    // rest of the session. Suspending first makes the pair atomic.
     this.suspended = true;
+    let replacementSession = null;
     try {
+      replacementSession = await this.createSession(token);
       // A v1 portal has no ConfigureShortcuts method. A replacement action ID
       // makes BindShortcuts show the same trusted chooser used on first setup.
       // The old session stays live until the user accepts, so cancel is safe.
@@ -376,6 +382,10 @@ class LinuxGlobalShortcutsPortal {
       throw error;
     } finally {
       this.suspended = false;
+      // A press the guard swallowed cannot be un-swallowed, and the key may
+      // well have been released while the chooser held the keyboard grab.
+      // Resume closed; a still-held key sends a fresh Activated.
+      this.release();
     }
   }
 

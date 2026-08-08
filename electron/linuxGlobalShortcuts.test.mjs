@@ -1,5 +1,6 @@
 // @vitest-environment node
 
+import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
 
 import { describe, expect, it, vi } from "vitest";
@@ -8,7 +9,9 @@ const require = createRequire(import.meta.url);
 const { Variant } = require("@jellybrick/dbus-next");
 const {
   ALTERNATE_SHORTCUT_ID,
+  GLOBAL_SHORTCUTS_INTERFACE,
   LinuxGlobalShortcutsPortal,
+  SHORTCUT_ID,
   bindingToXdgTrigger,
   desktopEnvironment,
   formatShortcutDescription,
@@ -19,6 +22,51 @@ const {
   shortcutDescription,
   xdgKeyName,
 } = require("./linuxGlobalShortcuts.js");
+
+const SESSION_A = "/org/freedesktop/portal/desktop/session/a";
+const SESSION_B = "/org/freedesktop/portal/desktop/session/b";
+const BINDING = { code: "CapsLock", label: "Caps Lock" };
+
+/**
+ * Start a portal against a fake session bus so the REAL Activated/Deactivated
+ * handlers get installed. Stubbing those out is what let the suspend-window bug
+ * through: the guard they consult is the whole subject of these tests.
+ */
+async function startPortal({ portalVersion = 1 } = {}) {
+  const shortcuts = new EventEmitter();
+  const bus = {
+    getProxyObject: async () => ({
+      getInterface: (name) => (
+        name === GLOBAL_SHORTCUTS_INTERFACE
+          ? shortcuts
+          : { Get: async () => new Variant("u", portalVersion) }
+      ),
+    }),
+    disconnect: () => {},
+  };
+  const portal = new LinuxGlobalShortcutsPortal({
+    sessionBus: () => bus,
+    env: { XDG_CURRENT_DESKTOP: "GNOME" },
+  });
+  portal.createSession = vi.fn(async () => SESSION_A);
+  portal.bindSession = vi.fn(async () => ({
+    shortcuts: [[SHORTCUT_ID, { trigger_description: new Variant("s", "Caps Lock") }]],
+  }));
+  portal.closeSession = vi.fn(async () => {});
+
+  const pressed = [];
+  await portal.start(BINDING, (value) => pressed.push(value));
+  pressed.length = 0;
+  return { portal, shortcuts, pressed };
+}
+
+function replacementBind() {
+  return vi.fn(async () => ({
+    shortcuts: [[ALTERNATE_SHORTCUT_ID, {
+      trigger_description: new Variant("s", "Ctrl + Press d"),
+    }]],
+  }));
+}
 
 describe("Linux Global Shortcuts portal binding", () => {
   it("converts physical keys and modifiers to XDG shortcut identifiers", () => {
@@ -148,5 +196,60 @@ describe("Linux Global Shortcuts portal binding", () => {
     expect(portal.closeSession).toHaveBeenCalledWith(newSession);
     expect(portal.closeSession).not.toHaveBeenCalledWith(oldSession);
     expect(portal.suspended).toBe(false);
+  });
+
+  it("stays muted when a press lands while the replacement chooser is opening", async () => {
+    const { portal, shortcuts, pressed } = await startPortal();
+
+    // The old session stays live until the user accepts, so the compositor
+    // keeps delivering its signals throughout. Anything awaited before the
+    // suspend guard is armed is a window in which Activated is honoured but
+    // the matching Deactivated is not.
+    portal.createSession = vi.fn(async () => {
+      shortcuts.emit("Activated", SESSION_A, SHORTCUT_ID);
+      return SESSION_B;
+    });
+    portal.bindSession = replacementBind();
+
+    await expect(portal.openSettings()).resolves.toBe(true);
+
+    expect(pressed).not.toContain(true);
+    expect(pressed.at(-1)).toBe(false);
+  });
+
+  it("releases a held key whose Deactivated is swallowed by the chooser", async () => {
+    const { portal, shortcuts, pressed } = await startPortal();
+
+    shortcuts.emit("Activated", SESSION_A, SHORTCUT_ID);
+    expect(pressed).toEqual([true]);
+
+    portal.createSession = vi.fn(async () => SESSION_B);
+    portal.bindSession = vi.fn(async () => {
+      // The user let go while the trusted chooser had the keyboard grabbed.
+      shortcuts.emit("Deactivated", SESSION_A, SHORTCUT_ID);
+      return {
+        shortcuts: [[ALTERNATE_SHORTCUT_ID, {
+          trigger_description: new Variant("s", "Ctrl + Press d"),
+        }]],
+      };
+    });
+
+    await expect(portal.openSettings()).resolves.toBe(true);
+
+    expect(pressed.at(-1)).toBe(false);
+  });
+
+  it("resumes closed when the replacement session cannot be created", async () => {
+    const { portal, shortcuts, pressed } = await startPortal();
+
+    portal.createSession = vi.fn(async () => {
+      shortcuts.emit("Activated", SESSION_A, SHORTCUT_ID);
+      throw new Error("Global shortcut portal returned no session");
+    });
+
+    await expect(portal.openSettings()).rejects.toThrow(/no session/);
+
+    expect(portal.suspended).toBe(false);
+    expect(pressed.at(-1)).toBe(false);
   });
 });
