@@ -2241,6 +2241,15 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               ) : (
                 <button
                   type="button"
+                  // Keep the tap from blurring the textarea: on iOS, tapping a
+                  // non-editable element dismisses the keyboard, which reflows
+                  // the layout and slides this button out from under the finger
+                  // so the click (fired at touchend) misses — requiring a second
+                  // tap. preventDefault on pointerdown retains focus (keyboard
+                  // stays up, no reflow) while still allowing the click through.
+                  // Must be pointerdown, not mousedown: iOS synthesizes mouse
+                  // events after touchend, too late to prevent the blur.
+                  onPointerDown={(e) => e.preventDefault()}
                   onClick={mode === "poll" ? handlePollSubmit : handleSend}
                   disabled={isUploading || (mode === "poll" ? !isPollValid || isSending : !hasContent)}
                   aria-label={isUploading ? "Uploading attachment" : mode === "poll" ? "Publish poll" : "Send message"}
