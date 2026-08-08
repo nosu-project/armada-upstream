@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { AppWindow, ArrowLeft, Download, Globe, Laptop, Smartphone, Terminal } from "lucide-react";
+import { AppWindow, ArrowLeft, Download, ExternalLink, Globe, Laptop, Smartphone, Terminal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useMemo, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -39,9 +39,28 @@ const OS_ICON: Record<DownloadOs, LucideIcon> = {
 /** A note the user needs BEFORE the download, not after it fails to open. */
 const OS_CAVEAT: Partial<Record<DownloadOs, string>> = {
   macos: "Ad-hoc signed rather than notarized, so the first launch needs Control-click → Open, then Open Anyway.",
-  android: "Sideloading asks Android to allow installs from your browser. Zapstore and Google Play are the alternatives.",
+  android: "Sideloading the APK asks Android to allow installs from your browser.",
   linux: "Mark an AppImage executable before running it: chmod +x Armada.AppImage",
 };
+
+/**
+ * Where Android users can get the app without sideloading. External stores,
+ * not CI-published files, which is why these live here rather than as assets
+ * in `lib/downloads.ts`: the manifest/workflow test there asserts every asset
+ * filename is something CI publishes.
+ */
+const ANDROID_STORES = [
+  {
+    label: "Google Play",
+    hint: "Install from the Play Store",
+    url: "https://play.google.com/store/apps/details?id=buzz.armada.app&hl=en-US",
+  },
+  {
+    label: "Zapstore",
+    hint: "The Nostr-native app store",
+    url: "https://zapstore.dev/apps/buzz.armada.app",
+  },
+];
 
 /** True when the user has asked the OS to keep motion to a minimum. */
 function prefersReducedMotion() {
@@ -78,13 +97,11 @@ function TargetCard({ target, manifest, featured }: {
   const caveat = OS_CAVEAT[target.os];
 
   return (
-    // The established card-over-the-sea treatment (see the landing quiz's
-    // answer buttons): a translucent panel with a hairline border, so the
-    // swell stays faintly visible underneath instead of being walled off.
+    // A borderless translucent panel, so the swell stays faintly visible
+    // underneath instead of being walled off. The featured card is simply a
+    // shade more solid.
     <section
-      className={`clip-corner-lg border p-4 space-y-3 ${
-        featured ? "border-primary/40 bg-background/60" : "border-border/60 bg-background/40"
-      }`}
+      className={`clip-corner-lg p-4 space-y-3 ${featured ? "bg-background/60" : "bg-background/40"}`}
     >
       <header className="flex items-center gap-2">
         <Icon className={`size-5 shrink-0 ${featured ? "text-primary" : "text-muted-foreground"}`} />
@@ -125,13 +142,37 @@ function TargetCard({ target, manifest, featured }: {
               </Button>
             );
           })}
+          {target.os === "android" &&
+            ANDROID_STORES.map((store) => (
+              <Button
+                key={store.url}
+                asChild
+                variant="secondary"
+                className="h-auto py-2.5 touch:py-3 justify-start text-left clip-corner-lg"
+              >
+                <a href={store.url} target="_blank" rel="noreferrer">
+                  <ExternalLink className="size-4 shrink-0" />
+                  <span className="flex flex-col gap-0.5 min-w-0">
+                    <span className="font-medium leading-tight">{store.label}</span>
+                    <span className="text-xs font-normal opacity-70 leading-tight whitespace-normal">{store.hint}</span>
+                  </span>
+                </a>
+              </Button>
+            ))}
         </div>
       ) : (
-        // iOS: no build is published, so the honest answer is the web app.
+        // iOS: no App Store build is published yet, so tease it. The web app
+        // is presented as a good install in its own right, not a stopgap:
+        // Safari's Add to Home Screen gives a full-screen app on the Home
+        // Screen today.
         <div className="space-y-2">
+          <p className="font-mono text-xs lowercase tracking-wide text-primary/80">
+            official app coming soon
+          </p>
           <p className="text-sm text-muted-foreground leading-relaxed">
-            There's no App Store build yet. {APP_NAME} runs as a full-screen web app instead: open it in Safari,
-            tap Share, then <strong className="text-foreground/80">Add to Home Screen</strong>.
+            {APP_NAME} already installs as a full-screen web app that lives on your Home
+            Screen like any other: open it in Safari, tap Share, then{" "}
+            <strong className="text-foreground/80">Add to Home Screen</strong>.
           </p>
           <Button asChild variant="secondary" className="h-auto py-2.5 touch:py-3 clip-corner-lg">
             <Link to="/">
@@ -279,7 +320,9 @@ export function DownloadsPage() {
         {/* ── The sign-off ─────────────────────────────────────────────────
             The landing's terminal prompt, so this page ends where that one
             does. `armada-caret` comes from the crest's keyframes below. */}
-        <section className="mx-auto flex max-w-xl flex-col items-center px-6 pb-24 pt-8 text-center safe-area-bottom">
+        {/* Tall enough that the prompt floats clear of the gradient floor
+            below, rather than sitting inside its darkest band. */}
+        <section className="mx-auto flex min-h-[50svh] max-w-xl flex-col items-center justify-center px-6 py-16 text-center safe-area-bottom">
           <p className="font-mono text-xl text-[hsl(var(--primary))] sm:text-2xl">
             <span className="text-[hsl(var(--accent2,180_90%_55%))]">$ </span>
             anchors aweigh
