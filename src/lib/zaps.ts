@@ -6,7 +6,7 @@
  *    ({@link tallyZaps}), verifying the embedded request's signature and
  *    holding the bolt11 invoice as the single source of truth for amounts.
  *
- *  - Concord v2 channels: CORD.md private zaps. No public event exists — the
+ *  - Concord channels: CORD.md private zaps. No public event exists — the
  *    payer seals a kind-9735-shaped rumor (NIP-57 receipt shape + `preimage`
  *    tag) into the Chat Plane, and every member verifies the payment locally
  *    ({@link verifyZapRumor}): sha256(preimage) must equal the invoice's

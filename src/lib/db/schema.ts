@@ -89,7 +89,7 @@ export const LOCALSTORAGE_MOVES: Array<{ from: string; to: string }> = [
   { from: "armada:favorite-gifs:merged:", to: "favorite-gifs-merged:" },
   /** Wire sync cursors (`WireSync`). */
   { from: "armada:wire-cursor:", to: "wire-cursor:" },
-  /** Control-plane watchdog dismissals (`useSuspiciousActivity2`). */
+  /** Control-plane watchdog dismissals (`useSuspiciousActivity`). */
   { from: "armada:cp-watchdog:", to: "cp-watchdog:" },
   /** Pending read cuts (`readCutPending`). */
   { from: "concord2:read-cut-pending:", to: "read-cut-pending:" },

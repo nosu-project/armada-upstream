@@ -270,7 +270,7 @@ export function useForegroundNotifications(): void {
           // (A git-activity candidate carries a `?ticket=` query; parse only
           // the path part.)
           const parsed = parseChatRoute(path.split("?")[0]);
-          const communityId = parsed?.kind === "concord2" ? parsed.communityId : "";
+          const communityId = parsed?.kind === "concord" ? parsed.communityId : "";
           level =
             communityId && cand.channelIdHex
               ? c.concordChannelLevel("c2", communityId, cand.channelIdHex)
@@ -341,7 +341,7 @@ export function useForegroundNotifications(): void {
               body = body ?? "New direct message";
             }
           } else if (cand.reaction) {
-            // A reaction to your own message (V2). Mirrors the NIP-29 native
+            // A reaction to your own message (Concord). Mirrors the NIP-29 native
             // string: "Reacted 👍 to your message".
             title = name;
             body = `Reacted ${cand.reactionEmoji ?? "👍"} to your message`;

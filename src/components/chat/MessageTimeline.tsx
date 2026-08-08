@@ -239,7 +239,7 @@ interface MessageTimelineProps {
   renderMessage: (event: ChatMsg, continuation: boolean) => ReactNode;
   /**
    * Optional generalized channel entries. Leaving this unset preserves the
-   * legacy chat-only timeline used by NIP-29, V1, DMs, and mesh.
+   * legacy chat-only timeline used by NIP-29, DMs, and mesh.
    */
   entries?: readonly ChannelTimelineEntry[];
   /** Renderer for non-chat entries supplied through `entries`. */

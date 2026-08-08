@@ -15,9 +15,9 @@ import {
   KIND_BLOSSOM_SERVERS,
   type BlossomServerListQuery,
 } from "@/hooks/useBlossomServerList";
-import { listQueryKey, syncCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
-import { liveEntries } from "@/concord-v2/lib/communityList";
-import { warmupCommunities2 } from "@/concord-v2/lib/loginWarmup";
+import { listQueryKey, syncCommunityList } from "@/concord/hooks/useCommunityList";
+import { liveEntries } from "@/concord/lib/communityList";
+import { warmupCommunities } from "@/concord/lib/loginWarmup";
 import {
   KIND_GROUP_CHAT,
   KIND_USER_GROUPS,
@@ -64,7 +64,7 @@ const MAX_CATCHUP_CHANNELS = 8;
 
 /**
  * Overall timeout for the whole sync so a dead relay never traps the user.
- * Sized so the V2 warm-up (plane sweeps + per-channel history) usually fits;
+ * Sized so the Concord warm-up (plane sweeps + per-channel history) usually fits;
  * if it doesn't, the gate lifts anyway and the in-chat sync status bar
  * carries the remaining progress.
  */
@@ -121,11 +121,11 @@ const PHASE_OPENING: Record<Exclude<SyncPhase, "done">, string> = {
  *   4. Catch up on the newest page of messages for each joined channel (capped),
  *      priming the same caches useGroupMessages reads so timelines render
  *      instantly once the gate lifts.
- *   5. Fetch + decrypt the Concord V2 Community List (kind 13302), seed the
- *      ["concord2","list"] cache, then WARM the communities themselves:
+ *   5. Fetch + decrypt the Concord Community List (kind 13302), seed the
+ *      ["concord","list"] cache, then WARM the communities themselves:
  *      register stream keys, sweep the control/guestbook planes, persist the
  *      control folds, and decrypt the newest page of every channel into the
- *      rumor store (see warmupCommunities2) — so the gate never lifts onto a
+ *      rumor store (see warmupCommunities) — so the gate never lifts onto a
  *      wall of empty rooms.
  *
  * Every step is best-effort and bounded by a timeout — the gate must never trap
@@ -554,40 +554,40 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       }
       if (cancelled) return;
 
-      // ── 5. Concord V2: seed the community list. ──────────────────────────
-      let v2Live: ReturnType<typeof liveEntries> = [];
+      // ── 5. Concord: seed the community list. ──────────────────────────
+      let concordLive: ReturnType<typeof liveEntries> = [];
       if (user.signer.nip44) {
         const vId = begin("communities");
         try {
-          const listData = await syncCommunityList2(nostr, user, queryClient, stepSignal());
+          const listData = await syncCommunityList(nostr, user, queryClient, stepSignal());
           logSync(
             "gate",
-            `v2 list fetched: event=${listData.event ? listData.event.id.slice(0, 8) : "none"} entries=${listData.list.entries.length} live=${liveEntries(listData.list).length} decryptFailed=${Boolean(listData.decryptFailed)}`,
+            `concord list fetched: event=${listData.event ? listData.event.id.slice(0, 8) : "none"} entries=${listData.list.entries.length} live=${liveEntries(listData.list).length} decryptFailed=${Boolean(listData.decryptFailed)}`,
           );
           if (!cancelled && !listData.decryptFailed) {
             queryClient.setQueryData(listQueryKey(pubkey), listData);
-            v2Live = liveEntries(listData.list);
+            concordLive = liveEntries(listData.list);
           }
         } catch (err) {
           // Best-effort; never block login on Concord.
-          logSync("gate", `v2 list fetch FAILED: ${err instanceof Error ? err.message : String(err)}`);
+          logSync("gate", `concord list fetch FAILED: ${err instanceof Error ? err.message : String(err)}`);
         }
-        if (v2Live.length > 0) {
-          resolve(vId, `${v2Live.length} ${v2Live.length === 1 ? "community" : "communities"}`);
+        if (concordLive.length > 0) {
+          resolve(vId, `${concordLive.length} ${concordLive.length === 1 ? "community" : "communities"}`);
         } else {
           drop(vId);
         }
       }
       if (cancelled) return;
 
-      // ── 6. Concord V2 warm-up: planes, folds, newest channel pages. ──────
+      // ── 6. Concord warm-up: planes, folds, newest channel pages. ──────
       // This is what makes the gate honest — without it the app shows through
       // with rail icons but hollow, empty rooms. Raced against the overall
       // budget: if it can't finish in time the gate lifts anyway and the
       // warm-up keeps running, visible in the in-chat sync status bar.
-      if (v2Live.length > 0) {
+      if (concordLive.length > 0) {
         const hId = begin("channels");
-        const warmup = warmupCommunities2(nostr, v2Live, {
+        const warmup = warmupCommunities(nostr, concordLive, {
           signal: overall,
           onProgress: (done, total) => progress(hId, `${done}/${total}`),
           // With a second account logged in, "retired epoch" cannot be judged

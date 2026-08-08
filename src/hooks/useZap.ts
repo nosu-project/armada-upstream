@@ -40,7 +40,7 @@ export interface UseZapResult {
  *    published by us — and the provider's public kind-9735 receipt on our app
  *    relays IS the announcement. Payment falls back NWC → WebLN → manual QR.
  *
- *  - **CORD.md** (Concord v2; transport supplies `sendZap`): the invoice is
+ *  - **CORD.md** (Concord; transport supplies `sendZap`): the invoice is
  *    fetched WITHOUT a `nostr` param (no public receipt anywhere), payment
  *    must return the preimage (NWC/WebLN only — manual QR can't), and the
  *    sealed announcement is published by the transport.

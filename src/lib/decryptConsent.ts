@@ -27,7 +27,7 @@
  *
  * Cache interplay: a decrypt whose plaintext is already in the AppSigner
  * persistent cache never touches the signer, so callers should gate ONLY the
- * uncached remainder (see `useDirectMessages` / `useDirectInvites2`). When
+ * uncached remainder (see `useDirectMessages` / `useDirectInvites`). When
  * everything is cached there is nothing to prompt about and the gate is skipped
  * entirely.
  */

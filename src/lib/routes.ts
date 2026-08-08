@@ -30,7 +30,7 @@
 import { relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 import { shareOrigin } from "@/lib/shareOrigin";
 
-/** Non-channel panes of a Concord V2 community. */
+/** Non-channel panes of a Concord community. */
 export const CONCORD2_PANES = [
   "mentions",
   "threads",
@@ -65,7 +65,7 @@ export interface Nip29Route {
 }
 
 export interface Concord2Route {
-  kind: "concord2";
+  kind: "concord";
   communityId: string;
   /** Mutually exclusive with `pane`. */
   channelId?: string;
@@ -83,7 +83,7 @@ export interface DmRoute {
 
 export type ChatRoute = Nip29Route | Concord2Route | DmRoute;
 
-function isConcord2Pane(value: string): value is Concord2Pane {
+function isConcordPane(value: string): value is Concord2Pane {
   return (CONCORD2_PANES as readonly string[]).includes(value);
 }
 
@@ -116,7 +116,7 @@ export function chatRoute(route: ChatRoute): string {
       if (!route.groupId) return base;
       return withFocus(`${base}/${encodeURIComponent(route.groupId)}`, route);
     }
-    case "concord2": {
+    case "concord": {
       const base = `/c/${encodeURIComponent(route.communityId)}`;
       if (route.pane) return `${base}/${route.pane}`;
       if (!route.channelId) return base;
@@ -144,9 +144,9 @@ export function roomRoute(route: ChatRoute): ChatRoute {
   switch (route.kind) {
     case "nip29":
       return { kind: "nip29", relayUrl: route.relayUrl, groupId: route.groupId, pane: route.pane };
-    case "concord2":
+    case "concord":
       return {
-        kind: "concord2",
+        kind: "concord",
         communityId: route.communityId,
         channelId: route.channelId,
         pane: route.pane,
@@ -223,14 +223,14 @@ export function parseChatRoute(pathname: string): ChatRoute | null {
     case "c": {
       if (seg.length < 2) return null;
       const communityId = decodeURIComponent(seg[1]);
-      if (seg.length === 2) return { kind: "concord2", communityId };
+      if (seg.length === 2) return { kind: "concord", communityId };
       const room = decodeURIComponent(seg[2]);
-      if (seg.length === 3 && isConcord2Pane(room)) {
-        return { kind: "concord2", communityId, pane: room };
+      if (seg.length === 3 && isConcordPane(room)) {
+        return { kind: "concord", communityId, pane: room };
       }
       const focus = parseFocus(seg.slice(3));
       if (!focus) return null;
-      return { kind: "concord2", communityId, channelId: room, ...focus };
+      return { kind: "concord", communityId, channelId: room, ...focus };
     }
     // The pre-rename DM path. Parsed (not just redirected) because a stale
     // push subscription or a tray notification can still land on it, and the
@@ -267,7 +267,7 @@ export function chatRouteTemplate(route: ChatRoute): string {
       if (!route.groupId) return "/s/:server";
       return focusTemplate("/s/:server/:groupId", route);
     }
-    case "concord2": {
+    case "concord": {
       if (route.pane) return `/c/:communityId/${route.pane}`;
       if (!route.channelId) return "/c/:communityId";
       return focusTemplate("/c/:communityId/:channelId", route);

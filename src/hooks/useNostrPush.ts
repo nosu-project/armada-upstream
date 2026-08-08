@@ -24,7 +24,7 @@ import {
   type UsePushNotificationsReturn,
 } from "@/lib/pushPrefs";
 import { effectiveDmRelays } from "@/contexts/AppContext";
-import { useConcord2Subs } from "@/concord-v2/hooks/useConcord2Subs";
+import { useConcordSubs } from "@/concord/hooks/useConcordSubs";
 import { NostrPushClient, type PushRelayPool, type PushSigner } from "@/lib/nostrPush";
 import {
   buildPushSubscriptions,
@@ -176,7 +176,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
   const { logins } = useNostrLogin();
   const { channelLevel, concordChannelLevel } = useNotifLevels();
   const { relays: publishedDmRelays } = useDmRelayList();
-  const allConcord2Subs = useConcord2Subs();
+  const allConcordSubs = useConcordSubs();
   const eventStore = useEventStore();
 
   const unavailableReason = isNativeRuntime()
@@ -271,12 +271,12 @@ export function useNostrPush(): UsePushNotificationsReturn {
     return undefined;
   }, [logins]);
 
-  const concordV2 = useMemo(
+  const concord = useMemo(
     () =>
-      allConcord2Subs.filter(
+      allConcordSubs.filter(
         (sub) => concordChannelLevel("c2", sub.communityId, sub.channelId) !== "nothing",
       ),
-    [allConcord2Subs, concordChannelLevel],
+    [allConcordSubs, concordChannelLevel],
   );
 
   const specs = useMemo(() => {
@@ -289,7 +289,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
       prefs,
       dmRelays,
       dmFollows,
-      concordV2,
+      concord,
     });
   }, [
     user,
@@ -299,7 +299,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
     prefs,
     dmRelays,
     dmFollows,
-    concordV2,
+    concord,
   ]);
 
   // Profiles reach the local store from the wire on their own schedule, and

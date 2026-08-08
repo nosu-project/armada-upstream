@@ -2,7 +2,7 @@
  * The transport-agnostic model behind the Discord-style quick switcher
  * (Ctrl/Cmd+K) and its Alt+↑/↓ channel hop.
  *
- * NIP-29 servers and Concord V2 communities are surfaced through one
+ * NIP-29 servers and Concord communities are surfaced through one
  * {@link Transport} interface, so the palette and the keyboard cycle share a
  * single code path and gain a third transport by adding one adapter — never a
  * parallel branch in the component. The rail's flattened layout supplies the
@@ -15,10 +15,10 @@
 import { matchPath } from "react-router-dom";
 import { nip19 } from "nostr-tools";
 
-import { channelsView } from "@/concord-v2/lib/community";
-import { rehydrateCommunity, type CommunityListEntry } from "@/concord-v2/lib/communityList";
-import { searchRumors } from "@/concord-v2/lib/rumorStore";
-import { readControlFold } from "@/concord-v2/lib/control";
+import { channelsView } from "@/concord/lib/community";
+import { rehydrateCommunity, type CommunityListEntry } from "@/concord/lib/communityList";
+import { searchRumors } from "@/concord/lib/rumorStore";
+import { readControlFold } from "@/concord/lib/control";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { searchDm17Rumors } from "@/lib/nip17/dm17Store";
 import { relayToRouteParam, routeParamToRelay } from "@/lib/platform";
@@ -69,7 +69,7 @@ export interface SwitcherEntries {
 /** Ambient reads a transport needs; both come straight from hooks in the view. */
 export interface SwitcherContext {
   queryClient: QueryClient;
-  /** community_id → live list entry (from `useLiveCommunities2`). */
+  /** community_id → live list entry (from `useLiveCommunities`). */
   communities: Map<string, CommunityListEntry>;
   /** The shared app event store (NIP-29 timelines + kind-0 profiles). */
   eventStore: EventStoreContextType;
@@ -147,7 +147,7 @@ const nip29Transport: Transport = {
   },
 };
 
-// ── Concord V2 ─────────────────────────────────────────────────────────────
+// ── Concord ─────────────────────────────────────────────────────────────
 
 const concordKey = (id: string) => `c2:${id}`;
 
@@ -163,7 +163,7 @@ const concordTransport: Transport = {
     const id = key.slice("c2:".length);
     const entry = communities.get(id);
     if (!entry) return [];
-    // Same derivation the community page uses (`useChannels2`), but sourced
+    // Same derivation the community page uses (`useChannels`), but sourced
     // from the persisted fold rather than a live one: rehydrate the community
     // from the list entry, read its decrypted control fold from IndexedDB, and
     // assemble the readable channels in display order. No decrypt, no network.

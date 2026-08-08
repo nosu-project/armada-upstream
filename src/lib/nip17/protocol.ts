@@ -66,7 +66,7 @@ export const KIND_DM_DELETE = 5;
  */
 export const KIND_DM_TIMER = 1740;
 /**
- * Typing indicator (Armada extension). The same rumor kind Concord V2 uses for
+ * Typing indicator (Armada extension). The same rumor kind Concord uses for
  * its channel typing signal (CORD-02 Appendix B), reused here so one kind means
  * one thing everywhere; only the envelope differs. Empty content, peer `p` tag,
  * no expiration — the event's existence IS the signal, and it is never stored.
@@ -81,7 +81,7 @@ export const KIND_DM_SEAL = 13;
 /** NIP-59 gift wrap. */
 export const KIND_DM_WRAP = 1059;
 /**
- * Ephemeral gift wrap (Armada extension, mirroring Concord V2's kind-21059
+ * Ephemeral gift wrap (Armada extension, mirroring Concord's kind-21059
  * wrap). Relays in the 20000–29999 range broadcast to current subscribers and
  * store nothing, which is the whole point: a durable kind-1059 typing signal
  * would pile up in the recipient's inbox forever and be replayed by every cold

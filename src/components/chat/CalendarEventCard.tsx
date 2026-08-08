@@ -180,7 +180,7 @@ interface CalendarEventMessageCardProps {
 /**
  * An inline chat card for a calendar event (kind 31922/31923) — the Discord-like
  * "event" embed rendered in the message timeline. Transport-agnostic: the tally
- * and RSVP setter are supplied, so NIP-29 and Concord v2 render the same card
+ * and RSVP setter are supplied, so NIP-29 and Concord render the same card
  * (the same events also list in {@link CalendarEventsBar}). Reuses
  * {@link RsvpControls} for the Going/Maybe/Can't-go row + attendee tallies.
  */

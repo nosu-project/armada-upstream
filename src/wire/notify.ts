@@ -54,7 +54,7 @@ export interface NotifyCandidate {
    * Some planes leave this for the notifier hook to fill in once it resolves
    * the relay/community the event belongs to:
    *   - NIP-29 group: `h:<relayUrl>|<groupId>`
-   *   - Concord V2:   `c2:<channelIdHex>`
+   *   - Concord:   `c2:<channelIdHex>`
    *   - DM:           `dm:<peerPubkey>`
    */
   roomKey: string;
@@ -66,7 +66,7 @@ export interface NotifyCandidate {
   relayUrl?: string;
   /** NIP-29 group id (for mute gating); set only for `plane === "nip29"`. */
   groupId?: string;
-  /** Concord V2 channel id hex; set only for `plane === "c2"`. */
+  /** Concord channel id hex; set only for `plane === "c2"`. */
   channelIdHex?: string;
   /** DM peer pubkey; set only for `plane === "dm"`. */
   peer?: string;

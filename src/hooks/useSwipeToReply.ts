@@ -41,7 +41,7 @@ const HORIZONTAL_RATIO = 2;
  * Whether a fullscreen image lightbox is currently open.
  *
  * Both lightbox variants (chat gallery `Lightbox`, single-image
- * `ImageLightbox2`) render as a portal on `document.body` — outside the message
+ * `ImageLightbox`) render as a portal on `document.body` — outside the message
  * row's subtree — and tag their content node with `data-lightbox-content`. A
  * touch that armed the swipe on the row *before* the overlay mounted (e.g. the
  * same tap that opened the lightbox) stays bound to its original target for the

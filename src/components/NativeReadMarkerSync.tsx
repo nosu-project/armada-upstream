@@ -5,7 +5,7 @@ import { Capacitor } from "@capacitor/core";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
   channelReadKey,
-  concord2ReadKey,
+  concordReadKey,
   dmReadKey,
   useReadState,
 } from "@/hooks/useReadState";
@@ -47,7 +47,7 @@ export function NativeReadMarkerSync() {
         const { room } = m;
         try {
           if (room.startsWith("c2:")) {
-            markRead(concord2ReadKey(room.slice(3)), ts);
+            markRead(concordReadKey(room.slice(3)), ts);
           } else if (room.startsWith("h:")) {
             // `h:<relayUrl>|<groupId>` — split on the last `|` (relay URLs and
             // group ids don't contain it) and rebuild the `relayUrl::groupId` key.
@@ -89,7 +89,7 @@ export function NativeReadMarkerSync() {
 /**
  * Read-state keys the Android service can attribute to a posted notification:
  * DMs, Concord channels, and NIP-29 channels (`<relayUrl>::<groupId>`).
- * The Concord V2 mention (`c2m:`) and thread (`c2t:`) sub-keys never key a
+ * The Concord mention (`c2m:`) and thread (`c2t:`) sub-keys never key a
  * notification room, so they're dropped (a channel's notifications clear on its
  * channel-level `c2:` read). `c2:`.startsWith excludes both by construction.
  */

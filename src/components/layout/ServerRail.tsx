@@ -28,11 +28,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
-import { useCommunityManagement2 } from "@/concord-v2/hooks/useCommunityActions2";
-import { useCommunity2, useIsExcluded2, useLiveCommunities2 } from "@/concord-v2/hooks/useCommunityList2";
-import { useChannels2, useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
-import { useConcord2Unread } from "@/concord-v2/hooks/useConcord2Unread";
-import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
+import { useCommunityManagement } from "@/concord/hooks/useCommunityActions";
+import { useCommunity, useIsExcluded, useLiveCommunities } from "@/concord/hooks/useCommunityList";
+import { useChannels, useControlFold } from "@/concord/hooks/useControlPlane";
+import { useConcordUnread } from "@/concord/hooks/useConcordUnread";
+import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDmPeerUnread, useHasUnreadDMs } from "@/hooks/useDirectMessages";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
@@ -95,11 +95,11 @@ function relayHost(url: string): string {
  */
 type RailItem =
   | { kind: "server"; key: string; url: string }
-  | { kind: "concord2"; key: string; communityId: string; name: string }
+  | { kind: "concord"; key: string; communityId: string; name: string }
   | { kind: "dm"; key: string; pubkey: string };
 
 /** Stable rail key for a Concord community. */
-const concord2Key = (communityId: string) => `c2:${communityId}`;
+const concordKey = (communityId: string) => `c2:${communityId}`;
 
 /**
  * Route for a DM on the rail. The PEER's thread, not the DM list: on mobile
@@ -179,13 +179,13 @@ function ServerMiniIcon({ url }: { url: string }) {
 }
 
 function Concord2MiniIcon({ communityId, name }: { communityId: string; name: string }) {
-  const community = useCommunity2(communityId);
-  const { data: folded } = useControlFold2(community, false);
-  const iconUrl = useDecryptedImage2(folded?.metadata?.icon);
+  const community = useCommunity(communityId);
+  const { data: folded } = useControlFold(community, false);
+  const iconUrl = useDecryptedImage(folded?.metadata?.icon);
   const displayName = folded?.metadata?.name || name;
   const initial = displayName.trim().charAt(0).toUpperCase() || "·";
-  const channels = useChannels2(community, false);
-  const { byChannel } = useConcord2Unread(community?.idHex, channels);
+  const channels = useChannels(community, false);
+  const { byChannel } = useConcordUnread(community?.idHex, channels);
   const { isConcordChannelMuted } = useMutes();
   return (
     <span className="relative flex items-center justify-center overflow-hidden rounded-sm bg-muted text-success">
@@ -265,9 +265,9 @@ function Concord2UnreadProbe({
   communityId: string;
   onChange: (unread: boolean, mention: boolean) => void;
 }) {
-  const community = useCommunity2(communityId);
-  const channels = useChannels2(community, false);
-  const { byChannel } = useConcord2Unread(community?.idHex, channels);
+  const community = useCommunity(communityId);
+  const channels = useChannels(community, false);
+  const { byChannel } = useConcordUnread(community?.idHex, channels);
   const { isConcordChannelMuted } = useMutes();
   const unread = Object.keys(byChannel).some(
     (id) => !isConcordChannelMuted("c2", communityId, id),
@@ -340,11 +340,11 @@ function ServerDragGhost({ url }: { url: string }) {
 }
 
 function Concord2DragGhost({ communityId, name }: { communityId: string; name: string }) {
-  const community = useCommunity2(communityId);
-  const { data: folded } = useControlFold2(community, false);
+  const community = useCommunity(communityId);
+  const { data: folded } = useControlFold(community, false);
   const displayName = folded?.metadata?.name || name;
   const initials = displayName.trim().slice(0, 2).toUpperCase() || "··";
-  const iconUrl = useDecryptedImage2(folded?.metadata?.icon);
+  const iconUrl = useDecryptedImage(folded?.metadata?.icon);
   return (
     <span className="flex items-center justify-center size-12 rotate-[-6deg] scale-110 clip-corner-lg overflow-hidden bg-muted text-success ring-2 ring-primary [filter:drop-shadow(0_8px_16px_rgba(0,0,0,0.55))_drop-shadow(0_0_8px_hsl(var(--primary)/0.6))]">
       {iconUrl ? (
@@ -645,25 +645,25 @@ const Concord2Button = memo(function Concord2Button({
   const triggerRef = useRef<HTMLAnchorElement | null>(null);
   useDragPointerDown(triggerRef, draggable, onDragPointerDown);
 
-  const community = useCommunity2(communityId);
+  const community = useCommunity(communityId);
   // Rail buttons only need the icon/name, which the fold serves from its
   // persisted snapshot. Pass active=false so we DON'T fan out a control-plane
   // REQ per relay for every community on pageload — the community's page
   // (active=true) syncs it on navigation, sharing this query key.
-  const { data: folded } = useControlFold2(community, false);
+  const { data: folded } = useControlFold(community, false);
   // Kicked/banned: the icon STAYS (only Leave/Dissolve remove it), but we mark
   // it so the user isn't left wondering why the room went read-only.
-  const excluded = useIsExcluded2(communityId);
+  const excluded = useIsExcluded(communityId);
   const displayName = folded?.metadata?.name || name;
   const initials = displayName.trim().slice(0, 2).toUpperCase() || "··";
-  const iconUrl = useDecryptedImage2(folded?.metadata?.icon);
+  const iconUrl = useDecryptedImage(folded?.metadata?.icon);
 
   // Aggregate unread across the community's channels, computed purely from the
   // local rumor cache (no extra relay fan-out — active=false shares the fold
   // query key). Mirrors the NIP-29 rail badge. Muted channels (or a muted
   // community) don't light the unread dot; unread mentions still badge.
-  const channels = useChannels2(community, false);
-  const { byChannel } = useConcord2Unread(community?.idHex, channels);
+  const channels = useChannels(community, false);
+  const { byChannel } = useConcordUnread(community?.idHex, channels);
   const { isConcordChannelMuted } = useMutes();
   const { communityLevel, setLevel: setNotifLevel } = useNotifLevels();
 
@@ -675,7 +675,7 @@ const Concord2Button = memo(function Concord2Button({
   // Leave from the rail's right-click menu (best-effort Guestbook leave, then
   // tombstone it locally), then go home.
   const navigate = useNavigate();
-  const { leave } = useCommunityManagement2(community);
+  const { leave } = useCommunityManagement(community);
   const handleLeave = async () => {
     try {
       await leave();
@@ -710,7 +710,7 @@ const Concord2Button = memo(function Concord2Button({
             dragging && "cursor-grabbing",
             reordering && "touch-none",
           )}
-          {...(draggable ? dragAttrs(itemAnchor(concord2Key(communityId)), dragParent) : {})}
+          {...(draggable ? dragAttrs(itemAnchor(concordKey(communityId)), dragParent) : {})}
         >
           {({ isActive }) => (
             <DragSlot dragging={dragging}>
@@ -785,8 +785,8 @@ const Concord2Button = memo(function Concord2Button({
       <ContextMenuContent>
         <NotifLevelMenu
           label="Community notifications"
-          level={communityLevel(concord2Key(communityId))}
-          onChange={(lvl) => setNotifLevel(concord2Key(communityId), lvl)}
+          level={communityLevel(concordKey(communityId))}
+          onChange={(lvl) => setNotifLevel(concordKey(communityId), lvl)}
         />
         <ContextMenuItem
           className="gap-2 text-destructive focus:text-destructive"
@@ -1121,7 +1121,7 @@ function RailFolder({
 
 /**
  * Far-left vertical rail listing every community — NIP-29 servers and Concord
- * (V1/V2) communities in one user-arranged list with Discord-style folders —
+ * communities in one user-arranged list with Discord-style folders —
  * plus DMs, add-community and settings actions.
  *
  * Drag interactions (Discord semantics):
@@ -1198,7 +1198,7 @@ function ServerRailInner({
   const { mesh } = useMeshTransport();
   const hasUnreadDMs = useHasUnreadDMs();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
-  const concord2 = useLiveCommunities2();
+  const concord = useLiveCommunities();
   const [addOpen, setAddOpen] = useState(false);
 
   // The NIP-29 half of the rail: the servers in the user's kind 10009 list, so
@@ -1225,17 +1225,17 @@ function ServerRailInner({
       base.push(
         ...railDms.map((pubkey) => ({ kind: "dm" as const, key: dmRailKey(pubkey), pubkey })),
       );
-      for (const entry of concord2) {
+      for (const entry of concord) {
         base.push({
-          kind: "concord2",
-          key: concord2Key(entry.community_id),
+          kind: "concord",
+          key: concordKey(entry.community_id),
           communityId: entry.community_id,
           name: entry.current.name,
         });
       }
     }
     return base;
-  }, [servers, concord2, railDms, user]);
+  }, [servers, concord, railDms, user]);
 
   const liveByKey = useMemo(() => new Map(items.map((it) => [it.key, it])), [items]);
 

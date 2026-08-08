@@ -18,7 +18,7 @@ function baseInput(overrides: Partial<PushSubscriptionInput> = {}): PushSubscrip
     prefs: { ...DEFAULT_PUSH_PREFS },
     dmRelays: [],
     dmFollows: [],
-    concordV2: [],
+    concord: [],
     ...overrides,
   };
 }
@@ -152,11 +152,11 @@ describe("buildPushSubscriptions", () => {
     expect(specs.some((s) => s.id.startsWith("armada-dm"))).toBe(false);
   });
 
-  it("maps Concord V2 streams to a kind-1059 authors filter", () => {
+  it("maps Concord streams to a kind-1059 authors filter", () => {
     const specs = byId(
       buildPushSubscriptions(
         baseInput({
-          concordV2: [
+          concord: [
             {
               relays: ["wss://c"],
               communityId: "c",
@@ -190,13 +190,13 @@ describe("buildPushSubscriptions", () => {
       gitAttachments: [],
     });
     const merged = buildPushSubscriptions(
-      baseInput({ concordV2: [sub(["wss://c"], "s1"), sub(["wss://c"], "s2")] }),
+      baseInput({ concord: [sub(["wss://c"], "s1"), sub(["wss://c"], "s2")] }),
     ).filter((s) => s.id.startsWith("armada-c2-"));
     expect(merged).toHaveLength(1);
     expect(merged[0].filter).toEqual({ kinds: [1059], authors: ["s1", "s2"] });
 
     const split = buildPushSubscriptions(
-      baseInput({ concordV2: [sub(["wss://a"], "s1"), sub(["wss://b"], "s2")] }),
+      baseInput({ concord: [sub(["wss://a"], "s1"), sub(["wss://b"], "s2")] }),
     ).filter((s) => s.id.startsWith("armada-c2-"));
     expect(split).toHaveLength(2);
   });

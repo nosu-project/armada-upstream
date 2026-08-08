@@ -20,7 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { COMMUNITY_TIMER_PRESETS, DEFAULT_MESSAGE_EXPIRATION_SECS } from "@/concord-v2/lib/disappearing";
+import { COMMUNITY_TIMER_PRESETS, DEFAULT_MESSAGE_EXPIRATION_SECS } from "@/concord/lib/disappearing";
 import {
   Tooltip,
   TooltipContent,
@@ -29,13 +29,13 @@ import {
 } from "@/components/ui/tooltip";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { RelayListEditor } from "@/components/RelayListEditor";
-import { useCommunityActions2, useCreateRelayCandidates2 } from "@/concord-v2/hooks/useCommunityActions2";
+import { useCommunityActions, useCreateRelayCandidates } from "@/concord/hooks/useCommunityActions";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { readClipboardText } from "@/lib/clipboard";
 import { claimBuzzInvite, fetchBuzzJoinPolicy, parseBuzzInviteUrl, type BuzzInvite, type BuzzJoinPolicy } from "@/buzz/invite";
-import { parseInviteLink, type ParsedInviteLink } from "@/concord-v2/lib/invite";
+import { parseInviteLink, type ParsedInviteLink } from "@/concord/lib/invite";
 import { parseGroupNaddr } from "@/lib/nip29";
 import { bridgePortalUrl, normalizeRelayUrl, relayToHttpUrl, relayToRouteParam } from "@/lib/platform";
 
@@ -50,9 +50,8 @@ interface AddDialogProps {
  * The "Add" wizard, restructured around Concord.
  *
  * The headline act is **starting an end-to-end-encrypted community** — every
- * NEW community is Concord V2 (CORD-01..06); V1 creation is retired, though
- * existing V1 communities keep working and V1 invites still join. Everything
- * else (joining an existing community — V2 or V1 — or connecting to a
+ * community is Concord (CORD-01..06). Everything else (joining an existing
+ * community, or connecting to a
  * trust-the-host NIP-29 relay) folds into a single smaller "escape hatch": one
  * smart-paste field that figures out what you gave it and does the right thing.
  */
@@ -80,7 +79,7 @@ export function AddDialog({ open, onOpenChange }: AddDialogProps) {
  */
 export function AddBody({ onDone }: { onDone: () => void }) {
   const navigate = useNavigate();
-  const { create, isCreating } = useCommunityActions2();
+  const { create, isCreating } = useCommunityActions();
 
   const [name, setName] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
@@ -95,13 +94,13 @@ export function AddBody({ onDone }: { onDone: () => void }) {
   // alone. Passing it at submit keeps what's shown identical to what's used.
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [relays, setRelays] = useState<string[] | null>(null);
-  const candidates = useCreateRelayCandidates2();
+  const candidates = useCreateRelayCandidates();
   const effectiveRelays = relays ?? candidates;
 
   const handleCreate = async () => {
     setCreateError(null);
     try {
-      // New communities are always Concord V2.
+      // New communities are always Concord.
       const { communityId, name: created } = await create({
         name: name.trim(),
         // Always the set shown below, so the community is minted on exactly
@@ -280,7 +279,7 @@ function ImportFromDiscordSection({ onOpen }: { onOpen: () => void }) {
  */
 type Classified =
   | { kind: "buzz"; invite: BuzzInvite; identity: string }
-  | { kind: "concord2"; invite: ParsedInviteLink; identity: string }
+  | { kind: "concord"; invite: ParsedInviteLink; identity: string }
   | { kind: "nip29-group"; group: { relay: string; groupId: string; inviteCode?: string }; identity: string }
   | { kind: "nip29"; relay: string; identity: string }
   | { kind: "unknown"; identity: "" };
@@ -305,8 +304,8 @@ function classify(input: string): Classified {
   }
   const buzz = parseBuzzInviteUrl(trimmed);
   if (buzz) return { kind: "buzz", invite: buzz, identity: `buzz:${buzz.host}:${buzz.code}` };
-  const v2 = parseInviteLink(trimmed);
-  if (v2) return { kind: "concord2", invite: v2, identity: `c2:${v2.naddr}` };
+  const invite = parseInviteLink(trimmed);
+  if (invite) return { kind: "concord", invite, identity: `c2:${invite.naddr}` };
   const relay = normalizeRelayUrl(trimmed);
   if (relay) return { kind: "nip29", relay, identity: `n:${relay}` };
   return { kind: "unknown", identity: "" };
@@ -315,7 +314,7 @@ function classify(input: string): Classified {
 /** What a resolved (validated + loaded) target looks like, for the preview card. */
 type Target =
   | { kind: "buzz"; relay: string; name?: string; description?: string; policy?: BuzzJoinPolicy; origin: string }
-  | { kind: "concord2"; name: string; channelCount: number; relays: string[] }
+  | { kind: "concord"; name: string; channelCount: number; relays: string[] }
   | { kind: "nip29-group"; relay: string; groupId: string; inviteCode?: string }
   | { kind: "nip29"; relay: string; name?: string; description?: string };
 
@@ -324,7 +323,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
   const { user } = useCurrentUser();
   const navigate = useNavigate();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
-  const v2 = useCommunityActions2();
+  const actions = useCommunityActions();
 
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState("");
@@ -394,10 +393,10 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
             policy,
             origin: classified.invite.origin,
           });
-        } else if (classified.kind === "concord2") {
-          const p = await v2.preview({ invite: classified.invite });
+        } else if (classified.kind === "concord") {
+          const p = await actions.preview({ invite: classified.invite });
           if (cancelled) return;
-          setTarget({ kind: "concord2", name: p.name, channelCount: p.channelCount, relays: p.relays });
+          setTarget({ kind: "concord", name: p.name, channelCount: p.channelCount, relays: p.relays });
         } else if (classified.kind === "nip29-group") {
           // Nothing to fetch: the naddr itself carries the relay + group id,
           // and the channel page resolves (and joins) the rest.
@@ -483,9 +482,9 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
         navigate(`/s/${relayToRouteParam(target.relay)}`);
         return;
       }
-      if (target.kind === "concord2") {
-        if (classified.kind !== "concord2") return;
-        const { communityId, name } = await v2.join({ invite: classified.invite });
+      if (target.kind === "concord") {
+        if (classified.kind !== "concord") return;
+        const { communityId, name } = await actions.join({ invite: classified.invite });
         onDone();
         toast({ title: "Encrypted community joined", description: name });
         navigate(`/c/${encodeURIComponent(communityId)}`);
@@ -518,7 +517,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
     }
   };
 
-  const busy = v2.isJoining || committing;
+  const busy = actions.isJoining || committing;
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="w-full max-w-sm">
@@ -676,7 +675,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
 
 /** The "here's where you're going" card shown once a target resolves. */
 function TargetPreview({ target }: { target: Target }) {
-  const isConcord = target.kind === "concord2";
+  const isConcord = target.kind === "concord";
   const Icon = isConcord ? ShieldCheck : target.kind === "nip29-group" ? Hash : Server;
   const title =
     target.kind === "nip29-group"

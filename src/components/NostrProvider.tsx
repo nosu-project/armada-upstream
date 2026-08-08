@@ -31,7 +31,7 @@ import {
   signStreamAuths,
   signStreamAuthsChunked,
   streamPubkeysForRelay,
-} from "@/concord-v2/lib/streamAuth";
+} from "@/concord/lib/streamAuth";
 
 interface NostrProviderProps {
   children: React.ReactNode;
@@ -55,7 +55,7 @@ const AUTH_MIN_INTERVAL_MS = 5_000;
 const USER_AUTH_HEADSTART_MS = 1_200;
 
 /**
- * NIP-59 gift-wrap kinds (Concord V2 wraps + ephemeral variant). See
+ * NIP-59 gift-wrap kinds (Concord wraps + ephemeral variant). See
  * `wire/ingest.ts` WRAP_KINDS.
  */
 const WRAP_KINDS = new Set([1059, 21059]);
@@ -65,7 +65,7 @@ const WRAP_KINDS = new Set([1059, 21059]);
  *
  * A 1059/21059 wrap's outer signature is cryptographically meaningless to the
  * client: NIP-59 wraps are signed either by a single-use ephemeral key (direct
- * invites) or, in Concord V2, by a group-shared *derived* stream key that every
+ * invites) or, in Concord, by a group-shared *derived* stream key that every
  * member can sign with. Neither establishes a sender identity. Authenticity and
  * integrity of the payload come from NIP-44 (authenticated encryption) plus the
  * inner seal's signature check (`stream.ts` `verifyEvent(seal)`) and the
@@ -119,7 +119,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     // store instead.
     void store.then((s) => s.query([{ kinds: [0], limit: 1 }])).catch(() => undefined);
     eventStore.current = store;
-    // The Concord V2 rumor cache is NOT warmed here: it is one ArmadaDB tenant
+    // The Concord rumor cache is NOT warmed here: it is one ArmadaDB tenant
     // per community, and no community is known at provider mount. Each tenant's
     // connection opens when its community is first read.
   }
@@ -261,7 +261,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   // flood the bunker. Set after each successful sign.
   const authCooldownRef = useRef<Map<string, number>>(new Map());
 
-  // Per-relay NIP-42 challenge + auth bookkeeping. Concord V2 authenticates
+  // Per-relay NIP-42 challenge + auth bookkeeping. Concord authenticates
   // as derived stream keys: a kind-1059 REQ passes an auth-gating relay
   // only once every `authors` entry is authenticated on the socket.
   const openRelaysRef = useRef<Map<string, { relay: NRelay1; challenge?: string }>>(new Map());
@@ -425,7 +425,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
           // kept off the critical path by falling back to a locally-signed
           // stream key (see the head-start race below).
           auth: async (challenge: string) => {
-            // Remember the challenge so newly-registered Concord V2 stream keys
+            // Remember the challenge so newly-registered Concord stream keys
             // can be authenticated on this same connection later, and
             // authenticate the streams we already hold right now (the stream
             // signatures are local, so they don't wait on the user signer).
@@ -671,7 +671,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     };
   }, []);
 
-  // When Concord V2 registers new stream keys, authenticate them on
+  // When Concord registers new stream keys, authenticate them on
   // already-open sockets right away. ditto-relay's challenge stays valid for
   // the socket's lifetime and its authenticated-pubkey set only grows, so a
   // late key just signs the stored challenge and sends another AUTH frame —

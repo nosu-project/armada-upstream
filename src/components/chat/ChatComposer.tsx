@@ -294,7 +294,7 @@ interface ChatComposerProps {
    */
   canSend?: () => string | null;
   /**
-   * Publish a composed poll through a delegated path (Concord v2 seals it as a
+   * Publish a composed poll through a delegated path (Concord seals it as a
    * Chat Plane rumor). Its presence re-enables poll mode alongside
    * `sendOverride` — without it, `sendOverride` hides poll mode (a plain DM has
    * no polls). NIP-29 omits it and publishes polls to its host relay directly.
@@ -1663,7 +1663,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
     try {
       if (onPollSubmit) {
-        // Delegated path (Concord v2): the transport seals the poll as a Chat
+        // Delegated path (Concord): the transport seals the poll as a Chat
         // Plane rumor. The channel binding is added there; no `relay` routing
         // tag, since votes ride the sealed plane rather than a NIP-88 relay.
         await onPollSubmit({ question: finalContent, options: filledOptions, pollType, durationDays: pollDuration });

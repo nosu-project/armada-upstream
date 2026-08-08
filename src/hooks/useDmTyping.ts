@@ -1,7 +1,7 @@
 /**
  * NIP-17 typing indicators — the DM plane's one EPHEMERAL action.
  *
- * A kind-23311 rumor (the same kind Concord V2 uses in its channels) sealed
+ * A kind-23311 rumor (the same kind Concord uses in its channels) sealed
  * NIP-59-style and carried in a kind-21059 ephemeral gift wrap, so relays
  * broadcast it to whoever is listening and store nothing. Wire format lives in
  * `src/lib/nip17/protocol.ts`; this hook owns the relay traffic:

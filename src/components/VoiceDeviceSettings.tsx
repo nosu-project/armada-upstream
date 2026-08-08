@@ -12,8 +12,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ownAvServers } from "@/concord-v2/hooks/useVoice2";
-import { probeAvBroker } from "@/concord-v2/lib/voice";
+import { ownAvServers } from "@/concord/hooks/useVoice";
+import { probeAvBroker } from "@/concord/lib/voice";
 import { useAppContext } from "@/hooks/useAppContext";
 import {
   desktopMicAccessStatus,
@@ -86,7 +86,7 @@ export function VoiceDeviceSettings() {
     updateConfig((current) => ({ ...current, preferredVoiceServer: normalized }));
     // Re-run every consumer of the preference: Concord broker rendezvous, the
     // DM voice-relay pick, and our own status probe below.
-    void queryClient.invalidateQueries({ queryKey: ["concord2", "av-broker"] });
+    void queryClient.invalidateQueries({ queryKey: ["concord", "av-broker"] });
     void queryClient.invalidateQueries({ queryKey: ["nip29", "dm-voice-relay"] });
     void queryClient.invalidateQueries({ queryKey: ["voice-server-status"] });
   }, [voiceServer, queryClient, updateConfig]);

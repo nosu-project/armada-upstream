@@ -308,7 +308,7 @@ export interface ChatMessageProps {
   pollContext?: { relayUrl: string; groupId: string };
   /**
    * Resolved poll tally + vote callback for a poll (kind 1068) message, for
-   * transports that carry the tally themselves (Concord v2's sealed chat fold)
+   * transports that carry the tally themselves (Concord's sealed chat fold)
    * rather than querying a relay. When present it renders the poll; NIP-29 uses
    * {@link pollContext} instead.
    */
@@ -316,7 +316,7 @@ export interface ChatMessageProps {
   /**
    * Resolved calendar event + RSVP state for a calendar (kind 31922/31923)
    * message. When present it renders the inline event card with RSVP controls.
-   * Both NIP-29 and Concord v2 supply it; transports without calendar events omit
+   * Both NIP-29 and Concord supply it; transports without calendar events omit
    * it and a calendar kind would never appear in their timeline.
    */
   calendar?: MessageCalendar;
@@ -327,11 +327,11 @@ export interface ChatMessageProps {
   /** Aggregated zaps for this message (feeds the ⚡ total chip). */
   zaps?: MessageZaps;
   /**
-   * CORD.md announcement publisher (Concord v2). Passed through to the zap
+   * CORD.md announcement publisher (Concord). Passed through to the zap
    * dialog; absent means the NIP-57 public-receipt flow.
    */
   onSendZap?: (target: ChatMsg, payment: ZapPayment) => Promise<void>;
-  /** CORD.md on-chain zap announcement publisher (Concord v2). */
+  /** CORD.md on-chain zap announcement publisher (Concord). */
   onSendOnchainZap?: (target: ChatMsg, announcement: OnchainZapAnnouncement) => Promise<void>;
   /** Optimistic send status, if this message is locally-published & unconfirmed. */
   sendStatus?: SendStatus;
@@ -409,7 +409,7 @@ export interface ChatMessageProps {
    */
   permalink?: ChatRoute;
   /**
-   * When set, this message is an unsigned rumor (e.g. a Concord V2 sealed chat
+   * When set, this message is an unsigned rumor (e.g. a Concord sealed chat
    * event) rather than a relay-addressable signed event. "View event JSON" then
    * shows this object (pretty-printed); the "Copy message ID" off-ramp, which
    * references a relay-addressable event id that doesn't exist for a rumor, is

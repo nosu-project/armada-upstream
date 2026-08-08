@@ -21,9 +21,9 @@
  *  - The owning module's own read path, lazily, so an account that logs in
  *    later still migrates without waiting for the next launch.
  */
-import { migrateLegacyInvites } from "@/concord-v2/lib/inviteInbox";
+import { migrateLegacyInvites } from "@/concord/lib/inviteInbox";
 import { DECRYPT_CACHE_DB_NAME } from "@/lib/AppSigner";
-import { LEGACY_RUMOR_DB_NAME, migrateLegacyRumors } from "@/concord-v2/lib/rumorMigration";
+import { LEGACY_RUMOR_DB_NAME, migrateLegacyRumors } from "@/concord/lib/rumorMigration";
 import { migrateLegacyDms } from "@/lib/nip17/dm17Store";
 import { migrateLegacyDecryptCache } from "@/lib/decryptCacheMigration";
 import { LEGACY_FOLDED_DB_NAME, migrateLegacyFolded } from "@/lib/foldedCache";

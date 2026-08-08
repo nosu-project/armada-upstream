@@ -54,7 +54,7 @@ export const ARMADA_TENANTS = {
    * so it lives in one tenant per relay (`nip29:<url>`, see `relayScope.ts`).
    */
   main: "main",
-  /** Concord V2 wraps parked by the native service for WebView decryption. */
+  /** Concord wraps parked by the native service for WebView decryption. */
   c2Park: "c2park",
   /**
    * The native service's handoff queue: events it ingested, awaiting a pass

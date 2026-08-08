@@ -1,9 +1,9 @@
 /**
  * The last painted window of a NIP-17 conversation, persisted across reloads.
  *
- * The DM thread had no equivalent of the Concord v2 timeline snapshot, so a
+ * The DM thread had no equivalent of the Concord timeline snapshot, so a
  * warm reload of a conversation whose entire history is on disk still opened on
- * a skeleton. The cause is different from v2's — there is no key-derivation
+ * a skeleton. The cause is different from Concord's — there is no key-derivation
  * chain here; `useDm17Thread`'s query is enabled on the first render, because
  * `self`, `peer` and NIP-44 support are all known synchronously — but the READ
  * is not free: `queryDm17Thread` awaits `migrateLegacyDms` (a full legacy drain
@@ -16,7 +16,7 @@
  * kind-4 path's own localStorage snapshot could not paint through this one's
  * absence — the skeleton showed even for conversations that had a snapshot.
  *
- * Same discipline as the v2 snapshot, and for the same reasons:
+ * Same discipline as the Concord snapshot, and for the same reasons:
  *
  *  - Seeded STALE (`updatedAt` in the past), so the query still fetches on
  *    mount: the snapshot paints, the real store read heals behind it. It is a

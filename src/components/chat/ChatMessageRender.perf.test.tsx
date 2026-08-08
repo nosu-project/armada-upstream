@@ -9,7 +9,7 @@ import type { ChatMsg } from "@/components/chat/transport";
 /**
  * Locates the channel-switch cost the fold/transport tests ruled OUT.
  *
- * chat.perf.test.ts + useTransport2.perf.test.tsx showed the data layer is
+ * chat.perf.test.ts + useTransport.perf.test.tsx showed the data layer is
  * cheap (2000 msgs fold in ~2ms). This measures the OTHER half of a switch:
  * mounting the message-row component trees to the DOM. Each row is
  * ChatMessage → MessageRow (avatar/name shell) + ChatContent (the markdown /

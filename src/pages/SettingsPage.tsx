@@ -55,7 +55,7 @@ import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
 import { effectiveDmRelays } from "@/contexts/AppContext";
-import { STOCK_RELAYS } from "@/concord-v2/lib/stockRelays";
+import { STOCK_RELAYS } from "@/concord/lib/stockRelays";
 import { APP_RELAYS, DM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
 import {
   getAudioProcessing,

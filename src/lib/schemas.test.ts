@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { STOCK_RELAYS } from "@/concord-v2/lib/stockRelays";
+import { STOCK_RELAYS } from "@/concord/lib/stockRelays";
 import { defaultConfig, SYNCED_CONFIG_KEYS } from "@/contexts/AppContext";
 import { AppConfigSchema } from "@/lib/schemas";
 

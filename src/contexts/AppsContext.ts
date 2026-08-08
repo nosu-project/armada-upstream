@@ -1,6 +1,6 @@
 import { createContext } from "react";
 
-import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
+import type { Channel, Community } from "@/concord/lib/types";
 import type { ImetaEncryption } from "@/lib/imeta";
 
 /**
@@ -10,7 +10,7 @@ import type { ImetaEncryption } from "@/lib/imeta";
  */
 export type AppScope =
   | { kind: "nip29"; relayUrl: string; groupId: string }
-  | { kind: "concord2"; community: CommunityV2; channel: ChannelV2 };
+  | { kind: "concord"; community: Community; channel: Channel };
 
 /**
  * A stable string identifying a chat scope. MUST be deterministic and identical
@@ -23,7 +23,10 @@ export function appScopeKey(scope: AppScope): string {
   switch (scope.kind) {
     case "nip29":
       return `nip29|${scope.relayUrl}|${scope.groupId}`;
-    case "concord2":
+    case "concord":
+      // The `concord2|` spelling is load-bearing and stays: this key is
+      // cross-client, so respelling it would put this build in a different
+      // coordination session from every other client in the same channel.
       return `concord2|${scope.channel.idHex}`;
   }
 }

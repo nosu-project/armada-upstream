@@ -57,7 +57,7 @@ export function gitTicketOlderCursor(events: readonly NostrRumor[], attachments:
 }
 
 /**
- * Store-first NIP-34 issue/PR roots for one Concord V2 channel. The wire owns
+ * Store-first NIP-34 issue/PR roots for one Concord channel. The wire owns
  * live subscriptions; this hook only performs finite, interval-bounded pulls.
  */
 export function useChannelGitTicketRoots(channelId: string | undefined, attachments: readonly ChannelGitAttachment[]): ChannelGitTicketRoots {

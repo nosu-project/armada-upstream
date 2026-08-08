@@ -26,7 +26,7 @@ object ArmadaDb {
     const val TENANT_MAIN = "main"
 
     /**
-     * Concord V2 wraps the service could not open (a rekey epoch it holds no
+     * Concord wraps the service could not open (a rekey epoch it holds no
      * key for), parked for the WebView, which does hold the keys. Peek+ack: a
      * wrap is only removed once its rumor is safely in the opened-event store.
      */
@@ -91,7 +91,7 @@ object ArmadaDb {
             tenant.substring(TENANT_SERVICE_QUEUE_PREFIX.length)
         else null
 
-    /** The opened-event store for one Concord V2 community. */
+    /** The opened-event store for one Concord community. */
     fun communityTenant(communityIdHex: String): String = "c2:$communityIdHex"
 
     private const val FILE_NAME = "armada-db.sqlite"

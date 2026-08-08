@@ -75,7 +75,7 @@ export function parseBuzzInviteUrl(input: string): BuzzInvite | undefined {
   const match = url.pathname.match(/^\/invite\/([^/]+)$/);
   if (!match) return undefined;
   const code = decodeURIComponent(match[1]);
-  // A Concord V2 invite path segment is an naddr; a Buzz code contains a `.`
+  // A Concord invite path segment is an naddr; a Buzz code contains a `.`
   // (HMAC token separator) and is never bech32.
   if (/^naddr1[023456789acdefghjklmnpqrstuvwxyz]+$/i.test(code)) return undefined;
   if (!code.includes(".")) return undefined;

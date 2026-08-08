@@ -31,7 +31,7 @@ time; it talks to relays and voice brokers over runtime-configurable URLs.
 - **Concord communities** — serverless, E2EE. All control/chat/invite/rekey
   traffic is gift-wrapped (NIP-59) over generic Nostr relays; voice uses a blind
   LiveKit token broker (CORD-07) that learns nothing about the community. The
-  full protocol lives client-side under `src/concord-v2/`. Armada's
+  full protocol lives client-side under `src/concord/`. Armada's
   client-specific Concord conventions are documented in
   [CORD.md](CORD.md), the CORD analog of a project's `NIP.md`.
 - **NIP-29 servers** — relays act as servers; channels are NIP-29 groups.

@@ -20,7 +20,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
-import { useLiveCommunities2 } from "@/concord-v2/hooks/useCommunityList2";
+import { useLiveCommunities } from "@/concord/hooks/useCommunityList";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { flattenLayout, mergeLayout } from "@/lib/railLayout";
 import {
@@ -122,7 +122,7 @@ export function QuickSwitcher() {
   const { config } = useAppContext();
 
   const liveServers = useNip29Servers();
-  const communities = useLiveCommunities2();
+  const communities = useLiveCommunities();
 
   // Rail-ordered keys across both transports: the same construction the
   // ServerRail uses (NIP-29 relay URLs + `c2:<id>` community keys, arranged by

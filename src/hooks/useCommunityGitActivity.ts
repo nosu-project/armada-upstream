@@ -15,7 +15,7 @@ import {
 } from "@/lib/gitActivity";
 import { useWireScopes } from "@/wire/useWireScopes";
 
-/** Shared, store-first Git activity scan used by every Concord V2 unread badge. */
+/** Shared, store-first Git activity scan used by every Concord unread badge. */
 export function useCommunityGitActivity(attachmentsByChannel: ReadonlyMap<string, readonly GitRepositoryAttachment[]>): { byChannel: Map<string, readonly GitTimelineActivity[]> } {
   const eventStore = useEventStore();
   const signature = [...attachmentsByChannel.entries()].map(([id, attachments]) => `${id}:${attachments.map((a) => `${a.address.coordinate}:${a.attachedAt}:${a.detachedAt ?? ""}`).join(",")}`).sort().join("|");

@@ -37,14 +37,14 @@ import { lazyWithReload } from "@/lib/chunkReload";
 // Each import is wrapped with lazyWithReload so a stale-chunk fetch after a
 // deploy (an open tab referencing pruned hashes) triggers a one-time reload to
 // a consistent build instead of surfacing as a crash.
-const ConcordV2Page = lazy(lazyWithReload(() => import("@/concord-v2/pages/ConcordV2Page").then((m) => ({ default: m.ConcordV2Page }))));
+const ConcordPage = lazy(lazyWithReload(() => import("@/concord/pages/ConcordPage").then((m) => ({ default: m.ConcordPage }))));
 const DiscordImportPage = lazy(lazyWithReload(() => import("@/pages/DiscordImportPage").then((m) => ({ default: m.DiscordImportPage }))));
 const DiscoverPage = lazy(lazyWithReload(() => import("@/pages/DiscoverPage").then((m) => ({ default: m.DiscoverPage }))));
 const DMsPage = lazy(lazyWithReload(() => import("@/pages/DMsPage").then((m) => ({ default: m.DMsPage }))));
 const DownloadsPage = lazy(lazyWithReload(() => import("@/pages/DownloadsPage").then((m) => ({ default: m.DownloadsPage }))));
 const GroupPage = lazy(lazyWithReload(() => import("@/pages/GroupPage").then((m) => ({ default: m.GroupPage }))));
 const InboxPage = lazy(lazyWithReload(() => import("@/pages/InboxPage").then((m) => ({ default: m.InboxPage }))));
-const InviteV2Page = lazy(lazyWithReload(() => import("@/concord-v2/pages/InviteV2Page")));
+const InvitePage = lazy(lazyWithReload(() => import("@/concord/pages/InvitePage")));
 const BuzzInvitePage = lazy(lazyWithReload(() => import("@/buzz/BuzzInvitePage")));
 const MeshPage = lazy(lazyWithReload(() => import("@/pages/MeshPage")));
 const ChangelogPage = lazy(lazyWithReload(() => import("@/pages/ChangelogPage").then((m) => ({ default: m.ChangelogPage }))));
@@ -60,14 +60,14 @@ const UserPage = lazy(lazyWithReload(() => import("@/pages/UserPage").then((m) =
 const WelcomePage = lazy(lazyWithReload(() => import("@/pages/WelcomePage").then((m) => ({ default: m.WelcomePage }))));
 
 /**
- * Dispatch `/invite/<segment>` to the right landing page. A Concord V2 invite's
+ * Dispatch `/invite/<segment>` to the right landing page. A Concord invite's
  * segment is a bech32 `naddr`; a Buzz relay invite's is a dotted HMAC token
  * (contains `.`, never bech32), so the shapes never collide.
  */
 function InviteRoute() {
   const { naddr } = useParams<{ naddr: string }>();
   const isBuzz = !!naddr && !/^naddr1/i.test(naddr) && naddr.includes(".");
-  return isBuzz ? <BuzzInvitePage /> : <InviteV2Page />;
+  return isBuzz ? <BuzzInvitePage /> : <InvitePage />;
 }
 
 /**
@@ -154,7 +154,7 @@ function HomeRedirect() {
       // A NIP-29 server key (relay URL) is only a valid landing target if the
       // user still has it: the layout keeps keys for items that aren't live
       // yet (lists still loading), so skip those — and skip stale keys from
-      // removed surfaces (e.g. the retired Concord V1 `c1:` prefix). Concord
+      // surfaces this client no longer has. Concord
       // keys are always navigable — their page handles a still-loading
       // community.
       if (!key.startsWith("c2:") && !servers.has(key)) continue;
@@ -264,7 +264,7 @@ function useWarmRouteChunks() {
     const timer = setTimeout(() => {
       for (const load of [
         () => import("@/pages/GroupPage"),
-        () => import("@/concord-v2/pages/ConcordV2Page"),
+        () => import("@/concord/pages/ConcordPage"),
         () => import("@/pages/DMsPage"),
         () => import("@/pages/ServerPage"),
         // Not a notification target, but the landing surface a new user hits
@@ -343,18 +343,18 @@ export function AppRouter() {
             <Route path="/s/:server/:groupId/m/:messageId" element={<GroupPage />} />
             <Route path="/s/:server/:groupId/t/:threadRoot" element={<GroupPage />} />
             <Route path="/s/:server/:groupId/t/:threadRoot/m/:messageId" element={<GroupPage />} />
-            <Route path="/c/:communityId" element={<ConcordV2Page />} />
+            <Route path="/c/:communityId" element={<ConcordPage />} />
             {/* Community-wide panes. Static segments outrank `:channelId`, and
                 Concord channel ids are hex, so these can never be shadowed by
                 a real channel. Kept in one place: `CONCORD2_PANES`. */}
             {CONCORD2_PANES.map((pane) => (
-              <Route key={pane} path={`/c/:communityId/${pane}`} element={<ConcordV2Page />} />
+              <Route key={pane} path={`/c/:communityId/${pane}`} element={<ConcordPage />} />
             ))}
-            <Route path="/c/:communityId/:channelId" element={<ConcordV2Page />} />
-            <Route path="/c/:communityId/:channelId/m/:messageId" element={<ConcordV2Page />} />
-            <Route path="/c/:communityId/:channelId/t/:threadRoot" element={<ConcordV2Page />} />
-            <Route path="/c/:communityId/:channelId/t/:threadRoot/m/:messageId" element={<ConcordV2Page />} />
-            {/* Concord V2 invite links carry an naddr path segment at
+            <Route path="/c/:communityId/:channelId" element={<ConcordPage />} />
+            <Route path="/c/:communityId/:channelId/m/:messageId" element={<ConcordPage />} />
+            <Route path="/c/:communityId/:channelId/t/:threadRoot" element={<ConcordPage />} />
+            <Route path="/c/:communityId/:channelId/t/:threadRoot/m/:messageId" element={<ConcordPage />} />
+            {/* Concord invite links carry an naddr path segment at
                 /invite/<naddr>#… (CORD-05). A Buzz relay invite shares the
                 same `/invite/<code>` path (its code is a dotted HMAC token,
                 never an naddr), dispatched by InviteRoute. */}

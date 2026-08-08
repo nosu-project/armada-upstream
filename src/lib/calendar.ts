@@ -1,6 +1,6 @@
 /**
  * Transport-agnostic NIP-52 calendar logic, shared by the NIP-29 relay path and
- * the Concord v2 sealed-rumor path (CORD.md "Calendar Events").
+ * the Concord sealed-rumor path (CORD.md "Calendar Events").
  *
  * The pure NIP-52 primitives (parsing, kinds, types, when-formatting) live in
  * `nip29.ts` and are re-exported here so both transports import one surface.

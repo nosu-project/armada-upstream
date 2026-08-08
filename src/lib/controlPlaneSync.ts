@@ -9,8 +9,8 @@
  * progressively so rail buttons paint as each relay answers.
  */
 
-import { controlScope, guestbookScope, sweepRelayScopes, type PlaneScope } from "@/concord-v2/lib/planeSync";
-import type { CommunityV2 } from "@/concord-v2/lib/types";
+import { controlScope, guestbookScope, sweepRelayScopes, type PlaneScope } from "@/concord/lib/planeSync";
+import type { Community } from "@/concord/lib/types";
 import { logSync, sinceMs } from "@/lib/syncLog";
 import { emitWireScopes } from "@/wire/bus";
 
@@ -26,7 +26,7 @@ interface NostrLike {
 
 export interface ControlPlaneSyncResult {
   /** Community-id hex → whether new control editions landed. */
-  v2Touched: Set<string>;
+  concordTouched: Set<string>;
 }
 
 /**
@@ -37,7 +37,7 @@ export interface ControlPlaneSyncResult {
 export async function syncControlPlane(
   nostr: NostrLike,
   queryClient: QueryClient,
-  v2: CommunityV2[],
+  communities: Community[],
   opts?: {
     signal?: AbortSignal;
     /**
@@ -50,11 +50,11 @@ export async function syncControlPlane(
     priorityIdHex?: string;
   },
 ): Promise<ControlPlaneSyncResult> {
-  const result: ControlPlaneSyncResult = { v2Touched: new Set() };
-  if (v2.length === 0) return result;
+  const result: ControlPlaneSyncResult = { concordTouched: new Set() };
+  if (communities.length === 0) return result;
 
   const started = Date.now();
-  logSync("sweep", `control-plane sweep start: v2=${v2.length} community(ies)`);
+  logSync("sweep", `control-plane sweep start: communities=${communities.length} community(ies)`);
 
   const jobs: Array<Promise<unknown>> = [];
 
@@ -69,22 +69,22 @@ export async function syncControlPlane(
     };
   };
   let guestbookTouched = 0;
-  const v2Jobs = (list: CommunityV2[]): Array<Promise<unknown>> => {
+  const sweepJobs = (list: Community[]): Array<Promise<unknown>> => {
     const byRelay = new Map<string, PlaneScope[]>();
     for (const c of list) {
       const announceControl = once(() => {
         emitWireScopes([`c2ctl:${c.idHex}`]);
-        queryClient.invalidateQueries({ queryKey: ["concord2", "control", c.idHex] });
+        queryClient.invalidateQueries({ queryKey: ["concord", "control", c.idHex] });
       });
       const announceGuestbook = once(() => {
         guestbookTouched++;
-        queryClient.invalidateQueries({ queryKey: ["concord2", "guestbook", c.idHex] });
+        queryClient.invalidateQueries({ queryKey: ["concord", "guestbook", c.idHex] });
       });
       for (const url of c.relays) {
         const scopes = byRelay.get(url) ?? [];
         scopes.push(
           controlScope(c, url, () => {
-            result.v2Touched.add(c.idHex);
+            result.concordTouched.add(c.idHex);
             announceControl();
           }),
           guestbookScope(c, url, announceGuestbook),
@@ -99,23 +99,23 @@ export async function syncControlPlane(
   // fan-out is launched, so its REQs aren't contending with a dozen other
   // communities' catch-up for sockets and bandwidth. Costs the rest of the
   // sweep one community's round-trip of delay, at most.
-  const priority = v2.filter((c) => c.idHex === opts?.priorityIdHex);
-  const rest = opts?.priorityIdHex ? v2.filter((c) => c.idHex !== opts.priorityIdHex) : v2;
+  const priority = communities.filter((c) => c.idHex === opts?.priorityIdHex);
+  const rest = opts?.priorityIdHex ? communities.filter((c) => c.idHex !== opts.priorityIdHex) : communities;
   if (priority.length > 0) {
-    await Promise.all(v2Jobs(priority));
+    await Promise.all(sweepJobs(priority));
   }
-  jobs.push(...v2Jobs(rest));
+  jobs.push(...sweepJobs(rest));
 
   await Promise.all(jobs);
 
   logSync(
     "sweep",
-    `control-plane sweep done in ${sinceMs(started)}: v2ControlTouched=${result.v2Touched.size} guestbookTouched=${guestbookTouched}`,
+    `control-plane sweep done in ${sinceMs(started)}: concordControlTouched=${result.concordTouched.size} guestbookTouched=${guestbookTouched}`,
   );
 
   // Final bus ring for everything touched (first-data emits fired early).
-  if (result.v2Touched.size > 0) {
-    emitWireScopes([...result.v2Touched].map((idHex) => `c2ctl:${idHex}`));
+  if (result.concordTouched.size > 0) {
+    emitWireScopes([...result.concordTouched].map((idHex) => `c2ctl:${idHex}`));
   }
 
   return result;

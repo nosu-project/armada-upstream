@@ -187,7 +187,7 @@ describe("railKeyToRoute", () => {
     );
   });
 
-  it("maps a Concord V2 key to /c/<id>", () => {
+  it("maps a Concord key to /c/<id>", () => {
     const id = "deadbeef";
     expect(railKeyToRoute(`c2:${id}`)).toBe(`/c/${id}`);
   });

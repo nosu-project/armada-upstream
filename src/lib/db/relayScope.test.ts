@@ -43,7 +43,7 @@ describe("isRelayScoped", () => {
     expect(isRelayScoped(ev(10009))).toBe(false); // the user's own group list
     expect(isRelayScoped(ev(1985, [["r", RELAY]]))).toBe(false); // NIP-32 self-label
     expect(isRelayScoped(ev(1059))).toBe(false); // gift wrap
-    expect(isRelayScoped(ev(3300))).toBe(false); // retired Concord V1 sealed outer (kind never reused)
+    expect(isRelayScoped(ev(3300))).toBe(false); // retired sealed-outer kind (never reused)
   });
 
   it("ignores a malformed or empty h tag", () => {

@@ -23,7 +23,7 @@ package buzz.armada.app.db
  * read exactly as it does for an event it fetched itself.
  *
  * Pure and Context-free so the rules can be tested on the JVM without an
- * emulator, matching [Dm17] and [Concord2].
+ * emulator, matching [Dm17] and [Concord].
  */
 object SelfState {
 

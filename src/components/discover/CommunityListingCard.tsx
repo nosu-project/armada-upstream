@@ -9,15 +9,15 @@ import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { readCachedBundle, resolveBundle } from "@/concord-v2/hooks/useCommunityActions2";
-import { useCommunity2, useCommunityEntry2 } from "@/concord-v2/hooks/useCommunityList2";
-import { useControlFold2 } from "@/concord-v2/hooks/useControlPlane2";
-import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
+import { readCachedBundle, resolveBundle } from "@/concord/hooks/useCommunityActions";
+import { useCommunity, useCommunityEntry } from "@/concord/hooks/useCommunityList";
+import { useControlFold } from "@/concord/hooks/useControlPlane";
+import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import {
   inviteUrlToLocalRoute,
   type DiscoveredInvite,
-} from "@/concord-v2/lib/inviteDiscovery";
-import { parseInviteLink } from "@/concord-v2/lib/invite";
+} from "@/concord/lib/inviteDiscovery";
+import { parseInviteLink } from "@/concord/lib/invite";
 import { useAuthor } from "@/hooks/useAuthor";
 import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
@@ -139,7 +139,7 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
   const metadata = author.data?.metadata;
   const displayName = getDisplayName(metadata, attributedPubkey);
 
-  const memberEntry = useCommunityEntry2(bundle?.community_id);
+  const memberEntry = useCommunityEntry(bundle?.community_id);
   const isMember = !!memberEntry;
 
   // A member holds the community's keys, so the AUTHORITATIVE metadata (the
@@ -148,13 +148,13 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
   // is only as fresh as the link creator's last re-post: for a member, the
   // card then shows the current images no matter what any relay vends. A
   // non-member has no keys and keeps the bundle preview.
-  const memberCommunity = useCommunity2(memberEntry?.community_id);
-  const { data: folded } = useControlFold2(memberCommunity);
+  const memberCommunity = useCommunity(memberEntry?.community_id);
+  const { data: folded } = useControlFold(memberCommunity);
 
   const icon = folded?.metadata?.icon ?? bundle?.icon;
   const banner = folded?.metadata?.banner ?? bundle?.banner;
-  const iconUrl = useDecryptedImage2(icon);
-  const bannerUrl = useDecryptedImage2(banner);
+  const iconUrl = useDecryptedImage(icon);
+  const bannerUrl = useDecryptedImage(banner);
   const name =
     folded?.metadata?.name?.trim() || bundle?.name?.trim() || "Encrypted community";
   // Like name/icon: a member's authoritative fold wins; a non-member sees the

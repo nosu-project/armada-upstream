@@ -5,21 +5,21 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useBootGateOpen } from "@/lib/bootGate";
 
-import { useCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
-import { dissolvedAt } from "@/concord-v2/hooks/useControlPlane2";
-import { openChatBatch } from "@/concord-v2/lib/chat";
-import { channelsView } from "@/concord-v2/lib/community";
-import { concord2Scope, isScopeActivated, markScopeLive, nip29Scope, onActivation } from "@/wire/activation";
-import { readControlFold } from "@/concord-v2/lib/control";
-import { channelGitRepositoryAttachments } from "@/concord-v2/lib/types";
-import { heldChannelKeys, liveEntries, rehydrateCommunity, type CommunityListEntry } from "@/concord-v2/lib/communityList";
-import { controlGroups } from "@/concord-v2/lib/control";
-import { KIND_MESSAGE } from "@/concord-v2/lib/kinds";
-import { warmupCommunities2 } from "@/concord-v2/lib/loginWarmup";
-import { openPlaneWrapsChunked } from "@/concord-v2/lib/planeSync";
-import { ackPendingWraps, peekPendingWraps, queryRumorsByChannel, writeOpened, writeRumors } from "@/concord-v2/lib/rumorStore";
-import { registerStreamKeys } from "@/concord-v2/lib/streamAuth";
-import { channelReadKey, concord2ReadKey, useReadState } from "@/hooks/useReadState";
+import { useCommunityList } from "@/concord/hooks/useCommunityList";
+import { dissolvedAt } from "@/concord/hooks/useControlPlane";
+import { openChatBatch } from "@/concord/lib/chat";
+import { channelsView } from "@/concord/lib/community";
+import { concordScope, isScopeActivated, markScopeLive, nip29Scope, onActivation } from "@/wire/activation";
+import { readControlFold } from "@/concord/lib/control";
+import { channelGitRepositoryAttachments } from "@/concord/lib/types";
+import { heldChannelKeys, liveEntries, rehydrateCommunity, type CommunityListEntry } from "@/concord/lib/communityList";
+import { controlGroups } from "@/concord/lib/control";
+import { KIND_MESSAGE } from "@/concord/lib/kinds";
+import { warmupCommunities } from "@/concord/lib/loginWarmup";
+import { openPlaneWrapsChunked } from "@/concord/lib/planeSync";
+import { ackPendingWraps, peekPendingWraps, queryRumorsByChannel, writeOpened, writeRumors } from "@/concord/lib/rumorStore";
+import { registerStreamKeys } from "@/concord/lib/streamAuth";
+import { channelReadKey, concordReadKey, useReadState } from "@/hooks/useReadState";
 import { NIP29_ACTIVITY_KINDS } from "@/hooks/useRelayUnread";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
@@ -46,8 +46,8 @@ import { ingestWireEvents } from "@/wire/ingest";
 import { buildWireSpec, stampRoundSince, type WireSpec } from "@/wire/spec";
 import type { GitRepositoryWireInput } from "@/wire/spec";
 
-import type { GroupKey, StreamKeyView } from "@/concord-v2/lib/derive";
-import type { ChannelV2 } from "@/concord-v2/lib/types";
+import type { GroupKey, StreamKeyView } from "@/concord/lib/derive";
+import type { Channel } from "@/concord/lib/types";
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
@@ -166,11 +166,11 @@ interface DotContext {
 /**
  * Whether the community's rail button currently shows an unread indicator,
  * judged from the local rumor store the way the rail judges it
- * (useConcord2Unread + the rail's mute rule): a non-self kind-9 newer than
+ * (useConcordUnread + the rail's mute rule): a non-self kind-9 newer than
  * its channel's read stamp lights the dot unless the channel is muted, and a
  * p-tag mention lights the badge regardless of mute.
  */
-async function communityDotted(communityIdHex: string, channels: ChannelV2[], ctx: DotContext): Promise<boolean> {
+async function communityDotted(communityIdHex: string, channels: Channel[], ctx: DotContext): Promise<boolean> {
   if (!ctx.pubkey || channels.length === 0) return false;
   const byChannel = await queryRumorsByChannel(
     communityIdHex,
@@ -178,7 +178,7 @@ async function communityDotted(communityIdHex: string, channels: ChannelV2[], ct
     { perChannel: DOT_SCAN_WINDOW },
   );
   for (const [idHex, rumors] of byChannel) {
-    const lastRead = ctx.readState[concord2ReadKey(idHex)] ?? 0;
+    const lastRead = ctx.readState[concordReadKey(idHex)] ?? 0;
     const muted = ctx.isMuted("c2", communityIdHex, idHex);
     for (const r of rumors) {
       if (r.kind !== KIND_MESSAGE) continue;
@@ -199,14 +199,14 @@ async function communityDotted(communityIdHex: string, channels: ChannelV2[], ct
  * bridged by the channel's own `c2:` round when it is viewed.
  */
 function catchUpCommunity(
-  nostr: Parameters<typeof warmupCommunities2>[0],
+  nostr: Parameters<typeof warmupCommunities>[0],
   entry: CommunityListEntry,
   idHex: string,
 ): void {
   if (catchUpsInFlight.has(idHex)) return;
   catchUpsInFlight.add(idHex);
   logSync("wire", `community ${idHex.slice(0, 8)} back on the wire — pulling newest pages`);
-  void warmupCommunities2(nostr, [entry], { pruneSnapshots: false })
+  void warmupCommunities(nostr, [entry], { pruneSnapshots: false })
     .catch(() => undefined)
     .finally(() => {
       catchUpsInFlight.delete(idHex);
@@ -214,11 +214,11 @@ function catchUpCommunity(
 }
 
 /**
- * Concord V2 channels for every live community in the membership list, with
+ * Concord channels for every live community in the membership list, with
  * their stream GroupKeys (rehydrated bundle + persisted control-fold snapshot,
  * local reads only). Registers every stream key for NIP-42 stream auth so the
- * wire's kind-1059 REQs pass auth-gating relays. Mirrors useConcord2Subs, but
- * keeps the full ChannelV2 (the wire decrypts; the native service can't).
+ * wire's kind-1059 REQs pass auth-gating relays. Mirrors useConcordSubs, but
+ * keeps the full Channel (the wire decrypts; the native service can't).
  *
  * NOT every community, though: one whose rail button already shows the unread
  * dot is DEFERRED — its channel filters leave the wire until the user
@@ -229,12 +229,12 @@ function catchUpCommunity(
  * traffic. Control planes are deliberately NOT deferred (cheap, and they keep
  * the fold current for the moment the community comes back).
  */
-function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2; communityIdHex: string; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }> {
+function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; communityIdHex: string; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }> {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { readState } = useReadState();
   const { isConcordChannelMuted } = useMutes();
-  const { data } = useCommunityList2();
+  const { data } = useCommunityList();
   const entries = useMemo(() => (data ? liveEntries(data.list) : []), [data]);
   const listSig = useMemo(
     () =>
@@ -268,13 +268,13 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
     () =>
       onFoldedWrite((key) => {
         if (!key.startsWith("concord2-fold:")) return;
-        void queryClient.invalidateQueries({ queryKey: ["wire", "concord2-channels"] });
+        void queryClient.invalidateQueries({ queryKey: ["wire", "concord-channels"] });
       }),
     [queryClient],
   );
 
-  const query = useQuery<Array<{ relays: string[]; channel: ChannelV2; communityIdHex: string; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }>>({
-    queryKey: ["wire", "concord2-channels", listSig, activationEpoch],
+  const query = useQuery<Array<{ relays: string[]; channel: Channel; communityIdHex: string; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }>>({
+    queryKey: ["wire", "concord-channels", listSig, activationEpoch],
     enabled: entries.length > 0,
     staleTime: 30_000,
     // Fold snapshots update out-of-band (community open / control sync) —
@@ -287,7 +287,7 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
       // would treat every deferred community as live and skip the catch-up
       // its cursor gap requires.
       await deferredFlags.ready();
-      const out: Array<{ relays: string[]; channel: ChannelV2; communityIdHex: string; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }> = [];
+      const out: Array<{ relays: string[]; channel: Channel; communityIdHex: string; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }> = [];
       for (const entry of entries) {
         const community = rehydrateCommunity(entry);
         if (!community || community.relays.length === 0) continue;
@@ -296,7 +296,7 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
         // so a relay outage can't quietly resurrect the feed.
         if ((await dissolvedAt(community.idHex)) !== undefined) continue;
         const folded = await readControlFold(community.idHex);
-        const channels: ChannelV2[] = [];
+        const channels: Channel[] = [];
         for (const channel of channelsView(community, folded)) {
           if (channel.streams.length === 0) continue;
           channels.push(channel);
@@ -305,7 +305,7 @@ function useWireConcord2Channels(): Array<{ relays: string[]; channel: ChannelV2
         // The unread-dot deferral (see wire/activation.ts). Every path back
         // to live runs the catch-up, because the shared per-relay cursor
         // advanced past this community's traffic while it was excluded.
-        const scope = concord2Scope(community.idHex);
+        const scope = concordScope(community.idHex);
         const wasDeferred = (deferredFlags.get(scope) ?? deferredFlags.get(community.idHex) ?? 0) > 0;
         const clearFlag = () => {
           deferredFlags.delete(scope);
@@ -455,7 +455,7 @@ function catchUpNip29Server(
  * list: a server whose rail button already shows the dot has its groups'
  * `#h` filters dropped from the wire until the user navigates into it (or
  * the dot clears via a read synced from another device) — the same rule, and
- * the same catch-up IOU, as the Concord V2 deferral above. NIP-29 is
+ * the same catch-up IOU, as the Concord deferral above. NIP-29 is
  * relay-per-community, so the unit of deferral is the relay: its rail button
  * and its dot are per-server, and its channels defer and re-activate
  * together.
@@ -529,7 +529,7 @@ function useWireNip29Deferral(
           continue;
         } else if (wasDeferred) {
           // The dot cleared while deferred — a read synced back from another
-          // device. Pin it live for the session (see the V2 branch above for
+          // device. Pin it live for the session (see the Concord branch above for
           // why re-deferring would oscillate).
           markScopeLive(scope);
           deferredFlags.delete(scope);
@@ -546,7 +546,7 @@ function useWireNip29Deferral(
 
 /** Folded channel metadata → canonical repository activity targets for the wire. */
 function wireGitRepositories(
-  channels: Array<{ channel: ChannelV2; communityIdHex: string; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }>,
+  channels: Array<{ channel: Channel; communityIdHex: string; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }>,
 ): GitRepositoryWireInput[] {
   const byAddress = new Map<string, GitRepositoryWireInput>();
   for (const { channel, communityIdHex, gitAttachments } of channels) {
@@ -570,7 +570,7 @@ function wireGitRepositories(
 }
 
 /**
- * The Concord V2 CONTROL-plane subscription targets for EVERY live community:
+ * The Concord CONTROL-plane subscription targets for EVERY live community:
  * per community, its control-stream GroupKeys (across held epochs) and relays.
  * Unlike the channel list, this needs NO fold — control keys derive straight
  * from the rehydrated bundle's held roots — so it's a cheap, stable memo that
@@ -583,13 +583,13 @@ function wireGitRepositories(
  * Every control stream key is registered for NIP-42 so the wire's kind-1059
  * control REQs pass auth-gating relays.
  */
-function useWireConcord2Control(): Array<{
+function useWireConcordControl(): Array<{
   relays: string[];
   idHex: string;
   groups: StreamKeyView[];
   refounded: boolean;
 }> {
-  const { data } = useCommunityList2();
+  const { data } = useCommunityList();
   const entries = useMemo(() => (data ? liveEntries(data.list) : []), [data]);
 
   return useMemo(() => {
@@ -624,13 +624,13 @@ function useWireConcord2Control(): Array<{
  *   - builds the wire spec (minimal relays + filters — the same information
  *     the APK's persistent notification service is configured with);
  *   - web: holds ONE subscription per relay through the relay pool (which
- *     handles NIP-42 AUTH — user key + Concord V2 stream keys), resuming from
+ *     handles NIP-42 AUTH — user key + Concord stream keys), resuming from
  *     a persisted per-relay cursor so time offline is replayed;
  *   - APK: bridges the native service's buffered/live events into the same
  *     ingest path;
- *   - drains V2 wraps the native service parked while the WebView was down.
+ *   - drains Concord wraps the native service parked while the WebView was down.
  *
- * Everything lands in IndexedDB (armada-events / the V2 rumor store) and the
+ * Everything lands in IndexedDB (armada-events / the Concord rumor store) and the
  * wire bus announces which conversations changed. Hooks hydrate from the
  * stores; none of them hold their own sockets.
  */
@@ -653,10 +653,10 @@ function WireSyncInner() {
   const { data: groupList } = useUserGroupList();
   const { data: followData } = useFollowList();
   const { relays: publishedDmRelays } = useDmRelayList();
-  const concord2 = useWireConcord2Channels();
-  const concord2Control = useWireConcord2Control();
+  const concord = useWireConcordChannels();
+  const concordControl = useWireConcordControl();
   const nip29Groups = useWireNip29Groups();
-  const gitRepositories = useMemo(() => wireGitRepositories(concord2), [concord2]);
+  const gitRepositories = useMemo(() => wireGitRepositories(concord), [concord]);
   const gitTicketRoots = useWireGitTicketRoots(gitRepositories);
 
   // NIP-29 groups to subscribe to: the per-server directory discovery (the
@@ -700,12 +700,12 @@ function WireSyncInner() {
         groups,
         dmRelays,
         dmFollows: followData?.pubkeys ?? [],
-        concord2,
-        concord2Control,
+        concord,
+        concordControl,
         gitRepositories,
         gitTicketRoots,
       }),
-    [user?.pubkey, groups, dmRelays, followData?.pubkeys, concord2, concord2Control, gitRepositories, gitTicketRoots],
+    [user?.pubkey, groups, dmRelays, followData?.pubkeys, concord, concordControl, gitRepositories, gitTicketRoots],
   );
 
   // The ingest path reads the spec lazily so long-lived subscriptions always
@@ -726,7 +726,7 @@ function WireSyncInner() {
   // ── Web sockets: one REQ per relay, resumed from the persisted cursor ─────
   // Loops are diffed PER RELAY rather than keyed on the whole spec: the spec
   // settles several times during startup as its inputs resolve (groupList,
-  // followData, concordData, concord2 folds, git repositories, git ticket
+  // followData, concordData, concord folds, git repositories, git ticket
   // roots), and tearing down every relay's standing REQ on each settle aborted
   // catch-up replays mid-flight and re-issued/re-authed every subscription —
   // most with identical filters. Only relays whose own filter set changed are
@@ -1044,20 +1044,20 @@ function WireSyncInner() {
   // Covers BOTH chat wraps (→ rumor store, `c2:` scope) and control-plane wraps
   // (→ opened-event store, `c2ctl:` scope). The native service parks any wrap it
   // can't open; the wire holds the keys, so it drains them here whenever the
-  // spec (hence the held key set) changes. useControlEvents2 no longer polls to
+  // spec (hence the held key set) changes. useControlEvents no longer polls to
   // drain parked control wraps — this is the single drain for both planes.
   useEffect(() => {
-    if (spec.v2ByPk.size === 0 && spec.v2CtlByPk.size === 0) return;
+    if (spec.concordByPk.size === 0 && spec.concordCtlByPk.size === 0) return;
     let cancelled = false;
     // Debounce: spec.sig fires 4-6 times during startup as queries resolve
-    // (groupList, followData, concordData, concord2, concord2Control). Without
+    // (groupList, followData, concordData, concord, concordControl). Without
     // a delay each firing kicks off IDB reads + openChatBatch + IDB writes
     // concurrently, monopolising the main thread before the UI is interactive.
     const timer = setTimeout(() => {
       void (async () => {
         const drainStart = performance.now();
         try {
-          const parked = await peekPendingWraps([...spec.v2ByPk.keys(), ...spec.v2CtlByPk.keys()]);
+          const parked = await peekPendingWraps([...spec.concordByPk.keys(), ...spec.concordCtlByPk.keys()]);
           if (parked.length === 0 || cancelled) return;
           // WALL CLOCK for the whole drain, against `crypto.openChatBatch`'s
           // CPU-only total. The gap between the two is the slicing overhead:
@@ -1069,21 +1069,21 @@ function WireSyncInner() {
           const acked: string[] = [];
 
           // Chat wraps → rumor store, grouped per owning channel.
-          const byChannel = new Map<ChannelV2, NostrRumor[]>();
+          const byChannel = new Map<Channel, NostrRumor[]>();
           // Control wraps → opened-event store, grouped per owning community.
           const ctlByCommunity = new Map<
             string,
             { groups: StreamKeyView[]; refounded: boolean; wraps: NostrRumor[] }
           >();
           for (const wrap of parked) {
-            const channel = spec.v2ByPk.get(wrap.pubkey);
+            const channel = spec.concordByPk.get(wrap.pubkey);
             if (channel) {
               const list = byChannel.get(channel);
               if (list) list.push(wrap);
               else byChannel.set(channel, [wrap]);
               continue;
             }
-            const ctl = spec.v2CtlByPk.get(wrap.pubkey);
+            const ctl = spec.concordCtlByPk.get(wrap.pubkey);
             if (ctl) {
               const bucket = ctlByCommunity.get(ctl.idHex);
               if (bucket) bucket.wraps.push(wrap);
@@ -1101,7 +1101,7 @@ function WireSyncInner() {
             // No community for this channel means no tenant to write to, so
             // neither store nor ACK — the wraps stay parked for a later drain
             // (a notified message must never be locally destructible).
-            const communityIdHex = spec.v2CommunityByChannel.get(channel.idHex);
+            const communityIdHex = spec.concordCommunityByChannel.get(channel.idHex);
             if (!communityIdHex) continue;
             const opened = await openChatBatch(wraps, channel);
             if (opened.length === 0) continue;

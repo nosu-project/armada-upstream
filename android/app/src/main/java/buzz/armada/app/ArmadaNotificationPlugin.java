@@ -483,7 +483,7 @@ public class ArmadaNotificationPlugin extends Plugin {
         String dmKnownPeersRaw = arrayToString(call.getArray("dmKnownPeers"));
         String dmRequestsRaw = call.getString("dmRequests");
         String selfRelaysRaw = arrayToString(call.getArray("selfRelays"));
-        String concord2SubsRaw = arrayToString(call.getArray("concord2Subs"));
+        String concordSubsRaw = arrayToString(call.getArray("concordSubs"));
         String gitSubsRaw = arrayToString(call.getArray("gitSubs"));
         // prefs is a flat object of booleans; store its JSON verbatim.
         String prefsRaw = null;
@@ -509,7 +509,7 @@ public class ArmadaNotificationPlugin extends Plugin {
         }
 
         SharedPreferences prefs = getContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        boolean hasWatch = relayUrlsRaw != null || concord2SubsRaw != null
+        boolean hasWatch = relayUrlsRaw != null || concordSubsRaw != null
                 || dmRelaysRaw != null;
         boolean hasConfig = enabled && userPubkey != null && hasWatch;
 
@@ -532,7 +532,11 @@ public class ArmadaNotificationPlugin extends Plugin {
             else editor.remove("dmRequests");
             if (selfRelaysRaw != null) editor.putString("selfRelays", selfRelaysRaw);
             else editor.remove("selfRelays");
-            if (concord2SubsRaw != null) editor.putString("concord2Subs", concord2SubsRaw);
+            // The "concord2Subs" PREF key keeps its old spelling on purpose:
+            // the service reads it on boot, before the WebView can re-register.
+            // Respelling it would leave an upgraded device with no Concord
+            // notifications until the user next opens the app.
+            if (concordSubsRaw != null) editor.putString("concord2Subs", concordSubsRaw);
             else editor.remove("concord2Subs");
             if (signerSealed != null) editor.putString("signerSealed", signerSealed);
             else editor.remove("signerSealed");
@@ -548,7 +552,7 @@ public class ArmadaNotificationPlugin extends Plugin {
             editor.apply();
             if (BuildConfig.DEBUG) Log.d(TAG, "Configured: relays=" + relayUrlsRaw + " groups=" + groupIdsRaw
                     + " dmRelays=" + dmRelaysRaw
-                    + " concord2Subs=" + (concord2SubsRaw != null ? "yes" : "none"));
+                    + " concordSubs=" + (concordSubsRaw != null ? "yes" : "none"));
         } else {
             prefs.edit().clear().apply();
             // Drop any un-drained read markers too, so they can't apply to a

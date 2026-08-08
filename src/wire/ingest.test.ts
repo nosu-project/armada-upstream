@@ -1,7 +1,7 @@
 /**
  * The wire's single ingestion point: every transport (web sockets, the APK
  * service's live feed and drain) funnels through `ingestWireEvents`, which
- * routes into IndexedDB (plaintext → armada-events; decryptable V2 wraps →
+ * routes into IndexedDB (plaintext → armada-events; decryptable Concord wraps →
  * rumor store; unknown wraps → parked) and announces changed scopes on the
  * bus. These tests pin that routing.
  */
@@ -10,12 +10,12 @@ import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure
 import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { bytesToHex, channelGroupKey, controlGroupKey, voiceGroupKey, voiceMediaKey } from "@/concord-v2/lib/derive";
-import { KIND_CONTROL, KIND_MESSAGE, KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
-import { peekPendingWraps, queryPlane, queryChannelRumors } from "@/concord-v2/lib/rumorStore";
+import { bytesToHex, channelGroupKey, controlGroupKey, voiceGroupKey, voiceMediaKey } from "@/concord/lib/derive";
+import { KIND_CONTROL, KIND_MESSAGE, KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord/lib/kinds";
+import { peekPendingWraps, queryPlane, queryChannelRumors } from "@/concord/lib/rumorStore";
 import { drainLiveDmWraps, resetLiveDmWraps } from "@/lib/nip17/dm17Store";
-import { buildRumor, channelBindingTags, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
-import type { ChannelV2 } from "@/concord-v2/lib/types";
+import { buildRumor, channelBindingTags, sealRumor, wrapSeal } from "@/concord/lib/stream";
+import type { Channel } from "@/concord/lib/types";
 
 import { onWireScopes, resetWireBus } from "./bus";
 import { ingestWireEvents, type WireEventStore } from "./ingest";
@@ -31,7 +31,7 @@ afterEach(() => {
 
 const root = new Uint8Array(32).fill(9);
 let nextChannelByte = 120;
-function makeChannel(): { channel: ChannelV2; idHex: string } {
+function makeChannel(): { channel: Channel; idHex: string } {
   const channelId = new Uint8Array(32).fill(nextChannelByte++);
   const idHex = bytesToHex(channelId);
   const group = channelGroupKey(root, channelId, 0);
@@ -55,7 +55,7 @@ function signer(sk = generateSecretKey()) {
   return { sk, pubkey: getPublicKey(sk), signEvent: async (t: EventTemplate) => finalizeEvent(t, sk) };
 }
 
-async function wrapChat(channel: ChannelV2, s: ReturnType<typeof signer>, content: string): Promise<NostrEvent> {
+async function wrapChat(channel: Channel, s: ReturnType<typeof signer>, content: string): Promise<NostrEvent> {
   const rumor = buildRumor({
     kind: KIND_MESSAGE,
     content,
@@ -81,9 +81,9 @@ class FakeStore implements WireEventStore {
 function makeSinks(spec: Partial<WireSpec>, store = new FakeStore()) {
   const full: WireSpec = {
     subs: [],
-    v2ByPk: new Map(),
-    v2CommunityByChannel: new Map(),
-    v2CtlByPk: new Map(),
+    concordByPk: new Map(),
+    concordCommunityByChannel: new Map(),
+    concordCtlByPk: new Map(),
     gitByRepository: new Map(),
     gitRootById: new Map(),
     gitRootAuthorById: new Map(),
@@ -178,14 +178,14 @@ describe("ingestWireEvents", () => {
     expect(scopes).toEqual(new Set([`git:${address}`]));
   });
 
-  it("decrypts V2 wraps for held streams into the rumor store (never armada-events)", async () => {
+  it("decrypts Concord wraps for held streams into the rumor store (never armada-events)", async () => {
     const { channel, idHex } = makeChannel();
     const communityIdHex = "c".repeat(64);
     const alice = signer();
     const wrap = await wrapChat(channel, alice, "sealed hello");
     const { store, sinks } = makeSinks({
-      v2ByPk: new Map([[wrap.pubkey, channel]]),
-      v2CommunityByChannel: new Map([[idHex, communityIdHex]]),
+      concordByPk: new Map([[wrap.pubkey, channel]]),
+      concordCommunityByChannel: new Map([[idHex, communityIdHex]]),
     });
 
     const scopes = await collectScopes(() => ingestWireEvents(sinks, [wrap]));
@@ -196,7 +196,7 @@ describe("ingestWireEvents", () => {
     expect(rumors.some((r) => r.content === "sealed hello")).toBe(true);
   });
 
-  it("decrypts V2 control wraps into the opened-event store and rings the c2ctl fold-wake", async () => {
+  it("decrypts Concord control wraps into the opened-event store and rings the c2ctl fold-wake", async () => {
     const communityId = new Uint8Array(32).fill(200);
     const idHex = bytesToHex(communityId);
     const control = controlGroupKey(root, communityId, 0);
@@ -210,7 +210,7 @@ describe("ingestWireEvents", () => {
     });
     const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_PLAINTEXT, control, owner), control) as NostrEvent;
     const { store, sinks } = makeSinks({
-      v2CtlByPk: new Map([[wrap.pubkey, { idHex, groups: [control], refounded: false }]]),
+      concordCtlByPk: new Map([[wrap.pubkey, { idHex, groups: [control], refounded: false }]]),
     });
 
     const scopes = await collectScopes(() => ingestWireEvents(sinks, [wrap]));
@@ -221,11 +221,11 @@ describe("ingestWireEvents", () => {
     expect(opened.some((o) => o.content === "edition")).toBe(true);
   });
 
-  it("parks V2 wraps for streams we hold no key for and rings the park doorbell", async () => {
+  it("parks Concord wraps for streams we hold no key for and rings the park doorbell", async () => {
     const { channel } = makeChannel();
     const alice = signer();
     const wrap = await wrapChat(channel, alice, "not ours yet");
-    const { store, sinks } = makeSinks({}); // empty v2ByPk — key unknown
+    const { store, sinks } = makeSinks({}); // empty concordByPk — key unknown
 
     const scopes = await collectScopes(() => ingestWireEvents(sinks, [wrap]));
 
@@ -252,7 +252,7 @@ describe("ingestWireEvents", () => {
     // The raw wrap is buffered in hand so useDm17 decrypts it WITHOUT a re-fetch.
     const buffered = drainLiveDmWraps();
     expect(buffered.map((w) => w.id)).toEqual([wrap.id]);
-    // It must NOT be parked as a dead Concord V2 pending wrap, nor stored.
+    // It must NOT be parked as a dead Concord pending wrap, nor stored.
     expect(scopes.has(`c2park:${wrap.pubkey}`)).toBe(false);
     expect(store.events).toHaveLength(0);
     expect((await peekPendingWraps([wrap.pubkey]))).toHaveLength(0);
@@ -276,7 +276,7 @@ describe("ingestWireEvents", () => {
     expect(drainLiveDmWraps()).toHaveLength(0);
   });
 
-  it("still parks a kind-1059 wrap NOT addressed to the viewer (a genuine unknown V2 stream)", async () => {
+  it("still parks a kind-1059 wrap NOT addressed to the viewer (a genuine unknown Concord stream)", async () => {
     const self = "9".repeat(64);
     const { sinks } = makeSinks({});
     const withSelf = { ...sinks, getSelfPubkey: () => self };
@@ -358,8 +358,8 @@ describe("ingestWireEvents — foreground notify candidates", () => {
     const alice = signer();
     const wrap = await wrapChat(channel, alice, "sealed hi");
     const { captured, off, sinks } = withSink({
-      v2ByPk: new Map([[wrap.pubkey, channel]]),
-      v2CommunityByChannel: new Map([[idHex, "comm-hex"]]),
+      concordByPk: new Map([[wrap.pubkey, channel]]),
+      concordCommunityByChannel: new Map([[idHex, "comm-hex"]]),
     });
     try {
       await ingestWireEvents(sinks, [wrap]);

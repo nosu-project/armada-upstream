@@ -9,8 +9,8 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { useCommunityActions2 } from "@/concord-v2/hooks/useCommunityActions2";
-import { parseInviteLink } from "@/concord-v2/lib/invite";
+import { useCommunityActions } from "@/concord/hooks/useCommunityActions";
+import { parseInviteLink } from "@/concord/lib/invite";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
 import {
@@ -52,7 +52,7 @@ const errText = (e: unknown) =>
 export function DiscordImportWizard({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
   const { user } = useCurrentUser();
-  const { join } = useCommunityActions2();
+  const { join } = useCommunityActions();
 
   const [step, setStep] = useState<Step>(0);
   const [error, setError] = useState("");

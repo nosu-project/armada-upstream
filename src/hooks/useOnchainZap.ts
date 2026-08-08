@@ -90,7 +90,7 @@ export function useOnchainZap(
   target: NostrRumor,
   onSuccess?: (result: OnchainZapResult) => void,
   recipientOverride?: BitcoinRecipientOverride,
-  /** Private announcement publisher (Concord v2). When present, the kind 8333
+  /** Private announcement publisher (Concord). When present, the kind 8333
    *  attribution is sealed into the channel as a rumor instead of published
    *  to public relays (which would leak community/channel context). */
   sendOnchainZap?: (target: NostrRumor, announcement: { txid: string; amountSats: number; comment: string }) => Promise<void>,
@@ -198,7 +198,7 @@ export function useOnchainZap(
       }
 
       // Publish the kind 8333 attribution. When a private announcement
-      // publisher is present (Concord v2), seal it into the channel as a
+      // publisher is present (Concord), seal it into the channel as a
       // rumor instead of publishing to public relays — the txid is already
       // on a public ledger, but the Nostr event leaks community/channel context.
       setProgress('publishing');

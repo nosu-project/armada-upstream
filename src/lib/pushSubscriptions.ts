@@ -27,7 +27,7 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 
 import type { PushPrefs } from "@/lib/pushPrefs";
 import type { NostrFilter } from "@nostrify/types";
-import type { Concord2Sub } from "@/concord-v2/lib/concordNotifications2";
+import type { ConcordSub } from "@/concord/lib/concordNotifications";
 
 // Kinds we key notifications off (all plaintext-or-encrypted matched by tag).
 const KIND_GROUP_MESSAGE = 9;
@@ -73,7 +73,7 @@ export interface PushSubscriptionInput {
   dmRelays: string[];
   /** Follows — friends-only kind-4 DM authors. */
   dmFollows: string[];
-  concordV2: Concord2Sub[];
+  concord: ConcordSub[];
 }
 
 /**
@@ -200,7 +200,7 @@ export function buildPushSubscriptions(input: PushSubscriptionInput): PushSubscr
 
   // Concord (kind-1059 stream authors), merged by relay set.
   for (const spec of mergeByRelaySet(
-    input.concordV2.map((s) => ({ relays: s.relays, values: s.streams.map((st) => st.pk) })),
+    input.concord.map((s) => ({ relays: s.relays, values: s.streams.map((st) => st.pk) })),
     "c2",
     (values, relays) => ({
       id: `armada-c2-${relaySetTag(relays)}`,

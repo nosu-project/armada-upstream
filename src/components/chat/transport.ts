@@ -116,7 +116,7 @@ export interface MessagePoll {
  * Per-calendar-event RSVP state + setter, resolved by the transport for a
  * calendar (kind 31922/31923) message. Its presence lets the row render its
  * inline event card with live RSVP tallies. Both NIP-29 (relay query) and
- * Concord v2 (sealed fold) supply it; the card itself is transport-agnostic.
+ * Concord (sealed fold) supply it; the card itself is transport-agnostic.
  */
 export interface MessageCalendar {
   /** The parsed, addressably-deduped event (newest per author/`d`). */
@@ -162,7 +162,7 @@ export function stableZapsFor(
 
 /**
  * A settled lightning payment, handed by the shared zap dialog to a transport
- * whose zap announcement is its own event (Concord v2's sealed CORD.md rumor).
+ * whose zap announcement is its own event (Concord's sealed CORD.md rumor).
  * NIP-29 has no publish step — the LNURL provider's public receipt is the
  * announcement — so its transport omits {@link ChatTransport.sendZap}.
  */
@@ -176,7 +176,7 @@ export interface ZapPayment {
 
 /**
  * A settled on-chain Bitcoin zap, handed by the zap dialog to a transport
- * whose on-chain zap announcement is a sealed chat-plane event (Concord v2).
+ * whose on-chain zap announcement is a sealed chat-plane event (Concord).
  * NIP-29 has no publish step — the public kind 8333 event is the
  * announcement — so its transport omits {@link ChatTransport.sendOnchainZap}.
  */
@@ -258,14 +258,14 @@ export interface ChatTransport {
   zapsFor?: (id: string) => MessageZaps | undefined;
   /**
    * Announce a settled zap payment for this message, for transports whose
-   * announcement is a chat-plane event (Concord v2 / CORD.md). When present,
+   * announcement is a chat-plane event (Concord / CORD.md). When present,
    * the dialog REQUIRES a proof-returning payment method (NWC/WebLN — no
    * manual QR, which never reveals the preimage).
    */
   sendZap?: (target: ChatMsg, payment: ZapPayment) => Promise<void>;
   /**
    * Announce a settled on-chain Bitcoin zap for this message, for transports
-   * whose announcement is a sealed chat-plane event (Concord v2). When
+   * whose announcement is a sealed chat-plane event (Concord). When
    * present, the on-chain zap hook seals the kind 8333 attribution rumor into
    * the channel instead of publishing a public Nostr event (which would leak
    * community/channel context). Absent = publish publicly via relays (NIP-29).
@@ -276,18 +276,18 @@ export interface ChatTransport {
    * Resolved poll tally + vote callback for a poll (kind 1068) message id. Its
    * presence lets a poll render its live results and accept votes. NIP-29
    * carries polls through the relay-querying {@link import("./PollCard").PollCard}
-   * instead, so it omits this; Concord v2 supplies it from the sealed chat fold.
+   * instead, so it omits this; Concord supplies it from the sealed chat fold.
    */
   pollFor?: (id: string) => MessagePoll | undefined;
   /**
    * Resolved calendar event + RSVP state for a calendar (kind 31922/31923)
    * message id, so the row renders an inline event card. Both transports also
    * surface these events in the events bar; this is the timeline copy. NIP-29
-   * resolves it from a relay query, Concord v2 from the sealed chat fold.
+   * resolves it from a relay query, Concord from the sealed chat fold.
    */
   calendarFor?: (id: string) => MessageCalendar | undefined;
   /**
-   * Publish a new poll as a chat-plane event (Concord v2 sealed rumor). Its
+   * Publish a new poll as a chat-plane event (Concord sealed rumor). Its
    * presence enables the composer's poll mode on the delegated send path. NIP-29
    * publishes polls directly to its host relay, so it omits this.
    */

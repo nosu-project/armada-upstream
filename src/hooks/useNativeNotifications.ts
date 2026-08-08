@@ -17,8 +17,8 @@ import {
   type PushPrefs,
 } from "@/lib/pushPrefs";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
-import { useConcord2Subs } from "@/concord-v2/hooks/useConcord2Subs";
-import { signStreamAuthsChunked } from "@/concord-v2/lib/streamAuth";
+import { useConcordSubs } from "@/concord/hooks/useConcordSubs";
+import { signStreamAuthsChunked } from "@/concord/lib/streamAuth";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { effectiveDmRelays, userReadRelays } from "@/contexts/AppContext";
 import { isGitAnnouncementDiscoveryRelay, normalizeRelayUrl } from "@/lib/platform";
@@ -360,27 +360,27 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     [prefs],
   );
 
-  // Concord V2 channel subscriptions: kind-1059 stream addresses + the
-  // conversation keys that open their wraps (see useConcord2Subs). Channels at
+  // Concord channel subscriptions: kind-1059 stream addresses + the
+  // conversation keys that open their wraps (see useConcordSubs). Channels at
   // `nothing` are dropped; `mentions` are watched but flagged `mentionOnly` so
-  // the service (which CAN decrypt V2) suppresses non-mention messages.
-  const allConcord2Subs = useConcord2Subs();
-  const concord2Subs = useMemo(
+  // the service (which CAN decrypt Concord) suppresses non-mention messages.
+  const allConcordSubs = useConcordSubs();
+  const concordSubs = useMemo(
     () =>
-      allConcord2Subs
+      allConcordSubs
         .map((sub) => ({
           sub,
           level: concordChannelLevel("c2", sub.communityId, sub.channelId),
         }))
         .filter(({ level }) => level !== "nothing")
         .map(({ sub, level }) => ({ ...sub, mentionOnly: level === "mentions" })),
-    [allConcord2Subs, concordChannelLevel],
+    [allConcordSubs, concordChannelLevel],
   );
   // Match the web wire's canonical repository grouping. The channel/community
   // route remains in this local payload and is never copied into relay filters.
   const gitRepositories = useMemo<GitRepositoryWireInput[]>(() => {
     const byAddress = new Map<string, GitRepositoryWireInput>();
-    for (const sub of concord2Subs) {
+    for (const sub of concordSubs) {
       // Git events have no encrypted @-mention signal. A channel set to
       // mentions-only must therefore not receive background Git alerts.
       if (sub.mentionOnly) continue;
@@ -395,7 +395,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
       }
     }
     return [...byAddress.values()].map((repository) => ({ ...repository, relays: [...new Set(repository.relays)].sort() }));
-  }, [concord2Subs]);
+  }, [concordSubs]);
   const gitTicketRoots = useWireGitTicketRoots(gitRepositories);
   const eventStore = useEventStore();
   const gitAnnouncements = useQuery({
@@ -434,7 +434,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     const turnedOff = !enabled;
     const nothingToWatch =
       relayUrls.length === 0 &&
-      concord2Subs.length === 0 &&
+      concordSubs.length === 0 &&
       dmRelays.length === 0;
 
     let payload: Parameters<typeof ArmadaNotification.configure>[0];
@@ -452,7 +452,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
         groupSubs,
         mentionOnlyGroupIds,
         prefs: prefsRecord,
-        concord2Subs,
+        concordSubs,
         dmRelays,
         dmFollows,
         dmKnownPeers,
@@ -471,7 +471,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     ArmadaNotification.configure(payload).catch((err) => {
       console.warn("[native-notif] configure failed:", err);
     });
-  }, [supported, enabled, user, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concord2Subs, dmRelays, dmFollows, dmKnownPeers, prefs.dmRequests, selfRelays, signerCfg, gitSubs]);
+  }, [supported, enabled, user, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, dmRelays, dmFollows, dmKnownPeers, prefs.dmRequests, selfRelays, signerCfg, gitSubs]);
 
   // Auto-enable on launch (opt-out, like Ditto): if the user hasn't turned it
   // off AND the OS permission is already granted, start the background service
@@ -501,14 +501,14 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   const knownRelays = useMemo(() => {
     const set = new Set<string>(relayUrls);
     for (const url of dmRelays) set.add(url);
-    for (const sub of concord2Subs) {
+    for (const sub of concordSubs) {
       for (const url of sub.relays) {
         const n = normalizeRelayUrl(url);
         if (n) set.add(n);
       }
     }
     return set;
-  }, [relayUrls, dmRelays, concord2Subs]);
+  }, [relayUrls, dmRelays, concordSubs]);
 
   // NIP-42: the service can't sign, so it bridges each relay's AUTH challenge
   // here. We sign a kind-22242 with the user's signer (nsec / bunker /
@@ -527,7 +527,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
         console.warn("[native-notif] ignoring AUTH for unknown relay:", relayUrl);
         return;
       }
-      // Concord V2 stream auth first: an auth-gating relay requires every
+      // Concord stream auth first: an auth-gating relay requires every
       // `authors` entry of the service's kind-1059 REQ to be authenticated on
       // that connection. These signatures are local (derived stream secret
       // keys, see streamAuth.ts) and scoped to the keys THIS relay hosts, so

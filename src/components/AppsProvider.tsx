@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { WebxdcApp } from "@/components/apps/WebxdcApp";
 import { YouTubeWatchalong } from "@/components/apps/YouTubeWatchalong";
 import { Button } from "@/components/ui/button";
-import { useConcord2AppSync } from "@/concord-v2/hooks/useConcord2AppSync";
+import { useConcordAppSync } from "@/concord/hooks/useConcordAppSync";
 import { useGroupAppSync } from "@/hooks/useGroupAppSync";
 import {
   AppsContext,
@@ -50,15 +50,15 @@ function Nip29RunningApp({
   return <>{children(sync)}</>;
 }
 
-/** Render a running Concord v2-scoped app (resolves the sealed channel sync backend). */
+/** Render a running Concord-scoped app (resolves the sealed channel sync backend). */
 function Concord2RunningApp({
   active,
   children,
 }: {
-  active: ActiveApp & { scope: Extract<AppScope, { kind: "concord2" }> };
+  active: ActiveApp & { scope: Extract<AppScope, { kind: "concord" }> };
   children: (sync: AppSync) => React.ReactNode;
 }) {
-  const sync = useConcord2AppSync(active.scope.community, active.scope.channel, active.sessionId);
+  const sync = useConcordAppSync(active.scope.community, active.scope.channel, active.sessionId);
   return <>{children(sync)}</>;
 }
 
@@ -135,7 +135,7 @@ function RunningApp({
     );
   }
   return (
-    <Concord2RunningApp active={active as ActiveApp & { scope: Extract<AppScope, { kind: "concord2" }> }}>
+    <Concord2RunningApp active={active as ActiveApp & { scope: Extract<AppScope, { kind: "concord" }> }}>
       {renderStage}
     </Concord2RunningApp>
   );

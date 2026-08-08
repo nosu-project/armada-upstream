@@ -22,7 +22,7 @@ import { useEventStore } from "@/hooks/useEventStore";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { usePinnedDms } from "@/hooks/usePinnedDms";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
-import { useLiveCommunities2 } from "@/concord-v2/hooks/useCommunityList2";
+import { useLiveCommunities } from "@/concord/hooks/useCommunityList";
 import { flattenLayout, mergeLayout } from "@/lib/railLayout";
 import { chatRoute } from "@/lib/routes";
 import {
@@ -102,7 +102,7 @@ export function SharePage() {
   const { user } = useCurrentUser();
   const { config } = useAppContext();
   const liveServers = useNip29Servers();
-  const communities = useLiveCommunities2();
+  const communities = useLiveCommunities();
   const { conversations } = useDm17Conversations({ interactive: true });
   const { pinned } = usePinnedDms();
 

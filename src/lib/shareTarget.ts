@@ -163,7 +163,7 @@ export function isShareableRoomRoute(path: string): boolean {
       return !!route.peer;
     case "nip29":
       return !!route.groupId;
-    case "concord2":
+    case "concord":
       return !!route.channelId;
   }
 }

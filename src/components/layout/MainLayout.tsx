@@ -2,10 +2,10 @@ import { Outlet } from "react-router-dom";
 
 import { AppsProvider } from "@/components/AppsProvider";
 import { CallProvider } from "@/components/CallProvider";
-import { DirectInvitesPrompt2 } from "@/concord-v2/components/DirectInvitesPrompt2";
+import { DirectInvitesPrompt } from "@/concord/components/DirectInvitesPrompt";
 import { QuickSwitcher } from "@/components/QuickSwitcher";
 import { ServerRail } from "@/components/layout/ServerRail";
-import { useRegisterAllStreamKeys2 } from "@/concord-v2/hooks/useStreamAuth2";
+import { useRegisterAllStreamKeys } from "@/concord/hooks/useStreamAuth";
 import { useShareShortcuts } from "@/hooks/useShareShortcuts";
 
 /**
@@ -20,9 +20,9 @@ import { useShareShortcuts } from "@/hooks/useShareShortcuts";
  * changes; they wrap the routed content and dock their UI below it.
  */
 export function MainLayout() {
-  // Concord V2 rides auth-gated kind-1059 streams: authenticate the connection
+  // Concord rides auth-gated kind-1059 streams: authenticate the connection
   // as every live community's derived stream keys so its planes are readable.
-  useRegisterAllStreamKeys2();
+  useRegisterAllStreamKeys();
   // Android: keep the Direct Share suggestions (share-sheet conversation
   // shortcuts) in step with the user's pinned + recent DMs. No-op elsewhere.
   useShareShortcuts();
@@ -39,7 +39,7 @@ export function MainLayout() {
             CallProvider's row — exactly where the page-owned rail sat. */}
         <ServerRail variant="shell" />
         <Outlet />
-        <DirectInvitesPrompt2 />
+        <DirectInvitesPrompt />
         <QuickSwitcher />
       </AppsProvider>
     </CallProvider>

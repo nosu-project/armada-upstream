@@ -28,7 +28,7 @@ import { writeClipboardText } from "@/lib/clipboard";
 import { dittoHashtagUrl, dittoNip19Url } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { HASHTAG_PATTERN } from "@/lib/hashtag";
-import { isInviteUrl } from "@/concord-v2/lib/invite";
+import { isInviteUrl } from "@/concord/lib/invite";
 import { parseFileMessageTags, parseImetaMap } from "@/lib/imeta";
 import { KIND_DM_FILE } from "@/lib/nip17/protocol";
 import { splitInlineCode, splitMarkdownBlocks, splitMarkdownLinks } from "@/lib/markdown";

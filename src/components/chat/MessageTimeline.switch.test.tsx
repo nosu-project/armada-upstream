@@ -6,7 +6,7 @@ import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
 
 /**
  * Verifies the effect of dropping the per-channel `key` on the Concord
- * MessageTimeline (ConcordV2Page.tsx): a channel switch now updates the
+ * MessageTimeline (ConcordPage.tsx): a channel switch now updates the
  * timeline IN PLACE instead of tearing down and recreating the scroller +
  * ResizeObserver + scroll listeners (and flashing a skeleton).
  *

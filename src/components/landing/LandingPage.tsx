@@ -5,7 +5,7 @@ import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCres
 import { BrandMark } from "@/components/brand/BrandMark";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { RELAY_DICTIONARY } from "@/concord-v2/lib/stockRelays";
+import { RELAY_DICTIONARY } from "@/concord/lib/stockRelays";
 import { relayToHttpUrl } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 

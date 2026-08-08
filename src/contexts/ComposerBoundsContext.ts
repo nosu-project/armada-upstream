@@ -8,7 +8,7 @@ import { createContext, useContext } from "react";
  * bottom can extend down into the composer / safe-area inset instead of
  * flipping upward.
  *
- * Each chat view (GroupChat, ConcordV2Page, ConcordPage, DMsPage Conversation,
+ * Each chat view (GroupChat, ConcordPage, ConcordPage, DMsPage Conversation,
  * ThreadPanel) provides its own instance via {@link ComposerBoundsProvider},
  * scoping the ref to that pane — important on desktop where a thread panel and
  * the main chat each have their own composer.

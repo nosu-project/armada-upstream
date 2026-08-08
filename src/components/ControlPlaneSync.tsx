@@ -4,11 +4,11 @@ import { useEffect, useMemo } from "react";
 
 import { useBootGateOpen } from "@/lib/bootGate";
 
-import { useCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
+import { useCommunityList } from "@/concord/hooks/useCommunityList";
 import { activeScopeId } from "@/wire/activation";
-import { liveEntries, rehydrateCommunity } from "@/concord-v2/lib/communityList";
-import { onStreamKeysAdded } from "@/concord-v2/lib/streamAuth";
-import type { CommunityV2 } from "@/concord-v2/lib/types";
+import { liveEntries, rehydrateCommunity } from "@/concord/lib/communityList";
+import { onStreamKeysAdded } from "@/concord/lib/streamAuth";
+import type { Community } from "@/concord/lib/types";
 import { syncControlPlane } from "@/lib/controlPlaneSync";
 import { logSync } from "@/lib/syncLog";
 
@@ -22,14 +22,14 @@ function useControlPlaneSync(): void {
   const { nostr } = useNostr();
   const queryClient = useQueryClient();
 
-  const { data: v2Data } = useCommunityList2();
+  const { data: communityListData } = useCommunityList();
 
   // Rehydrate every live membership into a runtime community. Memoized on the
   // decrypted list so a stable set feeds the query (and its key).
-  const v2: CommunityV2[] = useMemo(() => {
-    if (!v2Data) return [];
-    const out: CommunityV2[] = [];
-    for (const entry of liveEntries(v2Data.list)) {
+  const communities: Community[] = useMemo(() => {
+    if (!communityListData) return [];
+    const out: Community[] = [];
+    for (const entry of liveEntries(communityListData.list)) {
       // Planes live ONLY on the community's own relays (the bundle/fold's
       // relay set). Never union the deployment's app/platform relays in: they
       // don't store Concord wraps, and their instant empty answers can starve
@@ -38,22 +38,22 @@ function useControlPlaneSync(): void {
       if (community) out.push(community);
     }
     return out;
-  }, [v2Data]);
+  }, [communityListData]);
 
   // A signature that changes only when the set of communities (or their held
   // epochs, which change the derived control addresses) changes.
   const sig = useMemo(
     () =>
-      v2
+      communities
         .map((c) => `2:${c.idHex}:${c.heldRoots.map((r) => r.epoch).join("-")}`)
         .sort()
         .join(","),
-    [v2],
+    [communities],
   );
 
   useQuery({
     queryKey: ["control-plane-sync", sig],
-    enabled: v2.length > 0,
+    enabled: communities.length > 0,
     // The sweep advances a persisted cursor, so a re-run is cheap; keep it fresh
     // for a while and let a focus/interval-driven refetch catch up.
     staleTime: 5 * 60_000,
@@ -62,7 +62,7 @@ function useControlPlaneSync(): void {
       // The community the user is currently in (if any) sweeps first — on a
       // cold pageload direct to a community URL, its control fold is the
       // serial gate in front of the timeline.
-      await syncControlPlane(nostr, queryClient, v2, { signal, priorityIdHex: activeScopeId("c2:") });
+      await syncControlPlane(nostr, queryClient, communities, { signal, priorityIdHex: activeScopeId("c2:") });
       return sig;
     },
   });
