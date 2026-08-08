@@ -47,4 +47,37 @@ function hasDeveloperIdUpdateSignature(signatureDetails) {
   );
 }
 
-module.exports = { hasDeveloperIdUpdateSignature, supportsSelfUpdate };
+/**
+ * Read a `Get-AuthenticodeSignature ... .Status` verdict. PowerShell's
+ * SignatureStatus enum uses `Valid` for a trusted chain; everything else
+ * (NotSigned, HashMismatch, UnknownError, NotTrusted) is a refusal.
+ */
+function hasTrustedWindowsSignature(status) {
+  return String(status || "").trim() === "Valid";
+}
+
+/**
+ * Whether an update may be downloaded and installed without asking.
+ *
+ * On Windows an unsigned NSIS build makes electron-updater's publisherName
+ * check vacuous, so arming autoDownload + autoInstallOnAppQuit would let
+ * anyone who can serve the update path run code on every user — TLS to the
+ * host being the only thing in the way. Unsigned Windows builds still CHECK
+ * for updates; they just tell the user rather than installing.
+ *
+ * The other platforms already carry their own gate: macOS self-update is
+ * refused outright unless the bundle has a Developer ID signature
+ * (`hasDeveloperIdUpdateSignature`), and an AppImage is replaced only after
+ * electron-updater verifies the sha512 the feed declares.
+ */
+function autoInstallAllowed({ platform, signed = false }) {
+  if (platform === "win32") return Boolean(signed);
+  return true;
+}
+
+module.exports = {
+  autoInstallAllowed,
+  hasDeveloperIdUpdateSignature,
+  hasTrustedWindowsSignature,
+  supportsSelfUpdate,
+};

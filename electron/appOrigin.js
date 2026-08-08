@@ -22,4 +22,26 @@ function isArmadaAppUrl(value) {
   }
 }
 
-module.exports = { isArmadaAppUrl };
+/**
+ * Schemes Armada will hand to the operating system's default handler.
+ *
+ * Deliberately a tiny allowlist rather than a denylist of known-bad schemes.
+ * `setWindowOpenHandler` fires for `window.open` from ANY frame in the
+ * renderer, and the app embeds untrusted third-party content — WebXDC apps run
+ * in a sandbox that carries `allow-popups-to-escape-sandbox`, and link embeds
+ * load foreign origins. Anything reaching shell.openExternal is therefore a
+ * string a stranger may have chosen, and the OS will happily launch a handler
+ * for `file:`, `smb:`, `ms-msdt:` or any installed app's private scheme.
+ */
+const EXTERNAL_SCHEMES = new Set(["http:", "https:", "mailto:"]);
+
+/** Whether a URL may be opened in the user's browser / mail client. */
+function isExternallyOpenableUrl(value) {
+  try {
+    return EXTERNAL_SCHEMES.has(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}
+
+module.exports = { isArmadaAppUrl, isExternallyOpenableUrl };

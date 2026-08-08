@@ -56,9 +56,11 @@ const {
   powerMonitor,
 } = require("electron");
 const { autoUpdater } = require("electron-updater");
-const { isArmadaAppUrl } = require("./appOrigin");
+const { isArmadaAppUrl, isExternallyOpenableUrl } = require("./appOrigin");
 const {
+  autoInstallAllowed,
   hasDeveloperIdUpdateSignature,
+  hasTrustedWindowsSignature,
   supportsSelfUpdate,
 } = require("./updateSupport");
 const { listLinuxAudioApplications } = require("./linuxAudioSources");
@@ -93,6 +95,27 @@ const ORIGIN = `${SCHEME}://armada`;
 // Nostr lookup for "index.html" ("No such person") instead of the app. The
 // protocol handler below maps "/" to index.html.
 const START_URL = `${ORIGIN}/`;
+// Where an unsigned build sends the user to fetch an update by hand.
+const DOWNLOADS_URL = "https://armada.buzz/downloads/";
+
+/**
+ * Hand a URL to the OS default handler, but only for schemes meant for a
+ * browser or mail client. The renderer embeds untrusted third-party frames and
+ * window.open from any of them lands here, so the scheme is not trustworthy.
+ */
+async function openExternalUrl(url) {
+  if (!isExternallyOpenableUrl(url)) {
+    console.warn("[shell] refused to open external URL", url);
+    return false;
+  }
+  try {
+    await shell.openExternal(url);
+    return true;
+  } catch (error) {
+    console.warn("[shell] could not open external URL", error);
+    return false;
+  }
+}
 
 // Dark background matching the app theme (index.html theme-color #100b15).
 const BACKGROUND = "#100b15";
@@ -121,6 +144,7 @@ let isQuitting = false;
 let manualUpdateCheck = false;
 let updateCheckInFlight = false;
 let macSelfUpdateEligible;
+let windowsSelfUpdateEligible;
 const pushToTalk = new PushToTalkController({
   platform: process.platform,
   env: process.env,
@@ -269,24 +293,19 @@ function createWindow({ show = !startHidden || !closeToTraySupported } = {}) {
     },
   });
 
-  // External links (anything not on our app:// origin) open in the system
-  // browser; in-app navigation stays in the window.
-  const isInternal = (target) => {
-    try {
-      return new URL(target).origin === ORIGIN;
-    } catch {
-      return false;
-    }
-  };
+  // External links open in the system browser; in-app navigation stays in the
+  // window. Both use isArmadaAppUrl rather than an origin comparison, which
+  // reports "null" for a custom scheme and so classifies the app's OWN pages
+  // as external — see appOrigin.js.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (isInternal(url)) return { action: "allow" };
-    shell.openExternal(url);
+    if (isArmadaAppUrl(url)) return { action: "allow" };
+    void openExternalUrl(url);
     return { action: "deny" };
   });
   mainWindow.webContents.on("will-navigate", (event, url) => {
-    if (!isInternal(url)) {
+    if (!isArmadaAppUrl(url)) {
       event.preventDefault();
-      shell.openExternal(url);
+      void openExternalUrl(url);
     }
   });
 
@@ -631,13 +650,64 @@ async function checkForDesktopUpdates(manual = false) {
   }
 }
 
+/**
+ * Whether this Windows build carries a trusted Authenticode signature. Read
+ * once, lazily, the same way the macOS Developer ID check is: the answer is a
+ * property of the installed binary and cannot change while it runs.
+ */
+function windowsUpdateSignatureTrusted() {
+  if (process.platform !== "win32") return true;
+  if (windowsSelfUpdateEligible === undefined) {
+    const result = spawnSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "(Get-AuthenticodeSignature -LiteralPath $env:ARMADA_EXE).Status",
+      ],
+      { encoding: "utf8", env: { ...process.env, ARMADA_EXE: process.execPath } },
+    );
+    windowsSelfUpdateEligible =
+      result.status === 0 && hasTrustedWindowsSignature(result.stdout);
+  }
+  return windowsSelfUpdateEligible;
+}
+
 function installAutoUpdater() {
   if (!autoUpdatesSupported()) return;
 
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  // An unsigned Windows installer cannot be verified once downloaded, so it is
+  // offered rather than installed. Every other supported format either checks
+  // a Developer ID signature or the feed's sha512 before replacing itself.
+  const unattended = autoInstallAllowed({
+    platform: process.platform,
+    signed: windowsUpdateSignatureTrusted(),
+  });
+
+  autoUpdater.autoDownload = unattended;
+  autoUpdater.autoInstallOnAppQuit = unattended;
   autoUpdater.allowDowngrade = false;
   autoUpdater.logger = console;
+
+  if (!unattended) {
+    autoUpdater.on("update-available", async (info) => {
+      manualUpdateCheck = false;
+      const { response } = await showUpdateMessage({
+        type: "info",
+        title: "Armada update available",
+        message: `Armada ${info.version} is available.`,
+        detail:
+          "This build is not code signed, so Armada will not install it for you. "
+          + "Download the new installer and run it yourself.",
+        buttons: ["Open download page", "Later"],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      });
+      if (response === 0) await openExternalUrl(DOWNLOADS_URL);
+    });
+  }
 
   autoUpdater.on("update-not-available", async () => {
     const wasManual = manualUpdateCheck;
@@ -1215,6 +1285,9 @@ function installIpc() {
 
   // Open the OS microphone privacy settings so the user can allow desktop apps
   // to use the mic. No-op (resolves false) on platforms without a deep link.
+  // These two go to shell.openExternal directly rather than through
+  // openExternalUrl: they are compile-time constants in OS-private schemes,
+  // which is exactly what that allowlist exists to reject.
   ipcMain.handle("armada:open-mic-settings", async () => {
     try {
       if (process.platform === "win32") {

@@ -224,12 +224,23 @@ jobs:
           # Windows NSIS and Linux AppImage self-update from these files. The
           # portable exe, deb and Flatpak editions remain externally managed.
           cp electron/release/latest.yml electron/release/latest-linux.yml "$feed/"
-          cp electron/release/*.AppImage electron/release/*Setup*.exe "$feed/"
+          # Every .exe, not just *Setup*: electron-builder lists the portable
+          # artifact in latest.yml alongside the NSIS one, and a feed naming a
+          # payload that was never staged fails validation below.
+          cp electron/release/*.AppImage electron/release/*.exe "$feed/"
           for file in electron/release/*.blockmap; do
             [ -e "$file" ] || continue
             cp "$file" "$feed/"
           done
-          node electron/scripts/validate-update-feed.mjs "$feed/latest.yml" "$feed/latest-linux.yml"
+          # --version ties the feed to the tag being released. Without it a feed
+          # carrying the 0.0.0 fallback below, or one left over from an earlier
+          # build in a reused work dir, publishes as if it were this release.
+          case "$TAG" in
+            v[0-9]*) FEED_VERSION="${TAG#v}" ;;
+            *) FEED_VERSION=0.0.0 ;;
+          esac
+          node electron/scripts/validate-update-feed.mjs --version "$FEED_VERSION" \
+            "$feed/latest.yml" "$feed/latest-linux.yml"
 
           # Preserve the repository layout produced by flatpak-builder. Its
           # objects are content addressed; old objects may remain available for
