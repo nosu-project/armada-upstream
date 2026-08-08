@@ -187,7 +187,27 @@ public final class SqliteDriver: ArmadaSqlDriver {
             case .null:
                 status = sqlite3_bind_null(statement, slot)
             case let .text(text):
-                status = sqlite3_bind_text(statement, slot, text, -1, SQLITE_TRANSIENT)
+                // Bound with an explicit BYTE COUNT, never `-1`. A length of -1
+                // means "up to the first NUL", which would silently truncate
+                // every user-controlled string that contains one — a tag value,
+                // a KV key, a rumor's content — and store something the caller
+                // never asked to store.
+                let bytes = Array(text.utf8)
+                if bytes.isEmpty {
+                    // A null pointer binds SQL NULL rather than an empty string,
+                    // so the empty case needs a real (if unread) pointer.
+                    status = sqlite3_bind_text(statement, slot, "", 0, SQLITE_TRANSIENT)
+                } else {
+                    status = bytes.withUnsafeBytes { buffer in
+                        sqlite3_bind_text(
+                            statement,
+                            slot,
+                            buffer.baseAddress!.assumingMemoryBound(to: CChar.self),
+                            Int32(buffer.count),
+                            SQLITE_TRANSIENT
+                        )
+                    }
+                }
             case let .int(number):
                 status = sqlite3_bind_int64(statement, slot, number)
             case let .double(number):
