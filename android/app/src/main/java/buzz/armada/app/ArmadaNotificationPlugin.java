@@ -478,6 +478,9 @@ public class ArmadaNotificationPlugin extends Plugin {
         String relayUrlsRaw = arrayToString(call.getArray("relayUrls"));
         String groupIdsRaw = arrayToString(call.getArray("groupIds"));
         String groupSubsRaw = arrayToString(call.getArray("groupSubs"));
+        // Flat "mentions only" ids — only consulted when no groupSubs was sent
+        // (see parseGroupSubs); the relay-scoped flag rides on groupSubs itself.
+        String mentionOnlyGroupIdsRaw = arrayToString(call.getArray("mentionOnlyGroupIds"));
         String dmRelaysRaw = arrayToString(call.getArray("dmRelays"));
         String dmFollowsRaw = arrayToString(call.getArray("dmFollows"));
         String dmKnownPeersRaw = arrayToString(call.getArray("dmKnownPeers"));
@@ -522,6 +525,8 @@ public class ArmadaNotificationPlugin extends Plugin {
             else editor.remove("groupIds");
             if (groupSubsRaw != null) editor.putString("groupSubs", groupSubsRaw);
             else editor.remove("groupSubs");
+            if (mentionOnlyGroupIdsRaw != null) editor.putString("mentionOnlyGroupIds", mentionOnlyGroupIdsRaw);
+            else editor.remove("mentionOnlyGroupIds");
             if (dmRelaysRaw != null) editor.putString("dmRelays", dmRelaysRaw);
             else editor.remove("dmRelays");
             if (dmFollowsRaw != null) editor.putString("dmFollows", dmFollowsRaw);

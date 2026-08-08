@@ -27,7 +27,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
 import { mintCommunity } from "@/concord/lib/community";
-import { adminRole } from "@/concord/lib/roles";
+import { buildGrantEdition, buildRoleEdition, currentControlWriteGroup, sealEdition } from "@/concord/lib/control";
+import { adminRole, type Role } from "@/concord/lib/roles";
 import {
   baseRekeyGroupKey,
   bytesToHex,
@@ -208,6 +209,48 @@ async function rotationWraps(
     wraps.push(wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, address, rotator), address));
   }
   return wraps;
+}
+
+/**
+ * The control editions that entitle `memberPks` to `channelId`: the access
+ * Role scoped to the channel, and the owner's Grant of it to each member.
+ *
+ * A Private Channel's scoped Roles ARE its access list (CORD-04 §2,
+ * channelAccess.ts), and `useRefound` folds the plane itself rather than
+ * trusting the rendered one — so a channel rotation's recipients are decided
+ * by editions that actually landed, not by the injected fold. The Role carries
+ * no permission bits: read access is key possession, never a permission
+ * (CORD-04 §1).
+ */
+async function channelAccessEditions(
+  community: Community,
+  owner: ReturnType<typeof member>,
+  channelId: Uint8Array,
+  memberPks: string[],
+): Promise<NostrEvent[]> {
+  const control = currentControlWriteGroup(community);
+  const roleId = bytesToHex(random32());
+  const role: Role = {
+    roleId,
+    name: "sec",
+    position: 5,
+    permissions: 0n,
+    scope: { kind: "channel", channelId: bytesToHex(channelId) },
+    color: 0,
+  };
+  const out = [
+    await sealEdition(buildRoleEdition(role, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+  ];
+  for (const pk of memberPks) {
+    out.push(
+      await sealEdition(
+        buildGrantEdition(community.id, { member: pk, roleIds: [roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
+        control,
+        owner,
+      ),
+    );
+  }
+  return out;
 }
 
 function foldedFor(ownerPk: string, icon?: InviteBundle["icon"], creatorPk?: string) {
@@ -1152,6 +1195,8 @@ describe("useRefound (CORD-06 §3 channel rotations)", () => {
       );
 
       const relay = new FakeRelay();
+      // Alice holds the Role scoped to #sec, so the rotation vends her its key.
+      relay.events.push(...(await channelAccessEditions(community, owner, ch.id, [alice.pubkey])));
       h.pool = {
         relay: () => relay,
         query: async (filters: Filter[]) =>
@@ -1222,6 +1267,68 @@ describe("useRefound (CORD-06 §3 channel rotations)", () => {
       expect(vended.channels).toEqual([]);
       // The rotated key still exists — it just travels by grant, not by link.
       expect(newChKey).toBeDefined();
+    },
+  );
+
+  it(
+    "vends each rotated channel to ITS entitled members, not to everyone the base rotation keeps",
+    { timeout: 30_000 },
+    async () => {
+      // CORD-03 §1 defines a Private Channel as readable only by granted
+      // role-holders. A Refounding rotates every held private channel at once
+      // (CORD-06 §3), so rotating them all to the community-wide keep list
+      // would publish, to every remaining member, the key to every private
+      // channel they were never granted — a ban handing out the access it
+      // exists to withdraw. Each channel's recipients are its own.
+      const owner = member();
+      const alice = member(); // holds the Role scoped to #sec
+      const bob = member(); // an ordinary member, kept — but not of #sec
+      const mallory = member(); // the banned target
+      const { community: base } = mintCommunity("Fleet", owner.pubkey, [RELAY]);
+      const ch: PrivateChannelKey = { id: random32(), key: random32(), epoch: 0n, name: "sec" };
+      const community: Community = { ...base, privateChannels: [ch] };
+      const priorRoot = community.root;
+
+      const relay = new FakeRelay();
+      relay.events.push(...(await channelAccessEditions(community, owner, ch.id, [alice.pubkey])));
+      h.pool = { relay: () => relay, query: async () => [] };
+      h.user = asNUser(owner);
+      h.folded = foldedFor(owner.pubkey);
+      h.updateList = vi.fn(async () => {});
+      const jm = jmOf(community, owner.pubkey);
+      h.entry = { community_id: community.idHex, seed: jm, current: jm, added_at: 1 } satisfies CommunityListEntry;
+
+      const { wrapper } = makeWrapper();
+      const { result } = renderHook(() => useRefound(community), { wrapper });
+      await act(async () => {
+        await result.current.refound({ keep: [alice.pubkey, bob.pubkey], exclude: [mallory.pubkey] });
+      });
+
+      // The BASE rotation keeps both: Bob stays a member of the community and
+      // reads every public channel at the new root.
+      const baseAddress = baseRekeyGroupKey(priorRoot, community.id, 1n);
+      const [baseRotation] = groupRotations(
+        relay.published.filter((e) => e.pubkey === baseAddress.pk).map((w) => parseRekey(openWrap(w, baseAddress))),
+      );
+      expect(findBlob(baseRotation, myLocator(owner.pubkey, alice.pubkey, "0".repeat(64), 1n))).toBeDefined();
+      expect(findBlob(baseRotation, myLocator(owner.pubkey, bob.pubkey, "0".repeat(64), 1n))).toBeDefined();
+      expect(findBlob(baseRotation, myLocator(owner.pubkey, mallory.pubkey, "0".repeat(64), 1n))).toBeUndefined();
+
+      // The CHANNEL rotation keeps only Alice. Bob finding no blob at his
+      // locator across a complete rotation is how he learns he is not in #sec
+      // — the same signal a removal gives, which is correct: he never was.
+      const chAddress = channelRekeyGroupKey(priorRoot, ch.id, 1n);
+      const [chRotation] = groupRotations(
+        relay.published.filter((e) => e.pubkey === chAddress.pk).map((w) => parseRekey(openWrap(w, chAddress))),
+      );
+      expect(chRotation.complete).toBe(true);
+      const chBlobOf = (pk: string) => findBlob(chRotation, myLocator(owner.pubkey, pk, bytesToHex(ch.id), 1n));
+      expect(chBlobOf(alice.pubkey)).toBeDefined();
+      expect(chBlobOf(bob.pubkey)).toBeUndefined();
+      expect(chBlobOf(mallory.pubkey)).toBeUndefined();
+      // The rotator holds every key they rotate whatever the roster says —
+      // dropping themselves would leave nobody able to rotate #sec again.
+      expect(chBlobOf(owner.pubkey)).toBeDefined();
     },
   );
 

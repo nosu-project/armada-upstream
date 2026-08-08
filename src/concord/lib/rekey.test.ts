@@ -1,3 +1,4 @@
+import { encrypt as nip44Encrypt } from "nostr-tools/nip44";
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
 import type { EventTemplate } from "nostr-tools/pure";
 import { describe, expect, it } from "vitest";
@@ -24,6 +25,7 @@ import {
   findBlob,
   groupRotations,
   REKEY_BLOBS_PER_EVENT,
+  REKEY_RUMOR_MAX_BYTES,
   type ParsedRekey,
   lowerKeyWins,
   mintOrReuseRotationKey,
@@ -34,7 +36,7 @@ import {
   rotationPublishedAtMs,
   type RekeyBlob,
 } from "@/concord/lib/rekey";
-import { openWrap, sealRumor, wrapSeal } from "@/concord/lib/stream";
+import { NIP44_MAX_PLAINTEXT, openWrap, sealRumor, wrapSeal } from "@/concord/lib/stream";
 
 function signer(sk = generateSecretKey()) {
   return { sk, pubkey: getPublicKey(sk), signEvent: async (t: EventTemplate) => finalizeEvent(t, sk) };
@@ -363,5 +365,106 @@ describe("channel epoch floor from the wire (CORD-03 §2 / CORD-06 §2)", () => 
     expect(highestRotatedEpoch(window, [])).toBe(0n);
     // An unrelated author proves nothing about this channel.
     expect(highestRotatedEpoch(window, ["ff".repeat(32)])).toBe(0n);
+  });
+});
+
+// ── Chunking: a chunk is bounded by BYTES, not only by count ─────────────────
+
+describe("rekey chunking (CORD-06 §1)", () => {
+  const utf8Len = (s: string) => new TextEncoder().encode(s).length;
+
+  /**
+   * Blobs as they actually ride the wire: the fixed-width plaintext base64'd
+   * for string-only signers, then NIP-44'd under the rotator↔recipient
+   * pairwise key. Their width is what a count-based chunker cannot see.
+   */
+  function blobsOf(width: number, count: number): RekeyBlob[] {
+    const wrapped = nip44Encrypt(bytesToBase64(new Uint8Array(width)), random32());
+    return Array.from({ length: count }, () => ({ locator: bytesToHex(random32()), wrapped }));
+  }
+
+  const rotation = (prevCommit: string) =>
+    ({ scope: { kind: "root" }, newEpoch: 1n, prevEpoch: 0n, prevCommit }) as const;
+
+  /** The widest citation, since it rides every chunk and eats into the budget. */
+  const wideVac = () => ({ entityId: random32(), version: 2n ** 64n - 1n, editionHash: random32() });
+
+  const largestChunk = (rumors: { content: string }[]) =>
+    Math.max(...rumors.map((r) => (JSON.parse(r.content) as RekeyBlob[]).length));
+
+  it.each([
+    { form: "channel", width: 72 },
+    { form: "base member", width: 104 },
+    { form: "base staff", width: 136 },
+  ])("a 500-recipient $form rotation seals and wraps inside the NIP-44 cap", async ({ width }) => {
+    // The bug this pins: chunking on CORD-06 §1's count alone sized an event
+    // by WHO was in it, and 120 base blobs put the wrap layer's plaintext over
+    // the 65,535-byte cap — so `wrapSeal` threw and the Refounding failed at
+    // publish, above roughly 100 recipients. Channel blobs are narrow enough
+    // that they never hit it, which is why only bans and key rotations did.
+    const rotator = signer();
+    const address = baseRekeyGroupKey(random32(), random32(), 1);
+    const blobs = blobsOf(width, 500);
+    const rumors = buildRekeyRumors(
+      rotator.pubkey,
+      rotation(bytesToHex(random32())),
+      blobs,
+      Date.now(),
+      wideVac(),
+    );
+
+    // The split moves blobs between events; it must not lose or duplicate one.
+    expect(rumors.flatMap((r) => JSON.parse(r.content) as RekeyBlob[]).map((b) => b.locator)).toEqual(
+      blobs.map((b) => b.locator),
+    );
+
+    for (const [i, rumor] of rumors.entries()) {
+      // A size-driven split still numbers itself ["chunk", i, n], 1-indexed —
+      // a receiver correlates by holding all n (see groupRotations).
+      expect(rumor.tags.find((t) => t[0] === "chunk")?.slice(1)).toEqual([
+        String(i + 1),
+        String(rumors.length),
+      ]);
+      expect(utf8Len(JSON.stringify(rumor)), "the seal layer's plaintext").toBeLessThanOrEqual(
+        REKEY_RUMOR_MAX_BYTES,
+      );
+      const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, address, rotator);
+      // The layer that overflowed: the wrap NIP-44s the whole seal, which
+      // already carries the seal layer's base64 ciphertext.
+      expect(utf8Len(JSON.stringify(seal)), "the wrap layer's plaintext").toBeLessThanOrEqual(
+        NIP44_MAX_PLAINTEXT,
+      );
+      // Throws StreamError("oversize") rather than publishing, if it doesn't.
+      expect(openWrap(wrapSeal(seal, address), address).rumorId).toBe(rumor.id);
+    }
+  });
+
+  it("lets the count cap bind for channel blobs and the byte budget bind for base blobs", () => {
+    const rotator = signer();
+    const largest = (width: number) =>
+      largestChunk(buildRekeyRumors(rotator.pubkey, rotation(bytesToHex(random32())), blobsOf(width, 500), Date.now()));
+    // 72-byte blobs fit more than 120 in a rumor, so CORD-06 §1's count is
+    // still what stops them: channel rotations are byte-for-byte unchanged.
+    expect(largest(72)).toBe(REKEY_BLOBS_PER_EVENT);
+    // The wider base forms run out of bytes first, and the wider of the two
+    // first of all.
+    expect(largest(104)).toBeLessThan(REKEY_BLOBS_PER_EVENT);
+    expect(largest(136)).toBeLessThan(largest(104));
+  });
+
+  it("still emits one empty chunk for a rotation with no recipients", () => {
+    const rumors = buildRekeyRumors(signer().pubkey, rotation(bytesToHex(random32())), [], Date.now());
+    expect(rumors).toHaveLength(1);
+    expect(JSON.parse(rumors[0].content)).toEqual([]);
+    expect(rumors[0].tags.find((t) => t[0] === "chunk")?.slice(1)).toEqual(["1", "1"]);
+  });
+
+  it("keeps a lone over-budget blob rather than dropping it", () => {
+    // A blob is indivisible, so there is no chunking left to do — emitting it
+    // and letting the wrap refuse it beats silently severing its recipient.
+    const huge = { locator: bytesToHex(random32()), wrapped: "x".repeat(REKEY_RUMOR_MAX_BYTES * 2) };
+    const rumors = buildRekeyRumors(signer().pubkey, rotation(bytesToHex(random32())), [huge], Date.now());
+    expect(rumors).toHaveLength(1);
+    expect((JSON.parse(rumors[0].content) as RekeyBlob[])[0].locator).toBe(huge.locator);
   });
 });

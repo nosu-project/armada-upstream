@@ -256,15 +256,16 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   // group-list refetch that merely reorders doesn't churn the native config.
   const groupSubs = useMemo(() => {
     const seen = new Set<string>();
-    const subs: Array<{ relay: string; id: string }> = [];
+    const subs: Array<{ relay: string; id: string; mentionOnly: boolean }> = [];
     for (const g of groupList?.groups ?? []) {
-      if (channelLevel(g.relay, g.id) === "nothing") continue;
+      const level = channelLevel(g.relay, g.id);
+      if (level === "nothing") continue;
       const relay = normalizeRelayUrl(g.relay);
       if (!relay) continue;
       const key = `${relay}\u0000${g.id}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      subs.push({ relay, id: g.id });
+      subs.push({ relay, id: g.id, mentionOnly: level === "mentions" });
     }
     subs.sort((a, b) => a.relay.localeCompare(b.relay) || a.id.localeCompare(b.id));
     return subs;
