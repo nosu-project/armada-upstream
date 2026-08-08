@@ -4,6 +4,14 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.49.6] - 2026-08-08
+
+Bug fix release: private channels now load from their own keys, and the Linux .deb package is correctly staged in the desktop auto-update feed.
+
+### Fixed
+- Private channels now load from their own channel keys instead of the community stream, restoring message visibility for private channel members
+- The Linux .deb package is now included in the desktop auto-update feed so .deb users receive automatic updates
+
 ## [0.49.5] - 2026-08-08
 
 A maintenance release with build and packaging pipeline improvements. There are no user-facing changes.
