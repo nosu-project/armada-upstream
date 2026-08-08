@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "electron:dev": "scripts/dev-electron.sh",
     "gen:icons": "node scripts/gen-icons.mjs",
     "build": "vite build -l error && npm run build:sw-crypto && cp dist/index.html dist/404.html",
     "build:electron-db": "vite build -l error -c vite.config.electron.ts",
