@@ -4,6 +4,30 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.49.0] - 2026-08-07
+
+Direct message notifications were rebuilt. A message from someone you know now arrives with their name, avatar and a preview, gathered into one entry per conversation, while a message from a stranger no longer puts sender-controlled text or pictures in front of you. You can now forward a message to another conversation, and a new Downloads page collects the desktop and Android installers in one place.
+
+### Added
+- Forward a message from a direct message to any other conversation — the destination's composer opens with the content, so you can edit it before sending, and an attachment carries across as an attachment rather than a pasted link
+- A Downloads page collecting the desktop and Android installers, with the one matching your device shown first, linked from the footer in Settings
+- A Message requests setting for direct messages from people you don't follow, offering full notifications, hidden content (the default), or none at all
+
+### Changed
+- Notifications for direct messages now show the sender's name, avatar and a preview, and gather a conversation into a single entry carrying its recent lines, in place of a generic "New message"
+- Direct messages from people you don't follow collapse into one Message requests notification that shows nothing the sender controls
+- Communities now limit how quickly messages can be sent: after a short burst, sending pauses briefly, escalating up to an hour if the flooding continues, with the remaining wait shown when a message is refused
+
+### Fixed
+- Share and invite links created in the desktop app now point at armada.buzz; they previously carried an address internal to the app, which did not work for anyone they were sent to
+- WebXDC apps on a slow connection now load instead of stalling, downloading the app once rather than repeatedly
+- Direct message notifications keep working after a push server changes its keys
+- A hidden or backgrounded page no longer swallows a notification the service worker would otherwise have shown
+
+### Security
+- The Android app no longer includes the analytics used by the hosted web client
+- The key the notification worker uses to read direct messages is now encrypted where it is stored
+
 ## [0.48.1] - 2026-08-07
 
 Community relays now have their own dedicated setting, so new communities are created on relays you choose rather than an unlabeled mix of app and DM relays.
