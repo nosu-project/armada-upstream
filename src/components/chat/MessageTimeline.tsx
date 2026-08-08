@@ -142,20 +142,27 @@ type NonChatEntry = Exclude<ChannelTimelineEntry, { type: "chat" }>;
 /**
  * The run of Git entries a group-head row renders on behalf of: itself plus
  * every immediately-following same-day continuation. Those followers emit no
- * row of their own, so a comment burst collapses into one grouped block.
+ * row of their own, so a burst of comments, status flapping or CI runs
+ * collapses into one grouped block.
+ *
+ * `undefined` for a lone entry: a row that stands for only itself is told so,
+ * rather than being handed a one-element group it would have to re-check.
+ * Which kinds group is {@link isGitContinuation}'s business alone.
  */
 function relatedGitEntries(
   entries: readonly ChannelTimelineEntry[],
   index: number,
   entry: NonChatEntry,
 ): readonly NonChatEntry[] | undefined {
-  if (entry.type !== "git-comment") return undefined;
+  // Checked before allocating: most entries start no group, and this runs for
+  // every one of them on every window recompute.
+  if (!isGitContinuation(entry, entries[index + 1])) return undefined;
   const related: NonChatEntry[] = [entry];
   for (let cursor = index + 1; cursor < entries.length; cursor++) {
     const candidate = entries[cursor];
     if (
       !candidate ||
-      candidate.type !== "git-comment" ||
+      candidate.type === "chat" ||
       !isSameDay(entry.createdAt, candidate.createdAt) ||
       !isGitContinuation(related[related.length - 1], candidate)
     ) {
@@ -163,7 +170,7 @@ function relatedGitEntries(
     }
     related.push(candidate);
   }
-  return related;
+  return related.length > 1 ? related : undefined;
 }
 
 /** A row's identity plus its position relative to the viewport's top edge. */

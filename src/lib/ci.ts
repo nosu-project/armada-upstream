@@ -271,3 +271,74 @@ export function ciWorkflowName(run: Pick<CIRun, "workflow">): string {
 export function ciRunOutcome(run: Pick<CIRun, "status" | "conclusion">): CIConclusion | CIStatus {
   return run.status === "concluded" ? run.conclusion ?? "neutral" : run.status;
 }
+
+/** Outcomes that mean the workflow did not pass, as opposed to not running. */
+const CI_FAILING: ReadonlySet<string> = new Set(["failure", "timed_out", "startup_failure"]);
+
+export function isCIFailure(outcome: CIConclusion | CIStatus): boolean {
+  return CI_FAILING.has(outcome);
+}
+
+/** One workflow's runs within a stretch of CI activity, newest first. */
+export interface CIWorkflowGroup {
+  /** Display name, from {@link ciWorkflowName}. */
+  name: string;
+  /** Every run of this workflow in the stretch, newest first. */
+  runs: CIRun[];
+  /** The run whose outcome is the workflow's CURRENT state. */
+  latest: CIRun;
+}
+
+/**
+ * Collapse a run of CI activity to one entry per workflow.
+ *
+ * `assembleCIRuns` already folds re-attempts of one workflow on ONE commit, so
+ * what reaches a channel as twenty rows is twenty commits — the same job
+ * passing and failing down the timeline. Only the newest outcome per workflow
+ * is a fact about the repository now; the rest is history, and history belongs
+ * behind a disclosure rather than in the reading order of a conversation.
+ */
+export function groupCIRunsByWorkflow(runs: readonly CIRun[]): CIWorkflowGroup[] {
+  const groups = new Map<string, CIRun[]>();
+  for (const run of runs) {
+    const name = ciWorkflowName(run);
+    const existing = groups.get(name);
+    if (existing) existing.push(run);
+    else groups.set(name, [run]);
+  }
+  return [...groups]
+    .map(([name, workflowRuns]) => {
+      const sorted = [...workflowRuns].sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
+      return { name, runs: sorted, latest: sorted[0] };
+    })
+    .sort((a, b) => b.latest.createdAt - a.latest.createdAt || a.name.localeCompare(b.name));
+}
+
+/**
+ * The state a stretch of CI is in, from each workflow's latest run. A failure
+ * outranks work still in flight: "something is broken" is the reason to look,
+ * and it stays true while the next attempt runs.
+ */
+export function ciGroupsOutcome(groups: readonly CIWorkflowGroup[]): CIConclusion | CIStatus {
+  const outcomes = groups.map((group) => ciRunOutcome(group.latest));
+  if (outcomes.some(isCIFailure)) return "failure";
+  if (outcomes.some((outcome) => outcome === "in_progress" || outcome === "queued")) return "in_progress";
+  if (outcomes.some((outcome) => outcome === "success")) return "success";
+  return outcomes[0] ?? "neutral";
+}
+
+/** "2 passing, 1 failing" — the current state of a multi-workflow stretch. */
+export function ciGroupsSummary(groups: readonly CIWorkflowGroup[]): string {
+  const outcomes = groups.map((group) => ciRunOutcome(group.latest));
+  const counts = {
+    failing: outcomes.filter(isCIFailure).length,
+    running: outcomes.filter((outcome) => outcome === "in_progress" || outcome === "queued").length,
+    passing: outcomes.filter((outcome) => outcome === "success").length,
+  };
+  const parts = [
+    counts.failing > 0 ? `${counts.failing} failing` : undefined,
+    counts.running > 0 ? `${counts.running} running` : undefined,
+    counts.passing > 0 ? `${counts.passing} passing` : undefined,
+  ].filter((part): part is string => part !== undefined);
+  return parts.length > 0 ? parts.join(", ") : `${groups.length} workflows`;
+}

@@ -1439,6 +1439,14 @@ export function ConcordPage() {
     setOpenTicket(ticket);
     void projects.refreshTicket(ticket);
   }, [projects]);
+  // Stable identity so an unchanged Git row's props don't churn (React.memo).
+  // Depends on the hook's own `refreshTicket` callback, not on the result
+  // object, which the hook rebuilds on every render.
+  const refreshChannelTicket = gitActivity.refreshTicket;
+  const openChannelTicket = useCallback((ticket: GitTicket) => {
+    setOpenTicket(ticket);
+    void refreshChannelTicket(ticket);
+  }, [refreshChannelTicket]);
   // The conversation panel merges gated channel activity with the Projects
   // view's full history, so a ticket opened from either surface reads complete.
   const panelActivities = useMemo(
@@ -3467,7 +3475,7 @@ export function ConcordPage() {
                     transport={transport}
                     entries={mixedEntries}
                     newDividerId={newDividerId}
-                    renderEntry={(entry, relatedEntries) => isGitTimelineEntry(entry) ? <GitTimelineRow entry={entry} members={memberSet} onOpen={(ticket) => { setOpenTicket(ticket); void gitActivity.refreshTicket(ticket); }} commentEntries={entry.type === "git-comment" ? relatedEntries as Extract<typeof entry, { type: "git-comment" }>[] : undefined} activities={gitActivity.activities} /> : entry.type === "dm-timer" ? <TimerNotice author={entry.author} seconds={entry.seconds} self={user?.pubkey} /> : null}
+                    renderEntry={(entry, relatedEntries) => isGitTimelineEntry(entry) ? <GitTimelineRow entry={entry} onOpen={openChannelTicket} related={relatedEntries} /> : entry.type === "dm-timer" ? <TimerNotice author={entry.author} seconds={entry.seconds} self={user?.pubkey} /> : null}
                     handleRef={timelineRef}
                     syncing={channelSyncing || gateResolving}
                     syncFailed={channelSyncFailed}

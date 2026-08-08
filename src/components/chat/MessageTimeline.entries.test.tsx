@@ -21,9 +21,16 @@ function message(id: string, createdAt: number, pubkey = "a".repeat(64)): ChatMs
 }
 
 function gitEntry(id: string, createdAt: number): ChannelTimelineEntry {
-  // Shape-compatible stand-in: the timeline only reads type/id/createdAt and
-  // hands the entry back to `renderEntry`.
-  return { type: "git-ticket-opened", id, createdAt, activity: { id } } as unknown as ChannelTimelineEntry;
+  // Shape-compatible stand-in: the timeline reads type/id/createdAt, plus the
+  // activity's ticket and repository identity to decide grouping, and hands
+  // the entry back to `renderEntry`. A distinct author per entry keeps each
+  // one a row of its own, which is what these tests are counting.
+  return {
+    type: "git-ticket-opened",
+    id,
+    createdAt,
+    activity: { id, ticket: { id, author: id, type: "issue" }, repository: { coordinate: "30617:x:repo" } },
+  } as unknown as ChannelTimelineEntry;
 }
 
 function transportOf(messages: ChatMsg[]): ChatTransport {
