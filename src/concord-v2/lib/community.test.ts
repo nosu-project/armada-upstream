@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { channelsView, mintCommunity } from "./community";
-import { bytesToHex, random32 } from "./derive";
+import { bytesToHex, channelGroupKey, random32 } from "./derive";
 import { emptyRoles } from "./roles";
 
 import type { FoldedControl, FoldedChannel } from "./control";
@@ -69,10 +69,9 @@ describe("channelsView (CORD-03 channel kinds)", () => {
     expect(channelsView(community, folded)[0]?.isPrivate).toBe(false);
   });
 
-  it("a converted channel keeps BOTH eras of history readable", () => {
-    // The field case: a channel written to while private, then unprivated.
-    // Both the root-derived stream (public era) and every held channel key
-    // (private era) must be queried, or half the conversation disappears.
+  it("a private channel reads only its private-era keys; the public root era is not folded in", () => {
+    // A channel with private-era history across a rekey (current key epoch 2, a
+    // held prior at epoch 1) plus a root/public era at epoch 0.
     const { community: base } = mintCommunity("Fleet", OWNER, ["wss://a.test"]);
     const id = random32();
     const community: CommunityV2 = {
@@ -80,15 +79,38 @@ describe("channelsView (CORD-03 channel kinds)", () => {
       privateChannels: [{ id, key: random32(), epoch: 2n, name: "c", priors: [{ key: random32(), epoch: 1n }] }],
     };
 
-    // Now PUBLIC: writes go to the root stream, private-era streams remain.
+    // PUBLIC: the root era leads and every held channel key (the private era)
+    // stays queried, so publicising never appears to erase the conversation.
     const asPublic = channelsView(community, foldWith([channelDef(id, { name: "c", private: false })]))[0];
     expect(asPublic.current.epoch).toBe(community.rootEpoch);
     expect(asPublic.streams.map((s) => s.epoch).sort()).toEqual([0n, 1n, 2n]);
 
-    // Still PRIVATE: writes go to the current channel key, root-era remains.
+    // PRIVATE: only the channel-key streams (current + prior). The root-derived
+    // (community_root) era is world-readable, so it is NOT surfaced inside the
+    // private channel — its address never enters the read set.
     const asPrivate = channelsView(community, foldWith([channelDef(id, { name: "c", private: true })]))[0];
     expect(asPrivate.current.epoch).toBe(2n);
-    expect(asPrivate.streams.map((s) => s.epoch).sort()).toEqual([0n, 1n, 2n]);
+    expect(asPrivate.streams.map((s) => s.epoch).sort()).toEqual([1n, 2n]);
+    const rootPk = channelGroupKey(community.heldRoots[0].key, id, community.heldRoots[0].epoch).pk;
+    expect(asPrivate.streams.some((s) => s.group.pk === rootPk)).toBe(false);
+  });
+
+  it("a born-private channel does NOT read the community_root stream", () => {
+    // The leak class: a channel private from its first edition has no legitimate
+    // public era, yet its channel key epoch (0) collides with the root epoch (0),
+    // so identity is by ADDRESS. channelsView must read the independent channel
+    // key only — never the community_root address every public channel shares,
+    // where a non-conformant client's public writes would otherwise surface as
+    // private-channel content.
+    const { community: base } = mintCommunity("Fleet", OWNER, ["wss://a.test"]);
+    const id = random32();
+    const key = random32();
+    const community: CommunityV2 = { ...base, privateChannels: [{ id, key, epoch: 0n, name: "secret" }] };
+    const view = channelsView(community, foldWith([channelDef(id, { name: "secret", private: true })]))[0];
+    expect(view.streams).toHaveLength(1);
+    expect(view.streams[0].group.pk).toBe(channelGroupKey(key, id, 0n).pk);
+    const rootPk = channelGroupKey(community.heldRoots[0].key, id, community.heldRoots[0].epoch).pk;
+    expect(view.streams.some((s) => s.group.pk === rootPk)).toBe(false);
   });
 
   it("a held-but-unfolded private channel still reads as private", () => {

@@ -151,8 +151,19 @@ export function channelsView(community: CommunityV2, folded: FoldedControl | und
       get voice() {
         return (voiceMemo ??= voiceKeys(held.key, id, held.epoch));
       },
-      // Writes go to the current channel key; public-era history stays readable.
-      streams: [...channelStreams, ...rootStreams],
+      // A Private Channel reads ONLY its channel-key streams — the current key
+      // and every retained prior (a CORD-06 rekey's private-era history), so a
+      // rotation never erases the conversation. It deliberately does NOT fold
+      // in the root-derived (community_root) stream every public channel
+      // shares: those messages are world-readable to the whole membership, so
+      // surfacing them inside a private channel would present public content as
+      // private — whether they are a converted channel's genuine pre-privatise
+      // history (CORD-03 §2 keeps that readable to all, but it is not private)
+      // or, for a born-private channel, whatever a non-conformant client wrote
+      // to that shared address. Publicising re-folds the root stream via the
+      // public branch above; the pre-conversion history is never lost, only
+      // absent from the private view.
+      streams: channelStreams,
       current: channelStreams[0],
     });
   }

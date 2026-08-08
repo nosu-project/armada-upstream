@@ -187,13 +187,23 @@ describe("CORD-03 §2 — Metadata", () => {
     expect(() => channelEpochFloor(window, byEpoch.map(([pk]) => pk), 4)).toThrow(/rotated/i);
   });
 
-  it("O-18: privatising protects the FUTURE only — pre-conversion history stays readable to all", () => {
+  it("O-18: privatising protects the FUTURE only — the world-readable public era is not surfaced as private", () => {
+    // "Protects the future only": privatising moves WRITES to the independent
+    // key but cannot un-publish the pre-conversion messages — those stay on the
+    // community_root-derived address, decryptable by every member forever.
+    // Because that era is world-readable, the private channel does NOT fold it
+    // into its read set: surfacing it there would present public content as
+    // private (and a born-private channel's root address holds only what a
+    // non-conformant client wrote). Publicising re-adds it — O-20.
     const key = random32();
     const { community } = makeCommunity([{ id: channelId, key, epoch: 1n, name: "secret" }]);
     const view = channelsView(community, foldWith([{ id: channelId, metadata: { name: "secret", private: true } }]))[0];
-    expect(view.streams.map((s) => s.group.pk)).toContain(
-      channelGroupKey(community.root, channelId, community.rootEpoch).pk,
-    );
+    // Future writes go to the independent channel key.
+    expect(view.current.group.pk).toBe(channelGroupKey(key, channelId, 1n).pk);
+    // The public era's address stays derivable and readable to every member…
+    const publicEra = channelGroupKey(community.root, channelId, community.rootEpoch).pk;
+    // …but it is not surfaced inside the private channel.
+    expect(view.streams.map((s) => s.group.pk)).not.toContain(publicEra);
   });
 
   it.todo("O-19: converting Private→Public is possible (useCommunityActions2.test.tsx publiciseChannel)");
