@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { BrandMark } from "@/components/brand/BrandMark";
@@ -217,6 +218,43 @@ export function LandingPage({
               &#8594;
             </span>
           </a>
+        </section>
+
+        {/* ── Platforms ────────────────────────────────────────────────────
+            Where to take it. Names in the same mono caption strip as the
+            relay lights: an enumeration of facts, subordinate to the heading,
+            with the downloads page one arrow-link away. */}
+        <section className="mx-auto flex min-h-[100svh] max-w-2xl flex-col items-center justify-center gap-6 px-6 py-16 text-center">
+          <h2 className="text-balance font-mono text-xl font-bold tracking-tight text-foreground sm:text-3xl">
+            The same Armada on every deck
+          </h2>
+          <p className="max-w-xl text-pretty text-sm leading-relaxed text-muted-foreground sm:text-base">
+            Your key is your account, so the desktop app, the phone app and this
+            browser are all the same place. Install it where you live.
+          </p>
+          <ul className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2.5 font-mono text-xs tracking-wide text-muted-foreground/70">
+            <li>Linux</li>
+            <li>Windows</li>
+            <li>macOS</li>
+            <li>Android</li>
+            <li>iPhone &amp; iPad</li>
+            <li>Web</li>
+          </ul>
+          {/* Body face, not mono, like the features link above: the
+              paragraph's own next step rather than another caption line. */}
+          <Link
+            to="/downloads"
+            className="group inline-flex items-center gap-1.5 text-sm font-medium text-foreground/80 transition-colors hover:text-foreground sm:text-base"
+          >
+            Get the apps
+            {/* U+2192 again: WGL4 core, real glyph everywhere. */}
+            <span
+              aria-hidden="true"
+              className="text-[hsl(var(--accent2)/0.75)] transition-transform group-hover:translate-x-0.5 group-hover:text-[hsl(var(--accent2))]"
+            >
+              &#8594;
+            </span>
+          </Link>
         </section>
 
         {/* ── The closer ───────────────────────────────────────────────────

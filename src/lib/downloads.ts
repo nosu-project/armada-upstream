@@ -74,7 +74,7 @@ export const DOWNLOAD_TARGETS: DownloadTarget[] = [
     name: "Linux",
     manifest: "desktop",
     assets: [
-      { id: "linux-appimage", label: "AppImage", hint: "Any distribution — mark it executable and run it", file: "Armada.AppImage" },
+      { id: "linux-appimage", label: "AppImage", hint: "Any distribution. Mark it executable and run it", file: "Armada.AppImage" },
       { id: "linux-deb", label: "Debian package", hint: "Debian, Ubuntu and derivatives", file: "Armada.deb" },
     ],
   },

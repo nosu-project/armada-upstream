@@ -1,9 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { AppWindow, ArrowLeft, Download, Globe, Laptop, Smartphone, Terminal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
+import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
+import { AsciiSea } from "@/components/landing/AsciiSea";
 import { Button } from "@/components/ui/button";
 import {
   DOWNLOAD_TARGETS,
@@ -17,6 +19,14 @@ import {
   manifestUrl,
 } from "@/lib/downloads";
 import { APP_NAME } from "@/lib/platform";
+
+/**
+ * The downloads deck: a headless page in the landing's visual language — the
+ * crest and a mono heading over the {@link AsciiSea}, with the platform cards
+ * floating on the water below. No command-bar header; the only chrome is a
+ * ghost back arrow that scrolls away with the hero, the same way the landing
+ * itself carries no bars.
+ */
 
 const OS_ICON: Record<DownloadOs, LucideIcon> = {
   linux: Terminal,
@@ -32,6 +42,11 @@ const OS_CAVEAT: Partial<Record<DownloadOs, string>> = {
   android: "Sideloading asks Android to allow installs from your browser. Zapstore and Google Play are the alternatives.",
   linux: "Mark an AppImage executable before running it: chmod +x Armada.AppImage",
 };
+
+/** True when the user has asked the OS to keep motion to a minimum. */
+function prefersReducedMotion() {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
 
 /**
  * The version label and file sizes, fetched per platform family.
@@ -63,13 +78,22 @@ function TargetCard({ target, manifest, featured }: {
   const caveat = OS_CAVEAT[target.os];
 
   return (
-    <section className={`clip-corner-lg p-4 space-y-3 ${featured ? "bg-chrome ring-1 ring-primary/30" : "bg-muted/30"}`}>
+    // The established card-over-the-sea treatment (see the landing quiz's
+    // answer buttons): a translucent panel with a hairline border, so the
+    // swell stays faintly visible underneath instead of being walled off.
+    <section
+      className={`clip-corner-lg border p-4 space-y-3 ${
+        featured ? "border-primary/40 bg-background/60" : "border-border/60 bg-background/40"
+      }`}
+    >
       <header className="flex items-center gap-2">
         <Icon className={`size-5 shrink-0 ${featured ? "text-primary" : "text-muted-foreground"}`} />
-        <h2 className="font-semibold leading-tight">{target.name}</h2>
-        {featured && <span className="text-[10px] uppercase tracking-wide text-primary/80">Detected</span>}
+        <h2 className="font-mono font-bold lowercase tracking-tight leading-tight">{target.name}</h2>
+        {featured && (
+          <span className="font-mono text-[10px] lowercase tracking-wide text-primary/80">your platform</span>
+        )}
         {manifest?.version && (
-          <span className="ml-auto text-xs text-muted-foreground shrink-0">v{manifest.version}</span>
+          <span className="ml-auto font-mono text-xs text-muted-foreground shrink-0">v{manifest.version}</span>
         )}
       </header>
 
@@ -82,7 +106,7 @@ function TargetCard({ target, manifest, featured }: {
                 key={asset.id}
                 asChild
                 variant={featured && i === 0 ? "default" : "secondary"}
-                className="h-auto py-2.5 touch:py-3 justify-start text-left"
+                className="h-auto py-2.5 touch:py-3 justify-start text-left clip-corner-lg"
               >
                 {/* `download` only binds same-origin — on armada.buzz it forces a
                     save and names the file even if the server's content type is
@@ -105,11 +129,11 @@ function TargetCard({ target, manifest, featured }: {
       ) : (
         // iOS: no build is published, so the honest answer is the web app.
         <div className="space-y-2">
-          <p className="text-sm text-muted-foreground">
-            There's no App Store build yet. {APP_NAME} runs as a full-screen web app instead — open it in Safari,
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            There's no App Store build yet. {APP_NAME} runs as a full-screen web app instead: open it in Safari,
             tap Share, then <strong className="text-foreground/80">Add to Home Screen</strong>.
           </p>
-          <Button asChild variant="secondary" className="h-auto py-2.5 touch:py-3">
+          <Button asChild variant="secondary" className="h-auto py-2.5 touch:py-3 clip-corner-lg">
             <Link to="/">
               <Globe className="size-4 shrink-0" />
               Open {APP_NAME} in this browser
@@ -125,6 +149,10 @@ function TargetCard({ target, manifest, featured }: {
 
 export function DownloadsPage() {
   const navigate = useNavigate();
+  // The page's own scroll container: the sea reads its scrollTop imperatively,
+  // so it is a ref handed down, never state.
+  const scrollRef = useRef<HTMLElement>(null);
+  const targetsRef = useRef<HTMLElement>(null);
   // Detected once: re-running per render can't change, and a featured card that
   // moved between renders would be worse than a wrong guess.
   const detected = useMemo(() => detectCurrentOs(), []);
@@ -142,23 +170,93 @@ export function DownloadsPage() {
     return ordered;
   }, [detected]);
 
+  // The hero's one-click answer: the detected platform's primary asset. On iOS
+  // (no installable build) the honest primary action is the web app itself, and
+  // with no detection at all the hero just cues the list below.
+  const featured = targets.find((t) => t.os === detected);
+  const heroAsset = featured?.assets[0];
+
+  const scrollToTargets = () => {
+    targetsRef.current?.scrollIntoView({
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+      block: "start",
+    });
+  };
+
   return (
-    <main className="flex-1 min-w-0 flex flex-col safe-area-top">
-      {/* Header — a detached floating command bar matching the settings page chrome. */}
-      <header className="relative h-12 touch:h-14 mx-2 mt-3 w-[calc(100%-1rem)] max-w-2xl sm:mx-auto px-2 sidebar:px-3 flex items-center gap-1.5 shrink-0 clip-corner-lg bg-chrome">
-        <Button variant="ghost" size="icon" className="size-9 shrink-0" aria-label="Back" onClick={() => navigate(-1)}>
-          <ArrowLeft className="size-5" />
-        </Button>
-        <h1 className="font-semibold truncate leading-tight">Downloads</h1>
-      </header>
+    <main ref={scrollRef} className="relative flex-1 min-w-0 overflow-y-auto">
+      {/* Viewport-locked sea, exactly as the landing mounts it: `sticky` pins
+          it while `-mb-[100svh]` cancels its scroll height, so the content
+          scrolls straight over the water. */}
+      <div className="pointer-events-none sticky top-0 z-0 -mb-[100svh] h-[100svh]">
+        <AsciiSea scrollRef={scrollRef} />
+      </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto safe-area-bottom">
-        <div className="max-w-2xl mx-auto px-4 sm:px-6 pb-16 pt-3 space-y-4">
-          <p className="text-sm text-muted-foreground leading-relaxed">
-            {APP_NAME} on your desktop and your phone. Every link here points at the latest release and keeps
-            working across versions, so you can bookmark or share it.
-          </p>
+      {/* The one piece of chrome: a way back that scrolls away with the hero
+          rather than riding a bar across the page. */}
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label="Back"
+        onClick={() => navigate(-1)}
+        className="absolute left-2 top-2 z-20 size-9 touch:size-11 text-muted-foreground hover:text-foreground safe-area-top"
+      >
+        <ArrowLeft className="size-5" />
+      </Button>
 
+      <div className="relative z-10">
+        {/* ── Hero ────────────────────────────────────────────────────── */}
+        <section className="mx-auto flex min-h-[100svh] max-w-xl flex-col items-center justify-center gap-8 px-6 py-16 text-center safe-area-top">
+          <ArmadaCrest size={130} />
+          <div className="space-y-2.5">
+            <h1 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground sm:text-3xl">
+              get {APP_NAME.toLowerCase()}
+            </h1>
+            <p className="text-sm leading-relaxed text-muted-foreground sm:text-base">
+              The same {APP_NAME} on every deck: desktop, phone, and this browser.
+              Every link points at the latest release and keeps working across versions,
+              so you can bookmark or share it.
+            </p>
+          </div>
+
+          <div className="w-full max-w-sm">
+            {heroAsset && featured ? (
+              <Button size="lg" asChild className="h-12 w-full clip-corner-lg text-base font-medium">
+                <a href={downloadUrl(heroAsset.file)} download>
+                  <Download className="size-5" />
+                  Download for {featured.name}
+                </a>
+              </Button>
+            ) : featured?.os === "ios" ? (
+              <Button size="lg" asChild className="h-12 w-full clip-corner-lg text-base font-medium">
+                <Link to="/">
+                  <Globe className="size-5" />
+                  Open {APP_NAME} in this browser
+                </Link>
+              </Button>
+            ) : null}
+            {/* Cue and scroll target are one control, the landing's pattern:
+                the list below IS the answer. */}
+            <button
+              type="button"
+              onClick={scrollToTargets}
+              className="group mt-5 flex w-full flex-col items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+            >
+              All platforms
+              {/* U+2193 (↓) for the same reason the landing's cue is: WGL4
+                  core, so every system font has a real glyph instead of tofu. */}
+              <span
+                aria-hidden="true"
+                className="animate-[armada-bob_2.4s_ease-in-out_infinite] text-base leading-none text-[hsl(var(--accent2)/0.75)] group-hover:text-[hsl(var(--accent2))]"
+              >
+                &#8595;
+              </span>
+            </button>
+          </div>
+        </section>
+
+        {/* ── Every platform ───────────────────────────────────────────── */}
+        <section ref={targetsRef} className="mx-auto max-w-2xl scroll-mt-6 space-y-4 px-6 pb-12 pt-4">
           {targets.map((target) => (
             <TargetCard
               key={target.os}
@@ -169,15 +267,52 @@ export function DownloadsPage() {
           ))}
 
           <p className="text-xs text-muted-foreground/70 leading-relaxed">
-            Older releases stay where they were published, each under its own version — the same names with the
-            version in them, like <code className="text-foreground/60">Armada-v1.2.3.AppImage</code>. See{" "}
+            Older releases stay where they were published, each under its own versioned name, like{" "}
+            <code className="text-foreground/60">Armada-v1.2.3.AppImage</code>. See{" "}
             <Link to="/changelog" className="text-primary hover:underline">
               the changelog
             </Link>{" "}
             for what shipped in each.
           </p>
-        </div>
+        </section>
+
+        {/* ── The sign-off ─────────────────────────────────────────────────
+            The landing's terminal prompt, so this page ends where that one
+            does. `armada-caret` comes from the crest's keyframes below. */}
+        <section className="mx-auto flex max-w-xl flex-col items-center px-6 pb-24 pt-8 text-center safe-area-bottom">
+          <p className="font-mono text-xl text-[hsl(var(--primary))] sm:text-2xl">
+            <span className="text-[hsl(var(--accent2,180_90%_55%))]">$ </span>
+            anchors aweigh
+            <span className="animate-[armada-caret_1s_step-end_infinite]">_</span>
+          </p>
+        </section>
+
+        {/* The floor of the page, as on the landing: darken the last stretch
+            of sea so reaching the bottom reads as arriving somewhere. */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-40 bg-gradient-to-b from-transparent via-black/45 to-black/90"
+        />
       </div>
+
+      <ArmadaCrestKeyframes />
+      <DownloadsKeyframes />
     </main>
+  );
+}
+
+/** Page-local keyframes, scoped the way the landing page's are. */
+function DownloadsKeyframes() {
+  return (
+    <style>{`
+      /* The scroll cue riding the swell. Transform only. */
+      @keyframes armada-bob {
+        0%, 100% { transform: translateY(0); opacity: 0.55; }
+        50%      { transform: translateY(0.4rem); opacity: 1; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        [class*="animate-[armada-bob"] { animation: none !important; }
+      }
+    `}</style>
   );
 }
