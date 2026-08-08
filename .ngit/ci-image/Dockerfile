@@ -197,6 +197,13 @@ RUN set -eux; \
     cd /warm/app/electron; \
     mkdir -p dist; \
     cp /warm/app/dist/index.html dist/index.html; \
+    # electron/scripts/before-pack.cjs refuses to pack unless db.cjs AND
+    # dist/index.html both exist. The real db.cjs comes from `vite build -c
+    # vite.config.electron.ts`, which needs src/ — deliberately absent from this
+    # warm context. The packaged output is thrown away (only the tool-cache
+    # downloads matter), so a stub file satisfies the guard exactly as the stub
+    # index.html above does. Without it electron-builder aborts and NOTHING warms.
+    printf '// cache-warm stub\n' > db.cjs; \
     npm ci --no-audit --no-fund; \
     npx electron-builder --linux --win --config electron-builder.yml --publish never; \
     cd /; \
