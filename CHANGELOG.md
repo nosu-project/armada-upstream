@@ -4,6 +4,10 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.49.4] - 2026-08-08
+
+A maintenance release with build and packaging pipeline improvements. There are no user-facing changes.
+
 ## [0.49.3] - 2026-08-08
 
 A maintenance release with build and packaging pipeline improvements. There are no user-facing changes.
