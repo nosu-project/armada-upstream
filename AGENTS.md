@@ -5,9 +5,24 @@ the Capacitor Android project (`android/`), the Capacitor iOS project (`ios/`),
 and the Electron desktop shell (`electron/`).
 
 Armada's focus is [Concord](https://github.com/concord-protocol/concord):
-serverless, end-to-end encrypted communities that need no host. The client also
-still supports NIP-29 relay-based "servers" for operators who self-host. The
-optional self-hostable backend (NIP-29 relay + LiveKit voice + Concord AV
+serverless, end-to-end encrypted communities that need no host.
+
+**Concord is the default subject.** An unqualified request — "rooms",
+"channels", "invites", "the member list", "voice" — is about Concord. The
+client also still supports NIP-29 relay-based "servers" for operators who
+self-host, including [Buzz](https://github.com/block/buzz) relays (a
+NIP-29-based team-communication relay with custom kinds, rendered through the
+shared NIP-29 pages, `src/buzz/`) — but assume that side only when NIP-29,
+Buzz, or a relay-hosted server is named explicitly. When a change could
+plausibly land on either, ask rather than guessing NIP-29.
+
+**"Concord" means the protocol at the link above**, its first public release
+(CORD-01..07). An earlier, incompatible Concord v1 lived in this client and was
+removed; nothing implements it and no request refers to it. The `-v2` in
+`src/concord-v2/` and the `Concord V2` / `c2:` spellings through the code are
+that history, not a second live protocol.
+
+The optional self-hostable backend (NIP-29 relay + LiveKit voice + Concord AV
 broker) and all deployment/hosting docs live in the separate
 [`armada-relay`](https://gitlab.com/soapbox-pub/armada-relay) repository — this
 client does not depend on it at build time.
