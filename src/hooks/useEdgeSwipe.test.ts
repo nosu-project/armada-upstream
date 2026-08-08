@@ -227,6 +227,111 @@ describe("useEdgeSwipe", () => {
     expect(onCommit).not.toHaveBeenCalled();
   });
 
+  // ─── Stuck-gesture recovery ─────────────────────────────────────────────
+  //
+  // The pane's rendered offset follows `dragging`, so a gesture that can never
+  // end parks the pane mid-slide (a sliver of the channel list showing) with
+  // the full-screen chat overlay still swallowing every tap. `enabled` is
+  // derived from the revealed/hidden state, so a NAVIGATION — notably a native
+  // notification tap — flips it mid-drag; the drag must not survive that.
+
+  it("abandons an in-flight drag when the gesture is disabled mid-drag", () => {
+    const onCommit = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useEdgeSwipe({ onCommit, enabled }),
+      { initialProps: { enabled: true } },
+    );
+    const el = makeEl(400);
+
+    const h = result.current.handlers;
+    act(() => h.onPointerDown(mockPointerEvent({ x: 0, y: 0, timeStamp: 0, currentTarget: el })));
+    act(() => h.onPointerMove(mockPointerEvent({ x: 40, y: 0, timeStamp: 100, currentTarget: el })));
+    expect(result.current.dragging).toBe(true);
+
+    // Navigation flips the caller's `open`, which disables this direction.
+    rerender({ enabled: false });
+
+    expect(result.current.dragging).toBe(false);
+    expect(result.current.dragX).toBe(0);
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("stops swallowing the touch stream after a drag is interrupted while disabled", () => {
+    const onCommit = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useEdgeSwipe({ onCommit, enabled }),
+      { initialProps: { enabled: true } },
+    );
+    const el = makeEl(400);
+
+    act(() => result.current.handlers.onPointerDown(mockPointerEvent({ x: 0, y: 0, timeStamp: 0, currentTarget: el })));
+    act(() => result.current.handlers.onPointerMove(mockPointerEvent({ x: 40, y: 0, timeStamp: 100, currentTarget: el })));
+
+    // While the gesture is claimed, the non-passive listener cancels the
+    // native touch stream so the browser doesn't also scroll.
+    const during = new Event("touchmove", { bubbles: true, cancelable: true });
+    el.dispatchEvent(during);
+    expect(during.defaultPrevented).toBe(true);
+
+    // Navigation disables this direction and the pointerup never arrives. The
+    // listener must come off with it — left attached it cancels every future
+    // touchmove on the pane, and no later pointerdown can clear it because
+    // they all bail while disabled.
+    rerender({ enabled: false });
+
+    const after = new Event("touchmove", { bubbles: true, cancelable: true });
+    el.dispatchEvent(after);
+    expect(after.defaultPrevented).toBe(false);
+  });
+
+  it("ends the drag on a pointerup delivered off the element", () => {
+    const onCommit = vi.fn();
+    const { result } = renderHook(() => useEdgeSwipe({ onCommit }));
+    const el = makeEl(400);
+
+    const h = result.current.handlers;
+    act(() => h.onPointerDown(mockPointerEvent({ x: 0, y: 0, timeStamp: 0, currentTarget: el })));
+    act(() => h.onPointerMove(mockPointerEvent({ x: 40, y: 0, timeStamp: 100, currentTarget: el })));
+    expect(result.current.dragging).toBe(true);
+
+    // The element never sees the pointerup — only the window does.
+    act(() => {
+      const ev = Object.assign(new Event("pointerup", { bubbles: true }), { pointerId: 1 });
+      window.dispatchEvent(ev);
+    });
+
+    expect(result.current.dragging).toBe(false);
+    expect(result.current.dragX).toBe(0);
+  });
+
+  it("ends the drag when the app is backgrounded mid-gesture", () => {
+    const onCommit = vi.fn();
+    const { result } = renderHook(() => useEdgeSwipe({ onCommit }));
+    const el = makeEl(400);
+
+    const h = result.current.handlers;
+    act(() => h.onPointerDown(mockPointerEvent({ x: 0, y: 0, timeStamp: 0, currentTarget: el })));
+    act(() => h.onPointerMove(mockPointerEvent({ x: 40, y: 0, timeStamp: 100, currentTarget: el })));
+    expect(result.current.dragging).toBe(true);
+
+    const original = Object.getOwnPropertyDescriptor(Document.prototype, "visibilityState");
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => "hidden",
+    });
+    try {
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+    } finally {
+      delete (document as unknown as Record<string, unknown>).visibilityState;
+      if (original) Object.defineProperty(Document.prototype, "visibilityState", original);
+    }
+
+    expect(result.current.dragging).toBe(false);
+    expect(result.current.dragX).toBe(0);
+  });
+
   it("works for the close direction (leftward drag)", () => {
     const onCommit = vi.fn();
     const { result } = renderHook(() =>
