@@ -14,7 +14,7 @@ import {
   readCutPending,
   readCutPendingReady,
 } from "@/concord-v2/lib/readCutPending";
-import { canActOnMember, Permissions } from "@/concord-v2/lib/roles";
+import { canActOnMember, isAuthorized, Permissions } from "@/concord-v2/lib/roles";
 import type { CommunityV2 } from "@/concord-v2/lib/types";
 import { toast } from "@/hooks/useToast";
 
@@ -33,7 +33,12 @@ import { toast } from "@/hooks/useToast";
  *   - UNBAN: a Banlist edition dropping the npub (access needs a re-invite —
  *     the rotation is one-way).
  *
- * `recipients` is who should KEEP access after a ban's Refounding.
+ * Plus the severance on its own: {@link useModeration2}'s `rotateKeys` is a
+ * Refounding with an empty exclusion set — the same key roll, with no removal
+ * attached.
+ *
+ * `recipients` is who should KEEP access after a Refounding — a ban's, or a
+ * standalone rotation's.
  */
 /** The ban's steps, in execution order, for progress UI. */
 export type BanPhase = "silence" | "roles" | "rekey";
@@ -190,6 +195,54 @@ export function useModeration2(community: CommunityV2 | undefined, recipients: s
     onSuccess: invalidate,
   });
 
+  /**
+   * The Refounding on its own — "rotate the community keys", with nobody
+   * removed. Byte for byte the severance step of a ban (CORD-06 §3: epoch
+   * bump, control compaction under the new split address, every held Private
+   * Channel rekeyed, own invite bundles refreshed), minus the Banlist edition
+   * and the role strip, and with an EMPTY exclusion set — so every current
+   * member is carried forward.
+   *
+   * Destructive in the way every rotation is, which is why it is a red action:
+   * the retired root stops reading anything written after the roll, so a
+   * member who never adopts (offline, or a device that has since gone stale)
+   * is stranded until they are re-invited, and every member pays an adoption
+   * round. Reach for it when the keys themselves are suspect — a leaked
+   * device, a departed keyholder — not as routine hygiene.
+   *
+   * Two deliberate differences from a ban's rotation:
+   *
+   *   - `hasForeignLiveLinks` does NOT veto. A ban falls back to a Public ban
+   *     (the Banlist alone still silences) rather than strand another
+   *     creator's link; a bare rotation has no such fallback — refusing would
+   *     simply leave the suspect key live. The caller warns instead.
+   *   - No read-cut intent is persisted. Nothing is being severed, so a failed
+   *     rotation leaves nobody wrongly readable and there is nothing for
+   *     {@link useReadCutRetry2} to owe; the staffer just runs it again.
+   */
+  const rotateKeys = useMutation<void, Error, void>({
+    mutationFn: async () => {
+      if (!user || !community) throw new Error("Not ready.");
+      // The keep-list is this surface's roster, so a fold that hasn't landed
+      // would rotate to a THIN recipient set and cut live members — the same
+      // hazard useReadCutRetry2 keeps off cold surfaces. Refuse until settled.
+      if (!folded) throw new Error("Still syncing this community; try again shortly.");
+      // The same authority CORD-06 asks of a Refounder, checked here so an
+      // unauthorized staffer is told before the sweep rather than after it.
+      // The rank half is vacuous with nothing excluded.
+      if (!isAuthorized(folded.roster, user.pubkey, folded.ownerHex, Permissions.BAN)) {
+        throw new Error("You don't have permission to rotate this community's keys.");
+      }
+      if (!canRefound) {
+        throw new Error(
+          "Rotating the community keys needs a signer that supports encryption, which yours doesn't. Ask an admin whose signer does.",
+        );
+      }
+      await refound({ keep: recipients, exclude: [] });
+    },
+    onSuccess: invalidate,
+  });
+
   const unban = useMutation<void, Error, { target: string }>({
     mutationFn: async ({ target }) => {
       if (!canActOn(target, Permissions.BAN)) throw new Error("You don't have permission.");
@@ -253,6 +306,16 @@ export function useModeration2(community: CommunityV2 | undefined, recipients: s
       banMany.mutateAsync({ targets: [input.target], onPhase: input.onPhase, forceRotate: input.forceRotate }),
     banMany: banMany.mutateAsync,
     isBanning: banMany.isPending,
+    /** A Refounding with nothing excluded — see the mutation's contract. */
+    rotateKeys: () => rotateKeys.mutateAsync(),
+    isRotatingKeys: rotateKeys.isPending,
+    /** Gate for the standalone rotation's UI; the mutation re-checks it. */
+    canRotateKeys: Boolean(
+      canRefound &&
+      user &&
+      folded &&
+      isAuthorized(folded.roster, user.pubkey, folded.ownerHex, Permissions.BAN),
+    ),
     unban: unban.mutateAsync,
     /** Single-target delegate of {@link kickMany}. */
     kick: async (input: { target: string }) => {
