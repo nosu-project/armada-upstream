@@ -305,8 +305,11 @@ export function AppRouter() {
   // Data too, not just code: pre-resolve the Discover directory at idle so the
   // page's first open paints real cards instead of a skeleton waterfall.
   useWarmDiscover();
+  // No `future` prop on the router: `v7_startTransition` and
+  // `v7_relativeSplatPath` were opt-ins under v6 and are the only behavior v7
+  // has.
   return (
-      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <BrowserRouter>
         <NotificationNavigation />
         <ForegroundNotifications />
         <VersionCheck />

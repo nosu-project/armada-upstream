@@ -137,14 +137,13 @@ const nip29Transport: Transport = {
     );
   },
   match(pathname) {
-    const m =
-      matchPath<"server" | "groupId", string>("/s/:server/:groupId", pathname) ??
-      matchPath<"server" | "groupId", string>("/s/:server", pathname);
+    const withGroup = matchPath("/s/:server/:groupId", pathname);
+    const m = withGroup ?? matchPath("/s/:server", pathname);
     const serverParam = m?.params.server;
     if (!serverParam) return null;
     const relay = routeParamToRelay(serverParam);
     if (!relay) return null;
-    return { key: relay, channelId: m?.params.groupId };
+    return { key: relay, channelId: withGroup?.params.groupId };
   },
 };
 
@@ -181,12 +180,11 @@ const concordTransport: Transport = {
     }));
   },
   match(pathname) {
-    const m =
-      matchPath<"communityId" | "channelId", string>("/c/:communityId/:channelId", pathname) ??
-      matchPath<"communityId" | "channelId", string>("/c/:communityId", pathname);
+    const withChannel = matchPath("/c/:communityId/:channelId", pathname);
+    const m = withChannel ?? matchPath("/c/:communityId", pathname);
     const communityId = m?.params.communityId;
     if (!communityId) return null;
-    return { key: concordKey(communityId), channelId: m?.params.channelId };
+    return { key: concordKey(communityId), channelId: withChannel?.params.channelId };
   },
 };
 
