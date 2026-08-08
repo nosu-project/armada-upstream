@@ -386,10 +386,14 @@ async function showDmNotification(base, data) {
     const avatar = (cfg.peerAvatars && cfg.peerAvatars[opened.sender]) || "";
     const tag = `dm-${opened.sender}`;
     const lines = await appendRoomLine(tag, preview);
-    // A sender with no kind-0 sealed beside them reads "Anonymous", the same
-    // word the page's notifier and the Android service use, rather than a
-    // second spelling of "we don't know who this is" per transport.
-    await self.registration.showNotification(name || "Anonymous", {
+    // NOT "Anonymous" (the page notifier's and the Android service's fallback):
+    // both of those have a profile store and reach it before giving up, so an
+    // unnamed author is a fact they established. The worker has none — a
+    // missing entry means the page never sealed one, which happens whenever
+    // the config was written before the peer's kind-0 reached the local store.
+    // Titling that "Anonymous" states as fact about the sender what is really
+    // an absence on our side, and does it for EVERY sender at once.
+    await self.registration.showNotification(name || "New message", {
       ...base,
       ...(avatar ? { icon: avatar } : {}),
       body: lines.join("\n"),

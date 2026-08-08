@@ -302,6 +302,20 @@ export function useNostrPush(): UsePushNotificationsReturn {
     concordV2,
   ]);
 
+  // Profiles reach the local store from the wire on their own schedule, and
+  // NONE of the seal effect's inputs change when one lands. A config sealed
+  // while the kind-0 rows were still cold therefore stays nameless for the
+  // whole session — every DM push titling generically, for every sender at
+  // once, which is what a nameless config looks like from the outside. Re-seal
+  // a few times, backing off, until the known peers have resolved.
+  const [namesNonce, setNamesNonce] = useState(0);
+  const nameAttempts = useRef(0);
+  useEffect(() => {
+    // A new peer set (or session) gets its own budget; the retries themselves
+    // must not, or an unresolvable peer becomes a permanent poll.
+    nameAttempts.current = 0;
+  }, [user, enabled, dmKnownPeers]);
+
   // Keep the service worker's DM gating config current — policy + known set for
   // every enabled web-push session, plus the decrypt key for nsec logins.
   // Cleared whenever push is off or logged out, so the key never lingers past a
@@ -316,6 +330,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
     // request until the next rewrite.
     if (followsLoading) return;
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     (async () => {
       // Mirror useKnownDmPeers' `mine` dimension: a conversation the viewer
       // has authored a message in is known even where `acceptedDms` can't say
@@ -357,11 +372,29 @@ export function useNostrPush(): UsePushNotificationsReturn {
         peerAvatars,
         ...(dmSk ? { sk: dmSk } : {}),
       });
+      if (cancelled) return;
+      // Bounded: a peer who has never published a kind-0 never resolves.
+      if (knownPeers.some((peer) => !peerNames[peer]) && nameAttempts.current < 4) {
+        const delay = 5_000 * 2 ** nameAttempts.current;
+        nameAttempts.current += 1;
+        timer = setTimeout(() => setNamesNonce((n) => n + 1), delay);
+      }
     })();
     return () => {
       cancelled = true;
+      if (timer) clearTimeout(timer);
     };
-  }, [supported, user, enabled, followsLoading, prefs.dmRequests, dmKnownPeers, dmSk, eventStore]);
+  }, [
+    supported,
+    user,
+    enabled,
+    followsLoading,
+    prefs.dmRequests,
+    dmKnownPeers,
+    dmSk,
+    eventStore,
+    namesNonce,
+  ]);
 
   // ── Sync ───────────────────────────────────────────────────────────────────
 
