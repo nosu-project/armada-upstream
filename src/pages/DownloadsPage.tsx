@@ -322,12 +322,20 @@ export function DownloadsPage() {
             does. `armada-caret` comes from the crest's keyframes below. */}
         {/* Tall enough that the prompt floats clear of the gradient floor
             below, rather than sitting inside its darkest band. */}
-        <section className="mx-auto flex min-h-[50svh] max-w-xl flex-col items-center justify-center px-6 py-16 text-center safe-area-bottom">
+        <section className="mx-auto flex min-h-[50svh] max-w-xl flex-col items-center justify-center gap-8 px-6 py-16 text-center safe-area-bottom">
           <p className="font-mono text-xl text-[hsl(var(--primary))] sm:text-2xl">
             <span className="text-[hsl(var(--accent2,180_90%_55%))]">$ </span>
             anchors aweigh
             <span className="animate-[armada-caret_1s_step-end_infinite]">_</span>
           </p>
+
+          {/* The reader who scrolled the whole way gets a clear way home,
+              the same shape as the landing's bottom CTA. */}
+          <div className="w-full max-w-sm">
+            <Button size="lg" asChild className="h-12 w-full clip-corner-lg text-base font-medium">
+              <Link to="/">Return home</Link>
+            </Button>
+          </div>
         </section>
 
         {/* The floor of the page, as on the landing: darken the last stretch
