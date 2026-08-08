@@ -195,6 +195,13 @@ public class NotificationRelayService extends Service {
     // `groupSubs` config; falls back to relayUrls × groupIds for a config
     // written by an older build that shipped only the flat arrays.
     private final Map<String, Set<String>> relayToGroupIds = new HashMap<>();
+    // The subset of the above whose notification level is "mentions only",
+    // as `relay + '\0' + groupId` keys — relay-scoped for the same reason
+    // relayToGroupIds is: an `h` id names a group only together with its host,
+    // so a flat id set would mute the same-named group on every other relay.
+    // These groups stay SUBSCRIBED (a mention still has to arrive); the
+    // suppression happens per event in wantsNotification.
+    private final Set<String> mentionOnlyGroupKeys = new LinkedHashSet<>();
     private final Set<String> dmRelays = new LinkedHashSet<>();
     // People the user follows (kind 3 `p` tags, hex). DM (kind 4) subscriptions
     // are scoped to `authors:[...dmFollows]` so notifications only fire for DMs
@@ -389,8 +396,12 @@ public class NotificationRelayService extends Service {
         // CORD-08 disappearing-message timer (seconds, 0 = off) — the quick
         // reply stamps sendTime + timer on its rumor + wrap while set.
         final long timerSecs;
+        // Channel set to "mentions only": still subscribed (a mention has to
+        // arrive to be seen), but non-mention traffic notifies nothing.
+        final boolean mentionOnly;
         ConcordStream(byte[] convKey, String communityId, String channelId, String epoch,
-                       String name, String url, CommunityRef community, long timerSecs) {
+                       String name, String url, CommunityRef community, long timerSecs,
+                       boolean mentionOnly) {
             this.convKey = convKey;
             this.communityId = communityId;
             this.channelId = channelId;
@@ -399,6 +410,7 @@ public class NotificationRelayService extends Service {
             this.url = url;
             this.community = community;
             this.timerSecs = timerSecs;
+            this.mentionOnly = mentionOnly;
         }
     }
 
@@ -832,7 +844,8 @@ public class NotificationRelayService extends Service {
         relayUrls.addAll(parseStringArray(sp.getString("relayUrls", null)));
         groupIds.clear();
         groupIds.addAll(parseStringArray(sp.getString("groupIds", null)));
-        parseGroupSubs(sp.getString("groupSubs", null));
+        parseGroupSubs(sp.getString("groupSubs", null),
+                parseStringArray(sp.getString("mentionOnlyGroupIds", null)));
         dmRelays.clear();
         dmRelays.addAll(parseStringArray(sp.getString("dmRelays", null)));
         dmFollows.clear();
@@ -939,9 +952,15 @@ public class NotificationRelayService extends Service {
      * relay actually hosts. Falls back — when the config carries no
      * {@code groupSubs} (written by an older build) — to the legacy flat model:
      * every {@code groupId} on every {@code relayUrl}.
+     *
+     * <p>Also fills {@link #mentionOnlyGroupKeys} from each sub's
+     * {@code mentionOnly} flag. {@code flatMentionOnly} is the older flat
+     * {@code mentionOnlyGroupIds} list and is used ONLY on the legacy fallback
+     * path, where every id is already paired with every relay anyway.
      */
-    private void parseGroupSubs(String json) {
+    private void parseGroupSubs(String json, List<String> flatMentionOnly) {
         relayToGroupIds.clear();
+        mentionOnlyGroupKeys.clear();
         if (json != null) {
             try {
                 JSONArray arr = new JSONArray(json);
@@ -957,11 +976,15 @@ public class NotificationRelayService extends Service {
                         relayToGroupIds.put(relay, set);
                     }
                     set.add(id);
+                    if (sub.optBoolean("mentionOnly", false)) {
+                        mentionOnlyGroupKeys.add(groupKey(relay, id));
+                    }
                 }
                 return;
             } catch (JSONException e) {
                 Log.w(TAG, "Failed to parse groupSubs", e);
                 relayToGroupIds.clear();
+                mentionOnlyGroupKeys.clear();
             }
         }
         // Legacy fallback: no per-relay mapping shipped — subscribe every
@@ -970,7 +993,23 @@ public class NotificationRelayService extends Service {
         if (groupIds.isEmpty()) return;
         for (String relay : relayUrls) {
             relayToGroupIds.put(relay, new LinkedHashSet<>(groupIds));
+            for (String id : flatMentionOnly) {
+                if (groupIds.contains(id)) mentionOnlyGroupKeys.add(groupKey(relay, id));
+            }
         }
+    }
+
+    private static String groupKey(String relayUrl, String groupId) {
+        return relayUrl + "\u0000" + groupId;
+    }
+
+    /**
+     * Is this NIP-29 group set to "mentions only"? A group we can't identify
+     * (no `h` tag) is not — the per-kind prefs still decide.
+     */
+    private boolean isMentionOnlyGroup(String relayUrl, String groupId) {
+        if (relayUrl == null || groupId == null) return false;
+        return mentionOnlyGroupKeys.contains(groupKey(relayUrl, groupId));
     }
 
     /**
@@ -996,6 +1035,7 @@ public class NotificationRelayService extends Service {
                 String communityId = sub.optString("communityId", "");
                 String channelId = sub.optString("channelId", "");
                 if (communityId.isEmpty() || channelId.isEmpty()) continue;
+                boolean mentionOnly = sub.optBoolean("mentionOnly", false);
                 String name = community + " / #" + channel;
                 String url = "/c/" + uriEncode(communityId) + "/" + uriEncode(channelId);
                 JSONArray streams = sub.optJSONArray("streams");
@@ -1020,7 +1060,8 @@ public class NotificationRelayService extends Service {
                     pkList.add(pk);
                     pkToStream2.put(pk, new ConcordStream(
                             convKey, communityId, channelId, s.optString("epoch", ""),
-                            name, url, ref, Math.max(0, sub.optLong("timerSecs", 0))));
+                            name, url, ref, Math.max(0, sub.optLong("timerSecs", 0)),
+                            mentionOnly));
                 }
                 for (int j = 0; j < relays.length(); j++) {
                     String relay = relays.optString(j);
@@ -2698,6 +2739,11 @@ public class NotificationRelayService extends Service {
                 // where. (Generic body, but a real room title.)
                 ServiceStore.parkConcordWrap(this, event);
                 if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord (opaque): " + st.name);
+                // A mention lives on the rumor we just failed to open, so a
+                // "mentions only" channel has no signal to notify on and stays
+                // silent — the wrap is parked either way, so the WebView (which
+                // holds the full key history) still surfaces it on open.
+                if (st.mentionOnly) return;
                 if (!prefBool("allGroupMessages", true)) return;
                 enqueueRoomMessage(
                         st.community, "c2:" + st.channelId, st.name, st.url,
@@ -2771,7 +2817,11 @@ public class NotificationRelayService extends Service {
             }
             boolean mentionsMe2 = isMentioned(rumor, userPubkey);
             // Concord rooms reuse the group-message prefs: always notify on a
-            // mention; otherwise honour the all-messages toggle.
+            // mention; otherwise honour the all-messages toggle — unless the
+            // channel is "mentions only", which drops everything else first.
+            if (st.mentionOnly && !mentionsMe2) {
+                return;
+            }
             if (!(mentionsMe2 ? prefBool("mentions", true) : prefBool("allGroupMessages", true))) {
                 return;
             }
@@ -2814,7 +2864,11 @@ public class NotificationRelayService extends Service {
 
         boolean mentionsMe = pTags(event).contains(userPubkey);
 
-        if (!wantsNotification(kind, mentionsMe)) {
+        // The group this event belongs to, needed before the gate below so a
+        // "mentions only" room can drop it. Recomputed into nip29GroupId after
+        // the claim for the deep link.
+        if (!wantsNotification(kind, mentionsMe,
+                isMentionOnlyGroup(relayUrl, tagValue(event, "h")))) {
             return;
         }
 
@@ -3132,17 +3186,29 @@ public class NotificationRelayService extends Service {
         }
     }
 
-    private boolean wantsNotification(int kind, boolean mentionsMe) {
+    /**
+     * @param mentionOnly the event's room is set to "mentions only", so
+     *     anything that doesn't name the user is suppressed regardless of the
+     *     per-kind prefs. Reactions and thread replies survive it on their own
+     *     merit: both only reach here having `p`-tagged the user.
+     */
+    private boolean wantsNotification(int kind, boolean mentionsMe, boolean mentionOnly) {
+        return wantsNotification(kind, mentionsMe, mentionOnly, prefs);
+    }
+
+    /** Static so the decision is unit-testable without an Android runtime. */
+    static boolean wantsNotification(int kind, boolean mentionsMe, boolean mentionOnly, JSONObject prefs) {
+        if (mentionOnly && !mentionsMe) return false;
         switch (kind) {
             case 9:
-                if (mentionsMe) return prefBool("mentions", true);
-                return prefBool("allGroupMessages", true);
+                if (mentionsMe) return prefs.optBoolean("mentions", true);
+                return prefs.optBoolean("allGroupMessages", true);
             case 7:
-                return prefBool("reactions", true);
+                return prefs.optBoolean("reactions", true);
             case 1111:
-                return prefBool("replies", true);
+                return prefs.optBoolean("replies", true);
             case 4:
-                return prefBool("directMessages", true);
+                return prefs.optBoolean("directMessages", true);
         }
         return false;
     }

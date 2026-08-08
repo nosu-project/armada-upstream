@@ -159,13 +159,19 @@ export interface ArmadaNotificationPlugin {
      * broadcasting every joined id to every relay. Supersedes the flat
      * `groupIds`/`relayUrls` pairing; `groupIds` is still sent so an older
      * native binary (which ignores this field) keeps working.
+     *
+     * `mentionOnly` marks the group's level as "mentions only": the service
+     * still subscribes (so mentions land) but suppresses its non-mention
+     * traffic. It rides here rather than in a flat id list because an `h` id
+     * names a group only together with its relay — the same id on two relays
+     * is two unrelated groups, and a flat list would mute both.
      */
-    groupSubs?: Array<{ relay: string; id: string }>;
+    groupSubs?: Array<{ relay: string; id: string; mentionOnly?: boolean }>;
     /**
-     * Subset of `groupIds` whose notification level is "mentions only" — the
-     * service still subscribes (so mentions land) but should suppress non-
-     * mention messages for these groups. Older native binaries that don't know
-     * this field simply notify on all messages for them (graceful downgrade).
+     * Subset of `groupIds` whose notification level is "mentions only". This is
+     * the flat counterpart of `groupSubs[].mentionOnly`, and the service only
+     * consults it on the legacy path where no `groupSubs` was sent at all (it
+     * then pairs every id with every relay, so a flat mention set matches).
      */
     mentionOnlyGroupIds?: string[];
     /** Relays to read DMs (kind 4) from — the app/DM relays, not group relays. */
