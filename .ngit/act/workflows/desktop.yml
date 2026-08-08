@@ -301,7 +301,13 @@ jobs:
           # Every .exe, not just *Setup*: electron-builder lists the portable
           # artifact in latest.yml alongside the NSIS one, and a feed naming a
           # payload that was never staged fails validation below.
-          cp electron/release/*.AppImage electron/release/*.exe "$feed/"
+          # The .deb likewise: nothing self-updates from it, but electron-builder
+          # lists it in latest-linux.yml because the Linux target built it, and
+          # every reference is a hard requirement above. The AppImage is matched
+          # by its versioned name so flatpak/build.sh's staged Armada.AppImage
+          # isn't published into the feed as a second, unreferenced copy.
+          cp electron/release/Armada-*-linux-*.AppImage electron/release/*.exe \
+             electron/release/*.deb "$feed/"
           for file in electron/release/*.blockmap; do
             [ -e "$file" ] || continue
             cp "$file" "$feed/"
