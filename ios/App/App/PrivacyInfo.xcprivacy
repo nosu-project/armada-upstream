@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Apple's privacy manifest for the app target. Two independent things live
+	  here, and they answer to different reviewers:
+
+	  * NSPrivacyAccessedAPITypes is checked MECHANICALLY at upload. App Store
+	    Connect scans the binary for "required reason" API symbols and rejects
+	    with ITMS-91053 for any it finds that aren't declared here.
+	  * NSPrivacyCollectedDataTypes is not scanned; it must match the App
+	    Privacy nutrition label entered in App Store Connect by hand. A
+	    mismatch is a review problem, not an upload one.
+
+	  This manifest covers FIRST-PARTY code — the app target, `ios/ArmadaDB`
+	  (which is compiled in, not a binary dependency), and the Capacitor
+	  plugins under `node_modules`, none of which ship a manifest of their own.
+	-->
+
+	<key>NSPrivacyTracking</key>
+	<false/>
+
+	<!--
+	  Empty because nothing here correlates the user with third-party data for
+	  advertising or measurement. The Plausible integration
+	  (`PlausibleProvider.tsx`) is cookieless and, more to the point, inert
+	  unless `VITE_PLAUSIBLE_DOMAIN` is set — which only a hosted web build
+	  does, never this one.
+	-->
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+
+	<!--
+	  What follows is a consequence of the DEFAULT servers compiled into
+	  `platform.ts` and `blossom.ts`, not of anything the app is required to
+	  do. `relay.ditto.pub` and `blossom.ditto.pub` are operated by Soapbox
+	  Technology LLC — the same legal entity as the developer account — so
+	  content a user publishes there is retained by, and reachable by, the
+	  developer. That is Apple's definition of "collect", and it holds even
+	  though the user can replace every one of those servers in Settings.
+
+	  Concord community traffic is end-to-end encrypted and NIP-17 DMs are
+	  sealed, so neither is readable by a relay operator; they are covered
+	  below anyway, because the ciphertext is still transmitted and retained.
+
+	  None of it is used for tracking, and none of it is sold or used for
+	  advertising. If the ditto.pub defaults are ever dropped in favour of
+	  user-supplied servers only, this array can go empty.
+	-->
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array>
+		<!-- The Nostr public key: a stable, user-facing account identifier. -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeUserID</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+
+		<!-- Posts, chat messages and profile metadata. -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeOtherUserContent</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+
+		<!-- Image and video attachments, uploaded to a Blossom server. -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypePhotosorVideos</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+
+		<!-- Voice messages, uploaded the same way. -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeAudioData</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+	</array>
+
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<!--
+		  `stat`/`fstat`/`lstat`, from the SQLite amalgamation vendored at
+		  `ios/ArmadaDB/Sources/CArmadaSQLite` (26 call sites in its unix VFS)
+		  and from `@capacitor/filesystem`'s `stat()`. C617.1 is the container
+		  reason, and it is the accurate one: the only file ArmadaDB opens is
+		  `armada.db` in the `group.buzz.armada.app` App Group container, and
+		  no timestamp is ever shown to the user or sent off-device.
+		-->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
+			</array>
+		</dict>
+
+		<!--
+		  `statfs`/`fstatfs`, also from the vendored SQLite, which reads the
+		  filesystem's free space and I/O geometry to size writes and to fail
+		  cleanly rather than corrupt on a full disk. E174.1 is the
+		  write-headroom reason; nothing derived from it leaves the device.
+		-->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>E174.1</string>
+			</array>
+		</dict>
+
+		<!--
+		  Capacitor's own bridge keeps its `serverBasePath` in `UserDefaults`.
+		  Declared here rather than relied upon from `capacitor-swift-pm`,
+		  since a duplicate declaration is harmless and a missing one is an
+		  ITMS-91053 on a dependency this project doesn't control. CA92.1 is
+		  the "app's own data, not shared with other apps" reason.
+		-->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

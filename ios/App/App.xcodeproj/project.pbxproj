@@ -18,6 +18,7 @@
 		A2D8B0012C0100000000A102 /* ArmadaDbPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2D8B0012C0100000000A101 /* ArmadaDbPlugin.swift */; };
 		A2D8B0012C0100000000A104 /* ViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2D8B0012C0100000000A103 /* ViewController.swift */; };
 		A2D8B0012C0100000000A106 /* ArmadaDB in Frameworks */ = {isa = PBXBuildFile; productRef = A2D8B0012C0100000000A105 /* ArmadaDB */; };
+		A2D8B0012C0100000000A109 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A2D8B0012C0100000000A108 /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -34,6 +35,7 @@
 		A17E4C1B2B0100000000A001 /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
 		A2D8B0012C0100000000A101 /* ArmadaDbPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArmadaDbPlugin.swift; sourceTree = "<group>"; };
 		A2D8B0012C0100000000A103 /* ViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewController.swift; sourceTree = "<group>"; };
+		A2D8B0012C0100000000A108 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -77,6 +79,7 @@
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
 				504EC3131FED79650016851F /* Info.plist */,
+				A2D8B0012C0100000000A108 /* PrivacyInfo.xcprivacy */,
 				A17E4C1B2B0100000000A001 /* App.entitlements */,
 				2FAD9762203C412B000D30F8 /* config.xml */,
 				50B271D01FEDC1A000F3C39B /* public */,
@@ -154,6 +157,7 @@
 				504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */,
 				50B271D11FEDC1A000F3C39B /* public in Resources */,
 				504EC30F1FED79650016851F /* Assets.xcassets in Resources */,
+				A2D8B0012C0100000000A109 /* PrivacyInfo.xcprivacy in Resources */,
 				50379B232058CBB4000EE86E /* capacitor.config.json in Resources */,
 				504EC30D1FED79650016851F /* Main.storyboard in Resources */,
 				2FAD9763203C412B000D30F8 /* config.xml in Resources */,
