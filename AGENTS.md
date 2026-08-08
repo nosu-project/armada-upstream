@@ -45,7 +45,7 @@ commit/PR.
 |----------|---------|------|
 | `test.yml` | push (any branch) + PR | `npm run test` (tsc + eslint + vitest + build) and `npm audit --audit-level=high` |
 | `deploy-web.yml` | push to `main` | build + rsync-over-SSH deploy of the hosted client (armada.buzz); skips deploy if the SSH secret isn't provisioned |
-| `release.yml` | tag `v*` | signed Android APK + AAB, published as run artifacts, then Zapstore publish, then Google Play publish (draft release while the app is unpublished in Play Console; skips Play if the service-account secret isn't provisioned) |
+| `release.yml` | tag `v*` | signed Android APK + AAB, published as run artifacts and the APK to `armada.buzz/downloads/`, then Zapstore publish, then Google Play publish (draft release while the app is unpublished in Play Console; skips Play if the service-account secret isn't provisioned) |
 | `desktop.yml` | tag `v*` | Electron Linux (AppImage + deb), Windows (NSIS + portable) and macOS (ad-hoc signed .app zips, cross-built); published as run artifacts and rsynced to `armada.buzz/downloads/` |
 
 Notes specific to ngit-ci (vs the old GitLab pipeline):
@@ -109,6 +109,44 @@ Notes specific to ngit-ci (vs the old GitLab pipeline):
   multi-job workflows race on the working tree (why desktop.yml is one job
   building all three platforms). Job containers are capped by
   `NGIT_CI_ACT_CONTAINER_OPTIONS` (currently `--cpus=8 --memory=10g`).
+
+## The `/downloads` page and what CI publishes under it
+
+`src/pages/DownloadsPage.tsx` links **stable, unversioned filenames**
+(`Armada.AppImage`, `Armada-Setup.exe`, `Armada.apk`, …) that `desktop.yml` and
+`release.yml` re-copy beside the versioned archive on every tag. That split is
+the point: the page is a compile-time constant with no version to discover, and
+old releases still keep their own `Armada-vX.Y.Z.*` URLs. `src/lib/downloads.ts`
+is the one table of those names, and its test READS THE TWO WORKFLOW FILES and
+asserts every filename and manifest key it links is published by one of them —
+so renaming a file in CI without the client fails the suite rather than 404ing
+in production on the next tag.
+
+Three traps live here:
+
+- **`/downloads` is a real directory on the server, which beats the SPA
+  fallback.** nginx's `try_files $uri $uri/ /index.html` matches `$uri/` against
+  the directory and stops; with no index and autoindex off that is a **403**, so
+  the route would work on client-side navigation and break on reload or a shared
+  link. `deploy-web.yml` therefore uploads `dist/index.html` as
+  `downloads/index.html`, and `nginx.conf` has an explicit `location =
+  /downloads/`. The hosted server's own nginx config is NOT in this repo, which
+  is why the fix that actually ships is the uploaded index file.
+- **`.AppImage` has no entry in nginx's `mime.types`,** so it inherits
+  `default_type` — `text/plain` by default, i.e. a browser rendering a 100 MB
+  binary as text. `location /downloads/` sets `default_type
+  application/octet-stream`, and the page's anchors carry `download` as the
+  same-origin belt-and-braces.
+- **Each workflow writes its OWN manifest** (`latest-desktop.json`,
+  `latest-android.json`). Both fire on the same tag and run concurrently, so one
+  shared `latest.json` would be a lost update — and worse, whichever wrote last
+  would claim its version for a platform whose build had failed. The manifests
+  carry only a version label and file sizes; the page treats them as decoration
+  so a failed fetch never costs a working button.
+
+The rsyncs are additive (**no `--delete`**, on any of the three workflows) —
+that is what lets installers, the page's index, and the site build coexist in
+one jail root. Don't add one without excluding `/downloads`.
 
 ## How the client reaches backends (no build-time coupling)
 

@@ -41,6 +41,7 @@ const ConcordV2Page = lazy(lazyWithReload(() => import("@/concord-v2/pages/Conco
 const DiscordImportPage = lazy(lazyWithReload(() => import("@/pages/DiscordImportPage").then((m) => ({ default: m.DiscordImportPage }))));
 const DiscoverPage = lazy(lazyWithReload(() => import("@/pages/DiscoverPage").then((m) => ({ default: m.DiscoverPage }))));
 const DMsPage = lazy(lazyWithReload(() => import("@/pages/DMsPage").then((m) => ({ default: m.DMsPage }))));
+const DownloadsPage = lazy(lazyWithReload(() => import("@/pages/DownloadsPage").then((m) => ({ default: m.DownloadsPage }))));
 const GroupPage = lazy(lazyWithReload(() => import("@/pages/GroupPage").then((m) => ({ default: m.GroupPage }))));
 const InboxPage = lazy(lazyWithReload(() => import("@/pages/InboxPage").then((m) => ({ default: m.InboxPage }))));
 const InviteV2Page = lazy(lazyWithReload(() => import("@/concord-v2/pages/InviteV2Page")));
@@ -356,6 +357,11 @@ export function AppRouter() {
                 never an naddr), dispatched by InviteRoute. */}
             <Route path="/invite/:naddr" element={<InviteRoute />} />
             <Route path="/changelog" element={<ChangelogPage />} />
+            {/* Also a real directory on the hosted deployment, where CI rsyncs
+                the installers — nginx serves the SPA shell as its index so a
+                reload or a shared link reaches this route rather than the 403
+                a directory with no index would otherwise produce. */}
+            <Route path="/downloads" element={<DownloadsPage />} />
             <Route path="/privacy" element={<PrivacyPolicyPage />} />
             <Route path="/terms" element={<TermsPage />} />
             <Route path="/share" element={<SharePage />} />
