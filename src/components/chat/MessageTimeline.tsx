@@ -154,6 +154,9 @@ function relatedGitEntries(
   index: number,
   entry: NonChatEntry,
 ): readonly NonChatEntry[] | undefined {
+  // Checked before allocating: most entries start no group, and this runs for
+  // every one of them on every window recompute.
+  if (!isGitContinuation(entry, entries[index + 1])) return undefined;
   const related: NonChatEntry[] = [entry];
   for (let cursor = index + 1; cursor < entries.length; cursor++) {
     const candidate = entries[cursor];

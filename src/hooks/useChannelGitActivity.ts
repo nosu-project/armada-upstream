@@ -24,6 +24,14 @@ import { CI_EVENT_KINDS } from "@/lib/ci";
 import { useWireScopes } from "@/wire/useWireScopes";
 
 /**
+ * One shared empty result, so a channel with no Git activity — every channel,
+ * most of the time — hands back the SAME array on every render. A fresh `[]`
+ * here changes `mergeChannelTimeline`'s input identity on each pass, which
+ * re-sorts the whole conversation and hands every row new props to diff.
+ */
+const NO_ACTIVITY: GitTimelineActivity[] = [];
+
+/**
  * Store-first Git activity for a channel. All roots and children are read in
  * repository batches, so activity rows never open their own profile/repository,
  * ticket, or relay query.
@@ -152,5 +160,5 @@ export function useChannelGitActivity(
   useWireScopes((scopes) => {
     if (addresses.some((address) => scopes.has(`git:${address}`))) void queryClient.invalidateQueries({ queryKey });
   });
-  return { activities: query.data ?? [], isLoading: query.isLoading, isLoadingOlder, hasMore: hasMore && addresses.length > 0, loadOlder, refreshTicket };
+  return { activities: query.data ?? NO_ACTIVITY, isLoading: query.isLoading, isLoadingOlder, hasMore: hasMore && addresses.length > 0, loadOlder, refreshTicket };
 }

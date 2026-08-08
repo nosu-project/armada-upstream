@@ -12,7 +12,10 @@ import { GitTimelineRow } from "@/components/chat/GitTimeline";
 import type { GitChannelTimelineEntry } from "@/components/chat/channelTimeline";
 import type { GitRepositoryAddress, GitTicket } from "@/lib/gitActivity";
 
-vi.mock("@/hooks/useAuthor", () => ({ useAuthor: () => ({ data: undefined }) }));
+// A spy rather than a stub: every rendered actor calls it exactly once, which
+// is how the memoization tests below count renders without reaching into React.
+const { useAuthorSpy } = vi.hoisted(() => ({ useAuthorSpy: vi.fn(() => ({ data: undefined })) }));
+vi.mock("@/hooks/useAuthor", () => ({ useAuthor: useAuthorSpy }));
 vi.mock("@/hooks/useScopedDisplayName", () => ({
   useScopedDisplayName: (pubkey: string) => (pubkey.startsWith("78") ? "alex" : "robin"),
   useScopedIdentity: () => ({ displayName: "alex", color: undefined, label: undefined }),
@@ -145,6 +148,53 @@ describe("a burst of comments", () => {
     render(<GitTimelineRow entry={shown[0]} related={[shown[0], second]} onOpen={() => {}} />);
     expect(screen.getByText("alex")).toBeInTheDocument();
     expect(screen.getByText("robin")).toBeInTheDocument();
+  });
+});
+
+describe("re-rendering", () => {
+  const ticket = ticketWith("");
+  const group = [
+    commentEntry(ticket, "c1".padEnd(64, "0"), "First thought", 1_785_000_100),
+    commentEntry(ticket, "c2".padEnd(64, "0"), "Second thought", 1_785_000_101),
+  ];
+  // The identity the timeline would hold across renders.
+  const onOpen = () => {};
+
+  it("stands down when the timeline rebuilds an equal group", () => {
+    // One new chat message re-wraps every activity in the window, handing each
+    // Git row freshly allocated entries — which must not cost a re-render.
+    const rewrapped = group.map((entry) => ({ ...entry }));
+    const { rerender } = render(<GitTimelineRow entry={group[0]} related={[...group]} onOpen={onOpen} />);
+    const rendered = useAuthorSpy.mock.calls.length;
+    expect(rendered).toBeGreaterThan(0);
+    rerender(<GitTimelineRow entry={rewrapped[0]} related={rewrapped} onOpen={onOpen} />);
+    expect(useAuthorSpy.mock.calls.length).toBe(rendered);
+  });
+
+  it("re-renders when the activity itself is rebuilt", () => {
+    // A CI run keeps its event id while its Job Results are still arriving, so
+    // the row has to follow the activity object rather than the id.
+    const { rerender } = render(<GitTimelineRow entry={group[0]} related={[...group]} onOpen={onOpen} />);
+    const rendered = useAuthorSpy.mock.calls.length;
+    const restated = { ...group[0], activity: { ...group[0].activity } };
+    rerender(<GitTimelineRow entry={restated} related={[restated, group[1]]} onOpen={onOpen} />);
+    expect(useAuthorSpy.mock.calls.length).toBeGreaterThan(rendered);
+  });
+
+  it("re-renders when the group gains an entry", () => {
+    const { rerender } = render(<GitTimelineRow entry={group[0]} related={[...group]} onOpen={onOpen} />);
+    const rendered = useAuthorSpy.mock.calls.length;
+    const third = commentEntry(ticket, "c3".padEnd(64, "0"), "Third thought", 1_785_000_102);
+    third.activity.comment.author = OTHER;
+    rerender(<GitTimelineRow entry={group[0]} related={[...group, third]} onOpen={onOpen} />);
+    expect(useAuthorSpy.mock.calls.length).toBeGreaterThan(rendered);
+  });
+
+  it("re-renders when the handler it would call changes", () => {
+    const { rerender } = render(<GitTimelineRow entry={group[0]} related={[...group]} onOpen={onOpen} />);
+    const rendered = useAuthorSpy.mock.calls.length;
+    rerender(<GitTimelineRow entry={group[0]} related={[...group]} onOpen={() => {}} />);
+    expect(useAuthorSpy.mock.calls.length).toBeGreaterThan(rendered);
   });
 });
 

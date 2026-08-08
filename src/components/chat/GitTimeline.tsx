@@ -1,9 +1,9 @@
 import { ArrowUpRight, Braces, CheckCircle2, ChevronDown, ChevronRight, CircleDot, CircleSlash, Clock, ExternalLink, GitPullRequest, Loader2, MessageCircle, Paperclip, Pencil, ScrollText, Trash2, X, XCircle } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 
-import type { GitChannelTimelineEntry } from "@/components/chat/channelTimeline";
+import type { ChannelTimelineEntry, GitChannelTimelineEntry } from "@/components/chat/channelTimeline";
 import { isCommunityGuest } from "@/components/chat/channelTimeline";
 import { ChatContent } from "@/components/chat/ChatContent";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -91,8 +91,47 @@ function NoticeRow({ icon, onClick, label, children, detail }: { icon: ReactNode
   );
 }
 
+interface GitTimelineRowProps {
+  entry: GitChannelTimelineEntry;
+  onOpen: (ticket: GitTicket) => void;
+  /**
+   * The group the timeline built, passed through as-is. Deliberately the
+   * timeline's own entry type rather than a pre-filtered Git one: filtering at
+   * the call site would allocate a new array on every render and defeat the
+   * memo below. {@link sameType} does the narrowing instead, once, here.
+   */
+  related?: readonly ChannelTimelineEntry[];
+}
+
+/** What a timeline entry is ABOUT, under the wrapper the timeline rebuilds. */
+function activityOf(entry: ChannelTimelineEntry): unknown {
+  return "activity" in entry ? entry.activity : entry;
+}
+
+/**
+ * Whether two renders of a row describe the same activity.
+ *
+ * `mergeChannelTimeline` re-wraps every activity whenever anything in the
+ * conversation changes — a single new chat message is enough — so a shallow
+ * compare would re-render every Git row in the channel on each message,
+ * re-deriving previews and re-folding CI runs for activity that did not move.
+ * The wrapper is new; the activity inside it is the same object, and is
+ * rebuilt only when the underlying events actually change.
+ *
+ * NOT the entry's id: a CI run keeps the id of the event that announced it
+ * while its Job Results are still arriving, so a row keyed on the id would go
+ * on showing a run with no logs after the logs landed.
+ */
+function sameActivity(previous: GitTimelineRowProps, next: GitTimelineRowProps): boolean {
+  if (previous.entry.activity !== next.entry.activity) return false;
+  if (previous.onOpen !== next.onOpen) return false;
+  if (previous.related === next.related) return true;
+  if (!previous.related || !next.related || previous.related.length !== next.related.length) return false;
+  return previous.related.every((entry, index) => activityOf(entry) === activityOf(next.related![index]));
+}
+
 /** A Git event rendered as a contextual channel reference. The underlying NIP-34/NIP-22 event remains the source of truth. */
-export function GitTimelineRow({ entry, related, onOpen }: { entry: GitChannelTimelineEntry; onOpen: (ticket: GitTicket) => void; related?: readonly GitChannelTimelineEntry[] }) {
+export const GitTimelineRow = memo(function GitTimelineRow({ entry, related, onOpen }: GitTimelineRowProps) {
   // A dispatcher, deliberately hook-free: the four shapes share no state, and
   // branching inside one component would reorder its hooks.
   if (entry.type === "git-ci-run") {
@@ -105,7 +144,7 @@ export function GitTimelineRow({ entry, related, onOpen }: { entry: GitChannelTi
     return <CommentGroupRow entries={sameType(entry, related)} onOpen={onOpen} />;
   }
   return <TicketOpenedGroupRow entries={sameType(entry, related)} onOpen={onOpen} />;
-}
+}, sameActivity);
 
 /**
  * The group a row renders, narrowed to the head's own variant. The timeline
@@ -116,7 +155,7 @@ export function GitTimelineRow({ entry, related, onOpen }: { entry: GitChannelTi
  */
 function sameType<T extends GitChannelTimelineEntry["type"]>(
   head: Extract<GitChannelTimelineEntry, { type: T }>,
-  related: readonly GitChannelTimelineEntry[] | undefined,
+  related: readonly ChannelTimelineEntry[] | undefined,
 ): readonly Extract<GitChannelTimelineEntry, { type: T }>[] {
   if (!related || related.length === 0) return [head];
   return related.filter((entry): entry is Extract<GitChannelTimelineEntry, { type: T }> => entry.type === head.type);
