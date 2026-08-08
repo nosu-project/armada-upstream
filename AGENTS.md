@@ -122,20 +122,34 @@ asserts every filename and manifest key it links is published by one of them —
 so renaming a file in CI without the client fails the suite rather than 404ing
 in production on the next tag.
 
-Three traps live here:
+**armada.buzz is served by Caddy, not by this repo's `nginx.conf`.** The hosted
+config lives on the venus VPS at `/etc/caddy/sites-available/armada.buzz` and is
+not in version control; `nginx.conf` covers only the Dockerfile self-host path,
+where the rules differ enough to be worth stating separately. Traps:
 
-- **`/downloads` is a real directory on the server, which beats the SPA
-  fallback.** nginx's `try_files $uri $uri/ /index.html` matches `$uri/` against
-  the directory and stops; with no index and autoindex off that is a **403**, so
-  the route would work on client-side navigation and break on reload or a shared
-  link. `deploy-web.yml` therefore uploads `dist/index.html` as
-  `downloads/index.html`, and `nginx.conf` has an explicit `location =
-  /downloads/`. The hosted server's own nginx config is NOT in this repo, which
-  is why the fix that actually ships is the uploaded index file.
-- **`.AppImage` has no entry in nginx's `mime.types`,** so it inherits
+- **A missing installer must 404, and by default it does not.** Caddy's
+  catch-all ends in `try_files {path} /index.html`, so a pruned, misspelled or
+  not-yet-published file under `/downloads/` answered **200 with the 12 KB SPA
+  shell** — a browser saving `Armada.AppImage` that is HTML. The site config
+  now has a `handle /downloads/*` with a bare `file_server` ahead of the
+  catch-all so those paths 404 properly. `handle` blocks are mutually
+  exclusive, which is the sharp edge: the catch-all's `Cache-Control: no-cache`
+  does NOT reach inside, and had to be restated there or the SPA shell at
+  `downloads/index.html` would be heuristically cached, pinning chunk hashes a
+  later deploy no longer has. Versioned archives get `immutable` instead, being
+  content-addressed by filename.
+- **The directory does NOT shadow the route on Caddy, but it does on nginx.**
+  Caddy's `try_files` skips directories, so `/downloads` renders the SPA either
+  way. nginx's `try_files $uri $uri/ /index.html` matches `$uri/` against the
+  real directory and stops — with no index and autoindex off, a **403** on
+  reload or a shared link. `deploy-web.yml` uploads `dist/index.html` as
+  `downloads/index.html`, which fixes nginx and also gives Caddy's
+  `handle /downloads/*` something to serve for a bare `/downloads/`.
+- **`.AppImage` content type differs by server.** Caddy knows it
+  (`application/vnd.appimage`); nginx's `mime.types` does not, so it inherits
   `default_type` — `text/plain` by default, i.e. a browser rendering a 100 MB
-  binary as text. `location /downloads/` sets `default_type
-  application/octet-stream`, and the page's anchors carry `download` as the
+  binary as text. `nginx.conf`'s `location /downloads/` sets
+  `application/octet-stream`, and the page's anchors carry `download` as the
   same-origin belt-and-braces.
 - **Each workflow writes its OWN manifest** (`latest-desktop.json`,
   `latest-android.json`). Both fire on the same tag and run concurrently, so one

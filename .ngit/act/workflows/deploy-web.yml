@@ -99,13 +99,17 @@ jobs:
           rsync -av -e ssh dist/index.html dist/sw.js "${TARGET}:/"
 
           # /downloads is a REAL DIRECTORY on the server (desktop.yml and
-          # release.yml rsync the installers into it), so nginx's SPA fallback
-          # never runs for it: `try_files $uri $uri/ /index.html` matches $uri/
-          # against the directory and stops there, and with no index file and
-          # autoindex off that is a 403. Client-side navigation to the route
-          # would work while a reload or a shared link 403'd. Dropping the SPA
-          # shell in as that directory's index makes the URL boot the app,
-          # which then routes /downloads normally.
+          # release.yml rsync the installers into it), and it needs its own copy
+          # of the SPA shell as an index for two different reasons:
+          #
+          #   - armada.buzz (Caddy) serves /downloads/* from a `handle` block
+          #     with a bare file_server, so that the installers 404 properly
+          #     instead of falling through to the SPA. A bare /downloads/ then
+          #     resolves to this index rather than 404ing with them.
+          #   - A self-hosted nginx (the Dockerfile path) never reaches its SPA
+          #     fallback for the directory at all: `try_files $uri $uri/
+          #     /index.html` matches $uri/ and stops, and with no index and
+          #     autoindex off that is a 403 on reload or a shared link.
           #
           # Uploaded LAST, and only after the assets above, for the same reason
           # the root index.html is: it references the same hashed chunks.
