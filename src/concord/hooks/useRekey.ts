@@ -42,6 +42,7 @@ import {
   type RekeyBlob,
 } from "@/concord/lib/rekey";
 import { citationSatisfied } from "@/concord/lib/control";
+import { isEntitled } from "@/concord/lib/channelAccess";
 import { hasPermission, isStaff, outranksMember, Permissions } from "@/concord/lib/roles";
 import { queryPlane, queryRekeyRounds, readControlSnapshot, readStoredSeal, readStreamCursor, updateStreamCursor, writeOpened } from "@/concord/lib/rumorStore";
 import { openWrap, rewrapSeal, sealRumor, wrapSeal, type OpenedEvent, type OpenedWireEvent } from "@/concord/lib/stream";
@@ -1296,14 +1297,29 @@ export function useRefound(community: Community | undefined) {
       }
 
       // 2b. Rotate every held Private Channel (CORD-06 §3: "all Private
-      // Channels relevant to the removed user(s) are rekeyed"). This client
-      // grants every private channel to every member (the invite bundle
-      // carries them all), so every held channel is relevant to any removed
-      // member — rotate them all. Each channel is independently keyed
-      // (CORD-03), so each gets its own fresh key delivered by a
-      // channel-scoped rekey, sealed and addressed under the PRIOR
-      // community_root — never the freshly minted one — so a base-race loser
-      // can still open it (§3). Public channels rotate with the base for free.
+      // Channels relevant to the removed user(s) are rekeyed"). Each channel
+      // is independently keyed (CORD-03), so each gets its own fresh key
+      // delivered by a channel-scoped rekey, sealed and addressed under the
+      // PRIOR community_root — never the freshly minted one — so a base-race
+      // loser can still open it (§3). Public channels rotate with the base for
+      // free.
+      //
+      // Each channel's keep-list is its OWN. The Roles scoped to a channel are
+      // its access list (channelAccess.ts), so a member the base rotation
+      // keeps is vended a private channel's key only where they are entitled
+      // to that channel. Rotating every channel to the community-wide keep
+      // list instead publishes the access the rotation exists to withdraw:
+      // one ban would hand every remaining member the key to every private
+      // channel they had never been granted.
+      //
+      // Two consequences worth naming. A Refounding is now also an entitlement
+      // re-sync — whoever still holds a key a revoke elsewhere already took
+      // from them is cut here, the repair `handleRotateChannelKey` otherwise
+      // performs on its own. And a private channel with NO scoped Role
+      // (degenerate per channelAccess.ts, readable only by the owner and
+      // whoever already holds the key) rotates to its entitled set, which is
+      // the owner alone — its other holders are cut, because no fold can tell
+      // a rotator who they are.
       const rotatedChannels: PrivateChannelKey[] = [];
       for (const ch of community.privateChannels) {
         const chEpoch = ch.epoch + 1n;
@@ -1315,9 +1331,15 @@ export function useRefound(community: Community | undefined) {
           chPrevCommit,
         );
         const chIdHex = bytesToHex(ch.id);
+        // The rotator keeps every key they rotate, entitled or not: they hold
+        // the one being retired already, and dropping themselves here leaves
+        // nobody able to rotate this channel next time.
+        const chRecipients = recipients.filter(
+          (pk) => pk === user.pubkey || isEntitled(folded.roster, folded.ownerHex, pk, chIdHex),
+        );
         const chPlain = bytesToBase64(encodeWrappedKey(ch.id, chEpoch, chKey));
         const chBlobs: RekeyBlob[] = [];
-        for (const pk of recipients) {
+        for (const pk of chRecipients) {
           chBlobs.push({ locator: myLocator(user.pubkey, pk, chIdHex, chEpoch), wrapped: await nip44.encrypt(pk, chPlain) });
         }
         const chAddress = channelRekeyGroupKey(community.root, ch.id, chEpoch);
