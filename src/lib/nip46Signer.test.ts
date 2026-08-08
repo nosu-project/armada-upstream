@@ -162,7 +162,12 @@ describe("Nip46Signer", () => {
       if (req.params[1] === "slow") await new Promise((r) => setTimeout(r, 50));
       return { result: `decrypted:${req.params[1]}` };
     });
-    const signer = makeSigner(transport);
+    // An attempt timeout the 50ms hold cannot trip. At the 200ms default, a
+    // loaded box pushed the slow leg past the deadline, the signer republished
+    // it, and the published count below saw 3 — a retry this test never meant
+    // to exercise (that path has its own tests). Only the id-matching matters
+    // here, so take the retry out of the picture rather than race it.
+    const signer = makeSigner(transport, { attemptTimeoutMs: 30_000 });
 
     const [slow, fast] = await Promise.all([
       signer.nip44.decrypt("aa".repeat(32), "slow"),

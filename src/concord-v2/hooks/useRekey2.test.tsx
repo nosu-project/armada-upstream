@@ -829,7 +829,6 @@ describe("useChannelRekeyWatch2 (CORD-06 §2 channel rotations)", () => {
       const at1: PrivateChannelKey = { ...ch, key: k1, epoch: 1n };
       const at2: PrivateChannelKey = { ...ch, key: k2, epoch: 2n };
       const r1 = await channelRotationWraps(owner, community.root, ch, k1, [owner.pubkey, me.pubkey], Date.now() - 2000);
-      const r2 = await channelRotationWraps(owner, community.root, at1, k2, [owner.pubkey, me.pubkey], Date.now() - 1000);
       const r3 = await channelRotationWraps(owner, community.root, at2, k3, [owner.pubkey, me.pubkey], Date.now());
 
       const relay = new FakeRelay();
@@ -856,11 +855,18 @@ describe("useChannelRekeyWatch2 (CORD-06 §2 channel rotations)", () => {
         { timeout: 10_000 },
       );
 
-      // The missing link shows up on the next poll. `refetchQueries` (not
-      // `invalidateQueries`) so the promise resolves only once the fetch has
-      // actually completed; the walk it feeds is still async behind it, so
-      // the waitFor stays — with a margin sized for a fully loaded worker
-      // pool, where the 10s default has flaked.
+      // The missing link shows up on the next poll. It is BUILT here, at the
+      // moment it arrives, rather than up front with the others: `wrapSeal`
+      // stamps a wrap with `Date.now()` and ignores the `publishMs` that dates
+      // the rumor inside it, so a link built before r3 also carries a wrap
+      // older than r3's. The first fetch advances this scope's per-relay
+      // `since` cursor to the newest wrap it saw (r3's), and the watcher filters
+      // the next poll on it — so whenever the second boundary happened to fall
+      // between building the two, the late link was `since`-excluded from every
+      // subsequent poll and the walk below could never see it. That is a race
+      // against the wall clock, not the worker pool; building it now puts its
+      // wrap at or after the cursor by construction.
+      const r2 = await channelRotationWraps(owner, community.root, at1, k2, [owner.pubkey, me.pubkey], Date.now() - 1000);
       relay.events = [...r1, ...r2, ...r3];
       await act(async () => {
         await queryClient.refetchQueries({ queryKey: ["concord2", "chrekey"] });

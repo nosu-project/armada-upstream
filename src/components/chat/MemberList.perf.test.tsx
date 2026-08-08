@@ -161,20 +161,26 @@ describe("MemberList viewport gating", () => {
     );
     const gatedMs = performance.now() - t0;
 
-    // First paint mounts zero heavy rows regardless of roster size.
+    // First paint mounts zero heavy rows regardless of roster size, and stands
+    // up no per-row query hooks — which is WHY it is cheap, and the whole of
+    // what the ~1.2s all-eager render this replaced was paying for. Asserted
+    // structurally rather than as a wall-clock budget: a regression to eager
+    // rendering shows up here as 800 rows, on any machine, whereas the 400ms
+    // budget this used to carry was really measuring the box's spare capacity
+    // and failed on a loaded one at 463ms.
     expect(rowCount(container)).toBe(0);
+    expect(spies.useAuthor).not.toHaveBeenCalled();
+    expect(observers.length).toBe(800);
 
     const t1 = performance.now();
     fireAll();
     const fullMs = performance.now() - t1;
     expect(rowCount(container)).toBe(800);
 
+    // Kept as characterization for a human reading the log, not as a gate.
     console.log(
       `[perf] MemberList(800): gated first paint ${gatedMs.toFixed(1)}ms, ` +
         `full mount on scroll-in ${fullMs.toFixed(1)}ms`,
     );
-    // The gated first paint is the interactive cost now; it must be far below
-    // the ~1.2s all-eager render this replaced.
-    expect(gatedMs).toBeLessThan(400);
   }, 30_000);
 });
