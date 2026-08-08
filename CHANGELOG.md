@@ -4,6 +4,10 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.49.2] - 2026-08-08
+
+A maintenance release with build and packaging pipeline improvements. There are no user-facing changes.
+
 ## [0.49.1] - 2026-08-08
 
 The desktop app gains push-to-talk, application audio capture in screen shares on Linux, Flatpak packaging, and automatic updates. The Linux build now minimises to a system tray icon instead of quitting when the window is closed. Several notification fixes land alongside: duplicate pushes are filtered, the sender name fills in correctly, and the first tap on the send button now sends.
