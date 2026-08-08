@@ -25,7 +25,7 @@ import { useCallSignals } from "@/contexts/CallSignalsContext";
 import { useCall } from "@/hooks/useCall";
 import { toast } from "@/hooks/useToast";
 import { playLeaveSound, playMuteSound, playUnmuteSound } from "@/lib/callSounds";
-import { usePushToTalkRuntime } from "@/lib/pushToTalk";
+import { requestPushToTalkOverride, usePushToTalkRuntime } from "@/lib/pushToTalk";
 import { switchPublishedScreenShare } from "@/lib/screenShare";
 import { cn } from "@/lib/utils";
 
@@ -50,7 +50,7 @@ export function MicButton({ className }: { className?: string }) {
   const pushToTalk = usePushToTalkRuntime();
   const label = pushToTalk.ready
     ? pushToTalk.pressed
-      ? "Talking — release to mute"
+      ? "Talking — click to mute and stop push to talk"
       : `Hold ${pushToTalk.bindingLabel || "your shortcut"} to talk`
     : isMicrophoneEnabled
       ? "Mute microphone"
@@ -60,9 +60,17 @@ export function MicButton({ className }: { className?: string }) {
       type="button"
       aria-label={label}
       title={label}
-      disabled={pushToTalk.ready}
       onClick={() => {
-        if (pushToTalk.ready) return;
+        // While push to talk owns the microphone this button is the override,
+        // not a toggle: a global shortcut can lose its key-up (another window
+        // grabs the keyboard, the machine sleeps mid-press), and disabling the
+        // button would leave the user transmitting with no way back.
+        if (pushToTalk.ready) {
+          playMuteSound();
+          requestPushToTalkOverride();
+          void localParticipant.setMicrophoneEnabled(false);
+          return;
+        }
         const enabling = !isMicrophoneEnabled;
         // Self-only feedback, on the click gesture (AudioContext unlocked).
         if (enabling) playUnmuteSound();
@@ -74,7 +82,6 @@ export function MicButton({ className }: { className?: string }) {
         isMicrophoneEnabled
           ? "bg-foreground/10 text-foreground hover:bg-foreground/20"
           : "bg-destructive/20 text-destructive hover:bg-destructive/30",
-        pushToTalk.ready && "cursor-default disabled:opacity-100",
         className,
       )}
     >

@@ -272,6 +272,30 @@ export function onDesktopPushToTalkStatus(
   }
 }
 
+const overrideListeners = new Set<() => void>();
+
+/**
+ * Force the microphone closed and stand push-to-talk down for the rest of the
+ * session.
+ *
+ * This is the in-call escape hatch. A global shortcut's key-up can genuinely go
+ * missing — another window grabs the keyboard, a portal chooser swallows the
+ * release, the machine sleeps mid-press — and without a way back the user is
+ * left transmitting with the call UI reporting them silent. Everything else
+ * here is written to fail closed; this is what the user can reach when it
+ * nonetheless fails open.
+ */
+export function requestPushToTalkOverride(): void {
+  for (const listener of overrideListeners) listener();
+}
+
+export function onPushToTalkOverride(listener: () => void): () => void {
+  overrideListeners.add(listener);
+  return () => {
+    overrideListeners.delete(listener);
+  };
+}
+
 export function setPushToTalkRuntime(next: PushToTalkRuntime): void {
   if (
     runtime.ready === next.ready &&
