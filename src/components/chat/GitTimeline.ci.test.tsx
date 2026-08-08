@@ -51,6 +51,64 @@ function renderRow(entry: GitChannelTimelineEntry) {
   return render(<GitTimelineRow entry={entry} members={new Set()} onOpen={() => {}} />);
 }
 
+/** A concluded run of one workflow, with no jobs to expand. */
+function runEntry(workflow: string, conclusion: string, commit: string, createdAt: number): GitChannelTimelineEntry {
+  const run = parseCIRun(event(
+    CI_RESULT_KIND,
+    [["a", COORD], ["c", commit], ["w", `.ngit/act/workflows/${workflow}.yml`], ["o", "push"], ["conclusion", conclusion]],
+    "",
+    `${workflow}${createdAt}`.padEnd(64, "0"),
+  ))!;
+  run.createdAt = createdAt;
+  return {
+    type: "git-ci-run",
+    id: `git:${run.id}`,
+    createdAt,
+    activity: { type: "ci-run", run, repository: parseGitRepositoryAddress(COORD)!, createdAt },
+  };
+}
+
+describe("a stretch of CI runs", () => {
+  /** Ten pushes, each firing both workflows; `test` broke on the last one. */
+  const stretch = Array.from({ length: 10 }, (_, i) => [
+    runEntry("desktop", "success", `c${i}`.padEnd(40, "0"), 1_785_000_000 + i * 2),
+    runEntry("test", i === 9 ? "failure" : "success", `c${i}`.padEnd(40, "0"), 1_785_000_000 + i * 2 + 1),
+  ]).flat();
+
+  function renderGroup(entries: GitChannelTimelineEntry[]) {
+    return render(<GitTimelineRow entry={entries[0]} related={entries} members={new Set()} onOpen={() => {}} />);
+  }
+
+  it("states where each workflow stands instead of listing every run", () => {
+    renderGroup(stretch);
+    expect(screen.getByText(/20 runs across 2 workflows/)).toBeInTheDocument();
+    expect(screen.getByText(/1 failing, 1 passing/)).toBeInTheDocument();
+    // Twenty commits' worth of detail is exactly what the fold is for.
+    expect(screen.queryByText("c9000000")).not.toBeInTheDocument();
+  });
+
+  it("opens the runs behind the fold on click", () => {
+    renderGroup(stretch);
+    fireEvent.click(screen.getByRole("button", { name: /show ci runs/i }));
+    expect(screen.getByText("test")).toBeInTheDocument();
+    expect(screen.getByText("desktop")).toBeInTheDocument();
+    expect(screen.getByText(/failed/)).toBeInTheDocument();
+    // The run each workflow is currently on, not the nineteen before it.
+    expect(screen.getAllByTitle(/succeeded/).length).toBeGreaterThan(0);
+  });
+
+  it("names the workflow once when the whole stretch is one workflow", () => {
+    renderGroup(stretch.filter((entry) => entry.type === "git-ci-run" && entry.activity.run.workflow?.includes("test")));
+    expect(screen.getByText(/latest of 10 runs/)).toBeInTheDocument();
+  });
+
+  it("leaves a lone run as the sentence it already is", () => {
+    renderGroup([runEntry("test", "success", "a".repeat(40), 1_785_000_000)]);
+    expect(screen.queryByRole("button", { name: /show ci runs/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/succeeded/)).toBeInTheDocument();
+  });
+});
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe("CI run row", () => {
