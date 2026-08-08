@@ -3437,7 +3437,7 @@ export function ConcordV2Page() {
                     transport={transport}
                     entries={mixedEntries}
                     newDividerId={newDividerId}
-                    renderEntry={(entry, relatedEntries) => isGitTimelineEntry(entry) ? <GitTimelineRow entry={entry} members={memberSet} onOpen={(ticket) => { setOpenTicket(ticket); void gitActivity.refreshTicket(ticket); }} related={relatedEntries?.filter(isGitTimelineEntry)} activities={gitActivity.activities} /> : entry.type === "dm-timer" ? <TimerNotice2 author={entry.author} seconds={entry.seconds} self={user?.pubkey} /> : null}
+                    renderEntry={(entry, relatedEntries) => isGitTimelineEntry(entry) ? <GitTimelineRow entry={entry} onOpen={(ticket) => { setOpenTicket(ticket); void gitActivity.refreshTicket(ticket); }} related={relatedEntries?.filter(isGitTimelineEntry)} /> : entry.type === "dm-timer" ? <TimerNotice2 author={entry.author} seconds={entry.seconds} self={user?.pubkey} /> : null}
                     handleRef={timelineRef}
                     syncing={channelSyncing || gateResolving}
                     syncFailed={channelSyncFailed}

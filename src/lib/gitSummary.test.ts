@@ -5,36 +5,29 @@
 
 import { describe, expect, it } from "vitest";
 
-import { gitAttachmentLabel, gitBodyPreview, hasGitAttachments } from "@/lib/gitSummary";
+import { gitBodyPreview } from "@/lib/gitSummary";
 
 describe("gitBodyPreview", () => {
   it("keeps a short plain body verbatim", () => {
     const preview = gitBodyPreview("The timer keeps resetting when the tab is hidden.");
     expect(preview.text).toBe("The timer keeps resetting when the tab is hidden.");
     expect(preview.truncated).toBe(false);
-    expect(hasGitAttachments(preview)).toBe(false);
   });
 
-  it("counts markdown images and screen recordings instead of rendering them", () => {
+  it("drops markdown images and screen recordings, keeping the prose around them", () => {
     const preview = gitBodyPreview(
       "Steps to reproduce:\n\n![before](https://blossom.example/a.png)\n![after](https://blossom.example/b.png)\n\nhttps://blossom.example/screen.mp4\n\nIt drops the last frame.",
     );
-    expect(preview.images).toBe(2);
-    expect(preview.videos).toBe(1);
     expect(preview.text).toBe("Steps to reproduce: It drops the last frame.");
-    expect(gitAttachmentLabel(preview)).toBe("2 images · 1 video");
   });
 
-  it("counts a markdown image whose URL has no extension", () => {
+  it("drops a markdown image whose URL has no extension", () => {
     // Content-addressed upload hosts serve exactly this shape.
-    expect(gitBodyPreview("![shot](https://blossom.example/abc123)").images).toBe(1);
+    expect(gitBodyPreview("![shot](https://blossom.example/abc123)").text).toBe("");
   });
 
-  it("counts raw <img> and <video> markup", () => {
-    const preview = gitBodyPreview('<p>See</p><img src="https://x.test/a.png"><video src="https://x.test/b.mp4"></video>');
-    expect(preview.images).toBe(1);
-    expect(preview.videos).toBe(1);
-    expect(preview.text).toBe("See");
+  it("drops raw <img> and <video> markup", () => {
+    expect(gitBodyPreview('<p>See</p><img src="https://x.test/a.png"><video src="https://x.test/b.mp4"></video>').text).toBe("See");
   });
 
   it("strips markdown structure but keeps the words", () => {
@@ -60,7 +53,8 @@ describe("gitBodyPreview", () => {
     const source = "lorem ipsum dolor sit amet ".repeat(40).trim();
     const preview = gitBodyPreview(source);
     expect(preview.truncated).toBe(true);
-    expect(preview.text.length).toBeLessThanOrEqual(241);
+    // Short enough to commit to about two lines, so "more" comes early.
+    expect(preview.text.length).toBeLessThanOrEqual(121);
     expect(preview.text.endsWith("…")).toBe(true);
     // The kept part is a prefix of the body that stops between two words.
     const kept = preview.text.slice(0, -1);
@@ -70,16 +64,11 @@ describe("gitBodyPreview", () => {
 
   it("bounds the string itself, not just its rendered height", () => {
     // A megabyte of prose costs a megabyte of DOM behind a CSS line clamp.
-    expect(gitBodyPreview("x".repeat(1_000_000)).text.length).toBeLessThan(300);
+    expect(gitBodyPreview("x".repeat(1_000_000)).text.length).toBeLessThan(200);
   });
 
-  it("reduces a body that is only media to attachments", () => {
-    const preview = gitBodyPreview("![a](https://x.test/a.png)\n![b](https://x.test/b.png)\n![c](https://x.test/c.png)");
-    expect(preview.text).toBe("");
-    expect(gitAttachmentLabel(preview)).toBe("3 images");
-  });
-
-  it("names nothing when there is nothing to name", () => {
-    expect(gitAttachmentLabel(gitBodyPreview("plain"))).toBeUndefined();
+  it("leaves nothing behind for a body that is only media", () => {
+    // The row is then its subject line alone, which is the whole point.
+    expect(gitBodyPreview("![a](https://x.test/a.png)\n![b](https://x.test/b.png)\n![c](https://x.test/c.png)").text).toBe("");
   });
 });

@@ -24,70 +24,34 @@ export interface GitBodyPreview {
   text: string;
   /** Whether {@link text} was cut short — the row owes the reader a way in. */
   truncated: boolean;
-  images: number;
-  videos: number;
-  audio: number;
-}
-
-/** Whether a preview dropped any attachment worth naming in the row. */
-export function hasGitAttachments(preview: GitBodyPreview): boolean {
-  return preview.images + preview.videos + preview.audio > 0;
-}
-
-/** "2 images · 1 video" — what the row stands in for, never a media element. */
-export function gitAttachmentLabel(preview: GitBodyPreview): string | undefined {
-  const parts = [
-    plural(preview.images, "image"),
-    plural(preview.videos, "video"),
-    plural(preview.audio, "audio clip"),
-  ].filter((part): part is string => part !== undefined);
-  return parts.length > 0 ? parts.join(" · ") : undefined;
-}
-
-function plural(count: number, noun: string): string | undefined {
-  if (count <= 0) return undefined;
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 /**
- * Reduce a Git body to a single line of prose and the media it left behind.
+ * Reduce a Git body to a couple of lines of prose, dropping the media.
  *
  * `maxChars` bounds the string itself rather than relying on a CSS clamp: the
  * clamp keeps the row short on screen, but a megabyte of text still costs a
- * megabyte of DOM to lay out and hit-test behind it.
+ * megabyte of DOM to lay out and hit-test behind it. The default is short
+ * enough that the row commits to about two lines and hands the rest over.
  */
-export function gitBodyPreview(content: string, maxChars = 240): GitBodyPreview {
-  let images = 0;
-  let videos = 0;
-  let audio = 0;
-
-  /** Count a URL as an attachment, or report that it is ordinary prose. */
-  const countUrl = (url: string): boolean => {
-    if (IMAGE_URL.test(url)) images++;
-    else if (VIDEO_URL.test(url)) videos++;
-    else if (AUDIO_URL.test(url)) audio++;
-    else return false;
-    return true;
-  };
+export function gitBodyPreview(content: string, maxChars = 120): GitBodyPreview {
+  /** Drop a URL that renders as media, or report that it is ordinary prose. */
+  const isMediaUrl = (url: string): boolean => IMAGE_URL.test(url) || VIDEO_URL.test(url) || AUDIO_URL.test(url);
 
   let text = content.replace(/\r\n?/g, "\n");
-  // Raw HTML: comments say nothing to a reader, and a media tag is one more
-  // attachment however it was spelled.
+  // Raw HTML: comments say nothing to a reader, and a media tag is media
+  // however it was spelled.
   text = text.replace(/<!--[\s\S]*?-->/g, " ");
-  text = text.replace(/<img\b[^>]*>/gi, () => (images++, " "));
-  text = text.replace(/<video\b[\s\S]*?(?:<\/video>|\/?>)/gi, () => (videos++, " "));
+  text = text.replace(/<video\b[\s\S]*?(?:<\/video>|\/?>)/gi, " ");
   text = text.replace(/<\/?[a-z][^>]*>/gi, " ");
-  // A markdown image is an attachment even when its URL has no extension —
-  // most upload hosts serve content-addressed paths.
-  text = text.replace(/!\[[^\]]*\]\(([^)\s]*)[^)]*\)/g, (_match, url: string) => {
-    if (!countUrl(url)) images++;
-    return " ";
-  });
+  // Every markdown image goes, whatever its URL looks like — most upload
+  // hosts serve content-addressed paths with no extension to recognize.
+  text = text.replace(/!\[[^\]]*\]\([^)]*\)/g, " ");
   // A link's label is the prose; its target is not.
   text = text.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
-  // Bare media URLs render as players in the panel, so they are attachments
-  // here too. Other URLs stay: they are often the whole point of a comment.
-  text = text.replace(/https?:\/\/\S+/gi, (url) => (countUrl(url) ? " " : url));
+  // Bare media URLs render as players in the panel, so they go here too.
+  // Other URLs stay: they are often the whole point of a comment.
+  text = text.replace(/https?:\/\/\S+/gi, (url) => (isMediaUrl(url) ? " " : url));
   // Fence markers go and their contents stay: a body that is only a stack
   // trace should preview as its first lines rather than as nothing at all.
   text = text.replace(/^[ \t]*(?:```|~~~).*$/gm, " ");
@@ -109,5 +73,5 @@ export function gitBodyPreview(content: string, maxChars = 240): GitBodyPreview 
     text = `${(lastSpace > maxChars * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
   }
 
-  return { text, truncated, images, videos, audio };
+  return { text, truncated };
 }

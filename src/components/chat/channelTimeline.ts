@@ -75,6 +75,8 @@ export function mergeChannelTimeline(chat: readonly ChatMsg[], git: readonly Git
  * run, because the reader's attention did too. What groups is what a reader
  * would summarize as one thing —
  *
+ * - tickets one author opened in one repository: one person filing, not one
+ *   avatar and one name repeated down the channel;
  * - comments on one ticket: a burst of discussion, read as a thread;
  * - status changes on one ticket: only the last one is the ticket's state, the
  *   rest are a ticket that flapped;
@@ -85,6 +87,13 @@ export function mergeChannelTimeline(chat: readonly ChatMsg[], git: readonly Git
  */
 export function isGitContinuation(previous: ChannelTimelineEntry | undefined, entry: ChannelTimelineEntry | undefined): boolean {
   if (!previous || !entry) return false;
+  if (previous.type === "git-ticket-opened" && entry.type === "git-ticket-opened") {
+    // Type and repository too, so the group's one sentence stays true of every
+    // ticket under it ("opened 3 issues in armada").
+    return previous.activity.ticket.author === entry.activity.ticket.author
+      && previous.activity.ticket.type === entry.activity.ticket.type
+      && previous.activity.repository.coordinate === entry.activity.repository.coordinate;
+  }
   if (previous.type === "git-comment" && entry.type === "git-comment") {
     return previous.activity.ticket.id === entry.activity.ticket.id;
   }

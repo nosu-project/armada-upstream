@@ -10,15 +10,16 @@ import { describe, expect, it, vi } from "vitest";
 import { GitTimelineRow } from "@/components/chat/GitTimeline";
 
 import type { GitChannelTimelineEntry } from "@/components/chat/channelTimeline";
-import type { GitRepositoryAddress, GitTicket, GitTimelineActivity } from "@/lib/gitActivity";
+import type { GitRepositoryAddress, GitTicket } from "@/lib/gitActivity";
 
 vi.mock("@/hooks/useAuthor", () => ({ useAuthor: () => ({ data: undefined }) }));
 vi.mock("@/hooks/useScopedDisplayName", () => ({
-  useScopedDisplayName: () => "alex",
+  useScopedDisplayName: (pubkey: string) => (pubkey.startsWith("78") ? "alex" : "robin"),
   useScopedIdentity: () => ({ displayName: "alex", color: undefined, label: undefined }),
 }));
 
 const AUTHOR = "781a1527055f74c1f70230f10384609b34548f8ab6a0a6caa74025827f9fdae5";
+const OTHER = "86184109eae937d8d6f980b4a0b46da4ef0d983eade403ee1b4c0b6bde238b47";
 const repository: GitRepositoryAddress = { kind: 30617, owner: AUTHOR, identifier: "armada", coordinate: `30617:${AUTHOR}:armada` };
 
 const BODY = [
@@ -82,18 +83,30 @@ describe("an opened ticket", () => {
   const entry: GitChannelTimelineEntry = { type: "git-ticket-opened", id: `git:${ticket.id}`, createdAt: ticket.createdAt, activity: { type: "ticket-opened", ticket, repository, createdAt: ticket.createdAt } };
 
   it("stands in for the body's media rather than playing it in the channel", () => {
-    const { container } = render(<GitTimelineRow entry={entry} members={new Set()} onOpen={() => {}} />);
+    const { container } = render(<GitTimelineRow entry={entry} onOpen={() => {}} />);
     expect(screen.getByText("Git events drown the conversation")).toBeInTheDocument();
     expect(screen.getByText(/The channel is unreadable while CI is running\./)).toBeInTheDocument();
-    expect(screen.getByText("2 images · 1 video")).toBeInTheDocument();
-    // Three screenshots and a screen recording is what drowned the channel.
+    // Three screenshots and a screen recording is what drowned the channel —
+    // and a caption counting them is one more thing competing for the eye.
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("video")).toBeNull();
+    expect(screen.queryByText(/image|video/i)).toBeNull();
+  });
+
+  it("carries one icon at most: the avatar says who, the words say what", () => {
+    const { container } = render(<GitTimelineRow entry={entry} onOpen={() => {}} />);
+    expect(container.querySelectorAll("svg")).toHaveLength(0);
+    expect(screen.getByText(/opened an issue in armada/)).toBeInTheDocument();
+  });
+
+  it("does not date-stamp a row the reading order already places", () => {
+    render(<GitTimelineRow entry={entry} onOpen={() => {}} />);
+    expect(screen.queryByText(/\d+[mhd]$|^now$/)).toBeNull();
   });
 
   it("opens the work item from anywhere in the row", () => {
     const onOpen = vi.fn();
-    render(<GitTimelineRow entry={entry} members={new Set()} onOpen={onOpen} />);
+    render(<GitTimelineRow entry={entry} onOpen={onOpen} />);
     fireEvent.click(screen.getByText("Git events drown the conversation"));
     fireEvent.click(screen.getByText(/The channel is unreadable/));
     expect(onOpen).toHaveBeenCalledTimes(2);
@@ -102,7 +115,7 @@ describe("an opened ticket", () => {
 
   it("offers a way in when the body is longer than the row", () => {
     const long = ticketWith("word ".repeat(200));
-    render(<GitTimelineRow entry={{ ...entry, activity: { ...entry.activity, ticket: long } } as GitChannelTimelineEntry} members={new Set()} onOpen={() => {}} />);
+    render(<GitTimelineRow entry={{ ...entry, activity: { ...entry.activity, ticket: long } } as GitChannelTimelineEntry} onOpen={() => {}} />);
     expect(screen.getByText("more")).toBeInTheDocument();
   });
 });
@@ -113,27 +126,44 @@ describe("a burst of comments", () => {
     commentEntry(ticket, "c1".padEnd(64, "0"), "First thought", 1_785_000_100),
     commentEntry(ticket, "c2".padEnd(64, "0"), "Second thought", 1_785_000_101),
   ];
-  const activities: GitTimelineActivity[] = [
-    ...shown.map((entry) => entry.activity),
-    commentEntry(ticket, "c3".padEnd(64, "0"), "Elsewhere", 1_785_000_300).activity,
-    commentEntry(ticket, "c4".padEnd(64, "0"), "Elsewhere too", 1_785_000_400).activity,
-  ];
 
-  it("renders one block under the ticket it belongs to", () => {
-    render(<GitTimelineRow entry={shown[0]} related={shown} members={new Set()} onOpen={() => {}} activities={activities} />);
-    expect(screen.getAllByText("Git events drown the conversation")).toHaveLength(1);
+  it("names the ticket once, above the block", () => {
+    render(<GitTimelineRow entry={shown[0]} related={shown} onOpen={() => {}} />);
+    expect(screen.getAllByText(/Git events drown the conversation/)).toHaveLength(1);
     expect(screen.getByText("First thought")).toBeInTheDocument();
     expect(screen.getByText("Second thought")).toBeInTheDocument();
   });
 
-  it("says how much of the discussion is elsewhere", () => {
-    render(<GitTimelineRow entry={shown[0]} related={shown} members={new Set()} onOpen={() => {}} activities={activities} />);
-    expect(screen.getByText("View all 4 comments")).toBeInTheDocument();
+  it("does not repeat one author's name down the block", () => {
+    render(<GitTimelineRow entry={shown[0]} related={shown} onOpen={() => {}} />);
+    expect(screen.getAllByText("alex")).toHaveLength(1);
   });
 
-  it("says nothing when the block is the whole discussion", () => {
-    render(<GitTimelineRow entry={shown[0]} related={shown} members={new Set()} onOpen={() => {}} activities={shown.map((entry) => entry.activity)} />);
-    expect(screen.queryByText(/View all/)).not.toBeInTheDocument();
+  it("re-introduces the author when the speaker changes", () => {
+    const second = commentEntry(ticket, "c2".padEnd(64, "0"), "Second thought", 1_785_000_101);
+    second.activity.comment.author = OTHER;
+    render(<GitTimelineRow entry={shown[0]} related={[shown[0], second]} onOpen={() => {}} />);
+    expect(screen.getByText("alex")).toBeInTheDocument();
+    expect(screen.getByText("robin")).toBeInTheDocument();
+  });
+});
+
+describe("tickets filed back to back", () => {
+  const entries = ["b", "c", "d"].map((seed, index) => {
+    const ticket = ticketWith("body", seed.repeat(64));
+    return { type: "git-ticket-opened" as const, id: `git:${ticket.id}`, createdAt: ticket.createdAt + index, activity: { type: "ticket-opened" as const, ticket, repository, createdAt: ticket.createdAt + index } };
+  });
+
+  it("introduces the author once and lists what they filed", () => {
+    render(<GitTimelineRow entry={entries[0]} related={entries} onOpen={() => {}} />);
+    expect(screen.getAllByText("alex")).toHaveLength(1);
+    expect(screen.getByText(/opened 3 issues in armada/)).toBeInTheDocument();
+    expect(screen.getAllByText("Git events drown the conversation")).toHaveLength(3);
+  });
+
+  it("drops the bodies once there is more than one, leaving the subjects", () => {
+    render(<GitTimelineRow entry={entries[0]} related={entries} onOpen={() => {}} />);
+    expect(screen.queryByText("body")).toBeNull();
   });
 });
 
@@ -146,7 +176,7 @@ describe("a ticket that flapped", () => {
       statusEntry(ticket, 1630, 1_785_000_201),
       statusEntry(ticket, 1632, 1_785_000_202),
     ];
-    render(<GitTimelineRow entry={changes[0]} related={changes} members={new Set()} onOpen={() => {}} />);
+    render(<GitTimelineRow entry={changes[0]} related={changes} onOpen={() => {}} />);
     expect(screen.getByText(/closed/)).toBeInTheDocument();
     expect(screen.getByText(/3 status changes/)).toBeInTheDocument();
     expect(screen.queryByText(/reopened/)).not.toBeInTheDocument();
@@ -154,7 +184,7 @@ describe("a ticket that flapped", () => {
 
   it("drops the count for a single change", () => {
     const change = statusEntry(ticket, 1631, 1_785_000_200);
-    render(<GitTimelineRow entry={change} members={new Set()} onOpen={() => {}} />);
+    render(<GitTimelineRow entry={change} onOpen={() => {}} />);
     expect(screen.getByText(/resolved/)).toBeInTheDocument();
     expect(screen.queryByText(/status changes/)).not.toBeInTheDocument();
   });

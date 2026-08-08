@@ -48,7 +48,7 @@ function entryWith(logsUrl: string | undefined, tail: string): GitChannelTimelin
 }
 
 function renderRow(entry: GitChannelTimelineEntry) {
-  return render(<GitTimelineRow entry={entry} members={new Set()} onOpen={() => {}} />);
+  return render(<GitTimelineRow entry={entry} onOpen={() => {}} />);
 }
 
 /** A concluded run of one workflow, with no jobs to expand. */
@@ -76,12 +76,12 @@ describe("a stretch of CI runs", () => {
   ]).flat();
 
   function renderGroup(entries: GitChannelTimelineEntry[]) {
-    return render(<GitTimelineRow entry={entries[0]} related={entries} members={new Set()} onOpen={() => {}} />);
+    return render(<GitTimelineRow entry={entries[0]} related={entries} onOpen={() => {}} />);
   }
 
   it("states where each workflow stands instead of listing every run", () => {
     renderGroup(stretch);
-    expect(screen.getByText(/20 runs across 2 workflows/)).toBeInTheDocument();
+    expect(screen.getByText(/20 runs/)).toBeInTheDocument();
     expect(screen.getByText(/1 failing, 1 passing/)).toBeInTheDocument();
     // Twenty commits' worth of detail is exactly what the fold is for.
     expect(screen.queryByText("c9000000")).not.toBeInTheDocument();
