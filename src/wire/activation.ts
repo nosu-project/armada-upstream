@@ -24,7 +24,7 @@
  * deferral implementations share these semantics rather than each keeping
  * their own copy of them:
  *
- *   - `c2:<communityIdHex>`   — a Concord V2 community
+ *   - `c2:<communityIdHex>`   — a Concord community
  *   - `nip29:<relayUrl>`      — a NIP-29 server (relay-per-community, so the
  *                               relay IS the community; its channels defer and
  *                               activate together, exactly as its rail button
@@ -32,8 +32,8 @@
  */
 import { normalizeRelayUrl } from "@/lib/platform";
 
-/** Scope key for a Concord V2 community. */
-export function concord2Scope(communityIdHex: string): string {
+/** Scope key for a Concord community. */
+export function concordScope(communityIdHex: string): string {
   return `c2:${communityIdHex}`;
 }
 

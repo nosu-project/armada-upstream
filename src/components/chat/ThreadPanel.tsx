@@ -47,7 +47,7 @@ import { useIsTouch } from "@/hooks/useIsMobile";
 import { useLongPress } from "@/hooks/useLongPress";
 import { useMessagePermalink } from "@/hooks/useMessagePermalink";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
-import { isTombstoneRoot } from "@/concord-v2/hooks/useConcord2Threads";
+import { isTombstoneRoot } from "@/concord/hooks/useConcordThreads";
 import { ComposerBoundsProvider, getComposerCollisionPadding, useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { shortClockTime } from "@/lib/formatTime";
@@ -99,7 +99,7 @@ function ThreadMessage({
   zaps?: MessageZaps;
   /** Whether this surface supports zaps (shows the ⚡ button on others' messages). */
   zapEnabled?: boolean;
-  /** CORD.md announcement publisher (Concord v2); absent = NIP-57 public surface. */
+  /** CORD.md announcement publisher (Concord); absent = NIP-57 public surface. */
   onSendZap?: (target: ChatMsg, payment: ZapPayment) => Promise<void>;
   onSendOnchainZap?: (target: ChatMsg, announcement: OnchainZapAnnouncement) => Promise<void>;
   canReact: boolean;

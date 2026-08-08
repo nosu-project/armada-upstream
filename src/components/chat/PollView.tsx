@@ -23,7 +23,7 @@ interface PollViewProps {
  * Presentational NIP-88 poll card: question options as result bars or votable
  * buttons, the user's own choice, and totals. 100% transport-agnostic — the
  * tally and the vote callback are supplied, so the same card renders NIP-29
- * relay polls and Concord v2 sealed polls.
+ * relay polls and Concord sealed polls.
  */
 export function PollView({ event, tally, canVote, isVoting, onVote }: PollViewProps) {
   const { user } = useCurrentUser();

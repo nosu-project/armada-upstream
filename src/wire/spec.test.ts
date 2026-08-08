@@ -4,12 +4,12 @@ import { MAX_WRAP_BACKDATE_SECS } from "@/lib/nip17/protocol";
 
 import { GIT_ROOT_FILTER_CHUNK_SIZE, buildWireSpec, stampRoundSince } from "./spec";
 
-import type { GroupKey } from "@/concord-v2/lib/derive";
-import type { ChannelV2 } from "@/concord-v2/lib/types";
+import type { GroupKey } from "@/concord/lib/derive";
+import type { Channel } from "@/concord/lib/types";
 
 const PUBKEY = "f".repeat(64);
 
-function v2Channel(idByte: number, pks: string[]): ChannelV2 {
+function concordChannel(idByte: number, pks: string[]): Channel {
   const id = new Uint8Array(32).fill(idByte);
   const idHex = Array.from(id, (b) => b.toString(16).padStart(2, "0")).join("");
   return {
@@ -19,10 +19,10 @@ function v2Channel(idByte: number, pks: string[]): ChannelV2 {
     isPrivate: false,
     streams: pks.map((pk, i) => ({
       epoch: BigInt(i),
-      group: { pk } as unknown as ChannelV2["streams"][number]["group"],
+      group: { pk } as unknown as Channel["streams"][number]["group"],
     })),
-    current: { epoch: 0n, group: { pk: pks[0] } as unknown as ChannelV2["streams"][number]["group"] },
-  } as ChannelV2;
+    current: { epoch: 0n, group: { pk: pks[0] } as unknown as Channel["streams"][number]["group"] },
+  } as Channel;
 }
 
 describe("buildWireSpec", () => {
@@ -36,7 +36,7 @@ describe("buildWireSpec", () => {
       ],
       dmRelays: [],
       dmFollows: [],
-      concord2: [],
+      concord: [],
     });
 
     expect(spec.subs).toHaveLength(2);
@@ -52,7 +52,7 @@ describe("buildWireSpec", () => {
       groups: [],
       dmRelays: ["wss://dm.relay"],
       dmFollows: ["b".repeat(64), "a".repeat(64)],
-      concord2: [],
+      concord: [],
     });
 
     expect(spec.subs).toHaveLength(1);
@@ -69,21 +69,21 @@ describe("buildWireSpec", () => {
       groups: [],
       dmRelays: ["wss://dm.relay"],
       dmFollows: ["a".repeat(64)],
-      concord2: [],
+      concord: [],
     });
     expect(spec.subs).toHaveLength(0);
   });
 
   it("subscribes only the CURRENT epoch's stream live, but maps every held epoch's pk → channel", () => {
-    const chanA = v2Channel(1, ["pkA1", "pkA2"]);
-    const chanB = v2Channel(2, ["pkB1"]);
+    const chanA = concordChannel(1, ["pkA1", "pkA2"]);
+    const chanB = concordChannel(2, ["pkB1"]);
 
     const spec = buildWireSpec({
       pubkey: PUBKEY,
       groups: [],
       dmRelays: [],
       dmFollows: [],
-      concord2: [
+      concord: [
         { relays: ["wss://c.relay"], channel: chanA, communityIdHex: "commA" },
         { relays: ["wss://c.relay"], channel: chanB, communityIdHex: "commB" },
       ],
@@ -96,18 +96,18 @@ describe("buildWireSpec", () => {
       { kinds: [1059], authors: ["pkA1", "pkB1"] },
     ]);
     // …but its wraps still decode if one arrives (in-flight straggler / park).
-    expect(spec.v2ByPk.get("pkA2")).toBe(chanA);
-    expect(spec.v2ByPk.get("pkB1")).toBe(chanB);
+    expect(spec.concordByPk.get("pkA2")).toBe(chanA);
+    expect(spec.concordByPk.get("pkB1")).toBe(chanB);
   });
 
-  it("subscribes to Concord V2 control authors and maps control pk → community", () => {
+  it("subscribes to Concord control authors and maps control pk → community", () => {
     const spec = buildWireSpec({
       pubkey: PUBKEY,
       groups: [],
       dmRelays: [],
       dmFollows: [],
-      concord2: [],
-      concord2Control: [
+      concord: [],
+      concordControl: [
         {
           relays: ["wss://c.relay"],
           idHex: "a".repeat(64),
@@ -119,19 +119,19 @@ describe("buildWireSpec", () => {
 
     expect(spec.subs).toHaveLength(1);
     expect(spec.subs[0].filters).toEqual([{ kinds: [1059], authors: ["ctlA1", "ctlA2"] }]);
-    expect(spec.v2CtlByPk.get("ctlA1")?.idHex).toBe("a".repeat(64));
-    expect(spec.v2CtlByPk.get("ctlA2")?.idHex).toBe("a".repeat(64));
+    expect(spec.concordCtlByPk.get("ctlA1")?.idHex).toBe("a".repeat(64));
+    expect(spec.concordCtlByPk.get("ctlA2")?.idHex).toBe("a".repeat(64));
   });
 
   it("keeps chat-wrap and control-wrap filters separate on the same relay", () => {
-    const chanA = v2Channel(1, ["pkA1"]);
+    const chanA = concordChannel(1, ["pkA1"]);
     const spec = buildWireSpec({
       pubkey: PUBKEY,
       groups: [],
       dmRelays: [],
       dmFollows: [],
-      concord2: [{ relays: ["wss://c.relay"], channel: chanA, communityIdHex: "commA" }],
-      concord2Control: [
+      concord: [{ relays: ["wss://c.relay"], channel: chanA, communityIdHex: "commA" }],
+      concordControl: [
         {
           relays: ["wss://c.relay"],
           idHex: "a".repeat(64),
@@ -153,7 +153,7 @@ describe("buildWireSpec", () => {
       pubkey: PUBKEY,
       dmRelays: [],
       dmFollows: [],
-      concord2: [],
+      concord: [],
     };
     const a = buildWireSpec({ ...base, groups: [{ id: "g1", relay: "wss://a" }, { id: "g2", relay: "wss://a" }] });
     const b = buildWireSpec({ ...base, groups: [{ id: "g2", relay: "wss://a" }, { id: "g1", relay: "wss://a" }] });
@@ -166,7 +166,7 @@ describe("buildWireSpec", () => {
       address: { kind: 30617 as const, owner: "a".repeat(64), identifier: "armada", coordinate: address }, relayHints: [], attachedAt, detachedAt,
     });
     const spec = buildWireSpec({
-      pubkey: PUBKEY, groups: [], dmRelays: [], dmFollows: [], concord2: [],
+      pubkey: PUBKEY, groups: [], dmRelays: [], dmFollows: [], concord: [],
       gitRepositories: [{
         address,
         relays: ["wss://b.relay/", "wss://a.relay"],
@@ -193,7 +193,7 @@ describe("buildWireSpec", () => {
     expect(spec.gitByRepository.get(address)?.map((entry) => entry.channelId)).toEqual(["channel-a", "channel-b"]);
 
     const detached = buildWireSpec({
-      pubkey: PUBKEY, groups: [], dmRelays: [], dmFollows: [], concord2: [],
+      pubkey: PUBKEY, groups: [], dmRelays: [], dmFollows: [], concord: [],
       gitRepositories: [{ address, relays: ["wss://a.relay"], attachments: [{ channelId: "channel-a", attachment: attachment(10, 15) }] }],
     });
     expect(detached.subs).toEqual([]);
@@ -206,7 +206,7 @@ describe("buildWireSpec", () => {
     const roots = Array.from({ length: GIT_ROOT_FILTER_CHUNK_SIZE + 1 }, (_, index) => ({
       id: index.toString(16).padStart(64, "0"), kind: index % 2 ? 1618 : 1621, pubkey: "b".repeat(64), created_at: index, content: "", tags: [["a", address]], sig: "",
     }));
-    const spec = buildWireSpec({ pubkey: PUBKEY, groups: [], dmRelays: [], dmFollows: [], concord2: [], gitRepositories: [{ address, relays: ["wss://repo.relay", "wss://index.ngit.dev"], attachments: [{ channelId: "channel", attachment }] }], gitTicketRoots: [...roots].reverse() });
+    const spec = buildWireSpec({ pubkey: PUBKEY, groups: [], dmRelays: [], dmFollows: [], concord: [], gitRepositories: [{ address, relays: ["wss://repo.relay", "wss://index.ngit.dev"], attachments: [{ channelId: "channel", attachment }] }], gitTicketRoots: [...roots].reverse() });
     const filters = spec.subs.find((sub) => sub.relay === "wss://repo.relay")!.filters;
     expect(filters.filter((filter) => filter.kinds?.[0] === 1111).map((filter) => filter["#E"]?.length)).toEqual([GIT_ROOT_FILTER_CHUNK_SIZE, 1]);
     expect(filters.filter((filter) => filter.kinds?.[0] === 1630).map((filter) => filter["#e"]?.length)).toEqual([GIT_ROOT_FILTER_CHUNK_SIZE, 1]);
@@ -217,7 +217,7 @@ describe("buildWireSpec", () => {
   it("changes the subscription signature when a root arrives after wire startup", () => {
     const address = `30617:${"a".repeat(64)}:armada`;
     const attachment = { address: { kind: 30617 as const, owner: "a".repeat(64), identifier: "armada", coordinate: address }, relayHints: [], attachedAt: 10 };
-    const input = { pubkey: PUBKEY, groups: [], dmRelays: [], dmFollows: [], concord2: [], gitRepositories: [{ address, relays: ["wss://repo.relay"], attachments: [{ channelId: "channel", attachment }] }] };
+    const input = { pubkey: PUBKEY, groups: [], dmRelays: [], dmFollows: [], concord: [], gitRepositories: [{ address, relays: ["wss://repo.relay"], attachments: [{ channelId: "channel", attachment }] }] };
     const before = buildWireSpec(input);
     const root = { id: "1".repeat(64), kind: 1621, pubkey: "b".repeat(64), created_at: 20, content: "", tags: [["a", address]], sig: "" };
     const after = buildWireSpec({ ...input, gitTicketRoots: [root] });
@@ -237,7 +237,7 @@ describe("stampRoundSince", () => {
       groups: [{ id: "g1", relay: "wss://dm.relay" }],
       dmRelays: ["wss://dm.relay"],
       dmFollows: ["a".repeat(64)],
-      concord2: [],
+      concord: [],
     });
     const stamped = stampRoundSince(dm17.subs[0].filters, SINCE, NOW);
 
@@ -259,7 +259,7 @@ describe("stampRoundSince", () => {
     expect(stamped.some((f) => f.kinds?.[0] === 9)).toBe(true);
   });
 
-  it("keeps the cursor since on a Concord V2 wrap filter (authors-scoped, real timestamps)", () => {
+  it("keeps the cursor since on a Concord wrap filter (authors-scoped, real timestamps)", () => {
     const stamped = stampRoundSince([{ kinds: [1059], authors: ["pkA1"] }], SINCE, NOW);
     expect(stamped[0].since).toBe(SINCE);
     expect(stamped[0].limit).toBeUndefined();

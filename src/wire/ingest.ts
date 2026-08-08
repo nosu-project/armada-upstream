@@ -1,8 +1,8 @@
-import { openChatBatch } from "@/concord-v2/lib/chat";
-import { KIND_MESSAGE, KIND_REACTION } from "@/concord-v2/lib/kinds";
-import type { StreamKeyView } from "@/concord-v2/lib/derive";
-import { notePlaneWrapsJunk, notePlaneWrapsSeen, openPlaneWrapsChunked, unseenPlaneWraps } from "@/concord-v2/lib/planeSync";
-import { parkPendingWraps, writeOpened, writeRumors } from "@/concord-v2/lib/rumorStore";
+import { openChatBatch } from "@/concord/lib/chat";
+import { KIND_MESSAGE, KIND_REACTION } from "@/concord/lib/kinds";
+import type { StreamKeyView } from "@/concord/lib/derive";
+import { notePlaneWrapsJunk, notePlaneWrapsSeen, openPlaneWrapsChunked, unseenPlaneWraps } from "@/concord/lib/planeSync";
+import { parkPendingWraps, writeOpened, writeRumors } from "@/concord/lib/rumorStore";
 import { bufferLiveDmWraps } from "@/lib/nip17/dm17Store";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { KIND_STREAM_MESSAGE_V2 } from "@/buzz/kinds";
@@ -13,12 +13,12 @@ import { isCIEventKind, matchCIEventRepository } from "@/lib/ci";
 import { chatRoute } from "@/lib/routes";
 import { isGitRepositoryAttachedAt, matchGitTicketRepository, parseGitComment, parseGitStatusEvent, parseGitTicket } from "@/lib/gitActivity";
 
-import type { OpenedChat } from "@/concord-v2/lib/chat";
+import type { OpenedChat } from "@/concord/lib/chat";
 import type { WireSpec } from "@/wire/spec";
-import type { ChannelV2 } from "@/concord-v2/lib/types";
+import type { Channel } from "@/concord/lib/types";
 import type { NostrEvent } from "@nostrify/nostrify";
 
-/** Gift-wrap kinds (Concord V2 / NIP-59) — never persisted sealed. */
+/** Gift-wrap kinds (Concord / NIP-59) — never persisted sealed. */
 const WRAP_KINDS = new Set([1059, 21059]);
 /** NIP-59 gift-wrap kind — the DM candidate's reported kind for a NIP-17 wrap. */
 const KIND_DM_WRAP = 1059;
@@ -100,8 +100,8 @@ function scopeOf(ev: NostrEvent, spec: WireSpec | undefined): string | undefined
  * the web socket manager, the APK service's live `relayEvent` feed, and its
  * buffered drain — so there is exactly one routing rule:
  *
- *   - Concord V2 wraps whose stream key we hold → decrypt → rumor store.
- *   - V2 wraps we can't open yet (control/invite planes, key not derived yet)
+ *   - Concord wraps whose stream key we hold → decrypt → rumor store.
+ *   - Concord wraps we can't open yet (control/invite planes, key not derived yet)
  *     → parked pending store, drained later by whoever holds the key.
  *   - Everything else (NIP-29 kinds, DMs) → the event store,
  *     which routes by scope: NIP-29 to `opts.relay`'s own tenant, the rest to
@@ -135,7 +135,7 @@ export async function ingestWireEvents(
   // Split wraps from plaintext; group decryptable wraps per channel so the
   // (chunked, memoized) decode runs one batch per channel. Control-plane wraps
   // (a separate author set) are collected per community for a fold wake.
-  const wrapsByChannel = new Map<ChannelV2, NostrEvent[]>();
+  const wrapsByChannel = new Map<Channel, NostrEvent[]>();
   const ctlWraps: NostrEvent[] = [];
   const toPark: NostrEvent[] = [];
   const plain: NostrEvent[] = [];
@@ -143,12 +143,12 @@ export async function ingestWireEvents(
   for (const ev of events) {
     if (!ev || typeof ev.id !== "string" || typeof ev.kind !== "number") continue;
     if (WRAP_KINDS.has(ev.kind)) {
-      const channel = spec?.v2ByPk.get(ev.pubkey);
+      const channel = spec?.concordByPk.get(ev.pubkey);
       if (channel) {
         const list = wrapsByChannel.get(channel);
         if (list) list.push(ev);
         else wrapsByChannel.set(channel, [ev]);
-      } else if (spec?.v2CtlByPk.has(ev.pubkey)) {
+      } else if (spec?.concordCtlByPk.has(ev.pubkey)) {
         ctlWraps.push(ev);
       } else if (self && ev.kind === KIND_DM_WRAP && ev.tags.some(([n, v]) => n === "p" && v === self)) {
         // A NIP-17 gift wrap addressed to the viewer (kind-1059, `#p` = self —
@@ -161,10 +161,10 @@ export async function ingestWireEvents(
         // then rings `dm` for the re-read. (Two scopes deliberately: `dm:wrap` =
         // "live wraps are buffered, decrypt them"; `dm` = "the store changed,
         // re-read" — so decryption isn't re-triggered by its own store write.)
-        // It is NOT parked (parking treats it as a dead Concord V2 pending wrap).
+        // It is NOT parked (parking treats it as a dead Concord pending wrap).
         dmWraps.push(ev);
       } else {
-        // A wrap for a stream we hold no key for yet (V2 control/invite plane,
+        // A wrap for a stream we hold no key for yet (Concord control/invite plane,
         // or a just-joined channel whose spec hasn't refreshed) — park it.
         toPark.push(ev);
       }
@@ -183,26 +183,26 @@ export async function ingestWireEvents(
     if (freshDmWraps.length > 0) scopes.add("dm:wrap");
   }
 
-  // V2: decrypt with the owning channel's stream keys → the owning community's
+  // Concord: decrypt with the owning channel's stream keys → the owning community's
   // rumor-store tenant.
   for (const [channel, wraps] of wrapsByChannel) {
     const opened = await openChatBatch(wraps, channel);
     if (opened.length === 0) continue;
-    // A channel only reaches `v2ByPk` via the same spec input that registered
+    // A channel only reaches `concordByPk` via the same spec input that registered
     // its community, so a miss means the spec was rebuilt underneath us. Skip
     // the write rather than guessing a tenant: the wraps are still on the relay
     // (and, on native, still parked), so the next sweep re-ingests them once
     // the channel's community is back in the spec. Guessing would file one
     // community's messages under another.
-    const communityIdHex = spec?.v2CommunityByChannel.get(channel.idHex);
+    const communityIdHex = spec?.concordCommunityByChannel.get(channel.idHex);
     if (!communityIdHex) continue;
     writeRumors(communityIdHex, opened);
     scopes.add(`c2:${channel.idHex}`);
-    for (const c of v2Candidates(opened, channel, communityIdHex, self)) candidates.push(c);
+    for (const c of concordCandidates(opened, channel, communityIdHex, self)) candidates.push(c);
   }
 
-  // V2 CONTROL: decrypt with the community's control-stream keys → opened-event
-  // store, then ring `c2ctl:<idHex>`. useControlEvents2 listens on that scope
+  // Concord CONTROL: decrypt with the community's control-stream keys → opened-event
+  // store, then ring `c2ctl:<idHex>`. useControlEvents listens on that scope
   // (even for a non-open community, whose rail button can't be invalidation-
   // reached) to re-seed from the store and re-fold — so a freshly-published
   // channel edition surfaces in the sidebar promptly, without waiting for the
@@ -213,7 +213,7 @@ export async function ingestWireEvents(
       { groups: StreamKeyView[]; refounded: boolean; wraps: NostrEvent[] }
     >();
     for (const ev of ctlWraps) {
-      const entry = spec.v2CtlByPk.get(ev.pubkey);
+      const entry = spec.concordCtlByPk.get(ev.pubkey);
       if (!entry) continue;
       const bucket = byCommunity.get(entry.idHex);
       if (bucket) bucket.wraps.push(ev);
@@ -307,10 +307,10 @@ export async function ingestWireEvents(
   feedNotifyCandidates(candidates);
 }
 
-/** Build notify candidates for a batch of decrypted V2 chat rumors. */
-function v2Candidates(
+/** Build notify candidates for a batch of decrypted Concord chat rumors. */
+function concordCandidates(
   opened: OpenedChat[],
-  channel: ChannelV2,
+  channel: Channel,
   communityIdHex: string | undefined,
   self: string | undefined,
 ): NotifyCandidate[] {
@@ -319,7 +319,7 @@ function v2Candidates(
   // the id. `communityIdHex` unknown leaves the path empty and the hook drops
   // the candidate; there is no channel-only route to fall back to.
   const room = communityIdHex
-    ? ({ kind: "concord2", communityId: communityIdHex, channelId: channel.idHex } as const)
+    ? ({ kind: "concord", communityId: communityIdHex, channelId: channel.idHex } as const)
     : undefined;
   const pathTo = (messageId: string | undefined) =>
     room ? chatRoute(messageId ? { ...room, messageId } : room) : "";
@@ -362,7 +362,7 @@ function v2Candidates(
       kind: r.kind,
       body: preview(r.content),
       roomKey: `c2:${channel.idHex}`,
-      readKey: channel.idHex, // Concord2 read map is keyed by channel id hex
+      readKey: channel.idHex, // Concord read map is keyed by channel id hex
       path: pathTo(r.rumorId),
       eventId: r.rumorId,
       channelIdHex: channel.idHex,
@@ -472,7 +472,7 @@ function gitCandidates(ev: NostrEvent, spec: WireSpec | undefined): NotifyCandid
       readKey: channelId,
       // `?ticket=` opens the ticket pane, not a message permalink — a git
       // activity event is not a row in the channel timeline.
-      path: `${chatRoute({ kind: "concord2", communityId, channelId })}?ticket=${encodeURIComponent(ticketId ?? ev.id)}`,
+      path: `${chatRoute({ kind: "concord", communityId, channelId })}?ticket=${encodeURIComponent(ticketId ?? ev.id)}`,
       channelIdHex: channelId,
       git: { action, repository: attachment.address.identifier, ticketId, ticketTitle },
       eventId: ev.id,

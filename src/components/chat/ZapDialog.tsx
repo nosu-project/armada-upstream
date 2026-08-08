@@ -15,9 +15,9 @@ export interface ZapDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   target: ChatMsg;
-  /** CORD.md lightning zap announcement publisher (Concord v2); absent = NIP-57. */
+  /** CORD.md lightning zap announcement publisher (Concord); absent = NIP-57. */
   sendZap?: (target: ChatMsg, payment: ZapPayment) => Promise<void>;
-  /** CORD.md on-chain zap announcement publisher (Concord v2); absent = public kind 8333. */
+  /** CORD.md on-chain zap announcement publisher (Concord); absent = public kind 8333. */
   sendOnchainZap?: (target: ChatMsg, announcement: OnchainZapAnnouncement) => Promise<void>;
 }
 

@@ -1,5 +1,5 @@
 /**
- * Wiring test: the entire V2 catch-up — every community, both planes — must
+ * Wiring test: the entire Concord catch-up — every community, both planes — must
  * reach each relay as ONE REQ, and fresh data must invalidate touched queries.
  */
 
@@ -8,12 +8,12 @@ import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure
 import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { bytesToHex, controlGroupKey } from "@/concord-v2/lib/derive";
-import { KIND_SEAL_PLAINTEXT } from "@/concord-v2/lib/kinds";
-import { _configureAuthWaitForTests } from "@/concord-v2/lib/planeSync";
-import { queryPlane } from "@/concord-v2/lib/rumorStore";
-import { buildRumor, sealRumor, wrapSeal } from "@/concord-v2/lib/stream";
-import type { CommunityV2 } from "@/concord-v2/lib/types";
+import { bytesToHex, controlGroupKey } from "@/concord/lib/derive";
+import { KIND_SEAL_PLAINTEXT } from "@/concord/lib/kinds";
+import { _configureAuthWaitForTests } from "@/concord/lib/planeSync";
+import { queryPlane } from "@/concord/lib/rumorStore";
+import { buildRumor, sealRumor, wrapSeal } from "@/concord/lib/stream";
+import type { Community } from "@/concord/lib/types";
 
 import { syncControlPlane } from "./controlPlaneSync";
 
@@ -61,7 +61,7 @@ function signer(sk = generateSecretKey()) {
   return { sk, pubkey: getPublicKey(sk), signEvent: async (t: EventTemplate) => finalizeEvent(t, sk) };
 }
 
-function communityOf(fill: number, owner: string): CommunityV2 {
+function communityOf(fill: number, owner: string): Community {
   const root = new Uint8Array(32).fill(fill);
   const id = new Uint8Array(32).fill(fill + 1);
   return {
@@ -75,10 +75,10 @@ function communityOf(fill: number, owner: string): CommunityV2 {
     privateChannels: [],
     relays: [RELAY_A, RELAY_B],
     name: "test",
-  } as CommunityV2;
+  } as Community;
 }
 
-describe("syncControlPlane — batched V2 sweep", () => {
+describe("syncControlPlane — batched Concord sweep", () => {
   it("reaches each relay as ONE REQ covering every community's control + guestbook", async () => {
     const owner = signer();
     const a = communityOf(100, owner.pubkey);
@@ -116,15 +116,15 @@ describe("syncControlPlane — batched V2 sweep", () => {
       expect(opening.length, "every relay must be OPENED exactly once").toBe(1);
       expect(opening[0].length).toBe(4);
     }
-    expect(result.v2Touched).toEqual(new Set([a.idHex]));
-    expect(invalidated).toHaveBeenCalledWith({ queryKey: ["concord2", "control", a.idHex] });
+    expect(result.concordTouched).toEqual(new Set([a.idHex]));
+    expect(invalidated).toHaveBeenCalledWith({ queryKey: ["concord", "control", a.idHex] });
   });
 
   it(
     "issue #19: a late older edition from a relay that was down is picked up by a later sweep",
     { timeout: 30_000 },
     async () => {
-      // The end-to-end heal that used to live in useControlPlane2.test.tsx,
+      // The end-to-end heal that used to live in useControlPlane.test.tsx,
       // now owned by the sweep layer. Per-relay cursors (control:<id>|<url>)
       // mean a relay that was down during the first sweep is re-asked from its
       // OWN (unadvanced) cursor — so an edition with an OLDER created_at that
@@ -169,7 +169,7 @@ describe("syncControlPlane — batched V2 sweep", () => {
 
       // First sweep: E2 lands from relay A; relay B fails (its cursor stays put).
       const first = await syncControlPlane(nostr, queryClient, [community]);
-      expect(first.v2Touched).toEqual(new Set([community.idHex]));
+      expect(first.concordTouched).toEqual(new Set([community.idHex]));
       let stored = await queryPlane(community.idHex, "control");
       expect(stored.map((e) => e.rumorId)).toContain(e2.rumorId);
       expect(stored.map((e) => e.rumorId)).not.toContain(e1.rumorId);
@@ -181,7 +181,7 @@ describe("syncControlPlane — batched V2 sweep", () => {
       // (never advanced), not the newer A-driven one, so the older edition is
       // not skipped.
       const second = await syncControlPlane(nostr, queryClient, [community]);
-      expect(second.v2Touched).toEqual(new Set([community.idHex]));
+      expect(second.concordTouched).toEqual(new Set([community.idHex]));
       stored = await queryPlane(community.idHex, "control");
       expect(stored.map((e) => e.rumorId), "the late older edition E1 must eventually land").toContain(
         e1.rumorId,

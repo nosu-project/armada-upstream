@@ -5,10 +5,10 @@ import { useNavigate } from "react-router-dom";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useCommunityActions2, type InvitePreview2 } from "@/concord-v2/hooks/useCommunityActions2";
-import { useCommunity2 } from "@/concord-v2/hooks/useCommunityList2";
-import { useDecryptedImage2 } from "@/concord-v2/hooks/useDecryptedImage2";
-import { parseInviteLink, type ParsedInviteLink } from "@/concord-v2/lib/invite";
+import { useCommunityActions, type InvitePreview } from "@/concord/hooks/useCommunityActions";
+import { useCommunity } from "@/concord/hooks/useCommunityList";
+import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
+import { parseInviteLink, type ParsedInviteLink } from "@/concord/lib/invite";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
 import { cn } from "@/lib/utils";
@@ -42,8 +42,8 @@ export function InviteEmbed({ url, className }: InviteEmbedProps) {
 }
 
 function InviteCard({ invite, className }: { invite: ParsedInviteLink; className?: string }) {
-  const { preview } = useCommunityActions2();
-  const [data, setData] = useState<InvitePreview2 | null>(null);
+  const { preview } = useCommunityActions();
+  const [data, setData] = useState<InvitePreview | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -78,17 +78,17 @@ function InviteResolvedCard({
   className,
 }: {
   invite: ParsedInviteLink;
-  preview: InvitePreview2;
+  preview: InvitePreview;
   className?: string;
 }) {
   const navigate = useNavigate();
   const { user } = useCurrentUser();
-  const { join, isJoining } = useCommunityActions2();
-  const iconUrl = useDecryptedImage2(preview.bundle.icon);
+  const { join, isJoining } = useCommunityActions();
+  const iconUrl = useDecryptedImage(preview.bundle.icon);
 
   // idHex on the community list is the hex community_id; the bundle carries the
   // same hex, so a direct lookup tells us if we're already a member.
-  const alreadyJoined = !!useCommunity2(preview.communityId);
+  const alreadyJoined = !!useCommunity(preview.communityId);
   const [joining, setJoining] = useState(false);
 
   const expired =

@@ -44,30 +44,30 @@ const ROUNDTRIPS: Array<[ChatRoute, string, string]> = [
     "/s/relay.example/abc/t/r1/m/m1",
     "/s/:server/:groupId/t/:threadRoot/m/:messageId",
   ],
-  // Concord V2.
-  [{ kind: "concord2", communityId: "c" }, "/c/c", "/c/:communityId"],
+  // Concord.
+  [{ kind: "concord", communityId: "c" }, "/c/c", "/c/:communityId"],
   [
-    { kind: "concord2", communityId: "c", pane: "mentions" },
+    { kind: "concord", communityId: "c", pane: "mentions" },
     "/c/c/mentions",
     "/c/:communityId/mentions",
   ],
   [
-    { kind: "concord2", communityId: "c", channelId: "ch" },
+    { kind: "concord", communityId: "c", channelId: "ch" },
     "/c/c/ch",
     "/c/:communityId/:channelId",
   ],
   [
-    { kind: "concord2", communityId: "c", channelId: "ch", messageId: "m1" },
+    { kind: "concord", communityId: "c", channelId: "ch", messageId: "m1" },
     "/c/c/ch/m/m1",
     "/c/:communityId/:channelId/m/:messageId",
   ],
   [
-    { kind: "concord2", communityId: "c", channelId: "ch", threadRoot: "r1" },
+    { kind: "concord", communityId: "c", channelId: "ch", threadRoot: "r1" },
     "/c/c/ch/t/r1",
     "/c/:communityId/:channelId/t/:threadRoot",
   ],
   [
-    { kind: "concord2", communityId: "c", channelId: "ch", threadRoot: "r1", messageId: "m1" },
+    { kind: "concord", communityId: "c", channelId: "ch", threadRoot: "r1", messageId: "m1" },
     "/c/c/ch/t/r1/m/m1",
     "/c/:communityId/:channelId/t/:threadRoot/m/:messageId",
   ],
@@ -119,7 +119,7 @@ describe("chatRoute / parseChatRoute", () => {
     });
     // Concord channel ids are hex, so no such collision exists there.
     expect(parseChatRoute("/c/c/members")).toEqual({
-      kind: "concord2",
+      kind: "concord",
       communityId: "c",
       pane: "members",
     });
@@ -155,7 +155,7 @@ describe("roomPath", () => {
   it("drops thread and message focus, keeping the room", () => {
     expect(
       roomPath({
-        kind: "concord2",
+        kind: "concord",
         communityId: "c",
         channelId: "ch",
         threadRoot: "r1",
@@ -176,7 +176,7 @@ describe("withoutMessage", () => {
     expect(
       chatRoute(
         withoutMessage({
-          kind: "concord2",
+          kind: "concord",
           communityId: "c",
           channelId: "ch",
           threadRoot: "r1",
@@ -200,7 +200,7 @@ describe("withoutMessage", () => {
   });
 
   it("leaves a location with no message focus alone", () => {
-    const route: ChatRoute = { kind: "concord2", communityId: "c", channelId: "ch" };
+    const route: ChatRoute = { kind: "concord", communityId: "c", channelId: "ch" };
     expect(chatRoute(withoutMessage(route))).toBe(chatRoute(route));
   });
 });

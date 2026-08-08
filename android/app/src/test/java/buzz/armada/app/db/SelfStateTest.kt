@@ -21,7 +21,7 @@ class SelfStateTest {
     @Test
     fun `keeps every bare replaceable kind in the catalogue`() {
         // Follow, mute, NIP-29 servers/channels, DM relays, Blossom, emoji,
-        // and the Concord V2 community + invite lists.
+        // and the Concord community + invite lists.
         for (kind in listOf(3, 10000, 10009, 10050, 10063, 10030, 13302, 13303)) {
             assertTrue("kind $kind", SelfState.storable(self, rumor(kind = kind)))
         }

@@ -42,16 +42,16 @@ import { useRelayInfo } from "@/hooks/useRelayInfo";
 import { type ActiveCall, type ConcordVoiceContext } from "@/contexts/CallContext";
 import { useVoiceIdentity, VoiceIdentityContext, type VoiceIdentityResolver } from "@/contexts/VoiceIdentityContext";
 import { ServerScopeProvider } from "@/components/ServerScopeProvider";
-import { random32, voiceSenderKey } from "@/concord-v2/lib/derive";
-import { rendezvousCandidates, verifiedAuthorOf } from "@/concord-v2/lib/voice";
-import { useCallSync2 } from "@/concord-v2/hooks/useCallSync2";
+import { random32, voiceSenderKey } from "@/concord/lib/derive";
+import { rendezvousCandidates, verifiedAuthorOf } from "@/concord/lib/voice";
+import { useCallSync } from "@/concord/hooks/useCallSync";
 import {
   ownAvServers,
-  useAvToken2,
-  useVoiceHeartbeat2,
-  useVoicePresence2,
-  useVoiceReactions2,
-} from "@/concord-v2/hooks/useVoice2";
+  useAvToken,
+  useVoiceHeartbeat,
+  useVoicePresence,
+  useVoiceReactions,
+} from "@/concord/hooks/useVoice";
 import { CallSignalsContext, type CallSignals } from "@/contexts/CallSignalsContext";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { relayToRouteParam } from "@/lib/platform";
@@ -698,7 +698,7 @@ function ConcordVoiceRoom({
   // Live presence (§4): the identity→member verification input, the rendezvous
   // hint stream (§5), and the input to our own heartbeat below. Resolved before
   // the token so a failed mint has somewhere to fall through to.
-  const fold = useVoicePresence2(community, channel);
+  const fold = useVoicePresence(community, channel);
 
   // The §5 candidates behind `ctx.broker`. `resolveVoiceBroker` already probed
   // one at join time, but a probe only proves the broker answered a moment ago —
@@ -711,7 +711,7 @@ function ConcordVoiceRoom({
     [channel.voice.room.pk, fold, broker],
   );
 
-  const { data: tokenData, error, isLoading } = useAvToken2(channel, broker, true, fallbackBrokers);
+  const { data: tokenData, error, isLoading } = useAvToken(channel, broker, true, fallbackBrokers);
 
   // Raise-hand + emoji reactions (Armada client feature; Concord calls only —
   // they ride additive tags on the encrypted presence rumor, so brokers stay
@@ -724,7 +724,7 @@ function ConcordVoiceRoom({
   // when the channel's key rolls (the rotation that severs a removed member
   // from chat must move the call too), and hang up on a ban verdict, vault
   // removal, or channel deletion.
-  useCallSync2(ctx, onLeave);
+  useCallSync(ctx, onLeave);
 
   // Register the navigate-to-call handler so the floating video window's
   // "return to call" action lands on this Concord voice channel. The route
@@ -742,7 +742,7 @@ function ConcordVoiceRoom({
   // that actually minted the token, not the one the rendezvous nominated: after
   // a fall-through those differ, and advertising the unreachable origin would
   // steer everyone else at a broker that is not hosting this call.
-  const { sendReaction } = useVoiceHeartbeat2(
+  const { sendReaction } = useVoiceHeartbeat(
     community,
     channel,
     tokenData?.identity,
@@ -750,7 +750,7 @@ function ConcordVoiceRoom({
     handRaised,
   );
   // Live in-call emoji reactions from every member (own reactions echo back).
-  const reactions = useVoiceReactions2(community, channel);
+  const reactions = useVoiceReactions(community, channel);
 
   // Who has a hand up: the fresh presence fold, plus ourselves the instant we
   // raise (before our own heartbeat echoes back). Pushed to the app-level call

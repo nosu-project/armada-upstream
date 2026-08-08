@@ -28,18 +28,18 @@ export function dmReadKey(pubkey: string): string {
   return `dm:${pubkey}`;
 }
 
-/** Stable conversation key for a Concord V2 channel. */
-export function concord2ReadKey(channelIdHex: string): string {
+/** Stable conversation key for a Concord channel. */
+export function concordReadKey(channelIdHex: string): string {
   return `c2:${channelIdHex}`;
 }
 
-/** Stable key for a Concord V2 community's mentions-tab last-seen stamp. */
-export function concord2MentionReadKey(communityIdHex: string): string {
+/** Stable key for a Concord community's mentions-tab last-seen stamp. */
+export function concordMentionReadKey(communityIdHex: string): string {
   return `c2m:${communityIdHex}`;
 }
 
-/** Stable key for a Concord V2 thread's last-read stamp (by root rumor id). */
-export function concord2ThreadReadKey(rootId: string): string {
+/** Stable key for a Concord thread's last-read stamp (by root rumor id). */
+export function concordThreadReadKey(rootId: string): string {
   return `c2t:${rootId}`;
 }
 

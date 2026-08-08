@@ -2,7 +2,7 @@
  * The wire's change-notification bus.
  *
  * Every event the wire ingests lands in IndexedDB first (armada-events for
- * plaintext planes, the rumor store for decrypted Concord V2); the bus then
+ * plaintext planes, the rumor store for decrypted Concord); the bus then
  * tells interested hooks WHICH conversation changed so they can re-read the
  * store. This replaces the old per-hook live subscriptions and the
  * cross-cache `setQueryData` plumbing: stores are the single source of truth,
@@ -17,11 +17,11 @@
  *     thread needs to re-read
  *   - `dm:wrap`              — the wire saw a live inbound NIP-17 gift wrap it
  *     can't decrypt itself; useDm17 force-syncs to fetch + decrypt + store it
- *   - `c2:<channelIdHex>`    — a Concord V2 channel's rumor store changed
- *   - `c2park:<streamPk>`    — a V2 wrap for this stream address was PARKED
+ *   - `c2:<channelIdHex>`    — a Concord channel's rumor store changed
+ *   - `c2park:<streamPk>`    — a Concord wrap for this stream address was PARKED
  *     (the wire held no key for it); a hook holding that stream's key should
  *     drain the pending store
- *   - `c2ctl:<communityIdHex>` — a Concord V2 community's decrypted control
+ *   - `c2ctl:<communityIdHex>` — a Concord community's decrypted control
  *     plane changed (the background sweep stored new editions)
  *   - `git:<repository-address>` — an attached NIP-34 issue/PR root changed
  *

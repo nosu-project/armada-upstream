@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react";
 
-import type { VoiceReactionEntry } from "@/concord-v2/lib/voice";
+import type { VoiceReactionEntry } from "@/concord/lib/voice";
 
 /**
  * In-call "raise hand" + emoji reactions — an Armada client feature layered on

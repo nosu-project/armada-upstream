@@ -3,11 +3,11 @@ import { isGitAnnouncementDiscoveryRelay, normalizeRelayUrl } from "@/lib/platfo
 import { BUZZ_WIRE_KINDS } from "@/buzz/kinds";
 import { MAX_WRAP_BACKDATE_SECS } from "@/lib/nip17/protocol";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
-import { KIND_WRAP } from "@/concord-v2/lib/kinds";
+import { KIND_WRAP } from "@/concord/lib/kinds";
 import { GIT_ISSUE_KIND, GIT_PULL_REQUEST_KIND, GIT_STATUS_KINDS, matchGitTicketRepository, NIP22_COMMENT_KIND, parseGitTicket, type GitRepositoryAttachment } from "@/lib/gitActivity";
 
-import type { StreamKeyView } from "@/concord-v2/lib/derive";
-import type { ChannelV2 } from "@/concord-v2/lib/types";
+import type { StreamKeyView } from "@/concord/lib/derive";
+import type { Channel } from "@/concord/lib/types";
 import type { NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
@@ -40,7 +40,7 @@ export const GIT_ROOT_FILTER_CHUNK_SIZE = 100;
 
 /**
  * Whether a filter is the wire's NIP-17 DM gift-wrap inbox filter
- * (`{kinds:[1059], "#p":[me]}`). Concord V2 wrap filters share the kind but
+ * (`{kinds:[1059], "#p":[me]}`). Concord wrap filters share the kind but
  * are `authors`-scoped (stream addresses) and carry no `#p`.
  */
 function isDmWrapInboxFilter(f: NostrFilter): boolean {
@@ -95,24 +95,24 @@ export interface WireInputs {
   dmRelays: string[];
   /** Friends-only DM senders (kind-3 follows). */
   dmFollows: string[];
-  /** Concord V2 channels (each carries its stream GroupKeys for decrypt). */
-  concord2: Array<{ relays: string[]; channel: ChannelV2; communityIdHex: string }>;
+  /** Concord channels (each carries its stream GroupKeys for decrypt). */
+  concord: Array<{ relays: string[]; channel: Channel; communityIdHex: string }>;
   /**
-   * Concord V2 CONTROL planes (each carries its control-stream GroupKeys). A
+   * Concord CONTROL planes (each carries its control-stream GroupKeys). A
    * standing subscription to these authors lands new control editions —
    * channel creations, roster/metadata changes — LIVE for every community, not
    * only the one you have open, so a member added to a new channel sees it in
    * the sidebar without waiting for the slow background sweep (or for someone
    * to post the first message).
    */
-  concord2Control?: Array<{
+  concordControl?: Array<{
     relays: string[];
     idHex: string;
     groups: StreamKeyView[];
     /** Whether the community has ever rotated its root (see `noteControlSnapshot`). */
     refounded: boolean;
   }>;
-  /** Repository activity planes attached through folded Concord V2 channel metadata. */
+  /** Repository activity planes attached through folded Concord channel metadata. */
   gitRepositories?: GitRepositoryWireInput[];
   /** Cache/history-discovered NIP-34 issue and PR roots for dynamic child filters. */
   gitTicketRoots?: NostrRumor[];
@@ -136,12 +136,12 @@ export interface WireSub {
 
 export interface WireSpec {
   subs: WireSub[];
-  /** V2 stream address (wrap author) → owning channel, for decrypt + scope. */
-  v2ByPk: Map<string, ChannelV2>;
-  /** V2 channel id hex → its owning community id hex (for notification routing). */
-  v2CommunityByChannel: Map<string, string>;
-  /** V2 CONTROL stream address (wrap author) → its community, for decrypt + fold wake. */
-  v2CtlByPk: Map<string, { idHex: string; groups: StreamKeyView[]; refounded: boolean }>;
+  /** Concord stream address (wrap author) → owning channel, for decrypt + scope. */
+  concordByPk: Map<string, Channel>;
+  /** Concord channel id hex → its owning community id hex (for notification routing). */
+  concordCommunityByChannel: Map<string, string>;
+  /** Concord CONTROL stream address (wrap author) → its community, for decrypt + fold wake. */
+  concordCtlByPk: Map<string, { idHex: string; groups: StreamKeyView[]; refounded: boolean }>;
   /** Repository address → channels/intervals that reference it. */
   gitByRepository: Map<string, Array<{ channelId: string; communityId?: string; attachment: GitRepositoryAttachment }>>;
   /** Known ticket root id → repository address, for validating child activity. */
@@ -158,7 +158,7 @@ export interface WireSpec {
  * NIP-29 is relay-per-community: each host relay gets exactly one `#h` filter
  * covering the groups it hosts (NIP-42 AUTH is handled by the relay pool for
  * private groups — the pool signs kind-22242 with the user's signer, and
- * Concord V2 stream keys are additionally authenticated via the stream-auth
+ * Concord stream keys are additionally authenticated via the stream-auth
  * registry, which matters on relays that gate kind-1059 REQs by `authors`).
  *
  * Muted channels are deliberately INCLUDED: the wire feeds the local stores
@@ -213,21 +213,21 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     }
   }
 
-  // ── Concord V2: merged wrap-author filter per community relay ────────────
+  // ── Concord: merged wrap-author filter per community relay ────────────
   // The STANDING subscription carries only each channel's CURRENT epoch: a
   // retired epoch is sealed history with a hard read cutoff (its rotation's
   // publish time), so nothing legitimate ever arrives there live — holding
   // every old address open forever was a permanent writable side-channel for
   // any ejected keyholder, plus unbounded filter growth. History still reaches
-  // the store through the scheduler's backfill, and `v2ByPk` keeps EVERY held
+  // the store through the scheduler's backfill, and `concordByPk` keeps EVERY held
   // epoch so a straggler wrap already in flight (or parked) still decodes —
   // the decode path enforces the cutoff either way.
-  const v2ByPk = new Map<string, ChannelV2>();
-  const v2CommunityByChannel = new Map<string, string>();
+  const concordByPk = new Map<string, Channel>();
+  const concordCommunityByChannel = new Map<string, string>();
   const pksByRelay = new Map<string, Set<string>>();
-  for (const { relays, channel, communityIdHex } of inputs.concord2) {
-    for (const s of channel.streams) v2ByPk.set(s.group.pk, channel);
-    v2CommunityByChannel.set(channel.idHex, communityIdHex);
+  for (const { relays, channel, communityIdHex } of inputs.concord) {
+    for (const s of channel.streams) concordByPk.set(s.group.pk, channel);
+    concordCommunityByChannel.set(channel.idHex, communityIdHex);
     for (const url of relays) {
       const relay = normalizeRelayUrl(url);
       if (!relay) continue;
@@ -240,15 +240,15 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     add(relay, { kinds: [KIND_WRAP], authors: [...pks].sort() });
   }
 
-  // ── Concord V2 CONTROL: merged control-author filter per community relay ──
+  // ── Concord CONTROL: merged control-author filter per community relay ──
   // Kept SEPARATE from the chat-wrap map above: control wraps decode with the
   // control-stream keys (not any channel's) and wake the fold rather than a
   // chat timeline (see ingest.ts). Filters coalesce with the chat-wrap filter
   // on the same relay via the shared KIND_WRAP `add` merge — one round trip.
-  const v2CtlByPk = new Map<string, { idHex: string; groups: StreamKeyView[]; refounded: boolean }>();
+  const concordCtlByPk = new Map<string, { idHex: string; groups: StreamKeyView[]; refounded: boolean }>();
   const ctlPksByRelay = new Map<string, Set<string>>();
-  for (const { relays, idHex, groups, refounded } of inputs.concord2Control ?? []) {
-    for (const g of groups) v2CtlByPk.set(g.pk, { idHex, groups, refounded });
+  for (const { relays, idHex, groups, refounded } of inputs.concordControl ?? []) {
+    for (const g of groups) concordCtlByPk.set(g.pk, { idHex, groups, refounded });
     for (const url of relays) {
       const relay = normalizeRelayUrl(url);
       if (!relay) continue;
@@ -345,5 +345,5 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     .map(([relay, filters]) => ({ relay, filters }))
     .sort((a, b) => (a.relay < b.relay ? -1 : 1));
 
-  return { subs, v2ByPk, v2CommunityByChannel, v2CtlByPk, gitByRepository, gitRootById, gitRootAuthorById, sig: JSON.stringify(subs) };
+  return { subs, concordByPk, concordCommunityByChannel, concordCtlByPk, gitByRepository, gitRootById, gitRootAuthorById, sig: JSON.stringify(subs) };
 }

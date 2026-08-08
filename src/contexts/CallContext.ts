@@ -1,6 +1,6 @@
 import { createContext } from "react";
 
-import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
+import type { Channel, Community } from "@/concord/lib/types";
 
 /**
  * A Concord (CORD-07, serverless, end-to-end-encrypted) voice room: the
@@ -10,8 +10,8 @@ import type { ChannelV2, CommunityV2 } from "@/concord-v2/lib/types";
  * Concord calls.
  */
 export interface ConcordVoiceContext {
-  community: CommunityV2;
-  channel: ChannelV2;
+  community: Community;
+  channel: Channel;
   broker: string;
 }
 

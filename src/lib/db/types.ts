@@ -29,7 +29,7 @@
  *  - the parked-wrap tenant (`c2park`) stores wraps, whose id is their own.
  *
  * Anything else that stores a rumor stores it verbatim, and the reasons are in
- * `concord-v2/lib/rumorStore.ts` and `nip17/dm17Store.ts`: a rumor's tags are
+ * `concord/lib/rumorStore.ts` and `nip17/dm17Store.ts`: a rumor's tags are
  * the bytes its id commits to, so bookkeeping written into them makes the row
  * something the sender never signed.
  */

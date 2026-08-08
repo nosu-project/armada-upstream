@@ -182,10 +182,10 @@ In the Armada client:
 - `client/src/hooks/useZap.ts` + `client/src/lib/lnurl.ts` — the §2 flow
   (LNURL-pay without the `nostr` or `comment` parameters, pay, obtain
   preimage).
-- `client/src/concord-v2/lib/chat.ts` — folds verified Zaps into per-message
+- `client/src/concord/lib/chat.ts` — folds verified Zaps into per-message
   tallies, one per `payment_hash` (§4 uniqueness); unverified ones never enter
   totals.
-- `client/src/concord-v2/hooks/useTransport2.ts` — seals and publishes the Zap
+- `client/src/concord/hooks/useTransport.ts` — seals and publishes the Zap
   rumor (`sendZap`).
 
 ---
@@ -336,8 +336,8 @@ In the Armada client:
   and the `KIND_POLL`/`KIND_POLL_VOTE` constants.
 - `client/src/components/chat/PollView.tsx` — the presentational card (results
   bars / votable options), fed a tally + a vote callback by either transport.
-- `client/src/concord-v2/lib/chat.ts` — folds votes into `pollVotes` per poll.
-- `client/src/concord-v2/hooks/useTransport2.ts` — `sendPoll` (seals the kind
+- `client/src/concord/lib/chat.ts` — folds votes into `pollVotes` per poll.
+- `client/src/concord/hooks/useTransport.ts` — `sendPoll` (seals the kind
   1068), `sendPollVote` (seals the kind 1018), and `pollFor` (the per-poll tally).
 
 ---
@@ -420,9 +420,9 @@ In the Armada client:
 - `client/src/lib/calendar.ts` — the transport-agnostic core shared with the
   NIP-29 relay path: `parseCalendarEvents`, `buildCalendarTags`, `tallyRsvps`,
   and the `CalendarTransport` contract the shared events UI renders through.
-- `client/src/concord-v2/lib/chat.ts` — folds events (kept out of the timeline)
+- `client/src/concord/lib/chat.ts` — folds events (kept out of the timeline)
   and buckets RSVPs per event rumor id.
-- `client/src/concord-v2/hooks/useTransport2.ts` — seals events (`save`), RSVPs
+- `client/src/concord/hooks/useTransport.ts` — seals events (`save`), RSVPs
   (`setRsvp`), and deletes, and exposes the per-event tally (`rsvpsFor`).
 
 ---
@@ -522,11 +522,11 @@ relay-hosted calls have no such channel and carry no hand/reaction signal.
 
 In the Armada client:
 
-- `client/src/concord-v2/lib/voice.ts` — the `hand` field on
+- `client/src/concord/lib/voice.ts` — the `hand` field on
   `VoicePresenceEntry`, `presenceTags`/`parsePresence` (raise-hand), and
   `reactionTag`/`parseReaction` (the `VoiceReactionEntry` shape + validation).
-- `client/src/concord-v2/hooks/useVoice2.ts` — `useVoiceHeartbeat2` carries the
-  hand state and emits reactions (`sendReaction`); `useVoiceReactions2`
+- `client/src/concord/hooks/useVoice.ts` — `useVoiceHeartbeat` carries the
+  hand state and emits reactions (`sendReaction`); `useVoiceReactions`
   subscribes and fires each once per nonce (decaying ~4 s).
 - `client/src/contexts/CallSignalsContext.ts` — exposes the raise-hand toggle,
   the reaction sender, and the live reactions to the in-call UI.
@@ -551,7 +551,7 @@ cosmetic, never authority:
 `color` is baseline CORD-04, not an extension; Armada renders it as the role's
 badge/section tint (low 24 bits, `#rrggbb`).
 
-Implementation: `client/src/concord-v2/lib/roles.ts` (`Role.display`, written
+Implementation: `client/src/concord/lib/roles.ts` (`Role.display`, written
 only when true), `client/src/components/chat/MemberList.tsx` (the hoisted
 sections).
 
@@ -583,8 +583,8 @@ isn't expressible until every channel carries a position.
 Position is advisory display data: a client that ignores it loses the
 arrangement, never a channel.
 
-Implementation: `client/src/concord-v2/lib/channelOrder.ts`,
-`useCommunityManagement2.moveChannel` (the settings buttons) and
+Implementation: `client/src/concord/lib/channelOrder.ts`,
+`useCommunityManagement.moveChannel` (the settings buttons) and
 `.reorderChannel` (an absolute slot, what a drag lands on), `channelsView`
 (the single sort site).
 
@@ -662,19 +662,19 @@ they are not an access control.**
 
 In the Armada client:
 
-- `client/src/concord-v2/lib/channelCategory.ts` — the metadata accessors
+- `client/src/concord/lib/channelCategory.ts` — the metadata accessors
   (`channelCategory` / `withChannelCategory`), the casefolded `categoryKey`,
   and `groupChannelsByCategory` (the uncategorized run + ordered categories).
-- `client/src/concord-v2/lib/community.ts` — `channelsView` surfaces `category`
+- `client/src/concord/lib/community.ts` — `channelsView` surfaces `category`
   on each Channel it decides the member can see.
-- `client/src/concord-v2/hooks/useCommunityActions2.ts` — `setChannelCategory`
+- `client/src/concord/hooks/useCommunityActions.ts` — `setChannelCategory`
   publishes the Channel edition, round-tripping the Channel's other extensions
   (`armada.git` today) and its `private` flag. It refuses a Channel absent from
   the Control fold rather than filing it against a default `{name:"",
   private:false}` metadata, which would blank the name and publish a Private
   Channel as public.
-- `client/src/concord-v2/pages/ConcordV2Page.tsx` +
-  `client/src/concord-v2/components/ChannelCategoryHeading2.tsx` — the
+- `client/src/concord/pages/ConcordPage.tsx` +
+  `client/src/concord/components/ChannelCategoryHeading.tsx` — the
   collapsible headings. A collapsed category still shows the active Channel and
   anything unread, so folding one away never hides a mention. Which headings are
   folded is per-device state in `AppConfig.collapsedChannelCategories`, keyed by
@@ -691,7 +691,7 @@ be two editions on one entity for one gesture, and a failure between them
 would leave a Channel filed where it isn't positioned. Dropping on the
 trailing zone asks for a name first, since a category can't exist before a
 Channel names it. The planner is
-`client/src/concord-v2/lib/channelArrangement.ts`; the gesture is
+`client/src/concord/lib/channelArrangement.ts`; the gesture is
 `useChannelDrag.ts`.
 
 The drag re-stamps the whole rendered sequence, which is what makes it

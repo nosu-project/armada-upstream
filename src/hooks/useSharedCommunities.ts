@@ -1,17 +1,17 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
-import { useCommunityList2 } from "@/concord-v2/hooks/useCommunityList2";
-import { liveEntries, rehydrateCommunity } from "@/concord-v2/lib/communityList";
-import { citationSatisfied, readControlFold } from "@/concord-v2/lib/control";
+import { useCommunityList } from "@/concord/hooks/useCommunityList";
+import { liveEntries, rehydrateCommunity } from "@/concord/lib/communityList";
+import { citationSatisfied, readControlFold } from "@/concord/lib/control";
 import {
   coalesceGuestbook,
   completeMemberlist,
   snapshotAuthorities,
-} from "@/concord-v2/lib/guestbook";
-import { canActOnMember, Permissions } from "@/concord-v2/lib/roles";
-import { queryPlane } from "@/concord-v2/lib/rumorStore";
-import type { CommunityV2 } from "@/concord-v2/lib/types";
+} from "@/concord/lib/guestbook";
+import { canActOnMember, Permissions } from "@/concord/lib/roles";
+import { queryPlane } from "@/concord/lib/rumorStore";
+import type { Community } from "@/concord/lib/types";
 
 /**
  * For each of `peers`, a community the viewer shares with them — the trust hint
@@ -36,11 +36,11 @@ export function useSharedCommunities(
   peers: string[],
   enabled = true,
 ): Map<string, string> {
-  const { data: listData } = useCommunityList2();
+  const { data: listData } = useCommunityList();
 
   const communities = useMemo(() => {
     if (!listData) return [];
-    const out: CommunityV2[] = [];
+    const out: Community[] = [];
     for (const entry of liveEntries(listData.list)) {
       const community = rehydrateCommunity(entry);
       if (community) out.push(community);
@@ -90,7 +90,7 @@ export function useSharedCommunities(
             ),
           // A snapshot is honored only from the npub whose Refounding minted
           // the epoch carrying it; at genesis there is none. Mirrors
-          // useGuestbook2.
+          // useGuestbook.
           snapshotAuthorities: snapshotAuthorities(community),
           banned: folded?.banned,
         });

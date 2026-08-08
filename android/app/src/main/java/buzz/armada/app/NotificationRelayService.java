@@ -224,7 +224,7 @@ public class NotificationRelayService extends Service {
     //   pkToStream2: stream pubkey (the kind-1059 wrap's author, hex) → decrypt
     //                material + display name + deep link for that channel/epoch
     //   relayToPks2: relay url → the stream pubkeys that live on that relay
-    private final java.util.Map<String, Concord2Stream> pkToStream2 = new java.util.HashMap<>();
+    private final java.util.Map<String, ConcordStream> pkToStream2 = new java.util.HashMap<>();
     private final java.util.Map<String, Set<String>> relayToPks2 = new java.util.HashMap<>();
     // The user's shared signer (nsec key / Amber grant / NIP-46 session),
     // rebuilt on every config load. Opens NIP-17 gift wraps addressed to the
@@ -378,7 +378,7 @@ public class NotificationRelayService extends Service {
      * the notification. One entry per (channel, epoch) — each epoch has its
      * own stream pubkey and conversation key.
      */
-    private static final class Concord2Stream {
+    private static final class ConcordStream {
         final byte[] convKey;     // raw 32-byte NIP-44 conversation key
         final String communityId; // hex; names the ArmadaDB tenant opened rumors are filed in
         final String channelId;   // hex; the rumor's `channel` tag must match
@@ -389,7 +389,7 @@ public class NotificationRelayService extends Service {
         // CORD-08 disappearing-message timer (seconds, 0 = off) — the quick
         // reply stamps sendTime + timer on its rumor + wrap while set.
         final long timerSecs;
-        Concord2Stream(byte[] convKey, String communityId, String channelId, String epoch,
+        ConcordStream(byte[] convKey, String communityId, String channelId, String epoch,
                        String name, String url, CommunityRef community, long timerSecs) {
             this.convKey = convKey;
             this.communityId = communityId;
@@ -848,7 +848,7 @@ public class NotificationRelayService extends Service {
         } catch (JSONException e) {
             prefs = new JSONObject();
         }
-        parseConcord2Subs(sp.getString("concord2Subs", null));
+        parseConcordSubs(sp.getString("concord2Subs", null));
         parseGitSubs(sp.getString("gitSubs", null));
 
         // The user's shared signer credential (Keystore-sealed by the plugin):
@@ -982,7 +982,7 @@ public class NotificationRelayService extends Service {
      * routing tag); the per-stream conversation key opens wrap → seal → rumor
      * for a rich "<sender>: <preview>" body.
      */
-    private void parseConcord2Subs(String json) {
+    private void parseConcordSubs(String json) {
         pkToStream2.clear();
         relayToPks2.clear();
         if (json == null) return;
@@ -1018,7 +1018,7 @@ public class NotificationRelayService extends Service {
                     byte[] convKey = ConcordCrypto.hexToBytes(s.optString("convKey", null));
                     if (pk == null || pk.isEmpty() || convKey == null || convKey.length != 32) continue;
                     pkList.add(pk);
-                    pkToStream2.put(pk, new Concord2Stream(
+                    pkToStream2.put(pk, new ConcordStream(
                             convKey, communityId, channelId, s.optString("epoch", ""),
                             name, url, ref, Math.max(0, sub.optLong("timerSecs", 0))));
                 }
@@ -1034,7 +1034,7 @@ public class NotificationRelayService extends Service {
                 }
             }
         } catch (JSONException e) {
-            Log.w(TAG, "Failed to parse concord2Subs", e);
+            Log.w(TAG, "Failed to parse concordSubs", e);
         }
     }
 
@@ -1118,7 +1118,7 @@ public class NotificationRelayService extends Service {
         final String profilePrefix = "ap-" + Long.toHexString(System.nanoTime() + 4) + "-";
         // Prefix for one-shot kind-39000 group-metadata lookups.
         final String groupPrefix = "ah-" + Long.toHexString(System.nanoTime() + 5) + "-";
-        final String subConcord2 = "a2-" + Long.toHexString(System.nanoTime() + 6);
+        final String subConcord = "a2-" + Long.toHexString(System.nanoTime() + 6);
         final String subDm17 = "a7-" + Long.toHexString(System.nanoTime() + 7);
         final String subGitRoots = "ag-" + Long.toHexString(System.nanoTime() + 8);
         final String subGitChildren = "ai-" + Long.toHexString(System.nanoTime() + 9);
@@ -1138,7 +1138,7 @@ public class NotificationRelayService extends Service {
         final Map<String, PendingPublish> pendingPublishes = new HashMap<>();
         final List<PendingPublish> outbox = new ArrayList<>();
         // ids of the kind-22242s we sent and haven't seen an OK for. NIP-42
-        // allows several AUTHs per connection (the user + every Concord V2
+        // allows several AUTHs per connection (the user + every Concord
         // stream key), so this is a set; a relay's OK for some other event
         // can't trigger a REQ re-send.
         final Set<String> pendingAuthIds = new HashSet<>();
@@ -1151,7 +1151,7 @@ public class NotificationRelayService extends Service {
             if (!closed && ws != null) sendReqs(ws);
         };
         // Coalesces the REQ re-send that follows AUTH acks (#49): the user +
-        // every Concord V2 stream key each get their own OK, so an auth round
+        // every Concord stream key each get their own OK, so an auth round
         // used to trigger one full sendReqs PER OK — dozens of duplicate REQ
         // bursts per challenge. One re-send shortly after the burst settles
         // covers them all.
@@ -1283,7 +1283,7 @@ public class NotificationRelayService extends Service {
                     for (String pk : pks) authors.put(pk);
                     f5.put("authors", authors);
                     f5.put("since", sinceSec);
-                    webSocket.send(reqMessage(subConcord2, f5));
+                    webSocket.send(reqMessage(subConcord, f5));
                 }
                 Set<String> repositories = gitRepositoriesByRelay.get(relayUrl);
                 if (repositories != null && !repositories.isEmpty()) {
@@ -1591,7 +1591,7 @@ public class NotificationRelayService extends Service {
             String type = msg.optString(0);
             if ("AUTH".equals(type)) {
                 // NIP-42 challenge. The bridge is still emitted when the
-                // WebView is up (it signs the Concord V2 STREAM auths, whose
+                // WebView is up (it signs the Concord STREAM auths, whose
                 // derived keys live JS-side), but the user's own kind-22242 is
                 // signed natively whenever a shared signer credential exists —
                 // so auth-gated subscriptions (the classic #p DM inbox wall)
@@ -1611,7 +1611,7 @@ public class NotificationRelayService extends Service {
                 } else if (!bridged) {
                     Log.w(TAG, "No bridge (WebView down) and no shared signer — can't AUTH " + relayUrl);
                 }
-                // The Concord V2 STREAM auths, signed natively from the same
+                // The Concord STREAM auths, signed natively from the same
                 // group-key memo the quick reply signs wraps with — so an
                 // auth-gating relay's kind-1059 subscription survives a
                 // reconnect with the WebView asleep, instead of waiting for it
@@ -1708,7 +1708,7 @@ public class NotificationRelayService extends Service {
             if ("OK".equals(type)) {
                 // AUTH ack (["OK", <event-id>, true/false, msg]). On success,
                 // and only when the id matches a kind-22242 we sent (the user's
-                // or a Concord V2 stream key's), the matching connection
+                // or a Concord stream key's), the matching connection
                 // re-sends its REQs — coalesced into one round after the OK
                 // burst settles (see scheduleAuthResend).
                 String okId = msg.optString(1);
@@ -2179,7 +2179,7 @@ public class NotificationRelayService extends Service {
      * if the seal signature is bad or the rumor's author/channel/epoch binding
      * doesn't match (a spliced/foreign payload).
      */
-    private static Concord2Open openConcord2(JSONObject wrap, Concord2Stream st) {
+    private static ConcordOpen openConcord(JSONObject wrap, ConcordStream st) {
         try {
             String payload = wrap.optString("content", "");
             if (payload.isEmpty()) return null;
@@ -2219,22 +2219,22 @@ public class NotificationRelayService extends Service {
             String ep = tagValue(rumor, "epoch");
             if (ch == null || !st.channelId.equals(ch)) return null;
             if (ep == null || (!st.epoch.isEmpty() && !st.epoch.equals(ep))) return null;
-            return new Concord2Open(rumor, sealKind);
+            return new ConcordOpen(rumor, sealKind);
         } catch (Exception e) {
             return null;
         }
     }
 
     /**
-     * A recovered Concord V2 rumor and the kind of the seal it arrived in. The
+     * A recovered Concord rumor and the kind of the seal it arrived in. The
      * seal kind is provenance the opened-event store records alongside the
      * rumor (the fold and the dissolution check branch on it per row), so it has
      * to survive the open.
      */
-    private static final class Concord2Open {
+    private static final class ConcordOpen {
         final JSONObject rumor;
         final int sealKind;
-        Concord2Open(JSONObject rumor, int sealKind) {
+        ConcordOpen(JSONObject rumor, int sealKind) {
             this.rumor = rumor;
             this.sealKind = sealKind;
         }
@@ -2258,7 +2258,7 @@ public class NotificationRelayService extends Service {
      * `since` window on reconnect.
      */
     private void handleDm17Wrap(JSONObject wrap, String id, String relayUrl, boolean storedBefore) {
-        // Only wraps addressed to me are DMs — the Concord V2 authors-scoped
+        // Only wraps addressed to me are DMs — the Concord authors-scoped
         // subscription also delivers kind 1059, with no `p` tag at us.
         if (!isMentioned(wrap, userPubkey)) return;
         notifiedIds.add(id);
@@ -2458,7 +2458,7 @@ public class NotificationRelayService extends Service {
     private String roomKeyFor(JSONObject event, int kind) {
         if (kind == 4) return "dm";
         if (kind == 1059) {
-            Concord2Stream st = pkToStream2.get(event.optString("pubkey"));
+            ConcordStream st = pkToStream2.get(event.optString("pubkey"));
             if (st != null) return "c2:" + st.channelId;
             // A NIP-17 DM wrap — any wrap p-tagged at the user (the WebView
             // holds the identity key and splits threads by counterparty itself,
@@ -2522,7 +2522,7 @@ public class NotificationRelayService extends Service {
             // Share the channel's own room, community and title with chat, so
             // git activity appends to that conversation instead of opening a
             // second notification with a conflicting name.
-            Concord2Stream stream = streamForChannel(attachment.channelId);
+            ConcordStream stream = streamForChannel(attachment.channelId);
             enqueueRoomMessage(
                     stream != null ? stream.community : null, "c2:" + attachment.channelId,
                     stream != null ? stream.name : "Git activity", url,
@@ -2534,8 +2534,8 @@ public class NotificationRelayService extends Service {
     /** The subscribed stream for a channel, if any; git activity borrows its
      * community and display name. Streams are per (channel, epoch), so the
      * first match is enough — every epoch carries the same two. */
-    private Concord2Stream streamForChannel(String channelId) {
-        for (Concord2Stream stream : pkToStream2.values()) if (stream.channelId.equals(channelId)) return stream;
+    private ConcordStream streamForChannel(String channelId) {
+        for (ConcordStream stream : pkToStream2.values()) if (stream.channelId.equals(channelId)) return stream;
         return null;
     }
 
@@ -2594,7 +2594,7 @@ public class NotificationRelayService extends Service {
         // outer key whose signature proves no sender identity (matching the
         // WebView's verifyEventSkippingWraps), so the outer sig is skipped
         // here and the INNER seal is Schnorr-verified at decrypt time instead
-        // (see openConcord2/handleDm17Wrap). Everything else — NIP-29
+        // (see openConcord/handleDm17Wrap). Everything else — NIP-29
         // chat/reactions/replies and kind-4 DMs — must be verified before it
         // is stored, fed to the WebView, or turned into a notification.
         if (!passesFilter(event, kind, relayUrl)) {
@@ -2671,9 +2671,9 @@ public class NotificationRelayService extends Service {
         // notify just like a group message. If decryption fails (e.g. a rekey
         // epoch we don't hold yet) fall back to a keyless room notification.
         if (kind == 1059) {
-            Concord2Stream st = pkToStream2.get(event.optString("pubkey"));
+            ConcordStream st = pkToStream2.get(event.optString("pubkey"));
             if (st == null) {
-                // Not a Concord V2 wrap — a NIP-17 DM wrap. Handle + return.
+                // Not a Concord wrap — a NIP-17 DM wrap. Handle + return.
                 handleDm17Wrap(event, id, relayUrl, storedBefore);
                 return;
             }
@@ -2687,7 +2687,7 @@ public class NotificationRelayService extends Service {
             // above applies the same rule to its envelope).
             if (ServiceStore.isExpired(event)) return;
 
-            Concord2Open opened = openConcord2(event, st);
+            ConcordOpen opened = openConcord(event, st);
             if (opened == null) {
                 // Couldn't decrypt — a rekey epoch whose key we don't hold, or
                 // a foreign payload. PARK the wrap for the WebView, which holds
@@ -2696,8 +2696,8 @@ public class NotificationRelayService extends Service {
                 // one path by which a wrap we can't read still reaches its
                 // channel. Then still tell the user something arrived, and
                 // where. (Generic body, but a real room title.)
-                ServiceStore.parkConcord2Wrap(this, event);
-                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord2 (opaque): " + st.name);
+                ServiceStore.parkConcordWrap(this, event);
+                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord (opaque): " + st.name);
                 if (!prefBool("allGroupMessages", true)) return;
                 enqueueRoomMessage(
                         st.community, "c2:" + st.channelId, st.name, st.url,
@@ -2713,12 +2713,12 @@ public class NotificationRelayService extends Service {
             // as its author wrote it, nothing added). This is what makes a
             // notified Concord message
             // present in the channel on open rather than something the WebView
-            // has to decrypt again from a parked wrap. openConcord2 has already
+            // has to decrypt again from a parked wrap. openConcord has already
             // proved the seal's signature, that the rumor's author IS the seal's
             // signer, and that the channel/epoch binding matches the stream key
             // that opened the wrap — the checks the WebView's write path makes
             // before it will file a rumor under a channel.
-            ServiceStore.storeConcord2Rumor(this, st.communityId, opened.sealKind, rumor);
+            ServiceStore.storeConcordRumor(this, st.communityId, opened.sealKind, rumor);
 
             // Every chat-plane kind rides an identical wrap. Messages (kind 9),
             // thread replies (kind 1111), and reactions (kind 7) to YOUR own
@@ -2743,7 +2743,7 @@ public class NotificationRelayService extends Service {
                 if (!prefBool("reactions", true)) {
                     return;
                 }
-                final Concord2Stream fStR = st;
+                final ConcordStream fStR = st;
                 final String reactionLine = "Reacted " + reactionEmoji(rumor) + " to your message";
                 final long rtsR = rumor.optLong("created_at", 0);
                 final long fTsR = (rtsR > 0 ? rtsR * 1000L : System.currentTimeMillis());
@@ -2757,7 +2757,7 @@ public class NotificationRelayService extends Service {
                 resolveAuthor(author2, relayUrl, profile -> {
                     String name = displayName(profile);
                     String picture = profile != null ? profile.picture : null;
-                    if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord2 reaction: " + fStR.name + " / " + name);
+                    if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord reaction: " + fStR.name + " / " + name);
                     enqueueRoomMessage(
                             fStR.community, "c2:" + fStR.channelId, fStR.name,
                             appendMessageSegment(fStR.url, reactTarget),
@@ -2775,7 +2775,7 @@ public class NotificationRelayService extends Service {
             if (!(mentionsMe2 ? prefBool("mentions", true) : prefBool("allGroupMessages", true))) {
                 return;
             }
-            final Concord2Stream fSt = st;
+            final ConcordStream fSt = st;
             final boolean fMention2 = mentionsMe2;
             final String preview2 = messagePreview(rumor);
             final long rts = rumor.optLong("created_at", 0);
@@ -2798,7 +2798,7 @@ public class NotificationRelayService extends Service {
                 String name = displayName(profile);
                 String picture = profile != null ? profile.picture : null;
                 String text = buildMessageText(preview2, fMention2, threadRoot2 != null);
-                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord2: " + fSt.name + " / " + name);
+                if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY concord: " + fSt.name + " / " + name);
                 enqueueRoomMessage(
                         fSt.community, "c2:" + fSt.channelId, fSt.name,
                         appendMessageSegment(appendThreadSegment(fSt.url, threadRoot2), msgId2),
@@ -3686,7 +3686,7 @@ public class NotificationRelayService extends Service {
         } else if (roomKey.startsWith("h:")) {
             sendNip29Reply(signer, roomKey, text, sent);
         } else if (roomKey.startsWith("c2:")) {
-            sendConcord2Reply(signer, roomKey, text, sent);
+            sendConcordReply(signer, roomKey, text, sent);
         } else {
             finishReply(roomKey, sent, false);
         }
@@ -3796,7 +3796,7 @@ public class NotificationRelayService extends Service {
      * repeats it, exactly like a WebView send — kind 9 is never an exempt
      * kind, so the reply disappears like any other message.
      */
-    private void sendConcord2Reply(NativeSigner signer, String roomKey, String text, MsgEntry sent) {
+    private void sendConcordReply(NativeSigner signer, String roomKey, String text, MsgEntry sent) {
         final C2Stream target = c2ReplyStream(roomKey.substring(3));
         final byte[] streamSk = target != null ? streamSecretFor(target.pk) : null;
         if (target == null || streamSk == null) {
@@ -3868,7 +3868,7 @@ public class NotificationRelayService extends Service {
                             // The same write path a received wrap's rumor takes
                             // (kind + seal-form rules enforced there), so the
                             // reply is in the channel on next open.
-                            ServiceStore.storeConcord2Rumor(
+                            ServiceStore.storeConcordRumor(
                                     this, target.stream.communityId, 20013, rumor);
                         }
                         finishReply(roomKey, sent, ok);
@@ -3876,14 +3876,14 @@ public class NotificationRelayService extends Service {
                 }));
     }
 
-    /** A Concord V2 reply's destination: the newest-epoch stream, its address,
+    /** A Concord reply's destination: the newest-epoch stream, its address,
      * and the relays that host it. */
     private static final class C2Stream {
         final String pk;
-        final Concord2Stream stream;
+        final ConcordStream stream;
         final List<String> relays;
 
-        C2Stream(String pk, Concord2Stream stream, List<String> relays) {
+        C2Stream(String pk, ConcordStream stream, List<String> relays) {
             this.pk = pk;
             this.stream = stream;
             this.relays = relays;
@@ -3899,9 +3899,9 @@ public class NotificationRelayService extends Service {
     private C2Stream c2ReplyStream(String channelId) {
         if (channelId.isEmpty()) return null;
         String bestPk = null;
-        Concord2Stream best = null;
-        for (Map.Entry<String, Concord2Stream> e : pkToStream2.entrySet()) {
-            Concord2Stream cand = e.getValue();
+        ConcordStream best = null;
+        for (Map.Entry<String, ConcordStream> e : pkToStream2.entrySet()) {
+            ConcordStream cand = e.getValue();
             if (!cand.channelId.equals(channelId) || cand.epoch.isEmpty()) continue;
             if (best == null || parseEpoch(cand.epoch) > parseEpoch(best.epoch)) {
                 best = cand;
@@ -4282,7 +4282,7 @@ public class NotificationRelayService extends Service {
     /**
      * AES-256-GCM decrypt an encrypted community-image blob and verify its
      * plaintext SHA-256 (128-bit tag, matching the encrypt side in
-     * concord-v2/lib/image.ts). Returns
+     * concord/lib/image.ts). Returns
      * null on any crypto failure or a hash mismatch (a swapped blob fails
      * closed), so the icon simply doesn't render rather than showing a forgery.
      */

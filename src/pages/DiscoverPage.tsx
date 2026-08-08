@@ -12,7 +12,7 @@ import { ServerRail } from "@/components/layout/ServerRail";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { DiscoveredInvite } from "@/concord-v2/lib/inviteDiscovery";
+import type { DiscoveredInvite } from "@/concord/lib/inviteDiscovery";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
   useDiscoverCommunities,
@@ -26,7 +26,7 @@ const EmojiPackDialog = lazy(() =>
 );
 
 const ShareToDiscoverDialog = lazy(() =>
-  import("@/concord-v2/components/ShareToDiscoverDialog").then((m) => ({
+  import("@/concord/components/ShareToDiscoverDialog").then((m) => ({
     default: m.ShareToDiscoverDialog,
   })),
 );

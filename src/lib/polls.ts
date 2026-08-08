@@ -1,6 +1,6 @@
 /**
  * Transport-agnostic NIP-88 poll logic, shared by the NIP-29 relay path and the
- * Concord v2 sealed-rumor path (CORD.md "Polls").
+ * Concord sealed-rumor path (CORD.md "Polls").
  *
  * A poll is a kind-1068 event carrying its question in `content` and its options
  * as `["option", id, label]` tags; a vote is a kind-1018 event `e`-tagging the
@@ -33,7 +33,7 @@ export interface ParsedPoll {
 /**
  * A single voter's choice, normalized away from the underlying event shape so
  * the tally is identical for a relay-fetched NostrEvent (NIP-29) and a decoded
- * sealed rumor (Concord v2).
+ * sealed rumor (Concord).
  */
 export interface PollVote {
   pubkey: string;

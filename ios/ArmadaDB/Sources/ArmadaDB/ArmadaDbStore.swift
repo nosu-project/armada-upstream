@@ -11,7 +11,7 @@ public enum ArmadaDbTenants {
     /// NIP-29 is deliberately NOT here — see `nip29`.
     public static let main = "main"
 
-    /// Concord V2 wraps a background writer could not open (a rekey epoch it
+    /// Concord wraps a background writer could not open (a rekey epoch it
     /// holds no key for), parked for the WebView, which does hold the keys.
     public static let concordPark = "c2park"
 
@@ -61,7 +61,7 @@ public enum ArmadaDbTenants {
         return String(tenant.dropFirst(serviceQueuePrefix.count))
     }
 
-    /// The opened-event store for one Concord V2 community.
+    /// The opened-event store for one Concord community.
     public static func community(idHex: String) -> String {
         "c2:\(idHex)"
     }

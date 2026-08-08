@@ -188,7 +188,7 @@ object ServiceStore {
     }
 
     /**
-     * The derived Concord V2 stream secrets (hex, keyed by stream address) for
+     * The derived Concord stream secrets (hex, keyed by stream address) for
      * every requested address the group-key memo holds, read from the KV the
      * WebView persists it in (`c2gkmemo` — see groupKeyPersist.ts). The
      * derived keys are ALREADY at rest in this same shared database, which is
@@ -267,13 +267,13 @@ object ServiceStore {
     }
 
     /**
-     * Park a Concord V2 wrap the service could not open, for the WebView, which
+     * Park a Concord wrap the service could not open, for the WebView, which
      * holds the stream keys. Stored without its signature: a wrap is signed by a
      * derived stream key that authenticates no individual, and everything that
      * does authenticate the message is the seal sealed inside it.
      */
     @JvmStatic
-    fun parkConcord2Wrap(context: Context, wrap: JSONObject) {
+    fun parkConcordWrap(context: Context, wrap: JSONObject) {
         val rumor = Rumor.parse(wrap) ?: return
         try {
             ArmadaDb.get(context).event(ArmadaDb.TENANT_C2_PARK, rumor)
@@ -283,7 +283,7 @@ object ServiceStore {
     }
 
     /**
-     * Store a Concord V2 chat rumor the service decrypted, in its community's
+     * Store a Concord chat rumor the service decrypted, in its community's
      * opened-event tenant — the same row, byte for byte, that the WebView's
      * `openedToStored` writes.
      *
@@ -295,33 +295,33 @@ object ServiceStore {
      * plane wrap, and the one wrap-derived fact the WebView does keep (which
      * control stream an edition arrived on) belongs to a plane it never sees.
      *
-     * What may be stored is [Concord2.storable]'s to decide, and it applies the
+     * What may be stored is [Concord.storable]'s to decide, and it applies the
      * WebView's two chat-ingress rules: the seal must have been encrypted
      * (CORD-02 §5), and the kind must not be one another plane is read back by.
      * Neither fact survives the write — the seal form is not stored, and the
      * planes share this tenant — so a second writer that skipped either would
      * plant a row every reader downstream then trusts.
      *
-     * `openConcord2` has already checked what makes this safe to file under a
+     * `openConcord` has already checked what makes this safe to file under a
      * channel: the seal's signature, that the rumor's author IS the seal's
      * signer, and that the channel/epoch binding matches the stream whose key
      * opened the wrap.
      */
     @JvmStatic
-    fun storeConcord2Rumor(
+    fun storeConcordRumor(
         context: Context,
         communityIdHex: String,
         sealKind: Int,
         rumor: JSONObject,
     ) {
         val opened = Rumor.parse(rumor) ?: return
-        if (!Concord2.storable(communityIdHex, sealKind, opened, System.currentTimeMillis() / 1000)) {
+        if (!Concord.storable(communityIdHex, sealKind, opened, System.currentTimeMillis() / 1000)) {
             Log.w(TAG, "refusing a Concord chat rumor the chat plane may not carry")
             return
         }
 
         try {
-            ArmadaDb.get(context).event(Concord2.tenant(communityIdHex), opened)
+            ArmadaDb.get(context).event(Concord.tenant(communityIdHex), opened)
         } catch (error: Throwable) {
             Log.w(TAG, "concord rumor write failed", error)
         }

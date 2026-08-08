@@ -17,10 +17,13 @@ Buzz, or a relay-hosted server is named explicitly. When a change could
 plausibly land on either, ask rather than guessing NIP-29.
 
 **"Concord" means the protocol at the link above**, its first public release
-(CORD-01..07). An earlier, incompatible Concord v1 lived in this client and was
-removed; nothing implements it and no request refers to it. The `-v2` in
-`src/concord-v2/` and the `Concord V2` / `c2:` spellings through the code are
-that history, not a second live protocol.
+(CORD-01..07). There is no "v2" — it is simply the Concord Protocol. (A legacy,
+incompatible predecessor shipped in Vector and Armada; Armada removed it, and
+nothing here implements it.) The `c2:` and `concord2-*` spellings that survive
+in the code are ON-DISK identifiers — ArmadaDB tenant ids, KV/localStorage
+keys, the Android `concord2Subs` pref, and the cross-client `concord2|` app
+scope key — deliberately left at their old spelling so existing installs keep
+their data. Don't "finish" the rename.
 
 The optional self-hostable backend (NIP-29 relay + LiveKit voice + Concord AV
 broker) and all deployment/hosting docs live in the separate
@@ -32,7 +35,7 @@ client does not depend on it at build time.
 | Path         | What                                                            |
 |--------------|-----------------------------------------------------------------|
 | `src/`       | React 19 + Vite web client (Tailwind + shadcn/ui + Nostrify)    |
-| `src/concord-v2/` | The Concord protocol implementation (CORD-01..07): stream, control, chat, invites, rekey, voice, crypto derivations |
+| `src/concord/` | The Concord protocol implementation (CORD-01..07): stream, control, chat, invites, rekey, voice, crypto derivations |
 | `src/lib/db/` | ArmadaDB — the one local storage interface (tenants of rumors + a KV), its IndexedDB adapter, the Android bridge adapter, and the migrations |
 | `android/`   | Capacitor Android project (signed APK/AAB built in CI)          |
 | `android/…/app/db/` | ArmadaDB in Kotlin: the SQLite engine the Android build actually runs, shared by the WebView and the notification service |

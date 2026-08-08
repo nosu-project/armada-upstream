@@ -25,7 +25,7 @@
  *      re-running their queryFns reuses that safety instead of duplicating it.
  *
  * Query keys here are the PREFIXES the hooks invalidate on their own mutations
- * (e.g. `["nip29","user-groups"]`, `["concord2","list"]`) — invalidating the
+ * (e.g. `["nip29","user-groups"]`, `["concord","list"]`) — invalidating the
  * prefix matches every pubkey/relayKey-suffixed variant, so we don't need to
  * know the exact suffix (relayKey, etc.) a given mounted hook used.
  */
@@ -44,10 +44,10 @@ export const KIND_DM_RELAYS = 10050;
 export const KIND_BLOSSOM_SERVERS = 10063;
 /** NIP-51 user custom emoji list (10030). */
 export const KIND_USER_EMOJIS = 10030;
-/** Concord V2 community list — the membership vault (CORD-02, 13302). */
-export const KIND_COMMUNITY_LIST_V2 = 13302;
-/** Concord V2 invite list — the creator's minted-link bookkeeping (CORD-05, 13303). */
-export const KIND_INVITE_LIST_V2 = 13303;
+/** Concord community list — the membership vault (CORD-02, 13302). */
+export const KIND_COMMUNITY_LIST = 13302;
+/** Concord invite list — the creator's minted-link bookkeeping (CORD-05, 13303). */
+export const KIND_INVITE_LIST = 13303;
 /** NIP-78 application-specific data (30078) — vault, settings, and private app data. */
 export const KIND_APP_SPECIFIC = 30078;
 
@@ -69,8 +69,8 @@ export const SELF_SYNC_REPLACEABLE_KINDS: number[] = [
   KIND_DM_RELAYS,
   KIND_BLOSSOM_SERVERS,
   KIND_USER_EMOJIS,
-  KIND_COMMUNITY_LIST_V2,
-  KIND_INVITE_LIST_V2,
+  KIND_COMMUNITY_LIST,
+  KIND_INVITE_LIST,
 ];
 
 /**
@@ -106,10 +106,10 @@ export function queryKeysForSelfEvent(
       return [["blossom-server-list"]];
     case KIND_USER_EMOJIS:
       return [["custom-emojis"]];
-    case KIND_COMMUNITY_LIST_V2:
-      return [["concord2", "list"]];
-    case KIND_INVITE_LIST_V2:
-      return [["concord2", "invite-list"]];
+    case KIND_COMMUNITY_LIST:
+      return [["concord", "list"]];
+    case KIND_INVITE_LIST:
+      return [["concord", "invite-list"]];
     case KIND_APP_SPECIFIC:
       if (dTag === D_ARMADA_METADATA) return [["encrypted-settings"]];
       if (topicTag === T_ARMADA_GIF_FAVORITES) return [["favorite-gifs-sync"]];

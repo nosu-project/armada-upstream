@@ -171,7 +171,7 @@ describe("runMigrations", { timeout: 30_000 }, () => {
 
     const mod = await freshModules();
     const { writeFolded } = await import("@/lib/foldedCache");
-    const { communityListFoldKey } = await import("@/concord-v2/lib/communityList");
+    const { communityListFoldKey } = await import("@/concord/lib/communityList");
     await writeFolded(communityListFoldKey(A), { event: null, list: { entries: [] } });
 
     await mod.runMigrations([A]);
@@ -253,7 +253,7 @@ describe("schema version", { timeout: 30_000 }, () => {
     // Now exercise the lazy drain paths the app hits during an ordinary session.
     const { readFolded } = await import("@/lib/foldedCache");
     const { queryDm17Conversations } = await import("@/lib/nip17/dm17Store");
-    const { queryStoredInvites } = await import("@/concord-v2/lib/inviteInbox");
+    const { queryStoredInvites } = await import("@/concord/lib/inviteInbox");
     await readFolded("anything");
     await queryDm17Conversations(A);
     await queryStoredInvites(A);

@@ -28,7 +28,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import WalletProvider from "@/components/WalletProvider";
 import { WebPushNotifications } from "@/components/WebPushNotifications";
 import { WireSync } from "@/wire/WireSync";
-import { initGroupKeyPersistence } from "@/concord-v2/lib/groupKeyPersist";
+import { initGroupKeyPersistence } from "@/concord/lib/groupKeyPersist";
 import { secureStorage } from "@/lib/secureStorage";
 
 import AppRouter from "./AppRouter";

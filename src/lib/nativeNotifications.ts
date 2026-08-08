@@ -93,7 +93,7 @@ export interface ArmadaNotificationPlugin {
   getRoomEvents(options: { room: string }): Promise<{ events: string[] }>;
   /**
    * Fired when a relay issues a NIP-42 AUTH challenge. The JS layer signs the
-   * Concord V2 stream auths (their derived keys live JS-side) and the user's
+   * Concord stream auths (their derived keys live JS-side) and the user's
    * kind-22242, then calls submitAuth. The service ALSO signs the user's
    * 22242 itself when a signer credential was shared (configure's `signer`),
    * so auth-gated relays keep working with the app dead.
@@ -209,7 +209,7 @@ export interface ArmadaNotificationPlugin {
     /** Per-type notification prefs (mentions/reactions/replies/directMessages/allGroupMessages). */
     prefs?: Record<string, boolean>;
     /**
-     * Concord V2 (CORD-02) channel subscriptions. The service subscribes
+     * Concord (CORD-02) channel subscriptions. The service subscribes
      * `{kinds:[1059], authors:[…stream pk]}` per relay and uses the supplied
      * per-stream NIP-44 conversation key to open wrap → seal → rumor for a
      * rich "<sender>: <preview>" notification deep-linking to
@@ -219,7 +219,7 @@ export interface ArmadaNotificationPlugin {
      * stream key the service reads from the group-key memo already persisted
      * in the shared ArmadaDB (`c2gkmemo`, see groupKeyPersist.ts).
      */
-    concord2Subs?: Array<{
+    concordSubs?: Array<{
       relays: string[];
       communityId: string;
       communityName: string;
@@ -228,7 +228,7 @@ export interface ArmadaNotificationPlugin {
       streams: Array<{ pk: string; convKey: string; epoch: string }>;
       /**
        * The community's icon for the per-community group summary — see
-       * {@link CommunityNotifImage}. For V2 this is the encrypted CORD-02 §6
+       * {@link CommunityNotifImage}. For Concord this is the encrypted CORD-02 §6
        * icon pointer; the service fetches the blob, AES-GCM decrypts with the
        * shipped key/nonce, and verifies the plaintext hash before display.
        * Omitted when the community has no icon.
@@ -263,7 +263,7 @@ export interface ArmadaNotificationPlugin {
       | { type: "key"; sk: string }
       | { type: "amber"; packageName: string }
       | { type: "nip46"; clientSk: string; bunkerPk: string; relays: string[] };
-    /** Public NIP-34 activity attached to Concord V2 channels. Mapping an
+    /** Public NIP-34 activity attached to Concord channels. Mapping an
      * attachment to its private channel remains local to Android; relay filters
      * contain only the public repository coordinate and ticket ids. */
     gitSubs?: Array<{

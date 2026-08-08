@@ -8,13 +8,13 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useFollowList } from "@/hooks/useFollowList";
 import { KIND_EMOJI_SET, emojiPackEntries, emojiPackName } from "@/hooks/useEmojiPacks";
-import { resolveBundle } from "@/concord-v2/hooks/useCommunityActions2";
-import { parseInviteLink } from "@/concord-v2/lib/invite";
+import { resolveBundle } from "@/concord/hooks/useCommunityActions";
+import { parseInviteLink } from "@/concord/lib/invite";
 import {
   KIND_COMMUNITY_ANNOUNCEMENT,
   announcementFromEvent,
   type DiscoveredInvite,
-} from "@/concord-v2/lib/inviteDiscovery";
+} from "@/concord/lib/inviteDiscovery";
 import { isNostrId } from "@/lib/nostrId";
 import { getArmadaDB } from "@/lib/db/armadaDB";
 import { normalizeRelayUrl } from "@/lib/platform";

@@ -60,20 +60,20 @@ vi.mock("@/hooks/useNip29Servers", () => ({
     ...extraServers,
   ],
 }));
-vi.mock("@/concord-v2/hooks/useCommunityList2", () => ({
-  useCommunity2: () => undefined,
-  useLiveCommunities2: () => [],
-  useIsExcluded2: () => false,
+vi.mock("@/concord/hooks/useCommunityList", () => ({
+  useCommunity: () => undefined,
+  useLiveCommunities: () => [],
+  useIsExcluded: () => false,
 }));
-vi.mock("@/concord-v2/hooks/useControlPlane2", () => ({
-  useChannels2: () => [],
-  useControlFold2: () => ({ data: undefined }),
+vi.mock("@/concord/hooks/useControlPlane", () => ({
+  useChannels: () => [],
+  useControlFold: () => ({ data: undefined }),
 }));
-vi.mock("@/concord-v2/hooks/useConcord2Unread", () => ({
-  useConcord2Unread: () => ({ byChannel: {} }),
+vi.mock("@/concord/hooks/useConcordUnread", () => ({
+  useConcordUnread: () => ({ byChannel: {} }),
 }));
-vi.mock("@/concord-v2/hooks/useDecryptedImage2", () => ({
-  useDecryptedImage2: () => undefined,
+vi.mock("@/concord/hooks/useDecryptedImage", () => ({
+  useDecryptedImage: () => undefined,
 }));
 vi.mock("@/lib/haptics", () => ({ impact: vi.fn() }));
 

@@ -8,24 +8,24 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { bytesToHex } from "@/concord-v2/lib/derive";
-import type { CommunityV2 } from "@/concord-v2/lib/types";
+import { bytesToHex } from "@/concord/lib/derive";
+import type { Community } from "@/concord/lib/types";
 
 import { ControlPlaneSync } from "./ControlPlaneSync";
 
 // ── Module mocks ─────────────────────────────────────────────────────────────
 
 const h = vi.hoisted(() => ({
-  syncSpy: vi.fn(async () => ({ v2Touched: new Set() })),
+  syncSpy: vi.fn(async () => ({ concordTouched: new Set() })),
   entries: [] as unknown[],
-  v2Data: undefined as unknown,
+  communityListData: undefined as unknown,
 }));
 
 vi.mock("@nostrify/react", () => ({ useNostr: () => ({ nostr: {} }) }));
-vi.mock("@/concord-v2/hooks/useCommunityList2", () => ({
-  useCommunityList2: () => ({ data: h.v2Data }),
+vi.mock("@/concord/hooks/useCommunityList", () => ({
+  useCommunityList: () => ({ data: h.communityListData }),
 }));
-vi.mock("@/concord-v2/lib/communityList", () => ({
+vi.mock("@/concord/lib/communityList", () => ({
   liveEntries: () => h.entries,
   rehydrateCommunity: (e: unknown) => e,
 }));
@@ -35,7 +35,7 @@ vi.mock("@/lib/controlPlaneSync", () => ({
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
-function communityOf(fill: number): CommunityV2 {
+function communityOf(fill: number): Community {
   const root = new Uint8Array(32).fill(fill);
   const id = new Uint8Array(32).fill(fill + 1);
   return {
@@ -49,7 +49,7 @@ function communityOf(fill: number): CommunityV2 {
     privateChannels: [],
     relays: ["wss://relay-a.test"],
     name: "test",
-  } as CommunityV2;
+  } as Community;
 }
 
 function mount() {
@@ -65,7 +65,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   h.syncSpy.mockClear();
   h.entries = [];
-  h.v2Data = undefined;
+  h.communityListData = undefined;
 });
 
 afterEach(() => {
@@ -77,7 +77,7 @@ afterEach(() => {
 describe("ControlPlaneSync — global sweep scheduling", () => {
   it("kicks the sweep off as soon as the membership lists load", async () => {
     h.entries = [communityOf(70)];
-    h.v2Data = { event: null, list: { entries: [] } };
+    h.communityListData = { event: null, list: { entries: [] } };
 
     mount();
     await act(() => vi.advanceTimersByTimeAsync(100));
