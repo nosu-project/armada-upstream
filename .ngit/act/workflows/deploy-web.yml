@@ -116,8 +116,18 @@ jobs:
           # Pushed as a staged DIRECTORY into the jail root (like desktop.yml
           # does) so the first deploy creates downloads/ rather than failing on
           # a destination that doesn't exist yet.
+          #
+          # --chmod is load-bearing, NOT tidiness: this staging runs in the same
+          # shell as the `umask 077` above (set for the SSH key), so the staged
+          # directory is 0700 and the index 0600 — and `rsync -a` preserves
+          # that onto the server, resetting the EXISTING downloads/ that
+          # desktop.yml and release.yml published at 0755. The web server runs
+          # as its own user and then cannot traverse the directory, so every
+          # installer under it answers 403 with its own mode still intact.
+          # Setting the mode explicitly makes it independent of the ambient
+          # umask rather than on the order of two unrelated lines.
           stage="$RUNNER_TEMP/downloads-index"
           rm -rf "$stage"
           mkdir -p "$stage/downloads"
           cp dist/index.html "$stage/downloads/index.html"
-          rsync -av -e ssh "$stage/downloads" "${TARGET}:/"
+          rsync -av --chmod=D755,F644 -e ssh "$stage/downloads" "${TARGET}:/"

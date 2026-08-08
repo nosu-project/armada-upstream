@@ -288,7 +288,10 @@ jobs:
           TARGET="${DEPLOY_TARGET:-web}"
 
           # Additive: past releases stay downloadable at their own URLs.
-          rsync -av -e ssh "$root/downloads" "${TARGET}:/"
+          # --chmod: the served mode is stated here rather than inherited from
+          # the ambient umask — this staging happens to precede the `umask 077`
+          # above, which is not a property worth relying on. See desktop.yml.
+          rsync -av --chmod=D755,F644 -e ssh "$root/downloads" "${TARGET}:/"
 
       # Publish to Zapstore in the SAME job. We deliberately do NOT hand the APK
       # off via upload/download-artifact: under act's local artifact server the

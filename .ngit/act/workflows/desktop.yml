@@ -322,4 +322,8 @@ jobs:
           TARGET="${DEPLOY_TARGET:-web}"
 
           # Additive: past releases stay downloadable at their own URLs.
-          rsync -av -e ssh "$DEPLOY_ROOT/downloads" "${TARGET}:/"
+          # --chmod: the served mode is stated here rather than inherited from
+          # whatever umask the staging step ran under. An installer the web
+          # server's user can't read is a 403, which looks like a build that
+          # didn't publish.
+          rsync -av --chmod=D755,F644 -e ssh "$DEPLOY_ROOT/downloads" "${TARGET}:/"
