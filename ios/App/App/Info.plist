@@ -22,12 +22,26 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<!-- Armada bundles its own E2EE (NIP-44 ChaCha20-Poly1305, AES-GCM,
-	     HKDF-SHA256 via @noble/*) rather than using only the OS crypto, so it
-	     does not qualify for a Category 5 Part 2 exemption. Standard published
-	     algorithms only — mass market, self-classified 5D992.c under EAR
-	     740.17(b)(1), which obliges an annual self-classification report to BIS
-	     and NSA ENC. Declaring it here stops App Store Connect asking per build. -->
+	<!-- Armada bundles its own E2EE — ChaCha20 authenticated with HMAC-SHA256
+	     (NIP-44 v2, NOT ChaCha20-Poly1305), HKDF-SHA256, and secp256k1, all
+	     via @noble/* — rather than using only the OS crypto, so it does not
+	     qualify for the "OS encryption only" Category 5 Part 2 exemption. The
+	     AES-256-GCM that encrypts Concord attachments is by contrast the OS's
+	     own, reached through WebCrypto. Standard published algorithms
+	     throughout; nothing proprietary.
+
+	     Export posture is the PUBLISHED SOURCE route, not self-classification.
+	     Armada's full source is publicly available, which makes the
+	     corresponding object code not subject to the EAR (15 CFR 734.3(b)(3),
+	     on the strength of the 742.15(b) notification of the source URL to BIS
+	     and NSA ENC). That notification is ONE-TIME: no ERN, and no annual
+	     self-classification report — which the 5D992.c / 740.17(b)(1) route
+	     this file used to claim would have obliged every February 1. The one
+	     standing duty is to re-notify if the canonical repo URL moves.
+
+	     Left true rather than false because the binary really does carry
+	     non-OS crypto, and declaring it here stops App Store Connect asking
+	     per build. -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<true/>
 	<key>LSRequiresIPhoneOS</key>

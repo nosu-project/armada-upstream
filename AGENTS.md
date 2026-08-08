@@ -285,6 +285,34 @@ number doesn't exceed the previous one.
   `ios/App/App/Assets.xcassets` (app icon = the blade mark on `#100b15`, no
   alpha, matching the Android launcher icon; launch screen = the crest on the
   same background).
+- **`PrivacyInfo.xcprivacy` has to be in the Resources build phase, not merely
+  in the folder.** It is wired into `project.pbxproj` by hand (file reference +
+  `PBXBuildFile` + the `App` group + `PBXResourcesBuildPhase`); a manifest that
+  is only on disk ships in no bundle and App Store Connect still rejects the
+  upload with `ITMS-91053`. Nothing generates it — `cap sync` doesn't, and none
+  of the Capacitor SPM plugins vendor one of their own, so the app target's
+  manifest is the only one in the binary and must cover their APIs too. What it
+  declares: file-timestamp (`C617.1`), disk-space (`E174.1`) and user-defaults
+  (`CA92.1`) reasons, all reached through the **vendored SQLite**
+  (`ios/ArmadaDB/Sources/CArmadaSQLite`, which calls `stat`/`fstat`/`lstat` and
+  `statfs`/`fstatfs`) rather than through any Swift written here —
+  `ArmadaDbPlugin.swift` touches no required-reason API at all. Tracking is
+  `false` and there are no tracking domains. Re-check the required-reason list
+  when the SQLite amalgamation is re-pinned or a plugin is added.
+- **Export compliance is the PUBLISHED SOURCE route, and it is not the one the
+  file used to claim.** The binary carries non-OS crypto — ChaCha20 with
+  HMAC-SHA256 (NIP-44 v2; *not* ChaCha20-Poly1305), HKDF-SHA256 and secp256k1,
+  all bundled from `@noble/*` — so `ITSAppUsesNonExemptEncryption` is `true` and
+  no "OS crypto only" exemption applies. (The AES-256-GCM on Concord
+  attachments is the OS's, via WebCrypto; don't list it as bundled.) But
+  Armada's source is publicly available, which puts the corresponding object
+  code outside the EAR under 15 CFR 734.3(b)(3) on the strength of a
+  **one-time** 742.15(b) notification of the source URL to BIS and NSA ENC — no
+  ERN, and none of the annual February 1 self-classification reporting the
+  5D992.c / 740.17(b)(1) route would have obliged forever. Two standing duties
+  follow, and both are easy to lose: the source must STAY published, and a move
+  of the canonical repo URL means re-notifying. Don't "simplify" the comment at
+  `ios/App/App/Info.plist` back to self-classification.
 
 Android-only pieces that are simply absent on iOS, and are gated so they don't
 surface dead UI or throw: the `ArmadaNotification` background relay service
