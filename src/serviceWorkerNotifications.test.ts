@@ -32,20 +32,22 @@ function loadWorker(options: {
   const handlers = new Map<string, (event: unknown) => unknown>();
   const showNotification = vi.fn(async () => undefined);
   const setAppBadge = vi.fn(async () => undefined);
-  let badgeResponse: Response | undefined;
+  // A real per-URL store: the badge counter, the silent-push budget and the
+  // seen-event ledger all read back what they wrote, and the ledger enumerates.
+  const store = new Map<string, unknown>();
   const cache = {
     match: vi.fn(async (request: string) => {
       if (options.ownEventId && request.includes(`/own/${options.ownEventId}`)) return {};
-      if (request.endsWith("/.armada-push-state/badge")) return badgeResponse;
       if (options.dmConfig && request.endsWith("/.armada-push-state/dm-config")) {
         // The worker reads sealed bytes and decrypts via ArmadaDmCrypto.openConfig
         // (stubbed below); the bytes themselves are opaque here.
         return { arrayBuffer: async () => new ArrayBuffer(16) };
       }
-      return undefined;
+      return store.get(request);
     }),
-    put: vi.fn(async (_request: string, response: Response) => { badgeResponse = response; }),
-    delete: vi.fn(async () => true),
+    put: vi.fn(async (request: string, response: Response) => { store.set(request, response); }),
+    delete: vi.fn(async (request: string) => store.delete(request)),
+    keys: vi.fn(async () => [...store.keys()].map((url) => ({ url }))),
   };
   const clients = (options.clients ?? []).map((client) => ({
     ...client,
@@ -135,13 +137,19 @@ describe("Web Push suppression", () => {
     },
   );
 
-  it("shows a silent placeholder instead of nothing on an Apple endpoint", async () => {
-    // iOS revokes web push after a few pushes that display nothing, so a
-    // suppressed push on an Apple endpoint must still show SOMETHING.
+  it("spends the Apple keep-alive periodically, not on every suppressed push", async () => {
+    // iOS revokes web push after too many pushes that display nothing, but it
+    // tolerates a few. Every message the user SENDS is a suppressed push (their
+    // own NIP-17 self-copy comes back through the gateway), so a keep-alive per
+    // suppression put a "Messages synced" banner on screen for each one.
     const worker = loadWorker({
       ownEventId: "own-wrap",
       pushEndpoint: "https://web.push.apple.com/QKw71NdV3vO",
     });
+    await worker.push({ scope: "dm", event_id: "own-wrap", url: "/dm" });
+    await worker.push({ scope: "dm", event_id: "own-wrap", url: "/dm" });
+    expect(worker.showNotification).not.toHaveBeenCalled();
+
     await worker.push({ scope: "dm", event_id: "own-wrap", url: "/dm" });
     expect(worker.showNotification).toHaveBeenCalledTimes(1);
     const [, opts] = worker.showNotification.mock.calls[0] as unknown as [
@@ -151,6 +159,30 @@ describe("Web Push suppression", () => {
     expect(opts.silent).toBe(true);
     expect(opts.renotify).toBe(false);
     expect(opts.tag).toBe("armada-quiet-sync");
+  });
+
+  it("never re-alerts for an event it has already presented", async () => {
+    // A gateway restart replays stored relay matches as fresh pushes; without
+    // an event ledger each replay re-alerts (`renotify: true`) for a message
+    // the user has read, on whatever period the restart happens.
+    const worker = loadWorker();
+    await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dm" });
+    expect(worker.showNotification).toHaveBeenCalledTimes(1);
+    await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dm" });
+    await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dm" });
+    expect(worker.showNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it("replenishes the silent budget whenever it displays a notification", async () => {
+    const worker = loadWorker({ pushEndpoint: "https://web.push.apple.com/QKw71NdV3vO" });
+    await worker.push({ scope: "dm", event_id: "wrap", url: "/dm" }); // shown
+    await worker.push({ scope: "dm", event_id: "wrap", url: "/dm" }); // replay
+    await worker.push({ scope: "dm", event_id: "wrap", url: "/dm" }); // replay
+    expect(worker.showNotification).toHaveBeenCalledTimes(1);
+
+    await worker.push({ scope: "dm", event_id: "wrap", url: "/dm" }); // budget out
+    expect(worker.showNotification).toHaveBeenCalledTimes(2);
+    expect((worker.showNotification.mock.calls[1] as unknown as [string])[0]).toBe("Armada");
   });
 
   it("keeps full suppression on non-Apple endpoints", async () => {

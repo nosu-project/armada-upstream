@@ -83,6 +83,18 @@ const BADGE_STATE_URL = new URL(`${PUSH_STATE_PREFIX}badge`, self.location.origi
 // viewer's pubkey, and (nsec logins only) the decrypt key. Written by
 // swDmConfig.ts; read here per DM push. Must match that module's path.
 const DM_CONFIG_URL = new URL(`${PUSH_STATE_PREFIX}dm-config`, self.location.origin).href;
+// Event ids this install has already presented, so a replayed push can't
+// re-alert for a message the user has seen. Bounded like the own-event set.
+const SEEN_EVENT_PREFIX = `${PUSH_STATE_PREFIX}seen/`;
+const MAX_SEEN_EVENTS = 256;
+// Consecutive pushes that displayed nothing, for the Apple keep-alive below.
+const QUIET_STATE_URL = new URL(`${PUSH_STATE_PREFIX}quiet`, self.location.origin).href;
+// How many pushes may pass without displaying anything before an Apple
+// endpoint gets a visible keep-alive. iOS tolerates a few silent pushes and
+// revokes the subscription past that, so the budget is spent periodically —
+// NOT on every suppressed push, which put a "Messages synced" banner on screen
+// for every message the user sent (their own NIP-17 self-copy is a push).
+const APPLE_SILENT_BUDGET = 3;
 
 /** Increment the Home-Screen badge without needing a live page. */
 async function incrementAppBadge() {
@@ -153,6 +165,83 @@ async function isOwnPush(data) {
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether this push's event has already been presented by this install,
+ * recording it when it hasn't.
+ *
+ * The gateway watches relays on our behalf; whenever it restarts a REQ — a
+ * relay reconnect, or the client re-registering the same subscription — the
+ * relay replays its stored matches and each one arrives as a fresh push. With
+ * `renotify: true` that re-alerts for messages the user already read, at
+ * whatever period the restart happens on. Presentation is therefore idempotent
+ * per event id; a replay falls through to the quiet keep-alive.
+ */
+async function seenBefore(data) {
+  if (!data.event_id) return false;
+  try {
+    const cache = await caches.open(PUSH_STATE_CACHE);
+    const url = new URL(
+      `${SEEN_EVENT_PREFIX}${encodeURIComponent(data.event_id)}`,
+      self.location.origin,
+    ).href;
+    if (await cache.match(url)) return true;
+    await cache.put(url, new Response("1"));
+    try {
+      // Cache.keys() preserves insertion order, so the oldest go first.
+      const prefix = new URL(SEEN_EVENT_PREFIX, self.location.origin).href;
+      const seen = (await cache.keys()).filter((request) => request.url.startsWith(prefix));
+      if (seen.length > MAX_SEEN_EVENTS) {
+        await Promise.all(
+          seen.slice(0, seen.length - MAX_SEEN_EVENTS).map((request) => cache.delete(request)),
+        );
+      }
+    } catch {
+      // No enumeration — the ledger just grows slowly.
+    }
+  } catch {
+    // Never trade a real notification for a bookkeeping failure.
+  }
+  return false;
+}
+
+/** Forget the silent-push budget: a visible notification replenishes it. */
+async function resetQuietBudget() {
+  try {
+    const cache = await caches.open(PUSH_STATE_CACHE);
+    await cache.delete(QUIET_STATE_URL);
+  } catch {
+    // Ignore — the counter self-corrects on the next suppressed push.
+  }
+}
+
+/**
+ * Nothing to present for this push (locally authored, owned by a live page, or
+ * an event already shown). Display the quiet keep-alive only when this
+ * install's endpoint is Apple's AND the silent-push budget is nearly spent.
+ */
+async function quietSync(base, data) {
+  if (!(await isApplePushEndpoint())) return;
+  let due = true;
+  try {
+    const cache = await caches.open(PUSH_STATE_CACHE);
+    const stored = await cache.match(QUIET_STATE_URL);
+    const count = (stored ? Number.parseInt(await stored.text(), 10) || 0 : 0) + 1;
+    due = count >= APPLE_SILENT_BUDGET;
+    await cache.put(QUIET_STATE_URL, new Response(String(due ? 0 : count)));
+  } catch {
+    // Can't count — err toward keeping the subscription alive.
+  }
+  if (!due) return;
+  await self.registration.showNotification("Armada", {
+    ...base,
+    body: "Messages synced",
+    tag: "armada-quiet-sync",
+    renotify: false,
+    silent: true,
+    data: { url: data.url || "/" },
+  });
 }
 
 /** Ask a live page whether its foreground notifier owns open-app alerts. */
@@ -404,20 +493,15 @@ self.addEventListener("push", (event) => {
 
   event.waitUntil(
     (async () => {
+      // A suppressed push, or one replaying an event already presented here,
+      // displays nothing — which iOS counts toward revoking the subscription.
+      // quietSync() spends the keep-alive only once the budget is nearly out.
       if (await suppressPush(data)) {
-        // A suppressed push displays nothing, which iOS counts toward
-        // revoking the subscription — keep Apple installs alive with one
-        // silent, collapsing, never-realerting entry.
-        if (await isApplePushEndpoint()) {
-          await self.registration.showNotification("Armada", {
-            ...base,
-            body: "Messages synced",
-            tag: "armada-quiet-sync",
-            renotify: false,
-            silent: true,
-            data: { url: data.url || "/" },
-          });
-        }
+        await quietSync(base, data);
+        return;
+      }
+      if (await seenBefore(data)) {
+        await quietSync(base, data);
         return;
       }
 
@@ -428,7 +512,7 @@ self.addEventListener("push", (event) => {
       // when the worker can't decrypt (no inlined wrap, non-nsec login, etc.).
       if (data.scope === "dm") {
         if (await showDmNotification(base, data)) {
-          await incrementAppBadge();
+          await Promise.all([incrementAppBadge(), resetQuietBudget()]);
           return;
         }
       }
@@ -440,7 +524,7 @@ self.addEventListener("push", (event) => {
         data,
         tag,
       });
-      await incrementAppBadge();
+      await Promise.all([incrementAppBadge(), resetQuietBudget()]);
 
       // 2. Best-effort enrichment for plaintext events (nostr-push scopes).
       if (!data.event_id || !PLAINTEXT_SCOPES.has(data.scope)) return;
