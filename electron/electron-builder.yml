@@ -5,10 +5,11 @@
 # custom secure scheme (see main.js), so the app is fully standalone — not tied
 # to any hosted domain.
 #
-# Built in CI on version tags; see ../../.gitlab-ci.yml (build-desktop-*).
+# Built in CI on version tags; see ../.ngit/act/workflows/desktop.yml.
 
 appId: buzz.armada.app
 productName: Armada
+executableName: armada
 copyright: Armada
 
 directories:
@@ -16,6 +17,17 @@ directories:
   # builder output must NOT be ./dist.)
   output: release
   buildResources: build
+
+# Both native integrations ship N-API prebuilds pinned in package-lock.json:
+# uiohook-napi for every desktop OS/architecture and venmic for Linux. Rebuild
+# would discard that portability and require platform SDK headers in release
+# jobs (and cross-compiling the Windows hook from Linux cannot work at all).
+npmRebuild: false
+
+# Refuse to create an installer from a stale/partial staging directory. CI and
+# npm lifecycle scripts build these first; the hook protects direct `npx
+# electron-builder` invocations as well.
+beforePack: scripts/before-pack.cjs
 
 # What ships inside the app: the shell's own files plus the bundled web build.
 # electron + node_modules are provided by the builder runtime and not listed.
@@ -26,7 +38,18 @@ directories:
 # asar and the shell silently falls back: the default Electron window icon, and
 # an EMPTY tray image (a blank slot in the panel).
 files:
+  # flatpak-builder leaves an OSTree cache beside this config. It contains
+  # host-only absolute symlinks such as /app/bin/zypak-wrapper.sh and must
+  # never be traversed by cross-platform packaging.
+  - "!.flatpak-builder{,/**/*}"
   - main.js
+  - appOrigin.js
+  - updateSupport.js
+  - linuxAudioSources.js
+  - linuxGlobalShortcuts.js
+  - linuxStatusNotifier.js
+  - pushToTalk.js
+  - traySupport.js
   - preload.js
   # Resolves which web bundle app:// serves. Unlisted, the require fails inside
   # the asar and the shell cannot boot at all.
@@ -36,14 +59,32 @@ files:
   # app silently falls back to IndexedDB with the user's data in the wrong place.
   - db.cjs
   - package.json
+  # main.js uses these at runtime. buildResources alone supplies installer
+  # artwork; it does not put the files inside app.asar.
+  - build/icon.png
   - dist/**/*
   - build/**/*
   - "!**/*.map"
+asarUnpack:
+  - node_modules/@vencord/venmic/prebuilds/**/*
+  - node_modules/uiohook-napi/prebuilds/**/*
+
+# The release workflow uploads these installers plus electron-builder's
+# latest*.yml metadata to this static directory. electron-updater reads it on
+# Windows NSIS, signed macOS builds, and Linux AppImage only; package-managed
+# deb/Flatpak installs disable the in-app updater in main.js.
+publish:
+  provider: generic
+  url: https://armada.buzz/desktop
 
 # ── Linux ─────────────────────────────────────────────────────────────────────
 linux:
   category: Network
   maintainer: Armada <chad@chadwick.site>
+  # Preserve Armada's clipped-corner tile instead of letting launchers wrap
+  # the plain square logo in their generic application background.
+  icon: build/linux-icon.png
+  syncDesktopName: true
   target:
     - AppImage
     - deb
@@ -55,6 +96,10 @@ linux:
 
 # ── Windows ────────────────────────────────────────────────────────────────────
 win:
+  files:
+    - "!.flatpak-builder{,/**/*}"
+    - "!node_modules/@vencord/venmic{,/**/*}"
+    - "!node_modules/@jellybrick/dbus-next{,/**/*}"
   target:
     - target: nsis
       arch: [x64]
@@ -74,11 +119,19 @@ nsis:
 # only after a Gatekeeper override on the user's machine.
 mac:
   category: public.app-category.social-networking
+  files:
+    - "!.flatpak-builder{,/**/*}"
+    - "!node_modules/@vencord/venmic{,/**/*}"
+    - "!node_modules/@jellybrick/dbus-next{,/**/*}"
   target:
     - target: dmg
       arch: [x64, arm64]
-  # No hardened runtime / notarization unless signing is configured.
-  hardenedRuntime: false
+    # electron-updater's macOS feed installs the signed zip; the dmg remains
+    # the human-facing first-install artifact.
+    - target: zip
+      arch: [x64, arm64]
+  hardenedRuntime: true
+  gatekeeperAssess: false
   # macOS TCC requires these usage strings in Info.plist; without them the
   # process is killed the first time getUserMedia touches the mic/camera.
   extendInfo:

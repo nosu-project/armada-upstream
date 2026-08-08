@@ -14,6 +14,21 @@ export interface ScreenSource {
   isScreen: boolean;
 }
 
+export interface LinuxShareAudioSource {
+  id: string;
+  name: string;
+}
+
+export interface LinuxShareAudioSources {
+  supported: boolean;
+  reason: string | null;
+  sources: LinuxShareAudioSource[];
+}
+
+export type LinuxShareAudioSelection =
+  | { mode: "system" }
+  | { mode: "applications"; sourceIds: string[] };
+
 /**
  * OS-level microphone access status, independent of the in-app permission
  * handler. "granted" always on Linux; reflects the system privacy setting on
@@ -60,14 +75,43 @@ interface ArmadaDesktopDb {
   call: (op: string, payload?: unknown) => Promise<unknown>;
 }
 
+export interface DesktopPushToTalkBinding {
+  code: string;
+  label: string;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+}
+
+export interface DesktopPushToTalkStatus {
+  supported: boolean;
+  backend: "native" | "portal" | null;
+  bindingLabel: string | null;
+  reason: string | null;
+  settingsAvailable?: boolean;
+  settingsHint?: string | null;
+}
+
 interface ArmadaDesktopBridge {
   isDesktop: true;
   setBadge: (count: number) => void;
   getInfo: () => Promise<{ platform: string; version: string }>;
   getScreenSources: () => Promise<ScreenSource[]>;
   onPickScreenSource: (handler: () => string | null | Promise<string | null>) => void;
+  getLinuxShareAudioSources?: () => Promise<LinuxShareAudioSources>;
+  startLinuxShareAudio?: (selection: LinuxShareAudioSelection) => Promise<boolean>;
+  unmuteLinuxShareAudio?: () => Promise<boolean>;
+  stopLinuxShareAudio?: () => Promise<void>;
   getMicAccessStatus: () => Promise<MicAccessStatus>;
   openMicPrivacySettings: () => Promise<boolean>;
+  configurePushToTalk?: (
+    binding: DesktopPushToTalkBinding | null,
+  ) => Promise<DesktopPushToTalkStatus>;
+  openPushToTalkSystemSettings?: () => Promise<boolean>;
+  setPushToTalkActive?: (active: boolean) => Promise<boolean>;
+  onPushToTalkState?: (handler: (pressed: boolean) => void) => () => void;
+  onPushToTalkStatus?: (handler: (status: DesktopPushToTalkStatus) => void) => () => void;
   // Optional: a newer web bundle can run inside an older shell that predates
   // these, so every call site feature-detects rather than assuming.
   getSecretsStatus?: () => Promise<SecretsStatus>;
@@ -191,4 +235,193 @@ export async function desktopDecryptSecret(base64: string): Promise<string | nul
   } catch {
     return null;
   }
+}
+
+let nextLinuxShareAudioGeneration = 1;
+let linuxShareAudioGeneration: number | null = null;
+// Set when the picker chose "No audio"; consumed by the next capture.
+let shareAudioDeclined = false;
+let displayMediaAudioInstalled = false;
+
+/** List the applications PipeWire can route into a Linux screen share. */
+export async function desktopShareAudioSources(): Promise<LinuxShareAudioSources> {
+  const bridge = desktop();
+  if (!bridge?.getLinuxShareAudioSources) {
+    return { supported: false, reason: null, sources: [] };
+  }
+  try {
+    return await bridge.getLinuxShareAudioSources();
+  } catch {
+    return { supported: false, reason: "Application audio could not be loaded.", sources: [] };
+  }
+}
+
+/** Prepare the Linux virtual microphone selected in the screen-share dialog. */
+export async function prepareDesktopShareAudio(
+  selection: LinuxShareAudioSelection,
+): Promise<boolean> {
+  const bridge = desktop();
+  if (!bridge?.startLinuxShareAudio) return false;
+  try {
+    const prepared = await bridge.startLinuxShareAudio(selection);
+    shareAudioDeclined = false;
+    linuxShareAudioGeneration = prepared ? nextLinuxShareAudioGeneration++ : null;
+    return prepared;
+  } catch {
+    linuxShareAudioGeneration = null;
+    return false;
+  }
+}
+
+/** Tear down any PipeWire virtual microphone created for a share. */
+export async function stopDesktopShareAudio(): Promise<void> {
+  return stopDesktopShareAudioGeneration();
+}
+
+/**
+ * Record that the next capture is to carry no share audio.
+ *
+ * The teardown is deferred to that capture rather than done here, because the
+ * picker may still be cancelled. Unlinking at selection time silences the share
+ * the user currently has published and leaves nothing to restore it — the same
+ * acquire-before-replace rule the rest of this module follows.
+ */
+export function declineDesktopShareAudio(): void {
+  shareAudioDeclined = true;
+}
+
+async function stopDesktopShareAudioGeneration(expected?: number): Promise<void> {
+  if (expected !== undefined && linuxShareAudioGeneration !== expected) return;
+  linuxShareAudioGeneration = null;
+  try {
+    await desktop()?.stopLinuxShareAudio?.();
+  } catch {
+    // Best effort: the shell also unlinks before starting the next share.
+  }
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function findVenmicDevice(mediaDevices: MediaDevices): Promise<MediaDeviceInfo | null> {
+  // PipeWire and Chromium discover the virtual source asynchronously. In the
+  // common case it is present on the first pass; the short retry window keeps
+  // slower graph updates from silently producing video-only shares.
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const devices = await mediaDevices.enumerateDevices();
+    const device = devices.find(
+      (candidate) =>
+        candidate.kind === "audioinput" && candidate.label === "vencord-screen-share",
+    );
+    if (device) return device;
+    await wait(50);
+  }
+  return null;
+}
+
+/**
+ * Add venmic's PipeWire audio track to Electron's Linux display stream.
+ *
+ * LiveKit calls navigator.mediaDevices.getDisplayMedia directly. Installing
+ * this wrapper before React mounts lets the existing call path stay unchanged:
+ * the screen picker prepares venmic, Electron returns video, and this function
+ * attaches the virtual microphone before LiveKit sees the stream.
+ */
+export function installDesktopDisplayMediaAudio(): void {
+  if (displayMediaAudioInstalled || typeof navigator === "undefined") return;
+  const bridge = desktop();
+  const mediaDevices = navigator.mediaDevices;
+  if (
+    !bridge?.startLinuxShareAudio ||
+    !bridge.unmuteLinuxShareAudio ||
+    !bridge.stopLinuxShareAudio ||
+    typeof mediaDevices?.getDisplayMedia !== "function"
+  ) {
+    return;
+  }
+  const unmuteLinuxShareAudio = bridge.unmuteLinuxShareAudio;
+
+  displayMediaAudioInstalled = true;
+  const originalGetDisplayMedia = mediaDevices.getDisplayMedia.bind(mediaDevices);
+  mediaDevices.getDisplayMedia = async (constraints?: DisplayMediaStreamOptions) => {
+    const generationBeforeCapture = linuxShareAudioGeneration;
+    let stream: MediaStream;
+    try {
+      stream = await originalGetDisplayMedia(constraints);
+    } catch (error) {
+      // Cancelling a switch must leave the existing share's route alone. Only
+      // tear down audio when the picker prepared a NEW route before failing.
+      if (linuxShareAudioGeneration !== generationBeforeCapture) {
+        await stopDesktopShareAudio();
+      }
+      throw error;
+    }
+    if (shareAudioDeclined) {
+      // The capture succeeded, so the share this route belonged to is gone.
+      shareAudioDeclined = false;
+      await stopDesktopShareAudio();
+      return stream;
+    }
+    const captureGeneration = linuxShareAudioGeneration;
+    if (captureGeneration === null) {
+      return stream;
+    }
+    if (constraints?.audio === false || stream.getAudioTracks().length > 0) {
+      await stopDesktopShareAudioGeneration(captureGeneration);
+      return stream;
+    }
+
+    try {
+      const device = await findVenmicDevice(mediaDevices);
+      if (!device) throw new Error("venmic virtual microphone did not appear");
+      const audioStream = await mediaDevices.getUserMedia({
+        video: false,
+        audio: {
+          deviceId: { exact: device.deviceId },
+          autoGainControl: false,
+          echoCancellation: false,
+          noiseSuppression: false,
+          channelCount: 2,
+          sampleRate: 48_000,
+        },
+      });
+      const audioTrack = audioStream.getAudioTracks()[0];
+      if (!audioTrack) throw new Error("venmic returned no audio track");
+      stream.addTrack(audioTrack);
+      await unmuteLinuxShareAudio();
+
+      let stopped = false;
+      const stopAudio = () => {
+        if (stopped) return;
+        stopped = true;
+        audioTrack.stop();
+        void stopDesktopShareAudioGeneration(captureGeneration);
+      };
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.addEventListener("ended", stopAudio, { once: true });
+        // MediaStreamTrack.stop() does not dispatch `ended`, and LiveKit uses
+        // stop() when the user unpublishes. Wrap it so PipeWire still unlinks.
+        const stopVideo = videoTrack.stop.bind(videoTrack);
+        videoTrack.stop = () => {
+          stopAudio();
+          stopVideo();
+        };
+      }
+      audioTrack.addEventListener(
+        "ended",
+        () => void stopDesktopShareAudioGeneration(captureGeneration),
+        { once: true },
+      );
+      return stream;
+    } catch (error) {
+      console.warn("[screen-share] failed to attach Linux application audio", error);
+      // Scope the teardown like every other one here: findVenmicDevice retries
+      // for about a second and getUserMedia can stall, which is long enough for
+      // a newer share to have prepared its own route.
+      await stopDesktopShareAudioGeneration(captureGeneration);
+      return stream;
+    }
+  };
 }

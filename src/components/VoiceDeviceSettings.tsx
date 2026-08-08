@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Globe, Mic, MicOff, Volume2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Globe, Keyboard, Mic, MicOff, Volume2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -20,6 +21,15 @@ import {
   openDesktopMicSettings,
 } from "@/lib/desktop";
 import { CONCORD_AV_SERVERS } from "@/lib/platform";
+import {
+  bindingFromKeyboardEvent,
+  configureDesktopPushToTalk,
+  onDesktopPushToTalkStatus,
+  openDesktopPushToTalkSystemSettings,
+  setPushToTalkPreferences,
+  usePushToTalkPreferences,
+  type PushToTalkStatus,
+} from "@/lib/pushToTalk";
 import { cn } from "@/lib/utils";
 import {
   getPreferredMicId,
@@ -54,6 +64,13 @@ export function VoiceDeviceSettings() {
   // True when the mic is blocked by the OS privacy setting (desktop app), not
   // by our in-app handler — in that case we can deep-link the user to Settings.
   const [osMicBlocked, setOsMicBlocked] = useState(false);
+  const pushToTalk = usePushToTalkPreferences();
+  const [recordingPushToTalk, setRecordingPushToTalk] = useState(false);
+  const [pushToTalkStatus, setPushToTalkStatus] = useState<PushToTalkStatus | null>(null);
+  const [checkingPushToTalk, setCheckingPushToTalk] = useState(false);
+  const [openingPushToTalkSettings, setOpeningPushToTalkSettings] = useState(false);
+  const [pushToTalkSettingsError, setPushToTalkSettingsError] = useState<string | null>(null);
+  const pushToTalkModifierRef = useRef<ReturnType<typeof bindingFromKeyboardEvent>>(null);
 
   // Voice server (advanced): the server used to start calls in empty Concord
   // voice channels and to host DM calls. This account-level preference follows
@@ -300,6 +317,92 @@ export function VoiceDeviceSettings() {
     }
   }, [playingTone, speakerId]);
 
+  // Register eagerly when the user opens voice settings so failures (missing
+  // macOS Accessibility grant or a Wayland compositor without the portal) are
+  // visible here instead of only after joining a call.
+  useEffect(() => {
+    if (!isDesktop()) return;
+    let cancelled = false;
+    setCheckingPushToTalk(true);
+    void configureDesktopPushToTalk(pushToTalk.enabled ? pushToTalk.binding : null).then(
+      (status) => {
+        if (cancelled) return;
+        setPushToTalkStatus(status);
+        setCheckingPushToTalk(false);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [pushToTalk.binding, pushToTalk.enabled]);
+
+  useEffect(() => onDesktopPushToTalkStatus((status) => {
+    setPushToTalkStatus(status);
+    setCheckingPushToTalk(false);
+    setPushToTalkSettingsError(null);
+  }), []);
+
+  const setPushToTalkEnabled = (enabled: boolean) => {
+    setPushToTalkPreferences({ ...pushToTalk, enabled });
+    setPushToTalkStatus(null);
+    setCheckingPushToTalk(true);
+  };
+
+  const commitPushToTalkBinding = (
+    binding: NonNullable<ReturnType<typeof bindingFromKeyboardEvent>>,
+  ) => {
+    setPushToTalkPreferences({ enabled: pushToTalk.enabled, binding });
+    setRecordingPushToTalk(false);
+    pushToTalkModifierRef.current = null;
+    setPushToTalkStatus(null);
+    if (pushToTalk.enabled) setCheckingPushToTalk(true);
+  };
+
+  const choosePushToTalkBinding = async () => {
+    if (pushToTalkStatus?.backend !== "portal" || !pushToTalkStatus.supported) {
+      pushToTalkModifierRef.current = null;
+      setRecordingPushToTalk(true);
+      return;
+    }
+    if (pushToTalkStatus.settingsAvailable === false) return;
+    setPushToTalkSettingsError(null);
+    setOpeningPushToTalkSettings(true);
+    const opened = await openDesktopPushToTalkSystemSettings();
+    setOpeningPushToTalkSettings(false);
+    if (!opened) {
+      setPushToTalkSettingsError("Your desktop could not open its global-shortcut settings.");
+    }
+  };
+
+  const recordPushToTalk = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (!recordingPushToTalk) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.repeat) return;
+    if (event.key === "Escape") {
+      pushToTalkModifierRef.current = null;
+      setRecordingPushToTalk(false);
+      return;
+    }
+    const binding = bindingFromKeyboardEvent(event.nativeEvent);
+    if (!binding) return;
+    if (/^(Alt|Control|Meta|Shift)(Left|Right)$/.test(binding.code)) {
+      // Wait for either a non-modifier (Ctrl+Space) or this modifier's key-up
+      // (Right Ctrl by itself) before committing the binding.
+      pushToTalkModifierRef.current = binding;
+      return;
+    }
+    commitPushToTalkBinding(binding);
+  };
+
+  const finishPushToTalkModifier = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    const pending = pushToTalkModifierRef.current;
+    if (!recordingPushToTalk || !pending || event.code !== pending.code) return;
+    event.preventDefault();
+    event.stopPropagation();
+    commitPushToTalkBinding(pending);
+  };
+
   return (
     <div className="space-y-5">
       {/* Microphone */}
@@ -412,6 +515,79 @@ export function VoiceDeviceSettings() {
             <Volume2 className="size-4" />
             {playingTone ? "Playing…" : "Test"}
           </Button>
+        </div>
+      )}
+
+      {/* Desktop-only global push to talk. Kept per-device in localStorage:
+          physical shortcuts should not sync from a Windows keyboard onto a
+          phone or another computer. */}
+      {isDesktop() && (
+        <div className="space-y-2.5">
+          <div className="flex items-center gap-2">
+            <Keyboard className="size-4 text-muted-foreground shrink-0" />
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Push to talk
+            </label>
+            <Switch
+              className="ml-auto"
+              checked={pushToTalk.enabled}
+              onCheckedChange={setPushToTalkEnabled}
+              aria-label="Enable push to talk"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => void choosePushToTalkBinding()}
+            disabled={
+              pushToTalkStatus?.backend === "portal" &&
+              pushToTalkStatus.supported &&
+              pushToTalkStatus.settingsAvailable === false
+            }
+            onKeyDown={recordPushToTalk}
+            onKeyUp={finishPushToTalkModifier}
+            onBlur={() => {
+              pushToTalkModifierRef.current = null;
+              setRecordingPushToTalk(false);
+            }}
+            className={cn(
+              "flex min-h-10 touch:min-h-11 w-full items-center justify-center rounded-md border px-3 text-sm font-medium transition-colors",
+              recordingPushToTalk
+                ? "border-primary bg-primary/10 text-primary"
+                : "border-transparent bg-background/40 hover:bg-background/70 disabled:cursor-default disabled:opacity-80",
+            )}
+          >
+            {recordingPushToTalk
+              ? "Press a key or shortcut…"
+              : openingPushToTalkSettings
+                ? "Opening system shortcut settings…"
+                : pushToTalkStatus?.backend === "portal"
+                  ? pushToTalkStatus.bindingLabel || "Set system shortcut"
+                  : pushToTalk.binding.label}
+          </button>
+          {checkingPushToTalk ? (
+            <p className="text-xs text-muted-foreground">Registering global shortcut…</p>
+          ) : pushToTalk.enabled && pushToTalkStatus?.supported ? (
+            <p className="text-xs text-success">
+              Ready globally: {pushToTalkStatus.bindingLabel || pushToTalk.binding.label}
+              {pushToTalkStatus.backend === "portal" ? " (managed by your desktop)" : ""}
+            </p>
+          ) : pushToTalk.enabled && pushToTalkStatus?.reason ? (
+            <p className="text-xs text-destructive">{pushToTalkStatus.reason}</p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Hold this shortcut to transmit; releasing it mutes immediately, even while Armada
+              is in the background. Press Escape while recording to cancel.
+            </p>
+          )}
+          {pushToTalkStatus?.backend === "portal" && pushToTalkStatus.supported && (
+            <p className="text-xs text-muted-foreground">
+              {pushToTalkStatus.settingsHint ||
+                "Wayland requires your desktop's Global Shortcuts portal for push to talk."}
+            </p>
+          )}
+          {pushToTalkSettingsError && (
+            <p className="text-xs text-destructive">{pushToTalkSettingsError}</p>
+          )}
         </div>
       )}
 

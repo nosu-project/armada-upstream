@@ -4,17 +4,25 @@
   "version": "0.0.0",
   "description": "Armada desktop client (Electron wrapper around the web app).",
   "homepage": "https://armada.buzz",
+  "desktopName": "buzz.armada.app.desktop",
   "author": {
     "name": "Armada",
     "email": "chad@chadwick.site"
   },
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "main": "main.js",
   "scripts": {
+    "stage:web": "npm --prefix .. run build && npm --prefix .. run build:electron-db && node scripts/stage-web.mjs",
+    "prestart": "npm run stage:web",
     "start": "electron .",
+    "predist": "npm run stage:web",
     "dist": "electron-builder",
+    "predist:linux": "npm run stage:web",
     "dist:linux": "electron-builder --linux",
+    "dist:flatpak": "./flatpak/build.sh",
+    "predist:win": "npm run stage:web",
     "dist:win": "electron-builder --win",
+    "predist:mac": "npm run stage:web",
     "dist:mac": "electron-builder --mac"
   },
   "devDependencies": {
@@ -23,5 +31,16 @@
     "electron-builder": "^26.15.3",
     "js-yaml": "^5.2.3",
     "png2icons": "^2.0.1"
+  },
+  "dependencies": {
+    "@jellybrick/dbus-next": "^0.11.3",
+    "electron-updater": "^6.8.9"
+  },
+  "optionalDependencies": {
+    "@vencord/venmic": "^7.1.0",
+    "uiohook-napi": "^1.5.5"
+  },
+  "overrides": {
+    "tar": "^7.5.21"
   }
 }

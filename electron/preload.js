@@ -7,6 +7,26 @@
 
 const { contextBridge, ipcRenderer } = require("electron");
 
+let screenSourcePicker = null;
+
+// Main → preload → renderer request/response bridge for getDisplayMedia.
+// Context isolation gives preload and the page different global objects, so a
+// callback stored directly on preload's `window` is not visible to main-world
+// JavaScript. IPC is the deliberate bridge between those contexts.
+ipcRenderer.on("armada:pick-screen-source", async (_event, requestId) => {
+  let sourceId = null;
+  try {
+    sourceId = screenSourcePicker ? await screenSourcePicker() : null;
+  } catch {
+    sourceId = null;
+  }
+  ipcRenderer.send(
+    "armada:screen-source-picked",
+    requestId,
+    typeof sourceId === "string" && sourceId ? sourceId : null,
+  );
+});
+
 contextBridge.exposeInMainWorld("armadaDesktop", {
   /** True so the web app can detect it's running inside the desktop shell. */
   isDesktop: true,
@@ -41,6 +61,37 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
   openMicPrivacySettings: () => ipcRenderer.invoke("armada:open-mic-settings"),
 
   /**
+   * Register (or clear with null) the physical key used for desktop push to
+   * talk. Resolves { supported, backend, bindingLabel, reason }.
+   */
+  configurePushToTalk: (binding) =>
+    ipcRenderer.invoke("armada:push-to-talk-configure", binding),
+
+  /** Open the trusted Wayland portal UI that owns an existing global binding. */
+  openPushToTalkSystemSettings: () =>
+    ipcRenderer.invoke("armada:push-to-talk-open-system-settings"),
+
+  /** Listen only while a connected room needs push-to-talk state. */
+  setPushToTalkActive: (active) =>
+    ipcRenderer.invoke("armada:push-to-talk-active", Boolean(active)),
+
+  /** Subscribe to global key-down/key-up state; returns an unsubscribe. */
+  onPushToTalkState: (handler) => {
+    if (typeof handler !== "function") return () => {};
+    const listener = (_event, pressed) => handler(Boolean(pressed));
+    ipcRenderer.on("armada:push-to-talk-state", listener);
+    return () => ipcRenderer.removeListener("armada:push-to-talk-state", listener);
+  },
+
+  /** Track a Wayland portal binding changed through the system dialog. */
+  onPushToTalkStatus: (handler) => {
+    if (typeof handler !== "function") return () => {};
+    const listener = (_event, status) => handler(status);
+    ipcRenderer.on("armada:push-to-talk-status", listener);
+    return () => ipcRenderer.removeListener("armada:push-to-talk-status", listener);
+  },
+
+  /**
    * Whether OS-backed secret encryption is usable, and which backend provides
    * it: { available, backend }. `backend` is the Chromium password store on
    * Linux ("gnome_libsecret" | "kwallet*" | "basic_text" | "unknown") and the
@@ -70,13 +121,31 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
   getScreenSources: () => ipcRenderer.invoke("armada:get-screen-sources"),
 
   /**
-   * Register the callback the main process invokes when getDisplayMedia() is
-   * called. It must resolve to the chosen source id (from getScreenSources),
-   * or null/undefined to cancel. Stored on window so the main process can call
-   * it via executeJavaScript.
+   * Linux/PipeWire application audio available to add to a screen share.
+   * Resolves { supported, reason, sources: [{ id, name }] }. The opaque ids
+   * remain valid until the next source-list request.
+   */
+  getLinuxShareAudioSources: () =>
+    ipcRenderer.invoke("armada:linux-share-audio-sources"),
+
+  /** Prepare the venmic virtual microphone for system or application audio. */
+  startLinuxShareAudio: (selection) =>
+    ipcRenderer.invoke("armada:linux-share-audio-start", selection),
+
+  /** Unmute the virtual mic once its track is attached to the display stream. */
+  unmuteLinuxShareAudio: () =>
+    ipcRenderer.invoke("armada:linux-share-audio-unmute"),
+
+  /** Tear down the virtual mic when sharing ends or is cancelled. */
+  stopLinuxShareAudio: () => ipcRenderer.invoke("armada:linux-share-audio-stop"),
+
+  /**
+   * Register the callback the main process invokes over IPC when
+   * getDisplayMedia() is called. It must resolve to the chosen source id (from
+   * getScreenSources), or null/undefined to cancel.
    */
   onPickScreenSource: (handler) => {
-    window.__armadaPickScreenSource = () => Promise.resolve(handler());
+    screenSourcePicker = handler;
   },
 
   /**

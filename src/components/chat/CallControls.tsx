@@ -1,15 +1,32 @@
 import { DisconnectButton, useLocalParticipant } from "@livekit/components-react";
-import { Hand, Mic, MicOff, MonitorOff, MonitorUp, PhoneOff, Smile, Video, VideoOff } from "lucide-react";
+import {
+  Hand,
+  Loader2,
+  Mic,
+  MicOff,
+  MonitorOff,
+  MonitorUp,
+  PhoneOff,
+  RefreshCw,
+  Smile,
+  Video,
+  VideoOff,
+} from "lucide-react";
 import { useState } from "react";
 
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useCall } from "@/hooks/useCall";
 import { useCallSignals } from "@/contexts/CallSignalsContext";
+import { useCall } from "@/hooks/useCall";
+import { toast } from "@/hooks/useToast";
 import { playLeaveSound, playMuteSound, playUnmuteSound } from "@/lib/callSounds";
+import { requestPushToTalkOverride, usePushToTalkRuntime } from "@/lib/pushToTalk";
+import { switchPublishedScreenShare } from "@/lib/screenShare";
 import { cn } from "@/lib/utils";
 
 /**
@@ -30,13 +47,30 @@ const CTRL = "inline-flex items-center justify-center rounded-md size-8 touch:si
 
 export function MicButton({ className }: { className?: string }) {
   const { localParticipant, isMicrophoneEnabled } = useLocalParticipant();
-  const label = isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone";
+  const pushToTalk = usePushToTalkRuntime();
+  const label = pushToTalk.ready
+    ? pushToTalk.pressed
+      ? "Talking — click to mute and stop push to talk"
+      : `Hold ${pushToTalk.bindingLabel || "your shortcut"} to talk`
+    : isMicrophoneEnabled
+      ? "Mute microphone"
+      : "Unmute microphone";
   return (
     <button
       type="button"
       aria-label={label}
       title={label}
       onClick={() => {
+        // While push to talk owns the microphone this button is the override,
+        // not a toggle: a global shortcut can lose its key-up (another window
+        // grabs the keyboard, the machine sleeps mid-press), and disabling the
+        // button would leave the user transmitting with no way back.
+        if (pushToTalk.ready) {
+          playMuteSound();
+          requestPushToTalkOverride();
+          void localParticipant.setMicrophoneEnabled(false);
+          return;
+        }
         const enabling = !isMicrophoneEnabled;
         // Self-only feedback, on the click gesture (AudioContext unlocked).
         if (enabling) playUnmuteSound();
@@ -84,34 +118,94 @@ export function CameraButton({ className }: { className?: string }) {
 
 export function ScreenShareButton({ className }: { className?: string }) {
   const { localParticipant, isScreenShareEnabled } = useLocalParticipant();
+  const [switching, setSwitching] = useState(false);
   if (!supportsScreenShare) return null;
-  const label = isScreenShareEnabled ? "Stop sharing screen" : "Share screen";
+
+  const startShare = () => {
+    void localParticipant
+      .setScreenShareEnabled(true, { audio: true })
+      .catch((err) => {
+        if (err instanceof Error && err.name === "NotAllowedError") return;
+        console.warn("failed to start screen share", err);
+      });
+  };
+  const stopShare = () => {
+    void localParticipant
+      .setScreenShareEnabled(false, { audio: true })
+      .catch((err) => console.warn("failed to stop screen share", err));
+  };
+  const switchShare = async () => {
+    if (switching) return;
+    setSwitching(true);
+    try {
+      await switchPublishedScreenShare(localParticipant);
+    } catch (err) {
+      if (err instanceof Error && err.name === "NotAllowedError") return;
+      console.warn("failed to switch screen share", err);
+      toast({
+        title: "Couldn't switch the screen share",
+        description: "Your existing share is still active. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setSwitching(false);
+    }
+  };
+
+  if (!isScreenShareEnabled) {
+    return (
+      <button
+        type="button"
+        aria-label="Share screen"
+        title="Share screen"
+        onClick={startShare}
+        className={cn(
+          CTRL,
+          "bg-foreground/5 text-muted-foreground hover:bg-foreground/10",
+          className,
+        )}
+      >
+        <MonitorUp className="size-4" />
+      </button>
+    );
+  }
+
   return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      onClick={() => {
-        // Publish/unpublish the dedicated screenshare track (with best-effort
-        // tab audio); the browser shows its native picker. A user cancelling the
-        // picker rejects with NotAllowedError — expected, not surfaced.
-        void localParticipant
-          .setScreenShareEnabled(!isScreenShareEnabled, { audio: true })
-          .catch((err) => {
-            if (err instanceof Error && err.name === "NotAllowedError") return;
-            console.warn("failed to toggle screen share", err);
-          });
-      }}
-      className={cn(
-        CTRL,
-        isScreenShareEnabled
-          ? "bg-primary/20 text-primary hover:bg-primary/30"
-          : "bg-foreground/5 text-muted-foreground hover:bg-foreground/10",
-        className,
-      )}
-    >
-      {isScreenShareEnabled ? <MonitorOff className="size-4" /> : <MonitorUp className="size-4" />}
-    </button>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label="Screen share options"
+          title="Screen share options"
+          disabled={switching}
+          className={cn(
+            CTRL,
+            "bg-primary/20 text-primary hover:bg-primary/30 disabled:opacity-60",
+            className,
+          )}
+        >
+          {switching ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <MonitorUp className="size-4" />
+          )}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuItem onSelect={() => void switchShare()}>
+          <RefreshCw className="size-4" />
+          Switch screen or audio
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          className="text-destructive focus:text-destructive"
+          onSelect={stopShare}
+        >
+          <MonitorOff className="size-4" />
+          Stop sharing
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

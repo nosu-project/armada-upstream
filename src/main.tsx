@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { clearChunkReloadGuard, tryChunkReload } from "@/lib/chunkReload";
-import { signalDesktopWebReady } from "@/lib/desktop";
+import { installDesktopDisplayMediaAudio, signalDesktopWebReady } from "@/lib/desktop";
 import { signalWebReady } from "@/lib/webReady";
 import { perfMark, startLoopLagSampler } from "@/lib/perf";
 // Side-effect import: installs `window.__armadaDbCensus()`, the read-only store
@@ -13,6 +13,11 @@ import "@/lib/db/dbCensus";
 
 import App from "./App.tsx";
 import "./index.css";
+
+// Electron/Linux cannot put PipeWire audio directly on getDisplayMedia's
+// stream. Install the desktop bridge before LiveKit can request a share; this
+// is a no-op in browsers and native mobile builds.
+installDesktopDisplayMediaAudio();
 
 // Mark the native (Capacitor APK) runtime on <html> so CSS can switch off
 // web-isms (text selection, tap highlight, document overscroll/bounce) that

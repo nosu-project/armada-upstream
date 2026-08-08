@@ -52,10 +52,38 @@ const {
   session,
   systemPreferences,
   safeStorage,
+  dialog,
+  powerMonitor,
 } = require("electron");
+const { autoUpdater } = require("electron-updater");
+const { isArmadaAppUrl, isExternallyOpenableUrl } = require("./appOrigin");
+const {
+  autoInstallAllowed,
+  hasDeveloperIdUpdateSignature,
+  hasTrustedWindowsSignature,
+  supportsSelfUpdate,
+} = require("./updateSupport");
+const { listLinuxAudioApplications } = require("./linuxAudioSources");
+const {
+  detectLinuxTrayEnvironment,
+  queryStatusNotifierItems,
+} = require("./traySupport");
+const { PushToTalkController } = require("./pushToTalk");
+const createLinuxStatusNotifier =
+  process.platform === "linux"
+    ? require("./linuxStatusNotifier").createLinuxStatusNotifier
+    : null;
 const path = require("node:path");
 const fs = require("node:fs");
 const { resolveDistRoot } = require("./bundleStore");
+const { spawnSync } = require("node:child_process");
+
+// Keep Linux's desktop-file identity stable in both the AppImage and Flatpak.
+// Electron must receive this before ready so notifications and tray hosts can
+// associate the process with buzz.armada.app.desktop.
+if (process.platform === "linux") {
+  app.setDesktopName("buzz.armada.app.desktop");
+}
 
 // The web bundle that shipped inside the asar. This is the floor: a fresh
 // install serves it, and the shell falls back to it whenever it cannot host a
@@ -153,6 +181,28 @@ const DEV_URL = (() => {
 const DEV_ORIGIN = DEV_URL ? new URL(DEV_URL).origin : "";
 const START_URL = DEV_URL || APP_START_URL;
 
+// Where an unsigned build sends the user to fetch an update by hand.
+const DOWNLOADS_URL = "https://armada.buzz/downloads/";
+
+/**
+ * Hand a URL to the OS default handler, but only for schemes meant for a
+ * browser or mail client. The renderer embeds untrusted third-party frames and
+ * window.open from any of them lands here, so the scheme is not trustworthy.
+ */
+async function openExternalUrl(url) {
+  if (!isExternallyOpenableUrl(url)) {
+    console.warn("[shell] refused to open external URL", url);
+    return false;
+  }
+  try {
+    await shell.openExternal(url);
+    return true;
+  } catch (error) {
+    console.warn("[shell] could not open external URL", error);
+    return false;
+  }
+}
+
 // Dark background matching the app theme (index.html theme-color #100b15).
 const BACKGROUND = "#100b15";
 const ICON = path.join(__dirname, "build", "icon.png");
@@ -165,8 +215,47 @@ const TRAY_DIR = path.join(__dirname, "build");
 let mainWindow = null;
 /** @type {Tray | null} */
 let tray = null;
+let registeredTrayItem = null;
+// Closing may hide the window only while a usable tray host exists. Linux
+// desktops can accept a Tray object without displaying it (notably stock
+// GNOME), so this is established through the session bus before it is trusted.
+let closeToTraySupported = process.platform !== "linux";
+let traySupportCheck = null;
+let linuxCloseCheckInFlight = false;
+let hiddenTrayMonitor = null;
 // True once the user has actually chosen to quit (vs. closing to tray).
 let isQuitting = false;
+// True while a user-requested update check is in flight. Background checks
+// stay quiet when the installed build is already current or the feed is down.
+let manualUpdateCheck = false;
+let updateCheckInFlight = false;
+let macSelfUpdateEligible;
+let windowsSelfUpdateEligible;
+let updateCheckTimer = null;
+const pushToTalk = new PushToTalkController({
+  platform: process.platform,
+  env: process.env,
+  portalFactory: () => {
+    const { LinuxGlobalShortcutsPortal } = require("./linuxGlobalShortcuts");
+    const shortcutIdFile = path.join(app.getPath("userData"), "push-to-talk-portal-action");
+    return new LinuxGlobalShortcutsPortal({
+      loadShortcutId: () => fs.readFileSync(shortcutIdFile, "utf8").trim(),
+      saveShortcutId: (shortcutId) => fs.writeFileSync(shortcutIdFile, shortcutId, { mode: 0o600 }),
+    });
+  },
+  // Prompt only when the user explicitly enables/configures push to talk.
+  // macOS global input hooks require this OS-level Accessibility grant.
+  isMacTrusted: () =>
+    process.platform !== "darwin" || systemPreferences.isTrustedAccessibilityClient(true),
+  sendState: (pressed) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send("armada:push-to-talk-state", Boolean(pressed));
+  },
+  sendStatus: (status) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send("armada:push-to-talk-status", status);
+  },
+});
 // Honour --hidden / --minimized (autostart "launch minimized to tray").
 const startHidden =
   process.argv.includes("--hidden") || process.argv.includes("--minimized");
@@ -267,13 +356,13 @@ function registerAppProtocol() {
 
 // ── Window ───────────────────────────────────────────────────────────────────
 
-function createWindow() {
+function createWindow({ show = !startHidden || !closeToTraySupported } = {}) {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 832,
     minWidth: 480,
     minHeight: 600,
-    show: !startHidden,
+    show,
     backgroundColor: BACKGROUND,
     autoHideMenuBar: true,
     title: "Armada",
@@ -292,27 +381,54 @@ function createWindow() {
     },
   });
 
-  // External links (anything not on our own origin) open in the system
-  // browser; in-app navigation stays in the window.
-  const isInternal = isAppOrigin;
+  // External links (anything not on our own origin, packaged or dev) open in
+  // the system browser; in-app navigation stays in the window. isAppOrigin
+  // compares scheme+host rather than `URL.origin`, which reports "null" for a
+  // custom scheme and so would classify the app's OWN pages as external — see
+  // appOrigin.js.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (isInternal(url)) return { action: "allow" };
-    shell.openExternal(url);
+    if (isAppOrigin(url)) return { action: "allow" };
+    void openExternalUrl(url);
     return { action: "deny" };
   });
   mainWindow.webContents.on("will-navigate", (event, url) => {
-    if (!isInternal(url)) {
+    if (!isAppOrigin(url)) {
       event.preventDefault();
-      shell.openExternal(url);
+      void openExternalUrl(url);
     }
   });
 
-  // Close → hide to tray instead of quitting (unless the user chose Quit).
+  // Close → hide only when the tray is known to be visible. On Linux we
+  // re-check at the moment of closing because a shell extension or tray host
+  // can disappear during the session; without one, normal close quits and
+  // tears down calls instead of leaving an invisible process behind.
   mainWindow.on("close", (event) => {
-    if (!isQuitting) {
-      event.preventDefault();
-      mainWindow.hide();
+    if (isQuitting) return;
+    event.preventDefault();
+
+    if (process.platform !== "linux") {
+      if (closeToTraySupported && tray) {
+        hideWindowToTray();
+      } else {
+        isQuitting = true;
+        app.quit();
+      }
+      return;
     }
+    if (linuxCloseCheckInFlight) return;
+    linuxCloseCheckInFlight = true;
+    void refreshTraySupport()
+      .then((supported) => {
+        if (supported) {
+          hideWindowToTray();
+        } else {
+          isQuitting = true;
+          app.quit();
+        }
+      })
+      .finally(() => {
+        linuxCloseCheckInFlight = false;
+      });
   });
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -334,8 +450,9 @@ function createWindow() {
 }
 
 function showWindow() {
+  stopHiddenTrayMonitor();
   if (!mainWindow) {
-    createWindow();
+    createWindow({ show: true });
     return;
   }
   if (mainWindow.isMinimized()) mainWindow.restore();
@@ -370,36 +487,407 @@ function trayImage() {
   return image;
 }
 
-function createTray() {
-  const image = trayImage();
-  tray = new Tray(image.isEmpty() ? nativeImage.createEmpty() : image);
+function trayMenuEntries() {
+  return [
+    { id: 1, label: "Show Armada", activate: showWindow },
+    autoUpdatesSupported()
+      ? {
+          id: 2,
+          label: "Check for Updates…",
+          activate: () => void checkForDesktopUpdates(true),
+        }
+      : {
+          id: 2,
+          label:
+            process.platform === "linux" && app.isPackaged
+              ? "Updates are managed by your package manager"
+              : "Automatic updates unavailable",
+          enabled: false,
+        },
+    { id: 3, type: "separator" },
+    {
+      id: 4,
+      label: "Quit",
+      activate: () => {
+        isQuitting = true;
+        app.quit();
+      },
+    },
+  ];
+}
+
+function buildTrayContextMenu() {
+  return Menu.buildFromTemplate(
+    trayMenuEntries().map(({ activate, ...entry }) => ({
+      ...entry,
+      id: String(entry.id),
+      click: activate,
+    })),
+  );
+}
+
+function toggleWindowFromTray() {
+  // Every accessor on a destroyed BrowserWindow throws, and the tray outlives
+  // the window on close-to-quit paths.
+  if (
+    mainWindow &&
+    !mainWindow.isDestroyed() &&
+    mainWindow.isVisible() &&
+    !mainWindow.isMinimized()
+  ) {
+    hideWindowToTray();
+  } else {
+    showWindow();
+  }
+}
+
+/**
+ * Run a tray callback without letting it escape.
+ *
+ * linuxStatusNotifier dispatches these from queueMicrotask, so a throw is an
+ * uncaught main-process exception rather than a rejected promise — and
+ * Menu.popup() does throw when it cannot resolve a window, which is exactly
+ * the closed-to-tray case these callbacks exist to serve.
+ */
+function guardTrayCallback(run) {
+  return (...args) => {
+    try {
+      run(...args);
+    } catch (error) {
+      console.warn("[tray] callback failed", error);
+    }
+  };
+}
+
+async function createTray({ statusNotifier = false } = {}) {
+  if (tray && !tray.isDestroyed()) return true;
+  let image = trayImage();
+  if (image.isEmpty()) {
+    console.warn("[tray] packaged tray icon is missing");
+    return false;
+  }
+
+  if (statusNotifier && createLinuxStatusNotifier) {
+    try {
+      tray = await createLinuxStatusNotifier({
+        image,
+        tooltip: "Armada",
+        getMenuEntries: trayMenuEntries,
+        onActivate: guardTrayCallback(toggleWindowFromTray),
+        onContextMenu: guardTrayCallback((x, y) => {
+          const options = {};
+          if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+            options.window = mainWindow;
+          }
+          if (Number.isInteger(x)) options.x = x;
+          if (Number.isInteger(y)) options.y = y;
+          buildTrayContextMenu().popup(options);
+        }),
+      });
+      return true;
+    } catch (error) {
+      tray = null;
+      console.warn("[tray] failed to create StatusNotifierItem", error);
+      return false;
+    }
+  }
+
+  if (!image.isEmpty()) {
+    image = image.resize({ width: 22, height: 22 });
+  }
+  try {
+    tray = new Tray(image.isEmpty() ? nativeImage.createEmpty() : image);
+  } catch (error) {
+    tray = null;
+    console.warn("[tray] failed to create system tray icon", error);
+    return false;
+  }
   if (process.platform === "win32") {
     nativeTheme.on("updated", () => {
-      if (tray && !tray.isDestroyed()) tray.setImage(trayImage());
+      if (!tray || tray.isDestroyed()) return;
+      tray.setImage(trayImage().resize({ width: 22, height: 22 }));
     });
   }
   tray.setToolTip("Armada");
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: "Show Armada", click: showWindow },
-      { type: "separator" },
-      {
-        label: "Quit",
-        click: () => {
-          isQuitting = true;
-          app.quit();
-        },
-      },
-    ]),
-  );
+  tray.setContextMenu(buildTrayContextMenu());
   // Left-click toggles the window (common desktop-chat behavior).
-  tray.on("click", () => {
-    if (mainWindow && mainWindow.isVisible() && !mainWindow.isMinimized()) {
-      mainWindow.hide();
+  tray.on("click", toggleWindowFromTray);
+  return true;
+}
+
+function destroyTray() {
+  tray?.destroy();
+  tray = null;
+  registeredTrayItem = null;
+}
+
+async function refreshTraySupport() {
+  if (process.platform !== "linux") return closeToTraySupported;
+  if (traySupportCheck) return traySupportCheck;
+
+  traySupportCheck = detectLinuxTrayEnvironment()
+    .then(async ({ supported, watcherOwned, registeredItems }) => {
+      if (!supported) {
+        closeToTraySupported = false;
+        destroyTray();
+        return false;
+      }
+
+      if (tray && !tray.isDestroyed()) {
+        if (!watcherOwned || registeredItems?.includes(registeredTrayItem)) {
+          closeToTraySupported = true;
+          return true;
+        }
+        destroyTray();
+      }
+
+      const itemsBeforeCreation = new Set(registeredItems || []);
+      closeToTraySupported = await createTray({ statusNotifier: watcherOwned });
+      // Verify the watcher actually accepted Armada's item, not merely that a
+      // host exists. This catches sandbox filters and shell incompatibilities
+      // before close-to-tray can strand an invisible process. X11's legacy
+      // GtkStatusIcon fallback has no watcher entry and skips this check.
+      if (closeToTraySupported && watcherOwned) {
+        for (let attempt = 0; attempt < 5 && !registeredTrayItem; attempt += 1) {
+          const currentItems = await queryStatusNotifierItems();
+          registeredTrayItem = currentItems?.find((item) => !itemsBeforeCreation.has(item)) || null;
+          if (!registeredTrayItem && attempt < 4) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+        }
+        if (!registeredTrayItem) {
+          console.warn("[tray] StatusNotifier host did not register Armada's tray item");
+          closeToTraySupported = false;
+          destroyTray();
+        }
+      }
+      return closeToTraySupported;
+    })
+    .catch((error) => {
+      console.warn("[tray] failed to detect a Linux tray host", error);
+      closeToTraySupported = false;
+      destroyTray();
+      return false;
+    })
+    .finally(() => {
+      traySupportCheck = null;
+    });
+  return traySupportCheck;
+}
+
+function stopHiddenTrayMonitor() {
+  if (!hiddenTrayMonitor) return;
+  clearInterval(hiddenTrayMonitor);
+  hiddenTrayMonitor = null;
+}
+
+function startHiddenTrayMonitor() {
+  if (process.platform !== "linux" || hiddenTrayMonitor) return;
+  hiddenTrayMonitor = setInterval(() => {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isVisible()) {
+      stopHiddenTrayMonitor();
+      return;
+    }
+    void refreshTraySupport().then((supported) => {
+      if (!supported && mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+        showWindow();
+      }
+    });
+  }, 15_000);
+  hiddenTrayMonitor.unref?.();
+}
+
+function hideWindowToTray() {
+  if (!mainWindow || mainWindow.isDestroyed() || !closeToTraySupported || !tray) return;
+  mainWindow.hide();
+  startHiddenTrayMonitor();
+}
+
+// ── Application updates ────────────────────────────────────────────────────
+//
+// electron-updater supports the installed NSIS build on Windows, signed macOS
+// builds, and AppImage on Linux. A portable .exe has nowhere stable to install
+// an update, while deb and Flatpak packages must remain owned by their package
+// manager, so those formats intentionally never contact the update feed.
+
+function autoUpdatesSupported() {
+  if (!app.isPackaged) return false;
+  if (process.platform === "darwin" && macSelfUpdateEligible === undefined) {
+    const disabledMarker = fs.existsSync(
+      path.join(process.resourcesPath, "armada-no-self-update"),
+    );
+    if (disabledMarker) {
+      macSelfUpdateEligible = false;
     } else {
-      showWindow();
+      const result = spawnSync(
+        "/usr/bin/codesign",
+        ["-dv", "--verbose=4", process.execPath],
+        { encoding: "utf8" },
+      );
+      macSelfUpdateEligible =
+        result.status === 0 &&
+        hasDeveloperIdUpdateSignature(`${result.stdout || ""}\n${result.stderr || ""}`);
+    }
+  }
+  return supportsSelfUpdate({
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    env: process.env,
+    isMas: process.mas,
+    isWindowsStore: process.windowsStore,
+    // The Linux-cross-built macOS archives are ad-hoc signed and cannot safely
+    // replace themselves. A real Developer ID build made on macOS has no marker
+    // and uses electron-builder's signed zip feed normally.
+    macUpdateDisabled: process.platform === "darwin" && !macSelfUpdateEligible,
+  });
+}
+
+async function showUpdateMessage(options) {
+  // Only parent to a VISIBLE window. Update checks run on a timer, so this can
+  // fire while the app sits in the tray or was autostarted hidden, and a
+  // window-modal sheet on a hidden macOS window is never shown at all — the
+  // awaited promise would simply never settle.
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+    return dialog.showMessageBox(mainWindow, options);
+  }
+  return dialog.showMessageBox(options);
+}
+
+async function checkForDesktopUpdates(manual = false) {
+  if (!autoUpdatesSupported()) return;
+  if (updateCheckInFlight) {
+    if (manual) manualUpdateCheck = true;
+    return;
+  }
+  updateCheckInFlight = true;
+  manualUpdateCheck = manual;
+  try {
+    await autoUpdater.checkForUpdates();
+  } catch (error) {
+    console.warn("[updater] update check failed", error);
+    const shouldReport = manual && manualUpdateCheck;
+    manualUpdateCheck = false;
+    if (shouldReport) {
+      await showUpdateMessage({
+        type: "error",
+        title: "Update check failed",
+        message: "Armada could not check for updates.",
+        detail: "Check your connection and try again.",
+      });
+    }
+  } finally {
+    updateCheckInFlight = false;
+  }
+}
+
+/**
+ * Whether this Windows build carries a trusted Authenticode signature. Read
+ * once, lazily, the same way the macOS Developer ID check is: the answer is a
+ * property of the installed binary and cannot change while it runs.
+ */
+function windowsUpdateSignatureTrusted() {
+  if (process.platform !== "win32") return true;
+  if (windowsSelfUpdateEligible === undefined) {
+    const result = spawnSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "(Get-AuthenticodeSignature -LiteralPath $env:ARMADA_EXE).Status",
+      ],
+      { encoding: "utf8", env: { ...process.env, ARMADA_EXE: process.execPath } },
+    );
+    windowsSelfUpdateEligible =
+      result.status === 0 && hasTrustedWindowsSignature(result.stdout);
+  }
+  return windowsSelfUpdateEligible;
+}
+
+function installAutoUpdater() {
+  if (!autoUpdatesSupported()) return;
+
+  // An unsigned Windows installer cannot be verified once downloaded, so it is
+  // offered rather than installed. Every other supported format either checks
+  // a Developer ID signature or the feed's sha512 before replacing itself.
+  const unattended = autoInstallAllowed({
+    platform: process.platform,
+    signed: windowsUpdateSignatureTrusted(),
+  });
+
+  autoUpdater.autoDownload = unattended;
+  autoUpdater.autoInstallOnAppQuit = unattended;
+  autoUpdater.allowDowngrade = false;
+  autoUpdater.logger = console;
+
+  if (!unattended) {
+    autoUpdater.on("update-available", async (info) => {
+      manualUpdateCheck = false;
+      const { response } = await showUpdateMessage({
+        type: "info",
+        title: "Armada update available",
+        message: `Armada ${info.version} is available.`,
+        detail:
+          "This build is not code signed, so Armada will not install it for you. "
+          + "Download the new installer and run it yourself.",
+        buttons: ["Open download page", "Later"],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      });
+      if (response === 0) await openExternalUrl(DOWNLOADS_URL);
+    });
+  }
+
+  autoUpdater.on("update-not-available", async () => {
+    const wasManual = manualUpdateCheck;
+    manualUpdateCheck = false;
+    if (!wasManual) return;
+    await showUpdateMessage({
+      type: "info",
+      title: "Armada is up to date",
+      message: `You are running Armada ${app.getVersion()}, the newest available version.`,
+    });
+  });
+
+  autoUpdater.on("error", async (error) => {
+    console.warn("[updater] updater error", error);
+    const wasManual = manualUpdateCheck;
+    manualUpdateCheck = false;
+    if (!wasManual) return;
+    await showUpdateMessage({
+      type: "error",
+      title: "Update check failed",
+      message: "Armada could not check for updates.",
+      detail: "Check your connection and try again.",
+    });
+  });
+
+  autoUpdater.on("update-downloaded", async (info) => {
+    manualUpdateCheck = false;
+    const { response } = await showUpdateMessage({
+      type: "info",
+      title: "Armada update ready",
+      message: `Armada ${info.version} has been downloaded.`,
+      detail: "Restart Armada to install it now, or choose Later to install when you quit.",
+      buttons: ["Restart and install", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (response === 0) {
+      isQuitting = true;
+      autoUpdater.quitAndInstall(false, true);
     }
   });
+
+  // Let the UI and keyring finish booting before the first network request.
+  setTimeout(() => void checkForDesktopUpdates(false), 10_000).unref();
+  updateCheckTimer = setInterval(
+    () => void checkForDesktopUpdates(false),
+    4 * 60 * 60 * 1000,
+  );
+  updateCheckTimer.unref();
 }
 
 // ── Unread badge ─────────────────────────────────────────────────────────────
@@ -446,52 +934,258 @@ const UNREAD_OVERLAY_DATA_URL =
 // renderer (preload exposes pickScreenShareSource) and let the in-app UI choose,
 // then hand the chosen source back to Electron.
 
+// Keep the native DesktopCapturerSource objects from the list shown to the
+// renderer. On Linux/Wayland, getSources() enters the ScreenCast portal and
+// returns the ONE source the user authorized. Calling getSources() again after
+// the in-app picker would start a second portal session and lose the authorized
+// PipeWire stream, so the display-media handler must grant this exact object.
+const screenShareSources = new Map();
+const pendingScreenSharePicks = new Map();
+let nextScreenSharePickId = 1;
+
+function resolveScreenSharePick(requestId, sourceId) {
+  const pending = pendingScreenSharePicks.get(requestId);
+  if (!pending) return;
+  pendingScreenSharePicks.delete(requestId);
+  clearTimeout(pending.timer);
+  pending.resolve(typeof sourceId === "string" && sourceId ? sourceId : null);
+}
+
+function requestScreenSharePick() {
+  if (!mainWindow || mainWindow.isDestroyed()) return Promise.resolve(null);
+  const requestId = nextScreenSharePickId++;
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolveScreenSharePick(requestId, null), 5 * 60_000);
+    pendingScreenSharePicks.set(requestId, { resolve, timer });
+    try {
+      mainWindow.webContents.send("armada:pick-screen-source", requestId);
+    } catch {
+      resolveScreenSharePick(requestId, null);
+    }
+  });
+}
+
 function installDisplayMediaHandler() {
+  ipcMain.on("armada:screen-source-picked", (event, requestId, sourceId) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents) return;
+    if (!Number.isSafeInteger(requestId)) return;
+    resolveScreenSharePick(requestId, sourceId);
+  });
+
   // The renderer asks for the source list and returns the chosen id; we cache
   // it for the duration of one getDisplayMedia call.
   ipcMain.handle("armada:get-screen-sources", async () => {
-    const sources = await desktopCapturer.getSources({
-      types: ["screen", "window"],
-      thumbnailSize: { width: 320, height: 200 },
-      fetchWindowIcons: true,
-    });
-    return sources.map((s) => ({
-      id: s.id,
-      name: s.name,
-      thumbnail: s.thumbnail?.toDataURL() ?? "",
-      appIcon: s.appIcon && !s.appIcon.isEmpty() ? s.appIcon.toDataURL() : "",
-      isScreen: s.id.startsWith("screen:"),
-    }));
+    try {
+      const sources = await desktopCapturer.getSources({
+        types: ["screen", "window"],
+        thumbnailSize: { width: 320, height: 200 },
+        fetchWindowIcons: true,
+      });
+      screenShareSources.clear();
+      for (const source of sources) screenShareSources.set(source.id, source);
+      return sources.map((source) => ({
+        id: source.id,
+        name: source.name,
+        thumbnail: source.thumbnail?.toDataURL() ?? "",
+        appIcon:
+          source.appIcon && !source.appIcon.isEmpty() ? source.appIcon.toDataURL() : "",
+        isScreen: source.id.startsWith("screen:"),
+      }));
+    } catch (error) {
+      screenShareSources.clear();
+      console.warn("[screen-share] failed to list display sources", error);
+      throw error;
+    }
   });
 
   session.defaultSession.setDisplayMediaRequestHandler(
     (request, callback) => {
-      // Ask the renderer to pick a source via the in-app picker.
-      const pick = async () => {
+      // Electron's callback is one-shot and throws synchronously when an empty
+      // result cancels a video request. Mark it complete BEFORE invoking it so
+      // that a thrown cancellation can never result in a second callback.
+      let completed = false;
+      const complete = (streams, reportError = true) => {
+        if (completed) return;
+        completed = true;
         try {
-          const chosenId = await mainWindow.webContents.executeJavaScript(
-            "window.__armadaPickScreenSource && window.__armadaPickScreenSource()",
-            true,
-          );
-          if (!chosenId) {
-            callback({}); // user cancelled
-            return;
-          }
-          const sources = await desktopCapturer.getSources({
-            types: ["screen", "window"],
-          });
-          const source = sources.find((s) => s.id === chosenId) || sources[0];
-          callback({ video: source, audio: "loopback" });
-        } catch {
-          callback({});
+          callback(streams);
+        } catch (error) {
+          if (reportError) console.warn("[screen-share] Electron rejected display source", error);
         }
       };
-      pick();
+
+      // Ask the renderer to pick a source via the context-isolated preload IPC
+      // bridge. A property written on preload's window is invisible to the
+      // page, so executeJavaScript cannot be used to call the React handler.
+      const pick = async () => {
+        try {
+          const chosenId = await requestScreenSharePick();
+          if (!chosenId) {
+            screenShareSources.clear();
+            complete({}, false); // user cancelled
+            return;
+          }
+          const source = screenShareSources.get(chosenId);
+          screenShareSources.clear();
+          if (!source) {
+            console.warn("[screen-share] selected display source is no longer available");
+            complete({}, false);
+            return;
+          }
+          // Electron's loopback capture is Windows-only. Linux audio is added
+          // by the PipeWire virtual microphone below after this video stream
+          // reaches the renderer.
+          complete({
+            video: source,
+            ...(process.platform === "win32" && request.audioRequested
+              ? { audio: "loopback" }
+              : {}),
+          });
+        } catch (error) {
+          screenShareSources.clear();
+          console.warn("[screen-share] display capture request failed", error);
+          complete({}, false);
+        }
+      };
+      void pick();
     },
     // useSystemPicker: true would defer to the OS picker on platforms that have
     // one (Windows/macOS recents); we use our own picker for consistency.
     { useSystemPicker: false },
   );
+}
+
+// ── Linux screen-share audio (PipeWire) ────────────────────────────────────
+//
+// Chromium cannot attach Linux system audio to getDisplayMedia. venmic creates
+// a temporary PipeWire virtual microphone whose monitor contains either the
+// selected applications or the default speakers. The renderer adds that mic's
+// track to the display stream before LiveKit publishes it.
+
+let linuxAudioPatchBay;
+let linuxAudioLoadError;
+const linuxAudioMatchers = new Map();
+
+function getLinuxAudioPatchBay() {
+  if (process.platform !== "linux") return null;
+  if (linuxAudioPatchBay) return linuxAudioPatchBay;
+  if (linuxAudioLoadError) return null;
+  try {
+    const { PatchBay } = require("@vencord/venmic");
+    if (!PatchBay.hasPipeWire()) {
+      linuxAudioLoadError = "PipeWire is not available in this session.";
+      return null;
+    }
+    linuxAudioPatchBay = new PatchBay();
+    return linuxAudioPatchBay;
+  } catch (error) {
+    linuxAudioLoadError = "The PipeWire audio capture module could not be loaded.";
+    console.warn("[screen-share] failed to load venmic", error);
+    return null;
+  }
+}
+
+function electronAudioServiceMatcher() {
+  const metric = app.getAppMetrics().find((entry) => entry.name === "Audio Service");
+  return metric ? { "application.process.id": String(metric.pid) } : null;
+}
+
+function listLinuxAudioSources() {
+  if (process.platform !== "linux") {
+    return { supported: false, reason: null, sources: [] };
+  }
+  const patchBay = getLinuxAudioPatchBay();
+  if (!patchBay) {
+    return {
+      supported: false,
+      reason: linuxAudioLoadError || "Linux application audio requires PipeWire.",
+      sources: [],
+    };
+  }
+
+  try {
+    const audioService = electronAudioServiceMatcher();
+    const applications = listLinuxAudioApplications(
+      patchBay,
+      audioService?.["application.process.id"],
+    );
+    // Rebuilt rather than merged: the table only has to resolve ids the picker
+    // is still holding, and those ids name the application, so a re-list either
+    // yields the same entry or drops one that has gone away.
+    linuxAudioMatchers.clear();
+
+    const sources = applications.map((source) => {
+      linuxAudioMatchers.set(source.id, source.matcher);
+      return { id: source.id, name: source.name };
+    });
+    return { supported: true, reason: null, sources };
+  } catch (error) {
+    console.warn("[screen-share] failed to enumerate PipeWire audio", error);
+    return { supported: false, reason: "PipeWire audio sources could not be listed.", sources: [] };
+  }
+}
+
+function startLinuxShareAudio(selection) {
+  const patchBay = getLinuxAudioPatchBay();
+  if (!patchBay) return false;
+  try {
+    patchBay.unlink();
+    const exclude = [];
+    const audioService = electronAudioServiceMatcher();
+    if (audioService) exclude.push(audioService);
+    exclude.push({ "media.class": "Stream/Input/Audio" }, { "node.virtual": "true" });
+
+    const common = {
+      exclude,
+      ignore_devices: true,
+      only_speakers: true,
+      only_default_speakers: true,
+      // Stay muted until the renderer has attached the virtual microphone;
+      // this avoids a short burst through the user's normal mic path.
+      // venmic 6.x (used only for the Flatpak-compatible native addon) starts
+      // unmuted and has no unmute() method; unknown options are harmless.
+      mute: typeof patchBay.unmute === "function",
+    };
+    if (selection?.mode === "system") {
+      return patchBay.link({ ...common, include: [] });
+    }
+    if (selection?.mode === "applications" && Array.isArray(selection.sourceIds)) {
+      const include = selection.sourceIds
+        .map((id) => linuxAudioMatchers.get(id))
+        .filter(Boolean);
+      if (include.length === 0) return false;
+      return patchBay.link({ ...common, include });
+    }
+    return false;
+  } catch (error) {
+    console.warn("[screen-share] failed to start PipeWire audio", error);
+    return false;
+  }
+}
+
+function installLinuxShareAudioIpc() {
+  ipcMain.handle("armada:linux-share-audio-sources", () => listLinuxAudioSources());
+  ipcMain.handle("armada:linux-share-audio-start", (_event, selection) =>
+    startLinuxShareAudio(selection),
+  );
+  ipcMain.handle("armada:linux-share-audio-unmute", () => {
+    try {
+      if (!linuxAudioPatchBay) return false;
+      // The Flatpak-compatible venmic 6.x addon is already live after link().
+      if (typeof linuxAudioPatchBay.unmute !== "function") return true;
+      linuxAudioPatchBay.unmute();
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  ipcMain.handle("armada:linux-share-audio-stop", () => {
+    try {
+      linuxAudioPatchBay?.unlink();
+    } catch (error) {
+      console.warn("[screen-share] failed to stop PipeWire audio", error);
+    }
+  });
 }
 
 // ── Permissions (microphone/camera for voice) ───────────────────────────────
@@ -521,20 +1215,16 @@ const ALLOWED_PERMISSIONS = new Set([
   "pointerLock",
 ]);
 
-// Our own origin: app://armada, plus the Vite dev server in dev mode.
-//
-// Compared as scheme+host, NOT via `URL.origin`: `app:` is a non-special scheme
-// to a URL parser, so `new URL("app://armada/").origin` serializes to the
-// string "null" and an `=== ORIGIN` test is false for every URL this is asked
-// about — including the ones it exists to allow. Chromium gives the scheme a
-// real origin because registerSchemesAsPrivileged marks it `standard`, and
-// hands us "app://armada" as the requesting origin; Node's parser, which is
-// what runs here, knows nothing of that registration.
+// Our own origin: app://armada (isArmadaAppUrl, which compares scheme+host
+// rather than `URL.origin` — "null" for a custom scheme — and rejects
+// userinfo lookalikes; see appOrigin.js), plus the Vite dev server in dev
+// mode.
 function isAppOrigin(url) {
+  if (isArmadaAppUrl(url)) return true;
+  if (DEV_ORIGIN === "") return false;
   try {
     const u = new URL(url);
-    const origin = `${u.protocol}//${u.host}`;
-    return origin === ORIGIN || (DEV_ORIGIN !== "" && origin === DEV_ORIGIN);
+    return `${u.protocol}//${u.host}` === DEV_ORIGIN;
   } catch {
     return false;
   }
@@ -746,6 +1436,9 @@ function installIpc() {
 
   // Open the OS microphone privacy settings so the user can allow desktop apps
   // to use the mic. No-op (resolves false) on platforms without a deep link.
+  // These two go to shell.openExternal directly rather than through
+  // openExternalUrl: they are compile-time constants in OS-private schemes,
+  // which is exactly what that allowlist exists to reject.
   ipcMain.handle("armada:open-mic-settings", async () => {
     try {
       if (process.platform === "win32") {
@@ -763,6 +1456,20 @@ function installIpc() {
       return false;
     }
   });
+
+  // True hold-to-talk needs both press and release events while Armada is in
+  // the background. Windows/macOS and Linux X11 use the native hook; Linux
+  // Wayland/Flatpak uses the Global Shortcuts portal's Activated/Deactivated
+  // signals. The renderer only marks this active while a LiveKit room exists.
+  ipcMain.handle("armada:push-to-talk-configure", (_event, binding) =>
+    pushToTalk.configure(binding),
+  );
+  ipcMain.handle("armada:push-to-talk-open-system-settings", () =>
+    pushToTalk.openSystemSettings(),
+  );
+  ipcMain.handle("armada:push-to-talk-active", (_event, active) =>
+    pushToTalk.setActive(active),
+  );
 }
 
 // ── App lifecycle ────────────────────────────────────────────────────────────
@@ -773,7 +1480,7 @@ if (!gotLock) {
 } else {
   app.on("second-instance", () => showWindow());
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     if (DEV_URL) {
       console.log(`[dev] ${DEV_URL} — profile ${app.getPath("userData")}`);
     }
@@ -791,19 +1498,41 @@ if (!gotLock) {
     // before it reads anything.
     installDbIpc();
     installDisplayMediaHandler();
+    installLinuxShareAudioIpc();
     installBundleIpc();
-    createTray();
-    createWindow();
+    installAutoUpdater();
+    // A suspended or locked machine may never deliver the physical key-up.
+    // Fail closed instead of leaving the microphone live after wake/unlock.
+    powerMonitor.on("suspend", () => pushToTalk.cancelPress());
+    powerMonitor.on("lock-screen", () => pushToTalk.cancelPress());
+    // Create the window BEFORE probing the tray. On Linux that probe is a
+    // chain of gdbus round trips with 1.5s timeouts each, so a session whose
+    // D-Bus is slow or wedged would otherwise show no window at all for
+    // several seconds. Nothing about constructing the window depends on the
+    // answer — only whether a --hidden start is safe, reconciled below.
+    createWindow({ show: !startHidden });
     watchBundleBoot();
 
+    if (process.platform === "linux") {
+      await refreshTraySupport();
+    } else {
+      closeToTraySupported = await createTray();
+    }
+    // --hidden is safe only when the process has a visible way back in.
+    if (startHidden && !closeToTraySupported) showWindow();
+
     app.on("activate", () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      if (BrowserWindow.getAllWindows().length === 0) createWindow({ show: true });
       else showWindow();
     });
   });
 
   app.on("before-quit", () => {
     isQuitting = true;
+    stopHiddenTrayMonitor();
+    // Not awaited: before-quit is synchronous. The catch keeps a bus teardown
+  // rejection from surfacing as an unhandled rejection during shutdown.
+  void pushToTalk.destroy().catch(() => {});
   });
 
   // Closing the database is async, and quitting is not, so the first pass is
@@ -815,9 +1544,8 @@ if (!gotLock) {
     closeDb().finally(() => app.quit());
   });
 
-  // With a tray, the app keeps running when all windows are closed.
+  // With a usable tray, the app keeps running when all windows are closed.
   app.on("window-all-closed", () => {
-    // Intentionally do nothing: the tray keeps the app alive. Quit is explicit
-    // (tray menu / Cmd+Q), which sets isQuitting and lets the app exit.
+    if (!closeToTraySupported) app.quit();
   });
 }

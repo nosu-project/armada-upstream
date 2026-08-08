@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>buzz.armada.app</id>
+  <name>Armada</name>
+  <summary>Sovereign encrypted communities and chat</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-only</project_license>
+  <developer id="buzz.armada">
+    <name>Armada</name>
+  </developer>
+  <description>
+    <p>
+      Armada is a standalone Nostr client for serverless, end-to-end encrypted
+      Concord communities, direct messages, channels, and voice.
+    </p>
+  </description>
+  <launchable type="desktop-id">buzz.armada.app.desktop</launchable>
+  <url type="homepage">https://armada.buzz</url>
+  <content_rating type="oars-1.1" />
+</component>

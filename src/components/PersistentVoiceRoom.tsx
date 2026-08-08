@@ -31,6 +31,7 @@ import "@livekit/components-styles";
 import { InCallView } from "@/components/chat/VoiceBar";
 import { CallStage } from "@/components/chat/CallStage";
 import { DisplayName } from "@/components/DisplayName";
+import { DesktopPushToTalk } from "@/components/DesktopPushToTalk";
 import { Button } from "@/components/ui/button";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
@@ -542,6 +543,7 @@ function VoiceRoomShell({
       <RoomAudioRenderer />
       <CallSoundEffects />
       <MicNoiseProcessor />
+      <DesktopPushToTalk />
       <SpeakingReporter />
       <MutedReporter />
       <RosterReporter />

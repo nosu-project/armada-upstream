@@ -4,7 +4,8 @@
 # Everything .ngit/act/workflows otherwise downloads on EVERY run is baked in
 # as layers: JDK 21 / Node 22 toolcaches (so the setup-* actions no-op), the
 # Android SDK, system ruby + fastlane (Google Play publish), the zsp binary
-# (Zapstore publish), wine (Windows electron-builder targets), and warm
+# (Zapstore publish), wine (Windows electron-builder targets), Flatpak tooling,
+# and warm
 # ~/.gradle / ~/.npm / ~/.cache/electron{,-builder} dependency caches for this
 # repo.
 #
@@ -112,6 +113,20 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*; \
     wine --version
 
+# ── Flatpak (desktop Flatpak target + Electron BaseApp) ─────────────────────
+# The SDK/runtime download is much larger than the manifest build itself, so
+# keep it in the image rather than repeating it on every version tag. The
+# desktop workflow retains a fallback install for stock act images.
+RUN set -eux; \
+    apt-get update -qq; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends flatpak flatpak-builder; \
+    rm -rf /var/lib/apt/lists/*; \
+    flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo; \
+    flatpak install -y flathub \
+      org.freedesktop.Platform//25.08 \
+      org.freedesktop.Sdk//25.08 \
+      org.electronjs.Electron2.BaseApp//25.08
+
 # ── zsp binary (Zapstore publish; built in the zsp-builder stage) ────────────
 COPY --from=zsp-builder /out/zsp /usr/local/bin/zsp
 RUN zsp --version
@@ -195,4 +210,5 @@ RUN set -eux; \
     zsp --version; \
     wine --version; \
     swift --version; \
+    flatpak-builder --version; \
     sdkmanager --version

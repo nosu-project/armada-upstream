@@ -8,10 +8,10 @@
 //
 // The asar is REUSED from the electron-builder run rather than built a second
 // time, so the mac bundles ship byte-identical app code to the Linux/Windows
-// installers and there is no second `files` list to drift. That reuse is only
-// sound while the app has no native modules — electron/package.json has no
-// runtime `dependencies` at all. Adding one means building a per-platform asar
-// instead.
+// installers and there is no second `files` list to drift. The only native
+// integration in that asar, uiohook-napi, publishes N-API prebuilds for macOS,
+// Windows and Linux together; electron-builder keeps those prebuilds unpacked
+// and does not rebuild them. venmic is excluded at runtime outside Linux.
 //
 // The remaining Apple-only pieces are deliberately NOT faked here:
 //   - signing: an arm64 Mac refuses to exec an unsigned binary, so CI ad-hoc
@@ -48,6 +48,13 @@ const asar = path.join(root, "release/linux-unpacked/resources/app.asar");
 if (!fs.existsSync(asar)) {
   throw new Error(`no ${asar} — run electron-builder --linux first`);
 }
+const unpackedUiohook = path.join(
+  root,
+  "release/linux-unpacked/resources/app.asar.unpacked/node_modules/uiohook-napi",
+);
+if (!fs.existsSync(unpackedUiohook)) {
+  throw new Error(`no ${unpackedUiohook} — uiohook-napi was not staged for macOS`);
+}
 
 // electron-builder derives .icns from build/icon.png; packager wants the .icns.
 const icns = path.join(root, "release/mac-icon.icns");
@@ -83,6 +90,33 @@ for (const arch of arches) {
     icon: icns,
     extendInfo: builderConfig.mac?.extendInfo ?? {},
   });
+  const macApp = path.join(appPath, `${pkg.productName}.app`);
+  // prebuiltAsar copies app.asar, but @electron/packager does not know about
+  // electron-builder's sibling app.asar.unpacked directory. Copy the complete
+  // package so Node can resolve its JS shim and select the matching Darwin N-API
+  // prebuild at runtime. The Linux-only venmic payload is intentionally absent.
+  fs.cpSync(
+    unpackedUiohook,
+    path.join(
+      macApp,
+      "Contents",
+      "Resources",
+      "app.asar.unpacked",
+      "node_modules",
+      "uiohook-napi",
+    ),
+    { recursive: true },
+  );
+
+  // These Linux-cross-built archives are only ad-hoc signed in CI. They are
+  // intentionally not an electron-updater target: safely replacing a macOS
+  // app requires a consistently Developer ID-signed update. Native mac builds
+  // made with electron-builder do not contain this marker and may use the
+  // signed latest-mac.yml feed.
+  fs.writeFileSync(
+    path.join(macApp, "Contents", "Resources", "armada-no-self-update"),
+    "Cross-built ad-hoc archive; updates are installed manually.\n",
+  );
   built.push(appPath);
   console.log(`built ${appPath}`);
 }
