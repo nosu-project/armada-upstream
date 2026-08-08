@@ -1,4 +1,4 @@
-import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, KeyRound, Link as LinkIcon, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Phone, Pin, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Timer, Trash2, UserPlus, Users, X } from "lucide-react";
+import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Flag, Folder, FolderGit2, Hash, Headphones, KeyRound, Link as LinkIcon, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Phone, Pin, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Timer, Trash2, UserPlus, Users, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
@@ -43,6 +43,8 @@ import { ShareToDiscoverDialog } from "@/concord/components/ShareToDiscoverDialo
 import { RolesDialog } from "@/concord/components/RolesDialog";
 import { AuditLogView } from "@/concord/components/AuditLogView";
 import { BannedView } from "@/concord/components/BannedView";
+import { ReportsView } from "@/concord/components/ReportsView";
+import { reportInboxSecret } from "@/concord/lib/report";
 import { SuspiciousActivityBanner } from "@/concord/components/SuspiciousActivityBanner";
 import { useBanSelfRemove } from "@/concord/hooks/useBanSelfRemove";
 import { useLinkAuthorityWatch, useLinkFreshnessWatch } from "@/concord/hooks/useInvites";
@@ -1351,6 +1353,11 @@ export function ConcordPage() {
   const iAmAdminOrOwner = Boolean(user && (iAmOwner || (roster ? badgeOf(roster, user.pubkey) === "admin" : false)));
   const canKickAny = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.KICK));
   const canBanAny = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.BAN));
+  // Reports are encrypted to the Control Plane address, so reading the queue is
+  // exactly holding that epoch's secret — no roster bit is consulted, because
+  // none could be: nothing else can decrypt them. Absent on a legacy epoch,
+  // which has no staff-only address and therefore no reports either.
+  const canReadReports = Boolean(community && reportInboxSecret(community));
   // Channel-targeted authority honors role scope: a Role scoped to one channel
   // moderates there and nowhere else (its bits are inert outside it).
   const canModerateMessages = Boolean(
@@ -2667,6 +2674,15 @@ export function ConcordPage() {
                     },
                   },
                   {
+                    show: canReadReports,
+                    icon: <Flag className="size-4" />,
+                    label: "Reports",
+                    onClick: () => {
+                      selectPane("reports");
+                      setChannelsOpen(false);
+                    },
+                  },
+                  {
                     show: canManageRoles || canKickAny || canBanAny || canCreateInvite,
                     icon: <Users className="size-4" />,
                     label: "Members",
@@ -3012,6 +3028,11 @@ export function ConcordPage() {
                   <Ban className="size-5 text-muted-foreground shrink-0" />
                   <h1 className="font-semibold truncate leading-tight">Banned members</h1>
                 </>
+              ) : view === "reports" ? (
+                <>
+                  <Flag className="size-5 text-muted-foreground shrink-0" />
+                  <h1 className="font-semibold truncate leading-tight">Reports</h1>
+                </>
               ) : view === "members" ? (
                 <>
                   <Users className="size-5 text-muted-foreground shrink-0" />
@@ -3077,6 +3098,11 @@ export function ConcordPage() {
                     <>
                       <Ban className="size-3 shrink-0" />
                       Banned members
+                    </>
+                  ) : view === "reports" ? (
+                    <>
+                      <Flag className="size-3 shrink-0" />
+                      Reports
                     </>
                   ) : view === "members" ? (
                     <>
@@ -3319,6 +3345,10 @@ export function ConcordPage() {
               ) : view === "banned" ? (
                 <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable pb-safe">
                   {community && <BannedView community={community} />}
+                </div>
+              ) : view === "reports" && canReadReports ? (
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
+                  {community && <ReportsView community={community} />}
                 </div>
               ) : view === "members" ? (
                 <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">

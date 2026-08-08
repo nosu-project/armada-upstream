@@ -1,4 +1,4 @@
-import { Braces, ChevronDown, Copy, Link2, Link as LinkIcon, Loader2, Maximize2, MessagesSquare, Minimize2, Pencil, Trash2, X, Zap } from "lucide-react";
+import { Braces, ChevronDown, Copy, Flag, Link2, Link as LinkIcon, Loader2, Maximize2, MessagesSquare, Minimize2, Pencil, Trash2, X, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
@@ -9,6 +9,7 @@ import { MessageActionToolbar } from "@/components/chat/MessageActionToolbar";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { ReactionBar } from "@/components/chat/ReactionBar";
 import { flashRow } from "@/components/chat/rowFlash";
+import { ReportDialog } from "@/components/ReportDialog";
 import { ZapDialog } from "@/components/chat/ZapDialog";
 import { ZapPill } from "@/components/chat/ZapPill";
 import { DisplayName } from "@/components/DisplayName";
@@ -42,6 +43,7 @@ import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useAutosizeTextarea } from "@/hooks/useAutosizeTextarea";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useChatScope } from "@/hooks/useChatScope";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { useLongPress } from "@/hooks/useLongPress";
@@ -52,6 +54,7 @@ import { ComposerBoundsProvider, getComposerCollisionPadding, useComposerBoundsR
 import { getAvatarShape } from "@/lib/avatarShape";
 import { shortClockTime } from "@/lib/formatTime";
 import { writeClipboardText } from "@/lib/clipboard";
+import { reportDestination, type ReportTarget } from "@/lib/report";
 import { chatUrl, type ChatRoute } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
@@ -171,6 +174,17 @@ function ThreadMessage({
   // address.
   const canZap = Boolean(zapEnabled && user && !isOwn);
   const zapDisabled = Boolean(author.data && !metadata?.lud16 && !metadata?.lud06);
+  // Reporting, gated exactly as in ChatMessage: the ambient chat scope decides
+  // where a report goes, and an absent destination (a legacy Concord epoch,
+  // which has no staff-only address) offers none.
+  const [reportOpen, setReportOpen] = useState(false);
+  const chatScope = useChatScope();
+  const reportTo = reportDestination(chatScope);
+  const canReport = Boolean(reportTo && user && !isOwn);
+  const reportTarget: ReportTarget =
+    isRumor && reportTo?.kind === "network"
+      ? { pubkey: event.pubkey }
+      : { pubkey: event.pubkey, eventId: event.id };
 
   const copyMessageId = useCallback(() => {
     try {
@@ -215,13 +229,26 @@ function ThreadMessage({
     });
   }
   menuActions.push({ id: "json", label: "View event JSON", icon: Braces, onSelect: () => setJsonOpen(true) });
+  // Report and delete share the trailing destructive group; only the first of
+  // them opens it.
+  const showReport = canReport && !isEditing;
+  if (showReport) {
+    menuActions.push({
+      id: "report",
+      label: "Report message",
+      icon: Flag,
+      destructive: true,
+      groupStart: true,
+      onSelect: () => setReportOpen(true),
+    });
+  }
   if (canDelete && !isEditing) {
     menuActions.push({
       id: "delete",
       label: "Delete message",
       icon: Trash2,
       destructive: true,
-      groupStart: true,
+      groupStart: !showReport,
       onSelect: () => setConfirmDelete(true),
     });
   }
@@ -391,6 +418,14 @@ function ThreadMessage({
     </AlertDialog>
     {zapOpen && (
       <ZapDialog open={zapOpen} onOpenChange={setZapOpen} target={event} sendZap={onSendZap} sendOnchainZap={onSendOnchainZap} />
+    )}
+    {reportOpen && reportTo && (
+      <ReportDialog
+        open={reportOpen}
+        onOpenChange={setReportOpen}
+        destination={reportTo}
+        target={reportTarget}
+      />
     )}
     <Dialog open={jsonOpen} onOpenChange={setJsonOpen}>
       <DialogContent className="max-w-2xl">

@@ -1,4 +1,4 @@
-import { AtSign, Bell, BellOff, CheckCheck, ChevronLeft, ChevronRight, Headphones, Inbox, Loader2, Lock, MessageSquare, MoreVertical, PanelLeft, PanelLeftDashed, PenSquare, Phone, Pin, PinOff, Plus, Search, ShieldCheck, Sparkles, Timer, UserCheck, Users, UserX, X } from "lucide-react";
+import { AtSign, Bell, BellOff, CheckCheck, ChevronLeft, ChevronRight, Flag, Headphones, Inbox, Loader2, Lock, MessageSquare, MoreVertical, PanelLeft, PanelLeftDashed, PenSquare, Phone, Pin, PinOff, Plus, Search, ShieldCheck, Sparkles, Timer, UserCheck, Users, UserX, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type UIEvent } from "react";
 import { useNavigate, useParams, Navigate } from "react-router-dom";
@@ -21,6 +21,7 @@ import { VoicePresence } from "@/components/VoicePresence";
 import { BotPill } from "@/components/BotPill";
 import { DisplayName } from "@/components/DisplayName";
 import { NoteToSelfAvatar, NoteToSelfIcon, NOTE_TO_SELF_NAME } from "@/components/NoteToSelfAvatar";
+import { ReportDialog } from "@/components/ReportDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -783,6 +784,7 @@ function Conversation({
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [muteConfirmOpen, setMuteConfirmOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Reset the inline search whenever we switch conversations.
@@ -1195,6 +1197,18 @@ function Conversation({
                   <UserX className="size-4" />
                   Mute person
                 </DropdownMenuItem>
+                {/* A DM has no moderator: there is no room, no operator, and
+                    nobody but the two of you. So the only place a report can go
+                    is the public network — which the dialog says plainly, since
+                    the reporter's words go out in the clear. The message itself
+                    is never named: a NIP-17 rumor id resolves for no one. */}
+                <DropdownMenuItem
+                  className="px-3 py-2 text-destructive focus:text-destructive"
+                  onClick={() => setReportOpen(true)}
+                >
+                  <Flag className="size-4" />
+                  Report person
+                </DropdownMenuItem>
               </>
             )}
           </DropdownMenuContent>
@@ -1487,6 +1501,15 @@ function Conversation({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {reportOpen && (
+        <ReportDialog
+          open={reportOpen}
+          onOpenChange={setReportOpen}
+          destination={{ kind: "network" }}
+          target={{ pubkey: peer }}
+        />
+      )}
     </div>
     </ComposerBoundsProvider>
   );

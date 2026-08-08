@@ -1,4 +1,4 @@
-import { AlertCircle, Braces, Copy, Forward, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, Zap } from "lucide-react";
+import { AlertCircle, Braces, Copy, Flag, Forward, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
@@ -11,6 +11,7 @@ import { CalendarEventMessageCard } from "@/components/chat/CalendarEventCard";
 import { PollCard } from "@/components/chat/PollCard";
 import { PollView } from "@/components/chat/PollView";
 import { ReactionBar } from "@/components/chat/ReactionBar";
+import { ReportDialog } from "@/components/ReportDialog";
 import { ZapDialog } from "@/components/chat/ZapDialog";
 import { ZapPill } from "@/components/chat/ZapPill";
 import { DisplayName } from "@/components/DisplayName";
@@ -43,6 +44,7 @@ import {
 } from "@/components/ui/dialog";
 import { useAutosizeTextarea } from "@/hooks/useAutosizeTextarea";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useChatScope } from "@/hooks/useChatScope";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
@@ -55,6 +57,7 @@ import { chatUrl, type ChatRoute } from "@/lib/routes";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { expirationOf, KIND_DM_CHAT } from "@/lib/nip17/protocol";
 import { parseProxyTag } from "@/lib/nip48";
+import { reportDestination, type ReportTarget } from "@/lib/report";
 import { requestCommand } from "@/hooks/useCommandBus";
 import { commandLine } from "@/lib/botCommands";
 import { isMeAction, meActionText } from "@/lib/slashCommands";
@@ -538,6 +541,19 @@ const ChatMessageInner = memo(function ChatMessageInner({
   // Raw-event JSON viewer (rumor context menu).
   const [jsonOpen, setJsonOpen] = useState(false);
 
+  // Reporting. Where a report goes is a property of the surrounding room, not
+  // of this row, so it comes from the ambient chat scope: a Concord community
+  // routes to its moderators, a NIP-29 server to its host relay, and anywhere
+  // without a room (DMs) to the public network. `undefined` means the room has
+  // moderators in principle but no way to reach them privately (a legacy
+  // Concord epoch), and offers no report at all.
+  const [reportOpen, setReportOpen] = useState(false);
+  const chatScope = useChatScope();
+  const reportTo = reportDestination(chatScope);
+  // A mesh/proxied identity isn't a Nostr pubkey a report could name, and a
+  // message you sent isn't one you report.
+  const canReport = Boolean(reportTo && user && !isOwn && !identityOverride);
+
   // Zap dialog. The button shows on others' messages when the surface supports
   // zaps; it disables (with a hint) once the author's profile has loaded
   // without a lightning address. While the profile is still loading the button
@@ -549,6 +565,16 @@ const ChatMessageInner = memo(function ChatMessageInner({
   // Raw event source for the "View event JSON" menu item: the unsigned rumor
   // when present (Concord sealed chat), otherwise the signed event (NIP-29).
   const isRumor = rumor !== undefined;
+  // What a report names. A rumor id resolves only for someone who holds the
+  // room it was sealed in, so a PUBLIC report (a DM) names the person alone —
+  // an id nobody can fetch would attest to a private conversation while proving
+  // nothing about it. Everywhere else the id is worth naming: a NIP-29 message
+  // is a relay-addressable event, and a Concord rumor id resolves for exactly
+  // the moderators the report is encrypted to.
+  const reportTarget: ReportTarget =
+    isRumor && reportTo?.kind === "network"
+      ? { pubkey: event.pubkey }
+      : { pubkey: event.pubkey, eventId: event.id };
   // Serialized only while the dialog is open: this runs per rendered row, and
   // stringifying every message's event on mount is pure cost on a channel switch.
   const sourceJson = jsonOpen ? JSON.stringify(rumor ?? event, null, 2) : "";
@@ -658,13 +684,26 @@ const ChatMessageInner = memo(function ChatMessageInner({
     icon: Braces,
     onSelect: () => setJsonOpen(true),
   });
+  // Report and delete share the trailing destructive group, so only the first
+  // of them opens it — two adjacent separators would read as three groups.
+  const showReport = canReport && !isEditing;
+  if (showReport) {
+    menuActions.push({
+      id: "report",
+      label: "Report message",
+      icon: Flag,
+      destructive: true,
+      groupStart: true,
+      onSelect: () => setReportOpen(true),
+    });
+  }
   if (canDelete && !isEditing) {
     menuActions.push({
       id: "delete",
       label: "Delete message",
       icon: Trash2,
       destructive: true,
-      groupStart: true,
+      groupStart: !showReport,
       onSelect: () => setConfirmDelete(true),
     });
   }
@@ -971,6 +1010,14 @@ const ChatMessageInner = memo(function ChatMessageInner({
     )}
     {zapOpen && (
       <ZapDialog open={zapOpen} onOpenChange={setZapOpen} target={event} sendZap={onSendZap} sendOnchainZap={onSendOnchainZap} />
+    )}
+    {reportOpen && reportTo && (
+      <ReportDialog
+        open={reportOpen}
+        onOpenChange={setReportOpen}
+        destination={reportTo}
+        target={reportTarget}
+      />
     )}
     {jsonOpen && (
     <Dialog open={jsonOpen} onOpenChange={setJsonOpen}>
