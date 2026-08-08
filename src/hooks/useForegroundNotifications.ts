@@ -18,6 +18,7 @@ import {
 import { isRoomActive } from "@/lib/activeRooms";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
+import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
 import {
   loadNotificationSoundSettings,
   playNotificationSound,
@@ -133,6 +134,17 @@ export function useForegroundNotifications(): void {
   const lastNotified = useRef(new Map<string, number>());
   const notifiedEvents = useRef(new Set<string>());
 
+  // `useKnownDmPeers` decides on follows ∪ accepted ∪ pinned ∪ `mine`, and only
+  // the caller can supply `mine` — "the viewer has written in this thread".
+  // The sink has no conversation rows, so it keeps the peer set here, read from
+  // the same store `useNostrPush` seals into the worker's DM config. Passing a
+  // hardcoded `false` instead made every thread with an unfollowed peer a
+  // content-blind "Message request", however long the two had been talking —
+  // and on desktop, where this is the ONLY notifier (Electron has no push and
+  // no service worker presenting), that is every DM.
+  const minePeers = useRef(new Set<string>());
+  const mineLoading = useRef(false);
+
   useEffect(() => {
     if (!user) return;
     if (isNativeRuntime()) return; // native has its own background service
@@ -168,6 +180,29 @@ export function useForegroundNotifications(): void {
       const npub = tryNpubEncode(pubkey);
       return npub ? `${npub.slice(0, 12)}…` : "Someone";
     };
+
+    // Reload the peers the viewer has authored a message to. Called once on
+    // mount and again whenever a DM arrives from a peer the current sets don't
+    // know: the viewer may have replied since (replying is accepting, but the
+    // persisted `acceptedDms` is only written from the compose pane), so one
+    // message may present generically before the set catches up — which beats
+    // an interval poll, and beats deferring the decision past the point where
+    // the `off` policy has to stay silent.
+    const refreshMinePeers = () => {
+      if (mineLoading.current) return;
+      mineLoading.current = true;
+      void (async () => {
+        try {
+          const rows = await queryDm17Conversations(user.pubkey);
+          minePeers.current = new Set(rows.filter((row) => row.mine).map((row) => row.peer));
+        } catch {
+          // Store unavailable — follows ∪ accepted ∪ pinned still apply.
+        } finally {
+          mineLoading.current = false;
+        }
+      })();
+    };
+    refreshMinePeers();
 
     const unregister = registerNotifySink((candidates) => {
       const intentOn = foregroundNotifyIntent();
@@ -214,7 +249,9 @@ export function useForegroundNotifications(): void {
           // the message text, their display name and their avatar. Apply the
           // message-request policy before any of it is surfaced — "off" stays
           // silent, "generic" cues without content, "full" notifies as normal.
-          if (cand.peer && !c.isKnown(cand.peer, false)) {
+          if (cand.peer && !c.isKnown(cand.peer, minePeers.current.has(cand.peer))) {
+            // The viewer may have written to them since the set was loaded.
+            refreshMinePeers();
             const policy = loadPushPrefs().dmRequests;
             if (policy === "off") continue;
             if (policy !== "full") dmGeneric = true;
