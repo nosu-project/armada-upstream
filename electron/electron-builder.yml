@@ -44,6 +44,7 @@ files:
   - "!.flatpak-builder{,/**/*}"
   - main.js
   - appOrigin.js
+  - desktopIntegration.js
   - updateSupport.js
   - linuxAudioSources.js
   - linuxGlobalShortcuts.js
@@ -60,8 +61,11 @@ files:
   - db.cjs
   - package.json
   # main.js uses these at runtime. buildResources alone supplies installer
-  # artwork; it does not put the files inside app.asar.
+  # artwork; it does not put the files inside app.asar. linux-icon.png is the
+  # window icon on Linux and the source of the hicolor icons the AppImage
+  # installs for itself (desktopIntegration.js).
   - build/icon.png
+  - build/linux-icon.png
   - dist/**/*
   - build/**/*
   - "!**/*.map"

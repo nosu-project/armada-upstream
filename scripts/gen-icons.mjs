@@ -81,5 +81,8 @@ for (const s of ["splash-2732x2732.png", "splash-2732x2732-1.png", "splash-2732x
 
 console.log("electron/:");
 icon(join(ROOT, "electron/build/icon.png"), 1024, { frac: 0.72 });
+// electron/build/linux-icon.png — the cut-corner launcher tile Linux uses for
+// the packaged icon, the window icon and the AppImage's hicolor icons — is
+// hand-finished art, not composed from the mark, so nothing regenerates it.
 
 console.log("Done.");
