@@ -4,6 +4,14 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.50.2] - 2026-08-09
+
+Settings sync is now split into separate documents per category, so a read-state update no longer rewrites all your other preferences. Several settings that were silently dropped on reload now sync across devices correctly.
+
+### Fixed
+- DM typing indicators, DM request visibility, default zap amount, zap method, and zaps enabled now sync across devices; they were silently discarded on reload before this release
+- Read state and reactions no longer cause all other settings to be rewritten when they change; each settings category is now a separate synced document
+
 ## [0.50.1] - 2026-08-09
 
 Spam floods no longer drown a channel: coordinated waves of junk — repeated templates, rotating pitches, sudden swarms of new accounts, and established accounts taking turns posting fluent spam — collapse into a single expandable row instead of filling the timeline. Nothing is deleted, and your own messages, community staff, and people you've interacted with are never folded. Community staff can now pause a community from the channel menu, and direct invites arrive in a routed inbox with its own badge instead of a one-at-a-time popup.
