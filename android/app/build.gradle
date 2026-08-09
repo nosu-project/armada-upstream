@@ -18,6 +18,19 @@ android {
         versionCode 1
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        // -PapkAbis=armeabi-v7a,arm64-v8a trims the packaged ABIs. Used by
+        // release.yml for the DOWNLOADABLE APK only: it is a universal APK, so
+        // every user pays for all four copies of libsecp256k1-jni.so and
+        // libsqliteJni.so (~2.5 MB per ABI, ~10 MB of an 18 MB APK), and the
+        // x86 pair is emulators and a handful of Chromebooks. The AAB is built
+        // WITHOUT this property so Play keeps splitting all four.
+        def apkAbis = project.findProperty("apkAbis")
+        if (apkAbis) {
+            ndk {
+                abiFilters.clear()
+                abiFilters.addAll(apkAbis.toString().split(",").collect { it.trim() }.findAll { it })
+            }
+        }
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
@@ -37,7 +50,16 @@ android {
     buildTypes {
         release {
             signingConfig signingConfigs.release
-            minifyEnabled false
+            // R8: the unminified dex was 5.6 MB of an 18 MB APK, most of it
+            // AndroidX/bitchat/Tink code nothing reaches. Shrinking takes it to
+            // ~1.3 MB. See proguard-rules.pro for what the reflective entry
+            // points (the Capacitor bridge, the JNI loaders, Gson's field
+            // names) need in order to survive it.
+            // `shrinkResources` is deliberately NOT on: it measured ~10 KB here
+            // — the app's UI is a WebView, so there are barely any Android
+            // resources to shrink — against the risk of dropping one a plugin
+            // looks up by name.
+            minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }

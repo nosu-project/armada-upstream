@@ -171,7 +171,16 @@ jobs:
           set -eu
           cd android
           chmod +x gradlew
-          ./gradlew assembleRelease bundleRelease
+          # Two invocations, because the ABI set differs between the outputs.
+          # The AAB carries all four ABIs: Play splits it per device, so the
+          # x86 pair costs its users nothing and is what an x86_64 Chromebook
+          # or emulator installs.
+          # The APK is UNIVERSAL — one file, every ABI, downloaded whole — and
+          # libsecp256k1-jni.so + libsqliteJni.so are ~2.5 MB per ABI, so the
+          # x86 pair was 5 MB of dead weight on every phone. -PapkAbis drops
+          # them from the download only (see android/app/build.gradle).
+          ./gradlew bundleRelease
+          ./gradlew assembleRelease -PapkAbis=armeabi-v7a,arm64-v8a
 
       - name: Collect and name artifacts
         id: artifacts
@@ -183,6 +192,14 @@ jobs:
           mkdir -p "$out"
           cp android/app/build/outputs/apk/release/app-release.apk "$out/Armada-v$VERSION_NAME.apk"
           cp android/app/build/outputs/bundle/release/app-release.aab "$out/Armada-v$VERSION_NAME.aab"
+          # The release build is minified, so a stack trace from a sideloaded
+          # or Zapstore install is unreadable without this. (Play needs no
+          # copy: AGP embeds the map in the AAB as
+          # BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map.)
+          # It is the APK build's map, written by the assembleRelease that ran
+          # last above.
+          cp android/app/build/outputs/mapping/release/mapping.txt \
+            "$out/Armada-v$VERSION_NAME-apk-mapping.txt"
           ls -lh "$out"
           echo "dir=$out" >> "$GITHUB_OUTPUT"
 
@@ -204,6 +221,7 @@ jobs:
           path: |
             ${{ steps.artifacts.outputs.dir }}/Armada-v${{ steps.version.outputs.name }}.apk
             ${{ steps.artifacts.outputs.dir }}/Armada-v${{ steps.version.outputs.name }}.aab
+            ${{ steps.artifacts.outputs.dir }}/Armada-v${{ steps.version.outputs.name }}-apk-mapping.txt
 
       # Publish the APK to https://armada.buzz/downloads/, the way desktop.yml
       # publishes the installers — same rrsync-jailed deploy user, same staged
@@ -298,7 +316,7 @@ jobs:
       # multi-file wildcard upload round-trips back as a 3-byte stub (digests
       # match on upload, but the download is empty), which then makes `zsp`
       # choke on a non-APK. Building and publishing in one job keeps the real
-      # 7 MB signed APK on disk the whole time. zsp itself is baked into the
+      # signed APK on disk the whole time. zsp itself is baked into the
       # runner image, version-pinned there (see .ngit/ci-image/Dockerfile).
       - name: Publish to Zapstore
         env:

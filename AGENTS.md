@@ -77,6 +77,21 @@ Notes specific to ngit-ci (vs the old GitLab pipeline):
   every release got the same code and Zapstore silently dropped duplicates. The
   tag-derived scheme is deterministic, monotonic with semver, and independent of
   checkout depth. `versionName` is still the tag minus `v`.
+- **The APK and the AAB are built by two separate gradle invocations, and only
+  the APK is ABI-trimmed.** `release.yml` runs `bundleRelease` first, then
+  `assembleRelease -PapkAbis=armeabi-v7a,arm64-v8a`. The AAB keeps all four
+  ABIs because Play splits per device; the APK is universal, so its user
+  downloads every ABI it contains — and `libsecp256k1-jni.so` +
+  `libsqliteJni.so` are ~2.5 MB per ABI, which is what took the download from
+  7 MB (v0.17, before either library) to 18.6 MB (v0.50). Dropping the x86 pair
+  from the download cost 5 MB of nothing: they are emulators and a few
+  Chromebooks, neither of which sideloads. Release builds are also **minified**
+  (R8, `minifyEnabled true`) — 5.6 MB of dex to 1.3 MB. `proguard-rules.pro`
+  documents what the reflective entry points need to survive that; the thing to
+  re-check after adding a dependency or a plugin is that they still do, because
+  R8 breakage is a runtime failure in the release build ONLY, which no debug
+  install and no unit test will show you. `shrinkResources` stays off (~10 KB
+  on a WebView app, against real risk).
 - **Secrets are operator-provisioned and maintainer-gated.** `${{ secrets.* }}`
   is populated only for secrets the ngit-ci operator has provisioned for this
   repo's `#ALIAS`, and only on maintainer-authored triggers (a maintainer's
