@@ -3,16 +3,16 @@
  * Concord spam bot — moderation-UX test harness.
  *
  * Joins a Concord community from an invite link and posts a continuous stream
- * of realistic-looking (but harmless) spam to its public channels, rotating to
- * a fresh Nostr identity every rotation period (default 60s). The intent is to
- * simulate a persistent, ban-evading spammer so the client's moderation UX
- * (mutes, bans, rekeys, member list churn) can be exercised against something
- * that behaves like the real thing.
+ * of realistic-looking (but harmless) spam to its public channels, using a
+ * brand-new Nostr identity for EVERY message. The intent is to simulate a
+ * persistent, ban-evading spammer so the client's moderation UX (mutes, bans,
+ * rekeys, member list churn) can be exercised against something that behaves
+ * like the real thing.
  *
- * Each new identity announces itself with a kind-0 profile carrying a stable
- * instance id and rotation index (`spambot <instance> #<n>`), the previous
- * identity's npub in `about` (forming a chain across rotations), and the
- * NIP-24 `bot` flag — so the client can track the bot across key changes.
+ * Each message's identity announces itself with a kind-0 profile carrying a
+ * stable instance id and a sequence number (`spambot <instance> #<n>`), the
+ * previous identity's npub in `about` (forming a chain across messages), and
+ * the NIP-24 `bot` flag — so the client can track the bot across key changes.
  *
  * All spam URLs use RFC 2606 reserved domains (*.example.com / *.invalid) so
  * nothing posted is actually dangerous.
@@ -24,8 +24,7 @@
  * ~/.config/armada-spambot/invite (in that priority order).
  *
  * Options:
- *   --interval-ms <n>   Delay between messages per identity (default 3000)
- *   --rotate-ms <n>     Identity rotation period (default 60000)
+ *   --interval-ms <n>   Delay between messages (default 3000)
  *   --resolve-only      Resolve the invite, print community + channels, exit
  *   --once              Post a single message, verify it reads back, exit
  *
@@ -571,16 +570,13 @@ function spamContent() {
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const opts = { intervalMs: 3000, rotateMs: 60000, once: false, resolveOnly: false, invite: undefined };
+  const opts = { intervalMs: 3000, once: false, resolveOnly: false, invite: undefined };
   const args = [...argv];
   while (args.length) {
     const a = args.shift();
     switch (a) {
       case "--interval-ms":
         opts.intervalMs = Number(args.shift());
-        break;
-      case "--rotate-ms":
-        opts.rotateMs = Number(args.shift());
         break;
       case "--once":
         opts.once = true;
@@ -604,7 +600,7 @@ function parseArgs(argv) {
   if (!opts.invite) {
     throw new Error("no invite: pass the invite URL as an argument, set ARMADA_INVITE, or write it to ~/.config/armada-spambot/invite");
   }
-  if (!(opts.intervalMs > 0) || !(opts.rotateMs > 0)) throw new Error("intervals must be positive");
+  if (!(opts.intervalMs > 0)) throw new Error("interval must be positive");
   return opts;
 }
 
@@ -612,7 +608,7 @@ let identityCounter = 0;
 
 function newIdentity(prevPk) {
   const sk = generateSecretKey();
-  return { sk, pk: getPublicKey(sk), since: Date.now(), index: ++identityCounter, prevPk };
+  return { sk, pk: getPublicKey(sk), index: ++identityCounter, prevPk };
 }
 
 /**
@@ -779,13 +775,9 @@ async function main() {
     return;
   }
 
-  // --- 24/7 spam loop ---
-  log(`starting spam: message every ${opts.intervalMs}ms, new identity every ${opts.rotateMs}ms`);
+  // --- 24/7 spam loop: a brand-new identity for every single message ---
+  log(`starting spam: message every ${opts.intervalMs}ms, fresh key per message`);
   const instanceId = loadInstanceId();
-  let profRes = await publishProfile(pool, bundle, identity, instanceId);
-  log(`kind-0 profile (${identity.pk.slice(0, 12)}…, "spambot ${instanceId} #${identity.index}"): ${profRes.ok ? "ok" : `FAILED (${profRes.message})`}`);
-  let joinRes = await guestbookJoin(pool, bundle, identity);
-  log(`guestbook join (${identity.pk.slice(0, 12)}…): ${joinRes.ok ? "ok" : `FAILED (${joinRes.message})`}`);
 
   let lastBundleRefresh = Date.now();
   let lastChannelRefresh = Date.now();
@@ -793,19 +785,6 @@ async function main() {
 
   for (;;) {
     const now = Date.now();
-
-    // Identity rotation — a ban only silences one key for the rest of its minute.
-    if (now - identity.since >= opts.rotateMs) {
-      const prev = identity;
-      identity = newIdentity(prev.pk);
-      log(`rotated identity -> ${identity.pk.slice(0, 12)}… ("spambot ${instanceId} #${identity.index}", prev ${prev.pk.slice(0, 8)}…)`);
-      publishProfile(pool, bundle, identity, instanceId)
-        .then((r) => !r.ok && log(`kind-0 profile failed: ${r.message}`))
-        .catch(() => {});
-      guestbookJoin(pool, bundle, identity)
-        .then((r) => !r.ok && log(`guestbook join failed: ${r.message}`))
-        .catch(() => {});
-    }
 
     // Epoch freshness: re-resolve the invite so rekeys don't strand us. A
     // revoked invite is logged and tolerated: we keep spamming with the
@@ -835,13 +814,23 @@ async function main() {
       }
     }
 
+    // Fresh key per message: banning any one identity buys exactly one
+    // message of silence. The kind-0 + guestbook join announce the key so
+    // profile/member-list UX sees the churn.
+    identity = newIdentity(identity.pk);
     const channel = pick(channels);
     const content = spamContent();
     try {
+      const [profRes, joinRes] = await Promise.all([
+        publishProfile(pool, bundle, identity, instanceId),
+        guestbookJoin(pool, bundle, identity),
+      ]);
+      if (!profRes.ok) log(`kind-0 profile failed: ${profRes.message}`);
+      if (!joinRes.ok) log(`guestbook join failed: ${joinRes.message}`);
       const { wrap, result } = await postChat(pool, bundle, channel, identity, content);
       if (result.ok) {
         consecutiveFailures = 0;
-        log(`[${identity.pk.slice(0, 8)}] #${channel.name}: ${JSON.stringify(content.slice(0, 72))} -> ${wrap.id.slice(0, 12)}…`);
+        log(`[${identity.pk.slice(0, 8)}] (#${identity.index}) #${channel.name}: ${JSON.stringify(content.slice(0, 72))} -> ${wrap.id.slice(0, 12)}…`);
       } else {
         consecutiveFailures++;
         log(`PUBLISH REJECTED (${consecutiveFailures}): ${result.message}`);
