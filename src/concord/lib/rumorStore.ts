@@ -256,8 +256,27 @@ export function storedToOpenedChat(ev: NostrRumor, channelIdHex: string): Opened
 
 // ── Reads / writes ────────────────────────────────────────────────────────────
 
+/**
+ * The chat kinds that render as their OWN item — timeline rows (message, poll,
+ * thread reply, timer notice) and events-bar entries (calendar).
+ */
+const CHAT_ROW_KINDS = [9, 1068, 1111, 1740, 31922, 31923];
+/**
+ * The chat kinds that only ever DECORATE a row: delete, reaction, vote, edit,
+ * zaps, RSVP. Read under their OWN budget (see {@link queryChannelRumors}),
+ * never the rows': a shared limit let a bot bury a flood's rows — the
+ * detector's whole evidence, and the reader's timeline — under reactions to
+ * its own spam, minted for free and rendering as nothing.
+ */
+const CHAT_SIDE_KINDS = [5, 7, 1018, 3302, 8333, 9735, 31925];
 /** All chat-plane rumor kinds we persist and fold. */
-const CHAT_KINDS = [5, 7, 9, 1018, 1068, 1111, 1740, 3302, 8333, 9735, 31922, 31923, 31925];
+const CHAT_KINDS = [...CHAT_ROW_KINDS, ...CHAT_SIDE_KINDS];
+/**
+ * Side-events fetched per row of `limit`. Generous enough that tallies stay
+ * whole on any organic channel; when a reaction flood starves it anyway, what
+ * is lost is decoration on old rows — never rows, and never evidence.
+ */
+const SIDE_EVENT_FACTOR = 4;
 
 /**
  * The chat kinds a reader sees as a COMPOSED row: message, poll, thread reply.
@@ -283,22 +302,32 @@ function notExpired(events: NostrRumor[]): NostrRumor[] {
 }
 
 /**
- * Read a channel's cached chat rumors, newest-first up to `limit`. A `channel`
- * tag query hits the tag index directly. `before` (a `created_at` upper bound,
- * exclusive) pages older history out of the store.
+ * Read a channel's cached chat rumors, newest-first. `limit` budgets the ROWS
+ * ({@link CHAT_ROW_KINDS}); side-events ride along under their own budget
+ * ({@link CHAT_SIDE_KINDS}, ×{@link SIDE_EVENT_FACTOR}) so they can never
+ * displace the rows they decorate. A `channel` tag query hits the tag index
+ * directly. `before` (a `created_at` upper bound, exclusive) pages older
+ * history out of the store. Filters are independently limit-bounded in one
+ * transaction, exactly as {@link queryRumorsByChannel} relies on.
  */
 export async function queryChannelRumors(
   communityIdHex: string,
   channelIdHex: string,
   opts: { limit: number; before?: number; signal?: AbortSignal },
 ): Promise<OpenedChat[]> {
-  const filter: { kinds: number[]; "#channel": string[]; limit: number; until?: number } = {
-    kinds: CHAT_KINDS,
-    "#channel": [channelIdHex],
-    limit: opts.limit,
+  const bound = (kinds: number[], limit: number) => {
+    const f: { kinds: number[]; "#channel": string[]; limit: number; until?: number } = {
+      kinds,
+      "#channel": [channelIdHex],
+      limit,
+    };
+    if (opts.before !== undefined) f.until = opts.before - 1;
+    return f;
   };
-  if (opts.before !== undefined) filter.until = opts.before - 1;
-  const events = await rumorStore(communityIdHex).query([filter], { signal: opts.signal });
+  const events = await rumorStore(communityIdHex).query(
+    [bound(CHAT_ROW_KINDS, opts.limit), bound(CHAT_SIDE_KINDS, opts.limit * SIDE_EVENT_FACTOR)],
+    { signal: opts.signal },
+  );
   return notExpired(events).map((ev) => storedToOpenedChat(ev, channelIdHex));
 }
 
@@ -421,12 +450,14 @@ export async function queryRumorsByChannel(
   const out = new Map<string, OpenedChat[]>();
   if (channelIdsHex.length === 0) return out;
 
+  // Rows and side-events under separate budgets, like queryChannelRumors: a
+  // reaction flood must not displace the messages the badges and threads (and
+  // the badge path's flood detector) are derived from.
   const events = await rumorStore(communityIdHex).query(
-    channelIdsHex.map((idHex) => ({
-      kinds: CHAT_KINDS,
-      "#channel": [idHex],
-      limit: opts.perChannel,
-    })),
+    channelIdsHex.flatMap((idHex) => [
+      { kinds: CHAT_ROW_KINDS, "#channel": [idHex], limit: opts.perChannel },
+      { kinds: CHAT_SIDE_KINDS, "#channel": [idHex], limit: opts.perChannel },
+    ]),
     { signal: opts.signal },
   );
 

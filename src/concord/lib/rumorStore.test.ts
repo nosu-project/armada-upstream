@@ -493,6 +493,40 @@ describe("concord rumor store", () => {
     expect(got.map((r) => r.rumorId)).toEqual([webxdc.id]);
   });
 
+  it("keeps reactions from displacing messages out of the channel window", async () => {
+    const { channel, idHex } = makeChannel();
+    const alice = signer();
+    const reactor = signer();
+
+    // Five messages, then a newer wall of reactions. Under one shared limit
+    // the newest N rumors were all reactions — the flood detector's evidence
+    // and the reader's rows displaced by decoration a bot mints for free
+    // against its own spam.
+    const msgs = Array.from({ length: 5 }, (_, i) =>
+      chatRumor(idHex, alice, KIND_MESSAGE, `note ${i}`, 1000 + i * 1000),
+    );
+    const reacts = Array.from({ length: 12 }, (_, i) =>
+      chatRumor(idHex, reactor, KIND_REACTION, "+", 50_000 + i * 1000, [["e", "ab".repeat(32)]]),
+    );
+    const wraps = [
+      ...(await Promise.all(msgs.map((r) => wrapChat(r, channel, alice)))),
+      ...(await Promise.all(reacts.map((r) => wrapChat(r, channel, reactor)))),
+    ];
+    writeRumors(CID, await openChatBatch(wraps, channel));
+
+    const got = await eventually(
+      () => queryChannelRumors(CID, idHex, { limit: 6 }),
+      (r) => r.filter((x) => x.kind === KIND_MESSAGE).length === 5,
+    );
+    expect(got.filter((r) => r.kind === KIND_MESSAGE).length).toBe(5);
+    // The side-events still ride along, under their own budget.
+    expect(got.some((r) => r.kind === KIND_REACTION)).toBe(true);
+
+    // Same guarantee on the community-wide read the badges derive from.
+    const grouped = await queryRumorsByChannel(CID, [idHex], { perChannel: 6 });
+    expect((grouped.get(idHex) ?? []).filter((r) => r.kind === KIND_MESSAGE).length).toBe(5);
+  });
+
   it("dates an author's channel arrival by visible rows, never by reactions", async () => {
     const { channel, idHex } = makeChannel();
     const reactor = signer();
