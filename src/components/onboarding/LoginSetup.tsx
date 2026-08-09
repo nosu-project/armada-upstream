@@ -34,6 +34,7 @@ import {
   markWebPushPromptShown,
   registerWebPushOptInOpener,
   runWebPushEnable,
+  webPushOptInMode,
 } from "@/lib/webPushPrompt";
 
 /**
@@ -319,6 +320,9 @@ function NotificationsStep({ onDone }: { onDone: (granted: boolean) => void }) {
  */
 function WebPushStep({ onDone }: { onDone: () => void }) {
   const [busy, setBusy] = useState(false);
+  // Where Web Push is unavailable this same step offers the in-page notifier
+  // instead, so the copy must not promise closed-app delivery.
+  const foreground = webPushOptInMode() === "foreground";
 
   const enable = async () => {
     setBusy(true);
@@ -342,7 +346,9 @@ function WebPushStep({ onDone }: { onDone: () => void }) {
         </StepGlyph>
       }
       title="stay in the loop"
-      description="Armada can notify you about direct messages, mentions and replies even while it's closed. Delivery goes through your browser's push service; the notification carries no message content — Armada fetches and decrypts it on your device."
+      description={foreground
+        ? "Armada can notify you about direct messages, mentions and replies while it's open — including when it's behind another window. This browser can't deliver notifications once Armada is closed, so nothing leaves your device for them."
+        : "Armada can notify you about direct messages, mentions and replies even while it's closed. Delivery goes through your browser's push service; the notification carries no message content — Armada fetches and decrypts it on your device."}
     >
       <div className="w-full space-y-3">
         <Button

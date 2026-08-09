@@ -20,6 +20,15 @@ import { DEFAULT_PUSH_PREFS, type PushPrefs } from "@/lib/pushPrefs";
  * The user's intent (the master on/off wish) is stored locally, defaulting ON
  * (opt-out), mirroring the push intent. Nothing fires until the browser grants
  * Notification permission.
+ *
+ * THOSE TWO FACTS TOGETHER ARE A TRAP, and it is why {@link isForegroundNotifyReady}
+ * exists. The intent defaulting to ON means a profile that has never been asked
+ * still reads "on", while `Notification.permission` sits at `"default"` and the
+ * notifier can never fire — a feature that looks enabled, is enabled, and does
+ * nothing, indefinitely. Permission can only be requested from a user gesture,
+ * so the fix isn't to ask on mount: it is that INTENT ALONE IS NEVER THE
+ * ANSWER. Every surface asking "is this on?" must ask for both, which is what
+ * this module now returns.
  */
 
 /** localStorage key for the foreground-notification intent (master on/off). */
@@ -55,6 +64,42 @@ export function foregroundNotifyIntent(): boolean {
   return loadIntent();
 }
 
+/** Whether the browser has actually granted permission to notify. */
+export function foregroundNotifyGranted(): boolean {
+  return notificationsApiAvailable() && Notification.permission === "granted";
+}
+
+/**
+ * Whether an OS notification would actually appear right now — the user wants
+ * them AND the browser has granted permission.
+ *
+ * The single answer to "is this on?", so no caller can accidentally consult
+ * only the intent and report a feature as working when it cannot fire.
+ */
+export function isForegroundNotifyReady(): boolean {
+  return foregroundNotifyIntent() && foregroundNotifyGranted();
+}
+
+/**
+ * Ask the browser for Notification permission and turn the intent on.
+ *
+ * MUST be called from a user gesture — every browser refuses otherwise, which
+ * is the whole reason this can't happen automatically at boot. Resolves to
+ * whether notifications can now fire. Safe to call when already granted (no
+ * prompt) or denied (resolves immediately, no prompt).
+ */
+export async function enableForegroundNotifications(): Promise<boolean> {
+  if (!notificationsApiAvailable()) return false;
+  saveIntent(true);
+  if (Notification.permission === "granted") return true;
+  try {
+    return (await Notification.requestPermission()) === "granted";
+  } catch {
+    // Permission request unavailable (e.g. insecure context).
+    return false;
+  }
+}
+
 function loadPrefs(): PushPrefs {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
@@ -80,6 +125,13 @@ export interface UseForegroundNotificationSettingsReturn {
   permission: NotificationPermission;
   /** The user's master on/off wish for foreground notifications. */
   intent: boolean;
+  /**
+   * Whether notifications would ACTUALLY fire — the intent plus a granted
+   * permission. This, not `intent`, is what a toggle should show: the intent
+   * defaults to on, so a profile that has never been prompted would otherwise
+   * display an enabled feature that can't fire and gives no hint why.
+   */
+  enabled: boolean;
   /** Set the master wish; when turning on, prompts for permission if needed. */
   setEnabled: (on: boolean) => Promise<void>;
   /** The shared per-type preferences. */
@@ -107,22 +159,31 @@ export function useForegroundNotificationSettings(): UseForegroundNotificationSe
     if (!apiAvailable) return;
     const sync = () => setPermission(Notification.permission);
     document.addEventListener("visibilitychange", sync);
-    return () => document.removeEventListener("visibilitychange", sync);
+    // `focus` as well: permission is usually changed in a browser panel that
+    // never hides the tab, so visibility alone misses it.
+    window.addEventListener("focus", sync);
+    return () => {
+      document.removeEventListener("visibilitychange", sync);
+      window.removeEventListener("focus", sync);
+    };
   }, [apiAvailable]);
 
   const setEnabled = useCallback(
     async (on: boolean) => {
-      saveIntent(on);
-      setIntent(on);
-      if (on && apiAvailable && Notification.permission === "default") {
-        try {
-          const perm = await Notification.requestPermission();
-          setPermission(perm);
-        } catch {
-          // Permission request unavailable (e.g. insecure context) — leave
-          // permission as-is; the notifier simply won't fire.
-        }
+      if (!on) {
+        saveIntent(false);
+        setIntent(false);
+        return;
       }
+      // Ask whenever permission isn't granted, not only when it is exactly
+      // "default". Because the toggle now shows intent AND permission, its
+      // first use is usually "it reads off because permission was never asked
+      // for" rather than a real off→on flip — and the old `=== "default"`
+      // guard made that click a no-op. A "denied" request resolves at once
+      // without prompting, so covering it costs nothing.
+      await enableForegroundNotifications();
+      setIntent(true);
+      if (apiAvailable) setPermission(Notification.permission);
     },
     [apiAvailable],
   );
@@ -132,5 +193,13 @@ export function useForegroundNotificationSettings(): UseForegroundNotificationSe
     savePrefs(next);
   }, []);
 
-  return { apiAvailable, permission, intent, setEnabled, prefs, setPrefs };
+  return {
+    apiAvailable,
+    permission,
+    intent,
+    enabled: intent && permission === "granted",
+    setEnabled,
+    prefs,
+    setPrefs,
+  };
 }

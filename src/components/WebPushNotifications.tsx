@@ -2,6 +2,10 @@ import { type ReactNode, useEffect } from "react";
 
 import { WebPushContext } from "@/contexts/WebPushContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import {
+  enableForegroundNotifications,
+  notificationsApiAvailable,
+} from "@/hooks/useForegroundNotificationSettings";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { useNostrPush } from "@/hooks/useNostrPush";
 import { useOnboardingActive } from "@/hooks/useOnboarding";
@@ -49,21 +53,43 @@ function WebPushBridge({ children }: { children: ReactNode }) {
   // Keep the post-login opt-in step's action pointed at the live hook, so the
   // step's tap runs the current `enable` (fresh prefs/watch set), not a stale
   // closure captured when the step was queued.
+  //
+  // Where Web Push is unavailable the step still has a job: it offers the
+  // in-page notifier's permission instead. That notifier's intent defaults to
+  // ON, so without this ask it reads "enabled" from the very first launch while
+  // permission sits at "default" and it can never fire — and on desktop, where
+  // it is the ONLY notifier, that is every notification.
   useEffect(() => {
-    setWebPushEnable(active.enable);
+    if (active.supported) {
+      setWebPushEnable(active.enable, "push");
+    } else {
+      setWebPushEnable(async () => {
+        await enableForegroundNotifications();
+      }, "foreground");
+    }
     return () => setWebPushEnable(null);
-  }, [active.enable]);
+  }, [active.supported, active.enable]);
 
-  // Offer a one-time opt-in once a logged-in user could receive web push but
-  // hasn't been asked at OS level yet (permission still "default"). Held while
-  // the signup wizard runs so it doesn't paint over profile creation; the
+  // Offer a one-time opt-in once a logged-in user could receive notifications
+  // but hasn't been asked at OS level yet (permission still "default"). Held
+  // while the signup wizard runs so it doesn't paint over profile creation; the
   // onboarding dep re-fires this the moment the wizard finishes. The module
   // guards against re-offering across loads; the wizard surfaces it after sync.
+  const foregroundPending = !active.supported
+    && notificationsApiAvailable()
+    && Notification.permission === "default";
   useEffect(() => {
-    if (onboarding) return;
-    if (!user || !active.supported || !active.ready || active.permission !== "default") return;
+    if (onboarding || !user) return;
+    // Web Push needs its controller ready before the tap can subscribe; the
+    // foreground notifier only needs the Notifications API, so it has no such
+    // wait — and self-gates to nothing on iOS, where that API exists only for
+    // a Home-Screen PWA (see IosNotificationHint).
+    const ready = active.supported
+      ? active.ready && active.permission === "default"
+      : foregroundPending;
+    if (!ready) return;
     requestWebPushOptIn();
-  }, [onboarding, user, active.supported, active.ready, active.permission]);
+  }, [onboarding, user, active.supported, active.ready, active.permission, foregroundPending]);
 
   return <WebPushContext.Provider value={active}>{children}</WebPushContext.Provider>;
 }

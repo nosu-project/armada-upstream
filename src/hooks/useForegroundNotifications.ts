@@ -12,10 +12,7 @@ import { loadPushPrefs } from "@/lib/pushPrefs";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { parseAuthorEvent, seedAuthorCache, type AuthorResult } from "@/hooks/useAuthor";
-import {
-  foregroundNotifyIntent,
-  notificationsApiAvailable,
-} from "@/hooks/useForegroundNotificationSettings";
+import { isForegroundNotifyReady } from "@/hooks/useForegroundNotificationSettings";
 import { resolveDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import { isRoomActive } from "@/lib/activeRooms";
 import { getDisplayName } from "@/lib/getDisplayName";
@@ -332,10 +329,7 @@ export function useForegroundNotifications(): void {
     refreshMinePeers();
 
     const unregister = registerNotifySink((candidates) => {
-      const intentOn = foregroundNotifyIntent();
-      const canShowOsNotification = intentOn
-        && notificationsApiAvailable()
-        && Notification.permission === "granted";
+      const canShowOsNotification = isForegroundNotifyReady();
       const soundSettings = loadNotificationSoundSettings();
       let playedSound = false;
 
@@ -572,10 +566,7 @@ export function useForegroundNotifications(): void {
       // to display (`new Notification` throws on mobile) — claiming ownership
       // there swallows the push entirely. Hidden pages hand presentation back
       // to the service worker.
-      const owns = foregroundNotifyIntent()
-        && notificationsApiAvailable()
-        && Notification.permission === "granted"
-        && document.visibilityState === "visible";
+      const owns = isForegroundNotifyReady() && document.visibilityState === "visible";
       port.postMessage({ owns });
     };
     navigator.serviceWorker?.addEventListener("message", answerNotificationOwnerQuery);

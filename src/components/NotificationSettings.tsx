@@ -416,7 +416,7 @@ function IosNotificationHint({
  * the Android app.
  */
 function ForegroundOnlySettings() {
-  const { apiAvailable, permission, intent, setEnabled, prefs, setPrefs } =
+  const { apiAvailable, permission, enabled, setEnabled, prefs, setPrefs } =
     useForegroundNotificationSettings();
 
   const blocked = apiAvailable && permission === "denied";
@@ -434,10 +434,17 @@ function ForegroundOnlySettings() {
       <NotificationToggles
         title="Notifications while Armada is open"
         description="This browser doesn't support background push, so notifications only arrive while Armada is open. You'll get a system notification for new messages when you're not looking at the conversation."
-        enabled={intent}
+        enabled={enabled}
         busy={false}
         blocked={blocked}
         blockedMessage="Notifications are blocked in your browser settings."
+        // Distinct from blocked, and the state this panel spent a long time
+        // showing as simply "on": the master wish defaults to on, so without
+        // saying so here a profile that has never been asked looks enabled and
+        // silently never fires.
+        hint={apiAvailable && permission === "default"
+          ? "Your browser hasn't allowed notifications yet — turn this on to ask."
+          : undefined}
         prefs={prefs}
         onToggle={(v) => setEnabled(v).catch(() => {})}
         onSetPrefs={setPrefs}
@@ -457,11 +464,13 @@ function NotificationToggles(props: {
   busy: boolean;
   blocked: boolean;
   blockedMessage?: string;
+  /** An advisory note below the description — unlike `blocked`, actionable. */
+  hint?: string;
   prefs: PushPrefs;
   onToggle: (value: boolean) => void;
   onSetPrefs: (next: PushPrefs) => void;
 }) {
-  const { title, description, enabled, busy, blocked, blockedMessage, prefs } = props;
+  const { title, description, enabled, busy, blocked, blockedMessage, hint, prefs } = props;
 
   const setPref = (key: keyof PushPrefs) => (value: boolean) => {
     props.onSetPrefs({ ...prefs, [key]: value });
@@ -481,6 +490,9 @@ function NotificationToggles(props: {
           )}
           {blocked && blockedMessage && (
             <span className="block text-xs font-normal text-destructive">{blockedMessage}</span>
+          )}
+          {!blocked && hint && (
+            <span className="block text-xs font-normal text-amber-500">{hint}</span>
           )}
         </span>
         <Switch checked={enabled} disabled={busy || blocked} onCheckedChange={props.onToggle} />
