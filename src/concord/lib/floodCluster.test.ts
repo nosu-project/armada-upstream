@@ -194,7 +194,10 @@ describe("floodClusters", () => {
     );
     const started = performance.now();
     const flagged = floodClusters(many);
-    expect(performance.now() - started).toBeLessThan(500);
+    // Sized for a CONTENDED full-suite worker, not an idle core (isolation
+    // runs this in ~100ms). What it guards against — an accidental O(n²)
+    // pass — costs seconds, not hundreds of milliseconds.
+    expect(performance.now() - started).toBeLessThan(1000);
     expect(flagged.size).toBe(0);
   });
 });
@@ -568,6 +571,29 @@ describe("floodClusters — low letter originality (rule 5)", () => {
 
   it("never folds the reader's own mash", () => {
     expect(floodClusters(sorted(wall("me")), { self: "me" }).size).toBe(0);
+  });
+
+  it("folds mash that widened its alphabet: single words the room never says", () => {
+    // The adaptation observed live after the letter rule shipped: random
+    // strings with plenty of distinct letters (`fhuhacx`, `sfoe`, `chrl`),
+    // only a few of which still fail the letter test. What they cannot shed
+    // is being words no other author uses.
+    const junk = ["fhuhacx", "knehif", "ccccc", "sfoe", "tmg", "ubi", "snh", "oo", "ggggg", "chrl", "wqzx", "brfk"];
+    const room = [msg("regular", "morning all", T0 - 600_000)];
+    const evs = junk.map((c, i) => msg("masher", c, T0 + i * 60_000));
+    const flagged = floodClusters(sorted([...room, ...evs]));
+    expect(evs.every((e) => flagged.has(e.rumorId))).toBe(true);
+    expect(flagged.has(room[0].rumorId)).toBe(false);
+  });
+
+  it("leaves one-word messages made of the room's shared vocabulary", () => {
+    // Two people trading the same short words: every token has a second
+    // author, so nothing here is foreign — however terse the conversation.
+    const words = ["ok", "yes", "same", "nice", "wow"];
+    const evs = Array.from({ length: 24 }, (_, i) =>
+      msg(i % 2 ? "ana" : "bo", words[i % words.length], T0 + i * 120_000),
+    );
+    expect(floodClusters(sorted(evs)).size).toBe(0);
   });
 });
 

@@ -774,12 +774,24 @@ export function isGibberish(shape: string): boolean {
 }
 
 /**
- * Rule 5: one key spending its messages on letters rather than words.
+ * Rule 5: one key spending its messages on noise rather than language.
  *
- * The lone-key wall the other four rules are structurally blind to: `g`,
- * `ggg`, `a`, `nn` — each message its own singleton bucket (no density), one
- * word (never echo-eligible), one key (never a burst or a cohort). What is
- * left to measure is how little of the alphabet the key is using.
+ * The lone-key wall the other four rules are structurally blind to: each
+ * message its own singleton bucket (no density), one word (never
+ * echo-eligible), one key (never a burst or a cohort). Two ways a message
+ * reads as noise, and both spend the same allowance:
+ *
+ * - LETTERS ({@link isGibberish}): it draws on almost no alphabet — `g`,
+ *   `ggg`, `aaa`, `nn`.
+ * - VOCABULARY: it is a single word NO OTHER author in the batch uses —
+ *   `fhuhacx`, `sfoe`, `chrl`. The adaptation that followed the letter rule
+ *   was mash with more letters in it, and this is the property it cannot
+ *   shed: a random string is foreign to the room by construction, while the
+ *   room's real one-word messages (`ok`, `gm`, `lol`, `same`) are its SHARED
+ *   vocabulary. Joining that vocabulary means repeating what the room says,
+ *   which is the shape the density and echo rules already own. Judged only
+ *   when the batch holds a second author at all — with no one else speaking,
+ *   "words nobody shares" would describe every word.
  *
  * The policy is an allowance, and it is deliberate: a little low-originality
  * is a person being a person, and {@link FLOOD_GIBBERISH_MIN} of it inside
@@ -798,12 +810,30 @@ function markGibberish(
   flagged: Set<string>,
   self: string | undefined,
 ): void {
+  // Each token's sole author, or null once a second author uses it. Built
+  // over every row, the reader's included: their words are room vocabulary.
+  const soleUser = new Map<string, string | null>();
+  const authors = new Set<string>();
+  for (const ev of messages) {
+    authors.add(ev.author);
+    for (const w of normalize(ev).words) {
+      const cur = soleUser.get(w);
+      if (cur === undefined) soleUser.set(w, ev.author);
+      else if (cur !== null && cur !== ev.author) soleUser.set(w, null);
+    }
+  }
+  const compareAuthors = authors.size >= 2;
+
   const byAuthor = new Map<string, number[]>();
   for (let i = 0; i < messages.length; i++) {
-    if (messages[i].author === self) continue;
-    if (!normalize(messages[i]).gibberish) continue;
-    let list = byAuthor.get(messages[i].author);
-    if (!list) byAuthor.set(messages[i].author, (list = []));
+    const ev = messages[i];
+    if (ev.author === self) continue;
+    const n = normalize(ev);
+    const foreign =
+      compareAuthors && n.words.length === 1 && soleUser.get(n.words[0]) === ev.author;
+    if (!n.gibberish && !foreign) continue;
+    let list = byAuthor.get(ev.author);
+    if (!list) byAuthor.set(ev.author, (list = []));
     list.push(i);
   }
   for (const idx of byAuthor.values()) {
