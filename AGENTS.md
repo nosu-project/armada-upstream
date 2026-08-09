@@ -315,28 +315,9 @@ number doesn't exceed the previous one.
   `ArmadaDbPlugin.swift` touches no required-reason API at all. Tracking is
   `false` and there are no tracking domains. Re-check the required-reason list
   when the SQLite amalgamation is re-pinned or a plugin is added.
-- **Export compliance is the PUBLISHED SOURCE route, and it is not the one the
-  file used to claim.** The binary carries non-OS crypto — ChaCha20 with
-  HMAC-SHA256 (NIP-44 v2; *not* ChaCha20-Poly1305), HKDF-SHA256 and secp256k1,
-  all bundled from `@noble/*` — so `ITSAppUsesNonExemptEncryption` is `true` and
-  no "OS crypto only" exemption applies. (The AES-256-GCM on Concord
-  attachments is the OS's, via WebCrypto; don't list it as bundled.) But
-  Armada's source is publicly available, and that route carries **no filing at
-  all**. Publishing by itself frees nothing — 15 CFR 734.7(b) says published
-  5D002 software *remains* subject to the EAR unless its source meets
-  742.15(b); 742.15(b)(1) then puts publicly available 5D002 source outside the
-  EAR, and the note to 734.3(b)(3) extends that to the corresponding object
-  code, which is what the shipped binary is. **The 742.15(b)(2) email to BIS
-  and NSA ENC is not owed**: since 2016 (81 FR 64673) that paragraph is
-  "Notification requirement for 'non-standard cryptography'" and reaches only
-  proprietary or unpublished crypto, whereas every primitive here is a
-  published standard and NIP-44 v2 / Concord are published specs. Most guidance
-  still online describes the pre-2016 universal notification — it is the likelier
-  source of a "fix" here than the 5D992.c / 740.17(b)(1) route the plist once
-  claimed (which would have meant an ERN plus a February 1 report forever).
-  ONE standing duty, and the position rests entirely on it: the source must STAY
-  published. Don't "simplify" the comment at `ios/App/App/Info.plist` back to
-  self-classification, or add a notification duty back to it.
+- **Export compliance lives in the comment at `ios/App/App/Info.plist`.** Read it
+  before touching `ITSAppUsesNonExemptEncryption`; the position rests on Armada's
+  source staying publicly available.
 
 Android-only pieces that are simply absent on iOS, and are gated so they don't
 surface dead UI or throw: the `ArmadaNotification` background relay service

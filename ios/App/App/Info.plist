@@ -56,11 +56,25 @@
 	     became non-standard, 742.15(b)(2) would attach and would then also
 	     require re-notifying whenever the notified source URL moves.
 
-	     Left true rather than false because the binary really does carry
-	     non-OS crypto, and declaring it here stops App Store Connect asking
-	     per build. -->
+	     Declared FALSE, on the same published-source ground. The key asks
+	     whether the app uses NON-EXEMPT encryption under Category 5 Part 2,
+	     not whether it bundles non-OS crypto: once 742.15(b)(1) and the note
+	     to 734.3(b)(3) put this binary outside the EAR, no Category 5 Part 2
+	     control is left for it to be non-exempt from. Bundling @noble/*
+	     defeats the "OS crypto only" exemption above; it does not by itself
+	     make this key true.
+
+	     It is also the only value that uploads. Under true, App Store Connect
+	     demands an ITSEncryptionExportComplianceCode matching an APPROVED App
+	     Encryption Declaration and rejects the build without one — error
+	     90592, "the export compliance key value [] ... doesn't match the key
+	     value of the app's export compliance documentation", reproduced on
+	     0.50.0 both before and after a declaration existed. That code comes
+	     only from an ERN, i.e. exactly the filing this posture says is not
+	     owed, so true both fails the upload and contradicts the reasoning
+	     above. Don't restore it. -->
 	<key>ITSAppUsesNonExemptEncryption</key>
-	<true/>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<!-- Surface the app's Documents directory (where saved images/files land via
