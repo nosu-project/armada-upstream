@@ -40,15 +40,74 @@ export const TRIM_ABOVE = 200;
  * front — and the caller should fall back to the newest `initial` messages and
  * re-pin to the bottom.
  */
-export function resolveWindowStart(
-  messages: readonly { id: string }[],
+export function resolveWindowStart<T extends { id: string }>(
+  messages: readonly T[],
   startId: string | null,
   initial: number = INITIAL_WINDOW,
+  folded?: (message: T) => boolean,
 ): { startIndex: number; anchorLost: boolean } {
-  const tail = Math.max(0, messages.length - initial);
+  const tail = tailStart(messages, initial, folded);
   if (messages.length === 0) return { startIndex: 0, anchorLost: false };
   if (startId === null) return { startIndex: tail, anchorLost: false };
   const index = messages.findIndex((m) => m.id === startId);
   if (index === -1) return { startIndex: tail, anchorLost: true };
   return { startIndex: index, anchorLost: false };
+}
+
+/**
+ * Step the window back by `rows` RENDERED rows from `startIndex`, folding runs
+ * counting as one apiece.
+ *
+ * Same argument as {@link resolveWindowStart}'s, one scroll gesture at a time:
+ * a reader who scrolls up through a wall of spam is asking for more
+ * conversation, and a step measured in messages hands them one more collapsed
+ * line instead. Returns the new start index.
+ */
+export function stepBackRows<T extends { id: string }>(
+  entries: readonly T[],
+  startIndex: number,
+  rows: number = WINDOW_STEP,
+  folded?: (entry: T) => boolean,
+): number {
+  if (!folded) return Math.max(0, startIndex - rows);
+  let counted = 0;
+  let i = Math.min(startIndex, entries.length) - 1;
+  for (; i >= 0; i--) {
+    // The row is new unless the entry BELOW it is folded too, in which case
+    // this one is already inside that row. `i + 1` may be past the end when the
+    // step starts at the newest entry — there is no row below it then.
+    const below = i + 1 < entries.length ? entries[i + 1] : undefined;
+    if (!folded(entries[i]) || !below || !folded(below)) counted++;
+    if (counted >= rows) break;
+  }
+  return Math.max(0, i);
+}
+
+/**
+ * Where a window of `initial` ROWS starts, which is not the same as `initial`
+ * messages once some of them collapse.
+ *
+ * A flood folds into a single row (`floodCluster.ts`), so counting its members
+ * against the budget spends a whole viewport on one collapsed line and pushes
+ * the actual conversation out of the rendered slice — the reader opens the
+ * channel, sees "94 similar messages" and two sentences, and has to scroll up
+ * through history that was already loaded to find the room they were in. A run
+ * of folded messages therefore costs what it renders: one.
+ */
+function tailStart<T extends { id: string }>(
+  messages: readonly T[],
+  initial: number,
+  folded?: (message: T) => boolean,
+): number {
+  if (!folded) return Math.max(0, messages.length - initial);
+  let rows = 0;
+  let i = messages.length - 1;
+  for (; i >= 0; i--) {
+    const isFolded = folded(messages[i]);
+    // Only the first member of a run (scanning backwards, its LAST message)
+    // pays; the rest are inside a row already counted.
+    if (!isFolded || i === messages.length - 1 || !folded(messages[i + 1])) rows++;
+    if (rows > initial) break;
+  }
+  return Math.max(0, i + 1);
 }
