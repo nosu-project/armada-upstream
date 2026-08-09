@@ -23,6 +23,7 @@ import type { RsvpVote } from "@/lib/calendar";
 import type { PollVote } from "@/lib/polls";
 import { verifyOnchainZapRumor, verifyZapRumor, type ZapEntry } from "@/lib/zaps";
 import { citationFromTags, type AuthorityCitation } from "@/concord/lib/edition";
+import { floodClusters } from "@/concord/lib/floodCluster";
 import { checkChannelBinding, openWrap, type OpenedEvent } from "@/concord/lib/stream";
 import type { Channel } from "@/concord/lib/types";
 
@@ -246,6 +247,16 @@ export interface ReactionEntry {
 export interface FoldedTimeline {
   /** Surviving messages, sorted by ms ascending. */
   messages: OpenedChat[];
+  /**
+   * Rumor ids belonging to a visual flood (`floodCluster.ts`) — a DISPLAY hint
+   * only, and deliberately not applied to {@link messages}.
+   *
+   * Nothing is removed: the renderer folds these into one expandable row, so
+   * being wrong costs a click rather than a lost message. Keeping the set
+   * beside the timeline rather than filtering it is what stops a heuristic from
+   * becoming a second author-identity drop alongside the Banlist.
+   */
+  quarantined: Set<string>;
   /** target rumor id → emoji → tally. */
   reactions: Map<string, Map<string, ReactionEntry>>;
   /** target rumor id → VERIFIED zaps (CORD.md §4; unverified never enter). */
@@ -310,7 +321,18 @@ export function markReactionDeleted(rumorId: string): void {
  * target before the store's async removal has committed — and applies the same
  * authorization (self, or a `canDelete` moderator) so the two paths agree.
  */
-export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration): FoldedTimeline {
+export function foldTimeline(
+  opened: OpenedChat[],
+  moderation?: ChatModeration,
+  opts?: {
+    /**
+     * The reading user's pubkey, so the flood heuristic can leave their own
+     * messages alone (`floodCluster.ts`). Optional everywhere: a fold without
+     * it is only more eager, never wrong.
+     */
+    self?: string;
+  },
+): FoldedTimeline {
   const byId = new Map<string, OpenedChat>();
   // target rumor id → (deleter → their citation + the delete's own ms). Both
   // have to survive the fold: collapsing to a bare author set is what made the
@@ -562,8 +584,13 @@ export function foldTimeline(opened: OpenedChat[], moderation?: ChatModeration):
     list.push(entry);
   }
 
+  const messages = [...byId.values()].sort((a, b) =>
+    a.ms !== b.ms ? a.ms - b.ms : a.rumorId < b.rumorId ? -1 : 1,
+  );
+
   return {
-    messages: [...byId.values()].sort((a, b) => (a.ms !== b.ms ? a.ms - b.ms : a.rumorId < b.rumorId ? -1 : 1)),
+    messages,
+    quarantined: floodClusters(messages, opts?.self !== undefined ? { self: opts.self } : {}),
     reactions,
     zaps,
     pollVotes,

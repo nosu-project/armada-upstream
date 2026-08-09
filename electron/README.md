@@ -103,7 +103,22 @@ gitignored). This prevents a current shell from being paired with a stale
 renderer or silently falling back to a different storage engine.
 
 The app icon lives at `build/icon.png` (1024×1024, committed); electron-builder
-derives `.ico`/`.icns` from it.
+derives `.ico`/`.icns` from it. Linux uses `build/linux-icon.png` instead — the
+crest on the cut-corner tile the UI gives server icons — as both the packaged
+launcher icon (`linux.icon`) and the *window* icon, because on Linux the window
+icon is what a dock draws whenever it cannot match the window to an installed
+`.desktop` entry.
+
+That case is the AppImage, and `desktopIntegration.js` is the other half of the
+fix: the deb and the Flatpak install an entry, an AppImage run from
+`~/Downloads` has none, and a desktop environment with no entry to match falls
+back to naming the app after its WM_CLASS — `buzz.armada.app` in the dock
+tooltip. So the AppImage writes its own entry (and hicolor icons) into
+`XDG_DATA_HOME` at launch, with the same id, `Name` and `StartupWMClass` the
+packaged entries use. It only ever writes when `$APPIMAGE` is set, never
+replaces an entry it did not write itself (AppImageLauncher's, or a
+hand-edited one), stands down when a system-wide entry exists, and is disabled
+entirely by `ARMADA_NO_DESKTOP_INTEGRATION=1`.
 
 The tray icon is separate art — the simplified Armada A, the same shape as the
 Android notification small icon — because the crest is illegible in a ~16px

@@ -31,7 +31,7 @@ import type { NostrEvent } from "@nostrify/nostrify";
 // ── Module mocks ─────────────────────────────────────────────────────────────
 
 const h = vi.hoisted(() => ({
-  folded: { messages: [] as unknown[], reactions: new Map(), zaps: new Map(), pollVotes: new Map(), calendarEvents: [], rsvps: new Map(), timerNotices: [] },
+  folded: { messages: [] as unknown[], reactions: new Map(), zaps: new Map(), pollVotes: new Map(), calendarEvents: [], rsvps: new Map(), timerNotices: [], quarantined: new Set<string>() },
 }));
 
 vi.mock("@/concord/hooks/useChannel", () => ({
@@ -90,7 +90,7 @@ describe("useTransport — issue #19 (orphan replies are unreachable)", () => {
       KIND_COMMENT,
     );
     const normal = chat("33".repeat(32), "ordinary top-level message", 3_000_000);
-    h.folded = { messages: [reply, normal], reactions: new Map(), zaps: new Map(), pollVotes: new Map(), calendarEvents: [], rsvps: new Map(), timerNotices: [] };
+    h.folded = { messages: [reply, normal], reactions: new Map(), zaps: new Map(), pollVotes: new Map(), calendarEvents: [], rsvps: new Map(), timerNotices: [], quarantined: new Set<string>() };
 
     const { result } = renderHook(() => useTransport(community, channel, true, false), {
       wrapper: ({ children }) => (
@@ -117,7 +117,7 @@ describe("useTransport — issue #19 (orphan replies are unreachable)", () => {
     const inline = chat("55".repeat(32), "inline reply", 2_000_000, [
       ["q", parent.rumorId, "", "b".repeat(64)],
     ]);
-    h.folded = { messages: [parent, inline], reactions: new Map(), zaps: new Map(), pollVotes: new Map(), calendarEvents: [], rsvps: new Map(), timerNotices: [] };
+    h.folded = { messages: [parent, inline], reactions: new Map(), zaps: new Map(), pollVotes: new Map(), calendarEvents: [], rsvps: new Map(), timerNotices: [], quarantined: new Set<string>() };
 
     const { result } = renderHook(() => useTransport(community, channel, true, false), {
       wrapper: ({ children }) => (

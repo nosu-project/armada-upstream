@@ -151,6 +151,8 @@ export function useChannelTimeline(
   const { nostr } = useNostr();
   const queryClient = useQueryClient();
   const moderation = useChatModeration(community);
+  // Only so the flood heuristic can leave the reader's own messages alone.
+  const { user: readingUser } = useCurrentUser();
 
   const channelIdHex = channel?.idHex ?? routeChannelIdHex ?? null;
   // Cutoffs ride the signature too: a merge can teach this device an epoch's
@@ -399,13 +401,13 @@ export function useChannelTimeline(
   }).data;
 
   const folded: FoldedTimeline = useMemo(() => {
-    const result = foldTimeline(query.data ?? [], moderation);
+    const result = foldTimeline(query.data ?? [], moderation, { self: readingUser?.pubkey });
     if (optimisticDeleted && optimisticDeleted.length > 0) {
       const hidden = new Set(optimisticDeleted);
       return { ...result, messages: result.messages.filter((m) => !hidden.has(m.rumorId)) };
     }
     return result;
-  }, [query.data, moderation, optimisticDeleted]);
+  }, [query.data, moderation, optimisticDeleted, readingUser?.pubkey]);
 
   return {
     /** The folded, moderated timeline + reaction tallies. */

@@ -222,6 +222,18 @@ export interface ChatTransport {
    */
   rotationDividerIds?: ReadonlySet<string>;
 
+  /**
+   * Ids of messages belonging to a visual flood (Concord, `floodCluster.ts`):
+   * the timeline folds each consecutive run of them into one expandable row.
+   *
+   * A DISPLAY hint and nothing more. These messages are present, ordered and
+   * readable — one click away — because the heuristic that produced them is
+   * allowed to be wrong. Never filter on this, and never let it inform a
+   * moderation decision: the Banlist is the only author-identity drop an honest
+   * client performs. Undefined for transports without flood detection.
+   */
+  quarantinedIds?: ReadonlySet<string>;
+
   /** Backfill older history; resolves to the number of messages prepended. */
   loadOlder?: () => Promise<number>;
   /** Whether more history remains to backfill. */
