@@ -1,9 +1,15 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useCommunityRumors } from "@/concord/hooks/useCommunityRumors";
 import { quarantinedIn } from "@/concord/lib/floodCluster";
+import {
+  quarantineMemoryRevision,
+  recallQuarantined,
+  rememberQuarantined,
+  subscribeQuarantineMemory,
+} from "@/concord/lib/quarantineMemory";
 import { KIND_MESSAGE } from "@/concord/lib/kinds";
 import type { Channel } from "@/concord/lib/types";
 import { concordReadKey, useReadState } from "@/hooks/useReadState";
@@ -56,7 +62,27 @@ export function useConcordUnread(
   // The one shared community read (see useCommunityRumors).
   const { byChannel: rumorsByChannel } = useCommunityRumors(communityIdHex, channelIds);
 
+  // Re-derive when the persisted quarantine warms or grows: after a refresh
+  // the live rules may see too little of the flood to re-fold it, and the
+  // memory is what keeps its badges from coming back (see quarantineMemory.ts).
+  const memoryRev = useSyncExternalStore(subscribeQuarantineMemory, quarantineMemoryRevision);
+
+  // Remember what the badge path detected, so a refresh cannot resurrect it.
+  // Merge-only, so a shallow batch here can never un-remember what the
+  // timeline's better-informed fold stored.
+  useEffect(() => {
+    if (!communityIdHex) return;
+    for (const [idHex, rumors] of rumorsByChannel) {
+      const quarantined = quarantinedIn(rumors, pubkey);
+      if (quarantined.size === 0) continue;
+      const entries: Array<[string, number]> = [];
+      for (const r of rumors) if (quarantined.has(r.rumorId)) entries.push([r.rumorId, r.ms]);
+      if (entries.length > 0) void rememberQuarantined(communityIdHex, idHex, entries);
+    }
+  }, [communityIdHex, rumorsByChannel, pubkey]);
+
   const byChannel = useMemo<Record<string, ConcordUnread>>(() => {
+    void memoryRev;
     const next: Record<string, ConcordUnread> = {};
     for (const [idHex, rumors] of rumorsByChannel) {
       const lastRead = readState[concordReadKey(idHex)] ?? 0;
@@ -68,6 +94,7 @@ export function useConcordUnread(
       // Memoized on the batch's identity, so a readState recompute of this
       // memo (every markRead, every mounted instance) never re-runs the fold.
       const quarantined = quarantinedIn(rumors, pubkey);
+      const remembered = communityIdHex ? recallQuarantined(communityIdHex, idHex) : undefined;
       let latest = 0;
       let latestMention = 0;
       for (const r of rumors) {
@@ -77,6 +104,7 @@ export function useConcordUnread(
         // so a badge counting it would be one the channel can never clear.
         if (mutedPubkeys.has(r.author)) continue;
         if (quarantined.has(r.rumorId)) continue;
+        if (remembered?.has(r.rumorId)) continue;
         if (r.createdAt > latest) latest = r.createdAt;
         if (r.createdAt > latestMention && r.tags.some(([n, v]) => n === "p" && v === pubkey)) {
           latestMention = r.createdAt;
@@ -96,7 +124,7 @@ export function useConcordUnread(
       if (latest > lastRead) next[idHex] = { latest, mention: latestMention > lastRead };
     }
     return next;
-  }, [rumorsByChannel, readState, pubkey, gitByChannel, mutedPubkeys]);
+  }, [rumorsByChannel, readState, pubkey, gitByChannel, mutedPubkeys, communityIdHex, memoryRev]);
 
   const markRead = useCallback(
     (channelIdHex: string, timestamp: number) => {

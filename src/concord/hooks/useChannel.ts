@@ -1,6 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { hashKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { citationFor, dissolvedAt, useControlFold, useDissolved } from "@/concord/hooks/useControlPlane";
 import { persistTimelineSnapshot, prewarmTimelineSnapshot } from "@/concord/hooks/timelineSnapshot";
@@ -29,6 +29,12 @@ import {
   peekPendingWraps,
   ackPendingWraps,
 } from "@/concord/lib/rumorStore";
+import {
+  quarantineMemoryRevision,
+  recallQuarantined,
+  rememberQuarantined,
+  subscribeQuarantineMemory,
+} from "@/concord/lib/quarantineMemory";
 import { citationToTag, type AuthorityCitation } from "@/concord/lib/edition";
 import { citationSatisfied } from "@/concord/lib/control";
 import { canActOnMember, isAuthorized, Permissions } from "@/concord/lib/roles";
@@ -435,17 +441,45 @@ export function useChannelTimeline(
     refetchInterval: 5 * 60_000,
   }).data;
 
+  // Re-fold when the persisted quarantine warms or grows (see quarantineMemory.ts).
+  const memoryRev = useSyncExternalStore(subscribeQuarantineMemory, quarantineMemoryRevision);
+
   const folded: FoldedTimeline = useMemo(() => {
+    void memoryRev;
     const result = foldTimeline(query.data ?? [], moderation, {
       ...(readingUser?.pubkey !== undefined ? { self: readingUser.pubkey } : {}),
       ...(firstSeen ? { firstSeen } : {}),
     });
+    // What past sessions remember folding here. The live rules re-derive from
+    // whatever context this session holds, and after a refresh that is only
+    // the newest window — the memory is what keeps yesterday's wall folded.
+    const remembered = community?.idHex && channelIdHex
+      ? recallQuarantined(community.idHex, channelIdHex)
+      : undefined;
+    let quarantined = result.quarantined;
+    if (remembered) {
+      quarantined = new Set(quarantined);
+      for (const id of remembered) quarantined.add(id);
+    }
+    const merged = quarantined === result.quarantined ? result : { ...result, quarantined };
     if (optimisticDeleted && optimisticDeleted.length > 0) {
       const hidden = new Set(optimisticDeleted);
-      return { ...result, messages: result.messages.filter((m) => !hidden.has(m.rumorId)) };
+      return { ...merged, messages: merged.messages.filter((m) => !hidden.has(m.rumorId)) };
     }
-    return result;
-  }, [query.data, moderation, optimisticDeleted, readingUser?.pubkey, firstSeen]);
+    return merged;
+  }, [query.data, moderation, optimisticDeleted, readingUser?.pubkey, firstSeen, community?.idHex, channelIdHex, memoryRev]);
+
+  // Remember what this fold decided (merge-only), so the verdict survives the
+  // session even when its evidence — history, arrival order, the wave around
+  // a message — won't be reloaded by the next one.
+  useEffect(() => {
+    if (!community?.idHex || !channelIdHex || folded.quarantined.size === 0) return;
+    const entries: Array<[string, number]> = [];
+    for (const m of query.data ?? []) {
+      if (folded.quarantined.has(m.rumorId)) entries.push([m.rumorId, m.ms]);
+    }
+    if (entries.length > 0) void rememberQuarantined(community.idHex, channelIdHex, entries);
+  }, [folded.quarantined, query.data, community?.idHex, channelIdHex]);
 
   return {
     /** The folded, moderated timeline + reaction tallies. */
