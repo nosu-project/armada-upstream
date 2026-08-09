@@ -220,6 +220,40 @@ describe("scopePushSubscriptionId", () => {
     expect(id.length).toBeLessThanOrEqual(64);
   });
 
+  it("asks for the inlined event on every subscription the worker can open", () => {
+    // The worker renders from the real event and stores it; the gateway's
+    // static title/body are only the fallback. A subscription that forgot to
+    // opt in would silently be stuck on that fallback forever.
+    //
+    // `armada-dm` is the deliberate exception: it matches legacy kind-4
+    // ciphertext, which the worker has no way to open, so inlining it would
+    // spend payload budget to reach the same fallback.
+    const specs = buildPushSubscriptions(
+      baseInput({
+        relayUrls: ["wss://r"],
+        groupIds: ["g1", "g2"],
+        mentionOnlyGroupIds: ["g2"],
+        dmRelays: ["wss://dm"],
+        dmFollows: ["friend".padEnd(64, "0")],
+        concord: [{
+          relays: ["wss://c"],
+          communityId: "c".padEnd(64, "0"),
+          communityName: "C",
+          channelId: "ch".padEnd(64, "0"),
+          channelName: "general",
+          streams: [{ pk: "pk".padEnd(64, "0"), convKey: "k".padEnd(64, "0"), epoch: "1" }],
+          timerSecs: 0,
+          gitAttachments: [],
+        }],
+      }),
+    );
+    expect(specs.map((s) => s.id)).toContain("armada-dm");
+    for (const spec of specs) {
+      expect(spec.notification.data.inline_event, spec.id)
+        .toBe(spec.id === "armada-dm" ? undefined : true);
+    }
+  });
+
   it("does not collide across users or web origins", () => {
     const first = scopePushSubscriptionId("armada-groups", ME, "armada.buzz");
     const otherUser = scopePushSubscriptionId(

@@ -16,10 +16,21 @@ import {
   foregroundNotifyIntent,
   notificationsApiAvailable,
 } from "@/hooks/useForegroundNotificationSettings";
+import { resolveDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import { isRoomActive } from "@/lib/activeRooms";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
+import {
+  attributedLine,
+  mentionPubkeys,
+  NOTIFICATION_BADGE_ICON,
+  NOTIFICATION_FALLBACK_ICON,
+  presentNotification,
+  type NotificationMessage,
+  type PresentedNotification,
+} from "@/lib/notificationPreview";
+import { concordRoomIdentity, nip29RoomIdentity } from "@/lib/notificationRoom";
 import {
   loadNotificationSoundSettings,
   playNotificationSound,
@@ -30,8 +41,10 @@ import {
   installTabAttentionClearHandlers,
   markTabAttention,
 } from "@/lib/tabAttention";
-import { registerNotifySink } from "@/wire/notify";
+import { registerNotifySink, type NotifyCandidate } from "@/wire/notify";
 import { useWireNip29Groups } from "@/wire/useWireNip29Groups";
+
+import type { NostrMetadata } from "@nostrify/nostrify";
 
 /**
  * useForegroundNotifications
@@ -64,6 +77,17 @@ import { useWireNip29Groups } from "@/wire/useWireNip29Groups";
  * Notification; the selected in-app sound and inactive-tab marker remain
  * useful without that permission.
  */
+
+/**
+ * Per-room interruption ceiling, the page-side mirror of `sw.js`'s
+ * `ROOM_ALERT_*` and the native service's `ALERT_BURST_MAX`. Past this many
+ * ALERTING notifications for one room inside the window, further ones post
+ * without a sound.
+ */
+const ROOM_ALERT_MAX = 5;
+const ROOM_ALERT_WINDOW_MS = 120_000;
+/** Cap the timestamps one room re-serializes while a flood is live. */
+const ROOM_ALERT_MAX_TRACKED = 64;
 
 /** Whether a candidate is admitted by a resolved notification level. */
 function levelAdmits(level: NotifLevel, mention: boolean): boolean {
@@ -140,6 +164,10 @@ export function useForegroundNotifications(): void {
   // transports / re-ingests don't double-alert.
   const lastNotified = useRef(new Map<string, number>());
   const notifiedEvents = useRef(new Set<string>());
+  // Per-room alert timestamps (the interruption ceiling) and the recent lines
+  // a room's notification body accumulates, both keyed by room key.
+  const alertTimes = useRef(new Map<string, number[]>());
+  const roomLines = useRef(new Map<string, string[]>());
 
   // `useKnownDmPeers` decides on follows ∪ accepted ∪ pinned ∪ `mine`, and only
   // the caller can supply `mine` — "the viewer has written in this thread".
@@ -169,12 +197,22 @@ export function useForegroundNotifications(): void {
     // the identity in name only: the notification is the one surface with no
     // room to resolve it, no avatar beside it and no profile a tap reveals, so
     // it showed a key blob where every other surface shows a word.
-    const displayNameFor = async (pubkey: string): Promise<string> => {
-      if (!pubkey) return "Anonymous";
+    const profileFor = async (pubkey: string): Promise<{ name: string; avatar?: string }> => {
+      const present = (metadata: NostrMetadata | undefined) => ({
+        name: getDisplayName(metadata, pubkey),
+        // https only: a notification icon is loaded by the browser outside the
+        // page's control, and an http URL is a mixed-content fetch that simply
+        // fails (noisily, in the console) on every deploy this ships to.
+        avatar: typeof metadata?.picture === "string" && /^https:\/\//.test(metadata.picture)
+          ? metadata.picture
+          : undefined,
+      });
+
+      if (!pubkey) return { name: "Anonymous" };
       const qc = ctx.current.queryClient;
       const cached = qc.getQueryData<AuthorResult>(["author", pubkey]);
-      if (cached?.metadata) return getDisplayName(cached.metadata, pubkey);
-      if (cached?.event) return getDisplayName(parseAuthorEvent(cached.event).metadata, pubkey);
+      if (cached?.metadata) return present(cached.metadata);
+      if (cached?.event) return present(parseAuthorEvent(cached.event).metadata);
 
       // Fall back to the local event store (no network) — the profile is very
       // often already here even when no component has subscribed to it.
@@ -185,13 +223,89 @@ export function useForegroundNotifications(): void {
           const parsed = parseAuthorEvent(ev);
           // Seed the author cache so the next lookup is synchronous.
           seedAuthorCache(qc, pubkey, ev);
-          if (parsed.metadata) return getDisplayName(parsed.metadata, pubkey);
+          if (parsed.metadata) return present(parsed.metadata);
         }
       } catch {
         // Store unavailable — fall through.
       }
 
-      return "Anonymous";
+      return { name: "Anonymous" };
+    };
+
+    /**
+     * The room's title and icon, matching the Android conversation shortcut: a
+     * channel shows the COMMUNITY image, a DM the sender's avatar (left to the
+     * caller, which already has it). Local reads only; an unresolvable room
+     * simply goes unnamed and the presenter falls back to the sender.
+     */
+    const roomIdentityFor = async (
+      cand: NotifyCandidate,
+      relayUrl: string | undefined,
+      communityId: string | undefined,
+    ): Promise<{ title?: string; image?: string }> => {
+      try {
+        if (cand.plane === "nip29") {
+          if (!relayUrl || !cand.groupId) return {};
+          const room = await nip29RoomIdentity(relayUrl, cand.groupId);
+          return { title: room.title, image: room.iconUrl };
+        }
+        if (cand.plane === "c2") {
+          if (!communityId || !cand.channelIdHex) return {};
+          const room = await concordRoomIdentity(communityId, cand.channelIdHex);
+          // The icon is an encrypted blob; decrypting it is a warm Cache
+          // Storage hit whenever the community is (or has been) on screen.
+          const image = room.iconPointer
+            ? await resolveDecryptedImage(room.iconPointer).catch(() => undefined)
+            : undefined;
+          return { title: room.title, image };
+        }
+      } catch {
+        // Never let room decoration cost the notification itself.
+      }
+      return {};
+    };
+
+    /** Resolve the names a message's NIP-27 mentions refer to, locally. */
+    const mentionNamesFor = async (content: string | undefined): Promise<Map<string, string>> => {
+      const names = new Map<string, string>();
+      if (!content) return names;
+      const keys = mentionPubkeys(content);
+      if (keys.length === 0) return names;
+      await Promise.all(keys.map(async (pk) => {
+        const { name } = await profileFor(pk);
+        // "Anonymous" is an absence, not a name — leaving the raw token stands
+        // a better chance of meaning something to the reader.
+        if (name && name !== "Anonymous") names.set(pk, name);
+      }));
+      return names;
+    };
+
+    /**
+     * Whether this room has already alerted its fill inside the window, the
+     * page-side mirror of the service worker's `roomAlertSilent` and the native
+     * ALERT_BURST_MAX. Past the ceiling a notification is still shown and its
+     * lines still accumulate — it just stops making noise. Records every
+     * attempt, so a sustained flood keeps its own window full and stays quiet
+     * until it actually stops.
+     */
+    const roomAlertSilent = (roomKey: string): boolean => {
+      const now = Date.now();
+      const times = (alertTimes.current.get(roomKey) ?? [])
+        .filter((t) => now - t <= ROOM_ALERT_WINDOW_MS);
+      const silent = times.length >= ROOM_ALERT_MAX;
+      times.push(now);
+      alertTimes.current.set(
+        roomKey,
+        times.length > ROOM_ALERT_MAX_TRACKED ? times.slice(-ROOM_ALERT_MAX_TRACKED) : times,
+      );
+      return silent;
+    };
+
+    /** The room's recent notification lines plus `line`, capped at 5. */
+    const appendRoomLine = (roomKey: string, line: string): string[] => {
+      const lines = [...(roomLines.current.get(roomKey) ?? []).slice(-4), line];
+      roomLines.current.set(roomKey, lines);
+      return lines;
     };
 
     // Reload the peers the viewer has authored a message to. Called once on
@@ -247,10 +361,14 @@ export function useForegroundNotifications(): void {
         // Set when this is a DM from an unknown sender and the request policy is
         // "generic": still cue, but present nothing the sender controls.
         let dmGeneric = false;
+        // Filled per plane, for the room's title/image below.
+        let relayUrl: string | undefined;
+        let communityId: string | undefined;
 
         if (cand.plane === "nip29") {
           const relay = cand.groupId ? c.relayByGroup.get(cand.groupId) : undefined;
           if (!relay || !cand.groupId) continue; // not a group we're in
+          relayUrl = relay;
           roomKey = `h:${relay}|${cand.groupId}`;
           readKey = channelReadKey(relay, cand.groupId);
           path = chatRoute({
@@ -282,7 +400,7 @@ export function useForegroundNotifications(): void {
           // (A git-activity candidate carries a `?ticket=` query; parse only
           // the path part.)
           const parsed = parseChatRoute(path.split("?")[0]);
-          const communityId = parsed?.kind === "concord" ? parsed.communityId : "";
+          communityId = parsed?.kind === "concord" ? parsed.communityId : "";
           level =
             communityId && cand.channelIdHex
               ? c.concordChannelLevel("c2", communityId, cand.channelIdHex)
@@ -311,12 +429,19 @@ export function useForegroundNotifications(): void {
         lastNotified.current.set(roomKey, cand.createdAt);
         if (eventKey) notifiedEvents.current.add(eventKey);
 
+        // Past this room's interruption ceiling the notification is still shown
+        // and its lines still accumulate — it just stops making noise. A
+        // channel is writable by anyone holding the invite, so a flood reaches
+        // every surface at once; content-blind rate limiting is what keeps that
+        // from being a phone (or a laptop) buzzing all night.
+        const silent = roomAlertSilent(roomKey);
+
         // These page-owned cues work without Notification permission. A batch
         // can contain multiple accepted events, but should produce one sound,
         // not a stack of overlapping clips. The title marker itself is
         // idempotent and only appears while the tab is hidden or unfocused.
         markTabAttention();
-        if (soundSettings.enabled && !playedSound) {
+        if (soundSettings.enabled && !playedSound && !silent) {
           playNotificationSound({ settings: soundSettings });
           playedSound = true;
         }
@@ -340,28 +465,55 @@ export function useForegroundNotifications(): void {
               // No subscription info — fall through and show from the page.
             }
           }
-          let title: string;
-          let body = cand.body;
-          const name = await displayNameFor(cand.author);
-          if (cand.plane === "dm") {
-            if (dmGeneric) {
-              // Content-blind: nothing the sender controls (name/avatar/text).
-              title = "Message request";
-              body = "You have a new message request";
-            } else {
-              title = `${name} sent you a message`;
-              body = body ?? "New direct message";
-            }
-          } else if (cand.reaction) {
-            // A reaction to your own message (Concord). Mirrors the NIP-29 native
-            // string: "Reacted 👍 to your message".
-            title = name;
-            body = `Reacted ${cand.reactionEmoji ?? "👍"} to your message`;
+          // Either a fixed presentation (the two shapes that aren't chat
+          // messages) or the message the presenter composes below. Composing is
+          // deferred past the last active-room check so a notification that
+          // turns out not to be shown doesn't leave its line in the room's
+          // accumulated body.
+          let presented: PresentedNotification | undefined;
+          let message: NotificationMessage | undefined;
+
+          if (cand.plane === "dm" && dmGeneric) {
+            // Content-blind: nothing the sender controls (name/avatar/text).
+            presented = {
+              title: "Message request",
+              body: "You have a new message request",
+              icon: NOTIFICATION_FALLBACK_ICON,
+              badge: NOTIFICATION_BADGE_ICON,
+            };
           } else if (cand.git) {
-            title = `${name} ${cand.git.action} in ${cand.git.repository}`;
-            body = cand.git.ticketTitle ?? `New activity in the destination channel`;
+            // Repository activity routed into a channel: not a chat message, so
+            // it keeps its own shape rather than going through the presenter.
+            const { name, avatar } = await profileFor(cand.author);
+            presented = {
+              title: `${name} ${cand.git.action} in ${cand.git.repository}`,
+              body: cand.git.ticketTitle ?? "New activity in the destination channel",
+              icon: avatar ?? NOTIFICATION_FALLBACK_ICON,
+              badge: NOTIFICATION_BADGE_ICON,
+            };
           } else {
-            title = cand.mention ? `${name} mentioned you` : name;
+            const [{ name, avatar }, room, mentionNames] = await Promise.all([
+              profileFor(cand.author),
+              roomIdentityFor(cand, relayUrl, communityId),
+              mentionNamesFor(cand.content),
+            ]);
+            message = {
+              plane: cand.plane,
+              kind: cand.kind,
+              // `body` is already truncated and whitespace-collapsed; `content`
+              // is the raw text the preview pipeline needs. Encrypted legacy
+              // DMs have neither, and fall through to the per-plane default.
+              content: cand.content ?? cand.body ?? "",
+              authorName: name,
+              authorAvatar: avatar,
+              roomTitle: room.title,
+              roomImage: room.image,
+              mention: cand.mention,
+              reaction: cand.reaction,
+              threadReply: cand.threadReply,
+              imetaMime: cand.imetaMime,
+              mentionNames,
+            };
           }
 
           try {
@@ -369,9 +521,20 @@ export function useForegroundNotifications(): void {
             // at presentation time so a notification queued in the background
             // is not shown after the user has focused that conversation.
             if (cand.author === user.pubkey || isRoomActive(roomKey)) return;
-            const n = new Notification(title, {
-              body,
-              icon: "/favicon.png",
+            // Accumulate the room's recent lines so a busy conversation reads
+            // as a thread — the closest a Web Notification gets to the native
+            // MessagingStyle expansion.
+            if (message) {
+              presented = presentNotification(
+                message,
+                appendRoomLine(roomKey, attributedLine(message)),
+              );
+            }
+            if (!presented) return;
+            const n = new Notification(presented.title, {
+              body: presented.body,
+              icon: presented.icon,
+              badge: presented.badge,
               // Armada owns foreground audio so the selected sound isn't
               // doubled by the browser's default notification tone.
               silent: true,

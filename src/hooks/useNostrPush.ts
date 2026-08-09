@@ -13,12 +13,9 @@ import { useNotifLevels } from "@/hooks/useNotifLevels";
 import { usePinnedDms } from "@/hooks/usePinnedDms";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
-import { clearSwDmConfig, writeSwDmConfig } from "@/lib/swDmConfig";
+import { clearSwPushConfig, writeSwPushConfig } from "@/lib/swPushConfig";
 import { clearPushDisabledFlag, writePushDisabledFlag } from "@/lib/swPushDisabled";
 import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
-import { useEventStore } from "@/hooks/useEventStore";
-import { parseAuthorEvent } from "@/lib/authorCache";
-import { getDisplayName } from "@/lib/getDisplayName";
 import {
   DEFAULT_PUSH_PREFS,
   type PushPrefs,
@@ -178,7 +175,6 @@ export function useNostrPush(): UsePushNotificationsReturn {
   const { channelLevel, concordChannelLevel } = useNotifLevels();
   const { relays: publishedDmRelays } = useDmRelayList();
   const allConcordSubs = useConcordSubs();
-  const eventStore = useEventStore();
 
   const unavailableReason = isNativeRuntime()
     ? "native-runtime" as const
@@ -303,27 +299,21 @@ export function useNostrPush(): UsePushNotificationsReturn {
     concord,
   ]);
 
-  // Profiles reach the local store from the wire on their own schedule, and
-  // NONE of the seal effect's inputs change when one lands. A config sealed
-  // while the kind-0 rows were still cold therefore stays nameless for the
-  // whole session — every DM push titling generically, for every sender at
-  // once, which is what a nameless config looks like from the outside. Re-seal
-  // a few times, backing off, until the known peers have resolved.
-  const [namesNonce, setNamesNonce] = useState(0);
-  const nameAttempts = useRef(0);
-  useEffect(() => {
-    // A new peer set (or session) gets its own budget; the retries themselves
-    // must not, or an unresolvable peer becomes a permanent poll.
-    nameAttempts.current = 0;
-  }, [user, enabled, dmKnownPeers]);
-
-  // Keep the service worker's DM gating config current — policy + known set for
-  // every enabled web-push session, plus the decrypt key for nsec logins.
-  // Cleared whenever push is off or logged out, so the key never lingers past a
-  // session that can use it.
+  // Keep the service worker's push config current — the DM policy + known set
+  // for every enabled web-push session, the decrypt key for nsec logins, and
+  // the per-channel Concord stream keys. Cleared whenever push is off or logged
+  // out, so no key lingers past a session that can use it.
+  //
+  // Display data is deliberately NOT sealed here. The worker reads names,
+  // avatars, community icons and channel titles out of ArmadaDB at push time
+  // (`pushRuntime.ts`) — IndexedDB is reachable from a worker, which the
+  // earlier snapshot wrongly assumed it wasn't. That removed a whole failure
+  // mode: a config sealed while the kind-0 rows were still cold used to stay
+  // nameless for the session, so it needed timed re-seals to catch profiles
+  // that landed late, and it could only ever name a pre-listed peer.
   useEffect(() => {
     if (!supported || !user || !enabled) {
-      void clearSwDmConfig();
+      void clearSwPushConfig();
       return;
     }
     // Wait for the follow list: sealing a config while it loads would freeze
@@ -331,7 +321,6 @@ export function useNostrPush(): UsePushNotificationsReturn {
     // request until the next rewrite.
     if (followsLoading) return;
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     (async () => {
       // Mirror useKnownDmPeers' `mine` dimension: a conversation the viewer
       // has authored a message in is known even where `acceptedDms` can't say
@@ -344,46 +333,30 @@ export function useNostrPush(): UsePushNotificationsReturn {
       } catch {
         // Store unavailable — follows ∪ accepted ∪ pinned still apply.
       }
-      const knownPeers = [...new Set([...dmKnownPeers, ...minePeers])].sort();
-      // The worker has no profile store, so notification titles need the
-      // display names sealed alongside the peers. Local kind-0 read only —
-      // never a relay round.
-      const peerNames: Record<string, string> = {};
-      const peerAvatars: Record<string, string> = {};
-      try {
-        const store = await eventStore;
-        const profiles = await store.query([{ kinds: [0], authors: knownPeers }]);
-        for (const ev of profiles) {
-          const { metadata } = parseAuthorEvent(ev);
-          if (!metadata) continue;
-          peerNames[ev.pubkey] = getDisplayName(metadata, ev.pubkey);
-          if (typeof metadata.picture === "string" && /^https:\/\//.test(metadata.picture)) {
-            peerAvatars[ev.pubkey] = metadata.picture;
-          }
-        }
-      } catch {
-        // No profiles readable — the worker titles generically.
-      }
       if (cancelled) return;
-      await writeSwDmConfig({
+      await writeSwPushConfig({
         policy: prefs.dmRequests,
         self: user.pubkey,
-        knownPeers,
-        peerNames,
-        peerAvatars,
+        knownPeers: [...new Set([...dmKnownPeers, ...minePeers])].sort(),
+        // One entry per watched channel's CURRENT epoch. The conversation key
+        // reads that channel at that epoch and nothing else — the wrap-signing
+        // secret stays in the page (see concordNotifications.ts) — and the set
+        // goes stale by itself at the next rekey, which `concord` changing
+        // rewrites.
+        concord: concord.flatMap((sub) =>
+          sub.streams.map((s) => ({
+            pk: s.pk,
+            convKey: s.convKey,
+            epoch: s.epoch,
+            communityId: sub.communityId,
+            channelId: sub.channelId,
+          }))
+        ),
         ...(dmSk ? { sk: dmSk } : {}),
       });
-      if (cancelled) return;
-      // Bounded: a peer who has never published a kind-0 never resolves.
-      if (knownPeers.some((peer) => !peerNames[peer]) && nameAttempts.current < 4) {
-        const delay = 5_000 * 2 ** nameAttempts.current;
-        nameAttempts.current += 1;
-        timer = setTimeout(() => setNamesNonce((n) => n + 1), delay);
-      }
     })();
     return () => {
       cancelled = true;
-      if (timer) clearTimeout(timer);
     };
   }, [
     supported,
@@ -393,8 +366,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
     prefs.dmRequests,
     dmKnownPeers,
     dmSk,
-    eventStore,
-    namesNonce,
+    concord,
   ]);
 
   // ── Sync ───────────────────────────────────────────────────────────────────

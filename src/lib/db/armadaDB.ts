@@ -83,6 +83,24 @@ export function getArmadaDB(): ArmadaDB {
 }
 
 /**
+ * Fix the adapter to IndexedDB, before anything reads.
+ *
+ * Called at load by the Web Push service worker's runtime bundle
+ * (`src/sw/pushRuntime.ts`), which shares this store with the page so an event
+ * it receives while no tab is open is simply THERE on the next open — the same
+ * arrangement the Android service has, one layer down.
+ *
+ * A worker is unambiguously the IndexedDB case: the Android build unregisters
+ * the service worker outright, iOS Capacitor has no web push at all, and
+ * Electron ships no push either — so no worker anywhere reaches a Capacitor
+ * bridge or an Electron IPC channel to detect. Presetting says that once, here,
+ * instead of running two platform probes against globals a worker doesn't have.
+ */
+export function presetIndexedDBArmadaDB(): void {
+  instance ??= new IndexedDBArmadaDB(ARMADA_DB_NAME);
+}
+
+/**
  * Close and delete every database the app-wide instance owns (logout purge).
  *
  * Tenant database names are dynamic (`armada:t:<id>`), and Firefox has no

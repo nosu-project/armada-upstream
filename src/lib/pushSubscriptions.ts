@@ -20,6 +20,23 @@
  *
  * The builder is pure (no browser objects): it emits `PushSubscriptionSpec`s;
  * the caller merges in `domain` + the browser `push_subscription`.
+ *
+ * Every subscription the worker can OPEN sets `inline_event` (all but the
+ * legacy NIP-04 one — see below), which asks the server to embed the matched
+ * event in the push payload itself (see nostr-push). It started as a
+ * NIP-17 necessity — a gift wrap's sender is hidden until it's unsealed, so the
+ * request-vs-known decision can only be made client-side — but it is what makes
+ * every scope presentable: the worker renders the real message from the real
+ * event rather than showing "New message" and then racing a relay for the text.
+ * The server's static `title`/`body` below stay as the fallback for when it
+ * doesn't arrive.
+ *
+ * It is best-effort by design and can never fail a delivery. nostr-push drops
+ * the inlined event if the WHOLE payload would exceed its ~3800-unit web-push
+ * budget, and the static wake-up (still carrying `event_id`) goes out instead —
+ * so a long message degrades rather than disappearing. That budget is also why
+ * `notification.data` stays lean here: every byte of routing hint is a byte the
+ * event doesn't get.
  */
 
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -129,7 +146,7 @@ export function buildPushSubscriptions(input: PushSubscriptionInput): PushSubscr
       notification: {
         title: "New message",
         body: "",
-        data: { scope: "group", relays: relayUrls },
+        data: { scope: "group", relays: relayUrls, inline_event: true },
       },
     });
   }
@@ -150,7 +167,7 @@ export function buildPushSubscriptions(input: PushSubscriptionInput): PushSubscr
       notification: {
         title: "New message",
         body: "",
-        data: { scope: "group-mention", relays: relayUrls },
+        data: { scope: "group-mention", relays: relayUrls, inline_event: true },
       },
     });
   }
@@ -171,13 +188,6 @@ export function buildPushSubscriptions(input: PushSubscriptionInput): PushSubscr
       notification: {
         title: "New message",
         body: "New direct message",
-        // `inline_event` asks the server to embed the matched gift wrap in the
-        // push payload (see nostr-push). A NIP-17 wrap's sender is hidden until
-        // it's unsealed, so the request-vs-known decision — and any decrypted
-        // preview — has to happen in the service worker; inlining lets it do
-        // that without a relay round-trip, which is what keeps the work inside
-        // a mobile push handler's execution window. The server drops it (and the
-        // SW falls back to this static wake-up) if the wrap is too big to fit.
         data: { scope: "dm", relays: dmRelays, url: "/dm", inline_event: true },
       },
     });
@@ -185,6 +195,12 @@ export function buildPushSubscriptions(input: PushSubscriptionInput): PushSubscr
 
   // Legacy NIP-04 remains friends-only because its public author is available
   // to the content-blind push server and unknown senders would be a spam path.
+  //
+  // The ONE subscription that does not ask for `inline_event`: the worker
+  // opens NIP-17 envelopes and Concord stream wraps, and a kind-4 ciphertext is
+  // neither — it would arrive, fail to open, and fall back to this same static
+  // wake-up, having spent payload budget to do it. Inline it if and when the
+  // worker learns NIP-04.
   if (prefs.directMessages && dmFollows.length > 0 && dmRelays.length > 0) {
     specs.push({
       id: "armada-dm",
@@ -209,7 +225,7 @@ export function buildPushSubscriptions(input: PushSubscriptionInput): PushSubscr
       notification: {
         title: "New message",
         body: "New message in a community",
-        data: { scope: "c2", relays },
+        data: { scope: "c2", relays, inline_event: true },
       },
     }),
   )) {

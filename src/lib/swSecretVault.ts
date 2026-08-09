@@ -18,7 +18,7 @@
  * not make a browser tab a secure enclave.
  *
  * Shared source: the page imports `sealConfig`/`clearVault` to write; the SW's
- * crypto bundle (`dmCrypto.ts`) imports `openSealedConfig` to read. One IndexedDB
+ * runtime bundle (`pushRuntime.ts`) imports `openSealedConfig` to read. One IndexedDB
  * key, created by the page, used by both contexts (they share origin storage).
  */
 

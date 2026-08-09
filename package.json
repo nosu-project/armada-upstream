@@ -7,10 +7,10 @@
     "dev": "vite",
     "electron:dev": "scripts/dev-electron.sh",
     "gen:icons": "node scripts/gen-icons.mjs",
-    "build": "vite build -l error && npm run build:sw-crypto && cp dist/index.html dist/404.html",
+    "build": "vite build -l error && npm run build:sw-runtime && cp dist/index.html dist/404.html",
     "build:electron-db": "vite build -l error -c vite.config.electron.ts",
-    "build:sw-crypto": "vite build -l error -c vite.config.sw-crypto.ts",
-    "test": "tsc --noEmit && eslint --cache . && vitest run --passWithNoTests --reporter=dot && vite build -l error && npm run build:sw-crypto && npm run build:electron-db"
+    "build:sw-runtime": "vite build -l error -c vite.config.sw-runtime.ts",
+    "test": "tsc --noEmit && eslint --cache . && vitest run --passWithNoTests --reporter=dot && vite build -l error && npm run build:sw-runtime && npm run build:electron-db"
   },
   "engines": {
     "node": ">=22"

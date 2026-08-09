@@ -10,6 +10,7 @@ import { reactionContentKey } from "@/hooks/useReactions";
 import { dmThreadScope, emitWireScopes } from "@/wire/bus";
 import { feedNotifyCandidates, type NotifyCandidate } from "@/wire/notify";
 import { isCIEventKind, matchCIEventRepository } from "@/lib/ci";
+import { firstImetaMime, isThreadReply } from "@/lib/notificationPreview";
 import { chatRoute } from "@/lib/routes";
 import { isGitRepositoryAttachedAt, matchGitTicketRepository, parseGitComment, parseGitStatusEvent, parseGitTicket } from "@/lib/gitActivity";
 
@@ -361,6 +362,9 @@ function concordCandidates(
       mention: pTagsMe,
       kind: r.kind,
       body: preview(r.content),
+      content: r.content,
+      imetaMime: firstImetaMime(r.tags),
+      threadReply: isThreadReply(r.kind, r.tags),
       roomKey: `c2:${channel.idHex}`,
       readKey: channel.idHex, // Concord read map is keyed by channel id hex
       path: pathTo(r.rumorId),
@@ -400,6 +404,9 @@ function plaintextCandidates(
       mention: Boolean(self) && ev.tags.some(([n, v]) => n === "p" && v === self),
       kind: ev.kind,
       body: preview(ev.content),
+      content: ev.content,
+      imetaMime: firstImetaMime(ev.tags),
+      threadReply: isThreadReply(ev.kind, ev.tags),
       roomKey: "", // filled by the hook once the relay URL is known
       readKey: "", // filled by the hook (needs the relay URL)
       path: "", // ditto — the route names the relay

@@ -94,6 +94,29 @@ async function writeCached(hash: string, plaintext: Uint8Array, mime: string): P
 export async function decryptImagePointer(pointer: ImagePointer, signal?: AbortSignal): Promise<string> {
   const cached = await readCached(pointer.hash);
   if (cached) return URL.createObjectURL(cached);
+  const { bytes, mime } = await decryptImageBytes(pointer, signal);
+  return URL.createObjectURL(new Blob([buf(bytes)], { type: mime }));
+}
+
+/**
+ * The same fetch + decrypt + integrity check as {@link decryptImagePointer},
+ * stopping at the plaintext bytes.
+ *
+ * Split out for the Web Push service worker, which needs a community's icon for
+ * a notification but has no `URL.createObjectURL` — that is a Window-only API,
+ * so a worker has to inline the image as a `data:` URL instead. Keeping the
+ * crypto and the SHA-256 verification here means the worker cannot end up with
+ * a laxer check than the app: a swapped blob still fails closed for both.
+ */
+export async function decryptImageBytes(
+  pointer: ImagePointer,
+  signal?: AbortSignal,
+): Promise<{ bytes: Uint8Array; mime: string }> {
+  const cached = await readCached(pointer.hash);
+  if (cached) {
+    const bytes = new Uint8Array(await cached.arrayBuffer());
+    return { bytes, mime: cached.type || sniffImageMime(bytes) };
+  }
 
   const res = await fetch(pointer.url, { signal });
   if (!res.ok) throw new Error(`image fetch failed: HTTP ${res.status}`);
@@ -108,5 +131,5 @@ export async function decryptImagePointer(pointer: ImagePointer, signal?: AbortS
   }
   const mime = sniffImageMime(plaintext);
   void writeCached(pointer.hash, plaintext, mime);
-  return URL.createObjectURL(new Blob([buf(plaintext)], { type: mime }));
+  return { bytes: plaintext, mime };
 }

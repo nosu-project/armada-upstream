@@ -1,3 +1,4 @@
+import { firstImetaMime, isThreadReply } from "@/lib/notificationPreview";
 import { KIND_DM_CHAT, KIND_DM_FILE, type OpenedDm } from "@/lib/nip17/protocol";
 import { chatRoute } from "@/lib/routes";
 
@@ -49,6 +50,19 @@ export interface NotifyCandidate {
    */
   body?: string;
   /**
+   * The message's RAW content, untruncated and with its whitespace intact.
+   *
+   * `body` has already been through {@link preview}, which collapses runs of
+   * whitespace and elides — fine for a list row, lossy for the notification
+   * pipeline, which strips media URLs and resolves mentions before deciding
+   * whether anything is left to show. Present wherever `body` is.
+   */
+  content?: string;
+  /** The first `imeta` MIME, so a media-only message can name what it carries. */
+  imetaMime?: string;
+  /** Whether this is a reply inside a thread rather than to the room. */
+  threadReply?: boolean;
+  /**
    * The active-room key for the conversation this belongs to (matches the
    * shapes in activeRooms.ts), so the notifier can suppress an on-screen room.
    * Some planes leave this for the notifier hook to fill in once it resolves
@@ -92,6 +106,9 @@ export function dm17NotifyCandidates(opened: OpenedDm[], self: string): NotifyCa
       mention: true,
       kind: dm.kind,
       body: dm.kind === KIND_DM_FILE ? "Sent a file" : dm.content,
+      content: dm.content,
+      imetaMime: firstImetaMime(dm.tags),
+      threadReply: isThreadReply(dm.kind, dm.tags),
       roomKey: `dm:${dm.peer}`,
       readKey: `dm:${dm.peer}`,
       path: chatRoute({ kind: "dm", peer: dm.peer, messageId: dm.rumorId }),

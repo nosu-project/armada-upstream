@@ -20,12 +20,14 @@
 const BUILD = "__BUILD_STAMP__";
 void BUILD;
 
-// NIP-17 unwrap for the DM push path (below). A classic worker can't `import`,
-// and WebCrypto has no secp256k1, so this is a separately-built bundle
-// (vite.config.sw-crypto.ts → dist/sw-crypto.js) exposing self.ArmadaDmCrypto.
-// Guarded: it's absent in the unit-test VM and in any build that didn't ship
-// it, in which case DM push simply degrades to the generic wake-up. `typeof` is
-// safe on the undeclared name in that VM.
+// The push runtime: opening an inlined event, storing it, and composing what to
+// show. A classic worker can't `import`, WebCrypto has no secp256k1, and none of
+// the app's store or presentation code is reachable here — so this is a
+// separately-built bundle (vite.config.sw-runtime.ts → dist/sw-crypto.js, a name
+// kept for installed workers) exposing self.ArmadaDmCrypto. Guarded: it's absent
+// in the unit-test VM and in any build that didn't ship it, in which case push
+// degrades to the gateway's static wake-up. `typeof` is safe on the undeclared
+// name in that VM.
 try {
   if (typeof importScripts === "function") {
     importScripts(new URL("sw-crypto.js", self.location.href).href);
@@ -67,22 +69,32 @@ self.addEventListener("activate", (event) => {
 //
 //  - The content-blind nostr-push gateway sends a static wake-up plus routing
 //    hints: { title, body, data: { event_id, scope, relays } } (see
-//    pushSubscriptions.ts). The server never sees plaintext; WE fetch the
-//    referenced event and render it. We ALWAYS show the static notification
-//    first (synchronously, so the userVisibleOnly contract is never broken —
-//    iOS revokes the subscription after a few silent pushes), then, for
-//    plaintext group messages, replace it in place with the message preview
-//    using the same `tag`. Encrypted scopes (dm/c2) can't be opened
-//    here without bundled crypto, so they keep the generic wake-up.
+//    pushSubscriptions.ts), and — because every subscription this worker can
+//    open asks for `inline_event` — usually the matched event itself in
+//    `data.event`.
+//
+// When the event is there, the runtime bundle opens it, stores it and hands
+// back a real notification: the sender's name and avatar, the room's title and
+// image, the message text. The gateway's static `title`/`body` are only the
+// FALLBACK, for a payload too big to carry its event (nostr-push drops it past
+// ~3800 bytes), a scope whose keys this worker doesn't hold, or a build with no
+// bundle. That fallback then keeps the old behavior: show the static wake-up
+// immediately — synchronously, so the userVisibleOnly contract is never broken,
+// since iOS revokes the subscription after a few silent pushes — and for
+// plaintext group messages replace it in place with the message preview fetched
+// from a relay, using the same `tag`.
 
 const PLAINTEXT_SCOPES = new Set(["group", "group-mention"]);
 const PUSH_STATE_CACHE = "armada-push-state-v1";
 const PUSH_STATE_PREFIX = "/.armada-push-state/";
 const BADGE_STATE_URL = new URL(`${PUSH_STATE_PREFIX}badge`, self.location.origin).href;
-// The page-provided DM gating config: request policy, known-peer set, the
-// viewer's pubkey, and (nsec logins only) the decrypt key. Written by
-// swDmConfig.ts; read here per DM push. Must match that module's path.
-const DM_CONFIG_URL = new URL(`${PUSH_STATE_PREFIX}dm-config`, self.location.origin).href;
+// The page-provided push config: the DM request policy, the known-peer set, the
+// viewer's pubkey, (nsec logins only) the decrypt key, and the per-channel
+// Concord stream keys. Written by swPushConfig.ts; read here per push. Must
+// match that module's path — `dm-config` is the ON-DISK spelling from when the
+// blob only carried DM state, kept so an existing install's config stays
+// readable across the update.
+const PUSH_CONFIG_URL = new URL(`${PUSH_STATE_PREFIX}dm-config`, self.location.origin).href;
 // The user's push kill switch, written by swPushDisabled.ts BEFORE the disable
 // path's best-effort network teardown and deleted when push is re-enabled.
 // While it is set this worker displays nothing and tears down its own
@@ -346,105 +358,91 @@ async function suppressPush(data) {
 }
 
 /**
- * The page-provided DM gating config, or null if none/unavailable. The blob is
- * AES-GCM sealed at rest under a non-extractable key; the crypto bundle opens it
- * (swSecretVault.openSealedConfig), so a config we can't decrypt — or a build
- * without the bundle — safely degrades to the generic wake-up.
+ * The page-provided push config's SEALED bytes, or null if none.
+ *
+ * Sealed at rest under a non-extractable AES-GCM key; only the runtime bundle
+ * can open it (swSecretVault), so it is handed over as ciphertext and a config
+ * we can't decrypt — or a build without the bundle — safely degrades to the
+ * generic wake-up.
  */
-async function readDmConfig() {
+async function readSealedConfig() {
   try {
-    const crypto = self.ArmadaDmCrypto;
-    if (!crypto || typeof crypto.openConfig !== "function") return null;
     const cache = await caches.open(PUSH_STATE_CACHE);
-    const stored = await cache.match(DM_CONFIG_URL);
-    if (!stored) return null;
-    const sealed = new Uint8Array(await stored.arrayBuffer());
-    return await crypto.openConfig(sealed);
+    const stored = await cache.match(PUSH_CONFIG_URL);
+    if (!stored) return undefined;
+    return new Uint8Array(await stored.arrayBuffer());
   } catch {
-    return null;
+    return undefined;
   }
 }
 
 /**
- * Show the notification for a NIP-17 DM push, deciding UP FRONT from the wrap
- * the server inlined (`data.event`) so we call showNotification exactly once,
- * within the mobile push window and with no relay fetch. Returns true when it
- * handled the push; false to fall back to the generic wake-up (no inlined wrap,
- * no bundled crypto, a login whose key the worker doesn't hold, or an
- * undecryptable/foreign/expired wrap).
+ * Show the notification for a push whose event the gateway inlined, deciding
+ * everything UP FRONT so we call showNotification exactly once — within the
+ * mobile push window and with no relay fetch.
+ *
+ * Returns "shown" when it presented one, "dropped" when the opened event turned
+ * out to be one the user must not be told about, and false to fall back to the
+ * generic wake-up (no inlined event, no bundle, a scope whose keys this worker
+ * doesn't hold, or an undecryptable / foreign / expired envelope).
+ *
+ * The bundle also STORES what it opened before returning, so a message received
+ * while no tab was open is simply there on the next open.
  *
  * iOS revokes the whole push subscription after a few pushes that show nothing,
- * so every branch shows SOMETHING: `off` for an unknown sender is the quietest
- * we can be (one collapsing entry, no sound, no re-alert), never true silence.
+ * so every branch shows SOMETHING: `quiet` (an unknown sender under the `off`
+ * request policy) is the quietest we can be — one collapsing entry, no sound,
+ * no re-alert — never true silence.
  */
-async function showDmNotification(base, data) {
-  const wrap = data.event;
-  const crypto = self.ArmadaDmCrypto;
-  if (!wrap || !crypto) return false;
-  const cfg = await readDmConfig();
-  if (!cfg || !cfg.sk) return false; // non-nsec login → the worker can't decrypt
-  const opened = crypto.unwrapDm(wrap, cfg.sk, cfg.self);
-  if (!opened) return false; // undecryptable / not for us / expired
+async function showInlineNotification(base, data, silent) {
+  const runtime = self.ArmadaDmCrypto;
+  if (!data.event || !runtime || typeof runtime.preparePush !== "function") return false;
+
+  let prepared;
+  try {
+    const cfg = await runtime.openConfig(await readSealedConfig());
+    prepared = await runtime.preparePush(data, cfg);
+  } catch {
+    return false; // never trade the notification for a bundle failure
+  }
+  if (!prepared) return false;
+
+  // The bundle opened it and says it shouldn't be seen at all — the user's own
+  // message sent from another device, or a reaction to someone else's. Only
+  // the decrypted rumor could have told us that, so the decision arrives here
+  // rather than in suppressPush. Treated exactly like any other suppressed
+  // push: nothing shown, but the Apple keep-alive still ticks.
+  if (prepared.drop) {
+    await quietSync(base, data);
+    return "dropped";
+  }
 
   // Drop the (large) inlined event from the data we attach to the notification.
   const routeData = { ...data };
   delete routeData.event;
 
-  // Reactions/deletes/timer changes aren't messages, but the push must still
-  // show something on iOS — the content-blind request ping.
-  if (opened.kind !== 14 && opened.kind !== 15) {
-    return showQuietRequest(base);
-  }
+  // A content-blind request ping must not accumulate the room's lines — the
+  // whole point is that it reveals nothing the sender chose.
+  const lines = prepared.accumulate
+    ? await appendRoomLine(prepared.tag, prepared.line)
+    : [prepared.line];
+  const quiet = silent || prepared.quiet === true;
 
-  const known = Array.isArray(cfg.knownPeers) && cfg.knownPeers.indexOf(opened.sender) !== -1;
-
-  if (known || cfg.policy === "full") {
-    const preview = opened.kind === 15
-      ? "Sent a file"
-      : (truncate(opened.content, 140) || "Sent you a direct message");
-    // Mirror the native (Android service) DM presentation: the conversation
-    // title is just the sender's name, the icon is their avatar, and the body
-    // accumulates the room's recent lines like a MessagingStyle expansion.
-    // The page seals names/avatars for known peers beside the peer set; a
-    // sender without them (or a pre-names config) keeps the generic look.
-    const name = (cfg.peerNames && cfg.peerNames[opened.sender]) || "";
-    const avatar = (cfg.peerAvatars && cfg.peerAvatars[opened.sender]) || "";
-    const tag = `dm-${opened.sender}`;
-    const lines = await appendRoomLine(tag, preview);
-    // NOT "Anonymous" (the page notifier's and the Android service's fallback):
-    // both of those have a profile store and reach it before giving up, so an
-    // unnamed author is a fact they established. The worker has none — a
-    // missing entry means the page never sealed one, which happens whenever
-    // the config was written before the peer's kind-0 reached the local store.
-    // Titling that "Anonymous" states as fact about the sender what is really
-    // an absence on our side, and does it for EVERY sender at once.
-    await self.registration.showNotification(name || "New message", {
-      ...base,
-      ...(avatar ? { icon: avatar } : {}),
-      body: lines.join("\n"),
-      // Per-peer tag: a conversation collapses into one entry, distinct
-      // conversations stay distinct.
-      tag,
-      ...(Number.isFinite(opened.createdAt) && opened.createdAt > 0
-        ? { timestamp: opened.createdAt * 1000 }
-        : {}),
-      data: { ...routeData, url: `/dm/${opened.sender}`, lines },
-    });
-    return true;
-  }
-
-  // Unknown sender.
-  if (cfg.policy === "off") return showQuietRequest(base);
-
-  // policy === "generic": content-blind request ping (nothing the sender
-  // picks). Strings match the native service's request room.
-  await self.registration.showNotification("Message requests", {
+  await self.registration.showNotification(prepared.title, {
     ...base,
-    body: "You have a new message request",
-    tag: "armada-dm-requests",
-    data: { ...routeData, url: "/dm" },
+    ...(quiet ? { silent: true, renotify: false } : {}),
+    icon: prepared.icon,
+    badge: prepared.badge,
+    body: lines.join("\n"),
+    // Per-room tag: a conversation collapses into one entry, distinct
+    // conversations stay distinct.
+    tag: prepared.tag,
+    ...(Number.isFinite(prepared.timestamp) && prepared.timestamp > 0
+      ? { timestamp: prepared.timestamp }
+      : {}),
+    data: { ...routeData, url: prepared.url, lines: prepared.accumulate ? lines : undefined },
   });
-  return true;
+  return "shown";
 }
 
 /**
@@ -484,24 +482,6 @@ async function isApplePushEndpoint() {
   } catch {
     return false;
   }
-}
-
-/**
- * The quietest notification iOS lets us get away with for a DM we don't want to
- * surface (unknown sender under `off`, or a non-message rumor): one "Message
- * requests" entry that collapses all of them, never re-alerts, and reveals
- * nothing the sender controls.
- */
-async function showQuietRequest(base) {
-  await self.registration.showNotification("Message requests", {
-    ...base,
-    body: "You have new message requests",
-    tag: "armada-dm-requests",
-    renotify: false,
-    silent: true,
-    data: { url: "/dm" },
-  });
-  return true;
 }
 
 /**
@@ -582,7 +562,10 @@ self.addEventListener("push", (event) => {
   const title = payload.title ?? "Armada";
   const base = {
     icon: payload.icon || "/favicon.png",
-    badge: payload.badge || "/favicon.png",
+    // Single-colour on transparency: the platform keeps only this image's alpha
+    // channel, so the full-colour favicon that used to sit here rendered as a
+    // solid blob in the status bar.
+    badge: payload.badge || "/badge-96.png",
     renotify: true,
   };
 
@@ -610,25 +593,32 @@ self.addEventListener("push", (event) => {
         return;
       }
 
-      // DMs: decide from the wrap the server inlined and show exactly once (see
-      // showDmNotification), so an unknown sender is gated BEFORE anything they
-      // control reaches the screen and a known sender's message can be shown —
-      // all without a relay fetch. Falls through to the generic wake-up below
-      // when the worker can't decrypt (no inlined wrap, non-nsec login, etc.).
-      if (data.scope === "dm") {
-        if (await showDmNotification(base, data)) {
-          await Promise.all([incrementAppBadge(), resetQuietBudget()]);
-          return;
-        }
-      }
-
       // Past this room's interruption ceiling the notification is still shown
       // (and still updates its count), it just stops making noise — the web
       // mirror of the native ALERT_BURST_MAX. Decided once and applied to both
       // the wake-up and its enriched replacement so a flood past the budget
       // never re-alerts on the same event's second show either.
+      //
+      // Keyed on the SUBSCRIPTION-level tag rather than the room, because the
+      // room is only known once the event is open, and a rate limit that a
+      // sender can dodge by opening a new room isn't one. The inline path
+      // re-tags the notification per room afterwards.
       const silent = await roomAlertSilent(tag);
       const alertBase = silent ? { ...base, silent: true, renotify: false } : base;
+
+      // Decide from the event the gateway inlined and show exactly once (see
+      // showInlineNotification): the real sender, the real room, the real
+      // message — and stored on the way through. An unknown DM sender is gated
+      // BEFORE anything they control reaches the screen. Falls through to the
+      // static wake-up below when the event isn't there or can't be opened.
+      const inline = await showInlineNotification(base, data, silent);
+      if (inline === "shown") {
+        await Promise.all([incrementAppBadge(), resetQuietBudget()]);
+        return;
+      }
+      // A dropped push displayed nothing, so it neither counts against the
+      // badge nor replenishes the silent-push budget quietSync just spent.
+      if (inline === "dropped") return;
 
       // 1. Guaranteed visible notification, immediately.
       await self.registration.showNotification(title, {
