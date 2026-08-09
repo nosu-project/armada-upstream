@@ -70,11 +70,18 @@ async function readInviteList(
 }
 
 /**
- * Fetch and decrypt the user's Invite List, MERGING every copy the pool
- * returns rather than trusting a single newest event: tombstones union and win
- * terminally (CORD-05 §4), so a relay whose "newest" copy predates another
- * device's revocation can never resurrect the revoked link. Also returns the
- * newest `created_at` seen, for replaceable-event monotonicity on write.
+ * Fetch and decrypt the user's Invite List, merging every copy that reaches us
+ * rather than trusting a single newest event: tombstones union and win
+ * terminally (CORD-05 §4). Also returns the newest `created_at` seen, for
+ * replaceable-event monotonicity on write.
+ *
+ * The merge here is defensive, NOT the guarantee — `NPool.query` collects into
+ * an `NSet`, which applies replaceable semantics itself and hands back at most
+ * ONE 13303 (the newest that arrived inside the pool's ~300ms EOSE window). So
+ * a pool answered only by relays that haven't yet indexed our latest write
+ * returns a list that is genuinely BEHIND, tombstones and all. Every caller
+ * therefore merges this result into what it already holds and never assigns it
+ * over the top — see {@link useInviteList} and {@link useUpdateInviteList}.
  */
 export async function fetchInviteList(
   nostr: ReturnType<typeof useNostr>["nostr"],
@@ -103,6 +110,7 @@ export async function fetchInviteList(
 export function useInviteList() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const queryClient = useQueryClient();
 
   return useQuery<InviteList>({
     queryKey: inviteListKey(user?.pubkey),
@@ -110,7 +118,18 @@ export function useInviteList() {
     staleTime: 60_000,
     queryFn: async ({ signal }) => {
       const { list } = await fetchInviteList(nostr, user!, AbortSignal.any([signal, AbortSignal.timeout(8000)]));
-      return list;
+      // A network read may only WIDEN this device's list, never narrow it.
+      // Publishing the 13303 echoes it back on NostrSync's standing self-sync
+      // sub, which invalidates this query — so a revoke's refetch races the
+      // relays' indexing of the write that caused it, and a pool answering
+      // from the pre-revocation copy would hand back the entry we just
+      // tombstoned. Assigning that over the cache is what made a revoked link
+      // reappear a moment after vanishing. Merging is sound in both
+      // directions: entries are immutable once minted and keyed by token, and
+      // tombstones are terminal (CORD-05 §4), so folding the cache forward can
+      // only preserve facts, never invent or resurrect one.
+      const cached = queryClient.getQueryData<InviteList>(inviteListKey(user!.pubkey));
+      return cached ? mergeInviteLists(cached, list) : list;
     },
   });
 }
