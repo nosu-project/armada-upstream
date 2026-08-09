@@ -576,7 +576,19 @@ public class ArmadaNotificationPlugin extends Plugin {
         if (start) {
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    ctx.startForegroundService(serviceIntent);
+                    try {
+                        // startService() creates no startForeground() deadline
+                        // but is refused (IllegalStateException) from a
+                        // background state on API 26+. configure() normally
+                        // arrives from a visible WebView, so this path carries
+                        // no 10-second deadline; a background config refresh
+                        // falls back to startForegroundService(). A start
+                        // delivered to the already-running service still runs
+                        // onStartCommand → loadConfigAndReconnect either way.
+                        ctx.startService(serviceIntent);
+                    } catch (IllegalStateException notForeground) {
+                        ctx.startForegroundService(serviceIntent);
+                    }
                 } else {
                     ctx.startService(serviceIntent);
                 }

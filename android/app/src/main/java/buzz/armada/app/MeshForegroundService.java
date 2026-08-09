@@ -24,7 +24,19 @@ public class MeshForegroundService extends Service {
     private static final int NOTIF_ID = 4711;
 
     @Override
+    public void onCreate() {
+        super.onCreate();
+        // Post the foreground notification at the earliest lifecycle point:
+        // service create and start-args are two separate main-thread messages,
+        // and the startForeground() deadline keeps running through the gap —
+        // where unrelated queued work (WebView/JS posts) can burn it.
+        startForegroundCompat();
+    }
+
+    @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        // Idempotent re-post of the same notification; also covers redelivered
+        // starts on an already-created service.
         startForegroundCompat();
         return START_STICKY;
     }

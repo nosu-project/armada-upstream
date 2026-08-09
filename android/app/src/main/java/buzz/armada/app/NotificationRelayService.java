@@ -719,7 +719,19 @@ public class NotificationRelayService extends Service {
         Intent i = new Intent(ctx, NotificationRelayService.class);
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                ctx.startForegroundService(i);
+                try {
+                    // startService() creates no startForeground() deadline but
+                    // is refused (IllegalStateException) from a background
+                    // state on API 26+. Prefer it so a foreground start — an
+                    // app launch, where the service's onCreate queues behind
+                    // the Activity/WebView cold start — can never miss the
+                    // 10-second deadline; only the background paths (boot,
+                    // alarms), whose near-empty queue meets it comfortably,
+                    // fall back to startForegroundService().
+                    ctx.startService(i);
+                } catch (IllegalStateException notForeground) {
+                    ctx.startForegroundService(i);
+                }
             } else {
                 ctx.startService(i);
             }

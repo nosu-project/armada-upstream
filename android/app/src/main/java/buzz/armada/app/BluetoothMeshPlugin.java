@@ -118,7 +118,17 @@ public class BluetoothMeshPlugin extends Plugin implements BluetoothMeshDelegate
             Intent svc = new Intent(getContext(), MeshForegroundService.class);
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    getContext().startForegroundService(svc);
+                    try {
+                        // startService() creates no startForeground() deadline
+                        // but is refused (IllegalStateException) from a
+                        // background state on API 26+. The mesh starts from a
+                        // user action in a visible activity, so this normally
+                        // succeeds and the service can never miss the
+                        // 10-second deadline behind a congested main thread.
+                        getContext().startService(svc);
+                    } catch (IllegalStateException notForeground) {
+                        getContext().startForegroundService(svc);
+                    }
                 } else {
                     getContext().startService(svc);
                 }
