@@ -1,10 +1,11 @@
-import { ChevronDown, CloudOff, KeyRound, Loader2 } from "lucide-react";
+import { ChevronDown, CloudOff, KeyRound, Loader2, MessagesSquare } from "lucide-react";
 import { memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import {
   FIRST_PAINT_WINDOW,
   INITIAL_WINDOW,
   resolveWindowStart,
+  stepBackRows,
   TRIM_ABOVE,
   WINDOW_STEP,
 } from "@/components/chat/timelineWindow";
@@ -24,6 +25,14 @@ import type { ReactNode, RefObject } from "react";
  * render as a compact continuation (no repeated avatar/name/timestamp).
  */
 const CONTINUATION_WINDOW_SECONDS = 5 * 60;
+
+/**
+ * Shortest run of flood messages worth folding. The detector already needs a
+ * denser run than this to mark anything, but interleaved ordinary chat can
+ * split one flood into fragments, and a row reading "2 similar messages" costs
+ * a click to save two lines.
+ */
+const FLOOD_ROW_MIN = 3;
 
 /**
  * Distance from the top (px) at which older history is requested from the
@@ -129,12 +138,57 @@ function KeyRotationDivider() {
   );
 }
 
+/**
+ * A run of messages the transport marked as a visual flood
+ * (`quarantinedIds`), folded into one row the reader can open.
+ *
+ * Deliberately a summary and not a removal. The heuristic behind it is allowed
+ * to be wrong — a wave of real newcomers looks exactly like a bot swarm — so
+ * the messages stay in the timeline, in order, one click away. Nothing here
+ * reports anyone or informs a moderation decision.
+ */
+function FloodNotice({
+  count,
+  authors,
+  expanded,
+  onToggle,
+}: {
+  count: number;
+  authors: number;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-3 px-2 py-1 select-none">
+      <div className="h-px flex-1 bg-muted-foreground/25" />
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        className="flex items-center gap-1.5 rounded px-1.5 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground touch:py-1.5 touch:text-xs"
+        title={
+          expanded
+            ? "Fold these back up"
+            : "Several accounts posted near-identical messages at once. Nothing was removed."
+        }
+      >
+        <MessagesSquare className="size-3 shrink-0" aria-hidden />
+        {expanded
+          ? "Hide similar messages"
+          : `${count} similar ${count === 1 ? "message" : "messages"} from ${authors} ${authors === 1 ? "account" : "accounts"}`}
+      </button>
+      <div className="h-px flex-1 bg-muted-foreground/25" />
+    </div>
+  );
+}
+
 /** One rendered row: a message, a day separator, or the unread "NEW" divider. */
 type TimelineItem =
   | { type: "date"; ts: number; key: string }
   | { type: "unread"; key: string }
   | { type: "rotation"; key: string }
   | { type: "message"; msg: ChatMsg; continuation: boolean; key: string }
+  | { type: "flood"; msgs: readonly ChatMsg[]; authors: number; key: string }
   | { type: "entry"; entry: NonChatEntry; related?: readonly NonChatEntry[]; key: string };
 
 /** A generalized timeline entry that isn't a plain chat message (e.g. Git activity). */
@@ -403,7 +457,23 @@ export function MessageTimeline({
   syncFailed = false,
   className,
 }: MessageTimelineProps) {
-  const { messages, isLoading, loadOlder, hasMore, isLoadingOlder, rotationDividerIds } = transport;
+  const { messages, isLoading, loadOlder, hasMore, isLoadingOlder, rotationDividerIds, quarantinedIds } =
+    transport;
+
+  // Which flood rows the reader has opened, keyed by row key. Local, and reset
+  // by nothing: the key derives from the run's first message id, so a channel
+  // switch simply produces different keys rather than leaking an opened run
+  // into the next conversation. `floodRunOfRef` lets a jump (a pin, a
+  // permalink) open the run its target is hiding in before scrolling to it.
+  const [expandedFloods, setExpandedFloods] = useState<ReadonlySet<string>>(() => new Set());
+  const floodRunOfRef = useRef<Map<string, string>>(new Map());
+  const toggleFlood = useCallback((key: string) => {
+    setExpandedFloods((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
+  }, []);
 
   // THE number the user is complaining about: when the skeleton came down. Every
   // other milestone on the timeline is only interesting relative to this one.
@@ -473,6 +543,9 @@ export function MessageTimeline({
   // Live mirrors, so scroll/observer callbacks never close over stale props.
   const entriesRef = useRef(timelineEntries);
   entriesRef.current = timelineEntries;
+  // Read by the scroll handler, which is not re-created per render.
+  const quarantinedIdsRef = useRef(quarantinedIds);
+  quarantinedIdsRef.current = quarantinedIds;
 
   // How far the reader is from the newest message. Updated on every scroll and
   // after every programmatic move; the single input to stick-to-bottom.
@@ -523,9 +596,15 @@ export function MessageTimeline({
   // The window is resolved over the ENTRY stream, not just chat: a channel
   // whose recent history is mostly Git activity must still open with a full
   // window, and the anchor id has to name a row that actually exists.
+  // Folded flood messages are counted as the ONE row they render as, so a wall
+  // of spam at the bottom of the history can't spend the whole window and push
+  // the conversation above the rendered slice.
   const { startIndex, anchorLost } = useMemo(
-    () => resolveWindowStart(timelineEntries, windowStartId, OPENING_RAMP[rampStep]),
-    [timelineEntries, windowStartId, rampStep],
+    () =>
+      resolveWindowStart(timelineEntries, windowStartId, OPENING_RAMP[rampStep], (entry) =>
+        entry.type === "chat" ? !!quarantinedIds?.has(entry.message.id) : false,
+      ),
+    [timelineEntries, windowStartId, rampStep, quarantinedIds],
   );
   const startIndexRef = useRef(startIndex);
   startIndexRef.current = startIndex;
@@ -536,10 +615,58 @@ export function MessageTimeline({
   // doesn't change shape as the window grows.
   const items = useMemo<TimelineItem[]>(() => {
     const out: TimelineItem[] = [];
+    const runOf = new Map<string, string>();
+    /**
+     * Is this entry foldable into a flood run? The unread divider's target is
+     * deliberately excluded — the "NEW" line has to land on a row the reader
+     * can actually see, or their first unread message is behind a click they
+     * have no reason to make. A key-rotation boundary is excluded for the same
+     * reason and a stronger one: the divider is only emitted beside a rendered
+     * message row, so folding its target deletes the rotation line outright —
+     * including from the expanded run, which renders messages and nothing else.
+     */
+    const floodable = (entry: ChannelTimelineEntry | undefined) =>
+      !!entry &&
+      entry.type === "chat" &&
+      !!quarantinedIds?.has(entry.message.id) &&
+      newDividerId !== entry.message.id &&
+      !rotationDividerIds?.has(entry.message.id);
+
     for (let i = startIndex; i < timelineEntries.length; i++) {
       const entry = timelineEntries[i];
       const prev = timelineEntries[i - 1];
       const newDay = !!prev && !isSameDay(prev.createdAt, entry.createdAt);
+
+      // A run of flood messages collapses to one row. It breaks on anything
+      // else — an ordinary message between two of them means the reader's
+      // attention was broken too, same rule the Git grouping uses — and on a
+      // day boundary, so the date separator still introduces a visible row.
+      if (floodable(entry)) {
+        const run: ChatMsg[] = [];
+        let j = i;
+        for (; j < timelineEntries.length; j++) {
+          const at = timelineEntries[j];
+          if (!floodable(at) || at.type !== "chat") break;
+          if (j > i && !isSameDay(timelineEntries[j - 1].createdAt, at.createdAt)) break;
+          run.push(at.message);
+        }
+        // One or two stragglers are not a wall of noise; collapsing them would
+        // cost a click and save no space. Fall through and render them plainly.
+        if (run.length >= FLOOD_ROW_MIN) {
+          const headKey = run[0].renderKey ?? run[0].id;
+          const key = `flood-${headKey}`;
+          if (newDay) out.push({ type: "date", ts: entry.createdAt, key: `date-${headKey}` });
+          for (const m of run) runOf.set(m.id, key);
+          out.push({
+            type: "flood",
+            msgs: run,
+            authors: new Set(run.map((m) => m.pubkey)).size,
+            key,
+          });
+          i = j - 1;
+          continue;
+        }
+      }
       // A Git entry continuing the previous one is absorbed into that row's
       // group (see relatedGitEntries) and emits no row of its own — unless it
       // opens the window, where its group head sits outside the rendered slice
@@ -573,8 +700,12 @@ export function MessageTimeline({
         });
       }
     }
+    // Message id → the flood row hiding it, so a jump can open that row first.
+    // Assigned during render like `startIndexRef` above: it describes the rows
+    // this pass produced, and must not lag them by a commit.
+    floodRunOfRef.current = runOf;
     return out;
-  }, [timelineEntries, startIndex, newDividerId, rotationDividerIds]);
+  }, [timelineEntries, startIndex, newDividerId, rotationDividerIds, quarantinedIds]);
 
   // Rows are about to change at the top of the slice (a revealed batch, a
   // backfill prepend, a trim). Measure the reader's anchor row NOW, while the
@@ -624,10 +755,24 @@ export function MessageTimeline({
   /** Center a mounted row and flash a highlight over it. */
   const jumpToRow = useCallback((id: string, focus = false) => {
     const el = scrollRef.current;
-    const row = contentRef.current?.querySelector<HTMLElement>(`[data-event-id="${id}"]`);
-    if (!el || !row) return;
-    flashRow(row, focus);
-    distanceRef.current = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (!el) return;
+    const settle = () => {
+      const row = contentRef.current?.querySelector<HTMLElement>(`[data-event-id="${id}"]`);
+      if (!row) return;
+      flashRow(row, focus);
+      distanceRef.current = el.scrollHeight - el.scrollTop - el.clientHeight;
+    };
+    if (contentRef.current?.querySelector(`[data-event-id="${id}"]`)) {
+      settle();
+      return;
+    }
+    // Not mounted. If a flood row is folded over it, open that row and jump on
+    // the next frame — a pin or a permalink must not silently do nothing just
+    // because a heuristic tidied its target away.
+    const runKey = floodRunOfRef.current.get(id);
+    if (!runKey) return;
+    setExpandedFloods((prev) => (prev.has(runKey) ? prev : new Set(prev).add(runKey)));
+    requestAnimationFrame(settle);
   }, []);
 
   // The one place scroll position is adjusted for a rendered-slice change.
@@ -708,7 +853,11 @@ export function MessageTimeline({
     const start = startIndexRef.current;
     if (start > 0) {
       if (el.scrollTop >= REVEAL_TRIGGER_PX) return;
-      const next = entriesRef.current[Math.max(0, start - WINDOW_STEP)];
+      const next = entriesRef.current[
+        stepBackRows(entriesRef.current, start, WINDOW_STEP, (entry) =>
+          entry.type === "chat" ? !!quarantinedIdsRef.current?.has(entry.message.id) : false,
+        )
+      ];
       if (!next) return;
       extendLockRef.current = true;
       setWindowStart(next.id);
@@ -721,6 +870,42 @@ export function MessageTimeline({
       loadingOlderRef.current = false;
     });
   }, [paused, loadOlder, hasMore, isLoadingOlder, setWindowStart]);
+
+  /**
+   * Extend while the rendered slice does not even fill the scroller.
+   *
+   * Every other path into {@link maybeExtend} is driven by the reader
+   * scrolling up, which is impossible in a scroller with no overflow — and a
+   * folded flood produces exactly that: a wall of messages renders as a
+   * handful of one-line notices, so a full window of ROWS can be a third of a
+   * viewport of PIXELS with the rest of the conversation still above it and no
+   * gesture available to ask for it. Runs after every commit that changes the
+   * slice, one step at a time, and stops as soon as there is something to
+   * scroll.
+   */
+  useEffect(() => {
+    if (!listVisible || paused) return;
+    const el = scrollRef.current;
+    // An unmeasured scroller (zero height: not laid out yet, or a test
+    // environment with no layout at all) is not an underfilled one — reading it
+    // as one would walk the whole history in before the first paint.
+    if (!el || el.clientHeight === 0) return;
+    if (el.scrollHeight > el.clientHeight + AT_BOTTOM_PX) return;
+    if (startIndexRef.current > 0) {
+      const next = entriesRef.current[
+        stepBackRows(entriesRef.current, startIndexRef.current, WINDOW_STEP, (entry) =>
+          entry.type === "chat" ? !!quarantinedIdsRef.current?.has(entry.message.id) : false,
+        )
+      ];
+      if (next) setWindowStart(next.id);
+      return;
+    }
+    if (!loadOlder || !hasMore || isLoadingOlder || loadingOlderRef.current) return;
+    loadingOlderRef.current = true;
+    void loadOlder().finally(() => {
+      loadingOlderRef.current = false;
+    });
+  }, [items, listVisible, paused, loadOlder, hasMore, isLoadingOlder, setWindowStart]);
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -851,6 +1036,21 @@ export function MessageTimeline({
                     <NewMessagesDivider />
                   ) : item.type === "rotation" ? (
                     <KeyRotationDivider />
+                  ) : item.type === "flood" ? (
+                    <>
+                      <FloodNotice
+                        count={item.msgs.length}
+                        authors={item.authors}
+                        expanded={expandedFloods.has(item.key)}
+                        onToggle={() => toggleFlood(item.key)}
+                      />
+                      {expandedFloods.has(item.key) &&
+                        item.msgs.map((msg) => (
+                          <div key={msg.renderKey ?? msg.id} className="relative">
+                            {renderMessage(msg, false)}
+                          </div>
+                        ))}
+                    </>
                   ) : item.type === "entry" ? (
                     renderEntry?.(item.entry, item.related)
                   ) : (

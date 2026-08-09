@@ -34,6 +34,7 @@ const h = vi.hoisted(() => ({
     calendarEvents: [],
     rsvps: new Map(),
     timerNotices: [],
+    quarantined: new Set<string>(),
   },
 }));
 

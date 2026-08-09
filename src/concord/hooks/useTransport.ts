@@ -479,6 +479,16 @@ export function useTransport(
     return ids;
   }, [timeline, folded.messages, folded.calendarEvents]);
 
+  // Visual-flood membership, straight from the fold. Passed through rather than
+  // recomputed: the fold already saw the whole timeline, including the thread
+  // replies the transport splits out below. Those ids simply never match a row,
+  // which is why this is only ever asked `has()` and never counted.
+  // `undefined` when empty, so a quiet channel hands the timeline no set at all.
+  const quarantinedIds = useMemo<ReadonlySet<string> | undefined>(
+    () => (folded.quarantined.size > 0 ? folded.quarantined : undefined),
+    [folded.quarantined],
+  );
+
   // Per-event RSVP binding for the inline card, mirroring `pollFor`. Recomputed
   // when the event set or RSVP fold changes; identity-stable in between so an
   // unchanged calendar row keeps its `calendar` prop (React.memo).
@@ -552,6 +562,7 @@ export function useTransport(
       canModerate,
       isRumor: true,
       rotationDividerIds,
+      quarantinedIds,
       loadOlder,
       hasMore,
       isLoadingOlder,
@@ -572,7 +583,7 @@ export function useTransport(
       sendThreadReply,
       canSend,
     }),
-    [timeline, isLoading, canWrite, canModerate, rotationDividerIds, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, calendarFor, threadRepliesFor, sendThreadReply, canSend],
+    [timeline, isLoading, canWrite, canModerate, rotationDividerIds, quarantinedIds, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, calendarFor, threadRepliesFor, sendThreadReply, canSend],
   );
 
   // Built from the RAW rows, not the folded ones: pinning needs the original
