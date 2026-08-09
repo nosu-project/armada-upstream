@@ -3,7 +3,7 @@ import { useCallback, useMemo } from "react";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useCommunityRumors } from "@/concord/hooks/useCommunityRumors";
-import { floodClusters } from "@/concord/lib/floodCluster";
+import { quarantinedIn } from "@/concord/lib/floodCluster";
 import { KIND_MESSAGE } from "@/concord/lib/kinds";
 import type { Channel } from "@/concord/lib/types";
 import { concordReadKey, useReadState } from "@/hooks/useReadState";
@@ -65,10 +65,9 @@ export function useConcordUnread(
       // the community — for something the reader will see as a single line they
       // did not ask for. The fold is the render-layer answer to a flood; a
       // badge that still fires is the same interruption by another route.
-      const quarantined = floodClusters(
-        [...rumors].sort((a, b) => a.ms - b.ms),
-        pubkey !== undefined ? { self: pubkey } : {},
-      );
+      // Memoized on the batch's identity, so a readState recompute of this
+      // memo (every markRead, every mounted instance) never re-runs the fold.
+      const quarantined = quarantinedIn(rumors, pubkey);
       let latest = 0;
       let latestMention = 0;
       for (const r of rumors) {

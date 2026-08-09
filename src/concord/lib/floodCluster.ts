@@ -392,6 +392,41 @@ export function floodClusters(messages: readonly OpenedChat[], opts: FloodOption
   return flagged;
 }
 
+/** One batch's quarantine, keyed on the batch itself (see {@link quarantinedIn}). */
+const quarantineCache = new WeakMap<
+  readonly OpenedChat[],
+  { self: string | undefined; ids: Set<string> }
+>();
+
+/**
+ * The flood quarantine for one channel's cached batch, memoized on the batch's
+ * IDENTITY.
+ *
+ * The community-wide derived views (unread badges, mounted on the rail and the
+ * page at once) re-derive on inputs that cannot change this answer — read
+ * state, mute lists — and each mounted instance re-derives alone. But the
+ * shared scan (`useCommunityRumors`) hands out one array per channel and
+ * replaces it only when that channel actually ingested a rumor, so the array
+ * IS the question's identity: the same batch folds the same way, whoever asks.
+ * A read-state change is a cache hit; a delta scan recomputes exactly the
+ * channels it replaced.
+ *
+ * Pure — no store read, so no `firstSeen`: this is the BADGE path, and it sees
+ * only what the batch shows (the render path's store-backed map is
+ * {@link FloodOptions.firstSeen}). The sort is here because `floodClusters`
+ * expects ms order and the batch does not promise it.
+ */
+export function quarantinedIn(rumors: readonly OpenedChat[], self?: string): Set<string> {
+  const cached = quarantineCache.get(rumors);
+  if (cached && cached.self === self) return cached.ids;
+  const ids = floodClusters(
+    [...rumors].sort((a, b) => a.ms - b.ms),
+    self !== undefined ? { self } : {},
+  );
+  quarantineCache.set(rumors, { self, ids });
+  return ids;
+}
+
 /** Keys arriving within this of the previous one chain into a single cohort. */
 export const FLOOD_COHORT_WINDOW_MS = 600_000;
 /**

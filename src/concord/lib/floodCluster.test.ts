@@ -19,6 +19,7 @@ import {
   FLOOD_MIN_MESSAGES,
   FLOOD_WINDOW_MS,
   floodClusters,
+  quarantinedIn,
   shapeKey,
 } from "@/concord/lib/floodCluster";
 
@@ -506,5 +507,29 @@ describe("floodClusters — a cohort that drowns the channel", () => {
     const evs = conveyor(10, 5);
     const flagged = floodClusters(evs, { self: "key3" });
     expect(evs.filter((e) => e.author === "key3").every((e) => !flagged.has(e.rumorId))).toBe(true);
+  });
+});
+
+describe("quarantinedIn", () => {
+  it("answers an unsorted batch, memoized on the batch's identity", () => {
+    // The badge path hands over the shared scan's per-channel array as-is —
+    // unsorted, and re-asked on every readState change from every mounted
+    // instance. Same array, same Set instance; a replaced array (what a delta
+    // scan produces) is a new question and recomputes.
+    const batch = burst(30, () => "same payload").reverse();
+    const first = quarantinedIn(batch);
+    expect(first.size).toBe(30);
+    expect(quarantinedIn(batch)).toBe(first);
+
+    const replaced = [...batch];
+    const second = quarantinedIn(replaced);
+    expect(second).not.toBe(first);
+    expect(second.size).toBe(30);
+  });
+
+  it("recomputes when the reader changes, and still spares them", () => {
+    const flood = burst(20, () => "buy now", { author: "solo" });
+    expect(quarantinedIn(flood).size).toBe(20);
+    expect(quarantinedIn(flood, "solo").size).toBe(0);
   });
 });
