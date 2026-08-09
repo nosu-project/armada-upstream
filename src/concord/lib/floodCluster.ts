@@ -48,6 +48,7 @@
  */
 
 import type { OpenedChat } from "@/concord/lib/chat";
+import { KIND_COMMENT, KIND_MESSAGE, KIND_POLL } from "@/concord/lib/kinds";
 
 /** Messages sharing a template within one window before it reads as a flood. */
 export const FLOOD_MIN_MESSAGES = 8;
@@ -421,12 +422,21 @@ const quarantineCache = new WeakMap<
  * only what the batch shows (the render path's store-backed map is
  * {@link FloodOptions.firstSeen}). The sort is here because `floodClusters`
  * expects ms order and the batch does not promise it.
+ *
+ * The raw batch also carries SIDE-EVENTS — reactions, votes, deletes, edits —
+ * which render no row and are dropped before judging. A reaction must not
+ * date its author as present (reacting to your own spam is free warming, and
+ * was used as exactly that) and must not count in a wave's share. The
+ * timeline path gets the same behavior structurally: `foldTimeline` consumes
+ * side-events into their targets before its fold runs.
  */
+const SPEECH_KINDS: ReadonlySet<number> = new Set([KIND_MESSAGE, KIND_POLL, KIND_COMMENT]);
+
 export function quarantinedIn(rumors: readonly OpenedChat[], self?: string): Set<string> {
   const cached = quarantineCache.get(rumors);
   if (cached && cached.self === self) return cached.ids;
   const ids = floodClusters(
-    [...rumors].sort((a, b) => a.ms - b.ms),
+    rumors.filter((r) => SPEECH_KINDS.has(r.kind)).sort((a, b) => a.ms - b.ms),
     self !== undefined ? { self } : {},
   );
   quarantineCache.set(rumors, { self, ids });

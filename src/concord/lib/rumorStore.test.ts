@@ -15,6 +15,7 @@ import {
   openedToStored,
   parkPendingWraps,
   peekPendingWraps,
+  queryChannelFirstSeen,
   queryChannelRumors,
   queryMentionRumors,
   queryPlane,
@@ -490,6 +491,32 @@ describe("concord rumor store", () => {
       (r) => r.length === 1,
     );
     expect(got.map((r) => r.rumorId)).toEqual([webxdc.id]);
+  });
+
+  it("dates an author's channel arrival by visible rows, never by reactions", async () => {
+    const { channel, idHex } = makeChannel();
+    const reactor = signer();
+    const speaker = signer();
+
+    // A reaction renders no row and costs nothing, which is why a warming bot
+    // reacts to its own messages: dating keys by it walks a sybil set past
+    // every arrival rule before it says a word.
+    const react = chatRumor(idHex, reactor, KIND_REACTION, "+", 1_000_000, [["e", "ab".repeat(32)]]);
+    const speech = chatRumor(idHex, speaker, KIND_MESSAGE, "hello there", 2_000_000);
+    writeRumors(
+      CID,
+      await openChatBatch(
+        [await wrapChat(react, channel, reactor), await wrapChat(speech, channel, speaker)],
+        channel,
+      ),
+    );
+
+    const map = await eventually(
+      () => queryChannelFirstSeen(CID, idHex, { sinceMs: 0, limit: 100 }),
+      (m) => m.size > 0,
+    );
+    expect(map.get(speaker.pubkey)).toBe(2_000_000);
+    expect(map.has(reactor.pubkey)).toBe(false);
   });
 
   it("refuses a control edition that did not arrive under a plaintext seal", async () => {

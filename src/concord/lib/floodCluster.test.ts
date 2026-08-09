@@ -593,4 +593,32 @@ describe("quarantinedIn", () => {
     expect(quarantinedIn(flood).size).toBe(20);
     expect(quarantinedIn(flood, "solo").size).toBe(0);
   });
+
+  it("ignores side-events: self-reactions neither warm a key nor dilute a wave", () => {
+    // The badge path hands over the RAW batch, reactions included. A bot that
+    // reacts before it floods would otherwise date its keys early (no cohort
+    // chains) and stuff the wave's span with rows that render nothing.
+    const room = [msg("regular", "morning all", T0 - 600_000)];
+    const swarm: OpenedChat[] = [];
+    for (let i = 0; i < 10; i++) {
+      for (let j = 0; j < 5; j++) {
+        swarm.push(
+          msg(
+            `key${i}`,
+            `pitch ${String.fromCharCode(97 + i)}${String.fromCharCode(97 + j)} today`,
+            T0 + 700_000 + i * 90_000 + j * 60_000,
+          ),
+        );
+      }
+    }
+    const reactions = swarm.map((m, i) => ({
+      ...msg(m.author, "+", T0 - 300_000 + i * 1000),
+      kind: 7,
+    }));
+    const flagged = quarantinedIn([...room, ...swarm, ...reactions]);
+    expect(swarm.every((m) => flagged.has(m.rumorId))).toBe(true);
+    expect(flagged.has(room[0].rumorId)).toBe(false);
+    // The reactions themselves are not rows and are never in the verdict.
+    expect(reactions.some((m) => flagged.has(m.rumorId))).toBe(false);
+  });
 });

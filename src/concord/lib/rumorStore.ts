@@ -260,6 +260,18 @@ export function storedToOpenedChat(ev: NostrRumor, channelIdHex: string): Opened
 const CHAT_KINDS = [5, 7, 9, 1018, 1068, 1111, 1740, 3302, 8333, 9735, 31922, 31923, 31925];
 
 /**
+ * The chat kinds a reader sees as a COMPOSED row: message, poll, thread reply.
+ *
+ * The flood detector's notion of presence ({@link queryChannelFirstSeen})
+ * counts only these. "First heard" has to mean the author put a row in front
+ * of readers — a reaction, vote, edit or delete renders nothing and is the
+ * cheapest thing a key can emit, which makes it exactly what a warming bot
+ * reaches for: reacting to its own messages dated a sybil set as
+ * long-established without a reader ever seeing a thing.
+ */
+const SPEECH_KINDS = [9, 1068, 1111];
+
+/**
  * Drop rows whose NIP-40 `expiration` has passed (CORD-08 §3). Every chat read
  * applies this: the sweep ({@link sweepExpiredCommunityRumors}) physically
  * removes expired rows eventually, but a read between expiry and the next
@@ -312,6 +324,13 @@ export async function queryChannelRumors(
  * lose a protection or a precedent, never grant a flood immunity. (The origin
  * design this replaced had the opposite failure — a flood at the edge of what
  * the scan could see READ AS the channel's founding and exempted itself.)
+ *
+ * SPEECH ONLY ({@link SPEECH_KINDS}). An author is dated by their first
+ * visible row, never by side-events — otherwise presence is free to mint, and
+ * a bot that reacts to its own spam walks every key past the arrival rules
+ * before saying a word. Keeping side-events out of the FILTER also keeps them
+ * from spending the row cap: a reaction flood must not be able to push the
+ * precedent-bearing old rows out of the scan.
  */
 export async function queryChannelFirstSeen(
   communityIdHex: string,
@@ -321,7 +340,7 @@ export async function queryChannelFirstSeen(
   const events = await rumorStore(communityIdHex).query(
     [
       {
-        kinds: CHAT_KINDS,
+        kinds: SPEECH_KINDS,
         "#channel": [channelIdHex],
         since: Math.floor(opts.sinceMs / 1000),
         limit: opts.limit,
