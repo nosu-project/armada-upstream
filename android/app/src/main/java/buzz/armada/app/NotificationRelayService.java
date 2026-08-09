@@ -165,6 +165,47 @@ public class NotificationRelayService extends Service {
     // Most recent messages kept per room for the MessagingStyle expansion.
     private static final int MAX_MESSAGES_PER_ROOM = 8;
 
+    /**
+     * Alerting posts one room may fire inside {@link #ALERT_BURST_WINDOW_MS}
+     * before further messages post SILENTLY.
+     *
+     * A public Concord channel's write access is key possession (CORD-04 §1),
+     * so anyone holding an invite link can fill it — and a measured campaign
+     * ran 368 messages through one channel in half an hour, one every 3.4
+     * seconds. Every one of them reached here and alerted, which is a phone
+     * buzzing all night no matter what the timeline does about it: the fold in
+     * `floodCluster.ts` is a render-layer rule that this service, a second
+     * writer in another language, never sees.
+     *
+     * So the limit here is deliberately NOT a spam judgement. It is a ceiling
+     * on interruptions, and it holds whatever the messages say — no content is
+     * examined, nothing is classified, and a generator that writes better
+     * sentences gains nothing. Past the budget the room's notification is still
+     * POSTED and still accumulates its lines, so the tray shows what arrived
+     * and the count keeps climbing; it just stops making noise.
+     *
+     * Every attempt is recorded, not just the ones that alert, so a sustained
+     * flood keeps its own window full and stays quiet until it genuinely stops
+     * — otherwise the budget would refill mid-flood and buzz once per window
+     * for as long as the flood ran.
+     */
+    private static final int ALERT_BURST_MAX = 5;
+    /**
+     * Mentions get their own, smaller budget rather than breaking through.
+     *
+     * An @-ping is worth waking someone for, but `p` tags are attacker-chosen
+     * — a flood that tags every recipient would walk straight through an
+     * unconditional mention exemption, which is the one bypass that would make
+     * the rest of this pointless. A separate budget keeps a real mention
+     * audible while an ordinary flood exhausts only the message budget.
+     */
+    private static final int ALERT_BURST_MAX_MENTION = 3;
+    private static final long ALERT_BURST_WINDOW_MS = 120_000L;
+    /** Bound per room; entries older than the window are pruned on every check. */
+    private static final int ALERT_BURST_MAX_TRACKED = 256;
+    private final java.util.Map<String, java.util.ArrayDeque<Long>> alertBurst = new java.util.HashMap<>();
+    private final java.util.Map<String, java.util.ArrayDeque<Long>> mentionBurst = new java.util.HashMap<>();
+
     private static final long INITIAL_BACKOFF_MS = 1_000;
     private static final long MAX_BACKOFF_MS = 5 * 60 * 1_000;
     // A connection must survive this long before a subsequent failure resets
@@ -3257,11 +3298,14 @@ public class NotificationRelayService extends Service {
         if (!mention && roomKey != null && activeRoomKeys.contains(roomKey)) {
             return;
         }
+        // Past the room's alert budget the notification is still posted and
+        // still accumulates — it just stops making noise. See ALERT_BURST_MAX.
+        boolean alert = alertAllowed(roomKey, mention);
         // Post immediately without the avatar, then re-post with it once loaded
         // so image I/O never delays the notification.
         Bitmap cachedAvatar = senderPicture != null ? avatarCache.get(senderPicture) : null;
         postRoomMessage(community, roomKey, roomTitle, url, senderPubkey, senderName,
-                cachedAvatar, text, timestampMs, /*avatarRefresh=*/false, /*alert=*/true);
+                cachedAvatar, text, timestampMs, /*avatarRefresh=*/false, alert);
 
         if (senderPicture != null && !senderPicture.isEmpty() && cachedAvatar == null) {
             fetchAvatar(senderPicture, bmp -> {
@@ -3275,6 +3319,34 @@ public class NotificationRelayService extends Service {
                 }
             });
         }
+    }
+
+    /**
+     * Whether this room may make NOISE for one more message, spending from the
+     * per-room budget described at {@link #ALERT_BURST_MAX}. Messages and
+     * mentions draw on separate budgets.
+     *
+     * Called once per notified message on the relay thread (the same thread
+     * that owns every other field here), so the maps need no synchronization.
+     */
+    private boolean alertAllowed(String roomKey, boolean mention) {
+        if (roomKey == null) return true;
+        java.util.Map<String, java.util.ArrayDeque<Long>> budget = mention ? mentionBurst : alertBurst;
+        java.util.ArrayDeque<Long> times = budget.get(roomKey);
+        if (times == null) {
+            times = new java.util.ArrayDeque<>();
+            budget.put(roomKey, times);
+        }
+        long now = System.currentTimeMillis();
+        while (!times.isEmpty() && now - times.peekFirst() > ALERT_BURST_WINDOW_MS) {
+            times.pollFirst();
+        }
+        boolean allow = times.size() < (mention ? ALERT_BURST_MAX_MENTION : ALERT_BURST_MAX);
+        // Recorded whether or not it alerted — that is what keeps a sustained
+        // flood's window full, and quiet, until the flood actually stops.
+        times.addLast(now);
+        while (times.size() > ALERT_BURST_MAX_TRACKED) times.pollFirst();
+        return allow;
     }
 
     /**

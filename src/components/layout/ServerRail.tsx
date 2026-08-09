@@ -1,4 +1,4 @@
-import { Bluetooth, Compass, FolderOpen, Headphones, Lock, LogOut, MessageSquare, PanelLeftDashed, Plus, Settings, Trash2 } from "lucide-react";
+import { Bluetooth, Compass, FolderOpen, Headphones, Lock, LogOut, MailPlus, MessageSquare, PanelLeftDashed, Plus, Settings, Trash2 } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
@@ -32,6 +32,7 @@ import { useCommunityManagement } from "@/concord/hooks/useCommunityActions";
 import { useCommunity, useIsExcluded, useLiveCommunities } from "@/concord/hooks/useCommunityList";
 import { useChannels, useControlFold } from "@/concord/hooks/useControlPlane";
 import { useConcordUnread } from "@/concord/hooks/useConcordUnread";
+import { useInviteInbox } from "@/concord/hooks/useDirectInvites";
 import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDmPeerUnread, useHasUnreadDMs } from "@/hooks/useDirectMessages";
@@ -1197,6 +1198,10 @@ function ServerRailInner({
   const { user } = useCurrentUser();
   const { mesh } = useMeshTransport();
   const hasUnreadDMs = useHasUnreadDMs();
+  // Received Concord invites (CORD-05 §6). The rail entry appears only while
+  // some are pending — there's no history to browse once they're all
+  // accepted/declined — and badges the count not yet seen in the inbox.
+  const { items: inviteItems, unreadCount: inviteUnread } = useInviteInbox();
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const concord = useLiveCommunities();
   const [addOpen, setAddOpen] = useState(false);
@@ -1631,6 +1636,58 @@ function ServerRailInner({
             </TooltipTrigger>
             <RailTooltipContent side="right" className="font-medium">
               Direct messages
+            </RailTooltipContent>
+          </Tooltip>
+        )}
+
+        {/* Received encrypted-community invites (CORD-05 §6). Shown only while
+            some are pending; badges the count not yet seen in the inbox. */}
+        {user && inviteItems.length > 0 && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <NavLink
+                to="/invites"
+                aria-label="Invites"
+                onClick={onNavigate}
+                className="group relative flex items-center justify-center shrink-0"
+              >
+                <span
+                  className={cn(
+                    "absolute -left-2 w-[3px] bg-primary transition-all",
+                    "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
+                    "group-aria-[current=page]:h-12 group-aria-[current=page]:opacity-100",
+                  )}
+                />
+                <span
+                  className={cn(
+                    "relative block size-12 transition-all duration-150",
+                    "group-aria-[current=page]:[filter:drop-shadow(0_0_3px_hsl(var(--primary)/0.6))]",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "flex items-center justify-center size-12 clip-corner-lg transition-all duration-150",
+                      "bg-muted text-success opacity-60 saturate-50",
+                      "group-hover:opacity-100 group-hover:saturate-100",
+                      "group-aria-[current=page]:opacity-100 group-aria-[current=page]:saturate-100",
+                    )}
+                  >
+                    <MailPlus className="size-5" />
+                  </span>
+                  {/* Unread invite count (hidden on the active invites view). */}
+                  {inviteUnread > 0 && (
+                    <span
+                      className="absolute -top-1 -right-1 z-10 flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold leading-none ring-2 ring-background group-aria-[current=page]:hidden"
+                      aria-label={`${inviteUnread} new invite${inviteUnread === 1 ? "" : "s"}`}
+                    >
+                      {inviteUnread}
+                    </span>
+                  )}
+                </span>
+              </NavLink>
+            </TooltipTrigger>
+            <RailTooltipContent side="right" className="font-medium">
+              Invites
             </RailTooltipContent>
           </Tooltip>
         )}

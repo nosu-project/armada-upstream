@@ -20,6 +20,7 @@ import { backfillStore, LOAD_OLDER_MAX_PAGES, setChannelSyncContext } from "@/co
 import { KIND_COMMENT, KIND_DELETE, KIND_MESSAGE, KIND_POLL, KIND_REACTION, KIND_SEAL_ENCRYPTED } from "@/concord/lib/kinds";
 import {
   clearChannelExhausted,
+  queryChannelFirstSeen,
   queryChannelRumors,
   readChannelCursor,
   sweepExpiredCommunityRumors,
@@ -57,6 +58,19 @@ const deletedKey = (channelIdHex: string | null) => ["concord", "msg-deleted", c
  * Sized accordingly; the rumor cache serves re-reads with no decrypt.
  */
 const WINDOW_SIZE = 100;
+
+/**
+ * How far back the flood detector's channel-history read looks, and its row cap
+ * (see `queryChannelFirstSeen`).
+ *
+ * A time window rather than a row count, because what the detector needs is the
+ * QUIET before a flood, and a row count spends itself on the flood. Seven days
+ * so a weekend-quiet channel still has its regulars on the map when a Monday
+ * flood arrives; the cap then bounds the cost on a genuinely busy channel,
+ * where losing the map's oldest end costs a protection, never grants immunity.
+ */
+const FLOOD_HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const FLOOD_HISTORY_MAX_ROWS = 4000;
 
 const EMPTY_RAW: OpenedChat[] = [];
 
@@ -400,14 +414,38 @@ export function useChannelTimeline(
     initialData: [],
   }).data;
 
+  // Who was already in this CHANNEL, which the rendered window cannot say: a
+  // flood large enough to matter fills `WINDOW_SIZE` completely and every
+  // author in it then reads as new-together (see `queryChannelFirstSeen`).
+  // One indexed range read per channel open. It does NOT need to chase the
+  // flood live — new arrivals are dated by the batch itself, and an author's
+  // first-seen only ever moves earlier — but a slow refresh keeps a long
+  // session's map from aging out entirely.
+  const firstSeen = useQuery({
+    ...STORE_READ,
+    queryKey: ["concord-channel-first-seen", community?.idHex ?? null, channelIdHex],
+    queryFn: ({ signal }) =>
+      queryChannelFirstSeen(community!.idHex, channelIdHex!, {
+        sinceMs: Date.now() - FLOOD_HISTORY_WINDOW_MS,
+        limit: FLOOD_HISTORY_MAX_ROWS,
+        signal,
+      }),
+    enabled: !!community?.idHex && !!channelIdHex,
+    staleTime: 5 * 60_000,
+    refetchInterval: 5 * 60_000,
+  }).data;
+
   const folded: FoldedTimeline = useMemo(() => {
-    const result = foldTimeline(query.data ?? [], moderation, { self: readingUser?.pubkey });
+    const result = foldTimeline(query.data ?? [], moderation, {
+      ...(readingUser?.pubkey !== undefined ? { self: readingUser.pubkey } : {}),
+      ...(firstSeen ? { firstSeen } : {}),
+    });
     if (optimisticDeleted && optimisticDeleted.length > 0) {
       const hidden = new Set(optimisticDeleted);
       return { ...result, messages: result.messages.filter((m) => !hidden.has(m.rumorId)) };
     }
     return result;
-  }, [query.data, moderation, optimisticDeleted, readingUser?.pubkey]);
+  }, [query.data, moderation, optimisticDeleted, readingUser?.pubkey, firstSeen]);
 
   return {
     /** The folded, moderated timeline + reaction tallies. */

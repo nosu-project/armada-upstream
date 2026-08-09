@@ -43,4 +43,15 @@ export function concordThreadReadKey(rootId: string): string {
   return `c2t:${rootId}`;
 }
 
+/**
+ * Stable key for the direct-invite inbox's last-seen stamp. A single
+ * high-water mark for the whole inbox (not per-invite): opening the inbox marks
+ * every received invite as seen, so the rail badge clears. The read-state map
+ * is synced to the account's own encrypted settings, so this needs no pubkey in
+ * the key — a different account reads a different map.
+ */
+export function concordInviteReadKey(): string {
+  return "c2inv";
+}
+
 export const ReadStateContext = createContext<ReadStateContextType | undefined>(undefined);

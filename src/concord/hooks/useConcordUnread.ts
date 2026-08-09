@@ -3,6 +3,7 @@ import { useCallback, useMemo } from "react";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useCommunityRumors } from "@/concord/hooks/useCommunityRumors";
+import { floodClusters } from "@/concord/lib/floodCluster";
 import { KIND_MESSAGE } from "@/concord/lib/kinds";
 import type { Channel } from "@/concord/lib/types";
 import { concordReadKey, useReadState } from "@/hooks/useReadState";
@@ -59,6 +60,15 @@ export function useConcordUnread(
     const next: Record<string, ConcordUnread> = {};
     for (const [idHex, rumors] of rumorsByChannel) {
       const lastRead = readState[concordReadKey(idHex)] ?? 0;
+      // A visual flood renders as ONE collapsed row, so counting its members
+      // here would badge a channel — and on a big enough wave, every channel in
+      // the community — for something the reader will see as a single line they
+      // did not ask for. The fold is the render-layer answer to a flood; a
+      // badge that still fires is the same interruption by another route.
+      const quarantined = floodClusters(
+        [...rumors].sort((a, b) => a.ms - b.ms),
+        pubkey !== undefined ? { self: pubkey } : {},
+      );
       let latest = 0;
       let latestMention = 0;
       for (const r of rumors) {
@@ -67,6 +77,7 @@ export function useConcordUnread(
         // ...nor from someone muted: the timeline won't render their message,
         // so a badge counting it would be one the channel can never clear.
         if (mutedPubkeys.has(r.author)) continue;
+        if (quarantined.has(r.rumorId)) continue;
         if (r.createdAt > latest) latest = r.createdAt;
         if (r.createdAt > latestMention && r.tags.some(([n, v]) => n === "p" && v === pubkey)) {
           latestMention = r.createdAt;

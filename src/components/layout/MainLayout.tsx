@@ -2,7 +2,7 @@ import { Outlet } from "react-router-dom";
 
 import { AppsProvider } from "@/components/AppsProvider";
 import { CallProvider } from "@/components/CallProvider";
-import { DirectInvitesPrompt } from "@/concord/components/DirectInvitesPrompt";
+import { DirectInviteNotifier } from "@/concord/components/DirectInviteNotifier";
 import { QuickSwitcher } from "@/components/QuickSwitcher";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { useRegisterAllStreamKeys } from "@/concord/hooks/useStreamAuth";
@@ -39,7 +39,7 @@ export function MainLayout() {
             CallProvider's row — exactly where the page-owned rail sat. */}
         <ServerRail variant="shell" />
         <Outlet />
-        <DirectInvitesPrompt />
+        <DirectInviteNotifier />
         <QuickSwitcher />
       </AppsProvider>
     </CallProvider>

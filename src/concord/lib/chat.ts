@@ -331,6 +331,12 @@ export function foldTimeline(
      * it is only more eager, never wrong.
      */
     self?: string;
+    /**
+     * The CHANNEL's author history (`queryChannelFirstSeen`). Without it the
+     * flood detector can only see the rendered window, which a flood large
+     * enough to matter has already filled — see `FloodOptions.firstSeen`.
+     */
+    firstSeen?: ReadonlyMap<string, number>;
   },
 ): FoldedTimeline {
   const byId = new Map<string, OpenedChat>();
@@ -590,7 +596,10 @@ export function foldTimeline(
 
   return {
     messages,
-    quarantined: floodClusters(messages, opts?.self !== undefined ? { self: opts.self } : {}),
+    quarantined: floodClusters(messages, {
+      ...(opts?.self !== undefined ? { self: opts.self } : {}),
+      ...(opts?.firstSeen !== undefined ? { firstSeen: opts.firstSeen } : {}),
+    }),
     reactions,
     zaps,
     pollVotes,

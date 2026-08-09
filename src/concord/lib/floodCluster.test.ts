@@ -14,6 +14,8 @@ import { describe, expect, it } from "vitest";
 
 import type { OpenedChat } from "@/concord/lib/chat";
 import {
+  FLOOD_COHORT_AUTHORS,
+  FLOOD_COHORT_TAIL_MS,
   FLOOD_MIN_MESSAGES,
   FLOOD_WINDOW_MS,
   floodClusters,
@@ -392,5 +394,117 @@ describe("floodClusters — a rotating campaign", () => {
       msg("chatty", "here is the agenda for the meeting later today, please read it", T0 + i * 600_000),
     );
     expect(floodClusters(sorted(solo)).size).toBe(0);
+  });
+});
+
+/**
+ * The cohort rule — the one that reads no content at all.
+ *
+ * Every fixture here uses content that is UNIQUE per message and too short to
+ * be echo-eligible, so nothing in the file's three content rules can fire and
+ * what is being measured is only the cohort logic. That is also the attack it
+ * exists for: a slot-filling generator emits no two identical messages.
+ */
+describe("floodClusters — a cohort that drowns the channel", () => {
+  /** Past FLOOD_COHORT_PRECEDENT_MS, so the founder is precedent for the cohort. */
+  const AFTER_HISTORY = 700_000;
+  /** Distinct, wordless-to-the-content-rules filler. */
+  const uniq = (i: number, j: number) =>
+    `hello ${String.fromCharCode(97 + i)}${String.fromCharCode(97 + j)}zz`;
+
+  /** A founder, then `authors` keys arriving 90s apart posting `each` messages 60s apart. */
+  function conveyor(authors: number, each: number, from = T0 + AFTER_HISTORY) {
+    const out = [msg("founder", "morning everyone", T0)];
+    for (let i = 0; i < authors; i++) {
+      for (let j = 0; j < each; j++) {
+        out.push(msg(`key${i}`, uniq(i, j), from + i * 90_000 + j * 60_000));
+      }
+    }
+    return sorted(out);
+  }
+
+  it("folds a conveyor of keys whose every message is different", () => {
+    const evs = conveyor(10, 5);
+    const flagged = floodClusters(evs);
+    // Every cohort message, and never the founder's.
+    expect(flagged.size).toBe(50);
+    expect(evs.filter((e) => e.author === "founder").every((e) => !flagged.has(e.rumorId))).toBe(true);
+  });
+
+  it("leaves an influx alone while the regulars are still talking", () => {
+    // The same ten newcomers, but the room they walked into is busy. Newcomers
+    // are 50 of 74 messages — under FLOOD_COHORT_SHARE — so this reads as
+    // growth, which is what an invite posted somewhere busy actually looks like.
+    const evs = conveyor(10, 5);
+    for (let r = 0; r < 3; r++) {
+      for (let k = 0; k < 8; k++) {
+        evs.push(msg(`reg${r}`, `regular chatter ${r} ${String.fromCharCode(97 + k)}`, T0));
+        evs.push(msg(`reg${r}`, `still here ${r} ${String.fromCharCode(97 + k)}`, T0 + AFTER_HISTORY + k * 100_000));
+      }
+    }
+    expect(floodClusters(sorted(evs)).size).toBe(0);
+  });
+
+  it("says nothing when the channel has no history to be new relative to", () => {
+    // The same crowd, arriving in the channel's opening minutes. Everyone is
+    // new because the channel is new; there is no cohort, only a launch.
+    expect(floodClusters(conveyor(10, 5, T0 + 60_000)).size).toBe(0);
+  });
+
+  it("needs a crowd, not a handful of newcomers", () => {
+    expect(floodClusters(conveyor(FLOOD_COHORT_AUTHORS - 1, 5)).size).toBe(0);
+  });
+
+  /** Three keys, nine messages each, interleaved `gapMs` apart. */
+  function trio(gapMs: number) {
+    const out = [msg("founder", "morning everyone", T0)];
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 9; j++) {
+        out.push(msg(`key${i}`, uniq(i, j), T0 + AFTER_HISTORY + (j * 3 + i) * gapMs));
+      }
+    }
+    return sorted(out);
+  }
+
+  it("folds three keys hammering, long before an eighth would arrive", () => {
+    // The live campaign as it looked 78 seconds in: share 1.00, ~19 messages a
+    // minute, three keys so far, in a channel that existed before them. Waiting
+    // for breadth cost four more minutes and sixty more messages while the
+    // flood was already unmistakable.
+    expect(floodClusters(trio(3_400)).size).toBe(27);
+  });
+
+  it("leaves the same three keys alone at conversation pace", () => {
+    // Identical in every other respect — same keys, same arrival, same share,
+    // same message count. Nine messages each across half an hour is people
+    // talking, and three is far short of what breadth alone carries.
+    expect(floodClusters(trio(70_000)).size).toBe(0);
+  });
+
+  it("keeps the row of someone who arrives mid-flood and says one thing", () => {
+    // THE false-positive that matters: a real person follows an invite into a
+    // channel under attack. They arrive inside the cohort's window and cannot
+    // be told from it by arrival alone — but they have flooded nothing.
+    const evs = conveyor(10, 5);
+    const joiner = msg("joiner", "hi all, glad to be here", T0 + AFTER_HISTORY + 300_000);
+    evs.push(joiner);
+    expect(floodClusters(sorted(evs)).has(joiner.rumorId)).toBe(false);
+  });
+
+  it("releases once the cohort goes quiet", () => {
+    // The wave ends at FLOOD_COHORT_TAIL_MS of silence, so a key that comes
+    // back later to say something ordinary is outside it and renders.
+    const evs = conveyor(10, 5);
+    const later = Array.from({ length: 5 }, (_, i) =>
+      msg(`key${i}`, `following up on that ${String.fromCharCode(97 + i)}`, T0 + AFTER_HISTORY + FLOOD_COHORT_TAIL_MS + 3_600_000 + i * 60_000),
+    );
+    const flagged = floodClusters(sorted([...evs, ...later]));
+    expect(later.every((e) => !flagged.has(e.rumorId))).toBe(true);
+  });
+
+  it("never folds the reading user's own messages", () => {
+    const evs = conveyor(10, 5);
+    const flagged = floodClusters(evs, { self: "key3" });
+    expect(evs.filter((e) => e.author === "key3").every((e) => !flagged.has(e.rumorId))).toBe(true);
   });
 });

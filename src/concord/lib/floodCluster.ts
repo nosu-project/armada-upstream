@@ -122,6 +122,18 @@ export interface FloodOptions {
    * what someone just typed reads as the client having eaten it.
    */
   self?: string;
+  /**
+   * When each author was first heard IN THIS CHANNEL, from the store
+   * (`queryChannelFirstSeen`) rather than from this batch.
+   *
+   * The batch is a rendering window, not the channel's life, and the cohort
+   * rule's whole question — was this crowd already here — is unanswerable from
+   * a window a flood has filled. Supplied values only ever move an author's
+   * arrival EARLIER than the batch shows, or add authors the window pushed
+   * out; an author the store hasn't got is still dated by the batch, so a
+   * partial answer is safe.
+   */
+  firstSeen?: ReadonlyMap<string, number>;
 }
 
 const URL_RUN = /https?:\/\/\S+/g;
@@ -299,6 +311,15 @@ export function floodClusters(messages: readonly OpenedChat[], opts: FloodOption
     const seen = firstSeen.get(ev.author);
     if (seen === undefined || ev.ms < seen) firstSeen.set(ev.author, ev.ms);
   }
+  // The store knows the channel; the batch only knows the window. Merged
+  // entries can only move an arrival earlier or add an author the window
+  // pushed out — never date anyone later — so a partial map is safe.
+  if (opts.firstSeen) {
+    for (const [author, ms] of opts.firstSeen) {
+      const seen = firstSeen.get(author);
+      if (seen === undefined || ms < seen) firstSeen.set(author, ms);
+    }
+  }
 
   const byShape = new Map<string, Bucket>();
   for (let i = 0; i < messages.length; i++) {
@@ -366,8 +387,226 @@ export function floodClusters(messages: readonly OpenedChat[], opts: FloodOption
     }
   }
   markArrivalBurst(messages, firstSeen, flagged, opts.self);
+  markCohortFlood(messages, firstSeen, flagged, opts.self);
   sweepParticipants(messages, flagged, opts.self);
   return flagged;
+}
+
+/** Keys arriving within this of the previous one chain into a single cohort. */
+export const FLOOD_COHORT_WINDOW_MS = 600_000;
+/**
+ * Keys a wave needs before it folds on BREADTH alone, at any pace.
+ *
+ * A slow, broad cohort is a flood too — fifteen keys trickling through an hour
+ * while nobody else speaks — so this path asks nothing about rate.
+ */
+export const FLOOD_COHORT_AUTHORS = 8;
+/**
+ * …or, for a wave running at {@link FLOOD_COHORT_RATE_PER_MIN}, this many.
+ *
+ * Breadth alone is far too slow to be the only trigger, and measuring it
+ * against the live campaign is what showed why: its share was 1.00 and its
+ * pace ~19 messages a minute from the very first message, but its keys were
+ * introduced one every forty seconds, so an eight-key bar was not met until
+ * eighty messages and four and a half minutes had gone by. The whole flood was
+ * unmistakable within thirty seconds and the rule sat silent through it.
+ *
+ * Pace is what makes it adaptive. Three keys that arrived together, sustaining
+ * ten messages a minute, drowning everyone else, in a channel that existed
+ * before them — that is not a conversation, and waiting for the eighth key to
+ * confirm it only costs the reader the five minutes it takes to arrive.
+ */
+export const FLOOD_COHORT_RATE_AUTHORS = 3;
+/** The pace that lets {@link FLOOD_COHORT_RATE_AUTHORS} stand in for breadth. */
+export const FLOOD_COHORT_RATE_PER_MIN = 10;
+/** Messages one wave of a cohort must carry before it reads as a flood. */
+export const FLOOD_COHORT_MESSAGES = 24;
+/**
+ * Messages a cohort member must itself have carried in the wave before its own
+ * rows fold. The drowning is collective; the fold is individual.
+ *
+ * This is where the honest newcomer lives. Someone who follows an invite into a
+ * channel that happens to be under attack arrives inside the cohort's window
+ * and cannot be told apart from it by arrival alone — but they say one thing,
+ * or two, and a key that said two things has not flooded anything. Without this
+ * the rule folds exactly the person it most needs to keep, on their first
+ * message, which is the worst row in the timeline to get wrong.
+ *
+ * It leaves a gap: a cohort where every key posts once or twice is not folded
+ * here. That gap is {@link markArrivalBurst}'s shape and is deliberately its
+ * job — many keys, one message apiece, gone again — and the division is what
+ * lets each rule keep a bar the other would have to lower.
+ */
+export const FLOOD_COHORT_MIN_PER_AUTHOR = 3;
+/**
+ * Share of the channel a cohort's wave must occupy before it folds.
+ *
+ * THE discriminator between a flood and an influx, and the reason this rule can
+ * be content-free. When an invite is posted somewhere busy the regulars are
+ * still talking — the newcomers are a fraction of the room. When a sybil set
+ * arrives the room is drowned: the live campaign this rule is measured against
+ * ran 368 of the channel's 370 messages.
+ */
+export const FLOOD_COHORT_SHARE = 0.75;
+/** Silence that ends a cohort's wave — the "until it stops" of the rule. */
+export const FLOOD_COHORT_TAIL_MS = 3_600_000;
+/**
+ * How long before a cohort's arrival someone OUTSIDE it must have spoken — the
+ * precedent that makes the cohort judgeable at all.
+ *
+ * The boundary {@link markArrivalBurst} guards with `lo === 0`, restated per
+ * cohort: with no one here first, a crowd of first-time keys is a launch, not
+ * an invasion, and the rule stays silent. It is a RELATIVE test against each
+ * cohort on purpose. An earlier draft anchored it to the earliest message the
+ * scan could see and exempted everyone near that "origin" as a founder — and
+ * a flood hitting a channel that had been quiet for a day WAS the origin, so
+ * its first ten minutes of keys inherited founder immunity and the fold sat
+ * dead until enough history was scrolled in to push them out. Precedent has no
+ * anchor to corrupt: the founder who said anything ten minutes before the
+ * crowd arrived is precedent enough, at any window depth, live.
+ */
+export const FLOOD_COHORT_PRECEDENT_MS = 600_000;
+
+/**
+ * Rule 4: a crowd of keys that arrived together and then drowned the channel.
+ *
+ * The rule for a flood whose CONTENT is machine-generated per message. A
+ * slot-filling grammar (`hey gang! my {relation} would not stop talking about
+ * {topic}`) emits no two identical messages — the live campaign this is
+ * measured against produced 370 distinct shapes from 370 messages, so every
+ * bucket in this file was a singleton, no template ever repeated, and rules 1
+ * and 2 could not fire at all. Improving the text costs the attacker one more
+ * phrase list; there is no version of content matching that stays ahead of that
+ * for long.
+ *
+ * So this rule reads none of it. It asks how much of the channel is coming from
+ * keys that had not earned a place in it, which is a question the generator
+ * cannot answer differently by writing better sentences. Evading it costs
+ * either patience (warm the keys first — see the note on an adaptive attacker
+ * below) or silence, and silence is the outcome we want.
+ *
+ * Three things keep it off an honest influx:
+ *
+ * - The cohort must be a CROWD ({@link FLOOD_COHORT_AUTHORS}) that arrived
+ *   together, chained arrival-to-arrival so a conveyor that introduces a key
+ *   every 40 seconds for half an hour is one cohort rather than thirty
+ *   unremarkable singletons.
+ * - Its wave must DROWN the channel ({@link FLOOD_COHORT_SHARE}) — the
+ *   discriminator described there.
+ * - Someone outside it must have spoken before it arrived
+ *   ({@link FLOOD_COHORT_PRECEDENT_MS}), or this is a launch.
+ *
+ * Unlike {@link markArrivalBurst} this does NOT require a key's whole presence
+ * to sit inside the arrival window. That test is satisfied exactly once per
+ * key, which is what let the observed campaign through: its keys each talked
+ * for five to seven minutes, so by the time they were flooding they were no
+ * longer new. Cohort membership is fixed at ARRIVAL and the wave is bounded by
+ * the cohort going quiet ({@link FLOOD_COHORT_TAIL_MS}) instead — so a key that
+ * comes back tomorrow to say something ordinary is outside the wave and renders
+ * normally. Nothing here brands a key permanently, and nothing here is a drop.
+ */
+function markCohortFlood(
+  messages: readonly OpenedChat[],
+  firstSeen: ReadonlyMap<string, number>,
+  flagged: Set<string>,
+  self: string | undefined,
+): void {
+  // Only authors with rows in THIS batch can join a cohort (an author the
+  // store remembers but the window doesn't hold has nothing to fold), but
+  // their arrival time is the merged map's — a regular caught inside a flood
+  // window arrives at their real, old first-seen and chains into no cohort.
+  const inBatch = new Set<string>();
+  for (const ev of messages) inBatch.add(ev.author);
+  const arrivals = [...firstSeen]
+    .filter(([author]) => author !== self && inBatch.has(author))
+    .sort((a, b) => a[1] - b[1]);
+  // The lower of the two bars — whether a wave clears the breadth path or the
+  // pace one is decided per wave, in markCohortWaves.
+  if (arrivals.length < FLOOD_COHORT_RATE_AUTHORS) return;
+
+  // Every arrival, batch-held or store-remembered: the precedent scan below
+  // needs the authors the window pushed out, which is exactly the reading a
+  // flood corrupts when precedent is judged from the batch alone.
+  const allArrivals = [...firstSeen.values()].sort((a, b) => a - b);
+
+  for (let start = 0; start < arrivals.length; ) {
+    let end = start;
+    while (
+      end + 1 < arrivals.length &&
+      arrivals[end + 1][1] - arrivals[end][1] <= FLOOD_COHORT_WINDOW_MS
+    ) {
+      end++;
+    }
+    if (end - start + 1 >= FLOOD_COHORT_RATE_AUTHORS) {
+      const cohort = new Set(arrivals.slice(start, end + 1).map(([a]) => a));
+      // Precedent: anyone at all — the reader included — arrived early enough
+      // before this cohort to prove the channel existed without it.
+      const bar = arrivals[start][1] - FLOOD_COHORT_PRECEDENT_MS;
+      if (allArrivals[0] <= bar) {
+        markCohortWaves(messages, cohort, flagged);
+      }
+    }
+    start = end + 1;
+  }
+}
+
+/** First index whose ms is >= `ms` (messages are ms-ascending). */
+function lowerBound(messages: readonly OpenedChat[], ms: number): number {
+  let lo = 0;
+  let hi = messages.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (messages[mid].ms < ms) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/**
+ * Fold each of a cohort's waves that both carries enough messages and drowns
+ * the channel while it runs. A wave ends where the cohort falls silent for
+ * {@link FLOOD_COHORT_TAIL_MS}.
+ */
+function markCohortWaves(
+  messages: readonly OpenedChat[],
+  members: ReadonlySet<string>,
+  flagged: Set<string>,
+): void {
+  const idx: number[] = [];
+  for (let i = 0; i < messages.length; i++) if (members.has(messages[i].author)) idx.push(i);
+
+  let waveStart = 0;
+  for (let k = 1; k <= idx.length; k++) {
+    const ends = k === idx.length || messages[idx[k]].ms - messages[idx[k - 1]].ms > FLOOD_COHORT_TAIL_MS;
+    if (!ends) continue;
+    const wave = idx.slice(waveStart, k);
+    waveStart = k;
+    if (wave.length < FLOOD_COHORT_MESSAGES) continue;
+
+    // Everything the channel carried while the wave ran, the cohort included.
+    const from = messages[wave[0]].ms;
+    const to = messages[wave[wave.length - 1]].ms;
+    const total = lowerBound(messages, to + 1) - lowerBound(messages, from);
+    if (wave.length < total * FLOOD_COHORT_SHARE) continue;
+
+    // The wave is the evidence; each key's own volume is what folds it.
+    const carried = new Map<string, number>();
+    for (const i of wave) carried.set(messages[i].author, (carried.get(messages[i].author) ?? 0) + 1);
+
+    // Breadth OR pace (see FLOOD_COHORT_RATE_AUTHORS). A wave spanning no time
+    // at all is every message sharing one timestamp — treated as infinitely
+    // fast rather than dividing by zero, which is the right reading of it.
+    const minutes = (to - from) / 60_000;
+    const perMinute = minutes > 0 ? wave.length / minutes : Number.POSITIVE_INFINITY;
+    const broad = carried.size >= FLOOD_COHORT_AUTHORS;
+    const fast = carried.size >= FLOOD_COHORT_RATE_AUTHORS && perMinute >= FLOOD_COHORT_RATE_PER_MIN;
+    if (!broad && !fast) continue;
+    for (const i of wave) {
+      if ((carried.get(messages[i].author) ?? 0) >= FLOOD_COHORT_MIN_PER_AUTHOR) {
+        flagged.add(messages[i].rumorId);
+      }
+    }
+  }
 }
 
 /** Messages by first-time keys inside {@link FLOOD_BURST_WINDOW_MS} to read as an arrival. */
