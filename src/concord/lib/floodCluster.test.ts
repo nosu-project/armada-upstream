@@ -575,6 +575,24 @@ describe("floodClusters — untrusted keys drowning the channel (rule 6)", () =>
     expect(floodClusters(sorted(out)).size).toBe(0);
   });
 
+  it("folds a total nuke once the room provably predates it (establishedSinceMs)", () => {
+    // The launch shape above — no in-channel speaker precedes the flood — but
+    // the community itself is old (a control-plane rotation long before). That
+    // makes it an invasion, not a launch, so the drown rule fires. This is the
+    // one precedent a total nuke leaves: every early speaker is a drowner.
+    const out = [msg("founder", "first post in the brand new channel here", T0)];
+    let t = T0 + 30_000;
+    for (let j = 0; j < 12; j++) for (let i = 0; i < 3; i++) out.push(msg(`spam${i}`, sentence(), (t += 3_000)));
+    const evs = sorted(out);
+    // No precedent → nothing folds (as the prior test asserts).
+    expect(floodClusters(evs).size).toBe(0);
+    // Room provably existed 20 min before the wave → the flood folds.
+    const flagged = floodClusters(evs, { establishedSinceMs: T0 - 20 * 60_000 });
+    expect(evs.filter((e) => e.author.startsWith("spam")).every((e) => flagged.has(e.rumorId))).toBe(true);
+    // A room age INSIDE the precedent margin is still a launch — no fold.
+    expect(floodClusters(evs, { establishedSinceMs: T0 - 60_000 }).size).toBe(0);
+  });
+
   it("spares a key the reader has replied to — earned trust is immunity", () => {
     const evs = filibuster(3, 15);
     const target = evs.find((e) => e.author === "spam0")!;
@@ -637,6 +655,40 @@ describe("floodClusters — untrusted keys drowning the channel (rule 6)", () =>
     const evs = filibuster(3, 12);
     const ids = new Set(evs.map((e) => e.rumorId));
     for (const id of floodClusters(evs)) expect(ids.has(id)).toBe(true);
+  });
+
+  it("never folds staff, even a moderator posting like a flood", () => {
+    // Authority to moderate outranks anything the heuristic infers: a muzzled
+    // moderator is worse than a visible flood. `spam0` here holds the mod role.
+    const evs = filibuster(3, 15);
+    const staff = (a: string) => a === "spam0";
+    const flagged = floodClusters(evs, { staff });
+    expect(evs.filter((e) => e.author === "spam0").every((e) => !flagged.has(e.rumorId))).toBe(true);
+    // The other two, with no authority, still fold.
+    expect(evs.filter((e) => e.author === "spam1").some((e) => flagged.has(e.rumorId))).toBe(true);
+  });
+
+  it("gives staff immunity on the badge path too, with no reader", () => {
+    // Staff are seeded regardless of `self`, so the community-wide badge fold
+    // (which has no reading user) still spares a moderator.
+    const evs = filibuster(3, 15);
+    const flagged = floodClusters(evs, { staff: (a) => a === "spam1" });
+    expect(evs.filter((e) => e.author === "spam1").every((e) => !flagged.has(e.rumorId))).toBe(true);
+  });
+
+  it("does not vouch outward: a mod replying to a spammer never immunizes them", () => {
+    // Staff immunity covers a moderator's OWN messages, not whomever they
+    // engage. Moderating a flood means replying to it, so an outbound staff
+    // vouch would immunize the flooder the instant a mod pushed back — the exact
+    // spam vector. Staff are seeded trusted but are not propagation roots.
+    const evs = filibuster(3, 15);
+    const s2 = evs.find((e) => e.author === "spam2")!;
+    const modReply = reply("spam0", s2, T0 + AFTER_HISTORY + 9_000_000); // staff -> spam2
+    const flagged = floodClusters(sorted([...evs, modReply]), { staff: (a) => a === "spam0" });
+    // spam2 still folds despite the mod's reply...
+    expect(evs.filter((e) => e.author === "spam2").some((e) => flagged.has(e.rumorId))).toBe(true);
+    // ...while the mod's own message stays immune.
+    expect(flagged.has(modReply.rumorId)).toBe(false);
   });
 });
 

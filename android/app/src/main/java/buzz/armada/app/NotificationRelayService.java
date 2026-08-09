@@ -3312,7 +3312,17 @@ public class NotificationRelayService extends Service {
         }
         // Past the room's alert budget the notification is still posted and
         // still accumulates — it just stops making noise. See ALERT_BURST_MAX.
-        boolean alert = alertAllowed(roomKey, mention);
+        //
+        // A message from someone the user FOLLOWS is never throttled to silence,
+        // and never draws on the budget. The ceiling defends against untrusted
+        // floods — a public Concord channel is writable by anyone holding the
+        // invite (CORD-04 §1) — whereas a follow is the reader's own statement of
+        // trust, the same seed the render-layer flood fold treats as a trust
+        // root (computeTrusted). `dmFollows` is the kind-3 follow set the config
+        // already carries; an empty set or an unknown sender just falls through
+        // to the ceiling, so the hint only ever relaxes it, never tightens.
+        boolean trusted = senderPubkey != null && dmFollows.contains(senderPubkey);
+        boolean alert = trusted || alertAllowed(roomKey, mention);
         // Post immediately without the avatar, then re-post with it once loaded
         // so image I/O never delays the notification.
         Bitmap cachedAvatar = senderPicture != null ? avatarCache.get(senderPicture) : null;

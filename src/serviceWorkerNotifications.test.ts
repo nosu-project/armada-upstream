@@ -287,6 +287,37 @@ describe("Web Push suppression", () => {
     expect(worker.showNotification).toHaveBeenCalledTimes(1);
   });
 
+  it("goes silent past the per-room interruption ceiling for one tag", async () => {
+    // A flood in one room reaches every device's push. Past the ceiling the
+    // worker still SHOWS each (iOS counts a silent push; the tray still updates)
+    // but stops making noise — the web mirror of the native ALERT_BURST_MAX.
+    // Distinct event ids (so the seen-ledger doesn't dedup them) sharing one
+    // collapse `tag` (so they draw on the same room budget).
+    const worker = loadWorker();
+    for (let i = 0; i < 7; i++) {
+      await worker.push({ scope: "group", event_id: `flood-${i}`, tag: "room-x" });
+    }
+    expect(worker.showNotification).toHaveBeenCalledTimes(7);
+    const opts = (i: number) =>
+      (worker.showNotification.mock.calls[i] as unknown as [string, { silent?: boolean }])[1];
+    // The first five alert; the sixth and seventh are silenced.
+    expect(opts(0).silent ?? false).toBe(false);
+    expect(opts(4).silent ?? false).toBe(false);
+    expect(opts(5).silent).toBe(true);
+    expect(opts(6).silent).toBe(true);
+  });
+
+  it("keeps a different room's budget independent", async () => {
+    const worker = loadWorker();
+    for (let i = 0; i < 6; i++) {
+      await worker.push({ scope: "group", event_id: `a-${i}`, tag: "room-a" });
+    }
+    // A first message in another room still alerts, unaffected by room-a's flood.
+    await worker.push({ scope: "group", event_id: "b-0", tag: "room-b" });
+    const last = (worker.showNotification.mock.calls.at(-1) as unknown as [string, { silent?: boolean }])[1];
+    expect(last.silent ?? false).toBe(false);
+  });
+
   it("increments the Home-Screen badge after displaying a push", async () => {
     const worker = loadWorker({ badging: true });
     await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dm" });

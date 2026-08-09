@@ -236,6 +236,14 @@ export interface ChatModeration {
    * bare lib folds (tests) keep notices; the app path always supplies it.
    */
   canSetTimer?: (author: string) => boolean;
+  /**
+   * Whether `author` is community staff (owner or a holder of a staff
+   * permission). The flood heuristic never folds staff — moderation authority
+   * is the community's own strongest statement of trust and a muzzled moderator
+   * is worse than a visible flood. Optional so bare lib folds skip it; the app
+   * path supplies it from the control fold.
+   */
+  isStaff?: (author: string) => boolean;
 }
 
 /** A tallied reaction: reactors (pubkey→rumorId) plus the NIP-30 custom-emoji URL (if any). */
@@ -337,6 +345,18 @@ export function foldTimeline(
      * enough to matter has already filled — see `FloodOptions.firstSeen`.
      */
     firstSeen?: ReadonlyMap<string, number>;
+    /**
+     * Whether an author is community staff, so the flood heuristic never folds
+     * a moderator (`FloodOptions.staff`). Optional: a fold without it is only
+     * more eager, never wrong.
+     */
+    staff?: (author: string) => boolean;
+    /**
+     * An unforgeable lower bound (ms) on the room's age, letting the drown rule
+     * fold a total nuke of an established community that leaves no in-channel
+     * precedent (`FloodOptions.establishedSinceMs`). Optional.
+     */
+    establishedSinceMs?: number;
   },
 ): FoldedTimeline {
   const byId = new Map<string, OpenedChat>();
@@ -599,6 +619,12 @@ export function foldTimeline(
     quarantined: floodClusters(messages, {
       ...(opts?.self !== undefined ? { self: opts.self } : {}),
       ...(opts?.firstSeen !== undefined ? { firstSeen: opts.firstSeen } : {}),
+      // Staff-immunity source, in preference order: an explicit override, else
+      // the moderation context the app already resolves for the delete checks.
+      ...((opts?.staff ?? moderation?.isStaff) !== undefined
+        ? { staff: opts?.staff ?? moderation?.isStaff }
+        : {}),
+      ...(opts?.establishedSinceMs !== undefined ? { establishedSinceMs: opts.establishedSinceMs } : {}),
     }),
     reactions,
     zaps,

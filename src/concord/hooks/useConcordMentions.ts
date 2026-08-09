@@ -1,8 +1,13 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
+import {
+  quarantineMemoryRevision,
+  recallQuarantined,
+  subscribeQuarantineMemory,
+} from "@/concord/lib/quarantineMemory";
 import { queryMentionRumors } from "@/concord/lib/rumorStore";
 import { openedToChatMsg } from "@/concord/hooks/useTransport";
 import type { Channel } from "@/concord/lib/types";
@@ -79,14 +84,37 @@ export function useConcordMentions(channels: Channel[], communityIdHex: string |
     staleTime: 0,
   });
 
-  // Outside the query so a mute takes effect without a re-scan of the store,
-  // and so `hasNew` below is derived from the same list the tab renders — a
-  // muted mention that still lit the badge would leave a dot the Mentions tab
-  // has nothing in it to clear.
-  const mentions = useMemo(
-    () => (mutedPubkeys.size === 0 ? allMentions : allMentions.filter((m) => !mutedPubkeys.has(m.pubkey))),
-    [allMentions, mutedPubkeys],
-  );
+  // Re-derive when the persisted quarantine warms or grows, so a mention the
+  // flood fold folded stops counting the moment the memory lands.
+  const memoryRev = useSyncExternalStore(subscribeQuarantineMemory, quarantineMemoryRevision);
+
+  // Outside the query so a mute (or a fold) takes effect without a re-scan of
+  // the store, and so `hasNew` below is derived from the same list the tab
+  // renders — a filtered mention that still lit the badge would leave a dot the
+  // Mentions tab has nothing in it to clear.
+  const mentions = useMemo(() => {
+    void memoryRev;
+    let list = mutedPubkeys.size === 0 ? allMentions : allMentions.filter((m) => !mutedPubkeys.has(m.pubkey));
+    // Drop mentions the flood fold quarantined in their channel: a folded flood
+    // that `p`-tags you must no more light the Mentions tab than it lights the
+    // channel badge (useConcordUnread). Live re-folding is impossible here — a
+    // `#p` scan across channels is not a channel batch the heuristic can judge —
+    // so this reads the DURABLE per-channel verdict the unread/timeline folds
+    // remember (quarantineMemory), which is the cross-session source of record.
+    // Each mention's `id` is its rumorId, unique across channels, so the union
+    // of every watched channel's remembered set is a sound membership test.
+    if (communityIdHex && channelIds.length > 0) {
+      let quarantined: Set<string> | undefined;
+      for (const idHex of channelIds) {
+        const remembered = recallQuarantined(communityIdHex, idHex);
+        if (!remembered) continue;
+        quarantined ??= new Set();
+        for (const id of remembered) quarantined.add(id);
+      }
+      if (quarantined && quarantined.size > 0) list = list.filter((m) => !quarantined.has(m.id));
+    }
+    return list;
+  }, [allMentions, mutedPubkeys, communityIdHex, channelIds, memoryRev]);
 
   // Re-scan the moment the wire ingests a rumor for any watched channel.
   useWireScopes((scopes) => {

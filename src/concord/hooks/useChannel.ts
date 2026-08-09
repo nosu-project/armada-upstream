@@ -37,7 +37,7 @@ import {
 } from "@/concord/lib/quarantineMemory";
 import { citationToTag, type AuthorityCitation } from "@/concord/lib/edition";
 import { citationSatisfied } from "@/concord/lib/control";
-import { canActOnMember, isAuthorized, Permissions } from "@/concord/lib/roles";
+import { canActOnMember, isAuthorized, isStaff, Permissions } from "@/concord/lib/roles";
 import { chatExpiresAt, messageExpirationOf } from "@/concord/lib/disappearing";
 import { consumeSend, isRateLimitedKind, SendRateLimitError } from "@/concord/lib/sendRateLimit";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal } from "@/concord/lib/stream";
@@ -132,6 +132,7 @@ export function useChatModeration(community: Community | undefined): ChatModerat
       // hidden, never trusted on faith.
       canSetTimer: (author: string) =>
         Boolean(folded && isAuthorized(folded.roster, author, folded.ownerHex, Permissions.MANAGE_METADATA)),
+      isStaff: (author: string) => Boolean(folded && isStaff(folded.roster, author, folded.ownerHex)),
     }),
     [folded, community, dissolvedAtMs],
   );
@@ -444,11 +445,39 @@ export function useChannelTimeline(
   // Re-fold when the persisted quarantine warms or grows (see quarantineMemory.ts).
   const memoryRev = useSyncExternalStore(subscribeQuarantineMemory, quarantineMemoryRevision);
 
+  // A lower bound on when this room existed, for the drown rule's precedent
+  // (see FloodOptions.establishedSinceMs) — what lets a TOTAL nuke fold, whose
+  // every early speaker is itself a drowner so the speaker source is empty.
+  // Two sources, oldest wins:
+  //   1. The oldest control-plane rotation time we hold (`HeldRoot.retiredAt`,
+  //      epoch-seconds → ms). Unforgeable — only a staff rekey publishes one —
+  //      but often absent (never-rekeyed community, or roots retired before the
+  //      field existed).
+  //   2. The earliest channel activity the STORE has observed (min over the
+  //      7-day `firstSeen` map). Always available once history loads; a channel
+  //      that already had messages this long ago is not launching now. It is
+  //      chat-plane-derived, so best-effort: a flood can push it EARLIER (which
+  //      only adds precedent), and evading needs every message's `created_at`
+  //      clamped into one sub-10-min window — which collapses the wave's own
+  //      timespan the pace gate reads. Preferred source is (1) when present.
+  const establishedSinceMs = useMemo(() => {
+    let oldest: number | undefined;
+    for (const r of community?.heldRoots ?? []) {
+      if (typeof r.retiredAt === "number") {
+        const ms = r.retiredAt * 1000;
+        if (oldest === undefined || ms < oldest) oldest = ms;
+      }
+    }
+    if (firstSeen) for (const ms of firstSeen.values()) if (oldest === undefined || ms < oldest) oldest = ms;
+    return oldest;
+  }, [community?.heldRoots, firstSeen]);
+
   const folded: FoldedTimeline = useMemo(() => {
     void memoryRev;
     const result = foldTimeline(query.data ?? [], moderation, {
       ...(readingUser?.pubkey !== undefined ? { self: readingUser.pubkey } : {}),
       ...(firstSeen ? { firstSeen } : {}),
+      ...(establishedSinceMs !== undefined ? { establishedSinceMs } : {}),
     });
     // What past sessions remember folding here. The live rules re-derive from
     // whatever context this session holds, and after a refresh that is only
@@ -460,6 +489,13 @@ export function useChannelTimeline(
     if (remembered) {
       quarantined = new Set(quarantined);
       for (const id of remembered) quarantined.add(id);
+      // A remembered verdict can predate the roster (or come from the badge
+      // path, which folds without one), so re-assert staff/self immunity over
+      // the merged set: a moderator's — or the reader's own — message must
+      // never be in the rendered quarantine, whatever a past session stored.
+      // (The fold already cleared them; this covers only the recall merge.)
+      const immune = (a: string) => a === readingUser?.pubkey || Boolean(moderation?.isStaff?.(a));
+      for (const m of result.messages) if (quarantined.has(m.rumorId) && immune(m.author)) quarantined.delete(m.rumorId);
     }
     const merged = quarantined === result.quarantined ? result : { ...result, quarantined };
     if (optimisticDeleted && optimisticDeleted.length > 0) {
@@ -467,7 +503,7 @@ export function useChannelTimeline(
       return { ...merged, messages: merged.messages.filter((m) => !hidden.has(m.rumorId)) };
     }
     return merged;
-  }, [query.data, moderation, optimisticDeleted, readingUser?.pubkey, firstSeen, community?.idHex, channelIdHex, memoryRev]);
+  }, [query.data, moderation, optimisticDeleted, readingUser?.pubkey, firstSeen, establishedSinceMs, community?.idHex, channelIdHex, memoryRev]);
 
   // Remember what this fold decided (merge-only), so the verdict survives the
   // session even when its evidence — history, arrival order, the wave around

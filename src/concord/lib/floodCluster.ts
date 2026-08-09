@@ -168,6 +168,38 @@ export interface FloodOptions {
    * partial answer is safe.
    */
   firstSeen?: ReadonlyMap<string, number>;
+  /**
+   * Whether an author is community STAFF — the owner or a roster member holding
+   * any staff permission (`STAFF_MASK`). Staff are never folded: authority to
+   * moderate is the community's own strongest statement of trust, it outranks
+   * anything this heuristic infers, and a muzzled moderator is worse than a
+   * visible flood. They join the trusted set ({@link computeTrusted}) rather
+   * than getting a check of their own, so the same immunity pass covers them.
+   * Absent in bare lib folds (tests); the app path supplies it from the
+   * control fold.
+   */
+  staff?: (author: string) => boolean;
+  /**
+   * A lower bound (ms) on when this room existed, used only by the drown rule as
+   * an alternative source of precedent. The drown rule otherwise declines to
+   * fire unless someone OUTSIDE the flood spoke before it ("a room of nothing
+   * but strangers is a launch, not an invasion") — but that speaker signal is
+   * empty in a TOTAL nuke, where every early speaker is itself a drowner. This
+   * closes that hole: if the room existed before the wave by {@link
+   * FLOOD_COHORT_PRECEDENT_MS}, it is an existing room being invaded, not a
+   * launch, whatever the chat plane looks like.
+   *
+   * The app prefers an UNFORGEABLE source — the oldest control-plane rotation
+   * time it holds (`HeldRoot.retiredAt`, a staff-only rekey publish time) — and
+   * falls back to the earliest activity the store has observed in the channel
+   * when no rotation time exists (the common case). That fallback is chat-plane
+   * derived, so best-effort: a flood can only push it EARLIER (adding
+   * precedent), and hiding it needs every `created_at` clamped into one
+   * sub-{@link FLOOD_COHORT_PRECEDENT_MS} window, which collapses the very
+   * timespan the pace gate reads. Absent in bare lib folds, in which case the
+   * drown rule falls back to speaker-precedent alone.
+   */
+  establishedSinceMs?: number;
 }
 
 const URL_RUN = /https?:\/\/\S+/g;
@@ -502,11 +534,11 @@ export function floodClusters(messages: readonly OpenedChat[], opts: FloodOption
   // it is computed once and shared: the drown rule reads it to judge share by
   // stranger volume, and the immunity pass below reads it to protect the keys
   // the reader has vouched for from every rule at once.
-  const trusted = computeTrusted(messages, opts.self);
+  const trusted = computeTrusted(messages, opts.self, opts.staff);
 
   markArrivalBurst(messages, firstSeen, flagged, opts.self);
   markCohortFlood(messages, firstSeen, flagged, opts.self);
-  markUntrustedDrown(messages, firstSeen, trusted, flagged, opts.self);
+  markUntrustedDrown(messages, firstSeen, trusted, flagged, opts.self, opts.establishedSinceMs);
   markGibberish(messages, flagged, opts.self);
   sweepParticipants(messages, flagged, opts.self);
 
@@ -525,7 +557,7 @@ export function floodClusters(messages: readonly OpenedChat[], opts: FloodOption
 /** One batch's quarantine, keyed on the batch itself (see {@link quarantinedIn}). */
 const quarantineCache = new WeakMap<
   readonly OpenedChat[],
-  { self: string | undefined; ids: Set<string> }
+  { self: string | undefined; staff: FloodOptions["staff"]; ids: Set<string> }
 >();
 
 /**
@@ -546,6 +578,13 @@ const quarantineCache = new WeakMap<
  * {@link FloodOptions.firstSeen}). The sort is here because `floodClusters`
  * expects ms order and the batch does not promise it.
  *
+ * `staff` is threaded through for the same reason the render path carries it: a
+ * moderator's messages must never fold a channel's badge either. It is part of
+ * the cache key — a fold before the control roster resolved saw no staff and
+ * must recompute once it does — and the caller passes a STABLE reference
+ * (memoized on the roster) so a badge recompute is driven by real change, not a
+ * fresh closure each render.
+ *
  * The raw batch also carries SIDE-EVENTS — reactions, votes, deletes, edits —
  * which render no row and are dropped before judging. A reaction must not
  * date its author as present (reacting to your own spam is free warming, and
@@ -555,14 +594,18 @@ const quarantineCache = new WeakMap<
  */
 const SPEECH_KINDS: ReadonlySet<number> = new Set([KIND_MESSAGE, KIND_POLL, KIND_COMMENT]);
 
-export function quarantinedIn(rumors: readonly OpenedChat[], self?: string): Set<string> {
+export function quarantinedIn(
+  rumors: readonly OpenedChat[],
+  self?: string,
+  staff?: FloodOptions["staff"],
+): Set<string> {
   const cached = quarantineCache.get(rumors);
-  if (cached && cached.self === self) return cached.ids;
-  const ids = floodClusters(
-    rumors.filter((r) => SPEECH_KINDS.has(r.kind)).sort((a, b) => a.ms - b.ms),
-    self !== undefined ? { self } : {},
-  );
-  quarantineCache.set(rumors, { self, ids });
+  if (cached && cached.self === self && cached.staff === staff) return cached.ids;
+  const ids = floodClusters(rumors.filter((r) => SPEECH_KINDS.has(r.kind)).sort((a, b) => a.ms - b.ms), {
+    ...(self !== undefined ? { self } : {}),
+    ...(staff !== undefined ? { staff } : {}),
+  });
+  quarantineCache.set(rumors, { self, staff, ids });
   return ids;
 }
 
@@ -785,31 +828,59 @@ function markCohortWaves(
 
 /**
  * Which authors this reader has EARNED reason to trust — computed locally, per
- * reader, from the batch alone. The seed is the reading user (nothing a
- * stranger sends can fake being replied to by you), and trust flows outward
- * only through inbound attention FROM the already-trusted: a reply, a quote, a
- * mention. It is the one signal a flood cannot manufacture, because it is not
- * about what a key did — volume, tenure, reacting to its own sybils are all
- * free — but about what an independently-trusted party chose to direct AT it.
+ * reader, from the batch. There are two kinds of root. The reading user is one
+ * (nothing a stranger sends can fake being replied to by YOU). Community STAFF
+ * are the other: the owner and permission-holders the community itself vouches
+ * for, whose authority to moderate outranks anything this heuristic could
+ * infer. Trust then flows outward from every root through inbound attention:
+ * an edge `src → dst` when `src` replied to / quoted / mentioned `dst`. It is
+ * the one signal a flood cannot manufacture, because it is not about what a key
+ * did — volume, tenure, reacting to its own sybils are all free — but about
+ * what an independently-trusted party chose to direct AT it.
  *
- * The graph is directed and rooted: an edge is `src → dst` when `src` replied
- * to / quoted / mentioned `dst`, and trust is the set reachable from `self`.
- * A spammer naming a regular (or the reader) in a `p` tag makes an edge FROM
- * the spammer, whose source is untrusted, so it grants nothing; the closure
- * only ever widens through a party already inside it.
+ * The graph is directed and rooted, so a spammer naming a regular (or the
+ * reader) in a `p` tag makes an edge FROM the spammer, whose source is
+ * untrusted, and grants nothing; the closure only ever widens through a party
+ * already inside it.
+ *
+ * Staff differ from the reader in one deliberate way: they are seeded as
+ * trusted (never folded) but are NOT propagation roots — their outbound
+ * attention does not spread trust. The reader replying to someone is a clean
+ * vouch, but a moderator's reply is not: moderating a flood MEANS replying to
+ * it, quoting it to call it out, `p`-mentioning the spammer — so an outbound
+ * staff edge would whitelist the flooder (and, transitively, every sybil it
+ * had linked) the instant a mod pushed back. Immunity for a moderator's own
+ * messages is the whole of the guarantee; vouching outward from it is the hole.
+ * Only `self` spreads.
  *
  * Reactions would be an even stronger signal (the reader hearting a message),
  * but they are side-events consumed into tallies before the fold runs and are
  * not in `messages` — replies/quotes/mentions are what a speech row carries.
  *
- * With no `self` (a badge-path fold that wasn't given the reader) the set is
- * empty: everyone is a stranger, and the drown rule falls back to pace + share
- * + precedent, which is the intended trustless-room behavior.
+ * With no `self` AND no staff (a bare lib fold) the set is empty: everyone is a
+ * stranger, and the drown rule falls back to pace + share + precedent, which is
+ * the intended trustless-room behavior.
  */
-function computeTrusted(messages: readonly OpenedChat[], self: string | undefined): Set<string> {
+function computeTrusted(
+  messages: readonly OpenedChat[],
+  self: string | undefined,
+  staff: ((author: string) => boolean) | undefined,
+): Set<string> {
   const trusted = new Set<string>();
-  if (self === undefined) return trusted;
-  trusted.add(self);
+  const roots: string[] = [];
+  if (self !== undefined) {
+    trusted.add(self);
+    roots.push(self); // the reader is the one root that spreads trust outward
+  }
+  // Staff are seeded as trusted regardless of `self`, so a moderator is immune
+  // on the badge path too — but NOT as a root: a mod replying to a spammer to
+  // moderate them must not whitelist the flood. Only authors present in the
+  // batch need seeding (an absent one folds nothing), which also keeps the
+  // predicate call count to the roster members actually speaking.
+  if (staff) for (const ev of messages) if (staff(ev.author)) trusted.add(ev.author);
+  // No root spreads (a badge-path/staff-only fold) ⇒ the seeds ARE the whole
+  // set; skip building the attention graph.
+  if (roots.length === 0) return trusted;
 
   // author → the pubkeys they directed attention at (reply/quote target's
   // author, or a `p`-mention). Rumor refs are resolved through the batch.
@@ -834,8 +905,8 @@ function computeTrusted(messages: readonly OpenedChat[], self: string | undefine
     }
   }
 
-  // Reachability from self over the attention edges.
-  const queue = [self];
+  // Reachability from every root over the attention edges.
+  const queue = [...roots];
   while (queue.length) {
     const src = queue.pop()!;
     const outs = attends.get(src);
@@ -877,8 +948,12 @@ function computeTrusted(messages: readonly OpenedChat[], self: string | undefine
  * - **Pace.** Sustained at {@link FLOOD_COHORT_RATE_PER_MIN}, faster than
  *   people at keyboards hold across two dozen messages.
  * - **Precedent.** Someone OUTSIDE the wave spoke {@link
- *   FLOOD_COHORT_PRECEDENT_MS} before it, or a room of nothing but strangers is
- *   a launch, not an invasion.
+ *   FLOOD_COHORT_PRECEDENT_MS} before it, OR the room itself provably predates
+ *   the wave by that margin ({@link FloodOptions.establishedSinceMs}) — else a
+ *   room of nothing but strangers is a launch, not an invasion. The room-age
+ *   source is what catches a TOTAL nuke, whose every early speaker is a drowner
+ *   so the speaker source is empty (see that option for how the app sources it
+ *   and the limits of the chat-plane fallback).
  *
  * A wave is bounded by the untrusted group's own silence
  * ({@link FLOOD_COHORT_TAIL_MS}); a key that returns tomorrow to say one
@@ -894,6 +969,7 @@ function markUntrustedDrown(
   trusted: ReadonlySet<string>,
   flagged: Set<string>,
   self: string | undefined,
+  establishedSinceMs: number | undefined,
 ): void {
   // The untrusted wave's messages, in ms order (already sorted in `messages`).
   const idx: number[] = [];
@@ -936,16 +1012,27 @@ function markUntrustedDrown(
     for (const [a, n] of carried) if (n >= FLOOD_COHORT_MIN_PER_AUTHOR) group.add(a);
     if (group.size === 0) continue;
 
-    // Precedent: someone OUTSIDE the drowning group was heard a clear margin
-    // before the wave — proof the channel existed without them. Read from
-    // `firstSeen` (the store's 7-day map, not this window), so the quiet before
-    // a flood is visible even when the flood has filled the render batch. Light
-    // and early speakers count; only the heavy hitters are excluded from being
-    // their own precedent, which is what lets a room of otherwise-untrusted
-    // regulars still supply it.
+    // Precedent: proof the channel existed before this wave, so folding it is
+    // catching an invasion rather than an honest launch. EITHER source suffices:
+    //
+    //  - A SPEAKER outside the drowning group was heard a clear margin before
+    //    the wave. Read from `firstSeen` (the store's 7-day map, not this
+    //    window), so the quiet before a flood is visible even when the flood has
+    //    filled the render batch. Light and early speakers count; only the heavy
+    //    hitters are excluded from being their own precedent, which is what lets
+    //    a room of otherwise-untrusted regulars still supply it.
+    //
+    //  - The ROOM itself predates the wave (`establishedSinceMs`; see its doc
+    //    for the source and its limits). This is the only precedent a TOTAL
+    //    nuke leaves: when every early speaker is itself a drowner the speaker
+    //    source is empty, and a channel that already had history drowned
+    //    end-to-end would otherwise read as a launch and never fold.
+    const cutoff = from - FLOOD_COHORT_PRECEDENT_MS;
     let othersEarliest = Number.POSITIVE_INFINITY;
     for (const [a, ms] of firstSeen) if (!group.has(a) && ms < othersEarliest) othersEarliest = ms;
-    if (!(othersEarliest <= from - FLOOD_COHORT_PRECEDENT_MS)) continue;
+    const hasPrecedent =
+      othersEarliest <= cutoff || (establishedSinceMs !== undefined && establishedSinceMs <= cutoff);
+    if (!hasPrecedent) continue;
 
     for (const i of wave) if (group.has(messages[i].author)) flagged.add(messages[i].rumorId);
   }

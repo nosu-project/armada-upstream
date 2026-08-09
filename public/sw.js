@@ -96,6 +96,24 @@ const QUIET_STATE_URL = new URL(`${PUSH_STATE_PREFIX}quiet`, self.location.origi
 // for every message the user sent (their own NIP-17 self-copy is a push).
 const APPLE_SILENT_BUDGET = 3;
 
+// Per-room interruption ceiling, the web-push mirror of the native service's
+// ALERT_BURST_MAX (NotificationRelayService.java). A public channel is writable
+// by anyone holding the invite, so a flood reaches every device's push; past
+// this many ALERTING notifications for one collapse `tag` inside the window,
+// further ones post SILENTLY — still shown (iOS counts a silent push, and the
+// tray entry and its line count still update), they just stop making noise.
+// Content-blind, exactly like native: nothing is classified, a flood simply
+// stops buzzing. The worker is killed between pushes, so the window's alert
+// timestamps live in the push-state cache, keyed by tag.
+const ROOM_ALERT_PREFIX = `${PUSH_STATE_PREFIX}alert/`;
+const ROOM_ALERT_MAX = 5;
+const ROOM_ALERT_WINDOW_MS = 120_000;
+// Cap the timestamps one tag re-serializes while a flood is live (native's
+// ALERT_BURST_MAX_TRACKED). Only the count within the window matters; the extra
+// headroom keeps a sustained flood's window full so it stays quiet until it
+// genuinely stops, instead of the budget refilling mid-flood.
+const ROOM_ALERT_MAX_TRACKED = 64;
+
 /** Increment the Home-Screen badge without needing a live page. */
 async function incrementAppBadge() {
   if (typeof self.navigator?.setAppBadge !== "function") return;
@@ -479,6 +497,40 @@ async function showQuietRequest(base) {
   return true;
 }
 
+/**
+ * Whether this room's notification must post SILENTLY — it has already ALERTED
+ * {@link ROOM_ALERT_MAX} times for `tag` inside the window. Records every
+ * attempt (alerting or not), like the native service, so a sustained flood
+ * keeps its own window full and stays quiet until it actually stops. Call once
+ * per push, before showing; a bookkeeping failure never silences a real alert.
+ */
+async function roomAlertSilent(tag) {
+  if (!tag) return false;
+  try {
+    const cache = await caches.open(PUSH_STATE_CACHE);
+    const url = new URL(`${ROOM_ALERT_PREFIX}${encodeURIComponent(tag)}`, self.location.origin).href;
+    const now = Date.now();
+    const stored = await cache.match(url);
+    let times = [];
+    if (stored) {
+      try {
+        const parsed = JSON.parse(await stored.text());
+        if (Array.isArray(parsed)) times = parsed;
+      } catch {
+        // Corrupt entry — treat as empty.
+      }
+    }
+    times = times.filter((t) => typeof t === "number" && now - t <= ROOM_ALERT_WINDOW_MS);
+    const silent = times.length >= ROOM_ALERT_MAX;
+    times.push(now);
+    if (times.length > ROOM_ALERT_MAX_TRACKED) times = times.slice(-ROOM_ALERT_MAX_TRACKED);
+    await cache.put(url, new Response(JSON.stringify(times)));
+    return silent;
+  } catch {
+    return false;
+  }
+}
+
 self.addEventListener("push", (event) => {
   if (!event.data) return;
 
@@ -524,9 +576,17 @@ self.addEventListener("push", (event) => {
         }
       }
 
+      // Past this room's interruption ceiling the notification is still shown
+      // (and still updates its count), it just stops making noise — the web
+      // mirror of the native ALERT_BURST_MAX. Decided once and applied to both
+      // the wake-up and its enriched replacement so a flood past the budget
+      // never re-alerts on the same event's second show either.
+      const silent = await roomAlertSilent(tag);
+      const alertBase = silent ? { ...base, silent: true, renotify: false } : base;
+
       // 1. Guaranteed visible notification, immediately.
       await self.registration.showNotification(title, {
-        ...base,
+        ...alertBase,
         body: payload.body ?? "",
         data,
         tag,
@@ -548,7 +608,7 @@ self.addEventListener("push", (event) => {
 
       const h = tagValue(ev, "h");
       await self.registration.showNotification(title, {
-        ...base,
+        ...alertBase,
         body: truncate(ev.content, 140) || payload.body || "",
         tag,
         data: {
