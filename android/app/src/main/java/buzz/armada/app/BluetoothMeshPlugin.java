@@ -67,6 +67,8 @@ public class BluetoothMeshPlugin extends Plugin implements BluetoothMeshDelegate
     @Nullable
     private BluetoothMeshService meshService;
     private boolean started = false;
+    /** Keepalive refused because we weren't foreground; retried on next resume. */
+    private boolean keepaliveDeferred = false;
 
     // ---- Plugin methods (called from JS) ----------------------------------
 
@@ -112,35 +114,17 @@ public class BluetoothMeshPlugin extends Plugin implements BluetoothMeshDelegate
                 meshService = new BluetoothMeshService(getContext().getApplicationContext());
                 meshService.setDelegate(this);
             }
-            // Best-effort foreground service so the mesh survives backgrounding.
-            // Android can reject FGS starts when the app is not in an allowed
-            // foreground state; foreground mesh use should still work without it.
-            Intent svc = new Intent(getContext(), MeshForegroundService.class);
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    try {
-                        // startService() creates no startForeground() deadline
-                        // but is refused (IllegalStateException) from a
-                        // background state on API 26+. The mesh starts from a
-                        // user action in a visible activity, so this normally
-                        // succeeds and the service can never miss the
-                        // 10-second deadline behind a congested main thread.
-                        getContext().startService(svc);
-                    } catch (IllegalStateException notForeground) {
-                        getContext().startForegroundService(svc);
-                    }
-                } else {
-                    getContext().startService(svc);
-                }
-            } catch (Exception e) {
-                Log.w(TAG, "Foreground mesh service not started; continuing without background keepalive", e);
-            }
             if (!meshService.startServices()) {
-                getContext().stopService(new Intent(getContext(), MeshForegroundService.class));
                 call.reject("Failed to start mesh: Bluetooth unavailable or permissions missing");
                 return;
             }
             started = true;
+            // Only now that the mesh is actually up. Starting the keepalive
+            // first meant a failed startServices() immediately stopService()'d
+            // it, which can destroy the service before its onCreate has run —
+            // leaving a start the OS is still waiting to see answered by
+            // startForeground().
+            ensureKeepalive();
 
             JSObject ret = new JSObject();
             ret.put("peerID", meshService.getMyPeerID());
@@ -155,6 +139,49 @@ public class BluetoothMeshPlugin extends Plugin implements BluetoothMeshDelegate
         }
     }
 
+    /**
+     * Best-effort foreground service so the mesh survives backgrounding.
+     *
+     * Deliberately startService() with NO startForegroundService() fallback.
+     * startForegroundService() is a promise to call startForeground() within
+     * ~10 seconds or be killed, and the only state that fallback was ever
+     * reachable from is the background one where the promise is hardest to
+     * keep: the service's onCreate runs on the main thread, which on a cold
+     * launch is behind the whole Activity + WebView startup, and the mesh
+     * auto-starts from an effect on mount rather than from a tap. startService()
+     * carries no deadline and is simply refused (IllegalStateException) from the
+     * background on API 26+, so the worst case is no keepalive — which is the
+     * documented fallback anyway, since foreground mesh use works without it.
+     */
+    private void ensureKeepalive() {
+        try {
+            getContext().startService(new Intent(getContext(), MeshForegroundService.class));
+            keepaliveDeferred = false;
+        } catch (Exception e) {
+            keepaliveDeferred = true;
+            Log.w(TAG, "Foreground mesh service not started; continuing without background keepalive", e);
+        }
+    }
+
+    @Override
+    protected void handleOnResume() {
+        super.handleOnResume();
+        // We are demonstrably foreground here, so a start refused earlier from
+        // the background can be retried without reaching for the deadline.
+        if (started && keepaliveDeferred) {
+            ensureKeepalive();
+        }
+    }
+
+    private void stopKeepalive() {
+        keepaliveDeferred = false;
+        try {
+            getContext().stopService(new Intent(getContext(), MeshForegroundService.class));
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to stop mesh keepalive service", e);
+        }
+    }
+
     @PluginMethod
     public void stop(PluginCall call) {
         BluetoothMeshService service = meshService;
@@ -165,10 +192,10 @@ public class BluetoothMeshPlugin extends Plugin implements BluetoothMeshDelegate
                 service.setDelegate(null);
                 service.stopServices();
             }
-            getContext().stopService(new Intent(getContext(), MeshForegroundService.class));
         } catch (Exception e) {
             Log.w(TAG, "stop failed", e);
         }
+        stopKeepalive();
         call.resolve();
     }
 
@@ -361,7 +388,11 @@ public class BluetoothMeshPlugin extends Plugin implements BluetoothMeshDelegate
     protected void handleOnDestroy() {
         if (meshService != null && started) {
             try { meshService.stopServices(); } catch (Exception ignored) {}
+            // The mesh is gone with it, so the keepalive would otherwise sit in
+            // the shade advertising a mesh that is no longer running.
+            stopKeepalive();
         }
+        started = false;
         super.handleOnDestroy();
     }
 }
