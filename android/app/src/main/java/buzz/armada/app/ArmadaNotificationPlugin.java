@@ -486,6 +486,7 @@ public class ArmadaNotificationPlugin extends Plugin {
         String dmKnownPeersRaw = arrayToString(call.getArray("dmKnownPeers"));
         String dmRequestsRaw = call.getString("dmRequests");
         String selfRelaysRaw = arrayToString(call.getArray("selfRelays"));
+        String selfDTagsRaw = arrayToString(call.getArray("selfDTags"));
         String concordSubsRaw = arrayToString(call.getArray("concordSubs"));
         String gitSubsRaw = arrayToString(call.getArray("gitSubs"));
         // prefs is a flat object of booleans; store its JSON verbatim.
@@ -537,6 +538,12 @@ public class ArmadaNotificationPlugin extends Plugin {
             else editor.remove("dmRequests");
             if (selfRelaysRaw != null) editor.putString("selfRelays", selfRelaysRaw);
             else editor.remove("selfRelays");
+            // Absent leaves the pref absent, which the service reads as
+            // SelfState.DEFAULT_D_TAGS — never as an empty set, which would
+            // drop the kind-30078 subscription entirely. That is also what an
+            // older WebView (which doesn't send this) gets.
+            if (selfDTagsRaw != null) editor.putString("selfDTags", selfDTagsRaw);
+            else editor.remove("selfDTags");
             // The "concord2Subs" PREF key keeps its old spelling on purpose:
             // the service reads it on boot, before the WebView can re-register.
             // Respelling it would leave an upgraded device with no Concord

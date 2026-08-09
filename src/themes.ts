@@ -25,15 +25,6 @@ export interface ThemeConfig {
 }
 
 /**
- * Configured light and dark themes. When set in AppConfig these override
- * the builtin themes for "light" and "dark" modes.
- */
-export interface ThemesConfig {
-  light: ThemeConfig;
-  dark: ThemeConfig;
-}
-
-/**
  * Full set of CSS token values used by Tailwind. Derived from
  * CoreThemeColors via `deriveTokensFromCore`.
  */
@@ -258,10 +249,7 @@ export function resolveTheme(theme: "light" | "dark" | "system" | "custom"): "li
   return theme;
 }
 
-/** Resolve a light/dark mode to its core colors, honoring per-mode overrides. */
-export function resolveThemeColors(
-  mode: "light" | "dark",
-  themes?: ThemesConfig,
-): CoreThemeColors {
-  return themes?.[mode]?.colors ?? builtinThemes[mode];
+/** Resolve a light/dark mode to its core colors. */
+export function resolveThemeColors(mode: "light" | "dark"): CoreThemeColors {
+  return builtinThemes[mode];
 }

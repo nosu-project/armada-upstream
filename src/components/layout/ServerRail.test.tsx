@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { defaultConfig, type AppConfig } from "@/contexts/AppContext";
+import { flattenLayout } from "@/lib/railLayout";
 
 import { ServerRail } from "./ServerRail";
 
@@ -207,7 +208,7 @@ describe("ServerRail drag wiring", () => {
 
   beforeEach(() => {
     extraServers = [];
-    config = { ...defaultConfig, railLayout: [], railOrder: [], railOpenFolders: [] };
+    config = { ...defaultConfig, railLayout: [], railOpenFolders: [] };
     restoreGeometry = installGeometry();
     return () => restoreGeometry();
   });
@@ -251,7 +252,7 @@ describe("ServerRail drag wiring", () => {
     renderRail();
     // Drop A into the gap just above C (below B's center, above C's top).
     await mouseDrag(`item:${RELAY_A}`, SLOT_TOP + 2 * PITCH - 6);
-    expect(config.railOrder).toEqual([RELAY_B, RELAY_A, RELAY_C]);
+    expect(flattenLayout(config.railLayout)).toEqual([RELAY_B, RELAY_A, RELAY_C]);
   });
 
   it("drags an item out of an expanded folder to dissolve a 2-item folder", async () => {
@@ -335,8 +336,7 @@ describe("ServerRail drag wiring", () => {
     // A pickup that never travelled is a long-held TAP, not a reorder: it must
     // NOT apply a (no-op) drop or suppress the navigation click. Nothing is
     // persisted (no fold, no materialised order) and the click navigates.
-    expect(config.railLayout.filter((n) => n.type === "folder")).toEqual([]);
-    expect(config.railOrder).toEqual([]);
+    expect(config.railLayout).toEqual([]);
   });
 
   it("touch long-press picks up, claims touchmove from the browser, and drops", async () => {
@@ -384,7 +384,7 @@ describe("ServerRail active-route blade", () => {
 
   beforeEach(() => {
     extraServers = [];
-    config = { ...defaultConfig, railLayout: [], railOrder: [], railOpenFolders: [] };
+    config = { ...defaultConfig, railLayout: [], railOpenFolders: [] };
     restoreGeometry = installGeometry();
     return () => restoreGeometry();
   });
@@ -430,7 +430,6 @@ describe("ServerRail folder notification rollup", () => {
       railLayout: [
         { type: "folder", id: "f", name: "", keys: [RELAY_A, RELAY_B, RELAY_C, RELAY_D, RELAY_E] },
       ],
-      railOrder: [],
       railOpenFolders: [],
     };
     for (const key of Object.keys(relayUnread)) delete relayUnread[key];
@@ -482,7 +481,6 @@ describe("ServerRail DMs", () => {
     config = {
       ...defaultConfig,
       railLayout: [{ type: "item", key: DM_KEY }],
-      railOrder: [],
       railOpenFolders: [],
     };
     for (const key of Object.keys(dmUnread)) delete dmUnread[key];

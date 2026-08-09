@@ -6,7 +6,7 @@ import { getPreferredVoiceServer } from "@/lib/voiceDevices";
 
 import type { BlossomServerMetadata } from "@/lib/blossom";
 import type { RailLayoutNode } from "@/lib/railLayout";
-import type { ThemeConfig, ThemesConfig } from "@/themes";
+import type { ThemeConfig } from "@/themes";
 
 export type Theme = "light" | "dark" | "system" | "custom";
 
@@ -47,11 +47,6 @@ export interface AppConfig {
    */
   customTheme?: ThemeConfig;
   /**
-   * Optional per-mode overrides for the builtin light/dark themes. When set,
-   * these replace the builtin core colors for the respective mode.
-   */
-  themes?: ThemesConfig;
-  /**
    * NOTE: there is deliberately NO `addedRelays` here. The user's NIP-29
    * server set lives in exactly one place — their kind 10009 event, read via
    * `useUserGroupList()` and cached offline in the folded IndexedDB store.
@@ -62,21 +57,19 @@ export interface AppConfig {
    * resurrected it. One source of truth removes the whole failure mode.
    */
   /**
-   * User-defined display order for the *entire* community rail as one list —
-   * NIP-29 servers and Concord communities intermixed in any order.
-   * Entries are stable rail keys: a relay URL for NIP-29 servers,
-   * `c2:${communityId}` for Concord communities.
-   * Any item not listed falls back to its default position (appended in
-   * discovery order). Stored locally in app config.
-   */
-  railOrder: string[];
-  /**
    * The community rail's structured layout: an ordered list of items (by
-   * stable rail key — relay URLs and `c2:` community keys) and
-   * Discord-style folders grouping them. Supersedes `railOrder` (which is
-   * still written as the flattened order for backward compatibility, and read
-   * only to seed this layout on first migration). Synced across devices via
-   * the encrypted settings event.
+   * stable rail key — relay URLs, `c2:` community keys, `dm:` peer keys) and
+   * Discord-style folders grouping them. Any item not listed falls back to its
+   * default position (appended in discovery order by `mergeLayout`).
+   *
+   * The whole arrangement, and the ONLY field of its settings document
+   * (`${APP_ID}/rail`). It superseded a flat `railOrder: string[]`, which was
+   * written alongside it for a while for older clients and is now read exactly
+   * once, to seed a layout that doesn't exist yet — from localStorage in
+   * `deserializeConfig`, and from the legacy metadata document in
+   * `settingsDocs.ts`. It is `flattenLayout(railLayout)` and nothing more, so
+   * keeping it as a second stored copy only created two things that could
+   * disagree.
    */
   railLayout: RailLayoutNode[];
   /**
@@ -391,20 +384,26 @@ export interface AppContextType {
 }
 
 /**
- * AppConfig fields that sync across devices via the encrypted NIP-78 settings
- * event. Everything here is cross-device meaningful; `meshEnabled` and
- * `meshIncognito` are deliberately excluded — they gate a per-device Bluetooth
- * foreground service and must never be flipped on remotely.
- * `lastChannelByServer` is excluded too: which channel you're viewing is
- * per-device navigation state — syncing it makes two open clients yank each
- * other's channel selection around.
+ * The AppConfig fields carried by each encrypted NIP-78 settings document, one
+ * list per document. See `lib/settingsDocs.ts` for the catalogue that binds
+ * these to their `d` tags, and `docs/settings-documents.md` for why the split
+ * exists — briefly: a field that grows without bound or is rewritten
+ * constantly does not belong in the same replaceable event as the theme.
+ *
+ * Deliberately synced by NO document: `meshEnabled` / `meshIncognito` gate a
+ * per-device Bluetooth foreground service and must never be flipped on
+ * remotely; `railOpenFolders`, `collapsedChannelCategories` and
+ * `memberListVisible` are per-device UI state; `lastChannelByServer` is
+ * per-device navigation state, which two open clients would otherwise yank
+ * back and forth; and `searchRelays` / `dmRelays` / `relayMetadata` /
+ * `blossomServerMetadata` are local mirrors of canonical list events (10007 /
+ * 10050 / 10002 / 10063), which own them instead.
  */
-export const SYNCED_CONFIG_KEYS = [
+
+/** `${APP_ID}/metadata` — bounded preferences, written when a user changes one. */
+export const METADATA_CONFIG_KEYS = [
   "theme",
   "customTheme",
-  "themes",
-  "railOrder",
-  "railLayout",
   "appRelays",
   "communityRelays",
   "preferredVoiceServer",
@@ -413,15 +412,7 @@ export const SYNCED_CONFIG_KEYS = [
   "useAppDmRelays",
   "useOwnDmRelays",
   "useAppBlossomServers",
-  "mutedCommunities",
-  "mutedChannels",
-  "notifLevels",
-  "dmProtocol",
   "dmTypingIndicators",
-  "pinnedDms",
-  "closedDms",
-  "acceptedDms",
-  "startedDms",
   "showDmRequests",
   "discoverAllContent",
   "defaultZapAmount",
@@ -430,11 +421,40 @@ export const SYNCED_CONFIG_KEYS = [
   "accountStandingSeen",
 ] as const satisfies ReadonlyArray<keyof AppConfig>;
 
+/** `${APP_ID}/rail` — grows with every community; rewritten on every drag. */
+export const RAIL_CONFIG_KEYS = ["railLayout"] as const satisfies ReadonlyArray<keyof AppConfig>;
+
+/** `${APP_ID}/notifications` — one entry per conversation the user has tuned. */
+export const NOTIF_CONFIG_KEYS = [
+  "notifLevels",
+  "mutedCommunities",
+  "mutedChannels",
+] as const satisfies ReadonlyArray<keyof AppConfig>;
+
+/** `${APP_ID}/dms` — one entry per peer, in four maps that only ever grow. */
+export const DM_CONFIG_KEYS = [
+  "dmProtocol",
+  "pinnedDms",
+  "closedDms",
+  "acceptedDms",
+  "startedDms",
+] as const satisfies ReadonlyArray<keyof AppConfig>;
+
+/**
+ * Every AppConfig field that syncs, across all documents. Derived rather than
+ * written out, so a key can't be in a slice and missing here (or the reverse).
+ */
+export const SYNCED_CONFIG_KEYS = [
+  ...METADATA_CONFIG_KEYS,
+  ...RAIL_CONFIG_KEYS,
+  ...NOTIF_CONFIG_KEYS,
+  ...DM_CONFIG_KEYS,
+] as const satisfies ReadonlyArray<keyof AppConfig>;
+
 export type SyncedConfigKey = (typeof SYNCED_CONFIG_KEYS)[number];
 
 export const defaultConfig: AppConfig = {
   theme: "dark",
-  railOrder: [],
   railLayout: [],
   railOpenFolders: [],
   collapsedChannelCategories: {},

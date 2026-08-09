@@ -132,10 +132,8 @@ export function QuickSwitcher() {
   const orderedKeys = useMemo(() => {
     const liveKeys = switcherLiveKeys(liveServers, communities);
     const live = new Set(liveKeys);
-    return flattenLayout(mergeLayout(config.railLayout, config.railOrder, liveKeys)).filter((key) =>
-      live.has(key),
-    );
-  }, [liveServers, communities, config.railLayout, config.railOrder]);
+    return flattenLayout(mergeLayout(config.railLayout, liveKeys)).filter((key) => live.has(key));
+  }, [liveServers, communities, config.railLayout]);
 
   const ctx = useMemo<SwitcherContext>(
     () => ({

@@ -123,7 +123,7 @@ export function LoginSetup() {
   // The recovery prompt is only meaningful when sync came back empty-handed.
   // If the account already has a relay list, restored encrypted settings, or
   // any joined server, there is nothing to recover — don't interrupt.
-  const { settings, isFetched: settingsFetched } = useEncryptedSettings();
+  const { doc: settings, isFetched: settingsFetched } = useEncryptedSettings();
   const joinedServers = useNip29Servers();
   const hasRestoredData =
     hasSignedRelayList || settings !== null || joinedServers.length > 0;

@@ -4,6 +4,7 @@
  * - `VITE_APP_RELAYS` — comma-separated default app relays used for
  *   non-NIP-29 traffic (profiles, lists). User-overridable in Settings.
  * - `VITE_APP_NAME` — display name of the deployment.
+ * - `VITE_APP_ID` — fork identifier namespacing the app's own NIP-78 `d` tags.
  */
 
 import { nip19 } from "nostr-tools";
@@ -55,6 +56,20 @@ export function routeParamToRelay(param: string): string | undefined {
 }
 
 export const APP_NAME: string = import.meta.env.VITE_APP_NAME || "Armada";
+
+/**
+ * Fork/deployment identifier. Namespaces the app's own on-wire identifiers —
+ * the `d` tags of its NIP-78 settings documents (`${APP_ID}/metadata`,
+ * `${APP_ID}/rail`, …; see `lib/settingsDocs.ts` and `docs/settings-documents.md`).
+ *
+ * Distinct from {@link APP_NAME}, which is cosmetic: renaming the deployment
+ * must not move the documents a user's existing installs already read.
+ *
+ * A fork that changes this ALSO has to change `SelfState.DEFAULT_D_TAGS` in the
+ * Android service, which needs the tag set before a WebView has ever run (see
+ * the note there); `settingsDocs.test.ts` asserts the two stay in step.
+ */
+export const APP_ID: string = import.meta.env.VITE_APP_ID || "armada";
 
 /**
  * Whether the client is running on iOS / iPadOS.

@@ -6,7 +6,7 @@ import {
 } from "@/contexts/ReadStateContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEncryptedSettings } from "@/hooks/useEncryptedSettings";
-import { type EncryptedSettings } from "@/lib/schemas";
+import { useSettingsDoc } from "@/hooks/useSettingsDoc";
 
 const EMPTY: ReadStateMap = {};
 
@@ -49,20 +49,29 @@ const SYNC_DEBOUNCE_MS = 4000;
 /**
  * Provides per-conversation read-state (last-read timestamps) for unread and
  * mention badges. Backed by a per-user localStorage cache for instant/offline
- * reads and mirrored into the user's encrypted NIP-78 settings (debounced) so
- * unread carries across devices.
+ * reads and mirrored into the user's `${APP_ID}/read-state` NIP-78 document
+ * (debounced) so unread carries across devices.
+ *
+ * This is the largest and only genuinely unbounded settings document — an
+ * entry per conversation ever opened, never pruned — which is most of why it
+ * has one of its own rather than riding along with the theme.
  */
 export function ReadStateProvider({ children }: { children: React.ReactNode }) {
   const { user } = useCurrentUser();
-  const { settings, updateSettings, hasNip44Support } = useEncryptedSettings();
+  const { doc, isFetched, update, hasNip44Support } = useSettingsDoc("read-state");
+  // The pre-split home of this map, for the migration window. Merged in as a
+  // second source rather than arbitrated against: "max timestamp per key" is
+  // commutative, so the union of the two is simply the right answer.
+  const { doc: metadata } = useEncryptedSettings();
   const pubkey = user?.pubkey;
 
-  // Latest settings, readable from the debounced flush without restarting the
-  // debounce every time the query re-resolves.
-  const settingsRef = useRef<EncryptedSettings | null>(null);
+  // Whether the document has been read from the store, readable from the
+  // debounced flush without restarting the debounce every time the query
+  // re-resolves.
+  const isFetchedRef = useRef(false);
   useEffect(() => {
-    settingsRef.current = settings;
-  }, [settings]);
+    isFetchedRef.current = isFetched;
+  }, [isFetched]);
 
   // Debounced sync of dirty keys to encrypted settings.
   const flushTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -90,28 +99,28 @@ export function ReadStateProvider({ children }: { children: React.ReactNode }) {
       flushTimer.current = setTimeout(() => {
         const next = pendingSync.current;
         if (!next) return;
-        // Never publish without a settings event to merge over. `updateSettings`
-        // builds the new 30078 from `settings ?? {}`, so publishing off a failed
-        // or not-yet-resolved read would replace the user's real settings —
-        // every synced key they own — with just this one. Keep the pending map
-        // and let the effect below retry once a base has been read.
-        if (settingsRef.current === null) return;
+        // Never publish before the stored document has been read. This map is
+        // replaced wholesale, and what makes that safe is that hydration has
+        // already folded the stored map into this one — so publishing off a
+        // not-yet-resolved read would drop every read cut made on another
+        // device. Keep the pending map and let the effect below retry.
+        if (!isFetchedRef.current) return;
         pendingSync.current = null;
-        updateSettings({ readState: next }).catch((err) =>
+        update({ readState: next }).catch((err) =>
           console.warn("Read-state sync failed:", err),
         );
       }, SYNC_DEBOUNCE_MS);
     },
-    [hasNip44Support, updateSettings],
+    [hasNip44Support, update],
   );
 
-  // Retry a sync that was held back for want of a settings base, once one
-  // arrives. Reads stay in localStorage meanwhile, so nothing is lost — they
-  // just haven't reached the user's other devices yet.
+  // Retry a sync that was held back for want of a base, once one has been
+  // read. Reads stay in localStorage meanwhile, so nothing is lost — they just
+  // haven't reached the user's other devices yet.
   useEffect(() => {
-    if (!settings || !pendingSync.current) return;
+    if (!isFetched || !pendingSync.current) return;
     scheduleSync(pendingSync.current);
-  }, [settings, scheduleSync]);
+  }, [isFetched, scheduleSync]);
 
   // Flush any pending sync on unmount.
   useEffect(() => {
@@ -153,6 +162,16 @@ export function ReadStateProvider({ children }: { children: React.ReactNode }) {
     },
     [pubkey],
   );
+
+  // Merge-hydrate (max timestamp wins) so reads made on another device mark
+  // conversations read here too. Lives here rather than in NostrSync so it is
+  // ordered against the flush above by construction: the map a flush publishes
+  // is always one that has already absorbed the stored document.
+  useEffect(() => {
+    if (!pubkey) return;
+    if (doc?.readState) hydrate(doc.readState);
+    if (metadata?.readState) hydrate(metadata.readState);
+  }, [pubkey, doc?.readState, metadata?.readState, hydrate]);
 
   const value = useMemo(
     () => ({ readState, getLastRead, markRead, hydrate }),

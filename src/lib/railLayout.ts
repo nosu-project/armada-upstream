@@ -4,9 +4,9 @@
  * key) and folders that group them.
  *
  * The layout is persisted in AppConfig (`railLayout`) and synced across
- * devices via the encrypted NIP-78 settings event. All functions here are
- * pure so they can be unit-tested and so the ServerRail component stays a
- * thin view over them.
+ * devices in its own encrypted NIP-78 document (`${APP_ID}/rail`). All
+ * functions here are pure so they can be unit-tested and so the ServerRail
+ * component stays a thin view over them.
  *
  * Keys are the rail's stable item keys: a normalized relay URL for NIP-29
  * servers, `c2:${communityId}` for Concord communities,
@@ -83,13 +83,11 @@ export function railKeyDmPubkey(key: string): string | null {
 
 /**
  * Every DM peer on the rail, in visual order. Read straight from the stored
- * arrangement (falling back to the legacy flat order when no layout has been
- * stored yet) because for DMs there is no separate list to be live against.
+ * arrangement, because for DMs there is no separate list to be live against.
  */
-export function railDmPubkeys(stored: RailLayoutNode[], legacyOrder: string[]): string[] {
-  const keys = stored.length > 0 ? flattenLayout(stored) : legacyOrder;
+export function railDmPubkeys(stored: RailLayoutNode[]): string[] {
   const out: string[] = [];
-  for (const key of keys) {
+  for (const key of flattenLayout(stored)) {
     const pubkey = railKeyDmPubkey(key);
     if (pubkey && !out.includes(pubkey)) out.push(pubkey);
   }
@@ -172,18 +170,12 @@ export function normalizeLayout(nodes: RailLayoutNode[]): RailLayoutNode[] {
 
 /**
  * Build the working layout from the stored one plus the currently-live item
- * keys: seeds from the legacy flat `railOrder` when no layout exists yet, and
- * appends any live key the layout doesn't know about (newly joined server /
- * community) as a top-level item at the end. Never removes unknown keys.
+ * keys: appends any live key the layout doesn't know about (newly joined
+ * server / community) as a top-level item at the end. Never removes unknown
+ * keys.
  */
-export function mergeLayout(
-  stored: RailLayoutNode[],
-  legacyOrder: string[],
-  liveKeys: string[],
-): RailLayoutNode[] {
-  const base: RailLayoutNode[] =
-    stored.length > 0 ? stored : legacyOrder.map((key) => ({ type: "item", key }));
-  const out = normalizeLayout(base);
+export function mergeLayout(stored: RailLayoutNode[], liveKeys: string[]): RailLayoutNode[] {
+  const out = normalizeLayout(stored);
   const known = new Set(flattenLayout(out));
   for (const key of liveKeys) {
     if (!known.has(key)) {

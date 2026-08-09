@@ -28,7 +28,7 @@ export function useTheme() {
     const colors =
       resolved === "custom"
         ? (custom?.colors ?? config.customTheme?.colors ?? builtinThemes.dark)
-        : resolveThemeColors(resolved, config.themes);
+        : resolveThemeColors(resolved);
 
     // Suppress transitions for the swap so colors change instantly.
     const noTransition = document.createElement("style");
@@ -50,7 +50,7 @@ export function useTheme() {
     requestAnimationFrame(() => {
       noTransition.remove();
     });
-  }, [config.customTheme, config.themes]);
+  }, [config.customTheme]);
 
   /** Switch between light / dark / system / custom. */
   const setTheme = useCallback((theme: Theme) => {

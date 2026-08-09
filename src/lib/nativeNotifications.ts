@@ -212,6 +212,18 @@ export interface ArmadaNotificationPlugin {
      * An older native binary ignores this field and simply doesn't mirror them.
      */
     selfRelays?: string[];
+    /**
+     * The `d` tags of Armada's own NIP-78 settings documents (see
+     * `lib/settingsDocs.ts`). Kind 30078 is shared with every other client on
+     * the user's identity, so the service asks for these by `d` and stores
+     * only what it asked for.
+     *
+     * Supplied from here rather than hardcoded natively because a fork can
+     * change `VITE_APP_ID` and rename all six. An older native binary ignores
+     * the field, and an absent one means "use the built-in default set" —
+     * never "none", which would drop the subscription entirely.
+     */
+    selfDTags?: string[];
     /** Per-type notification prefs (mentions/reactions/replies/directMessages/allGroupMessages). */
     prefs?: Record<string, boolean>;
     /**

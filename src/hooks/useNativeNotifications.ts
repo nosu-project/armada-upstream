@@ -17,6 +17,7 @@ import {
   type PushPrefs,
 } from "@/lib/pushPrefs";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
+import { SETTINGS_DTAGS } from "@/lib/settingsDocs";
 import { useConcordSubs } from "@/concord/hooks/useConcordSubs";
 import { signStreamAuthsChunked } from "@/concord/lib/streamAuth";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
@@ -466,6 +467,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
         dmKnownPeers,
         dmRequests: prefs.dmRequests,
         selfRelays,
+        selfDTags: SETTINGS_DTAGS,
         signer: signerCfg,
         gitSubs,
       };

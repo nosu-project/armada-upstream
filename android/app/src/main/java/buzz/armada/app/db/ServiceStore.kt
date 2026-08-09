@@ -151,9 +151,15 @@ object ServiceStore {
      * each rather than growing a history nobody reads.
      */
     @JvmStatic
-    fun cacheSelfState(context: Context, event: JSONObject, self: String): Boolean {
+    @JvmOverloads
+    fun cacheSelfState(
+        context: Context,
+        event: JSONObject,
+        self: String,
+        dTags: Set<String> = SelfState.DEFAULT_D_TAGS,
+    ): Boolean {
         val rumor = Rumor.parse(event) ?: return false
-        if (!SelfState.storable(self, rumor)) return false
+        if (!SelfState.storable(self, rumor, dTags)) return false
         return try {
             ArmadaDb.get(context).event(ArmadaDb.TENANT_MAIN, rumor)
             true

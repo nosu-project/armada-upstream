@@ -1,14 +1,16 @@
 import { useNostr } from "@nostrify/react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 
 import { useBootGateOpen } from "@/lib/bootGate";
 
 import { setBuzzMediaSigner } from "@/buzz/media";
-import { accountDataRelays, SYNCED_CONFIG_KEYS, type AppConfig } from "@/contexts/AppContext";
+import { accountDataRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useConfigDocSync, markConfigSynced } from "@/hooks/useConfigDocSync";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEncryptedSettings } from "@/hooks/useEncryptedSettings";
+import { useSettingsDoc } from "@/hooks/useSettingsDoc";
 import { useEventStore } from "@/hooks/useEventStore";
 import {
   getFrequentReactions,
@@ -21,9 +23,7 @@ import { useBlossomServerList } from "@/hooks/useBlossomServerList";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useSearchRelayList } from "@/hooks/useSearchRelayList";
 import { useTheme } from "@/hooks/useTheme";
-import { useReadState } from "@/hooks/useReadState";
 import { parseRelayList, KIND_RELAY_LIST } from "@/lib/nip65";
-import { type EncryptedSettings } from "@/lib/schemas";
 import {
   KIND_APP_SPECIFIC,
   queryKeysForSelfEvent,
@@ -32,13 +32,9 @@ import {
   T_ARMADA_GIF_FAVORITES,
 } from "@/lib/selfSyncKinds";
 import { ACTIVE_THEME_KIND, parseDittoTheme } from "@/lib/themeEvent";
-import { syncedConfigSnapshot } from "@/lib/syncedConfig";
 import { setPreferredVoiceServer } from "@/lib/voiceDevices";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
-
-/** Debounce for pushing local config changes to the encrypted NIP-78 event. */
-const PUBLISH_DEBOUNCE_MS = 800;
 
 /**
  * Debounce for the quick-reaction frequency table. Longer than the config one:
@@ -84,17 +80,17 @@ function dTagOf(event: NostrEvent): string | undefined {
  *    community rail no longer waits for a remount or a staleTime lapse.
  *
  * B. Application (this data → runtime state). Adapted from Ditto's NostrSync:
- *    1. Pulls Armada's encrypted settings (30078, d="armada/metadata") into
- *       AppConfig (SYNCED_CONFIG_KEYS), timestamp-guarded so a stale relay event
- *       never clobbers a fresh local edit; re-applies whenever a newer remote
- *       event arrives (layer A invalidates → the query re-reads → this fires).
- *    1a. Read-state hydration from the same event.
+ *    1. Armada's encrypted settings documents (30078, `d=${APP_ID}/…`) ↔
+ *       AppConfig, one {@link useConfigDocSync} per document that mirrors
+ *       config. Both directions live there, including the debounced publish of
+ *       local edits; see `docs/settings-documents.md`.
+ *    1a. The quick-reaction frequency table ↔ its own document.
  *    (There is no 1b. It used to hydrate the 10009 `r` tags into an
- *        `addedRelays` config cache; the rail now reads that list directly.)
+ *        `addedRelays` config cache; the rail now reads that list directly.
+ *        Read-state hydration is likewise gone from here — it moved into
+ *        ReadStateProvider, which owns the local map.)
  *    1c. Blossom media server list (10063) → config.
- *    2. Publishes local config changes back to the encrypted event (debounced),
- *       so every AppConfig edit syncs across devices.
- *    3. Interop: adopt the user's Ditto active profile theme (16767) if they've
+ *    2. Interop: adopt the user's Ditto active profile theme (16767) if they've
  *       never picked a theme in Armada.
  *
  * Renders nothing.
@@ -112,12 +108,22 @@ function NostrSyncInner() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { config, updateConfig } = useAppContext();
-  const { settings, settingsEvent, updateSettings, hasNip44Support } = useEncryptedSettings();
+  const { doc: metadata, hasNip44Support } = useEncryptedSettings();
+  const reactionsDoc = useSettingsDoc("reactions");
+  const { update: updateReactions } = reactionsDoc;
   const eventStore = useEventStore();
+
+  // ─── 1. Settings documents ↔ AppConfig (both directions) ──────────────
+  // One instance per document; each owns its own applied-id guard, publish
+  // baseline and debounce, so these four can't race one another.
+  useConfigDocSync("metadata");
+  useConfigDocSync("rail");
+  useConfigDocSync("notifications");
+  useConfigDocSync("dms");
+
   const blossomServerList = useBlossomServerList();
   const dmRelayList = useDmRelayList();
   const searchRelayList = useSearchRelayList();
-  const { hydrate: hydrateReadState } = useReadState();
   const { applyCustomTheme } = useTheme();
   const queryClient = useQueryClient();
   const selfRelayKey = accountDataRelays(config, user?.pubkey).sort().join("\u0000");
@@ -134,27 +140,13 @@ function NostrSyncInner() {
   const relayListAppliedPubkey = useRef<string | undefined>(undefined);
   // Newest created_at handled per (kind + optional d tag), across resubscribes.
   const seenSelfVersions = useRef<Map<string, number>>(new Map());
-  // The settings document we've most recently folded into local config.
-  const appliedSettingsId = useRef<string | undefined>(undefined);
-  // Serialized synced subset last known to match the remote event, so the
-  // publish watcher can skip no-op writes (including the config change caused
-  // by applying an incoming pull).
-  const lastSyncedSnapshot = useRef<string | undefined>(undefined);
-  // A pending debounced settings publish. Non-null means "a local edit is
-  // newer than anything on disk", which section 1 reads to know not to apply
-  // over it — so clearing the timeout must also clear the ref, or a cancelled
-  // publish would look like a permanently in-flight one.
-  const publishTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const cancelPublish = useCallback(() => {
-    if (publishTimer.current) clearTimeout(publishTimer.current);
-    publishTimer.current = null;
-  }, []);
-  // Latest settings, readable from a debounced callback without making every
-  // settings change tear down and rebuild that subscription.
-  const settingsRef = useRef<EncryptedSettings | null>(null);
+  // Whether the reactions document has been read from the store, readable
+  // from a debounced callback without making every change tear down and
+  // rebuild that subscription.
+  const reactionsFetched = useRef(false);
   useEffect(() => {
-    settingsRef.current = settings;
-  }, [settings]);
+    reactionsFetched.current = reactionsDoc.isFetched;
+  }, [reactionsDoc.isFetched]);
 
   // Publish the current signer to the Buzz media module so Buzz-hosted images
   // and avatars can be fetched with a signed BUD-11 GET header from any render
@@ -165,18 +157,12 @@ function NostrSyncInner() {
 
   // Reset guards when the account changes.
   useEffect(() => {
-    appliedSettingsId.current = undefined;
-    lastSyncedSnapshot.current = undefined;
-    // A debounced publish belongs to the account that made the edit; letting
-    // one fire after a switch would write that config into the new account's
-    // settings document.
-    cancelPublish();
     blossomAppliedEvent.current = undefined;
     dmRelaysAppliedEvent.current = undefined;
     searchRelaysAppliedEvent.current = undefined;
     relayListAppliedPubkey.current = undefined;
     seenSelfVersions.current = new Map();
-  }, [user?.pubkey, cancelPublish]);
+  }, [user?.pubkey]);
 
   // ─── A. Standing self-state subscription (transport / freshness) ──────
   // One long-lived REQ for the user's own replaceable/addressable events. Each
@@ -280,82 +266,6 @@ function NostrSyncInner() {
     // relay set changes (e.g. NIP-65 adoption) so the standing REQ follows.
   }, [nostr, user?.pubkey, queryClient, eventStore, resumeEpoch, selfRelayKey]);
 
-  // ─── 1. Armada encrypted settings → local config ─────────────────────
-  // Apply each settings document once, identified by the event it came in.
-  // Which document that is has already been decided — by the store, which
-  // keeps only the newest version of the NIP-01 coordinate — so there is no
-  // timestamp arbitration to do here. A stale copy arriving late from a slow
-  // relay is refused by the store and never reaches this effect.
-  useEffect(() => {
-    if (!user?.pubkey || !settings || !settingsEvent) return;
-    if (appliedSettingsId.current === settingsEvent.id) return;
-
-    // …with one exception: a local edit inside its publish debounce is newer
-    // than anything on disk and isn't on disk yet. Applying over it would
-    // revert what the user just did, and section 2 would then see no diff and
-    // never publish it. The publish itself supersedes this document, so
-    // skipping is not a deferral — there is nothing left to apply.
-    if (publishTimer.current) return;
-
-    appliedSettingsId.current = settingsEvent.id;
-
-    const merged: Partial<AppConfig> = {};
-    for (const key of SYNCED_CONFIG_KEYS) {
-      const value = settings[key as keyof EncryptedSettings];
-      if (value !== undefined) {
-        (merged as Record<string, unknown>)[key] = value;
-      }
-    }
-    // Every synced key applies wholesale. The blob used to also carry
-    // `addedRelays`, union-merged — which made it a server RE-ADD channel:
-    // a blob written before a removal still listed the removed server and
-    // put it back on every device, forever. The server set now lives only in
-    // the kind 10009 list, so there is nothing here to union.
-    updateConfig((current) => {
-      const next = { ...current, ...merged };
-      // Record what we just applied so the publish watcher treats it as
-      // already-synced and doesn't echo it straight back out.
-      lastSyncedSnapshot.current = JSON.stringify(syncedConfigSnapshot(next));
-      return next;
-    });
-  }, [user?.pubkey, settings, settingsEvent, updateConfig]);
-
-  // ─── 2. Local config → encrypted settings (debounced publish) ─────────
-  // A DIRECT user config edit (theme, relays, orders, …) is pushed to the
-  // NIP-78 document so it syncs across devices. This is the ONLY place Armada
-  // broadcasts a settings event automatically, and it must fire only for a
-  // real user mutation — never off boot-time or sync-driven config changes,
-  // which keep `lastSyncedSnapshot` in lockstep so the diff below can only
-  // reflect a user edit.
-  //
-  // `settings === null` means the store holds no settings document. Publishing
-  // then would merge the local subset over `{}` and REPLACE the user's real
-  // settings on every device with it — so we don't, and a user who genuinely
-  // has none simply runs on app defaults until they create one explicitly.
-  useEffect(() => {
-    if (!user?.pubkey || !hasNip44Support || settings === null) return;
-
-    const snapshot = JSON.stringify(syncedConfigSnapshot(config));
-    if (lastSyncedSnapshot.current === undefined) {
-      // First observation: adopt current state as the baseline (matches what
-      // section 1 applied, or the local defaults if it hasn't run).
-      lastSyncedSnapshot.current = snapshot;
-      return;
-    }
-    if (snapshot === lastSyncedSnapshot.current) return;
-
-    cancelPublish();
-    publishTimer.current = setTimeout(() => {
-      publishTimer.current = null;
-      lastSyncedSnapshot.current = snapshot;
-      updateSettings(syncedConfigSnapshot(config)).catch((err) =>
-        console.warn("Config sync failed:", err),
-      );
-    }, PUBLISH_DEBOUNCE_MS);
-
-    return cancelPublish;
-  }, [user?.pubkey, hasNip44Support, config, settings, updateSettings, cancelPublish]);
-
   // The portable voice-server preference is synchronized in AppConfig, while
   // the voice runtime still reads its established localStorage key. Keep that
   // bridge current after login and whenever another device changes the value.
@@ -363,23 +273,24 @@ function NostrSyncInner() {
     setPreferredVoiceServer(config.preferredVoiceServer);
   }, [config.preferredVoiceServer]);
 
-  // ─── 1a. Read-state (unread/mention) → local read-state cache ─────────
-  // Merge-hydrate (max timestamp wins) so synced reads from other devices
-  // mark conversations read here too. Safe to run on every settings change.
-  useEffect(() => {
-    if (!user?.pubkey || !settings?.readState) return;
-    hydrateReadState(settings.readState);
-  }, [user?.pubkey, settings?.readState, hydrateReadState]);
+  // (Read-state hydration lives in ReadStateProvider, which owns the local map
+  // and so can order it against its own debounced flush.)
 
-  // ─── 1d. Quick-reaction frequency table ↔ encrypted settings ──────────
+  // ─── 1a. Quick-reaction frequency table ↔ its own document ────────────
   // Merge-hydrate (max count / most recent use per emoji) so the quick row on
   // a new device starts from the emoji the user actually reaches for. Safe to
-  // run on every settings change: the merge is a no-op write when nothing
-  // moved.
+  // run on every change: the merge is a no-op write when nothing moved, and —
+  // as with the read state above — commutative, so the legacy copy in metadata
+  // is simply folded in as a second source.
   useEffect(() => {
-    if (!user?.pubkey || !settings?.frequentReactions) return;
-    hydrateFrequentReactions(user.pubkey, settings.frequentReactions);
-  }, [user?.pubkey, settings?.frequentReactions]);
+    if (!user?.pubkey) return;
+    if (reactionsDoc.doc?.frequentReactions) {
+      hydrateFrequentReactions(user.pubkey, reactionsDoc.doc.frequentReactions);
+    }
+    if (metadata?.frequentReactions) {
+      hydrateFrequentReactions(user.pubkey, metadata.frequentReactions);
+    }
+  }, [user?.pubkey, reactionsDoc.doc?.frequentReactions, metadata?.frequentReactions]);
 
   // …and push the other way, debounced, on a user-initiated reaction only
   // (`subscribeFrequentReactions` never fires for the hydrate above, so two
@@ -393,11 +304,14 @@ function NostrSyncInner() {
       if (changed !== pubkey) return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
-        // Same guard as section 2: `updateSettings` merges the patch over the
-        // last read settings, so publishing without a known-good base would
-        // replace the user's real settings event with just this one key.
-        if (settingsRef.current === null) return;
-        updateSettings({ frequentReactions: getFrequentReactions(pubkey) }).catch((err) =>
+        // `update` merges the patch over the document last read from the
+        // store. Publishing before one has been read would be merging over
+        // `{}` — harmless here, since this document has exactly one field and
+        // we are writing all of it, but the table itself would be replaced by
+        // whatever this device happens to hold rather than merged with what
+        // the others have. Waiting for the read costs one debounce window.
+        if (!reactionsFetched.current) return;
+        updateReactions({ frequentReactions: getFrequentReactions(pubkey) }).catch((err) =>
           console.warn("Frequent-reaction sync failed:", err),
         );
       }, FREQUENT_REACTIONS_DEBOUNCE_MS);
@@ -407,7 +321,7 @@ function NostrSyncInner() {
       unsubscribe();
       if (timer) clearTimeout(timer);
     };
-  }, [user?.pubkey, hasNip44Support, updateSettings]);
+  }, [user?.pubkey, hasNip44Support, updateReactions]);
 
   // NOTE: there is no longer a "1b" section hydrating the kind 10009 server
   // list into a local config cache. That cache (`addedRelays`) is gone: the
@@ -440,9 +354,7 @@ function NostrSyncInner() {
           updatedAt: event.created_at,
         },
       };
-      if (lastSyncedSnapshot.current !== undefined) {
-        lastSyncedSnapshot.current = JSON.stringify(syncedConfigSnapshot(next));
-      }
+      markConfigSynced(next);
       return next;
     });
   }, [user?.pubkey, blossomServerList.event, blossomServerList.servers, updateConfig]);
@@ -457,9 +369,7 @@ function NostrSyncInner() {
     searchRelaysAppliedEvent.current = event.id;
     updateConfig((current) => {
       const next = { ...current, searchRelays: searchRelayList.relays };
-      if (lastSyncedSnapshot.current !== undefined) {
-        lastSyncedSnapshot.current = JSON.stringify(syncedConfigSnapshot(next));
-      }
+      markConfigSynced(next);
       return next;
     });
   }, [user?.pubkey, searchRelayList.event, searchRelayList.relays, updateConfig]);
@@ -470,9 +380,7 @@ function NostrSyncInner() {
     dmRelaysAppliedEvent.current = event.id;
     updateConfig((current) => {
       const next = { ...current, dmRelays: dmRelayList.relays };
-      if (lastSyncedSnapshot.current !== undefined) {
-        lastSyncedSnapshot.current = JSON.stringify(syncedConfigSnapshot(next));
-      }
+      markConfigSynced(next);
       return next;
     });
   }, [user?.pubkey, dmRelayList.event, dmRelayList.relays, updateConfig]);
@@ -511,10 +419,9 @@ function NostrSyncInner() {
             relayMetadata: { relays, updatedAt: event.created_at, pubkey: user.pubkey },
           };
           // Sync-driven (hydrating the user's own 10002 list), not a user edit
-          // — keep the publish baseline in lockstep so it isn't broadcast back.
-          if (lastSyncedSnapshot.current !== undefined) {
-            lastSyncedSnapshot.current = JSON.stringify(syncedConfigSnapshot(next));
-          }
+          // — keep the publish baselines in lockstep so the `appRelays` this
+          // can seed isn't broadcast back out as though the user typed it.
+          markConfigSynced(next);
           return next;
         });
       } catch {
@@ -533,9 +440,9 @@ function NostrSyncInner() {
     if (dittoCheckedPubkey.current === user.pubkey) return;
 
     // Only adopt the Ditto theme if the user has no Armada theme yet: no
-    // settings document on disk AND still on the untouched default.
+    // metadata document on disk AND still on the untouched default.
     const usingDefault = config.theme === "dark" && !config.customTheme;
-    if (settings || !usingDefault) {
+    if (metadata || !usingDefault) {
       dittoCheckedPubkey.current = user.pubkey;
       return;
     }
@@ -563,7 +470,7 @@ function NostrSyncInner() {
     return () => {
       cancelled = true;
     };
-  }, [user?.pubkey, settings, config.theme, config.customTheme, nostr, applyCustomTheme]);
+  }, [user?.pubkey, metadata, config.theme, config.customTheme, nostr, applyCustomTheme]);
 
   return null;
 }

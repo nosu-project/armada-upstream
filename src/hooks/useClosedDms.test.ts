@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { SYNCED_CONFIG_KEYS } from "@/contexts/AppContext";
 import { dmRemainsClosed } from "@/hooks/useClosedDms";
-import { EncryptedSettingsSchema } from "@/lib/schemas";
+import { DmsDocSchema } from "@/lib/schemas";
 
 const marker = { eventId: "old", createdAt: 100 };
 
@@ -28,7 +28,7 @@ describe("dmRemainsClosed", () => {
   it("stores close markers in the encrypted cross-device settings payload", () => {
     expect(SYNCED_CONFIG_KEYS).toContain("closedDms");
     expect(
-      EncryptedSettingsSchema.parse({ closedDms: { peer: marker } }).closedDms,
+      DmsDocSchema.parse({ closedDms: { peer: marker } }).closedDms,
     ).toEqual({ peer: marker });
   });
 });

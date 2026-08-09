@@ -59,7 +59,7 @@ function activeColors(config: AppConfig): CoreThemeColors {
   if (resolved === "custom") {
     return config.customTheme?.colors ?? builtinThemes.dark;
   }
-  return resolveThemeColors(resolved, config.themes);
+  return resolveThemeColors(resolved);
 }
 
 /**

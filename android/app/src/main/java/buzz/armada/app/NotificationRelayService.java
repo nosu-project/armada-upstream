@@ -267,6 +267,12 @@ public class NotificationRelayService extends Service {
     // scoping self-state to them would mean never watching the relays their
     // settings are actually published to.
     private final Set<String> selfRelays = new LinkedHashSet<>();
+    // The `d` tags of Armada's own NIP-78 settings documents, supplied by the
+    // WebView so a fork that changes VITE_APP_ID renames them here too. Falls
+    // back to the built-in set when the pref is absent — on a cold boot before
+    // the app has ever been opened, and for an older WebView that doesn't send
+    // it. Empty is never a valid value: it would drop the subscription.
+    private Set<String> selfDTags = SelfState.DEFAULT_D_TAGS;
     private JSONObject prefs = new JSONObject();
     // Concord (CORD-02) channel subscriptions, keyed for fast lookup:
     //   pkToStream2: stream pubkey (the kind-1059 wrap's author, hex) → decrypt
@@ -908,6 +914,10 @@ public class NotificationRelayService extends Service {
         dmRequests = sp.getString("dmRequests", "generic");
         selfRelays.clear();
         selfRelays.addAll(parseStringArray(sp.getString("selfRelays", null)));
+        List<String> configuredDTags = parseStringArray(sp.getString("selfDTags", null));
+        selfDTags = configuredDTags.isEmpty()
+                ? SelfState.DEFAULT_D_TAGS
+                : new LinkedHashSet<>(configuredDTags);
         try {
             String p = sp.getString("prefs", null);
             prefs = p != null ? new JSONObject(p) : new JSONObject();
@@ -1430,7 +1440,7 @@ public class NotificationRelayService extends Service {
                     // this identity, so it is asked for by `d` rather than
                     // wholesale.
                     JSONArray dTags = new JSONArray();
-                    for (String d : SelfState.D_TAGS) dTags.put(d);
+                    for (String d : selfDTags) dTags.put(d);
                     JSONObject documents = new JSONObject();
                     documents.put("kinds", new JSONArray().put(SelfState.KIND_APP_SPECIFIC));
                     documents.put("authors", me);
@@ -2719,7 +2729,10 @@ public class NotificationRelayService extends Service {
         // simply current the next time the app opens, with no relay read in the
         // critical path. Nothing here notifies: none of it is a message.
         if (SelfState.isSelfKind(kind)) {
-            if (userPubkey != null) ServiceStore.cacheSelfState(this, event, userPubkey);
+            // The SAME set the REQ above was built from: subscribing to one and
+            // authorizing against another either stores documents we never
+            // asked for or discards ones we did.
+            if (userPubkey != null) ServiceStore.cacheSelfState(this, event, userPubkey, selfDTags);
             return;
         }
 

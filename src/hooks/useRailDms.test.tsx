@@ -37,14 +37,14 @@ function railDms() {
 
 describe("useRailDms", () => {
   beforeEach(() => {
-    config = { ...defaultConfig, railLayout: [], railOrder: [], railOpenFolders: [] };
+    config = { ...defaultConfig, railLayout: [], railOpenFolders: [] };
   });
 
   // The top, not the end: the stored arrangement holds only what the user has
   // arranged, and the rail's `mergeLayout` appends every live server and
   // community it doesn't know AFTER it — so an appended DM would render in the
   // middle. Only the top means the same place before and after that append.
-  it("adds a DM to the top of the rail, in both the layout and the flat order", () => {
+  it("adds a DM to the top of the rail", () => {
     config.railLayout = [{ type: "item", key: RELAY_A }];
     const hook = railDms();
     hook.act((h) => h.addToRail(PEER));
@@ -53,26 +53,9 @@ describe("useRailDms", () => {
       { type: "item", key: `dm:${PEER}` },
       { type: "item", key: RELAY_A },
     ]);
-    expect(config.railOrder).toEqual([`dm:${PEER}`, RELAY_A]);
     expect(hook.current.railDms).toEqual([PEER]);
     expect(hook.current.isOnRail(PEER)).toBe(true);
     expect(hook.current.isOnRail(OTHER)).toBe(false);
-  });
-
-  it("seeds from the legacy flat order rather than replacing the arrangement", () => {
-    // A client that only ever wrote `railOrder` (no structured layout yet).
-    // Writing a layout of just the new DM would leave every server to be
-    // re-appended in discovery order — silently reordering the user's rail.
-    config.railOrder = [RELAY_B, RELAY_A];
-    const hook = railDms();
-    hook.act((h) => h.addToRail(PEER));
-
-    expect(config.railOrder).toEqual([`dm:${PEER}`, RELAY_B, RELAY_A]);
-    expect(config.railLayout).toEqual([
-      { type: "item", key: `dm:${PEER}` },
-      { type: "item", key: RELAY_B },
-      { type: "item", key: RELAY_A },
-    ]);
   });
 
   // The regression the top placement exists for: a rail whose stored layout is
@@ -85,7 +68,7 @@ describe("useRailDms", () => {
     // RELAY_B is live but unarranged, so the rail appends it after the stored
     // keys. The DM must still be first — not wedged between the two.
     expect(
-      flattenLayout(mergeLayout(config.railLayout, config.railOrder, [RELAY_A, RELAY_B])),
+      flattenLayout(mergeLayout(config.railLayout, [RELAY_A, RELAY_B])),
     ).toEqual([`dm:${PEER}`, RELAY_A, RELAY_B]);
   });
 
@@ -103,14 +86,12 @@ describe("useRailDms", () => {
     config.railLayout = [
       { type: "folder", id: "f", name: "", keys: [RELAY_A, `dm:${PEER}`, RELAY_B] },
     ];
-    config.railOrder = [RELAY_A, `dm:${PEER}`, RELAY_B];
     const hook = railDms();
     hook.act((h) => h.removeFromRail(PEER));
 
     expect(config.railLayout).toEqual([
       { type: "folder", id: "f", name: "", keys: [RELAY_A, RELAY_B] },
     ]);
-    expect(config.railOrder).toEqual([RELAY_A, RELAY_B]);
     expect(hook.current.railDms).toEqual([]);
   });
 

@@ -24,7 +24,13 @@ import {
   parseGroupListTags,
   type GroupRef,
 } from "@/lib/nip29";
-import { EncryptedSettingsSchema } from "@/lib/schemas";
+import { MetadataDocSchema } from "@/lib/schemas";
+import {
+  SETTINGS_DTAGS,
+  SETTINGS_KIND,
+  settingsDTag,
+  settingsDocForDTag,
+} from "@/lib/settingsDocs";
 import { parseBlossomServerList } from "@/lib/blossom";
 import {
   KIND_SEARCH_RELAYS,
@@ -33,10 +39,10 @@ import {
 import type { SearchRelayListQuery } from "@/hooks/useSearchRelayList";
 import { logSync } from "@/lib/syncLog";
 import {
-  SETTINGS_D,
-  SETTINGS_KIND,
-  type StoredSettings,
-} from "@/hooks/useEncryptedSettings";
+  decodeSettingsDoc,
+  settingsDocQueryKey,
+  type StoredSettingsDoc,
+} from "@/hooks/useSettingsDoc";
 import {
   discoverRelayList,
   queryExplicitRelays,
@@ -404,16 +410,42 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       let settingsFound = false;
       try {
         if (user.signer.nip44) {
+          // All six documents in one filter. No `limit`: it would cap the
+          // whole filter rather than each `d`, so five of the six could come
+          // back missing purely because the sixth answered first.
           const events = await queryExplicitRelays(
             nostr,
             accountRelays,
-            [{ kinds: [SETTINGS_KIND], authors: [pubkey], "#d": [SETTINGS_D], limit: 1 }],
+            [{ kinds: [SETTINGS_KIND], authors: [pubkey], "#d": SETTINGS_DTAGS }],
             stepSignal(),
           );
-          const event = events.sort((a, b) => b.created_at - a.created_at)[0];
+
+          // Seed every split document straight into its own query cache. Their
+          // events are already in ArmadaDB — `queryExplicitRelays` reads
+          // through the batcher, which mirrors what it returns — so this is
+          // purely to spare each hook the store round-trip on first render.
+          const newestByDTag = new Map<string, NostrEvent>();
+          for (const candidate of events) {
+            const dTag = candidate.tags.find(([name]) => name === "d")?.[1];
+            if (dTag === undefined) continue;
+            const held = newestByDTag.get(dTag);
+            if (!held || candidate.created_at > held.created_at) {
+              newestByDTag.set(dTag, candidate);
+            }
+          }
+          for (const [dTag, candidate] of newestByDTag) {
+            const name = settingsDocForDTag(dTag);
+            if (!name || name === "metadata") continue; // metadata is seeded below
+            const decoded = await decodeSettingsDoc(candidate, user.signer, pubkey, name);
+            if (decoded && !cancelled) {
+              queryClient.setQueryData(settingsDocQueryKey(name, pubkey), decoded);
+            }
+          }
+
+          const event = newestByDTag.get(settingsDTag("metadata"));
           if (event?.content) {
             const decrypted = await user.signer.nip44.decrypt(pubkey, event.content);
-            const parsed = EncryptedSettingsSchema.safeParse(JSON.parse(decrypted));
+            const parsed = MetadataDocSchema.safeParse(JSON.parse(decrypted));
             if (parsed.success && !cancelled) {
               // Fold this run's canonical relay reads (NIP-65 bootstrap, and
               // the standard 10007/10050/10063 lists) over the NIP-78 blob so
@@ -440,16 +472,16 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
               // reads through the batcher, which mirrors what it returns — so
               // the settings query would find it on its own. Seeding is for
               // `merged`, which folds this run's canonical relay reads over the
-              // blob and exists only in memory.
-              queryClient.setQueryData<StoredSettings>(["encrypted-settings", pubkey], {
-                event,
-                settings: merged,
-              });
+              // document and exists only in memory.
+              queryClient.setQueryData<StoredSettingsDoc<"metadata">>(
+                settingsDocQueryKey("metadata", pubkey),
+                { event, doc: merged },
+              );
               settingsFound = true;
 
               // Migration: kinds 10007/10050/10063 are the canonical home for
-              // these lists as of this release, and they were dropped from
-              // SYNCED_CONFIG_KEYS so the NIP-78 blob no longer applies them.
+              // these lists as of this release, and they were dropped from the
+              // synced config keys so the NIP-78 document no longer applies them.
               // Pre-migration clients stored them ONLY in that blob, so a fresh
               // device with no canonical event yet would otherwise revert to
               // defaults. Keep the blob's value alive locally; a later explicit

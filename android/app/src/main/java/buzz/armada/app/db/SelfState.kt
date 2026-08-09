@@ -40,13 +40,33 @@ object SelfState {
     val KINDS: Set<Int> = setOf(3, 10000, 10009, 10050, 10063, 10030, 13302, 13303)
 
     /**
-     * The `d` values of the addressable kind-30078 documents Armada owns. The
-     * kind is shared with every other NIP-78 client on the user's identity, so
-     * it is filtered by `d` rather than stored wholesale — a third-party app's
-     * blob is none of our business and would only cost space.
+     * The `d` values of the addressable kind-30078 documents Armada owns, for
+     * the default `APP_ID`. The kind is shared with every other NIP-78 client
+     * on the user's identity, so it is filtered by `d` rather than stored
+     * wholesale — a third-party app's blob is none of our business and would
+     * only cost space.
+     *
+     * The WebView supplies the real set through the plugin config
+     * (`selfDTags`), because a fork can change `VITE_APP_ID` and rename all six
+     * documents. This default is what the service runs on before any WebView
+     * has ever configured it — on a cold boot, the prefs are read and the
+     * sockets opened long before the app is opened — and is therefore the set
+     * a default build depends on. `settingsDocs.test.ts` asserts it matches
+     * `SETTINGS_DOC_NAMES`; drift costs background delivery for whichever
+     * documents are missing, silently.
+     *
+     * Absent config means "use this", never "use nothing": an empty set would
+     * drop the kind-30078 subscription entirely.
      */
     @JvmField
-    val D_TAGS: Set<String> = setOf("armada/metadata")
+    val DEFAULT_D_TAGS: Set<String> = setOf(
+        "armada/metadata",
+        "armada/rail",
+        "armada/read-state",
+        "armada/notifications",
+        "armada/dms",
+        "armada/reactions",
+    )
 
     /** Tag shared by the per-installation encrypted GIF-favorite shards. */
     const val TOPIC_GIF_FAVORITES = "armada-gif-favorites"
@@ -65,15 +85,20 @@ object SelfState {
      * filter with somebody else's event, or with an unsigned one, must not be
      * able to write into that. The caller verifies the signature; this refuses
      * anything not authored by [self].
+     *
+     * [dTags] must be the SAME set the REQ was built from. Subscribing to one
+     * set and authorizing against another means either storing documents we
+     * never asked for, or discarding ones we did.
      */
     @JvmStatic
-    fun storable(self: String, rumor: Rumor): Boolean {
+    @JvmOverloads
+    fun storable(self: String, rumor: Rumor, dTags: Set<String> = DEFAULT_D_TAGS): Boolean {
         if (self.isEmpty()) return false
         if (rumor.pubkey != self) return false
         if (rumor.kind in KINDS) return true
         if (rumor.kind != KIND_APP_SPECIFIC) return false
         // Addressable: keep only Armada's own documents.
-        if (rumor.tagValue("d") in D_TAGS) return true
+        if (rumor.tagValue("d") in dTags) return true
         return rumor.tagValue("t") == TOPIC_GIF_FAVORITES
     }
 }

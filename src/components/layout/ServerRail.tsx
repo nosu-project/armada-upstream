@@ -1216,8 +1216,8 @@ function ServerRailInner({
   // back out of it, which also means they can never be "not live yet" and get
   // skipped at render the way a still-loading community can.
   const railDms = useMemo(
-    () => railDmPubkeys(config.railLayout, config.railOrder),
-    [config.railLayout, config.railOrder],
+    () => railDmPubkeys(config.railLayout),
+    [config.railLayout],
   );
 
   // Every live rail item (NIP-29 servers, Concord communities and pinned
@@ -1244,14 +1244,13 @@ function ServerRailInner({
 
   const liveByKey = useMemo(() => new Map(items.map((it) => [it.key, it])), [items]);
 
-  // The working layout: the synced `railLayout` (seeded from the legacy flat
-  // `railOrder` when absent) with newly-discovered items appended. Keys the
-  // layout knows but that aren't live yet (still loading / since removed) are
-  // KEPT in the data — they're only skipped at render — so an early drag can't
-  // wipe another device's folders.
+  // The working layout: the synced `railLayout` with newly-discovered items
+  // appended. Keys the layout knows but that aren't live yet (still loading /
+  // since removed) are KEPT in the data — they're only skipped at render — so
+  // an early drag can't wipe another device's folders.
   const layout = useMemo(
-    () => mergeLayout(config.railLayout, config.railOrder, items.map((it) => it.key)),
-    [config.railLayout, config.railOrder, items],
+    () => mergeLayout(config.railLayout, items.map((it) => it.key)),
+    [config.railLayout, items],
   );
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
@@ -1306,15 +1305,7 @@ function ServerRailInner({
     (nodes: RailLayoutNode[]) => {
       const normalized = normalizeLayout(nodes);
       const keys = flattenLayout(normalized);
-      updateConfig((current) => ({
-        ...current,
-        // The structured layout (items + folders) — the source of truth.
-        railLayout: normalized,
-        // Flattened order kept in sync for older clients that only understand
-        // the flat list (and as the seed `mergeLayout` reads when no layout
-        // has been stored yet).
-        railOrder: keys,
-      }));
+      updateConfig((current) => ({ ...current, railLayout: normalized }));
 
       // Also sync the relative order of user-added relays to the kind 10009
       // list (the cross-device source of truth for the added-server set).

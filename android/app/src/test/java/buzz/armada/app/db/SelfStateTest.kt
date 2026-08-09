@@ -33,13 +33,44 @@ class SelfStateTest {
         // still syncs, and only ever show up as "that one setting doesn't
         // travel between my devices".
         assertEquals(setOf(3, 10000, 10009, 10050, 10063, 10030, 13302, 13303), SelfState.KINDS)
-        assertEquals(setOf("armada/metadata"), SelfState.D_TAGS)
+        assertEquals(
+            setOf(
+                "armada/metadata",
+                "armada/rail",
+                "armada/read-state",
+                "armada/notifications",
+                "armada/dms",
+                "armada/reactions",
+            ),
+            SelfState.DEFAULT_D_TAGS,
+        )
     }
 
     @Test
-    fun `keeps Armada's own NIP-78 documents`() {
-        // The settings blob carries the community rail's arrangement.
-        assertTrue(SelfState.storable(self, rumor(kind = 30078, tags = listOf(listOf("d", "armada/metadata")))))
+    fun `keeps every one of Armada's own NIP-78 documents`() {
+        // Six documents, not one: the rail's arrangement, the read state and
+        // the mutes each have their own, and a service that mirrored only
+        // `metadata` would leave five of them to arrive on next app open.
+        for (dTag in SelfState.DEFAULT_D_TAGS) {
+            assertTrue(dTag, SelfState.storable(self, rumor(kind = 30078, tags = listOf(listOf("d", dTag)))))
+        }
+    }
+
+    @Test
+    fun `uses the configured tag set when the WebView supplies one`() {
+        // A fork changes VITE_APP_ID and every document is renamed with it.
+        val forked = setOf("fork/metadata", "fork/rail")
+        assertTrue(
+            SelfState.storable(self, rumor(kind = 30078, tags = listOf(listOf("d", "fork/rail"))), forked),
+        )
+        // …and the default build's tags are then somebody else's documents.
+        assertFalse(
+            SelfState.storable(
+                self,
+                rumor(kind = 30078, tags = listOf(listOf("d", "armada/rail"))),
+                forked,
+            ),
+        )
     }
 
     @Test

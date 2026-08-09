@@ -30,6 +30,8 @@
  * know the exact suffix (relayKey, etc.) a given mounted hook used.
  */
 
+import { SETTINGS_DTAGS, SETTINGS_KIND, settingsDocForDTag } from "@/lib/settingsDocs";
+
 /** NIP-02 contact/follow list. */
 export const KIND_FOLLOW_LIST = 3;
 /** NIP-51 mute list (kind 10000). */
@@ -49,10 +51,8 @@ export const KIND_COMMUNITY_LIST = 13302;
 /** Concord invite list — the creator's minted-link bookkeeping (CORD-05, 13303). */
 export const KIND_INVITE_LIST = 13303;
 /** NIP-78 application-specific data (30078) — vault, settings, and private app data. */
-export const KIND_APP_SPECIFIC = 30078;
+export const KIND_APP_SPECIFIC = SETTINGS_KIND;
 
-/** `d` tag identifying Armada's own encrypted settings document. */
-export const D_ARMADA_METADATA = "armada/metadata";
 /** Tag shared by per-installation encrypted GIF-favorite shards. */
 export const T_ARMADA_GIF_FAVORITES = "armada-gif-favorites";
 
@@ -74,10 +74,10 @@ export const SELF_SYNC_REPLACEABLE_KINDS: number[] = [
 ];
 
 /**
- * The `d` tags to sync on the addressable kind-30078 document (distinguished
- * from other apps' kind-30078 data by `d`).
+ * The `d` tags to sync on the addressable kind-30078 documents (distinguished
+ * from other apps' kind-30078 data by `d`) — Armada's six settings documents.
  */
-export const SELF_SYNC_DTAGS: string[] = [D_ARMADA_METADATA];
+export const SELF_SYNC_DTAGS: string[] = SETTINGS_DTAGS;
 
 /**
  * Resolve the query-key prefix(es) to invalidate for an incoming self event.
@@ -110,10 +110,14 @@ export function queryKeysForSelfEvent(
       return [["concord", "list"]];
     case KIND_INVITE_LIST:
       return [["concord", "invite-list"]];
-    case KIND_APP_SPECIFIC:
-      if (dTag === D_ARMADA_METADATA) return [["encrypted-settings"]];
+    case KIND_APP_SPECIFIC: {
+      // Each settings document has its own query, so only the one that
+      // actually changed re-reads and re-applies.
+      const doc = dTag !== undefined ? settingsDocForDTag(dTag) : undefined;
+      if (doc) return [["settings-doc", doc]];
       if (topicTag === T_ARMADA_GIF_FAVORITES) return [["favorite-gifs-sync"]];
       return [];
+    }
     default:
       return [];
   }

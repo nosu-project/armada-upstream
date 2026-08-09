@@ -304,24 +304,21 @@ export function WelcomePage() {
   // A signed-in user with a community never sees onboarding: redirect onto
   // the FIRST item of their arranged community rail — NIP-29 servers AND
   // Concord communities intermixed in the order they chose (the same
-  // list the far-left rail renders). The persisted `railLayout` (seeded from
-  // the legacy flat `railOrder`) lives in app config and is available
-  // synchronously, so the redirect commits without racing the rail's async
-  // load. `mergeLayout` seeds the working order from `railOrder` and appends
-  // any live NIP-29 server the layout doesn't yet know about.
+  // list the far-left rail renders). The persisted `railLayout` lives in app
+  // config and is available synchronously, so the redirect commits without
+  // racing the rail's async load. `mergeLayout` appends any live NIP-29 server
+  // the layout doesn't yet know about.
   const liveServers = useNip29Servers();
   const firstRoute = useMemo(() => {
     const servers = new Set(liveServers);
-    const ordered = flattenLayout(
-      mergeLayout(config.railLayout, config.railOrder, liveServers),
-    );
+    const ordered = flattenLayout(mergeLayout(config.railLayout, liveServers));
     for (const key of ordered) {
       if (!key.startsWith("c2:") && !servers.has(key)) continue;
       const route = railKeyToRoute(key);
       if (route) return route;
     }
     return null;
-  }, [config.railLayout, config.railOrder, liveServers]);
+  }, [config.railLayout, liveServers]);
   if (user && !online && mesh.available) {
     return <Navigate to="/mesh" replace />;
   }

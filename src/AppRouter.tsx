@@ -138,19 +138,15 @@ function HomeRedirect() {
   // Land on the first item of the user's *arranged* community rail — NIP-29
   // servers AND Concord communities intermixed in the order they chose
   // (the same list the far-left rail renders). The persisted `railLayout`
-  // (seeded from the legacy flat `railOrder`) lives in app config and is
-  // therefore available synchronously on the first render — before the server
-  // and Concord lists rehydrate from their folded caches — so the redirect
-  // commits to the right destination without racing the rail's async load.
-  // `mergeLayout` seeds the working order from `railOrder` and appends any
-  // live NIP-29 server the layout doesn't yet know about (a fresh user who
-  // never reordered).
+  // lives in app config and is therefore available synchronously on the first
+  // render — before the server and Concord lists rehydrate from their folded
+  // caches — so the redirect commits to the right destination without racing
+  // the rail's async load. `mergeLayout` appends any live NIP-29 server the
+  // layout doesn't yet know about (a fresh user who never reordered).
   const liveServers = useNip29Servers();
   const firstRoute = useMemo(() => {
     const servers = new Set(liveServers);
-    const ordered = flattenLayout(
-      mergeLayout(config.railLayout, config.railOrder, liveServers),
-    );
+    const ordered = flattenLayout(mergeLayout(config.railLayout, liveServers));
     for (const key of ordered) {
       // A NIP-29 server key (relay URL) is only a valid landing target if the
       // user still has it: the layout keeps keys for items that aren't live
@@ -163,7 +159,7 @@ function HomeRedirect() {
       if (route) return route;
     }
     return null;
-  }, [config.railLayout, config.railOrder, liveServers]);
+  }, [config.railLayout, liveServers]);
 
   if (!state.ready) {
     // Launch URL not yet known — committing to a default destination here

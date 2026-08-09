@@ -48,17 +48,13 @@ describe("normalizeLayout", () => {
 });
 
 describe("mergeLayout", () => {
-  it("seeds from the legacy flat order when no layout exists", () => {
-    expect(mergeLayout([], ["b", "a"], ["a", "b", "c"])).toEqual([
-      item("b"),
-      item("a"),
-      item("c"),
-    ]);
+  it("appends every live key when no layout has been stored", () => {
+    expect(mergeLayout([], ["a", "b", "c"])).toEqual([item("a"), item("b"), item("c")]);
   });
 
   it("appends unknown live keys and keeps unknown stored keys in place", () => {
     const stored = [folder("f", ["a", "ghost"]), item("b")];
-    expect(mergeLayout(stored, [], ["a", "b", "new"])).toEqual([
+    expect(mergeLayout(stored, ["a", "b", "new"])).toEqual([
       folder("f", ["a", "ghost"]),
       item("b"),
       item("new"),
@@ -220,19 +216,12 @@ describe("DM rail keys", () => {
 
   it("collects DM peers from the layout in visual order, folders included", () => {
     expect(
-      railDmPubkeys(
-        [item(dmRailKey(PEER)), folder("f", ["wss://a", dmRailKey(OTHER)])],
-        [],
-      ),
+      railDmPubkeys([item(dmRailKey(PEER)), folder("f", ["wss://a", dmRailKey(OTHER)])]),
     ).toEqual([PEER, OTHER]);
   });
 
-  it("falls back to the legacy flat order when no layout has been stored", () => {
-    expect(railDmPubkeys([], ["wss://a", dmRailKey(OTHER)])).toEqual([OTHER]);
-  });
-
   it("ignores a stored key that isn't a usable pubkey", () => {
-    expect(railDmPubkeys([item("dm:nope"), item(dmRailKey(PEER))], [])).toEqual([PEER]);
+    expect(railDmPubkeys([item("dm:nope"), item(dmRailKey(PEER))])).toEqual([PEER]);
   });
 });
 
@@ -349,6 +338,6 @@ describe("removeKey", () => {
     // was in when the user left.
     const left = removeKey([folder("f", ["a", "b", "c"])], "b");
     expect(flattenLayout(left)).toEqual(["a", "c"]);
-    expect(flattenLayout(mergeLayout(left, [], ["a", "c", "b"]))).toEqual(["a", "c", "b"]);
+    expect(flattenLayout(mergeLayout(left, ["a", "c", "b"]))).toEqual(["a", "c", "b"]);
   });
 });

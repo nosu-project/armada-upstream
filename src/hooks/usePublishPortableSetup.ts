@@ -14,11 +14,11 @@ import {
   type DmRelayListQuery,
 } from "@/hooks/useDmRelayList";
 import {
-  readStoredSettings,
-  SETTINGS_D,
-  SETTINGS_KIND,
-  type StoredSettings,
-} from "@/hooks/useEncryptedSettings";
+  decodeSettingsDoc,
+  nextSettingsDoc,
+  readSettingsDoc,
+  settingsDocQueryKey,
+} from "@/hooks/useSettingsDoc";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { parseBlossomServerList } from "@/lib/blossom";
@@ -31,13 +31,19 @@ import {
   uniqueRelayUrls,
 } from "@/lib/nip65";
 import { APP_NAME, RELAY_LIST_DISCOVERY_RELAYS } from "@/lib/platform";
-import { EncryptedSettingsSchema, type EncryptedSettings } from "@/lib/schemas";
 import {
   KIND_SEARCH_RELAYS,
   readSearchRelayList,
 } from "@/lib/searchRelayList";
 import type { SearchRelayListQuery } from "@/hooks/useSearchRelayList";
-import { syncedConfigSnapshot } from "@/lib/syncedConfig";
+import {
+  SETTINGS_DOC_NAMES,
+  SETTINGS_DTAGS,
+  SETTINGS_KIND,
+  settingsDTag,
+  type SettingsDocName,
+} from "@/lib/settingsDocs";
+import { CONFIG_KEYS_BY_DOC, configSnapshot, type ConfigDocName } from "@/lib/syncedConfig";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -48,6 +54,12 @@ export interface PortableSetupPublishResult {
   records: number;
   destinations: number;
   rejectedDeliveries: number;
+  /**
+   * Settings documents that exist on this device but that no relay returned,
+   * and so were left alone. Rebuilding one from a base we couldn't confirm
+   * would silently drop whatever the local copy is missing.
+   */
+  unrefreshed: SettingsDocName[];
 }
 
 function newest(events: NostrEvent[], kind: number): NostrEvent | undefined {
@@ -116,8 +128,7 @@ export function usePublishPortableSetup() {
           {
             kinds: [SETTINGS_KIND],
             authors: [user.pubkey],
-            "#d": [SETTINGS_D],
-            limit: 1,
+            "#d": SETTINGS_DTAGS,
           },
         ],
         AbortSignal.timeout(PUBLISH_TIMEOUT_MS),
@@ -165,57 +176,76 @@ export function usePublishPortableSetup() {
       }
       if (blossomEvent) toPublish.push(blossomEvent);
 
-      // The relays' newest copy and ArmadaDB's compete. The store is where the
-      // standing self-state REQ files every version as it arrives — and on
-      // Android, where the notification service files them while the app is
-      // dead — so it can hold one the relays we just asked have not caught up
-      // to. Merging over the older of the two would republish it as newest.
-      const stored = await readStoredSettings(await eventStore, user.signer, user.pubkey);
-      const fromRelays = events
-        .filter((event) =>
-          event.kind === SETTINGS_KIND
-          && event.tags.some(([name, value]) => name === "d" && value === SETTINGS_D))
-        .sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id))[0];
-      // We know the user has settings, and this read didn't find them: every
-      // relay we asked failed or is behind. Publishing a base we can't confirm
-      // would drop whatever it is missing, on every device.
-      if (!fromRelays && stored) {
-        throw new Error("Could not refresh your existing private settings; nothing was published");
-      }
+      // Each of the six settings documents, handled independently. A document
+      // this account has never written simply isn't there, which is not a
+      // failure — but one that exists locally and came back from NO relay is,
+      // and is skipped rather than rebuilt from a base we can't confirm.
+      const store = await eventStore;
+      const settingsSeeds: { name: SettingsDocName; event: NostrEvent; doc: unknown }[] = [];
+      const unrefreshed: SettingsDocName[] = [];
 
-      let previousSettings: NostrRumor | undefined = fromRelays;
-      let base: EncryptedSettings = {};
-      if (stored && (!fromRelays || stored.event.created_at >= fromRelays.created_at)) {
-        previousSettings = stored.event;
-        base = stored.settings;
-      } else if (fromRelays) {
-        try {
-          const plaintext = await user.signer.nip44.decrypt(user.pubkey, fromRelays.content);
-          const parsed = EncryptedSettingsSchema.safeParse(JSON.parse(plaintext));
-          if (!parsed.success) throw new Error("Invalid settings document");
-          base = parsed.data;
-        } catch {
-          throw new Error("Could not decrypt your existing private settings; nothing was published");
+      for (const name of SETTINGS_DOC_NAMES) {
+        // The relays' newest copy and ArmadaDB's compete. The store is where
+        // the standing self-state REQ files every version as it arrives — and
+        // on Android, where the notification service files them while the app
+        // is dead — so it can hold one the relays we just asked have not
+        // caught up to. Merging over the older of the two would republish it
+        // as newest.
+        const stored = await readSettingsDoc(store, user.signer, user.pubkey, name);
+        const dTag = settingsDTag(name);
+        const fromRelays = events
+          .filter((event) =>
+            event.kind === SETTINGS_KIND
+            && event.tags.some(([tag, value]) => tag === "d" && value === dTag))
+          .sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id))[0];
+
+        // We know the user has this document, and this read didn't find it:
+        // every relay we asked failed or is behind. Publishing a base we can't
+        // confirm would drop whatever it is missing, on every device. Skipping
+        // one document doesn't compromise the others — they're separate
+        // coordinates — so the rest of the setup still gets published.
+        if (!fromRelays && stored) {
+          unrefreshed.push(name);
+          continue;
         }
+
+        const configKeys = name in CONFIG_KEYS_BY_DOC ? (name as ConfigDocName) : undefined;
+        // Nothing local to merge in (read-state, reactions): mirror the newest
+        // signed copy byte-for-byte, exactly as the list events above are
+        // mirrored. Re-signing identical plaintext would only churn the
+        // coordinate.
+        if (!configKeys) {
+          if (fromRelays) toPublish.push(fromRelays as NostrEvent);
+          continue;
+        }
+
+        let previous: NostrRumor | undefined = fromRelays;
+        let base: Record<string, unknown> = {};
+        if (stored && (!fromRelays || stored.event.created_at >= fromRelays.created_at)) {
+          previous = stored.event;
+          base = stored.doc as Record<string, unknown>;
+        } else if (fromRelays) {
+          const decoded = await decodeSettingsDoc(fromRelays, user.signer, user.pubkey, name);
+          if (!decoded) {
+            throw new Error(
+              `Could not decrypt your existing private settings (${name}); nothing was published`,
+            );
+          }
+          base = decoded.doc as Record<string, unknown>;
+        }
+
+        const next = nextSettingsDoc(name, base as never, configSnapshot(config, configKeys) as never);
+        const settingsEvent = await user.signer.signEvent({
+          kind: SETTINGS_KIND,
+          content: await user.signer.nip44.encrypt(user.pubkey, JSON.stringify(next)),
+          tags: previous
+            ? previous.tags.filter(([tag]) => tag !== "client")
+            : [["d", dTag], ["title", `${APP_NAME} Settings`]],
+          created_at: nextCreatedAt(previous),
+        });
+        toPublish.push(settingsEvent);
+        settingsSeeds.push({ name, event: settingsEvent, doc: next });
       }
-      const nextSettings: EncryptedSettings = {
-        ...base,
-        ...syncedConfigSnapshot(config),
-        lastSync: Date.now(),
-      };
-      const settingsContent = await user.signer.nip44.encrypt(
-        user.pubkey,
-        JSON.stringify(nextSettings),
-      );
-      const settingsEvent = await user.signer.signEvent({
-        kind: SETTINGS_KIND,
-        content: settingsContent,
-        tags: previousSettings
-          ? previousSettings.tags.filter(([name]) => name !== "client")
-          : [["d", SETTINGS_D], ["title", `${APP_NAME} Settings`]],
-        created_at: nextCreatedAt(previousSettings),
-      });
-      toPublish.push(settingsEvent);
 
       for (const event of toPublish) {
         if (event.pubkey !== user.pubkey) throw new Error("The signer returned a different account");
@@ -261,18 +291,19 @@ export function usePublishPortableSetup() {
           blossomServerMetadata: { servers, updatedAt: blossomEvent!.created_at },
         }));
       }
-      // Into the store like every other version of this document, so the next
-      // read — here or in the notification service — sees what we published.
-      await (await eventStore).event(settingsEvent);
-      queryClient.setQueryData<StoredSettings>(["encrypted-settings", user.pubkey], {
-        event: settingsEvent,
-        settings: nextSettings,
-      });
+      // Into the store like every other version of these documents, so the
+      // next read — here or in the notification service — sees what we
+      // published.
+      for (const { name, event, doc } of settingsSeeds) {
+        await store.event(event);
+        queryClient.setQueryData(settingsDocQueryKey(name, user.pubkey), { event, doc });
+      }
 
       return {
         records: toPublish.length,
         destinations: targets.length,
         rejectedDeliveries,
+        unrefreshed,
       };
     } finally {
       setIsPending(false);

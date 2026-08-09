@@ -14,7 +14,7 @@ const h = vi.hoisted(() => ({
     },
   },
   user: { pubkey: "a".repeat(64) },
-  settings: { settings: null as unknown, isFetched: true },
+  settings: { doc: null as unknown, isFetched: true },
   servers: [] as string[],
 }));
 
@@ -64,7 +64,7 @@ describe("LoginSetup relay discovery", () => {
   beforeEach(() => {
     localStorage.clear();
     h.config.relayMetadata = { relays: [], updatedAt: 0, pubkey: undefined };
-    h.settings = { settings: null, isFetched: true };
+    h.settings = { doc: null, isFetched: true };
     h.servers = [];
   });
 
@@ -85,14 +85,14 @@ describe("LoginSetup relay discovery", () => {
   });
 
   it("never prompts when the settings read is still in flight", async () => {
-    h.settings = { settings: null, isFetched: false };
+    h.settings = { doc: null, isFetched: false };
     render(<LoginSetup />);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByRole("heading", { name: "restore your setup" })).not.toBeInTheDocument();
   });
 
   it("does not prompt for an account that already restored data", async () => {
-    h.settings = { settings: { theme: "dark" }, isFetched: true };
+    h.settings = { doc: { theme: "dark" }, isFetched: true };
     render(<LoginSetup />);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByRole("heading", { name: "restore your setup" })).not.toBeInTheDocument();
