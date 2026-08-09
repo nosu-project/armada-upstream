@@ -1,24 +1,51 @@
 /**
- * `fetchInviteList` (CORD-05 §4): the Invite List read MERGES every copy the
- * pool returns instead of trusting a single newest event. The spec's merge law
- * — entries immutable, tombstones union, a tombstone beats an entry
- * TERMINALLY — is what makes this safe against a stale device: a relay whose
- * "newest" copy predates another device's revocation must never let the
- * revoked link resurface (it would get refreshed with fresh keys after a
- * Refounding otherwise).
+ * The Invite List read (CORD-05 §4). The spec's merge law — entries immutable,
+ * tombstones union, a tombstone beats an entry TERMINALLY — is what makes a
+ * read safe against a stale copy: a 13303 that predates another device's
+ * revocation must never let the revoked link resurface (it would get refreshed
+ * with fresh keys after a Refounding otherwise).
+ *
+ * Two layers, because they fail differently. `fetchInviteList` merges every
+ * copy IT is handed; but `NPool.query` collects into an `NSet`, which applies
+ * replaceable semantics of its own and hands it at most ONE 13303 — so the
+ * function's merge cannot see a copy the pool already dropped, and a pool
+ * answered only by relays that haven't indexed our latest write returns a list
+ * that is simply behind. `useInviteList` is the layer that has to survive
+ * that, by merging the read into the cache rather than assigning over it.
  */
 
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { getConversationKey } from "nostr-tools/nip44";
 import { encrypt as nip44Encrypt } from "nostr-tools/nip44";
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
 import type { NostrEvent } from "nostr-tools/pure";
-import { describe, expect, it } from "vitest";
+import { createElement, type ReactNode } from "react";
+import { describe, expect, it, vi } from "vitest";
 
-import { fetchInviteList } from "@/concord/hooks/useInvites";
+import { fetchInviteList, useInviteList } from "@/concord/hooks/useInvites";
 import type { InviteList } from "@/concord/lib/invite";
 import { KIND_INVITE_LIST } from "@/concord/lib/kinds";
 
 import type { NUser } from "@nostrify/react/login";
+
+/** Swappable per test; read at call time by the two hook mocks below. */
+const mocks = vi.hoisted(() => ({
+  nostr: { query: async () => [] } as { query: () => Promise<unknown[]> },
+  user: undefined as unknown,
+}));
+
+vi.mock("@nostrify/react", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@nostrify/react")>()),
+  useNostr: () => ({ nostr: mocks.nostr }),
+}));
+
+vi.mock("@/hooks/useCurrentUser", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useCurrentUser")>()),
+  useCurrentUser: () => ({ user: mocks.user }),
+}));
+
+
 
 function fakeUser(sk = generateSecretKey()) {
   const pubkey = getPublicKey(sk);
@@ -107,5 +134,72 @@ describe("fetchInviteList (CORD-05 §4 merge on read)", () => {
     // A relay keeps only the newest replaceable per author — a rewrite must
     // outbid the garbage copy sitting there, or it would be shadowed forever.
     expect(newestCreatedAt).toBe(2000);
+  });
+});
+
+describe("useInviteList (a network read may only widen the local list)", () => {
+  const cid = "ce".repeat(32);
+  const token = "0a".repeat(16);
+
+  function harness() {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+    });
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+    return { queryClient, wrapper };
+  }
+
+  it("keeps a locally tombstoned entry when the pool still answers from the pre-revocation copy", async () => {
+    const { sk, user } = fakeUser();
+    mocks.user = user;
+    // Every relay that answers inside the pool's ~300ms EOSE window is still
+    // serving the list as it was BEFORE the revoke — the link live, no
+    // tombstone. This is the ordinary case right after a write, not a fault.
+    mocks.nostr = {
+      query: async () => [listCopy(sk, { entries: [entry(token, cid)], tombstones: [] }, 1000)],
+    };
+
+    const { queryClient, wrapper } = harness();
+    // What `revokeLink`'s optimistic write leaves in the cache.
+    queryClient.setQueryData(["concord", "invite-list", user.pubkey], {
+      entries: [],
+      tombstones: [{ token, community_id: cid }],
+    } satisfies InviteList);
+
+    const { result } = renderHook(() => useInviteList(), { wrapper });
+
+    // Publishing the 13303 echoes it back on the self-sync sub, which
+    // invalidates this query — the refetch that used to resurrect the link.
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["concord", "invite-list"] });
+    });
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+
+    expect(result.current.data?.entries).toEqual([]);
+    expect(result.current.data?.tombstones.map((t) => t.token)).toEqual([token]);
+  });
+
+  it("still adopts what the read adds (a mint from another device)", async () => {
+    const { sk, user } = fakeUser();
+    mocks.user = user;
+    const other = "0b".repeat(16);
+    mocks.nostr = {
+      query: async () => [listCopy(sk, { entries: [entry(other, cid)], tombstones: [] }, 2000)],
+    };
+
+    const { queryClient, wrapper } = harness();
+    queryClient.setQueryData(["concord", "invite-list", user.pubkey], {
+      entries: [entry(token, cid)],
+      tombstones: [],
+    } satisfies InviteList);
+
+    const { result } = renderHook(() => useInviteList(), { wrapper });
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ["concord", "invite-list"] });
+    });
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+
+    expect(result.current.data?.entries.map((e) => e.token).sort()).toEqual([token, other].sort());
   });
 });
