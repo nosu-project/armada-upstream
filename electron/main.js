@@ -63,6 +63,7 @@ const {
   hasTrustedWindowsSignature,
   supportsSelfUpdate,
 } = require("./updateSupport");
+const { integrateAppImage } = require("./desktopIntegration");
 const { listLinuxAudioApplications } = require("./linuxAudioSources");
 const {
   detectLinuxTrayEnvironment,
@@ -80,7 +81,10 @@ const { spawnSync } = require("node:child_process");
 
 // Keep Linux's desktop-file identity stable in both the AppImage and Flatpak.
 // Electron must receive this before ready so notifications and tray hosts can
-// associate the process with buzz.armada.app.desktop.
+// associate the process with buzz.armada.app.desktop. It is also the window's
+// WM_CLASS, i.e. the entry a dock looks for when it wants a name and an icon
+// for this process — desktopIntegration.js installs that entry for the
+// AppImage, which is otherwise the one packaging that has none.
 if (process.platform === "linux") {
   app.setDesktopName("buzz.armada.app.desktop");
 }
@@ -205,11 +209,30 @@ async function openExternalUrl(url) {
 
 // Dark background matching the app theme (index.html theme-color #100b15).
 const BACKGROUND = "#100b15";
-const ICON = path.join(__dirname, "build", "icon.png");
+// The window icon. On Linux this is also the art a dock or panel draws for a
+// window it cannot match to an installed .desktop entry (the AppImage case —
+// see desktopIntegration.js), so it has to be the LAUNCHER tile — the crest on
+// the cut-corner vessel shape the UI gives server icons — rather than the
+// full-bleed square. macOS and Windows draw the icon from the packaged bundle
+// instead, where electron-builder derives .icns/.ico from build/icon.png.
+const ICON = path.join(__dirname, "build", process.platform === "linux" ? "linux-icon.png" : "icon.png");
 // Tray art (electron/icon-src/tray.svg): the simplified Armada A, the same
 // shape as the Android notification small icon. A tray slot is ~16-22px, so
 // the full crest in ICON is unreadable there.
 const TRAY_DIR = path.join(__dirname, "build");
+
+/**
+ * The launcher tile at `size`×`size` as PNG bytes, for the hicolor icon theme.
+ * Scaling once here beats shipping one 512 for every slot from a 16px panel up.
+ */
+function renderLinuxIcon(size) {
+  const image = nativeImage.createFromPath(ICON);
+  if (image.isEmpty()) return null;
+  const resized = image.getSize().width === size
+    ? image
+    : image.resize({ width: size, height: size, quality: "best" });
+  return resized.toPNG();
+}
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -1512,6 +1535,18 @@ if (!gotLock) {
     // answer — only whether a --hidden start is safe, reconciled below.
     createWindow({ show: !startHidden });
     watchBundleBoot();
+
+    // Give the AppImage the .desktop entry no installer wrote for it, so the
+    // dock has a name and an icon to draw instead of the bare WM_CLASS. Not
+    // awaited and not fatal: nothing about running depends on the outcome.
+    void integrateAppImage({
+      version: app.getVersion(),
+      renderIcon: renderLinuxIcon,
+    }).then((result) => {
+      if (result.reason === "error") {
+        console.warn("[shell] desktop integration failed", result.error);
+      }
+    });
 
     if (process.platform === "linux") {
       await refreshTraySupport();
