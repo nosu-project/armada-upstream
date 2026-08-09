@@ -436,7 +436,14 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     const nothingToWatch =
       relayUrls.length === 0 &&
       concordSubs.length === 0 &&
-      dmRelays.length === 0;
+      dmRelays.length === 0 &&
+      // `selfRelays` counts too: the service's self-state subscription is what
+      // keeps the user's own documents — the NIP-78 settings among them — on
+      // disk while the app is dead. Leaving it out of this test meant an
+      // account with no NIP-29 server, no Concord community and no DM relay
+      // never got the service configured at all, so that subscription never
+      // ran, however many relays the user had.
+      selfRelays.length === 0;
 
     let payload: Parameters<typeof ArmadaNotification.configure>[0];
     if (turnedOff || loggedOut) {

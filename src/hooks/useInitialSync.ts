@@ -32,7 +32,11 @@ import {
 } from "@/lib/searchRelayList";
 import type { SearchRelayListQuery } from "@/hooks/useSearchRelayList";
 import { logSync } from "@/lib/syncLog";
-import type { SettingsRead } from "@/hooks/useEncryptedSettings";
+import {
+  SETTINGS_D,
+  SETTINGS_KIND,
+  type StoredSettings,
+} from "@/hooks/useEncryptedSettings";
 import {
   discoverRelayList,
   queryExplicitRelays,
@@ -42,10 +46,6 @@ import { RELAY_LIST_DISCOVERY_RELAYS } from "@/lib/platform";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
-/** NIP-78 application-data kind (Armada's encrypted settings). */
-const SETTINGS_KIND = 30078;
-/** `d` tag identifying Armada's settings event. */
-const SETTINGS_D = "armada/metadata";
 /** NIP-88 poll kind — polls render inline in the group timeline. */
 const KIND_POLL = 1068;
 /** Kinds shown in a group timeline (mirrors useGroupMessages). */
@@ -436,15 +436,14 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
                     }
                   : {}),
               };
-              // Seeded in the shape useEncryptedSettings stores: this WAS a
-              // relay read, so it counts as a confirmed one and NostrSync may
-              // merge over it. (The settings watermark is deliberately not
-              // written here — see the note further down — so NostrSync still
-              // applies these to config.)
-              queryClient.setQueryData<SettingsRead>(["encrypted-settings", pubkey], {
+              // The event itself is already in ArmadaDB — `queryExplicitRelays`
+              // reads through the batcher, which mirrors what it returns — so
+              // the settings query would find it on its own. Seeding is for
+              // `merged`, which folds this run's canonical relay reads over the
+              // blob and exists only in memory.
+              queryClient.setQueryData<StoredSettings>(["encrypted-settings", pubkey], {
+                event,
                 settings: merged,
-                source: "remote",
-                complete: true,
               });
               settingsFound = true;
 

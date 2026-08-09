@@ -1,6 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import { useBootGateOpen } from "@/lib/bootGate";
 
@@ -8,13 +8,8 @@ import { setBuzzMediaSigner } from "@/buzz/media";
 import { accountDataRelays, SYNCED_CONFIG_KEYS, type AppConfig } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import {
-  getLastSettingsWrite,
-  getLocalSettingsSync,
-  setLastSettingsWrite,
-  setLocalSettingsSync,
-  useEncryptedSettings,
-} from "@/hooks/useEncryptedSettings";
+import { useEncryptedSettings } from "@/hooks/useEncryptedSettings";
+import { useEventStore } from "@/hooks/useEventStore";
 import {
   getFrequentReactions,
   hydrateFrequentReactions,
@@ -117,8 +112,8 @@ function NostrSyncInner() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { config, updateConfig } = useAppContext();
-  const { settings, settingsSource, updateSettings, hasNip44Support, isSuccess } =
-    useEncryptedSettings();
+  const { settings, settingsEvent, updateSettings, hasNip44Support } = useEncryptedSettings();
+  const eventStore = useEventStore();
   const blossomServerList = useBlossomServerList();
   const dmRelayList = useDmRelayList();
   const searchRelayList = useSearchRelayList();
@@ -139,17 +134,21 @@ function NostrSyncInner() {
   const relayListAppliedPubkey = useRef<string | undefined>(undefined);
   // Newest created_at handled per (kind + optional d tag), across resubscribes.
   const seenSelfVersions = useRef<Map<string, number>>(new Map());
-  // The remote sync timestamp we've most recently folded into local config.
-  const appliedSyncTs = useRef<number>(-1);
-  // Whether the initial incoming pull has settled for the current account.
-  // Gate outgoing publishes on this so we never republish local defaults over
-  // a good remote copy before we've had a chance to read it.
-  const pulledForPubkey = useRef<string | undefined>(undefined);
+  // The settings document we've most recently folded into local config.
+  const appliedSettingsId = useRef<string | undefined>(undefined);
   // Serialized synced subset last known to match the remote event, so the
   // publish watcher can skip no-op writes (including the config change caused
   // by applying an incoming pull).
   const lastSyncedSnapshot = useRef<string | undefined>(undefined);
+  // A pending debounced settings publish. Non-null means "a local edit is
+  // newer than anything on disk", which section 1 reads to know not to apply
+  // over it — so clearing the timeout must also clear the ref, or a cancelled
+  // publish would look like a permanently in-flight one.
   const publishTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelPublish = useCallback(() => {
+    if (publishTimer.current) clearTimeout(publishTimer.current);
+    publishTimer.current = null;
+  }, []);
   // Latest settings, readable from a debounced callback without making every
   // settings change tear down and rebuild that subscription.
   const settingsRef = useRef<EncryptedSettings | null>(null);
@@ -166,15 +165,18 @@ function NostrSyncInner() {
 
   // Reset guards when the account changes.
   useEffect(() => {
-    appliedSyncTs.current = -1;
-    pulledForPubkey.current = undefined;
+    appliedSettingsId.current = undefined;
     lastSyncedSnapshot.current = undefined;
+    // A debounced publish belongs to the account that made the edit; letting
+    // one fire after a switch would write that config into the new account's
+    // settings document.
+    cancelPublish();
     blossomAppliedEvent.current = undefined;
     dmRelaysAppliedEvent.current = undefined;
     searchRelaysAppliedEvent.current = undefined;
     relayListAppliedPubkey.current = undefined;
     seenSelfVersions.current = new Map();
-  }, [user?.pubkey]);
+  }, [user?.pubkey, cancelPublish]);
 
   // ─── A. Standing self-state subscription (transport / freshness) ──────
   // One long-lived REQ for the user's own replaceable/addressable events. Each
@@ -231,7 +233,19 @@ function NostrSyncInner() {
       if (event.created_at <= prev) return; // echo of a version already handled
       seen.set(seenKey, event.created_at);
 
-      scheduleInvalidate(keys);
+      // Write it to ArmadaDB, and only THEN tell the readers. The batcher
+      // mirrors everything out of `.req()` on its own, but as a fire-and-forget
+      // write that races this invalidation — and the settings document is now
+      // read from the store, so "invalidated but not yet written" is a re-read
+      // of the version we just superseded. Ordering it here is the difference
+      // between a live subscription and a live subscription that lands. A
+      // duplicate write is a no-op: same id, same coordinate.
+      void eventStore
+        .then((store) => store.event(event))
+        .catch(() => undefined)
+        .finally(() => {
+          if (!controller.signal.aborted) scheduleInvalidate(keys);
+        });
     };
 
     const filters: NostrFilter[] = [
@@ -264,136 +278,83 @@ function NostrSyncInner() {
     // Rebuilding is the only recovery for either, and with no `since` it costs
     // a handful of replaceables. `selfRelayKey` rebuilds it when the account's
     // relay set changes (e.g. NIP-65 adoption) so the standing REQ follows.
-  }, [nostr, user?.pubkey, queryClient, resumeEpoch, selfRelayKey]);
+  }, [nostr, user?.pubkey, queryClient, eventStore, resumeEpoch, selfRelayKey]);
 
   // ─── 1. Armada encrypted settings → local config ─────────────────────
+  // Apply each settings document once, identified by the event it came in.
+  // Which document that is has already been decided — by the store, which
+  // keeps only the newest version of the NIP-01 coordinate — so there is no
+  // timestamp arbitration to do here. A stale copy arriving late from a slow
+  // relay is refused by the store and never reaches this effect.
   useEffect(() => {
-    if (!user?.pubkey) return;
+    if (!user?.pubkey || !settings || !settingsEvent) return;
+    if (appliedSettingsId.current === settingsEvent.id) return;
 
-    // Wait for the settings pull to complete at least once. The real guard
-    // against clobbering a good remote config with local defaults is below
-    // (we open the publish gate only after positively observing a remote
-    // event, and section 2 refuses to publish with a null base) — this just
-    // avoids acting on an in-flight query.
-    if (!isSuccess) return;
+    // …with one exception: a local edit inside its publish debounce is newer
+    // than anything on disk and isn't on disk yet. Applying over it would
+    // revert what the user just did, and section 2 would then see no diff and
+    // never publish it. The publish itself supersedes this document, so
+    // skipping is not a deferral — there is nothing left to apply.
+    if (publishTimer.current) return;
 
-    const remoteTs = settings?.lastSync ?? 0;
-    const localTs = Math.max(getLocalSettingsSync(user.pubkey), getLastSettingsWrite());
+    appliedSettingsId.current = settingsEvent.id;
 
-    // Only apply a remote event that is both newer than our local edits and
-    // newer than what we've already folded in (so periodic refetch re-applies
-    // fresh cross-device changes without thrashing on the same event).
-    if (settings && remoteTs > localTs && remoteTs > appliedSyncTs.current) {
-      const merged: Partial<AppConfig> = {};
-      for (const key of SYNCED_CONFIG_KEYS) {
-        const value = settings[key as keyof EncryptedSettings];
-        if (value !== undefined) {
-          (merged as Record<string, unknown>)[key] = value;
-        }
+    const merged: Partial<AppConfig> = {};
+    for (const key of SYNCED_CONFIG_KEYS) {
+      const value = settings[key as keyof EncryptedSettings];
+      if (value !== undefined) {
+        (merged as Record<string, unknown>)[key] = value;
       }
-      // Every synced key applies wholesale. The blob used to also carry
-      // `addedRelays`, union-merged — which made it a server RE-ADD channel:
-      // a blob written before a removal still listed the removed server and
-      // put it back on every device, forever. The server set now lives only in
-      // the kind 10009 list, so there is nothing here to union.
-      updateConfig((current) => {
-        const next = { ...current, ...merged };
-        // Record what we just applied so the publish watcher treats it as
-        // already-synced and doesn't echo it straight back out.
-        lastSyncedSnapshot.current = JSON.stringify(syncedConfigSnapshot(next));
-        return next;
-      });
-      setLocalSettingsSync(user.pubkey, remoteTs);
-      appliedSyncTs.current = remoteTs;
     }
-
-    // Open the outgoing-publish gate ONLY once we have positively observed the
-    // user's own remote settings event. Rationale:
-    //
-    //   • `nostr.query` (NPool) silently swallows relay errors/timeouts and
-    //     returns whatever it collected before a 1s EOSE — so a slow or dead
-    //     relay yields an empty result indistinguishable from "no event". We
-    //     must never treat that ambiguity as license to publish.
-    //   • `updateSettings` builds the new 30078 event by merging the local
-    //     synced subset over `settings.data ?? {}`. If `settings` is null
-    //     (no remote observed), that base is empty, so the published event
-    //     DROPS every key not present in local defaults — a replaceable-event
-    //     wipe of the user's real config, stamped newest so it wins on every
-    //     device. This is the bug.
-    //   • A user with no metadata event simply runs on app defaults. There is
-    //     nothing to sync and no reason to fabricate a config for them.
-    //
-    // So: no observed remote event → gate stays closed → we never auto-publish.
-    // The gate opens the moment we read a real event THIS SESSION, after which
-    // genuine user edits publish and merge safely over the known-good remote
-    // base.
-    //
-    // `settingsSource === "remote"` is the whole test. It used to be
-    // `settings !== null || getLocalSettingsSync(pubkey) > 0`, and both
-    // disjuncts opened the gate on a FAILED read: the query falls back to the
-    // locally mirrored copy, so `settings` is non-null even when no relay
-    // answered, and the persisted marker only says some PAST session read
-    // something. Either way the base we then merged over was this device's
-    // stale copy, republished with a fresh `lastSync` — which is precisely the
-    // "my other device reverted my changes" report. The source discriminator
-    // distinguishes the two, so the gate can require an actual read.
-    if (settingsSource === "remote") {
-      pulledForPubkey.current = user.pubkey;
-    }
-  }, [user?.pubkey, settings, settingsSource, isSuccess, updateConfig]);
+    // Every synced key applies wholesale. The blob used to also carry
+    // `addedRelays`, union-merged — which made it a server RE-ADD channel:
+    // a blob written before a removal still listed the removed server and
+    // put it back on every device, forever. The server set now lives only in
+    // the kind 10009 list, so there is nothing here to union.
+    updateConfig((current) => {
+      const next = { ...current, ...merged };
+      // Record what we just applied so the publish watcher treats it as
+      // already-synced and doesn't echo it straight back out.
+      lastSyncedSnapshot.current = JSON.stringify(syncedConfigSnapshot(next));
+      return next;
+    });
+  }, [user?.pubkey, settings, settingsEvent, updateConfig]);
 
   // ─── 2. Local config → encrypted settings (debounced publish) ─────────
-  // A DIRECT user config edit (theme, relays, orders, last-open channel, …) is
-  // pushed to the NIP-78 event so it syncs across devices. This is the ONLY
-  // place Armada broadcasts a settings event, and it must fire only for a real
-  // user mutation — never off boot-time or sync-driven config changes:
+  // A DIRECT user config edit (theme, relays, orders, …) is pushed to the
+  // NIP-78 document so it syncs across devices. This is the ONLY place Armada
+  // broadcasts a settings event automatically, and it must fire only for a
+  // real user mutation — never off boot-time or sync-driven config changes,
+  // which keep `lastSyncedSnapshot` in lockstep so the diff below can only
+  // reflect a user edit.
   //
-  //   • `pulledForPubkey` gates on having observed the user's remote event, so
-  //     we never publish a merge that would drop keys we simply failed to read
-  //     (the initial-sync wipe).
-  //   • Sync-driven mutations (sections 1 / 1b / 1c) keep `lastSyncedSnapshot`
-  //     in lockstep, so the diff below can only ever reflect a user edit.
-  //   • As a last belt-and-braces guard we require a non-null `settings` base
-  //     at publish time: `updateSettings` merges the patch over `settings.data`,
-  //     and merging over null would replace the remote event with just the
-  //     local subset — the very wipe we're preventing.
+  // `settings === null` means the store holds no settings document. Publishing
+  // then would merge the local subset over `{}` and REPLACE the user's real
+  // settings on every device with it — so we don't, and a user who genuinely
+  // has none simply runs on app defaults until they create one explicitly.
   useEffect(() => {
-    if (!user?.pubkey || !hasNip44Support) return;
-    if (pulledForPubkey.current !== user.pubkey) return;
+    if (!user?.pubkey || !hasNip44Support || settings === null) return;
 
     const snapshot = JSON.stringify(syncedConfigSnapshot(config));
     if (lastSyncedSnapshot.current === undefined) {
-      // First observation post-pull: adopt current state as the baseline
-      // (matches what the pull applied, or the local defaults if none).
+      // First observation: adopt current state as the baseline (matches what
+      // section 1 applied, or the local defaults if it hasn't run).
       lastSyncedSnapshot.current = snapshot;
       return;
     }
     if (snapshot === lastSyncedSnapshot.current) return;
 
-    // A genuine user edit was just observed. Stamp the local-write clock NOW,
-    // before the debounce, so section 1's `remoteTs > localTs` guard protects
-    // this edit against a stale relay copy that lands during the debounce
-    // window (the "my change reverted" race). `updateSettings` re-stamps it at
-    // actual publish time; this only closes the gap in between.
-    setLastSettingsWrite(Date.now());
-
-    // Never publish while we lack a known-good remote base to merge over —
-    // doing so would replace the user's real settings event with only the
-    // local synced subset, dropping every key we haven't observed.
-    if (settings === null) return;
-
-    if (publishTimer.current) clearTimeout(publishTimer.current);
+    cancelPublish();
     publishTimer.current = setTimeout(() => {
+      publishTimer.current = null;
       lastSyncedSnapshot.current = snapshot;
       updateSettings(syncedConfigSnapshot(config)).catch((err) =>
         console.warn("Config sync failed:", err),
       );
     }, PUBLISH_DEBOUNCE_MS);
 
-    return () => {
-      if (publishTimer.current) clearTimeout(publishTimer.current);
-    };
-  }, [user?.pubkey, hasNip44Support, config, settings, updateSettings]);
+    return cancelPublish;
+  }, [user?.pubkey, hasNip44Support, config, settings, updateSettings, cancelPublish]);
 
   // The portable voice-server preference is synchronized in AppConfig, while
   // the voice runtime still reads its established localStorage key. Keep that
@@ -479,7 +440,7 @@ function NostrSyncInner() {
           updatedAt: event.created_at,
         },
       };
-      if (pulledForPubkey.current === user.pubkey) {
+      if (lastSyncedSnapshot.current !== undefined) {
         lastSyncedSnapshot.current = JSON.stringify(syncedConfigSnapshot(next));
       }
       return next;
@@ -496,7 +457,7 @@ function NostrSyncInner() {
     searchRelaysAppliedEvent.current = event.id;
     updateConfig((current) => {
       const next = { ...current, searchRelays: searchRelayList.relays };
-      if (pulledForPubkey.current === user.pubkey) {
+      if (lastSyncedSnapshot.current !== undefined) {
         lastSyncedSnapshot.current = JSON.stringify(syncedConfigSnapshot(next));
       }
       return next;
@@ -509,7 +470,7 @@ function NostrSyncInner() {
     dmRelaysAppliedEvent.current = event.id;
     updateConfig((current) => {
       const next = { ...current, dmRelays: dmRelayList.relays };
-      if (pulledForPubkey.current === user.pubkey) {
+      if (lastSyncedSnapshot.current !== undefined) {
         lastSyncedSnapshot.current = JSON.stringify(syncedConfigSnapshot(next));
       }
       return next;
@@ -551,7 +512,7 @@ function NostrSyncInner() {
           };
           // Sync-driven (hydrating the user's own 10002 list), not a user edit
           // — keep the publish baseline in lockstep so it isn't broadcast back.
-          if (pulledForPubkey.current === user.pubkey) {
+          if (lastSyncedSnapshot.current !== undefined) {
             lastSyncedSnapshot.current = JSON.stringify(syncedConfigSnapshot(next));
           }
           return next;
@@ -571,12 +532,10 @@ function NostrSyncInner() {
     if (!user?.pubkey) return;
     if (dittoCheckedPubkey.current === user.pubkey) return;
 
-    // Only adopt the Ditto theme if the user has no Armada theme yet:
-    // never synced Armada settings AND still on the untouched default.
-    const hasArmadaSettings =
-      getLocalSettingsSync(user.pubkey) > 0 || (settings && (settings.lastSync ?? 0) > 0);
+    // Only adopt the Ditto theme if the user has no Armada theme yet: no
+    // settings document on disk AND still on the untouched default.
     const usingDefault = config.theme === "dark" && !config.customTheme;
-    if (hasArmadaSettings || !usingDefault) {
+    if (settings || !usingDefault) {
       dittoCheckedPubkey.current = user.pubkey;
       return;
     }

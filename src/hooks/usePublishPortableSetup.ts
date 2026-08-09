@@ -13,8 +13,14 @@ import {
   parseDmRelays,
   type DmRelayListQuery,
 } from "@/hooks/useDmRelayList";
-import { getLocalSettingsSync, setLocalSettingsSync } from "@/hooks/useEncryptedSettings";
+import {
+  readStoredSettings,
+  SETTINGS_D,
+  SETTINGS_KIND,
+  type StoredSettings,
+} from "@/hooks/useEncryptedSettings";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useEventStore } from "@/hooks/useEventStore";
 import { parseBlossomServerList } from "@/lib/blossom";
 import { KIND_USER_GROUPS } from "@/lib/nip29";
 import {
@@ -34,9 +40,8 @@ import type { SearchRelayListQuery } from "@/hooks/useSearchRelayList";
 import { syncedConfigSnapshot } from "@/lib/syncedConfig";
 
 import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
-const SETTINGS_KIND = 30078;
-const SETTINGS_D = "armada/metadata";
 const PUBLISH_TIMEOUT_MS = 8_000;
 
 export interface PortableSetupPublishResult {
@@ -51,7 +56,7 @@ function newest(events: NostrEvent[], kind: number): NostrEvent | undefined {
     .sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id))[0];
 }
 
-function nextCreatedAt(prev: NostrEvent | undefined): number {
+function nextCreatedAt(prev: NostrRumor | undefined): number {
   const now = Math.floor(Date.now() / 1000);
   return prev ? Math.max(now, prev.created_at + 1) : now;
 }
@@ -68,6 +73,7 @@ export function usePublishPortableSetup() {
   const { user } = useCurrentUser();
   const { config, updateConfig } = useAppContext();
   const queryClient = useQueryClient();
+  const eventStore = useEventStore();
   const [isPending, setIsPending] = useState(false);
 
   const publish = useCallback(async (): Promise<PortableSetupPublishResult> => {
@@ -159,19 +165,32 @@ export function usePublishPortableSetup() {
       }
       if (blossomEvent) toPublish.push(blossomEvent);
 
-      const previousSettings = events
+      // The relays' newest copy and ArmadaDB's compete. The store is where the
+      // standing self-state REQ files every version as it arrives — and on
+      // Android, where the notification service files them while the app is
+      // dead — so it can hold one the relays we just asked have not caught up
+      // to. Merging over the older of the two would republish it as newest.
+      const stored = await readStoredSettings(await eventStore, user.signer, user.pubkey);
+      const fromRelays = events
         .filter((event) =>
           event.kind === SETTINGS_KIND
           && event.tags.some(([name, value]) => name === "d" && value === SETTINGS_D))
         .sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id))[0];
-      if (!previousSettings && getLocalSettingsSync(user.pubkey) > 0) {
+      // We know the user has settings, and this read didn't find them: every
+      // relay we asked failed or is behind. Publishing a base we can't confirm
+      // would drop whatever it is missing, on every device.
+      if (!fromRelays && stored) {
         throw new Error("Could not refresh your existing private settings; nothing was published");
       }
 
+      let previousSettings: NostrRumor | undefined = fromRelays;
       let base: EncryptedSettings = {};
-      if (previousSettings) {
+      if (stored && (!fromRelays || stored.event.created_at >= fromRelays.created_at)) {
+        previousSettings = stored.event;
+        base = stored.settings;
+      } else if (fromRelays) {
         try {
-          const plaintext = await user.signer.nip44.decrypt(user.pubkey, previousSettings.content);
+          const plaintext = await user.signer.nip44.decrypt(user.pubkey, fromRelays.content);
           const parsed = EncryptedSettingsSchema.safeParse(JSON.parse(plaintext));
           if (!parsed.success) throw new Error("Invalid settings document");
           base = parsed.data;
@@ -242,8 +261,13 @@ export function usePublishPortableSetup() {
           blossomServerMetadata: { servers, updatedAt: blossomEvent!.created_at },
         }));
       }
-      queryClient.setQueryData(["encrypted-settings", user.pubkey], nextSettings);
-      setLocalSettingsSync(user.pubkey, nextSettings.lastSync ?? Date.now());
+      // Into the store like every other version of this document, so the next
+      // read — here or in the notification service — sees what we published.
+      await (await eventStore).event(settingsEvent);
+      queryClient.setQueryData<StoredSettings>(["encrypted-settings", user.pubkey], {
+        event: settingsEvent,
+        settings: nextSettings,
+      });
 
       return {
         records: toPublish.length,
@@ -253,7 +277,7 @@ export function usePublishPortableSetup() {
     } finally {
       setIsPending(false);
     }
-  }, [config, nostr, queryClient, updateConfig, user]);
+  }, [config, eventStore, nostr, queryClient, updateConfig, user]);
 
   return { publish, isPending };
 }
