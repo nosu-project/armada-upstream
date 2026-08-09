@@ -4,6 +4,24 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.50.0] - 2026-08-08
+
+Muting and reporting land across the app: mute anyone from any menu and they disappear from every surface, or report a message or a person — in a community the report goes privately to its staff, who read the queue in a new Reports pane. Staff can also rotate a community's keys on demand. Git activity in channels is now quiet chat rows instead of bordered cards, and key rotations in large communities and private channels are fixed.
+
+### Added
+- Mute anyone from a message menu, thread panel, member list, profile card, DM header or voice menu; muted people vanish from timelines, member lists, reactions, typing indicators, search, mentions, notifications and Discover, and can be unmuted from a new Muted people section in Settings
+- Report a message or a person from the message menu, member list, profile card or DM header, with the option to mute them at the same time; reports in a community go privately to its staff, who read them in a new Reports pane
+- Staff can rotate a community's keys on demand from the community menu
+
+### Changed
+- Git activity in channels renders as quiet chat rows instead of bordered cards, with long bodies trimmed to a preview, back-to-back activity from one person grouped, and stretches of status changes or CI runs folded into a single row
+
+### Fixed
+- A Refounding no longer hands every remaining member the keys to private channels they aren't entitled to; each private channel is rotated only to the members entitled to it
+- Key rotations in communities with more than roughly 100 members no longer fail to publish
+- Rooms set to notify only on mentions no longer notify for every message when the app is in the background on Android
+- An interrupted edge swipe no longer leaves a pane stuck partway open
+
 ## [0.49.6] - 2026-08-08
 
 Bug fix release: private channels now load from their own keys, and the Linux .deb package is correctly staged in the desktop auto-update feed.
