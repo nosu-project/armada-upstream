@@ -28,6 +28,7 @@ import {
   grantLocator,
   hex32,
   inviteLinksLocator,
+  signalLocator,
   type GroupKey,
   type StreamKeyView,
 } from "@/concord/lib/derive";
@@ -40,6 +41,7 @@ import {
 } from "@/concord/lib/edition";
 import {
   KIND_SEAL_PLAINTEXT,
+  SIGNAL_PAUSE,
   VSK_BANLIST,
   VSK_CHANNEL,
   VSK_DISSOLVED,
@@ -48,6 +50,7 @@ import {
   VSK_METADATA,
   VSK_PINS,
   VSK_ROLE,
+  VSK_SIGNALS,
 } from "@/concord/lib/kinds";
 import {
   canActOnPosition,
@@ -286,6 +289,25 @@ export function buildRegistryEdition(communityId: Uint8Array, creatorHex: string
   });
 }
 
+/**
+ * Community Signal (vsk 12); eid = signal_locator(cid, signal_id) (CORD-04 §8).
+ * A transient staff directive folded per token — the pause is `signal_id`
+ * "pause" with content `{ paused, until? }`, gated by MANAGE_CHANNELS.
+ */
+export function buildSignalsEdition(
+  communityId: Uint8Array,
+  signalId: string,
+  content: Record<string, unknown>,
+  o: BuildCommon,
+): NostrRumor {
+  return buildEditionRumor({
+    vsk: VSK_SIGNALS,
+    entityId: signalLocator(communityId, signalId),
+    content: JSON.stringify(content),
+    ...o,
+  });
+}
+
 // ── The one-pass fold ────────────────────────────────────────────────────────
 
 export interface EntityHead {
@@ -313,6 +335,16 @@ export interface FoldedChannel {
  */
 export const controlFoldKey = (idHex: string) => `concord2-fold:${idHex}`;
 
+/** One folded Community Signal head (vsk 12, CORD-04 §8). */
+export interface FoldedSignal {
+  /** The head edition's decoded content, already validated for this signal_id. */
+  content: Record<string, unknown>;
+  /** The authorized author of the head edition. */
+  author: string;
+  /** The head edition's `created_at` in SECONDS — a pause's enactment time. */
+  at: number;
+}
+
 /** The Control Plane replayed into current state. */
 export interface FoldedControl {
   roster: CommunityRoles;
@@ -333,6 +365,14 @@ export interface FoldedControl {
    * as EMPTY rather than affecting the fold at all (CORD-04 §7).
    */
   pinLists: Map<string, { content: string; author: string }>;
+  /**
+   * Community Signals (vsk 12, CORD-04 §8) by signal_id — transient staff
+   * directives, folded and gated per token. An absent token is inactive. Only
+   * signal_ids this build implements can appear: an unknown one is never
+   * coordinate-derived, so it is invisible here (and dropped at the next
+   * Refounding) rather than mis-enforced.
+   */
+  signals: Map<string, FoldedSignal>;
   /** Per-entity head version + hash, for chaining the next edition (key = eid hex). */
   heads: Map<string, EntityHead>;
   /**
@@ -388,6 +428,9 @@ export function isCurrentFoldedControl(value: unknown): value is FoldedControl {
   // rather than an empty list — an empty pin list reads as "nothing pinned",
   // which would let a write replace entries it never saw (CORD-04 §7).
   if (!(fold.pinLists instanceof Map)) return false;
+  // `signals` arrived after `pinLists`; a snapshot without it must MISS and
+  // re-fold, or `activePause`/enforcement would read `undefined.get` on boot.
+  if (!(fold.signals instanceof Map)) return false;
   for (const def of fold.channels.values()) {
     if (!def || typeof def.metadata !== "object" || def.metadata === null) return false;
   }
@@ -970,6 +1013,94 @@ export function banShouldRotate(
   return banShouldRotateMany(folded, viewer, [target], force);
 }
 
+/**
+ * signal_id → the permission that authorizes writing it (CORD-04 §8). This map
+ * is also the set of signal_ids this build implements: the fold derives a
+ * coordinate only for these tokens, so an unknown directive is invisible.
+ */
+const SIGNAL_GATES: Record<string, bigint> = {
+  [SIGNAL_PAUSE]: Permissions.MANAGE_CHANNELS,
+};
+
+/**
+ * The longest `until` a pause edition may name, measured from its OWN
+ * `created_at` (CORD-04 §8). Bounded against the edition rather than the
+ * reader's clock so every reader reaches the same verdict, and bounded at all
+ * because the mistake it catches is silent and severe: a writer emitting
+ * milliseconds where the field is seconds mints a fifty-thousand-year freeze
+ * that no expiry will ever clear. An open-ended pause omits `until`.
+ */
+const MAX_PAUSE_UNTIL_SECS = 30 * 24 * 60 * 60;
+
+/**
+ * Whether a signal head's raw content JSON is well-formed for its signal_id.
+ * `createdAt` is the edition's own timestamp — the anchor the `pause` bound is
+ * measured from. A failing head falls through to the next authorized candidate,
+ * exactly as a malformed edition of any other entity does.
+ */
+function validateSignal(signalId: string, content: string, createdAt: number): boolean {
+  let v: unknown;
+  try {
+    v = JSON.parse(content);
+  } catch {
+    return false;
+  }
+  if (typeof v !== "object" || v === null) return false;
+  if (signalId === SIGNAL_PAUSE) {
+    const p = v as { paused?: unknown; until?: unknown };
+    if (typeof p.paused !== "boolean") return false;
+    if (p.until !== undefined) {
+      if (typeof p.until !== "number" || !Number.isInteger(p.until) || p.until <= 0) return false;
+      if (p.until > createdAt + MAX_PAUSE_UNTIL_SECS) return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+/** A Community's active pause (CORD-04 §8), resolved for `nowSec`. */
+export interface ActivePause {
+  /** Enactment time in SECONDS — the floor a reader folds non-staff messages from. */
+  since: number;
+  /** Optional auto-clear time in seconds. */
+  until?: number;
+  /** The staffer who enacted it. */
+  by: string;
+}
+
+/**
+ * The pause resolved from its folded head alone. Split out so a caller that
+ * holds only the head — the wire's per-community pause cache, which keeps this
+ * one small object rather than a whole `FoldedControl` per background
+ * community — resolves it against `nowSec` without re-folding.
+ */
+export function activePauseOf(head: FoldedSignal | undefined, nowSec: number): ActivePause | undefined {
+  if (!head) return undefined;
+  const c = head.content as { paused?: unknown; until?: unknown };
+  if (c.paused !== true) return undefined;
+  const until = typeof c.until === "number" ? c.until : undefined;
+  if (until !== undefined && nowSec >= until) return undefined;
+  return { since: head.at, ...(until !== undefined ? { until } : {}), by: head.author };
+}
+
+/**
+ * The Community's active pause, or undefined. Active = the folded "pause" head
+ * has `paused === true` AND (no `until`, or `until` still in the future at
+ * `nowSec`). The `until` self-clears without a clearing edition, so a raid
+ * response survives the pauser going offline (CORD-04 §8) — which obliges a
+ * caller rendering off this to SCHEDULE the expiry, not merely to compare at
+ * render: a frozen room whose `until` passed unobserved is indistinguishable
+ * to its members from one nobody lifted (see `usePauseClock`).
+ */
+export function activePause(folded: FoldedControl | undefined, nowSec: number): ActivePause | undefined {
+  return activePauseOf(folded?.signals.get(SIGNAL_PAUSE), nowSec);
+}
+
+/** The folded `pause` head, for a caller that wants to cache it (see `readLivePause`). */
+export function pauseHeadOf(folded: FoldedControl | undefined): FoldedSignal | undefined {
+  return folded?.signals.get(SIGNAL_PAUSE);
+}
+
 function foldOnce(
   editions: ParsedEdition[],
   communityId: Uint8Array,
@@ -1212,6 +1343,28 @@ function foldOnce(
     pinLists.set(eid, { content: head.content, author: head.author });
   }
 
+  // 8. Community Signals (vsk 12), each gated per signal_id (CORD-04 §8). Only
+  // the tokens in SIGNAL_GATES have a derivable coordinate here, so a signal_id
+  // this build doesn't implement matches no entity and stays invisible — the
+  // forward-compat contract. The coordinate IS signal_locator(cid, signal_id),
+  // looked up exactly, so a vsk-12 edition at any other eid is unspoofable in.
+  const signals = new Map<string, FoldedSignal>();
+  const signalCands = candidatesOf(VSK_SIGNALS);
+  for (const [signalId, gate] of Object.entries(SIGNAL_GATES)) {
+    const candidates = signalCands.get(bytesToHex(signalLocator(communityId, signalId))) ?? [];
+    const head = pickHead(candidates, heads, headEditions, (p) => {
+      if (!isAuthorized(roster, p.author, ownerHex, gate)) return false;
+      if (!citationOk(p)) return false;
+      return validateSignal(signalId, p.content, p.createdAt);
+    });
+    if (!head) continue;
+    signals.set(signalId, {
+      content: JSON.parse(head.content) as Record<string, unknown>,
+      author: head.author,
+      at: head.createdAt,
+    });
+  }
+
   // Data-availability roll-up: gap-held entities, plus floored entities with
   // ZERO served editions this fold. A floored entity whose editions were
   // served but authority-rejected is NOT flagged — that's a deliberate drop
@@ -1224,7 +1377,7 @@ function foldOnce(
     if (!servedEids.has(eid) && !gapHeld.has(eid)) incomplete.push(eid);
   }
 
-  const result: FoldedControl = { roster, ownerHex, metadata, channels, banned, bannedAt, liveInviteLinks, registriesByCreator, pinLists, heads, headEditions, incomplete };
+  const result: FoldedControl = { roster, ownerHex, metadata, channels, banned, bannedAt, liveInviteLinks, registriesByCreator, pinLists, signals, heads, headEditions, incomplete };
   return result;
 }
 

@@ -1,4 +1,4 @@
-import { ChevronDown, CloudOff, KeyRound, Loader2, MessagesSquare } from "lucide-react";
+import { ChevronDown, CloudOff, KeyRound, Loader2, MessagesSquare, Pause } from "lucide-react";
 import { memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -146,18 +146,33 @@ function KeyRotationDivider() {
  * to be wrong — a wave of real newcomers looks exactly like a bot swarm — so
  * the messages stay in the timeline, in order, one click away. Nothing here
  * reports anyone or informs a moderation decision.
+ *
+ * `paused` switches the copy for the other thing that collapses a run: a
+ * community pause (CORD-04 §8). The suppression is identical and the reason is
+ * not, and the flood wording is an accusation — near-identical messages from
+ * many accounts — that about a paused room's ordinary traffic is false and
+ * unearned.
  */
 function FloodNotice({
   count,
   authors,
+  paused,
   expanded,
   onToggle,
 }: {
   count: number;
   authors: number;
+  paused: boolean;
   expanded: boolean;
   onToggle: () => void;
 }) {
+  const label = expanded
+    ? paused
+      ? "Hide messages sent while paused"
+      : "Hide similar messages"
+    : paused
+      ? `${count} ${count === 1 ? "message" : "messages"} sent while the community was paused`
+      : `${count} similar ${count === 1 ? "message" : "messages"} from ${authors} ${authors === 1 ? "account" : "accounts"}`;
   return (
     <div className="flex items-center gap-3 px-2 py-1 select-none">
       <div className="h-px flex-1 bg-muted-foreground/25" />
@@ -169,13 +184,13 @@ function FloodNotice({
         title={
           expanded
             ? "Fold these back up"
-            : "Several accounts posted near-identical messages at once. Nothing was removed."
+            : paused
+              ? "Posted after a moderator paused the community. Nothing was removed."
+              : "Several accounts posted near-identical messages at once. Nothing was removed."
         }
       >
-        <MessagesSquare className="size-3 shrink-0" aria-hidden />
-        {expanded
-          ? "Hide similar messages"
-          : `${count} similar ${count === 1 ? "message" : "messages"} from ${authors} ${authors === 1 ? "account" : "accounts"}`}
+        {paused ? <Pause className="size-3 shrink-0" aria-hidden /> : <MessagesSquare className="size-3 shrink-0" aria-hidden />}
+        {label}
       </button>
       <div className="h-px flex-1 bg-muted-foreground/25" />
     </div>
@@ -188,7 +203,7 @@ type TimelineItem =
   | { type: "unread"; key: string }
   | { type: "rotation"; key: string }
   | { type: "message"; msg: ChatMsg; continuation: boolean; key: string }
-  | { type: "flood"; msgs: readonly ChatMsg[]; authors: number; key: string }
+  | { type: "flood"; msgs: readonly ChatMsg[]; authors: number; paused: boolean; key: string }
   | { type: "entry"; entry: NonChatEntry; related?: readonly NonChatEntry[]; key: string };
 
 /** A generalized timeline entry that isn't a plain chat message (e.g. Git activity). */
@@ -457,7 +472,7 @@ export function MessageTimeline({
   syncFailed = false,
   className,
 }: MessageTimelineProps) {
-  const { messages, isLoading, loadOlder, hasMore, isLoadingOlder, rotationDividerIds, quarantinedIds } =
+  const { messages, isLoading, loadOlder, hasMore, isLoadingOlder, rotationDividerIds, quarantinedIds, pausedIds } =
     transport;
 
   // Which flood rows the reader has opened, keyed by row key. Local, and reset
@@ -661,6 +676,10 @@ export function MessageTimeline({
             type: "flood",
             msgs: run,
             authors: new Set(run.map((m) => m.pubkey)).size,
+            // Only when the WHOLE run is pause-collapsed: a run mixing in a
+            // genuine flood cluster keeps the flood copy, which is the safer
+            // of the two to be wrong about.
+            paused: run.every((m) => pausedIds?.has(m.id) ?? false),
             key,
           });
           i = j - 1;
@@ -705,7 +724,7 @@ export function MessageTimeline({
     // this pass produced, and must not lag them by a commit.
     floodRunOfRef.current = runOf;
     return out;
-  }, [timelineEntries, startIndex, newDividerId, rotationDividerIds, quarantinedIds]);
+  }, [timelineEntries, startIndex, newDividerId, rotationDividerIds, quarantinedIds, pausedIds]);
 
   // Rows are about to change at the top of the slice (a revealed batch, a
   // backfill prepend, a trim). Measure the reader's anchor row NOW, while the
@@ -1041,6 +1060,7 @@ export function MessageTimeline({
                       <FloodNotice
                         count={item.msgs.length}
                         authors={item.authors}
+                        paused={item.paused}
                         expanded={expandedFloods.has(item.key)}
                         onToggle={() => toggleFlood(item.key)}
                       />

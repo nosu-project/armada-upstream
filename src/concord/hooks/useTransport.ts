@@ -488,6 +488,12 @@ export function useTransport(
     () => (folded.quarantined.size > 0 ? folded.quarantined : undefined),
     [folded.quarantined],
   );
+  // Which of those were collapsed by a community pause rather than by the flood
+  // heuristic, so the row can say why (CORD-04 §8).
+  const pausedIds = useMemo<ReadonlySet<string> | undefined>(
+    () => (folded.paused.size > 0 ? folded.paused : undefined),
+    [folded.paused],
+  );
 
   // Per-event RSVP binding for the inline card, mirroring `pollFor`. Recomputed
   // when the event set or RSVP fold changes; identity-stable in between so an
@@ -563,6 +569,7 @@ export function useTransport(
       isRumor: true,
       rotationDividerIds,
       quarantinedIds,
+      pausedIds,
       loadOlder,
       hasMore,
       isLoadingOlder,
@@ -583,7 +590,7 @@ export function useTransport(
       sendThreadReply,
       canSend,
     }),
-    [timeline, isLoading, canWrite, canModerate, rotationDividerIds, quarantinedIds, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, calendarFor, threadRepliesFor, sendThreadReply, canSend],
+    [timeline, isLoading, canWrite, canModerate, rotationDividerIds, quarantinedIds, pausedIds, loadOlder, hasMore, isLoadingOlder, sendStatusFor, retryEvent, discard, deleteEvent, editMessage, replyCountFor, reactionsFor, zapsFor, sendZap, sendOnchainZap, pollFor, sendPoll, calendarFor, threadRepliesFor, sendThreadReply, canSend],
   );
 
   // Built from the RAW rows, not the folded ones: pinning needs the original

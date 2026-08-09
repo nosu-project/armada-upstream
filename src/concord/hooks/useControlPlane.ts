@@ -3,6 +3,7 @@ import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-quer
 import { useEffect, useMemo } from "react";
 import { useDeferredFold } from "@/concord/hooks/useDeferredFold";
 import {
+  activePauseOf,
   controlFoldKey,
   currentControlGroup,
   currentControlWriteGroup,
@@ -10,9 +11,12 @@ import {
   isCurrentFoldedControl,
   isDissolvedOpened,
   openControlEditions,
+  pauseHeadOf,
   sealEdition,
+  type ActivePause,
   type EntityHead,
   type FoldedControl,
+  type FoldedSignal,
 } from "@/concord/lib/control";
 import { channelsView } from "@/concord/lib/community";
 import { bytesToHex, dissolvedGroupKey, grantLocator, hex32 } from "@/concord/lib/derive";
@@ -334,6 +338,99 @@ export function useControlFold(community: Community | undefined, active = true) 
   );
 
   return { ...control, data } as typeof control & { data: FoldedControl | undefined };
+}
+
+/**
+ * Per-community revision of the decrypted control plane, bumped by the wire's
+ * `c2ctl:<id>` bus. {@link readLivePause} re-folds only the community whose
+ * revision moved, so a burst of editions in ONE community no longer re-reads
+ * and re-folds every other community's plane.
+ */
+const controlPlaneRev = new Map<string, number>();
+/** The last pause head folded per community, with the revision it came from. */
+const livePauseCache = new Map<string, { rev: number; epoch: bigint; head: FoldedSignal | undefined }>();
+let pauseBusWired = false;
+
+function wirePauseBus(): void {
+  if (pauseBusWired) return;
+  pauseBusWired = true;
+  onWireScopes((scopes) => {
+    for (const s of scopes) {
+      if (!s.startsWith("c2ctl:")) continue;
+      const idHex = s.slice("c2ctl:".length);
+      controlPlaneRev.set(idHex, (controlPlaneRev.get(idHex) ?? 0) + 1);
+    }
+  });
+}
+
+/** Drop the pause cache — for tests, and for a logout that swaps the store. */
+export function _forgetLivePauseCacheForTests(): void {
+  controlPlaneRev.clear();
+  livePauseCache.clear();
+}
+
+/**
+ * The CURRENT pause (CORD-04 §8) for a community the user may not have open.
+ *
+ * `readControlFold` is the persisted fold, and it refreshes lazily — only when
+ * the community is opened — so for a BACKGROUND community it can predate the
+ * pause by hours. The wire's freeze decision can't be made off a stale answer,
+ * so this folds the store's control editions directly.
+ *
+ * It folds them the way {@link useControlFold} does, which is the part that is
+ * easy to get wrong and expensive to get wrong here, because this value gates
+ * the chat wire and push:
+ *
+ *   - anchored on the compaction snapshot for a Refounded community, since a
+ *     fold by old-root contiguity and one by snapshot disagree about which
+ *     editions outrank which. Without the snapshot we return "not paused" and
+ *     leave chat on the wire: a wrongly-live community costs bandwidth, a
+ *     wrongly-frozen one costs the room, so this fails OPEN;
+ *   - floored by the same shared per-entity high-water marks, and it RAISES
+ *     them, because a background community is never folded anywhere else — so
+ *     without this the pause entity would have no floor at all, and a relay
+ *     serving a stale `paused: true` after the lift could re-freeze the room.
+ *
+ * Cached on the community's own control-plane revision, so the common case (no
+ * control traffic for this community) costs a map lookup rather than a plane
+ * read plus a fold.
+ */
+export async function readLivePause(community: Community, nowSec: number): Promise<ActivePause | undefined> {
+  wirePauseBus();
+  const rev = controlPlaneRev.get(community.idHex) ?? 0;
+  const cached = livePauseCache.get(community.idHex);
+  if (cached && cached.rev === rev && cached.epoch === community.rootEpoch) {
+    return activePauseOf(cached.head, nowSec);
+  }
+
+  const refounded = community.rootEpoch > 0n;
+  const snapIds = refounded
+    ? await readControlSnapshot(community.idHex, currentControlGroup(community).pk)
+    : undefined;
+  if (refounded && !snapIds) return undefined; // fail open — see above
+  const stored = await queryPlane(community.idHex, "control");
+
+  const floorKey = `${community.idHex}@${community.rootEpoch}`;
+  let floorHeads = foldFloors.get(floorKey);
+  if (!floorHeads) {
+    floorHeads = new Map();
+    foldFloors.set(floorKey, floorHeads);
+  }
+  const folded = foldControlState(
+    openControlEditions(stored),
+    community.id,
+    community.owner,
+    floorHeads,
+    snapIds ? new Set(snapIds) : undefined,
+  );
+  for (const [eid, head] of folded.heads) {
+    const prior = floorHeads.get(eid);
+    if (!prior || head.version > prior.version) floorHeads.set(eid, head);
+  }
+
+  const head = pauseHeadOf(folded);
+  livePauseCache.set(community.idHex, { rev, epoch: community.rootEpoch, head });
+  return activePauseOf(head, nowSec);
 }
 
 /** The channels the member can read, assembled from the fold + held keys. */

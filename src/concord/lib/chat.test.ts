@@ -11,6 +11,7 @@ import { parseCalendarEvents, tallyRsvps } from "@/lib/calendar";
 import { parsePoll, tallyPollVotes } from "@/lib/polls";
 import { MOCK_PREIMAGE as ZAP_PREIMAGE, paymentHashOf } from "@/test/bolt11Mock";
 import type { Channel } from "@/concord/lib/types";
+import type { OpenedChat } from "@/concord/lib/chat";
 
 // Synthetic "lnmock…" invoices decode to controlled sections so the CORD.md
 // fold can be tested without a bolt11 encoder (shared with zaps.test.ts).
@@ -690,5 +691,61 @@ describe("disappearing messages (CORD-08)", () => {
     const folded = foldTimeline(await openChatBatch(wraps, channel));
 
     expect(folded.timerNotices.map((n) => n.rumorId)).toEqual([n1.id, n2.id]);
+  });
+});
+
+describe("foldTimeline — community pause (CORD-04 §8)", () => {
+  let pseq = 0;
+  const plainMsg = (author: string, ms: number): OpenedChat => {
+    pseq += 1;
+    return { rumorId: `p${pseq}`, author, kind: KIND_MESSAGE, content: "hi", tags: [], ms, createdAt: Math.floor(ms / 1000), channelIdHex, epoch: 0n };
+  };
+
+  it("collapses non-staff messages posted at/after the pause, sparing staff and history", () => {
+    const before = plainMsg("member", 900_000); // pre-pause: untouched
+    const during = plainMsg("member", 1_200_000); // during pause: folded
+    const mod = plainMsg("mod", 1_300_000); // staff: exempt even during
+
+    const folded = foldTimeline([before, during, mod], undefined, {
+      pauseSince: 1000, // seconds → floor 1_000_000 ms
+      staff: (a) => a === "mod",
+    });
+
+    expect(folded.quarantined.has(during.rumorId)).toBe(true);
+    expect(folded.quarantined.has(before.rumorId)).toBe(false);
+    expect(folded.quarantined.has(mod.rumorId)).toBe(false);
+    // A fold, never a drop: every message still folds (cf. the Banlist).
+    expect(folded.messages).toHaveLength(3);
+    // Reported separately from the flood verdict, so the row can say why and
+    // the durable quarantine memory can refuse to keep it (useChannel).
+    expect([...folded.paused]).toEqual([during.rumorId]);
+  });
+
+  it("spares the reader's own messages", () => {
+    // Sent moments before the pause edition landed, or still in flight when it
+    // did. Collapsing it reads as the client having eaten the reader's message.
+    const mine = plainMsg("me", 1_200_000);
+    const theirs = plainMsg("member", 1_200_001);
+
+    const folded = foldTimeline([mine, theirs], undefined, {
+      pauseSince: 1000,
+      self: "me",
+      staff: () => false,
+    });
+
+    expect(folded.paused.has(mine.rumorId)).toBe(false);
+    expect(folded.quarantined.has(mine.rumorId)).toBe(false);
+    expect(folded.paused.has(theirs.rumorId)).toBe(true);
+  });
+
+  it("keeps `paused` empty when the collapse came from the flood rules alone", () => {
+    const folded = foldTimeline([plainMsg("a", 1_200_000)], undefined, { staff: () => false });
+    expect(folded.paused.size).toBe(0);
+  });
+
+  it("does nothing without an active pause", () => {
+    const m = plainMsg("member", 1_200_000);
+    const folded = foldTimeline([m], undefined, { staff: () => false });
+    expect(folded.quarantined.has(m.rumorId)).toBe(false);
   });
 });

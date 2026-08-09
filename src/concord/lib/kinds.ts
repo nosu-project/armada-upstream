@@ -132,6 +132,23 @@ export const VSK_BANLIST = "4";
 export const VSK_INVITE_REGISTRY = "8";
 export const VSK_DISSOLVED = "10";
 export const VSK_PINS = "11";
+/**
+ * Community Signals (CORD-04 §8): a NAMESPACE, not one entity. Each `signal_id`
+ * token is its own control edition at `signalLocator(cid, signal_id)`, folded
+ * and gated per token, so a new directive is a new token — never a new `vsk`,
+ * never a kind-registry change. Enforcement is a reader-side FOLD (a collapse
+ * the reader can expand), never a drop: the Banlist stays the only author drop.
+ */
+export const VSK_SIGNALS = "12";
+
+/**
+ * The one `signal_id` this build implements: closes the Community to non-staff.
+ * Content `{ paused: boolean, until?: number }` (unix seconds), gated by
+ * MANAGE_CHANNELS. A reader that doesn't know a token never derives its
+ * coordinate, so an unknown Signal is invisible (and dropped at the next
+ * Refounding) rather than mis-enforced.
+ */
+export const SIGNAL_PAUSE = "pause";
 
 /** Invite-bundle marker values for its `vsk` tag: live vs revocation tombstone. */
 export const VSK_INVITE_LIVE = "6";

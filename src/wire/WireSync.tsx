@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useBootGateOpen } from "@/lib/bootGate";
 
 import { useCommunityList } from "@/concord/hooks/useCommunityList";
-import { dissolvedAt } from "@/concord/hooks/useControlPlane";
+import { dissolvedAt, readLivePause } from "@/concord/hooks/useControlPlane";
 import { openChatBatch } from "@/concord/lib/chat";
 import { channelsView } from "@/concord/lib/community";
 import { concordScope, isScopeActivated, markScopeLive, nip29Scope, onActivation } from "@/wire/activation";
@@ -40,7 +40,7 @@ import { normalizeRelayUrl } from "@/lib/platform";
 import { onRelayReopened } from "@/lib/relayReopen";
 import { logSync } from "@/lib/syncLog";
 import { perfCount, perfMark } from "@/lib/perf";
-import { emitWireScopes } from "@/wire/bus";
+import { emitWireScopes, onWireScopes } from "@/wire/bus";
 import { useWireNip29Groups } from "@/wire/useWireNip29Groups";
 import { ingestWireEvents } from "@/wire/ingest";
 import { buildWireSpec, stampRoundSince, type WireSpec } from "@/wire/spec";
@@ -272,6 +272,28 @@ function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; c
       }),
     [queryClient],
   );
+  // A pause (CORD-04 §8) is a control edition on the global c2ctl sub, and for a
+  // community the user isn't viewing it persists no fold — so `onFoldedWrite`
+  // never fires. Recompute on the control-plane bus too, or a background pause
+  // would keep its chat streams on the wire until the 2-minute refetch.
+  //
+  // Matched against the live list first: a re-run re-reads every community's
+  // fold, so firing it for a `c2ctl:` scope this wire doesn't carry would spend
+  // the whole list's IndexedDB reads on someone else's roster edit.
+  const liveIdsRef = useRef<Set<string>>(new Set());
+  liveIdsRef.current = useMemo(() => new Set(entries.map((e) => e.community_id.toLowerCase())), [entries]);
+  useEffect(
+    () =>
+      onWireScopes((scopes) => {
+        for (const s of scopes) {
+          if (s.startsWith("c2ctl:") && liveIdsRef.current.has(s.slice("c2ctl:".length).toLowerCase())) {
+            void queryClient.invalidateQueries({ queryKey: ["wire", "concord-channels"] });
+            return;
+          }
+        }
+      }),
+    [queryClient],
+  );
 
   const query = useQuery<Array<{ relays: string[]; channel: Channel; communityIdHex: string; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }>>({
     queryKey: ["wire", "concord-channels", listSig, activationEpoch],
@@ -302,15 +324,45 @@ function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; c
           channels.push(channel);
         }
 
-        // The unread-dot deferral (see wire/activation.ts). Every path back
-        // to live runs the catch-up, because the shared per-relay cursor
-        // advanced past this community's traffic while it was excluded.
+        // Two rules below drop this community's chat filters from the wire (a
+        // pause, and the unread-dot deferral), and both owe the SAME durable
+        // IOU: the per-relay cursor keeps advancing on other traffic — DMs,
+        // git, every other community on that host — while the filters are
+        // gone, so the missed region can never be recovered from cursor replay
+        // and whichever path brings the community back live must run the
+        // catch-up first (see `deferredFlags`, `catchUpCommunity`).
         const scope = concordScope(community.idHex);
         const wasDeferred = (deferredFlags.get(scope) ?? deferredFlags.get(community.idHex) ?? 0) > 0;
+        const defer = () => {
+          if (!wasDeferred) deferredFlags.set(scope, Math.floor(Date.now() / 1000));
+        };
         const clearFlag = () => {
           deferredFlags.delete(scope);
           deferredFlags.delete(community.idHex); // pre-scope legacy spelling
         };
+
+        // Freeze: while a community is paused (CORD-04 §8) its chat streams
+        // leave the wire entirely — for EVERYONE, staff included. The pause is
+        // advisory, so a spammer's bad client floods regardless; any client
+        // still subscribed only downloads the wall it would fold away, and a
+        // staffer who needs to act on chat lifts the pause first. The control
+        // plane stays subscribed (useWireConcordControl), so the lift still
+        // lands; an `until` expiry self-resumes with no edition. `readLivePause`
+        // reads the CURRENT pause rather than the persisted fold, which for a
+        // background community can predate it by hours.
+        //
+        // The `defer()` is the load-bearing half: not fetching the pause window
+        // is the point, but resuming as though nothing happened is not. The IOU
+        // makes the resume a catch-up, so the room comes back knowing what it
+        // missed instead of silently believing its history complete.
+        if (await readLivePause(community, Math.floor(Date.now() / 1000))) {
+          defer();
+          continue;
+        }
+
+        // The unread-dot deferral (see wire/activation.ts). Every path back
+        // to live runs the catch-up, because the shared per-relay cursor
+        // advanced past this community's traffic while it was excluded.
         if (isScopeActivated(scope)) {
           // Navigated into (this session): live for good.
           if (wasDeferred) {
@@ -318,7 +370,7 @@ function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; c
             catchUpCommunity(nostr, entry, community.idHex);
           }
         } else if (await communityDotted(community.idHex, channels, dotCtxRef.current)) {
-          if (!wasDeferred) deferredFlags.set(scope, Math.floor(Date.now() / 1000));
+          defer();
           continue;
         } else if (wasDeferred) {
           // The dot cleared while deferred — a read synced back from another

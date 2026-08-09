@@ -37,6 +37,7 @@ import {
 } from "@/concord/lib/quarantineMemory";
 import { citationToTag, type AuthorityCitation } from "@/concord/lib/edition";
 import { citationSatisfied } from "@/concord/lib/control";
+import { useActivePause } from "@/concord/hooks/usePause";
 import { canActOnMember, isAuthorized, isStaff, Permissions } from "@/concord/lib/roles";
 import { chatExpiresAt, messageExpirationOf } from "@/concord/lib/disappearing";
 import { consumeSend, isRateLimitedKind, SendRateLimitError } from "@/concord/lib/sendRateLimit";
@@ -174,6 +175,15 @@ export function useChannelTimeline(
   const moderation = useChatModeration(community);
   // Only so the flood heuristic can leave the reader's own messages alone.
   const { user: readingUser } = useCurrentUser();
+  // The community's active pause (CORD-04 §8), so the fold collapses non-staff
+  // messages posted while it holds — the read side of the pause signal. Via
+  // `useActivePause`, which schedules the `until` expiry: without the wake, a
+  // bounded pause would keep collapsing long after it lapsed, since nothing
+  // else re-renders this timeline on its behalf.
+  // Only the enactment time enters the fold, and taking it as a scalar keeps
+  // the memo from re-running on every render — `activePause` builds a fresh
+  // object each time, so depending on the pause itself would defeat it.
+  const pauseSince = useActivePause(community)?.since;
 
   const channelIdHex = channel?.idHex ?? routeChannelIdHex ?? null;
   // Cutoffs ride the signature too: a merge can teach this device an epoch's
@@ -478,6 +488,7 @@ export function useChannelTimeline(
       ...(readingUser?.pubkey !== undefined ? { self: readingUser.pubkey } : {}),
       ...(firstSeen ? { firstSeen } : {}),
       ...(establishedSinceMs !== undefined ? { establishedSinceMs } : {}),
+      ...(pauseSince !== undefined ? { pauseSince } : {}),
     });
     // What past sessions remember folding here. The live rules re-derive from
     // whatever context this session holds, and after a refresh that is only
@@ -503,19 +514,28 @@ export function useChannelTimeline(
       return { ...merged, messages: merged.messages.filter((m) => !hidden.has(m.rumorId)) };
     }
     return merged;
-  }, [query.data, moderation, optimisticDeleted, readingUser?.pubkey, firstSeen, establishedSinceMs, community?.idHex, channelIdHex, memoryRev]);
+  }, [query.data, moderation, optimisticDeleted, readingUser?.pubkey, firstSeen, establishedSinceMs, pauseSince, community?.idHex, channelIdHex, memoryRev]);
 
   // Remember what this fold decided (merge-only), so the verdict survives the
   // session even when its evidence — history, arrival order, the wave around
   // a message — won't be reloaded by the next one.
+  //
+  // PAUSE-collapsed ids are excluded, and the distinction is the whole reason
+  // the fold reports them separately. The memory exists for verdicts whose
+  // evidence won't come back; a pause's evidence is its folded head, which is
+  // always there and correctly STOPS applying the moment the pause lifts.
+  // Storing them here would make a transient directive permanent — the memory
+  // is merge-only and outlives the lift, so ordinary messages would stay
+  // collapsed forever, which is the "MUST NOT drop" of CORD-04 §8 reached by
+  // a slower route.
   useEffect(() => {
     if (!community?.idHex || !channelIdHex || folded.quarantined.size === 0) return;
     const entries: Array<[string, number]> = [];
     for (const m of query.data ?? []) {
-      if (folded.quarantined.has(m.rumorId)) entries.push([m.rumorId, m.ms]);
+      if (folded.quarantined.has(m.rumorId) && !folded.paused.has(m.rumorId)) entries.push([m.rumorId, m.ms]);
     }
     if (entries.length > 0) rememberQuarantined(community.idHex, channelIdHex, entries);
-  }, [folded.quarantined, query.data, community?.idHex, channelIdHex]);
+  }, [folded.quarantined, folded.paused, query.data, community?.idHex, channelIdHex]);
 
   return {
     /** The folded, moderated timeline + reaction tallies. */

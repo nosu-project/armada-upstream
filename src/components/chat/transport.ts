@@ -234,6 +234,15 @@ export interface ChatTransport {
    */
   quarantinedIds?: ReadonlySet<string>;
 
+  /**
+   * The subset of {@link quarantinedIds} collapsed because the community is
+   * PAUSED (CORD-04 §8), not because they looked like a flood. Purely so the
+   * collapsed row can state the real reason — a paused room's ordinary traffic
+   * is not "near-identical messages from many accounts", and saying so about it
+   * is an accusation the client has no basis for.
+   */
+  pausedIds?: ReadonlySet<string>;
+
   /** Backfill older history; resolves to the number of messages prepended. */
   loadOlder?: () => Promise<number>;
   /** Whether more history remains to backfill. */

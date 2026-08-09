@@ -83,6 +83,7 @@ function foldWith(channelIdHex: string): FoldedControl {
     heads: new Map(),
     headEditions: new Map(),
     pinLists: new Map(),
+    signals: new Map(),
     incomplete: [],
   } as unknown as FoldedControl;
 }

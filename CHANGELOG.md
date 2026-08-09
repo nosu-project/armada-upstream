@@ -4,6 +4,21 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.50.1] - 2026-08-09
+
+Spam floods no longer drown a channel: coordinated waves of junk — repeated templates, rotating pitches, sudden swarms of new accounts, and established accounts taking turns posting fluent spam — collapse into a single expandable row instead of filling the timeline. Nothing is deleted, and your own messages, community staff, and people you've interacted with are never folded. Community staff can now pause a community from the channel menu, and direct invites arrive in a routed inbox with its own badge instead of a one-at-a-time popup.
+
+### Added
+- Spam floods collapse into a single expandable timeline row you can click to reveal, covering repeated messages, near-duplicate rotating pitches, sudden waves of newly arrived accounts, coordinated groups posting in turns, and established accounts drowning a channel with unique spam; nothing is ever deleted, and your own messages, community staff, and people you've talked to are always left in place
+- Community staff can pause a community from the channel menu for a set duration or until they resume it; while paused the composer is disabled and non-staff messages are collapsed away
+- Direct invites now arrive in a routed inbox with its own rail entry and unseen-count badge, replacing the one-at-a-time popup, with a passive toast that points you there
+
+### Changed
+- Flood-collapsed messages no longer raise unread or mention badges, and message notifications are rate-limited per room so a spam burst can't repeatedly buzz your device; people you follow are exempt from the limit
+
+### Fixed
+- The Android background notification service no longer risks being killed at startup under the system's foreground-service deadline
+
 ## [0.50.0] - 2026-08-08
 
 Muting and reporting land across the app: mute anyone from any menu and they disappear from every surface, or report a message or a person — in a community the report goes privately to its staff, who read the queue in a new Reports pane. Staff can also rotate a community's keys on demand. Git activity in channels is now quiet chat rows instead of bordered cards, and key rotations in large communities and private channels are fixed.
