@@ -521,6 +521,125 @@ describe("floodClusters — a cohort that drowns the channel", () => {
   });
 });
 
+describe("floodClusters — untrusted keys drowning the channel (rule 6)", () => {
+  const AFTER_HISTORY = 700_000; // past FLOOD_COHORT_PRECEDENT_MS
+
+  // Five distinct words per message, drawn so no two messages share enough to
+  // merge (Jaccard < FLOOD_SIMILARITY) or repeat a shape — a stand-in for the
+  // live slot-filling generator, and the point of the rule: substantial, fluent
+  // content that density, echo and gibberish are all blind to. Only the keys'
+  // UNTRUSTED share of the channel gives them away.
+  let wc = 0;
+  const sentence = () => Array.from({ length: 5 }, () => `topic${wc++}`).join(" ");
+
+  /** A founder at T0, then `keys` established-but-untrusted keys taking turns
+   *  posting `each` distinct fluent messages `gapMs` apart — the filibuster. */
+  function filibuster(keys: number, each: number, gapMs = 3_000) {
+    const out = [msg("founder", "morning everyone hope the build went well today", T0)];
+    let t = T0 + AFTER_HISTORY;
+    for (let j = 0; j < each; j++) {
+      for (let i = 0; i < keys; i++) {
+        out.push(msg(`spam${i}`, sentence(), t));
+        t += gapMs;
+      }
+    }
+    return sorted(out);
+  }
+
+  /** A reply by `author` to `target`'s rumor (an `e` edge, for trust). */
+  function reply(author: string, target: OpenedChat, ms: number): OpenedChat {
+    return { ...msg(author, "oh interesting, tell me more about that", ms), tags: [["e", target.rumorId]] };
+  }
+
+  it("folds three established keys that no shape rule can see", () => {
+    // The observed live shape: 3 aged keys round-robining unique, fluent spam
+    // at pace, ~96% of the channel. No repeated template (density/echo blind),
+    // not a fresh cohort (they arrived long ago), fluent words (gibberish
+    // blind). Only their share of the room by UNTRUSTED volume gives them away.
+    const evs = filibuster(3, 12);
+    const flagged = floodClusters(evs);
+    expect(evs.filter((e) => e.author.startsWith("spam")).every((e) => flagged.has(e.rumorId))).toBe(true);
+    expect(flagged.has(evs.find((e) => e.author === "founder")!.rumorId)).toBe(false);
+  });
+
+  it("leaves the same keys alone at conversation pace", () => {
+    // Same keys, same share, same count — but slow. People talking, not a wall.
+    const evs = filibuster(3, 12, 90_000);
+    expect(floodClusters(evs).size).toBe(0);
+  });
+
+  it("says nothing at a channel's launch, with no precedent to be new against", () => {
+    const out = [msg("founder", "first post in the brand new channel here", T0)];
+    let t = T0 + 30_000; // inside FLOOD_COHORT_PRECEDENT_MS of the founder
+    for (let j = 0; j < 12; j++) for (let i = 0; i < 3; i++) out.push(msg(`spam${i}`, sentence(), (t += 3_000)));
+    expect(floodClusters(sorted(out)).size).toBe(0);
+  });
+
+  it("spares a key the reader has replied to — earned trust is immunity", () => {
+    const evs = filibuster(3, 15);
+    const target = evs.find((e) => e.author === "spam0")!;
+    const me = "reader";
+    const evs2 = sorted([...evs, reply(me, target, T0 + AFTER_HISTORY + 10_000_000)]);
+    const flagged = floodClusters(evs2, { self: me });
+    // The vouched-for key renders; the other two still fold.
+    expect(evs.filter((e) => e.author === "spam0").every((e) => !flagged.has(e.rumorId))).toBe(true);
+    expect(evs.filter((e) => e.author === "spam1").some((e) => flagged.has(e.rumorId))).toBe(true);
+  });
+
+  it("does not let a stranger earn trust by naming the reader", () => {
+    // The inverted attack: an edge INTO the trusted set grants nothing, because
+    // trust flows outward from the reader, never inward toward them. A spammer
+    // p-tagging the reader (or a regular) stays a stranger.
+    const evs = filibuster(3, 12);
+    const me = "reader";
+    const named = evs.map((e) =>
+      e.author === "spam0" ? { ...e, tags: [["p", me]] } : e,
+    );
+    const flagged = floodClusters(sorted(named), { self: me });
+    expect(named.filter((e) => e.author === "spam0").every((e) => flagged.has(e.rumorId))).toBe(true);
+  });
+
+  it("keeps a regular visible when a spammer pastes their line into an echo", () => {
+    // The copy-a-regular attack against the ECHO rule: a trusted regular posts
+    // a substantial sentence once; three spammers repeat it verbatim, making a
+    // 4-author echo bucket that would fold all four. Trust immunity clears the
+    // regular's own row and leaves the spammers folded.
+    const line = "just pushed the fix for the login bug, should be live shortly now";
+    const me = "reader";
+    const reg = msg("regular", line, T0);
+    const evs: OpenedChat[] = [
+      reg,
+      reply(me, reg, T0 + 1_000), // reader vouches for the regular
+      msg("spamA", line, T0 + 2_000),
+      msg("spamB", line, T0 + 3_000),
+      msg("spamC", line, T0 + 4_000),
+    ];
+    const flagged = floodClusters(sorted(evs), { self: me });
+    expect(flagged.has(reg.rumorId)).toBe(false);
+    expect(flagged.has(evs[2].rumorId)).toBe(true);
+    expect(flagged.has(evs[4].rumorId)).toBe(true);
+  });
+
+  it("propagates trust transitively through a vouched-for regular", () => {
+    // Reader trusts R; R replied to S; so S is trusted too, and a flood S is
+    // swept into does not fold S's rows.
+    const evs = filibuster(3, 15);
+    const s0 = evs.find((e) => e.author === "spam0")!;
+    const me = "reader";
+    const r = reply("regular", s0, T0 + AFTER_HISTORY + 9_000_000); // regular -> spam0
+    const meToReg = reply(me, r, T0 + AFTER_HISTORY + 9_500_000); // reader -> regular
+    const flagged = floodClusters(sorted([...evs, r, meToReg]), { self: me });
+    expect(evs.filter((e) => e.author === "spam0").every((e) => !flagged.has(e.rumorId))).toBe(true);
+  });
+
+  it("is still a display set — folds nothing that isn't there to fold", () => {
+    // The invariant the whole file keeps: every flagged id is a real message id.
+    const evs = filibuster(3, 12);
+    const ids = new Set(evs.map((e) => e.rumorId));
+    for (const id of floodClusters(evs)) expect(ids.has(id)).toBe(true);
+  });
+});
+
 describe("floodClusters — low letter originality (rule 5)", () => {
   /** The reported wall: one key, letter runs and single letters, minutes apart. */
   function wall(author: string, from = T0, gapMs = 120_000) {

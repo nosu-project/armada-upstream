@@ -13,10 +13,13 @@
  * `ChatModeration` in `chat.ts`), and a heuristic must not quietly become the
  * second one. Being wrong here costs a collapsed row the reader can expand.
  *
- * The rule buckets by CONTENT first and only then looks at who sent it, which
- * is what lets one test cover every flood shape: bucketing by author would need
- * a different rule for 1×100 than for 100×1, and the second is free to mint.
- * An author count is therefore a description of the flood, not its trigger.
+ * The shape rules bucket by CONTENT first and only then look at who sent it,
+ * which is what lets one test cover every flood shape: bucketing by author
+ * would need a different rule for 1×100 than for 100×1, and the second is free
+ * to mint. For those rules an author count is a description of the flood, not
+ * its trigger. The trust rule (6) is the deliberate exception — it triggers on
+ * WHO, because who-the-reader-trusts is the one input a flood cannot mint — and
+ * it only ever spares, never newly condemns beyond the drown rule it gates.
  *
  * ## What a real flood looked like
  *
@@ -33,7 +36,9 @@
  *   second wave from the same keys looked established. Hence the cross-author
  *   echo rule below, which needs no notion of newness at all.
  *
- * So there are two independent rules, and a message folds if EITHER fires:
+ * A message folds if ANY of the rules below fires. The first five read the
+ * flood's SHAPE — its content, arrival and pace — and each closes a gap the
+ * previous one left:
  *
  * 1. **Density** — one template repeated {@link FLOOD_MIN_MESSAGES} times
  *    inside {@link FLOOD_WINDOW_MS}, by at most two authors or by authors none
@@ -45,6 +50,34 @@
  *    `+1`, `lol`) constantly and on eight-word sentences essentially never,
  *    which is why the rule is gated on length; and one pitch on many keys is
  *    what a sybil set is FOR, which is why it is gated on spread.
+ * 3. **Arrival burst** ({@link markArrivalBurst}) — a crowd of first-time keys
+ *    arriving at once, each speaking once and vanishing.
+ * 4. **Cohort** ({@link markCohortFlood}) — a crowd that arrived together and
+ *    then drowned the channel, content ignored.
+ * 5. **Gibberish** ({@link markGibberish}) — one key spending its messages on
+ *    low-originality noise (`ggg`, room-foreign single words).
+ *
+ * ## Why shape is not enough, and what replaces it
+ *
+ * Every shape rule is an arms race the flood can win by changing shape: rotate
+ * the pitch (density), post from one key (echo), warm the keys first (arrival,
+ * cohort), write fluent sentences (gibberish). The end state, observed live, is
+ * two or three ESTABLISHED keys taking turns posting unique, grammatical spam
+ * at pace — invisible to all five, and able to fake a conversation or paste a
+ * regular's line to defeat any further shape heuristic.
+ *
+ * The one thing a sender cannot forge is what OTHER people have independently
+ * directed at them. So {@link computeTrusted} derives, per reader and rooted at
+ * the reader, the authors the reader has earned reason to trust — reachable
+ * through replies, quotes and mentions FROM the already-trusted — and:
+ *
+ * 6. **Untrusted drown** ({@link markUntrustedDrown}) — the keys the reader has
+ *    no earned reason to trust who TOGETHER drown the channel (the cohort rule's
+ *    share + pace + precedent, restated over the untrusted subset, minus its
+ *    arrived-together gate). A clique vouching for itself builds no trust, so
+ *    faking a conversation does not help; and a trusted author's rows are
+ *    exempt from every rule at once, so pasting a regular's line folds only the
+ *    spammer's copy. Earning one trusted reply, quote or mention clears a key.
  */
 
 import type { OpenedChat } from "@/concord/lib/chat";
@@ -199,12 +232,52 @@ function echoEligible(wordCount: number, linked: boolean): boolean {
   return wordCount >= (linked ? FLOOD_ECHO_MIN_WORDS_LINKED : FLOOD_ECHO_MIN_WORDS);
 }
 
-/** Jaccard overlap of two token sets. */
-function similarity(a: Set<string>, b: Set<string>): number {
-  const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+/**
+ * Jaccard overlap of two token sets pre-interned to SORTED integer ids
+ * ({@link internWords}). This is the fold's hot path on a rotating campaign
+ * (tens of thousands of comparisons between 20-30-word templates), where a
+ * `Set<string>` measure spent all its time hashing strings in `Set.has`; a
+ * linear merge of two sorted `Int32Array`s is branch-predictable and
+ * allocation-free.
+ */
+function similarityIds(a: Int32Array, b: Int32Array): number {
+  let i = 0;
+  let j = 0;
   let shared = 0;
-  for (const t of small) if (large.has(t)) shared++;
-  return shared / (a.size + b.size - shared);
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      shared++;
+      i++;
+      j++;
+    } else if (a[i] < b[j]) {
+      i++;
+    } else {
+      j++;
+    }
+  }
+  return shared / (a.length + b.length - shared);
+}
+
+/**
+ * Intern each eligible bucket's word set to a sorted `Int32Array` of ids for
+ * {@link similarityIds}. Returned as a dense array indexed by bucket id (holes
+ * for the ineligible), so the merge's hot comparison loop indexes rather than
+ * hashes a Map key on every one of its tens of thousands of calls.
+ */
+function internWords(buckets: Bucket[], ids: Iterable<number>): (Int32Array | undefined)[] {
+  const wordId = new Map<string, number>();
+  const out: (Int32Array | undefined)[] = new Array(buckets.length);
+  for (const i of ids) {
+    const arr = new Int32Array(buckets[i].words.size);
+    let k = 0;
+    for (const w of buckets[i].words) {
+      let id = wordId.get(w);
+      if (id === undefined) wordId.set(w, (id = wordId.size));
+      arr[k++] = id;
+    }
+    out[i] = arr.sort();
+  }
+  return out;
 }
 
 /**
@@ -253,23 +326,56 @@ function mergeSimilar(buckets: Bucket[]): number[] {
     }
   }
 
+  const wordIds = internWords(buckets, eligible);
+  const examine = (i: number, j: number) => {
+    if (find(i) !== find(j) && similarityIds(wordIds[i]!, wordIds[j]!) >= FLOOD_SIMILARITY) {
+      union(i, j);
+    }
+  };
+
+  // Shared-word count per candidate bucket, in a reused typed array rather than
+  // a fresh Map per bucket: this loop runs O(eligible × words × df) times on a
+  // rotating campaign (thousands of near-unique templates over a small
+  // vocabulary), where the Map's per-entry overhead dominated. `touched` lists
+  // the ids to reset, so clearing stays O(touched).
+  const count = new Int32Array(buckets.length);
+  const touched: number[] = [];
   for (const i of eligible) {
-    const seen = new Map<number, number>();
+    touched.length = 0;
+    let maxShared = 0;
     for (const w of buckets[i].words) {
-      for (const j of index.get(w) ?? []) {
+      const list = index.get(w);
+      if (!list) continue;
+      for (const j of list) {
         if (j >= i) continue; // each pair once
-        seen.set(j, (seen.get(j) ?? 0) + 1);
+        if (count[j] === 0) touched.push(j);
+        const c = ++count[j];
+        if (c > maxShared) maxShared = c;
       }
     }
-    // Most shared rare words first: the best candidates, and the cap then bites
-    // on the ones that were never going to clear the threshold anyway.
-    const candidates = [...seen.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, CANDIDATE_CAP);
-    for (const [j] of candidates) {
-      if (find(i) === find(j)) continue;
-      if (similarity(buckets[i].words, buckets[j].words) >= FLOOD_SIMILARITY) union(i, j);
+    // At most {@link CANDIDATE_CAP} candidates are compared. Below the cap the
+    // order is irrelevant — union is commutative, so the connected components
+    // are the same whichever order the edges are added — and the selection is
+    // skipped entirely. Above it, the survivors are the ones sharing the most
+    // words, chosen by a counting sort (O(touched), not an O(c·log c) comparison
+    // sort per bucket): the cap then bites on candidates that were never going
+    // to clear the threshold anyway. Both branches examine the same set.
+    if (touched.length <= CANDIDATE_CAP) {
+      for (const j of touched) examine(i, j);
+    } else {
+      const byCount: number[][] = [];
+      for (const j of touched) (byCount[count[j]] ??= []).push(j);
+      let examined = 0;
+      for (let c = maxShared; c >= 1 && examined < CANDIDATE_CAP; c--) {
+        const tier = byCount[c];
+        if (!tier) continue;
+        for (const j of tier) {
+          examine(i, j);
+          if (++examined >= CANDIDATE_CAP) break;
+        }
+      }
     }
+    for (const j of touched) count[j] = 0;
   }
   return parent;
 }
@@ -392,10 +498,27 @@ export function floodClusters(messages: readonly OpenedChat[], opts: FloodOption
       markEcho(messages, idx, echoMin, echoWindowMs, flagged);
     }
   }
+  // Trust is rooted at the reader and flows only through inbound attention, so
+  // it is computed once and shared: the drown rule reads it to judge share by
+  // stranger volume, and the immunity pass below reads it to protect the keys
+  // the reader has vouched for from every rule at once.
+  const trusted = computeTrusted(messages, opts.self);
+
   markArrivalBurst(messages, firstSeen, flagged, opts.self);
   markCohortFlood(messages, firstSeen, flagged, opts.self);
+  markUntrustedDrown(messages, firstSeen, trusted, flagged, opts.self);
   markGibberish(messages, flagged, opts.self);
   sweepParticipants(messages, flagged, opts.self);
+
+  // Earned-trust immunity, applied LAST so it overrides every rule. A key the
+  // reader has replied to, quoted or mentioned (transitively) is never folded —
+  // which is what defeats the copy-a-regular attack: pasting a trusted author's
+  // sentence lands the copy in a content bucket, but only the SPAMMER's copy
+  // folds, because the regular's own row is cleared here. `self` is in
+  // `trusted`, so this also subsumes the per-rule self-exemption.
+  if (trusted.size > 0) {
+    for (const ev of messages) if (trusted.has(ev.author)) flagged.delete(ev.rumorId);
+  }
   return flagged;
 }
 
@@ -657,6 +780,174 @@ function markCohortWaves(
         flagged.add(messages[i].rumorId);
       }
     }
+  }
+}
+
+/**
+ * Which authors this reader has EARNED reason to trust — computed locally, per
+ * reader, from the batch alone. The seed is the reading user (nothing a
+ * stranger sends can fake being replied to by you), and trust flows outward
+ * only through inbound attention FROM the already-trusted: a reply, a quote, a
+ * mention. It is the one signal a flood cannot manufacture, because it is not
+ * about what a key did — volume, tenure, reacting to its own sybils are all
+ * free — but about what an independently-trusted party chose to direct AT it.
+ *
+ * The graph is directed and rooted: an edge is `src → dst` when `src` replied
+ * to / quoted / mentioned `dst`, and trust is the set reachable from `self`.
+ * A spammer naming a regular (or the reader) in a `p` tag makes an edge FROM
+ * the spammer, whose source is untrusted, so it grants nothing; the closure
+ * only ever widens through a party already inside it.
+ *
+ * Reactions would be an even stronger signal (the reader hearting a message),
+ * but they are side-events consumed into tallies before the fold runs and are
+ * not in `messages` — replies/quotes/mentions are what a speech row carries.
+ *
+ * With no `self` (a badge-path fold that wasn't given the reader) the set is
+ * empty: everyone is a stranger, and the drown rule falls back to pace + share
+ * + precedent, which is the intended trustless-room behavior.
+ */
+function computeTrusted(messages: readonly OpenedChat[], self: string | undefined): Set<string> {
+  const trusted = new Set<string>();
+  if (self === undefined) return trusted;
+  trusted.add(self);
+
+  // author → the pubkeys they directed attention at (reply/quote target's
+  // author, or a `p`-mention). Rumor refs are resolved through the batch.
+  const authorOf = new Map<string, string>();
+  for (const ev of messages) authorOf.set(ev.rumorId, ev.author);
+  const attends = new Map<string, Set<string>>();
+  const addEdge = (src: string, dst: string) => {
+    if (dst === src) return;
+    let s = attends.get(src);
+    if (!s) attends.set(src, (s = new Set()));
+    s.add(dst);
+  };
+  for (const ev of messages) {
+    for (const t of ev.tags) {
+      if (t.length < 2 || !t[1]) continue;
+      if (t[0] === "e" || t[0] === "E" || t[0] === "q") {
+        const target = authorOf.get(t[1]);
+        if (target) addEdge(ev.author, target);
+      } else if (t[0] === "p" && /^[0-9a-f]{64}$/.test(t[1])) {
+        addEdge(ev.author, t[1]);
+      }
+    }
+  }
+
+  // Reachability from self over the attention edges.
+  const queue = [self];
+  while (queue.length) {
+    const src = queue.pop()!;
+    const outs = attends.get(src);
+    if (!outs) continue;
+    for (const dst of outs) if (!trusted.has(dst)) { trusted.add(dst); queue.push(dst); }
+  }
+  return trusted;
+}
+
+/**
+ * Rule 6: the UNTRUSTED speakers who together drown the channel.
+ *
+ * The blind spot the shape rules share, and the arms race they lose: density
+ * needs a repeated template (a per-message generator repeats none); echo,
+ * arrival-burst and the cohort rule need a CROWD that ARRIVED together
+ * (established keys don't); gibberish needs low-originality words (a fluent
+ * pitch isn't). Two-or-three aged keys taking turns posting distinct, fluent
+ * spam hit none of them — observed live as 3 keys at ~96% of the channel, and
+ * the natural next move (fake a conversation between themselves, paste a
+ * regular's line to drag them into a content bucket) defeats any rule that
+ * reads the flood's SHAPE.
+ *
+ * So this rule reads none of the shape. It asks how much of the channel is
+ * coming from keys the reader has earned no reason to trust ({@link
+ * computeTrusted}), which is the one question better sentences and staged
+ * chatter cannot answer differently. The flood's accomplices vouching for each
+ * other builds no trust — the closure is rooted at the reader — so a clique
+ * stays untrusted however much it interacts, and the copy-a-regular attack only
+ * folds the spammer's own copy, because a trusted author's rows are exempt
+ * (applied in {@link floodClusters}).
+ *
+ * The cohort rule's discriminators, restated over the untrusted subset, are
+ * what keep this off an honest room:
+ *
+ * - **Drown.** The untrusted wave must be {@link FLOOD_COHORT_SHARE} of
+ *   everything the channel carried while it ran. A real conversation with some
+ *   spam in it keeps trusted voices talking, so the untrusted share stays low
+ *   and nothing folds; only when strangers drown the room does it fire.
+ * - **Pace.** Sustained at {@link FLOOD_COHORT_RATE_PER_MIN}, faster than
+ *   people at keyboards hold across two dozen messages.
+ * - **Precedent.** Someone OUTSIDE the wave spoke {@link
+ *   FLOOD_COHORT_PRECEDENT_MS} before it, or a room of nothing but strangers is
+ *   a launch, not an invasion.
+ *
+ * A wave is bounded by the untrusted group's own silence
+ * ({@link FLOOD_COHORT_TAIL_MS}); a key that returns tomorrow to say one
+ * ordinary thing is outside it. Each key folds only once it has itself carried
+ * {@link FLOOD_COHORT_MIN_PER_AUTHOR} of the wave, so a stranger who says two
+ * things while a flood happens around them is left alone. Still a DISPLAY fold,
+ * never a drop; one trusted reply, quote or mention clears a key that earned
+ * it, on the next fold.
+ */
+function markUntrustedDrown(
+  messages: readonly OpenedChat[],
+  firstSeen: ReadonlyMap<string, number>,
+  trusted: ReadonlySet<string>,
+  flagged: Set<string>,
+  self: string | undefined,
+): void {
+  // The untrusted wave's messages, in ms order (already sorted in `messages`).
+  const idx: number[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const a = messages[i].author;
+    if (a !== self && !trusted.has(a)) idx.push(i);
+  }
+  if (idx.length < FLOOD_COHORT_MESSAGES) return;
+
+  let waveStart = 0;
+  for (let k = 1; k <= idx.length; k++) {
+    const ends = k === idx.length || messages[idx[k]].ms - messages[idx[k - 1]].ms > FLOOD_COHORT_TAIL_MS;
+    if (!ends) continue;
+    const wave = idx.slice(waveStart, k);
+    waveStart = k;
+    if (wave.length < FLOOD_COHORT_MESSAGES) continue;
+
+    const from = messages[wave[0]].ms;
+    const to = messages[wave[wave.length - 1]].ms;
+
+    // Drown: the untrusted wave is most of what the channel carried while it
+    // ran. If trusted voices are still getting a word in, this fails and the
+    // room is judged a conversation, not a flood.
+    const total = lowerBound(messages, to + 1) - lowerBound(messages, from);
+    if (wave.length < total * FLOOD_COHORT_SHARE) continue;
+
+    // Pace: sustained faster than a person plausibly holds. A wave spanning no
+    // time at all is one timestamp's worth — treated as infinitely fast rather
+    // than dividing by zero.
+    const minutes = (to - from) / 60_000;
+    const perMinute = minutes > 0 ? wave.length / minutes : Number.POSITIVE_INFINITY;
+    if (perMinute < FLOOD_COHORT_RATE_PER_MIN) continue;
+
+    // The GROUP is the keys actually carrying the wave — each past
+    // {@link FLOOD_COHORT_MIN_PER_AUTHOR}. A stranger swept into the window who
+    // said one or two things is neither folded nor counted as a drowner.
+    const carried = new Map<string, number>();
+    for (const i of wave) carried.set(messages[i].author, (carried.get(messages[i].author) ?? 0) + 1);
+    const group = new Set<string>();
+    for (const [a, n] of carried) if (n >= FLOOD_COHORT_MIN_PER_AUTHOR) group.add(a);
+    if (group.size === 0) continue;
+
+    // Precedent: someone OUTSIDE the drowning group was heard a clear margin
+    // before the wave — proof the channel existed without them. Read from
+    // `firstSeen` (the store's 7-day map, not this window), so the quiet before
+    // a flood is visible even when the flood has filled the render batch. Light
+    // and early speakers count; only the heavy hitters are excluded from being
+    // their own precedent, which is what lets a room of otherwise-untrusted
+    // regulars still supply it.
+    let othersEarliest = Number.POSITIVE_INFINITY;
+    for (const [a, ms] of firstSeen) if (!group.has(a) && ms < othersEarliest) othersEarliest = ms;
+    if (!(othersEarliest <= from - FLOOD_COHORT_PRECEDENT_MS)) continue;
+
+    for (const i of wave) if (group.has(messages[i].author)) flagged.add(messages[i].rumorId);
   }
 }
 
