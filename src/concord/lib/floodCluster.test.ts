@@ -16,6 +16,7 @@ import type { OpenedChat } from "@/concord/lib/chat";
 import {
   FLOOD_COHORT_AUTHORS,
   FLOOD_COHORT_TAIL_MS,
+  FLOOD_GIBBERISH_MIN,
   FLOOD_MIN_MESSAGES,
   FLOOD_WINDOW_MS,
   floodClusters,
@@ -81,6 +82,13 @@ describe("shapeKey", () => {
   it("is empty for content with nothing to repeat", () => {
     expect(shapeKey("   ")).toBe("");
     expect(shapeKey("")).toBe("");
+  });
+
+  it("collapses a run of one letter, so elongation is one template", () => {
+    expect(shapeKey("gggggg")).toBe(shapeKey("ggg"));
+    expect(shapeKey("noooo way")).toBe(shapeKey("noooooooo way"));
+    // Two of a letter is a word, not a run: `gg` keeps its own shape.
+    expect(shapeKey("gg")).not.toBe(shapeKey("g"));
   });
 });
 
@@ -507,6 +515,59 @@ describe("floodClusters — a cohort that drowns the channel", () => {
     const evs = conveyor(10, 5);
     const flagged = floodClusters(evs, { self: "key3" });
     expect(evs.filter((e) => e.author === "key3").every((e) => !flagged.has(e.rumorId))).toBe(true);
+  });
+});
+
+describe("floodClusters — low letter originality (rule 5)", () => {
+  /** The reported wall: one key, letter runs and single letters, minutes apart. */
+  function wall(author: string, from = T0, gapMs = 120_000) {
+    const junk = ["g", "ggg", "gggg", "gggggg", "g", "ggggg", "a", "a", "aa", "a", "nn", "g", "a"];
+    return junk.map((c, i) => msg(author, c, from + i * gapMs));
+  }
+
+  it("folds a lone key's wall of mash once it spends the allowance", () => {
+    // Every message a distinct shape or below density's bar, one word, one key:
+    // rules 1-4 are all structurally silent on this, which is what it exploits.
+    const room = [msg("regular", "morning all", T0 - 600_000)];
+    const evs = sorted([...room, ...wall("masher")]);
+    const flagged = floodClusters(evs);
+    expect(evs.filter((e) => e.author === "masher").every((e) => flagged.has(e.rumorId))).toBe(true);
+    expect(flagged.has(room[0].rumorId)).toBe(false);
+  });
+
+  it("keeps the wall inside the allowance", () => {
+    const evs = sorted(wall("m").slice(0, FLOOD_GIBBERISH_MIN - 1));
+    expect(floodClusters(evs).size).toBe(0);
+  });
+
+  it("sweeps the ordinary message the wall interleaves — an accepted casualty", () => {
+    const room = [msg("regular", "morning all", T0 - 600_000)];
+    const hello = msg("masher", "hello world", T0 + 5 * 120_000 + 1);
+    const flagged = floodClusters(sorted([...room, ...wall("masher"), hello]));
+    expect(flagged.has(hello.rumorId)).toBe(true);
+  });
+
+  it("never counts the two-letter words that are just language", () => {
+    const words = ["no", "ok", "gm", "hi", "ty"];
+    const evs = Array.from({ length: 20 }, (_, i) =>
+      msg("terse", words[i % words.length], T0 + i * 150_000),
+    );
+    expect(floodClusters(sorted(evs)).size).toBe(0);
+  });
+
+  it("folds a heavy laugher past the allowance — casualties are accepted", () => {
+    // `kkkk` and `jajaja` are low-originality by construction; a dozen inside
+    // an hour from one key folds, deliberately, however honest the laughter.
+    const room = [msg("regular", "morning all", T0 - 600_000)];
+    const laughs = Array.from({ length: FLOOD_GIBBERISH_MIN }, (_, i) =>
+      msg("laugher", i % 2 ? "jajaja" : "kkkkkk", T0 + i * 240_000),
+    );
+    const flagged = floodClusters(sorted([...room, ...laughs]));
+    expect(laughs.every((e) => flagged.has(e.rumorId))).toBe(true);
+  });
+
+  it("never folds the reader's own mash", () => {
+    expect(floodClusters(sorted(wall("me")), { self: "me" }).size).toBe(0);
   });
 });
 

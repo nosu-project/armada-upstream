@@ -139,6 +139,8 @@ export interface FloodOptions {
 const URL_RUN = /https?:\/\/\S+/g;
 const TRAILING_NONCE = /([>!])\s*[a-z0-9]{4,9}$/;
 const DIGIT_TOKEN = /[\p{L}\p{N}]*\p{N}[\p{L}\p{N}]*/gu;
+/** Three-plus of one letter: elongation (`nooo`), laughter (`kkkk`), mash (`ggggg`). */
+const LETTER_RUN = /(\p{L})\1{2,}/gu;
 const INVISIBLE = /[\u200b-\u200f\u2060\ufeff]/g;
 /** Words, in any script. Emoji and punctuation are deliberately not words. */
 const WORD = /[\p{L}][\p{L}\p{N}_]*/gu;
@@ -162,6 +164,9 @@ export function shapeKey(content: string): string {
     .replace(URL_RUN, "@")
     .replace(TRAILING_NONCE, "$1#")
     .replace(DIGIT_TOKEN, "#")
+    // A letter run is one keypress held down: `ggg` and `gggggg` are the same
+    // message, and `noooo` is `no`. Two is a word (`gg`), three is a run.
+    .replace(LETTER_RUN, "$1")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -269,12 +274,12 @@ function mergeSimilar(buckets: Bucket[]): number[] {
 }
 
 /** Per-message normalization, memoized on the row itself (folds re-run often). */
-const normCache = new WeakMap<OpenedChat, { shape: string; words: string[] }>();
-function normalize(ev: OpenedChat): { shape: string; words: string[] } {
+const normCache = new WeakMap<OpenedChat, { shape: string; words: string[]; gibberish: boolean }>();
+function normalize(ev: OpenedChat): { shape: string; words: string[]; gibberish: boolean } {
   let n = normCache.get(ev);
   if (!n) {
     const shape = shapeKey(ev.content);
-    normCache.set(ev, (n = { shape, words: normalizeTokens(shape) }));
+    normCache.set(ev, (n = { shape, words: normalizeTokens(shape), gibberish: isGibberish(shape) }));
   }
   return n;
 }
@@ -388,6 +393,7 @@ export function floodClusters(messages: readonly OpenedChat[], opts: FloodOption
   }
   markArrivalBurst(messages, firstSeen, flagged, opts.self);
   markCohortFlood(messages, firstSeen, flagged, opts.self);
+  markGibberish(messages, flagged, opts.self);
   sweepParticipants(messages, flagged, opts.self);
   return flagged;
 }
@@ -721,6 +727,85 @@ function markArrivalBurst(
     if (burners < FLOOD_BURST_MIN) continue;
 
     for (let i = lo; i <= hi; i++) if (burner(messages[i].author)) flagged.add(messages[i].rumorId);
+  }
+}
+
+/** Distinct letters at or under which a message reads as low-originality. */
+export const FLOOD_GIBBERISH_MAX_LETTERS = 2;
+/**
+ * Low-originality messages ONE key may post inside the window before the run
+ * folds — the allowance ends on this one.
+ *
+ * Chosen against the honest twins rather than the attack: elongation, a laugh,
+ * a `hmm`, a `gg` after a match are all low-originality and all fine in the
+ * amounts a person actually produces. A dozen inside an hour from one key is a
+ * habit the channel is being made to scroll past.
+ */
+export const FLOOD_GIBBERISH_MIN = 12;
+/** Long, like the echo window: mash is a drizzle, not a burst. */
+export const FLOOD_GIBBERISH_WINDOW_MS = 3_600_000;
+
+/**
+ * Does this shape draw on too few letters to be saying anything?
+ *
+ * Letter originality is the property keyboard mash cannot vary: a generator
+ * can rephrase a pitch forever, but `g`, `ggg`, `aaa`, `nn` are low-diversity
+ * by being what they are. One distinct letter is mash at any length. Two
+ * distinct letters is mash from three letters up (`lol`, `haha`, `hmm`,
+ * `kkkk`, `jajaja`) — but at exactly two letters it is the language itself
+ * (`no`, `ok`, `gm`, `hi`, `ty`) and is never counted.
+ */
+export function isGibberish(shape: string): boolean {
+  const letters = shape.match(/\p{L}/gu);
+  if (!letters) return false;
+  const distinct = new Set(letters).size;
+  if (distinct > FLOOD_GIBBERISH_MAX_LETTERS) return false;
+  return distinct === 1 || letters.length >= 3;
+}
+
+/**
+ * Rule 5: one key spending its messages on letters rather than words.
+ *
+ * The lone-key wall the other four rules are structurally blind to: `g`,
+ * `ggg`, `a`, `nn` — each message its own singleton bucket (no density), one
+ * word (never echo-eligible), one key (never a burst or a cohort). What is
+ * left to measure is how little of the alphabet the key is using.
+ *
+ * The policy is an allowance, and it is deliberate: a little low-originality
+ * is a person being a person, and {@link FLOOD_GIBBERISH_MIN} of it inside
+ * {@link FLOOD_GIBBERISH_WINDOW_MS} from one key is spamming, whatever the
+ * intent behind it. That knowingly folds a heavy laugher — `kkkk`, `jajaja`,
+ * `hhhh` are exactly low-originality — and, through {@link sweepParticipants},
+ * the ordinary messages the wall interleaves. Accepted casualties: the fold is
+ * one click to expand, and the row it collapses was a wall either way.
+ *
+ * Per key on purpose. Cross-key mash is the chorus (`gm`, `🎉`) this file has
+ * repeatedly declined to fold, and the crowd-shaped rules already own the
+ * crowd-shaped attacks.
+ */
+function markGibberish(
+  messages: readonly OpenedChat[],
+  flagged: Set<string>,
+  self: string | undefined,
+): void {
+  const byAuthor = new Map<string, number[]>();
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].author === self) continue;
+    if (!normalize(messages[i]).gibberish) continue;
+    let list = byAuthor.get(messages[i].author);
+    if (!list) byAuthor.set(messages[i].author, (list = []));
+    list.push(i);
+  }
+  for (const idx of byAuthor.values()) {
+    if (idx.length < FLOOD_GIBBERISH_MIN) continue;
+    let lo = 0;
+    let marked = 0;
+    for (let hi = 0; hi < idx.length; hi++) {
+      while (messages[idx[hi]].ms - messages[idx[lo]].ms > FLOOD_GIBBERISH_WINDOW_MS) lo++;
+      if (hi - lo + 1 < FLOOD_GIBBERISH_MIN) continue;
+      for (let i = Math.max(lo, marked); i <= hi; i++) flagged.add(messages[idx[i]].rumorId);
+      marked = hi + 1;
+    }
   }
 }
 
