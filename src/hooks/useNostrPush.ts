@@ -14,6 +14,7 @@ import { usePinnedDms } from "@/hooks/usePinnedDms";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { clearSwDmConfig, writeSwDmConfig } from "@/lib/swDmConfig";
+import { clearPushDisabledFlag, writePushDisabledFlag } from "@/lib/swPushDisabled";
 import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
 import { useEventStore } from "@/hooks/useEventStore";
 import { parseAuthorEvent } from "@/lib/authorCache";
@@ -507,6 +508,11 @@ export function useNostrPush(): UsePushNotificationsReturn {
       sub = await registration.pushManager.subscribe(options);
     }
 
+    // Registering below is the moment pushes can resume; lift the worker's
+    // kill switch from any previous disable first, or it would tear this
+    // fresh subscription down on the first push.
+    await clearPushDisabledFlag();
+
     const json = sub.toJSON();
     const pushSubscription = {
       type: "web" as const,
@@ -693,6 +699,12 @@ export function useNostrPush(): UsePushNotificationsReturn {
     setBusy(true);
     try {
       saveIntent(false);
+      // Local truth first, where the worker can read it: everything after
+      // this line goes over the network and can fail (or the page can die
+      // mid-teardown), and the worker refuses — and tears down — pushes on
+      // its own while this flag stands. "Off" must not depend on a flaky
+      // gateway honoring the deletes below.
+      await writePushDisabledFlag();
       const domain = pushDomain();
       // Delete every server record we registered.
       if (client) {

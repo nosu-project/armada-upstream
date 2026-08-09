@@ -83,6 +83,13 @@ const BADGE_STATE_URL = new URL(`${PUSH_STATE_PREFIX}badge`, self.location.origi
 // viewer's pubkey, and (nsec logins only) the decrypt key. Written by
 // swDmConfig.ts; read here per DM push. Must match that module's path.
 const DM_CONFIG_URL = new URL(`${PUSH_STATE_PREFIX}dm-config`, self.location.origin).href;
+// The user's push kill switch, written by swPushDisabled.ts BEFORE the disable
+// path's best-effort network teardown and deleted when push is re-enabled.
+// While it is set this worker displays nothing and tears down its own
+// subscription — the page's unsubscribe/server-delete can fail or be cut off
+// mid-way, and a gateway that never saw the delete keeps pushing forever at a
+// device whose user said stop.
+const PUSH_DISABLED_URL = new URL(`${PUSH_STATE_PREFIX}disabled`, self.location.origin).href;
 // Event ids this install has already presented, so a replayed push can't
 // re-alert for a message the user has seen. Bounded like the own-event set.
 const SEEN_EVENT_PREFIX = `${PUSH_STATE_PREFIX}seen/`;
@@ -531,6 +538,35 @@ async function roomAlertSilent(tag) {
   }
 }
 
+/**
+ * Whether the user has turned push off on this install. The page's disable
+ * path unsubscribes and deletes the gateway registrations, but both are
+ * best-effort over the network; this flag is the local truth the worker can
+ * enforce without any page open.
+ */
+async function pushDisabled() {
+  try {
+    const cache = await caches.open(PUSH_STATE_CACHE);
+    return Boolean(await cache.match(PUSH_DISABLED_URL));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Tear down this install's own subscription so disabled pushes stop at the
+ * source: once the endpoint is gone the push service answers 410 and the
+ * gateway drops the registration — no relay cooperation needed.
+ */
+async function dropOwnSubscription() {
+  try {
+    const sub = await self.registration.pushManager.getSubscription();
+    if (sub) await sub.unsubscribe();
+  } catch {
+    // The next stray push retries.
+  }
+}
+
 self.addEventListener("push", (event) => {
   if (!event.data) return;
 
@@ -552,6 +588,16 @@ self.addEventListener("push", (event) => {
 
   event.waitUntil(
     (async () => {
+      // The user turned push off. Show NOTHING — deliberately breaking the
+      // userVisibleOnly contract, because its penalty (the browser revoking
+      // the subscription) is the outcome wanted here — and re-attempt the
+      // teardown, since this push arriving proves the subscription is still
+      // alive.
+      if (await pushDisabled()) {
+        await dropOwnSubscription();
+        return;
+      }
+
       // A suppressed push, or one replaying an event already presented here,
       // displays nothing — which iOS counts toward revoking the subscription.
       // quietSync() spends the keep-alive only once the budget is nearly out.
@@ -721,6 +767,17 @@ self.addEventListener("pushsubscriptionchange", (event) => {
   const key = event.oldSubscription?.options?.applicationServerKey;
   event.waitUntil(
     (async () => {
+      // While the user's kill switch is set, a rotation must not resurrect
+      // push: drop whatever the browser minted instead of re-subscribing.
+      if (await pushDisabled()) {
+        try {
+          if (event.newSubscription) await event.newSubscription.unsubscribe();
+        } catch {
+          // Already dead, or the push service is unreachable — either way no
+          // page will re-register it while the flag stands.
+        }
+        return;
+      }
       if (!event.newSubscription && key) {
         try {
           await self.registration.pushManager.subscribe({

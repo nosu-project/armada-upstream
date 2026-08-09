@@ -27,14 +27,24 @@ function loadWorker(options: {
   dmCrypto?: { unwrapDm: (...args: unknown[]) => unknown };
   dmConfig?: Record<string, unknown>;
   pushEndpoint?: string;
+  pushDisabled?: boolean;
   priorNotifications?: Array<{ tag: string; data: Record<string, unknown> }>;
 } = {}) {
   const handlers = new Map<string, (event: unknown) => unknown>();
   const showNotification = vi.fn(async () => undefined);
   const setAppBadge = vi.fn(async () => undefined);
+  const unsubscribe = vi.fn(async () => true);
+  const subscribe = vi.fn(async () => ({ endpoint: "https://push.example/new", unsubscribe }));
   // A real per-URL store: the badge counter, the silent-push budget and the
   // seen-event ledger all read back what they wrote, and the ledger enumerates.
   const store = new Map<string, unknown>();
+  if (options.pushDisabled) {
+    // The kill switch swPushDisabled.ts writes when the user turns push off.
+    store.set(
+      new URL("/.armada-push-state/disabled", "https://armada.buzz").href,
+      new Response("1"),
+    );
+  }
   const cache = {
     match: vi.fn(async (request: string) => {
       if (options.ownEventId && request.includes(`/own/${options.ownEventId}`)) return {};
@@ -64,9 +74,11 @@ function loadWorker(options: {
     navigator: options.badging ? { setAppBadge, clearAppBadge: vi.fn() } : undefined,
     registration: {
       showNotification,
-      ...(options.pushEndpoint
-        ? { pushManager: { getSubscription: async () => ({ endpoint: options.pushEndpoint }) } }
-        : {}),
+      pushManager: {
+        getSubscription: async () =>
+          options.pushEndpoint ? { endpoint: options.pushEndpoint, unsubscribe } : null,
+        subscribe,
+      },
       ...(options.priorNotifications
         ? {
           getNotifications: async ({ tag }: { tag: string }) =>
@@ -118,7 +130,20 @@ function loadWorker(options: {
     await pending;
   }
 
-  return { push, showNotification, setAppBadge };
+  async function pushSubscriptionChange(newSubscription?: { unsubscribe: () => Promise<boolean> }) {
+    let pending: Promise<unknown> | undefined;
+    const event = {
+      oldSubscription: { options: { applicationServerKey: new ArrayBuffer(8) } },
+      newSubscription,
+      waitUntil: (promise: Promise<unknown>) => { pending = promise; },
+    };
+    const handler = handlers.get("pushsubscriptionchange");
+    expect(handler).toBeTypeOf("function");
+    handler!(event);
+    await pending;
+  }
+
+  return { push, pushSubscriptionChange, showNotification, setAppBadge, subscribe, unsubscribe };
 }
 
 describe("Web Push suppression", () => {
@@ -467,5 +492,53 @@ describe("Web Push DM gating (inlined wrap)", () => {
     await worker.push({ scope: "dm", event_id: "w", url: "/dm" }); // no `event`
     const [, opts] = worker.showNotification.mock.calls[0] as unknown as [string, { body: string }];
     expect(opts.body).toBe("New direct message");
+  });
+});
+
+describe("Web Push kill switch", () => {
+  // The disable path's unsubscribe and gateway deletes are best-effort over
+  // the network. The flag is the local truth: while it is set the worker
+  // shows NOTHING (yes, breaking userVisibleOnly — revocation is the goal)
+  // and tears its own subscription down, so a gateway that never saw the
+  // delete stops reaching the device at the source.
+  it("shows nothing and tears down the subscription while disabled", async () => {
+    const worker = loadWorker({
+      pushDisabled: true,
+      pushEndpoint: "https://web.push.apple.com/QKw71NdV3vO",
+    });
+    await worker.push({ scope: "dm", event_id: "incoming-wrap", url: "/dm" });
+    expect(worker.showNotification).not.toHaveBeenCalled();
+    expect(worker.unsubscribe).toHaveBeenCalled();
+  });
+
+  it("retries the teardown on every stray push", async () => {
+    const worker = loadWorker({
+      pushDisabled: true,
+      pushEndpoint: "https://web.push.apple.com/QKw71NdV3vO",
+    });
+    await worker.push({ scope: "group", event_id: "a" });
+    await worker.push({ scope: "group", event_id: "b" });
+    expect(worker.unsubscribe).toHaveBeenCalledTimes(2);
+    expect(worker.showNotification).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-resubscribe on pushsubscriptionchange while disabled", async () => {
+    const worker = loadWorker({ pushDisabled: true });
+    await worker.pushSubscriptionChange();
+    expect(worker.subscribe).not.toHaveBeenCalled();
+  });
+
+  it("unsubscribes a browser-minted replacement subscription while disabled", async () => {
+    const replacement = { unsubscribe: vi.fn(async () => true) };
+    const worker = loadWorker({ pushDisabled: true });
+    await worker.pushSubscriptionChange(replacement);
+    expect(replacement.unsubscribe).toHaveBeenCalled();
+    expect(worker.subscribe).not.toHaveBeenCalled();
+  });
+
+  it("still auto-resubscribes on rotation when push is enabled", async () => {
+    const worker = loadWorker();
+    await worker.pushSubscriptionChange();
+    expect(worker.subscribe).toHaveBeenCalled();
   });
 });
