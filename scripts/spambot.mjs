@@ -5,14 +5,17 @@
  * Two modes:
  *
  * CHAT (default): joins a Concord community from an invite link and posts a
- * continuous stream of realistic-looking (but harmless) spam to its public
- * channels. Strategy evolved against src/concord/lib/floodCluster.ts (commit
- * cc57eadf): a PERSISTENT POOL of keys (introduced one at a time, slow enough
- * to never trip the arrival-burst rule, each kept speaking past the 120s
- * "burner" window) plus a combinatorial content engine whose messages never
- * repeat a shape, enforced by a Jaccard guard against the last hour of output
- * (the fold merges near-duplicates at ≥0.6). Fresh-key-per-message is the one
- * strategy the fold's rule 3 sees through completely, so keys are reused.
+ * continuous stream of gibberish spam ("test", "gggg", "nn"…) to its public
+ * channels, each message collecting ❤️👍😂 from sibling keys. Strategy evolved
+ * against src/concord/lib/floodCluster.ts through two rounds:
+ *   - v1 content rules (density/echo/arrival-burst) were beaten by a warm
+ *     48-key pool + a Jaccard-guarded unique-content engine.
+ *   - v2 (commit 0cb74b2e) added a content-free COHORT rule — keys chained
+ *     arrival-to-arrival (≤10 min) that drown the channel — which folds the
+ *     v1 pool at 89-99%. Beaten here by introducing keys one per 11–14 min
+ *     (no chain ever forms; the rule needs ≥3 chained keys), never repeating
+ *     a gibberish shape within 10 min (density), and staying wordless (echo).
+ * Re-run the proof against the shipped rule: node scratch/verify-evasion.mjs
  *
  * INVITE (`--invite-spam <pubkey|npub>`): NIP-59 gift-wraps kind-3313 direct
  * invites (CORD-05 §6) to a target pubkey, delivered to the target's kind-10050
@@ -84,6 +87,7 @@ const KIND_DIRECT_INVITE = 3313;
 const KIND_NIP59_SEAL = 13;
 const KIND_DM_RELAYS = 10050;
 const KIND_RELAY_LIST = 10002;
+const KIND_REACTION = 7;
 
 const VSK_INVITE_LIVE = "6";
 const VSK_INVITE_REVOKED = "9";
@@ -663,7 +667,7 @@ function fill(s, token) {
     .replaceAll("{when}", pick(WHEN));
 }
 
-/** One unique-looking chat message; long, link in ~40%. */
+/** One unique-looking chat message; long, link in ~40%. (English engine.) */
 export function generateMessage() {
   const token = pick(TOKENS);
   const frames = [
@@ -688,7 +692,51 @@ export function generateMessage() {
   return msg;
 }
 
-// --- Jaccard guard, mirroring floodCluster.ts normalization exactly --------
+// --- Gibberish engine ------------------------------------------------------
+// The current round's content: near-wordless noise in the spirit of "test",
+// "teste", "nn", "gggg". Single-token shapes are echo-ineligible (<5 words),
+// and with no exact shape repeating within 10 minutes the density rule never
+// finds 8 copies in 5. Content rules simply have nothing to read.
+
+const TEST_FAMILY = ["test", "teste", "sets", "sete", "tset", "tes", "tet", "tst", "tests", "testt", "sett", "est"];
+const REPEAT_LETTERS = "gntsraelodhcpbmu".split("");
+const GIBBERISH_CHARS = "abcdefghijklmnopqrstuvwxyz";
+
+const recentGibberish = new Map(); // shape -> ms
+function gibberishRaw() {
+  const roll = Math.random();
+  if (roll < 0.2) return pick(TEST_FAMILY);
+  if (roll < 0.6) {
+    const letter = pick(REPEAT_LETTERS);
+    return letter.repeat(1 + Math.floor(Math.random() * 7));
+  }
+  const len = 1 + Math.floor(Math.random() * 7);
+  let s = "";
+  for (let i = 0; i < len; i++) s += GIBBERISH_CHARS[Math.floor(Math.random() * 26)];
+  return s;
+}
+
+/** Gibberish that has not appeared in the last 10 minutes. */
+export function gibberishContent() {
+  const cutoff = Date.now() - 10 * 60 * 1000;
+  for (const [shape, t] of recentGibberish) if (t < cutoff) recentGibberish.delete(shape);
+  for (let tries = 0; tries < 100; tries++) {
+    const content = gibberishRaw();
+    if (!recentGibberish.has(content)) {
+      recentGibberish.set(content, Date.now());
+      return content;
+    }
+  }
+  return null; // give up the beat rather than repeat a shape
+}
+
+/** Content dispatcher: --content english|gibberish (default gibberish). */
+function makeContent(opts) {
+  return opts.content === "english" ? guardedContent() : gibberishContent();
+}
+
+// --- Jaccard guard for the English engine, mirroring floodCluster.ts -------
+// (kept after the dispatcher textually; function declarations hoist)
 
 const URL_RUN = /https?:\/\/\S+/g;
 const TRAILING_NONCE = /([>!])\s*[a-z0-9]{4,9}$/;
@@ -786,7 +834,7 @@ function decodePubkey(s) {
 }
 
 function parseArgs(argv) {
-  const opts = { intervalMs: 3000, once: false, resolveOnly: false, invite: undefined, inviteSpam: undefined };
+  const opts = { intervalMs: 3000, content: "gibberish", once: false, resolveOnly: false, invite: undefined, inviteSpam: undefined };
   const args = [...argv];
   while (args.length) {
     const a = args.shift();
@@ -794,6 +842,12 @@ function parseArgs(argv) {
       case "--interval-ms":
         opts.intervalMs = Number(args.shift());
         break;
+      case "--content": {
+        const v = args.shift();
+        if (v !== "english" && v !== "gibberish") throw new Error("--content must be english|gibberish");
+        opts.content = v;
+        break;
+      }
       case "--invite-spam":
         opts.inviteSpam = decodePubkey(args.shift());
         break;
@@ -997,6 +1051,25 @@ async function guestbookJoin(pool, bundle, identity) {
   return pool.publishToAny(bundle.relays, wrap);
 }
 
+/** NIP-25-style reaction rumor (kind 7), same seal/wrap path as chat. */
+async function postReaction(pool, bundle, channel, reactor, targetRumorId, targetAuthorPk, emoji) {
+  const stream = channelGroupKey(bundle.community_root, channel.id, bundle.root_epoch);
+  const rumor = buildRumor({
+    kind: KIND_REACTION,
+    content: emoji,
+    tags: [
+      ["channel", channel.id],
+      ["epoch", String(bundle.root_epoch)],
+      ["e", targetRumorId],
+      ["p", targetAuthorPk],
+    ],
+    pubkey: reactor.pk,
+    ms: Date.now(),
+  });
+  const wrap = sealAndWrap(rumor, stream, reactor.sk);
+  return pool.publishToAny(bundle.relays, wrap);
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------------------------------------------------------------------------
@@ -1123,7 +1196,7 @@ async function main() {
 
   if (opts.once) {
     const channel = channels[0];
-    const content = guardedContent() ?? generateMessage();
+    const content = makeContent(opts) ?? generateMessage();
     log(`posting test message to #${channel.name} from ${identity.pk.slice(0, 12)}…`);
     const profRes = await publishProfile(pool, bundle.relays, identity);
     log(`kind-0 profile: ${profRes.ok ? "ok" : `FAILED (${profRes.message})`}`);
@@ -1151,25 +1224,26 @@ async function main() {
     pool.closeAll();
     return;
   }
-
-  // --- 24/7 chat spam loop: persistent key pool + never-repeating content ---
+  // --- 24/7 chat spam loop: slow pool + gibberish + self-reactions ---
   //
-  // Evasion of src/concord/lib/floodCluster.ts:
-  //  * Rule 3 (arrival burst) folds ≥8 messages from ≥6 keys whose WHOLE
-  //    presence fits in 2 min. So keys are introduced one per KEY_INTRO_MS
-  //    (never ≥6 young keys at once) and KEPT FOREVER — a key that is still
-  //    speaking 2 min after it arrived can never be a "burner" again.
-  //  * Rule 1 (density) needs 8 copies of one shape in 5 min, and with >2
-  //    authors they must ALL be strangers — pool keys have history.
-  //  * Rule 2 (echo) needs one template on ≥3 keys in an hour. guardedContent()
-  //    keeps every message Jaccard-dissimilar from the last hour of output.
+  // Evasion of src/concord/lib/floodCluster.ts AS OF 0cb74b2e:
+  //  * Rule 4 (cohort flood) is content-free: it folds crowds of keys chained
+  //    arrival-to-arrival (≤10 min gaps) that drown the channel. So keys are
+  //    introduced one per 11–14 min — never chained, every key a singleton
+  //    cohort, and the rule needs ≥3 chained members to judge anything.
+  //  * Rule 1 (density) needs 8 copies of one shape in 5 min: gibberish never
+  //    repeats a shape within 10 minutes.
+  //  * Rule 2 (echo) needs ≥5 words: gibberish has one token.
+  //  * Rule 3 (arrival burst) needs ≥8 messages from ≥6 young keys in 2 min:
+  //    intros are 11+ min apart, so at most one key is ever "young".
+  //  * Each posted message collects ❤️👍😂 from three other pool keys —
+  //    engagement dressing, and reactions are outside every rule's input.
   const POOL_TARGET = 48;
-  const KEY_INTRO_MS = 25000;
   const keyPool = [];
-  let lastIntro = 0;
+  let nextIntroAt = 0;
   let rr = 0;
 
-  log(`starting spam: message every ${opts.intervalMs}ms from a persistent pool of ${POOL_TARGET} keys`);
+  log(`starting spam (${opts.content}): message every ${opts.intervalMs}ms, slow pool of ${POOL_TARGET} keys (one per 11-14min)`);
   let lastBundleRefresh = Date.now();
   let lastChannelRefresh = Date.now();
   let consecutiveFailures = 0;
@@ -1205,10 +1279,10 @@ async function main() {
       }
     }
 
-    // Pool warmup: one new key per KEY_INTRO_MS, announced with a human
-    // kind-0 + a guestbook join like any honest new member.
-    if (keyPool.length < POOL_TARGET && now - lastIntro >= KEY_INTRO_MS) {
-      lastIntro = now;
+    // Pool growth: one key per 11-14 min (> FLOOD_COHORT_WINDOW_MS), announced
+    // with a human kind-0 + a guestbook join like any honest new member.
+    if (keyPool.length < POOL_TARGET && now >= nextIntroAt) {
+      nextIntroAt = now + 660_000 + Math.floor(Math.random() * 180_000);
       const member = newIdentity();
       keyPool.push(member);
       log(`pool key #${keyPool.length}/${POOL_TARGET}: ${member.pk.slice(0, 12)}…`);
@@ -1230,17 +1304,24 @@ async function main() {
 
     identity = keyPool[rr++ % keyPool.length];
     const channel = pick(channels);
-    const content = guardedContent();
+    const content = makeContent(opts);
     if (!content) {
-      log(`content guard exhausted (${guardGiveups} giveups); skipping this beat`);
       await sleep(opts.intervalMs);
       continue;
     }
     try {
-      const { wrap, result } = await postChat(pool, bundle, channel, identity, content);
+      const { wrap, rumor, result } = await postChat(pool, bundle, channel, identity, content);
       if (result.ok) {
         consecutiveFailures = 0;
         log(`[${identity.pk.slice(0, 8)}] #${channel.name}: ${JSON.stringify(content.slice(0, 72))} -> ${wrap.id.slice(0, 12)}…`);
+        // Engagement dressing: ❤️ 👍 😂 from three other pool keys, best-effort.
+        const others = keyPool.filter((m) => m.pk !== identity.pk);
+        for (let k = 0; k < Math.min(3, others.length); k++) {
+          const reactor = others[(rr + k) % others.length];
+          postReaction(pool, bundle, channel, reactor, rumor.id, identity.pk, ["❤️", "👍", "😂"][k])
+            .then((r) => !r.ok && log(`reaction failed: ${r.message}`))
+            .catch(() => {});
+        }
       } else {
         consecutiveFailures++;
         log(`PUBLISH REJECTED (${consecutiveFailures}): ${result.message}`);
