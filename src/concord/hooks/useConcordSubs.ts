@@ -1,11 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef } from "react";
 
 import { useCommunityList } from "@/concord/hooks/useCommunityList";
+import { readLivePause } from "@/concord/hooks/useControlPlane";
 import { heldChannelKeys, rehydrateCommunity, liveEntries } from "@/concord/lib/communityList";
 import { buildConcordSubs, type ConcordSub } from "@/concord/lib/concordNotifications";
 import { readControlFold } from "@/concord/lib/control";
 import { registerStreamKeys } from "@/concord/lib/streamAuth";
+import { onWireScopes } from "@/wire/bus";
 
 /**
  * The Concord native-notification subscriptions for EVERY live community
@@ -25,10 +27,32 @@ import { registerStreamKeys } from "@/concord/lib/streamAuth";
  */
 export function useConcordSubs(): ConcordSub[] {
   const { data } = useCommunityList();
+  const queryClient = useQueryClient();
 
   // Key the query on membership identity + epoch (what changes the derived
   // streams), not the whole list object, so unrelated list churn is free.
   const entries = useMemo(() => (data ? liveEntries(data.list) : []), [data]);
+
+  // A pause (or its lift) is a control edition delivered on the GLOBAL c2ctl
+  // sub for every community, not only the open one. Recompute the sub set when
+  // one lands, so a pause on a community the user isn't viewing stops its
+  // notifications promptly rather than on the 60s poll. Matched against the
+  // live list first: a re-run re-reads every community's fold, which is too
+  // much to spend on a `c2ctl:` scope for a community this list doesn't carry.
+  const liveIdsRef = useRef<Set<string>>(new Set());
+  liveIdsRef.current = useMemo(() => new Set(entries.map((e) => e.community_id.toLowerCase())), [entries]);
+  useEffect(
+    () =>
+      onWireScopes((scopes) => {
+        for (const s of scopes) {
+          if (s.startsWith("c2ctl:") && liveIdsRef.current.has(s.slice("c2ctl:".length).toLowerCase())) {
+            void queryClient.invalidateQueries({ queryKey: ["concord", "notif-subs"] });
+            return;
+          }
+        }
+      }),
+    [queryClient],
+  );
   const listSig = useMemo(
     () =>
       entries
@@ -51,6 +75,16 @@ export function useConcordSubs(): ConcordSub[] {
         const community = rehydrateCommunity(entry);
         if (!community) continue;
         const folded = await readControlFold(community.idHex);
+        // Freeze: a paused community (CORD-04 §8) drops its chat plane from the
+        // background service too, for everyone, staff included — the pause is
+        // advisory, so a spammer floods regardless and any listener just eats
+        // it. `readLivePause` reads the CURRENT pause rather than `folded`,
+        // which for a background community can predate it by hours. The control
+        // plane stays subscribed, so the lift still lands and the 60s refetch
+        // resumes; an `until` expiry self-resumes with no edition. The window
+        // this misses is owed the same catch-up as the wire's, and gets it from
+        // the same IOU — WireSync defers the community on the same condition.
+        if (await readLivePause(community, Math.floor(Date.now() / 1000))) continue;
         const built = buildConcordSubs(community, folded);
         subs.push(...built.subs);
         // Register for NIP-42, scoped to the community's relays: the native

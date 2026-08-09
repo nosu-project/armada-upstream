@@ -265,6 +265,14 @@ export interface FoldedTimeline {
    * becoming a second author-identity drop alongside the Banlist.
    */
   quarantined: Set<string>;
+  /**
+   * The subset of {@link quarantined} collapsed by a community PAUSE (CORD-04
+   * §8) rather than by the flood heuristic. Same suppression, different reason,
+   * and the reader is owed the difference: the flood row's copy accuses its
+   * messages of being near-identical spam from many accounts, which about a
+   * paused room's ordinary traffic is simply false.
+   */
+  paused: Set<string>;
   /** target rumor id → emoji → tally. */
   reactions: Map<string, Map<string, ReactionEntry>>;
   /** target rumor id → VERIFIED zaps (CORD.md §4; unverified never enter). */
@@ -357,6 +365,13 @@ export function foldTimeline(
      * precedent (`FloodOptions.establishedSinceMs`). Optional.
      */
     establishedSinceMs?: number;
+    /**
+     * An active community pause's enactment time in SECONDS (`activePause`,
+     * CORD-04 §8). When set, non-staff messages timestamped at or after it fold
+     * into the flood row — a reader-side quiet, never a drop. Undefined = no
+     * pause. The `staff` predicate (or the moderation context) exempts staff.
+     */
+    pauseSince?: number;
   },
 ): FoldedTimeline {
   const byId = new Map<string, OpenedChat>();
@@ -614,18 +629,41 @@ export function foldTimeline(
     a.ms !== b.ms ? a.ms - b.ms : a.rumorId < b.rumorId ? -1 : 1,
   );
 
+  // Staff-immunity source, in preference order: an explicit override, else the
+  // moderation context the app already resolves for the delete checks.
+  const isStaff = opts?.staff ?? moderation?.isStaff;
+  const quarantined = floodClusters(messages, {
+    ...(opts?.self !== undefined ? { self: opts.self } : {}),
+    ...(opts?.firstSeen !== undefined ? { firstSeen: opts.firstSeen } : {}),
+    ...(isStaff !== undefined ? { staff: isStaff } : {}),
+    ...(opts?.establishedSinceMs !== undefined ? { establishedSinceMs: opts.establishedSinceMs } : {}),
+  });
+  // A community pause (CORD-04 §8) collapses non-staff messages posted at/after
+  // the pause into the SAME expandable row a flood gets — a reader-side quiet,
+  // not an author drop: the events still fold, staff and pre-pause history are
+  // untouched. The author's own created_at gates it (forgeable), so it's a
+  // cooperative measure that composes with the flood rules, never replaces them.
+  //
+  // The reader's OWN messages are exempt, as they are from the flood rules: a
+  // message this device sent moments before the pause edition landed — or one
+  // still in flight when it did — would otherwise vanish into a collapsed row
+  // with no explanation, which reads as the client having eaten it.
+  const paused = new Set<string>();
+  if (opts?.pauseSince !== undefined) {
+    const floorMs = opts.pauseSince * 1000;
+    for (const m of messages) {
+      if (m.ms < floorMs) continue;
+      if (m.author === opts.self) continue;
+      if (isStaff?.(m.author) ?? false) continue;
+      paused.add(m.rumorId);
+      quarantined.add(m.rumorId);
+    }
+  }
+
   return {
     messages,
-    quarantined: floodClusters(messages, {
-      ...(opts?.self !== undefined ? { self: opts.self } : {}),
-      ...(opts?.firstSeen !== undefined ? { firstSeen: opts.firstSeen } : {}),
-      // Staff-immunity source, in preference order: an explicit override, else
-      // the moderation context the app already resolves for the delete checks.
-      ...((opts?.staff ?? moderation?.isStaff) !== undefined
-        ? { staff: opts?.staff ?? moderation?.isStaff }
-        : {}),
-      ...(opts?.establishedSinceMs !== undefined ? { establishedSinceMs: opts.establishedSinceMs } : {}),
-    }),
+    quarantined,
+    paused,
     reactions,
     zaps,
     pollVotes,

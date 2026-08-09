@@ -36,6 +36,7 @@ const LABEL_GRANT = "concord/grant";
 const LABEL_BANLIST = "concord/banlist";
 const LABEL_INVITE_LINKS = "concord/invite-links";
 const LABEL_PINS = "concord/pins";
+const LABEL_SIGNAL = "concord/signal";
 const LABEL_INVITE_KEY = "concord/invite-key";
 
 /** The community_id commitment prefix (A.4) — plain SHA-256, NOT the hkdf shape. */
@@ -464,6 +465,18 @@ export function inviteLinksLocator(communityId: Uint8Array, creatorXonly: Uint8A
   assert32("communityId", communityId);
   assert32("creatorXonly", creatorXonly);
   return hkdf32(communityId, buildInfo(LABEL_INVITE_LINKS, creatorXonly));
+}
+
+/**
+ * A Community Signal's coordinate (CORD-04 §8). The `signal_id` is a short
+ * ASCII token; its 32-byte info slot is `sha256(utf8(signal_id))` — the same
+ * "hash a variable-length name into the fixed id field" shape the voice-sender
+ * key uses (A.6). Keyless and epoch-free like every locator, so it survives a
+ * Refounding and a fresh joiner derives it from the community_id alone.
+ */
+export function signalLocator(communityId: Uint8Array, signalId: string): Uint8Array {
+  assert32("communityId", communityId);
+  return hkdf32(communityId, buildInfo(LABEL_SIGNAL, sha256(ASCII.encode(signalId))));
 }
 
 /**

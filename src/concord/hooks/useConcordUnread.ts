@@ -91,6 +91,17 @@ export function useConcordUnread(
       // the community — for something the reader will see as a single line they
       // did not ask for. The fold is the render-layer answer to a flood; a
       // badge that still fires is the same interruption by another route.
+      //
+      // A community PAUSE (CORD-04 §8) is deliberately NOT mirrored here, even
+      // though it collapses rows the same way. Two reasons, and the second is
+      // the deciding one. The population is negligible: the pause drops the
+      // chat subscription outright, so the only messages that can reach this
+      // scan at/after the pause are the ones already in flight when it landed.
+      // And this path has no roster — it never resolves who is staff — so a
+      // suppression here could not honor the staff exemption the fold applies,
+      // and would silence exactly the moderator coordination a paused room
+      // exists to make room for. Under-badging staff is worse than
+      // over-badging a handful of stragglers.
       // Memoized on the batch's identity, so a readState recompute of this
       // memo (every markRead, every mounted instance) never re-runs the fold.
       const quarantined = quarantinedIn(rumors, pubkey);

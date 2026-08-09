@@ -555,12 +555,27 @@ export function useNostrPush(): UsePushNotificationsReturn {
   );
   const lastSynced = useRef<string | null>(null);
   const retry = useRef(0);
+  // Whether this SESSION has registered a non-empty set. Only half the signal:
+  // see the effect below, which also consults the persisted registration list.
+  const hadSpecs = useRef(false);
   const [nonce, setNonce] = useState(0);
   useEffect(() => {
     if (!supported || !ready || !client || !user) return;
     if (permission !== "granted") return;
     if (!loadIntent()) return;
-    if (specs.length === 0) return; // still loading, or nothing to watch
+    // Empty specs is ambiguous: it means "still loading" on a cold start, and
+    // "was watching, now nothing" once something has been registered — and only
+    // the second must run, so `sync` prunes the stale server records instead of
+    // leaving the gateway pushing for a community that is (say) now paused.
+    //
+    // The session ref alone can't tell them apart across a RESTART, which is
+    // exactly when it matters: registrations are server-side and outlive the
+    // tab, so a reload into a still-empty spec set would skip the prune forever
+    // and the gateway would keep pushing. The persisted registration list is
+    // the durable half of the answer — if it holds ids, something is registered
+    // and the prune is owed regardless of what this session has seen.
+    if (specs.length === 0 && !hadSpecs.current && loadRegisteredIds().length === 0) return;
+    if (specs.length > 0) hadSpecs.current = true;
     if (lastSynced.current === syncSig) return;
 
     let cancelled = false;

@@ -1,4 +1,4 @@
-import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Flag, Folder, FolderGit2, Hash, Headphones, KeyRound, Link as LinkIcon, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Phone, Pin, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Timer, Trash2, UserPlus, Users, X } from "lucide-react";
+import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Flag, Folder, FolderGit2, Hash, Headphones, KeyRound, Link as LinkIcon, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Pause, Phone, Pin, Play, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Timer, Trash2, UserPlus, Users, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
@@ -71,6 +71,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuPortal,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
@@ -112,6 +116,8 @@ import { channelDecodeDeadEnd } from "@/concord/lib/channelSync";
 import { activateScope, concordScope } from "@/wire/activation";
 import { useCommunityManagement, useStrandedRecovery } from "@/concord/hooks/useCommunityActions";
 import { useChannels, useControlFold, useDissolved } from "@/concord/hooks/useControlPlane";
+import { PAUSE_DURATIONS, useCommunityPause } from "@/concord/hooks/usePause";
+import { CommunityPauseBanner } from "@/concord/components/CommunityPauseBanner";
 import { usePins } from "@/concord/hooks/usePins";
 import { BanMemberDialog } from "@/concord/components/BanMemberDialog";
 import { RotateKeysDialog } from "@/concord/components/RotateKeysDialog";
@@ -1339,12 +1345,19 @@ export function ConcordPage() {
   const { setTier, setMemberRoles } = useRoles(community);
   const { sendDirectInvite } = useInviteActions(community);
   const { rekeyChannel, canRekeyChannel } = useChannelRekey(community);
+  const { pause: communityPause, setPaused, clearPause } = useCommunityPause(community);
   const ownerHex = folded?.ownerHex ?? community?.owner;
   const iAmOwner = Boolean(user && ownerHex && user.pubkey === ownerHex);
   const roster = folded?.roster;
   const canManageRoles = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.MANAGE_ROLES));
   const canManageMetadata = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.MANAGE_METADATA));
   const canManageChannels = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.MANAGE_CHANNELS));
+  // Community pause (CORD-04 §8): a frozen room. Nobody posts — every member
+  // (staff included) drops the chat wire to save bandwidth, so a message would
+  // reach no live audience — so the composer is disabled for everyone; a manager
+  // resumes it (banner / menu) to talk. The timeline's staff-exempt collapse
+  // (foldTimeline) is a separate, rendering-only concern.
+  const communityPaused = Boolean(communityPause);
   const canCreateInvite = Boolean(user && folded && isAuthorized(folded.roster, user.pubkey, ownerHex, Permissions.CREATE_INVITE));
   // Only the owner and admins may mint a shareable invite link. A plain member
   // still opens the invite dialog and invites people one by one (direct key
@@ -2242,6 +2255,13 @@ export function ConcordPage() {
   // through a ref rather than depending on it.
   const transportRef = useRef(transport);
   transportRef.current = transport;
+  // Refuse sends while the community is paused for a non-staff member (CORD-04
+  // §8); the reason surfaces in the composer. Staff fall through to the
+  // transport's own gate. Reads the ref so this callback identity stays stable.
+  const composerCanSend = useCallback((): string | null => {
+    if (communityPaused) return "This community is paused. A moderator must resume it before anyone can post.";
+    return transportRef.current.canSend?.() ?? null;
+  }, [communityPaused]);
   const startEditing = useCallback((e: ChatMsg) => setEditingId(e.id), []);
   const cancelEditing = useCallback(() => setEditingId(undefined), []);
 
@@ -3273,6 +3293,45 @@ export function ConcordPage() {
                       {channelMuted ? "Unmute channel" : "Mute channel"}
                     </DropdownMenuItem>
                   )}
+                  {canManageChannels && community && !dissolved && (
+                    communityPause ? (
+                      <DropdownMenuItem className="px-3 py-2" onClick={() => clearPause.mutate()}>
+                        <Play className="size-4" />
+                        Resume community
+                      </DropdownMenuItem>
+                    ) : (
+                      // A duration submenu rather than a toggle: pausing freezes
+                      // chat for every member, so it should not be one stray
+                      // click away from "Mute channel" — and a bounded pause is
+                      // the one that still lifts if whoever set it never comes
+                      // back (CORD-04 §8).
+                      <DropdownMenuSub>
+                        <DropdownMenuSubTrigger className="px-3 py-2">
+                          <Pause className="size-4" />
+                          Pause community
+                        </DropdownMenuSubTrigger>
+                        <DropdownMenuPortal>
+                          <DropdownMenuSubContent>
+                            {PAUSE_DURATIONS.map((d) => (
+                              <DropdownMenuItem
+                                key={d.label}
+                                className="px-3 py-2"
+                                onClick={() =>
+                                  setPaused.mutate(
+                                    d.secs === undefined
+                                      ? {}
+                                      : { untilSecs: Math.floor(Date.now() / 1000) + d.secs },
+                                  )
+                                }
+                              >
+                                {d.label}
+                              </DropdownMenuItem>
+                            ))}
+                          </DropdownMenuSubContent>
+                        </DropdownMenuPortal>
+                      </DropdownMenuSub>
+                    )
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
@@ -3608,24 +3667,34 @@ export function ConcordPage() {
                     </div>
                   ) : (
                     channel && (
-                      <ChatComposer
-                        relayUrl="dm"
-                        groupId={channel.idHex}
-                        messages={[]}
-                        mentionPubkeys={memberPubkeys}
-                        botCommands
-                        recentAuthors={recentAuthors}
-                        conversationRelays={community?.relays}
-                        placeholder={user ? `Message #${channel.name}` : "Sign in to send"}
-                        sendOverride={handleSend}
-                        canSend={transport.canSend}
-                        onPollSubmit={transport.sendPoll}
-                        replyTo={replyTo}
-                        replyMarker="nipc7"
-                        onCancelReply={() => setReplyTo(undefined)}
-                        onTyping={publishTyping}
-                        encryptAttachments
-                      />
+                      <>
+                        {communityPause && (
+                          <CommunityPauseBanner
+                            pause={communityPause}
+                            canManage={canManageChannels}
+                            onResume={() => clearPause.mutate()}
+                            resuming={clearPause.isPending}
+                          />
+                        )}
+                        <ChatComposer
+                          relayUrl="dm"
+                          groupId={channel.idHex}
+                          messages={[]}
+                          mentionPubkeys={memberPubkeys}
+                          botCommands
+                          recentAuthors={recentAuthors}
+                          conversationRelays={community?.relays}
+                          placeholder={communityPaused ? "This community is paused" : user ? `Message #${channel.name}` : "Sign in to send"}
+                          sendOverride={handleSend}
+                          canSend={composerCanSend}
+                          onPollSubmit={transport.sendPoll}
+                          replyTo={replyTo}
+                          replyMarker="nipc7"
+                          onCancelReply={() => setReplyTo(undefined)}
+                          onTyping={publishTyping}
+                          encryptAttachments
+                        />
+                      </>
                     )
                   )}
                 </>

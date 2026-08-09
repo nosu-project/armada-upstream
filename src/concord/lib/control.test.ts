@@ -3,12 +3,14 @@ import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
 import { describe, expect, it } from "vitest";
 
 import {
+  activePause,
   buildBanlistEdition,
   buildChannelEdition,
   buildGrantEdition,
   buildMetadataEdition,
   buildRegistryEdition,
   buildRoleEdition,
+  buildSignalsEdition,
   foldControlState,
   isCurrentFoldedControl,
   type FoldedChannel,
@@ -27,7 +29,7 @@ import { bytesToHex, communityIdOf, controlGroupKey, dissolvedGroupKey, grantLoc
 import { channelCategory } from "@/concord/lib/channelCategory";
 import { buildEditionRumor, isTagDecimal } from "@/concord/lib/edition";
 import { readPinList } from "@/concord/lib/pins";
-import { VSK_PINS } from "@/concord/lib/kinds";
+import { SIGNAL_PAUSE, VSK_PINS } from "@/concord/lib/kinds";
 import { buildRumor, openWrap, rewrapSeal, sealRumor, wrapSeal } from "@/concord/lib/stream";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import { KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord/lib/kinds";
@@ -1770,5 +1772,140 @@ describe("isCurrentFoldedControl", () => {
     expect(isCurrentFoldedControl({ channels: {}, heads: new Map() })).toBe(false);
     // Every Map is load-bearing: missing any one of them is a stale shape.
     expect(isCurrentFoldedControl({ channels: new Map(), heads: new Map() }), "no pinLists").toBe(false);
+  });
+
+  it("rejects a snapshot that predates `signals`", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const wrap = await sealEdition(
+      buildSignalsEdition(communityId, SIGNAL_PAUSE, { paused: true }, { actorPubkey: owner.pubkey, version: 1n }),
+      control,
+      owner,
+    );
+    const folded = foldControlState(openControlWraps([wrap], [control]), communityId, owner.pubkey);
+    expect(isCurrentFoldedControl(folded)).toBe(true);
+    const { signals: _dropped, ...older } = folded;
+    expect(isCurrentFoldedControl(older as FoldedControl)).toBe(false);
+  });
+});
+
+describe("community signals — pause (vsk 12, CORD-04 §8)", () => {
+  const pauseWrap = (
+    communityId: Uint8Array,
+    control: GroupKey,
+    by: ReturnType<typeof signer>,
+    content: Record<string, unknown>,
+    o: { version: bigint; prevHash?: Uint8Array; createdAtSecs?: number; authority?: ReturnType<typeof citeGrant> },
+  ) => sealEdition(buildSignalsEdition(communityId, SIGNAL_PAUSE, content, { actorPubkey: by.pubkey, ...o }), control, by);
+
+  it("folds an owner's pause and activePause reports its enactment time", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const wrap = await pauseWrap(communityId, control, owner, { paused: true }, { version: 1n, createdAtSecs: 1000 });
+    const folded = foldControlState(openControlWraps([wrap], [control]), communityId, owner.pubkey);
+
+    expect(folded.signals.get(SIGNAL_PAUSE)?.content).toEqual({ paused: true });
+    expect(activePause(folded, 1500)).toEqual({ since: 1000, by: owner.pubkey });
+  });
+
+  it("honors an optional `until`: active before it, self-clears after", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const wrap = await pauseWrap(communityId, control, owner, { paused: true, until: 2000 }, { version: 1n, createdAtSecs: 1000 });
+    const folded = foldControlState(openControlWraps([wrap], [control]), communityId, owner.pubkey);
+
+    expect(activePause(folded, 1999)).toEqual({ since: 1000, until: 2000, by: owner.pubkey });
+    // At and past `until` the pause is inert with no clearing edition needed.
+    expect(activePause(folded, 2000)).toBeUndefined();
+    expect(activePause(folded, 5000)).toBeUndefined();
+  });
+
+  it("a later `paused:false` edition clears an active pause", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const v1 = await pauseWrap(communityId, control, owner, { paused: true }, { version: 1n, createdAtSecs: 1000 });
+    const prevHash = openControlWraps([v1], [control])[0].selfHash;
+    const v2 = await pauseWrap(communityId, control, owner, { paused: false }, { version: 2n, prevHash, createdAtSecs: 1100 });
+    const folded = foldControlState(openControlWraps([v1, v2], [control]), communityId, owner.pubkey);
+
+    expect(folded.signals.get(SIGNAL_PAUSE)?.content).toEqual({ paused: false });
+    expect(activePause(folded, 1500)).toBeUndefined();
+  });
+
+  it("drops a pause from an author without MANAGE_CHANNELS (fail closed)", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const stranger = signer();
+    // A roleless non-owner has no authority — their pause never folds, and an
+    // owner-signed vac they don't hold can't be forged, so `activePause` is empty.
+    const wrap = await pauseWrap(communityId, control, stranger, { paused: true }, { version: 1n });
+    const folded = foldControlState(openControlWraps([wrap], [control]), communityId, owner.pubkey);
+
+    expect(folded.signals.has(SIGNAL_PAUSE)).toBe(false);
+    expect(activePause(folded, 1500)).toBeUndefined();
+  });
+
+  it("drops a pause whose `until` is beyond the 30-day bound", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    // The mistake this catches: milliseconds written into a seconds field. It
+    // is silent (the edition is otherwise well-formed, and folds) and severe
+    // (a freeze no expiry ever clears), so the head must fail outright.
+    const now = 1_700_000_000;
+    const wrap = await pauseWrap(communityId, control, owner, { paused: true, until: now * 1000 }, {
+      version: 1n,
+      createdAtSecs: now,
+    });
+    const folded = foldControlState(openControlWraps([wrap], [control]), communityId, owner.pubkey);
+
+    expect(folded.signals.has(SIGNAL_PAUSE)).toBe(false);
+    expect(activePause(folded, now + 500)).toBeUndefined();
+  });
+
+  it("accepts an `until` at the bound and rejects a non-positive one", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const thirtyDays = 30 * 24 * 60 * 60;
+    const ok = await pauseWrap(communityId, control, owner, { paused: true, until: 1000 + thirtyDays }, {
+      version: 1n,
+      createdAtSecs: 1000,
+    });
+    expect(
+      activePause(foldControlState(openControlWraps([ok], [control]), communityId, owner.pubkey), 1500),
+    ).toEqual({ since: 1000, until: 1000 + thirtyDays, by: owner.pubkey });
+
+    const bad = await pauseWrap(communityId, control, owner, { paused: true, until: 0 }, {
+      version: 1n,
+      createdAtSecs: 1000,
+    });
+    expect(
+      foldControlState(openControlWraps([bad], [control]), communityId, owner.pubkey).signals.has(SIGNAL_PAUSE),
+    ).toBe(false);
+  });
+
+  it("drops a malformed pause (paused not a boolean)", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const wrap = await pauseWrap(communityId, control, owner, { paused: "yes" }, { version: 1n });
+    const folded = foldControlState(openControlWraps([wrap], [control]), communityId, owner.pubkey);
+
+    expect(folded.signals.has(SIGNAL_PAUSE)).toBe(false);
+  });
+
+  it("lets a MANAGE_CHANNELS admin pause, citing their grant", async () => {
+    const { owner, communityId, control } = await makeCommunity();
+    const admin = signer();
+    const adm = adminRole(bytesToHex(new Uint8Array(32).fill(3)));
+    const roleWrap = await sealEdition(buildRoleEdition(adm, { actorPubkey: owner.pubkey, version: 1n }), control, owner);
+    const grantWrap = await sealEdition(
+      buildGrantEdition(communityId, { member: admin.pubkey, roleIds: [adm.roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
+      control,
+      owner,
+    );
+    const pause = await pauseWrap(communityId, control, admin, { paused: true }, {
+      version: 1n,
+      createdAtSecs: 1000,
+      authority: citeGrant(grantWrap, control),
+    });
+    const folded = foldControlState(
+      openControlWraps([roleWrap, grantWrap, pause], [control]),
+      communityId,
+      owner.pubkey,
+    );
+
+    expect(hasPermission(folded.roster, admin.pubkey, Permissions.MANAGE_CHANNELS)).toBe(true);
+    expect(activePause(folded, 1500)).toEqual({ since: 1000, by: admin.pubkey });
   });
 });

@@ -108,6 +108,7 @@ function foldedWith(input: { grants?: CommunityRoles["grants"]; foreignLinks?: s
     liveInviteLinks: new Set(),
     registriesByCreator: registries,
     pinLists: new Map(),
+    signals: new Map(),
     heads: new Map(),
     headEditions: new Map(),
     incomplete: [],
