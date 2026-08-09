@@ -291,6 +291,54 @@ export async function queryChannelRumors(
 }
 
 /**
+ * When each author was first heard in this channel — the flood detector's
+ * notion of who was already here ({@link FloodOptions.firstSeen} in
+ * `floodCluster.ts`).
+ *
+ * That question CANNOT be answered from the rendered window. `useChannel`
+ * opens a channel holding its newest `WINDOW_SIZE` rumors, and a flood big
+ * enough to matter fills that window completely: every author in it then
+ * reads as new-together, the crowd has no one to be new RELATIVE to, and the
+ * detector goes blind exactly when it is needed. Measured on a live
+ * 370-message campaign, the cohort rule folded 99% given the channel's real
+ * history and 0% given the newest hundred rows.
+ *
+ * A TIME window rather than a row count, because a flood is by nature recent
+ * and what the rule needs is the quiet before it. The engine answers
+ * newest-first, so when the row cap bites it is the OLDEST rows — the
+ * precedent-bearing end — that fall off, and an author whose only old message
+ * was cut is dated by a newer one or missing entirely. Both are safe: the
+ * detector merges by minimum against its own batch, so a capped scan can only
+ * lose a protection or a precedent, never grant a flood immunity. (The origin
+ * design this replaced had the opposite failure — a flood at the edge of what
+ * the scan could see READ AS the channel's founding and exempted itself.)
+ */
+export async function queryChannelFirstSeen(
+  communityIdHex: string,
+  channelIdHex: string,
+  opts: { sinceMs: number; limit: number; signal?: AbortSignal },
+): Promise<Map<string, number>> {
+  const events = await rumorStore(communityIdHex).query(
+    [
+      {
+        kinds: CHAT_KINDS,
+        "#channel": [channelIdHex],
+        since: Math.floor(opts.sinceMs / 1000),
+        limit: opts.limit,
+      },
+    ],
+    { signal: opts.signal },
+  );
+  const firstSeen = new Map<string, number>();
+  for (const ev of notExpired(events)) {
+    const chat = storedToOpenedChat(ev, channelIdHex);
+    const seen = firstSeen.get(chat.author);
+    if (seen === undefined || chat.ms < seen) firstSeen.set(chat.author, chat.ms);
+  }
+  return firstSeen;
+}
+
+/**
  * Read cached rumors by id, whatever plane or channel they arrived on.
  *
  * For surfaces that hold a POINTER to a message rather than a position in a

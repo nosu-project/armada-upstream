@@ -743,7 +743,15 @@ describe("classify", () => {
 
 // ── 4. The render-layer rule ─────────────────────────────────────────────────
 
-describe("floodClusters — the shape a timeline would actually collapse", () => {
+/**
+ * The corpora below are SIGNED — every message is a real seal + wrap — so each
+ * test spends a second or two in secp256k1 before the rule under test runs at
+ * all (the rule itself is ~1ms on these sets). That sits far enough under the
+ * 5s default to pass alone and close enough to it to time out under a full
+ * suite's CPU contention, which is a flake about the harness rather than
+ * anything about flood detection.
+ */
+describe("floodClusters — the shape a timeline would actually collapse", { timeout: 30_000 }, () => {
   /** The shipped rule reads a ms-ordered timeline, as `foldTimeline` returns. */
   const timeline = (c: Corpus) => [...c.events].sort((a, b) => a.ms - b.ms);
   const run = (c: Corpus) => score(floodClusters(timeline(c)), c);
