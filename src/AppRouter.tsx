@@ -45,6 +45,7 @@ const DownloadsPage = lazy(lazyWithReload(() => import("@/pages/DownloadsPage").
 const GroupPage = lazy(lazyWithReload(() => import("@/pages/GroupPage").then((m) => ({ default: m.GroupPage }))));
 const InboxPage = lazy(lazyWithReload(() => import("@/pages/InboxPage").then((m) => ({ default: m.InboxPage }))));
 const InvitePage = lazy(lazyWithReload(() => import("@/concord/pages/InvitePage")));
+const InvitesPage = lazy(lazyWithReload(() => import("@/concord/pages/InvitesPage").then((m) => ({ default: m.InvitesPage }))));
 const BuzzInvitePage = lazy(lazyWithReload(() => import("@/buzz/BuzzInvitePage")));
 const MeshPage = lazy(lazyWithReload(() => import("@/pages/MeshPage")));
 const ChangelogPage = lazy(lazyWithReload(() => import("@/pages/ChangelogPage").then((m) => ({ default: m.ChangelogPage }))));
@@ -378,6 +379,9 @@ export function AppRouter() {
                 Add dialog its entry point sits in (see DiscordImportPage). */}
             <Route path="/import/discord" element={<RequireAuth><DiscordImportPage /></RequireAuth>} />
             <Route path="/mesh" element={<RequireAuth><MeshPage /></RequireAuth>} />
+            {/* The received direct-invite inbox (account-level, CORD-05 §6).
+                Distinct from a community's own `/c/:id/invites` link-admin pane. */}
+            <Route path="/invites" element={<RequireAuth><InvitesPage /></RequireAuth>} />
             <Route path="/dm" element={<RequireAuth><DMsPage /></RequireAuth>} />
             <Route path="/dm/:peer" element={<RequireAuth><DMsPage /></RequireAuth>} />
             {/* DMs have no thread panel, so no `/t/` shape here. */}

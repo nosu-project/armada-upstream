@@ -1,9 +1,11 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
 
 import { assertNotBanned, bundleToEntry } from "@/concord/hooks/useCommunityActions";
 import { useCommunityList, useUpdateCommunityList } from "@/concord/hooks/useCommunityList";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { concordInviteReadKey, useReadState } from "@/hooks/useReadState";
 import {
   directInviteExpired,
   isCatchUpBundle,
@@ -39,6 +41,13 @@ export interface ParkedInvite {
   bundle: InviteBundle;
   communityId: string;
   name: string;
+  /**
+   * When the invite was sent — the inner rumor's `created_at` (unix seconds).
+   * The sender's word, which is fine here: it drives the inbox's newest-first
+   * order and its seen/unread mark, both anti-nag rather than authority (the
+   * same basis on which the decline tombstone compares against rumor time).
+   */
+  receivedAt: number;
   /**
    * True when this invite is for a community I'm ALREADY in, but carries a
    * higher `root_epoch` than I currently hold — an admin healing me forward
@@ -211,12 +220,49 @@ export function useDirectInvites() {
           bundle,
           communityId: bundle.community_id,
           name: bundle.name,
+          receivedAt: record.rumor.created_at,
           catchUp,
         });
       }
       return [...parked.values()];
     },
   });
+}
+
+/** One row of the invite inbox: a parked invite and whether it's still unseen. */
+export interface InviteInboxItem {
+  invite: ParkedInvite;
+  /** True until the user has opened the inbox past this invite's arrival. */
+  unread: boolean;
+}
+
+export interface InviteInbox {
+  /** Parked invites, newest first. */
+  items: InviteInboxItem[];
+  /** How many haven't been seen yet (drives the rail badge / toast). */
+  unreadCount: number;
+}
+
+/**
+ * The direct-invite inbox as a mail-client-style list: {@link useDirectInvites}'
+ * parked invites, sorted newest-first and tagged unread against the inbox's
+ * single last-seen high-water mark ({@link concordInviteReadKey}). Both the
+ * routed inbox page and the rail badge read this, sharing the one underlying
+ * scan query. Opening the page advances the mark, which clears every row's
+ * unread flag at once.
+ */
+export function useInviteInbox(): InviteInbox {
+  const { data: invites } = useDirectInvites();
+  const { getLastRead } = useReadState();
+
+  return useMemo(() => {
+    const lastRead = getLastRead(concordInviteReadKey());
+    const items: InviteInboxItem[] = (invites ?? [])
+      .map((invite) => ({ invite, unread: invite.receivedAt > lastRead }))
+      .sort((a, b) => b.invite.receivedAt - a.invite.receivedAt);
+    const unreadCount = items.reduce((n, it) => n + (it.unread ? 1 : 0), 0);
+    return { items, unreadCount };
+  }, [invites, getLastRead]);
 }
 
 /**
