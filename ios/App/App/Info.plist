@@ -30,14 +30,31 @@
 	     own, reached through WebCrypto. Standard published algorithms
 	     throughout; nothing proprietary.
 
-	     Export posture is the PUBLISHED SOURCE route, not self-classification.
-	     Armada's full source is publicly available, which makes the
-	     corresponding object code not subject to the EAR (15 CFR 734.3(b)(3),
-	     on the strength of the 742.15(b) notification of the source URL to BIS
-	     and NSA ENC). That notification is ONE-TIME: no ERN, and no annual
-	     self-classification report — which the 5D992.c / 740.17(b)(1) route
-	     this file used to claim would have obliged every February 1. The one
-	     standing duty is to re-notify if the canonical repo URL moves.
+	     Export posture is the PUBLISHED SOURCE route, not self-classification,
+	     and it carries NO filing at all. The chain, read off the current EAR
+	     text: publishing alone does not free encryption software (15 CFR
+	     734.7(b) — published 5D002 software "remains subject to the EAR"
+	     unless its source meets 742.15(b)); 742.15(b)(1) puts publicly
+	     available 5D002 SOURCE outside the EAR; and the note to 734.3(b)(3)
+	     extends that status to the corresponding OBJECT code, i.e. this
+	     binary. Armada's source is public, so all three are satisfied.
+
+	     The 742.15(b)(2) email to BIS and NSA ENC is NOT owed. Since the 2016
+	     amendment (81 FR 64673) that paragraph is titled "Notification
+	     requirement for 'non-standard cryptography'" and reaches only source
+	     performing non-standard crypto — proprietary or unpublished
+	     functionality. Every primitive here is standard and published
+	     (RFC 8439, RFC 2104/FIPS 180-4, RFC 5869, SEC 2/BIP-340), and NIP-44
+	     v2 and Concord are published specifications, so nothing qualifies.
+	     Much online guidance still describes the pre-2016 rule, where the
+	     notification WAS universal; don't restore it from that. Nor from the
+	     5D992.c / 740.17(b)(1) route this file once claimed, which would have
+	     obliged an ERN plus a self-classification report every February 1.
+
+	     One standing duty, and it is the whole basis of the position: the
+	     source must STAY publicly available. If the bundled crypto ever
+	     became non-standard, 742.15(b)(2) would attach and would then also
+	     require re-notifying whenever the notified source URL moves.
 
 	     Left true rather than false because the binary really does carry
 	     non-OS crypto, and declaring it here stops App Store Connect asking
