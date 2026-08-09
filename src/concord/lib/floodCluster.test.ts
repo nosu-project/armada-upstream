@@ -16,9 +16,11 @@ import type { OpenedChat } from "@/concord/lib/chat";
 import {
   FLOOD_COHORT_AUTHORS,
   FLOOD_COHORT_TAIL_MS,
+  FLOOD_GIBBERISH_MIN,
   FLOOD_MIN_MESSAGES,
   FLOOD_WINDOW_MS,
   floodClusters,
+  quarantinedIn,
   shapeKey,
 } from "@/concord/lib/floodCluster";
 
@@ -80,6 +82,13 @@ describe("shapeKey", () => {
   it("is empty for content with nothing to repeat", () => {
     expect(shapeKey("   ")).toBe("");
     expect(shapeKey("")).toBe("");
+  });
+
+  it("collapses a run of one letter, so elongation is one template", () => {
+    expect(shapeKey("gggggg")).toBe(shapeKey("ggg"));
+    expect(shapeKey("noooo way")).toBe(shapeKey("noooooooo way"));
+    // Two of a letter is a word, not a run: `gg` keeps its own shape.
+    expect(shapeKey("gg")).not.toBe(shapeKey("g"));
   });
 });
 
@@ -185,7 +194,10 @@ describe("floodClusters", () => {
     );
     const started = performance.now();
     const flagged = floodClusters(many);
-    expect(performance.now() - started).toBeLessThan(500);
+    // Sized for a CONTENDED full-suite worker, not an idle core (isolation
+    // runs this in ~100ms). What it guards against — an accidental O(n²)
+    // pass — costs seconds, not hundreds of milliseconds.
+    expect(performance.now() - started).toBeLessThan(1000);
     expect(flagged.size).toBe(0);
   });
 });
@@ -506,5 +518,133 @@ describe("floodClusters — a cohort that drowns the channel", () => {
     const evs = conveyor(10, 5);
     const flagged = floodClusters(evs, { self: "key3" });
     expect(evs.filter((e) => e.author === "key3").every((e) => !flagged.has(e.rumorId))).toBe(true);
+  });
+});
+
+describe("floodClusters — low letter originality (rule 5)", () => {
+  /** The reported wall: one key, letter runs and single letters, minutes apart. */
+  function wall(author: string, from = T0, gapMs = 120_000) {
+    const junk = ["g", "ggg", "gggg", "gggggg", "g", "ggggg", "a", "a", "aa", "a", "nn", "g", "a"];
+    return junk.map((c, i) => msg(author, c, from + i * gapMs));
+  }
+
+  it("folds a lone key's wall of mash once it spends the allowance", () => {
+    // Every message a distinct shape or below density's bar, one word, one key:
+    // rules 1-4 are all structurally silent on this, which is what it exploits.
+    const room = [msg("regular", "morning all", T0 - 600_000)];
+    const evs = sorted([...room, ...wall("masher")]);
+    const flagged = floodClusters(evs);
+    expect(evs.filter((e) => e.author === "masher").every((e) => flagged.has(e.rumorId))).toBe(true);
+    expect(flagged.has(room[0].rumorId)).toBe(false);
+  });
+
+  it("keeps the wall inside the allowance", () => {
+    const evs = sorted(wall("m").slice(0, FLOOD_GIBBERISH_MIN - 1));
+    expect(floodClusters(evs).size).toBe(0);
+  });
+
+  it("sweeps the ordinary message the wall interleaves — an accepted casualty", () => {
+    const room = [msg("regular", "morning all", T0 - 600_000)];
+    const hello = msg("masher", "hello world", T0 + 5 * 120_000 + 1);
+    const flagged = floodClusters(sorted([...room, ...wall("masher"), hello]));
+    expect(flagged.has(hello.rumorId)).toBe(true);
+  });
+
+  it("never counts the two-letter words that are just language", () => {
+    const words = ["no", "ok", "gm", "hi", "ty"];
+    const evs = Array.from({ length: 20 }, (_, i) =>
+      msg("terse", words[i % words.length], T0 + i * 150_000),
+    );
+    expect(floodClusters(sorted(evs)).size).toBe(0);
+  });
+
+  it("folds a heavy laugher past the allowance — casualties are accepted", () => {
+    // `kkkk` and `jajaja` are low-originality by construction; a dozen inside
+    // an hour from one key folds, deliberately, however honest the laughter.
+    const room = [msg("regular", "morning all", T0 - 600_000)];
+    const laughs = Array.from({ length: FLOOD_GIBBERISH_MIN }, (_, i) =>
+      msg("laugher", i % 2 ? "jajaja" : "kkkkkk", T0 + i * 240_000),
+    );
+    const flagged = floodClusters(sorted([...room, ...laughs]));
+    expect(laughs.every((e) => flagged.has(e.rumorId))).toBe(true);
+  });
+
+  it("never folds the reader's own mash", () => {
+    expect(floodClusters(sorted(wall("me")), { self: "me" }).size).toBe(0);
+  });
+
+  it("folds mash that widened its alphabet: single words the room never says", () => {
+    // The adaptation observed live after the letter rule shipped: random
+    // strings with plenty of distinct letters (`fhuhacx`, `sfoe`, `chrl`),
+    // only a few of which still fail the letter test. What they cannot shed
+    // is being words no other author uses.
+    const junk = ["fhuhacx", "knehif", "ccccc", "sfoe", "tmg", "ubi", "snh", "oo", "ggggg", "chrl", "wqzx", "brfk"];
+    const room = [msg("regular", "morning all", T0 - 600_000)];
+    const evs = junk.map((c, i) => msg("masher", c, T0 + i * 60_000));
+    const flagged = floodClusters(sorted([...room, ...evs]));
+    expect(evs.every((e) => flagged.has(e.rumorId))).toBe(true);
+    expect(flagged.has(room[0].rumorId)).toBe(false);
+  });
+
+  it("leaves one-word messages made of the room's shared vocabulary", () => {
+    // Two people trading the same short words: every token has a second
+    // author, so nothing here is foreign — however terse the conversation.
+    const words = ["ok", "yes", "same", "nice", "wow"];
+    const evs = Array.from({ length: 24 }, (_, i) =>
+      msg(i % 2 ? "ana" : "bo", words[i % words.length], T0 + i * 120_000),
+    );
+    expect(floodClusters(sorted(evs)).size).toBe(0);
+  });
+});
+
+describe("quarantinedIn", () => {
+  it("answers an unsorted batch, memoized on the batch's identity", () => {
+    // The badge path hands over the shared scan's per-channel array as-is —
+    // unsorted, and re-asked on every readState change from every mounted
+    // instance. Same array, same Set instance; a replaced array (what a delta
+    // scan produces) is a new question and recomputes.
+    const batch = burst(30, () => "same payload").reverse();
+    const first = quarantinedIn(batch);
+    expect(first.size).toBe(30);
+    expect(quarantinedIn(batch)).toBe(first);
+
+    const replaced = [...batch];
+    const second = quarantinedIn(replaced);
+    expect(second).not.toBe(first);
+    expect(second.size).toBe(30);
+  });
+
+  it("recomputes when the reader changes, and still spares them", () => {
+    const flood = burst(20, () => "buy now", { author: "solo" });
+    expect(quarantinedIn(flood).size).toBe(20);
+    expect(quarantinedIn(flood, "solo").size).toBe(0);
+  });
+
+  it("ignores side-events: self-reactions neither warm a key nor dilute a wave", () => {
+    // The badge path hands over the RAW batch, reactions included. A bot that
+    // reacts before it floods would otherwise date its keys early (no cohort
+    // chains) and stuff the wave's span with rows that render nothing.
+    const room = [msg("regular", "morning all", T0 - 600_000)];
+    const swarm: OpenedChat[] = [];
+    for (let i = 0; i < 10; i++) {
+      for (let j = 0; j < 5; j++) {
+        swarm.push(
+          msg(
+            `key${i}`,
+            `pitch ${String.fromCharCode(97 + i)}${String.fromCharCode(97 + j)} today`,
+            T0 + 700_000 + i * 90_000 + j * 60_000,
+          ),
+        );
+      }
+    }
+    const reactions = swarm.map((m, i) => ({
+      ...msg(m.author, "+", T0 - 300_000 + i * 1000),
+      kind: 7,
+    }));
+    const flagged = quarantinedIn([...room, ...swarm, ...reactions]);
+    expect(swarm.every((m) => flagged.has(m.rumorId))).toBe(true);
+    expect(flagged.has(room[0].rumorId)).toBe(false);
+    // The reactions themselves are not rows and are never in the verdict.
+    expect(reactions.some((m) => flagged.has(m.rumorId))).toBe(false);
   });
 });

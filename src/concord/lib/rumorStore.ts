@@ -256,8 +256,39 @@ export function storedToOpenedChat(ev: NostrRumor, channelIdHex: string): Opened
 
 // ── Reads / writes ────────────────────────────────────────────────────────────
 
+/**
+ * The chat kinds that render as their OWN item — timeline rows (message, poll,
+ * thread reply, timer notice) and events-bar entries (calendar).
+ */
+const CHAT_ROW_KINDS = [9, 1068, 1111, 1740, 31922, 31923];
+/**
+ * The chat kinds that only ever DECORATE a row: delete, reaction, vote, edit,
+ * zaps, RSVP. Read under their OWN budget (see {@link queryChannelRumors}),
+ * never the rows': a shared limit let a bot bury a flood's rows — the
+ * detector's whole evidence, and the reader's timeline — under reactions to
+ * its own spam, minted for free and rendering as nothing.
+ */
+const CHAT_SIDE_KINDS = [5, 7, 1018, 3302, 8333, 9735, 31925];
 /** All chat-plane rumor kinds we persist and fold. */
-const CHAT_KINDS = [5, 7, 9, 1018, 1068, 1111, 1740, 3302, 8333, 9735, 31922, 31923, 31925];
+const CHAT_KINDS = [...CHAT_ROW_KINDS, ...CHAT_SIDE_KINDS];
+/**
+ * Side-events fetched per row of `limit`. Generous enough that tallies stay
+ * whole on any organic channel; when a reaction flood starves it anyway, what
+ * is lost is decoration on old rows — never rows, and never evidence.
+ */
+const SIDE_EVENT_FACTOR = 4;
+
+/**
+ * The chat kinds a reader sees as a COMPOSED row: message, poll, thread reply.
+ *
+ * The flood detector's notion of presence ({@link queryChannelFirstSeen})
+ * counts only these. "First heard" has to mean the author put a row in front
+ * of readers — a reaction, vote, edit or delete renders nothing and is the
+ * cheapest thing a key can emit, which makes it exactly what a warming bot
+ * reaches for: reacting to its own messages dated a sybil set as
+ * long-established without a reader ever seeing a thing.
+ */
+const SPEECH_KINDS = [9, 1068, 1111];
 
 /**
  * Drop rows whose NIP-40 `expiration` has passed (CORD-08 §3). Every chat read
@@ -271,22 +302,32 @@ function notExpired(events: NostrRumor[]): NostrRumor[] {
 }
 
 /**
- * Read a channel's cached chat rumors, newest-first up to `limit`. A `channel`
- * tag query hits the tag index directly. `before` (a `created_at` upper bound,
- * exclusive) pages older history out of the store.
+ * Read a channel's cached chat rumors, newest-first. `limit` budgets the ROWS
+ * ({@link CHAT_ROW_KINDS}); side-events ride along under their own budget
+ * ({@link CHAT_SIDE_KINDS}, ×{@link SIDE_EVENT_FACTOR}) so they can never
+ * displace the rows they decorate. A `channel` tag query hits the tag index
+ * directly. `before` (a `created_at` upper bound, exclusive) pages older
+ * history out of the store. Filters are independently limit-bounded in one
+ * transaction, exactly as {@link queryRumorsByChannel} relies on.
  */
 export async function queryChannelRumors(
   communityIdHex: string,
   channelIdHex: string,
   opts: { limit: number; before?: number; signal?: AbortSignal },
 ): Promise<OpenedChat[]> {
-  const filter: { kinds: number[]; "#channel": string[]; limit: number; until?: number } = {
-    kinds: CHAT_KINDS,
-    "#channel": [channelIdHex],
-    limit: opts.limit,
+  const bound = (kinds: number[], limit: number) => {
+    const f: { kinds: number[]; "#channel": string[]; limit: number; until?: number } = {
+      kinds,
+      "#channel": [channelIdHex],
+      limit,
+    };
+    if (opts.before !== undefined) f.until = opts.before - 1;
+    return f;
   };
-  if (opts.before !== undefined) filter.until = opts.before - 1;
-  const events = await rumorStore(communityIdHex).query([filter], { signal: opts.signal });
+  const events = await rumorStore(communityIdHex).query(
+    [bound(CHAT_ROW_KINDS, opts.limit), bound(CHAT_SIDE_KINDS, opts.limit * SIDE_EVENT_FACTOR)],
+    { signal: opts.signal },
+  );
   return notExpired(events).map((ev) => storedToOpenedChat(ev, channelIdHex));
 }
 
@@ -312,6 +353,13 @@ export async function queryChannelRumors(
  * lose a protection or a precedent, never grant a flood immunity. (The origin
  * design this replaced had the opposite failure — a flood at the edge of what
  * the scan could see READ AS the channel's founding and exempted itself.)
+ *
+ * SPEECH ONLY ({@link SPEECH_KINDS}). An author is dated by their first
+ * visible row, never by side-events — otherwise presence is free to mint, and
+ * a bot that reacts to its own spam walks every key past the arrival rules
+ * before saying a word. Keeping side-events out of the FILTER also keeps them
+ * from spending the row cap: a reaction flood must not be able to push the
+ * precedent-bearing old rows out of the scan.
  */
 export async function queryChannelFirstSeen(
   communityIdHex: string,
@@ -321,7 +369,7 @@ export async function queryChannelFirstSeen(
   const events = await rumorStore(communityIdHex).query(
     [
       {
-        kinds: CHAT_KINDS,
+        kinds: SPEECH_KINDS,
         "#channel": [channelIdHex],
         since: Math.floor(opts.sinceMs / 1000),
         limit: opts.limit,
@@ -402,12 +450,14 @@ export async function queryRumorsByChannel(
   const out = new Map<string, OpenedChat[]>();
   if (channelIdsHex.length === 0) return out;
 
+  // Rows and side-events under separate budgets, like queryChannelRumors: a
+  // reaction flood must not displace the messages the badges and threads (and
+  // the badge path's flood detector) are derived from.
   const events = await rumorStore(communityIdHex).query(
-    channelIdsHex.map((idHex) => ({
-      kinds: CHAT_KINDS,
-      "#channel": [idHex],
-      limit: opts.perChannel,
-    })),
+    channelIdsHex.flatMap((idHex) => [
+      { kinds: CHAT_ROW_KINDS, "#channel": [idHex], limit: opts.perChannel },
+      { kinds: CHAT_SIDE_KINDS, "#channel": [idHex], limit: opts.perChannel },
+    ]),
     { signal: opts.signal },
   );
 
