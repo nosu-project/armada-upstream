@@ -77,7 +77,7 @@ export function useConcordUnread(
       if (quarantined.size === 0) continue;
       const entries: Array<[string, number]> = [];
       for (const r of rumors) if (quarantined.has(r.rumorId)) entries.push([r.rumorId, r.ms]);
-      if (entries.length > 0) void rememberQuarantined(communityIdHex, idHex, entries);
+      if (entries.length > 0) rememberQuarantined(communityIdHex, idHex, entries);
     }
   }, [communityIdHex, rumorsByChannel, pubkey]);
 

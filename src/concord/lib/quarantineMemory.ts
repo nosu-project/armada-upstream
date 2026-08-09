@@ -35,8 +35,13 @@ import { KvPrefixCache } from "@/lib/db/kvCache";
 
 /** How long a remembered verdict outlives its message's timestamp. */
 export const QUARANTINE_RETENTION_MS = 30 * 24 * 3_600_000;
-/** Most ids one channel's memory may hold; the newest win. */
-export const QUARANTINE_MAX_IDS = 2000;
+/**
+ * Most ids one channel's memory may hold; the newest win. Also bounds what a
+ * flush re-serializes into one KV value while a flood is live, so it is sized
+ * for what can still RENDER (the window plus a few load-older pages), not for
+ * the flood's whole output.
+ */
+export const QUARANTINE_MAX_IDS = 1000;
 
 const cache = new KvPrefixCache<Record<string, number>>({ prefix: "c2quar:" });
 
@@ -88,38 +93,94 @@ export function recallQuarantined(
 }
 
 /**
- * Merge freshly-folded ids (with their message timestamps) into the channel's
- * memory. Waits for the warm first, so an early fold cannot overwrite what a
- * past session stored; concurrent writers within a tab are serialized by the
- * cache's synchronous map, and across tabs last-writer-wins costs at most a
- * re-detectable verdict — the same trade `noteControlSnapshot` documents.
+ * Staged verdicts not yet written, per entry id: remembering STAGES, and one
+ * coalesced flush merges and writes.
+ *
+ * The first shape of this wrote (and notified) per call, and a live flood
+ * made that a per-message bill: every ingest folded a new id, every write
+ * re-spread and re-serialized the whole record, and every notify re-folded
+ * every mounted consumer — the reader paid for the spam twice, the second
+ * time in frozen frames. Staging costs a map insert; the flush pays the
+ * spread, the prune, the KV write and the ONE notify, once per
+ * {@link QUARANTINE_FLUSH_MS}.
  */
-export async function rememberQuarantined(
+const pending = new Map<string, Map<string, number>>();
+let flushTimer: ReturnType<typeof setTimeout> | undefined;
+let flushing: Promise<void> = Promise.resolve();
+
+/** How long staged verdicts coalesce before the merged write. */
+export const QUARANTINE_FLUSH_MS = 2000;
+
+/**
+ * Stage freshly-folded ids (with their message timestamps) for the channel's
+ * memory — synchronous and cheap, it is called from render-adjacent effects
+ * on every fold. The flush waits for the warm, so an early fold can never
+ * overwrite what a past session stored; across tabs last-writer-wins costs at
+ * most a re-detectable verdict — the trade `noteControlSnapshot` documents.
+ * Staged-but-unflushed ids are already flagged in the fold that derived them
+ * and merely not yet visible to the other paths — never the reverse.
+ */
+export function rememberQuarantined(
   communityIdHex: string,
   channelIdHex: string,
   entries: Iterable<readonly [rumorId: string, ms: number]>,
-): Promise<void> {
+): void {
   if (!communityIdHex || !channelIdHex) return;
-  await cache.ready();
   const id = entryId(communityIdHex, channelIdHex);
   const existing = cache.get(id);
-  let next: Record<string, number> | undefined;
+  let bucket = pending.get(id);
+  let staged = false;
   for (const [rumorId, ms] of entries) {
     if (existing?.[rumorId] !== undefined) continue;
-    next ??= { ...existing };
-    next[rumorId] = ms;
+    if (bucket?.has(rumorId)) continue;
+    if (!bucket) pending.set(id, (bucket = new Map()));
+    bucket.set(rumorId, ms);
+    staged = true;
   }
-  if (!next) return;
+  if (!staged) return;
+  flushTimer ??= setTimeout(() => {
+    flushTimer = undefined;
+    flushing = flush();
+  }, QUARANTINE_FLUSH_MS);
+}
 
-  const cutoff = Date.now() - QUARANTINE_RETENTION_MS;
-  let kept = Object.entries(next).filter(([, ms]) => ms >= cutoff);
-  if (kept.length > QUARANTINE_MAX_IDS) {
-    kept.sort((a, b) => b[1] - a[1]);
-    kept = kept.slice(0, QUARANTINE_MAX_IDS);
+/** Merge every staged bucket into KV — the once-per-window write. */
+async function flush(): Promise<void> {
+  await cache.ready();
+  const staged = [...pending];
+  pending.clear();
+  for (const [id, bucket] of staged) {
+    // Re-checked against the warmed map: staging may have run before the warm
+    // and staged ids a past session already holds.
+    const existing = cache.get(id);
+    let next: Record<string, number> | undefined;
+    for (const [rumorId, ms] of bucket) {
+      if (existing?.[rumorId] !== undefined) continue;
+      next ??= { ...existing };
+      next[rumorId] = ms;
+    }
+    if (!next) continue;
+
+    const cutoff = Date.now() - QUARANTINE_RETENTION_MS;
+    let kept = Object.entries(next).filter(([, ms]) => ms >= cutoff);
+    if (kept.length > QUARANTINE_MAX_IDS) {
+      kept.sort((a, b) => b[1] - a[1]);
+      kept = kept.slice(0, QUARANTINE_MAX_IDS);
+    }
+    if (kept.length === 0) {
+      if (existing) cache.delete(id);
+      continue;
+    }
+    cache.set(id, Object.fromEntries(kept));
   }
-  if (kept.length === 0) {
-    if (existing) cache.delete(id);
-    return;
+}
+
+/** Flush staged verdicts now. Tests, and nothing user-facing, wait on this. */
+export async function flushQuarantineMemory(): Promise<void> {
+  if (flushTimer !== undefined) {
+    clearTimeout(flushTimer);
+    flushTimer = undefined;
+    flushing = flush();
   }
-  cache.set(id, Object.fromEntries(kept));
+  await flushing;
 }

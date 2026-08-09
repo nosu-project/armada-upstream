@@ -10,7 +10,9 @@ import { describe, expect, it } from "vitest";
 import {
   QUARANTINE_MAX_IDS,
   QUARANTINE_RETENTION_MS,
+  flushQuarantineMemory,
   quarantineMemoryReady,
+  quarantineMemoryRevision,
   recallQuarantined,
   rememberQuarantined,
 } from "@/concord/lib/quarantineMemory";
@@ -24,11 +26,17 @@ describe("quarantine memory", () => {
     expect(recallQuarantined(community(1), "chan")).toBeUndefined();
   });
 
-  it("merges new verdicts into what is already remembered", async () => {
+  it("merges new verdicts into what is already remembered, in one flush", async () => {
     const c = community(2);
-    await rememberQuarantined(c, "chan", [["r1", Date.now()]]);
-    await rememberQuarantined(c, "chan", [["r2", Date.now()]]);
+    await quarantineMemoryReady();
+    const rev = quarantineMemoryRevision();
+    rememberQuarantined(c, "chan", [["r1", Date.now()]]);
+    rememberQuarantined(c, "chan", [["r2", Date.now()]]);
+    await flushQuarantineMemory();
     expect(recallQuarantined(c, "chan")).toEqual(new Set(["r1", "r2"]));
+    // Two stages coalesced into ONE write and one notify — the per-message
+    // write bill is the thing the staging exists to remove.
+    expect(quarantineMemoryRevision()).toBe(rev + 1);
     // Channels don't share memory.
     expect(recallQuarantined(c, "other")).toBeUndefined();
   });
@@ -36,10 +44,12 @@ describe("quarantine memory", () => {
   it("prunes verdicts whose messages have aged past retention", async () => {
     const c = community(3);
     const stale = Date.now() - QUARANTINE_RETENTION_MS - 60_000;
-    await rememberQuarantined(c, "chan", [["old", stale]]);
+    rememberQuarantined(c, "chan", [["old", stale]]);
+    await flushQuarantineMemory();
     // Nothing within retention survived, so nothing is remembered at all.
     expect(recallQuarantined(c, "chan")).toBeUndefined();
-    await rememberQuarantined(c, "chan", [["new", Date.now()]]);
+    rememberQuarantined(c, "chan", [["new", Date.now()]]);
+    await flushQuarantineMemory();
     expect(recallQuarantined(c, "chan")).toEqual(new Set(["new"]));
   });
 
@@ -50,7 +60,8 @@ describe("quarantine memory", () => {
       { length: QUARANTINE_MAX_IDS + 5 },
       (_, i) => [`r${i}`, now - i * 1000] as const,
     );
-    await rememberQuarantined(c, "chan", entries);
+    rememberQuarantined(c, "chan", entries);
+    await flushQuarantineMemory();
     const ids = recallQuarantined(c, "chan");
     expect(ids?.size).toBe(QUARANTINE_MAX_IDS);
     expect(ids?.has("r0")).toBe(true);
@@ -59,9 +70,11 @@ describe("quarantine memory", () => {
 
   it("re-adding a known id is a no-op, not a rewrite", async () => {
     const c = community(5);
-    await rememberQuarantined(c, "chan", [["r1", Date.now()]]);
+    rememberQuarantined(c, "chan", [["r1", Date.now()]]);
+    await flushQuarantineMemory();
     const before = recallQuarantined(c, "chan");
-    await rememberQuarantined(c, "chan", [["r1", Date.now() + 5000]]);
+    rememberQuarantined(c, "chan", [["r1", Date.now() + 5000]]);
+    await flushQuarantineMemory();
     // Same stored value, so the memoized set view is the same object.
     expect(recallQuarantined(c, "chan")).toBe(before);
   });

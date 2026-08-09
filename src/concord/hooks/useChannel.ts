@@ -478,7 +478,7 @@ export function useChannelTimeline(
     for (const m of query.data ?? []) {
       if (folded.quarantined.has(m.rumorId)) entries.push([m.rumorId, m.ms]);
     }
-    if (entries.length > 0) void rememberQuarantined(community.idHex, channelIdHex, entries);
+    if (entries.length > 0) rememberQuarantined(community.idHex, channelIdHex, entries);
   }, [folded.quarantined, query.data, community?.idHex, channelIdHex]);
 
   return {
