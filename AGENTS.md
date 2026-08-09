@@ -42,7 +42,7 @@ client does not depend on it at build time.
 | `ios/`       | Capacitor iOS project (SwiftPM, no CocoaPods; built manually on a Mac — no CI) |
 | `ios/ArmadaDB/` | ArmadaDB in Swift: the SQLite engine the iOS build runs, with SQLite vendored. A SwiftPM package so it builds on **Linux**, where its conformance suite runs without a Mac |
 | `electron/`  | Electron desktop shell (loads the bundled web build; Linux/Windows/macOS installers built in CI) |
-| `scripts/`   | Repo tooling, incl. `scripts/spambot.mjs` — a Concord-aware spam bot (invite-join, seal/wrap signing, NIP-42) used for moderation-UX testing; see its header comment |
+| `scripts/`   | Repo tooling, incl. `scripts/spambot.mjs` — a Concord-aware spam bot (chat spam with flood-fold evasion, plus kind-3313 direct-invite spam via `--invite-spam`) used for moderation-UX testing; see its header comment |
 | `Dockerfile` + `nginx.conf` | nginx-served static build for web hosting        |
 
 ## Build / test

@@ -2,17 +2,25 @@
 /**
  * Concord spam bot — moderation-UX test harness.
  *
- * Joins a Concord community from an invite link and posts a continuous stream
- * of realistic-looking (but harmless) spam to its public channels, using a
- * brand-new Nostr identity for EVERY message. The intent is to simulate a
- * persistent, ban-evading spammer so the client's moderation UX (mutes, bans,
- * rekeys, member list churn) can be exercised against something that behaves
- * like the real thing.
+ * Two modes:
  *
- * Each message's identity announces itself with a kind-0 profile carrying a
- * stable instance id and a sequence number (`spambot <instance> #<n>`), the
- * previous identity's npub in `about` (forming a chain across messages), and
- * the NIP-24 `bot` flag — so the client can track the bot across key changes.
+ * CHAT (default): joins a Concord community from an invite link and posts a
+ * continuous stream of realistic-looking (but harmless) spam to its public
+ * channels. Strategy evolved against src/concord/lib/floodCluster.ts (commit
+ * cc57eadf): a PERSISTENT POOL of keys (introduced one at a time, slow enough
+ * to never trip the arrival-burst rule, each kept speaking past the 120s
+ * "burner" window) plus a combinatorial content engine whose messages never
+ * repeat a shape, enforced by a Jaccard guard against the last hour of output
+ * (the fold merges near-duplicates at ≥0.6). Fresh-key-per-message is the one
+ * strategy the fold's rule 3 sees through completely, so keys are reused.
+ *
+ * INVITE (`--invite-spam <pubkey|npub>`): NIP-59 gift-wraps kind-3313 direct
+ * invites (CORD-05 §6) to a target pubkey, delivered to the target's kind-10050
+ * DM relays (else NIP-65 read relays, else the stock set). ~1 in 4 invites is
+ * for the real community (accept works); the rest point at freshly generated
+ * PHANTOM communities (self-certifying owner+salt, random root) so the
+ * recipient's already-member and declined-tombstone suppression never engages
+ * and every invite parks a new dialog.
  *
  * All spam URLs use RFC 2606 reserved domains (*.example.com / *.invalid) so
  * nothing posted is actually dangerous.
@@ -24,9 +32,10 @@
  * ~/.config/armada-spambot/invite (in that priority order).
  *
  * Options:
- *   --interval-ms <n>   Delay between messages (default 3000)
- *   --resolve-only      Resolve the invite, print community + channels, exit
- *   --once              Post a single message, verify it reads back, exit
+ *   --interval-ms <n>        Delay between messages/invites (default 3000)
+ *   --invite-spam <pubkey>   Send direct invites to this key instead of chat spam
+ *   --resolve-only           Resolve the invite, print community + channels, exit
+ *   --once                   Post a single message, verify it reads back, exit
  *
  * Stop: Ctrl-C, or `systemctl --user stop armada-spambot` when running under
  * the bundled systemd unit.
@@ -49,9 +58,10 @@ import {
   verifyEvent,
 } from "nostr-tools/pure";
 import * as nip19 from "nostr-tools/nip19";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 // ---------------------------------------------------------------------------
 // CORD-02 Appendix A key derivations (mirrors src/concord/lib/derive.ts)
@@ -70,6 +80,10 @@ const KIND_EDITION = 3308;
 const KIND_GUESTBOOK = 3306;
 const KIND_AUTH = 22242;
 const KIND_PROFILE = 0;
+const KIND_DIRECT_INVITE = 3313;
+const KIND_NIP59_SEAL = 13;
+const KIND_DM_RELAYS = 10050;
+const KIND_RELAY_LIST = 10002;
 
 const VSK_INVITE_LIVE = "6";
 const VSK_INVITE_REVOKED = "9";
@@ -126,12 +140,16 @@ const inviteBundleKey = (token) =>
   hkdf32(token, buildInfo("concord/invite-key", ZERO32));
 
 function verifyCommunityId(idHex, ownerHex, saltHex) {
+  return communityIdOf(ownerHex, saltHex) === idHex.toLowerCase();
+}
+
+function communityIdOf(ownerHex, saltHex) {
   const pre = new Uint8Array([
     ...te.encode("concord/community"),
     ...hexToBytes(ownerHex),
     ...hexToBytes(saltHex),
   ]);
-  return bytesToHex(sha256(pre)) === idHex.toLowerCase();
+  return bytesToHex(sha256(pre));
 }
 
 // ---------------------------------------------------------------------------
@@ -388,7 +406,8 @@ class RelayConn {
 class RelayPool {
   constructor(getAuthSigners) {
     this.conns = new Map();
-    this.getAuthSigners = getAuthSigners;
+    this.extraSigners = []; // mutable ring (e.g. invite-mode ephemeral keys)
+    this.getAuthSigners = () => [...getAuthSigners(), ...this.extraSigners];
   }
 
   async get(url) {
@@ -520,63 +539,263 @@ async function discoverChannels(pool, bundle) {
 }
 
 // ---------------------------------------------------------------------------
-// Spam content: realistic shape, harmless destinations (RFC 2606 domains)
+// Unique-content engine (flood-fold evasion)
 // ---------------------------------------------------------------------------
+// src/concord/lib/floodCluster.ts folds a message when EITHER rule fires:
+//   density — one shape (case/whitespace/digits/URLs normalized) repeated
+//             ≥8× in 5 min, by ≤2 authors or by all-stranger authors;
+//   echo    — one substantial template (≥8 words, ≥5 with a link) posted ≥4×
+//             across ≥3 keys in 1h, near-duplicates merged at Jaccard ≥ 0.6;
+// plus rule 3 (arrival burst) for ≥8 messages from ≥6 keys whose whole
+// presence fits in 2 min. The counter is a persistent key pool (see main
+// loop) and content that never repeats a shape: wide combinatorial frames
+// here, with a Jaccard guard against the last hour of output as enforcement.
+// All URLs stay on RFC 2606 reserved domains.
 
-const TOKENS = ["BTC", "ETH", "SOL", "DOGE", "XRP", "PEPE", "SHIB", "ADA", "AVAX", "LINK"];
+const TOKENS = ["BTC", "ETH", "SOL", "DOGE", "XRP", "PEPE", "SHIB", "ADA", "AVAX", "LINK", "SUI", "NEAR", "ARB", "OP", "TAO"];
 const URLS = [
-  "https://doubler.example.com",
-  "https://claim-airdrop.example.com",
-  "https://verify-wallet.example.com",
-  "https://signals-pro.example.com",
-  "https://freemint.example.com",
-  "https://bonus-pool.example.com",
-  "https://prize-draw.example.com",
-  "https://elon-giveaway.example.com",
-  "https://pump-alerts.example.com",
-  "https://wallet-sync.example.com",
+  "https://doubler.example.com", "https://claim-airdrop.example.com", "https://verify-wallet.example.com",
+  "https://signals-pro.example.com", "https://freemint.example.com", "https://bonus-pool.example.com",
+  "https://prize-draw.example.com", "https://elon-giveaway.example.com", "https://pump-alerts.example.com",
+  "https://wallet-sync.example.com", "https://node-rewards.example.com", "https://stake-max.example.com",
 ];
-const NAMES = ["Jessica", "Mike", "CryptoKing", "Sarah", "TraderJoe", "Luna", "AdminSupport", "Dave"];
+const NAMES = ["Sarah", "CryptoKing", "Jessica", "Mike", "Luna", "Dave", "Priya", "Victor", "Nina", "Omar", "Elena", "Marcus", "Tara", "Ken"];
+const TOPICS = [
+  "the halving aftermath", "restaking yields", "the new L2 launch", "airdrop meta", "ETF inflows",
+  "memecoin rotation", "validator queue times", "MEV protection", "the governance proposal",
+  "liquidity incentives", "perp funding rates", "the bridge audit", "stablecoin yields",
+  "the token unlock schedule", "onchain volume", "the dev relaunch", "gas optimization",
+  "the testnet migration",
+];
+const RELATIVES = ["cousin", "neighbor", "brother in law", "old college friend", "coworker", "gym buddy", "landlord", "barber", "dentist", "roommate", "uncle", "former manager"];
+const EARN_VERBS = ["turned {small} into {big}", "flipped {small} to {big}", "grew a {small} bag to {big}", "cleared {big} starting from {small}", "netted {big} off a {small} position"];
+const ASSET_ACTS = ["staking", "swinging", "DCAing into", "farming", "validating", "lp'ing", "holding", "accumulating", "bridging", "restaking"];
+const TOOLS = ["dashboard", "aggregator", "vault", "tracker", "screener", "simulator", "explorer", "index", "scanner", "portfolio tool"];
+const TOOL_ADJ = ["free", "open-source", "community-run", "audited", "beta", "invite-only", "non-custodial", "cross-chain", "zero-fee", "privacy-first"];
+const OPENERS = [
+  "hey everyone", "hi all", "good morning folks", "hello frens", "hey gang", "evening all",
+  "hola amigos", "hey folks", "quick question", "not financial advice but", "serious question",
+  "random thought", "ok so", "real talk", "unpopular opinion", "honest question",
+];
+const QUESTIONS = [
+  "what is everyone {act} this {when}?", "is {t} still worth {act} after {topic}?",
+  "anyone else {watch} {topic} {when}?", "thoughts on {t} versus {t2} {when}?",
+  "when do we realistically see {t} move again?", "did anyone here catch the news about {topic}?",
+  "what am I missing about {topic}?", "is it too late to get into {t}?",
+  "how is everyone playing {topic}?", "anyone tried that {adj} {t} {tool} yet?",
+  "what wallets are you all using for {t} {when}?", "who here is still {act} {t}, worth the gas?",
+];
+const WATCH = ["watching", "tracking", "following", "farming", "monitoring", "studying"];
+const WHEN = ["this week", "lately", "these days", "this month", "right now", "this cycle"];
+const SMALL = ["fifty bucks", "a couple hundred", "one paycheck", "spare change", "a small bag", "lunch money", "two hundred"];
+const BIG = ["a used car", "five figures", "a house deposit", "a year of rent", "six months of salary", "a motorcycle", "tuition money"];
+const CTAS = [
+  "do your own research obviously", "link is in my bio if anyone wants it", "happy to share details in DMs",
+  "not going to post the link here, mods are touchy", "look it up before you disagree", "dyor as always",
+  "I can point you to the {tool} if you ask nicely", "check my profile for the writeup",
+];
+const ALERTS = [
+  "heads up", "PSA for everyone here", "be careful out there", "friendly warning", "just so nobody else gets burned",
+  "not sure who needs to hear this", "important reminder", "saw this too many times {when}",
+];
+const WARNINGS = [
+  "a fake {t} support account is going around asking for seed phrases",
+  "there is a phishing site cloning the official {t} staking page",
+  "someone is impersonating mods in DMs asking about {topic}",
+  "a fake airdrop for {t} is draining wallets that sign the claim",
+  "a lookalike bridge around {topic} popped up, double check URLs",
+  "people are getting wallet-drained by a fake {t} rewards portal",
+  "a cloned {tool} is stealing keys, the real one never asks for your seed",
+  "romance scammers are pitching {t} schemes in DMs again",
+];
+const OFFERS = [
+  "there is still a rewards pool open for {t} holders, claiming ends {when}: {url}",
+  "found a {adj} {tool} paying way over market for {t}, been live for weeks: {url}",
+  "the {t} foundation is doing a loyalty airdrop, check eligibility here: {url}",
+  "this {adj} {tool} tracks {topic} wallets, still in beta: {url}",
+  "a validator I use is boosting {t} rewards {when}, no lockup: {url}",
+  "there is a community voting portal for {topic} with a small grant attached: {url}",
+  "my referral for the {t} yield {tool} still has slots, we split the bonus: {url}",
+  "new {t} {tool} is dripping credits if you are quick: {url}",
+];
+const STORIES = [
+  "I finally moved my {t} off the exchange after reading about {topic}",
+  "been {act} {t} since last year and it adds up faster than you think",
+  "lost some {t} to a phishing site last month so now I triple check every link",
+  "my portfolio is basically {t} and hopes at this point",
+  "spent the weekend reading about {topic} and I am convinced we are early",
+  "I keep telling my {rel} to look at {topic} before it is everywhere",
+  "watched {t} dip twice {when} and bought both times, no regrets",
+  "my thesis on {topic} has not changed in months, just quietly {act} {t}",
+  "sold my {t} bag too early once and never forgave myself",
+  "set up a small {t} validator and the rewards are actually decent",
+  "my {rel} would not stop talking about {topic} at dinner",
+  "switched my {t} over to a {adj} {tool} after the fees got silly",
+];
+const CLAIMS = [
+  "my {rel} {earn} on {t}", "a guy I work with {earn} off {topic}",
+  "my {rel} quit her job after {act} {t} all year", "this trader I follow called {topic} a week early",
+  "an old {rel} made {big} {act} {t}", "my {rel} got into {topic} before anyone I know",
+  "a small account I follow {earn} on {t}", "my {rel} would not stop texting me about {topic}",
+  "a group chat I am in has been printing on {t} all month", "someone at my gym {earn} off {topic}",
+];
 
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-const amount = () => (Math.floor(Math.random() * 500) + 10) * 10;
-const pct = () => Math.floor(Math.random() * 900) + 100;
+const maybe = (p) => Math.random() < p;
 
-function spamContent() {
-  const t = pick(TOKENS);
-  const url = pick(URLS);
-  const templates = [
-    () => `URGENT: ${t} doubling event live now! Send any amount to the event address and get 2x back instantly. Over ${amount()} ${t} already distributed. ${url}`,
-    () => `Congratulations! Your wallet was selected in the ${t} airdrop snapshot. Claim ${amount()} ${t} before the pool closes: ${url}`,
-    () => `I made ${pct()}% in 2 weeks with this signals group. Join free today, spots limited: ${url}`,
-    () => `[ALERT] Suspicious login detected on your account. Verify your wallet immediately or funds will be frozen: ${url}`,
-    () => `FREE MINT is LIVE! Only ${Math.floor(Math.random() * 900) + 100} spots left. Mint yours now: ${url}`,
-    () => `Hi, I'm ${pick(NAMES)} from official support. We detected unusual activity on your account. Please confirm your recovery phrase here to avoid suspension: ${url}`,
-    () => `${t} is about to PUMP. Insider news dropping in 1 hour, get in early: ${url}`,
-    () => `Earn $${amount()} per day from home with this one simple trick. No experience needed: ${url}`,
-    () => `Flash giveaway! First 100 people to register get ${amount()} ${t} absolutely free: ${url}`,
-    () => `Why is nobody talking about this? ${t} staking at ${pct()}% APY, I've already withdrawn twice: ${url}`,
-    () => `This community is dead, everyone moved to the real server. Join us: ${url}`,
-    () => `Mods are banning everyone who knows the truth. Screenshot this before it gets deleted: ${url}`,
-    () => `hey, check your DMs, I sent you something`,
-    () => `Anyone else unable to withdraw? Support told me to use this official sync portal and it worked: ${url}`,
-    () => `You have been selected for the ${t} community rewards program. Register within 24h: ${url}`,
-  ];
-  return pick(templates)();
+function fill(s, token) {
+  // NB: {earn} expands lazily — replaceAll would evaluate the recursive fill
+  // call even when the pattern is absent, recursing forever.
+  if (s.includes("{earn}")) s = s.replaceAll("{earn}", fill(pick(EARN_VERBS), token));
+  return s
+    .replaceAll("{t}", token)
+    .replaceAll("{t2}", pick(TOKENS))
+    .replaceAll("{topic}", pick(TOPICS))
+    .replaceAll("{url}", pick(URLS))
+    .replaceAll("{name}", pick(NAMES))
+    .replaceAll("{rel}", pick(RELATIVES))
+    .replaceAll("{small}", pick(SMALL))
+    .replaceAll("{big}", pick(BIG))
+    .replaceAll("{act}", pick(ASSET_ACTS))
+    .replaceAll("{tool}", pick(TOOLS))
+    .replaceAll("{adj}", pick(TOOL_ADJ))
+    .replaceAll("{watch}", pick(WATCH))
+    .replaceAll("{when}", pick(WHEN));
 }
+
+/** One unique-looking chat message; long, link in ~40%. */
+export function generateMessage() {
+  const token = pick(TOKENS);
+  const frames = [
+    () => `${pick(OPENERS)}, ${fill(pick(QUESTIONS), token)}`,
+    () => `${fill(pick(QUESTIONS), token)} ${fill(pick(CTAS), token)}.`,
+    () => `${fill(pick(CLAIMS), token)} {when} — ${fill(pick(CTAS), token)}.`,
+    () => `${pick(OPENERS)}! ${fill(pick(STORIES), token)}.`,
+    () => `${fill(pick(STORIES), token)}. ${fill(pick(CTAS), token)}, {when}.`,
+    () => `${pick(ALERTS)}: ${fill(pick(WARNINGS), token)}${maybe(0.5) ? `: ${pick(URLS)}` : ""}`,
+    () => `${pick(ALERTS)}, ${fill(pick(WARNINGS), token)}. stay safe {when}.`,
+    () => fill(pick(OFFERS), token),
+    () => `${pick(OPENERS)}, ${fill(pick(OFFERS), token)}`,
+    () => `${fill(pick(CLAIMS), token)}. anyway, ${fill(pick(QUESTIONS), token)}`,
+    () => {
+      const story = fill(pick(STORIES), token);
+      return `${fill(pick(QUESTIONS), token)} asking because ${story.charAt(0).toLowerCase()}${story.slice(1)}.`;
+    },
+  ];
+  let msg = fill(pick(frames)(), token);
+  // Occasional second sentence keeps length/shape distribution wide.
+  if (maybe(0.25)) msg += ` ${fill(pick(STORIES), pick(TOKENS))}.`;
+  return msg;
+}
+
+// --- Jaccard guard, mirroring floodCluster.ts normalization exactly --------
+
+const URL_RUN = /https?:\/\/\S+/g;
+const TRAILING_NONCE = /([>!])\s*[a-z0-9]{4,9}$/;
+const DIGIT_TOKEN = /[\p{L}\p{N}]*\p{N}[\p{L}\p{N}]*/gu;
+const INVISIBLE = /[\u200b-\u200f\u2060\ufeff]/g;
+const WORD = /[\p{L}][\p{L}\p{N}_]*/gu;
+
+export function shapeKey(content) {
+  return content
+    .toLowerCase()
+    .replace(INVISIBLE, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(URL_RUN, "@")
+    .replace(TRAILING_NONCE, "$1#")
+    .replace(DIGIT_TOKEN, "#")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function jaccard(a, b) {
+  const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+  let shared = 0;
+  for (const t of small) if (large.has(t)) shared++;
+  return shared / (a.size + b.size - shared);
+}
+
+const recentShapes = []; // { t: ms, shape: string, words: Set<string> }
+let guardGiveups = 0;
+
+/**
+ * A message strictly dissimilar (Jaccard < 0.45, well under the fold's 0.6
+ * merge) from everything sent in the last hour, and never an exact shape
+ * repeat — so neither the density rule nor the echo rule can ever find 8 or 4
+ * copies of anything, and no two buckets ever merge into a campaign. Returns
+ * null when the hour is too crowded to differentiate against (caller skips
+ * the tick — a missed beat is invisible, a flagged flood is not).
+ */
+export function guardedContent() {
+  const cutoff = Date.now() - 65 * 60 * 1000;
+  while (recentShapes.length && recentShapes[0].t < cutoff) recentShapes.shift();
+  for (let tries = 0; tries < 500; tries++) {
+    const content = generateMessage();
+    const shape = shapeKey(content);
+    const words = new Set(shape.match(WORD) ?? []);
+    let clash = false;
+    for (const r of recentShapes) {
+      if (r.shape === shape || jaccard(words, r.words) >= 0.45) { clash = true; break; }
+    }
+    if (!clash) {
+      recentShapes.push({ t: Date.now(), shape, words });
+      return content;
+    }
+  }
+  guardGiveups++;
+  return null;
+}
+
+/** Human-looking kind-0 profiles for pool keys: no bot flag, no chain. */
+function humanProfile() {
+  const name = pick(NAMES);
+  const styles = [
+    () => name,
+    () => `${name}${Math.floor(Math.random() * 90) + 10}`,
+    () => `${name} ${String.fromCharCode(65 + Math.floor(Math.random() * 26))}.`,
+    () => name.toLowerCase(),
+  ];
+  const bios = [
+    "building in web3", "here for the tech", "trading since 2017", "just here to learn",
+    "hodling through it all", "coffee and crypto", "lurking and learning", "decentralization maxi",
+    "mostly lurking", "asking too many questions", "in it for the long run", "nocoiner curious",
+  ];
+  return { name: pick(styles)(), about: pick(bios) };
+}
+
+/** Phantom-community names for direct-invite spam. */
+const PHANTOM_NAMES = [
+  "Crypto Signals Pro", "NFT Whales Lounge", "Bitcoin Millionaires Club", "Alt Gem Hunters",
+  "DeFi Insiders", "Moon Shot Traders", "Airdrop Alpha Group", "Whale Watch Daily",
+  "Trading Mastery Hub", "Passive Income Network", "Pump Squad Elite", "Web3 Jobs Board",
+  "Staking Rewards Club", "Memecoin Mania", "The Hodl Hotel",
+];
 
 // ---------------------------------------------------------------------------
 // Bot
 // ---------------------------------------------------------------------------
 
+function decodePubkey(s) {
+  if (!s) throw new Error("--invite-spam needs a pubkey argument");
+  if (/^[0-9a-f]{64}$/i.test(s)) return s.toLowerCase();
+  const d = nip19.decode(s);
+  if (d.type === "npub") return d.data;
+  if (d.type === "nprofile") return d.data.pubkey;
+  throw new Error(`not a pubkey/npub/nprofile: ${s}`);
+}
+
 function parseArgs(argv) {
-  const opts = { intervalMs: 3000, once: false, resolveOnly: false, invite: undefined };
+  const opts = { intervalMs: 3000, once: false, resolveOnly: false, invite: undefined, inviteSpam: undefined };
   const args = [...argv];
   while (args.length) {
     const a = args.shift();
     switch (a) {
       case "--interval-ms":
         opts.intervalMs = Number(args.shift());
+        break;
+      case "--invite-spam":
+        opts.inviteSpam = decodePubkey(args.shift());
         break;
       case "--once":
         opts.once = true;
@@ -606,57 +825,147 @@ function parseArgs(argv) {
 
 let identityCounter = 0;
 
-function newIdentity(prevPk) {
+function newIdentity() {
   const sk = generateSecretKey();
-  return { sk, pk: getPublicKey(sk), index: ++identityCounter, prevPk };
+  return { sk, pk: getPublicKey(sk), index: ++identityCounter };
 }
 
 /**
- * Stable-per-install bot id, persisted next to the invite file so identities
- * stay attributable to this bot across service restarts.
+ * Announce a pool key with a kind-0 profile. Deliberately human-looking and
+ * unlinkable (no bot flag, no instance id, no chain to the previous key):
+ * anything else would hand the defender a signal the flood fold doesn't read.
+ * The bot's own log records every key for correlation.
  */
-function loadInstanceId() {
-  const path = join(homedir(), ".config", "armada-spambot", "instance-id");
-  try {
-    const id = readFileSync(path, "utf8").trim();
-    if (id) return id;
-  } catch {
-    /* first run */
-  }
-  const id = bytesToHex(generateSecretKey().slice(0, 4));
-  try {
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    writeFileSync(path, id + "\n", { mode: 0o600 });
-  } catch {
-    /* non-fatal: fall through with the ephemeral id */
-  }
-  return id;
-}
-
-/**
- * Announce the current identity with a kind-0 profile so rotations can be
- * tracked: stable instance id + rotation index in `name`, previous identity's
- * npub in `about` (chain), NIP-24 `bot` flag.
- */
-async function publishProfile(pool, bundle, identity, instanceId) {
-  const profile = {
-    name: `spambot ${instanceId} #${identity.index}`,
-    about:
-      `Automated moderation-test spam bot (armada scripts/spambot.mjs), ` +
-      `instance ${instanceId}, identity #${identity.index}.` +
-      (identity.prevPk ? ` Previous identity: ${nip19.npubEncode(identity.prevPk)}` : ""),
-    bot: true,
-  };
+async function publishProfile(pool, relays, identity) {
   const event = finalizeEvent(
     {
       kind: KIND_PROFILE,
-      content: JSON.stringify(profile),
+      content: JSON.stringify(humanProfile()),
       tags: [],
       created_at: Math.floor(Date.now() / 1000),
     },
     identity.sk,
   );
-  return pool.publishToAny(bundle.relays, event);
+  return pool.publishToAny(relays, event);
+}
+
+// ---------------------------------------------------------------------------
+// CORD-05 §6 direct invites (mirrors src/concord/lib/directInvite.ts)
+// ---------------------------------------------------------------------------
+
+/** NIP-59 timestamp fuzzing: now minus a random 0..48h. */
+const tweakedPast = () =>
+  Math.floor(Date.now() / 1000) - Math.floor(Math.random() * 2 * 24 * 60 * 60);
+
+/**
+ * A bundle for a community that does not exist: random owner key + salt make
+ * the self-certifying community_id check pass, random root/control keys are
+ * never validated on receive. Each phantom invite is a NEW community_id, so
+ * already-member suppression and decline-tombstones never catch a second one.
+ */
+function phantomBundle(name, inviterPk) {
+  const owner = getPublicKey(generateSecretKey());
+  const salt = bytesToHex(generateSecretKey());
+  return {
+    community_id: communityIdOf(owner, salt),
+    owner,
+    owner_salt: salt,
+    community_root: bytesToHex(generateSecretKey()),
+    root_epoch: 0,
+    control_pk: getPublicKey(generateSecretKey()),
+    channels: [],
+    relays: [...STOCK_RELAYS],
+    name,
+    description: `The official ${name} community. Invite-only alpha, join before it fills up.`,
+    creator_npub: inviterPk,
+  };
+}
+
+/** A real, acceptable invite to the community the bot holds a link for. */
+function memberBundle(source, inviterPk) {
+  return {
+    community_id: source.community_id,
+    owner: source.owner,
+    owner_salt: source.owner_salt,
+    community_root: source.community_root,
+    root_epoch: source.root_epoch,
+    ...(source.control_pk ? { control_pk: source.control_pk } : {}),
+    channels: source.channels ?? [],
+    relays: source.relays,
+    name: source.name,
+    ...(source.description ? { description: source.description } : {}),
+    creator_npub: inviterPk,
+  };
+}
+
+/**
+ * wrap(1059, ephemeral) → seal(13, inviter) → rumor(3313, bundle JSON),
+ * classic NIP-59. The wrap carries the recipient `p` and the `k=3313` hint.
+ */
+function buildDirectInviteWrap(recipientPk, bundle, inviterSk) {
+  const inviterPk = getPublicKey(inviterSk);
+  const rumor = {
+    kind: KIND_DIRECT_INVITE,
+    content: JSON.stringify(bundle),
+    tags: [],
+    created_at: Math.floor(Date.now() / 1000),
+    pubkey: inviterPk,
+  };
+  const seal = finalizeEvent(
+    {
+      kind: KIND_NIP59_SEAL,
+      content: nip44Encrypt(JSON.stringify(rumor), getConversationKey(inviterSk, recipientPk)),
+      tags: [],
+      created_at: tweakedPast(),
+    },
+    inviterSk,
+  );
+  const eph = generateSecretKey();
+  const wrap = finalizeEvent(
+    {
+      kind: KIND_WRAP,
+      content: nip44Encrypt(JSON.stringify(seal), getConversationKey(eph, recipientPk)),
+      tags: [
+        ["p", recipientPk],
+        ["k", String(KIND_DIRECT_INVITE)],
+      ],
+      created_at: tweakedPast(),
+    },
+    eph,
+  );
+  return { wrap, eph, inviterPk };
+}
+
+/** Recipient's inbox: kind-10050 DM relays → NIP-65 read relays → stock set. */
+async function resolveInboxRelays(pool, recipientPk) {
+  const events = await pool.queryAll(
+    STOCK_RELAYS,
+    { kinds: [KIND_DM_RELAYS, KIND_RELAY_LIST], authors: [recipientPk], limit: 4 },
+    8000,
+  );
+  const latest = (kind) =>
+    events.filter((e) => e.kind === kind).sort((a, b) => b.created_at - a.created_at)[0];
+  const norm = (u) => {
+    if (typeof u !== "string") return undefined;
+    u = u.trim();
+    if (!u) return undefined;
+    if (!/^wss?:\/\//.test(u)) u = `wss://${u}`;
+    return u.replace(/\/+$/, "");
+  };
+  const dm = latest(KIND_DM_RELAYS);
+  if (dm) {
+    const relays = dm.tags.filter((t) => t[0] === "relay").map((t) => norm(t[1])).filter(Boolean);
+    if (relays.length) return relays.slice(0, 5);
+  }
+  const nip65 = latest(KIND_RELAY_LIST);
+  if (nip65) {
+    const relays = nip65.tags
+      .filter((t) => t[0] === "r" && t[2] !== "write")
+      .map((t) => norm(t[1]))
+      .filter(Boolean);
+    if (relays.length) return relays.slice(0, 5);
+  }
+  return [...STOCK_RELAYS];
 }
 
 async function postChat(pool, bundle, channel, identity, content) {
@@ -689,6 +998,66 @@ async function guestbookJoin(pool, bundle, identity) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ---------------------------------------------------------------------------
+// Direct-invite spam loop
+// ---------------------------------------------------------------------------
+
+async function inviteLoop(pool, invite, bundle, recipientPk, opts) {
+  // Ephemeral wrap authors need to answer NIP-42 challenges on gated relays;
+  // keep the most recent ones in the pool's auth set.
+  const ephRing = [];
+  pool.extraSigners = ephRing;
+
+  let inbox = await resolveInboxRelays(pool, recipientPk);
+  log(`invite target ${recipientPk.slice(0, 12)}…, inbox: ${inbox.join(", ")}`);
+
+  let lastInboxRefresh = Date.now();
+  let lastBundleRefresh = Date.now();
+
+  for (;;) {
+    const now = Date.now();
+    if (now - lastBundleRefresh >= 5 * 60 * 1000) {
+      lastBundleRefresh = now;
+      try {
+        bundle = await resolveBundle(pool, invite);
+      } catch (e) {
+        log(`bundle refresh failed (keeping last-known): ${e.message}`);
+      }
+    }
+    if (now - lastInboxRefresh >= 30 * 60 * 1000) {
+      lastInboxRefresh = now;
+      try {
+        inbox = await resolveInboxRelays(pool, recipientPk);
+      } catch (e) {
+        log(`inbox refresh failed (keeping last-known): ${e.message}`);
+      }
+    }
+
+    const inviterSk = generateSecretKey();
+    const inviterPk = getPublicKey(inviterSk);
+    // Mostly phantom communities: each is a brand-new community_id, so
+    // already-member suppression and decline-tombstones never engage. One in
+    // four is the real community so the accept path stays exercised.
+    const real = Math.random() < 0.25;
+    const b = real ? memberBundle(bundle, inviterPk) : phantomBundle(pick(PHANTOM_NAMES), inviterPk);
+    const { wrap, eph } = buildDirectInviteWrap(recipientPk, b, inviterSk);
+    ephRing.push(eph);
+    if (ephRing.length > 8) ephRing.shift();
+    try {
+      const res = await pool.publishToAny(inbox, wrap);
+      if (res.ok) {
+        log(`invite (${real ? "REAL" : "phantom"}) "${b.name}" from ${inviterPk.slice(0, 8)}… -> ${wrap.id.slice(0, 12)}…`);
+      } else {
+        log(`INVITE REJECTED: ${res.message}`);
+      }
+    } catch (e) {
+      log(`invite error: ${e.message}`);
+      await sleep(5000);
+    }
+    await sleep(opts.intervalMs);
+  }
+}
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
@@ -727,6 +1096,7 @@ async function main() {
     try {
       bundle = await resolveBundle(pool, invite);
       log(`community: "${bundle.name}" id=${bundle.community_id.slice(0, 12)}… epoch=${bundle.root_epoch} relays: ${bundle.relays.join(", ")}`);
+      if (opts.inviteSpam) break; // invite delivery needs no channels
       channels = await discoverChannels(pool, bundle);
       log(`public channels: ${channels.map((c) => `#${c.name}`).join(", ") || "(none found)"}`);
       if (channels.length > 0 || oneShot) break;
@@ -742,13 +1112,20 @@ async function main() {
     pool.closeAll();
     return;
   }
+
+  if (opts.inviteSpam) {
+    log(`starting direct-invite spam: one invite every ${opts.intervalMs}ms`);
+    await inviteLoop(pool, invite, bundle, opts.inviteSpam, opts);
+    return;
+  }
+
   if (channels.length === 0) throw new Error("no public channels to spam");
 
   if (opts.once) {
     const channel = channels[0];
-    const content = spamContent();
+    const content = guardedContent() ?? generateMessage();
     log(`posting test message to #${channel.name} from ${identity.pk.slice(0, 12)}…`);
-    const profRes = await publishProfile(pool, bundle, identity, loadInstanceId());
+    const profRes = await publishProfile(pool, bundle.relays, identity);
     log(`kind-0 profile: ${profRes.ok ? "ok" : `FAILED (${profRes.message})`}`);
     const joinRes = await guestbookJoin(pool, bundle, identity);
     log(`guestbook join: ${joinRes.ok ? "ok" : `FAILED (${joinRes.message})`}`);
@@ -775,10 +1152,24 @@ async function main() {
     return;
   }
 
-  // --- 24/7 spam loop: a brand-new identity for every single message ---
-  log(`starting spam: message every ${opts.intervalMs}ms, fresh key per message`);
-  const instanceId = loadInstanceId();
+  // --- 24/7 chat spam loop: persistent key pool + never-repeating content ---
+  //
+  // Evasion of src/concord/lib/floodCluster.ts:
+  //  * Rule 3 (arrival burst) folds ≥8 messages from ≥6 keys whose WHOLE
+  //    presence fits in 2 min. So keys are introduced one per KEY_INTRO_MS
+  //    (never ≥6 young keys at once) and KEPT FOREVER — a key that is still
+  //    speaking 2 min after it arrived can never be a "burner" again.
+  //  * Rule 1 (density) needs 8 copies of one shape in 5 min, and with >2
+  //    authors they must ALL be strangers — pool keys have history.
+  //  * Rule 2 (echo) needs one template on ≥3 keys in an hour. guardedContent()
+  //    keeps every message Jaccard-dissimilar from the last hour of output.
+  const POOL_TARGET = 48;
+  const KEY_INTRO_MS = 25000;
+  const keyPool = [];
+  let lastIntro = 0;
+  let rr = 0;
 
+  log(`starting spam: message every ${opts.intervalMs}ms from a persistent pool of ${POOL_TARGET} keys`);
   let lastBundleRefresh = Date.now();
   let lastChannelRefresh = Date.now();
   let consecutiveFailures = 0;
@@ -814,23 +1205,42 @@ async function main() {
       }
     }
 
-    // Fresh key per message: banning any one identity buys exactly one
-    // message of silence. The kind-0 + guestbook join announce the key so
-    // profile/member-list UX sees the churn.
-    identity = newIdentity(identity.pk);
+    // Pool warmup: one new key per KEY_INTRO_MS, announced with a human
+    // kind-0 + a guestbook join like any honest new member.
+    if (keyPool.length < POOL_TARGET && now - lastIntro >= KEY_INTRO_MS) {
+      lastIntro = now;
+      const member = newIdentity();
+      keyPool.push(member);
+      log(`pool key #${keyPool.length}/${POOL_TARGET}: ${member.pk.slice(0, 12)}…`);
+      Promise.all([
+        publishProfile(pool, bundle.relays, member),
+        guestbookJoin(pool, bundle, member),
+      ])
+        .then(([p, g]) => {
+          if (!p.ok) log(`kind-0 profile failed: ${p.message}`);
+          if (!g.ok) log(`guestbook join failed: ${g.message}`);
+        })
+        .catch(() => {});
+    }
+
+    if (keyPool.length === 0) {
+      await sleep(1000);
+      continue;
+    }
+
+    identity = keyPool[rr++ % keyPool.length];
     const channel = pick(channels);
-    const content = spamContent();
+    const content = guardedContent();
+    if (!content) {
+      log(`content guard exhausted (${guardGiveups} giveups); skipping this beat`);
+      await sleep(opts.intervalMs);
+      continue;
+    }
     try {
-      const [profRes, joinRes] = await Promise.all([
-        publishProfile(pool, bundle, identity, instanceId),
-        guestbookJoin(pool, bundle, identity),
-      ]);
-      if (!profRes.ok) log(`kind-0 profile failed: ${profRes.message}`);
-      if (!joinRes.ok) log(`guestbook join failed: ${joinRes.message}`);
       const { wrap, result } = await postChat(pool, bundle, channel, identity, content);
       if (result.ok) {
         consecutiveFailures = 0;
-        log(`[${identity.pk.slice(0, 8)}] (#${identity.index}) #${channel.name}: ${JSON.stringify(content.slice(0, 72))} -> ${wrap.id.slice(0, 12)}…`);
+        log(`[${identity.pk.slice(0, 8)}] #${channel.name}: ${JSON.stringify(content.slice(0, 72))} -> ${wrap.id.slice(0, 12)}…`);
       } else {
         consecutiveFailures++;
         log(`PUBLISH REJECTED (${consecutiveFailures}): ${result.message}`);
@@ -845,7 +1255,10 @@ async function main() {
   }
 }
 
-main().catch((e) => {
-  console.error(`fatal: ${e.message}`);
-  process.exit(1);
-});
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  main().catch((e) => {
+    console.error(`fatal: ${e.message}`);
+    process.exit(1);
+  });
+}
