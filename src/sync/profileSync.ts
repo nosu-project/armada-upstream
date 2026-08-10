@@ -54,6 +54,17 @@ export const PROFILE_SYNC_TOPIC = "profiles";
 const FOUND_STALE_MS = 15 * 60_000;
 /** A profile we MISSED is re-asked no sooner than this (same hint set). */
 const MISS_RETRY_MS = 60_000;
+/**
+ * Ceiling for the miss backoff. Half an hour still re-checks an author whose
+ * profile appears later in a long session, while turning a permanently
+ * profile-less pubkey from ~60 requests an hour into 2.
+ */
+const MISS_RETRY_MAX_MS = 30 * 60_000;
+/**
+ * Consecutive empty rounds per pubkey, driving {@link missRetryDelay}. Cleared
+ * when the profile is finally found, so a late arrival resets to the fast path.
+ */
+const missAttempts = new Map<string, number>();
 /** Hinted relays asked per run, at most. */
 const MAX_HINT_RELAYS = 6;
 /** Pubkeys per REQ against a hinted relay. */
@@ -150,11 +161,40 @@ export function demandProfiles(pubkeys: string[], context: ProfileSyncContext): 
  * pubkey) everything looks due, which costs at most one extra run whose
  * candidate filter then does the authoritative check against the store.
  */
+/**
+ * How long to wait before re-asking for a pubkey that came back empty.
+ *
+ * A miss used to retry at a flat {@link MISS_RETRY_MS} for as long as anything
+ * held demand — and demand lives for the life of a MOUNT, while the timeline
+ * never unmounts a row the reader has scrolled past. So every author whose row
+ * was ever rendered kept a REQ going out once a minute for the rest of the
+ * session, forever, growing with every scroll-back. In a flooded room most of
+ * those authors have no kind-0 at all, which is precisely the case that never
+ * resolves and never stops asking.
+ *
+ * Back off geometrically instead, capped by {@link MISS_RETRY_MAX_MS}. The
+ * relay-hint escape hatch below is untouched: a community's relays arriving
+ * after the first round still bump `hintGeneration` and re-ask every miss
+ * immediately, which is the case where a retry is actually likely to succeed.
+ */
+export function _missRetryDelayMs(attempts: number): number {
+  return Math.min(MISS_RETRY_MS * 2 ** (Math.max(1, attempts) - 1), MISS_RETRY_MAX_MS);
+}
+
+function missRetryDelay(pk: string): number {
+  return _missRetryDelayMs(missAttempts.get(pk) ?? 1);
+}
+
+/** Test seam: consecutive empty rounds recorded for `pk`. */
+export function _profileMissAttemptsForTests(pk: string): number {
+  return missAttempts.get(pk) ?? 0;
+}
+
 function isDueNow(pk: string): boolean {
   const stamp = stamps.get(pk);
   if (stamp === undefined) return true;
   const found = foundProfiles.has(pk);
-  if (Date.now() - stamp > (found ? FOUND_STALE_MS : MISS_RETRY_MS)) return true;
+  if (Date.now() - stamp > (found ? FOUND_STALE_MS : missRetryDelay(pk))) return true;
   return !found && stampedGeneration.get(pk) !== hintGeneration;
 }
 
@@ -291,9 +331,13 @@ async function runProfileSync(signal: AbortSignal): Promise<void> {
   for (const pk of candidates) {
     stamps.set(pk, at);
     stampedGeneration.set(pk, hintGeneration);
+    // Count this round as a miss up front; the found loop below clears it. A
+    // pubkey that keeps coming back empty backs off (see missRetryDelay).
+    if (!newest.has(pk)) missAttempts.set(pk, (missAttempts.get(pk) ?? 0) + 1);
   }
   for (const [pk, ev] of newest) {
     foundProfiles.add(pk);
+    missAttempts.delete(pk);
     seedAuthorCache(c.queryClient, pk, ev);
   }
 }
@@ -315,6 +359,7 @@ export function _resetProfileSyncForTests(): void {
   hintRelays.clear();
   stampedGeneration.clear();
   foundProfiles.clear();
+  missAttempts.clear();
   hintGeneration = 0;
   ctx = undefined;
   demandHolds = 0;
