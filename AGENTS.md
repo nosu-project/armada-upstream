@@ -378,10 +378,42 @@ message.
   `push-config.json` there, under `.completeUntilFirstUserAuthentication` —
   the weakest protection class that still works, because a push arrives while
   the device is LOCKED and anything stronger leaves the extension unable to
-  read its own config. `sk` is present only for nsec logins and is deleted on
-  disable/logout. **Always call the content handler exactly once**: an
-  extension that returns without calling it, or crashes, silently shows the
-  gateway's static text with no log anyone reads.
+  read its own config. An nsec login puts `sk` there; a NIP-46 login puts the
+  CLIENT key plus its bunker's pubkey/relays (`nip46`) and the extension asks
+  the bunker to `nip44_decrypt` the wrap and the seal, over one socket, with
+  the identity key never leaving the bunker — so a bunker that PROMPTS for
+  decryption can never work here, since the push arrives with the device
+  locked and no UI to approve anything. Both are deleted on disable/logout.
+  **Always call the content handler exactly once**: an extension that returns
+  without calling it, or crashes, silently shows the gateway's static text
+  with no log anyone reads. It now has a genuine race to get that wrong —
+  the avatar fetch below and `serviceExtensionTimeWillExpire` complete on
+  different queues — so the call is behind a lock and a flag.
+- **Presentation must not depend on persistence.** The store and the
+  notification fail independently, so `PushProcessor` takes an OPTIONAL store:
+  a database that will not open costs the message its history and its sender's
+  name, and the text has already been decrypted by then. Gating the one on the
+  other is not hypothetical — it shipped, and every push silently fell back to
+  the gateway's static text because `NotifyStore()` returned nil.
+- **A sender's face needs an `INSendMessageIntent`, not an attachment.** iOS
+  shows the app icon on a notification unless it is a COMMUNICATION
+  notification: donate the intent, rebuild the content with
+  `UNNotificationContent.updating(from:)`, and the sender's avatar (or the
+  monogram of their name) replaces it, with the conversation joining Focus
+  modes' people rules. Needs the Communication Notifications capability on the
+  App ID — automatic signing adds it, but without the entitlement
+  `updating(from:)` throws and the notification degrades to the right text
+  with the wrong icon, which looks like nothing is wrong. `PreparedPush.sender`
+  is present only where the sender is ALREADY named in the body, which is what
+  keeps a message request — whose whole point is that a stranger controls
+  their own name and picture — from becoming a person on the lock screen.
+- **The avatar is the one thing here that touches the network**, because the
+  image has to be bytes in hand when the content handler is called; there is no
+  URL the system will fetch for us. It is bounded on every axis (`https` only,
+  4s, 256 KB) and cached per sender in the App Group (`AvatarCache`, keyed by
+  the SHA-256 of the URL so a changed picture misses once and nothing has to
+  invalidate anything), so it is a per-sender cost rather than a per-message
+  one. Every failure ends at the monogram, never at a missing notification.
 - **iOS cannot withdraw a delivered alert.** A push the pipeline decides is not
   news (the viewer's own message from another device, a reaction to someone
   else's) still has to show something, so it becomes a `passive` "Messages
