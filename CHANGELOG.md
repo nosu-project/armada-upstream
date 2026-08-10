@@ -4,6 +4,27 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.51.0] - 2026-08-10
+
+Push notifications come to iPhone and iPad, decrypted on your device — the sender, the text, and their picture — over the same content-blind gateway used elsewhere, with a tap opening the conversation. A new history tool verifies a community's messages and exports them as a self-contained web page, letting you pick channels and a time range. Creating a community is now a guided full-screen wizard, and community settings and moderation each open as a full-page tabbed pane. The downloads page adds Flatpak and copy-ready install commands for the command-line builds.
+
+### Added
+- Push notifications on iPhone and iPad, decrypted on your device — the sender, the text, and their picture — over the same content-blind gateway used on other platforms, with a tap on a direct message opening straight to the conversation
+- A history tool that verifies a community's messages and exports them as a self-contained web page, with channel selection and a time range, leaving out disappearing and deleted messages
+- The downloads page lists Flatpak and shows copy-ready install commands for the command-line builds
+- A speaker glyph marks a channel that has a live voice call
+
+### Changed
+- Creating a community is now a full-screen guided wizard, opening on the text channel step
+- Community settings open as a full-page tabbed pane instead of a dialog
+- Moderation tools are consolidated into one tabbed panel
+- The Discover page is centered in a bounded column with its three-column grid restored, and its mobile tabs and search match the server rail
+- The server rail shows its settings divider only when the list overflows
+
+### Fixed
+- The desktop app now quits cleanly instead of hanging on exit
+- The Discover community list no longer collapses to empty when a fetch is dropped
+
 ## [0.50.3] - 2026-08-09
 
 Notifications now carry the message itself: who sent it, what they said, which conversation it belongs to, and the sender's picture — all decrypted on your device, across background push, in-app, and desktop alerts, and grouped per conversation. Turning notifications off now takes effect immediately, and messages you sent from another device no longer buzz you. Large member lists and DM lists also scroll smoothly.
