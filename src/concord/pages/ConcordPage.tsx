@@ -1,4 +1,4 @@
-import { AtSign, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Pause, Phone, Pin, Play, Plus, RefreshCw, Search, Settings, Shield, Timer, Trash2, UserPlus, Users, X, type LucideIcon } from "lucide-react";
+import { AtSign, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Pause, Phone, Pin, Play, Plus, RefreshCw, Search, Settings, Shield, Timer, Trash2, UserPlus, Users, Volume2, X, type LucideIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
@@ -545,11 +545,13 @@ const ChannelRow = memo(function ChannelRow({
   // desync. Folded presence remains the source for calls you're not in.
   const participants = inCall && voiceRoomPubkeys ? voiceRoomPubkeys : foldedParticipants;
 
-  const Icon = channel.isPrivate ? Lock : Hash;
   const hasUnread = Boolean(unread);
   const hasMention = Boolean(unread?.mention);
   // A call is live in this channel when anyone is present.
   const occupied = participants.length > 0;
+  // While a call is live, the row wears a speaker glyph in place of its usual
+  // hashtag (or lock) — the surest signal there's voice to join here.
+  const Icon = occupied ? Volume2 : channel.isPrivate ? Lock : Hash;
   return (
     <ContextMenu>
       <ContextMenuTrigger className="block">
