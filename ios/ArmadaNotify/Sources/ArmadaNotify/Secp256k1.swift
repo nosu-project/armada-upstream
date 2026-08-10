@@ -53,6 +53,44 @@ enum Secp256k1 {
         return Crypto.hkdfExtract(salt: [UInt8]("nip44-v2".utf8), ikm: sharedX)
     }
 
+    /// The x-only (BIP-340 / Nostr) public key for a secret key, hex.
+    ///
+    /// Only ever used for the NIP-46 CLIENT key — the key that addresses the
+    /// user's bunker. The identity key is never on this device for the logins
+    /// this path exists to serve.
+    static func xonlyPublicKey(secretKey sk: [UInt8]) -> String? {
+        guard sk.count == 32 else { return nil }
+        var keypair = secp256k1_keypair()
+        guard secp256k1_keypair_create(context, &keypair, sk) == 1 else { return nil }
+        var xonly = secp256k1_xonly_pubkey()
+        guard secp256k1_keypair_xonly_pub(context, &xonly, nil, &keypair) == 1 else { return nil }
+        var serialized = [UInt8](repeating: 0, count: 32)
+        guard secp256k1_xonly_pubkey_serialize(context, &serialized, &xonly) == 1 else { return nil }
+        return Hex.encode(serialized)
+    }
+
+    /// Sign a 32-byte message hash per BIP-340, returning the 64-byte signature
+    /// as hex. Used for exactly one thing: the kind-24133 event carrying an RPC
+    /// to the bunker.
+    static func schnorrSign(message: [UInt8], secretKey sk: [UInt8]) -> String? {
+        guard message.count == 32, sk.count == 32 else { return nil }
+        var keypair = secp256k1_keypair()
+        guard secp256k1_keypair_create(context, &keypair, sk) == 1 else { return nil }
+
+        // BIP-340's auxiliary randomness. Not load-bearing for correctness —
+        // the signature verifies either way — but it is the side-channel
+        // hardening the spec asks for, so it is real randomness rather than a
+        // zero block.
+        var generator = SystemRandomNumberGenerator()
+        let aux = (0..<32).map { _ in UInt8.random(in: UInt8.min...UInt8.max, using: &generator) }
+
+        var signature = [UInt8](repeating: 0, count: 64)
+        guard secp256k1_schnorrsig_sign32(context, &signature, message, &keypair, aux) == 1 else {
+            return nil
+        }
+        return Hex.encode(signature)
+    }
+
     /// Verify a 64-byte BIP-340 signature over `message` for an x-only pubkey.
     /// False (never a throw) on any malformed input.
     static func schnorrVerify(message: [UInt8], pubkeyHex: String, signatureHex: String) -> Bool {

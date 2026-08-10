@@ -83,11 +83,9 @@ struct PushProcessor {
     // MARK: - DM
 
     private func prepareDm(wrap: NostrEvent) -> PreparedPush? {
-        // A non-nsec login (bunker, extension) keeps its key off the device, so
-        // there is nothing here that can open the wrap.
-        guard let sk = config.secretKey else { return nil }
+        guard let decryptor = dmDecryptor() else { return nil }
         guard let opened = Dm17.open(
-            wrap: wrap, secretKey: sk, self: config.selfPubkey, now: now
+            wrap: wrap, decryptor: decryptor, self: config.selfPubkey, now: now
         ) else { return nil }
 
         // Persist first: a DM exists nowhere else once it is read off the relay.
@@ -131,6 +129,33 @@ struct PushProcessor {
             quiet: false
         )
     }
+
+    /// How this login can open a gift wrap, or nil if it cannot.
+    ///
+    /// An nsec login decrypts locally. A bunker login asks the bunker, which
+    /// costs two round-trips inside the notification's budget and is why the
+    /// timeout is short: an unreachable or slow bunker must degrade to the
+    /// gateway's static text quickly, not sit on the extension until iOS kills
+    /// it. A NIP-07 login has neither and gets nil — there is no browser here.
+    private func dmDecryptor() -> Nip44Decryptor? {
+        if let sk = config.secretKey { return LocalDecryptor(secretKey: sk) }
+        guard let nip46 = config.nip46 else { return nil }
+        guard let client = Nip46Client(
+            clientSecretKey: nip46.clientSecretKey,
+            bunkerPubkey: nip46.bunkerPubkey,
+            relays: nip46.relays,
+            timeout: Self.bunkerTimeout
+        ) else { return nil }
+        return RemoteDecryptor(client: client)
+    }
+
+    /// Total budget for the bunker exchange, both RPCs together.
+    ///
+    /// iOS allows the extension around 30 seconds, but spending them is not
+    /// free: the notification is not shown until the handler is called, so a
+    /// long wait is a late banner. Ten seconds is enough for two relay
+    /// round-trips and short enough that a dead bunker is barely noticeable.
+    private static let bunkerTimeout: TimeInterval = 10
 
     /// The content-blind ping for an unknown sender: nothing they control.
     private func requestPing(quiet: Bool) -> PreparedPush {

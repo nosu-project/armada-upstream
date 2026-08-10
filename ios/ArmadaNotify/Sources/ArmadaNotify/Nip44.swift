@@ -8,9 +8,12 @@ import Foundation
 /// `chacha_key[0..32]`, `chacha_nonce[32..44]`, `hmac_key[44..76]`, and the MAC
 /// is `HMAC-SHA256(hmac_key, nonce || ciphertext)`.
 ///
-/// Decrypt only. The extension never encrypts anything: it has no reason to
-/// publish, and a decrypt-only surface cannot leak a key through a nonce reuse
-/// bug it does not contain. Ported from `ConcordCrypto.java`.
+/// Decrypting is nearly all of it. The one thing that encrypts is the NIP-46
+/// client (`Nip46Client`), which has to seal an RPC to the user's bunker —
+/// there is no other reason for this process to produce ciphertext, and none
+/// of it ever touches the identity key.
+///
+/// Ported from `ConcordCrypto.java`.
 enum Nip44 {
 
     /// Decrypt a base64 payload, or nil on any malformed input, MAC mismatch or
@@ -42,6 +45,56 @@ enum Nip44 {
         guard Crypto.constantTimeEquals(expected, mac) else { return nil }
 
         return unpad(Crypto.chacha20(key: chachaKey, nonce: chachaNonce, input: ciphertext))
+    }
+
+    /// Encrypt to a base64 payload under a raw conversation key.
+    ///
+    /// `nonce` is injectable so the round-trip can be pinned against a vector;
+    /// the caller that matters generates a fresh random one per message, which
+    /// NIP-44 requires — the message keys are derived from it, so a repeat
+    /// would reuse a ChaCha20 keystream.
+    static func encrypt(
+        conversationKey: [UInt8],
+        plaintext: String,
+        nonce: [UInt8] = randomNonce()
+    ) -> String? {
+        guard conversationKey.count == 32, nonce.count == 32 else { return nil }
+        let unpadded = [UInt8](plaintext.utf8)
+        guard unpadded.count >= 1, unpadded.count <= 65535 else { return nil }
+
+        let keys = Crypto.hkdfExpand(prk: conversationKey, info: nonce, length: 76)
+        guard keys.count == 76 else { return nil }
+        let chachaKey = Array(keys[0..<32])
+        let chachaNonce = Array(keys[32..<44])
+        let hmacKey = Array(keys[44..<76])
+
+        var padded = [UInt8]()
+        padded.reserveCapacity(2 + paddedLength(unpadded.count))
+        padded.append(UInt8(truncatingIfNeeded: unpadded.count >> 8))
+        padded.append(UInt8(truncatingIfNeeded: unpadded.count))
+        padded.append(contentsOf: unpadded)
+        padded.append(
+            contentsOf: [UInt8](repeating: 0, count: paddedLength(unpadded.count) - unpadded.count)
+        )
+
+        let ciphertext = Crypto.chacha20(key: chachaKey, nonce: chachaNonce, input: padded)
+        let mac = Crypto.hmacSha256(key: hmacKey, message: nonce + ciphertext)
+        return Data([2] + nonce + ciphertext + mac).base64EncodedString()
+    }
+
+    /// 32 fresh random bytes. `SystemRandomNumberGenerator` is documented as
+    /// cryptographically secure on every platform this builds for.
+    static func randomNonce() -> [UInt8] {
+        var generator = SystemRandomNumberGenerator()
+        return (0..<32).map { _ in UInt8.random(in: UInt8.min...UInt8.max, using: &generator) }
+    }
+
+    /// NIP-44's padded length: a 32-byte floor, then power-of-two-derived chunks.
+    private static func paddedLength(_ unpadded: Int) -> Int {
+        if unpadded <= 32 { return 32 }
+        let nextPower = 1 << (Int.bitWidth - (unpadded - 1).leadingZeroBitCount)
+        let chunk = nextPower <= 256 ? 32 : nextPower / 8
+        return chunk * ((unpadded - 1) / chunk + 1)
     }
 
     /// Strip NIP-44 padding: `[u16-BE len][plaintext][zeros]`, with the extended

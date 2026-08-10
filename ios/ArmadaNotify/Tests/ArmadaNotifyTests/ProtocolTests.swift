@@ -45,7 +45,7 @@ final class ProtocolTests: XCTestCase {
     // MARK: - NIP-17
 
     func testOpensARealGiftWrap() {
-        let opened = Dm17.open(wrap: dmWrap, secretKey: aliceSk, self: alicePk, now: now)
+        let opened = Dm17.open(wrap: dmWrap, decryptor: LocalDecryptor(secretKey: aliceSk), self: alicePk, now: now)
         XCTAssertNotNil(opened)
         XCTAssertEqual(opened?.author, bobPk)
         XCTAssertEqual(opened?.kind, 14)
@@ -57,31 +57,31 @@ final class ProtocolTests: XCTestCase {
 
     func testRefusesAWrapAddressedToSomeoneElse() {
         let bobSk = Hex.decode(vectorString("bobSk"))!
-        XCTAssertNil(Dm17.open(wrap: dmWrap, secretKey: bobSk, self: bobPk, now: now))
+        XCTAssertNil(Dm17.open(wrap: dmWrap, decryptor: LocalDecryptor(secretKey: bobSk), self: bobPk, now: now))
     }
 
     func testRefusesANonWrapKind() {
         var wrap = dmWrap
         wrap.kind = 1060
-        XCTAssertNil(Dm17.open(wrap: wrap, secretKey: aliceSk, self: alicePk, now: now))
+        XCTAssertNil(Dm17.open(wrap: wrap, decryptor: LocalDecryptor(secretKey: aliceSk), self: alicePk, now: now))
     }
 
     func testRefusesAnExpiredEnvelopeAtTheOuterLevel() {
         var wrap = dmWrap
         wrap.tags.append(["expiration", String(now - 1)])
-        XCTAssertNil(Dm17.open(wrap: wrap, secretKey: aliceSk, self: alicePk, now: now))
+        XCTAssertNil(Dm17.open(wrap: wrap, decryptor: LocalDecryptor(secretKey: aliceSk), self: alicePk, now: now))
     }
 
     func testAcceptsAnExpirationStillInTheFuture() {
         var wrap = dmWrap
         wrap.tags.append(["expiration", String(now + 3600)])
-        XCTAssertNotNil(Dm17.open(wrap: wrap, secretKey: aliceSk, self: alicePk, now: now))
+        XCTAssertNotNil(Dm17.open(wrap: wrap, decryptor: LocalDecryptor(secretKey: aliceSk), self: alicePk, now: now))
     }
 
     func testAMalformedExpirationDoesNotHideAMessage() {
         var wrap = dmWrap
         wrap.tags.append(["expiration", "not-a-number"])
-        XCTAssertNotNil(Dm17.open(wrap: wrap, secretKey: aliceSk, self: alicePk, now: now))
+        XCTAssertNotNil(Dm17.open(wrap: wrap, decryptor: LocalDecryptor(secretKey: aliceSk), self: alicePk, now: now))
     }
 
     func testRefusesTamperedCiphertext() {
@@ -90,14 +90,14 @@ final class ProtocolTests: XCTestCase {
         var content = Array(wrap.content)
         content[content.count / 2] = content[content.count / 2] == "A" ? "B" : "A"
         wrap.content = String(content)
-        XCTAssertNil(Dm17.open(wrap: wrap, secretKey: aliceSk, self: alicePk, now: now))
+        XCTAssertNil(Dm17.open(wrap: wrap, decryptor: LocalDecryptor(secretKey: aliceSk), self: alicePk, now: now))
     }
 
     func testRefusesARumorClaimingTheFuture() {
         // The rumor's created_at is 1700000000; a `now` far enough behind it
         // puts it beyond the hour of tolerated skew.
         XCTAssertNil(
-            Dm17.open(wrap: dmWrap, secretKey: aliceSk, self: alicePk, now: 1_699_000_000)
+            Dm17.open(wrap: dmWrap, decryptor: LocalDecryptor(secretKey: aliceSk), self: alicePk, now: 1_699_000_000)
         )
     }
 

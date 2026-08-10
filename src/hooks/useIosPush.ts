@@ -109,7 +109,7 @@ export function useIosPush(): UsePushNotificationsReturn {
   const [prefs, setPrefsState] = useState<PushPrefs>(loadPushPrefs);
   const [nonce, setNonce] = useState(0);
 
-  const { specs, concord, dmKnownPeers, dmSk, followsLoading } = usePushWatchSet(prefs);
+  const { specs, concord, dmKnownPeers, dmSk, dmBunker, followsLoading } = usePushWatchSet(prefs);
 
   // Keep the extension's config current: the DM policy and known set for every
   // enabled session, the decrypt key for nsec logins, and the per-channel
@@ -155,7 +155,11 @@ export function useIosPush(): UsePushNotificationsReturn {
             channelId: sub.channelId,
           }))
         ),
+        // An nsec login decrypts on the device; a bunker login hands over the
+        // client key so the extension can ask the bunker instead. Never both —
+        // a login is one or the other.
         ...(dmSk ? { sk: dmSk } : {}),
+        ...(!dmSk && dmBunker ? { nip46: dmBunker } : {}),
       });
     })().catch(() => {
       // A config the extension can't read degrades to the gateway's static
@@ -172,6 +176,7 @@ export function useIosPush(): UsePushNotificationsReturn {
     prefs.dmRequests,
     dmKnownPeers,
     dmSk,
+    dmBunker,
     concord,
   ]);
 

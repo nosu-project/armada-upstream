@@ -16,6 +16,18 @@ struct ConcordStream {
     let channelId: String
 }
 
+/// A bunker login's remote signer, as much of it as decryption needs.
+///
+/// The key here is the CLIENT key, not the identity key: it addresses the
+/// bunker and nothing else. That makes it strictly weaker than the `sk` an
+/// nsec login stores — it cannot decrypt or sign anything by itself, only ask a
+/// bunker that can, over a grant the user already made and can revoke there.
+struct Nip46Config {
+    let clientSecretKey: [UInt8]
+    let bunkerPubkey: String
+    let relays: [String]
+}
+
 /// How to notify for a DM from someone the viewer doesn't know.
 enum DmRequestLevel: String {
     case off
@@ -31,11 +43,17 @@ enum DmRequestLevel: String {
 /// push time, for any author, rather than pre-sealed for a listed few.
 ///
 /// SECURITY. `sk` is the account's identity key and is present ONLY for nsec
-/// logins — bunker (NIP-46) and extension (NIP-07) logins keep their key off the
-/// device, so their DMs stay the generic wake-up here exactly as they do in the
-/// web worker. It has to be present at all because a NIP-17 wrap is authored by
-/// a fresh ephemeral key per message: there is no conversation key to
-/// precompute, so opening one needs the ECDH itself.
+/// logins. It has to be present at all because a NIP-17 wrap is authored by a
+/// fresh ephemeral key per message: there is no conversation key to precompute,
+/// so opening one needs the ECDH itself.
+///
+/// A bunker (NIP-46) login sends `nip46` instead — the CLIENT key, the bunker's
+/// pubkey and its relays — and the extension asks the bunker to decrypt
+/// (`Nip46Client`). That is a materially smaller secret: the client key can
+/// only address the bunker, under a grant the user made in the app and can
+/// revoke there, whereas an `sk` is the account. Extension (NIP-07) logins send
+/// neither and stay the generic wake-up, as they do in the web worker: there is
+/// no browser to ask.
 ///
 /// It lives in the App Group container under
 /// `.completeUntilFirstUserAuthentication`, which is the weakest protection
@@ -59,6 +77,8 @@ struct PushConfig {
     let knownPeers: Set<String>
     /// Decrypt key bytes. Present for nsec logins only.
     let secretKey: [UInt8]?
+    /// The bunker to ask instead, for NIP-46 logins.
+    let nip46: Nip46Config?
     /// The CURRENT epoch's stream for every watched channel. Only the current
     /// one: a retired epoch is read-cutoff history and must not notify.
     let concord: [ConcordStream]
@@ -75,6 +95,17 @@ struct PushConfig {
         var secretKey: [UInt8]?
         if let hex = object["sk"] as? String, let bytes = Hex.decode(hex), bytes.count == 32 {
             secretKey = bytes
+        }
+
+        var nip46: Nip46Config?
+        if let entry = object["nip46"] as? [String: Any],
+            let clientHex = entry["clientSk"] as? String,
+            let clientKey = Hex.decode(clientHex), clientKey.count == 32,
+            let bunkerPubkey = entry["bunkerPubkey"] as? String,
+            let relays = entry["relays"] as? [String], !relays.isEmpty {
+            nip46 = Nip46Config(
+                clientSecretKey: clientKey, bunkerPubkey: bunkerPubkey, relays: relays
+            )
         }
 
         var streams = [ConcordStream]()
@@ -100,6 +131,7 @@ struct PushConfig {
             selfPubkey: selfPubkey,
             knownPeers: knownPeers,
             secretKey: secretKey,
+            nip46: nip46,
             concord: streams
         )
     }

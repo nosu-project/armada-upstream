@@ -29,12 +29,12 @@ enum Dm17 {
     /// Rumors claiming to be further in the future than this are refused.
     private static let maxFutureSkewSecs = 3600
 
-    /// Open a kind-1059 wrap addressed to `self`, or nil for anything this key
-    /// cannot open, that is malformed, or that has already expired.
+    /// Open a kind-1059 wrap addressed to `self`, or nil for anything the
+    /// decryptor cannot open, that is malformed, or that has already expired.
     ///
     /// The checks, in order:
-    ///   1. the wrap decrypts under `conv(sk, wrap.pubkey)` → a kind-13 seal;
-    ///   2. the seal decrypts under `conv(sk, seal.pubkey)` → the rumor;
+    ///   1. the wrap decrypts to us from `wrap.pubkey` → a kind-13 seal;
+    ///   2. the seal decrypts to us from `seal.pubkey` → the rumor;
     ///   3. the rumor's claimed pubkey equals the seal's signer (NIP-59
     ///      anti-spoofing). No Schnorr verify is needed for that: NIP-44's AEAD
     ///      means a seal that decrypted was authenticated to US by its author;
@@ -48,22 +48,20 @@ enum Dm17 {
     /// that simply would not open.
     static func open(
         wrap: NostrEvent,
-        secretKey sk: [UInt8],
+        decryptor: Nip44Decryptor,
         self selfPubkey: String,
         now: Int = Int(Date().timeIntervalSince1970)
     ) -> OpenedDm? {
         guard wrap.kind == kindWrap else { return nil }
         guard !Nip40.isExpired(wrap.tags, now: now) else { return nil }
 
-        guard let wrapKey = Secp256k1.conversationKey(secretKey: sk, peerPubkeyHex: wrap.pubkey),
-              let sealJson = Nip44.decrypt(conversationKey: wrapKey, payloadBase64: wrap.content),
+        guard let sealJson = decryptor.decrypt(pubkey: wrap.pubkey, ciphertext: wrap.content),
               let seal = NostrEvent.parse(json: sealJson),
               seal.kind == kindSeal,
               !Nip40.isExpired(seal.tags, now: now)
         else { return nil }
 
-        guard let sealKey = Secp256k1.conversationKey(secretKey: sk, peerPubkeyHex: seal.pubkey),
-              let rumorJson = Nip44.decrypt(conversationKey: sealKey, payloadBase64: seal.content),
+        guard let rumorJson = decryptor.decrypt(pubkey: seal.pubkey, ciphertext: seal.content),
               let rumor = NostrEvent.parse(json: rumorJson)
         else { return nil }
 

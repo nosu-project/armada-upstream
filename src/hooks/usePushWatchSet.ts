@@ -47,10 +47,22 @@ export interface PushWatchSet {
   dmKnownPeers: string[];
   /**
    * The account's secret key, for nsec logins ONLY. Bunker (NIP-46) and
-   * extension (NIP-07) keys stay off-device, so those logins yield nothing here
-   * and their DM push cannot be opened outside the page.
+   * extension (NIP-07) keys stay off-device, so those logins yield nothing
+   * here.
    */
   dmSk?: string;
+  /**
+   * A bunker login's remote signer, for a background reader that can't open a
+   * gift wrap itself but CAN ask the bunker to (`Nip46Client` in the iOS
+   * extension). The `clientSk` is the key that addresses the bunker, not the
+   * account: strictly weaker than `dmSk`, and revocable at the bunker.
+   *
+   * The web service worker is deliberately not given this. It would mean a
+   * websocket and two bunker round-trips inside a `push` handler that already
+   * has an event in hand, on a platform where the page is usually a tab away —
+   * the extension has it because iOS gives it no alternative.
+   */
+  dmBunker?: { clientSk: string; bunkerPubkey: string; relays: string[] };
   /**
    * Whether the follow list is still loading. Callers that persist anything
    * derived from `dmKnownPeers` must wait: writing it mid-load freezes an empty
@@ -144,6 +156,26 @@ export function usePushWatchSet(prefs: PushPrefs): PushWatchSet {
     return undefined;
   }, [logins]);
 
+  const dmBunker = useMemo(() => {
+    const login = logins[0];
+    try {
+      if (login?.type === "bunker") {
+        const decoded = nip19.decode(login.data.clientNsec);
+        if (decoded.type !== "nsec") return undefined;
+        const relays = login.data.relays.filter((url: string) => Boolean(url));
+        if (relays.length === 0) return undefined;
+        return {
+          clientSk: bytesToHex(decoded.data),
+          bunkerPubkey: login.data.bunkerPubkey,
+          relays,
+        };
+      }
+    } catch {
+      // Malformed login data — no bunker, and DM push stays generic.
+    }
+    return undefined;
+  }, [logins]);
+
   const concord = useMemo(
     () =>
       allConcordSubs.filter(
@@ -175,5 +207,5 @@ export function usePushWatchSet(prefs: PushPrefs): PushWatchSet {
     concord,
   ]);
 
-  return { specs, concord, dmKnownPeers, dmSk, followsLoading };
+  return { specs, concord, dmKnownPeers, dmSk, dmBunker, followsLoading };
 }

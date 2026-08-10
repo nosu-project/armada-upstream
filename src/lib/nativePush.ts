@@ -92,15 +92,18 @@ export const ArmadaPush = registerPlugin<ArmadaPushPlugin>("ArmadaPush");
  * snapshot the page had to seal ahead of time and re-seal when a profile landed
  * late.
  *
- * `sk` is present ONLY for nsec logins. Bunker (NIP-46) and extension (NIP-07)
- * keys stay off-device, so those logins send none and their DM push stays the
- * generic wake-up — exactly as on the web.
+ * `sk` is present ONLY for nsec logins. A bunker (NIP-46) login sends `nip46`
+ * instead and the extension asks the bunker to decrypt — the client key it
+ * carries addresses the bunker and nothing else, so it is a materially smaller
+ * secret than an account key. Extension (NIP-07) logins send neither and stay
+ * the generic wake-up: there is no browser for the extension to ask.
  */
 export interface IosPushConfig {
   policy: string;
   self: string;
   knownPeers: string[];
   sk?: string;
+  nip46?: { clientSk: string; bunkerPubkey: string; relays: string[] };
   concord?: Array<{
     pk: string;
     convKey: string;
