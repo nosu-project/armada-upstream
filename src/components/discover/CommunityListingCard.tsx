@@ -313,7 +313,7 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
             </Button>
           )}
           <Button
-            variant="outline"
+            variant="ghost"
             size="icon"
             className="shrink-0 clip-corner-lg"
             aria-label="Copy invite link"

@@ -69,86 +69,91 @@ export function DiscoverPage() {
     <>
       <ServerRail />
       <main className="flex flex-col flex-1 min-w-0 h-full safe-area-top">
-        {/* Header — the floating command bar shared with Inbox / Mesh / Group.
-            Dropped on a phone, where the tab pills carry the page identity and
-            the vertical space is better spent on results. */}
-        <header className="relative h-12 touch:h-14 mx-2 mt-3 px-2 sidebar:px-3 hidden sm:flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
-          <Compass className="size-5 shrink-0 text-muted-foreground" />
-          <h1 className="min-w-0 flex-1 truncate font-semibold leading-tight">Discover</h1>
-        </header>
+        {/* A centred, bounded column — the same presentational width the
+            moderation and community-settings surfaces use, so Discover reads as
+            an inviting page rather than a full-bleed grid. */}
+        <div className="mx-auto flex w-full max-w-2xl flex-1 min-h-0 flex-col px-3 sm:px-4">
+          {/* Header — the floating command bar shared with Inbox / Mesh / Group.
+              Dropped on a phone, where the tab pills carry the page identity and
+              the vertical space is better spent on results. */}
+          <header className="relative h-12 touch:h-14 mt-4 px-3 hidden sm:flex items-center gap-2 shrink-0 clip-corner-lg bg-chrome">
+            <Compass className="size-5 shrink-0 text-muted-foreground" />
+            <h1 className="min-w-0 flex-1 truncate font-semibold leading-tight">Discover</h1>
+          </header>
 
-        {/* Tab pills + search — one row from sm up, stacked on a phone. */}
-        <div className="mx-2 mt-3 sm:mt-2 flex shrink-0 flex-col gap-2 sm:flex-row sm:items-center">
-          <PillTabs tabs={TABS} value={tab} onChange={(id) => setTab(id)} />
+          {/* Tab pills + search — one row from sm up, stacked on a phone. */}
+          <div className="mt-4 flex shrink-0 flex-col gap-2 sm:flex-row sm:items-center">
+            <PillTabs tabs={TABS} value={tab} onChange={(id) => setTab(id)} />
 
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            <div className="flex h-9 touch:h-11 min-w-0 flex-1 items-center gap-1.5 px-2 sidebar:px-3 clip-corner-lg bg-chrome">
-              <Search className="size-4 shrink-0 text-muted-foreground" />
-              <Input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") setQuery("");
-                }}
-                placeholder={active.placeholder}
-                aria-label={active.placeholder}
-                className="h-full flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-              />
-              {query && (
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <div className="flex h-9 touch:h-11 min-w-0 flex-1 items-center gap-1.5 px-2 sidebar:px-3 clip-corner-lg bg-chrome">
+                <Search className="size-4 shrink-0 text-muted-foreground" />
+                <Input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setQuery("");
+                  }}
+                  placeholder={active.placeholder}
+                  aria-label={active.placeholder}
+                  className="h-full flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+                />
+                {query && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Clear search"
+                    className="size-7 touch:size-9 shrink-0 text-muted-foreground"
+                    onClick={() => setQuery("")}
+                  >
+                    <X className="size-4" />
+                  </Button>
+                )}
+              </div>
+
+              {/* Lives beside the search, not in the header, so it survives the
+                  header being dropped on a phone. */}
+              {tab === "communities" && user && (
                 <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Clear search"
-                  className="size-7 touch:size-9 shrink-0 text-muted-foreground"
-                  onClick={() => setQuery("")}
+                  className="h-9 touch:h-11 shrink-0 clip-corner-lg"
+                  onClick={() => setShareOpen(true)}
                 >
-                  <X className="size-4" />
+                  <Plus className="size-4" />
+                  <span className="hidden sm:inline">Add your community</span>
+                  <span className="sr-only sm:hidden">Add your community</span>
+                </Button>
+              )}
+              {tab === "emojis" && user && (
+                <Button
+                  className="h-9 touch:h-11 shrink-0 clip-corner-lg"
+                  onClick={() => setCreateOpen(true)}
+                >
+                  <Plus className="size-4" />
+                  <span className="hidden sm:inline">New pack</span>
+                  <span className="sr-only sm:hidden">Create emoji pack</span>
+                </Button>
+              )}
+
+              {/* Second tenant of the same slot — the two never co-render. */}
+              {tab === "themes" && user && (
+                <Button
+                  className="h-9 touch:h-11 shrink-0 clip-corner-lg"
+                  onClick={() => setThemeCreateOpen(true)}
+                >
+                  <Plus className="size-4" />
+                  <span className="hidden sm:inline">New theme</span>
+                  <span className="sr-only sm:hidden">Create theme</span>
                 </Button>
               )}
             </div>
-
-            {/* Lives beside the search, not in the header, so it survives the
-                header being dropped on a phone. */}
-            {tab === "communities" && user && (
-              <Button
-                className="h-9 touch:h-11 shrink-0 clip-corner-lg"
-                onClick={() => setShareOpen(true)}
-              >
-                <Plus className="size-4" />
-                <span className="hidden sm:inline">Add your community</span>
-                <span className="sr-only sm:hidden">Add your community</span>
-              </Button>
-            )}
-            {tab === "emojis" && user && (
-              <Button
-                className="h-9 touch:h-11 shrink-0 clip-corner-lg"
-                onClick={() => setCreateOpen(true)}
-              >
-                <Plus className="size-4" />
-                <span className="hidden sm:inline">New pack</span>
-                <span className="sr-only sm:hidden">Create emoji pack</span>
-              </Button>
-            )}
-
-            {/* Second tenant of the same slot — the two never co-render. */}
-            {tab === "themes" && user && (
-              <Button
-                className="h-9 touch:h-11 shrink-0 clip-corner-lg"
-                onClick={() => setThemeCreateOpen(true)}
-              >
-                <Plus className="size-4" />
-                <span className="hidden sm:inline">New theme</span>
-                <span className="sr-only sm:hidden">Create theme</span>
-              </Button>
-            )}
           </div>
-        </div>
 
-        {/* Results */}
-        <div className="flex-1 min-h-0 overflow-y-auto scrollbar-stable px-2 pb-8 pt-4 sm:pt-2">
-          {tab === "communities" && <CommunitiesTab query={query} />}
-          {tab === "emojis" && <EmojisTab query={query} />}
-          {tab === "themes" && <ThemesTab query={query} />}
+          {/* Results */}
+          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-stable pb-8 pt-6">
+            {tab === "communities" && <CommunitiesTab query={query} />}
+            {tab === "emojis" && <EmojisTab query={query} />}
+            {tab === "themes" && <ThemesTab query={query} />}
+          </div>
         </div>
       </main>
 
@@ -173,7 +178,7 @@ export function DiscoverPage() {
   );
 }
 
-const GRID = "grid gap-2 sm:grid-cols-2 xl:grid-cols-3 items-stretch";
+const GRID = "grid gap-4 sm:grid-cols-2 items-stretch";
 
 /**
  * Card-shaped placeholders while the first page loads — the grid keeps its
