@@ -1,49 +1,40 @@
 import { ArrowLeft, FolderGit2, Hash, Loader2, Lock } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { OwnerAvatar, OwnerSlashRepo, RepositoryPicker, type PickedRepository } from "@/components/projects/RepositoryPicker";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/useToast";
 
 /** Re-exported under its original name for the page's handler signature. */
 export type WizardRepository = PickedRepository;
 
-type Step = "type" | "text" | "repo" | "confirm";
+/**
+ * A text channel is what "create a channel" means; the repository path is a
+ * detour off it. There is no chooser step, so `text` is where the dialog opens.
+ */
+type Step = "text" | "repo" | "confirm";
 
-function stepTitle(step: Step): string {
-  switch (step) {
-    case "type": return "Create a channel";
-    case "text": return "New text channel";
-    case "repo": return "Choose a repository";
-    case "confirm": return "New repository channel";
-  }
-}
-
-function TypeCard({ icon: Icon, title, description, onClick }: { icon: typeof Hash; title: string; description: string; onClick: () => void }) {
+/** The glyph frame the wizard steps use, sized down for a dialog. */
+function StepGlyph({ children }: { children: ReactNode }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="group flex w-full items-center gap-3 clip-corner-lg bg-card p-3.5 text-left transition-colors hover:bg-foreground/[0.03]"
-    >
-      <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-muted/40">
-        <Icon className="size-5 text-muted-foreground transition-colors group-hover:text-foreground" />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block text-sm font-semibold text-foreground">{title}</span>
-        <span className="block text-xs leading-4 text-muted-foreground">{description}</span>
-      </span>
-    </button>
+    <div className="flex size-16 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
+      {children}
+    </div>
   );
 }
 
 /**
- * The create-channel wizard: a plain text channel, or a repository channel
- * that ties a NIP-34 repo to the new channel — found by searching the public
- * ngit directory or by pasting an naddr / nostr:// address from a git client.
+ * Create a channel: a plain text channel, or a repository channel that ties a
+ * NIP-34 repo to it — found by searching the public ngit directory or by pasting
+ * an naddr / nostr:// address from a git client.
+ *
+ * Text is the default and the repository path is a secondary door at the bottom
+ * of it, rather than the two being equal halves of a chooser screen: naming a
+ * text channel is the overwhelmingly common case, and it used to cost a step of
+ * its own before you could type anything.
  */
 export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onCreateText, onCreateRepository }: {
   open: boolean;
@@ -52,17 +43,17 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
   onCreateText: (name: string, opts?: { isPrivate?: boolean }) => Promise<unknown>;
   onCreateRepository: (name: string, repository: PickedRepository) => Promise<unknown>;
 }) {
-  const [step, setStep] = useState<Step>("type");
+  const [step, setStep] = useState<Step>("text");
   const [name, setName] = useState("");
   const [selected, setSelected] = useState<PickedRepository | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPrivate, setIsPrivate] = useState(true);
 
-  // Fresh wizard every time it opens.
+  // Fresh dialog every time it opens.
   useEffect(() => {
     if (!open) return;
-    setStep("type");
+    setStep("text");
     setName("");
     setSelected(null);
     setCreating(false);
@@ -98,126 +89,163 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
     }
   }, [name, creating, step, selected, isPrivate, onCreateRepository, onCreateText, onOpenChange]);
 
-  const back = step === "text" || step === "repo" ? () => setStep("type") : step === "confirm" ? () => setStep("repo") : undefined;
+  // The repository detour is the only thing there is to come back from.
+  const back = step === "repo"
+    ? () => setStep("text")
+    : step === "confirm"
+      ? () => setStep("repo")
+      : undefined;
 
   return (
     <Dialog open={open} onOpenChange={(next) => !creating && onOpenChange(next)}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-1.5">
-            {back && (
-              <Button variant="ghost" size="icon" className="-ml-1.5 size-7" aria-label="Back" disabled={creating} onClick={back}>
-                <ArrowLeft className="size-4" />
-              </Button>
-            )}
-            {stepTitle(step)}
-          </DialogTitle>
-        </DialogHeader>
-
-        {/* DialogContent is a grid; min-w-0 stops an unbreakable string (a
-            hex identifier, a long URL) from widening the whole dialog. */}
-        {step === "type" && (
-          <div className="min-w-0 space-y-2.5">
-            <TypeCard
-              icon={Hash}
-              title="Text channel"
-              description="A plain conversation space for your community."
-              onClick={() => setStep("text")}
-            />
-            <TypeCard
-              icon={FolderGit2}
-              title="Repository channel"
-              description="Ties a git repository to the channel: live activity in chat, and a Projects view for issues and PRs."
-              onClick={() => setStep("repo")}
-            />
-          </div>
+      <ChromeDialogContent title="Create a channel">
+        {/* Mirrors the close button's corner, as the wizard's header does. */}
+        {back && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="absolute left-2 top-2 size-9 touch:size-11 text-muted-foreground hover:text-foreground"
+            aria-label="Back"
+            disabled={creating}
+            onClick={back}
+          >
+            <ArrowLeft className="size-5" />
+          </Button>
         )}
 
-        {step === "text" && (
-          <form
-            className="min-w-0 space-y-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void create();
-            }}
-          >
-            <Input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="e.g. general, memes, dev-talk"
-              autoFocus
-              disabled={creating}
-            />
+        {/* The chrome card is a grid; min-w-0 stops an unbreakable string (a hex
+            identifier, a long URL) from widening the whole dialog. */}
+        <div className="flex min-w-0 flex-col items-center gap-5 text-center">
+          <StepGlyph>
+            {step === "text" ? <Hash className="size-7" /> : <FolderGit2 className="size-7" />}
+          </StepGlyph>
 
-            <label htmlFor="channel2-private" className="flex items-start gap-3 cursor-pointer">
-              <Checkbox
-                id="channel2-private"
-                checked={isPrivate}
-                onCheckedChange={(c) => setIsPrivate(c === true)}
+          <div className="space-y-1.5">
+            <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
+              {step === "text" ? "new channel" : step === "repo" ? "choose a repository" : "name the channel"}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {step === "text"
+                ? "A conversation space for your community."
+                : step === "repo"
+                  ? "Search the public directory, or paste an address from your git client."
+                  : "Its activity appears in the channel and in Projects."}
+            </p>
+          </div>
+
+          {step === "text" && (
+            <form
+              className="w-full min-w-0 space-y-3 text-left"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void create();
+              }}
+            >
+              <Input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="e.g. general, memes, dev-talk"
+                aria-label="Channel name"
+                autoFocus
                 disabled={creating}
-                className="mt-0.5"
+                className="h-12 text-base"
               />
-              <span className="min-w-0">
-                <span className="flex items-center gap-1.5 text-sm font-medium">
-                  <Lock className="size-3.5" /> Private channel
-                </span>
-                <span className="block text-xs text-muted-foreground">
-                  Gets its own key. Only members granted its role can read it, in any client.
-                </span>
-              </span>
-            </label>
 
-            {isPrivate && (
-              <p className="text-xs text-muted-foreground">
-                A role of the same name is created alongside it and decides who may read it.
-                Grant that role to give a member access.
-              </p>
-            )}
+              <label
+                htmlFor="channel2-private"
+                className="flex cursor-pointer items-start gap-3 rounded-lg bg-secondary/50 p-3"
+              >
+                <Checkbox
+                  id="channel2-private"
+                  checked={isPrivate}
+                  onCheckedChange={(c) => setIsPrivate(c === true)}
+                  disabled={creating}
+                  className="mt-0.5"
+                />
+                <span className="min-w-0">
+                  <span className="flex items-center gap-1.5 text-sm font-medium">
+                    <Lock className="size-3.5" /> Private channel
+                  </span>
+                  <span className="block text-xs text-muted-foreground">
+                    Gets its own key, and a role of the same name that decides who
+                    can read it — in any client.
+                  </span>
+                </span>
+              </label>
 
-            {error && <p className="text-xs text-destructive">{error}</p>}
-            <div className="flex justify-end">
-              <Button type="submit" size="sm" disabled={creating || !name.trim()}>
+              {error && <p className="text-xs text-destructive">{error}</p>}
+
+              <Button
+                type="submit"
+                size="lg"
+                disabled={creating || !name.trim()}
+                className="h-12 w-full clip-corner-lg text-base font-medium"
+              >
                 {creating ? <Loader2 className="size-4 animate-spin" /> : "Create channel"}
               </Button>
-            </div>
-          </form>
-        )}
 
-        {step === "repo" && (
-          <RepositoryPicker connectedCoordinates={connectedCoordinates} onSelect={choose} />
-        )}
+              {/* The secondary door. Below the primary action and quieter than
+                  it, so the common case is never a choice you have to make. */}
+              <div className="flex items-center gap-3 pt-1">
+                <span className="h-px flex-1 bg-border" />
+                <span className="text-[0.7rem] uppercase tracking-wider text-muted-foreground">or</span>
+                <span className="h-px flex-1 bg-border" />
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={creating}
+                onClick={() => setStep("repo")}
+                className="w-full text-muted-foreground hover:text-foreground"
+              >
+                <FolderGit2 className="size-4" />
+                Tie a git repository to it
+              </Button>
+            </form>
+          )}
 
-        {step === "confirm" && selected && (
-          <form
-            className="min-w-0 space-y-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void create();
-            }}
-          >
-            <div className="flex min-w-0 items-center gap-2.5 clip-corner-lg border border-border/60 bg-card p-2.5">
-              <OwnerAvatar pubkey={selected.owner} />
-              <span className="min-w-0 flex-1">
-                <OwnerSlashRepo owner={selected.owner} name={selected.displayName} />
-                <span className="block truncate text-xs text-muted-foreground">Activity will appear in the channel and in Projects.</span>
-              </span>
+          {step === "repo" && (
+            <div className="w-full min-w-0 text-left">
+              <RepositoryPicker connectedCoordinates={connectedCoordinates} onSelect={choose} />
             </div>
-            <Input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="Channel name"
-              autoFocus
-              disabled={creating}
-            />
-            {error && <p className="text-xs text-destructive">{error}</p>}
-            <div className="flex justify-end">
-              <Button type="submit" size="sm" disabled={creating || !name.trim()}>
+          )}
+
+          {step === "confirm" && selected && (
+            <form
+              className="w-full min-w-0 space-y-3 text-left"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void create();
+              }}
+            >
+              <div className="flex min-w-0 items-center gap-2.5 rounded-lg bg-secondary/50 p-3">
+                <OwnerAvatar pubkey={selected.owner} />
+                <span className="min-w-0 flex-1">
+                  <OwnerSlashRepo owner={selected.owner} name={selected.displayName} />
+                </span>
+              </div>
+              <Input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="Channel name"
+                aria-label="Channel name"
+                autoFocus
+                disabled={creating}
+                className="h-12 text-base"
+              />
+              {error && <p className="text-xs text-destructive">{error}</p>}
+              <Button
+                type="submit"
+                size="lg"
+                disabled={creating || !name.trim()}
+                className="h-12 w-full clip-corner-lg text-base font-medium"
+              >
                 {creating ? <Loader2 className="size-4 animate-spin" /> : "Create repository channel"}
               </Button>
-            </div>
-          </form>
-        )}
-      </DialogContent>
+            </form>
+          )}
+        </div>
+      </ChromeDialogContent>
     </Dialog>
   );
 }

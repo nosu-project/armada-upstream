@@ -5,6 +5,14 @@ import { NewChannelDialog } from "@/concord/components/NewChannelDialog";
 
 vi.mock("@/hooks/useToast", () => ({ toast: vi.fn() }));
 
+// The picker queries the relay pool for the ngit directory, which needs a
+// NostrProvider; these tests only care that it is what the git door leads to.
+vi.mock("@/components/projects/RepositoryPicker", () => ({
+  RepositoryPicker: () => <div>repository picker</div>,
+  OwnerAvatar: () => null,
+  OwnerSlashRepo: () => null,
+}));
+
 const NAME_PLACEHOLDER = "e.g. general, memes, dev-talk";
 
 function setup() {
@@ -18,13 +26,32 @@ function setup() {
       onCreateRepository={vi.fn(async () => {})}
     />,
   );
-  fireEvent.click(screen.getByText("Text channel"));
+  // No chooser step to get past: a text channel is what the dialog opens on.
   return { onCreateText };
 }
 
 const typeName = (value: string) =>
   fireEvent.change(screen.getByPlaceholderText(NAME_PLACEHOLDER), { target: { value } });
 const submit = () => fireEvent.click(screen.getByRole("button", { name: "Create channel" }));
+
+describe("NewChannelDialog — the default path", () => {
+  it("opens on the text channel form, with the repository path a step away", () => {
+    setup();
+
+    // Typing a name is possible on open; it used to cost a chooser step first.
+    expect(screen.getByPlaceholderText(NAME_PLACEHOLDER)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create channel" })).toBeInTheDocument();
+
+    // Git is a secondary door, not half of a chooser.
+    fireEvent.click(screen.getByRole("button", { name: /tie a git repository to it/i }));
+    expect(screen.getByText("repository picker")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(NAME_PLACEHOLDER)).not.toBeInTheDocument();
+
+    // And it comes back to the form, which is the step behind it now.
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByPlaceholderText(NAME_PLACEHOLDER)).toBeInTheDocument();
+  });
+});
 
 describe("NewChannelDialog — privacy controls reach the create call", () => {
   it("creates a PRIVATE channel by default when the box is left alone", async () => {
