@@ -41,6 +41,7 @@ import {
   withChannelGitRepositoryAttachments,
   type ChannelMetadata,
   type Community,
+  type ImagePointer,
   type PrivateChannelKey,
 } from "@/concord/lib/types";
 import { withChannelCategory } from "@/concord/lib/channelCategory";
@@ -439,9 +440,17 @@ export function useCommunityActions() {
   const create = useMutation<
     { communityId: string; name: string },
     Error,
-    { name: string; relays?: string[]; messageExpirationSecs?: number }
+    {
+      name: string;
+      relays?: string[];
+      messageExpirationSecs?: number;
+      /** Optional genesis presentation (CORD-02 §6), from the creation wizard. */
+      description?: string;
+      icon?: ImagePointer;
+      banner?: ImagePointer;
+    }
   >({
-    mutationFn: async ({ name, relays: chosen, messageExpirationSecs }) => {
+    mutationFn: async ({ name, relays: chosen, messageExpirationSecs, description, icon, banner }) => {
       if (!user) throw new Error("Sign in to start an encrypted community.");
       if (!user.signer.nip44) throw new Error("This signer can't hold encrypted communities (NIP-44 unsupported).");
       const trimmed = name.trim();
@@ -462,6 +471,13 @@ export function useCommunityActions() {
       // screen chose otherwise; 0 (off) writes no field at all.
       const timerSecs = Math.floor(messageExpirationSecs ?? DEFAULT_MESSAGE_EXPIRATION_SECS);
 
+      // Presentation, when the creation wizard collected any. Written into the
+      // genesis edition rather than a follow-up update so a member who folds
+      // the community for the first time already has its face — and so an
+      // abandoned second publish can't leave version 1 describing a community
+      // the creator never saw. Absent fields write no key at all.
+      const trimmedDescription = description?.trim();
+
       // Genesis: two owner-signed editions, nothing more (CORD-02 §1).
       await publishEdition(
         nostr,
@@ -472,6 +488,9 @@ export function useCommunityActions() {
           {
             name: trimmed,
             relays: community.relays,
+            ...(trimmedDescription ? { description: trimmedDescription } : {}),
+            ...(icon ? { icon } : {}),
+            ...(banner ? { banner } : {}),
             ...(timerSecs > 0 ? { message_expiration: timerSecs } : {}),
           },
           { actorPubkey: user.pubkey, version: 1n },

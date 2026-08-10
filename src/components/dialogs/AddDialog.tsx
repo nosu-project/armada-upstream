@@ -1,4 +1,4 @@
-import { ChevronDown, ClipboardPaste, Hash, Link2, Loader2, Server, ShieldCheck, Timer } from "lucide-react";
+import { ChevronDown, ClipboardPaste, Hash, Link2, Loader2, Server, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -14,22 +14,13 @@ import { Dialog, ChromeDialogContent } from "@/components/ui/dialog";
 import { ImportFromDiscordButton } from "@/components/ImportFromDiscord";
 import { Input } from "@/components/ui/input";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { COMMUNITY_TIMER_PRESETS, DEFAULT_MESSAGE_EXPIRATION_SECS } from "@/concord/lib/disappearing";
-import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
-import { RelayListEditor } from "@/components/RelayListEditor";
-import { useCommunityActions, useCreateRelayCandidates } from "@/concord/hooks/useCommunityActions";
+import { useCommunityActions } from "@/concord/hooks/useCommunityActions";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { toast } from "@/hooks/useToast";
 import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
@@ -69,180 +60,60 @@ export function AddDialog({ open, onOpenChange }: AddDialogProps) {
 }
 
 /**
- * The Add wizard's body: create an encrypted community, plus the smart-paste
- * "escape hatch" for joining via an invite link or NIP-29 server URL.
+ * The Add wizard's body: the door into founding an encrypted community, plus
+ * the smart-paste "escape hatch" for joining via an invite link or NIP-29
+ * server URL.
  *
- * Exported for standalone/full-page use (the welcome-page onboarding renders
- * it inline). A standalone host must render {@link ArmadaCrestKeyframes}
- * alongside it for the crest animation, and provide `onDone` (called after a
- * successful create/join/add; the dialog uses it to close, a page can no-op).
+ * Creating is deliberately NOT a form here. It used to be — a name field, a
+ * retention picker and a relay list stacked into a dialog, which left no room
+ * to ask about the community's icon, banner or description, so every community
+ * was born faceless. Those questions now live in the full-screen
+ * {@link CreateCommunityWizard} at `/create`, and this is the button that goes
+ * there; the pitch stays because this is where the choice is made.
+ *
+ * Exported for standalone/full-page use. A standalone host must render
+ * {@link ArmadaCrestKeyframes} alongside it for the crest animation, and
+ * provide `onDone` (called after a successful join/add, and when the create
+ * wizard takes over; the dialog uses it to close, a page can no-op).
  */
 export function AddBody({ onDone }: { onDone: () => void }) {
   const navigate = useNavigate();
-  const { create, isCreating } = useCommunityActions();
-
-  const [name, setName] = useState("");
-  const [createError, setCreateError] = useState<string | null>(null);
-  // Disappearing messages (CORD-08), surfaced at creation on purpose:
-  // retention is a decision a community should make before its first message.
-  // Defaults to 30 days; "Off" is right there on the same screen.
-  const [expiration, setExpiration] = useState(DEFAULT_MESSAGE_EXPIRATION_SECS);
-
-  // Which relays the community is minted on. `null` = untouched (use the
-  // configured default candidates); once the user edits the picker, `relays`
-  // holds the explicit set for this mint only, leaving the standing setting
-  // alone. Passing it at submit keeps what's shown identical to what's used.
-  const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [relays, setRelays] = useState<string[] | null>(null);
-  const candidates = useCreateRelayCandidates();
-  const effectiveRelays = relays ?? candidates;
-
-  const handleCreate = async () => {
-    setCreateError(null);
-    try {
-      // New communities are always Concord.
-      const { communityId, name: created } = await create({
-        name: name.trim(),
-        // Always the set shown below, so the community is minted on exactly
-        // the relays the user was told about (create derives the same default
-        // from config when this is empty).
-        relays: effectiveRelays,
-        messageExpirationSecs: expiration,
-      });
-      onDone();
-      toast({ title: "Encrypted community ready", description: created });
-      navigate(`/c/${encodeURIComponent(communityId)}`);
-    } catch (e) {
-      setCreateError(e instanceof Error ? e.message : "Couldn't create the community.");
-    }
-  };
 
   return (
     <div className="flex flex-col items-center gap-6 text-center">
       <ArmadaCrest size={84} />
 
-      <div className="space-y-3">
-        <div>
-          <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
-            gather your crew
-          </h2>
-          <p className="font-mono text-base lowercase tracking-tight text-muted-foreground">
-            start an encrypted community
-          </p>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          Serverless and end-to-end-encrypted. No host can read it; your key is
-          your membership. You become the owner.
-        </p>
-      </div>
+      {/* One line, not three. This is a chooser between three doors — the
+          case for an encrypted community belongs on the wizard's own first
+          screen, where there's room for it and it isn't in the way. */}
+      <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
+        gather your crew
+      </h2>
 
-      <div className="w-full max-w-sm space-y-3">
-        <Input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && name.trim() && !isCreating) {
-              e.preventDefault();
-              handleCreate();
-            }
+      <div className="w-full max-w-sm">
+        <Button
+          type="button"
+          size="lg"
+          onClick={() => {
+            // Navigation is the whole mechanism, as with the Discord import:
+            // the wizard is owned by its route, so this dialog unmounting (via
+            // `onDone`, which is what stops a second close button painting over
+            // it) cannot take the wizard's state down with it.
+            navigate("/create");
+            onDone();
           }}
-          placeholder="Name your community"
-          aria-label="Community name"
-          autoComplete="off"
-          autoFocus
-          className="h-12 text-base"
-        />
-
-        <div className="flex items-center justify-between gap-3 rounded-lg bg-secondary/50 p-3 text-left">
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5 text-sm font-medium">
-              <Timer className="size-4 shrink-0 text-muted-foreground" />
-              Disappearing messages
-            </div>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Messages delete for everyone after this long. Staff can change it later.
-            </p>
-          </div>
-          <Select value={String(expiration)} onValueChange={(v) => setExpiration(Number(v))}>
-            <SelectTrigger className="h-9 w-28 shrink-0" aria-label="Disappearing messages timer">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="z-[260]">
-              {COMMUNITY_TIMER_PRESETS.map((p) => (
-                <SelectItem key={p.seconds} value={String(p.seconds)}>
-                  {p.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        {createError && (
-          <Alert variant="destructive">
-            <AlertDescription>{createError}</AlertDescription>
-          </Alert>
-        )}
-
-        <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
-          <div className="flex gap-2">
-            <Button
-              type="button"
-              size="lg"
-              onClick={handleCreate}
-              disabled={isCreating || !name.trim()}
-              className="h-12 flex-1 clip-corner-lg text-base font-medium"
-            >
-              {isCreating ? (
-                <><Loader2 className="size-4 mr-2 animate-spin" /> Creating...</>
-              ) : (
-                <><ShieldCheck className="size-4 mr-2" /> Create encrypted community</>
-              )}
-            </Button>
-
-            <CollapsibleTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label="Choose relays"
-                className="h-12 w-12 shrink-0"
-              >
-                <ChevronDown className={cn("size-5 transition-transform", advancedOpen && "rotate-180")} />
-              </Button>
-            </CollapsibleTrigger>
-          </div>
-
-          {/* The relays the community will be minted on, shown up front so the
-              choice isn't hidden behind the picker. Expand (chevron) to edit. */}
-          {!advancedOpen && effectiveRelays.length > 0 && (
-            <p className="mt-2 text-left text-xs text-muted-foreground">
-              Lives on {effectiveRelays.length}{" "}
-              {effectiveRelays.length === 1 ? "relay" : "relays"}:{" "}
-              {effectiveRelays
-                .map((r) => r.replace(/^wss?:\/\//, "").replace(/\/$/, ""))
-                .join(", ")}
-            </p>
-          )}
-
-          <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
-            <p className="mb-2 mt-3 text-left text-xs text-muted-foreground">
-              Where this community lives. Everyone in it reads and posts here,
-              so pick relays that will let you post.
-            </p>
-            <RelayListEditor
-              relays={effectiveRelays}
-              onChange={setRelays}
-              onReset={() => setRelays(candidates)}
-              emptyText="Add at least one relay to host this community."
-            />
-          </CollapsibleContent>
-        </Collapsible>
+          className="h-12 w-full clip-corner-lg text-base font-medium"
+        >
+          <ShieldCheck className="size-4 mr-2" />
+          Create encrypted community
+        </Button>
       </div>
 
       {/* Coming off Discord: the portal mints the community from a guild's
           channels and history, signed with this user's own key, and hands back
           an invite the escape hatch below accepts. Absent unless the build
-          names a portal. */}
+          names a portal. What it does and what it costs is explained by the
+          import wizard itself, not here. */}
       <ImportFromDiscordSection onOpen={onDone} />
 
       <EscapeHatch onDone={onDone} />
@@ -250,7 +121,7 @@ export function AddBody({ onDone }: { onDone: () => void }) {
   );
 }
 
-/** The Discord-import path, with the one line of context it needs. */
+/** The Discord-import path: the divider and the button, and nothing else. */
 function ImportFromDiscordSection({ onOpen }: { onOpen: () => void }) {
   if (!bridgePortalUrl("/import")) return null;
 
@@ -262,10 +133,6 @@ function ImportFromDiscordSection({ onOpen }: { onOpen: () => void }) {
         <span className="h-px flex-1 bg-border" />
       </div>
       <ImportFromDiscordButton onOpen={onOpen} />
-      <p className="text-xs text-muted-foreground">
-        Bring a server you run across, with its channels, history, and emoji.
-        You sign the new community with your own key, so you own it.
-      </p>
     </div>
   );
 }

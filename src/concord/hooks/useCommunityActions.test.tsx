@@ -281,6 +281,45 @@ describe("create — genesis plus the starter rooms", () => {
     expect(add.entry.current.channels[0].name).toBe("private");
     expect(h.ops.indexOf("list:add")).toBeLessThan(h.ops.indexOf("edition:1"));
   });
+
+  /**
+   * The creation wizard's second step (icon / banner / description) rides the
+   * GENESIS edition rather than a follow-up update: version 1 is what a member
+   * folds on first contact, and a second publish that never landed would leave
+   * the community describing itself as the creator never saw it.
+   */
+  it("seals the wizard's presentation into the genesis metadata (CORD-02 §6)", async () => {
+    const { result } = renderHook(() => useCommunityActions(), { wrapper });
+    const icon = { url: "https://blossom.test/i.enc", key: "aa".repeat(32), nonce: "bb".repeat(16), hash: "cc".repeat(32) };
+    const banner = { url: "https://blossom.test/b.enc", key: "dd".repeat(32), nonce: "ee".repeat(16), hash: "ff".repeat(32) };
+
+    await result.current.create({
+      name: "Fleet",
+      relays: ["wss://relay.test"],
+      description: "  Ships and the people who sail them.  ",
+      icon,
+      banner,
+    });
+
+    const metadata = JSON.parse(h.editions[0].content) as Record<string, unknown>;
+    expect(metadata.description).toBe("Ships and the people who sail them.");
+    expect(metadata.icon).toEqual(icon);
+    expect(metadata.banner).toEqual(banner);
+  });
+
+  it("writes no presentation keys at all when the wizard's second step was left empty", async () => {
+    const { result } = renderHook(() => useCommunityActions(), { wrapper });
+
+    // Whitespace is not a description: an all-spaces field must leave the key
+    // absent, not store a blank string every reader then has to trim.
+    await result.current.create({ name: "Fleet", relays: ["wss://relay.test"], description: "   " });
+
+    const metadata = JSON.parse(h.editions[0].content) as Record<string, unknown>;
+    expect(metadata).not.toHaveProperty("description");
+    expect(metadata).not.toHaveProperty("icon");
+    expect(metadata).not.toHaveProperty("banner");
+    expect(metadata.name).toBe("Fleet");
+  });
 });
 
 // ── The home relays a new community is minted on ─────────────────────────────

@@ -38,6 +38,7 @@ import { lazyWithReload } from "@/lib/chunkReload";
 // deploy (an open tab referencing pruned hashes) triggers a one-time reload to
 // a consistent build instead of surfacing as a crash.
 const ConcordPage = lazy(lazyWithReload(() => import("@/concord/pages/ConcordPage").then((m) => ({ default: m.ConcordPage }))));
+const CreateCommunityPage = lazy(lazyWithReload(() => import("@/pages/CreateCommunityPage").then((m) => ({ default: m.CreateCommunityPage }))));
 const DiscordImportPage = lazy(lazyWithReload(() => import("@/pages/DiscordImportPage").then((m) => ({ default: m.DiscordImportPage }))));
 const HistoryAuditPage = lazy(lazyWithReload(() => import("@/pages/HistoryAuditPage").then((m) => ({ default: m.HistoryAuditPage }))));
 const DiscoverPage = lazy(lazyWithReload(() => import("@/pages/DiscoverPage").then((m) => ({ default: m.DiscoverPage }))));
@@ -373,8 +374,9 @@ export function AppRouter() {
             {/* Public browse/search directory — no auth (joining/adding prompts
                 sign-in at the point of action, like the invite landing). */}
             <Route path="/discover" element={<DiscoverPage />} />
-            {/* Full-screen wizard. A route, not a dialog: it has to outlive the
+            {/* Full-screen wizards. Routes, not dialogs: each has to outlive the
                 Add dialog its entry point sits in (see DiscordImportPage). */}
+            <Route path="/create" element={<RequireAuth><CreateCommunityPage /></RequireAuth>} />
             <Route path="/import/discord" element={<RequireAuth><DiscordImportPage /></RequireAuth>} />
             <Route path="/mesh" element={<RequireAuth><MeshPage /></RequireAuth>} />
             {/* The received direct-invite inbox (account-level, CORD-05 §6).
