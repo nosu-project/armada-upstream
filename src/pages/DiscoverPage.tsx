@@ -11,6 +11,7 @@ import { EmojiPackCard } from "@/components/chat/EmojiPackCard";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PillTabs, type PillTab } from "@/components/ui/pill-tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { DiscoveredInvite } from "@/concord/lib/inviteDiscovery";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -19,7 +20,6 @@ import {
   useDiscoverEmojiPacks,
   useDiscoverThemes,
 } from "@/hooks/useDiscover";
-import { cn } from "@/lib/utils";
 
 const EmojiPackDialog = lazy(() =>
   import("@/components/discover/EmojiPackDialog").then((m) => ({ default: m.EmojiPackDialog })),
@@ -37,7 +37,7 @@ const ThemeCreatorDialog = lazy(() =>
 
 type DiscoverTab = "communities" | "emojis" | "themes";
 
-const TABS: { id: DiscoverTab; label: string; icon: typeof Users; placeholder: string }[] = [
+const TABS: (PillTab<DiscoverTab> & { placeholder: string })[] = [
   { id: "communities", label: "Communities", icon: Users, placeholder: "Search communities…" },
   { id: "emojis", label: "Emojis", icon: Smile, placeholder: "Search emoji packs…" },
   { id: "themes", label: "Themes", icon: Palette, placeholder: "Search themes…" },
@@ -79,44 +79,7 @@ export function DiscoverPage() {
 
         {/* Tab pills + search — one row from sm up, stacked on a phone. */}
         <div className="mx-2 mt-3 sm:mt-2 flex shrink-0 flex-col gap-2 sm:flex-row sm:items-center">
-          {/* Three icon+label pills don't fit a 320px phone, and truncating
-              "Communities" is worse than not showing it. So below sm only the
-              active pill carries its label: it grows to fill the rail while the
-              others collapse to their icon. The label animates via a 0fr→1fr
-              grid column, which reaches its exact content width without any
-              measuring or hardcoded max-width (and merely snaps, rather than
-              breaking, where that interpolation is unsupported). */}
-          <div className="flex w-full items-center gap-1 p-1 clip-corner-lg bg-chrome sm:w-auto sm:shrink-0">
-            {TABS.map((t) => {
-              const Icon = t.icon;
-              const isActive = tab === t.id;
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => setTab(t.id)}
-                  aria-pressed={isActive}
-                  aria-label={t.label}
-                  className={cn(
-                    "flex items-center justify-center overflow-hidden px-2 py-1.5 text-sm clip-corner-lg transition-all duration-200 ease-out motion-reduce:transition-none touch:py-2.5 sm:flex-none sm:px-3",
-                    isActive
-                      ? "flex-1 bg-primary font-medium text-primary-foreground sm:flex-none"
-                      : "flex-none text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-                  )}
-                >
-                  <Icon className="size-4 shrink-0" />
-                  <span
-                    className={cn(
-                      "grid transition-[grid-template-columns] duration-200 ease-out motion-reduce:transition-none",
-                      isActive ? "grid-cols-[1fr]" : "grid-cols-[0fr] sm:grid-cols-[1fr]",
-                    )}
-                  >
-                    <span className="overflow-hidden whitespace-nowrap pl-1.5">{t.label}</span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+          <PillTabs tabs={TABS} value={tab} onChange={(id) => setTab(id)} />
 
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <div className="flex h-9 touch:h-11 min-w-0 flex-1 items-center gap-1.5 px-2 sidebar:px-3 clip-corner-lg bg-chrome">
