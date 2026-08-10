@@ -1,12 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
-import { AppWindow, ArrowLeft, Download, ExternalLink, Globe, Laptop, Smartphone, Terminal } from "lucide-react";
+import { AppWindow, ArrowLeft, Check, Copy, Download, ExternalLink, Globe, Laptop, Smartphone, Terminal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { AsciiSea } from "@/components/landing/AsciiSea";
 import { Button } from "@/components/ui/button";
+import { toast } from "@/hooks/useToast";
+import { writeClipboardText } from "@/lib/clipboard";
 import {
   DOWNLOAD_TARGETS,
   type DownloadOs,
@@ -87,6 +89,50 @@ function useManifest(name: ManifestName) {
   });
 }
 
+/**
+ * A copyable command for the CLI-installed builds: the shell line in a mono box
+ * with a clear copy button that flips to a check for a moment. The command can
+ * scroll horizontally if it's long, so the button stays put and always visible.
+ */
+function CommandLine({ command }: { command: string }) {
+  const [copied, setCopied] = useState(false);
+  const resetTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  const copy = async () => {
+    try {
+      await writeClipboardText(command);
+      setCopied(true);
+      clearTimeout(resetTimer.current);
+      resetTimer.current = setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast({
+        title: "Copy failed",
+        description: "Select the command and copy it manually.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-1 clip-corner-lg bg-background/60 pl-2.5 pr-1">
+      <code className="min-w-0 flex-1 overflow-x-auto whitespace-pre py-1.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
+        <span aria-hidden="true" className="select-none text-[hsl(var(--accent2)/0.75)]">$ </span>
+        {command}
+      </code>
+      <Button
+        type="button"
+        size="icon"
+        variant="ghost"
+        onClick={copy}
+        aria-label={copied ? "Copied" : "Copy command"}
+        className="size-7 touch:size-9 shrink-0 text-muted-foreground hover:text-foreground"
+      >
+        {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
+      </Button>
+    </div>
+  );
+}
+
 function TargetCard({ target, manifest, featured }: {
   target: DownloadTarget;
   manifest?: DownloadsManifest;
@@ -141,12 +187,7 @@ function TargetCard({ target, manifest, featured }: {
                     </span>
                   </a>
                 </Button>
-                {asset.command && (
-                  <code className="block overflow-x-auto whitespace-pre clip-corner-lg bg-background/60 px-2.5 py-1.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
-                    <span aria-hidden="true" className="select-none text-[hsl(var(--accent2)/0.75)]">$ </span>
-                    {asset.command}
-                  </code>
-                )}
+                {asset.command && <CommandLine command={asset.command} />}
               </div>
             );
           })}
