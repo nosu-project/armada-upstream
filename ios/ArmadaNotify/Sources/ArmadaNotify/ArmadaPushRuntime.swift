@@ -30,10 +30,14 @@ public enum ArmadaPushRuntime {
             let store = try? NotifyStore()
             if store == nil { Breadcrumb.record("no-store") }
 
-            guard let prepared = PushProcessor(store: store, config: config)
-                .prepare(userInfo: userInfo)
-            else {
-                Breadcrumb.record(store == nil ? "unopened+no-store" : "unopened")
+            // The processor names its own refusal through `trace`; that name
+            // is the breadcrumb, since "returned nil" on its own has never
+            // been enough to act on.
+            var why = "unopened"
+            guard let prepared = PushProcessor(
+                store: store, config: config, trace: { why = $0 }
+            ).prepare(userInfo: userInfo) else {
+                Breadcrumb.record(store == nil ? "\(why)+no-store" : why)
                 return nil
             }
             Breadcrumb.record(prepared.drop ? "dropped" : "shown")

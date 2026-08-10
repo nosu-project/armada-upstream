@@ -74,10 +74,30 @@ struct PushProcessor {
     let config: PushConfig
     let now: Int
 
-    init(store: NotifyStore?, config: PushConfig, now: Int = Int(Date().timeIntervalSince1970)) {
+    /// Where a refusal goes.
+    ///
+    /// Returning nil is this type's ONLY way to decline, and it means six
+    /// different things — an event the gateway could not inline, a login with
+    /// no key, a bunker that did not answer, a wrap for somebody else, an
+    /// expired message, a scope that is not ours. They are indistinguishable
+    /// from outside and they are all invisible: the user sees the gateway's
+    /// static text either way. Naming which one ran is the difference between
+    /// diagnosing this in a minute and guessing at it for an hour.
+    ///
+    /// A STATUS only — never content, pubkeys or event ids. Defaults to a
+    /// no-op, so the Linux suite and any other caller pay nothing for it.
+    let trace: (String) -> Void
+
+    init(
+        store: NotifyStore?,
+        config: PushConfig,
+        now: Int = Int(Date().timeIntervalSince1970),
+        trace: @escaping (String) -> Void = { _ in }
+    ) {
         self.store = store
         self.config = config
         self.now = now
+        self.trace = trace
     }
 
     /// `userInfo` is the APNs payload. The gateway hoists every key of the
@@ -85,10 +105,25 @@ struct PushProcessor {
     /// nesting it, so `scope`, `relays` and the inlined `event` are read from
     /// there.
     func prepare(userInfo: [AnyHashable: Any]) -> PreparedPush? {
-        guard let scope = userInfo["scope"] as? String else { return nil }
-        guard let rawEvent = userInfo["event"] as? [String: Any],
-              let event = NostrEvent.parse(rawEvent)
-        else { return nil }
+        guard let scope = userInfo["scope"] as? String else {
+            trace("no-scope")
+            return nil
+        }
+        // The absence of an event is NOT a decrypt failure and must not be
+        // reported as one: the gateway inlines it only if the whole payload
+        // fits APNs' 4 KB, and drops it silently otherwise (see
+        // `pushSubscriptions.ts`). A gift wrap is nested base64 and can be a
+        // couple of kilobytes on its own, so this is an ordinary outcome for a
+        // long message rather than a fault — and it is indistinguishable from
+        // a broken decrypt unless it is named.
+        guard let rawEvent = userInfo["event"] as? [String: Any] else {
+            trace("no-inlined-event(\(scope))")
+            return nil
+        }
+        guard let event = NostrEvent.parse(rawEvent) else {
+            trace("unparseable-event(\(scope))")
+            return nil
+        }
 
         switch scope {
         case "dm":
@@ -99,6 +134,7 @@ struct PushProcessor {
             let relays = (userInfo["relays"] as? [String]) ?? []
             return prepareGroup(event: event, relays: relays)
         default:
+            trace("unknown-scope(\(scope))")
             return nil
         }
     }
@@ -106,10 +142,21 @@ struct PushProcessor {
     // MARK: - DM
 
     private func prepareDm(wrap: NostrEvent) -> PreparedPush? {
-        guard let decryptor = dmDecryptor() else { return nil }
+        guard let decryptor = dmDecryptor() else {
+            // Neither an on-device key nor a usable bunker: this login cannot
+            // open a wrap at all, which is a configuration fact rather than a
+            // failure of this message.
+            trace("dm-no-decryptor")
+            return nil
+        }
         guard let opened = Dm17.open(
             wrap: wrap, decryptor: decryptor, self: config.selfPubkey, now: now
-        ) else { return nil }
+        ) else {
+            // Addressed to someone else, malformed, expired — or, for a bunker
+            // login, a decrypt the bunker did not answer in time.
+            trace(config.secretKey == nil ? "dm-open-failed(bunker)" : "dm-open-failed(local)")
+            return nil
+        }
 
         // Persist first: a DM exists nowhere else once it is read off the relay.
         try? store?.writeDm(opened, self: config.selfPubkey, now: now)
@@ -205,8 +252,17 @@ struct PushProcessor {
     // MARK: - Concord
 
     private func prepareConcord(wrap: NostrEvent) -> PreparedPush? {
-        guard let stream = Concord.stream(for: wrap, in: config.concord) else { return nil }
-        guard let opened = Concord.open(wrap: wrap, stream: stream) else { return nil }
+        // No stream claims this wrap's author: a channel this install is not
+        // watching, or an epoch it has no key for yet (the config holds only
+        // the CURRENT epoch, and a rekey moves it).
+        guard let stream = Concord.stream(for: wrap, in: config.concord) else {
+            trace("c2-no-stream(\(config.concord.count) watched)")
+            return nil
+        }
+        guard let opened = Concord.open(wrap: wrap, stream: stream) else {
+            trace("c2-open-failed")
+            return nil
+        }
 
         // Store it either way: a message we won't announce is still a message,
         // and the timeline it belongs to has no other copy.
@@ -275,7 +331,10 @@ struct PushProcessor {
     /// re-reads on open, which is exactly the case the "no relay, no store"
     /// rule calls refetchable.
     private func prepareGroup(event: NostrEvent, relays: [String]) -> PreparedPush? {
-        guard let groupId = event.uniqueTag("h") else { return nil }
+        guard let groupId = event.uniqueTag("h") else {
+            trace("grp-no-h")
+            return nil
+        }
         if event.pubkey == config.selfPubkey { return .dropped }
 
         // Ask each candidate relay's tenant and accept a name only if exactly

@@ -123,7 +123,8 @@ export function useIosPush(): UsePushNotificationsReturn {
   const [prefs, setPrefsState] = useState<PushPrefs>(loadPushPrefs);
   const [nonce, setNonce] = useState(0);
 
-  const { specs, concord, dmKnownPeers, dmSk, dmBunker, followsLoading } = usePushWatchSet(prefs);
+  const { specs, concord, dmKnownPeers, dmSk, dmBunker, followsLoading, watchSetLoading }
+    = usePushWatchSet(prefs);
 
   // Keep the extension's config current: the DM policy and known set for every
   // enabled session, the decrypt key for nsec logins, and the per-channel
@@ -315,9 +316,32 @@ export function useIosPush(): UsePushNotificationsReturn {
       throw err;
     }
 
-    // Prune gateway records we no longer want (left group, muted, logged out).
+    // Prune gateway records we no longer want (left group, muted, logged out)
+    // — but ONLY once the watch set has settled. The sources load at different
+    // speeds, so an early sync produces a real-looking set that is merely
+    // incomplete, and pruning from it deletes the records for every community
+    // that had not loaded yet. Registering from a partial set is harmless
+    // (registration replaces); deleting from one is not, and the user's only
+    // symptom is that some rooms quietly stop notifying.
     const currentIds = new Set(scopedSpecs.map((s) => s.id));
-    for (const id of loadRegisteredPushIds()) {
+    // Concord's channels are not covered by the flags above: they come from
+    // per-community control folds that are read after everything else, so a
+    // sync can legitimately see zero of them for several seconds while the
+    // follow and group lists are already settled. If the gateway holds `c2`
+    // records and this pass produced none, the set is still filling in — not
+    // a user who left every community at once — and pruning here is what
+    // silently unsubscribes them from every community they are in.
+    const registeredIds = loadRegisteredPushIds();
+    const concordStillCold = concord.length === 0
+      && registeredIds.some((id) => id.startsWith("armada-c2-"));
+    if (watchSetLoading || concordStillCold) {
+      await recordPushStatus(
+        `ok ${registered} subs on ${domain} (partial — prune deferred)`
+          + ` env=${registration.environment ?? "?"} token=…${registration.token.slice(-6)}`,
+      );
+      return;
+    }
+    for (const id of registeredIds) {
       if (!currentIds.has(id)) {
         await client.deleteSubscription(id, domain).catch(() => {});
       }
@@ -327,7 +351,7 @@ export function useIosPush(): UsePushNotificationsReturn {
       `ok ${registered} subs on ${domain}`
         + ` env=${registration.environment ?? "?"} token=…${registration.token.slice(-6)}`,
     );
-  }, [client, user, specs]);
+  }, [client, user, specs, concord, watchSetLoading]);
 
   // Auto-(re)sync whenever the watch set changes, exactly as the web
   // controller does: as long as the user intends push and the OS has granted

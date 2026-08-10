@@ -69,6 +69,19 @@ export interface PushWatchSet {
    * known set on disk, reclassifying every known conversation as a request.
    */
   followsLoading: boolean;
+  /**
+   * Whether the watch set is still filling in.
+   *
+   * A caller that PRUNES must wait for this. The sources here load at
+   * different speeds — the follow list and the group list come off relays, and
+   * `useConcordSubs` only knows a community's channels once its control fold
+   * has been read — so an early render produces a REAL but INCOMPLETE spec set.
+   * Registering from one is harmless (registration replaces), but pruning from
+   * one deletes the gateway records for every community that had not loaded
+   * yet, and the user simply stops being notified for them until something
+   * happens to re-sync.
+   */
+  watchSetLoading: boolean;
 }
 
 export function usePushWatchSet(prefs: PushPrefs): PushWatchSet {
@@ -207,5 +220,19 @@ export function usePushWatchSet(prefs: PushPrefs): PushWatchSet {
     concord,
   ]);
 
-  return { specs, concord, dmKnownPeers, dmSk, dmBunker, followsLoading };
+  // `groupList === undefined` and a still-loading follow list both mean the
+  // set can still grow. Concord has no loading flag of its own: its subs
+  // derive from folds that are themselves read behind these, so the two
+  // above are the honest proxy for "not settled yet".
+  const watchSetLoading = followsLoading || groupList === undefined;
+
+  return {
+    specs,
+    concord,
+    dmKnownPeers,
+    dmSk,
+    dmBunker,
+    followsLoading,
+    watchSetLoading,
+  };
 }
