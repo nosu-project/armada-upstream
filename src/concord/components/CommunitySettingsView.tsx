@@ -5,11 +5,15 @@ import {
   Check,
   Folder,
   Hash,
+  History,
   ImagePlus,
+  Info,
   Loader2,
   Lock,
   Pencil,
+  Plug,
   Plus,
+  Radio,
   Shield,
   Timer,
   Trash2,
@@ -17,6 +21,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -26,6 +31,7 @@ import { DiscordBridgeSection } from "@/components/ImportFromDiscord";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { OwnerAvatar, OwnerSlashRepo, RepositoryPicker, type PickedRepository } from "@/components/projects/RepositoryPicker";
 import { Input } from "@/components/ui/input";
+import { PillTabs, type PillTab } from "@/components/ui/pill-tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useNostr } from "@nostrify/react";
 
@@ -77,68 +83,28 @@ import { channelGitRepositoryAttachments } from "@/concord/lib/types";
 import { fetchGitRepositoryAnnouncement } from "@/lib/gitRepositoryResolver";
 import { parseGitRepositoryAddress } from "@/lib/gitActivity";
 
+type SettingsTab = "overview" | "channels" | "integrations" | "relays";
+
+const SETTINGS_TABS: readonly PillTab<SettingsTab>[] = [
+  { id: "overview", label: "Overview", icon: Info },
+  { id: "channels", label: "Channels", icon: Hash },
+  { id: "integrations", label: "Integrations", icon: Plug },
+  { id: "relays", label: "Relays", icon: Radio },
+];
+
 /**
- * The single "community" surface: the same view is shown to everyone (icon,
- * banner, name, description, owner, member count, relays, channels). Viewers
- * with MANAGE_METADATA can edit the name / description / icon / banner inline
+ * The community settings pane — the single "community" surface, rendered as a
+ * full page in the main content column (like the audit log), one tab per
+ * concern: Overview (identity, owner, disappearing messages), Channels,
+ * Integrations (git repositories + Discord bridge), and Relays (relay set +
+ * history export). The same view is shown to everyone; viewers with
+ * MANAGE_METADATA can edit the name / description / icon / banner inline
  * (Signal-style — tap to change); viewers with MANAGE_CHANNELS can rename,
  * delete and add channels. Edits publish version-chained editions; every
  * member's fold re-checks the permission (CORD-02/04), so the UI gating is a
  * convenience, not the enforcement point.
  */
-export function CommunityInfoDialog({
-  community,
-  metadata,
-  ownerHex,
-  memberCount,
-  canManageMetadata,
-  canManageChannels,
-  channelRoles,
-  onPrivatiseChannel,
-  onRotateChannelKey,
-  open,
-  onOpenChange,
-}: {
-  community: Community | undefined;
-  metadata: CommunityMetadata | undefined;
-  ownerHex: string | undefined;
-  memberCount: number;
-  canManageMetadata: boolean;
-  canManageChannels: boolean;
-  /** Per channel id, the Roles scoped to it — its access list (CORD-04 §2). */
-  channelRoles?: ReadonlyMap<string, Array<{ id: string; name: string }>>;
-  /** Convert a public channel to private (CORD-03 §2). */
-  onPrivatiseChannel?: (channelIdHex: string) => Promise<void>;
-  /** Re-key a private channel to exactly its entitled members. */
-  onRotateChannelKey?: (channelIdHex: string) => Promise<void>;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md border-0 rounded-none p-0 bg-transparent shadow-none">
-        <DialogTitle className="sr-only">Community</DialogTitle>
-        <div className="clip-corner-lg bg-chrome max-h-[85vh] overflow-y-auto">
-          {community && (
-            <InfoBody
-              community={community}
-              metadata={metadata}
-              ownerHex={ownerHex}
-              memberCount={memberCount}
-              canManageMetadata={canManageMetadata}
-              canManageChannels={canManageChannels}
-              channelRoles={channelRoles}
-              onPrivatiseChannel={onPrivatiseChannel}
-              onRotateChannelKey={onRotateChannelKey}
-            />
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function InfoBody({
+export function CommunitySettingsView({
   community,
   metadata,
   ownerHex,
@@ -155,8 +121,11 @@ function InfoBody({
   memberCount: number;
   canManageMetadata: boolean;
   canManageChannels: boolean;
+  /** Per channel id, the Roles scoped to it — its access list (CORD-04 §2). */
   channelRoles?: ReadonlyMap<string, Array<{ id: string; name: string }>>;
+  /** Convert a public channel to private (CORD-03 §2). */
   onPrivatiseChannel?: (channelIdHex: string) => Promise<void>;
+  /** Re-key a private channel to exactly its entitled members. */
   onRotateChannelKey?: (channelIdHex: string) => Promise<void>;
 }) {
   const { updateMetadata, isUpdating } = useMetadataActions(community);
@@ -208,216 +177,270 @@ function InfoBody({
     }
   };
 
+  const [tab, setTab] = useState<SettingsTab>("overview");
+
   return (
-    <div className="space-y-5">
-      {/* Banner: shown when present, or as an add affordance for editors. */}
-      {(bannerUrl || canManageMetadata) && (
-        <div className="relative -mb-2">
-          {bannerUrl ? (
-            <button
-              type="button"
-              className="block h-24 w-full overflow-hidden cursor-zoom-in"
-              aria-label="View banner"
-              onClick={() => setBannerZoom(true)}
-            >
-              <img src={bannerUrl} alt="" className="size-full object-cover" />
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="flex h-24 w-full items-center justify-center bg-secondary/40 text-muted-foreground transition-colors hover:bg-secondary/60"
-              onClick={() => bannerInputRef.current?.click()}
-              aria-label="Add banner"
-            >
-              <ImagePlus className="size-5" />
-            </button>
-          )}
-          {canManageMetadata && (
-            <button
-              type="button"
-              className="absolute bottom-2 right-2 grid size-8 place-items-center rounded-full bg-background/70 text-foreground backdrop-blur transition-colors hover:bg-background/90"
-              onClick={() => bannerInputRef.current?.click()}
-              disabled={uploading === "banner"}
-              aria-label="Change banner"
-            >
-              {uploading === "banner" ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <Pencil className="size-3.5" />
-              )}
-            </button>
-          )}
-        </div>
-      )}
+    <div className="mx-auto w-full max-w-2xl px-3 py-4">
+      <div className="mb-4 flex">
+        <PillTabs tabs={SETTINGS_TABS} value={tab} onChange={(id) => setTab(id)} />
+      </div>
 
-      <div className={cn("space-y-5 px-6 pb-6 sm:px-7 sm:pb-7", !(bannerUrl || canManageMetadata) && "pt-6 sm:pt-7")}>
-        <div className="flex flex-col items-center text-center gap-3">
-          <div className="relative">
-            {iconUrl ? (
-              <button
-                type="button"
-                className="cursor-zoom-in rounded-2xl"
-                aria-label="View icon"
-                onClick={() => setIconZoom(true)}
-              >
-                <img src={iconUrl} alt="" className="size-16 rounded-2xl object-cover" />
-              </button>
-            ) : canManageMetadata ? (
-              <button
-                type="button"
-                className="grid size-16 place-items-center rounded-2xl bg-secondary/50 text-muted-foreground transition-colors hover:bg-secondary/70"
-                onClick={() => iconInputRef.current?.click()}
-                aria-label="Add icon"
-              >
-                <ImagePlus className="size-5" />
-              </button>
-            ) : (
-              <div className="grid size-16 place-items-center rounded-2xl bg-primary/15 text-primary">
-                <span className="text-2xl font-semibold">{name[0]?.toUpperCase() ?? "?"}</span>
-              </div>
-            )}
-            {canManageMetadata && (
-              <button
-                type="button"
-                className="absolute -bottom-1 -right-1 grid size-6 place-items-center rounded-full bg-background text-foreground ring-1 ring-border transition-colors hover:bg-secondary"
-                onClick={() => iconInputRef.current?.click()}
-                disabled={uploading === "icon"}
-                aria-label="Change icon"
-              >
-                {uploading === "icon" ? (
-                  <Loader2 className="size-3 animate-spin" />
-                ) : (
-                  <Pencil className="size-3" />
-                )}
-              </button>
-            )}
-          </div>
-
-          {editingField === "name" ? (
-            <InlineEdit
-              initial={name}
-              saving={isUpdating}
-              multiline={false}
-              onCancel={() => setEditingField(null)}
-              onSave={(v) => saveField("name", v)}
-            />
-          ) : (
-            <div className="flex items-center gap-1.5">
-              <h2 className="text-lg font-semibold leading-tight break-words">{name}</h2>
-              {canManageMetadata && (
-                <Button
+      {tab === "overview" && (
+        <div className="space-y-5">
+          {/* Banner: shown when present, or as an add affordance for editors. */}
+          {(bannerUrl || canManageMetadata) && (
+            <div className="relative">
+              {bannerUrl ? (
+                <button
                   type="button"
-                  size="icon"
-                  variant="ghost"
-                  className="size-6 shrink-0 text-muted-foreground"
-                  aria-label="Edit name"
-                  onClick={() => setEditingField("name")}
+                  className="block h-32 w-full overflow-hidden rounded-lg cursor-zoom-in"
+                  aria-label="View banner"
+                  onClick={() => setBannerZoom(true)}
                 >
-                  <Pencil className="size-3" />
-                </Button>
+                  <img src={bannerUrl} alt="" className="size-full object-cover" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="flex h-32 w-full items-center justify-center rounded-lg bg-secondary/40 text-muted-foreground transition-colors hover:bg-secondary/60"
+                  onClick={() => bannerInputRef.current?.click()}
+                  aria-label="Add banner"
+                >
+                  <ImagePlus className="size-5" />
+                </button>
+              )}
+              {canManageMetadata && (
+                <button
+                  type="button"
+                  className="absolute bottom-2 right-2 grid size-8 place-items-center rounded-full bg-background/70 text-foreground backdrop-blur transition-colors hover:bg-background/90"
+                  onClick={() => bannerInputRef.current?.click()}
+                  disabled={uploading === "banner"}
+                  aria-label="Change banner"
+                >
+                  {uploading === "banner" ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Pencil className="size-3.5" />
+                  )}
+                </button>
               )}
             </div>
           )}
-        </div>
 
-        {iconUrl && iconZoom && <ImageLightbox src={iconUrl} onClose={() => setIconZoom(false)} />}
-        {bannerUrl && bannerZoom && <ImageLightbox src={bannerUrl} onClose={() => setBannerZoom(false)} />}
+          <div className="space-y-5">
+            <div className="flex flex-col items-center text-center gap-3">
+              <div className="relative">
+                {iconUrl ? (
+                  <button
+                    type="button"
+                    className="cursor-zoom-in rounded-2xl"
+                    aria-label="View icon"
+                    onClick={() => setIconZoom(true)}
+                  >
+                    <img src={iconUrl} alt="" className="size-16 rounded-2xl object-cover" />
+                  </button>
+                ) : canManageMetadata ? (
+                  <button
+                    type="button"
+                    className="grid size-16 place-items-center rounded-2xl bg-secondary/50 text-muted-foreground transition-colors hover:bg-secondary/70"
+                    onClick={() => iconInputRef.current?.click()}
+                    aria-label="Add icon"
+                  >
+                    <ImagePlus className="size-5" />
+                  </button>
+                ) : (
+                  <div className="grid size-16 place-items-center rounded-2xl bg-primary/15 text-primary">
+                    <span className="text-2xl font-semibold">{name[0]?.toUpperCase() ?? "?"}</span>
+                  </div>
+                )}
+                {canManageMetadata && (
+                  <button
+                    type="button"
+                    className="absolute -bottom-1 -right-1 grid size-6 place-items-center rounded-full bg-background text-foreground ring-1 ring-border transition-colors hover:bg-secondary"
+                    onClick={() => iconInputRef.current?.click()}
+                    disabled={uploading === "icon"}
+                    aria-label="Change icon"
+                  >
+                    {uploading === "icon" ? (
+                      <Loader2 className="size-3 animate-spin" />
+                    ) : (
+                      <Pencil className="size-3" />
+                    )}
+                  </button>
+                )}
+              </div>
 
-        {/* Description */}
-        {editingField === "description" ? (
-          <InlineEdit
-            initial={description ?? ""}
-            saving={isUpdating}
-            multiline
-            placeholder="What's this community about?"
-            onCancel={() => setEditingField(null)}
-            onSave={(v) => saveField("description", v)}
-          />
-        ) : description ? (
-          <div className="flex items-start gap-1.5">
-            <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm text-muted-foreground">
-              {description}
-            </p>
-            {canManageMetadata && (
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                className="size-6 shrink-0 text-muted-foreground"
-                aria-label="Edit description"
-                onClick={() => setEditingField("description")}
-              >
-                <Pencil className="size-3" />
-              </Button>
+              {editingField === "name" ? (
+                <InlineEdit
+                  initial={name}
+                  saving={isUpdating}
+                  multiline={false}
+                  onCancel={() => setEditingField(null)}
+                  onSave={(v) => saveField("name", v)}
+                />
+              ) : (
+                <div className="flex items-center gap-1.5">
+                  <h2 className="text-lg font-semibold leading-tight break-words">{name}</h2>
+                  {canManageMetadata && (
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      className="size-6 shrink-0 text-muted-foreground"
+                      aria-label="Edit name"
+                      onClick={() => setEditingField("name")}
+                    >
+                      <Pencil className="size-3" />
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {iconUrl && iconZoom && <ImageLightbox src={iconUrl} onClose={() => setIconZoom(false)} />}
+            {bannerUrl && bannerZoom && <ImageLightbox src={bannerUrl} onClose={() => setBannerZoom(false)} />}
+
+            {/* Description */}
+            {editingField === "description" ? (
+              <InlineEdit
+                initial={description ?? ""}
+                saving={isUpdating}
+                multiline
+                placeholder="What's this community about?"
+                onCancel={() => setEditingField(null)}
+                onSave={(v) => saveField("description", v)}
+              />
+            ) : description ? (
+              <div className="flex items-start gap-1.5">
+                <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm text-muted-foreground">
+                  {description}
+                </p>
+                {canManageMetadata && (
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="size-6 shrink-0 text-muted-foreground"
+                    aria-label="Edit description"
+                    onClick={() => setEditingField("description")}
+                  >
+                    <Pencil className="size-3" />
+                  </Button>
+                )}
+              </div>
+            ) : (
+              canManageMetadata && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="w-full justify-start gap-1.5 text-muted-foreground"
+                  onClick={() => setEditingField("description")}
+                >
+                  <Plus className="size-3.5" /> Add a description
+                </Button>
+              )
             )}
-          </div>
-        ) : (
-          canManageMetadata && (
-            <Button
-              type="button"
-              variant="ghost"
-              className="w-full justify-start gap-1.5 text-muted-foreground"
-              onClick={() => setEditingField("description")}
-            >
-              <Plus className="size-3.5" /> Add a description
-            </Button>
-          )
-        )}
 
-        {error && (
-          <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
+            {error && (
+              <Alert variant="destructive">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
 
-        <div className="space-y-3">
-          {ownerHex && <OwnerRow pubkey={ownerHex} />}
-          <div className="flex items-center gap-2.5 text-sm">
-            <Users className="size-4 shrink-0 text-muted-foreground" />
-            <span>
-              {memberCount} {memberCount === 1 ? "member" : "members"}
-            </span>
+            <div className="space-y-3">
+              {ownerHex && <OwnerRow pubkey={ownerHex} />}
+              <div className="flex items-center gap-2.5 text-sm">
+                <Users className="size-4 shrink-0 text-muted-foreground" />
+                <span>
+                  {memberCount} {memberCount === 1 ? "member" : "members"}
+                </span>
+              </div>
+            </div>
+
+            <DisappearingSection community={community} metadata={metadata} canManage={canManageMetadata} />
           </div>
+
+          <input
+            ref={bannerInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleUpload("banner", f);
+              e.target.value = "";
+            }}
+          />
+          <input
+            ref={iconInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleUpload("icon", f);
+              e.target.value = "";
+            }}
+          />
         </div>
+      )}
 
-        <DisappearingSection community={community} metadata={metadata} canManage={canManageMetadata} />
-
+      {tab === "channels" && (
         <ChannelsSection community={community} canManage={canManageChannels} channelRoles={channelRoles} onPrivatiseChannel={onPrivatiseChannel} onRotateChannelKey={onRotateChannelKey} />
+      )}
 
-        <ConnectedRepositoriesSection community={community} canManage={canManageChannels} />
+      {tab === "integrations" && (
+        <div className="space-y-5">
+          <ConnectedRepositoriesSection community={community} canManage={canManageChannels} />
 
-        <DiscordBridgeSection canManage={canManageChannels} />
+          <DiscordBridgeSection canManage={canManageChannels} />
+        </div>
+      )}
 
-        <RelaysSection
-          community={community}
-          metadata={metadata}
-          relays={relays}
-          canManage={canManageMetadata}
-        />
+      {tab === "relays" && (
+        <div className="space-y-5">
+          <RelaysSection
+            community={community}
+            metadata={metadata}
+            relays={relays}
+            canManage={canManageMetadata}
+          />
+
+          <HistorySection community={community} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * "Verify & export history": navigates to the full-screen history route
+ * (`HistoryAuditView`), which reads the community to its floor and exports a
+ * self-contained HTML copy. Available to every member; it reads only what this
+ * member can already decrypt.
+ */
+function HistorySection({ community }: { community: Community }) {
+  const navigate = useNavigate();
+  return (
+    <div className="space-y-1.5">
+      <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        History
+      </span>
+      <div className="space-y-2.5 rounded-lg bg-secondary/40 p-3">
+        <p className="text-xs text-muted-foreground">
+          Read every channel across all relays, save it to your local store, and export a
+          self-contained HTML copy that opens as a mini-Armada.
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          className="clip-corner-lg"
+          onClick={() => navigate(`/c/${encodeURIComponent(community.idHex)}/history`)}
+        >
+          <History className="size-4 shrink-0" />
+          Verify &amp; export history
+        </Button>
       </div>
-
-      <input
-        ref={bannerInputRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) handleUpload("banner", f);
-          e.target.value = "";
-        }}
-      />
-      <input
-        ref={iconInputRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) handleUpload("icon", f);
-          e.target.value = "";
-        }}
-      />
     </div>
   );
 }

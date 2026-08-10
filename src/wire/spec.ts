@@ -35,6 +35,24 @@ const DM_WRAP_REPLAY_LIMIT = 100;
  * device slept) is recovered by the DM inbox poll's periodic full scan.
  */
 const DM_WRAP_REPLAY_LIMIT_STEADY = 10;
+/**
+ * Stored-replay cap for the Git child filters once a relay's round has EOSEd
+ * this session, for the same reason as {@link DM_WRAP_REPLAY_LIMIT_STEADY}.
+ *
+ * A ticket's comment/status filters carry `limit: 4_000` so a newly discovered
+ * root can pull its whole history on the round that installs it. That bound
+ * then applies to EVERY later rotation too — and the wire re-REQs each relay
+ * on a 90s quiet rotation, so a relay whose cursor sits behind the tickets it
+ * serves re-delivers up to 4,000 stored children per rotation, per relay. A
+ * live idle client measured 93% of NIP-34 deliveries as copies of an event
+ * already in hand, across four relays carrying the same repositories.
+ *
+ * After EOSE the store already holds that window, so the cap only needs to
+ * cover a short overlap. Anything deeper is recovered by the paths that exist
+ * for it: `useWireGitTicketRoots`' child backfill and `useGitProjects`' deep
+ * per-repository sync.
+ */
+const GIT_CHILD_REPLAY_LIMIT_STEADY = 100;
 /** Conservative relay-filter cardinality: keeps REQ frames comfortably small. */
 export const GIT_ROOT_FILTER_CHUNK_SIZE = 100;
 
@@ -45,6 +63,21 @@ export const GIT_ROOT_FILTER_CHUNK_SIZE = 100;
  */
 function isDmWrapInboxFilter(f: NostrFilter): boolean {
   return !f.authors && f.kinds?.length === 1 && f.kinds[0] === KIND_GIFT_WRAP && Boolean(f["#p"]?.length);
+}
+
+/**
+ * Whether a filter is one of the Git ticket CHILD filters built above
+ * (`{kinds:[1111], "#E":[roots]}` / `{kinds:[1630..1633], "#e":[roots]}`).
+ *
+ * Matched on the exact kind set as well as the tag so an unrelated filter that
+ * merely carries `#e` — a reaction or a thread read — is never re-capped.
+ */
+function isGitChildFilter(f: NostrFilter): boolean {
+  if (f.kinds?.length === 1 && f.kinds[0] === NIP22_COMMENT_KIND && f["#E"]?.length) return true;
+  return Boolean(
+    f["#e"]?.length && f.kinds?.length === GIT_STATUS_KINDS.length &&
+      f.kinds.every((k) => (GIT_STATUS_KINDS as readonly number[]).includes(k)),
+  );
 }
 
 /**
@@ -67,14 +100,20 @@ function isDmWrapInboxFilter(f: NostrFilter): boolean {
  * (newest-first), and ingest dedupes re-deliveries by wrap id — deeper catch-up
  * is the DM inbox poll's job (which already rewinds the same window).
  */
-export function stampRoundSince(filters: NostrFilter[], since: number, now: number, preserveExplicitSince = false, wrapReplayDone = false): NostrFilter[] {
+export function stampRoundSince(filters: NostrFilter[], since: number, now: number, preserveExplicitSince = false, replayDone = false): NostrFilter[] {
   const wrapSince = Math.min(since, now - MAX_WRAP_BACKDATE_SECS - WRAP_SINCE_SLACK_SECS);
-  const wrapLimit = wrapReplayDone ? DM_WRAP_REPLAY_LIMIT_STEADY : DM_WRAP_REPLAY_LIMIT;
-  return filters.map((f) =>
-    isDmWrapInboxFilter(f)
-      ? { ...f, since: wrapSince, limit: wrapLimit }
-      : { ...f, since: preserveExplicitSince && f.since !== undefined ? f.since : since },
-  );
+  const wrapLimit = replayDone ? DM_WRAP_REPLAY_LIMIT_STEADY : DM_WRAP_REPLAY_LIMIT;
+  return filters.map((f) => {
+    if (isDmWrapInboxFilter(f)) return { ...f, since: wrapSince, limit: wrapLimit };
+    const stamped = { ...f, since: preserveExplicitSince && f.since !== undefined ? f.since : since };
+    // Steady state only: the round that INSTALLS a child filter keeps the full
+    // bound, because that is the round expected to pull the ticket's history
+    // (it is also the round carrying the root-derived `since`).
+    if (replayDone && !preserveExplicitSince && isGitChildFilter(f) && (f.limit ?? 0) > GIT_CHILD_REPLAY_LIMIT_STEADY) {
+      stamped.limit = GIT_CHILD_REPLAY_LIMIT_STEADY;
+    }
+    return stamped;
+  });
 }
 
 /**

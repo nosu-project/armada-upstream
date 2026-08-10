@@ -40,6 +40,8 @@ export const CONCORD2_PANES = [
   "banned",
   "members",
   "reports",
+  "roles",
+  "settings",
 ] as const;
 export type Concord2Pane = (typeof CONCORD2_PANES)[number];
 

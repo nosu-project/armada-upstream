@@ -109,7 +109,7 @@ export function DiscordBridgeSection({ canManage }: { canManage: boolean }) {
           is readable in plaintext on Discord's servers. Unbridged channels are
           unaffected.
         </p>
-        <Button asChild variant="outline" size="sm" className="clip-corner-lg">
+        <Button asChild size="sm" className="clip-corner-lg">
           <a href={href} target="_blank" rel="noopener noreferrer">
             <DiscordMark className="size-4 shrink-0" />
             Open bridge portal

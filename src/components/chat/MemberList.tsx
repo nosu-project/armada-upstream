@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { BotPill } from "@/components/BotPill";
+import { DeferredRow } from "@/components/DeferredRow";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { ReportDialog } from "@/components/ReportDialog";
 import { StatusDialog } from "@/components/dialogs/StatusDialog";
@@ -98,50 +99,26 @@ const roleTint = (color: number) => `#${(color & 0xffffff).toString(16).padStart
 /** Approx height of one member row (avatar size-8 + py-2), for the gate placeholder. */
 const ROW_MIN_H = 48;
 /**
- * Roster size above which offscreen rows are viewport-gated. Below it a roster
- * renders fully (a small member list is already cheap, and gating would only
- * add a first-frame placeholder swap for no benefit). Each mounted row stands
- * up ~4 query hooks + two profile-card popovers + a context menu; on a large
- * server that DOM is the member panel's whole cost, so rows the reader can't
- * see aren't built until they scroll near the viewport.
+ * Offscreen rows are viewport-gated whatever the roster's size.
+ *
+ * Each mounted row stands up ~4 query hooks + two profile-card popovers + a
+ * context menu, so on a large server that DOM is the member panel's whole cost
+ * — which is why rows the reader can't see aren't built until they scroll near
+ * the viewport.
+ *
+ * The gate used to apply only above a 60-member threshold, on the reasoning
+ * that a small roster's DOM is already cheap. Its DOM is; its NETWORK is not.
+ * Every row calls `useAuthor`, which declares profile demand for the life of
+ * the mount, and `demandProfiles` batches a mount burst into ONE round fired
+ * immediately — so opening a room with a sub-threshold roster put a kind-0 REQ
+ * for the entire member list on the wire in the same breath as that room's
+ * first chat REQ. The member list is not what the reader is waiting for, and
+ * it was visibly filling in ahead of the messages beside it.
+ *
+ * A search still renders every row: `useMemberSearch` reads each member's
+ * resolved name out of the query cache, which a row populates only once
+ * mounted. A search is user-initiated, so it never races a room open.
  */
-const VIRTUALIZE_THRESHOLD = 60;
-
-/**
- * Defer mounting `children` until the placeholder scrolls near the viewport,
- * then keep it mounted (latched, like MessageRow's action toolbar). When
- * `active` is false it renders `children` immediately — used so a small roster,
- * or a roster being searched (whose matcher needs every member's name resolved,
- * `useMemberSearch`), is never gated.
- */
-function DeferredRow({ active, children }: { active: boolean; children: ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [shown, setShown] = useState(!active);
-
-  useEffect(() => {
-    if (!active) {
-      setShown(true);
-      return;
-    }
-    const el = ref.current;
-    if (!el) return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting)) {
-          setShown(true);
-          io.disconnect();
-        }
-      },
-      // Preload a screenful ahead so rows are mounted before they're scrolled to.
-      { rootMargin: "300px" },
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, [active]);
-
-  if (shown) return <>{children}</>;
-  return <div ref={ref} aria-hidden style={{ height: ROW_MIN_H }} />;
-}
 
 interface MemberRowProps {
   pubkey: string;
@@ -718,10 +695,10 @@ export function MemberList({
   );
   const matched = useMemberSearch(roster, query);
   const searching = matched !== null;
-  // Gate offscreen rows only on a large roster, and never while searching (the
+  // Gate offscreen rows at every roster size, but never while searching (the
   // matcher reads each member's resolved name from the query cache, which a
   // row populates only once mounted).
-  const virtualize = roster.length > VIRTUALIZE_THRESHOLD && !searching;
+  const virtualize = !searching;
 
   // A member hoisted into a role section renders only there; when a query is
   // active every section is also narrowed to the matches.
@@ -861,7 +838,7 @@ export function MemberList({
             {toggleHost === "admins" && searchToggle}
           </div>
           {visibleAdmins.map((admin) => (
-            <DeferredRow key={admin.pubkey} active={virtualize}>
+            <DeferredRow key={admin.pubkey} active={virtualize} minHeight={ROW_MIN_H}>
             <MemberRow
               pubkey={admin.pubkey}
               roles={admin.roles}
@@ -903,7 +880,7 @@ export function MemberList({
               {toggleHost === `section:${section.id}` && searchToggle}
             </div>
             {section.members.map((pubkey) => (
-              <DeferredRow key={pubkey} active={virtualize}>
+              <DeferredRow key={pubkey} active={virtualize} minHeight={ROW_MIN_H}>
               <MemberRow
                 pubkey={pubkey}
                 roles={adminMap.get(pubkey)}
@@ -950,7 +927,7 @@ export function MemberList({
         )
       ) : (
         regulars.map((pubkey) => (
-          <DeferredRow key={pubkey} active={virtualize}>
+          <DeferredRow key={pubkey} active={virtualize} minHeight={ROW_MIN_H}>
           <MemberRow
             pubkey={pubkey}
             roles={buzzRoles.get(pubkey)}

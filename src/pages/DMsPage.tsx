@@ -19,6 +19,7 @@ import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { VoicePresence } from "@/components/VoicePresence";
 import { BotPill } from "@/components/BotPill";
+import { DeferredRow } from "@/components/DeferredRow";
 import { DisplayName } from "@/components/DisplayName";
 import { NoteToSelfAvatar, NoteToSelfIcon, NOTE_TO_SELF_NAME } from "@/components/NoteToSelfAvatar";
 import { ReportDialog } from "@/components/ReportDialog";
@@ -1817,6 +1818,23 @@ function ConversationSectionHeader({
   );
 }
 
+/** Approx height of one conversation row (avatar size-12 + py-2.5), for the gate placeholder. */
+const ROW_MIN_H = 68;
+/**
+ * How many rows render eagerly before gating starts — a tall viewport's worth
+ * at ROW_MIN_H, so everything the reader can see on the first frame is real
+ * content rather than a placeholder that swaps in a frame later.
+ *
+ * Gating is by POSITION rather than by list length (MemberList's
+ * VIRTUALIZE_THRESHOLD): a conversation row is dearer than a member row — it
+ * fetches a remote avatar image on top of a profile query and a LiveKit
+ * presence query — so the 40th row of a 41-row inbox is worth deferring too. A
+ * length threshold also interacts badly with a list that GROWS into it: rows
+ * first rendered while the list was short latch mounted (DeferredRow never
+ * un-shows), so they'd stay eager no matter how long the list later got.
+ */
+const EAGER_ROWS = 12;
+
 /** Which tier the conversation list is showing: the inbox or the request pile. */
 type DmListView = "inbox" | "requests";
 
@@ -1863,7 +1881,8 @@ function RequestsEntryRow({ count, onClick }: { count: number; onClick: () => vo
   );
 }
 
-function ConversationList({
+/** Exported for DMsPage.list.test.tsx, which renders it directly. */
+export function ConversationList({
   rows,
   requestRows,
   view,
@@ -2006,12 +2025,18 @@ function ConversationList({
   // nothing.
   const sectioned = search.trim().length === 0 && pinnedRows.length > 0;
 
+  // Gating is off entirely while searching: a row hides itself when it matches
+  // neither the contact nor any decrypted message (ConversationRow returns
+  // null), so a placeholder would reserve height for rows that render nothing
+  // and the results would sit in a field of gaps.
+  const gateRows = search.trim().length === 0;
+
   // Nothing but Note to Self — i.e. what used to be an empty list.
   const onlyNoteToSelf = rows.length === 1 && rows[0]?.peer === user?.pubkey;
 
-  const renderRow = (c: (typeof rows)[number], request = false) => (
+  const renderRow = (c: (typeof rows)[number], index: number, request = false) => (
+    <DeferredRow key={c.peer} active={gateRows && index >= EAGER_ROWS} minHeight={ROW_MIN_H}>
     <ConversationRow
-      key={c.peer}
       peer={c.peer}
       preview={c.latest}
       previewText={c.plaintext ?? previews[c.peer]}
@@ -2039,6 +2064,7 @@ function ConversationList({
       onClose={c.peer === user?.pubkey ? undefined : () => closePeer(c.peer, c.latest)}
       onBlock={() => void blockPeer(c.peer)}
     />
+    </DeferredRow>
   );
 
   // Register this pane's slot so the persistent call bar portals above the
@@ -2200,7 +2226,7 @@ function ConversationList({
               Messages from people you don't follow. Reply to one and it moves
               to your inbox. Nobody here is told you've seen theirs.
             </p>
-            {requestRows.map((c) => renderRow(c, true))}
+            {requestRows.map((c, i) => renderRow(c, i, true))}
             {/* The automatic sync only moves forward, so a sender whose
                 messages all predate this device's first sync never appears on
                 its own. Explicit, one page at a time — see useDm17Backfill. */}
@@ -2252,14 +2278,17 @@ function ConversationList({
             {sectioned ? (
               <>
                 <ConversationSectionHeader className="pt-1">Pinned</ConversationSectionHeader>
-                {pinnedRows.map((c) => renderRow(c))}
+                {pinnedRows.map((c, i) => renderRow(c, i))}
                 {otherRows.length > 0 && (
                   <ConversationSectionHeader>Recent</ConversationSectionHeader>
                 )}
-                {otherRows.map((c) => renderRow(c))}
+                {/* Numbering continues across the two sections: what matters is
+                    how far down the scroll container a row sits, not which
+                    section it's in. */}
+                {otherRows.map((c, i) => renderRow(c, pinnedRows.length + i))}
               </>
             ) : (
-              [...pinnedRows, ...otherRows].map((c) => renderRow(c))
+              [...pinnedRows, ...otherRows].map((c, i) => renderRow(c, i))
             )}
             {/* The "start one" hint used to stand in for an empty list. Note to
                 Self is always a row, so the list is never empty — the hint goes

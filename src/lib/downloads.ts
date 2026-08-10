@@ -46,6 +46,14 @@ export interface DownloadAsset {
   hint: string;
   /** Stable filename under {@link DOWNLOADS_BASE_URL}. */
   file: string;
+  /**
+   * The shell command to install or run this build, for the ones that are
+   * driven from a terminal rather than double-clicked (an AppImage has to be
+   * marked executable, a .deb and a Flatpak bundle install from the CLI). The
+   * page shows it beneath the download button. Written against the stable
+   * filename, since that is what the user has after the download.
+   */
+  command?: string;
 }
 
 export interface DownloadTarget {
@@ -74,8 +82,9 @@ export const DOWNLOAD_TARGETS: DownloadTarget[] = [
     name: "Linux",
     manifest: "desktop",
     assets: [
-      { id: "linux-appimage", label: "AppImage", hint: "Any distribution. Mark it executable and run it", file: "Armada.AppImage" },
-      { id: "linux-deb", label: "Debian package", hint: "Debian, Ubuntu and derivatives", file: "Armada.deb" },
+      { id: "linux-appimage", label: "AppImage", hint: "Any distribution. Mark it executable and run it", file: "Armada.AppImage", command: "chmod +x Armada.AppImage && ./Armada.AppImage" },
+      { id: "linux-deb", label: "Debian package", hint: "Debian, Ubuntu and derivatives", file: "Armada.deb", command: "sudo apt install ./Armada.deb" },
+      { id: "linux-flatpak", label: "Flatpak", hint: "Sandboxed, any distribution with Flatpak", file: "Armada.flatpak", command: "flatpak install Armada.flatpak" },
     ],
   },
   {

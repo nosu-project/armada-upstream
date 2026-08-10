@@ -153,16 +153,26 @@ describe("MemberList viewport gating", () => {
     expect(spies.useUserStatus).toHaveBeenCalledTimes(1000); // general + music per row
   }, 30_000);
 
-  it("renders a small roster in full (no gating below threshold)", () => {
+  it("gates a SMALL roster too, so opening a room does not REQ the whole list", () => {
+    // This used to render all 40 rows eagerly, on the reasoning that a small
+    // roster's DOM is cheap. Its DOM is; its network is not. Every row calls
+    // useAuthor, which declares profile demand for the life of the mount, and
+    // demandProfiles batches a mount burst into ONE kind-0 REQ fired
+    // immediately — so the whole member list went on the wire beside the
+    // room's first chat REQ, and visibly filled in ahead of the messages.
     const members = pubkeys(40);
     const { container } = render(
       <MemberList admins={[]} members={members} canModerate={false} />,
     );
 
-    // Under the threshold: all rows mount immediately, no observers created.
+    expect(rowCount(container)).toBe(0);
+    expect(spies.useAuthor).not.toHaveBeenCalled();
+    expect(observers.length).toBe(40);
+
+    // Nothing is lost: the rows mount as they scroll in, as on a large roster.
+    fireAll();
     expect(rowCount(container)).toBe(40);
     expect(spies.useAuthor).toHaveBeenCalledTimes(40);
-    expect(observers.length).toBe(0);
   });
 
   it("[perf] gated first paint of a large roster is cheap (few rows mounted)", () => {

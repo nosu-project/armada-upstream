@@ -4,6 +4,23 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.50.3] - 2026-08-09
+
+Notifications now carry the message itself: who sent it, what they said, which conversation it belongs to, and the sender's picture — all decrypted on your device, across background push, in-app, and desktop alerts, and grouped per conversation. Turning notifications off now takes effect immediately, and messages you sent from another device no longer buzz you. Large member lists and DM lists also scroll smoothly.
+
+### Added
+- Notifications show the message itself — the sender, the text, the room or community it belongs to, and the sender's picture — decrypted on your device, for background push, in-app, and desktop alerts, with alerts grouped per conversation
+
+### Changed
+- Notifications no longer alert you to your own messages sent from another device, or to reactions meant for someone else
+
+### Fixed
+- Turning off notifications now takes effect immediately, and notifications honor your system's notification permission
+- Large member lists and DM conversation lists scroll smoothly, rendering only the rows in view
+- Mention names resolve more reliably, and the app stops re-requesting a profile that keeps coming back empty
+- Duplicate messages are dropped before they can flicker into a conversation
+- The Bluetooth mesh keepalive service no longer risks being killed at startup under the system's foreground-service deadline
+
 ## [0.50.2] - 2026-08-09
 
 Settings sync is now split into separate documents per category, so a read-state update no longer rewrites all your other preferences. Several settings that were silently dropped on reload now sync across devices correctly.

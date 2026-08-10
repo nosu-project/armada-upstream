@@ -54,6 +54,17 @@ export const PROFILE_SYNC_TOPIC = "profiles";
 const FOUND_STALE_MS = 15 * 60_000;
 /** A profile we MISSED is re-asked no sooner than this (same hint set). */
 const MISS_RETRY_MS = 60_000;
+/**
+ * Ceiling for the miss backoff. Half an hour still re-checks an author whose
+ * profile appears later in a long session, while turning a permanently
+ * profile-less pubkey from ~60 requests an hour into 2.
+ */
+const MISS_RETRY_MAX_MS = 30 * 60_000;
+/**
+ * Consecutive empty rounds per pubkey, driving {@link missRetryDelay}. Cleared
+ * when the profile is finally found, so a late arrival resets to the fast path.
+ */
+const missAttempts = new Map<string, number>();
 /** Hinted relays asked per run, at most. */
 const MAX_HINT_RELAYS = 6;
 /** Pubkeys per REQ against a hinted relay. */
@@ -68,6 +79,22 @@ const SETTLE_MS = 50;
 
 /** On-screen pubkeys, refcounted by mounted demands. */
 const demand = new Map<string, number>();
+
+/**
+ * The ONE scheduler want held while any demand is mounted. A member list is
+ * hundreds of rows mounting and releasing per scroll frame; a want token (and
+ * its scheduler pass) per row is where the CPU went — the `demand` map above
+ * is the real refcount, so the scheduler only needs to know "someone cares".
+ */
+let topicWant: (() => void) | undefined;
+let demandHolds = 0;
+
+/**
+ * Pubkeys a run FOUND (in the store or on the wire) this session. Picks the
+ * lazy TTL in {@link isDueNow}; before a run has seen a pubkey the check
+ * degrades toward "due", never toward wrongly skipping.
+ */
+const foundProfiles = new Set<string>();
 
 /** Relays worth asking about profiles right now, refcounted by mounted views. */
 const hintRelays = new Map<string, number>();
@@ -102,22 +129,73 @@ export function demandProfiles(pubkeys: string[], context: ProfileSyncContext): 
   const pks = [...new Set(pubkeys)].filter(Boolean);
   if (pks.length === 0) return () => undefined;
   for (const pk of pks) demand.set(pk, (demand.get(pk) ?? 0) + 1);
-  // Force: a fresh TOPIC stamp must not gate a brand-new row's fetch — the
-  // per-pubkey stamps inside the run are the real throttle, so a forced run
-  // over all-fresh pubkeys is a cheap local no-op.
-  const release = want(PROFILE_SYNC_TOPIC, "visible", { force: true });
+  demandHolds++;
+  topicWant ??= want(PROFILE_SYNC_TOPIC, "visible");
+  // Wake the topic only when some demanded pubkey is actually due: a fresh
+  // TOPIC stamp must not gate a brand-new row's fetch, but the common scroll
+  // case — every row already fresh — must not force runs either (the old
+  // unconditional `force: true` re-ran the topic every min-interval for as
+  // long as rows kept mounting).
+  if (pks.some(isDueNow)) invalidateSyncTopic(PROFILE_SYNC_TOPIC);
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    release();
     for (const pk of pks) {
       const count = demand.get(pk);
       if (count === undefined) continue;
       if (count <= 1) demand.delete(pk);
       else demand.set(pk, count - 1);
     }
+    demandHolds--;
+    if (demandHolds === 0) {
+      topicWant?.();
+      topicWant = undefined;
+    }
   };
+}
+
+/**
+ * Mirror of the run's candidate filter, evaluated synchronously at demand
+ * time. Before the stamp warm lands (or before any run has classified a
+ * pubkey) everything looks due, which costs at most one extra run whose
+ * candidate filter then does the authoritative check against the store.
+ */
+/**
+ * How long to wait before re-asking for a pubkey that came back empty.
+ *
+ * A miss used to retry at a flat {@link MISS_RETRY_MS} for as long as anything
+ * held demand — and demand lives for the life of a MOUNT, while the timeline
+ * never unmounts a row the reader has scrolled past. So every author whose row
+ * was ever rendered kept a REQ going out once a minute for the rest of the
+ * session, forever, growing with every scroll-back. In a flooded room most of
+ * those authors have no kind-0 at all, which is precisely the case that never
+ * resolves and never stops asking.
+ *
+ * Back off geometrically instead, capped by {@link MISS_RETRY_MAX_MS}. The
+ * relay-hint escape hatch below is untouched: a community's relays arriving
+ * after the first round still bump `hintGeneration` and re-ask every miss
+ * immediately, which is the case where a retry is actually likely to succeed.
+ */
+export function _missRetryDelayMs(attempts: number): number {
+  return Math.min(MISS_RETRY_MS * 2 ** (Math.max(1, attempts) - 1), MISS_RETRY_MAX_MS);
+}
+
+function missRetryDelay(pk: string): number {
+  return _missRetryDelayMs(missAttempts.get(pk) ?? 1);
+}
+
+/** Test seam: consecutive empty rounds recorded for `pk`. */
+export function _profileMissAttemptsForTests(pk: string): number {
+  return missAttempts.get(pk) ?? 0;
+}
+
+function isDueNow(pk: string): boolean {
+  const stamp = stamps.get(pk);
+  if (stamp === undefined) return true;
+  const found = foundProfiles.has(pk);
+  if (Date.now() - stamp > (found ? FOUND_STALE_MS : missRetryDelay(pk))) return true;
+  return !found && stampedGeneration.get(pk) !== hintGeneration;
 }
 
 /**
@@ -175,6 +253,9 @@ async function runProfileSync(signal: AbortSignal): Promise<void> {
   const found = new Set<string>();
   for (const ev of cached) {
     found.add(ev.pubkey);
+    // Classify for the demand-time due check too — BEFORE the early return
+    // below, so a round with no candidates still teaches it the lazy TTL.
+    foundProfiles.add(ev.pubkey);
     seedAuthorCache(c.queryClient, ev.pubkey, ev);
   }
 
@@ -250,8 +331,15 @@ async function runProfileSync(signal: AbortSignal): Promise<void> {
   for (const pk of candidates) {
     stamps.set(pk, at);
     stampedGeneration.set(pk, hintGeneration);
+    // Count this round as a miss up front; the found loop below clears it. A
+    // pubkey that keeps coming back empty backs off (see missRetryDelay).
+    if (!newest.has(pk)) missAttempts.set(pk, (missAttempts.get(pk) ?? 0) + 1);
   }
-  for (const [pk, ev] of newest) seedAuthorCache(c.queryClient, pk, ev);
+  for (const [pk, ev] of newest) {
+    foundProfiles.add(pk);
+    missAttempts.delete(pk);
+    seedAuthorCache(c.queryClient, pk, ev);
+  }
 }
 
 registerSyncTopic(PROFILE_SYNC_TOPIC, {
@@ -270,6 +358,11 @@ export function _resetProfileSyncForTests(): void {
   demand.clear();
   hintRelays.clear();
   stampedGeneration.clear();
+  foundProfiles.clear();
+  missAttempts.clear();
   hintGeneration = 0;
   ctx = undefined;
+  demandHolds = 0;
+  topicWant?.();
+  topicWant = undefined;
 }

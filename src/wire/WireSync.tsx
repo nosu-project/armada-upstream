@@ -835,12 +835,14 @@ function WireSyncInner() {
         // anomalies (swallowed REQ, reopen restart, early CLOSED) speak.
         let firstRound = true;
         // Whether a round on this loop has completed its stored replay (EOSE).
-        // The DM wrap filter re-rewinds the 2-day backdate window every round,
-        // so once the window has been replayed ONCE, later rounds (routine
-        // quiet rotations, reconnects) shrink its replay `limit` — the bytes
-        // were pure duplicates. The DM poll's periodic full scan backstops a
-        // burst deeper than the steady cap (see stampRoundSince).
-        let wrapReplayDone = false;
+        // Two filters shrink their replay `limit` once it has: the DM wrap
+        // filter, which re-rewinds the 2-day backdate window every round, and
+        // the Git ticket child filters, whose 4,000-event bootstrap bound
+        // otherwise applies to every quiet rotation as well. In both cases the
+        // repeat bytes were pure duplicates. Deeper catch-up is backstopped by
+        // the DM poll's periodic full scan and by the Git root/project syncs
+        // respectively (see stampRoundSince).
+        let replayDone = false;
         while (!controller.signal.aborted) {
           const started = Date.now();
           // Recompute the resume point each round: the cursor advanced with
@@ -911,7 +913,7 @@ function WireSyncInner() {
           try {
             try {
               for await (const msg of nostr.relay(relay).req(
-                [...stampRoundSince(settled, since, now, false, wrapReplayDone), ...stampRoundSince(pending, since, now, true, wrapReplayDone)],
+                [...stampRoundSince(settled, since, now, false, replayDone), ...stampRoundSince(pending, since, now, true, replayDone)],
                 { signal: roundSignal },
               )) {
                 sawAnything = true;
@@ -919,7 +921,7 @@ function WireSyncInner() {
                 if (msg[0] === "EOSE") {
                   await flushReplay();
                   eosed = true;
-                  wrapReplayDone = true;
+                  replayDone = true;
                   // Bootstrap replay complete. Marked only at EOSE, so a round
                   // torn down mid-replay retries the deep `since` next round.
                   for (const f of pending) bootstrappedRef.current.add(bootKey(f));

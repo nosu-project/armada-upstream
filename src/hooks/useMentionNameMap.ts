@@ -80,20 +80,39 @@ function buildMentionRegex(names: string[]): RegExp | null {
  * aliases, and returns a matcher restricted to those known names, so an
  * arbitrary `@word` without a corresponding tag is never linkified.
  */
+/**
+ * The tagged pubkeys whose profiles this event could actually need.
+ *
+ * A `p` tag alone is not a mention: this map exists ONLY to turn literal
+ * `@alias` text in the body back into a pubkey, and {@link buildMentionRegex}
+ * requires an `@` that the body must contain for any alias to match. So a
+ * message with no `@` in its content has nothing to resolve, whatever it tags.
+ *
+ * Skipping those is a real saving rather than a micro-optimization, because
+ * each tagged pubkey otherwise costs a kind-0 fetch (a REQ, a Schnorr verify,
+ * a zod parse, a store write and a render) through the profile sync topic. A
+ * live client measured 952 distinct profiles fetched in nine minutes, and
+ * kind 0 was 46% of all signature verification — and messages that `p`-tag
+ * many pubkeys while carrying no mention text at all are exactly the shape
+ * spam takes.
+ */
+export function mentionTagPubkeys(event: NostrRumor): string[] {
+  if (!event.content.includes('@')) return [];
+  const set = new Set<string>();
+  for (const tag of event.tags) {
+    if ((tag[0] === 'p' || tag[0] === MENTION_REFERENCE_TAG) && tag[1] && HEX64.test(tag[1])) {
+      set.add(tag[1].toLowerCase());
+    }
+  }
+  return [...set];
+}
+
 export function useMentionNameMap(event: NostrRumor): MentionNameMap {
   const { nostr } = useNostr();
   const queryClient = useQueryClient();
   const eventStore = useEventStore();
 
-  const pubkeys = useMemo(() => {
-    const set = new Set<string>();
-    for (const tag of event.tags) {
-      if ((tag[0] === 'p' || tag[0] === MENTION_REFERENCE_TAG) && tag[1] && HEX64.test(tag[1])) {
-        set.add(tag[1].toLowerCase());
-      }
-    }
-    return [...set];
-  }, [event.tags]);
+  const pubkeys = useMemo(() => mentionTagPubkeys(event), [event.tags, event.content]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The store-first author queries below only READ; the profile sync topic
   // owns fetching. Declare the tagged pubkeys for the life of the mount so

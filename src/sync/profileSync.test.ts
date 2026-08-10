@@ -275,4 +275,51 @@ describe("profileSync — the profiles topic", () => {
       m._resetSyncManagerForTests();
     },
   );
+
+  it("backs a repeatedly-missing pubkey off instead of re-asking every minute", { timeout: 30_000 }, async () => {
+    // Demand lives for the life of a MOUNT, and the timeline never unmounts a
+    // row scrolled past, so a pubkey with no kind-0 anywhere used to keep a REQ
+    // going out once a minute for the whole session — per author, growing with
+    // every scroll-back. In a flooded room that is most of the authors.
+    const m = await freshModules();
+    const { nostr } = makeNostr({ pool: () => [] });
+    const queryClient = new QueryClient();
+
+    const release = m.demandProfiles([PK1], { nostr, queryClient });
+    await settled(m);
+
+    // One empty round recorded, so the next retry is already past the flat minute.
+    expect(m._profileMissAttemptsForTests(PK1)).toBe(1);
+    expect(m._missRetryDelayMs(m._profileMissAttemptsForTests(PK1))).toBe(60_000);
+
+    release();
+    m._resetProfileSyncForTests();
+    m._resetSyncManagerForTests();
+  });
+
+  it("clears the backoff once the profile is finally found", { timeout: 30_000 }, async () => {
+    const m = await freshModules();
+    const { nostr } = makeNostr({ pool: () => [profile(sk1, "alice", 1_700_000_000)] });
+    const queryClient = new QueryClient();
+
+    const release = m.demandProfiles([PK1], { nostr, queryClient });
+    await settled(m);
+
+    expect(m._profileMissAttemptsForTests(PK1)).toBe(0);
+
+    release();
+    m._resetProfileSyncForTests();
+    m._resetSyncManagerForTests();
+  });
+
+  it("grows the miss retry geometrically, capped", async () => {
+    const m = await freshModules();
+    expect(m._missRetryDelayMs(1)).toBe(60_000);
+    expect(m._missRetryDelayMs(2)).toBe(120_000);
+    expect(m._missRetryDelayMs(3)).toBe(240_000);
+    // Capped, so a long session still re-checks a profile that appears later.
+    expect(m._missRetryDelayMs(20)).toBe(30 * 60_000);
+    // Defensive: an unseen pubkey reads as the first attempt, never faster.
+    expect(m._missRetryDelayMs(0)).toBe(60_000);
+  });
 });

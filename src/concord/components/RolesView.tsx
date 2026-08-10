@@ -1,13 +1,11 @@
 import { GripVertical, Hash, Loader2, Plus, Shield, ShieldOff } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
-import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { DisplayName } from "@/components/DisplayName";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ColorPicker } from "@/components/ui/color-picker";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -65,25 +63,11 @@ function MemberNames({ members }: { members: MemberGrant[] }) {
  * permission bits. Each save publishes a version-chained Role (vsk 1) edition;
  * every member's fold re-checks MANAGE_ROLES + strict outrank (CORD-04).
  */
-export function RolesDialog({
-  community,
-  open,
-  onOpenChange,
-}: {
-  community: Community | undefined;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
+export function RolesView({ community }: { community: Community }) {
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md border-0 rounded-none p-0 bg-transparent shadow-none">
-        <DialogTitle className="sr-only">Roles</DialogTitle>
-        <div className="clip-corner-lg bg-chrome p-6 sm:p-7">
-          {community && <RolesBody community={community} />}
-        </div>
-        <ArmadaCrestKeyframes />
-      </DialogContent>
-    </Dialog>
+    <div className="mx-auto w-full max-w-2xl p-4">
+      <RolesBody community={community} />
+    </div>
   );
 }
 
@@ -515,14 +499,10 @@ function RolesBody({ community }: { community: Community }) {
 
   return (
     <div className="flex flex-col items-center gap-6">
-      <div className="flex flex-col items-center gap-3 text-center">
-        <ArmadaCrest size={64} />
-        <h2 className="font-mono text-2xl font-bold lowercase tracking-tight text-foreground">roles</h2>
-        <p className="text-sm text-muted-foreground">
-          Roles bundle permissions at a rank. Lower position = higher authority; the owner is position 0 and
-          unmintable.
-        </p>
-      </div>
+      <p className="text-sm text-muted-foreground">
+        Roles bundle permissions at a rank. Lower position = higher authority; the owner is position 0 and
+        unmintable.
+      </p>
 
       {error && (
         <Alert variant="destructive">

@@ -1,4 +1,4 @@
-import { AtSign, Ban, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Flag, Folder, FolderGit2, Hash, Headphones, KeyRound, Link as LinkIcon, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Pause, Phone, Pin, Play, Plus, RefreshCw, ScrollText, Search, Settings, Shield, Timer, Trash2, UserPlus, Users, X } from "lucide-react";
+import { AtSign, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Pause, Phone, Pin, Play, Plus, RefreshCw, Search, Settings, Shield, Timer, Trash2, UserPlus, Users, X, type LucideIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
@@ -35,21 +35,23 @@ import { GitTimelineRow, TicketSidePanel } from "@/components/chat/GitTimeline";
 import { isGitTimelineEntry, mergeChannelTimeline } from "@/components/chat/channelTimeline";
 import { TypingIndicator } from "@/components/chat/TypingIndicator";
 import { VoiceParticipantList } from "@/components/VoicePresence";
-import { CommunityInfoDialog } from "@/concord/components/CommunityInfoDialog";
+import { CommunitySettingsView } from "@/concord/components/CommunitySettingsView";
 import { AddChannelMembersDialog } from "@/concord/components/AddChannelMembersDialog";
 import { ImageLightbox } from "@/concord/components/ImageLightbox";
 import { InviteDialog } from "@/concord/components/InviteDialog";
 import { ShareToDiscoverDialog } from "@/concord/components/ShareToDiscoverDialog";
-import { RolesDialog } from "@/concord/components/RolesDialog";
-import { AuditLogView } from "@/concord/components/AuditLogView";
-import { BannedView } from "@/concord/components/BannedView";
-import { ReportsView } from "@/concord/components/ReportsView";
+import { ModerationView } from "@/concord/components/ModerationView";
+import {
+  MODERATION_TABS,
+  firstModerationPane,
+  isModerationPane,
+  type ModerationAccess,
+  type ModerationPane,
+} from "@/concord/lib/moderationPanes";
 import { reportInboxSecret } from "@/concord/lib/report";
 import { SuspiciousActivityBanner } from "@/concord/components/SuspiciousActivityBanner";
 import { useBanSelfRemove } from "@/concord/hooks/useBanSelfRemove";
 import { useLinkAuthorityWatch, useLinkFreshnessWatch } from "@/concord/hooks/useInvites";
-import { InvitesView } from "@/concord/components/InvitesView";
-import { MembersView } from "@/concord/components/MembersView";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
@@ -163,6 +165,21 @@ import type { ChatMsg, MessageCalendar, MessagePoll, MessageReactions, MessageZa
 
 /** Stable empty replies array so a thread-less row keeps a constant prop. */
 const EMPTY_REPLIES: ChatMsg[] = [];
+
+/**
+ * What the header calls each community-wide pane that isn't a moderation one —
+ * those are named by `MODERATION_TABS`, so their tab strip and the header
+ * can't disagree.
+ */
+const PANE_HEADERS: Record<
+  Exclude<Concord2Pane, ModerationPane>,
+  { icon: LucideIcon; label: string }
+> = {
+  mentions: { icon: AtSign, label: "Mentions" },
+  threads: { icon: MessagesSquare, label: "Threads" },
+  projects: { icon: FolderGit2, label: "Projects" },
+  settings: { icon: Settings, label: "Community settings" },
+};
 
 /** The community's decrypted icon for the channel-list title. Renders nothing
  *  when the community has no icon (the header falls back to a name-only
@@ -1151,6 +1168,10 @@ export function ConcordPage() {
   // community-wide panes. Navigating to a channel returns to chat by virtue of
   // the route no longer naming a pane.
   const view: "channel" | Concord2Pane = routePane ?? "channel";
+  // The header's icon + title for a pane; null in a channel, where the header
+  // names the channel instead.
+  const paneHeader =
+    view === "channel" ? null : isModerationPane(view) ? MODERATION_TABS[view] : PANE_HEADERS[view];
   const selectChannel = useCallback(
     (idHex: string) => {
       if (!communityId) return;
@@ -1388,6 +1409,22 @@ export function ConcordPage() {
   // paths everywhere else too — timeline reply/edit and the thread composer.
   const { data: dissolved } = useDissolved(community);
   const canWrite = Boolean(user && channel && !dissolved && !excluded && !stranded);
+
+  // Which tabs the moderation panel offers this viewer. The audit log and the
+  // invite links are open to every member — a community's history and the links
+  // that let people in are things it owes its members — so the panel always has
+  // something to show, and "Moderation" is always in the menu.
+  const moderationAccess: ModerationAccess = useMemo(
+    () => ({
+      members: canManageRoles || canKickAny || canBanAny || canCreateInvite,
+      roles: canManageRoles && !dissolved,
+      invites: true,
+      banned: canBanAny,
+      reports: canReadReports,
+      audit: true,
+    }),
+    [canManageRoles, canKickAny, canBanAny, canCreateInvite, canReadReports, dissolved],
+  );
 
   const { transport: baseTransport, reactionsFor, allMessages, calendar, timerEntries, openedById } = useTransport(community, channel, canWrite, canModerateMessages, channelIdHex);
 
@@ -1766,9 +1803,7 @@ export function ConcordPage() {
   }, [communityId]);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [addMembersOpen, setAddMembersOpen] = useState(false);
-  const [infoOpen, setInfoOpen] = useState(false);
   const [shareDiscoverOpen, setShareDiscoverOpen] = useState(false);
-  const [rolesOpen, setRolesOpen] = useState(false);
   const [banTarget, setBanTarget] = useState<string | null>(null);
   const [rotateKeysOpen, setRotateKeysOpen] = useState(false);
   /**
@@ -2643,7 +2678,10 @@ export function ConcordPage() {
                     show: true,
                     icon: <Settings className="size-4" />,
                     label: "Community settings",
-                    onClick: () => setInfoOpen(true),
+                    onClick: () => {
+                      selectPane("settings");
+                      setChannelsOpen(false);
+                    },
                   },
                   {
                     show: !!user && !dissolved,
@@ -2667,55 +2705,16 @@ export function ConcordPage() {
                     onClick: () => setCreatingChannel(true),
                   },
                   {
-                    show: canManageRoles && !dissolved,
+                    // One entry for the six moderation panes, landing on the
+                    // first this viewer may open. Also closes the mobile
+                    // channel drawer so the view slides into the <main>
+                    // overlay (inert on desktop).
+                    show: true,
                     icon: <Shield className="size-4" />,
-                    label: "Manage roles",
-                    onClick: () => setRolesOpen(true),
-                  },
-                  {
-                    show: true,
-                    icon: <ScrollText className="size-4" />,
-                    label: "Audit log",
-                    // Also close the mobile channel drawer so the view slides
-                    // into the <main> overlay (inert on desktop).
+                    label: "Moderation",
                     onClick: () => {
-                      selectPane("audit");
-                      setChannelsOpen(false);
-                    },
-                  },
-                  {
-                    show: true,
-                    icon: <LinkIcon className="size-4" />,
-                    label: "Invite links",
-                    onClick: () => {
-                      selectPane("invites");
-                      setChannelsOpen(false);
-                    },
-                  },
-                  {
-                    show: canBanAny,
-                    icon: <Ban className="size-4" />,
-                    label: "Banned members",
-                    onClick: () => {
-                      selectPane("banned");
-                      setChannelsOpen(false);
-                    },
-                  },
-                  {
-                    show: canReadReports,
-                    icon: <Flag className="size-4" />,
-                    label: "Reports",
-                    onClick: () => {
-                      selectPane("reports");
-                      setChannelsOpen(false);
-                    },
-                  },
-                  {
-                    show: canManageRoles || canKickAny || canBanAny || canCreateInvite,
-                    icon: <Users className="size-4" />,
-                    label: "Members",
-                    onClick: () => {
-                      selectPane("members");
+                      const pane = firstModerationPane(moderationAccess);
+                      if (pane) selectPane(pane);
                       setChannelsOpen(false);
                     },
                   },
@@ -3036,45 +3035,10 @@ export function ConcordPage() {
                 priorityScope={channelScope}
                 className="absolute -bottom-0.5 left-2 z-10"
               />
-              {view === "mentions" ? (
+              {paneHeader ? (
                 <>
-                  <AtSign className="size-5 text-muted-foreground shrink-0" />
-                  <h1 className="font-semibold truncate leading-tight">Mentions</h1>
-                </>
-              ) : view === "audit" ? (
-                <>
-                  <ScrollText className="size-5 text-muted-foreground shrink-0" />
-                  <h1 className="font-semibold truncate leading-tight">Audit log</h1>
-                </>
-              ) : view === "invites" ? (
-                <>
-                  <LinkIcon className="size-5 text-muted-foreground shrink-0" />
-                  <h1 className="font-semibold truncate leading-tight">Invite links</h1>
-                </>
-              ) : view === "banned" ? (
-                <>
-                  <Ban className="size-5 text-muted-foreground shrink-0" />
-                  <h1 className="font-semibold truncate leading-tight">Banned members</h1>
-                </>
-              ) : view === "reports" ? (
-                <>
-                  <Flag className="size-5 text-muted-foreground shrink-0" />
-                  <h1 className="font-semibold truncate leading-tight">Reports</h1>
-                </>
-              ) : view === "members" ? (
-                <>
-                  <Users className="size-5 text-muted-foreground shrink-0" />
-                  <h1 className="font-semibold truncate leading-tight">Members</h1>
-                </>
-              ) : view === "threads" ? (
-                <>
-                  <MessagesSquare className="size-5 text-muted-foreground shrink-0" />
-                  <h1 className="font-semibold truncate leading-tight">Threads</h1>
-                </>
-              ) : view === "projects" ? (
-                <>
-                  <FolderGit2 className="size-5 text-muted-foreground shrink-0" />
-                  <h1 className="font-semibold truncate leading-tight">Projects</h1>
+                  <paneHeader.icon className="size-5 text-muted-foreground shrink-0" />
+                  <h1 className="font-semibold truncate leading-tight">{paneHeader.label}</h1>
                 </>
               ) : (
                 <>
@@ -3099,53 +3063,18 @@ export function ConcordPage() {
               <button
                 type="button"
                 className="flex items-center gap-2.5 min-w-0 text-left"
-                onClick={() => community && setInfoOpen(true)}
+                onClick={() => community && selectPane("settings")}
                 disabled={!community}
-                aria-label="Community info"
+                aria-label="Community settings"
               >
               <TitleAvatar icon={folded?.metadata?.icon} name={community?.name} />
               <div className="min-w-0 flex flex-col">
                 <span className="font-semibold text-base leading-tight truncate">{community?.name ?? "…"}</span>
                 <span className="text-xs text-muted-foreground leading-tight truncate flex items-center gap-0.5">
-                  {view === "mentions" ? (
+                  {paneHeader ? (
                     <>
-                      <AtSign className="size-3 shrink-0" />
-                      Mentions
-                    </>
-                  ) : view === "audit" ? (
-                    <>
-                      <ScrollText className="size-3 shrink-0" />
-                      Audit log
-                    </>
-                  ) : view === "invites" ? (
-                    <>
-                      <LinkIcon className="size-3 shrink-0" />
-                      Invite links
-                    </>
-                  ) : view === "banned" ? (
-                    <>
-                      <Ban className="size-3 shrink-0" />
-                      Banned members
-                    </>
-                  ) : view === "reports" ? (
-                    <>
-                      <Flag className="size-3 shrink-0" />
-                      Reports
-                    </>
-                  ) : view === "members" ? (
-                    <>
-                      <Users className="size-3 shrink-0" />
-                      Members
-                    </>
-                  ) : view === "threads" ? (
-                    <>
-                      <MessagesSquare className="size-3 shrink-0" />
-                      Threads
-                    </>
-                  ) : view === "projects" ? (
-                    <>
-                      <FolderGit2 className="size-3 shrink-0" />
-                      Projects
+                      <paneHeader.icon className="size-3 shrink-0" />
+                      {paneHeader.label}
                     </>
                   ) : (
                     <>
@@ -3401,29 +3330,32 @@ export function ConcordPage() {
                     onJump={jumpToMention}
                   />
                 </div>
-              ) : view === "audit" ? (
-                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
-                  {community && <AuditLogView community={community} />}
-                </div>
-              ) : view === "invites" ? (
-                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
-                  {community && <InvitesView community={community} />}
-                </div>
-              ) : view === "banned" ? (
+              ) : isModerationPane(view) ? (
                 <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-stable pb-safe">
-                  {community && <BannedView community={community} />}
+                  {community && (
+                    <ModerationView
+                      community={community}
+                      pane={view}
+                      access={moderationAccess}
+                      memberPubkeys={memberPubkeys}
+                      canModerateMembers={canKickAny || canBanAny}
+                      onSelect={selectPane}
+                    />
+                  )}
                 </div>
-              ) : view === "reports" && canReadReports ? (
-                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
-                  {community && <ReportsView community={community} />}
-                </div>
-              ) : view === "members" ? (
+              ) : view === "settings" ? (
                 <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
                   {community && (
-                    <MembersView
+                    <CommunitySettingsView
                       community={community}
-                      memberPubkeys={memberPubkeys}
-                      canModerate={canKickAny || canBanAny}
+                      metadata={folded?.metadata}
+                      ownerHex={ownerHex}
+                      memberCount={memberPubkeys.length}
+                      canManageMetadata={canManageMetadata}
+                      canManageChannels={canManageChannels}
+                      channelRoles={channelRoleCatalog}
+                      onPrivatiseChannel={canManageChannels ? handlePrivatiseChannel : undefined}
+                      onRotateChannelKey={canRekeyChannel ? handleRotateChannelKey : undefined}
                     />
                   )}
                 </div>
@@ -3823,19 +3755,6 @@ export function ConcordPage() {
         onClose={() => setRotateKeysOpen(false)}
         onConfirm={runRotateKeys}
       />
-      <CommunityInfoDialog
-        community={community}
-        metadata={folded?.metadata}
-        ownerHex={ownerHex}
-        memberCount={memberPubkeys.length}
-        canManageMetadata={canManageMetadata}
-        canManageChannels={canManageChannels}
-        channelRoles={channelRoleCatalog}
-        onPrivatiseChannel={canManageChannels ? handlePrivatiseChannel : undefined}
-        onRotateChannelKey={canRekeyChannel ? handleRotateChannelKey : undefined}
-        open={infoOpen}
-        onOpenChange={setInfoOpen}
-      />
       <CategoryNameDialog
         open={Boolean(categoryPrompt)}
         initial={categoryPrompt?.initial ?? ""}
@@ -3843,7 +3762,6 @@ export function ConcordPage() {
         onOpenChange={(next) => !next && setCategoryPrompt(null)}
         onSubmit={(name) => categoryPrompt && void refileCategory(categoryPrompt.channels, name)}
       />
-      <RolesDialog community={community} open={rolesOpen} onOpenChange={setRolesOpen} />
     </MemberRolesContext.Provider>
     </ChannelNavContext.Provider>
   );

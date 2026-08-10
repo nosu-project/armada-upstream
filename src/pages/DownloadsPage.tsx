@@ -1,12 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
-import { AppWindow, ArrowLeft, Download, ExternalLink, Globe, Laptop, Smartphone, Terminal } from "lucide-react";
+import { AppWindow, ArrowLeft, Check, Copy, Download, ExternalLink, Globe, Laptop, Smartphone, Terminal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { AsciiSea } from "@/components/landing/AsciiSea";
 import { Button } from "@/components/ui/button";
+import { toast } from "@/hooks/useToast";
+import { writeClipboardText } from "@/lib/clipboard";
 import {
   DOWNLOAD_TARGETS,
   type DownloadOs,
@@ -40,7 +42,6 @@ const OS_ICON: Record<DownloadOs, LucideIcon> = {
 const OS_CAVEAT: Partial<Record<DownloadOs, string>> = {
   macos: "Ad-hoc signed rather than notarized, so the first launch needs Control-click → Open, then Open Anyway.",
   android: "Sideloading the APK asks Android to allow installs from your browser.",
-  linux: "Mark an AppImage executable before running it: chmod +x Armada.AppImage",
 };
 
 /**
@@ -88,6 +89,50 @@ function useManifest(name: ManifestName) {
   });
 }
 
+/**
+ * A copyable command for the CLI-installed builds: the shell line in a mono box
+ * with a clear copy button that flips to a check for a moment. The command can
+ * scroll horizontally if it's long, so the button stays put and always visible.
+ */
+function CommandLine({ command }: { command: string }) {
+  const [copied, setCopied] = useState(false);
+  const resetTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  const copy = async () => {
+    try {
+      await writeClipboardText(command);
+      setCopied(true);
+      clearTimeout(resetTimer.current);
+      resetTimer.current = setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast({
+        title: "Copy failed",
+        description: "Select the command and copy it manually.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-1 clip-corner-lg bg-background/60 pl-2.5 pr-1">
+      <code className="min-w-0 flex-1 overflow-x-auto whitespace-pre py-1.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
+        <span aria-hidden="true" className="select-none text-[hsl(var(--accent2)/0.75)]">$ </span>
+        {command}
+      </code>
+      <Button
+        type="button"
+        size="icon"
+        variant="ghost"
+        onClick={copy}
+        aria-label={copied ? "Copied" : "Copy command"}
+        className="size-7 touch:size-9 shrink-0 text-muted-foreground hover:text-foreground"
+      >
+        {copied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
+      </Button>
+    </div>
+  );
+}
+
 function TargetCard({ target, manifest, featured }: {
   target: DownloadTarget;
   manifest?: DownloadsManifest;
@@ -119,27 +164,31 @@ function TargetCard({ target, manifest, featured }: {
           {target.assets.map((asset, i) => {
             const size = manifest?.files?.[asset.id]?.size;
             return (
-              <Button
-                key={asset.id}
-                asChild
-                variant={featured && i === 0 ? "default" : "secondary"}
-                className="h-auto py-2.5 touch:py-3 justify-start text-left clip-corner-lg"
-              >
-                {/* `download` only binds same-origin — on armada.buzz it forces a
-                    save and names the file even if the server's content type is
-                    wrong. Cross-origin (the native shells) it is ignored and the
-                    link opens normally, which is the desired behavior there. */}
-                <a href={downloadUrl(asset.file)} download>
-                  <Download className="size-4 shrink-0" />
-                  <span className="flex flex-col gap-0.5 min-w-0">
-                    <span className="font-medium leading-tight">
-                      {asset.label}
-                      {size ? <span className="font-normal opacity-70"> · {formatBytes(size)}</span> : null}
+              // The button and, for a CLI-installed build, the command to run
+              // after it stack in one grid cell.
+              <div key={asset.id} className="flex flex-col gap-1.5">
+                <Button
+                  asChild
+                  variant={featured && i === 0 ? "default" : "secondary"}
+                  className="h-auto py-2.5 touch:py-3 justify-start text-left clip-corner-lg"
+                >
+                  {/* `download` only binds same-origin — on armada.buzz it forces a
+                      save and names the file even if the server's content type is
+                      wrong. Cross-origin (the native shells) it is ignored and the
+                      link opens normally, which is the desired behavior there. */}
+                  <a href={downloadUrl(asset.file)} download>
+                    <Download className="size-4 shrink-0" />
+                    <span className="flex flex-col gap-0.5 min-w-0">
+                      <span className="font-medium leading-tight">
+                        {asset.label}
+                        {size ? <span className="font-normal opacity-70"> · {formatBytes(size)}</span> : null}
+                      </span>
+                      <span className="text-xs font-normal opacity-70 leading-tight whitespace-normal">{asset.hint}</span>
                     </span>
-                    <span className="text-xs font-normal opacity-70 leading-tight whitespace-normal">{asset.hint}</span>
-                  </span>
-                </a>
-              </Button>
+                  </a>
+                </Button>
+                {asset.command && <CommandLine command={asset.command} />}
+              </div>
             );
           })}
           {target.os === "android" &&
