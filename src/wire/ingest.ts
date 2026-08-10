@@ -3,6 +3,7 @@ import { KIND_MESSAGE, KIND_REACTION } from "@/concord/lib/kinds";
 import type { StreamKeyView } from "@/concord/lib/derive";
 import { notePlaneWrapsJunk, notePlaneWrapsSeen, openPlaneWrapsChunked, unseenPlaneWraps } from "@/concord/lib/planeSync";
 import { parkPendingWraps, writeOpened, writeRumors } from "@/concord/lib/rumorStore";
+import { isRelayScoped } from "@/lib/db/relayScope";
 import { bufferLiveDmWraps } from "@/lib/nip17/dm17Store";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { KIND_STREAM_MESSAGE_V2 } from "@/buzz/kinds";
@@ -63,6 +64,48 @@ export interface WireSinks {
 /** First value of a tag, if any. */
 function tagValue(ev: NostrEvent, name: string): string | undefined {
   return tagValueIn(ev.tags, name);
+}
+
+/**
+ * Plaintext events already ingested this session, so a duplicate delivery
+ * costs nothing.
+ *
+ * The wire re-REQs every filter on a quiet rotation with a backward `since`
+ * overlap (`WireSync`'s QUIET_ROTATE_MS / CURSOR_OVERLAP_SECONDS), and one
+ * filter fans out to every relay carrying it — so the SAME event arrives many
+ * times over. Measured on a live idle client: 72% of kind-0 deliveries, 74%
+ * of kind-4, and 93% of the NIP-34 git kinds were copies of an event already
+ * in hand. The store dedupes by id, but only once the write reaches it, so
+ * every copy still paid a store round-trip AND re-emitted its scope — and a
+ * scope is what drives the React Query invalidations downstream, so a
+ * duplicate that changed nothing still re-read and re-rendered.
+ *
+ * Both wrap paths already dedupe this way (`unseenPlaneWraps`,
+ * `bufferLiveDmWraps`' session-seen ids); plaintext was the gap.
+ *
+ * Session-scoped and bounded, like the other id memos. It may only suppress a
+ * write the store would have rejected as a duplicate anyway — see
+ * {@link plainSeenKey} for the one case where the id alone is NOT enough.
+ */
+const seenPlain = new Set<string>();
+const SEEN_PLAIN_CAP = 20_000;
+
+/**
+ * The dedupe key for a plaintext event.
+ *
+ * The id alone, EXCEPT for relay-scoped events. A NIP-29 event is filed into
+ * its source relay's own tenant (`relayScope.ts`), so the same id arriving
+ * from a second relay is a genuinely different row that must still be
+ * written — dedupe those per (id, relay), which still absorbs that relay's
+ * own replay without starving the other tenant.
+ */
+function plainSeenKey(ev: NostrEvent, relay: string | undefined): string {
+  return isRelayScoped(ev) ? `${ev.id}|${relay ?? ""}` : ev.id;
+}
+
+/** Test seam: forget every ingested id. */
+export function _resetIngestDedupeForTests(): void {
+  seenPlain.clear();
 }
 
 /** The same, over bare tags (a decrypted rumor isn't a `NostrEvent`). */
@@ -279,14 +322,30 @@ export async function ingestWireEvents(
         !(ev.kind === 1618 || ev.kind === 1621 || ev.kind === 1111 || (ev.kind >= 1630 && ev.kind <= 1633) || isCIEventKind(ev.kind)) ||
         scopeOf(ev, spec),
     );
-    const writes = storable.map((ev) =>
+    // Drop copies of events already ingested this session (see seenPlain).
+    // Marked BEFORE the write so a burst carrying the same event twice keeps
+    // only one; unmarked if the write throws, so a failed write is retried by
+    // the next delivery rather than being deduped against nothing.
+    const fresh = storable.filter((ev) => {
+      const key = plainSeenKey(ev, opts?.relay);
+      if (seenPlain.has(key)) return false;
+      if (seenPlain.size >= SEEN_PLAIN_CAP) {
+        // Oldest insertion first — `Set` iterates in insertion order.
+        const oldest = seenPlain.keys().next();
+        if (!oldest.done) seenPlain.delete(oldest.value);
+      }
+      seenPlain.add(key);
+      return true;
+    });
+    const writes = fresh.map((ev) =>
       Promise.resolve()
         .then(() => store.event(ev, { relay: opts?.relay }))
         .catch(() => {
           // Duplicate or rejected — either way the store's state is authoritative.
+          seenPlain.delete(plainSeenKey(ev, opts?.relay));
         })
     );
-    for (const ev of storable) {
+    for (const ev of fresh) {
       const scope = scopeOf(ev, spec);
       if (scope) scopes.add(scope);
       // The coarse `dm` scope refreshes the conversation list. Name the
