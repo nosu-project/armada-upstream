@@ -168,7 +168,7 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
                   </span>
                   <span className="block text-xs text-muted-foreground">
                     Gets its own key, and a role of the same name that decides who
-                    can read it — in any client.
+                    can read it. Enforced in every client.
                   </span>
                 </span>
               </label>
@@ -199,7 +199,7 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
                 className="w-full text-muted-foreground hover:text-foreground"
               >
                 <FolderGit2 className="size-4" />
-                Tie a git repository to it
+                Connect a git repository
               </Button>
             </form>
           )}

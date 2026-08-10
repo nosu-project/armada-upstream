@@ -43,7 +43,7 @@ describe("NewChannelDialog — the default path", () => {
     expect(screen.getByRole("button", { name: "Create channel" })).toBeInTheDocument();
 
     // Git is a secondary door, not half of a chooser.
-    fireEvent.click(screen.getByRole("button", { name: /tie a git repository to it/i }));
+    fireEvent.click(screen.getByRole("button", { name: /connect a git repository/i }));
     expect(screen.getByText("repository picker")).toBeInTheDocument();
     expect(screen.queryByPlaceholderText(NAME_PLACEHOLDER)).not.toBeInTheDocument();
 

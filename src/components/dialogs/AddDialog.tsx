@@ -328,7 +328,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
       if (target.kind === "buzz") {
         if (classified.kind !== "buzz") return;
         if (!user) {
-          throw new Error("Sign in first — a Buzz invite is claimed with your key.");
+          throw new Error("Sign in first. A Buzz invite is claimed with your key.");
         }
         if (target.policy && !policyAccepted) {
           throw new Error("Accept the server's terms to join.");
@@ -372,7 +372,7 @@ function EscapeHatch({ onDone }: { onDone: () => void }) {
       // this write IS the add — awaited, so a rejected publish surfaces as an
       // error instead of a rail icon that disappears at the next sync.
       if (!user) {
-        throw new Error("Sign in first — your server list is stored on your Nostr account.");
+        throw new Error("Sign in first. Your server list is stored on your Nostr account.");
       }
       await updateList({ type: "add-server", url: target.relay });
       toast({ title: "Server added", description: target.name || target.relay });
