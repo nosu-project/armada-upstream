@@ -196,11 +196,21 @@ public class ArmadaPushPlugin: CAPPlugin, CAPBridgedPlugin {
             .urls(for: .cachesDirectory, in: .userDomainMask).first
         else { return call.resolve() }
         let stamped = "\(ISO8601DateFormatter().string(from: Date())) \(line)\n"
-        try? stamped.write(
-            to: dir.appendingPathComponent("push-status.txt"),
-            atomically: true,
-            encoding: .utf8
-        )
+        let file = dir.appendingPathComponent("push-status.txt")
+        // Append, not overwrite. The interesting failure here is never the
+        // final state — it is what happened along the way: a registration that
+        // a quota refusal truncated, a relay set that drifted between launches.
+        // One file showing only the last attempt would erase exactly the record
+        // a bug like that leaves behind.
+        if FileManager.default.fileExists(atPath: file.path),
+            let handle = try? FileHandle(forWritingTo: file) {
+            defer { try? handle.close() }
+            try? handle.seekToEnd()
+            try? handle.write(contentsOf: Data(stamped.utf8))
+            call.resolve()
+            return
+        }
+        try? stamped.write(to: file, atomically: true, encoding: .utf8)
         call.resolve()
     }
 

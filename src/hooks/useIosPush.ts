@@ -347,8 +347,14 @@ export function useIosPush(): UsePushNotificationsReturn {
       }
     }
     saveRegisteredPushIds([...currentIds]);
+    // The relays the DM subscription asks the gateway to watch. Recorded
+    // because the gateway's own relay set is a SEPARATE thing: it answers the
+    // RPC over `NOSTR_PUSH_RELAYS` regardless, which can make a broken watch
+    // set look healthy — the relay the gateway connects to is not necessarily
+    // a relay the user's DMs ever touch.
+    const dmRelays = specs.find((spec) => spec.id === "armada-dm17")?.relays ?? [];
     await recordPushStatus(
-      `ok ${registered} subs on ${domain}`
+      `ok ${registered} subs on ${domain} dmRelays=[${dmRelays.join(" ")}]`
         + ` env=${registration.environment ?? "?"} token=…${registration.token.slice(-6)}`,
     );
   }, [client, user, specs, concord, watchSetLoading]);
