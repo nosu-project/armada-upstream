@@ -108,6 +108,16 @@ describe("exportHtml (mini-Armada)", () => {
     expect(html.split("data:image/png;base64,BBBB").length - 1).toBe(1);
   });
 
+  it("embeds each avatar once regardless of message count", () => {
+    const m = model();
+    m.channels[0].messages.push({ rumorId: "m3", author: "aa", ms: Date.parse("2026-01-01T00:02:00Z"), kind: 9, content: "again", reactions: [], attachments: [] });
+    const html = exportHtml(m);
+    // aa authored two messages, but the avatar bytes appear once (in a style
+    // rule) and are referenced by class, not re-inlined per message.
+    expect(html.split("data:image/png;base64,AAAA").length - 1).toBe(1);
+    expect(html).toContain('class="avatar av-aa"');
+  });
+
   it("builds the file as Blob parts that join to the whole document", () => {
     const parts = exportHtmlParts(model());
     expect(Array.isArray(parts)).toBe(true);

@@ -147,11 +147,27 @@ function renderContent(text: string): string {
   return linked.replace(/\n/g, "<br>");
 }
 
+/**
+ * A message avatar. The image itself is NOT inlined here: it is embedded once
+ * per author in a `<style>` rule ({@link avatarStyleParts}) and referenced by
+ * class, so a chatty user's avatar costs its bytes once instead of once per
+ * message — the difference between a sane export and a multi-gigabyte one.
+ */
 function avatarHtml(model: ExportModel, pubkey: string): string {
-  const src = model.profiles[pubkey]?.picture;
+  if (model.profiles[pubkey]?.picture) return `<span class="avatar av-${pubkey}"></span>`;
   const initial = escapeHtml(nameOf(model, pubkey).slice(0, 1).toUpperCase() || "?");
-  if (src) return `<img class="avatar" src="${escapeHtml(src)}" alt="">`;
   return `<span class="avatar avatar-fallback">${initial}</span>`;
+}
+
+/** One `background-image` rule per author with a picture, for the avatar dedupe. */
+function avatarStyleParts(model: ExportModel): string[] {
+  const parts: string[] = [];
+  for (const [pk, p] of Object.entries(model.profiles)) {
+    // Keys are hex pubkeys (safe as class suffixes); strip anything that could
+    // break out of the url("…") string defensively (data URIs never contain it).
+    if (p.picture) parts.push(`.av-${pk}{background-image:url("${p.picture.replace(/["\\\n\r]/g, "")}")}`);
+  }
+  return parts;
 }
 
 function attachmentHtml(a: ExportAttachment): string {
@@ -179,7 +195,7 @@ function messageHtml(model: ExportModel, m: ExportMessage): string {
         .map((r) => `<span class="reaction">${escapeHtml(r.emoji)} <b>${r.count}</b></span>`)
         .join("")}</div>`
     : "";
-  return `<div class="msg" id="m-${escapeHtml(m.rumorId)}">${avatarHtml(model, m.author)}<div class="msg-body">${head}${body}${atts}${reactions}</div></div>`;
+  return `<div class="msg">${avatarHtml(model, m.author)}<div class="msg-body">${head}${body}${atts}${reactions}</div></div>`;
 }
 
 // ── The self-contained mini-Armada document ──────────────────────────────────
@@ -221,7 +237,7 @@ a { color: #c9a9ff; }
 .pane.active { display: block; }
 .empty { color: #7d7189; padding: 24px 0; text-align: center; }
 .msg { display: flex; gap: 12px; padding: 7px 0; }
-.avatar { width: 40px; height: 40px; border-radius: 50%; flex: 0 0 40px; object-fit: cover; background: #34294a; }
+.avatar { width: 40px; height: 40px; border-radius: 50%; flex: 0 0 40px; background: #34294a center/cover no-repeat; }
 .avatar-fallback { display: inline-flex; align-items: center; justify-content: center; font-weight: 600; color: #d8ccdf; }
 .msg-body { min-width: 0; flex: 1; }
 .msg-head { display: flex; align-items: baseline; gap: 8px; }
@@ -317,7 +333,13 @@ export function exportHtmlParts(model: ExportModel): string[] {
   parts.push(
     `<!doctype html>\n<html lang="en">\n<head>\n` +
       `<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n` +
-      `<title>${escapeHtml(model.communityName)} Concord export</title>\n<style>${APP_STYLE}</style>\n</head>\n<body>\n` +
+      `<title>${escapeHtml(model.communityName)} Concord export</title>\n<style>${APP_STYLE}</style>\n<style>`,
+  );
+  // Each author's avatar, embedded once (see avatarHtml). Pushed as its own
+  // parts so this can be tens of megabytes without a single huge string.
+  parts.push(...avatarStyleParts(model));
+  parts.push(
+    `</style>\n</head>\n<body>\n` +
       `<div class="tabbar"><button class="tab active" data-view="chat">Chat</button>` +
       `<button class="tab" data-view="text">Text</button><button class="tab" data-view="json">JSON</button></div>\n` +
       `<div class="views"><section class="view view-chat active" data-view="chat"><div class="app">` +
