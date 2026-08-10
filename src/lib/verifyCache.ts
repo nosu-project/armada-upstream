@@ -43,7 +43,21 @@ const verified = new Set<string>();
 export function verifyEventOnce(event: NostrEvent): boolean {
   const start = performance.now();
 
-  if (getEventHash(event) !== event.id) {
+  let hash: string;
+  try {
+    // `getEventHash` serializes, and serializing an event with missing or
+    // ill-typed fields THROWS rather than returning a non-matching hash. A
+    // malformed event has to read as unverified, not as an exception: callers
+    // include `openWrap`, whose seal is JSON parsed out of a decrypted payload
+    // and shaped by whoever holds the group key. (nostr-tools' own
+    // `verifyEvent` catches this internally; so must the memoized form.)
+    hash = getEventHash(event);
+  } catch {
+    perfCount("crypto.verifyEvent", performance.now() - start, 1, "events");
+    return false;
+  }
+
+  if (hash !== event.id) {
     perfCount("crypto.verifyEvent", performance.now() - start, 1, "events");
     return false;
   }
