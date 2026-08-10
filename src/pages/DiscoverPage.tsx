@@ -37,10 +37,28 @@ const ThemeCreatorDialog = lazy(() =>
 
 type DiscoverTab = "communities" | "emojis" | "themes";
 
-const TABS: (PillTab<DiscoverTab> & { placeholder: string })[] = [
-  { id: "communities", label: "Communities", icon: Users, placeholder: "Search communities…" },
-  { id: "emojis", label: "Emojis", icon: Smile, placeholder: "Search emoji packs…" },
-  { id: "themes", label: "Themes", icon: Palette, placeholder: "Search themes…" },
+const TABS: (PillTab<DiscoverTab> & { placeholder: string; blurb: string })[] = [
+  {
+    id: "communities",
+    label: "Communities",
+    icon: Users,
+    placeholder: "Search communities…",
+    blurb: "Encrypted communities you can join with a link. No server, no host.",
+  },
+  {
+    id: "emojis",
+    label: "Emojis",
+    icon: Smile,
+    placeholder: "Search emoji packs…",
+    blurb: "Custom emoji packs shared across Nostr. Add one to your reactions.",
+  },
+  {
+    id: "themes",
+    label: "Themes",
+    icon: Palette,
+    placeholder: "Search themes…",
+    blurb: "Community-made color themes you can preview and apply in a tap.",
+  },
 ];
 
 /**
@@ -81,12 +99,23 @@ export function DiscoverPage() {
             <h1 className="min-w-0 flex-1 truncate font-semibold leading-tight">Discover</h1>
           </header>
 
-          {/* Tab pills + search — one row from sm up, stacked on a phone. */}
-          <div className="mt-4 flex shrink-0 flex-col gap-2 sm:flex-row sm:items-center">
-            <PillTabs tabs={TABS} value={tab} onChange={(id) => setTab(id)} />
+          {/* What the current tab surfaces — desktop only, where there's room to
+              set the page's intent before the grid. */}
+          <p className="hidden sm:block mt-3 px-1 text-sm text-muted-foreground">{active.blurb}</p>
+
+          {/* Tab pills + search — one row from sm up, stacked on a phone. On a
+              phone the vessels are the server rail's size-12 grid, spaced on its
+              gap-4 rhythm, so the two read as one idiom. */}
+          <div className="mt-3 flex shrink-0 flex-col gap-4 sm:mt-5 sm:flex-row sm:items-center sm:gap-3">
+            <PillTabs
+              tabs={TABS}
+              value={tab}
+              onChange={(id) => setTab(id)}
+              className="h-12 sm:h-auto"
+            />
 
             <div className="flex min-w-0 flex-1 items-center gap-2">
-              <div className="flex h-9 touch:h-11 min-w-0 flex-1 items-center gap-1.5 px-2 sidebar:px-3 clip-corner-lg bg-chrome">
+              <div className="flex h-12 sm:h-9 min-w-0 flex-1 items-center gap-1.5 px-2 sidebar:px-3 clip-corner-lg bg-chrome">
                 <Search className="size-4 shrink-0 text-muted-foreground" />
                 <Input
                   value={query}
@@ -115,7 +144,7 @@ export function DiscoverPage() {
                   header being dropped on a phone. */}
               {tab === "communities" && user && (
                 <Button
-                  className="h-9 touch:h-11 shrink-0 clip-corner-lg"
+                  className="h-12 sm:h-9 shrink-0 clip-corner-lg"
                   onClick={() => setShareOpen(true)}
                 >
                   <Plus className="size-4" />
@@ -125,7 +154,7 @@ export function DiscoverPage() {
               )}
               {tab === "emojis" && user && (
                 <Button
-                  className="h-9 touch:h-11 shrink-0 clip-corner-lg"
+                  className="h-12 sm:h-9 shrink-0 clip-corner-lg"
                   onClick={() => setCreateOpen(true)}
                 >
                   <Plus className="size-4" />
@@ -137,7 +166,7 @@ export function DiscoverPage() {
               {/* Second tenant of the same slot — the two never co-render. */}
               {tab === "themes" && user && (
                 <Button
-                  className="h-9 touch:h-11 shrink-0 clip-corner-lg"
+                  className="h-12 sm:h-9 shrink-0 clip-corner-lg"
                   onClick={() => setThemeCreateOpen(true)}
                 >
                   <Plus className="size-4" />
@@ -148,8 +177,9 @@ export function DiscoverPage() {
             </div>
           </div>
 
-          {/* Results */}
-          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-stable pb-8 pt-6">
+          {/* Results — the top spacing is a MARGIN, not scroll padding, so the
+              gap under the search bar stays put as the grid scrolls beneath it. */}
+          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-stable mt-4 sm:mt-6 pb-8">
             {tab === "communities" && <CommunitiesTab query={query} />}
             {tab === "emojis" && <EmojisTab query={query} />}
             {tab === "themes" && <ThemesTab query={query} />}

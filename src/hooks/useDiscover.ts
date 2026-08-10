@@ -294,7 +294,18 @@ async function fetchDiscoverDirectory(
         .filter((e) => e.kind === TEAM_PACK_COORD.kind && e.pubkey === TEAM_PACK_COORD.pubkey)
         .sort((a, b) => b.created_at - a.created_at)[0]
     : undefined;
-  const packAuthors = followPackPubkeys(packEvent);
+  let packAuthors = followPackPubkeys(packEvent);
+  if (packAuthors.length === 0) {
+    // The pack is a `limit: 1` addressable event piggybacked on the
+    // announcements REQ, and a round trip that drops it reads as an empty
+    // pack — which would collapse the allow-list and blank a grid that had
+    // just painted. Treat empty as a probable miss and carry the last good
+    // pack forward, mirroring writeSeed's fail-open rule.
+    const seeded = await getArmadaDB()
+      .kv.get<string[]>(PACK_SEED_KV)
+      .catch(() => undefined);
+    if (seeded && seeded.length > 0) packAuthors = seeded;
+  }
   // Feed the standalone pack query's seed too (the Emojis/Themes tabs).
   writeSeed(PACK_SEED_KV, packAuthors);
 

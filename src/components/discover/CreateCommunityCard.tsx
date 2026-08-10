@@ -33,7 +33,7 @@ export function CreateCommunityCard({ className }: { className?: string }) {
   return (
     <div
       className={cn(
-        "flex w-full flex-col overflow-hidden clip-corner-lg border border-primary/25 bg-[hsl(var(--chrome-deep)/0.55)]",
+        "flex w-full flex-col overflow-hidden rounded-xl border border-primary/25 bg-[hsl(var(--chrome-deep)/0.55)]",
         className,
       )}
     >
