@@ -10,7 +10,7 @@ import {
   rememberQuarantined,
   subscribeQuarantineMemory,
 } from "@/concord/lib/quarantineMemory";
-import { KIND_MESSAGE } from "@/concord/lib/kinds";
+import { KIND_DELETE, KIND_MESSAGE } from "@/concord/lib/kinds";
 import type { Channel } from "@/concord/lib/types";
 import { concordReadKey, useReadState } from "@/hooks/useReadState";
 import type { GitTimelineActivity } from "@/lib/gitActivity";
@@ -106,6 +106,26 @@ export function useConcordUnread(
       // memo (every markRead, every mounted instance) never re-runs the fold.
       const quarantined = quarantinedIn(rumors, pubkey);
       const remembered = communityIdHex ? recallQuarantined(communityIdHex, idHex) : undefined;
+      // A kind-5 self-delete removes its target from the render (foldTimeline,
+      // chat.ts) — but the store's NIP-09 pass only fires within one write
+      // batch, so a delete a relay delivered in a LATER batch than its target
+      // leaves that target physically in the store (chat.ts:302-308). This scan
+      // reads the raw store, so a self-deleted NEWEST message would otherwise
+      // pin `latest` above every rendered entry: a badge no open can clear,
+      // because clear-on-open stamps the newest RENDERED (undeleted) row. Fold
+      // deletes here so the count matches what the reader sees, exactly as the
+      // muted-author skip below does. Self-deletes only (delete author ==
+      // target author), which is all the store's own NIP-09 honors without a
+      // roster and cannot be abused to suppress a stranger's still-shown message.
+      const authorById = new Map<string, string>();
+      for (const r of rumors) authorById.set(r.rumorId, r.author);
+      const selfDeleted = new Set<string>();
+      for (const r of rumors) {
+        if (r.kind !== KIND_DELETE) continue;
+        for (const [n, v] of r.tags) {
+          if (n === "e" && v && authorById.get(v) === r.author) selfDeleted.add(v);
+        }
+      }
       let latest = 0;
       let latestMention = 0;
       for (const r of rumors) {
@@ -114,6 +134,8 @@ export function useConcordUnread(
         // ...nor from someone muted: the timeline won't render their message,
         // so a badge counting it would be one the channel can never clear.
         if (mutedPubkeys.has(r.author)) continue;
+        // ...nor a message its author has since deleted (same reasoning).
+        if (selfDeleted.has(r.rumorId)) continue;
         if (quarantined.has(r.rumorId)) continue;
         if (remembered?.has(r.rumorId)) continue;
         if (r.createdAt > latest) latest = r.createdAt;
