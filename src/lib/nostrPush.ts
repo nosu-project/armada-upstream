@@ -2,11 +2,15 @@
  * nostr-push RPC client (NIP-PUSH, kind 25742 + NIP-44).
  *
  * The push server is a content-blind relay watcher: the client registers
- * NIP-01 filters + a browser Web Push subscription, and the server delivers a
- * static "wake-up" push when a matching event arrives. The client's service
- * worker fetches the event and decrypts/renders it — the server never sees
- * plaintext (see `pushSubscriptions.ts` for what we register, and `sw.js` for
- * the render).
+ * NIP-01 filters + whatever transport reaches this install (a browser Web Push
+ * subscription, or an APNs device token on iOS), and the server delivers a
+ * static "wake-up" push when a matching event arrives. The client fetches the
+ * event and decrypts/renders it — the server never sees plaintext (see
+ * `pushSubscriptions.ts` for what we register, and `sw.js` for the web render).
+ *
+ * Nothing in this file is browser-specific: the transport is Nostr over the
+ * injected `PushRelayPool`, and the only per-platform part is which
+ * `PushTransport` the caller hands `registerSubscription`.
  *
  * Transport: kind-25742 events with NIP-44-encrypted content. We `#p`-tag the
  * server's pubkey on the request and it replies with a kind-25742 `#p`-tagged
@@ -24,8 +28,45 @@ export const KIND_PUSH_RPC = 25742;
 /** How long to wait for the server's reply before giving up. */
 const RPC_TIMEOUT_MS = 20_000;
 
+/** A browser Push API endpoint (RFC 8291 + RFC 8292 VAPID). */
+export interface WebPushTransport {
+  type: "web";
+  endpoint: string;
+  p256dh_key: string;
+  auth_key: string;
+}
+
 /**
- * A per-subscription Web Push registration. `relays` is an Armada extension to
+ * An Apple Push Notification service device token.
+ *
+ * `bundle_id` becomes the `apns-topic` header, which is how one team-wide auth
+ * key on the gateway serves every app in that Apple Developer team — the app
+ * names itself rather than the server being configured per app.
+ *
+ * `environment` is not cosmetic. A device token is minted against exactly ONE
+ * APNs host and the other rejects it with `BadDeviceToken`: a build run from
+ * Xcode gets a sandbox token, TestFlight and the App Store get production ones.
+ * Omitting it makes the gateway fall back to its own global setting, which
+ * cannot be right for both at once — so the app reads its own
+ * `aps-environment` entitlement and always says which it is
+ * (`ArmadaPushPlugin.swift`).
+ */
+export interface ApnsPushTransport {
+  type: "apns";
+  device_token: string;
+  bundle_id: string;
+  environment?: "sandbox" | "production";
+}
+
+/**
+ * How the gateway reaches this install. NIP-PUSH keys this union on `type`, and
+ * everything above it — the RPC, the filters, the quota, the mute-list check —
+ * is identical across transports; only the final delivery hop differs.
+ */
+export type PushTransport = WebPushTransport | ApnsPushTransport;
+
+/**
+ * A per-subscription push registration. `relays` is an Armada extension to
  * the base NIP-PUSH `register_subscription`: our groups/communities live on
  * arbitrary user relays, not one global set, so each subscription names the
  * relays the server should watch for it. Servers that ignore `relays` fall back
@@ -43,12 +84,7 @@ export interface PushRegistration {
     badge?: string;
     data?: Record<string, unknown>;
   };
-  push_subscription: {
-    type: "web";
-    endpoint: string;
-    p256dh_key: string;
-    auth_key: string;
-  };
+  push_subscription: PushTransport;
 }
 
 /** The minimal relay-pool surface we need (NPool satisfies this). */

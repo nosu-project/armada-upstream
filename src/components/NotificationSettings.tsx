@@ -14,6 +14,7 @@ import {
   type NotificationSoundId,
   type NotificationSoundSettings as NotificationSoundSettingsValue,
 } from "@/lib/notificationSounds";
+import { hasIosPush } from "@/lib/nativePush";
 import { type DmRequestLevel, type PushPrefs } from "@/lib/pushPrefs";
 import type { WebPushUnavailableReason } from "@/lib/webPushSupport";
 import {
@@ -298,9 +299,14 @@ function WebPushSettings() {
   return (
     <NotificationToggles
       title="Enable push notifications"
-      description={ready
-        ? "Get notified even when Armada is closed. Armada repairs expired browser subscriptions whenever you return."
-        : "Preparing secure background notifications…"}
+      description={!ready
+        ? "Preparing secure background notifications…"
+        : hasIosPush()
+          // The iOS app has no Notification Service Extension yet, so the
+          // gateway's fixed wake-up text is what the lock screen shows. Say so
+          // rather than let it read as a bug.
+          ? "Get notified even when Armada is closed. Notifications say a new message arrived without naming the sender or quoting it — Armada only decrypts once you open it."
+          : "Get notified even when Armada is closed. Armada repairs expired browser subscriptions whenever you return."}
       enabled={enabled}
       busy={busy}
       blocked={permission === "denied"}
@@ -333,11 +339,14 @@ function IosNotificationHint({
   standalone: boolean;
   reason?: WebPushUnavailableReason;
 }) {
+  // Only an iOS app built before push notifications existed reaches this now:
+  // a current one registers an APNs token with the same gateway the web client
+  // uses (useIosPush), and a browser reports the layer that is actually missing.
   if (reason === "native-runtime") {
     return (
       <p className="text-sm text-muted-foreground">
-        This iOS build does not include a native background notification service, and Web Push is
-        unavailable inside its embedded browser.
+        This version of the Armada app can&rsquo;t receive background notifications. Update to a
+        newer build to turn them on.
       </p>
     );
   }
@@ -345,8 +354,8 @@ function IosNotificationHint({
   if (reason === "gateway") {
     return (
       <p className="text-sm text-muted-foreground">
-        This Armada deployment has no background push service configured. The browser and your
-        iPhone are not the problem; the site operator needs to configure a push gateway.
+        This build of Armada has no background push service configured. Your iPhone is not the
+        problem; whoever built or deployed it needs to configure a push gateway.
       </p>
     );
   }

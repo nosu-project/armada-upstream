@@ -325,9 +325,63 @@ surface dead UI or throw: the `ArmadaNotification` background relay service
 (use `hasNativeNotificationService()`, not `isNativeRuntime()`, for anything
 touching it), NIP-55 external signers (Amber), the Bluetooth mesh, and
 the Credential Manager nsec export (itself Android 14+ only — see Conventions).
-**iOS therefore has no notifications at
-all** — no background service, and no Web Push in WKWebView; that needs APNs or
-a native iOS equivalent.
+
+### Notifications: APNs through the same nostr-push gateway
+
+iOS is the one platform that cannot listen for its own events in the
+background — no equivalent of Android's foreground service, and no Web Push in
+WKWebView — so it takes an APNs device token (`ios/App/App/ArmadaPushPlugin.swift`,
+`src/lib/nativePush.ts`) and registers it with the SAME content-blind
+nostr-push gateway the web client uses, as NIP-PUSH's `type: "apns"`
+subscription. `useIosPush.ts` is the controller; it and `useNostrPush.ts`
+register one watch set (`usePushWatchSet.ts`) and expose one
+`UsePushNotificationsReturn`, so the settings UI never learns which it has.
+Apple is unavoidably in the delivery path; what survives is that the GATEWAY
+still matches kinds and tags and sends a fixed string, never a rendered
+message.
+
+- **What the lock screen shows is what is REGISTERED.** There is no
+  Notification Service Extension, so `standaloneNotification()` re-shapes each
+  spec for a client with no decrypt stage: it fills the empty body the web
+  worker would have overwritten, and strips `inline_event`/`relays`, which only
+  feed a decrypt/fetch step that does not exist here and are spent against
+  APNs' hard 4096-byte payload. Deliberately NOT solved with NIP-PUSH's
+  `{{content}}` template — that is resolved server-side, which would route
+  message text through a gateway whose whole point is that it never handles
+  plaintext. An NSE is what closes this, and it means a third port of the
+  decrypt/store pipeline (`sw.js`+`pushRuntime.ts` on web, `Dm17.kt`+
+  `ServiceStore.kt` on Android) in Swift against the App Group's ArmadaDB —
+  which is exactly why the database is in the App Group already.
+- **`aps-environment` is a runtime question, not a build flag.** A device token
+  is minted against exactly one APNs host and the other rejects it with
+  `BadDeviceToken` — and a Release build run from Xcode is still sandbox while
+  the same configuration through TestFlight is production, so neither
+  `#if DEBUG` nor a build setting can answer it. `ArmadaPushBridge` reads the
+  `aps-environment` entitlement back out of the app's own embedded
+  provisioning profile and sends it with the token; an App Store build embeds
+  no profile, which is itself the production answer. Requires Push
+  Notifications on the App ID, like Associated Domains and App Groups.
+- **Subscription ids carry an installation id.** nostr-push indexes
+  `subscription_id` globally and registering REPLACES, and the native builds
+  have no origin of their own worth naming so they share `armada.buzz` as their
+  `domain` with the hosted client. Without the extra dimension
+  (`pushInstallationId`), signing in on an iPhone would silently take over the
+  same account's browser records and the browser's next sync would take them
+  back. Two BROWSERS on one origin still collide this way; that is pre-existing
+  and left alone, because changing web ids would make every install prune and
+  re-register.
+- **The gateway is build-time config, and iOS has no CI to set it.**
+  `VITE_NOSTR_PUSH_PUBKEY` / `VITE_NOSTR_PUSH_RELAYS` must be in the
+  environment of the `npm run build` that precedes `npx cap sync ios`, or the
+  app ships with `unavailableReason: "gateway"` and no push path at all.
+- Taps are routed by the plugin, not by a URL. A tap that LAUNCHED the process
+  is buffered natively and read by `coldLaunchDeepLink` alongside the launch
+  URL, so both settle the one race against `HomeRedirect`; a warm tap is the
+  `pushOpened` listener in `useNotificationNavigation`. Only DMs name a
+  destination — a group/community wake-up carries no room id, the gateway being
+  content-blind. A push arriving while the app is open lands in Notification
+  Center without a banner or sound, since the payload cannot distinguish the
+  channel being read from any other.
 
 Deep links: armada.buzz **universal links work**, via the
 `com.apple.developer.associated-domains` entitlement in
@@ -342,8 +396,9 @@ redirect** (it is extensionless, so nginx needs the explicit `location =`
 block in `nginx.conf`), and its `appIDs` must be `<TEAMID>.buzz.armada.app`.
 There is still no `CFBundleURLTypes` entry, so the `armada://open<path>` scheme
 does not resolve — deliberately: per `deepLinkUrl.ts` that scheme is emitted
-ONLY by the Android notification service's PendingIntents, so on iOS nothing
-can currently produce one. Add it with the notifications work, not before.
+ONLY by the Android notification service's PendingIntents, and iOS push taps
+reach the router through the plugin rather than through a URL, so nothing on
+iOS can produce one.
 
 ## Local storage: ArmadaDB
 
@@ -548,7 +603,14 @@ Things to know before touching it:
   gates on an explicit platform SET plus `isPluginAvailable`. Gating it on
   `isNativePlatform()` would be wrong the day a third native platform appears;
   gating it on `"android"` would silently put iOS back on IndexedDB, with the
-  data already written to SQLite left where nothing reads it.
+  data already written to SQLite left where nothing reads it. The rule runs the
+  other way too: `ArmadaPush` is iOS-ONLY, so `hasIosPush()` gates on
+  `getPlatform() === "ios"` plus `isPluginAvailable` — the second half because
+  an iOS build predating the plugin would otherwise offer a toggle whose every
+  call rejects. Android needs no such plugin and should never get one: the APK
+  ships no Play Services to receive FCM on, and its background service is
+  strictly better anyway, holding the relay sockets itself with no third party
+  in the delivery path.
 - Commit messages: concise, imperative, sentence case (see `git log`).
   Describe the technical change only — what was changed. Don't embed a
   confident problem diagnosis, root-cause narrative, or prescribed "this fixes

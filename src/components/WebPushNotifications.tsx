@@ -6,26 +6,34 @@ import {
   enableForegroundNotifications,
   notificationsApiAvailable,
 } from "@/hooks/useForegroundNotificationSettings";
+import { useIosPush } from "@/hooks/useIosPush";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { useNostrPush } from "@/hooks/useNostrPush";
 import { useOnboardingActive } from "@/hooks/useOnboarding";
+import { hasIosPush } from "@/lib/nativePush";
 import { DEFAULT_PUSH_PREFS, type UsePushNotificationsReturn } from "@/lib/pushPrefs";
 import { requestWebPushOptIn, setWebPushEnable } from "@/lib/webPushPrompt";
 
 /**
- * Provider that keeps one web-push controller alive app-wide.
+ * Provider that keeps one gateway push controller alive app-wide.
  *
  * Before this, the push hook was only mounted by the notification settings
  * page — so its auto-(re)enable and server-record syncs (prefs and per-channel
  * mutes) only ran when the user happened to visit Settings. Keeping the hook
  * here also prevents Settings from mounting a second controller and racing two
- * VAPID/server syncs. Inert in the native APK (which uses the foreground
- * service path instead — see NativeNotifications).
+ * VAPID/server syncs.
  *
- * The content-blind nostr-push hook self-gates on `supported`, so this is also
- * inert when no nostr-push server is configured for this build.
+ * Which controller depends on how this build can be reached, and exactly one is
+ * ever mounted: Web Push in a browser, APNs in the iOS app. The Android APK has
+ * neither — it runs its own background relay service instead (see
+ * NativeNotifications), which needs no third party in the delivery path — so it
+ * gets the inert value below. Both real controllers self-gate on `supported`,
+ * so this is also inert when no nostr-push gateway is configured for the build.
  */
 export function WebPushNotifications({ children }: { children: ReactNode }) {
+  // Platform is fixed for the life of the process, so branching on it before
+  // the hooks is stable — each branch mounts one component with its own hooks.
+  if (hasIosPush()) return <IosPushBridge>{children}</IosPushBridge>;
   if (isNativeRuntime()) {
     const unavailable: UsePushNotificationsReturn = {
       supported: false,
@@ -47,6 +55,17 @@ export function WebPushNotifications({ children }: { children: ReactNode }) {
 
 function WebPushBridge({ children }: { children: ReactNode }) {
   const active = useNostrPush();
+  return <PushBridge active={active}>{children}</PushBridge>;
+}
+
+function IosPushBridge({ children }: { children: ReactNode }) {
+  const active = useIosPush();
+  return <PushBridge active={active}>{children}</PushBridge>;
+}
+
+function PushBridge(
+  { active, children }: { active: UsePushNotificationsReturn; children: ReactNode },
+) {
   const { user } = useCurrentUser();
   const onboarding = useOnboardingActive();
 

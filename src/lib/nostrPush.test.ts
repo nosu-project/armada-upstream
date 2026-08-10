@@ -101,6 +101,38 @@ describe("NostrPushClient", () => {
     expect(published[0].tags).toContainEqual(["p", SERVER]);
   });
 
+  it("carries an APNs device token through the same request shape", async () => {
+    // The transport is a discriminated union under one RPC: an iOS
+    // registration differs from a web one only in `push_subscription`, and the
+    // gateway needs `environment` because a token is valid on exactly one APNs
+    // host (see ArmadaPushPlugin.apsEnvironment).
+    const published: NostrEvent[] = [];
+    const reply = replyEvent({ request_id: REQ_ID, success: true, result: { success: true } });
+    const pool = fakePool([["EVENT", "s", reply]], published);
+    await makeClient(pool).registerSubscription({
+      subscription_id: "armada-dm17",
+      domain: "armada.buzz",
+      filter: { kinds: [1059], "#p": [ME] },
+      relays: ["wss://dm"],
+      notification: { title: "New message", body: "New direct message" },
+      push_subscription: {
+        type: "apns",
+        device_token: "ab".repeat(32),
+        bundle_id: "buzz.armada.app",
+        environment: "sandbox",
+      },
+    });
+    expect(published).toHaveLength(1);
+    const payload = JSON.parse(published[0].content);
+    expect(payload.method).toBe("register_subscription");
+    expect(payload.params.push_subscription).toEqual({
+      type: "apns",
+      device_token: "ab".repeat(32),
+      bundle_id: "buzz.armada.app",
+      environment: "sandbox",
+    });
+  });
+
   it("throws NostrPushError on an error reply", async () => {
     const reply = replyEvent({ request_id: REQ_ID, success: false, error: "quota exceeded" });
     await expect(

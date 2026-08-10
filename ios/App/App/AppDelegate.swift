@@ -7,8 +7,24 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Override point for customization after application launch.
+        // Claim the notification delegate before launch finishes. A tap that
+        // STARTS the process is delivered during launch, and iOS drops it if
+        // nothing is listening by then — so this cannot wait for the WebView,
+        // which is also why the bridge buffers the tap rather than assuming a
+        // plugin is there to receive it (ArmadaPushPlugin.swift).
+        ArmadaPushBridge.shared.install()
         return true
+    }
+
+    // APNs answers `registerForRemoteNotifications()` on the app delegate, which
+    // exists before any plugin does. Forward both outcomes to the bridge, which
+    // is what `ArmadaPush.register()` is waiting on.
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        ArmadaPushBridge.shared.didRegister(deviceToken: deviceToken)
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        ArmadaPushBridge.shared.didFailToRegister(error: error)
     }
 
     func applicationWillResignActive(_ application: UIApplication) {

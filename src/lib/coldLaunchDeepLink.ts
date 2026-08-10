@@ -2,12 +2,14 @@ import { App as CapacitorApp } from "@capacitor/app";
 
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { pathFromDeepLinkUrl } from "@/lib/deepLinkUrl";
+import { takePendingPushOpen } from "@/lib/nativePush";
 
 /**
  * Cold-launch deep-link resolution, resolved ONCE at startup.
  *
- * A notification tap launches the process with an `armada://open<path>` URL
- * (and an App Link tap with an `https://armada.buzz/<path>` URL), but
+ * A notification tap launches the process with an `armada://open<path>` URL on
+ * Android and through the notification delegate on iOS (`nativePush.ts`), and
+ * an App Link tap with an `https://armada.buzz/<path>` URL, but
  * Capacitor still loads the SPA at its root (`/`), and `App.getLaunchUrl()` is
  * async — it resolves a beat AFTER React mounts. By then the router's
  * `HomeRedirect` has already sent `/` to the default server, `ServerPage` has
@@ -43,9 +45,22 @@ function settle(path: string | null): void {
 if (isNativeRuntime()) {
   // Guard so a hung bridge can't pin HomeRedirect forever.
   const timeout = setTimeout(() => settle(null), 1500);
-  CapacitorApp.getLaunchUrl()
-    .then((res) => {
-      const path = pathFromDeepLinkUrl(res?.url);
+  // Two cold sources, read together. An iOS push tap is delivered to the
+  // notification delegate rather than as a URL open, so it produces no launch
+  // URL — but it is the same kind of fact, arrives at the same moment, and must
+  // beat HomeRedirect's default in the same way. Reading both here is what
+  // keeps that one race in one place; a tap resolved separately would navigate
+  // AFTER the default had already won, which is a tap that "didn't work".
+  Promise.all([
+    CapacitorApp.getLaunchUrl()
+      .then((res) => pathFromDeepLinkUrl(res?.url))
+      .catch(() => null),
+    takePendingPushOpen().catch(() => null),
+  ])
+    .then(([urlPath, pushPath]) => {
+      // Only one of them can be why the process started; prefer the URL, which
+      // is the more specific of the two (a push tap knows only the DM tier).
+      const path = urlPath ?? pushPath;
       if (!resolved) {
         clearTimeout(timeout);
         settle(path);

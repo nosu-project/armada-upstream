@@ -1,37 +1,29 @@
 import { useNostr } from "@nostrify/react";
-import { useNostrLogin } from "@nostrify/react/login";
-import { bytesToHex } from "@noble/hashes/utils.js";
-import { nip19 } from "nostr-tools";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { useAcceptedDms } from "@/hooks/useAcceptedDms";
-import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useDmRelayList } from "@/hooks/useDmRelayList";
-import { useFollowList } from "@/hooks/useFollowList";
-import { useNotifLevels } from "@/hooks/useNotifLevels";
-import { usePinnedDms } from "@/hooks/usePinnedDms";
-import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
+import { usePushWatchSet } from "@/hooks/usePushWatchSet";
 import { clearSwPushConfig, writeSwPushConfig } from "@/lib/swPushConfig";
 import { clearPushDisabledFlag, writePushDisabledFlag } from "@/lib/swPushDisabled";
 import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
 import {
-  DEFAULT_PUSH_PREFS,
+  loadPushPrefs,
   type PushPrefs,
   type UsePushNotificationsReturn,
 } from "@/lib/pushPrefs";
-import { effectiveDmRelays } from "@/contexts/AppContext";
-import { useConcordSubs } from "@/concord/hooks/useConcordSubs";
-import { NostrPushClient, type PushRelayPool, type PushSigner } from "@/lib/nostrPush";
 import {
-  buildPushSubscriptions,
-  scopePushSubscriptionId,
-} from "@/lib/pushSubscriptions";
+  loadPushIntent,
+  loadRegisteredPushIds,
+  savePushIntent,
+  savePushPrefs,
+  saveRegisteredPushIds,
+} from "@/lib/pushRegistry";
+import { NostrPushClient, type PushRelayPool, type PushSigner } from "@/lib/nostrPush";
+import { scopePushSubscriptionId } from "@/lib/pushSubscriptions";
 import {
   NOSTR_PUSH_PUBKEY,
   NOSTR_PUSH_RELAYS,
-  normalizeRelayUrl,
   nostrPushConfigured,
 } from "@/lib/platform";
 import {
@@ -49,11 +41,12 @@ import {
  * the service worker fetches and decrypts/renders the referenced event
  * (`sw.js`).
  *
- * This hook mirrors the native Android background service's watch set
- * (`useNativeNotifications`): the same groups, mentions-only levels, addressed
- * NIP-17 wraps, friends-only legacy DMs, and Concord channels — turned
- * into content-blind subscriptions by `buildPushSubscriptions`, then registered
- * with the server.
+ * The watch set it registers is `usePushWatchSet` — the same groups,
+ * mentions-only levels, addressed NIP-17 wraps, friends-only legacy DMs and
+ * Concord channels the native Android background service watches
+ * (`useNativeNotifications`), and the same ones the iOS APNs controller
+ * registers (`useIosPush`). Only the transport differs between the two: this
+ * one registers a browser Web Push subscription, that one a device token.
  * It self-gates: `supported` is false unless a nostr-push server is configured
  * for this build and the signer can NIP-44.
  *
@@ -61,65 +54,8 @@ import {
  * drives.
  */
 
-const PREFS_KEY = "armada:push-prefs";
-const INTENT_KEY = "armada:push-intent";
 /** Per-domain VAPID key cache (avoids an RPC round-trip on every load). */
 const VAPID_KEY = "armada:nostr-push-vapid";
-/** The subscription ids we last registered — to prune stale ones. */
-const SUBS_KEY = "armada:nostr-push-subs";
-
-function loadIntent(): boolean {
-  try {
-    const raw = localStorage.getItem(INTENT_KEY);
-    return raw === null ? true : raw === "true";
-  } catch {
-    return true;
-  }
-}
-
-function saveIntent(on: boolean): void {
-  try {
-    localStorage.setItem(INTENT_KEY, String(on));
-  } catch {
-    // ignore
-  }
-}
-
-function loadPrefs(): PushPrefs {
-  try {
-    const raw = localStorage.getItem(PREFS_KEY);
-    if (raw) return { ...DEFAULT_PUSH_PREFS, ...JSON.parse(raw) };
-  } catch {
-    // ignore
-  }
-  return { ...DEFAULT_PUSH_PREFS };
-}
-
-function savePrefs(prefs: PushPrefs): void {
-  try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
-  } catch {
-    // ignore
-  }
-}
-
-function loadRegisteredIds(): string[] {
-  try {
-    const raw = localStorage.getItem(SUBS_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {
-    // ignore
-  }
-  return [];
-}
-
-function saveRegisteredIds(ids: string[]): void {
-  try {
-    localStorage.setItem(SUBS_KEY, JSON.stringify(ids));
-  } catch {
-    // ignore
-  }
-}
 
 /** base64url (VAPID public key) → ArrayBuffer for applicationServerKey. */
 function urlBase64ToBuffer(base64String: string): ArrayBuffer {
@@ -166,15 +102,6 @@ async function pushPermission(prepared: PreparedPush): Promise<NotificationPermi
 export function useNostrPush(): UsePushNotificationsReturn {
   const { user } = useCurrentUser();
   const { nostr } = useNostr();
-  const { config } = useAppContext();
-  const { data: groupList } = useUserGroupList();
-  const { data: followData, isLoading: followsLoading } = useFollowList();
-  const { accepted } = useAcceptedDms();
-  const { pinned } = usePinnedDms();
-  const { logins } = useNostrLogin();
-  const { channelLevel, concordChannelLevel } = useNotifLevels();
-  const { relays: publishedDmRelays } = useDmRelayList();
-  const allConcordSubs = useConcordSubs();
 
   const unavailableReason = isNativeRuntime()
     ? "native-runtime" as const
@@ -189,115 +116,12 @@ export function useNostrPush(): UsePushNotificationsReturn {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string>();
   const [prepareNonce, setPrepareNonce] = useState(0);
-  const [prefs, setPrefsState] = useState<PushPrefs>(loadPrefs);
+  const [prefs, setPrefsState] = useState<PushPrefs>(loadPushPrefs);
   const preparedRef = useRef<PreparedPush | undefined>(undefined);
 
-  // ── Inputs (mirror useNativeNotifications) ─────────────────────────────────
-
-  const relayUrls = useMemo(() => {
-    const set = new Set<string>();
-    for (const g of groupList?.groups ?? []) {
-      const n = normalizeRelayUrl(g.relay);
-      if (n) set.add(n);
-    }
-    for (const url of groupList?.servers ?? []) {
-      const n = normalizeRelayUrl(url);
-      if (n) set.add(n);
-    }
-    return [...set].sort();
-  }, [groupList]);
-
-  const groupIds = useMemo(
-    () =>
-      [
-        ...new Set(
-          (groupList?.groups ?? [])
-            .filter((g) => channelLevel(g.relay, g.id) !== "nothing")
-            .map((g) => g.id),
-        ),
-      ].sort(),
-    [groupList, channelLevel],
-  );
-
-  const mentionOnlyGroupIds = useMemo(
-    () =>
-      [
-        ...new Set(
-          (groupList?.groups ?? [])
-            .filter((g) => channelLevel(g.relay, g.id) === "mentions")
-            .map((g) => g.id),
-        ),
-      ].sort(),
-    [groupList, channelLevel],
-  );
-
-  const dmRelays = useMemo(() => {
-    const set = new Set<string>();
-    for (const url of [...effectiveDmRelays(config), ...publishedDmRelays]) {
-      const n = normalizeRelayUrl(url);
-      if (n) set.add(n);
-    }
-    return [...set].sort();
-  }, [config, publishedDmRelays]);
-
-  const dmFollows = useMemo(
-    () => [...new Set(followData?.pubkeys ?? [])].sort(),
-    [followData?.pubkeys],
-  );
-
-  // The service worker gates DM push from the wrap the server inlines. It needs
-  // the "known" peer set (follows ∪ accepted ∪ pinned, mirroring
-  // useKnownDmPeers) and — for nsec logins only — the key to unseal the wrap.
-  // Bunker (NIP-46) / extension (NIP-07) keys stay off-device, so those logins
-  // pass no key and their DM push stays the generic wake-up.
-  const dmKnownPeers = useMemo(
-    () => [...new Set([...(followData?.pubkeys ?? []), ...accepted, ...pinned])].sort(),
-    [followData?.pubkeys, accepted, pinned],
-  );
-
-  const dmSk = useMemo(() => {
-    const login = logins[0];
-    try {
-      if (login?.type === "nsec") {
-        const decoded = nip19.decode(login.data.nsec);
-        if (decoded.type === "nsec") return bytesToHex(decoded.data);
-      }
-    } catch {
-      // Malformed login data — no key, and DM push stays generic.
-    }
-    return undefined;
-  }, [logins]);
-
-  const concord = useMemo(
-    () =>
-      allConcordSubs.filter(
-        (sub) => concordChannelLevel("c2", sub.communityId, sub.channelId) !== "nothing",
-      ),
-    [allConcordSubs, concordChannelLevel],
-  );
-
-  const specs = useMemo(() => {
-    if (!user) return [];
-    return buildPushSubscriptions({
-      pubkey: user.pubkey,
-      relayUrls,
-      groupIds,
-      mentionOnlyGroupIds,
-      prefs,
-      dmRelays,
-      dmFollows,
-      concord,
-    });
-  }, [
-    user,
-    relayUrls,
-    groupIds,
-    mentionOnlyGroupIds,
-    prefs,
-    dmRelays,
-    dmFollows,
-    concord,
-  ]);
+  // The watch set — the same one the Android background service uses, and the
+  // one the APNs controller registers (`usePushWatchSet`).
+  const { specs, concord, dmKnownPeers, dmSk, followsLoading } = usePushWatchSet(prefs);
 
   // Keep the service worker's push config current — the DM policy + known set
   // for every enabled web-push session, the decrypt key for nsec logins, and
@@ -445,7 +269,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
       if (cancelled) return;
       preparedRef.current = prepared;
       setPermission(nextPermission);
-      setEnabled(Boolean(current && nextPermission === "granted" && loadIntent()));
+      setEnabled(Boolean(current && nextPermission === "granted" && loadPushIntent()));
       setReady(true);
     })().catch((err) => {
       if (cancelled) return;
@@ -514,12 +338,12 @@ export function useNostrPush(): UsePushNotificationsReturn {
 
     // Prune server records we no longer want (left group, muted, logged-out DM).
     const currentIds = new Set(scopedSpecs.map((s) => s.id));
-    for (const id of loadRegisteredIds()) {
+    for (const id of loadRegisteredPushIds()) {
       if (!currentIds.has(id)) {
         await client.deleteSubscription(id, domain).catch(() => {});
       }
     }
-    saveRegisteredIds([...currentIds]);
+    saveRegisteredPushIds([...currentIds]);
   }, [client, user, specs]);
 
   // Auto-(re)sync on every load and whenever the watch set changes: opt-out, so
@@ -540,7 +364,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
   useEffect(() => {
     if (!supported || !ready || !client || !user) return;
     if (permission !== "granted") return;
-    if (!loadIntent()) return;
+    if (!loadPushIntent()) return;
     // Empty specs is ambiguous: it means "still loading" on a cold start, and
     // "was watching, now nothing" once something has been registered — and only
     // the second must run, so `sync` prunes the stale server records instead of
@@ -552,7 +376,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
     // and the gateway would keep pushing. The persisted registration list is
     // the durable half of the answer — if it holds ids, something is registered
     // and the prune is owed regardless of what this session has seen.
-    if (specs.length === 0 && !hadSpecs.current && loadRegisteredIds().length === 0) return;
+    if (specs.length === 0 && !hadSpecs.current && loadRegisteredPushIds().length === 0) return;
     if (specs.length > 0) hadSpecs.current = true;
     if (lastSynced.current === syncSig) return;
 
@@ -615,8 +439,8 @@ export function useNostrPush(): UsePushNotificationsReturn {
         ]);
         if (cancelled) return;
         setPermission(nextPermission);
-        setEnabled(Boolean(existing && nextPermission === "granted" && loadIntent()));
-        if (!existing && nextPermission === "granted" && loadIntent()) {
+        setEnabled(Boolean(existing && nextPermission === "granted" && loadPushIntent()));
+        if (!existing && nextPermission === "granted" && loadPushIntent()) {
           lastSynced.current = null;
           retry.current = 0;
           setNonce((n) => n + 1);
@@ -650,7 +474,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
     try {
       const subscription = await subscriptionPromise;
       setPermission("granted");
-      saveIntent(true);
+      savePushIntent(true);
       lastSynced.current = null;
       await sync(subscription);
       lastSynced.current = syncSig;
@@ -670,7 +494,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
   const disable = useCallback(async () => {
     setBusy(true);
     try {
-      saveIntent(false);
+      savePushIntent(false);
       // Local truth first, where the worker can read it: everything after
       // this line goes over the network and can fail (or the page can die
       // mid-teardown), and the worker refuses — and tears down — pushes on
@@ -680,11 +504,11 @@ export function useNostrPush(): UsePushNotificationsReturn {
       const domain = pushDomain();
       // Delete every server record we registered.
       if (client) {
-        for (const id of loadRegisteredIds()) {
+        for (const id of loadRegisteredPushIds()) {
           await client.deleteSubscription(id, domain).catch(() => {});
         }
       }
-      saveRegisteredIds([]);
+      saveRegisteredPushIds([]);
       try {
         const reg = preparedRef.current?.registration ?? await navigator.serviceWorker.ready;
         const sub = await reg.pushManager.getSubscription();
@@ -702,7 +526,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
   const setPrefs = useCallback(
     async (next: PushPrefs) => {
       setPrefsState(next);
-      savePrefs(next);
+      savePushPrefs(next);
       // The specs recompute from `prefs`; force the sync effect to re-run.
       lastSynced.current = null;
       setNonce((n) => n + 1);

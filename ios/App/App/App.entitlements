@@ -34,5 +34,25 @@
 	<array>
 		<string>group.buzz.armada.app</string>
 	</array>
+
+	<!-- APNs, the app's only route to a notification while it is closed: iOS
+	     has no equivalent of the Android background relay service, and
+	     WKWebView has no Web Push. The device token goes to the same
+	     content-blind nostr-push gateway the web client registers with, as a
+	     `type: "apns"` subscription (ArmadaPushPlugin.swift, useIosPush.ts).
+
+	     The VALUE here is not the environment the app ends up in — Xcode
+	     rewrites it per build, `development` for a locally signed build and
+	     `production` for an App Store/TestFlight one — and a device token is
+	     valid against exactly one APNs host. So the app reads this entitlement
+	     back out of its own embedded provisioning profile at runtime and tells
+	     the gateway which host minted the token, rather than either side
+	     guessing.
+
+	     Requires Push Notifications to be enabled on the App ID in the Apple
+	     developer portal; automatic signing then regenerates a profile carrying
+	     the capability. -->
+	<key>aps-environment</key>
+	<string>development</string>
 </dict>
 </plist>

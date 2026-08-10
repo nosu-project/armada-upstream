@@ -2,7 +2,7 @@ import Capacitor
 import UIKit
 
 /// The app's Capacitor view controller, which exists for one reason: to
-/// register `ArmadaDbPlugin`.
+/// register the app-local plugins (`ArmadaDbPlugin`, `ArmadaPushPlugin`).
 ///
 /// Capacitor's automatic registration walks `packageClassList` in
 /// `capacitor.config.json`, which `cap sync` regenerates from the installed npm
@@ -17,5 +17,6 @@ class ViewController: CAPBridgeViewController {
 
     override func capacitorDidLoad() {
         bridge?.registerPluginInstance(ArmadaDbPlugin())
+        bridge?.registerPluginInstance(ArmadaPushPlugin())
     }
 }

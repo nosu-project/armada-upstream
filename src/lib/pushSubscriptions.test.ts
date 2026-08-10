@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildPushSubscriptions,
   scopePushSubscriptionId,
+  standaloneNotification,
   type PushSubscriptionInput,
 } from "@/lib/pushSubscriptions";
 import { DEFAULT_PUSH_PREFS } from "@/lib/pushPrefs";
@@ -270,5 +271,84 @@ describe("scopePushSubscriptionId", () => {
     const id = scopePushSubscriptionId("x".repeat(100), ME, "armada.buzz");
     expect(id).toHaveLength(64);
     expect(id).toMatch(/^x{31}-[0-9a-f]{32}$/);
+  });
+
+  it("separates installs sharing one account and domain", () => {
+    // Registering an id REPLACES, and the native builds share armada.buzz as
+    // their domain with the hosted client. Without the installation dimension
+    // signing in on a phone would take over the browser's records, and the
+    // browser's next sync would take them back.
+    const web = scopePushSubscriptionId("armada-dm17", ME, "armada.buzz");
+    const phone = scopePushSubscriptionId("armada-dm17", ME, "armada.buzz", "install-a");
+    const tablet = scopePushSubscriptionId("armada-dm17", ME, "armada.buzz", "install-b");
+
+    expect(new Set([web, phone, tablet])).toHaveLength(3);
+    expect(phone).toBe(scopePushSubscriptionId("armada-dm17", ME, "armada.buzz", "install-a"));
+    expect(phone.length).toBeLessThanOrEqual(64);
+  });
+
+  it("leaves the web ids untouched when no installation is given", () => {
+    // Changing them would make every existing install prune and re-register.
+    // The digest is sha256("armada.buzz\0<pubkey>") truncated to 128 bits, the
+    // value the pre-installation implementation produced for this input.
+    expect(scopePushSubscriptionId("armada-groups", ME, "armada.buzz"))
+      .toBe("armada-groups-9499c671775bd76106853ef22515d79e");
+  });
+});
+
+describe("standaloneNotification", () => {
+  const specs = buildPushSubscriptions(
+    baseInput({
+      relayUrls: ["wss://r"],
+      groupIds: ["g1", "g2"],
+      mentionOnlyGroupIds: ["g2"],
+      dmRelays: ["wss://dm"],
+      dmFollows: ["friend".padEnd(64, "0")],
+      concord: [{
+        relays: ["wss://c"],
+        communityId: "c".padEnd(64, "0"),
+        communityName: "C",
+        channelId: "ch".padEnd(64, "0"),
+        channelName: "general",
+        streams: [{ pk: "pk".padEnd(64, "0"), convKey: "k".padEnd(64, "0"), epoch: "1" }],
+        timerSecs: 0,
+        gitAttachments: [],
+      }],
+    }),
+  );
+
+  it("gives every subscription a body that can stand on its own", () => {
+    // A client with no decrypt stage shows exactly what is registered, and the
+    // group scopes carry an empty body for the web worker to overwrite.
+    for (const spec of specs) {
+      const notification = standaloneNotification(spec);
+      expect(notification.title, spec.id).toBeTruthy();
+      expect(notification.body, spec.id).toBeTruthy();
+    }
+  });
+
+  it("distinguishes a mention from an ordinary channel message", () => {
+    const groups = specs.find((s) => s.id === "armada-groups")!;
+    const mention = specs.find((s) => s.id === "armada-groups-mention")!;
+    expect(standaloneNotification(groups).body).toBe("New message in a channel");
+    expect(standaloneNotification(mention).body).toBe("Someone mentioned you");
+  });
+
+  it("keeps a body the spec already provides", () => {
+    const dm = specs.find((s) => s.id === "armada-dm17")!;
+    expect(standaloneNotification(dm).body).toBe("New direct message");
+  });
+
+  it("drops the payload a client without a decrypt stage cannot use", () => {
+    // inline_event and relays both feed a decrypt/fetch step; with none they
+    // are bytes spent against APNs' 4096-byte budget. The routing hints stay.
+    for (const spec of specs) {
+      const { data } = standaloneNotification(spec);
+      expect(data.inline_event, spec.id).toBeUndefined();
+      expect(data.relays, spec.id).toBeUndefined();
+      expect(data.scope, spec.id).toBe(spec.notification.data.scope);
+    }
+    const dm = specs.find((s) => s.id === "armada-dm17")!;
+    expect(standaloneNotification(dm).data.url).toBe("/dm");
   });
 });

@@ -100,6 +100,19 @@ export interface PushSubscriptionInput {
  * user registers it first. Include both owner and domain because the same
  * Nostr identity may use Armada from more than one web origin.
  *
+ * `installation` adds a per-install dimension, and registering an id is
+ * REPLACE — so any two installs that compute the same id take the gateway's one
+ * record in turn, and whichever synced last is the only one still reachable.
+ * The native builds pass one (`nativePush.ts`), because they share the public
+ * web origin as their `domain` with the hosted client: without it, signing in
+ * on the iPhone would silently overwrite the same account's browser
+ * registrations, and the browser's next sync would overwrite the iPhone's back.
+ *
+ * The web path deliberately passes nothing, leaving its ids as they are: two
+ * BROWSERS on one origin still collide the same way, but changing their ids
+ * would make every existing install prune and re-register on next load, which
+ * is a migration this doesn't need to carry.
+ *
  * Keep the readable logical id for server logs and append a 128-bit digest;
  * nostr-push caps subscription ids at 64 characters.
  */
@@ -107,11 +120,50 @@ export function scopePushSubscriptionId(
   logicalId: string,
   pubkey: string,
   domain: string,
+  installation?: string,
 ): string {
-  const scope = `${domain.toLowerCase()}\0${pubkey.toLowerCase()}`;
+  const scope = [domain, pubkey, ...(installation ? [installation] : [])]
+    .map((part) => part.toLowerCase())
+    .join("\0");
   const tag = bytesToHex(sha256(new TextEncoder().encode(scope))).slice(0, 32);
   const prefix = logicalId.slice(0, 64 - tag.length - 1);
   return `${prefix}-${tag}`;
+}
+
+/**
+ * Re-shape a spec's notification for a client that CANNOT open the event.
+ *
+ * Every spec above is written for the web service worker, which decrypts the
+ * inlined event and rewrites the notification from it. Two things follow for a
+ * client with no such stage — today, iOS, which has no Notification Service
+ * Extension (`useIosPush.ts`), so what is registered is exactly what the lock
+ * screen shows:
+ *
+ *  - **The body must stand alone.** The group scopes carry an empty body on
+ *    purpose, since on the web it shows only for the instant before the real
+ *    text replaces it. Registered as-is it would be an alert with a title and
+ *    no body, the one outcome that reads as broken rather than as terse. This
+ *    deliberately does NOT reach for NIP-PUSH's `{{content}}` template to do
+ *    better: that is resolved server-side, which would route message text
+ *    through a gateway whose entire point is that it never handles plaintext.
+ *  - **`inline_event` and `relays` come off.** Both exist to feed a decrypt
+ *    stage. With none, the event is payload the client cannot read and the
+ *    relay list is for a fetch nobody makes — and on APNs they are spent
+ *    against a hard 4096-byte budget. `scope` and `url` stay, because the tap
+ *    handler routes on them.
+ */
+export function standaloneNotification(
+  spec: PushSubscriptionSpec,
+): { title: string; body: string; data: Record<string, unknown> } {
+  const { title, body, data } = spec.notification;
+  const { scope, url } = data as { scope: PushScope; url?: unknown };
+  return {
+    title,
+    body: body || (scope === "group-mention"
+      ? "Someone mentioned you"
+      : "New message in a channel"),
+    data: { scope, ...(typeof url === "string" ? { url } : {}) },
+  };
 }
 
 /** Short deterministic tag from a relay set (for concord subscription ids). */

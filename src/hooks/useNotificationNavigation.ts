@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { onLateColdLaunchDeepLink } from "@/lib/coldLaunchDeepLink";
 import { pathFromDeepLinkUrl } from "@/lib/deepLinkUrl";
+import { ArmadaPush, hasIosPush } from "@/lib/nativePush";
 import { signalDeepLinkNavigated } from "@/lib/webReady";
 
 /**
@@ -58,10 +59,28 @@ export function useNotificationNavigation(): void {
       if (!cancelled) navigate(path);
     });
 
+    // iOS push taps arrive on the notification delegate rather than as a URL,
+    // so they are their own listener rather than another `appUrlOpen` source.
+    // Only the WARM case is here: a tap that launched the process is read by
+    // coldLaunchDeepLink, together with the launch URL, so both settle the one
+    // race against HomeRedirect.
+    let pushHandle: { remove: () => void } | undefined;
+    if (hasIosPush()) {
+      ArmadaPush.addListener("pushOpened", ({ path }) => {
+        if (!cancelled && path) navigate(path);
+      })
+        .then((h) => {
+          if (cancelled) h.remove();
+          else pushHandle = h;
+        })
+        .catch(() => undefined);
+    }
+
     return () => {
       cancelled = true;
       offLate();
       handle?.remove();
+      pushHandle?.remove();
     };
   }, [navigate]);
 }
