@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { BotPill } from "@/components/BotPill";
+import { DeferredRow } from "@/components/DeferredRow";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { ReportDialog } from "@/components/ReportDialog";
 import { StatusDialog } from "@/components/dialogs/StatusDialog";
@@ -106,42 +107,6 @@ const ROW_MIN_H = 48;
  * see aren't built until they scroll near the viewport.
  */
 const VIRTUALIZE_THRESHOLD = 60;
-
-/**
- * Defer mounting `children` until the placeholder scrolls near the viewport,
- * then keep it mounted (latched, like MessageRow's action toolbar). When
- * `active` is false it renders `children` immediately — used so a small roster,
- * or a roster being searched (whose matcher needs every member's name resolved,
- * `useMemberSearch`), is never gated.
- */
-function DeferredRow({ active, children }: { active: boolean; children: ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [shown, setShown] = useState(!active);
-
-  useEffect(() => {
-    if (!active) {
-      setShown(true);
-      return;
-    }
-    const el = ref.current;
-    if (!el) return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting)) {
-          setShown(true);
-          io.disconnect();
-        }
-      },
-      // Preload a screenful ahead so rows are mounted before they're scrolled to.
-      { rootMargin: "300px" },
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, [active]);
-
-  if (shown) return <>{children}</>;
-  return <div ref={ref} aria-hidden style={{ height: ROW_MIN_H }} />;
-}
 
 interface MemberRowProps {
   pubkey: string;
@@ -861,7 +826,7 @@ export function MemberList({
             {toggleHost === "admins" && searchToggle}
           </div>
           {visibleAdmins.map((admin) => (
-            <DeferredRow key={admin.pubkey} active={virtualize}>
+            <DeferredRow key={admin.pubkey} active={virtualize} minHeight={ROW_MIN_H}>
             <MemberRow
               pubkey={admin.pubkey}
               roles={admin.roles}
@@ -903,7 +868,7 @@ export function MemberList({
               {toggleHost === `section:${section.id}` && searchToggle}
             </div>
             {section.members.map((pubkey) => (
-              <DeferredRow key={pubkey} active={virtualize}>
+              <DeferredRow key={pubkey} active={virtualize} minHeight={ROW_MIN_H}>
               <MemberRow
                 pubkey={pubkey}
                 roles={adminMap.get(pubkey)}
@@ -950,7 +915,7 @@ export function MemberList({
         )
       ) : (
         regulars.map((pubkey) => (
-          <DeferredRow key={pubkey} active={virtualize}>
+          <DeferredRow key={pubkey} active={virtualize} minHeight={ROW_MIN_H}>
           <MemberRow
             pubkey={pubkey}
             roles={buzzRoles.get(pubkey)}

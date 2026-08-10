@@ -19,6 +19,7 @@ import { ServerRail } from "@/components/layout/ServerRail";
 import { SwipeReveal } from "@/components/layout/SwipeReveal";
 import { VoicePresence } from "@/components/VoicePresence";
 import { BotPill } from "@/components/BotPill";
+import { DeferredRow } from "@/components/DeferredRow";
 import { DisplayName } from "@/components/DisplayName";
 import { NoteToSelfAvatar, NoteToSelfIcon, NOTE_TO_SELF_NAME } from "@/components/NoteToSelfAvatar";
 import { ReportDialog } from "@/components/ReportDialog";
@@ -1817,6 +1818,16 @@ function ConversationSectionHeader({
   );
 }
 
+/** Approx height of one conversation row (avatar size-12 + py-2.5), for the gate placeholder. */
+const ROW_MIN_H = 68;
+/**
+ * Conversation count above which offscreen rows are viewport-gated, matching
+ * MemberList's threshold. Each mounted row stands up a profile query and a
+ * LiveKit presence query and carries a context menu, so a long inbox — or a
+ * flooded request tier — pays for rows nobody has scrolled to yet.
+ */
+const VIRTUALIZE_THRESHOLD = 60;
+
 /** Which tier the conversation list is showing: the inbox or the request pile. */
 type DmListView = "inbox" | "requests";
 
@@ -2006,12 +2017,19 @@ function ConversationList({
   // nothing.
   const sectioned = search.trim().length === 0 && pinnedRows.length > 0;
 
+  // Gate offscreen rows only on a long list, and never while searching — a row
+  // hides itself when it matches neither the contact nor any decrypted message
+  // (ConversationRow returns null), so a placeholder would reserve height for
+  // rows that render nothing and the results would sit in a field of gaps.
+  const listLength = requesting ? requestRows.length : rows.length;
+  const virtualize = listLength > VIRTUALIZE_THRESHOLD && search.trim().length === 0;
+
   // Nothing but Note to Self — i.e. what used to be an empty list.
   const onlyNoteToSelf = rows.length === 1 && rows[0]?.peer === user?.pubkey;
 
   const renderRow = (c: (typeof rows)[number], request = false) => (
+    <DeferredRow key={c.peer} active={virtualize} minHeight={ROW_MIN_H}>
     <ConversationRow
-      key={c.peer}
       peer={c.peer}
       preview={c.latest}
       previewText={c.plaintext ?? previews[c.peer]}
@@ -2039,6 +2057,7 @@ function ConversationList({
       onClose={c.peer === user?.pubkey ? undefined : () => closePeer(c.peer, c.latest)}
       onBlock={() => void blockPeer(c.peer)}
     />
+    </DeferredRow>
   );
 
   // Register this pane's slot so the persistent call bar portals above the
