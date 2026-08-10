@@ -59,6 +59,13 @@ export interface ArmadaPushPlugin {
   /** Clear the app icon badge and any delivered notifications. */
   clearBadge(): Promise<void>;
   /**
+   * Hand the Notification Service Extension what it needs to open an inlined
+   * event. `config` is JSON — see `IosPushConfig`.
+   */
+  writeConfig(options: { config: string }): Promise<void>;
+  /** Delete that config, on disable or logout. */
+  clearConfig(): Promise<void>;
+  /**
    * The notification tap that launched this process, consumed once.
    *
    * A cold launch delivers the tap before the WebView has loaded, let alone
@@ -74,6 +81,46 @@ export interface ArmadaPushPlugin {
 }
 
 export const ArmadaPush = registerPlugin<ArmadaPushPlugin>("ArmadaPush");
+
+/**
+ * What the Notification Service Extension needs to OPEN an event the gateway
+ * inlined. The iOS counterpart of `SwPushConfig`, and deliberately the same
+ * shape: one set of fields, two readers.
+ *
+ * Like that one it carries NO display data — the extension reads names and
+ * room titles out of ArmadaDB at push time, for any author, rather than from a
+ * snapshot the page had to seal ahead of time and re-seal when a profile landed
+ * late.
+ *
+ * `sk` is present ONLY for nsec logins. Bunker (NIP-46) and extension (NIP-07)
+ * keys stay off-device, so those logins send none and their DM push stays the
+ * generic wake-up — exactly as on the web.
+ */
+export interface IosPushConfig {
+  policy: string;
+  self: string;
+  knownPeers: string[];
+  sk?: string;
+  concord?: Array<{
+    pk: string;
+    convKey: string;
+    epoch: string;
+    communityId: string;
+    channelId: string;
+  }>;
+}
+
+/** Write (replace) the extension's config. No-op where the plugin is absent. */
+export async function writeIosPushConfig(config: IosPushConfig): Promise<void> {
+  if (!hasIosPush()) return;
+  await ArmadaPush.writeConfig({ config: JSON.stringify(config) });
+}
+
+/** Delete it. Called on disable and logout, so no key outlives its session. */
+export async function clearIosPushConfig(): Promise<void> {
+  if (!hasIosPush()) return;
+  await ArmadaPush.clearConfig().catch(() => {});
+}
 
 /**
  * Whether this build can take an APNs token.

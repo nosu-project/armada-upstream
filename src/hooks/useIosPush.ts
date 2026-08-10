@@ -3,7 +3,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { usePushWatchSet } from "@/hooks/usePushWatchSet";
-import { ArmadaPush, hasIosPush, pushInstallationId } from "@/lib/nativePush";
+import {
+  ArmadaPush,
+  clearIosPushConfig,
+  hasIosPush,
+  pushInstallationId,
+  writeIosPushConfig,
+} from "@/lib/nativePush";
+import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
 import { NostrPushClient, type PushRelayPool, type PushSigner } from "@/lib/nostrPush";
 import {
   NOSTR_PUSH_PUBKEY,
@@ -44,14 +51,17 @@ import { PUBLIC_WEB_ORIGIN } from "@/lib/shareOrigin";
  * does keep is the gateway's content-blindness: it matches kinds and tags and
  * sends a fixed string, never a rendered message.
  *
- * The consequence, until there is a Notification Service Extension: what the
- * lock screen shows is the STATIC text registered here (see
- * `standaloneNotification`), not the message. An NSE is what would close that
- * gap, and it is a real piece of work — a third port of the decrypt/store
- * pipeline that `sw.js` + `pushRuntime.ts` are on the web and `Dm17.kt` +
- * `ServiceStore.kt` are on Android, this time in Swift against the App Group's
- * ArmadaDB. The database is already in the App Group precisely so it can be
- * written from an extension's process; nothing else for it exists yet.
+ * What the lock screen SHOWS is decided on the device, by the Notification
+ * Service Extension (`ios/App/NotificationService`, over the `ArmadaNotify`
+ * package): the gateway inlines the matched event, the extension opens it,
+ * writes it into the same ArmadaDB the WebView reads, and rewrites the
+ * notification from the plaintext. That is the third port of the pipeline
+ * `sw.js` + `pushRuntime.ts` are on the web and `Dm17.kt` + `ServiceStore.kt`
+ * are on Android.
+ *
+ * This hook's job on that front is `writeIosPushConfig`: the extension runs in
+ * its own process with no WebView and no localStorage, so everything it needs
+ * to decrypt has to be put somewhere it can read first.
  *
  * Exposes the shared `UsePushNotificationsReturn` the settings UI drives, so
  * `NotificationSettings` needs to know nothing about which one it has.
@@ -99,7 +109,71 @@ export function useIosPush(): UsePushNotificationsReturn {
   const [prefs, setPrefsState] = useState<PushPrefs>(loadPushPrefs);
   const [nonce, setNonce] = useState(0);
 
-  const { specs } = usePushWatchSet(prefs);
+  const { specs, concord, dmKnownPeers, dmSk, followsLoading } = usePushWatchSet(prefs);
+
+  // Keep the extension's config current: the DM policy and known set for every
+  // enabled session, the decrypt key for nsec logins, and the per-channel
+  // Concord stream keys. Cleared whenever push is off or logged out, so no key
+  // lingers past a session that can use it.
+  useEffect(() => {
+    if (!supported || !user || !enabled) {
+      void clearIosPushConfig();
+      return;
+    }
+    // Wait for the follow list: writing a config while it loads would freeze an
+    // empty known set on disk, reclassifying every known conversation as a
+    // request until the next rewrite.
+    if (followsLoading) return;
+    let cancelled = false;
+    (async () => {
+      // Mirror useKnownDmPeers' `mine` dimension: a conversation the viewer has
+      // authored a message in is known even where `acceptedDms` cannot say so
+      // (it is device-local, so a fresh install starts it empty while the
+      // synced history still shows the viewer's own messages).
+      let minePeers: string[] = [];
+      try {
+        const rows = await queryDm17Conversations(user.pubkey);
+        minePeers = rows.filter((row) => row.mine).map((row) => row.peer);
+      } catch {
+        // Store unavailable — follows ∪ accepted ∪ pinned still apply.
+      }
+      if (cancelled) return;
+      await writeIosPushConfig({
+        policy: prefs.dmRequests,
+        self: user.pubkey,
+        knownPeers: [...new Set([...dmKnownPeers, ...minePeers])].sort(),
+        // One entry per watched channel's CURRENT epoch. The conversation key
+        // reads that channel at that epoch and nothing else — the wrap-signing
+        // secret stays in the page — and the set goes stale by itself at the
+        // next rekey, which `concord` changing rewrites.
+        concord: concord.flatMap((sub) =>
+          sub.streams.map((stream) => ({
+            pk: stream.pk,
+            convKey: stream.convKey,
+            epoch: stream.epoch,
+            communityId: sub.communityId,
+            channelId: sub.channelId,
+          }))
+        ),
+        ...(dmSk ? { sk: dmSk } : {}),
+      });
+    })().catch(() => {
+      // A config the extension can't read degrades to the gateway's static
+      // wake-up, which is the same safe place every other failure lands in.
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    supported,
+    user,
+    enabled,
+    followsLoading,
+    prefs.dmRequests,
+    dmKnownPeers,
+    dmSk,
+    concord,
+  ]);
 
   const client = useMemo(() => {
     if (!supported || !user || !NOSTR_PUSH_PUBKEY) return undefined;
@@ -317,6 +391,8 @@ export function useIosPush(): UsePushNotificationsReturn {
       // stops the pushes; this makes the device stop holding a token the app no
       // longer uses, and any push racing the deletes has nowhere to land.
       await ArmadaPush.unregister().catch(() => {});
+      // The identity key must not outlive the session that could use it.
+      await clearIosPushConfig();
       lastSynced.current = null;
       setEnabled(false);
     } finally {

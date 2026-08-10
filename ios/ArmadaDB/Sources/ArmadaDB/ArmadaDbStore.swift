@@ -123,12 +123,12 @@ public final class ArmadaDbStore {
         /// The App Group the app and its extensions share.
         ///
         /// The file lives in the GROUP container rather than the app's own
-        /// sandbox because an extension can only see the group's. Nothing needs
-        /// that yet — there are no iOS notifications — but the choice is not
-        /// reversible after a release: moving the file later would strand
-        /// decrypted Concord and NIP-17 history that exists nowhere else, so the
-        /// container is picked before anything is stored in it rather than
-        /// after.
+        /// sandbox because an extension can only see the group's — which is
+        /// what lets the Notification Service Extension write a decrypted
+        /// message into the very tenant the WebView reads it from. The choice
+        /// was made before it was needed, and deliberately: it is not
+        /// reversible after a release, since moving the file later would strand
+        /// decrypted Concord and NIP-17 history that exists nowhere else.
         public static let appGroup = "group.buzz.armada.app"
 
         public static let fileName = "armada-db.sqlite"

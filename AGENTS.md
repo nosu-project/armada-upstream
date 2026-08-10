@@ -41,6 +41,7 @@ client does not depend on it at build time.
 | `android/…/app/db/` | ArmadaDB in Kotlin: the SQLite engine the Android build actually runs, shared by the WebView and the notification service |
 | `ios/`       | Capacitor iOS project (SwiftPM, no CocoaPods; built manually on a Mac — no CI) |
 | `ios/ArmadaDB/` | ArmadaDB in Swift: the SQLite engine the iOS build runs, with SQLite vendored. A SwiftPM package so it builds on **Linux**, where its conformance suite runs without a Mac |
+| `ios/ArmadaNotify/` | The decrypt/store/present pipeline the iOS Notification Service Extension runs (NIP-44/NIP-17/Concord, libsecp256k1 vendored). A SwiftPM package for the same reason — its suite runs on **Linux** |
 | `electron/`  | Electron desktop shell (loads the bundled web build; Linux/Windows/macOS installers built in CI) |
 | `docs/`      | Design notes too long for this file — currently `settings-documents.md` (the NIP-78 settings split) |
 | `scripts/`   | Repo tooling, incl. two Concord-aware moderation-UX harnesses that mirror the same CORD-01/02/05 derivations: `scripts/spambot.mjs` (WRITES — chat spam with flood-fold evasion, plus kind-3313 direct-invite spam via `--invite-spam`) and `scripts/dump-community.mjs` (READS — resolves an invite and pages the decrypted Chat Plane out of the relays in `OpenedChat` shape, for feeding `floodCluster.ts`); see each file's header comment |
@@ -64,7 +65,7 @@ commit/PR.
 
 | Workflow | Trigger | What |
 |----------|---------|------|
-| `test.yml` | push (any branch) + PR | `npm run test` (tsc + eslint + vitest + build), the Swift ArmadaDB conformance suite (`swift test --package-path ios/ArmadaDB`), and `npm audit --audit-level=high` |
+| `test.yml` | push (any branch) + PR | `npm run test` (tsc + eslint + vitest + build), both Swift suites (`swift test --package-path ios/{ArmadaDB,ArmadaNotify}`), and `npm audit --audit-level=high` |
 | `deploy-web.yml` | push to `main` | build + rsync-over-SSH deploy of the hosted client (armada.buzz); skips deploy if the SSH secret isn't provisioned |
 | `release.yml` | tag `v*` | signed Android APK + AAB, published as run artifacts and the APK to `armada.buzz/downloads/`, then Zapstore publish, then Google Play publish (draft release while the app is unpublished in Play Console; skips Play if the service-account secret isn't provisioned) |
 | `desktop.yml` | tag `v*` | Electron Linux (AppImage + deb), Windows (NSIS + portable) and macOS (ad-hoc signed .app zips, cross-built); published as run artifacts and rsynced to `armada.buzz/downloads/` |
@@ -340,18 +341,52 @@ Apple is unavoidably in the delivery path; what survives is that the GATEWAY
 still matches kinds and tags and sends a fixed string, never a rendered
 message.
 
-- **What the lock screen shows is what is REGISTERED.** There is no
-  Notification Service Extension, so `standaloneNotification()` re-shapes each
-  spec for a client with no decrypt stage: it fills the empty body the web
-  worker would have overwritten, and strips `inline_event`/`relays`, which only
-  feed a decrypt/fetch step that does not exist here and are spent against
-  APNs' hard 4096-byte payload. Deliberately NOT solved with NIP-PUSH's
-  `{{content}}` template — that is resolved server-side, which would route
-  message text through a gateway whose whole point is that it never handles
-  plaintext. An NSE is what closes this, and it means a third port of the
-  decrypt/store pipeline (`sw.js`+`pushRuntime.ts` on web, `Dm17.kt`+
-  `ServiceStore.kt` on Android) in Swift against the App Group's ArmadaDB —
-  which is exactly why the database is in the App Group already.
+- **The message is decrypted on the device, by the Notification Service
+  Extension.** `ios/App/NotificationService` is the target; all of its work is
+  in `ios/ArmadaNotify`, the THIRD port of the decrypt/store/present pipeline
+  (`sw.js`+`pushRuntime.ts` on web, `Dm17.kt`+`ServiceStore.kt` on Android).
+  The gateway inlines the matched event, the extension opens it, writes it into
+  the same ArmadaDB the WebView reads — which is why the database was put in
+  the App Group before anything was stored in it — and rewrites the
+  notification from the plaintext. `standaloneNotification()` only fills the
+  empty body the group scopes register, for the two ordinary ways an
+  un-rewritten notification still reaches the screen: an event too large for
+  the gateway to inline (best-effort, 4096-byte APNs payload) and a NIP-46/07
+  login whose key never reaches the device. Deliberately NOT solved with
+  NIP-PUSH's `{{content}}` template — that is resolved server-side, which would
+  route message text through a gateway whose whole point is that it never
+  handles plaintext.
+- **`ios/ArmadaNotify` is a SwiftPM package so its suite runs on Linux**, like
+  `ios/ArmadaDB` and for a sharper reason: this is the code that decides
+  whether a rumor is authentic. Its vectors were generated with the very
+  nostr-tools/@noble builds the web client uses, so a port that drifts from the
+  app's own crypto fails `swift test --package-path ios/ArmadaNotify` (wired
+  into `test.yml`) rather than in the field. libsecp256k1 is VENDORED
+  (`Sources/CArmadaSecp256k1`, upstream v0.7.0, `extrakeys`+`schnorrsig` only),
+  the same call SQLite gets. ECDH goes through `secp256k1_ec_pubkey_tweak_mul`,
+  NOT the `ecdh` module, whose helper returns a SHA-256 OF the shared point
+  while NIP-44 hashes the bare x — the same choice `NostrCrypto.java` makes.
+  SHA-256/HMAC/HKDF/ChaCha20 are hand-written above the curve because NIP-44
+  needs RAW ChaCha20 and CryptoKit exposes only ChaChaPoly; splitting the hash
+  chain between CryptoKit and a fallback would leave the Linux suite testing
+  code the extension does not run. **The counter starts at 0**, not the AEAD's
+  1 — that alone is the difference between decrypting and garbage.
+- **The extension is a separate process with its own sandbox.** It shares
+  exactly one thing with the app, the App Group, so its entitlements must
+  declare it and its own App ID must have it provisioned. Anything it needs to
+  decrypt goes through `writeIosPushConfig` into
+  `push-config.json` there, under `.completeUntilFirstUserAuthentication` —
+  the weakest protection class that still works, because a push arrives while
+  the device is LOCKED and anything stronger leaves the extension unable to
+  read its own config. `sk` is present only for nsec logins and is deleted on
+  disable/logout. **Always call the content handler exactly once**: an
+  extension that returns without calling it, or crashes, silently shows the
+  gateway's static text with no log anyone reads.
+- **iOS cannot withdraw a delivered alert.** A push the pipeline decides is not
+  news (the viewer's own message from another device, a reaction to someone
+  else's) still has to show something, so it becomes a `passive` "Messages
+  synced" rather than the gateway's "New message" — which would be a
+  notification about nothing.
 - **`aps-environment` is a runtime question, not a build flag.** A device token
   is minted against exactly one APNs host and the other rejects it with
   `BadDeviceToken` — and a Release build run from Xcode is still sandbox while

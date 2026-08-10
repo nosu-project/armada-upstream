@@ -339,16 +339,21 @@ describe("standaloneNotification", () => {
     expect(standaloneNotification(dm).body).toBe("New direct message");
   });
 
-  it("drops the payload a client without a decrypt stage cannot use", () => {
-    // inline_event and relays both feed a decrypt/fetch step; with none they
-    // are bytes spent against APNs' 4096-byte budget. The routing hints stay.
+  it("passes the decrypt stage's payload through untouched", () => {
+    // The iOS Notification Service Extension opens the inlined event exactly
+    // as the service worker does, so `inline_event` and `relays` must survive:
+    // filling the body is about the FALLBACK, not about replacing the render.
     for (const spec of specs) {
-      const { data } = standaloneNotification(spec);
-      expect(data.inline_event, spec.id).toBeUndefined();
-      expect(data.relays, spec.id).toBeUndefined();
-      expect(data.scope, spec.id).toBe(spec.notification.data.scope);
+      expect(standaloneNotification(spec).data, spec.id).toBe(spec.notification.data);
     }
     const dm = specs.find((s) => s.id === "armada-dm17")!;
     expect(standaloneNotification(dm).data.url).toBe("/dm");
+    expect(standaloneNotification(dm).data.inline_event).toBe(true);
+  });
+
+  it("leaves the title alone", () => {
+    for (const spec of specs) {
+      expect(standaloneNotification(spec).title, spec.id).toBe(spec.notification.title);
+    }
   });
 });

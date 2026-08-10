@@ -1,7 +1,8 @@
 // swift-tools-version:5.9
 //
 // ArmadaDB in Swift: the SQLite store the iOS build runs, shared by the WebView
-// and — once notifications exist — by the APNs Notification Service Extension.
+// and by the APNs Notification Service Extension, which writes into it from its
+// own process (see ios/ArmadaNotify).
 //
 // It is a package rather than a folder of files in the app target for one
 // reason: a package builds on Linux, so the conformance suite ported from

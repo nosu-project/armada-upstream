@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The extension runs in its own process and sees none of the app's
+	     sandbox. This App Group is the ONLY thing the two share, and it is
+	     where both ArmadaDB and the push config live — which is why the
+	     database was put here before anything was stored in it (see
+	     App.entitlements). Without this entitlement the extension can open
+	     neither, and every push silently falls back to the gateway's static
+	     text.
+
+	     It must be the same group the app declares, and registered on the App
+	     ID in the developer portal. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.buzz.armada.app</string>
+	</array>
+</dict>
+</plist>

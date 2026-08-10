@@ -131,38 +131,37 @@ export function scopePushSubscriptionId(
 }
 
 /**
- * Re-shape a spec's notification for a client that CANNOT open the event.
+ * The same subscription, with a body that can stand on its own.
  *
- * Every spec above is written for the web service worker, which decrypts the
- * inlined event and rewrites the notification from it. Two things follow for a
- * client with no such stage — today, iOS, which has no Notification Service
- * Extension (`useIosPush.ts`), so what is registered is exactly what the lock
- * screen shows:
+ * The group scopes register an EMPTY body on purpose: on the web it shows for
+ * only the instant before the service worker replaces it with the decrypted
+ * message. iOS has a decrypt stage too now — the Notification Service Extension
+ * (`ios/App/NotificationService`) — so `inline_event` and `relays` ride through
+ * unchanged and the extension does the same rewrite.
  *
- *  - **The body must stand alone.** The group scopes carry an empty body on
- *    purpose, since on the web it shows only for the instant before the real
- *    text replaces it. Registered as-is it would be an alert with a title and
- *    no body, the one outcome that reads as broken rather than as terse. This
- *    deliberately does NOT reach for NIP-PUSH's `{{content}}` template to do
- *    better: that is resolved server-side, which would route message text
- *    through a gateway whose entire point is that it never handles plaintext.
- *  - **`inline_event` and `relays` come off.** Both exist to feed a decrypt
- *    stage. With none, the event is payload the client cannot read and the
- *    relay list is for a fetch nobody makes — and on APNs they are spent
- *    against a hard 4096-byte budget. `scope` and `url` stay, because the tap
- *    handler routes on them.
+ * What differs is the FALLBACK. On the web an un-rewritten notification is a
+ * flash; on iOS it is what stays on the lock screen, and there are two ordinary
+ * ways to get one: an event too large for the gateway to inline (APNs allows
+ * 4096 bytes of payload, and inlining is best-effort by design), and a login
+ * whose key never reaches the device (NIP-46/NIP-07), for which the extension
+ * cannot decrypt anything at all. An alert with a title and no body is the one
+ * outcome that reads as broken rather than as terse, so the body is filled.
+ *
+ * Deliberately NOT filled with NIP-PUSH's `{{content}}` template, which would
+ * be the obvious way to do better: that is resolved SERVER-side, and would put
+ * the message text into a payload built by a gateway whose entire point is that
+ * it never handles plaintext.
  */
 export function standaloneNotification(
   spec: PushSubscriptionSpec,
-): { title: string; body: string; data: Record<string, unknown> } {
+): { title: string; body: string; data: PushNotifData } {
   const { title, body, data } = spec.notification;
-  const { scope, url } = data as { scope: PushScope; url?: unknown };
   return {
     title,
-    body: body || (scope === "group-mention"
+    body: body || (data.scope === "group-mention"
       ? "Someone mentioned you"
       : "New message in a channel"),
-    data: { scope, ...(typeof url === "string" ? { url } : {}) },
+    data,
   };
 }
 

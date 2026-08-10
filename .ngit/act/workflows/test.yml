@@ -42,5 +42,13 @@ jobs:
       # image predates this step and needs .ngit/ci-image/build.sh.
       - run: swift test --package-path ios/ArmadaDB
 
+      # The iOS Notification Service Extension's decrypt/store/present pipeline
+      # (ios/ArmadaNotify) — NIP-44, NIP-17 gift wraps, Concord stream wraps.
+      # Also a SwiftPM package for the Linux reason above, and more load-bearing
+      # than most: this is the code that decides whether a rumor is authentic,
+      # and its vectors were generated with the very nostr-tools/@noble builds
+      # the web client uses, so a drift from the app's own crypto fails here.
+      - run: swift test --package-path ios/ArmadaNotify
+
       # Fail on known high/critical advisories in dependencies.
       - run: npm audit --audit-level=high

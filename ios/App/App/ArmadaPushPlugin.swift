@@ -1,3 +1,4 @@
+import ArmadaNotify
 import Capacitor
 import Foundation
 import UIKit
@@ -30,6 +31,8 @@ public class ArmadaPushPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "unregister", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearBadge", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "takePendingOpen", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "writeConfig", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "clearConfig", returnType: CAPPluginReturnPromise),
     ]
 
     /// How long to wait for APNs to hand back a token before giving up.
@@ -132,6 +135,35 @@ public class ArmadaPushPlugin: CAPPlugin, CAPBridgedPlugin {
                 call.resolve()
             }
         }
+    }
+
+    // MARK: - The extension's config
+
+    /// Hand the Notification Service Extension what it needs to OPEN an event
+    /// the gateway inlined: the DM policy, the known-peer set, the viewer's own
+    /// pubkey, the identity key for nsec logins, and the per-channel Concord
+    /// stream keys. The iOS counterpart of `writeSwPushConfig`.
+    ///
+    /// Crosses as JSON TEXT rather than a marshalled object for the reason
+    /// `ArmadaDbPlugin` does: Capacitor would have to guess number types, and
+    /// there is nothing here worth marshalling field by field.
+    @objc func writeConfig(_ call: CAPPluginCall) {
+        guard let json = call.getString("config") else {
+            return call.reject("config is required")
+        }
+        do {
+            try PushConfigStore.write(json)
+            call.resolve()
+        } catch {
+            call.reject("\(error.localizedDescription)")
+        }
+    }
+
+    /// Delete it, on disable or logout. The identity key must not outlive the
+    /// session that could use it.
+    @objc func clearConfig(_ call: CAPPluginCall) {
+        PushConfigStore.clear()
+        call.resolve()
     }
 
     /// The notification tap that launched this process, consumed once.
