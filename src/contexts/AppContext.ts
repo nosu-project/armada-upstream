@@ -1,7 +1,9 @@
 import { createContext } from "react";
 
 import { STOCK_RELAYS } from "@/concord/lib/stockRelays";
+import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
 import { APP_RELAYS, DM_RELAYS, normalizeRelayUrl, SEARCH_RELAYS } from "@/lib/platform";
+import { loadPushPrefs, type PushPrefs } from "@/lib/pushPrefs";
 import { getPreferredVoiceServer } from "@/lib/voiceDevices";
 
 import type { BlossomServerMetadata } from "@/lib/blossom";
@@ -162,12 +164,19 @@ export interface AppConfig {
    */
   relayMetadata: RelayMetadata;
   /**
-   * Whether to include the app's default DM relays (`appRelays` ∪ the platform
-   * `DM_RELAYS`) in the direct-message relay set. On by default. Independent of
+   * Whether to include the app's DM relays (`appRelays` ∪ `appDmRelays`) in the
+   * direct-message relay set. On by default. Independent of
    * `useOwnDmRelays`: the two toggles combine (app / mine / both / neither) —
    * see `effectiveDmRelays`.
    */
   useAppDmRelays: boolean;
+  /**
+   * Additional app-provided DM relays. Seeded from `VITE_DM_RELAYS`, but kept
+   * in encrypted settings so restoring a custom setup replaces the shipped
+   * Armada address instead of silently adding it back. General `appRelays`
+   * remain part of the app DM set for legacy NIP-04 interoperability.
+   */
+  appDmRelays: string[];
   /**
    * Whether to include the user's own DM relays (`dmRelays`) in the
    * direct-message relay set. Off by default. Combines with `useAppDmRelays`.
@@ -183,8 +192,7 @@ export interface AppConfig {
    * The user's personal Blossom file server list (BUD-03), mirroring Ditto's
    * blossomServerMetadata. `servers` is synced bidirectionally with the
    * user's kind 10063 event (NostrSync pulls newer lists; Settings edits
-   * publish). App default servers (APP_BLOSSOM_SERVERS) are managed
-   * separately.
+   * publish). App-provided servers (`appBlossomServers`) are managed separately.
    */
   blossomServerMetadata: BlossomServerMetadata;
   /**
@@ -193,6 +201,12 @@ export interface AppConfig {
    * useOwnDmRelays toggle pattern). On by default.
    */
   useAppBlossomServers: boolean;
+  /**
+   * App-provided Blossom servers. Like `appRelays` and `appDmRelays`, these are
+   * seeded from the build only for a fresh config; a synchronized value is the
+   * complete replacement set.
+   */
+  appBlossomServers: string[];
   /**
    * The last channel/room the user had open in each server/community, so we
    * can re-open it on return instead of dumping them on a channel list. Keyed
@@ -238,6 +252,8 @@ export interface AppConfig {
    * push gateway's `muted_groups`). Synced across devices.
    */
   notifLevels: Record<string, "all" | "mentions" | "nothing">;
+  /** Account-global notification categories, shared by every delivery path. */
+  pushPrefs: PushPrefs;
   /**
    * Per-conversation DM encryption preference, keyed by `dm:${pubkey}` (the
    * same scope key as `notifLevels`). Lets the user override the automatic
@@ -410,8 +426,10 @@ export const METADATA_CONFIG_KEYS = [
   "useAppRelays",
   "useUserRelays",
   "useAppDmRelays",
+  "appDmRelays",
   "useOwnDmRelays",
   "useAppBlossomServers",
+  "appBlossomServers",
   "dmTypingIndicators",
   "showDmRequests",
   "discoverAllContent",
@@ -429,6 +447,7 @@ export const NOTIF_CONFIG_KEYS = [
   "notifLevels",
   "mutedCommunities",
   "mutedChannels",
+  "pushPrefs",
 ] as const satisfies ReadonlyArray<keyof AppConfig>;
 
 /** `${APP_ID}/dms` — one entry per peer, in four maps that only ever grow. */
@@ -453,6 +472,24 @@ export const SYNCED_CONFIG_KEYS = [
 
 export type SyncedConfigKey = (typeof SYNCED_CONFIG_KEYS)[number];
 
+/** Local mirrors whose standard signed list events are the portable source. */
+export const CANONICAL_LIST_CONFIG_KEYS = [
+  "searchRelays",
+  "dmRelays",
+  "relayMetadata",
+  "blossomServerMetadata",
+] as const satisfies ReadonlyArray<keyof AppConfig>;
+
+/** Deliberately device-specific config, never applied from another client. */
+export const PER_DEVICE_CONFIG_KEYS = [
+  "railOpenFolders",
+  "collapsedChannelCategories",
+  "memberListVisible",
+  "lastChannelByServer",
+  "meshIncognito",
+  "meshEnabled",
+] as const satisfies ReadonlyArray<keyof AppConfig>;
+
 export const defaultConfig: AppConfig = {
   theme: "dark",
   railLayout: [],
@@ -466,14 +503,17 @@ export const defaultConfig: AppConfig = {
   useUserRelays: false,
   relayMetadata: { relays: [], updatedAt: 0 },
   useAppDmRelays: true,
+  appDmRelays: [...DM_RELAYS],
   useOwnDmRelays: false,
   dmRelays: [],
   blossomServerMetadata: { servers: [], updatedAt: 0 },
   useAppBlossomServers: true,
+  appBlossomServers: [...APP_BLOSSOM_SERVERS],
   lastChannelByServer: {},
   mutedCommunities: [],
   mutedChannels: [],
   notifLevels: {},
+  pushPrefs: loadPushPrefs(),
   dmProtocol: {},
   dmTypingIndicators: true,
   pinnedDms: [],
@@ -497,9 +537,10 @@ export const AppContext = createContext<AppContextType | undefined>(undefined);
  * independently-toggleable sources:
  *
  *   - app DM relays (`useAppDmRelays`): the general app relays plus the
- *     platform default DM relay(s) (`DM_RELAYS`). The app relays keep legacy
+ *     synchronized app DM relay set (`appDmRelays`). The app relays keep legacy
  *     NIP-04 (kind 4) DMs working; `DM_RELAYS` gives gift-wrapped (NIP-17) DMs
- *     a dependable home the push/native watch sets follow.
+ *     a dependable home the push/native watch sets follow. A fresh config
+ *     seeds that set from `DM_RELAYS`; a restored setup replaces it wholesale.
  *   - the user's own DM relays (`useOwnDmRelays` + `dmRelays`).
  *
  * Both on ⇒ both sets; one on ⇒ that set; neither ⇒ empty (the user has opted
@@ -516,7 +557,7 @@ export function effectiveDmRelays(config: AppConfig): string[] {
   const out = new Set<string>();
   if (config.useAppDmRelays) {
     for (const url of config.appRelays) out.add(url);
-    for (const url of DM_RELAYS) out.add(url);
+    for (const url of config.appDmRelays) out.add(url);
   }
   if (config.useOwnDmRelays) {
     for (const url of config.dmRelays) out.add(url);
@@ -575,6 +616,31 @@ export function accountDataRelays(config: AppConfig, pubkey?: string): string[] 
   for (const url of userWriteRelays(config, pubkey)) {
     const normalized = normalizeRelayUrl(url);
     if (normalized) urls.add(normalized);
+  }
+  return [...urls];
+}
+
+/**
+ * Relays that carry the logged-in user's portable self-state.
+ *
+ * This starts with the ordinary account-data set, then always includes the
+ * user's declared NIP-65 write relays even when `useUserRelays` is off. That
+ * toggle controls general profile/list routing; it must not sever the private
+ * settings replication the user explicitly initialized with "Sync setup".
+ * Other clients discover the same write set from kind 10002 before reading the
+ * documents, so this is also the live receive set.
+ */
+export function selfStateRelays(config: AppConfig, pubkey?: string): string[] {
+  const urls = new Set(accountDataRelays(config, pubkey));
+  const ownsRelayList = !pubkey
+    || !config.relayMetadata.pubkey
+    || config.relayMetadata.pubkey === pubkey;
+  if (ownsRelayList) {
+    for (const relay of config.relayMetadata.relays) {
+      if (!relay.write) continue;
+      const normalized = normalizeRelayUrl(relay.url);
+      if (normalized) urls.add(normalized);
+    }
   }
   return [...urls];
 }

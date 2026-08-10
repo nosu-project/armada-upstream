@@ -1,17 +1,14 @@
 import { useNostr } from "@nostrify/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { usePushWatchSet } from "@/hooks/usePushWatchSet";
 import { clearSwPushConfig, writeSwPushConfig } from "@/lib/swPushConfig";
 import { clearPushDisabledFlag, writePushDisabledFlag } from "@/lib/swPushDisabled";
 import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
-import {
-  loadPushPrefs,
-  type PushPrefs,
-  type UsePushNotificationsReturn,
-} from "@/lib/pushPrefs";
+import type { PushPrefs, UsePushNotificationsReturn } from "@/lib/pushPrefs";
 import {
   loadPushIntent,
   loadRegisteredPushIds,
@@ -102,6 +99,7 @@ async function pushPermission(prepared: PreparedPush): Promise<NotificationPermi
 export function useNostrPush(): UsePushNotificationsReturn {
   const { user } = useCurrentUser();
   const { nostr } = useNostr();
+  const { config, updateConfig } = useAppContext();
 
   const unavailableReason = isNativeRuntime()
     ? "native-runtime" as const
@@ -116,7 +114,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string>();
   const [prepareNonce, setPrepareNonce] = useState(0);
-  const [prefs, setPrefsState] = useState<PushPrefs>(loadPushPrefs);
+  const prefs = config.pushPrefs;
   const preparedRef = useRef<PreparedPush | undefined>(undefined);
 
   // The watch set — the same one the Android background service uses, and the
@@ -526,13 +524,13 @@ export function useNostrPush(): UsePushNotificationsReturn {
 
   const setPrefs = useCallback(
     async (next: PushPrefs) => {
-      setPrefsState(next);
       savePushPrefs(next);
+      updateConfig((current) => ({ ...current, pushPrefs: next }));
       // The specs recompute from `prefs`; force the sync effect to re-run.
       lastSynced.current = null;
       setNonce((n) => n + 1);
     },
-    [],
+    [updateConfig],
   );
 
   const retrySetup = useCallback(() => {

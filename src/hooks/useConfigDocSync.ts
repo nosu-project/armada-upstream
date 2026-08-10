@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef } from "react";
 
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -10,6 +10,8 @@ import type { AppConfig } from "@/contexts/AppContext";
 
 /** Debounce for pushing local config changes to a NIP-78 settings document. */
 const PUBLISH_DEBOUNCE_MS = 800;
+/** Retry a durable local settings edit whose relay delivery failed. */
+const PUBLISH_RETRY_MS = 5_000;
 
 /**
  * Publish baselines of the mounted {@link useConfigDocSync} instances, keyed
@@ -17,10 +19,10 @@ const PUBLISH_DEBOUNCE_MS = 800;
  *
  * A config change is published because it differs from the baseline, which
  * means "what the remote document already says". Some config changes aren't
- * user edits at all: hydrating the user's own kind-10002 list can seed
- * `appRelays`, and that must not be broadcast straight back out as though they
- * had typed it. {@link markConfigSynced} lets the hydrating effect move the
- * baselines with it.
+ * user edits at all: hydrating the user's canonical kind-10002/10050/10063
+ * lists updates their local mirrors, and must not be broadcast as though the
+ * user edited an Armada preference. {@link markConfigSynced} lets those
+ * hydrating effects move the baselines with them.
  *
  * Module-scoped because the effects that do the hydrating (in NostrSync) are
  * siblings of these hooks, not children — there is nothing to pass a ref
@@ -67,6 +69,9 @@ export function useConfigDocSync(name: ConfigDocName): void {
   const { config, updateConfig } = useAppContext();
   const { doc, event, update, hasNip44Support } = useSettingsDoc(name);
   const metadata = useSettingsDoc("metadata");
+  const configRef = useRef(config);
+  configRef.current = config;
+  const [, recheckAfterPublish] = useReducer((value: number) => value + 1, 0);
 
   // The version we've most recently folded into local config.
   const appliedId = useRef<string | undefined>(undefined);
@@ -94,20 +99,25 @@ export function useConfigDocSync(name: ConfigDocName): void {
   // stale cache version over the edit being written. Counted, not boolean:
   // never reset, because every increment has exactly one decrement in
   // `finally`, and zeroing it on account switch would unbalance a write that
-  // settles after the switch.
+  // settles after the switch — stale completions are instead ignored via
+  // `accountGeneration`.
   const publishesInFlight = useRef(0);
+  const accountGeneration = useRef(0);
   const cancelPublish = useCallback(() => {
     if (publishTimer.current) clearTimeout(publishTimer.current);
     publishTimer.current = null;
   }, []);
 
   useEffect(() => {
+    accountGeneration.current += 1;
     appliedId.current = undefined;
     appliedCreatedAt.current = undefined;
     lastPublished.current = undefined;
     // A debounced publish belongs to the account that made the edit; letting
     // one fire after a switch would write that config into the new account's
-    // settings document.
+    // settings document. An already-signed request in flight cannot be
+    // cancelled here; the generation check in `attempt` ignores its
+    // completion instead.
     cancelPublish();
   }, [user?.pubkey, cancelPublish]);
 
@@ -182,18 +192,39 @@ export function useConfigDocSync(name: ConfigDocName): void {
       return;
     }
     if (snapshot === lastPublished.current) return;
+    if (publishesInFlight.current > 0) return;
 
     cancelPublish();
-    publishTimer.current = setTimeout(() => {
+    const attempt = () => {
       publishTimer.current = null;
-      lastPublished.current = snapshot;
       publishesInFlight.current += 1;
-      update(configSnapshot(config, name))
-        .catch((err) => console.warn(`Config sync failed for ${name}:`, err))
+      const generation = accountGeneration.current;
+      const attemptSnapshot = JSON.stringify(configSnapshot(configRef.current, name));
+      const patch = configSnapshot(configRef.current, name);
+      let succeeded = false;
+      update(patch)
+        .then(() => {
+          if (accountGeneration.current !== generation) return;
+          lastPublished.current = attemptSnapshot;
+          succeeded = true;
+        })
+        .catch((err) => {
+          if (accountGeneration.current !== generation) return;
+          console.warn(`Config sync failed for ${name}; retrying:`, err);
+          publishTimer.current = setTimeout(attempt, PUBLISH_RETRY_MS);
+        })
         .finally(() => {
+          // Decrement unconditionally to keep the counter balanced; only the
+          // side effects below belong to the account that scheduled the write.
           publishesInFlight.current -= 1;
+          if (accountGeneration.current !== generation) return;
+          // The config (or an incoming relay version) may have changed while
+          // delivery was in flight. Re-run both directions now that the gate
+          // is open so that latest state cannot wait for an unrelated edit.
+          if (succeeded) recheckAfterPublish();
         });
-    }, PUBLISH_DEBOUNCE_MS);
+    };
+    publishTimer.current = setTimeout(attempt, PUBLISH_DEBOUNCE_MS);
 
     return cancelPublish;
   }, [user?.pubkey, hasNip44Support, config, name, metadata.doc, update, cancelPublish]);

@@ -13,7 +13,7 @@ import { useNotifLevels } from "@/hooks/useNotifLevels";
 import { usePinnedDms } from "@/hooks/usePinnedDms";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import {
-  DEFAULT_PUSH_PREFS,
+  savePushPrefs,
   type PushPrefs,
 } from "@/lib/pushPrefs";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
@@ -21,7 +21,7 @@ import { SETTINGS_DTAGS } from "@/lib/settingsDocs";
 import { useConcordSubs } from "@/concord/hooks/useConcordSubs";
 import { signStreamAuthsChunked } from "@/concord/lib/streamAuth";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
-import { effectiveDmRelays, userReadRelays } from "@/contexts/AppContext";
+import { effectiveDmRelays, selfStateRelays } from "@/contexts/AppContext";
 import { isGitAnnouncementDiscoveryRelay, normalizeRelayUrl } from "@/lib/platform";
 import { useWireGitTicketRoots } from "@/hooks/useWireGitTicketRoots";
 import type { GitRepositoryWireInput } from "@/wire/spec";
@@ -30,8 +30,6 @@ import { GIT_REPOSITORY_ANNOUNCEMENT_KIND, parseGitRepositoryAnnouncement } from
 
 /** localStorage key for the native background-notification intent (toggle). */
 const NATIVE_INTENT_KEY = "armada:native-notif-intent";
-/** Shared per-type prefs with the web-push path. */
-const PREFS_KEY = "armada:push-prefs";
 
 /** True only inside the Capacitor native runtime (the APK or the iOS app), not web/PWA. */
 export function isNativeRuntime(): boolean {
@@ -122,16 +120,6 @@ export async function enableNativeNotifications(): Promise<boolean> {
 /** Module-level guard so the launch permission check runs once per app, not per hook instance. */
 let autoChecked = false;
 
-function loadPrefs(): PushPrefs {
-  try {
-    const raw = localStorage.getItem(PREFS_KEY);
-    if (raw) return { ...DEFAULT_PUSH_PREFS, ...JSON.parse(raw) };
-  } catch {
-    // ignore
-  }
-  return { ...DEFAULT_PUSH_PREFS };
-}
-
 export interface UseNativeNotificationsReturn {
   /** Whether we're in the native APK (where this path applies). */
   supported: boolean;
@@ -166,7 +154,7 @@ export interface UseNativeNotificationsReturn {
 export function useNativeNotifications(): UseNativeNotificationsReturn {
   const supported = hasNativeNotificationService();
   const { user } = useCurrentUser();
-  const { config } = useAppContext();
+  const { config, updateConfig } = useAppContext();
   const { data: groupList } = useUserGroupList();
   const { data: followData } = useFollowList();
   const { accepted } = useAcceptedDms();
@@ -177,7 +165,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   // is already granted. Shared across every hook instance (see setEnabledShared).
   const enabled = useSyncExternalStore(subscribeEnabled, () => enabledState, () => false);
   const [busy, setBusy] = useState(false);
-  const [prefs, setPrefsState] = useState<PushPrefs>(loadPrefs);
+  const prefs = config.pushPrefs;
 
   // The relays to hold open. A standalone Armada client has no host, so the
   // source of truth is the user's own kind 10009 list: the relays that host
@@ -207,20 +195,10 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   // Derived separately from `relayUrls` on purpose: that set comes from the
   // kind-10009 list and is therefore NIP-29 servers only, which a Concord-only
   // user simply doesn't have.
-  const selfRelays = useMemo(() => {
-    const set = new Set<string>();
-    if (config.useAppRelays) {
-      for (const url of config.appRelays) {
-        const n = normalizeRelayUrl(url);
-        if (n) set.add(n);
-      }
-    }
-    for (const url of userReadRelays(config)) {
-      const n = normalizeRelayUrl(url);
-      if (n) set.add(n);
-    }
-    return [...set].sort();
-  }, [config]);
+  const selfRelays = useMemo(
+    () => selfStateRelays(config, user?.pubkey).sort(),
+    [config, user?.pubkey],
+  );
 
   // Joined group ids (the `h` tag values) for the kind-9 filter. Groups at the
   // `nothing` level are omitted entirely (the service never subscribes — no
@@ -599,13 +577,9 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   }, [supported]);
 
   const setPrefs = useCallback(async (next: PushPrefs) => {
-    setPrefsState(next);
-    try {
-      localStorage.setItem(PREFS_KEY, JSON.stringify(next));
-    } catch {
-      // ignore
-    }
-  }, []);
+    savePushPrefs(next);
+    updateConfig((current) => ({ ...current, pushPrefs: next }));
+  }, [updateConfig]);
 
   return { supported, enabled, busy, prefs, enable, disable, setPrefs };
 }

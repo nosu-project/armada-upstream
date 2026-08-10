@@ -31,7 +31,7 @@ import {
 } from "@/concord/lib/voice";
 import type { Channel, Community } from "@/concord/lib/types";
 import { CONCORD_AV_SERVERS } from "@/lib/platform";
-import { preferredVoiceServerOrigin } from "@/lib/voiceDevices";
+import { effectiveAvServers } from "@/lib/voiceDevices";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -339,13 +339,13 @@ export function useVoiceReactions(
 
 /**
  * The client's own default AV servers, in preference order: the user's
- * Settings → Voice server first (when set), then the deployment's build-time
- * defaults. Consulted only when a room is empty — an occupied room's
+ * Settings → Voice server when set, otherwise the deployment's build-time
+ * defaults. A synchronized custom address is a replacement, not an additive
+ * hint. Consulted only when a room is empty — an occupied room's
  * presence-announced brokers always win the rendezvous (§5).
  */
 export function ownAvServers(): string[] {
-  const preferred = preferredVoiceServerOrigin();
-  return preferred ? [preferred, ...CONCORD_AV_SERVERS] : [...CONCORD_AV_SERVERS];
+  return effectiveAvServers(CONCORD_AV_SERVERS);
 }
 
 /**

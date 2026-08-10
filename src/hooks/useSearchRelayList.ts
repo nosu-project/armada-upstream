@@ -1,7 +1,7 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { accountDataRelays } from "@/contexts/AppContext";
+import { selfStateRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
@@ -33,7 +33,7 @@ export function useSearchRelayList() {
     queryFn: async ({ signal }) => {
       const events = await queryExplicitRelays(
         nostr,
-        accountDataRelays(config, user!.pubkey),
+        selfStateRelays(config, user!.pubkey),
         [{ kinds: [KIND_SEARCH_RELAYS], authors: [user!.pubkey], limit: 1 }],
         AbortSignal.any([signal, AbortSignal.timeout(6_000)]),
       );
@@ -54,7 +54,7 @@ export function useSearchRelayList() {
 
       const events = await queryExplicitRelays(
         nostr,
-        accountDataRelays(config, user.pubkey),
+        selfStateRelays(config, user.pubkey),
         [{ kinds: [KIND_SEARCH_RELAYS], authors: [user.pubkey], limit: 1 }],
         AbortSignal.timeout(8_000),
       );
@@ -104,6 +104,7 @@ export function useSearchRelayList() {
         tags,
         created_at: createdAt,
         prev: prev ?? undefined,
+        relays: selfStateRelays(config, user.pubkey),
         onSigned: (event) => {
           signed = event;
           queryClient.setQueryData<SearchRelayListQuery>(queryKey, {

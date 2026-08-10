@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { DEFAULT_PUSH_PREFS, type PushPrefs } from "@/lib/pushPrefs";
+import { useAppContext } from "@/hooks/useAppContext";
+import { savePushPrefs, type PushPrefs } from "@/lib/pushPrefs";
 
 /**
  * Foreground (in-page) notification enablement.
@@ -33,8 +34,6 @@ import { DEFAULT_PUSH_PREFS, type PushPrefs } from "@/lib/pushPrefs";
 
 /** localStorage key for the foreground-notification intent (master on/off). */
 const INTENT_KEY = "armada:foreground-notif-intent";
-/** Shared per-type preferences key (also used by Web Push / native). */
-const PREFS_KEY = "armada:push-prefs";
 
 /** Whether the Notifications API is available (required to notify). */
 export function notificationsApiAvailable(): boolean {
@@ -100,24 +99,6 @@ export async function enableForegroundNotifications(): Promise<boolean> {
   }
 }
 
-function loadPrefs(): PushPrefs {
-  try {
-    const raw = localStorage.getItem(PREFS_KEY);
-    if (raw) return { ...DEFAULT_PUSH_PREFS, ...JSON.parse(raw) };
-  } catch {
-    // ignore
-  }
-  return { ...DEFAULT_PUSH_PREFS };
-}
-
-function savePrefs(prefs: PushPrefs): void {
-  try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
-  } catch {
-    // ignore
-  }
-}
-
 export interface UseForegroundNotificationSettingsReturn {
   /** Whether the Notifications API is present (OS notifications possible). */
   apiAvailable: boolean;
@@ -146,12 +127,13 @@ export interface UseForegroundNotificationSettingsReturn {
  * notifier can fire OS notifications.
  */
 export function useForegroundNotificationSettings(): UseForegroundNotificationSettingsReturn {
+  const { config, updateConfig } = useAppContext();
   const apiAvailable = notificationsApiAvailable();
   const [permission, setPermission] = useState<NotificationPermission>(
     apiAvailable ? Notification.permission : "default",
   );
   const [intent, setIntent] = useState<boolean>(loadIntent);
-  const [prefs, setPrefsState] = useState<PushPrefs>(loadPrefs);
+  const prefs = config.pushPrefs;
 
   // Keep the shown permission fresh (the user may change it in browser UI, or
   // grant it via the web-push toggle elsewhere).
@@ -189,9 +171,9 @@ export function useForegroundNotificationSettings(): UseForegroundNotificationSe
   );
 
   const setPrefs = useCallback((next: PushPrefs) => {
-    setPrefsState(next);
-    savePrefs(next);
-  }, []);
+    savePushPrefs(next);
+    updateConfig((current) => ({ ...current, pushPrefs: next }));
+  }, [updateConfig]);
 
   return {
     apiAvailable,

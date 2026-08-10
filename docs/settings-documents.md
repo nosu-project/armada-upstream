@@ -5,10 +5,10 @@ kind 30078, NIP-44-encrypted to self, named `${APP_ID}/<name>`.
 
 | `d` tag | Contents | Written when | Merge |
 |---|---|---|---|
-| `armada/metadata` | theme, custom theme, relay toggles, `appRelays`, `communityRelays`, voice-server preference, DM typing indicators, DM requests, Discover scope, zap defaults, Account Standing nag | a preference changes | wholesale |
+| `armada/metadata` | theme, custom theme, relay toggles, `appRelays`, `communityRelays`, replaceable app DM/media endpoints, voice-server preference, DM typing indicators, DM requests, Discover scope, zap defaults, Account Standing nag | a preference changes | wholesale |
 | `armada/rail` | `railLayout` | every rail drag | wholesale |
 | `armada/read-state` | `readState` | every channel view (4 s debounce) | max per key |
-| `armada/notifications` | `notifLevels`, `mutedCommunities`, `mutedChannels` | a conversation is muted/tuned | wholesale |
+| `armada/notifications` | `notifLevels`, `mutedCommunities`, `mutedChannels`, account-global notification categories | a notification preference changes | wholesale |
 | `armada/dms` | `dmProtocol`, `pinnedDms`, `closedDms`, `acceptedDms`, `startedDms` | a DM is pinned, closed, accepted, opened | wholesale |
 | `armada/reactions` | `frequentReactions` | every reaction (10 s debounce) | max count / most recent |
 
@@ -16,6 +16,29 @@ The catalogue is `src/lib/settingsDocs.ts`; the schemas are in
 `src/lib/schemas.ts`; the AppConfig key lists are in `src/contexts/AppContext.ts`
 (`METADATA_/RAIL_/NOTIF_/DM_CONFIG_KEYS`); the read/write hook is
 `src/hooks/useSettingsDoc.ts`.
+
+## Establishing and maintaining sync
+
+The first **Start sync** / **Sync now** action is deliberately explicit. It
+refreshes the user's existing replaceable records, copies their signed server,
+search, DM and Blossom lists byte-for-byte, and creates or refreshes the six
+encrypted documents on every NIP-65 write relay. This explicit initialization
+is what makes it safe to create a missing document: an empty relay read is not
+otherwise distinguishable from a failed one.
+
+After a metadata document exists, AppConfig edits publish automatically (800 ms
+debounce, with retry after a failed delivery). Hot-path documents keep their own
+debounces. The standing self-state subscription connects directly to the
+account's NIP-65 write relays, independent of the "Use my own relays" general
+traffic toggle, so another open client applies a new version without reload;
+the cold-boot sync performs the same discovery before the UI opens.
+
+Synchronized endpoint arrays are complete replacement sets. Build-time values
+seed a fresh config only. In particular, `appRelays`, `appDmRelays`,
+`appBlossomServers`, `communityRelays`, and a non-empty voice-server preference
+do not have public Armada addresses unioned back in after restore. Public
+NIP-65 discovery indexes and CORD's versioned stock-relay dictionary are
+protocol discovery/interoperability floors, not runtime account settings.
 
 ## Why six and not one
 
@@ -167,9 +190,10 @@ Nothing native decrypts these; storing the raw event verbatim is the whole job.
   local mirrors; the standard events own them. The metadata schema still
   declares them because `useInitialSync` reads them **once**, to rescue a user
   whose canonical event doesn't exist yet. Nothing writes them.
-- **`PushPrefs`** (`src/lib/pushPrefs.ts`) — the account-global per-type
-  notification prefs, in plain localStorage under `armada:push-prefs`. The one
-  settings surface outside both AppConfig and NIP-78.
+- **Notification permission and delivery enablement** — browser/OS permission,
+  Web Push subscriptions, native-service enablement, and foreground intent are
+  device capabilities. The category choices themselves (`PushPrefs`) sync in
+  `armada/notifications`; localStorage is only their background-runtime mirror.
 - **GIF favorites**, which use kind 30078 but a different scheme: one
   per-installation shard at `armada/gif-favorites/<deviceId>`, discovered by the
   `t` tag `armada-gif-favorites` rather than by `d`. Merging shards gives

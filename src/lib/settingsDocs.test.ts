@@ -2,9 +2,11 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
+  CANONICAL_LIST_CONFIG_KEYS,
   DM_CONFIG_KEYS,
   METADATA_CONFIG_KEYS,
   NOTIF_CONFIG_KEYS,
+  PER_DEVICE_CONFIG_KEYS,
   RAIL_CONFIG_KEYS,
   SYNCED_CONFIG_KEYS,
   defaultConfig,
@@ -80,13 +82,29 @@ describe("config key partition", () => {
     for (const key of SYNCED_CONFIG_KEYS) expect(known).toContain(key);
   });
 
+  it("classifies every config field as encrypted, canonical-list, or per-device", () => {
+    const known = new Set([...Object.keys(defaultConfig), "customTheme", "memberListVisible"]);
+    const classified = [
+      ...SYNCED_CONFIG_KEYS,
+      ...CANONICAL_LIST_CONFIG_KEYS,
+      ...PER_DEVICE_CONFIG_KEYS,
+    ];
+    expect(new Set(classified).size).toBe(classified.length);
+    expect([...new Set(classified)].sort()).toEqual([...known].sort());
+  });
+
   /**
    * A key a split document claims has to be the same key the document
    * actually carries, or the migration reads out of metadata into nothing.
    */
   it("claims from metadata exactly what each document carries", () => {
     expect([...MIGRATED_KEYS.rail]).toEqual(expect.arrayContaining([...RAIL_CONFIG_KEYS]));
-    expect([...MIGRATED_KEYS.notifications]).toEqual([...NOTIF_CONFIG_KEYS]);
+    expect([...MIGRATED_KEYS.notifications]).toEqual([
+      "notifLevels",
+      "mutedCommunities",
+      "mutedChannels",
+    ]);
+    expect(NOTIF_CONFIG_KEYS).toContain("pushPrefs");
     expect([...MIGRATED_KEYS.dms].sort()).toEqual([...DM_CONFIG_KEYS].sort());
     expect(MIGRATED_KEYS["read-state"]).toEqual(["readState"]);
     expect(MIGRATED_KEYS.reactions).toEqual(["frequentReactions"]);

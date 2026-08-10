@@ -5,7 +5,7 @@ import { useEffect, useRef } from "react";
 import { useBootGateOpen } from "@/lib/bootGate";
 
 import { setBuzzMediaSigner } from "@/buzz/media";
-import { accountDataRelays } from "@/contexts/AppContext";
+import { selfStateRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useConfigDocSync, markConfigSynced } from "@/hooks/useConfigDocSync";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -32,6 +32,7 @@ import {
   T_ARMADA_GIF_FAVORITES,
 } from "@/lib/selfSyncKinds";
 import { ACTIVE_THEME_KIND, parseDittoTheme } from "@/lib/themeEvent";
+import { savePushPrefs } from "@/lib/pushPrefs";
 import { setPreferredVoiceServer } from "@/lib/voiceDevices";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
@@ -126,7 +127,7 @@ function NostrSyncInner() {
   const searchRelayList = useSearchRelayList();
   const { applyCustomTheme } = useTheme();
   const queryClient = useQueryClient();
-  const selfRelayKey = accountDataRelays(config, user?.pubkey).sort().join("\u0000");
+  const selfRelayKey = selfStateRelays(config, user?.pubkey).sort().join("\u0000");
   useFavoriteGifsSync();
 
   // Bumped when the app returns from a real backgrounding (not an alt-tab),
@@ -242,7 +243,9 @@ function NostrSyncInner() {
 
     void (async () => {
       try {
-        for await (const msg of nostr.req(filters, { signal: controller.signal })) {
+        const relayUrls = selfRelayKey ? selfRelayKey.split("\u0000") : [];
+        const source = relayUrls.length > 0 ? nostr.group(relayUrls) : nostr;
+        for await (const msg of source.req(filters, { signal: controller.signal })) {
           if (msg[0] === "EVENT") onEvent(msg[2] as NostrEvent);
         }
       } catch {
@@ -272,6 +275,13 @@ function NostrSyncInner() {
   useEffect(() => {
     setPreferredVoiceServer(config.preferredVoiceServer);
   }, [config.preferredVoiceServer]);
+
+  // Background notification runtimes cannot read React state or decrypt the
+  // settings document. Keep their localStorage mirror current when this device
+  // edits the categories and when another client changes them.
+  useEffect(() => {
+    savePushPrefs(config.pushPrefs);
+  }, [config.pushPrefs]);
 
   // (Read-state hydration lives in ReadStateProvider, which owns the local map
   // and so can order it against its own debounced flush.)
@@ -413,14 +423,11 @@ function NostrSyncInner() {
           if (sameOwner && event.created_at <= current.relayMetadata.updatedAt) return current;
           const next = {
             ...current,
-            appRelays: current.appRelays.length === 0
-              ? relays.map((relay) => relay.url)
-              : current.appRelays,
             relayMetadata: { relays, updatedAt: event.created_at, pubkey: user.pubkey },
           };
-          // Sync-driven (hydrating the user's own 10002 list), not a user edit
-          // — keep the publish baselines in lockstep so the `appRelays` this
-          // can seed isn't broadcast back out as though the user typed it.
+          // Sync-driven (hydrating the user's own 10002 list), not a user edit.
+          // NIP-65 is a separate canonical list and must never refill an
+          // intentionally empty synchronized `appRelays` preference.
           markConfigSynced(next);
           return next;
         });

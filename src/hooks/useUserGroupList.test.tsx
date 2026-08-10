@@ -45,6 +45,16 @@ vi.mock("@nostrify/react", () => ({
 vi.mock("@/hooks/useCurrentUser", () => ({
   useCurrentUser: () => ({ user: h.user }),
 }));
+vi.mock("@/hooks/useAppContext", () => ({
+  useAppContext: () => ({
+    config: {
+      useAppRelays: false,
+      appRelays: [],
+      useUserRelays: false,
+      relayMetadata: { relays: [], updatedAt: 0 },
+    },
+  }),
+}));
 vi.mock("@/hooks/useNostrPublish", () => ({
   useNostrPublish: () => ({ mutateAsync: h.publish }),
 }));

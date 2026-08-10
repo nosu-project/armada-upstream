@@ -264,7 +264,6 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       // ── 1. Signed NIP-65 relay map ──────────────────────────────────────
       const rId = begin("relays");
       let accountRelays = accountDataRelays(configRef.current, pubkey);
-      let bootstrapAppRelays: string[] = [];
       try {
         const discovery = await discoverRelayList(
           nostr,
@@ -283,13 +282,9 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
           const sameOwner = current.relayMetadata.pubkey === pubkey;
           const metadataIsNewer = !sameOwner
             || discovery.event.created_at > current.relayMetadata.updatedAt;
-          const discoveredUrls = discovery.relays.map((relay) => relay.url);
-          if (metadataIsNewer || current.appRelays.length === 0) {
+          if (metadataIsNewer) {
             const next = {
               ...current,
-              appRelays: current.appRelays.length === 0
-                ? discoveredUrls
-                : current.appRelays,
               useUserRelays:
                 metadataIsNewer && (!sameOwner || current.relayMetadata.updatedAt === 0)
                   ? true
@@ -303,15 +298,13 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
                 : current.relayMetadata,
             };
             configRef.current = next;
-            bootstrapAppRelays = current.appRelays.length === 0 ? next.appRelays : [];
             updateConfigRef.current((live) => {
               const sameLiveOwner = live.relayMetadata.pubkey === pubkey;
               const liveMetadataIsNewer = !sameLiveOwner
                 || discovery.event.created_at > live.relayMetadata.updatedAt;
-              if (!liveMetadataIsNewer && live.appRelays.length > 0) return live;
+              if (!liveMetadataIsNewer) return live;
               return {
                 ...live,
-                appRelays: live.appRelays.length === 0 ? discoveredUrls : live.appRelays,
                 useUserRelays:
                   liveMetadataIsNewer && (!sameLiveOwner || live.relayMetadata.updatedAt === 0)
                     ? true
@@ -452,9 +445,6 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
               // the seeded config already reflects them.
               const merged = {
                 ...parsed.data,
-                ...(bootstrapAppRelays.length > 0 && parsed.data.appRelays?.length === 0
-                  ? { appRelays: bootstrapAppRelays }
-                  : {}),
                 ...(canonicalSearch && !canonicalSearch.decryptFailed
                   ? { searchRelays: canonicalSearch.relays }
                   : {}),

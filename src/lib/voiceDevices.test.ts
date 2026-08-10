@@ -1,14 +1,42 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  effectiveAvServers,
+  effectiveDmVoiceRelays,
   getScreenShareVolume,
   getUserVolume,
   getUserVolumes,
   MAX_PLAYBACK_VOLUME,
   rememberScreenShareVolume,
   rememberUserVolume,
+  setPreferredVoiceServer,
   subscribeUserVolumes,
 } from "@/lib/voiceDevices";
+
+describe("voice server replacement", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("uses deployment defaults only while no synchronized preference exists", () => {
+    expect(effectiveAvServers(["https://armada.example"])).toEqual([
+      "https://armada.example",
+    ]);
+    expect(effectiveDmVoiceRelays(["wss://armada.example"])).toEqual([
+      "wss://armada.example",
+    ]);
+  });
+
+  it("replaces both AV and DM-voice defaults with the custom host", () => {
+    setPreferredVoiceServer("https://voice.mine.example/path");
+    expect(effectiveAvServers(["https://armada.example"])).toEqual([
+      "https://voice.mine.example",
+    ]);
+    expect(effectiveDmVoiceRelays(["wss://armada.example"])).toEqual([
+      "wss://voice.mine.example",
+    ]);
+  });
+});
 
 describe("voice playback volumes", () => {
   beforeEach(() => {

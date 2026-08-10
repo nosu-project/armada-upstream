@@ -187,6 +187,14 @@ export function SettingsPage() {
     updateConfig((current) => ({ ...current, appRelays: relays }));
   };
 
+  const setAppDmRelays = (relays: string[]) => {
+    updateConfig((current) => ({ ...current, appDmRelays: relays }));
+  };
+
+  const setAppBlossomServers = (servers: string[]) => {
+    updateConfig((current) => ({ ...current, appBlossomServers: servers }));
+  };
+
   const setCommunityRelays = (relays: string[]) => {
     updateConfig((current) => ({ ...current, communityRelays: relays }));
   };
@@ -448,6 +456,9 @@ export function SettingsPage() {
         const userRelayUrls = ownsRelayList
           ? config.relayMetadata.relays.map((r) => r.url)
           : [];
+        const userWriteRelayUrls = ownsRelayList
+          ? config.relayMetadata.relays.filter((r) => r.write).map((r) => r.url)
+          : [];
         return (
           <>
             <SettingsRow>
@@ -496,37 +507,49 @@ export function SettingsPage() {
                 <RelayBootstrapForm />
               </SettingsRow>
             )}
-            {user && userRelayUrls.length > 0 && (
+            {user && userWriteRelayUrls.length > 0 && (
               <SettingsRow
-                label="Publish my current setup"
-                description="Copies your signed server, search, DM, media, and private Armada settings to every NIP-65 write relay so a fresh device can restore them. Nothing is published until you press the button."
+                label={portableSetup.isAutomatic ? "Automatic setup sync" : "Set up automatic sync"}
+                description={portableSetup.isAutomatic
+                  ? "Changes now sync automatically to every NIP-65 write relay. Sync now also refreshes the signed server, search, DM, and media lists immediately."
+                  : "Press once to copy your signed lists and encrypted settings to every NIP-65 write relay. After that, theme, relay choices, voice/audio-video server, notifications, rail, and DM preferences sync automatically."}
               >
-                <Button
-                  type="button"
-                  className="h-11 clip-corner-lg touch:h-12"
-                  disabled={portableSetup.isPending}
-                  onClick={() => {
-                    portableSetup.publish().then((result) => {
-                      toast({
-                        title: result.rejectedDeliveries > 0
-                          ? "Setup partially published"
-                          : "Setup published",
-                        description: result.rejectedDeliveries > 0
-                          ? `${result.records} signed records were sent to ${result.destinations} account relays, but ${result.rejectedDeliveries} deliveries were rejected.`
-                          : `${result.records} signed records are available on ${result.destinations} account relays.`,
-                        variant: result.rejectedDeliveries > 0 ? "destructive" : undefined,
+                <div className="space-y-2">
+                  <Button
+                    type="button"
+                    className="h-11 clip-corner-lg touch:h-12"
+                    disabled={portableSetup.isPending || portableSetup.isStatusLoading}
+                    onClick={() => {
+                      portableSetup.publish().then((result) => {
+                        toast({
+                          title: result.rejectedDeliveries > 0
+                            ? "Setup partially synchronized"
+                            : "Setup synchronized",
+                          description: result.rejectedDeliveries > 0
+                            ? `${result.records} signed records were sent to ${result.destinations} account relays, but ${result.rejectedDeliveries} deliveries were rejected.`
+                            : `${result.records} signed records are available on ${result.destinations} account relays.`,
+                          variant: result.rejectedDeliveries > 0 ? "destructive" : undefined,
+                        });
+                      }).catch((err) => {
+                        toast({
+                          title: "Setup was not fully synchronized",
+                          description: err instanceof Error ? err.message : "Please try again.",
+                          variant: "destructive",
+                        });
                       });
-                    }).catch((err) => {
-                      toast({
-                        title: "Setup was not fully published",
-                        description: err instanceof Error ? err.message : "Please try again.",
-                        variant: "destructive",
-                      });
-                    });
-                  }}
-                >
-                  {portableSetup.isPending ? "Publishing…" : "Publish current setup"}
-                </Button>
+                    }}
+                  >
+                    {portableSetup.isPending
+                      ? "Synchronizing…"
+                      : portableSetup.isAutomatic
+                        ? "Sync now"
+                        : "Start sync"}
+                  </Button>
+                  <p className="text-xs text-muted-foreground leading-snug">
+                    Device hardware, audio processing, notification permission, Bluetooth, and
+                    wallet secrets stay on this device.
+                  </p>
+                </div>
               </SettingsRow>
             )}
           </>
@@ -574,16 +597,25 @@ export function SettingsPage() {
         );
       case "dms": {
         const effective = effectiveDmRelays(config);
-        // The app DM relays are the app relays plus the platform DM relay(s),
-        // exactly what `effectiveDmRelays` folds in when the toggle is on.
-        const appDmRelays = [...new Set([...config.appRelays, ...DM_RELAYS])];
         return (
           <>
             <SettingsRow
               label="Use app DM relays"
-              description="Send and receive DMs on Armada's default DM relays."
+              description="Send and receive DMs on your general app relays and the additional synchronized app DM relays below."
             >
               <Switch checked={config.useAppDmRelays} onCheckedChange={setUseAppDmRelays} />
+            </SettingsRow>
+            <SettingsRow
+              label="Additional app DM relays"
+              description="The client-provided DM relays used alongside your general app relays. This synchronized list replaces Armada's built-in DM address."
+            >
+              <RelayListEditor
+                relays={config.appDmRelays}
+                onChange={setAppDmRelays}
+                onReset={() => setAppDmRelays([...DM_RELAYS])}
+                emptyText="No additional app DM relays. Legacy DMs still use your general app relays."
+                placeholder="wss://dm-relay.example.com"
+              />
             </SettingsRow>
             <SettingsRow
               label="Use my own DM relays"
@@ -593,7 +625,6 @@ export function SettingsPage() {
             </SettingsRow>
             <SettingsRow>
               <RelayListEditor
-                pinned={config.useAppDmRelays ? appDmRelays : []}
                 relays={config.dmRelays}
                 onChange={setDmRelays}
                 emptyText="No personal DM relays yet. Add one, or rely on the app DM relays above."
@@ -635,21 +666,40 @@ export function SettingsPage() {
           <>
             <SettingsRow
               label="Use app media servers"
-              description="Upload files to Armada's default Blossom media servers in addition to your own."
+              description="Upload files to the synchronized app Blossom servers in addition to your own."
             >
               <Switch
                 checked={config.useAppBlossomServers}
                 onCheckedChange={setUseAppBlossomServers}
               />
             </SettingsRow>
-            <SettingsRow>
+            <SettingsRow
+              label="App media servers"
+              description="This synchronized list replaces the media-server addresses shipped with the app."
+            >
               <BlossomServerListEditor
-                pinned={config.useAppBlossomServers ? APP_BLOSSOM_SERVERS : []}
-                servers={config.blossomServerMetadata.servers}
-                onChange={setBlossomServers}
-                emptyText="No media servers of your own — uploads use the app defaults."
+                servers={config.appBlossomServers}
+                onChange={setAppBlossomServers}
+                onReset={() => setAppBlossomServers([...APP_BLOSSOM_SERVERS])}
+                emptyText="No app media servers configured."
               />
             </SettingsRow>
+            <SettingsRow>
+              <BlossomServerListEditor
+                servers={config.blossomServerMetadata.servers}
+                onChange={setBlossomServers}
+                emptyText="No personal media servers configured."
+              />
+            </SettingsRow>
+            {!config.useAppBlossomServers
+              && config.blossomServerMetadata.servers.length === 0 && (
+              <SettingsRow>
+                <p className="text-sm text-destructive">
+                  No media servers selected. File uploads are unavailable until you add a
+                  personal server or turn app media servers back on.
+                </p>
+              </SettingsRow>
+            )}
           </>
         );
       case "discover":
