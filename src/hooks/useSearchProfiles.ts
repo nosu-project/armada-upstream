@@ -275,10 +275,13 @@ export function useMemberProfiles(pubkeys: string[], query: string) {
     const lowerQuery = query.trim().toLowerCase();
 
     const profiles: SearchProfile[] = pubkeys.filter((pk) => !mutedPubkeys.has(pk)).map((pubkey) => {
-      const entry = queryClient
-        .getQueryCache()
-        .find({ queryKey: ["author", pubkey] });
-      const data = entry?.state.data as
+      // `getQueryData` hashes the key once and looks it up by hash. The
+      // equivalent `getQueryCache().find({ queryKey })` copies the whole cache
+      // into an array and `JSON.stringify`s every entry's key looking for a
+      // match — O(members × cached queries) per render, and the author cache
+      // holds a query per profile the session has ever seen. It was the single
+      // hottest app-code frame in a profile of the hosted client.
+      const data = queryClient.getQueryData(["author", pubkey]) as
         | { event?: NostrRumor; metadata?: NostrMetadata }
         | undefined;
       return {
