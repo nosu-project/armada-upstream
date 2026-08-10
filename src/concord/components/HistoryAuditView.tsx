@@ -7,8 +7,17 @@ import { Label } from "@/components/ui/label";
 import { WizardShell } from "@/components/onboarding/WizardShell";
 import { useHistoryAudit, type AuditPhase } from "@/concord/hooks/useHistoryAudit";
 import type { HistoryReport } from "@/concord/lib/historyAudit";
-import { EXPORT_FORMATS, exportFileName, type ExportFormat, type ExportModel } from "@/concord/lib/historyExport";
+import { exportFileName, exportHtmlParts, type ExportModel } from "@/concord/lib/historyExport";
 import type { Community } from "@/concord/lib/types";
+
+/** Export time windows. `hours: null` is all history. */
+const RANGES: { label: string; hours: number | null }[] = [
+  { label: "1d", hours: 24 },
+  { label: "3d", hours: 24 * 3 },
+  { label: "7d", hours: 24 * 7 },
+  { label: "30d", hours: 24 * 30 },
+  { label: "All", hours: null },
+];
 
 const PHASE_LABEL: Record<AuditPhase, string> = {
   idle: "",
@@ -20,14 +29,17 @@ const PHASE_LABEL: Record<AuditPhase, string> = {
   error: "Failed",
 };
 
-/** Force a save of the export via an object-URL anchor. */
-function download(model: ExportModel, format: ExportFormat): void {
-  const fmt = EXPORT_FORMATS[format];
-  const blob = new Blob([fmt.write(model)], { type: `${fmt.mime};charset=utf-8` });
+/**
+ * Force a save of the export via an object-URL anchor. The HTML is built as an
+ * array of Blob parts, never one concatenated string, so a large community's
+ * tens-of-megabytes of embedded media can't overflow the max string size.
+ */
+function download(model: ExportModel): void {
+  const blob = new Blob(exportHtmlParts(model), { type: "text/html;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = exportFileName(model, format);
+  a.download = exportFileName(model, "html");
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -58,10 +70,17 @@ interface HistoryAuditViewProps {
 export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) {
   const { run, cancel, canRun, progress, result, error } = useHistoryAudit(community);
   const [embed, setEmbed] = useState(true);
+  const [rangeHours, setRangeHours] = useState<number | null>(null);
 
   const busy = progress.phase !== "idle" && progress.phase !== "done" && progress.phase !== "error";
   const pct = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
   const relayFailure = result ? hadRelayFailure(result.report) : false;
+
+  const startRun = () =>
+    void run({
+      embedAssets: embed,
+      ...(rangeHours === null ? {} : { sinceMs: Date.now() - rangeHours * 3_600_000 }),
+    });
 
   const close = () => {
     if (busy) cancel();
@@ -125,7 +144,7 @@ export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) 
             )}
 
             <div className="flex gap-2">
-              <Button type="button" className="h-11 flex-1 clip-corner-lg" onClick={() => download(result.model, "html")}>
+              <Button type="button" className="h-11 flex-1 clip-corner-lg" onClick={() => download(result.model)}>
                 <FileCode className="size-4" />
                 Download HTML
               </Button>
@@ -134,7 +153,7 @@ export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) 
                   type="button"
                   variant="secondary"
                   className="h-11 clip-corner-lg"
-                  onClick={() => void run({ embedAssets: embed })}
+                  onClick={startRun}
                 >
                   Run again
                 </Button>
@@ -147,11 +166,32 @@ export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) 
             </p>
           </div>
         ) : (
-          <div className="flex items-center justify-center gap-2">
-            <Checkbox id="history-embed" checked={embed} onCheckedChange={(v) => setEmbed(v === true)} />
-            <Label htmlFor="history-embed" className="text-sm font-normal text-muted-foreground">
-              Embed images for offline viewing (larger export)
-            </Label>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <p className="text-center text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Time range
+              </p>
+              <div className="flex flex-wrap justify-center gap-1.5">
+                {RANGES.map((r) => (
+                  <Button
+                    key={r.label}
+                    type="button"
+                    size="sm"
+                    variant={rangeHours === r.hours ? "default" : "secondary"}
+                    className="clip-corner-lg"
+                    onClick={() => setRangeHours(r.hours)}
+                  >
+                    {r.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center justify-center gap-2">
+              <Checkbox id="history-embed" checked={embed} onCheckedChange={(v) => setEmbed(v === true)} />
+              <Label htmlFor="history-embed" className="text-sm font-normal text-muted-foreground">
+                Embed images for offline viewing (larger export)
+              </Label>
+            </div>
           </div>
         )}
 
@@ -165,7 +205,7 @@ export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) 
             size="lg"
             className="h-12 w-full clip-corner-lg text-base"
             disabled={!canRun}
-            onClick={() => void run({ embedAssets: embed })}
+            onClick={startRun}
           >
             Run audit
           </Button>

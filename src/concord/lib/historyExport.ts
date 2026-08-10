@@ -277,59 +277,86 @@ function channelButton(ch: ExportChannel): string {
   );
 }
 
-function channelPane(model: ExportModel, ch: ExportChannel): string {
-  const body = ch.messages.length
-    ? ch.messages.map((m) => messageHtml(model, m)).join("")
-    : `<div class="empty">No messages in this channel.</div>`;
-  return `<section class="pane" data-pane="${escapeHtml(ch.channelIdHex)}">${body}</section>`;
+/**
+ * The model with heavy inlined media stripped, for the embedded JSON view. The
+ * bytes are already in the Chat tab; serializing every `data:` URI a SECOND
+ * time as JSON text is what doubled a large community's export and pushed it
+ * past the browser's maximum string size. URLs are kept, inlined bytes dropped.
+ */
+function lightenForJson(model: ExportModel): ExportModel {
+  const strip = (u: string | undefined) => (u && u.startsWith("data:") ? undefined : u);
+  return {
+    ...model,
+    icon: strip(model.icon),
+    profiles: Object.fromEntries(
+      Object.entries(model.profiles).map(([k, p]) => [k, { ...p, picture: strip(p.picture) }]),
+    ),
+    channels: model.channels.map((ch) => ({
+      ...ch,
+      messages: ch.messages.map((m) => ({
+        ...m,
+        attachments: m.attachments.map(({ dataUri: _dataUri, ...a }) => a),
+      })),
+    })),
+  };
+}
+
+/**
+ * The export as an ARRAY of HTML fragments (one per message, plus chrome), for
+ * `new Blob(parts, …)`. A large community's embedded media runs to tens of
+ * megabytes; concatenating it into one JavaScript string throws "allocation
+ * size overflow" before it ever reaches the file, so the whole document is
+ * never a single string — the Blob concatenates the parts in native memory.
+ */
+export function exportHtmlParts(model: ExportModel): string[] {
+  const channels = model.channels;
+  const firstName = channels[0]?.name ?? "";
+  const rail = channels.map(channelButton).join("") || '<div class="empty">No channels</div>';
+
+  const parts: string[] = [];
+  parts.push(
+    `<!doctype html>\n<html lang="en">\n<head>\n` +
+      `<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n` +
+      `<title>${escapeHtml(model.communityName)} Concord export</title>\n<style>${APP_STYLE}</style>\n</head>\n<body>\n` +
+      `<div class="tabbar"><button class="tab active" data-view="chat">Chat</button>` +
+      `<button class="tab" data-view="text">Text</button><button class="tab" data-view="json">JSON</button></div>\n` +
+      `<div class="views"><section class="view view-chat active" data-view="chat"><div class="app">` +
+      `<aside class="sidebar"><div class="community">${communityGlyph(model)}<span>${escapeHtml(model.communityName)}</span></div>` +
+      `<nav class="channels">${rail}</nav>` +
+      `<div class="exported">Exported ${escapeHtml(isoTime(model.generatedAtMs))}<br>${escapeHtml(model.communityIdHex.slice(0, 16))}…</div></aside>` +
+      `<main class="main"><div class="topbar"><span class="title"><span class="hash muted">#</span> ` +
+      `<span id="pane-title">${escapeHtml(firstName)}</span></span></div><div class="panes">`,
+  );
+
+  if (channels.length === 0) {
+    parts.push('<div class="empty">Nothing to show.</div>');
+  } else {
+    for (const ch of channels) {
+      parts.push(`<section class="pane" data-pane="${escapeHtml(ch.channelIdHex)}">`);
+      if (ch.messages.length === 0) {
+        parts.push('<div class="empty">No messages in this channel.</div>');
+      } else {
+        for (const m of ch.messages) parts.push(messageHtml(model, m));
+      }
+      parts.push(`</section>`);
+    }
+  }
+
+  parts.push(`</div></main></div></section>`);
+  parts.push(`<section class="view view-text" data-view="text"><pre>${escapeHtml(buildTranscript(model))}</pre></section>`);
+  parts.push(`<section class="view view-json" data-view="json"><pre>${escapeHtml(exportJson(lightenForJson(model)))}</pre></section>`);
+  parts.push(`</div>\n<script>${SWITCH_SCRIPT}</script>\n</body>\n</html>\n`);
+  return parts;
 }
 
 /**
  * A single self-contained HTML file: a Chat / Text / JSON tab bar over one
  * rumor-derived model. Fully offline (inline CSS/JS, `data:` URIs for media).
+ * Prefer {@link exportHtmlParts} + a Blob for the download path; this joins them
+ * into one string (fine for small models and tests, unsafe for a huge export).
  */
 export function exportHtml(model: ExportModel): string {
-  const channels = model.channels;
-  const rail = channels.map(channelButton).join("");
-  const panes = channels.map((ch) => channelPane(model, ch)).join("");
-  const firstName = channels[0]?.name ?? "";
-  const transcript = escapeHtml(buildTranscript(model));
-  const json = escapeHtml(exportJson(model));
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(model.communityName)} Concord export</title>
-<style>${APP_STYLE}</style>
-</head>
-<body>
-<div class="tabbar">
-  <button class="tab active" data-view="chat">Chat</button>
-  <button class="tab" data-view="text">Text</button>
-  <button class="tab" data-view="json">JSON</button>
-</div>
-<div class="views">
-  <section class="view view-chat active" data-view="chat">
-    <div class="app">
-      <aside class="sidebar">
-        <div class="community">${communityGlyph(model)}<span>${escapeHtml(model.communityName)}</span></div>
-        <nav class="channels">${rail || '<div class="empty">No channels</div>'}</nav>
-        <div class="exported">Exported ${escapeHtml(isoTime(model.generatedAtMs))}<br>${escapeHtml(model.communityIdHex.slice(0, 16))}…</div>
-      </aside>
-      <main class="main">
-        <div class="topbar"><span class="title"><span class="hash muted">#</span> <span id="pane-title">${escapeHtml(firstName)}</span></span></div>
-        <div class="panes">${panes || '<div class="empty">Nothing to show.</div>'}</div>
-      </main>
-    </div>
-  </section>
-  <section class="view view-text" data-view="text"><pre>${transcript}</pre></section>
-  <section class="view view-json" data-view="json"><pre>${json}</pre></section>
-</div>
-<script>${SWITCH_SCRIPT}</script>
-</body>
-</html>
-`;
+  return exportHtmlParts(model).join("");
 }
 
 // ── Format registry ──────────────────────────────────────────────────────────

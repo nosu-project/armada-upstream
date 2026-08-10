@@ -6,6 +6,7 @@ import {
   escapeHtml,
   exportFileName,
   exportHtml,
+  exportHtmlParts,
   exportJson,
   isoTime,
   type ExportModel,
@@ -98,6 +99,20 @@ describe("exportHtml (mini-Armada)", () => {
     const html = exportHtml(model());
     expect(html).toContain("data:image/png;base64,AAAA");
     expect(html).toContain("data:image/png;base64,BBBB");
+  });
+
+  it("does not duplicate embedded media into the JSON view", () => {
+    // The base64 lives once in the Chat view; the JSON view keeps URLs only, so
+    // a large export can't overflow the max string size by carrying it twice.
+    const html = exportHtml(model());
+    expect(html.split("data:image/png;base64,BBBB").length - 1).toBe(1);
+  });
+
+  it("builds the file as Blob parts that join to the whole document", () => {
+    const parts = exportHtmlParts(model());
+    expect(Array.isArray(parts)).toBe(true);
+    expect(parts.length).toBeGreaterThan(3);
+    expect(parts.join("")).toBe(exportHtml(model()));
   });
 
   it("escapes hostile content so an export can't XSS its viewer", () => {

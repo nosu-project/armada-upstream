@@ -93,6 +93,12 @@ export interface RunOptions {
   embedAssets?: boolean;
   /** Passed through to {@link auditHistory} (e.g. `danglingIsBlocker` for a pre-compaction gate). */
   auditOptions?: AuditOptions;
+  /**
+   * Only include messages at or after this epoch-ms; undefined = all history.
+   * Bounds the backfill from below AND filters the store read, so a "last 7
+   * days" export neither pages older wraps nor carries older stored rumors.
+   */
+  sinceMs?: number;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -153,6 +159,7 @@ async function collectChannelWraps(
   community: Community,
   channel: Channel,
   signal: AbortSignal,
+  sinceSecs?: number,
 ): Promise<{ wraps: NostrEvent[]; exhausted: boolean; failed: boolean }> {
   const wraps: NostrEvent[] = [];
   let until: number | undefined;
@@ -160,7 +167,7 @@ async function collectChannelWraps(
   let failed = false;
   for (let round = 0; round < MAX_BACKFILL_ROUNDS; round++) {
     if (signal.aborted) break;
-    const r = await backfillStore(nostr, community.relays, channel, signal, { until, maxPages: 20 });
+    const r = await backfillStore(nostr, community.relays, channel, signal, { until, since: sinceSecs, maxPages: 20 });
     wraps.push(...r.events);
     if (r.failed) failed = true;
     if (r.exhausted) {
@@ -233,6 +240,8 @@ export function useHistoryAudit(community: Community | undefined) {
       abortRef.current = controller;
       const signal = controller.signal;
       const embedAssets = opts?.embedAssets ?? true;
+      const sinceMs = opts?.sinceMs;
+      const sinceSecs = sinceMs !== undefined ? Math.floor(sinceMs / 1000) : undefined;
 
       setError(null);
       setResult(null);
@@ -263,14 +272,18 @@ export function useHistoryAudit(community: Community | undefined) {
           const channel = channels[i];
           setProgress({ phase: "channels", done: i, total: channels.length, label: `#${channel.name}` });
 
-          const { wraps, exhausted, failed } = await collectChannelWraps(nostr, community, channel, signal);
+          const { wraps, exhausted, failed } = await collectChannelWraps(nostr, community, channel, signal, sinceSecs);
           const openedWire = await openChatBatch(wraps, channel, { signal });
           // Populate the local store, THEN read the export source back out of it,
           // so the export is generated purely from durable rumors (never from a
           // wire set that hasn't landed on disk). The store also merges in
           // whatever earlier syncs already decrypted.
           if (openedWire.length) await writeRumors(community.idHex, openedWire);
-          const rumors = await queryChannelRumors(community.idHex, channel.idHex, { limit: 1_000_000, signal });
+          const allRumors = await queryChannelRumors(community.idHex, channel.idHex, { limit: 1_000_000, signal });
+          // The store keeps everything it ever decrypted, so a time-bounded
+          // export filters it down to the window regardless of what the sweep
+          // fetched this run.
+          const rumors = sinceMs !== undefined ? allRumors.filter((r) => r.ms >= sinceMs) : allRumors;
 
           const timeline = foldTimeline(rumors, { banned: folded.banned, canDelete: () => false });
           for (const m of timeline.messages) authors.add(m.author);
