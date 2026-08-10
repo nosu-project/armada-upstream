@@ -8,8 +8,8 @@ import { useCommunity } from "@/concord/hooks/useCommunityList";
  * The history audit + export tool, as a route.
  *
  * A route rather than a dialog (mirroring {@link DiscordImportPage}): the audit
- * outlives the settings dialog its entry point sits in, so owning it here means
- * nothing below can unmount it, and the settings dialog disappears on its own
+ * outlives the settings pane its entry point sits in, so owning it here means
+ * nothing below can unmount it, and the settings pane yields on its own
  * because the route changed. Portalled to `<body>` because `WizardShell` is
  * `position: fixed` and a transformed ancestor would shrink it to that box.
  */

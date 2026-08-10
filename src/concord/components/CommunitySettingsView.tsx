@@ -11,6 +11,7 @@ import {
   Lock,
   Pencil,
   Plus,
+  Settings,
   Shield,
   Timer,
   Trash2,
@@ -28,6 +29,7 @@ import { DiscordBridgeSection } from "@/components/ImportFromDiscord";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { OwnerAvatar, OwnerSlashRepo, RepositoryPicker, type PickedRepository } from "@/components/projects/RepositoryPicker";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useNostr } from "@nostrify/react";
 
@@ -80,67 +82,18 @@ import { fetchGitRepositoryAnnouncement } from "@/lib/gitRepositoryResolver";
 import { parseGitRepositoryAddress } from "@/lib/gitActivity";
 
 /**
- * The single "community" surface: the same view is shown to everyone (icon,
- * banner, name, description, owner, member count, relays, channels). Viewers
- * with MANAGE_METADATA can edit the name / description / icon / banner inline
+ * The community settings pane — the single "community" surface, rendered as a
+ * full page in the main content column (like the audit log), one tab per
+ * concern: Overview (identity, owner, disappearing messages), Channels,
+ * Integrations (git repositories + Discord bridge), and Relays (relay set +
+ * history export). The same view is shown to everyone; viewers with
+ * MANAGE_METADATA can edit the name / description / icon / banner inline
  * (Signal-style — tap to change); viewers with MANAGE_CHANNELS can rename,
  * delete and add channels. Edits publish version-chained editions; every
  * member's fold re-checks the permission (CORD-02/04), so the UI gating is a
  * convenience, not the enforcement point.
  */
-export function CommunityInfoDialog({
-  community,
-  metadata,
-  ownerHex,
-  memberCount,
-  canManageMetadata,
-  canManageChannels,
-  channelRoles,
-  onPrivatiseChannel,
-  onRotateChannelKey,
-  open,
-  onOpenChange,
-}: {
-  community: Community | undefined;
-  metadata: CommunityMetadata | undefined;
-  ownerHex: string | undefined;
-  memberCount: number;
-  canManageMetadata: boolean;
-  canManageChannels: boolean;
-  /** Per channel id, the Roles scoped to it — its access list (CORD-04 §2). */
-  channelRoles?: ReadonlyMap<string, Array<{ id: string; name: string }>>;
-  /** Convert a public channel to private (CORD-03 §2). */
-  onPrivatiseChannel?: (channelIdHex: string) => Promise<void>;
-  /** Re-key a private channel to exactly its entitled members. */
-  onRotateChannelKey?: (channelIdHex: string) => Promise<void>;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md border-0 rounded-none p-0 bg-transparent shadow-none">
-        <DialogTitle className="sr-only">Community</DialogTitle>
-        <div className="clip-corner-lg bg-chrome max-h-[85vh] overflow-y-auto">
-          {community && (
-            <InfoBody
-              community={community}
-              metadata={metadata}
-              ownerHex={ownerHex}
-              memberCount={memberCount}
-              canManageMetadata={canManageMetadata}
-              canManageChannels={canManageChannels}
-              channelRoles={channelRoles}
-              onPrivatiseChannel={onPrivatiseChannel}
-              onRotateChannelKey={onRotateChannelKey}
-            />
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function InfoBody({
+export function CommunitySettingsView({
   community,
   metadata,
   ownerHex,
@@ -157,8 +110,11 @@ function InfoBody({
   memberCount: number;
   canManageMetadata: boolean;
   canManageChannels: boolean;
+  /** Per channel id, the Roles scoped to it — its access list (CORD-04 §2). */
   channelRoles?: ReadonlyMap<string, Array<{ id: string; name: string }>>;
+  /** Convert a public channel to private (CORD-03 §2). */
   onPrivatiseChannel?: (channelIdHex: string) => Promise<void>;
+  /** Re-key a private channel to exactly its entitled members. */
   onRotateChannelKey?: (channelIdHex: string) => Promise<void>;
 }) {
   const { updateMetadata, isUpdating } = useMetadataActions(community);
@@ -211,14 +167,27 @@ function InfoBody({
   };
 
   return (
-    <div className="space-y-5">
+    <div className="mx-auto w-full max-w-2xl px-3 py-4">
+      <div className="mb-3 flex items-center gap-2">
+        <Settings className="size-5 text-primary" />
+        <h2 className="text-lg font-semibold">Community settings</h2>
+      </div>
+      <Tabs defaultValue="overview">
+        <TabsList className="grid w-full grid-cols-4">
+          <TabsTrigger value="overview" className="px-2">Overview</TabsTrigger>
+          <TabsTrigger value="channels" className="px-2">Channels</TabsTrigger>
+          <TabsTrigger value="integrations" className="px-2">Integrations</TabsTrigger>
+          <TabsTrigger value="relays" className="px-2">Relays</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="overview" className="mt-4 space-y-5">
       {/* Banner: shown when present, or as an add affordance for editors. */}
       {(bannerUrl || canManageMetadata) && (
-        <div className="relative -mb-2">
+        <div className="relative">
           {bannerUrl ? (
             <button
               type="button"
-              className="block h-24 w-full overflow-hidden cursor-zoom-in"
+              className="block h-32 w-full overflow-hidden rounded-lg cursor-zoom-in"
               aria-label="View banner"
               onClick={() => setBannerZoom(true)}
             >
@@ -227,7 +196,7 @@ function InfoBody({
           ) : (
             <button
               type="button"
-              className="flex h-24 w-full items-center justify-center bg-secondary/40 text-muted-foreground transition-colors hover:bg-secondary/60"
+              className="flex h-32 w-full items-center justify-center rounded-lg bg-secondary/40 text-muted-foreground transition-colors hover:bg-secondary/60"
               onClick={() => bannerInputRef.current?.click()}
               aria-label="Add banner"
             >
@@ -252,7 +221,7 @@ function InfoBody({
         </div>
       )}
 
-      <div className={cn("space-y-5 px-6 pb-6 sm:px-7 sm:pb-7", !(bannerUrl || canManageMetadata) && "pt-6 sm:pt-7")}>
+      <div className="space-y-5">
         <div className="flex flex-col items-center text-center gap-3">
           <div className="relative">
             {iconUrl ? (
@@ -383,21 +352,6 @@ function InfoBody({
         </div>
 
         <DisappearingSection community={community} metadata={metadata} canManage={canManageMetadata} />
-
-        <ChannelsSection community={community} canManage={canManageChannels} channelRoles={channelRoles} onPrivatiseChannel={onPrivatiseChannel} onRotateChannelKey={onRotateChannelKey} />
-
-        <ConnectedRepositoriesSection community={community} canManage={canManageChannels} />
-
-        <DiscordBridgeSection canManage={canManageChannels} />
-
-        <RelaysSection
-          community={community}
-          metadata={metadata}
-          relays={relays}
-          canManage={canManageMetadata}
-        />
-
-        <HistorySection community={community} />
       </div>
 
       <input
@@ -422,6 +376,29 @@ function InfoBody({
           e.target.value = "";
         }}
       />
+        </TabsContent>
+
+        <TabsContent value="channels" className="mt-4">
+          <ChannelsSection community={community} canManage={canManageChannels} channelRoles={channelRoles} onPrivatiseChannel={onPrivatiseChannel} onRotateChannelKey={onRotateChannelKey} />
+        </TabsContent>
+
+        <TabsContent value="integrations" className="mt-4 space-y-5">
+          <ConnectedRepositoriesSection community={community} canManage={canManageChannels} />
+
+          <DiscordBridgeSection canManage={canManageChannels} />
+        </TabsContent>
+
+        <TabsContent value="relays" className="mt-4 space-y-5">
+          <RelaysSection
+            community={community}
+            metadata={metadata}
+            relays={relays}
+            canManage={canManageMetadata}
+          />
+
+          <HistorySection community={community} />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Community } from "@/concord/lib/types";
-import { ConnectedRepositoriesSection } from "./CommunityInfoDialog";
+import { ConnectedRepositoriesSection } from "./CommunitySettingsView";
 
 const h = vi.hoisted(() => ({
   attach: vi.fn(),

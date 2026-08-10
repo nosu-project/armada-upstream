@@ -35,7 +35,7 @@ import { GitTimelineRow, TicketSidePanel } from "@/components/chat/GitTimeline";
 import { isGitTimelineEntry, mergeChannelTimeline } from "@/components/chat/channelTimeline";
 import { TypingIndicator } from "@/components/chat/TypingIndicator";
 import { VoiceParticipantList } from "@/components/VoicePresence";
-import { CommunityInfoDialog } from "@/concord/components/CommunityInfoDialog";
+import { CommunitySettingsView } from "@/concord/components/CommunitySettingsView";
 import { AddChannelMembersDialog } from "@/concord/components/AddChannelMembersDialog";
 import { ImageLightbox } from "@/concord/components/ImageLightbox";
 import { InviteDialog } from "@/concord/components/InviteDialog";
@@ -1766,7 +1766,6 @@ export function ConcordPage() {
   }, [communityId]);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [addMembersOpen, setAddMembersOpen] = useState(false);
-  const [infoOpen, setInfoOpen] = useState(false);
   const [shareDiscoverOpen, setShareDiscoverOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);
   const [banTarget, setBanTarget] = useState<string | null>(null);
@@ -2643,7 +2642,10 @@ export function ConcordPage() {
                     show: true,
                     icon: <Settings className="size-4" />,
                     label: "Community settings",
-                    onClick: () => setInfoOpen(true),
+                    onClick: () => {
+                      selectPane("settings");
+                      setChannelsOpen(false);
+                    },
                   },
                   {
                     show: !!user && !dissolved,
@@ -3076,6 +3078,11 @@ export function ConcordPage() {
                   <FolderGit2 className="size-5 text-muted-foreground shrink-0" />
                   <h1 className="font-semibold truncate leading-tight">Projects</h1>
                 </>
+              ) : view === "settings" ? (
+                <>
+                  <Settings className="size-5 text-muted-foreground shrink-0" />
+                  <h1 className="font-semibold truncate leading-tight">Community settings</h1>
+                </>
               ) : (
                 <>
                   {channel?.isPrivate ? (
@@ -3099,9 +3106,9 @@ export function ConcordPage() {
               <button
                 type="button"
                 className="flex items-center gap-2.5 min-w-0 text-left"
-                onClick={() => community && setInfoOpen(true)}
+                onClick={() => community && selectPane("settings")}
                 disabled={!community}
-                aria-label="Community info"
+                aria-label="Community settings"
               >
               <TitleAvatar icon={folded?.metadata?.icon} name={community?.name} />
               <div className="min-w-0 flex flex-col">
@@ -3146,6 +3153,11 @@ export function ConcordPage() {
                     <>
                       <FolderGit2 className="size-3 shrink-0" />
                       Projects
+                    </>
+                  ) : view === "settings" ? (
+                    <>
+                      <Settings className="size-3 shrink-0" />
+                      Settings
                     </>
                   ) : (
                     <>
@@ -3424,6 +3436,22 @@ export function ConcordPage() {
                       community={community}
                       memberPubkeys={memberPubkeys}
                       canModerate={canKickAny || canBanAny}
+                    />
+                  )}
+                </div>
+              ) : view === "settings" ? (
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
+                  {community && (
+                    <CommunitySettingsView
+                      community={community}
+                      metadata={folded?.metadata}
+                      ownerHex={ownerHex}
+                      memberCount={memberPubkeys.length}
+                      canManageMetadata={canManageMetadata}
+                      canManageChannels={canManageChannels}
+                      channelRoles={channelRoleCatalog}
+                      onPrivatiseChannel={canManageChannels ? handlePrivatiseChannel : undefined}
+                      onRotateChannelKey={canRekeyChannel ? handleRotateChannelKey : undefined}
                     />
                   )}
                 </div>
@@ -3822,19 +3850,6 @@ export function ConcordPage() {
         strandsForeignLinks={rotateStrandsForeignLinks}
         onClose={() => setRotateKeysOpen(false)}
         onConfirm={runRotateKeys}
-      />
-      <CommunityInfoDialog
-        community={community}
-        metadata={folded?.metadata}
-        ownerHex={ownerHex}
-        memberCount={memberPubkeys.length}
-        canManageMetadata={canManageMetadata}
-        canManageChannels={canManageChannels}
-        channelRoles={channelRoleCatalog}
-        onPrivatiseChannel={canManageChannels ? handlePrivatiseChannel : undefined}
-        onRotateChannelKey={canRekeyChannel ? handleRotateChannelKey : undefined}
-        open={infoOpen}
-        onOpenChange={setInfoOpen}
       />
       <CategoryNameDialog
         open={Boolean(categoryPrompt)}
