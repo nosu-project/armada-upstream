@@ -165,9 +165,12 @@ public class ArmadaPushPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     /// Delete it, on disable or logout. The identity key must not outlive the
-    /// session that could use it.
+    /// session that could use it — and neither should the avatars of the people
+    /// that session was talking to, which are the one other thing the extension
+    /// leaves in the shared container.
     @objc func clearConfig(_ call: CAPPluginCall) {
         PushConfigStore.clear()
+        AvatarCache.clear()
         call.resolve()
     }
 

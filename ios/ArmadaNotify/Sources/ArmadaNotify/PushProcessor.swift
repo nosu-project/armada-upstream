@@ -25,9 +25,27 @@ public struct PreparedPush {
     /// Show this as quietly as the platform allows: an unknown sender under the
     /// `off` request policy.
     public let quiet: Bool
+    /// Who sent it, when that is safe to reveal.
+    ///
+    /// Present only where the sender is already being named in the body — so
+    /// never for a request ping, whose whole purpose is to reveal nothing a
+    /// stranger controls, including their avatar. `NotificationService` turns
+    /// this into a communication notification, which is what makes iOS show the
+    /// person rather than the app icon.
+    public let sender: Sender?
+
+    public struct Sender {
+        /// Hex pubkey, used only as the intent's stable identifier.
+        public let id: String
+        public let name: String
+        /// `https` avatar URL, or nil.
+        public let avatarUrl: String?
+        /// The room, for a group conversation. Absent for a DM.
+        public let groupName: String?
+    }
 
     static let dropped = PreparedPush(
-        drop: true, title: "", body: "", threadId: "", path: nil, quiet: true
+        drop: true, title: "", body: "", threadId: "", path: nil, quiet: true, sender: nil
     )
 }
 
@@ -111,11 +129,12 @@ struct PushProcessor {
             return requestPing(quiet: config.policy == .off)
         }
 
+        let profile = store?.profile(pubkey: opened.author)
         let message = NotificationPreview.Message(
             plane: .dm,
             kind: opened.kind,
             content: opened.content,
-            authorName: store?.displayName(pubkey: opened.author) ?? "Anonymous",
+            authorName: profile?.name ?? "Anonymous",
             roomTitle: nil,
             imetaMime: NotificationPreview.firstImetaMime(opened.tags),
             mentionNames: store?.mentionNames(in: opened.content) ?? [:]
@@ -131,7 +150,13 @@ struct PushProcessor {
             body: presented.body,
             threadId: "dm-\(opened.author)",
             path: "/dm/\(opened.author)",
-            quiet: false
+            quiet: false,
+            sender: PreparedPush.Sender(
+                id: opened.author,
+                name: profile?.name ?? "Anonymous",
+                avatarUrl: profile?.picture,
+                groupName: nil
+            )
         )
     }
 
@@ -170,7 +195,10 @@ struct PushProcessor {
             body: quiet ? "You have new message requests" : "You have a new message request",
             threadId: "armada-dm-requests",
             path: "/dm",
-            quiet: quiet
+            quiet: quiet,
+            // No sender: a stranger controls their name AND their avatar, and
+            // the point of this ping is that none of it reaches the screen.
+            sender: nil
         )
     }
 
@@ -198,11 +226,12 @@ struct PushProcessor {
         // be read at all.
         if reaction && !mention { return .dropped }
 
+        let profile = store?.profile(pubkey: opened.author)
         var message = NotificationPreview.Message(
             plane: .c2,
             kind: opened.kind,
             content: opened.content,
-            authorName: store?.displayName(pubkey: opened.author) ?? "Anonymous",
+            authorName: profile?.name ?? "Anonymous",
             roomTitle: store?.concordRoomTitle(
                 communityId: stream.communityId, channelId: stream.channelId
             ),
@@ -225,7 +254,13 @@ struct PushProcessor {
             body: presented.body,
             threadId: "c2:\(stream.channelId)",
             path: "/c/\(stream.communityId)/\(stream.channelId)/m/\(target)",
-            quiet: false
+            quiet: false,
+            sender: PreparedPush.Sender(
+                id: opened.author,
+                name: profile?.name ?? "Anonymous",
+                avatarUrl: profile?.picture,
+                groupName: message.roomTitle
+            )
         )
     }
 
@@ -258,11 +293,12 @@ struct PushProcessor {
         let mention = event.tags.contains {
             $0.count > 1 && $0[0] == "p" && $0[1] == config.selfPubkey
         }
+        let profile = store?.profile(pubkey: event.pubkey)
         var message = NotificationPreview.Message(
             plane: .nip29,
             kind: event.kind,
             content: event.content,
-            authorName: store?.displayName(pubkey: event.pubkey) ?? "Anonymous",
+            authorName: profile?.name ?? "Anonymous",
             roomTitle: only?.title,
             mention: mention,
             imetaMime: NotificationPreview.firstImetaMime(event.tags),
@@ -284,7 +320,13 @@ struct PushProcessor {
             body: presented.body,
             threadId: "h:\(groupId)",
             path: path,
-            quiet: false
+            quiet: false,
+            sender: PreparedPush.Sender(
+                id: event.pubkey,
+                name: profile?.name ?? "Anonymous",
+                avatarUrl: profile?.picture,
+                groupName: only?.title
+            )
         )
     }
 

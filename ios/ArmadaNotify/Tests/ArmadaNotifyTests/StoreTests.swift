@@ -248,3 +248,79 @@ final class StorelessTests: XCTestCase {
         XCTAssertEqual(prepared?.drop, true)
     }
 }
+
+/// Who a notification says it is FROM.
+///
+/// `PreparedPush.sender` is what the extension turns into a communication
+/// notification, which is the only way iOS shows a person instead of the app
+/// icon. It therefore carries a privacy rule, not just a name: it is present
+/// exactly where the sender is already being named in the body.
+final class SenderIdentityTests: XCTestCase {
+
+    private let self_ = String(repeating: "a", count: 64)
+    private let peer = String(repeating: "b", count: 64)
+
+    private func config(knownPeers: Set<String> = [], policy: DmRequestLevel = .generic) -> PushConfig {
+        PushConfig(
+            policy: policy, selfPubkey: self_, knownPeers: knownPeers,
+            secretKey: nil, nip46: nil, concord: []
+        )
+    }
+
+    func testANip29MessageNamesItsSender() {
+        let processor = PushProcessor(store: nil, config: config(), now: 1_700_000_000)
+        let event: [String: Any] = [
+            "id": String(repeating: "e", count: 64),
+            "pubkey": peer, "created_at": 1_700_000_000, "kind": 9,
+            "tags": [["h", "general"]], "content": "shipped it",
+        ]
+        let prepared = processor.prepare(userInfo: ["scope": "group", "event": event])
+
+        XCTAssertEqual(prepared?.sender?.id, peer, "the pubkey is the conversation's identity")
+        XCTAssertEqual(prepared?.sender?.name, "Anonymous")
+        // No store, so no kind-0 and no picture — the notification falls back to
+        // the monogram, which is still the person.
+        XCTAssertNil(prepared?.sender?.avatarUrl)
+    }
+
+    /// The rule this type exists to carry. A stranger picks their own name AND
+    /// their own avatar, so a message request must reach the screen with
+    /// neither — a content-blind ping cannot become a person.
+    func testAMessageRequestHasNoSender() {
+        let alicePk = vectorString("alicePk")
+        let processor = PushProcessor(
+            store: nil,
+            config: PushConfig(
+                policy: .generic, selfPubkey: alicePk, knownPeers: [],
+                secretKey: Hex.decode(vectorString("aliceSk")), nip46: nil, concord: []
+            ),
+            now: 1_700_000_000
+        )
+        let prepared = processor.prepare(
+            userInfo: ["scope": "dm", "event": vectorObject("dmWrap")]
+        )
+
+        XCTAssertEqual(prepared?.title, "Message requests", "the request ping, not the message")
+        XCTAssertNil(prepared?.sender, "a stranger must not become a communication notification")
+    }
+
+    /// The same wrap from a KNOWN sender is a person, and says so.
+    func testAKnownSenderIsNamed() {
+        let alicePk = vectorString("alicePk")
+        let bobPk = vectorString("bobPk")
+        let processor = PushProcessor(
+            store: nil,
+            config: PushConfig(
+                policy: .generic, selfPubkey: alicePk, knownPeers: [bobPk],
+                secretKey: Hex.decode(vectorString("aliceSk")), nip46: nil, concord: []
+            ),
+            now: 1_700_000_000
+        )
+        let prepared = processor.prepare(
+            userInfo: ["scope": "dm", "event": vectorObject("dmWrap")]
+        )
+
+        XCTAssertEqual(prepared?.sender?.id, bobPk)
+        XCTAssertNil(prepared?.sender?.groupName, "a DM is not a group conversation")
+    }
+}

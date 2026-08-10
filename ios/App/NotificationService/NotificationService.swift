@@ -13,8 +13,8 @@ import UserNotifications
 /// Deliberately thin. Every decision, every refusal and every byte of
 /// decryption lives in the `ArmadaNotify` package, whose suite runs on Linux
 /// under `swift test`; what is left here is the part that cannot be tested
-/// anywhere — reading a `UNNotificationRequest` and calling a completion
-/// handler.
+/// anywhere — reading a `UNNotificationRequest`, fetching an avatar, donating
+/// an intent, and calling a completion handler.
 ///
 /// Two rules govern this file:
 ///
@@ -22,15 +22,23 @@ import UserNotifications
 ///    without calling it, or that crashes, shows the gateway's original
 ///    static text. That is the correct fallback and it is also invisible: no
 ///    log anyone reads, no error the app can report. So every failure path
-///    here ends in the same `contentHandler(content)` the success path does.
+///    here ends in the same `deliver(_:)` the success path does, and
+///    `deliver` is idempotent because the avatar fetch below means the timeout
+///    and the completion can now genuinely race.
 ///  - **Never spend the budget.** ~24 MB and a few seconds, after which
 ///    `serviceExtensionTimeWillExpire` fires and iOS shows whatever is left.
-///    Nothing here waits on the network: names and room titles are read from
-///    the ArmadaDB file in the App Group, or not at all.
+///    The one thing that waits on the network is the avatar, which is bounded
+///    and cached (`AvatarLoader`); names and room titles are read from the
+///    ArmadaDB file in the App Group, or not at all.
 class NotificationService: UNNotificationServiceExtension {
 
     private var contentHandler: ((UNNotificationContent) -> Void)?
     private var bestAttempt: UNMutableNotificationContent?
+    /// Guards the handler against the avatar fetch and the expiry timer both
+    /// arriving. `didReceive` and `serviceExtensionTimeWillExpire` are called on
+    /// the same queue, but the fetch's completion is not.
+    private let lock = NSLock()
+    private var delivered = false
 
     override func didReceive(
         _ request: UNNotificationRequest,
@@ -42,10 +50,10 @@ class NotificationService: UNNotificationServiceExtension {
         bestAttempt = content
 
         // No config (push disabled, logged out, or a login whose key stays off
-        // the device), no store, or an event this key cannot open: keep what
-        // the gateway sent.
+        // the device), or an event this key cannot open: keep what the gateway
+        // sent.
         guard let prepared = ArmadaPushRuntime.prepare(userInfo: request.content.userInfo) else {
-            return contentHandler(content)
+            return deliver(content)
         }
 
         if prepared.drop {
@@ -61,7 +69,7 @@ class NotificationService: UNNotificationServiceExtension {
             content.body = "Messages synced"
             content.sound = nil
             content.interruptionLevel = .passive
-            return contentHandler(content)
+            return deliver(content)
         }
 
         content.title = prepared.title
@@ -80,14 +88,39 @@ class NotificationService: UNNotificationServiceExtension {
             userInfo["url"] = path
             content.userInfo = userInfo
         }
-        contentHandler(content)
+
+        // A push with no nameable sender (the message-request ping) stays an
+        // ordinary app notification, which is exactly right: it is the one case
+        // where showing a person would be showing a stranger.
+        guard let sender = prepared.sender else { return deliver(content) }
+
+        AvatarLoader.load(url: sender.avatarUrl) { [weak self] avatar in
+            guard let self else { return }
+            let communication = CommunicationNotification.apply(
+                sender: sender,
+                threadId: prepared.threadId,
+                avatar: avatar,
+                to: content
+            )
+            // A system that declines the intent still gets the decrypted text.
+            self.deliver(communication ?? content)
+        }
     }
 
     /// Out of time. Hand back whatever has been built — which is at worst the
     /// gateway's original content, never nothing.
     override func serviceExtensionTimeWillExpire() {
-        if let contentHandler = contentHandler, let bestAttempt = bestAttempt {
-            contentHandler(bestAttempt)
-        }
+        if let bestAttempt = bestAttempt { deliver(bestAttempt) }
+    }
+
+    /// Call the content handler at most once.
+    private func deliver(_ content: UNNotificationContent) {
+        lock.lock()
+        let alreadyDelivered = delivered
+        delivered = true
+        let handler = contentHandler
+        lock.unlock()
+        if alreadyDelivered { return }
+        handler?(content)
     }
 }

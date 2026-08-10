@@ -56,5 +56,26 @@
 	     the capability. -->
 	<key>aps-environment</key>
 	<string>development</string>
+
+	<!-- Communication Notifications, which is what lets a decrypted message
+	     show the SENDER rather than the app icon.
+
+	     iOS reserves the person-shaped notification treatment (avatar or name
+	     monogram in place of the app icon, the sender as the source, and
+	     "Allow Notifications From People" in Focus modes) for notifications
+	     rebuilt from a donated INSendMessageIntent — see
+	     NotificationService/CommunicationNotification.swift. Without this
+	     entitlement `UNNotificationContent.updating(from:)` throws, and the
+	     notification silently degrades to an ordinary app notification with
+	     the right text and the wrong icon, which is precisely the state this
+	     was added to fix.
+
+	     Requires the capability on the App ID in the developer portal, like
+	     Push Notifications, App Groups and Associated Domains. It belongs to
+	     the APP even though the extension is what donates the intent: the
+	     extension runs under the app's identity for this purpose, and its own
+	     entitlements file stays minimal. -->
+	<key>com.apple.developer.usernotifications.communication</key>
+	<true/>
 </dict>
 </plist>

@@ -89,11 +89,19 @@ struct NotifyStore {
 
     // MARK: - Reads
 
-    /// A sender's display name from the local kind-0, never the network. A
-    /// notification is the one surface with no time to wait on a relay, so an
+    /// A sender's name and avatar, from the local kind-0 and never the network.
+    struct Profile {
+        let name: String
+        /// An `https` picture URL, or nil. Only https: a notification image is
+        /// fetched by the extension, and a plaintext URL would both leak the
+        /// read and be trivially substitutable in flight.
+        let picture: String?
+    }
+
+    /// A notification is the one surface with no time to wait on a relay, so an
     /// author this cannot name reads "Anonymous" — a fact established by
     /// looking, not a placeholder for a lookup that never happened.
-    func displayName(pubkey: String) -> String {
+    func profile(pubkey: String) -> Profile {
         guard let events = query(
             tenant: ArmadaDbTenants.main,
             filters: [["kinds": [0], "authors": [pubkey], "limit": 1]]
@@ -101,11 +109,25 @@ struct NotifyStore {
             let content = first["content"] as? String,
             let decoded = try? JSONSerialization.jsonObject(with: Data(content.utf8)),
             let metadata = decoded as? [String: Any]
-        else { return "Anonymous" }
+        else { return Profile(name: "Anonymous", picture: nil) }
 
-        if let name = metadata["name"] as? String, !name.isEmpty { return name }
-        if let name = metadata["display_name"] as? String, !name.isEmpty { return name }
-        return "Anonymous"
+        var name = "Anonymous"
+        if let value = metadata["name"] as? String, !value.isEmpty {
+            name = value
+        } else if let value = metadata["display_name"] as? String, !value.isEmpty {
+            name = value
+        }
+
+        var picture: String?
+        if let value = metadata["picture"] as? String, value.lowercased().hasPrefix("https://") {
+            picture = value
+        }
+        return Profile(name: name, picture: picture)
+    }
+
+    /// Just the name, for the mention map.
+    func displayName(pubkey: String) -> String {
+        profile(pubkey: pubkey).name
     }
 
     /// Resolve the names a message's NIP-27 mentions refer to, locally. Absent

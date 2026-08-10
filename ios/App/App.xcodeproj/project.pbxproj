@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		A2D8B0012C0100000000B004 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2D8B0012C0100000000B003 /* NotificationService.swift */; };
+		A2D8B0012C0100000000C002 /* AvatarLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2D8B0012C0100000000C001 /* AvatarLoader.swift */; };
+		A2D8B0012C0100000000C004 /* CommunicationNotification.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2D8B0012C0100000000C003 /* CommunicationNotification.swift */; };
 		A2D8B0012C0100000000B00F /* NotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A2D8B0012C0100000000B002 /* NotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A2D8B0012C0100000000B014 /* ArmadaNotify in Frameworks */ = {isa = PBXBuildFile; productRef = A2D8B0012C0100000000B013 /* ArmadaNotify */; };
 		A2D8B0012C0100000000B016 /* ArmadaNotify in Frameworks */ = {isa = PBXBuildFile; productRef = A2D8B0012C0100000000B015 /* ArmadaNotify */; };
@@ -29,6 +31,8 @@
 /* Begin PBXFileReference section */
 		A2D8B0012C0100000000B002 /* NotificationService.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = NotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		A2D8B0012C0100000000B003 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
+		A2D8B0012C0100000000C001 /* AvatarLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AvatarLoader.swift; sourceTree = "<group>"; };
+		A2D8B0012C0100000000C003 /* CommunicationNotification.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommunicationNotification.swift; sourceTree = "<group>"; };
 		A2D8B0012C0100000000B005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A2D8B0012C0100000000B006 /* NotificationService.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = NotificationService.entitlements; sourceTree = "<group>"; };
 		2FAD9762203C412B000D30F8 /* config.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = config.xml; sourceTree = "<group>"; };
@@ -88,6 +92,8 @@
 			isa = PBXGroup;
 			children = (
 				A2D8B0012C0100000000B003 /* NotificationService.swift */,
+				A2D8B0012C0100000000C001 /* AvatarLoader.swift */,
+				A2D8B0012C0100000000C003 /* CommunicationNotification.swift */,
 				A2D8B0012C0100000000B005 /* Info.plist */,
 				A2D8B0012C0100000000B006 /* NotificationService.entitlements */,
 			);
@@ -264,6 +270,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				A2D8B0012C0100000000B004 /* NotificationService.swift in Sources */,
+				A2D8B0012C0100000000C002 /* AvatarLoader.swift in Sources */,
+				A2D8B0012C0100000000C004 /* CommunicationNotification.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
