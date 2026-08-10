@@ -33,6 +33,7 @@ public class ArmadaPushPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "takePendingOpen", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "writeConfig", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearConfig", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "recordStatus", returnType: CAPPluginReturnPromise),
     ]
 
     /// How long to wait for APNs to hand back a token before giving up.
@@ -171,6 +172,35 @@ public class ArmadaPushPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func clearConfig(_ call: CAPPluginCall) {
         PushConfigStore.clear()
         AvatarCache.clear()
+        call.resolve()
+    }
+
+    /// Record how the last registration went, where a developer with the device
+    /// on a cable can read it back.
+    ///
+    /// Registration is the one link in this chain with no observable outcome.
+    /// The gateway's answer arrives over Nostr and is swallowed by a retry
+    /// loop; the app then looks identical whether it registered, was refused
+    /// for exceeding the per-domain quota, or never asked. A device that
+    /// silently stops receiving is the failure this whole path is prone to, so
+    /// the outcome goes on disk in the app's own container rather than nowhere.
+    ///
+    /// Caller-supplied text, and the caller keeps secrets out of it: this is a
+    /// status line (counts, environment, a token SUFFIX to spot rotation, an
+    /// error message), never a token or a key.
+    @objc func recordStatus(_ call: CAPPluginCall) {
+        guard let line = call.getString("line") else {
+            return call.reject("line is required")
+        }
+        guard let dir = FileManager.default
+            .urls(for: .cachesDirectory, in: .userDomainMask).first
+        else { return call.resolve() }
+        let stamped = "\(ISO8601DateFormatter().string(from: Date())) \(line)\n"
+        try? stamped.write(
+            to: dir.appendingPathComponent("push-status.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
         call.resolve()
     }
 

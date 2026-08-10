@@ -9,6 +9,7 @@ import {
   hasIosPush,
   pushInstallationId,
   writeIosPushConfig,
+  recordPushStatus,
 } from "@/lib/nativePush";
 import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
 import { NostrPushClient, type PushRelayPool, type PushSigner } from "@/lib/nostrPush";
@@ -285,15 +286,33 @@ export function useIosPush(): UsePushNotificationsReturn {
       notification: standaloneNotification(spec),
     }));
 
-    for (const spec of scopedSpecs) {
-      await client.registerSubscription({
-        subscription_id: spec.id,
-        domain,
-        filter: spec.filter,
-        relays: spec.relays,
-        notification: spec.notification,
-        push_subscription: pushSubscription,
-      });
+    // Registered one at a time, and the index matters on failure: the gateway
+    // enforces a quota per (pubkey, domain) and REFUSES a new id past it rather
+    // than replacing anything, so a partial success is a real state — the first
+    // few subscriptions live, the rest silently absent. Naming which one
+    // stopped is the difference between "push is broken" and "the sixth
+    // registration was refused".
+    let registered = 0;
+    try {
+      for (const spec of scopedSpecs) {
+        await client.registerSubscription({
+          subscription_id: spec.id,
+          domain,
+          filter: spec.filter,
+          relays: spec.relays,
+          notification: spec.notification,
+          push_subscription: pushSubscription,
+        });
+        registered += 1;
+      }
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      await recordPushStatus(
+        `FAILED after ${registered}/${scopedSpecs.length} on ${domain}`
+          + ` env=${registration.environment ?? "?"} token=…${registration.token.slice(-6)}`
+          + ` — ${reason}`,
+      );
+      throw err;
     }
 
     // Prune gateway records we no longer want (left group, muted, logged out).
@@ -304,6 +323,10 @@ export function useIosPush(): UsePushNotificationsReturn {
       }
     }
     saveRegisteredPushIds([...currentIds]);
+    await recordPushStatus(
+      `ok ${registered} subs on ${domain}`
+        + ` env=${registration.environment ?? "?"} token=…${registration.token.slice(-6)}`,
+    );
   }, [client, user, specs]);
 
   // Auto-(re)sync whenever the watch set changes, exactly as the web

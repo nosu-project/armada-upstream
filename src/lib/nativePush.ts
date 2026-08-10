@@ -66,6 +66,17 @@ export interface ArmadaPushPlugin {
   /** Delete that config, on disable or logout. */
   clearConfig(): Promise<void>;
   /**
+   * Record how the last gateway registration went, on disk in the app's own
+   * container, for a developer with the device on a cable.
+   *
+   * Registration is otherwise unobservable: the gateway answers over Nostr,
+   * the answer is swallowed by a retry loop, and a device that has silently
+   * stopped receiving looks exactly like one that never tried. `line` is a
+   * STATUS — counts, environment, a token suffix, an error message — and must
+   * never carry a token or a key.
+   */
+  recordStatus(options: { line: string }): Promise<void>;
+  /**
    * The notification tap that launched this process, consumed once.
    *
    * A cold launch delivers the tap before the WebView has loaded, let alone
@@ -123,6 +134,18 @@ export async function writeIosPushConfig(config: IosPushConfig): Promise<void> {
 export async function clearIosPushConfig(): Promise<void> {
   if (!hasIosPush()) return;
   await ArmadaPush.clearConfig().catch(() => {});
+}
+
+/**
+ * Leave a one-line record of how the last gateway registration went.
+ *
+ * Best-effort and never throws: this is instrumentation, and a diagnostic that
+ * could fail the operation it describes would be worse than none. Keep secrets
+ * out of `line` — it is a status, not a payload.
+ */
+export async function recordPushStatus(line: string): Promise<void> {
+  if (!hasIosPush()) return;
+  await ArmadaPush.recordStatus({ line }).catch(() => {});
 }
 
 /**
