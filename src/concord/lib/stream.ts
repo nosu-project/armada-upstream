@@ -18,7 +18,7 @@
  */
 
 import { decrypt as nip44Decrypt, encrypt as nip44Encrypt } from "nostr-tools/nip44";
-import { finalizeEvent, generateSecretKey, getEventHash, getPublicKey, verifyEvent } from "nostr-tools/pure";
+import { finalizeEvent, generateSecretKey, getEventHash, getPublicKey } from "nostr-tools/pure";
 import type { EventTemplate, NostrEvent, UnsignedEvent } from "nostr-tools/pure";
 
 import type { GroupKey, StreamKeyView } from "@/concord/lib/derive";
@@ -28,6 +28,7 @@ import {
   KIND_WRAP,
   KIND_WRAP_EPHEMERAL,
 } from "@/concord/lib/kinds";
+import { verifyEventOnce } from "@/lib/verifyCache";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 export class StreamError extends Error {
@@ -267,7 +268,7 @@ export function openWrap(wrap: NostrRumor, stream: StreamKeyView): OpenedWireEve
   // rather than lean on the relays having done so.
   if (stream.restricted) {
     const signed = wrap as NostrRumor & { sig?: string };
-    if (typeof signed.sig !== "string" || !verifyEvent(signed as NostrEvent)) {
+    if (typeof signed.sig !== "string" || !verifyEventOnce(signed as NostrEvent)) {
       throw new StreamError("bad-wrap-signature", "write-restricted wrap signature invalid");
     }
   }
@@ -281,7 +282,12 @@ export function openWrap(wrap: NostrRumor, stream: StreamKeyView): OpenedWireEve
   if (seal.kind !== KIND_SEAL_ENCRYPTED && seal.kind !== KIND_SEAL_PLAINTEXT) {
     throw new StreamError("bad-seal-kind", `unknown seal kind ${seal.kind}`);
   }
-  if (!verifyEvent(seal)) {
+  // Memoized by seal id (see verifyCache): the same wrap arrives from every
+  // relay serving the community, and each delivery re-parses the seal into a
+  // fresh object, so nostr-tools' per-object `verifiedSymbol` memo never hits.
+  // The id is the seal's content hash and is recomputed from THIS copy before
+  // the memo is consulted, so a duplicate cannot ride a known-good id.
+  if (!verifyEventOnce(seal)) {
     throw new StreamError("bad-seal-signature", "seal signature invalid");
   }
 
