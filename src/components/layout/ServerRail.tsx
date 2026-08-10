@@ -1391,23 +1391,29 @@ function ServerRailInner({
   const handleDragPointerDown = railDrag.begin;
   const draggable = items.length > 1;
 
-  // Whether the community list actually overflows its scroll region. The
-  // Settings footer's top divider only earns its keep when there's content
-  // scrolled off above it to divide from; with a short list it's just a line
-  // under empty space. Measured, not guessed — item count, folder open/close
-  // and rail/viewport height all move the threshold — by observing the nav
-  // (its own height) and each child (content height, incl. folder expansion).
-  const [listOverflows, setListOverflows] = useState(false);
+  // Whether there's list content scrolled off below the current view. The
+  // Settings footer's top divider only earns its keep as the seam over hidden
+  // content — with a short list, or once scrolled to the bottom, it's just a
+  // line under nothing. Measured, not guessed: item count, folder open/close
+  // and rail/viewport height move the overflow threshold (watched via the nav's
+  // own height and each child's, incl. folder expansion), and scrolling moves
+  // the seam (watched via the scroll event).
+  const [contentBelow, setContentBelow] = useState(false);
   useEffect(() => {
     const nav = navRef.current;
     if (!nav) return;
-    const measure = () => setListOverflows(nav.scrollHeight > nav.clientHeight + 1);
+    const measure = () =>
+      setContentBelow(nav.scrollHeight - nav.scrollTop - nav.clientHeight > 1);
     measure();
-    if (typeof ResizeObserver === "undefined") return;
+    nav.addEventListener("scroll", measure, { passive: true });
+    if (typeof ResizeObserver === "undefined") return () => nav.removeEventListener("scroll", measure);
     const ro = new ResizeObserver(measure);
     ro.observe(nav);
     for (const child of Array.from(nav.children)) ro.observe(child);
-    return () => ro.disconnect();
+    return () => {
+      nav.removeEventListener("scroll", measure);
+      ro.disconnect();
+    };
   }, [renderNodes, user, mesh.available, inviteItems.length]);
 
   // What the floating ghost carries.
@@ -1798,7 +1804,7 @@ function ServerRailInner({
       <div
         className={cn(
           "flex flex-col items-center shrink-0 w-full pt-3 sidebar:pt-4",
-          listOverflows && "border-t border-chrome-divider",
+          contentBelow && "border-t border-chrome-divider",
           "pb-[calc(var(--safe-area-pad-bottom,0.75rem)+0.5rem)] sidebar:pb-[calc(var(--safe-area-pad-bottom-tight,0.25rem)+0.5rem)]",
         )}
       >
