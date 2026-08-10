@@ -155,7 +155,12 @@ public class ArmadaPushPlugin: CAPPlugin, CAPBridgedPlugin {
             try PushConfigStore.write(json)
             call.resolve()
         } catch {
-            call.reject("\(error.localizedDescription)")
+            // Say what the container looks like, not just that the write
+            // failed. Without the config every notification falls back to the
+            // gateway's static text, which is indistinguishable from the
+            // feature not existing — so the reason has to travel back to
+            // somewhere a person can read it.
+            call.reject("\(error.localizedDescription) [\(PushConfigStore.describe())]")
         }
     }
 

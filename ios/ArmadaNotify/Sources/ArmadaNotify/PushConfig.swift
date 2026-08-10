@@ -175,6 +175,31 @@ struct PushConfig {
             try? FileManager.default.removeItem(at: url)
         }
 
+        /// What the App Group actually looks like from this process.
+        ///
+        /// Reported back to the WebView when a write fails, because the two
+        /// interesting failures are indistinguishable from the outside: an
+        /// entitlement the OS did not grant (no container at all) and a
+        /// container that is there but unwritable. It also says whether
+        /// ArmadaDB's file is present, since the store and this config share
+        /// one container — if neither is there, the problem is the container,
+        /// not the config.
+        public static func describe(appGroup group: String = "group.buzz.armada.app") -> String {
+            guard let container = FileManager.default
+                .containerURL(forSecurityApplicationGroupIdentifier: group)
+            else {
+                return "App Group \(group) resolved to no container — the entitlement is "
+                    + "missing or the group is not provisioned on the App ID"
+            }
+            let files = FileManager.default
+            let db = container.appendingPathComponent("armada-db.sqlite").path
+            return "container ok; armada-db.sqlite "
+                + (files.fileExists(atPath: db) ? "present" : "ABSENT")
+                + "; config "
+                + (files.fileExists(atPath: container.appendingPathComponent(fileName).path)
+                    ? "present" : "absent")
+        }
+
         static func read() -> PushConfig? {
             guard let url = url(), let data = try? Data(contentsOf: url) else { return nil }
             return PushConfig.parse(json: String(decoding: data, as: UTF8.self))

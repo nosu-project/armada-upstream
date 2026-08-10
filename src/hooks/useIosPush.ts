@@ -71,6 +71,17 @@ import { PUBLIC_WEB_ORIGIN } from "@/lib/shareOrigin";
 const MAX_SYNC_RETRIES = 3;
 
 /**
+ * How long the config write will wait on the DM store before giving up on the
+ * "conversations I have written in" set and writing without it.
+ */
+const MINE_PEERS_TIMEOUT_MS = 3_000;
+
+function errorText(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.replace(/\s+/g, " ").trim();
+}
+
+/**
  * The `domain` every RPC is scoped by.
  *
  * NIP-PUSH wants "a valid hostname matching the app's origin", which the app
@@ -106,6 +117,8 @@ export function useIosPush(): UsePushNotificationsReturn {
   const [busy, setBusy] = useState(false);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string>();
+  /** A failed config write, reported separately from sync failures. */
+  const [configError, setConfigError] = useState<string>();
   const [prefs, setPrefsState] = useState<PushPrefs>(loadPushPrefs);
   const [nonce, setNonce] = useState(0);
 
@@ -130,10 +143,20 @@ export function useIosPush(): UsePushNotificationsReturn {
       // authored a message in is known even where `acceptedDms` cannot say so
       // (it is device-local, so a fresh install starts it empty while the
       // synced history still shows the viewer's own messages).
+      //
+      // RACED AGAINST A TIMEOUT, because this is an enhancement and the write
+      // below is not. It reads ArmadaDB, and a store that is slow — or wedged,
+      // which on this platform is a real state — must not be able to stop the
+      // extension's config from being written at all. That failure mode is
+      // invisible from the device: every push just quietly falls back to the
+      // gateway's static text, with nothing to say why.
       let minePeers: string[] = [];
       try {
-        const rows = await queryDm17Conversations(user.pubkey);
-        minePeers = rows.filter((row) => row.mine).map((row) => row.peer);
+        const rows = await Promise.race([
+          queryDm17Conversations(user.pubkey),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), MINE_PEERS_TIMEOUT_MS)),
+        ]);
+        if (rows) minePeers = rows.filter((row) => row.mine).map((row) => row.peer);
       } catch {
         // Store unavailable — follows ∪ accepted ∪ pinned still apply.
       }
@@ -161,9 +184,18 @@ export function useIosPush(): UsePushNotificationsReturn {
         ...(dmSk ? { sk: dmSk } : {}),
         ...(!dmSk && dmBunker ? { nip46: dmBunker } : {}),
       });
-    })().catch(() => {
-      // A config the extension can't read degrades to the gateway's static
-      // wake-up, which is the same safe place every other failure lands in.
+      if (!cancelled) setConfigError(undefined);
+    })().catch((err) => {
+      if (cancelled) return;
+      // NOT swallowed. Without a config the extension cannot open anything, so
+      // every notification silently degrades to "New direct message" — the one
+      // symptom that looks identical to "the feature isn't built yet". Say so
+      // where the user can read it.
+      console.warn("[ios-push] writing the extension config failed:", err);
+      setConfigError(
+        `Armada couldn't hand its notification extension the keys it needs, so `
+        + `notifications can't show who a message is from. ${errorText(err)}`,
+      );
     });
     return () => {
       cancelled = true;
@@ -424,7 +456,7 @@ export function useIosPush(): UsePushNotificationsReturn {
     supported,
     unavailableReason,
     ready,
-    error,
+    error: error ?? configError,
     permission,
     enabled,
     busy: busy || (supported && !ready && !error),
