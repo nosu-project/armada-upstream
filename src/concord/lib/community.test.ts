@@ -29,7 +29,7 @@ function channelDef(id: Uint8Array, metadata: ChannelMetadata): FoldedChannel {
     channelIdHex: bytesToHex(id),
     name: metadata.name,
     isPrivate: metadata.private,
-    deleted: false,
+    deleted: metadata.deleted === true,
     metadata,
   };
 }
@@ -120,5 +120,17 @@ describe("channelsView (CORD-03 channel kinds)", () => {
     // Holding an independent channel key is itself proof the channel is
     // private: a public one would derive from the root and need no key.
     expect(channelsView(community, foldWith([]))[0]?.isPrivate).toBe(true);
+  });
+
+  it("a deleted private channel is not resurrected by its retained key", () => {
+    const { community: base } = mintCommunity("Fleet", OWNER, ["wss://a.test"]);
+    const id = random32();
+    const community: Community = { ...base, privateChannels: [held(id, "gone")] };
+    const deleted = channelDef(id, { name: "gone", private: true, deleted: true });
+
+    // The key stays in the member bundle so history remains decryptable, but a
+    // control-plane tombstone is authoritative and must keep it out of the
+    // live channel list.
+    expect(channelsView(community, foldWith([deleted]))).toEqual([]);
   });
 });

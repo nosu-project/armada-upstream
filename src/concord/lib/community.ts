@@ -94,8 +94,11 @@ export function channelsView(community: Community, folded: FoldedControl | undef
   });
 
   for (const def of folded?.channels.values() ?? []) {
-    if (def.deleted) continue;
+    // A folded definition is authoritative even when it is a tombstone. Mark
+    // it seen before dropping deleted channels so the held-key fallback below
+    // cannot resurrect a deleted Private Channel as merely "not yet folded".
     seen.add(def.channelIdHex);
+    if (def.deleted) continue;
     const id = hex32(def.channelIdHex);
 
     // History is not one key. A channel accumulates streams: one per held
