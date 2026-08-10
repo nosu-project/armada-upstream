@@ -130,11 +130,29 @@ let stampsSettled = false;
 
 let wired = false;
 let timer: ReturnType<typeof setTimeout> | undefined;
+/** The deadline the armed timer targets (ms epoch); Infinity when none. */
+let timerAt = Infinity;
+let scheduleQueued = false;
+
+/**
+ * Coalesce scheduler passes: every nudge (a want, a release, a finished run,
+ * a focus event) marks the scheduler dirty and one pass runs per microtask.
+ * A member list is hundreds of per-row wants mounting and releasing in a
+ * single flush — a synchronous full pass per call was where the CPU went.
+ */
+function requestSchedule(): void {
+  if (scheduleQueued) return;
+  scheduleQueued = true;
+  queueMicrotask(() => {
+    scheduleQueued = false;
+    schedule();
+  });
+}
 
 /** Register the handler for a topic-key prefix (e.g. `"c2:"`). */
 export function registerSyncTopic(prefix: string, policy: TopicPolicy): void {
   policies.set(prefix, policy);
-  schedule();
+  requestSchedule();
 }
 
 /**
@@ -162,7 +180,7 @@ export function want(topic: string, priority: SyncPriority = "visible", opts?: W
   if (rt.state.status === "idle" && policyFor(topic) !== undefined) {
     publish(topic, rt, "pending");
   }
-  schedule();
+  requestSchedule();
   return () => {
     if (!rt.wants.delete(token)) return;
     if (rt.wants.size === 0) {
@@ -175,7 +193,7 @@ export function want(topic: string, priority: SyncPriority = "visible", opts?: W
       }
       rt.forced = false;
     }
-    schedule();
+    requestSchedule();
   };
 }
 
@@ -188,7 +206,7 @@ export function invalidateSyncTopic(topic: string): void {
   const rt = topics.get(topic);
   if (!rt) return;
   rt.forced = true;
-  schedule();
+  requestSchedule();
 }
 
 /** The topic's current state. Stable snapshot identity between changes. */
@@ -252,21 +270,21 @@ function ensureWired(): void {
   wired = true;
   void stamps.ready().finally(() => {
     stampsSettled = true;
-    schedule();
+    requestSchedule();
   });
   // The warm (and any stamp write) changes lastSyncedAt under published
   // snapshots; refresh them and let staleness re-evaluate.
   stamps.subscribe(() => {
     for (const [topic, rt] of topics) publish(topic, rt, rt.state.status);
-    schedule();
+    requestSchedule();
   });
-  onBootGateOpen(schedule);
+  onBootGateOpen(requestSchedule);
   if (typeof document !== "undefined") {
-    document.addEventListener("visibilitychange", schedule);
+    document.addEventListener("visibilitychange", requestSchedule);
   }
   if (typeof window !== "undefined") {
-    window.addEventListener("focus", schedule);
-    window.addEventListener("online", schedule);
+    window.addEventListener("focus", requestSchedule);
+    window.addEventListener("online", requestSchedule);
   }
 }
 
@@ -298,10 +316,6 @@ function dueAt(topic: string, rt: TopicRuntime, policy: TopicPolicy): number {
  * Idempotent; called on every state change and environment nudge.
  */
 function schedule(): void {
-  if (timer !== undefined) {
-    clearTimeout(timer);
-    timer = undefined;
-  }
   if (paused()) return; // re-nudged by the gate / warm / visibility listeners
 
   const now = Date.now();
@@ -352,8 +366,21 @@ function schedule(): void {
     startRun(c.topic, c.rt, c.policy, c.priority);
   }
 
+  // Re-arm only when the next deadline moved EARLIER than the armed timer.
+  // A timer left targeting a deadline that vanished or moved later fires a
+  // harmless no-op pass and re-arms then — cheaper than a clearTimeout +
+  // setTimeout pair on every pass, which profiling showed dominating.
   if (nextWake < Infinity) {
-    timer = setTimeout(schedule, Math.max(MIN_WAKE_MS, nextWake - now));
+    const fireAt = now + Math.max(MIN_WAKE_MS, nextWake - now);
+    if (fireAt < timerAt) {
+      clearTimeout(timer);
+      timerAt = fireAt;
+      timer = setTimeout(() => {
+        timer = undefined;
+        timerAt = Infinity;
+        schedule();
+      }, fireAt - now);
+    }
   }
 }
 
@@ -405,7 +432,7 @@ function finishRun(
     rt.nextEligibleAt = Date.now() + Math.min(1000 * 2 ** rt.failures, MAX_BACKOFF_MS);
     publish(topic, rt, "error");
   }
-  schedule();
+  requestSchedule();
 }
 
 /**
@@ -416,6 +443,7 @@ function finishRun(
 export function _resetSyncManagerForTests(): void {
   if (timer !== undefined) clearTimeout(timer);
   timer = undefined;
+  timerAt = Infinity;
   for (const rt of topics.values()) rt.run?.controller.abort();
   topics.clear();
   policies.clear();

@@ -69,6 +69,22 @@ const SETTLE_MS = 50;
 /** On-screen pubkeys, refcounted by mounted demands. */
 const demand = new Map<string, number>();
 
+/**
+ * The ONE scheduler want held while any demand is mounted. A member list is
+ * hundreds of rows mounting and releasing per scroll frame; a want token (and
+ * its scheduler pass) per row is where the CPU went — the `demand` map above
+ * is the real refcount, so the scheduler only needs to know "someone cares".
+ */
+let topicWant: (() => void) | undefined;
+let demandHolds = 0;
+
+/**
+ * Pubkeys a run FOUND (in the store or on the wire) this session. Picks the
+ * lazy TTL in {@link isDueNow}; before a run has seen a pubkey the check
+ * degrades toward "due", never toward wrongly skipping.
+ */
+const foundProfiles = new Set<string>();
+
 /** Relays worth asking about profiles right now, refcounted by mounted views. */
 const hintRelays = new Map<string, number>();
 
@@ -102,22 +118,44 @@ export function demandProfiles(pubkeys: string[], context: ProfileSyncContext): 
   const pks = [...new Set(pubkeys)].filter(Boolean);
   if (pks.length === 0) return () => undefined;
   for (const pk of pks) demand.set(pk, (demand.get(pk) ?? 0) + 1);
-  // Force: a fresh TOPIC stamp must not gate a brand-new row's fetch — the
-  // per-pubkey stamps inside the run are the real throttle, so a forced run
-  // over all-fresh pubkeys is a cheap local no-op.
-  const release = want(PROFILE_SYNC_TOPIC, "visible", { force: true });
+  demandHolds++;
+  topicWant ??= want(PROFILE_SYNC_TOPIC, "visible");
+  // Wake the topic only when some demanded pubkey is actually due: a fresh
+  // TOPIC stamp must not gate a brand-new row's fetch, but the common scroll
+  // case — every row already fresh — must not force runs either (the old
+  // unconditional `force: true` re-ran the topic every min-interval for as
+  // long as rows kept mounting).
+  if (pks.some(isDueNow)) invalidateSyncTopic(PROFILE_SYNC_TOPIC);
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    release();
     for (const pk of pks) {
       const count = demand.get(pk);
       if (count === undefined) continue;
       if (count <= 1) demand.delete(pk);
       else demand.set(pk, count - 1);
     }
+    demandHolds--;
+    if (demandHolds === 0) {
+      topicWant?.();
+      topicWant = undefined;
+    }
   };
+}
+
+/**
+ * Mirror of the run's candidate filter, evaluated synchronously at demand
+ * time. Before the stamp warm lands (or before any run has classified a
+ * pubkey) everything looks due, which costs at most one extra run whose
+ * candidate filter then does the authoritative check against the store.
+ */
+function isDueNow(pk: string): boolean {
+  const stamp = stamps.get(pk);
+  if (stamp === undefined) return true;
+  const found = foundProfiles.has(pk);
+  if (Date.now() - stamp > (found ? FOUND_STALE_MS : MISS_RETRY_MS)) return true;
+  return !found && stampedGeneration.get(pk) !== hintGeneration;
 }
 
 /**
@@ -175,6 +213,9 @@ async function runProfileSync(signal: AbortSignal): Promise<void> {
   const found = new Set<string>();
   for (const ev of cached) {
     found.add(ev.pubkey);
+    // Classify for the demand-time due check too — BEFORE the early return
+    // below, so a round with no candidates still teaches it the lazy TTL.
+    foundProfiles.add(ev.pubkey);
     seedAuthorCache(c.queryClient, ev.pubkey, ev);
   }
 
@@ -251,7 +292,10 @@ async function runProfileSync(signal: AbortSignal): Promise<void> {
     stamps.set(pk, at);
     stampedGeneration.set(pk, hintGeneration);
   }
-  for (const [pk, ev] of newest) seedAuthorCache(c.queryClient, pk, ev);
+  for (const [pk, ev] of newest) {
+    foundProfiles.add(pk);
+    seedAuthorCache(c.queryClient, pk, ev);
+  }
 }
 
 registerSyncTopic(PROFILE_SYNC_TOPIC, {
@@ -270,6 +314,10 @@ export function _resetProfileSyncForTests(): void {
   demand.clear();
   hintRelays.clear();
   stampedGeneration.clear();
+  foundProfiles.clear();
   hintGeneration = 0;
   ctx = undefined;
+  demandHolds = 0;
+  topicWant?.();
+  topicWant = undefined;
 }
