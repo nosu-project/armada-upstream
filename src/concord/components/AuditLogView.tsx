@@ -1,14 +1,22 @@
-import { CheckCircle2, Clock3, ScrollText, XCircle } from "lucide-react";
-import { useMemo } from "react";
+import { Braces, CheckCircle2, Clock3, ScrollText, XCircle } from "lucide-react";
+import { useMemo, useState } from "react";
 
+import { EventJsonDialog } from "@/components/EventJsonDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useControlEvents, useControlFold } from "@/concord/hooks/useControlPlane";
 import { bytesToHex } from "@/concord/lib/derive";
 import { classifyEditions, type AuditValidity } from "@/concord/lib/auditLog";
 import { openControlEditions, type FoldedControl } from "@/concord/lib/control";
 import type { ParsedEdition } from "@/concord/lib/edition";
+import { openedToStored } from "@/concord/lib/rumorStore";
 import {
   VSK_BANLIST,
   VSK_CHANNEL,
@@ -26,8 +34,11 @@ import {
 import type { Community } from "@/concord/lib/types";
 import { DisplayName } from "@/components/DisplayName";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useIsTouch } from "@/hooks/useIsMobile";
+import { useLongPress } from "@/hooks/useLongPress";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { shortTimeAgo } from "@/lib/formatTime";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
  * Control-plane audit log for a Concord community — CORD-04.
@@ -109,15 +120,34 @@ interface AuditRow {
   validity: Validity;
   /** Whether the actor cited a specific grant as their authority (non-owner actions). */
   citedAuthority: boolean;
+  /**
+   * The edition rumor itself, for "View event JSON".
+   *
+   * Every field above is a rendering of this, so the row can be checked against
+   * the thing it claims to describe. It is the RUMOR — the bytes the author
+   * signed — rather than the opened stream event, whose wire fields are present
+   * only for an edition swept this session and absent for one read back from
+   * the store; showing those would make the same row's JSON depend on how it
+   * happened to arrive.
+   */
+  rumor: NostrRumor;
 }
 
 function AuditRowItem({ row, community }: { row: AuditRow; community: Community }) {
   const author = useAuthor(row.author);
   const actorName = useScopedDisplayName(row.author, author.data?.metadata);
   const isOwner = row.author === community.owner;
+  const isTouch = useIsTouch();
+  const [jsonOpen, setJsonOpen] = useState(false);
+  // One action, so the touch gesture opens it directly rather than a sheet
+  // holding a single item.
+  const longPress = useLongPress(isTouch ? () => setJsonOpen(true) : undefined);
 
-  return (
-    <li className="flex items-start gap-2.5 rounded-md bg-foreground/5 px-3 py-2 text-sm">
+  const item = (
+    <li
+      className="flex items-start gap-2.5 rounded-md bg-foreground/5 px-3 py-2 text-sm"
+      {...(isTouch ? longPress : {})}
+    >
       <Avatar className="mt-0.5 size-6 shrink-0">
         <AvatarImage src={author.data?.metadata?.picture} alt={actorName} />
         <AvatarFallback className="bg-primary/20 text-[10px] text-primary">
@@ -156,6 +186,34 @@ function AuditRowItem({ row, community }: { row: AuditRow; community: Community 
         {shortTimeAgo(row.createdAt)}
       </time>
     </li>
+  );
+
+  return (
+    <>
+      {/* Same split as the chat timeline: on touch the long press owns the
+          gesture, so the right-click menu isn't mounted at all. */}
+      {isTouch ? (
+        item
+      ) : (
+        <ContextMenu>
+          <ContextMenuTrigger asChild>{item}</ContextMenuTrigger>
+          <ContextMenuContent className="w-52">
+            <ContextMenuItem onSelect={() => setJsonOpen(true)}>
+              <Braces className="mr-2 size-4" />
+              View event JSON
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
+      )}
+      {jsonOpen && (
+        <EventJsonDialog
+          open={jsonOpen}
+          onOpenChange={setJsonOpen}
+          source={row.rumor}
+          description="The raw, unsigned control-plane edition — the bytes its author signed. Its Schnorr signature is on the seal that carried it, which is stored separately."
+        />
+      )}
+    </>
   );
 }
 
@@ -243,6 +301,7 @@ function toRow(
     validity,
     citedAuthority: Boolean(e.authority),
     details: [] as string[],
+    rumor: openedToStored(e.opened),
   };
   const eidHex = bytesToHex(e.entityId);
 

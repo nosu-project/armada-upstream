@@ -35,13 +35,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { EventJsonDialog } from "@/components/EventJsonDialog";
 import { useAutosizeTextarea } from "@/hooks/useAutosizeTextarea";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useChatScope } from "@/hooks/useChatScope";
@@ -582,10 +576,6 @@ const ChatMessageInner = memo(function ChatMessageInner({
     isRumor && reportTo?.kind === "network"
       ? { pubkey: event.pubkey }
       : { pubkey: event.pubkey, eventId: event.id };
-  // Serialized only while the dialog is open: this runs per rendered row, and
-  // stringifying every message's event on mount is pure cost on a channel switch.
-  const sourceJson = jsonOpen ? JSON.stringify(rumor ?? event, null, 2) : "";
-
   // Reset the draft whenever an edit (re)starts.
   useEffect(() => {
     if (isEditing) setEditText(event.content);
@@ -1040,30 +1030,16 @@ const ChatMessageInner = memo(function ChatMessageInner({
       />
     )}
     {jsonOpen && (
-    <Dialog open={jsonOpen} onOpenChange={setJsonOpen}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Event JSON</DialogTitle>
-          <DialogDescription>
-            {isRumor
-              ? "The raw, unsigned rumor for this message."
-              : "The raw signed event for this message."}
-          </DialogDescription>
-        </DialogHeader>
-        <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted p-3 text-xs leading-relaxed">
-          {sourceJson}
-        </pre>
-        <div className="flex justify-end">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => writeClipboardText(sourceJson).catch(() => undefined)}
-          >
-            <Copy className="mr-2 size-4" /> Copy JSON
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
+      <EventJsonDialog
+        open={jsonOpen}
+        onOpenChange={setJsonOpen}
+        source={rumor ?? event}
+        description={
+          isRumor
+            ? "The raw, unsigned rumor for this message."
+            : "The raw signed event for this message."
+        }
+      />
     )}
     </>
   );

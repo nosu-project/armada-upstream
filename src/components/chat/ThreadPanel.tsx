@@ -32,13 +32,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { EventJsonDialog } from "@/components/EventJsonDialog";
 import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useAutosizeTextarea } from "@/hooks/useAutosizeTextarea";
@@ -146,16 +140,6 @@ function ThreadMessage({
   // tap away in the sheet/menu, so it confirms instead of firing immediately).
   const [sheetOpen, setSheetOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  // A rumor has no signature; strip the synthetic empty `sig` the transport
-  // adds for rendering so the JSON view reflects the true rumor shape.
-  // Raw event source for the "View event JSON" menu item: a rumor has no
-  // signature, so strip the synthetic empty `sig` the transport adds for
-  // rendering; a signed event (NIP-29) is shown as-is.
-  // Serialized only while the dialog is open: this runs per rendered row, and
-  // stringifying every message's event on mount is pure cost on a channel switch.
-  const sourceJson = !jsonOpen
-    ? ""
-    : JSON.stringify(event, null, 2);
 
   // The author can delete their own message; moderators can delete anyone's
   // (mirrors ChatMessage's gating). The transport decides how.
@@ -441,30 +425,18 @@ function ThreadMessage({
         target={reportTarget}
       />
     )}
-    <Dialog open={jsonOpen} onOpenChange={setJsonOpen}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Event JSON</DialogTitle>
-          <DialogDescription>
-            {isRumor
-              ? "The raw, unsigned rumor for this message."
-              : "The raw signed event for this message."}
-          </DialogDescription>
-        </DialogHeader>
-        <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted p-3 text-xs leading-relaxed">
-          {sourceJson}
-        </pre>
-        <div className="flex justify-end">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => writeClipboardText(sourceJson).catch(() => undefined)}
-          >
-            <Copy className="mr-2 size-4" /> Copy JSON
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
+    {jsonOpen && (
+      <EventJsonDialog
+        open={jsonOpen}
+        onOpenChange={setJsonOpen}
+        source={event}
+        description={
+          isRumor
+            ? "The raw, unsigned rumor for this message."
+            : "The raw signed event for this message."
+        }
+      />
+    )}
     </>
   );
 }
