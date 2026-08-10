@@ -1,10 +1,12 @@
-import { Check, FileCode, Loader2, ShieldCheck } from "lucide-react";
+import { Check, ChevronDown, FileCode, Loader2, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Label } from "@/components/ui/label";
 import { WizardShell } from "@/components/onboarding/WizardShell";
+import { cn } from "@/lib/utils";
 import { useHistoryAudit, type AuditPhase } from "@/concord/hooks/useHistoryAudit";
 import type { HistoryReport } from "@/concord/lib/historyAudit";
 import { exportFileName, exportHtmlParts, type ExportModel } from "@/concord/lib/historyExport";
@@ -68,18 +70,38 @@ interface HistoryAuditViewProps {
  * offers the self-contained HTML export built from those rumors.
  */
 export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) {
-  const { run, cancel, canRun, progress, result, error } = useHistoryAudit(community);
+  const { run, cancel, canRun, progress, result, error, channels } = useHistoryAudit(community);
   const [embed, setEmbed] = useState(true);
   const [rangeHours, setRangeHours] = useState<number | null>(null);
+  const [excluded, setExcluded] = useState<Set<string>>(new Set());
+  const [channelsOpen, setChannelsOpen] = useState(false);
 
   const busy = progress.phase !== "idle" && progress.phase !== "done" && progress.phase !== "error";
   const pct = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
   const relayFailure = result ? hadRelayFailure(result.report) : false;
 
+  const selectedIds = channels.filter((c) => !excluded.has(c.idHex)).map((c) => c.idHex);
+  const noneSelected = channels.length > 0 && selectedIds.length === 0;
+  const toggleChannel = (idHex: string) =>
+    setExcluded((prev) => {
+      const next = new Set(prev);
+      if (next.has(idHex)) next.delete(idHex);
+      else next.add(idHex);
+      return next;
+    });
+
+  // Counts reflect what will actually be written — the model, after disappearing
+  // messages and any unpicked channels are dropped — not the raw audit tally.
+  const exportChannelCount = result?.model.channels.length ?? 0;
+  const exportMessageCount = result
+    ? result.model.channels.reduce((n, c) => n + c.messages.length, 0)
+    : 0;
+
   const startRun = () =>
     void run({
       embedAssets: embed,
       ...(rangeHours === null ? {} : { sinceMs: Date.now() - rangeHours * 3_600_000 }),
+      ...(excluded.size ? { channelIds: new Set(selectedIds) } : {}),
     });
 
   const close = () => {
@@ -133,8 +155,8 @@ export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) 
           <div className="space-y-4">
             <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
               <Check className="size-4 text-emerald-500" />
-              {result.report.channels.length} channel{result.report.channels.length === 1 ? "" : "s"},{" "}
-              {result.report.totalMessages} message{result.report.totalMessages === 1 ? "" : "s"} ready to export
+              {exportChannelCount} channel{exportChannelCount === 1 ? "" : "s"},{" "}
+              {exportMessageCount} message{exportMessageCount === 1 ? "" : "s"} ready to export
             </div>
 
             {relayFailure && (
@@ -192,6 +214,34 @@ export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) 
                 Embed images for offline viewing (larger export)
               </Label>
             </div>
+
+            {channels.length > 1 && (
+              <Collapsible open={channelsOpen} onOpenChange={setChannelsOpen}>
+                <CollapsibleTrigger className="mx-auto flex items-center gap-1 text-xs font-medium uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground">
+                  Channels ({selectedIds.length}/{channels.length})
+                  <ChevronDown className={cn("size-3.5 transition-transform", channelsOpen && "rotate-180")} />
+                </CollapsibleTrigger>
+                <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
+                  <div className="mt-2 max-h-52 space-y-0.5 overflow-y-auto rounded-lg border bg-secondary/30 p-2">
+                    {channels.map((c) => (
+                      <label
+                        key={c.idHex}
+                        className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-secondary"
+                      >
+                        <Checkbox checked={!excluded.has(c.idHex)} onCheckedChange={() => toggleChannel(c.idHex)} />
+                        <span className="text-muted-foreground">{c.isPrivate ? "🔒" : "#"}</span>
+                        <span className="truncate">{c.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                  {noneSelected && (
+                    <p className="mt-1.5 text-center text-xs text-amber-500">
+                      Select at least one channel to export.
+                    </p>
+                  )}
+                </CollapsibleContent>
+              </Collapsible>
+            )}
           </div>
         )}
 
@@ -204,7 +254,7 @@ export function HistoryAuditView({ community, onClose }: HistoryAuditViewProps) 
             type="button"
             size="lg"
             className="h-12 w-full clip-corner-lg text-base"
-            disabled={!canRun}
+            disabled={!canRun || noneSelected}
             onClick={startRun}
           >
             Run audit

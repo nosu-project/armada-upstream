@@ -31,6 +31,8 @@ import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
 import { foldTimeline, openChatBatch, replyTargetOf } from "@/concord/lib/chat";
 import { backfillStore } from "@/concord/lib/channelSync";
+import { expirationOf } from "@/concord/lib/disappearing";
+import { useChatModeration } from "@/concord/hooks/useChannel";
 import { useChannels, useControlFold } from "@/concord/hooks/useControlPlane";
 import {
   auditHistory,
@@ -99,6 +101,11 @@ export interface RunOptions {
    * days" export neither pages older wraps nor carries older stored rumors.
    */
   sinceMs?: number;
+  /**
+   * Restrict the sweep + export to these channel idHex values; undefined = every
+   * channel. A channel left out is neither backfilled nor written into the model.
+   */
+  channelIds?: ReadonlySet<string>;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -187,7 +194,13 @@ function buildExportMessages(timeline: ReturnType<typeof foldTimeline>): {
   pending: Array<{ ref: ExportAttachment; entry: ImetaEntry }>;
 } {
   const pending: Array<{ ref: ExportAttachment; entry: ImetaEntry }> = [];
-  const messages = timeline.messages.map((m): ExportMessage => {
+  const messages = timeline.messages
+    // Disappearing messages (a NIP-40 `expiration` tag, CORD-08) are ephemeral
+    // by the community's own policy. An export is a permanent artifact, so they
+    // are dropped here even before their deadline passes — the fold already
+    // drops the ones that have expired; this drops the ones that still will.
+    .filter((m) => expirationOf(m.tags) === undefined)
+    .map((m): ExportMessage => {
     const byEmoji = timeline.reactions.get(m.rumorId);
     const reactions = byEmoji
       ? [...byEmoji.entries()].map(([emoji, entry]) => ({ emoji, count: entry.reactors.size }))
@@ -220,6 +233,7 @@ export function useHistoryAudit(community: Community | undefined) {
   const { nostr } = useNostr();
   const channels = useChannels(community);
   const { data: folded } = useControlFold(community);
+  const moderation = useChatModeration(community);
 
   const [progress, setProgress] = useState<AuditProgress>({ phase: "idle", done: 0, total: 0 });
   const [result, setResult] = useState<HistoryAuditResult | null>(null);
@@ -242,6 +256,11 @@ export function useHistoryAudit(community: Community | undefined) {
       const embedAssets = opts?.embedAssets ?? true;
       const sinceMs = opts?.sinceMs;
       const sinceSecs = sinceMs !== undefined ? Math.floor(sinceMs / 1000) : undefined;
+      // Restrict to the picked channels (undefined = all). An unpicked channel
+      // is never backfilled, so a scoped export is also a cheaper sweep.
+      const selectedChannels = opts?.channelIds
+        ? channels.filter((c) => opts.channelIds!.has(c.idHex))
+        : channels;
 
       setError(null);
       setResult(null);
@@ -267,10 +286,10 @@ export function useHistoryAudit(community: Community | undefined) {
         const pendingAssets: Array<{ ref: ExportAttachment; entry: ImetaEntry }> = [];
         const authors = new Set<string>();
 
-        for (let i = 0; i < channels.length; i++) {
+        for (let i = 0; i < selectedChannels.length; i++) {
           if (signal.aborted) throw new Error("cancelled");
-          const channel = channels[i];
-          setProgress({ phase: "channels", done: i, total: channels.length, label: `#${channel.name}` });
+          const channel = selectedChannels[i];
+          setProgress({ phase: "channels", done: i, total: selectedChannels.length, label: `#${channel.name}` });
 
           const { wraps, exhausted, failed } = await collectChannelWraps(nostr, community, channel, signal, sinceSecs);
           const openedWire = await openChatBatch(wraps, channel, { signal });
@@ -285,7 +304,12 @@ export function useHistoryAudit(community: Community | undefined) {
           // fetched this run.
           const rumors = sinceMs !== undefined ? allRumors.filter((r) => r.ms >= sinceMs) : allRumors;
 
-          const timeline = foldTimeline(rumors, { banned: folded.banned, canDelete: () => false });
+          // Fold with the community's real moderation context (not a bare
+          // `canDelete: () => false`) so a message a moderator deleted is left
+          // out of the export just as it is out of the live timeline — the store
+          // drops durable deletes, this catches one freshly swept alongside its
+          // target this run.
+          const timeline = foldTimeline(rumors, moderation);
           for (const m of timeline.messages) authors.add(m.author);
 
           const queriedEpochs = channel.streams.map((s) => s.epoch.toString());
@@ -403,10 +427,10 @@ export function useHistoryAudit(community: Community | undefined) {
         return undefined;
       }
     },
-    [community, folded, channels, nostr],
+    [community, folded, channels, moderation, nostr],
   );
 
   const channelCount = useMemo(() => channels.length, [channels]);
 
-  return { run, cancel, canRun, progress, result, error, channelCount };
+  return { run, cancel, canRun, progress, result, error, channels, channelCount };
 }
