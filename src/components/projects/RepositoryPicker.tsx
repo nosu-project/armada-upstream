@@ -1,10 +1,16 @@
 import { useNostr } from "@nostrify/react";
-import { FolderGit2, Loader2, Search } from "lucide-react";
+import { FolderGit2, HelpCircle, Loader2, Search } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { useCallback, useMemo, useState } from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useAuthor } from "@/hooks/useAuthor";
 import { searchGitRepositories, useGitRepositoryDirectory } from "@/hooks/useGitRepositoryDirectory";
 import type { GitRepositoryAnnouncement } from "@/lib/gitActivity";
@@ -140,11 +146,38 @@ export function RepositoryPicker({ connectedCoordinates, onSelect, autoFocus = t
         <Input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search repositories, or paste an naddr / nostr:// address"
+          // Short enough to read in full inside a dialog-width field. What may
+          // be pasted (an naddr, a nostr:// remote) is confirmed by the "Use
+          // this repository address" row the moment one is detected, and spelled
+          // out by whatever hosts the picker.
+          placeholder="Search, or paste an address"
           autoFocus={autoFocus}
           disabled={resolving}
-          className="h-9 border-0 px-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
+          // An input's intrinsic width comes from its `size`, so without this it
+          // refuses to shrink below ~20 characters and overflows a narrow row.
+          className="h-9 min-w-0 border-0 px-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
         />
+        {/* The specifics the placeholder no longer has room to name. */}
+        <TooltipProvider delayDuration={300}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label="What can I paste?"
+                className="shrink-0 p-1 -mr-1 text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <HelpCircle className="size-4" />
+              </button>
+            </TooltipTrigger>
+            {/* Above the dialog this usually sits in (z-[250]). */}
+            <TooltipContent side="top" className="z-[260] max-w-60 text-center text-xs">
+              Search the public ngit directory by name, or paste a repository
+              address: an <span className="font-mono">naddr1…</span> or an{" "}
+              <span className="font-mono">nostr://</span> remote from your git
+              client.
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
       <div className="max-h-64 min-w-0 space-y-0.5 overflow-y-auto rounded-lg bg-secondary/40 p-1">
         {looksLikeAddress ? (

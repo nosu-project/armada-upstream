@@ -37,7 +37,7 @@ vi.mock("@/hooks/useGitRepositoryDirectory", () => ({
 vi.mock("@/hooks/useAuthor", () => ({ useAuthor: () => ({ data: undefined }) }));
 
 const community = { idHex: "community" } as Community;
-const SEARCH_PLACEHOLDER = "Search repositories, or paste an naddr / nostr:// address";
+const SEARCH_PLACEHOLDER = "Search, or paste an address";
 
 function renderSection(canManage: boolean) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
