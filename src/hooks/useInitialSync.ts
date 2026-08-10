@@ -401,8 +401,9 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       // ── 2. Encrypted settings ───────────────────────────────────────────
       const sId = begin("settings");
       let settingsFound = false;
+      const automaticSettingsSync = configRef.current.automaticSettingsSync !== false;
       try {
-        if (user.signer.nip44) {
+        if (user.signer.nip44 && automaticSettingsSync) {
           // All six documents in one filter. No `limit`: it would cap the
           // whole filter rather than each `d`, so five of the six could come
           // back missing purely because the sixth answered first.
@@ -499,7 +500,11 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       } catch {
         // Best-effort; fall through to the next step.
       }
-      resolve(sId, settingsFound ? "RESTORED" : "DEFAULTS", settingsFound ? "ok" : "info");
+      resolve(
+        sId,
+        automaticSettingsSync ? (settingsFound ? "RESTORED" : "DEFAULTS") : "OFF",
+        settingsFound ? "ok" : "info",
+      );
       if (cancelled) return;
 
       // ── 3. Group list (kind 10009) ──────────────────────────────────────

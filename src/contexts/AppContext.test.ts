@@ -8,6 +8,10 @@ import {
 import { DM_RELAYS } from "@/lib/platform";
 
 describe("portable network configuration", () => {
+  it("enables automatic settings sync only as a fresh device-local default", () => {
+    expect(defaultConfig.automaticSettingsSync).toBe(true);
+  });
+
   it("seeds app DM relays from the build only for a fresh config", () => {
     expect(defaultConfig.appDmRelays).toEqual(DM_RELAYS);
   });

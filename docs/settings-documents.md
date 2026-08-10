@@ -33,6 +33,15 @@ account's NIP-65 write relays, independent of the "Use my own relays" general
 traffic toggle, so another open client applies a new version without reload;
 the cold-boot sync performs the same discovery before the UI opens.
 
+Each installation has a device-local **Automatic settings sync** switch. Turning
+it off stops that client from publishing or applying encrypted settings
+automatically, including read-state and frequent-reaction updates, and skips the
+settings fetch during cold boot. Encrypted GIF-favorite shards follow the same
+switch. It does not travel in NIP-78 — otherwise one
+client could turn every other client back on or off. **Sync now** remains an
+explicit one-shot publish while the switch is off. Standard signed Nostr lists
+still change when the user explicitly edits or saves those lists.
+
 Synchronized endpoint arrays are complete replacement sets. Build-time values
 seed a fresh config only. In particular, `appRelays`, `appDmRelays`,
 `appBlossomServers`, `communityRelays`, and a non-empty voice-server preference
@@ -181,6 +190,7 @@ Nothing native decrypts these; storing the raw event verbatim is the whole job.
 ## What is deliberately NOT here
 
 - **Per-device state**, which never syncs: `railOpenFolders`,
+  `automaticSettingsSync`,
   `collapsedChannelCategories`, `memberListVisible`, `lastChannelByServer`
   (syncing it makes two open clients yank each other's channel selection
   around), and `meshEnabled` / `meshIncognito` (they gate a Bluetooth foreground

@@ -92,6 +92,7 @@ export const AppConfigSchema = z.object({
   communityRelays: z.array(z.string()).catch(defaultConfig.communityRelays),
   searchRelays: z.array(z.string()).catch(defaultConfig.searchRelays),
   preferredVoiceServer: z.string().catch(defaultConfig.preferredVoiceServer),
+  automaticSettingsSync: z.boolean().catch(defaultConfig.automaticSettingsSync),
   useAppRelays: z.boolean().catch(defaultConfig.useAppRelays),
   useUserRelays: z.boolean().catch(defaultConfig.useUserRelays),
   relayMetadata: RelayMetadataSchema.catch(defaultConfig.relayMetadata),

@@ -39,6 +39,31 @@ describe("useConfigDocSync automatic delivery", () => {
     vi.useRealTimers();
   });
 
+  it("neither applies nor publishes settings when this device opts out", async () => {
+    h.config = {
+      ...h.config,
+      automaticSettingsSync: false,
+      theme: "dark",
+    };
+    renderHook(() => useConfigDocSync("metadata"));
+
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(h.updateConfig).not.toHaveBeenCalled();
+    expect(h.publish).not.toHaveBeenCalled();
+  });
+
+  it("cancels a queued automatic publish when the switch is turned off", async () => {
+    const { rerender } = renderHook(() => useConfigDocSync("metadata"));
+
+    h.config = { ...h.config, theme: "dark" };
+    rerender();
+    h.config = { ...h.config, automaticSettingsSync: false };
+    rerender();
+
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(h.publish).not.toHaveBeenCalled();
+  });
+
   it("retries a durable config edit after relay delivery fails", async () => {
     h.publish
       .mockRejectedValueOnce(new Error("relay down"))

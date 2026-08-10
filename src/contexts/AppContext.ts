@@ -140,6 +140,13 @@ export interface AppConfig {
    */
   preferredVoiceServer: string;
   /**
+   * Whether this installation automatically sends and applies Armada's
+   * encrypted settings documents. Device-local by design: synchronizing this
+   * switch would let one client turn every other client back on or off.
+   * Manual "Sync now" remains available either way.
+   */
+  automaticSettingsSync: boolean;
+  /**
    * Whether the app relays (`appRelays`) are used in the general relay pool.
    * On by default. Turning it off is a deliberate foot-gun: with no app
    * relays, no joined servers, and no NIP-65 relays enabled, the pool is empty
@@ -482,6 +489,7 @@ export const CANONICAL_LIST_CONFIG_KEYS = [
 
 /** Deliberately device-specific config, never applied from another client. */
 export const PER_DEVICE_CONFIG_KEYS = [
+  "automaticSettingsSync",
   "railOpenFolders",
   "collapsedChannelCategories",
   "memberListVisible",
@@ -499,6 +507,7 @@ export const defaultConfig: AppConfig = {
   communityRelays: [...STOCK_RELAYS],
   searchRelays: [...SEARCH_RELAYS],
   preferredVoiceServer: getPreferredVoiceServer(),
+  automaticSettingsSync: true,
   useAppRelays: true,
   useUserRelays: false,
   relayMetadata: { relays: [], updatedAt: 0 },

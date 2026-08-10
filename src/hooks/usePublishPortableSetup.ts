@@ -93,7 +93,8 @@ export function usePublishPortableSetup() {
     || config.relayMetadata.pubkey === user?.pubkey;
   const hasSyncRelay = ownsRelayList
     && config.relayMetadata.relays.some((relay) => relay.write);
-  const isAutomatic = Boolean(user?.signer.nip44 && metadataDoc.doc && hasSyncRelay);
+  const isConfigured = Boolean(user?.signer.nip44 && metadataDoc.doc && hasSyncRelay);
+  const isAutomatic = isConfigured && config.automaticSettingsSync !== false;
 
   const publish = useCallback(async (): Promise<PortableSetupPublishResult> => {
     if (!user) throw new Error("Not logged in");
@@ -321,6 +322,7 @@ export function usePublishPortableSetup() {
   return {
     publish,
     isPending,
+    isConfigured,
     isAutomatic,
     isStatusLoading: metadataDoc.isLoading,
   };

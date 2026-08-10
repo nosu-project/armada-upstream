@@ -195,6 +195,10 @@ export function SettingsPage() {
     updateConfig((current) => ({ ...current, appBlossomServers: servers }));
   };
 
+  const setAutomaticSettingsSync = (automaticSettingsSync: boolean) => {
+    updateConfig((current) => ({ ...current, automaticSettingsSync }));
+  };
+
   const setCommunityRelays = (relays: string[]) => {
     updateConfig((current) => ({ ...current, communityRelays: relays }));
   };
@@ -507,12 +511,27 @@ export function SettingsPage() {
                 <RelayBootstrapForm />
               </SettingsRow>
             )}
+            {user && (
+              <SettingsRow
+                label="Automatic settings sync"
+                description="Automatically send private Armada setting changes and apply changes from your other clients. This switch affects only this device; Sync now still works when it is off."
+              >
+                <Switch
+                  checked={config.automaticSettingsSync !== false}
+                  onCheckedChange={setAutomaticSettingsSync}
+                />
+              </SettingsRow>
+            )}
             {user && userWriteRelayUrls.length > 0 && (
               <SettingsRow
-                label={portableSetup.isAutomatic ? "Automatic setup sync" : "Set up automatic sync"}
-                description={portableSetup.isAutomatic
-                  ? "Changes now sync automatically to every NIP-65 write relay. Sync now also refreshes the signed server, search, DM, and media lists immediately."
-                  : "Press once to copy your signed lists and encrypted settings to every NIP-65 write relay. After that, theme, relay choices, voice/audio-video server, notifications, rail, and DM preferences sync automatically."}
+                label={portableSetup.isConfigured ? "Synchronize setup" : "Set up synchronization"}
+                description={portableSetup.isConfigured
+                  ? portableSetup.isAutomatic
+                    ? "Changes sync automatically to every NIP-65 write relay. Sync now also refreshes the signed server, search, DM, and media lists immediately."
+                    : "Automatic sync is off on this device. Sync now still sends its current encrypted settings and refreshes its signed lists."
+                  : config.automaticSettingsSync !== false
+                    ? "Press once to copy your signed lists and encrypted settings to every NIP-65 write relay. Later private setting changes will sync automatically."
+                    : "Press once to copy your signed lists and encrypted settings. Future private Armada setting changes remain on this device until you press Sync now or enable automatic sync."}
               >
                 <div className="space-y-2">
                   <Button
@@ -541,7 +560,7 @@ export function SettingsPage() {
                   >
                     {portableSetup.isPending
                       ? "Synchronizing…"
-                      : portableSetup.isAutomatic
+                      : portableSetup.isConfigured
                         ? "Sync now"
                         : "Start sync"}
                   </Button>

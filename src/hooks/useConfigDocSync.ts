@@ -67,6 +67,7 @@ export function markConfigSynced(config: AppConfig): void {
 export function useConfigDocSync(name: ConfigDocName): void {
   const { user } = useCurrentUser();
   const { config, updateConfig } = useAppContext();
+  const automaticSettingsSync = config.automaticSettingsSync !== false;
   const { doc, event, update, hasNip44Support } = useSettingsDoc(name);
   const metadata = useSettingsDoc("metadata");
   const configRef = useRef(config);
@@ -121,6 +122,16 @@ export function useConfigDocSync(name: ConfigDocName): void {
     cancelPublish();
   }, [user?.pubkey, cancelPublish]);
 
+  useEffect(() => {
+    if (automaticSettingsSync) return;
+    // Stop every future automatic action on this installation. A request that
+    // has already reached the signer/network cannot be recalled, but changing
+    // the generation prevents its completion from scheduling another write.
+    // (`publishesInFlight` is deliberately left to drain on its own.)
+    accountGeneration.current += 1;
+    cancelPublish();
+  }, [automaticSettingsSync, cancelPublish]);
+
   // Let a sync-driven config change (see `markConfigSynced`) move this
   // document's baseline instead of looking like a user edit.
   useEffect(() => {
@@ -141,7 +152,7 @@ export function useConfigDocSync(name: ConfigDocName): void {
   const resolved = name === "metadata" ? split : resolveLegacy(name, split, legacy);
 
   useEffect(() => {
-    if (!user?.pubkey || !resolved) return;
+    if (!automaticSettingsSync || !user?.pubkey || !resolved) return;
     if (appliedId.current === resolved.event.id) return;
 
     // …with one exception: a local edit inside its publish debounce, or whose
@@ -170,7 +181,7 @@ export function useConfigDocSync(name: ConfigDocName): void {
       lastPublished.current = JSON.stringify(configSnapshot(next, name));
       return next;
     });
-  }, [user?.pubkey, name, resolved, updateConfig]);
+  }, [automaticSettingsSync, user?.pubkey, name, resolved, updateConfig]);
 
   // ─── Config → document ────────────────────────────────────────────────
   //
@@ -182,7 +193,9 @@ export function useConfigDocSync(name: ConfigDocName): void {
   // the signal for every slice: a split document is legitimately absent until
   // its domain is first touched, so its own null says nothing.
   useEffect(() => {
-    if (!user?.pubkey || !hasNip44Support || metadata.doc === null) return;
+    if (!automaticSettingsSync || !user?.pubkey || !hasNip44Support || metadata.doc === null) {
+      return;
+    }
 
     const snapshot = JSON.stringify(configSnapshot(config, name));
     if (lastPublished.current === undefined) {
@@ -227,7 +240,16 @@ export function useConfigDocSync(name: ConfigDocName): void {
     publishTimer.current = setTimeout(attempt, PUBLISH_DEBOUNCE_MS);
 
     return cancelPublish;
-  }, [user?.pubkey, hasNip44Support, config, name, metadata.doc, update, cancelPublish]);
+  }, [
+    automaticSettingsSync,
+    user?.pubkey,
+    hasNip44Support,
+    config,
+    name,
+    metadata.doc,
+    update,
+    cancelPublish,
+  ]);
 }
 
 export type { ConfigDocName };

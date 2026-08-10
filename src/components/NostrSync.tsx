@@ -109,6 +109,7 @@ function NostrSyncInner() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { config, updateConfig } = useAppContext();
+  const automaticSettingsSync = config.automaticSettingsSync !== false;
   const { doc: metadata, hasNip44Support } = useEncryptedSettings();
   const reactionsDoc = useSettingsDoc("reactions");
   const { update: updateReactions } = reactionsDoc;
@@ -237,8 +238,16 @@ function NostrSyncInner() {
 
     const filters: NostrFilter[] = [
       { authors: [pubkey], kinds: SELF_SYNC_REPLACEABLE_KINDS },
-      { authors: [pubkey], kinds: [KIND_APP_SPECIFIC], "#d": SELF_SYNC_DTAGS },
-      { authors: [pubkey], kinds: [KIND_APP_SPECIFIC], "#t": [T_ARMADA_GIF_FAVORITES] },
+      ...(automaticSettingsSync
+        ? [
+            { authors: [pubkey], kinds: [KIND_APP_SPECIFIC], "#d": SELF_SYNC_DTAGS },
+            {
+              authors: [pubkey],
+              kinds: [KIND_APP_SPECIFIC],
+              "#t": [T_ARMADA_GIF_FAVORITES],
+            },
+          ]
+        : []),
     ];
 
     void (async () => {
@@ -267,7 +276,15 @@ function NostrSyncInner() {
     // Rebuilding is the only recovery for either, and with no `since` it costs
     // a handful of replaceables. `selfRelayKey` rebuilds it when the account's
     // relay set changes (e.g. NIP-65 adoption) so the standing REQ follows.
-  }, [nostr, user?.pubkey, queryClient, eventStore, resumeEpoch, selfRelayKey]);
+  }, [
+    nostr,
+    user?.pubkey,
+    queryClient,
+    eventStore,
+    resumeEpoch,
+    selfRelayKey,
+    automaticSettingsSync,
+  ]);
 
   // The portable voice-server preference is synchronized in AppConfig, while
   // the voice runtime still reads its established localStorage key. Keep that
@@ -293,21 +310,26 @@ function NostrSyncInner() {
   // as with the read state above — commutative, so the legacy copy in metadata
   // is simply folded in as a second source.
   useEffect(() => {
-    if (!user?.pubkey) return;
+    if (!automaticSettingsSync || !user?.pubkey) return;
     if (reactionsDoc.doc?.frequentReactions) {
       hydrateFrequentReactions(user.pubkey, reactionsDoc.doc.frequentReactions);
     }
     if (metadata?.frequentReactions) {
       hydrateFrequentReactions(user.pubkey, metadata.frequentReactions);
     }
-  }, [user?.pubkey, reactionsDoc.doc?.frequentReactions, metadata?.frequentReactions]);
+  }, [
+    automaticSettingsSync,
+    user?.pubkey,
+    reactionsDoc.doc?.frequentReactions,
+    metadata?.frequentReactions,
+  ]);
 
   // …and push the other way, debounced, on a user-initiated reaction only
   // (`subscribeFrequentReactions` never fires for the hydrate above, so two
   // devices can't ping-pong the table between them).
   useEffect(() => {
     const pubkey = user?.pubkey;
-    if (!pubkey || !hasNip44Support) return;
+    if (!automaticSettingsSync || !pubkey || !hasNip44Support) return;
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     const unsubscribe = subscribeFrequentReactions((changed) => {
@@ -331,7 +353,7 @@ function NostrSyncInner() {
       unsubscribe();
       if (timer) clearTimeout(timer);
     };
-  }, [user?.pubkey, hasNip44Support, updateReactions]);
+  }, [automaticSettingsSync, user?.pubkey, hasNip44Support, updateReactions]);
 
   // NOTE: there is no longer a "1b" section hydrating the kind 10009 server
   // list into a local config cache. That cache (`addedRelays`) is gone: the
@@ -443,7 +465,7 @@ function NostrSyncInner() {
 
   // ─── 2. Ditto active profile theme fallback (first-time Armada users) ─
   useEffect(() => {
-    if (!user?.pubkey) return;
+    if (!automaticSettingsSync || !user?.pubkey) return;
     if (dittoCheckedPubkey.current === user.pubkey) return;
 
     // Only adopt the Ditto theme if the user has no Armada theme yet: no
@@ -477,7 +499,15 @@ function NostrSyncInner() {
     return () => {
       cancelled = true;
     };
-  }, [user?.pubkey, metadata, config.theme, config.customTheme, nostr, applyCustomTheme]);
+  }, [
+    automaticSettingsSync,
+    user?.pubkey,
+    metadata,
+    config.theme,
+    config.customTheme,
+    nostr,
+    applyCustomTheme,
+  ]);
 
   return null;
 }
