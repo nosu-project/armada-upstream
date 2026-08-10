@@ -14,6 +14,15 @@ import { useCommunity, useCommunityEntry } from "@/concord/hooks/useCommunityLis
 import { useControlFold } from "@/concord/hooks/useControlPlane";
 import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import {
+  discoverStreamAuthors,
+  type DiscoverActivityTarget,
+} from "@/concord/lib/discoverActivity";
+import {
+  enqueueDiscoverControlPeek,
+  peekDiscoverControl,
+  readCachedControlPeek,
+} from "@/concord/lib/discoverControlPeek";
+import {
   inviteUrlToLocalRoute,
   type DiscoveredInvite,
 } from "@/concord/lib/inviteDiscovery";
@@ -22,6 +31,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { writeClipboardText } from "@/lib/clipboard";
+import { shortTimeAgo } from "@/lib/formatTime";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { cn } from "@/lib/utils";
 
@@ -43,6 +53,14 @@ interface CommunityListingCardProps {
    * becomes knowable.
    */
   onResolved?: (linkSigner: string, communityId: string, owner: string) => void;
+  /**
+   * Reports the stream-author probe target for the batched Discover last-active
+   * REQ (guestbook / control / vended private channels, plus public channels
+   * when this viewer is a member and holds the Control fold).
+   */
+  onActivityTarget?: (target: DiscoverActivityTarget) => void;
+  /** Newest kind-1059 wrap `created_at` (unix seconds) from the batched probe. */
+  lastActiveAt?: number;
 }
 
 /** The card-shaped placeholder shown while a listing's bundle resolves. */
@@ -79,7 +97,14 @@ export function CommunityListingCardSkeleton({ className }: { className?: string
  * (which resolves + joins, prompting sign-in). Skeleton-shaped until the
  * bundle settles, so no placeholder name ever flashes.
  */
-export function CommunityListingCard({ invite, className, filter, onResolved }: CommunityListingCardProps) {
+export function CommunityListingCard({
+  invite,
+  className,
+  filter,
+  onResolved,
+  onActivityTarget,
+  lastActiveAt,
+}: CommunityListingCardProps) {
   const navigate = useNavigate();
   const { nostr } = useNostr();
   const parsed = useMemo(() => parseInviteLink(invite.inviteUrl), [invite.inviteUrl]);
@@ -151,6 +176,38 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
   const memberCommunity = useCommunity(memberEntry?.community_id);
   const { data: folded } = useControlFold(memberCommunity);
 
+  // Background Control peek for non-members: channel count + public channel
+  // ids for last-active. Serialized globally so the grid does one community
+  // at a time; members already hold the fold and skip this.
+  const controlPeekKey = ["discover", "control-peek", bundle?.community_id] as const;
+  const { data: controlPeek } = useQuery({
+    queryKey: controlPeekKey,
+    enabled: !!bundle && !isMember && !!bundle.community_id,
+    staleTime: 10 * 60_000,
+    retry: false,
+    queryFn: ({ signal }) =>
+      enqueueDiscoverControlPeek(() => peekDiscoverControl(nostr, bundle!, signal)),
+  });
+
+  // Same warm-seed pattern as invite bundles / the Discover directory: last
+  // session's peek paints channel count immediately; seeded STALE so the
+  // live peek above still refreshes.
+  useEffect(() => {
+    if (!bundle?.community_id || isMember) return;
+    let cancelled = false;
+    void (async () => {
+      const cached = await readCachedControlPeek(bundle.community_id);
+      if (cancelled || !cached) return;
+      if (queryClient.getQueryData(controlPeekKey) !== undefined) return;
+      queryClient.setQueryData(controlPeekKey, cached, { updatedAt: 0 });
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // controlPeekKey's community_id is what matters; the array identity is stable per id.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bundle?.community_id, isMember, queryClient]);
+
   const icon = folded?.metadata?.icon ?? bundle?.icon;
   const banner = folded?.metadata?.banner ?? bundle?.banner;
   const iconUrl = useDecryptedImage(icon);
@@ -161,11 +218,34 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
   // bundle's capped preview copy.
   const description = folded?.metadata?.description?.trim() || bundle?.description?.trim() || "";
   const initial = name.charAt(0).toUpperCase() || "·";
-  const channelCount = Array.isArray(bundle?.channels) ? bundle!.channels.length : 0;
+  const channelCount = folded
+    ? [...folded.channels.values()].filter((c) => !c.deleted).length
+    : (controlPeek?.channelCount ?? 0);
+  const publicChannelIdHexes = useMemo(() => {
+    if (folded) {
+      return [...folded.channels.values()]
+        .filter((c) => !c.deleted && !c.isPrivate)
+        .map((c) => c.channelIdHex)
+        .sort();
+    }
+    return controlPeek?.publicChannelIdHexes;
+  }, [folded, controlPeek?.publicChannelIdHexes]);
 
   useEffect(() => {
     if (bundle?.community_id) onResolved?.(invite.linkSigner, bundle.community_id, bundle.owner);
   }, [bundle?.community_id, bundle?.owner, invite.linkSigner, onResolved]);
+
+  // Probe target for the tab-level batched last-active REQ. Public chat
+  // stream authors land once the fold (member) or Control peek (listing)
+  // knows channel ids.
+  useEffect(() => {
+    if (!bundle || !onActivityTarget) return;
+    onActivityTarget({
+      linkSigner: invite.linkSigner,
+      authors: discoverStreamAuthors(bundle, { publicChannelIdHexes }),
+      relays: Array.isArray(bundle.relays) ? bundle.relays : [],
+    });
+  }, [bundle, publicChannelIdHexes, invite.linkSigner, onActivityTarget]);
 
   const onJoin = () => navigate(inviteUrlToLocalRoute(invite.inviteUrl));
   const onOpen = () => navigate(`/c/${encodeURIComponent(bundle!.community_id)}`);
@@ -270,11 +350,18 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
             ) : (
               <p className="font-semibold truncate leading-tight">{name}</p>
             )}
-            <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-              <ShieldCheck className="size-3 shrink-0" />
+            {/* One inline text flow — channel count and last-active append as
+                their background peeks land, without reshaping the row. */}
+            <p className="text-[11px] leading-snug text-muted-foreground">
+              <ShieldCheck className="mr-1 inline size-3 align-[-0.125em]" />
               Encrypted community
-              {channelCount > 0 && ` · ${channelCount} channel${channelCount === 1 ? "" : "s"}`}
-            </span>
+              {channelCount > 0
+                ? ` · ${channelCount} channel${channelCount === 1 ? "" : "s"}`
+                : null}
+              {lastActiveAt != null && lastActiveAt > 0
+                ? ` · Active ${shortTimeAgo(lastActiveAt)}`
+                : null}
+            </p>
           </div>
         </div>
 

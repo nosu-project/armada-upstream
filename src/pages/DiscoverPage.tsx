@@ -13,10 +13,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PillTabs, type PillTab } from "@/components/ui/pill-tabs";
 import { Skeleton } from "@/components/ui/skeleton";
+import type { DiscoverActivityTarget } from "@/concord/lib/discoverActivity";
 import type { DiscoveredInvite } from "@/concord/lib/inviteDiscovery";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
   useDiscoverCommunities,
+  useDiscoverCommunityActivity,
   useDiscoverEmojiPacks,
   useDiscoverThemes,
 } from "@/hooks/useDiscover";
@@ -255,6 +257,34 @@ function CommunitiesTab({ query }: { query: string }) {
     [],
   );
 
+  // Activity probe targets reported by each card as its bundle (and, for
+  // members, Control fold) resolves — batched into one last-wrap REQ below.
+  const [activityTargets, setActivityTargets] = useState<Record<string, DiscoverActivityTarget>>(
+    {},
+  );
+  const onActivityTarget = useCallback((target: DiscoverActivityTarget) => {
+    const normalized: DiscoverActivityTarget = {
+      ...target,
+      authors: [...target.authors].sort(),
+      relays: [...target.relays],
+    };
+    setActivityTargets((prev) => {
+      const cur = prev[normalized.linkSigner];
+      if (
+        cur
+        && cur.authors.length === normalized.authors.length
+        && cur.authors.every((a, i) => a === normalized.authors[i])
+        && cur.relays.length === normalized.relays.length
+        && cur.relays.every((r, i) => r === normalized.relays[i])
+      ) {
+        return prev;
+      }
+      return { ...prev, [normalized.linkSigner]: normalized };
+    });
+  }, []);
+  const activityTargetList = useMemo(() => Object.values(activityTargets), [activityTargets]);
+  const lastActiveBySigner = useDiscoverCommunityActivity(activityTargetList);
+
   // Display order: communities owned by team-follow-pack members first, then
   // the rest of the trusted set (pack ∪ viewer ∪ follows), then — only in
   // unrestricted mode, where the allow-list is bypassed — everyone else.
@@ -329,6 +359,8 @@ function CommunitiesTab({ query }: { query: string }) {
             invite={invite}
             filter={query}
             onResolved={onResolved}
+            onActivityTarget={onActivityTarget}
+            lastActiveAt={lastActiveBySigner[invite.linkSigner]}
           />
         ))}
     </div>
