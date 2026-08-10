@@ -72,7 +72,7 @@ export function DiscoverPage() {
         {/* A centred, bounded column — the same presentational width the
             moderation and community-settings surfaces use, so Discover reads as
             an inviting page rather than a full-bleed grid. */}
-        <div className="mx-auto flex w-full max-w-2xl flex-1 min-h-0 flex-col px-3 sm:px-4">
+        <div className="mx-auto flex w-full max-w-5xl flex-1 min-h-0 flex-col px-3 sm:px-4">
           {/* Header — the floating command bar shared with Inbox / Mesh / Group.
               Dropped on a phone, where the tab pills carry the page identity and
               the vertical space is better spent on results. */}
@@ -178,7 +178,7 @@ export function DiscoverPage() {
   );
 }
 
-const GRID = "grid gap-4 sm:grid-cols-2 items-stretch";
+const GRID = "grid gap-4 sm:grid-cols-2 lg:grid-cols-3 items-stretch";
 
 /**
  * Card-shaped placeholders while the first page loads — the grid keeps its
