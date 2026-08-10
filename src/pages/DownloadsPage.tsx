@@ -40,7 +40,6 @@ const OS_ICON: Record<DownloadOs, LucideIcon> = {
 const OS_CAVEAT: Partial<Record<DownloadOs, string>> = {
   macos: "Ad-hoc signed rather than notarized, so the first launch needs Control-click → Open, then Open Anyway.",
   android: "Sideloading the APK asks Android to allow installs from your browser.",
-  linux: "Mark an AppImage executable before running it: chmod +x Armada.AppImage",
 };
 
 /**
@@ -119,27 +118,36 @@ function TargetCard({ target, manifest, featured }: {
           {target.assets.map((asset, i) => {
             const size = manifest?.files?.[asset.id]?.size;
             return (
-              <Button
-                key={asset.id}
-                asChild
-                variant={featured && i === 0 ? "default" : "secondary"}
-                className="h-auto py-2.5 touch:py-3 justify-start text-left clip-corner-lg"
-              >
-                {/* `download` only binds same-origin — on armada.buzz it forces a
-                    save and names the file even if the server's content type is
-                    wrong. Cross-origin (the native shells) it is ignored and the
-                    link opens normally, which is the desired behavior there. */}
-                <a href={downloadUrl(asset.file)} download>
-                  <Download className="size-4 shrink-0" />
-                  <span className="flex flex-col gap-0.5 min-w-0">
-                    <span className="font-medium leading-tight">
-                      {asset.label}
-                      {size ? <span className="font-normal opacity-70"> · {formatBytes(size)}</span> : null}
+              // The button and, for a CLI-installed build, the command to run
+              // after it stack in one grid cell.
+              <div key={asset.id} className="flex flex-col gap-1.5">
+                <Button
+                  asChild
+                  variant={featured && i === 0 ? "default" : "secondary"}
+                  className="h-auto py-2.5 touch:py-3 justify-start text-left clip-corner-lg"
+                >
+                  {/* `download` only binds same-origin — on armada.buzz it forces a
+                      save and names the file even if the server's content type is
+                      wrong. Cross-origin (the native shells) it is ignored and the
+                      link opens normally, which is the desired behavior there. */}
+                  <a href={downloadUrl(asset.file)} download>
+                    <Download className="size-4 shrink-0" />
+                    <span className="flex flex-col gap-0.5 min-w-0">
+                      <span className="font-medium leading-tight">
+                        {asset.label}
+                        {size ? <span className="font-normal opacity-70"> · {formatBytes(size)}</span> : null}
+                      </span>
+                      <span className="text-xs font-normal opacity-70 leading-tight whitespace-normal">{asset.hint}</span>
                     </span>
-                    <span className="text-xs font-normal opacity-70 leading-tight whitespace-normal">{asset.hint}</span>
-                  </span>
-                </a>
-              </Button>
+                  </a>
+                </Button>
+                {asset.command && (
+                  <code className="block overflow-x-auto whitespace-pre clip-corner-lg bg-background/60 px-2.5 py-1.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                    <span aria-hidden="true" className="select-none text-[hsl(var(--accent2)/0.75)]">$ </span>
+                    {asset.command}
+                  </code>
+                )}
+              </div>
             );
           })}
           {target.os === "android" &&
