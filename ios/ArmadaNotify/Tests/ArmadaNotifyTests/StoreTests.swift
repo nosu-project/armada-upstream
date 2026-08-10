@@ -195,3 +195,56 @@ final class StoreTests: XCTestCase {
         XCTAssertNil(store.concordRoomTitle(communityId: "unknown", channelId: channel))
     }
 }
+
+/// Presentation must not depend on persistence.
+///
+/// The store and the notification fail independently: a database that will not
+/// open costs the message its history and its sender's name, but the text has
+/// already been decrypted and refusing to show it would turn one broken thing
+/// into two. This is the rule that was wrong first time round — the extension
+/// bailed on a nil store and every push silently fell back to the gateway's
+/// static text.
+final class StorelessTests: XCTestCase {
+
+    private let self_ = String(repeating: "a", count: 64)
+    private let peer = String(repeating: "b", count: 64)
+
+    func testPresentsANip29MessageWithNoStoreAtAll() {
+        let config = PushConfig(
+            policy: .generic, selfPubkey: self_, knownPeers: [], secretKey: nil,
+            nip46: nil, concord: []
+        )
+        let processor = PushProcessor(store: nil, config: config, now: 1_700_000_000)
+
+        let event: [String: Any] = [
+            "id": String(repeating: "e", count: 64),
+            "pubkey": peer, "created_at": 1_700_000_000, "kind": 9,
+            "tags": [["h", "general"]], "content": "shipped it",
+        ]
+        let prepared = processor.prepare(userInfo: [
+            "scope": "group", "relays": ["wss://relay.example"], "event": event,
+        ])
+
+        XCTAssertNotNil(prepared, "a decrypted message must still be shown")
+        XCTAssertEqual(prepared?.body, "Anonymous: shipped it")
+        XCTAssertEqual(prepared?.threadId, "h:general")
+        XCTAssertFalse(prepared?.drop ?? true)
+    }
+
+    func testStillDropsTheViewersOwnMessageWithNoStore() {
+        // Degrading must not lose the decisions either — an own message is
+        // still not news.
+        let config = PushConfig(
+            policy: .generic, selfPubkey: self_, knownPeers: [], secretKey: nil,
+            nip46: nil, concord: []
+        )
+        let processor = PushProcessor(store: nil, config: config, now: 1_700_000_000)
+        let event: [String: Any] = [
+            "id": String(repeating: "e", count: 64),
+            "pubkey": self_, "created_at": 1_700_000_000, "kind": 9,
+            "tags": [["h", "general"]], "content": "mine",
+        ]
+        let prepared = processor.prepare(userInfo: ["scope": "group", "event": event])
+        XCTAssertEqual(prepared?.drop, true)
+    }
+}

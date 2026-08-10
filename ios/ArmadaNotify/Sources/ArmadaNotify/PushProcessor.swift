@@ -47,11 +47,16 @@ public struct PreparedPush {
 /// that failed has still persisted the message.
 struct PushProcessor {
 
-    let store: NotifyStore
+    /// Optional, and that is the point: a store that will not open costs the
+    /// message's PERSISTENCE, not its notification. Gating presentation on
+    /// persistence turns one broken thing into two — the user loses the text as
+    /// well as the history — and the store is the half that can be refilled
+    /// from a relay later.
+    let store: NotifyStore?
     let config: PushConfig
     let now: Int
 
-    init(store: NotifyStore, config: PushConfig, now: Int = Int(Date().timeIntervalSince1970)) {
+    init(store: NotifyStore?, config: PushConfig, now: Int = Int(Date().timeIntervalSince1970)) {
         self.store = store
         self.config = config
         self.now = now
@@ -89,7 +94,7 @@ struct PushProcessor {
         ) else { return nil }
 
         // Persist first: a DM exists nowhere else once it is read off the relay.
-        try? store.writeDm(opened, self: config.selfPubkey, now: now)
+        try? store?.writeDm(opened, self: config.selfPubkey, now: now)
 
         // Our own sent copy is addressed to us too, and is not news.
         if opened.author == config.selfPubkey { return .dropped }
@@ -110,10 +115,10 @@ struct PushProcessor {
             plane: .dm,
             kind: opened.kind,
             content: opened.content,
-            authorName: store.displayName(pubkey: opened.author),
+            authorName: store?.displayName(pubkey: opened.author) ?? "Anonymous",
             roomTitle: nil,
             imetaMime: NotificationPreview.firstImetaMime(opened.tags),
-            mentionNames: store.mentionNames(in: opened.content)
+            mentionNames: store?.mentionNames(in: opened.content) ?? [:]
         )
         var shaped = message
         shaped.threadReply = NotificationPreview.isThreadReply(
@@ -177,7 +182,7 @@ struct PushProcessor {
 
         // Store it either way: a message we won't announce is still a message,
         // and the timeline it belongs to has no other copy.
-        try? store.writeConcord(opened, communityId: stream.communityId, now: now)
+        try? store?.writeConcord(opened, communityId: stream.communityId, now: now)
 
         // Our own message, sent from another device. The local send marks its
         // own event id, but nothing marks one made elsewhere — only the
@@ -197,14 +202,14 @@ struct PushProcessor {
             plane: .c2,
             kind: opened.kind,
             content: opened.content,
-            authorName: store.displayName(pubkey: opened.author),
-            roomTitle: store.concordRoomTitle(
+            authorName: store?.displayName(pubkey: opened.author) ?? "Anonymous",
+            roomTitle: store?.concordRoomTitle(
                 communityId: stream.communityId, channelId: stream.channelId
             ),
             mention: mention,
             reaction: reaction,
             imetaMime: NotificationPreview.firstImetaMime(opened.tags),
-            mentionNames: store.mentionNames(in: opened.content)
+            mentionNames: store?.mentionNames(in: opened.content) ?? [:]
         )
         message.threadReply = NotificationPreview.isThreadReply(
             kind: opened.kind, tags: opened.tags
@@ -244,7 +249,7 @@ struct PushProcessor {
         // coin toss.
         var named = [(relay: String, title: String)]()
         for relay in relays {
-            if let title = store.nip29RoomTitle(relayUrl: relay, groupId: groupId) {
+            if let title = store?.nip29RoomTitle(relayUrl: relay, groupId: groupId) {
                 named.append((relay, title))
             }
         }
@@ -257,11 +262,11 @@ struct PushProcessor {
             plane: .nip29,
             kind: event.kind,
             content: event.content,
-            authorName: store.displayName(pubkey: event.pubkey),
+            authorName: store?.displayName(pubkey: event.pubkey) ?? "Anonymous",
             roomTitle: only?.title,
             mention: mention,
             imetaMime: NotificationPreview.firstImetaMime(event.tags),
-            mentionNames: store.mentionNames(in: event.content)
+            mentionNames: store?.mentionNames(in: event.content) ?? [:]
         )
         message.threadReply = NotificationPreview.isThreadReply(
             kind: event.kind, tags: event.tags
