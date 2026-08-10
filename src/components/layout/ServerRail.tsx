@@ -1391,6 +1391,25 @@ function ServerRailInner({
   const handleDragPointerDown = railDrag.begin;
   const draggable = items.length > 1;
 
+  // Whether the community list actually overflows its scroll region. The
+  // Settings footer's top divider only earns its keep when there's content
+  // scrolled off above it to divide from; with a short list it's just a line
+  // under empty space. Measured, not guessed — item count, folder open/close
+  // and rail/viewport height all move the threshold — by observing the nav
+  // (its own height) and each child (content height, incl. folder expansion).
+  const [listOverflows, setListOverflows] = useState(false);
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+    const measure = () => setListOverflows(nav.scrollHeight > nav.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(nav);
+    for (const child of Array.from(nav.children)) ro.observe(child);
+    return () => ro.disconnect();
+  }, [renderNodes, user, mesh.available, inviteItems.length]);
+
   // What the floating ghost carries.
   const draggedItem =
     dragSource?.kind === "item" ? (liveByKey.get(dragSource.key) ?? null) : null;
@@ -1778,7 +1797,8 @@ function ServerRailInner({
           which sits inside pb-safe plus an extra 0.5rem. */}
       <div
         className={cn(
-          "flex flex-col items-center shrink-0 w-full border-t border-chrome-divider pt-3 sidebar:pt-4",
+          "flex flex-col items-center shrink-0 w-full pt-3 sidebar:pt-4",
+          listOverflows && "border-t border-chrome-divider",
           "pb-[calc(var(--safe-area-pad-bottom,0.75rem)+0.5rem)] sidebar:pb-[calc(var(--safe-area-pad-bottom-tight,0.25rem)+0.5rem)]",
         )}
       >
