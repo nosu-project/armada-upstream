@@ -1576,7 +1576,13 @@ if (!gotLock) {
   app.on("will-quit", (event) => {
     if (!dbServer) return;
     event.preventDefault();
-    closeDb().finally(() => app.quit());
+    // Re-quitting from will-quit's own preventDefault continuation is a no-op:
+    // Electron guards against re-entrant quit while the will-quit emission is
+    // still on the stack. closeDb resolves on a microtask (better-sqlite3's
+    // close() is synchronous), so calling app.quit() directly lands inside that
+    // same emission and the app hangs instead of exiting. setImmediate defers
+    // the second quit to a fresh macrotask, past the guard.
+    closeDb().finally(() => setImmediate(() => app.quit()));
   });
 
   // With a usable tray, the app keeps running when all windows are closed.
