@@ -115,6 +115,28 @@ function searchEmojis(query: string, customEmojis: CustomEmoji[]): EmojiResult[]
 }
 
 /**
+ * Index of the `:` that opens an in-progress `:shortcode` query ending at
+ * `cursor`, or -1 if there isn't one.
+ *
+ * A colon starts a shortcode when it sits at the beginning of the text or
+ * after anything that is not a shortcode character (`[A-Za-z0-9_]`). That
+ * keeps `http://` / `3:30` / `word:foo` from matching, while still allowing
+ * back-to-back native emojis (`👍:smile`) without a required space — the
+ * previous whitespace-only rule rejected those.
+ */
+export function findEmojiShortcodeColon(value: string, cursor: number): number {
+  for (let i = cursor - 1; i >= 0; i--) {
+    const ch = value[i];
+    if (ch === " " || ch === "\n" || ch === "\t") break;
+    if (ch === ":" && i < cursor - 1) {
+      if (i === 0 || !/[A-Za-z0-9_]/.test(value[i - 1]!)) return i;
+      break;
+    }
+  }
+  return -1;
+}
+
+/**
  * Detects `:shortcode` at the cursor position in a textarea and shows
  * an emoji autocomplete dropdown. On selection, replaces `:shortcode`
  * with the native emoji character or `:shortcode:` for custom emojis.
@@ -151,18 +173,7 @@ export function EmojiShortcodeAutocomplete({
 
     const value = text ?? textarea.value;
     const cursor = cursorPos ?? textarea.selectionStart ?? value.length;
-
-    let colonPos = -1;
-    for (let i = cursor - 1; i >= 0; i--) {
-      const ch = value[i];
-      if (ch === " " || ch === "\n" || ch === "\t") break;
-      if (ch === ":" && i < cursor - 1) {
-        if (i === 0 || /[\s]/.test(value[i - 1])) {
-          colonPos = i;
-        }
-        break;
-      }
-    }
+    const colonPos = findEmojiShortcodeColon(value, cursor);
 
     if (colonPos === -1) {
       setIsOpen(false);
