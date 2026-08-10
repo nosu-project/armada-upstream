@@ -1,6 +1,38 @@
 import ArmadaNotify
 import UserNotifications
 
+/// Calls a content handler at most once, independently of who still holds it.
+///
+/// The extension's whole contract is "call the handler exactly once", and the
+/// two ways to break it pull in opposite directions: call it twice, or never.
+/// Owning that guarantee here rather than in `NotificationService` is
+/// deliberate — the avatar fetch's completion captures THIS, not the extension
+/// object, so a notification is delivered even if the system has already let
+/// the extension instance go. A closure that captured the extension weakly and
+/// bailed on a nil `self` would return without calling the handler, and an
+/// extension that never calls its handler shows NOTHING: not the decrypted
+/// message, and not the gateway's fallback either.
+private final class OneShotHandler {
+
+    private let lock = NSLock()
+    private var handler: ((UNNotificationContent) -> Void)?
+
+    init(_ handler: @escaping (UNNotificationContent) -> Void) {
+        self.handler = handler
+    }
+
+    /// Deliver `content`, unless something already did. Taking the handler out
+    /// under the lock is what makes the avatar fetch and the expiry timer —
+    /// which complete on different queues — safe to race.
+    func callAsFunction(_ content: UNNotificationContent) {
+        lock.lock()
+        let handler = self.handler
+        self.handler = nil
+        lock.unlock()
+        handler?(content)
+    }
+}
+
 /// The Notification Service Extension: the only place on iOS where an incoming
 /// message can be decrypted before the user sees it.
 ///
@@ -20,11 +52,9 @@ import UserNotifications
 ///
 ///  - **Always call the handler, exactly once.** An extension that returns
 ///    without calling it, or that crashes, shows the gateway's original
-///    static text. That is the correct fallback and it is also invisible: no
-///    log anyone reads, no error the app can report. So every failure path
-///    here ends in the same `deliver(_:)` the success path does, and
-///    `deliver` is idempotent because the avatar fetch below means the timeout
-///    and the completion can now genuinely race.
+///    static text — or, if the handler is never called at all, nothing
+///    whatsoever. That is why delivery is owned by `OneShotHandler` above and
+///    never conditioned on this object still being alive.
 ///  - **Never spend the budget.** ~24 MB and a few seconds, after which
 ///    `serviceExtensionTimeWillExpire` fires and iOS shows whatever is left.
 ///    The one thing that waits on the network is the avatar, which is bounded
@@ -32,19 +62,16 @@ import UserNotifications
 ///    ArmadaDB file in the App Group, or not at all.
 class NotificationService: UNNotificationServiceExtension {
 
-    private var contentHandler: ((UNNotificationContent) -> Void)?
+    private var deliver: OneShotHandler?
     private var bestAttempt: UNMutableNotificationContent?
-    /// Guards the handler against the avatar fetch and the expiry timer both
-    /// arriving. `didReceive` and `serviceExtensionTimeWillExpire` are called on
-    /// the same queue, but the fetch's completion is not.
-    private let lock = NSLock()
-    private var delivered = false
 
     override func didReceive(
         _ request: UNNotificationRequest,
         withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void
     ) {
-        self.contentHandler = contentHandler
+        let deliver = OneShotHandler(contentHandler)
+        self.deliver = deliver
+
         let content = (request.content.mutableCopy() as? UNMutableNotificationContent)
             ?? UNMutableNotificationContent()
         bestAttempt = content
@@ -94,8 +121,9 @@ class NotificationService: UNNotificationServiceExtension {
         // where showing a person would be showing a stranger.
         guard let sender = prepared.sender else { return deliver(content) }
 
-        AvatarLoader.load(url: sender.avatarUrl) { [weak self] avatar in
-            guard let self else { return }
+        // Captures `deliver` and `content` — NOT the extension. See
+        // `OneShotHandler`.
+        AvatarLoader.load(url: sender.avatarUrl) { avatar in
             let communication = CommunicationNotification.apply(
                 sender: sender,
                 threadId: prepared.threadId,
@@ -103,24 +131,13 @@ class NotificationService: UNNotificationServiceExtension {
                 to: content
             )
             // A system that declines the intent still gets the decrypted text.
-            self.deliver(communication ?? content)
+            deliver(communication ?? content)
         }
     }
 
     /// Out of time. Hand back whatever has been built — which is at worst the
     /// gateway's original content, never nothing.
     override func serviceExtensionTimeWillExpire() {
-        if let bestAttempt = bestAttempt { deliver(bestAttempt) }
-    }
-
-    /// Call the content handler at most once.
-    private func deliver(_ content: UNNotificationContent) {
-        lock.lock()
-        let alreadyDelivered = delivered
-        delivered = true
-        let handler = contentHandler
-        lock.unlock()
-        if alreadyDelivered { return }
-        handler?(content)
+        if let bestAttempt = bestAttempt { deliver?(bestAttempt) }
     }
 }
