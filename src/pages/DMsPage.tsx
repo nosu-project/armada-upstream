@@ -1881,7 +1881,8 @@ function RequestsEntryRow({ count, onClick }: { count: number; onClick: () => vo
   );
 }
 
-function ConversationList({
+/** Exported for DMsPage.list.test.tsx, which renders it directly. */
+export function ConversationList({
   rows,
   requestRows,
   view,
