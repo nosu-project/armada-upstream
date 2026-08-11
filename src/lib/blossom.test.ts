@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   APP_BLOSSOM_SERVERS,
+  blossomFallbackUrls,
   getEffectiveBlossomServers,
   normalizeBlossomServerUrl,
   parseBlossomServerList,
@@ -73,6 +74,50 @@ describe("getEffectiveBlossomServers", () => {
   it("falls back to app servers when disabled but the user list is empty", () => {
     expect(getEffectiveBlossomServers({ servers: [], updatedAt: 0 }, false))
       .toEqual(APP_BLOSSOM_SERVERS);
+  });
+});
+
+describe("blossomFallbackUrls", () => {
+  const SHA = "a".repeat(64);
+  const servers = [
+    "https://a.example/",
+    "https://b.example/",
+    "https://c.example/",
+  ];
+
+  it("returns the same blob on every other server for a content-addressed URL", () => {
+    expect(blossomFallbackUrls(`https://a.example/${SHA}`, servers)).toEqual([
+      `https://b.example/${SHA}`,
+      `https://c.example/${SHA}`,
+    ]);
+  });
+
+  it("keeps the extension and query, and excludes the source origin", () => {
+    expect(
+      blossomFallbackUrls(`https://b.example/${SHA}.png?x=1`, servers),
+    ).toEqual([
+      `https://a.example/${SHA}.png?x=1`,
+      `https://c.example/${SHA}.png?x=1`,
+    ]);
+  });
+
+  it("dedupes servers by origin (trailing slash / case insensitive)", () => {
+    expect(
+      blossomFallbackUrls(`https://a.example/${SHA}`, [
+        "https://B.EXAMPLE///",
+        "https://b.example/",
+      ]),
+    ).toEqual([`https://b.example/${SHA}`]);
+  });
+
+  it("returns [] for a non-content-addressed URL", () => {
+    expect(
+      blossomFallbackUrls("https://a.example/photo.png", servers),
+    ).toEqual([]);
+  });
+
+  it("returns [] for an unparseable URL", () => {
+    expect(blossomFallbackUrls("not a url", servers)).toEqual([]);
   });
 });
 

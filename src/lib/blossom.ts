@@ -97,6 +97,50 @@ export function getEffectiveBlossomServers(
   return dedupeServers([...APP_BLOSSOM_SERVERS, ...userMeta.servers]);
 }
 
+/**
+ * A Blossom content-addressed path: a leading `/<sha256>` (64 hex), optionally
+ * followed by an extension (`/<sha256>.png`) some servers keep. The `\b` after
+ * the hash tolerates the extension without matching a longer hex-ish path.
+ */
+export const BLOSSOM_SHA256_PATH_REGEX = /^\/[a-f0-9]{64}\b/i;
+
+/**
+ * Given a media URL and the effective server list, return the SAME blob served
+ * from every OTHER server, for read-side redundancy (mirrors Ditto's
+ * useBlossomFallback). A blob uploaded via {@link getEffectiveBlossomServers}
+ * is content-addressed and mirrored (BUD-04) across the list, so swapping the
+ * origin onto another server's copy is a valid retry when one server is down or
+ * hasn't finished mirroring.
+ *
+ * Only applies to content-addressed URLs (`/<sha256>[.ext]`): an arbitrary
+ * external image has no equivalent elsewhere, so it returns `[]`. Origins are
+ * deduped and the source URL's own origin is excluded.
+ */
+export function blossomFallbackUrls(url: string, servers: string[]): string[] {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return [];
+  }
+  if (!BLOSSOM_SHA256_PATH_REGEX.test(parsed.pathname)) return [];
+
+  const seen = new Set<string>([parsed.origin]);
+  const out: string[] = [];
+  for (const server of servers) {
+    let origin: string;
+    try {
+      origin = new URL(server).origin;
+    } catch {
+      continue;
+    }
+    if (seen.has(origin)) continue;
+    seen.add(origin);
+    out.push(`${origin}${parsed.pathname}${parsed.search}`);
+  }
+  return out;
+}
+
 /** Deduplicate server URLs by normalized form, preserving order. */
 function dedupeServers(urls: string[]): string[] {
   const seen = new Set<string>();

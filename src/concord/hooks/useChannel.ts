@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { citationFor, dissolvedAt, useControlFold, useDissolved } from "@/concord/hooks/useControlPlane";
 import { persistTimelineSnapshot, prewarmTimelineSnapshot } from "@/concord/hooks/timelineSnapshot";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useSendStatusMap, useSendStatusMapValue, type SendStatusMap } from "@/hooks/useSendStatusMap";
+import { useSendStatusMap, useSendStatusMapValue, type SendStatus, type SendStatusMap } from "@/hooks/useSendStatusMap";
 import {
   buildConcordCommentTags,
   filterEpochCutoff,
@@ -568,6 +568,85 @@ export function useChannelTimeline(
 
 // ── Sending ──────────────────────────────────────────────────────────────────
 
+/** The relay-publish surface {@link broadcastWrap} needs (a subset of NPool). */
+interface WrapPublisher {
+  relay(url: string): { event(event: NostrEvent, opts?: { signal?: AbortSignal }): Promise<unknown> };
+}
+
+/**
+ * Grace period AFTER the failed/not-failed decision during which the relay
+ * publishes keep running. A relay that ACKs slowly (past the signer's budget)
+ * is still evidence the message reached a relay, so its late OK clears the
+ * "failed" badge rather than leaving a delivered message looking unsent.
+ */
+const LATE_ACK_GRACE_MS = 20_000;
+
+/**
+ * Broadcast a wrap to the community relays, driving one message's optimistic
+ * send status by rumor id through `onStatus`:
+ *
+ *  - the moment ANY relay accepts, clear the status — delivered; and if a retry
+ *    had left it "failed", this is what retires that badge;
+ *  - if NO relay accepts within the signer's publish budget, set "failed";
+ *  - but keep the publishes running past that decision (the grace window), so a
+ *    slow relay's LATE accept still clears a "failed" message. That late OK is
+ *    the evidence the message DID reach a relay after we'd given up waiting —
+ *    without it a delivered-but-slow send stays marked failed forever.
+ *
+ * Fire-and-forget: never throws. A non-visible kind (reaction/edit/delete)
+ * passes a no-op `onStatus`, so it neither shows nor clears a badge.
+ */
+export function broadcastWrap(
+  nostr: WrapPublisher,
+  relays: string[],
+  wrap: NostrEvent,
+  method: string | undefined,
+  onStatus: (status: SendStatus | undefined) => void,
+): void {
+  if (relays.length === 0) {
+    onStatus("failed");
+    return;
+  }
+  const decisionMs = publishTimeoutMs(method);
+  const hardMs = decisionMs + LATE_ACK_GRACE_MS;
+  const started = Date.now();
+  let accepted = false;
+  let settled = 0;
+
+  const decide = setTimeout(() => {
+    if (!accepted) onStatus("failed");
+  }, decisionMs);
+
+  for (const url of relays) {
+    void nostr
+      .relay(url)
+      .event(wrap, { signal: AbortSignal.timeout(hardMs) })
+      .then(() => {
+        logSync("send", `wrap ${wrap.id.slice(0, 8)} → ${url}: accepted in ${sinceMs(started)}`);
+        if (!accepted) {
+          accepted = true;
+          clearTimeout(decide);
+          onStatus(undefined);
+        }
+      })
+      .catch((reason) => {
+        logSync(
+          "send",
+          `wrap ${wrap.id.slice(0, 8)} → ${url}: FAILED (${reason instanceof Error ? reason.message : String(reason)}) in ${sinceMs(started)}`,
+        );
+      })
+      .finally(() => {
+        settled += 1;
+        // Every relay has answered and none accepted: settle on "failed" now
+        // rather than waiting out the grace window on a batch that's all done.
+        if (settled === relays.length && !accepted) {
+          clearTimeout(decide);
+          onStatus("failed");
+        }
+      });
+  }
+}
+
 /**
  * Send one chat-plane rumor: build (with the channel/epoch binding),
  * optimistically insert IMMEDIATELY, then sign the seal with the user's real
@@ -591,26 +670,6 @@ export function useSendMessage(community: Community | undefined, channel: Channe
   // it last knew, exactly the mixed-client behavior the CORD specifies.
   const { data: folded } = useControlFold(community);
   const timerSecs = messageExpirationOf(folded?.metadata);
-
-  const broadcast = useCallback(
-    async (wrap: NostrEvent) => {
-      // Budget scaled to the signer: an auth-gating relay can demand a NIP-42
-      // sign (a bunker round-trip for NIP-46 logins) inside this await (#51).
-      const timeout = publishTimeoutMs(user?.method);
-      const started = Date.now();
-      const results = await Promise.allSettled(
-        community!.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(timeout) })),
-      );
-      results.forEach((r, i) => {
-        logSync(
-          "send",
-          `wrap ${wrap.id.slice(0, 8)} → ${community!.relays[i]}: ${r.status === "fulfilled" ? "accepted" : `FAILED (${r.reason instanceof Error ? r.reason.message : r.reason})`} in ${sinceMs(started)}`,
-        );
-      });
-      if (!results.some((r) => r.status === "fulfilled")) throw new Error("No relay accepted the message.");
-    },
-    [nostr, community, user?.method],
-  );
 
   return useMutation({
     mutationFn: async ({
@@ -760,8 +819,8 @@ export function useSendMessage(community: Community | undefined, channel: Channe
       // (and a self-delete removes its target via the store's NIP-09).
       writeRumors(community.idHex, [sealed]);
 
-      void broadcast(wrap).catch(() => {
-        if (isVisible) setStatus(rumor.id, "failed");
+      broadcastWrap(nostr, community.relays, wrap, user.method, (status) => {
+        if (isVisible) setStatus(rumor.id, status);
       });
 
       return { rumorId: rumor.id, wrap: wrap as NostrEvent | undefined };
@@ -771,6 +830,7 @@ export function useSendMessage(community: Community | undefined, channel: Channe
 
 /** Retry / discard a failed optimistic message, and optimistic self-delete. */
 export function useMessageActions(community: Community | undefined, channel: Channel | undefined) {
+  const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
   // The fold supplies this actor's own Grant head, which a moderation delete
@@ -780,16 +840,71 @@ export function useMessageActions(community: Community | undefined, channel: Cha
   const { setStatus } = useSendStatusMap(statusKey(channelIdHex));
   const { mutateAsync: send } = useSendMessage(community, channel);
 
+  // Re-broadcast the ORIGINAL failed message under its own rumor id, so a
+  // message that actually reached a relay (a slow ACK we timed out on) is
+  // re-delivered as the SAME event and dedupes on arrival instead of appearing
+  // twice. The seal we already signed is reused verbatim when the failure was
+  // the broadcast; only a failure to seal in the first place (placeholder seal)
+  // re-signs — and even then buildRumor with the stored `ms`+tags reproduces
+  // the identical rumor id.
+  const resend = useCallback(
+    (msg: OpenedChat) => {
+      if (!user || !community || !channel) return;
+      const isVisible = msg.kind === KIND_MESSAGE || msg.kind === KIND_COMMENT || msg.kind === KIND_POLL;
+      const onStatus = (status: SendStatus | undefined) => {
+        if (isVisible) setStatus(msg.rumorId, status);
+      };
+      void (async () => {
+        try {
+          let seal = msg.seal && msg.seal.sig ? msg.seal : undefined;
+          if (!seal) {
+            const rumor = buildRumor({
+              kind: msg.kind,
+              content: msg.content,
+              tags: msg.tags,
+              pubkey: user.pubkey,
+              ms: msg.ms,
+            });
+            seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, user.signer);
+          }
+          // Mirror the rumor's own signed NIP-40 onto the re-wrap so relays purge
+          // the ciphertext too (CORD-08 §2); the rumor inside is untouched.
+          const expTag = msg.tags.find((t) => t[0] === "expiration")?.[1];
+          const expiration = expTag !== undefined && /^[0-9]+$/.test(expTag) ? Number(expTag) : undefined;
+          const wrap = wrapSeal(seal, channel.current.group, expiration !== undefined ? { expiration } : undefined);
+          await markOwnWebPushEvent(wrap.id);
+          // Keep the persisted copy current with the seal/wrap we just (re)built,
+          // so a refresh mid-flight keeps the message.
+          writeRumors(community.idHex, [{ ...msg, seal, wrapId: wrap.id, streamPk: wrap.pubkey }]);
+          broadcastWrap(nostr, community.relays, wrap, user.method, onStatus);
+        } catch {
+          onStatus("failed");
+        }
+      })();
+    },
+    [nostr, user, community, channel, setStatus],
+  );
+
   const retry = useCallback(
     (id: string) => {
       if (!user || !community || !channel) return;
       const raw = queryClient.getQueryData<OpenedChat[]>(channelKey(channelIdHex)) ?? [];
       const msg = raw.find((m) => m.rumorId === id);
       if (!msg) return;
-      // Re-send as a fresh rumor (a new id); drop the failed original. A
-      // threaded reply (kind-1111 comment) carries its NIP-22 thread pointers in
-      // its own tags, so preserve them verbatim (minus the channel binding,
-      // which `send` re-adds) rather than rebuilding from a parent event.
+      // Same epoch: re-send the ORIGINAL (preserve the rumor id). Optimistically
+      // clear the badge while it re-broadcasts — `broadcastWrap` re-asserts
+      // "failed" only if this attempt also finds no relay.
+      if (msg.epoch === channel.current.epoch) {
+        setStatus(id, undefined);
+        resend(msg);
+        return;
+      }
+      // The epoch rotated since the failure, retiring the binding the rumor id
+      // commits to — the one case a retry legitimately can't preserve the id, so
+      // re-send as a fresh rumor under the current epoch. A threaded reply
+      // (kind-1111 comment) carries its NIP-22 thread pointers in its own tags,
+      // so preserve them verbatim (minus the channel binding, which `send`
+      // re-adds) rather than rebuilding from a parent event.
       const isComment = msg.kind === KIND_COMMENT;
       // Also strip the failed attempt's `expiration` — the re-send computes a
       // fresh one from its own send time, and duplicating the tag would make
@@ -810,7 +925,7 @@ export function useMessageActions(community: Community | undefined, channel: Cha
         bypassRateLimit: true,
       }).catch(() => undefined);
     },
-    [user, community, channel, channelIdHex, queryClient, setStatus, send],
+    [user, community, channel, channelIdHex, queryClient, setStatus, send, resend],
   );
 
   const discard = useCallback(

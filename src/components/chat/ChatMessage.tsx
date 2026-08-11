@@ -42,7 +42,7 @@ import { useChatScope } from "@/hooks/useChatScope";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useIsTouch } from "@/hooks/useIsMobile";
 import { useMuteToggle } from "@/hooks/useMuteList";
-import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
+import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { getComposerCollisionPadding, useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
 import { getAvatarShape } from "@/lib/avatarShape";
@@ -148,7 +148,7 @@ export function ReplyPreview({ content, hideMediaPlaceholder = false, tags }: { 
  * line never flashes a broken image).
  */
 export function ReplyThumbnail({ image }: { image: EncryptedRef }) {
-  const resolved = useResolvedMediaSrc(image);
+  const { resolved, onError } = useMediaWithFallback(image);
   if (resolved.status !== "ready") return null;
   return (
     <img
@@ -156,6 +156,7 @@ export function ReplyThumbnail({ image }: { image: EncryptedRef }) {
       alt=""
       className="size-4 shrink-0 rounded-[3px] object-cover"
       loading="lazy"
+      onError={onError}
     />
   );
 }

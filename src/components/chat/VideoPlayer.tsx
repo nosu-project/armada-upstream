@@ -1,7 +1,9 @@
 import { Loader2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import { BlurhashCanvas } from "@/components/BlurhashCanvas";
+import { MediaFallback } from "@/components/chat/MediaFallback";
+import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import { isValidBlurhash } from "@/lib/blurhash";
 import { cn } from "@/lib/utils";
@@ -20,6 +22,11 @@ interface VideoPlayerProps {
   mime?: string;
   /** AES-GCM decryption params for client-encrypted (Concord/Vector) blobs. */
   encryption?: ImetaEncryption;
+  /**
+   * Present as a GIF: autoplay, loop, muted, no controls, transparent chrome.
+   * Set for Tenor/Giphy-style `.mp4` renditions that are really animated GIFs.
+   */
+  gif?: boolean;
   className?: string;
 }
 
@@ -29,9 +36,8 @@ interface VideoPlayerProps {
  * (Concord/Vector) attachments are AES-GCM ciphertext on Blossom, so the src
  * is fetched + decrypted to an object URL before it reaches the <video>.
  */
-export function VideoPlayer({ src, poster, dim, blurhash, mime, encryption, className }: VideoPlayerProps) {
-  const [failed, setFailed] = useState(false);
-  const resolved = useResolvedMediaSrc({ url: src, encryption, mime });
+export function VideoPlayer({ src, poster, dim, blurhash, mime, encryption, gif = false, className }: VideoPlayerProps) {
+  const { resolved, onError, failed, reset } = useMediaWithFallback({ url: src, encryption, mime });
 
   // An encrypted poster is ciphertext on Blossom, so it has to be fetched and
   // decrypted before the <video> can use it. NIP-17 encrypts a `thumb` with the
@@ -53,35 +59,35 @@ export function VideoPlayer({ src, poster, dim, blurhash, mime, encryption, clas
     return "16 / 9";
   }, [dim]);
 
-  if (failed || resolved.status === "error") {
-    return (
-      <a
-        href={src}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-primary hover:underline break-all"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {src}
-      </a>
-    );
+  if (failed) {
+    return <MediaFallback url={src} onRetry={reset} label={gif ? "GIF" : "Video"} />;
   }
 
   return (
     <div
-      className={cn("my-1.5 max-w-md rounded-xl overflow-hidden border border-border bg-black", className)}
+      className={cn(
+        "my-1.5 rounded-xl overflow-hidden",
+        // A GIF gets transparent, borderless chrome and image-like sizing; a
+        // video keeps its framed black letterbox.
+        gif ? "max-w-xs bg-transparent" : "max-w-md border border-border bg-black",
+        className,
+      )}
       style={{ aspectRatio }}
       onClick={(e) => e.stopPropagation()}
     >
       {resolved.status === "ready" ? (
         <video
           src={resolved.src}
-          poster={posterSrc}
-          controls
+          poster={gif ? undefined : posterSrc}
+          controls={!gif}
+          autoPlay={gif}
+          loop={gif}
+          muted={gif}
+          disablePictureInPicture={gif}
           preload="metadata"
           playsInline
           className="w-full h-full object-contain"
-          onError={() => setFailed(true)}
+          onError={onError}
         />
       ) : (
         <div className="relative w-full h-full flex items-center justify-center">

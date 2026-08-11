@@ -11,6 +11,7 @@ import { FileAttachment } from "@/components/chat/FileAttachment";
 import { InviteEmbed } from "@/components/chat/InviteEmbed";
 import { Lightbox } from "@/components/chat/Lightbox";
 import { LinkEmbed } from "@/components/chat/LinkEmbed";
+import { MediaFallback } from "@/components/chat/MediaFallback";
 import { CodeBlock, InlineCode } from "@/components/chat/Markdown";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { renderInlineMarkdown } from "@/components/chat/markdownRender";
@@ -32,12 +33,12 @@ import { isInviteUrl } from "@/concord/lib/invite";
 import { parseFileMessageTags, parseImetaMap } from "@/lib/imeta";
 import { KIND_DM_FILE } from "@/lib/nip17/protocol";
 import { splitInlineCode, splitMarkdownBlocks, splitMarkdownLinks } from "@/lib/markdown";
-import { AUDIO_EXTS, EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX, mimeFromExt } from "@/lib/mediaUrls";
+import { AUDIO_EXTS, EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX, isGifLikeUrl, mimeFromExt } from "@/lib/mediaUrls";
 import { relayToRouteParam } from "@/lib/platform";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 import { bolt11AmountSats, formatSats } from "@/lib/zaps";
-import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
+import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { useToast } from "@/hooks/useToast";
 import { useWallet } from "@/hooks/useWallet";
 
@@ -1051,6 +1052,9 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             blurhash={imeta?.blurhash}
             mime={mediaMime}
             encryption={encryption}
+            // A Tenor/Giphy-style .mp4 is really a GIF — present it looping and
+            // chromeless rather than as a video with controls.
+            gif={isGifLikeUrl(token.url)}
           />
         );
       }
@@ -1314,21 +1318,13 @@ function getImetaField(tags: string[][], url: string, field: string): string | u
 /** Inline image thumbnail that opens the shared lightbox on click. */
 function InlineImage({ image, onClick }: { image: ImageRef; onClick: (e: React.MouseEvent) => void }) {
   const [loaded, setLoaded] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const resolved = useResolvedMediaSrc(image);
+  const { resolved, onError, failed, reset } = useMediaWithFallback(image);
 
-  if (failed || resolved.status === "error") {
-    return (
-      <a
-        href={image.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-primary hover:underline break-all"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {image.url}
-      </a>
-    );
+  // Once every mirror is exhausted, degrade to a link + manual retry. Block-level
+  // (via MediaFallback) because the tokenizer stripped the surrounding newlines
+  // expecting a block — an inline fallback would glue onto adjacent text.
+  if (failed) {
+    return <MediaFallback url={image.url} onRetry={reset} label="Image" />;
   }
 
   const aspectRatio = parseDimAspectRatio(image.dim);
@@ -1360,7 +1356,7 @@ function InlineImage({ image, onClick }: { image: ImageRef; onClick: (e: React.M
             )}
             loading="lazy"
             onLoad={() => setLoaded(true)}
-            onError={() => setFailed(true)}
+            onError={onError}
           />
         )}
       </div>
@@ -1400,7 +1396,14 @@ function ImageGrid({ images, onOpen }: { images: ImageRef[]; onOpen: (index: num
 /** A single grid cell image, decrypting on display when encrypted. */
 function GridImage({ image }: { image: ImageRef }) {
   const [loaded, setLoaded] = useState(false);
-  const resolved = useResolvedMediaSrc(image);
+  const { resolved, onError, failed, reset } = useMediaWithFallback(image);
+
+  // Once every mirror is exhausted, fill the cell with a retry control rather
+  // than leaving a silently-blank tile (cross-server fallback runs before this).
+  if (failed) {
+    return <MediaFallback url={image.url} onRetry={reset} compact />;
+  }
+
   return (
     <>
       {!loaded && image.blurhash && (
@@ -1412,6 +1415,7 @@ function GridImage({ image }: { image: ImageRef }) {
           alt=""
           loading="lazy"
           onLoad={() => setLoaded(true)}
+          onError={onError}
           className="absolute inset-0 w-full h-full object-cover hover:opacity-90 transition-opacity"
         />
       )}

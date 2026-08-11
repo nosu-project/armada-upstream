@@ -55,6 +55,33 @@ export const IMETA_MEDIA_URL_TEST_REGEX = new RegExp(
   'i',
 );
 
+/**
+ * Hosts whose "video" files are really silent, looping GIF renditions. Other
+ * clients' GIF pickers (Tenor/Giphy) share the `.mp4`/`.webm` rendition rather
+ * than the `.gif`, so a plain `<video controls>` renders a GIF as a heavy,
+ * chrome-laden clip that doesn't autoplay. Matched against the URL host with a
+ * leading-dot boundary so only these domains and their subdomains qualify
+ * (`media.tenor.com`, `media1.giphy.com`), never a lookalike like `nottenor.com`.
+ */
+const GIF_VIDEO_HOST_REGEX = /(^|\.)(tenor\.com|giphy\.com)$/i;
+
+/**
+ * Whether a media URL should present as a GIF (autoplay, loop, muted, no
+ * controls) rather than a video. True for known GIF-CDN hosts and for the
+ * `.gif.mp4` / `.gif.webm` filename convention some pickers emit. A real `.gif`
+ * is already an `<img>`, so this only matters for the video render path.
+ */
+export function isGifLikeUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (GIF_VIDEO_HOST_REGEX.test(parsed.hostname)) return true;
+  return /\.gif\.(mp4|webm)$/i.test(parsed.pathname);
+}
+
 /** Infers a MIME type from a file extension string (lowercase). */
 export function mimeFromExt(ext: string): string {
   switch (ext) {

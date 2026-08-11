@@ -4,7 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { BlurhashCanvas } from "@/components/BlurhashCanvas";
+import { MediaFallback } from "@/components/chat/MediaFallback";
 import { useAndroidBack } from "@/hooks/useAndroidBack";
+import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import { toast } from "@/hooks/useToast";
 import { downloadUrl } from "@/lib/downloadFile";
@@ -503,7 +505,7 @@ function LightboxImage({
   onSwipeBlocked?: () => void;
   onZoomChange?: (zoomed: boolean) => void;
 }) {
-  const resolved = useResolvedMediaSrc(image);
+  const { resolved, onError, failed, reset } = useMediaWithFallback(image);
   const [loaded, setLoaded] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -720,8 +722,15 @@ function LightboxImage({
       onMouseLeave={handleMouseUp}
       style={{ cursor: scale.current > 1 ? "grab" : "default" }}
     >
+      {/* Every mirror failed: a centered placeholder + manual retry. */}
+      {failed && (
+        <div className="absolute inset-0 flex items-center justify-center p-4">
+          <MediaFallback url={image.url} onRetry={reset} label="Image" className="bg-muted" />
+        </div>
+      )}
+
       {/* Loading spinner / blurhash while the current image resolves. */}
-      {isActive && (resolved.status === "loading" || !loaded) && (
+      {isActive && !failed && (resolved.status === "loading" || !loaded) && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           {image.blurhash ? (
             <BlurhashCanvas
@@ -758,6 +767,7 @@ function LightboxImage({
               loaded ? "opacity-100" : "opacity-0",
             )}
             onLoad={() => setLoaded(true)}
+            onError={onError}
             onClick={(e) => e.stopPropagation()}
           />
         )}
