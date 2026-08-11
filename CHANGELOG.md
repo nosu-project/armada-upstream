@@ -4,6 +4,20 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.51.2] - 2026-08-11
+
+Reactions in a voice call now float up the full window so everyone in the call sees them. The post-login sync screen is restyled as a jack-in sequence, editing a community's picture reuses the same crop tool as creating one, and an empty channel now reads as still loading rather than claiming the relays are unreachable. Deleted private channels no longer reappear, and emoji autocomplete works right after a native emoji with no space before the colon.
+
+### Changed
+- Reactions sent during a voice call now float up the full window and are seen by everyone in the call
+- The post-login sync screen is restyled as a jack-in sequence
+- Editing a community's picture opens the same crop tool used when creating one
+- An empty channel now shows as a timeline still loading, with the background retry kept visible, rather than reporting the relays as unreachable
+
+### Fixed
+- Deleted private channels no longer reappear
+- Emoji autocomplete now triggers on a shortcode typed right after a native emoji or other text with no space before the colon
+
 ## [0.51.1] - 2026-08-10
 
 Media in chat now tries each of your Blossom servers before showing a placeholder, and a failed send clears once any relay accepts the retry. Inline images no longer shift the timeline as they load. The audit log adds a "View event JSON" option, and the Android notification background service handles malformed relay addresses without crashing.
