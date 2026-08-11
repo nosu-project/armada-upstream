@@ -53,8 +53,12 @@ public class MainActivity extends BridgeActivity {
     // with a hard cap so a frozen WebView can't pin it. (The transition
     // snapshot Android itself animates in is out of app control and may still
     // show the old frame for the system animation's duration.)
+    // The web layer signals once the deep-link navigation has actually
+    // COMMITTED and painted (with its own 2.5s fallback if it never commits),
+    // so this cap is a last resort for a frozen WebView, not the normal
+    // dismisser — generous beats lifting onto mid-navigation churn.
     private View deepLinkGate;
-    private static final long GATE_MAX_MS = 2500;
+    private static final long GATE_MAX_MS = 4000;
     private static final long GATE_POLL_MS = 16;
 
     @Override

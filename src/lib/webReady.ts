@@ -1,5 +1,8 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
+import { coldLaunchPending, onColdLaunchResolved } from "@/lib/coldLaunchDeepLink";
+import { coldSharePending, onColdShareResolved } from "@/lib/shareTarget";
+
 /**
  * Native bridge for telling the Android launch splash when the web layer has
  * actually painted, so it can lift at the right moment (see WebReadyPlugin.java
@@ -26,6 +29,31 @@ const WebReady = registerPlugin<WebReadyPlugin>("WebReady");
  */
 export function signalWebReady(): void {
   if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== "android") return;
+  // Hold the splash while the cold-launch intent (deep link or share) is
+  // still unresolved. Lifting now would paint whatever HomeRedirect shows
+  // while it waits — and if the guard loses the race, the DEFAULT route,
+  // which the deep link then replaces as a second visible navigation ("wrong
+  // view, then transitions"). HomeRedirect holds its redirect on these same
+  // facts, so once both settle the next paint is the tap's destination. The
+  // native 8s splash cap still bounds a resolution that never comes.
+  if (coldLaunchPending() || coldSharePending()) {
+    const offs: Array<() => void> = [];
+    let sent = false;
+    const check = () => {
+      if (sent || coldLaunchPending() || coldSharePending()) return;
+      sent = true;
+      for (const off of offs) off();
+      sendReady();
+    };
+    offs.push(onColdLaunchResolved(check));
+    offs.push(onColdShareResolved(check));
+    check();
+    return;
+  }
+  sendReady();
+}
+
+function sendReady(): void {
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       WebReady.signalReady().catch(() => {

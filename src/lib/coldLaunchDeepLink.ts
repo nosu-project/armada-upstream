@@ -1,6 +1,7 @@
 import { App as CapacitorApp } from "@capacitor/app";
 
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
+import { markDeepLinkNavigation } from "@/lib/deepLinkNav";
 import { pathFromDeepLinkUrl } from "@/lib/deepLinkUrl";
 import { takePendingPushOpen } from "@/lib/nativePush";
 
@@ -43,8 +44,14 @@ function settle(path: string | null): void {
 
 // Kick off the single launch-URL read at module load (before React mounts).
 if (isNativeRuntime()) {
-  // Guard so a hung bridge can't pin HomeRedirect forever.
-  const timeout = setTimeout(() => settle(null), 1500);
+  // Guard so a hung bridge can't pin HomeRedirect (or the native splash —
+  // signalWebReady holds it while this is pending) forever. Generous on
+  // purpose: on a slow cold start the bridge answers getLaunchUrl only after
+  // it finishes initializing, and a guard that fires first sends the user to
+  // the default route with the notification's room arriving as a SECOND
+  // visible navigation moments later. The native splash stays up while we
+  // wait (its own cap is 8s), so patience here costs nothing on screen.
+  const timeout = setTimeout(() => settle(null), 4000);
   // Two cold sources, read together. An iOS push tap is delivered to the
   // notification delegate rather than as a URL open, so it produces no launch
   // URL — but it is the same kind of fact, arrives at the same moment, and must
@@ -94,6 +101,9 @@ export function coldLaunchPending(): boolean {
 export function consumeColdLaunchDeepLink(): string | null {
   const p = deepLinkPath;
   deepLinkPath = null;
+  // The consumer (HomeRedirect) renders this as its first navigation — mark
+  // it so SwipeReveal lands on the destination without an entrance slide.
+  if (p) markDeepLinkNavigation();
   return p;
 }
 

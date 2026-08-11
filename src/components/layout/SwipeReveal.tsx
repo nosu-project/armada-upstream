@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useEdgeSwipe } from "@/hooks/useEdgeSwipe";
 import { useIsTouch } from "@/hooks/useIsMobile";
+import { isRecentDeepLinkNavigation } from "@/lib/deepLinkNav";
 import { cn } from "@/lib/utils";
 
 /** Settle/enter transition length (ms). Matches the `duration-200` classes. */
@@ -82,8 +83,11 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
   // (`animate-in`) runs on the compositor independently of React/main-thread
   // work, so the heavy chat tree mounting on the same frame doesn't stutter it
   // (the old rAF approach forced an extra render + reflow and lurched). Captured
-  // once on mount; never re-armed. Only when entering closed on a touch layout.
-  const [enterAnim] = useState(() => swipeEnabled && !open);
+  // once on mount; never re-armed. Only when entering closed on a touch layout —
+  // and not for a deep-link arrival (notification tap, App Link), which should
+  // LAND on its destination when the native crest gate/splash lifts, not play
+  // one more transition after it.
+  const [enterAnim] = useState(() => swipeEnabled && !open && !isRecentDeepLinkNavigation());
 
   // A gesture-driven reveal/close should animate to its resting position (the
   // Discord settle). An `open` change from *navigation* (switching
