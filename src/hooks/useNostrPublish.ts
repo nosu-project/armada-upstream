@@ -52,12 +52,13 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
       }
 
       const { prev, relay, onSigned, ...template } = t;
-      const tags = [...(template.tags ?? [])];
-
-      // NIP-89 client tag
-      if (!tags.some(([name]) => name === "client")) {
-        tags.push(["client", APP_NAME]);
-      }
+      // NIP-89 client tag: always stamp this build. Replaceable RMW (mute list,
+      // etc.) often copies prior public tags wholesale, including another app's
+      // `client` — "add if missing" would then misattribute the new version.
+      const tags = [
+        ...(template.tags ?? []).filter(([name]) => name !== "client"),
+        ["client", APP_NAME],
+      ];
 
       const created_at = template.created_at ?? Math.floor(Date.now() / 1000);
 

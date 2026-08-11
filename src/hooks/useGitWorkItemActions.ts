@@ -47,8 +47,12 @@ export function useGitWorkItemActions() {
     if (!user) throw new Error("Sign in to participate in repository discussions.");
     if (!relays.length) throw new Error("This repository has no reachable activity relays.");
 
-    const tags = [...template.tags];
-    if (!tags.some(([name]) => name === "client")) tags.push(["client", APP_NAME]);
+    // Same rule as useNostrPublish: this version is ours, not a carried-forward
+    // `client` from a prior event's tags.
+    const tags = [
+      ...template.tags.filter(([name]) => name !== "client"),
+      ["client", APP_NAME],
+    ];
     const event = await user.signer.signEvent({
       kind: template.kind,
       content: template.content,
