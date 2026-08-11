@@ -323,11 +323,15 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
           // token request bar appears as soon as the module lands.
           <Suspense fallback={null}>
             {/* `key` remounts the connection only when switching rooms (for
-                Concord: also on an epoch roll or a rendezvous migration). */}
+                Concord: also on an epoch roll or a refounding). Keyed on the
+                voice room pubkey, which is the SFU room name and the token's
+                grant identity — it changes on any epoch roll AND on a refounding
+                that reuses an epoch number, so the mint/remount stays in step
+                with the token the SFU will accept. */}
             <PersistentVoiceRoom
               key={
                 activeCall.concord
-                  ? `concord|${activeCall.concord.channel.idHex}|${activeCall.concord.channel.current.epoch}|${activeCall.concord.broker}`
+                  ? `concord|${activeCall.concord.channel.idHex}|${activeCall.concord.channel.voice.room.pk}|${activeCall.concord.broker}`
                   : `${activeCall.relayUrl}|${activeCall.groupId}`
               }
               call={activeCall}

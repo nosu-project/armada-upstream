@@ -418,7 +418,14 @@ export function useAvToken(
   fallbacks: readonly string[] = [],
 ) {
   return useQuery<AvToken>({
-    queryKey: ["concord", "av-token", channel?.idHex ?? null, channel?.current.epoch.toString(), broker],
+    // Key on the room pubkey, not the epoch: the room name is
+    // voiceGroupKey(secret, channelId, epoch), so its pk is the true grant
+    // identity the broker mints against. Keying on `current.epoch` would let a
+    // token minted for one room be served for a different room that happens to
+    // share (idHex, epoch) — e.g. a refounding that reuses an epoch number —
+    // which the SFU then rejects with "no permissions to access the room". This
+    // matches the rejoin test in callSync (`voice.room.pk !== snapshot.roomPk`).
+    queryKey: ["concord", "av-token", channel?.idHex ?? null, channel?.voice?.room.pk ?? null, broker],
     enabled: enabled && Boolean(channel?.voice && broker),
     queryFn: async () => fetchAvTokenFromAny([broker!, ...fallbacks], channel!.voice.room),
     staleTime: Infinity,
