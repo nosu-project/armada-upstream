@@ -780,11 +780,32 @@ function ConcordVoiceRoom({
   );
 
   // Build the E2EE-enabled Room once (the component remounts per room/epoch/broker).
-  const e2ee = useMemo(() => {
+  const e2ee = useMemo((): {
+    room: Room | null;
+    keyProvider: SenderKeyProvider;
+    worker: Worker | null;
+    error?: unknown;
+  } => {
     const keyProvider = new SenderKeyProvider();
-    const worker = new Worker(new URL("livekit-client/e2ee-worker", import.meta.url), {
-      type: "module",
-    });
+    // Constructing the E2EE worker can throw, and this runs during render, so an
+    // unguarded throw takes down the whole tree — surfacing as an opaque "hard
+    // join error" even though the SFU token minted fine and the participant may
+    // already be visible at the SFU (rendering to peers as an undecodable,
+    // Unverified ghost). Known triggers: a stale tab after a deploy whose hashed
+    // e2ee-worker chunk now 404s and is answered by the SPA fallback as HTML, a
+    // browser that rejects the module worker, or a CSP that blocks it. Concord
+    // media MUST be end-to-end encrypted (the broker/SFU are blind and
+    // untrusted), so falling back to a plaintext room is not an option — capture
+    // the failure and render a clean, leavable error below instead.
+    let worker: Worker;
+    try {
+      worker = new Worker(new URL("livekit-client/e2ee-worker", import.meta.url), {
+        type: "module",
+      });
+    } catch (err) {
+      console.error("Concord voice: E2EE worker failed to start", err);
+      return { room: null, keyProvider, worker: null, error: err };
+    }
     const micId = getPreferredMicId();
     const cameraId = getPreferredCameraId();
     const processing = getAudioProcessing();
@@ -826,6 +847,7 @@ function ConcordVoiceRoom({
     const mediaKey = channel.voice.mediaKey;
     if (!mediaKey) return;
     const room = e2ee.room;
+    if (!room) return;
 
     const syncKeys = () => {
       const identities = new Set<string>([tokenData.identity]);
@@ -839,7 +861,17 @@ function ConcordVoiceRoom({
         if (applied.current.get(identity) === want) continue;
         applied.current.set(identity, want);
         const material = verified ? voiceSenderKey(mediaKey, identity) : random32();
-        void e2ee.keyProvider.setSenderMaterial(material, identity).catch(() => undefined);
+        void e2ee.keyProvider
+          .setSenderMaterial(material, identity)
+          // A failed key install means this identity's frames won't decrypt —
+          // for our OWN identity that is exactly the "joined but Unverified to
+          // peers" symptom — so make it observable rather than a silent no-op.
+          .catch((err) =>
+            console.error("Concord voice: failed to install frame key", {
+              own: identity === tokenData.identity,
+              err,
+            }),
+          );
       }
     };
 
@@ -852,20 +884,25 @@ function ConcordVoiceRoom({
 
   // Enable E2EE once our own key is installed; terminate the worker on unmount.
   useEffect(() => {
-    if (!tokenData) return;
+    if (!tokenData || !e2ee.room) return;
+    const room = e2ee.room;
     let cancelled = false;
     void (async () => {
       try {
-        if (!cancelled) await e2ee.room.setE2EEEnabled(true);
+        if (!cancelled) await room.setE2EEEnabled(true);
       } catch (err) {
-        console.warn("failed to enable Concord voice E2EE", err);
+        // Media won't encrypt if this throws (e.g. the browser lacks the
+        // insertable-streams / RTCRtpScriptTransform path LiveKit needs), which
+        // leaves us undecodable to peers. Surface it loudly; the render guard
+        // below already refuses to join without a live E2EE worker.
+        console.error("Concord voice: failed to enable E2EE", err);
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [e2ee, tokenData]);
-  useEffect(() => () => e2ee.worker.terminate(), [e2ee]);
+  useEffect(() => () => e2ee.worker?.terminate(), [e2ee]);
 
   // Split healing (§5): if presence shows the call occupied on an origin that
   // beats ours in the tie-break, migrate there (once per mount — the remount
@@ -915,6 +952,17 @@ function ConcordVoiceRoom({
 
   if (isLoading) return <>{<LoadingBar placeBar={placeBar} label="Requesting voice access…" />}</>;
   if (error || !tokenData) return <>{<ErrorBar placeBar={placeBar} error={error} onLeave={onLeave} />}</>;
+  // E2EE couldn't come up (worker failed to construct above). Never join a
+  // Concord room without it — the SFU is blind and untrusted — so surface a
+  // clear, leavable error instead of connecting as an undecodable ghost.
+  const room = e2ee.room;
+  if (e2ee.error || !room) {
+    const e2eeError =
+      e2ee.error instanceof Error
+        ? e2ee.error
+        : new Error("Voice encryption couldn’t start in this browser. Reload to update, then rejoin.");
+    return <>{<ErrorBar placeBar={placeBar} error={e2eeError} onLeave={onLeave} />}</>;
+  }
 
   const label = (
     <span className="flex items-center gap-1 min-w-0">
@@ -930,7 +978,7 @@ function ConcordVoiceRoom({
           serverUrl={tokenData.url}
           token={tokenData.token}
           options={{}}
-          room={e2ee.room}
+          room={room}
           onDisconnected={handleDisconnected}
           placeBar={placeBar}
           placeStage={placeStage}
