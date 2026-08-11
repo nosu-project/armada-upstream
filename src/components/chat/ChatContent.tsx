@@ -1327,7 +1327,12 @@ function InlineImage({ image, onClick }: { image: ImageRef; onClick: (e: React.M
     return <MediaFallback url={image.url} onRetry={reset} label="Image" />;
   }
 
-  const aspectRatio = parseDimAspectRatio(image.dim);
+  // A known `dim` lets us reserve the EXACT box the loaded image will occupy —
+  // its aspect ratio fitted into the same max-w-sm × max-h-80 the <img>'s own
+  // classes would apply — as a persistent geometry that does not change on
+  // load, so the image never resizes as it renders. Without a `dim` we can
+  // only reserve a min box and let the image settle into its natural size.
+  const box = fitImageBox(image.dim);
 
   return (
     <button
@@ -1336,11 +1341,17 @@ function InlineImage({ image, onClick }: { image: ImageRef; onClick: (e: React.M
       onClick={onClick}
     >
       <div
-        className={cn("relative rounded-lg overflow-hidden", !loaded && !image.blurhash && "bg-muted")}
+        className={cn(
+          "relative rounded-lg overflow-hidden",
+          box && "w-full",
+          !loaded && !image.blurhash && "bg-muted",
+        )}
         style={
-          !loaded
-            ? { aspectRatio, minHeight: aspectRatio ? undefined : 120, minWidth: 160 }
-            : undefined
+          box
+            ? { aspectRatio: box.aspectRatio, maxWidth: box.maxWidth }
+            : !loaded
+              ? { minHeight: 120, minWidth: 160 }
+              : undefined
         }
       >
         {!loaded && image.blurhash && (
@@ -1351,8 +1362,11 @@ function InlineImage({ image, onClick }: { image: ImageRef; onClick: (e: React.M
             src={resolved.src}
             alt=""
             className={cn(
-              "block max-w-full max-h-80 h-auto rounded-lg hover:opacity-90 transition-opacity",
-              !loaded && aspectRatio && "absolute inset-0 w-full h-full object-cover",
+              "block rounded-lg hover:opacity-90 transition-opacity",
+              // With a reserved box the image fills it (the box already carries
+              // its aspect ratio, so object-cover cannot crop); without one it
+              // falls back to natural size under the same max-w/max-h caps.
+              box ? "w-full h-full object-cover" : "max-w-full max-h-80 h-auto",
             )}
             loading="lazy"
             onLoad={() => setLoaded(true)}
@@ -1423,12 +1437,25 @@ function GridImage({ image }: { image: ImageRef }) {
   );
 }
 
-/** Parses a NIP-94 `dim` string ("WxH") into a CSS `aspect-ratio` value. */
-function parseDimAspectRatio(dim: string | undefined): string | undefined {
+/**
+ * Fits a NIP-94 `dim` ("WxH") into the inline-image caps (max-w-sm × max-h-80)
+ * without upscaling, returning a persistent `aspect-ratio` plus the capped
+ * `maxWidth` in px. Reserving this exact box — rather than clamping the loaded
+ * <img> with its own `max-h-80`, which the placeholder never knew about — is
+ * what keeps a portrait image (whose full-width height would exceed the cap)
+ * from resizing on load: its width is pre-shrunk here so the box and the image
+ * agree. Returns undefined when `dim` is missing or malformed.
+ */
+function fitImageBox(
+  dim: string | undefined,
+): { aspectRatio: string; maxWidth: number } | undefined {
   if (!dim) return undefined;
   const [w, h] = dim.split("x").map(Number);
   if (!w || !h || Number.isNaN(w) || Number.isNaN(h)) return undefined;
-  return `${w} / ${h}`;
+  const MAX_W = 384; // max-w-sm
+  const MAX_H = 320; // max-h-80
+  const scale = Math.min(1, MAX_W / w, MAX_H / h);
+  return { aspectRatio: `${w} / ${h}`, maxWidth: Math.round(w * scale) };
 }
 
 /** Mention chip resolving the profile's display name. */
