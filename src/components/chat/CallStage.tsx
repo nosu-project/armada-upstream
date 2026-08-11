@@ -368,18 +368,6 @@ function reactionOffset(nonce: string): number {
   return (h % 141) - 70;
 }
 
-/**
- * Registry of every currently-mounted participant tile's root element, keyed
- * by pubkey, plus the box a `StageReactions` overlay measures itself against.
- * Populated by `VideoTile`/`AvatarTile` as they mount/unmount and read (not
- * continuously observed — a one-off `getBoundingClientRect` at the moment a
- * reaction arrives is enough) by `computeSpawnPoint` below. One CallStage
- * instance relayouts across theater/floating/docked (see its doc comment), so
- * a single registry — not one per render branch — stays correct across mode
- * switches; entries self-remove on unmount, e.g. floating mode only mounts
- * the one primary tile, so anyone else's reaction falls back to the box's
- * bottom-center.
- */
 /** A reaction's start point + travel distance within its stage box, both in px. */
 interface ReactionSpawn {
   x: number;
@@ -403,14 +391,28 @@ const REACTION_RISE_RATIO = 0.7;
 const REACTION_RISE_MIN = 160;
 const REACTION_RISE_MAX = 420;
 const REACTION_BOTTOM_MARGIN = 24;
+// Keep the rise clear of the box top and the floater's centre clear of the
+// side edges: a short docked pane would otherwise fade the emoji out clipped
+// at the top, and a wide sender pill jittered near a side would be sheared by
+// the overlay's `overflow-hidden`.
+const REACTION_TOP_MARGIN = 8;
+const REACTION_EDGE_MARGIN = 72;
 
-function computeSpawnPoint(container: HTMLElement | null): ReactionSpawn {
+function computeSpawnPoint(container: HTMLElement | null, nonce: string): ReactionSpawn {
   const box = container?.getBoundingClientRect();
   if (!box || box.width === 0 || box.height === 0) {
     return { x: 0, y: 0, rise: REACTION_RISE_MIN };
   }
-  const rise = Math.min(Math.max(box.height * REACTION_RISE_RATIO, REACTION_RISE_MIN), REACTION_RISE_MAX);
-  return { x: box.width / 2, y: box.height - REACTION_BOTTOM_MARGIN, rise };
+  const y = box.height - REACTION_BOTTOM_MARGIN;
+  // Fixed fraction of the box height, clamped to a sane range, then capped so
+  // the floater never rises past the top edge on a tiny pane.
+  let rise = Math.min(Math.max(box.height * REACTION_RISE_RATIO, REACTION_RISE_MIN), REACTION_RISE_MAX);
+  rise = Math.min(rise, Math.max(y - REACTION_TOP_MARGIN, 0));
+  // Jitter the horizontal origin off centre (so simultaneous reactions fan
+  // out) but hold it within a margin of the sides.
+  const margin = Math.min(REACTION_EDGE_MARGIN, box.width / 2);
+  const x = Math.min(Math.max(box.width / 2 + reactionOffset(nonce), margin), box.width - margin);
+  return { x, y, rise };
 }
 
 /**
@@ -433,7 +435,7 @@ const StageReactionFloater = memo(function StageReactionFloater({
     <div
       className="absolute flex items-center gap-1.5 animate-reaction-rise"
       style={{
-        left: spawn.x + reactionOffset(entry.nonce),
+        left: spawn.x,
         top: spawn.y,
         "--rise": `${spawn.rise}px`,
       } as CSSProperties}
@@ -448,7 +450,7 @@ const StageReactionFloater = memo(function StageReactionFloater({
             {displayName[0]?.toUpperCase()}
           </AvatarFallback>
         </Avatar>
-        <span className="truncate">
+        <span className="truncate min-w-0">
           <DisplayName pubkey={entry.author} name={displayName} />
         </span>
       </span>
@@ -467,34 +469,33 @@ const StageReactionFloater = memo(function StageReactionFloater({
  */
 function StageReactions({ containerRef }: { containerRef: React.RefObject<HTMLElement | null> }) {
   const { reactions } = useCallSignals();
-  const [spawns, setSpawns] = useState<Map<string, ReactionSpawn>>(new Map());
+  // Spawn point per reaction, computed the first time a nonce is seen and
+  // cached for its ~4s life. Held in a ref (not state) so a just-arrived
+  // reaction gets its spawn synchronously in THIS render — with state it
+  // rendered null for one frame (its pop-in keyframe skipped) until the effect
+  // committed the spawn. The cached object stays a stable prop, so the
+  // `StageReactionFloater` memo still holds.
+  const spawns = useRef(new Map<string, ReactionSpawn>());
 
+  // Drop spawns whose reaction has aged out, so the map can't grow unbounded
+  // over a long call.
   useEffect(() => {
-    setSpawns((prev) => {
-      let changed = false;
-      const next = new Map(prev);
-      for (const r of reactions) {
-        if (!next.has(r.nonce)) {
-          next.set(r.nonce, computeSpawnPoint(containerRef.current));
-          changed = true;
-        }
-      }
-      for (const nonce of next.keys()) {
-        if (!reactions.some((r) => r.nonce === nonce)) {
-          next.delete(nonce);
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [reactions, containerRef]);
+    const live = new Set(reactions.map((r) => r.nonce));
+    for (const nonce of spawns.current.keys()) {
+      if (!live.has(nonce)) spawns.current.delete(nonce);
+    }
+  }, [reactions]);
 
   if (reactions.length === 0) return null;
   return (
     <div className="pointer-events-none absolute inset-0 z-30 overflow-hidden" aria-hidden>
       {reactions.map((r) => {
-        const spawn = spawns.get(r.nonce);
-        return spawn ? <StageReactionFloater key={r.nonce} entry={r} spawn={spawn} /> : null;
+        let spawn = spawns.current.get(r.nonce);
+        if (!spawn) {
+          spawn = computeSpawnPoint(containerRef.current, r.nonce);
+          spawns.current.set(r.nonce, spawn);
+        }
+        return <StageReactionFloater key={r.nonce} entry={r} spawn={spawn} />;
       })}
     </div>
   );
