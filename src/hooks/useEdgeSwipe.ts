@@ -1,11 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { onAppStateChange } from "@/lib/appStateEvents";
+
 /** Min horizontal travel (px) before we claim the gesture from the scroller. */
 const CLAIM_THRESHOLD = 10;
 /** Fraction of the pane width past which a release commits. */
 const COMMIT_FRACTION = 0.25;
 /** Flick velocity (px/ms) that commits regardless of distance. */
 const COMMIT_VELOCITY = 0.3;
+/**
+ * Quiet time (no pointer traffic) after which an in-flight drag is declared
+ * abandoned and springs back. Long enough that a finger deliberately holding
+ * the pane mid-drag rarely hits it; short enough that a drag whose touch
+ * stream the WebView cut without ANY terminating event self-heals in seconds
+ * instead of pinning the pane until the app is killed.
+ */
+const STALL_RESET_MS = 3000;
+/** How often the stale-drag watchdog checks. */
+const STALL_POLL_MS = 500;
 
 export interface EdgeSwipeState {
   /**
@@ -245,12 +257,33 @@ export function useEdgeSwipe({
     window.addEventListener("pointerup", onEnd);
     document.addEventListener("visibilitychange", onHide);
     window.addEventListener("pagehide", onPageHide);
+    // The Android WebView also fails to deliver `visibilitychange`/`pagehide`
+    // across some background transitions (the reason App.tsx drives
+    // focusManager from Capacitor instead), so the reliable backgrounding
+    // signal is Capacitor's `appStateChange`, raised from the activity
+    // lifecycle rather than the renderer. Either flip abandons the drag: the
+    // touch stream it belonged to is gone.
+    const offAppState = onAppStateChange(() => reset());
     return () => {
       window.removeEventListener("pointercancel", onEnd);
       window.removeEventListener("pointerup", onEnd);
       document.removeEventListener("visibilitychange", onHide);
       window.removeEventListener("pagehide", onPageHide);
+      offAppState();
     };
+  }, [state.dragging, reset]);
+
+  // Stale-drag watchdog, the net under the nets: every path above still needs
+  // SOME event to be delivered, and the stuck-sliver reports show the WebView
+  // can cut a touch stream with none at all. A claimed drag that has produced
+  // no pointer traffic for STALL_RESET_MS cannot still be a live gesture, so
+  // it springs back on a timer that depends on nothing but the event loop.
+  useEffect(() => {
+    if (!state.dragging) return;
+    const id = window.setInterval(() => {
+      if (performance.now() - lastT.current > STALL_RESET_MS) reset();
+    }, STALL_POLL_MS);
+    return () => window.clearInterval(id);
   }, [state.dragging, reset]);
 
   return {
