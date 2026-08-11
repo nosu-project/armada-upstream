@@ -165,14 +165,19 @@ export default {
 				'0%, 44%, 100%': { transform: 'scale(1)', opacity: '0.35' },
 				'22%': { transform: 'scale(1.3)', opacity: '1' }
 			},
-			'reaction-float': {
-				// In-call emoji reaction (à la Zoom/Signal): pop in at the tile
-				// bottom, then drift up and fade over the reaction TTL. The
-				// -50% X keeps it centered on its jittered left offset.
+			'reaction-rise': {
+				// In-call emoji reaction (à la Jitsi/Zoom): pops in over the
+				// sender's tile and rises above the whole call stage, so
+				// everyone sees it — not just whoever's looking at that tile.
+				// `--rise` (px) is the SAME fixed distance for every reaction
+				// in a given stage box, so no one's reaction gets more or
+				// less screen time depending on where their tile sits. -50% X
+				// keeps it centered on its jittered horizontal offset.
 				'0%': { transform: 'translate(-50%, 0) scale(0.5)', opacity: '0' },
-				'12%': { transform: 'translate(-50%, -8px) scale(1.15)', opacity: '1' },
-				'30%': { transform: 'translate(-50%, -18px) scale(1)', opacity: '1' },
-				'100%': { transform: 'translate(-50%, -76px) scale(1)', opacity: '0' }
+				'10%': { transform: 'translate(-50%, calc(var(--rise, 300px) * -0.12)) scale(1.15)', opacity: '1' },
+				'25%': { transform: 'translate(-50%, calc(var(--rise, 300px) * -0.3)) scale(1)', opacity: '1' },
+				'85%': { transform: 'translate(-50%, calc(var(--rise, 300px) * -0.92)) scale(1)', opacity: '1' },
+				'100%': { transform: 'translate(-50%, calc(var(--rise, 300px) * -1)) scale(1)', opacity: '0' }
 			}
 			},
 			animation: {
@@ -189,7 +194,7 @@ export default {
 				'success-fade-up': 'success-fade-up 0.45s ease-out both',
 				'success-spark': 'success-spark 1.1s ease-out both',
 				'typing-dot': 'typing-dot 1.2s ease-in-out infinite',
-				'reaction-float': 'reaction-float 4s ease-out forwards'
+				'reaction-rise': 'reaction-rise 4s ease-out forwards'
 			}
 		}
 	},
