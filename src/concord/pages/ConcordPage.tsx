@@ -1570,12 +1570,31 @@ export function ConcordPage() {
   // user and new replies in threads they participate in get their own stamps
   // advanced too, so the Mentions/Threads tabs don't re-badge what was already
   // read here.
+  //
+  // The stamp is the MAX of the newest rendered row and the badge's own
+  // `latest` (useConcordUnread). Those two can disagree: the render fold drops
+  // rows the badge scan still counts — a moderator-authorized delete (deleter
+  // != author), a banned author, an expired (NIP-40) message — because the
+  // badge path has no roster (see useConcordUnread). When the NEWEST message in
+  // a channel is one of those, the newest rendered row is strictly older than
+  // the badge's `latest`, and since markRead is monotonic (>=), a stamp to the
+  // rendered row alone can never reach it — the channel stays unread forever, no
+  // matter how often it's opened. Clearing to the badge's own `latest` closes
+  // that whole class by construction: whatever made the badge fire, opening the
+  // channel consumes exactly it.
   const channelIdForRead = channel?.idHex;
   const readerPubkey = user?.pubkey;
+  // Read inside stamp() rather than as an effect dep, so a read-state recompute
+  // (every markRead, anywhere) doesn't re-register the visibilitychange listener.
+  const unreadByChannelRef = useRef(unreadByChannel);
+  unreadByChannelRef.current = unreadByChannel;
   useEffect(() => {
-    if (!readerPubkey || !channelIdForRead || mixedEntries.length === 0) return;
+    if (!readerPubkey || !channelIdForRead) return;
+    // Newest rendered row, if any. May be 0 when every message in the channel
+    // is one the render fold drops (all mod-deleted / banned / expired); the
+    // badge's own `latest` (read in stamp() below) still clears it in that case.
+    // markChannelRead no-ops on a <= 0 stamp, so an empty channel is harmless.
     const latest = mixedEntries[mixedEntries.length - 1]?.createdAt ?? 0;
-    if (latest <= 0) return;
 
     // The newest visible mention of the user (never self-authored — the tab
     // doesn't surface self-mentions), and the newest visible reply per
@@ -1599,7 +1618,8 @@ export function ConcordPage() {
 
     const stamp = () => {
       if (document.visibilityState !== "visible") return;
-      markChannelRead(channelIdForRead, latest);
+      const badgeLatest = unreadByChannelRef.current[channelIdForRead]?.latest ?? 0;
+      markChannelRead(channelIdForRead, Math.max(latest, badgeLatest));
       if (newestMention > 0) markMentionsRead(newestMention);
       for (const [root, ts] of replyStamps) markThreadRead(root, ts);
     };
