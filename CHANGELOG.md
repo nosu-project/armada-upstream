@@ -4,6 +4,19 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.51.1] - 2026-08-10
+
+Media in chat now tries each of your Blossom servers before showing a placeholder, and a failed send clears once any relay accepts the retry. Inline images no longer shift the timeline as they load. The audit log adds a "View event JSON" option, and the Android notification background service handles malformed relay addresses without crashing.
+
+### Added
+- Media that fails to load is tried on each of your other Blossom servers in turn before showing a placeholder card; Tenor and Giphy clips load as video
+- "View event JSON" is available on audit log rows, behind the same right-click or long-press as chat messages
+
+### Fixed
+- A failed chat message clears once a relay accepts the retry
+- Inline chat images reserve their space before loading so the timeline no longer shifts
+- The Android notification service skips blank or malformed relay entries rather than crashing the background worker
+
 ## [0.51.0] - 2026-08-10
 
 Push notifications come to iPhone and iPad, decrypted on your device — the sender, the text, and their picture — over the same content-blind gateway used elsewhere, with a tap opening the conversation. A new history tool verifies a community's messages and exports them as a self-contained web page, letting you pick channels and a time range. Creating a community is now a guided full-screen wizard, and community settings and moderation each open as a full-page tabbed pane. The downloads page adds Flatpak and copy-ready install commands for the command-line builds.
