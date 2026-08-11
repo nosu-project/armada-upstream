@@ -188,7 +188,17 @@ async function fetchFollowPack(
     [{ kinds: [coord.kind], authors: [coord.pubkey], "#d": [coord.identifier], limit: 1 }],
     { signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) },
   );
-  const pubkeys = followPackPubkeys(event);
+  let pubkeys = followPackPubkeys(event);
+  if (pubkeys.length === 0) {
+    // An empty read on a cold pool or a dropped REQ is a probable miss, not
+    // an empty pack — and an empty pack collapses the allow-list, blanking
+    // feeds that had already painted. Carry the last good membership forward
+    // (writeSeed's fail-open rule, same as fetchDiscoverDirectory's).
+    const seeded = await getArmadaDB()
+      .kv.get<string[]>(PACK_SEED_KV)
+      .catch(() => undefined);
+    if (seeded && seeded.length > 0) pubkeys = seeded;
+  }
   writeSeed(PACK_SEED_KV, pubkeys);
   return pubkeys;
 }
@@ -329,9 +339,21 @@ async function fetchDiscoverDirectory(
     if (!invite) continue;
     if (!byLinkSigner.has(invite.linkSigner)) byLinkSigner.set(invite.linkSigner, invite);
   }
+  let invites = [...byLinkSigner.values()];
+  if (anns.length === 0) {
+    // Same fail-open rule as the pack above: a round trip that returned NO
+    // announcements at all is a probable miss (cold pool, dropped REQ), not
+    // an emptied directory — returning it as truth would swap a painted grid
+    // for the empty state on the next background refresh. Carry the last
+    // good listing set forward; a real refresh overwrites it.
+    const seeded = await getArmadaDB()
+      .kv.get<DiscoverDirectory>(DIRECTORY_SEED_KV)
+      .catch(() => undefined);
+    if (seeded && seeded.invites.length > 0) invites = seeded.invites;
+  }
   const directory: DiscoverDirectory = {
     packAuthors,
-    invites: [...byLinkSigner.values()],
+    invites,
     overflow: anns.length >= FETCH_LIMIT,
   };
   if (directory.invites.length > 0 || directory.packAuthors.length > 0) {
@@ -611,23 +633,45 @@ export function useWarmDiscover(): void {
   }, [nostr, queryClient, relays, unrestricted, pubkey]);
 }
 
+/**
+ * A refetch that comes back with NOTHING where the same query previously had
+ * results is a probable relay miss (cold pool, dropped REQ), not a directory
+ * that emptied — an empty success would swap a painted grid for the empty
+ * state. Applies only to no-query reads: an empty SEARCH result is an answer.
+ */
+function keepLastGoodPage(
+  queryClient: ReturnType<typeof useQueryClient>,
+  queryKey: QueryKey,
+  q: string,
+): NostrRumor[] | undefined {
+  if (q) return undefined;
+  const prev = queryClient.getQueryData<NostrRumor[]>(queryKey);
+  return prev && prev.length > 0 ? prev : undefined;
+}
+
 /** NIP-30 emoji packs (kind 30030). */
 export function useDiscoverEmojiPacks(query: string) {
   const { nostr } = useNostr();
+  const queryClient = useQueryClient();
   const relays = useDiscoverRelays();
   const { authors, unrestricted, isLoading: authorsLoading } = useDiscoverAuthors();
   const debounced = useDebounce(query, 300);
 
   const authorFilter = unrestricted ? undefined : authors;
 
+  const queryKey: QueryKey = ["discover", "emoji-packs", relays, authorFilter ?? "all", debounced.trim()];
   const result = useQuery<NostrRumor[]>({
-    queryKey: ["discover", "emoji-packs", relays, authorFilter ?? "all", debounced.trim()],
+    queryKey,
     enabled: relays.length > 0 && !authorsLoading && (unrestricted || authors.length > 0),
     staleTime: 30_000,
     placeholderData: (prev) => prev,
     queryFn: async ({ signal }) => {
       const q = debounced.trim();
       const events = await fetchDiscover(nostr, relays, KIND_EMOJI_SET, q, authorFilter, signal);
+      if (events.length === 0) {
+        const kept = keepLastGoodPage(queryClient, queryKey, q);
+        if (kept) return kept;
+      }
       // Only packs that actually carry emojis are worth showing.
       const usable = events.filter((e) => emojiPackEntries(e).length > 0);
       if (!q) return usable;
@@ -648,20 +692,26 @@ export function useDiscoverEmojiPacks(query: string) {
 /** Shareable theme definitions (Ditto kind 36767). */
 export function useDiscoverThemes(query: string) {
   const { nostr } = useNostr();
+  const queryClient = useQueryClient();
   const relays = useDiscoverRelays();
   const { authors, unrestricted, isLoading: authorsLoading } = useDiscoverAuthors();
   const debounced = useDebounce(query, 300);
 
   const authorFilter = unrestricted ? undefined : authors;
 
+  const queryKey: QueryKey = ["discover", "themes", relays, authorFilter ?? "all", debounced.trim()];
   const result = useQuery<NostrRumor[]>({
-    queryKey: ["discover", "themes", relays, authorFilter ?? "all", debounced.trim()],
+    queryKey,
     enabled: relays.length > 0 && !authorsLoading && (unrestricted || authors.length > 0),
     staleTime: 30_000,
     placeholderData: (prev) => prev,
     queryFn: async ({ signal }) => {
       const q = debounced.trim();
       const events = await fetchDiscover(nostr, relays, THEME_DEFINITION_KIND, q, authorFilter, signal);
+      if (events.length === 0) {
+        const kept = keepLastGoodPage(queryClient, queryKey, q);
+        if (kept) return kept;
+      }
       // Drop anything we can't render as a 3-color theme.
       const usable = events.filter((e) => parseDittoTheme(e) !== null);
       if (!q) return usable;
