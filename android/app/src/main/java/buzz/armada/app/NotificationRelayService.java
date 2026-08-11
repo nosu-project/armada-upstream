@@ -965,6 +965,14 @@ public class NotificationRelayService extends Service {
         // Rebuild all connections with the current filters.
         closeAllConnections();
         for (String url : allRelays) {
+            // A malformed config entry (blank, "null", schemeless) must never
+            // reach okhttp: url() throws and an uncaught throw here kills the
+            // service process, which the persisted config then reproduces on
+            // every restart.
+            if (!isValidRelayUrl(url)) {
+                Log.w(TAG, "Skipping invalid relay url in config");
+                continue;
+            }
             RelayConnection rc = new RelayConnection(url);
             connections.add(rc);
             rc.connect();
@@ -1032,7 +1040,7 @@ public class NotificationRelayService extends Service {
                     if (sub == null) continue;
                     String relay = sub.optString("relay", "");
                     String id = sub.optString("id", "");
-                    if (relay.isEmpty() || id.isEmpty()) continue;
+                    if (!isValidRelayUrl(relay) || id.isEmpty()) continue;
                     Set<String> set = relayToGroupIds.get(relay);
                     if (set == null) {
                         set = new LinkedHashSet<>();
@@ -1128,7 +1136,7 @@ public class NotificationRelayService extends Service {
                 }
                 for (int j = 0; j < relays.length(); j++) {
                     String relay = relays.optString(j);
-                    if (relay == null || relay.isEmpty()) continue;
+                    if (!isValidRelayUrl(relay)) continue;
                     Set<String> set = relayToPks2.get(relay);
                     if (set == null) {
                         set = new LinkedHashSet<>();
@@ -1180,7 +1188,7 @@ public class NotificationRelayService extends Service {
                     // The client resolves which relay is the discovery index and
                     // drops it before writing gitSubs, so these are activity
                     // relays only; the service holds no host of its own.
-                    if (relay.isEmpty()) continue;
+                    if (!isValidRelayUrl(relay)) continue;
                     Set<String> addresses = gitRepositoriesByRelay.get(relay);
                     if (addresses == null) gitRepositoriesByRelay.put(relay, addresses = new LinkedHashSet<>());
                     addresses.add(address);
@@ -1283,7 +1291,17 @@ public class NotificationRelayService extends Service {
             // first — leaked sockets keep pinging and re-failing forever.
             if (closed || ws != null || !isNetworkAvailable()) return;
             connectAttemptAt = System.currentTimeMillis();
-            Request request = new Request.Builder().url(relayUrl).build();
+            final Request request;
+            try {
+                // Belt-and-braces: allRelays is pre-filtered by isValidRelayUrl,
+                // but a bad relayUrl must drop THIS connection, never crash the
+                // whole service process (see isValidRelayUrl).
+                request = new Request.Builder().url(relayUrl).build();
+            } catch (IllegalArgumentException e) {
+                Log.w(TAG, "Invalid relay url, dropping connection: " + e.getMessage());
+                closed = true;
+                return;
+            }
             ws = httpClient.newWebSocket(request, new WebSocketListener() {
                 @Override
                 public void onOpen(WebSocket webSocket, Response response) {
@@ -4304,6 +4322,10 @@ public class NotificationRelayService extends Service {
     private void publishOneShot(String url, JSONObject event, PublishCallback cb) {
         final String eventId = event.optString("id", "");
         final boolean[] done = { false };
+        if (!isValidRelayUrl(url)) {
+            cb.done(false);
+            return;
+        }
         try {
             Request req = new Request.Builder().url(url).build();
             final WebSocket ws = httpClient.newWebSocket(req, new WebSocketListener() {
@@ -4413,7 +4435,17 @@ public class NotificationRelayService extends Service {
                 });
                 return;
             }
-            Request request = new Request.Builder().url(ref.imageUrl).build();
+            final Request request;
+            try {
+                request = new Request.Builder().url(ref.imageUrl).build();
+            } catch (Exception e) {
+                if (BuildConfig.DEBUG) Log.d(TAG, "community icon url invalid: " + e.getMessage());
+                handler.post(() -> {
+                    groupImageInFlight.remove(cacheKey);
+                    cb.onBitmap(null);
+                });
+                return;
+            }
             avatarClient.newCall(request).enqueue(new Callback() {
                 @Override
                 public void onFailure(Call call, IOException e) {
@@ -4611,7 +4643,14 @@ public class NotificationRelayService extends Service {
                 });
                 return;
             }
-            Request request = new Request.Builder().url(url).build();
+            final Request request;
+            try {
+                request = new Request.Builder().url(url).build();
+            } catch (Exception e) {
+                if (BuildConfig.DEBUG) Log.d(TAG, "avatar url invalid: " + e.getMessage());
+                handler.post(() -> cb.onBitmap(null));
+                return;
+            }
             avatarClient.newCall(request).enqueue(new Callback() {
                 @Override
                 public void onFailure(Call call, IOException e) {
@@ -4851,6 +4890,28 @@ public class NotificationRelayService extends Service {
             for (int i = 0; i < arr.length(); i++) out.add(arr.getString(i));
         } catch (JSONException ignored) {}
         return out;
+    }
+
+    /**
+     * Whether a configured relay URL is safe to dial: a non-blank
+     * {@code ws://}/{@code wss://} URL with something after the scheme. Guards
+     * the connect path against a blank, {@code "null"} (org.json spells a JSON
+     * null as the four-char string "null" through {@code optString}, not Java
+     * null) or otherwise schemeless entry a malformed config can carry —
+     * okhttp's {@code Request.Builder.url()} throws
+     * {@link IllegalArgumentException} on such a value, which on a service
+     * worker thread is an uncaught crash of the whole process, re-triggered on
+     * every restart from the same persisted config. Relay-URL normalization
+     * proper stays JS-side; this is only a floor.
+     */
+    private static boolean isValidRelayUrl(String url) {
+        if (url == null) return false;
+        String u = url.trim();
+        int scheme;
+        if (u.regionMatches(true, 0, "wss://", 0, 6)) scheme = 6;
+        else if (u.regionMatches(true, 0, "ws://", 0, 5)) scheme = 5;
+        else return false;
+        return u.length() > scheme;
     }
 
     private static Set<String> pTags(JSONObject event) {

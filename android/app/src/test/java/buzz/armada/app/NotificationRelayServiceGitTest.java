@@ -34,6 +34,25 @@ public class NotificationRelayServiceGitTest {
         assertFalse(call("validHex", "b".repeat(63)));
     }
 
+    @Test public void acceptsOnlyWebSocketRelayUrls() throws Exception {
+        assertTrue(call("isValidRelayUrl", "wss://relay.example"));
+        assertTrue(call("isValidRelayUrl", "ws://relay.example"));
+        assertTrue(call("isValidRelayUrl", "WSS://Relay.Example")); // scheme is case-insensitive
+        assertTrue(call("isValidRelayUrl", "  wss://relay.example  ")); // trimmed
+    }
+
+    @Test public void rejectsBlankNullAndSchemelessRelayUrls() throws Exception {
+        // The crash source: org.json spells a JSON null as the four-char string
+        // "null" through optString, which is not empty and has no scheme.
+        assertFalse(call("isValidRelayUrl", "null"));
+        assertFalse(call("isValidRelayUrl", null));
+        assertFalse(call("isValidRelayUrl", ""));
+        assertFalse(call("isValidRelayUrl", "   "));
+        assertFalse(call("isValidRelayUrl", "relay.example"));
+        assertFalse(call("isValidRelayUrl", "https://relay.example"));
+        assertFalse(call("isValidRelayUrl", "wss://")); // scheme only, no host
+    }
+
     private static String rootTag(String tagsJson, String name) throws Exception {
         Method method = NotificationRelayService.class.getDeclaredMethod("rootTag", JSONObject.class, String.class);
         method.setAccessible(true);
