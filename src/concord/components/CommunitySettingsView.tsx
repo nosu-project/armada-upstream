@@ -50,6 +50,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ImageCropDialog } from "@/components/ImageCropDialog";
 import { ImageLightbox } from "@/concord/components/ImageLightbox";
 import {
   COMMUNITY_TIMER_PRESETS,
@@ -144,22 +145,56 @@ export function CommunitySettingsView({
 
   const [editingField, setEditingField] = useState<"name" | "description" | null>(null);
 
-  const bannerInputRef = useRef<HTMLInputElement>(null);
-  const iconInputRef = useRef<HTMLInputElement>(null);
+  // Same crop path as CreateCommunityWizard: pick → ImageCropDialog → encrypt.
+  const pickInputRef = useRef<HTMLInputElement>(null);
+  const pendingField = useRef<"icon" | "banner">("icon");
+  const [cropState, setCropState] = useState<{
+    imageSrc: string;
+    aspect: number;
+    field: "icon" | "banner";
+    title: string;
+  } | null>(null);
 
-  const handleUpload = async (which: "icon" | "banner", file: File) => {
+  const handlePickImage = (field: "icon" | "banner") => {
+    pendingField.current = field;
+    pickInputRef.current?.click();
+  };
+
+  const handleFileChosen = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    const field = pendingField.current;
+    setCropState({
+      imageSrc: URL.createObjectURL(file),
+      aspect: field === "icon" ? 1 : 3,
+      field,
+      title: field === "icon" ? "Crop icon" : "Crop banner",
+    });
+  };
+
+  const handleCropCancel = () => {
+    if (cropState) URL.revokeObjectURL(cropState.imageSrc);
+    setCropState(null);
+  };
+
+  const handleCropConfirm = async (blob: Blob) => {
+    if (!cropState) return;
+    const { field, imageSrc } = cropState;
+    URL.revokeObjectURL(imageSrc);
+    setCropState(null);
     setError(null);
-    setUploading(which);
+    setUploading(field);
     try {
-      const { ciphertext, key, nonce, hash } = await encryptImageBlob(file);
+      const { ciphertext, key, nonce, hash } = await encryptImageBlob(blob);
       const tags = await uploadFile(
-        new File([ciphertext], `${which}.enc`, { type: "application/octet-stream" }),
+        new File([ciphertext], `${field}.enc`, { type: "application/octet-stream" }),
       );
       const url = tags[0]?.[1];
       if (!url) throw new Error("Upload returned no URL.");
       const image: ImagePointer = { url, key, nonce, hash };
-      await updateMetadata(which === "icon" ? { icon: image } : { banner: image });
-      toast({ title: which === "icon" ? "Icon updated" : "Banner updated" });
+      await updateMetadata(field === "icon" ? { icon: image } : { banner: image });
+      toast({ title: field === "icon" ? "Icon updated" : "Banner updated" });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Upload failed.");
     } finally {
@@ -203,7 +238,7 @@ export function CommunitySettingsView({
                 <button
                   type="button"
                   className="flex h-32 w-full items-center justify-center rounded-lg bg-secondary/40 text-muted-foreground transition-colors hover:bg-secondary/60"
-                  onClick={() => bannerInputRef.current?.click()}
+                  onClick={() => handlePickImage("banner")}
                   aria-label="Add banner"
                 >
                   <ImagePlus className="size-5" />
@@ -213,7 +248,7 @@ export function CommunitySettingsView({
                 <button
                   type="button"
                   className="absolute bottom-2 right-2 grid size-8 place-items-center rounded-full bg-background/70 text-foreground backdrop-blur transition-colors hover:bg-background/90"
-                  onClick={() => bannerInputRef.current?.click()}
+                  onClick={() => handlePickImage("banner")}
                   disabled={uploading === "banner"}
                   aria-label="Change banner"
                 >
@@ -243,7 +278,7 @@ export function CommunitySettingsView({
                   <button
                     type="button"
                     className="grid size-16 place-items-center rounded-2xl bg-secondary/50 text-muted-foreground transition-colors hover:bg-secondary/70"
-                    onClick={() => iconInputRef.current?.click()}
+                    onClick={() => handlePickImage("icon")}
                     aria-label="Add icon"
                   >
                     <ImagePlus className="size-5" />
@@ -257,7 +292,7 @@ export function CommunitySettingsView({
                   <button
                     type="button"
                     className="absolute -bottom-1 -right-1 grid size-6 place-items-center rounded-full bg-background text-foreground ring-1 ring-border transition-colors hover:bg-secondary"
-                    onClick={() => iconInputRef.current?.click()}
+                    onClick={() => handlePickImage("icon")}
                     disabled={uploading === "icon"}
                     aria-label="Change icon"
                   >
@@ -361,27 +396,22 @@ export function CommunitySettingsView({
           </div>
 
           <input
-            ref={bannerInputRef}
+            ref={pickInputRef}
             type="file"
             accept="image/*"
             className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) handleUpload("banner", f);
-              e.target.value = "";
-            }}
+            onChange={handleFileChosen}
           />
-          <input
-            ref={iconInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) handleUpload("icon", f);
-              e.target.value = "";
-            }}
-          />
+          {cropState && (
+            <ImageCropDialog
+              open
+              imageSrc={cropState.imageSrc}
+              aspect={cropState.aspect}
+              title={cropState.title}
+              onCancel={handleCropCancel}
+              onCrop={handleCropConfirm}
+            />
+          )}
         </div>
       )}
 
