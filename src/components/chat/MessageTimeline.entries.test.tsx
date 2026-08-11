@@ -90,6 +90,26 @@ describe("MessageTimeline with generalized entries", () => {
     expect(screen.getByText("nothing here")).toBeInTheDocument();
   });
 
+  it("does not diagnose a relay outage when an empty history check will retry", () => {
+    render(
+      <MessageTimeline
+        transport={transportOf([])}
+        entries={[]}
+        renderMessage={() => null}
+        renderEntry={() => null}
+        emptyState={<span>nothing here</span>}
+        syncing
+        syncFailed
+      />,
+    );
+
+    expect(
+      screen.getByText("No messages loaded yet. We’ll keep checking the relays for history in the background…"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/can(?:'|’)t reach the relays/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("Catching up…")).not.toBeInTheDocument();
+  });
+
   it("queues a message jump while the opening window is still mounting", async () => {
     const messages = Array.from({ length: 40 }, (_, i) => message(`m${i}`, 1000 + i));
     const handle = createRef<MessageTimelineHandle>();

@@ -1,4 +1,4 @@
-import { ChevronDown, CloudOff, KeyRound, Loader2, MessagesSquare, Pause } from "lucide-react";
+import { ChevronDown, KeyRound, Loader2, MessagesSquare, Pause } from "lucide-react";
 import { memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -343,9 +343,10 @@ interface MessageTimelineProps {
   syncing?: boolean;
   /**
    * True when the conversation's catch-up keeps FAILING (its sync topic is in
-   * error/backoff). An empty timeline then says the relays are unreachable
-   * instead of alternating between "Catching up…" and an empty-state verdict
-   * every retry — the retries continue in the background either way.
+   * error/backoff). An all-empty relay read is deliberately inconclusive and
+   * takes this same retry path, so an empty timeline says only that no messages
+   * have loaded yet instead of claiming the relays are unreachable. The
+   * retries continue in the background either way.
    */
   syncFailed?: boolean;
   className?: string;
@@ -1015,11 +1016,13 @@ export function MessageTimeline({
               claims history is about to appear from disk. A catch-up stuck in
               its retry loop takes precedence over the spinner: the scheduler
               alternates error/pending on every backoff, and flip-flopping
-              copy would read as progress that isn't happening. */}
+              copy would read as progress that isn't happening. An all-empty
+              relay read deliberately follows this path too, so don't diagnose
+              a connection failure here. */}
           {syncFailed ? (
             <p className="flex items-center justify-center gap-2 px-2 py-8 text-center text-sm text-muted-foreground">
-              <CloudOff className="size-4 shrink-0" aria-hidden />
-              Can't reach the relays for this conversation. Retrying in the background…
+              <MessagesSquare className="size-4 shrink-0" aria-hidden />
+              No messages loaded yet. We’ll keep checking the relays for history in the background…
             </p>
           ) : syncing ? (
             <p className="flex items-center justify-center gap-2 px-2 py-8 text-sm text-muted-foreground">
