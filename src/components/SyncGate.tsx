@@ -1,7 +1,8 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { BrandMark } from "@/components/brand/BrandMark";
+import { SignalStatic } from "@/components/brand/SignalStatic";
 import { TerminalProgress } from "@/components/brand/TerminalProgress";
 import { markBootPainted } from "@/lib/bootGate";
 import { useFreshLogin } from "@/hooks/useFreshLogin";
@@ -20,6 +21,14 @@ import { useInitialSync } from "@/hooks/useInitialSync";
  * terminal-style progress list (one line per sync step) until
  * {@link useInitialSync} reports `done`. The sync is timeout-bounded, so a slow
  * or dead relay can never trap the user.
+ *
+ * The overlay reads as jacking in: the wordmark's tagline slot carries a
+ * "jacking in" prompt (flipping to "jacked in" as the gate lifts), under
+ * {@link SignalStatic} — dead-channel interference whose strength is bound to
+ * the real sync, dropping a step each time a phase resolves and cutting out
+ * when the link is up. The static skips rendering under
+ * prefers-reduced-motion; the caret is covered by
+ * {@link ArmadaCrestKeyframes}' rule.
  *
  * Mounted alongside NostrSync in App. Renders nothing when there's no fresh
  * login in flight.
@@ -61,6 +70,17 @@ export function useSyncGateActive(): boolean {
 
 function SyncOverlay({ pubkey, onDone }: { pubkey: string; onDone: () => void }) {
   const { log, done } = useInitialSync(pubkey);
+  const [leaving, setLeaving] = useState(false);
+
+  // Interference level for the static: buried at first contact, stepping down
+  // with every phase of the real sync that resolves, gone once the link is up.
+  const resolvedCount = log.filter((line) => line.status !== undefined).length;
+  const staticLevel = done ? 0 : Math.max(0.1, 0.5 * 0.72 ** resolvedCount);
+
+  // Fingerprint of live wire activity — changes on every log mutation (a
+  // phase resolving, a warmup x/y tick), each of which is a real relay
+  // round-trip. SignalStatic ripples on each change.
+  const wireSignal = log.map((line) => `${line.id}:${line.status ?? ""}`).join("|");
 
   useEffect(() => {
     setGateActive(true);
@@ -71,28 +91,69 @@ function SyncOverlay({ pubkey, onDone }: { pubkey: string; onDone: () => void })
   }, []);
 
   // When the sync finishes, hold a brief beat so the final line lands, then
-  // clear the fresh-login flag so the overlay unmounts and the (now-primed)
-  // app shows through.
+  // fade the whole overlay out before unmounting — the app underneath (often
+  // the DMs page with its decrypt prompt) should be arrived at, not cut to.
+  // Pointer events drop the moment the fade starts.
   useEffect(() => {
     if (!done) return;
-    const t = setTimeout(onDone, 500);
-    return () => clearTimeout(t);
+    const beat = setTimeout(() => setLeaving(true), 400);
+    const unmount = setTimeout(onDone, 1000);
+    return () => {
+      clearTimeout(beat);
+      clearTimeout(unmount);
+    };
   }, [done, onDone]);
+
+  // The fade IS the app becoming interactive, so the gate must read as down
+  // the moment it starts — the deferred post-login steps (the DMs decrypt
+  // prompt among them) queue behind useSyncGateActive and would otherwise
+  // wait out the unmount timer too.
+  useEffect(() => {
+    if (leaving) setGateActive(false);
+  }, [leaving]);
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex flex-col items-center justify-center gap-10 bg-background px-6"
+      className={`fixed inset-0 z-[100] flex flex-col items-center justify-center gap-10 overflow-hidden bg-background px-6 transition-opacity duration-500 ${
+        leaving ? "pointer-events-none opacity-0" : "opacity-100"
+      }`}
       role="status"
       aria-live="polite"
     >
       <div className="flex flex-col items-center gap-6">
         <ArmadaCrest size={96} />
-        <BrandMark />
+        <BrandMark
+          tagline={done ? "jacked in" : (
+            // A CSS typewriter: width in ch stepped one glyph at a time (the
+            // font is mono, so 1ch = 1 glyph), on a slow type/hold/erase loop.
+            // BrandMark's caret sits right after this span, so it rides the
+            // typed edge. Under reduced motion the animation is killed and the
+            // span falls back to its natural (full) width.
+            <span className="inline-block overflow-hidden whitespace-nowrap align-bottom animate-[armada-type_7s_steps(10,end)_infinite]">
+              jacking in
+            </span>
+          )}
+        />
       </div>
 
-      <TerminalProgress lines={log} />
+      <div className="w-full max-w-sm">
+        <TerminalProgress lines={log} />
+      </div>
+
+      {/* Over the content, visor-fashion: the interference is between the
+          operator and the feed, not scenery behind it. */}
+      <SignalStatic level={staticLevel} seed={pubkey} signal={wireSignal} />
 
       <ArmadaCrestKeyframes />
+      {/* Gate-only keyframes ("jacking in" is 10ch). Type over ~2s, hold,
+          erase quickly, breathe, retype. */}
+      <style>{`
+        @keyframes armada-type {
+          0% { width: 0ch; }
+          30%, 82% { width: 10ch; }
+          94%, 100% { width: 0ch; }
+        }
+      `}</style>
     </div>
   );
 }
