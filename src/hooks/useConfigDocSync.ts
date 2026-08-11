@@ -70,6 +70,14 @@ export function useConfigDocSync(name: ConfigDocName): void {
 
   // The version we've most recently folded into local config.
   const appliedId = useRef<string | undefined>(undefined);
+  // Its created_at, so the apply effect can refuse a version OLDER than one it
+  // already applied. The store never regresses, but the query cache between
+  // the store and this hook can: a refetch that read the store before a write
+  // landed can resolve after it and put the previous version back in the
+  // cache. Applying that would revert the user's newest edit — and set
+  // `lastPublished` to the old layout, so the publish watcher would never
+  // re-publish the lost one.
+  const appliedCreatedAt = useRef<number | undefined>(undefined);
   // Serialized slice last known to match the remote document, so the publish
   // watcher can skip no-op writes (including the config change caused by
   // applying an incoming pull).
@@ -79,6 +87,15 @@ export function useConfigDocSync(name: ConfigDocName): void {
   // it — so clearing the timeout must also clear the ref, or a cancelled
   // publish would look like a permanently in-flight one.
   const publishTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Publishes past their debounce but not yet settled. The timer ref alone
+  // left a hole: it was cleared at fire time, while the write itself — a store
+  // read plus two signer round-trips, seconds on a NIP-46 signer — was still
+  // in flight, and during that window the apply effect would happily fold a
+  // stale cache version over the edit being written. Counted, not boolean:
+  // never reset, because every increment has exactly one decrement in
+  // `finally`, and zeroing it on account switch would unbalance a write that
+  // settles after the switch.
+  const publishesInFlight = useRef(0);
   const cancelPublish = useCallback(() => {
     if (publishTimer.current) clearTimeout(publishTimer.current);
     publishTimer.current = null;
@@ -86,6 +103,7 @@ export function useConfigDocSync(name: ConfigDocName): void {
 
   useEffect(() => {
     appliedId.current = undefined;
+    appliedCreatedAt.current = undefined;
     lastPublished.current = undefined;
     // A debounced publish belongs to the account that made the edit; letting
     // one fire after a switch would write that config into the new account's
@@ -116,14 +134,23 @@ export function useConfigDocSync(name: ConfigDocName): void {
     if (!user?.pubkey || !resolved) return;
     if (appliedId.current === resolved.event.id) return;
 
-    // …with one exception: a local edit inside its publish debounce is newer
-    // than anything on disk and isn't on disk yet. Applying over it would
-    // revert what the user just did, and the publish watcher would then see no
-    // diff and never publish it. The publish itself supersedes this version,
-    // so skipping is not a deferral — there is nothing left to apply.
-    if (publishTimer.current) return;
+    // …with one exception: a local edit inside its publish debounce, or whose
+    // publish is still being written, is newer than anything on disk and isn't
+    // on disk yet. Applying over it would revert what the user just did, and
+    // the publish watcher would then see no diff and never publish it. The
+    // publish itself supersedes this version, so skipping is not a deferral —
+    // there is nothing left to apply, and the publish landing re-renders this
+    // hook with its own (newer) event anyway.
+    if (publishTimer.current || publishesInFlight.current > 0) return;
+
+    // Never fold a version older than one already applied. Only a cache
+    // regression can present one (see `appliedCreatedAt`); the newest version
+    // is already in config.
+    if (appliedCreatedAt.current !== undefined
+      && resolved.event.created_at < appliedCreatedAt.current) return;
 
     appliedId.current = resolved.event.id;
+    appliedCreatedAt.current = resolved.event.created_at;
     const patch = docToConfigPatch(name, resolved.doc as Record<string, unknown>);
 
     updateConfig((current: AppConfig) => {
@@ -160,9 +187,12 @@ export function useConfigDocSync(name: ConfigDocName): void {
     publishTimer.current = setTimeout(() => {
       publishTimer.current = null;
       lastPublished.current = snapshot;
-      update(configSnapshot(config, name)).catch((err) =>
-        console.warn(`Config sync failed for ${name}:`, err),
-      );
+      publishesInFlight.current += 1;
+      update(configSnapshot(config, name))
+        .catch((err) => console.warn(`Config sync failed for ${name}:`, err))
+        .finally(() => {
+          publishesInFlight.current -= 1;
+        });
     }, PUBLISH_DEBOUNCE_MS);
 
     return cancelPublish;

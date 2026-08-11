@@ -85,6 +85,20 @@ A fork that changes `VITE_APP_ID` must also change
    addressable supersession, so "the document on disk" is by construction the
    newest one this device has seen from any source — which is why a write
    re-reads the store rather than trusting the query cache.
+5. **Writes to one document are serialized, and the query cache is not allowed
+   to regress.** A write spans a store read and two signer round-trips —
+   seconds on a NIP-46 signer — so two edits back to back (rail drags) would
+   otherwise merge over the same previous version and stamp the same
+   `created_at`, and the later edit could lose the NIP-01 tie to the earlier
+   one. `serializeSettingsWrite` chains them per document. The cache is the
+   softer surface: a refetch (triggered by the previous version's own relay
+   echo) that read the store before a write landed can resolve after the
+   write's `setQueryData` and put the older version back, which
+   `useConfigDocSync` would fold over the user's newest edit. Three defenses,
+   each sufficient alone: the write cancels in-flight queries before
+   `setQueryData`; the sync hook's apply guard stays up while a publish is in
+   flight (not just while its debounce pends); and the apply effect refuses
+   any event older than one it has already applied.
 
 ## The migration window
 

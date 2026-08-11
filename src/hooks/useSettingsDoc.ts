@@ -144,6 +144,29 @@ export function nextSettingsDoc<N extends SettingsDocName>(
   } as SettingsDocOf<N>;
 }
 
+/**
+ * All writes to one settings document run one at a time, process-wide.
+ *
+ * A write is a read-modify-write spanning a store read, two signer round-trips
+ * (decrypt + encrypt/sign) and a store write — seconds on a NIP-46 signer. Two
+ * rail edits whose debounces fire back to back would otherwise both read the
+ * SAME previous version, merge their patches independently, and stamp the same
+ * `created_at` — so the second edit either overwrites the first or loses the
+ * NIP-01 tie to it. Serializing per document makes each write observe the
+ * previous one's result; distinct documents are distinct coordinates and may
+ * still write concurrently. Same shape as `serializeGroupListWrite` for 10009.
+ */
+const settingsWriteChains = new Map<SettingsDocName, Promise<unknown>>();
+
+function serializeSettingsWrite<T>(name: SettingsDocName, write: () => Promise<T>): Promise<T> {
+  const chain = settingsWriteChains.get(name) ?? Promise.resolve();
+  const run = chain.then(write, write);
+  // Swallow the result on the chain itself so one failed write neither wedges
+  // the queue nor surfaces as an unhandled rejection; the caller still gets it.
+  settingsWriteChains.set(name, run.then(() => undefined, () => undefined));
+  return run;
+}
+
 export interface UseSettingsDocReturn<N extends SettingsDocName> {
   /** The decrypted document, or null when none is on disk. */
   doc: SettingsDocOf<N> | null;
@@ -175,7 +198,7 @@ export function useSettingsDoc<N extends SettingsDocName>(name: N): UseSettingsD
   });
 
   const mutation = useMutation({
-    mutationFn: async (patch: Partial<SettingsDocOf<N>>) => {
+    mutationFn: (patch: Partial<SettingsDocOf<N>>) => serializeSettingsWrite(name, async () => {
       if (!user?.signer.nip44) throw new Error("NIP-44 encryption not supported by signer");
       const store = await eventStore;
 
@@ -205,13 +228,19 @@ export function useSettingsDoc<N extends SettingsDocName>(name: N): UseSettingsD
       // Durable first, then visible, then published. An edit survives a kill
       // between the signature and the relay round-trip.
       await store.event(event);
+      // A refetch already in flight (a relay echo of the PREVIOUS version
+      // invalidates this key) read the store before this event existed;
+      // letting it resolve after setQueryData would regress the cache to that
+      // older version, and the config sync would apply it over what the user
+      // just did. Cancel it — the store now supersedes anything it could carry.
+      await queryClient.cancelQueries({ queryKey });
       queryClient.setQueryData<StoredSettingsDoc<N>>(queryKey, { event, doc: next });
       nostr.event(event, { signal: AbortSignal.timeout(8000) }).catch((err) => {
         console.warn(`Failed to publish ${name} settings:`, err);
       });
 
       return next;
-    },
+    }),
   });
 
   const { mutateAsync } = mutation;
