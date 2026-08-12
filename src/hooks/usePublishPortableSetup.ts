@@ -89,8 +89,7 @@ export function usePublishPortableSetup() {
   const eventStore = useEventStore();
   const [isPending, setIsPending] = useState(false);
   const metadataDoc = useSettingsDoc("metadata");
-  const ownsRelayList = !config.relayMetadata.pubkey
-    || config.relayMetadata.pubkey === user?.pubkey;
+  const ownsRelayList = !!user && config.relayMetadata.pubkey === user.pubkey;
   const hasSyncRelay = ownsRelayList
     && config.relayMetadata.relays.some((relay) => relay.write);
   const isConfigured = Boolean(user?.signer.nip44 && metadataDoc.doc && hasSyncRelay);
@@ -100,8 +99,7 @@ export function usePublishPortableSetup() {
     if (!user) throw new Error("Not logged in");
     if (!user.signer.nip44) throw new Error("Your signer does not support encrypted settings");
 
-    const ownsRelayList = !config.relayMetadata.pubkey
-      || config.relayMetadata.pubkey === user.pubkey;
+    const ownsRelayList = config.relayMetadata.pubkey === user.pubkey;
     const targets = uniqueRelayUrls(
       ownsRelayList
         ? config.relayMetadata.relays

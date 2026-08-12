@@ -47,6 +47,18 @@ describe("portable network configuration", () => {
     expect(relays).toEqual(["wss://write.example"]);
   });
 
+  it("does not adopt an unattributed cached relay list", () => {
+    const relays = selfStateRelays({
+      ...defaultConfig,
+      useAppRelays: false,
+      relayMetadata: {
+        updatedAt: 1,
+        relays: [{ url: "wss://legacy.example", read: true, write: true }],
+      },
+    }, "a".repeat(64));
+    expect(relays).toEqual([]);
+  });
+
   it("does not reuse a previous account's NIP-65 relays", () => {
     const relays = selfStateRelays({
       ...defaultConfig,

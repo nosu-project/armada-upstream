@@ -641,9 +641,11 @@ export function accountDataRelays(config: AppConfig, pubkey?: string): string[] 
  */
 export function selfStateRelays(config: AppConfig, pubkey?: string): string[] {
   const urls = new Set(accountDataRelays(config, pubkey));
-  const ownsRelayList = !pubkey
-    || !config.relayMetadata.pubkey
-    || config.relayMetadata.pubkey === pubkey;
+  // Strict attribution only: a cached list without a `pubkey` stamp could be
+  // a previous account's (the field is optional in legacy persisted configs).
+  // NostrSync stamps the owner on every kind-10002 hydrate, so an unstamped
+  // config regains its write relays on the first boot that reads the list.
+  const ownsRelayList = !!pubkey && config.relayMetadata.pubkey === pubkey;
   if (ownsRelayList) {
     for (const relay of config.relayMetadata.relays) {
       if (!relay.write) continue;
