@@ -1,6 +1,6 @@
 import { AlertCircle, Ban, Braces, Copy, Flag, Forward, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, UserCheck, UserMinus, UserX, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ChatContent } from "@/components/chat/ChatContent";
 import { emojify } from "@/components/chat/emojify";
@@ -548,6 +548,27 @@ const ChatMessageInner = memo(function ChatMessageInner({
   const wasEdited = event.tags.some(([name]) => name === "edited");
   const [editText, setEditText] = useState(event.content);
   const editRef = useAutosizeTextarea(editText);
+  // Autosize returns a callback ref; compose it with a caret-to-end placement so
+  // that opening an edit lands the cursor after the existing text (browsers
+  // default `autoFocus` to the start, which reads as a single-line box with the
+  // caret in the wrong place on a multi-line message). The flag resets on
+  // unmount so re-editing re-places the caret.
+  const caretPlacedRef = useRef(false);
+  const setEditRef = useCallback(
+    (el: HTMLTextAreaElement | null) => {
+      editRef(el);
+      if (!el) {
+        caretPlacedRef.current = false;
+        return;
+      }
+      if (caretPlacedRef.current) return;
+      caretPlacedRef.current = true;
+      el.focus();
+      const end = el.value.length;
+      el.setSelectionRange(end, end);
+    },
+    [editRef],
+  );
   // Deleting is irreversible and now sits one tap away in the action sheet, so
   // it confirms. (It used to be a two-step "arm the trash icon" gesture, which
   // only worked because it WAS a bare icon on the hover strip.)
@@ -817,8 +838,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
       {isEditing ? (
         <div className="mt-0.5">
           <textarea
-            ref={editRef}
-            autoFocus
+            ref={setEditRef}
             value={editText}
             onChange={(e) => setEditText(e.target.value)}
             onKeyDown={(e) => {

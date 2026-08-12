@@ -1793,6 +1793,11 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       } else {
         handleSend();
       }
+    } else if (e.key === "Escape" && mode === "poll") {
+      // Escape leaves poll mode; the panel has no other keyboard exit and
+      // clicking away doesn't dismiss it (it's inline composer state, not a modal).
+      e.preventDefault();
+      setMode("post");
     }
   };
 
@@ -2287,6 +2292,17 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
               >
                 <div className="overflow-hidden min-h-0">
                 <div className="space-y-2 pt-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-medium text-muted-foreground">Poll</span>
+                    <button
+                      type="button"
+                      aria-label="Close poll"
+                      onClick={() => setMode("post")}
+                      className="p-1 touch:p-2.5 rounded-full text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  </div>
                   <div className="space-y-1.5">
                     {pollOptions.map((opt, idx) => (
                       <div key={opt.id} className="flex items-center gap-2">
