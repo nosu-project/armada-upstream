@@ -76,7 +76,18 @@ export function KickMembersDialog({ targets, ineligible, onClose, onConfirm }: K
 
   return (
     <Dialog open={targets !== null && targets.length > 0} onOpenChange={(open) => !open && close()}>
-      <ChromeDialogContent title={count > 1 ? "Kick members" : "Kick member"} className="sm:max-w-sm">
+      <ChromeDialogContent
+        title={count > 1 ? "Kick members" : "Kick member"}
+        className="sm:max-w-sm focus:outline-none"
+        onOpenAutoFocus={(e) => {
+          // Keep initial focus off Cancel: a programmatic focus reads as
+          // keyboard focus and paints a ring around the cut-corner button on
+          // open. Focus the dialog surface instead — focus stays trapped and
+          // Escape still works; the first Tab moves to the buttons.
+          e.preventDefault();
+          (e.currentTarget as HTMLElement | null)?.focus();
+        }}
+      >
         <div className="flex flex-col items-center gap-2 text-center">
           <div className="flex size-12 items-center justify-center clip-corner-lg bg-destructive/15 text-destructive">
             <UserMinus className="size-6" />
@@ -85,8 +96,8 @@ export function KickMembersDialog({ targets, ineligible, onClose, onConfirm }: K
             {count > 1 ? `kick ${count} members?` : "kick member?"}
           </h2>
           <p className="text-sm text-muted-foreground">
-            A kick removes them from the member list but doesn't block them — they can rejoin from an
-            invite. Use Ban to keep someone out.
+            A kick removes them from the member list but doesn't block them. They can rejoin from an
+            invite, so use Ban to keep someone out.
           </p>
         </div>
 
@@ -99,7 +110,7 @@ export function KickMembersDialog({ targets, ineligible, onClose, onConfirm }: K
         )}
         {ineligible && ineligible.length > 0 && (
           <p className="mt-2 text-center text-xs text-muted-foreground">
-            {ineligible.length} selected member{ineligible.length === 1 ? " is" : "s are"} skipped — you
+            {ineligible.length} selected member{ineligible.length === 1 ? " is" : "s are"} skipped. You
             don't outrank them.
           </p>
         )}

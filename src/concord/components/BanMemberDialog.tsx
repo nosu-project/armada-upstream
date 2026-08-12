@@ -102,7 +102,18 @@ export function BanMemberDialog({ targets, ineligible, willRotate, onClose, onCo
 
   return (
     <Dialog open={targets !== null && targets.length > 0} onOpenChange={(open) => !open && close()}>
-      <ChromeDialogContent title={count > 1 ? "Ban members" : "Ban member"} className="sm:max-w-sm">
+      <ChromeDialogContent
+        title={count > 1 ? "Ban members" : "Ban member"}
+        className="sm:max-w-sm focus:outline-none"
+        onOpenAutoFocus={(e) => {
+          // Keep initial focus off Cancel: a programmatic focus reads as
+          // keyboard focus and paints a ring around the cut-corner button on
+          // open. Focus the dialog surface instead — focus stays trapped and
+          // Escape still works; the first Tab moves to the buttons.
+          e.preventDefault();
+          (e.currentTarget as HTMLElement | null)?.focus();
+        }}
+      >
         <div className="flex flex-col items-center gap-2 text-center">
           <div className="flex size-12 items-center justify-center clip-corner-lg bg-destructive/15 text-destructive">
             <Ban className="size-6" />
@@ -124,7 +135,7 @@ export function BanMemberDialog({ targets, ineligible, willRotate, onClose, onCo
         )}
         {ineligible && ineligible.length > 0 && (
           <p className="mt-2 text-center text-xs text-muted-foreground">
-            {ineligible.length} selected member{ineligible.length === 1 ? " is" : "s are"} skipped — you
+            {ineligible.length} selected member{ineligible.length === 1 ? " is" : "s are"} skipped. You
             don't outrank them.
           </p>
         )}
