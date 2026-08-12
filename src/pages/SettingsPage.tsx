@@ -525,50 +525,52 @@ export function SettingsPage() {
             {user && userWriteRelayUrls.length > 0 && (
               <SettingsRow
                 label={portableSetup.isConfigured ? "Synchronize setup" : "Set up synchronization"}
-                description={portableSetup.isConfigured
-                  ? portableSetup.isAutomatic
-                    ? "Changes sync automatically to every NIP-65 write relay. Sync now also refreshes the signed server, search, DM, and media lists immediately."
-                    : "Automatic sync is off on this device. Sync now still sends its current encrypted settings and refreshes its signed lists."
-                  : config.automaticSettingsSync !== false
-                    ? "Press once to copy your signed lists and encrypted settings to every NIP-65 write relay. Later private setting changes will sync automatically."
-                    : "Press once to copy your signed lists and encrypted settings. Future private Armada setting changes remain on this device until you press Sync now or enable automatic sync."}
+                description={(
+                  <>
+                    {portableSetup.isConfigured
+                      ? portableSetup.isAutomatic
+                        ? "Changes sync automatically to every NIP-65 write relay. Sync now also refreshes the signed server, search, DM, and media lists immediately."
+                        : "Automatic sync is off on this device. Sync now still sends its current encrypted settings and refreshes its signed lists."
+                      : config.automaticSettingsSync !== false
+                        ? "Press once to copy your signed lists and encrypted settings to every NIP-65 write relay. Later private setting changes will sync automatically."
+                        : "Press once to copy your signed lists and encrypted settings. Future private Armada setting changes remain on this device until you press Sync now or enable automatic sync."}
+                    <span className="mt-2 block">
+                      Device hardware, audio processing, notification permission, Bluetooth, and
+                      wallet secrets stay on this device.
+                    </span>
+                  </>
+                )}
               >
-                <div className="space-y-2">
-                  <Button
-                    type="button"
-                    className="h-11 clip-corner-lg touch:h-12"
-                    disabled={portableSetup.isPending || portableSetup.isStatusLoading}
-                    onClick={() => {
-                      portableSetup.publish().then((result) => {
-                        toast({
-                          title: result.rejectedDeliveries > 0
-                            ? "Setup partially synchronized"
-                            : "Setup synchronized",
-                          description: result.rejectedDeliveries > 0
-                            ? `${result.records} signed records were sent to ${result.destinations} account relays, but ${result.rejectedDeliveries} deliveries were rejected.`
-                            : `${result.records} signed records are available on ${result.destinations} account relays.`,
-                          variant: result.rejectedDeliveries > 0 ? "destructive" : undefined,
-                        });
-                      }).catch((err) => {
-                        toast({
-                          title: "Setup was not fully synchronized",
-                          description: err instanceof Error ? err.message : "Please try again.",
-                          variant: "destructive",
-                        });
+                <Button
+                  type="button"
+                  className="h-11 clip-corner-lg touch:h-12"
+                  disabled={portableSetup.isPending || portableSetup.isStatusLoading}
+                  onClick={() => {
+                    portableSetup.publish().then((result) => {
+                      toast({
+                        title: result.rejectedDeliveries > 0
+                          ? "Setup partially synchronized"
+                          : "Setup synchronized",
+                        description: result.rejectedDeliveries > 0
+                          ? `${result.records} signed records were sent to ${result.destinations} account relays, but ${result.rejectedDeliveries} deliveries were rejected.`
+                          : `${result.records} signed records are available on ${result.destinations} account relays.`,
+                        variant: result.rejectedDeliveries > 0 ? "destructive" : undefined,
                       });
-                    }}
-                  >
-                    {portableSetup.isPending
-                      ? "Synchronizing…"
-                      : portableSetup.isConfigured
-                        ? "Sync now"
-                        : "Start sync"}
-                  </Button>
-                  <p className="text-xs text-muted-foreground leading-snug">
-                    Device hardware, audio processing, notification permission, Bluetooth, and
-                    wallet secrets stay on this device.
-                  </p>
-                </div>
+                    }).catch((err) => {
+                      toast({
+                        title: "Setup was not fully synchronized",
+                        description: err instanceof Error ? err.message : "Please try again.",
+                        variant: "destructive",
+                      });
+                    });
+                  }}
+                >
+                  {portableSetup.isPending
+                    ? "Synchronizing…"
+                    : portableSetup.isConfigured
+                      ? "Sync now"
+                      : "Start sync"}
+                </Button>
               </SettingsRow>
             )}
           </>
