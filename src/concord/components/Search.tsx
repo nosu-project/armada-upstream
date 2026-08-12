@@ -283,6 +283,9 @@ const SearchRow = memo(function SearchRow({
 }) {
   // `ChatMsg` is already signature-less, so the message IS the rumor.
   const rumor = event;
+  // The beveled hover tint is a clipped `::before` behind the content, not a
+  // clip-path on the wrapper: clipping the wrapper also slices off
+  // ChatMessage's action toolbar, which floats above the row's top edge.
   return (
     <div
       role={onJump ? "button" : undefined}
@@ -298,7 +301,11 @@ const SearchRow = memo(function SearchRow({
             }
           : undefined
       }
-      className={cn("clip-corner-lg", onJump && "cursor-pointer transition-colors hover:bg-foreground/5")}
+      className={cn(
+        "relative isolate",
+        onJump &&
+          "cursor-pointer before:absolute before:inset-0 before:-z-10 before:clip-corner-lg before:transition-colors before:content-[''] hover:before:bg-foreground/5",
+      )}
       aria-label={onJump ? "Jump to this message" : undefined}
     >
       <ChatMessage event={event} rumor={rumor} canWrite={false} canModerate={false} highlight={highlight} />
