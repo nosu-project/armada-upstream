@@ -1,4 +1,4 @@
-import { AlertCircle, Braces, Copy, Flag, Forward, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, UserCheck, UserX, Zap } from "lucide-react";
+import { AlertCircle, Ban, Braces, Copy, Flag, Forward, Link, Link2, MessagesSquare, Pencil, Pin, PinOff, Reply, Trash2, UserCheck, UserMinus, UserX, Zap } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
@@ -361,6 +361,23 @@ export interface ChatMessageProps {
   onTogglePin?: (event: ChatMsg) => void;
   /** Delete this message (hidden when absent). */
   onDelete?: (event: ChatMsg) => void;
+  /**
+   * Kick this message's author from the community (Concord moderation). The
+   * callback is stable; visibility for THIS author is gated by {@link canKick},
+   * which the page computes (and which already excludes self and the owner).
+   * Opens a confirmation rather than acting on select. Hidden when absent.
+   */
+  onKick?: (pubkey: string) => void;
+  /** Whether the viewer may kick this message's author — gates the Kick item. */
+  canKick?: boolean;
+  /**
+   * Ban this message's author from the community (Concord moderation). Stable
+   * callback; visibility gated per-author by {@link canBan}. Opens a
+   * confirmation (which may rotate the community's keys). Hidden when absent.
+   */
+  onBan?: (pubkey: string) => void;
+  /** Whether the viewer may ban this message's author — gates the Ban item. */
+  canBan?: boolean;
   /** Open the threaded-replies side panel — the "reply in thread" action (hidden when absent). */
   onOpenThread?: (event: ChatMsg) => void;
   /**
@@ -470,6 +487,10 @@ const ChatMessageInner = memo(function ChatMessageInner({
   onDiscard,
   onTogglePin,
   onDelete,
+  onKick,
+  canKick,
+  onBan,
+  canBan,
   onOpenThread,
   onReply,
   onForward,
@@ -716,6 +737,32 @@ const ChatMessageInner = memo(function ChatMessageInner({
       destructive: true,
       groupStart: !showMute && !showReport,
       onSelect: () => setConfirmDelete(true),
+    });
+  }
+  // Person-level moderation on the author (Concord). Gated per-author by the
+  // page: `canKick`/`canBan` already exclude the viewer's own messages and the
+  // owner. Each opens a confirmation dialog rather than acting on select. They
+  // trail the destructive group, opening it only if nothing above them did.
+  const showKick = Boolean(onKick) && Boolean(canKick) && !isEditing && !isOwn;
+  const showBan = Boolean(onBan) && Boolean(canBan) && !isEditing && !isOwn;
+  if (showKick) {
+    menuActions.push({
+      id: "kick",
+      label: "Kick from community",
+      icon: UserMinus,
+      destructive: true,
+      groupStart: !showMute && !showReport && !canDelete,
+      onSelect: () => onKick?.(event.pubkey),
+    });
+  }
+  if (showBan) {
+    menuActions.push({
+      id: "ban",
+      label: "Ban from community",
+      icon: Ban,
+      destructive: true,
+      groupStart: !showMute && !showReport && !canDelete && !showKick,
+      onSelect: () => onBan?.(event.pubkey),
     });
   }
 

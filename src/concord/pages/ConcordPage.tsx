@@ -122,6 +122,7 @@ import { PAUSE_DURATIONS, useCommunityPause } from "@/concord/hooks/usePause";
 import { CommunityPauseBanner } from "@/concord/components/CommunityPauseBanner";
 import { usePins } from "@/concord/hooks/usePins";
 import { BanMemberDialog } from "@/concord/components/BanMemberDialog";
+import { KickMembersDialog } from "@/concord/components/KickMembersDialog";
 import { RotateKeysDialog } from "@/concord/components/RotateKeysDialog";
 import type { BanPhase } from "@/concord/hooks/useModeration";
 import { hasForeignLiveLinks } from "@/concord/lib/control";
@@ -257,6 +258,13 @@ interface ChatMessage2Props {
   replyParent: ChatMsg | undefined;
   onJumpToReply: (id: string) => void;
   onDelete: ((event: ChatMsg) => void) | undefined;
+  /** Kick/ban the author from the community; stable openers of the confirm
+   *  dialogs. `canKick`/`canBan` gate visibility per-author (KICK/BAN power,
+   *  strict outrank — already false for self and the owner). */
+  onKick: ((pubkey: string) => void) | undefined;
+  onBan: ((pubkey: string) => void) | undefined;
+  canKick: boolean;
+  canBan: boolean;
   /** Pins (CORD-04 §7) — both present only for PIN_MESSAGES holders. */
   isPinned: boolean;
   onTogglePin: ((event: ChatMsg) => void) | undefined;
@@ -292,6 +300,10 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
   replyParent,
   onJumpToReply,
   onDelete,
+  onKick,
+  onBan,
+  canKick,
+  canBan,
   isPinned,
   onTogglePin,
   onRetry,
@@ -336,6 +348,10 @@ const ConcordChatMessage = memo(function ConcordChatMessage({
       onReply={onReply}
       replyContext={replyContext}
       onDelete={onDelete}
+      onKick={onKick}
+      onBan={onBan}
+      canKick={canKick}
+      canBan={canBan}
       isPinned={isPinned}
       onTogglePin={onTogglePin}
       onRetry={onRetry ? () => onRetry(event) : undefined}
@@ -1834,6 +1850,7 @@ export function ConcordPage() {
   const [addMembersOpen, setAddMembersOpen] = useState(false);
   const [shareDiscoverOpen, setShareDiscoverOpen] = useState(false);
   const [banTarget, setBanTarget] = useState<string | null>(null);
+  const [kickTarget, setKickTarget] = useState<string | null>(null);
   const [rotateKeysOpen, setRotateKeysOpen] = useState(false);
   /**
    * The pending "name a category" prompt. A category has no id, so naming one
@@ -2598,6 +2615,14 @@ export function ConcordPage() {
     } else {
       toast({ title: "Member banned", description: "Added to the banlist; key rotation didn't complete (you can retry)." });
     }
+  };
+
+  const runKick = async (targets: string[], onProgress: (done: number, total: number) => void) => {
+    const result = await moderation.kickMany({ targets, onProgress });
+    if (result.failed.length === 0) {
+      toast({ title: "Member kicked", description: "They're off the member list, but can rejoin from an invite." });
+    }
+    return result;
   };
 
   // The standalone rotation strands every OTHER creator's live links until
@@ -3550,6 +3575,10 @@ export function ConcordPage() {
                         replyParent={replyId ? messagesById.get(replyId) : undefined}
                         onJumpToReply={jumpWithinChannel}
                         onDelete={transport.deleteMessage}
+                        onKick={canKickAny ? setKickTarget : undefined}
+                        onBan={canBanAny ? setBanTarget : undefined}
+                        canKick={canKickAny && moderation.canKick(msg.pubkey)}
+                        canBan={canBanAny && moderation.canBan(msg.pubkey)}
                         onRetry={transport.retry}
                         onDiscard={transport.discard}
                         isEditing={editingId === msg.id}
@@ -3775,6 +3804,11 @@ export function ConcordPage() {
         willRotate={banWillRotate}
         onClose={() => setBanTarget(null)}
         onConfirm={runBan}
+      />
+      <KickMembersDialog
+        targets={kickTarget ? [kickTarget] : null}
+        onClose={() => setKickTarget(null)}
+        onConfirm={runKick}
       />
       <RotateKeysDialog
         open={rotateKeysOpen}
