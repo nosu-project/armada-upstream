@@ -2,7 +2,7 @@ import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 
-import { accountDataRelays, effectiveDmRelays } from "@/contexts/AppContext";
+import { accountDataRelays, effectiveDmRelays, selfStateRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
@@ -137,7 +137,7 @@ export function useDmRelayList() {
     queryFn: async ({ signal }) => {
       const events = await queryExplicitRelays(
         nostr,
-        accountDataRelays(config, user!.pubkey),
+        selfStateRelays(config, user!.pubkey),
         [{ kinds: [KIND_DM_RELAYS], authors: [user!.pubkey], limit: 1 }],
         AbortSignal.any([signal, AbortSignal.timeout(6000)]),
       );
@@ -157,7 +157,7 @@ export function useDmRelayList() {
         .filter((r): r is string => !!r);
       const events = await queryExplicitRelays(
         nostr,
-        accountDataRelays(config, user.pubkey),
+        selfStateRelays(config, user.pubkey),
         [{ kinds: [KIND_DM_RELAYS], authors: [user.pubkey], limit: 1 }],
         AbortSignal.timeout(8_000),
       );
@@ -182,6 +182,7 @@ export function useDmRelayList() {
         tags,
         created_at: createdAt,
         prev: prev ?? undefined,
+        relays: selfStateRelays(config, user.pubkey),
         onSigned: (event) => {
           queryClient.setQueryData<DmRelayListQuery>(queryKey, { event, relays: urls });
         },

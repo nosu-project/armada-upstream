@@ -26,6 +26,7 @@ export function useUploadFile() {
       // App default servers merged with the user's kind 10063 list, which
       // NostrSync keeps cached in config.blossomServerMetadata.
       const servers = getEffectiveBlossomServers(
+        config.appBlossomServers,
         config.blossomServerMetadata,
         config.useAppBlossomServers,
       );

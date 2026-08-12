@@ -2,7 +2,7 @@ import { useNostr } from "@nostrify/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 
-import { accountDataRelays } from "@/contexts/AppContext";
+import { selfStateRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import {
   KIND_BLOSSOM_SERVERS,
@@ -18,6 +18,7 @@ import {
   nextSettingsDoc,
   readSettingsDoc,
   settingsDocQueryKey,
+  useSettingsDoc,
 } from "@/hooks/useSettingsDoc";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
@@ -87,6 +88,12 @@ export function usePublishPortableSetup() {
   const queryClient = useQueryClient();
   const eventStore = useEventStore();
   const [isPending, setIsPending] = useState(false);
+  const metadataDoc = useSettingsDoc("metadata");
+  const ownsRelayList = !!user && config.relayMetadata.pubkey === user.pubkey;
+  const hasSyncRelay = ownsRelayList
+    && config.relayMetadata.relays.some((relay) => relay.write);
+  const isConfigured = Boolean(user?.signer.nip44 && metadataDoc.doc && hasSyncRelay);
+  const isAutomatic = isConfigured && config.automaticSettingsSync !== false;
 
   const publish = useCallback(async (): Promise<PortableSetupPublishResult> => {
     if (!user) throw new Error("Not logged in");
@@ -107,7 +114,7 @@ export function usePublishPortableSetup() {
     setIsPending(true);
     try {
       const sources = uniqueRelayUrls([
-        ...accountDataRelays(config, user.pubkey),
+        ...selfStateRelays(config, user.pubkey),
         ...targets,
         ...RELAY_LIST_DISCOVERY_RELAYS,
       ]);
@@ -310,5 +317,11 @@ export function usePublishPortableSetup() {
     }
   }, [config, eventStore, nostr, queryClient, updateConfig, user]);
 
-  return { publish, isPending };
+  return {
+    publish,
+    isPending,
+    isConfigured,
+    isAutomatic,
+    isStatusLoading: metadataDoc.isLoading,
+  };
 }

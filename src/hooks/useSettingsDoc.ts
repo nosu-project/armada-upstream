@@ -5,7 +5,9 @@ import { useCallback } from "react";
 import type { NostrFilter, NostrSigner } from "@nostrify/nostrify";
 import type { z } from "zod";
 
+import { selfStateRelays } from "@/contexts/AppContext";
 import type { ArmadaEventStore } from "@/contexts/EventStoreContext";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -183,6 +185,7 @@ export interface UseSettingsDocReturn<N extends SettingsDocName> {
 export function useSettingsDoc<N extends SettingsDocName>(name: N): UseSettingsDocReturn<N> {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
   const eventStore = useEventStore();
   const queryClient = useQueryClient();
 
@@ -235,9 +238,17 @@ export function useSettingsDoc<N extends SettingsDocName>(name: N): UseSettingsD
       // just did. Cancel it — the store now supersedes anything it could carry.
       await queryClient.cancelQueries({ queryKey });
       queryClient.setQueryData<StoredSettingsDoc<N>>(queryKey, { event, doc: next });
-      nostr.event(event, { signal: AbortSignal.timeout(8000) }).catch((err) => {
+      const relays = selfStateRelays(config, user.pubkey);
+      const publisher = relays.length > 0 ? nostr.group(relays) : nostr;
+      try {
+        await publisher.event(event, { signal: AbortSignal.timeout(8000) });
+      } catch (err) {
         console.warn(`Failed to publish ${name} settings:`, err);
-      });
+        // The version is already durable locally. Surface the transport
+        // failure so the automatic config sync can retry the exact snapshot;
+        // a later manual "Sync now" also republishes it.
+        throw err;
+      }
 
       return next;
     }),

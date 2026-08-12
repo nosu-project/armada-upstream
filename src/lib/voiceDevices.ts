@@ -145,6 +145,18 @@ export function preferredDmVoiceRelay(): string | undefined {
   return origin ? origin.replace(/^https:\/\//, "wss://") : undefined;
 }
 
+/** Custom AV preference as an exact replacement, or the deployment defaults. */
+export function effectiveAvServers(defaults: string[]): string[] {
+  const preferred = preferredVoiceServerOrigin();
+  return preferred ? [preferred] : [...defaults];
+}
+
+/** DM-voice form of the same exact-replacement preference. */
+export function effectiveDmVoiceRelays(defaults: string[]): string[] {
+  const preferred = preferredDmVoiceRelay();
+  return preferred ? [preferred] : [...defaults];
+}
+
 /**
  * Browser audio-processing constraints applied to the captured mic track.
  * These map directly onto the standard MediaTrackConstraints; LiveKit defaults

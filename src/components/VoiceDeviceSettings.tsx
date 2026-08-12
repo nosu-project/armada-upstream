@@ -95,8 +95,8 @@ export function VoiceDeviceSettings() {
     setVoiceServer(config.preferredVoiceServer);
   }, [config.preferredVoiceServer]);
 
-  // Live reachability: probe the effective server list (preference first, then
-  // the deployment defaults) exactly the way call setup does, so this row
+  // Live reachability: probe the exact effective server list (a custom server,
+  // or the deployment defaults when empty) exactly the way call setup does, so this row
   // diagnoses "voice unavailable" on any device.
   const voiceServerInvalid = Boolean(getPreferredVoiceServer()) && !preferredVoiceServerOrigin();
   const effectiveServers = ownAvServers();
@@ -627,7 +627,8 @@ export function VoiceDeviceSettings() {
         )}
         <p className="text-xs text-muted-foreground">
           Used to start calls in empty voice channels and for direct-message calls. Leave empty
-          for the default{CONCORD_AV_SERVERS[0] ? ` (${CONCORD_AV_SERVERS[0]})` : ""}.
+          for the default{CONCORD_AV_SERVERS[0] ? ` (${CONCORD_AV_SERVERS[0]})` : ""}. A custom
+          address replaces the built-in Armada voice servers on every synced client.
         </p>
       </div>
     </div>

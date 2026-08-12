@@ -7,7 +7,9 @@
  * (`useNativeNotifications`), the in-app foreground notifier
  * (`useForegroundNotificationSettings`) and the per-channel level resolver
  * (`useNotifLevels`) — so they live outside any one of them. They are stored
- * under `armada:push-prefs`, which each path reads directly.
+ * in encrypted account settings. The localStorage mirror remains because the
+ * service worker and Android background service need the value without React;
+ * `NostrSync` refreshes that mirror when another client changes the document.
  */
 
 import type { WebPushUnavailableReason } from "@/lib/webPushSupport";
@@ -64,6 +66,15 @@ export function loadPushPrefs(): PushPrefs {
     // ignore — fall through to defaults
   }
   return { ...DEFAULT_PUSH_PREFS };
+}
+
+/** Persist the local mirror consumed by background notification runtimes. */
+export function savePushPrefs(next: PushPrefs): void {
+  try {
+    localStorage.setItem("armada:push-prefs", JSON.stringify(next));
+  } catch {
+    // localStorage unavailable — the in-memory AppConfig value still applies.
+  }
 }
 
 /** What a push-notifications hook hands the settings UI. */

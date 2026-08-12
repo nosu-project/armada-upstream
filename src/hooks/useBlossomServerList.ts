@@ -1,7 +1,7 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { accountDataRelays } from "@/contexts/AppContext";
+import { selfStateRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
@@ -42,7 +42,7 @@ export function useBlossomServerList() {
     queryFn: async ({ signal }) => {
       const events = await queryExplicitRelays(
         nostr,
-        accountDataRelays(config, user!.pubkey),
+        selfStateRelays(config, user!.pubkey),
         [{ kinds: [KIND_BLOSSOM_SERVERS], authors: [user!.pubkey], limit: 1 }],
         AbortSignal.any([signal, AbortSignal.timeout(6000)]),
       );
@@ -62,7 +62,7 @@ export function useBlossomServerList() {
         .filter((url): url is string => !!url);
       const events = await queryExplicitRelays(
         nostr,
-        accountDataRelays(config, user.pubkey),
+        selfStateRelays(config, user.pubkey),
         [{ kinds: [KIND_BLOSSOM_SERVERS], authors: [user.pubkey], limit: 1 }],
         AbortSignal.timeout(8_000),
       );
@@ -87,6 +87,7 @@ export function useBlossomServerList() {
         tags,
         created_at: createdAt,
         prev: prev ?? undefined,
+        relays: selfStateRelays(config, user.pubkey),
         onSigned: (event) => {
           queryClient.setQueryData<BlossomServerListQuery>(queryKey, {
             event,

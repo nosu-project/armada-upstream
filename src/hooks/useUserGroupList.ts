@@ -2,7 +2,7 @@ import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 
-import { accountDataRelays } from "@/contexts/AppContext";
+import { selfStateRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
@@ -162,7 +162,7 @@ export function useUserGroupList() {
     queryFn: async ({ signal }) => {
       const events = await queryExplicitRelays(
         nostr,
-        accountDataRelays(config, user!.pubkey),
+        selfStateRelays(config, user!.pubkey),
         [{ kinds: [KIND_USER_GROUPS], authors: [user!.pubkey], limit: 1 }],
         AbortSignal.any([signal, AbortSignal.timeout(8000)]),
       );
@@ -316,6 +316,7 @@ function nextCreatedAt(prev: NostrEvent | null): number {
 export function useUpdateUserGroupList() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
   const { mutateAsync: publishEvent } = useNostrPublish();
   const queryClient = useQueryClient();
   const removeRailKey = useRemoveRailKey();
@@ -325,7 +326,9 @@ export function useUpdateUserGroupList() {
       if (!user) throw new Error("User is not logged in");
 
       // Read-modify-write against fresh relay state, never the query cache.
-      const events = await nostr.query(
+      const relays = selfStateRelays(config, user.pubkey);
+      const source = relays.length > 0 ? nostr.group(relays) : nostr;
+      const events = await source.query(
         [{ kinds: [KIND_USER_GROUPS], authors: [user.pubkey], limit: 1 }],
         { signal: AbortSignal.timeout(8000) },
       );
@@ -406,6 +409,7 @@ export function useUpdateUserGroupList() {
         tags,
         created_at: nextCreatedAt(prev),
         prev: prev ?? undefined,
+        relays,
       });
       // Persist the decrypted result (we have `next` in the clear here) so the
       // next boot reads plaintext without a signer decrypt. AWAITED, not fired

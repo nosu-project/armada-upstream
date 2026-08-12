@@ -40,7 +40,7 @@ describe("parseBlossomServerList", () => {
 
 describe("getEffectiveBlossomServers", () => {
   it("returns app servers when the user has none", () => {
-    expect(getEffectiveBlossomServers({ servers: [], updatedAt: 0 }, true))
+    expect(getEffectiveBlossomServers(APP_BLOSSOM_SERVERS, { servers: [], updatedAt: 0 }, true))
       .toEqual(APP_BLOSSOM_SERVERS);
   });
 
@@ -49,7 +49,7 @@ describe("getEffectiveBlossomServers", () => {
       servers: ["https://mine.example/", "https://blossom.primal.net"],
       updatedAt: 0,
     };
-    expect(getEffectiveBlossomServers(userMeta, true)).toEqual([
+    expect(getEffectiveBlossomServers(APP_BLOSSOM_SERVERS, userMeta, true)).toEqual([
       ...APP_BLOSSOM_SERVERS,
       "https://mine.example/",
     ]);
@@ -60,20 +60,28 @@ describe("getEffectiveBlossomServers", () => {
       servers: ["HTTPS://BLOSSOM.PRIMAL.NET///", "https://mine.example/"],
       updatedAt: 0,
     };
-    const effective = getEffectiveBlossomServers(userMeta, true);
+    const effective = getEffectiveBlossomServers(APP_BLOSSOM_SERVERS, userMeta, true);
     expect(effective).toEqual([...APP_BLOSSOM_SERVERS, "https://mine.example/"]);
   });
 
   it("returns only user servers when app servers are disabled", () => {
     const userMeta = { servers: ["https://mine.example/"], updatedAt: 0 };
-    expect(getEffectiveBlossomServers(userMeta, false)).toEqual([
+    expect(getEffectiveBlossomServers(APP_BLOSSOM_SERVERS, userMeta, false)).toEqual([
       "https://mine.example/",
     ]);
   });
 
-  it("falls back to app servers when disabled but the user list is empty", () => {
-    expect(getEffectiveBlossomServers({ servers: [], updatedAt: 0 }, false))
-      .toEqual(APP_BLOSSOM_SERVERS);
+  it("keeps an intentional empty set when app servers are disabled", () => {
+    expect(getEffectiveBlossomServers(APP_BLOSSOM_SERVERS, { servers: [], updatedAt: 0 }, false))
+      .toEqual([]);
+  });
+
+  it("uses a synchronized app-server replacement instead of build defaults", () => {
+    expect(getEffectiveBlossomServers(
+      ["https://custom.example/"],
+      { servers: [], updatedAt: 0 },
+      true,
+    )).toEqual(["https://custom.example/"]);
   });
 });
 

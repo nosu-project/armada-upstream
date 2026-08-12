@@ -70,10 +70,32 @@ const signer = {
   }),
 };
 
-const h = vi.hoisted(() => ({ nostrEvent: vi.fn() }));
+const h = vi.hoisted(() => ({
+  nostrEvent: vi.fn(),
+  group: vi.fn(),
+  config: {
+    useAppRelays: true,
+    appRelays: ["wss://app.example"],
+    useUserRelays: false,
+    relayMetadata: {
+      pubkey: "a".repeat(64),
+      updatedAt: 1,
+      relays: [{ url: "wss://home.example", read: true, write: true }],
+    },
+  },
+}));
 
 vi.mock("@nostrify/react", () => ({
-  useNostr: () => ({ nostr: { event: h.nostrEvent } }),
+  useNostr: () => ({
+    nostr: {
+      event: h.nostrEvent,
+      group: h.group,
+    },
+  }),
+}));
+
+vi.mock("@/hooks/useAppContext", () => ({
+  useAppContext: () => ({ config: h.config }),
 }));
 
 vi.mock("@/hooks/useCurrentUser", () => ({
@@ -125,6 +147,7 @@ beforeEach(() => {
     published.push(event);
     return Promise.resolve();
   });
+  h.group.mockReset().mockImplementation(() => ({ event: h.nostrEvent }));
 });
 
 describe("readSettingsDoc", () => {
@@ -206,6 +229,21 @@ describe("useSettingsDoc", () => {
     expect(publishedDoc()).toMatchObject({ theme: "dark", defaultZapAmount: 42 });
   });
 
+  it("publishes to NIP-65 write relays even when general user-relay routing is off", async () => {
+    await seedStore("metadata", { theme: "light" }, 100);
+    const { result } = render("metadata");
+    await waitFor(() => expect(result.current.doc).toEqual({ theme: "light" }));
+
+    await act(async () => {
+      await result.current.update({ theme: "dark" });
+    });
+
+    expect(h.group).toHaveBeenCalledWith([
+      "wss://app.example",
+      "wss://home.example",
+    ]);
+  });
+
   it("publishes a version the store will accept over the one it merged over", async () => {
     // A document stamped in the future: `Date.now()` alone would be older, and
     // the store would silently refuse the write.
@@ -238,7 +276,7 @@ describe("useSettingsDoc", () => {
     await waitFor(() => expect(result.current.doc).toEqual({ theme: "light" }));
 
     await act(async () => {
-      await result.current.update({ theme: "dark" });
+      await expect(result.current.update({ theme: "dark" })).rejects.toThrow("relay unreachable");
     });
 
     expect(published).toHaveLength(1);

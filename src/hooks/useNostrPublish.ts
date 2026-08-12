@@ -27,6 +27,12 @@ export type EventTemplate = Omit<NostrEvent, "id" | "pubkey" | "sig" | "created_
    */
   relay?: string;
   /**
+   * Publish to this exact relay set. Used for the user's portable self-state so
+   * NIP-65 write relays keep receiving it even when they are disabled for
+   * general pool traffic. Mutually exclusive with `relay`.
+   */
+  relays?: string[];
+  /**
    * Called with the fully-signed event immediately before it is sent to the
    * network. Lets callers optimistically insert the event into a local cache
    * (and learn its final id) before the relay round-trip completes.
@@ -51,7 +57,8 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
         throw new Error("User is not logged in");
       }
 
-      const { prev, relay, onSigned, ...template } = t;
+      const { prev, relay, relays, onSigned, ...template } = t;
+      if (relay && relays) throw new Error("Specify either relay or relays, not both");
       const tags = [...(template.tags ?? [])];
 
       // NIP-89 client tag
@@ -120,6 +127,8 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
         const timeout = publishTimeoutMs(user.method);
         if (relay) {
           await nostr.relay(relay).event(event, { signal: AbortSignal.timeout(timeout) });
+        } else if (relays && relays.length > 0) {
+          await nostr.group(relays).event(event, { signal: AbortSignal.timeout(timeout) });
         } else {
           await nostr.event(event, { signal: AbortSignal.timeout(timeout) });
         }

@@ -15,6 +15,7 @@ import {
   subscribeFavoriteGifChanges,
   type FavoriteGifShard,
 } from "@/hooks/useFavoriteGifs";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
@@ -80,13 +81,16 @@ async function decodeShards(
 }
 
 /**
- * Always-on encrypted sync for GIF favorites. Each installation owns one
- * addressable shard; merging all shards gives add/remove convergence without
- * one upgrading device being able to replace another device's old favorites.
+ * Encrypted sync for GIF favorites, gated by this installation's automatic
+ * settings-sync preference. Each installation owns one addressable shard;
+ * merging all shards gives add/remove convergence without one upgrading device
+ * being able to replace another device's old favorites.
  */
 export function useFavoriteGifsSync(): void {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
+  const automaticSettingsSync = config.automaticSettingsSync !== false;
   const eventStore = useEventStore();
   const { mutateAsync: publishEvent } = useNostrPublish();
   const queryClient = useQueryClient();
@@ -96,11 +100,12 @@ export function useFavoriteGifsSync(): void {
   const publishChain = useRef<Promise<void>>(Promise.resolve());
   const pulledForPubkey = useRef<string | undefined>(undefined);
   const dirtyBeforePull = useRef(false);
+  const previousAutomatic = useRef(automaticSettingsSync);
 
   const queryKey = [QUERY_KEY, user?.pubkey];
   const query = useQuery({
     queryKey,
-    enabled: !!user?.pubkey && !!user.signer.nip44,
+    enabled: automaticSettingsSync && !!user?.pubkey && !!user.signer.nip44,
     queryFn: async ({ signal }) => {
       if (!user?.signer.nip44) return { shards: [], ownEvents: new Map<string, NostrRumor>() };
       const filter = favoriteGifFilter(user.pubkey);
@@ -125,7 +130,7 @@ export function useFavoriteGifsSync(): void {
   const publishCurrentShard = useCallback((completeMigration: boolean) => {
     const pubkey = user?.pubkey;
     const nip44 = user?.signer.nip44;
-    if (!pubkey || !nip44) return Promise.resolve();
+    if (!automaticSettingsSync || !pubkey || !nip44) return Promise.resolve();
 
     const run = async () => {
       const shard = loadOwnFavoriteGifShard(pubkey);
@@ -164,7 +169,7 @@ export function useFavoriteGifsSync(): void {
 
     publishChain.current = publishChain.current.then(run, run);
     return publishChain.current;
-  }, [publishEvent, queryClient, user]);
+  }, [automaticSettingsSync, publishEvent, queryClient, user]);
 
   useEffect(() => {
     pulledForPubkey.current = undefined;
@@ -174,12 +179,24 @@ export function useFavoriteGifsSync(): void {
     migrationInFlight.current = false;
   }, [user?.pubkey]);
 
+  // Changes made while opted out remain in this installation's local shard.
+  // Enabling synchronization is an explicit request to publish that current
+  // shard after the remote shards have been pulled and merged.
+  useEffect(() => {
+    const wasAutomatic = previousAutomatic.current;
+    previousAutomatic.current = automaticSettingsSync;
+    if (wasAutomatic || !automaticSettingsSync) return;
+    pulledForPubkey.current = undefined;
+    dirtyBeforePull.current = true;
+    void queryClient.invalidateQueries({ queryKey: [QUERY_KEY, user?.pubkey] });
+  }, [automaticSettingsSync, queryClient, user?.pubkey]);
+
   // Apply every remote device shard, then safely claim this installation's
   // pre-sync list. The legacy key is removed only once the encrypted shard has
   // been signed and durably queued by useNostrPublish.
   useEffect(() => {
     const pubkey = user?.pubkey;
-    if (!pubkey || !query.data) return;
+    if (!automaticSettingsSync || !pubkey || !query.data) return;
     hydrateFavoriteGifShards(pubkey, query.data.shards);
     const ownD = getFavoriteGifShardDTag(pubkey);
     const ownEvent = query.data.ownEvents.get(ownD);
@@ -202,13 +219,13 @@ export function useFavoriteGifsSync(): void {
     void publishCurrentShard(migration.hadLegacy).finally(() => {
       migrationInFlight.current = false;
     });
-  }, [publishCurrentShard, query.data, user?.pubkey]);
+  }, [automaticSettingsSync, publishCurrentShard, query.data, user?.pubkey]);
 
   // Explicit favorite/unfavorite actions update local state immediately, then
   // coalesce rapid clicks into one rewrite of this installation's shard.
   useEffect(() => {
     const pubkey = user?.pubkey;
-    if (!pubkey || !user.signer.nip44) return;
+    if (!automaticSettingsSync || !pubkey || !user.signer.nip44) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const unsubscribe = subscribeFavoriteGifChanges((changedPubkey) => {
       if (changedPubkey !== pubkey) return;
@@ -223,7 +240,7 @@ export function useFavoriteGifsSync(): void {
       unsubscribe();
       if (timer) clearTimeout(timer);
     };
-  }, [publishCurrentShard, user]);
+  }, [automaticSettingsSync, publishCurrentShard, user]);
 }
 
 export const favoriteGifsSyncQueryKey = [QUERY_KEY] as const;

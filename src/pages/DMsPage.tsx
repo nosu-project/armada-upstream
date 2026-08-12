@@ -105,7 +105,7 @@ import { emojify } from "@/components/chat/emojify";
 import { DM_VOICE_RELAYS } from "@/lib/platform";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
-import { preferredDmVoiceRelay } from "@/lib/voiceDevices";
+import { effectiveDmVoiceRelays } from "@/lib/voiceDevices";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 
@@ -791,10 +791,10 @@ function Conversation({
   const dmRelays = useMemo(() => effectiveDmRelays(config), [config]);
   const voiceCandidates = useMemo(
     () => {
-      // The user's Settings -> Voice server (when set) wins, then configured
-      // LiveKit-capable relays, with general DM relays as a last resort.
-      const preferred = preferredDmVoiceRelay();
-      const ordered = [...(preferred ? [preferred] : []), ...DM_VOICE_RELAYS, ...dmRelays];
+      // A custom Settings -> Voice server replaces the built-in voice relay;
+      // general DM relays remain a last capability-probed fallback.
+      const configured = effectiveDmVoiceRelays(DM_VOICE_RELAYS);
+      const ordered = [...configured, ...dmRelays];
       return ordered.filter((r, i) => ordered.indexOf(r) === i);
     },
     [dmRelays],
@@ -1952,10 +1952,9 @@ export function ConversationList({
   const dmRelays = useMemo(() => effectiveDmRelays(config), [config]);
   const voiceCandidates = useMemo(
     () => {
-      // Match the conversation header's capability order: known voice relays
-      // first, general-purpose DM relays only as a fallback.
-      const preferred = preferredDmVoiceRelay();
-      const ordered = [...(preferred ? [preferred] : []), ...DM_VOICE_RELAYS, ...dmRelays];
+      // Match the conversation header's replacement semantics and fallback.
+      const configured = effectiveDmVoiceRelays(DM_VOICE_RELAYS);
+      const ordered = [...configured, ...dmRelays];
       return ordered.filter((r, i) => ordered.indexOf(r) === i);
     },
     [dmRelays],

@@ -39,7 +39,7 @@ export interface MediaWithFallback {
  */
 export function useMediaWithFallback(ref: EncryptedRef): MediaWithFallback {
   const { config } = useAppContext();
-  const { blossomServerMetadata, useAppBlossomServers } = config;
+  const { appBlossomServers, blossomServerMetadata, useAppBlossomServers } = config;
 
   // The primary URL first, then the same blob on every other server. Memoized
   // on primitive/stable identity so it doesn't rebuild every render (callers
@@ -49,10 +49,10 @@ export function useMediaWithFallback(ref: EncryptedRef): MediaWithFallback {
       ref.url,
       ...blossomFallbackUrls(
         ref.url,
-        getEffectiveBlossomServers(blossomServerMetadata, useAppBlossomServers),
+        getEffectiveBlossomServers(appBlossomServers, blossomServerMetadata, useAppBlossomServers),
       ),
     ],
-    [ref.url, blossomServerMetadata, useAppBlossomServers],
+    [ref.url, appBlossomServers, blossomServerMetadata, useAppBlossomServers],
   );
 
   // Index into `candidates`; reaching `candidates.length` means every mirror

@@ -2,7 +2,7 @@ import { useCallback, useMemo } from "react";
 
 import { channelReadKey } from "@/contexts/ReadStateContext";
 import { useAppContext } from "@/hooks/useAppContext";
-import { DEFAULT_PUSH_PREFS, type PushPrefs } from "@/lib/pushPrefs";
+import { loadPushPrefs, type PushPrefs } from "@/lib/pushPrefs";
 import { normalizeRelayUrl } from "@/lib/platform";
 
 /**
@@ -63,17 +63,6 @@ export function dmScopeKey(pubkey: string): string {
   return `dm:${pubkey}`;
 }
 
-/** Read the current global per-type prefs (shared with push/native/foreground). */
-function loadPrefs(): PushPrefs {
-  try {
-    const raw = localStorage.getItem("armada:push-prefs");
-    if (raw) return { ...DEFAULT_PUSH_PREFS, ...JSON.parse(raw) };
-  } catch {
-    // ignore
-  }
-  return { ...DEFAULT_PUSH_PREFS };
-}
-
 /** The global fallback level for channel-like scopes, from the per-type prefs. */
 function globalChannelLevel(prefs: PushPrefs): NotifLevel {
   if (prefs.allGroupMessages) return "all";
@@ -124,6 +113,10 @@ function effectiveMap(
 
 export function useNotifLevels(): UseNotifLevelsReturn {
   const { config, updateConfig } = useAppContext();
+  // AppConfigSchema fills this on real persisted configs. Keep the legacy
+  // localStorage mirror as an upgrade boundary for pre-field configs and
+  // partial embedders that have not supplied the new account-global value.
+  const pushPrefs = config.pushPrefs ?? loadPushPrefs();
 
   const map = useMemo(
     () => effectiveMap(config.notifLevels, config.mutedCommunities, config.mutedChannels),
@@ -171,9 +164,9 @@ export function useNotifLevels(): UseNotifLevelsReturn {
   const communityLevel = useCallback(
     (railKey: string): NotifLevel => {
       const explicit = map.get(communityScopeKey(railKey));
-      return explicit ?? globalChannelLevel(loadPrefs());
+      return explicit ?? globalChannelLevel(pushPrefs);
     },
-    [map],
+    [map, pushPrefs],
   );
 
   const channelLevel = useCallback(
@@ -182,9 +175,9 @@ export function useNotifLevels(): UseNotifLevelsReturn {
       if (own) return own;
       const server = map.get(communityScopeKey(relayUrl));
       if (server) return server;
-      return globalChannelLevel(loadPrefs());
+      return globalChannelLevel(pushPrefs);
     },
-    [map],
+    [map, pushPrefs],
   );
 
   const concordChannelLevel = useCallback(
@@ -193,17 +186,17 @@ export function useNotifLevels(): UseNotifLevelsReturn {
       if (own) return own;
       const community = map.get(`${protocol}:${communityId}`);
       if (community) return community;
-      return globalChannelLevel(loadPrefs());
+      return globalChannelLevel(pushPrefs);
     },
-    [map],
+    [map, pushPrefs],
   );
 
   const dmLevel = useCallback(
     (pubkey: string): NotifLevel => {
       const own = map.get(dmScopeKey(pubkey));
-      return own ?? globalDmLevel(loadPrefs());
+      return own ?? globalDmLevel(pushPrefs);
     },
-    [map],
+    [map, pushPrefs],
   );
 
   return {

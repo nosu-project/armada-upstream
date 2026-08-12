@@ -4,6 +4,7 @@ import {
   ReadStateContext,
   type ReadStateMap,
 } from "@/contexts/ReadStateContext";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEncryptedSettings } from "@/hooks/useEncryptedSettings";
 import { useSettingsDoc } from "@/hooks/useSettingsDoc";
@@ -58,6 +59,8 @@ const SYNC_DEBOUNCE_MS = 4000;
  */
 export function ReadStateProvider({ children }: { children: React.ReactNode }) {
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
+  const automaticSettingsSync = config.automaticSettingsSync !== false;
   const { doc, isFetched, update, hasNip44Support } = useSettingsDoc("read-state");
   // The pre-split home of this map, for the migration window. Merged in as a
   // second source rather than arbitrated against: "max timestamp per key" is
@@ -93,8 +96,8 @@ export function ReadStateProvider({ children }: { children: React.ReactNode }) {
 
   const scheduleSync = useCallback(
     (map: ReadStateMap) => {
-      if (!hasNip44Support) return;
       pendingSync.current = map;
+      if (!automaticSettingsSync || !hasNip44Support) return;
       if (flushTimer.current) clearTimeout(flushTimer.current);
       flushTimer.current = setTimeout(() => {
         const next = pendingSync.current;
@@ -111,16 +114,25 @@ export function ReadStateProvider({ children }: { children: React.ReactNode }) {
         );
       }, SYNC_DEBOUNCE_MS);
     },
-    [hasNip44Support, update],
+    [automaticSettingsSync, hasNip44Support, update],
   );
+
+  // A device-local opt-out stops a pending debounce without discarding the
+  // locally durable read map. If the user turns synchronization back on, the
+  // effect below schedules that accumulated map after folding in remote state.
+  useEffect(() => {
+    if (automaticSettingsSync) return;
+    if (flushTimer.current) clearTimeout(flushTimer.current);
+    flushTimer.current = undefined;
+  }, [automaticSettingsSync]);
 
   // Retry a sync that was held back for want of a base, once one has been
   // read. Reads stay in localStorage meanwhile, so nothing is lost — they just
   // haven't reached the user's other devices yet.
   useEffect(() => {
-    if (!isFetched || !pendingSync.current) return;
+    if (!automaticSettingsSync || !isFetched || !pendingSync.current) return;
     scheduleSync(pendingSync.current);
-  }, [isFetched, scheduleSync]);
+  }, [automaticSettingsSync, isFetched, scheduleSync]);
 
   // Flush any pending sync on unmount.
   useEffect(() => {
@@ -168,10 +180,22 @@ export function ReadStateProvider({ children }: { children: React.ReactNode }) {
   // ordered against the flush above by construction: the map a flush publishes
   // is always one that has already absorbed the stored document.
   useEffect(() => {
-    if (!pubkey) return;
-    if (doc?.readState) hydrate(doc.readState);
-    if (metadata?.readState) hydrate(metadata.readState);
-  }, [pubkey, doc?.readState, metadata?.readState, hydrate]);
+    if (!automaticSettingsSync || !pubkey) return;
+    const absorb = (incoming: ReadStateMap) => {
+      if (pendingSync.current) {
+        pendingSync.current = mergeReadState(pendingSync.current, incoming);
+      }
+      hydrate(incoming);
+    };
+    if (doc?.readState) absorb(doc.readState);
+    if (metadata?.readState) absorb(metadata.readState);
+  }, [
+    automaticSettingsSync,
+    pubkey,
+    doc?.readState,
+    metadata?.readState,
+    hydrate,
+  ]);
 
   const value = useMemo(
     () => ({ readState, getLastRead, markRead, hydrate }),

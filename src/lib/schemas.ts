@@ -35,6 +35,16 @@ export const RelayMetadataSchema = z.object({
   pubkey: z.string().optional(),
 });
 
+/** Account-global notification categories shared by every delivery path. */
+export const PushPrefsSchema = z.object({
+  mentions: z.boolean(),
+  reactions: z.boolean(),
+  replies: z.boolean(),
+  directMessages: z.boolean(),
+  allGroupMessages: z.boolean(),
+  dmRequests: z.enum(["off", "generic", "full"]),
+});
+
 /**
  * A node in the community rail's structured layout: a bare item (by stable
  * rail key) or a Discord-style folder of items. See lib/railLayout.ts.
@@ -82,18 +92,22 @@ export const AppConfigSchema = z.object({
   communityRelays: z.array(z.string()).catch(defaultConfig.communityRelays),
   searchRelays: z.array(z.string()).catch(defaultConfig.searchRelays),
   preferredVoiceServer: z.string().catch(defaultConfig.preferredVoiceServer),
+  automaticSettingsSync: z.boolean().catch(defaultConfig.automaticSettingsSync),
   useAppRelays: z.boolean().catch(defaultConfig.useAppRelays),
   useUserRelays: z.boolean().catch(defaultConfig.useUserRelays),
   relayMetadata: RelayMetadataSchema.catch(defaultConfig.relayMetadata),
   useAppDmRelays: z.boolean().catch(defaultConfig.useAppDmRelays),
+  appDmRelays: z.array(z.string()).catch(defaultConfig.appDmRelays),
   useOwnDmRelays: z.boolean().catch(defaultConfig.useOwnDmRelays),
   dmRelays: z.array(z.string()).catch(defaultConfig.dmRelays),
   blossomServerMetadata: BlossomServerMetadataSchema.catch(defaultConfig.blossomServerMetadata),
   useAppBlossomServers: z.boolean().catch(defaultConfig.useAppBlossomServers),
+  appBlossomServers: z.array(z.string()).catch(defaultConfig.appBlossomServers),
   lastChannelByServer: z.record(z.string(), z.string()).catch({}),
   mutedCommunities: z.array(z.string()).catch([]),
   mutedChannels: z.array(z.string()).catch([]),
   notifLevels: z.record(z.string(), z.enum(["all", "mentions", "nothing"])).catch({}),
+  pushPrefs: PushPrefsSchema.catch(defaultConfig.pushPrefs),
   dmProtocol: z.record(z.string(), z.enum(["auto", "nip17", "nip04"])).catch({}),
   dmTypingIndicators: z.boolean().catch(defaultConfig.dmTypingIndicators),
   pinnedDms: z.array(z.string()).catch([]),
@@ -147,10 +161,14 @@ export const MetadataDocSchema = z.looseObject({
   useUserRelays: z.boolean().optional(),
   /** Whether DMs use the app's default DM relays. */
   useAppDmRelays: z.boolean().optional(),
+  /** Complete app-provided DM relay set; replaces the build defaults. */
+  appDmRelays: z.array(z.string()).optional(),
   /** Whether DMs also use the user's own relays. */
   useOwnDmRelays: z.boolean().optional(),
   /** Whether app default Blossom servers are used alongside the user's. */
   useAppBlossomServers: z.boolean().optional(),
+  /** Complete app-provided Blossom server set; replaces the build defaults. */
+  appBlossomServers: z.array(z.string()).optional(),
   /** Whether typing indicators are sent and shown in DMs (see AppConfig). */
   dmTypingIndicators: z.boolean().optional(),
   /** Whether unknown-sender DMs are surfaced in the request tier — see AppConfig. */
@@ -258,6 +276,7 @@ export const NotificationsDocSchema = z.looseObject({
   notifLevels: NotifLevelsSchema.optional(),
   mutedCommunities: z.array(z.string()).optional(),
   mutedChannels: z.array(z.string()).optional(),
+  pushPrefs: PushPrefsSchema.optional(),
 });
 
 /**

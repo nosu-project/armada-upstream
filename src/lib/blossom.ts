@@ -82,19 +82,18 @@ function normalizeUrl(url: string): string {
  * Ditto's getEffectiveBlossomServers (and Armada's effectiveDmRelays)
  * semantics:
  *
- * - When `useAppBlossomServers` is true, merges the app servers with the
- *   user's servers (app first, deduped).
- * - When false, returns only the user's servers — unless they have none,
- *   in which case the app servers are used so uploads still work.
+ * - When `useAppBlossomServers` is true, merges the synchronized app-server
+ *   set with the user's servers (app first, deduped).
+ * - When false, returns only the user's servers, including an intentional
+ *   empty set. An explicit off must not silently dial build-time defaults.
  */
 export function getEffectiveBlossomServers(
+  appServers: string[],
   userMeta: BlossomServerMetadata,
   useAppBlossomServers: boolean,
 ): string[] {
-  if (!useAppBlossomServers && userMeta.servers.length > 0) {
-    return dedupeServers(userMeta.servers);
-  }
-  return dedupeServers([...APP_BLOSSOM_SERVERS, ...userMeta.servers]);
+  if (!useAppBlossomServers) return dedupeServers(userMeta.servers);
+  return dedupeServers([...appServers, ...userMeta.servers]);
 }
 
 /**
