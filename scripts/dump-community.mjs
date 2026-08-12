@@ -33,6 +33,18 @@
  *   --kinds <a,b,...>  Only these rumor kinds (default: all Chat Plane kinds).
  *   --timeout <ms>     Per-relay REQ timeout (default: 20000).
  *
+ * Env vars, for the awkward communities:
+ *   INCLUDE_PRIVATE=1        Also read channels the control plane marks private.
+ *   CONTROL_EPOCH_SCAN=<n>   Fold the control plane at root_epoch..root_epoch+n
+ *                            too — each epoch has its own control-stream pubkey,
+ *                            so a channel created after a rekey is invisible at
+ *                            the invite's root epoch alone (default: 0).
+ *   EXTRA_CHANNELS=id:name,… Read channel ids whose control-plane DEFINITION the
+ *                            bundle relays never served (a data-availability gap
+ *                            that hides the channel from discovery). The stream
+ *                            key derives from community_root + id, so the
+ *                            timeline reads even when the name never resolved.
+ *
  * Exit status is non-zero on a resolution failure so it is usable in a pipe.
  */
 
@@ -73,6 +85,7 @@ const RELAY_DICTIONARY = {
   4: "wss://relay.dreamith.to",
 };
 const STOCK_RELAYS = Object.values(RELAY_DICTIONARY);
+const INCLUDE_PRIVATE = process.env.INCLUDE_PRIVATE === "1";
 
 function buildInfo(label, id32, epoch) {
   const l = te.encode(label);
@@ -385,29 +398,37 @@ async function resolveBundle(pool, invite) {
 
 /** Fold the control plane and return public, non-deleted channels. */
 async function discoverChannels(pool, bundle) {
-  const readKey = controlGroupKey(bundle.community_root, bundle.community_id, bundle.root_epoch);
-  const wraps = await pool.queryAll(
-    bundle.relays,
-    { kinds: [KIND_WRAP], authors: [bundle.control_pk] },
-    20000,
-  );
   const editions = new Map();
-  for (const wrap of wraps) {
-    if (wrap.pubkey !== bundle.control_pk || !verifyEvent(wrap)) continue;
-    try {
-      const seal = JSON.parse(nip44Decrypt(wrap.content, readKey.convKey));
-      if (seal.kind !== KIND_SEAL_PLAINTEXT) continue;
-      const rumor = JSON.parse(seal.content);
-      if (rumor.kind !== KIND_EDITION) continue;
-      const tag = (n) => rumor.tags.find((t) => t[0] === n)?.[1];
-      const vsk = tag("vsk");
-      const eid = tag("eid");
-      const ev = Number(tag("ev"));
-      if (!vsk || !eid || !Number.isFinite(ev)) continue;
-      const prev = editions.get(eid);
-      if (!prev || ev > prev.ev) editions.set(eid, { ev, vsk, content: rumor.content });
-    } catch {
-      // not decryptable / malformed — skip
+  const scanTo = bundle.root_epoch + Number(process.env.CONTROL_EPOCH_SCAN ?? 0);
+  for (let epoch = bundle.root_epoch; epoch <= scanTo; epoch++) {
+    const readKey = controlGroupKey(bundle.community_root, bundle.community_id, epoch);
+    const wraps = await pool.queryAll(
+      bundle.relays,
+      { kinds: [KIND_WRAP], authors: [readKey.pk] },
+      20000,
+    );
+    let folded = 0;
+    for (const wrap of wraps) {
+      if (wrap.pubkey !== readKey.pk || !verifyEvent(wrap)) continue;
+      try {
+        const seal = JSON.parse(nip44Decrypt(wrap.content, readKey.convKey));
+        if (seal.kind !== KIND_SEAL_PLAINTEXT) continue;
+        const rumor = JSON.parse(seal.content);
+        if (rumor.kind !== KIND_EDITION) continue;
+        const tag = (n) => rumor.tags.find((t) => t[0] === n)?.[1];
+        const vsk = tag("vsk");
+        const eid = tag("eid");
+        const ev = Number(tag("ev"));
+        if (!vsk || !eid || !Number.isFinite(ev)) continue;
+        folded++;
+        const prev = editions.get(eid);
+        if (!prev || ev > prev.ev) editions.set(eid, { ev, vsk, content: rumor.content });
+      } catch {
+        // not decryptable / malformed — skip
+      }
+    }
+    if (scanTo > bundle.root_epoch) {
+      log(`control epoch ${epoch}: ${wraps.length} wraps, ${folded} editions folded`);
     }
   }
   const channels = [];
@@ -415,7 +436,7 @@ async function discoverChannels(pool, bundle) {
     if (ed.vsk !== "2") continue;
     try {
       const def = JSON.parse(ed.content);
-      if (def.deleted || def.private) continue;
+      if (def.deleted || (def.private && !INCLUDE_PRIVATE)) continue;
       channels.push({ id: eid, name: def.name ?? "channel" });
     } catch {
       // skip
@@ -597,7 +618,19 @@ async function main() {
   log(`community: "${bundle.name}" id=${bundle.community_id.slice(0, 12)}… epoch=${bundle.root_epoch}`);
   log(`relays: ${bundle.relays.join(", ")}`);
 
+  // Control-plane reads may be AUTH-gated too; the control key doesn't depend
+  // on channel discovery, so authorize with it before folding the control plane.
+  authFinalizers = buildAuthFinalizers(bundle, []);
   let channels = await discoverChannels(pool, bundle);
+  // Manually add channel ids whose control-plane definition wasn't served by the
+  // bundle relays (data-availability gap) — we hold community_root, so the
+  // stream key derives from the id alone. `id:name` pairs, comma-separated.
+  if (process.env.EXTRA_CHANNELS) {
+    for (const spec of process.env.EXTRA_CHANNELS.split(",")) {
+      const [id, name] = spec.split(":");
+      if (id && !channels.some((c) => c.id === id)) channels.push({ id, name: name ?? id.slice(0, 8) });
+    }
+  }
   if (opts.channels.length) {
     channels = channels.filter((c) => opts.channels.includes(c.name.toLowerCase()));
   }
