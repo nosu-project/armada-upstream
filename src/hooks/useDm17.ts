@@ -613,12 +613,6 @@ export interface Dm17Thread {
    * best-effort fallback. When false, callers use the kind-4 path.
    */
   canSend: boolean;
-  /**
-   * Whether the peer has PUBLISHED a kind-10050 inbox (guaranteed-reachable
-   * private delivery). When false but `canSend` is true, we're delivering the
-   * private DM to shared relays best-effort — reachable if the peer reads them.
-   */
-  hasPeerInbox: boolean;
   /** Send a chat message (kind 14). Resolves once optimistically rendered. */
   send: (content: string, extraTags?: string[][]) => Promise<void>;
   /** Send a kind-7 reaction targeting a message in this conversation. */
@@ -661,7 +655,9 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
   // published kind-10050 inbox; when they have none we fall back to our own
   // (app / DM) relays — fully private (still gift-wrapped, no metadata leak),
   // and reachable whenever the peer reads those shared relays (the common
-  // Armada case). `hasPeerInbox` lets the UI flag best-effort delivery.
+  // Armada case). This is a routing fact, not a trustworthy user-readiness or
+  // delivery-status signal: older clients (including Ditto) never published
+  // kind 10050 even when the conversation worked over shared relays.
   const hasPeerInbox = peerInboxRelays.length > 0;
   const canSend = support && !!peer && (hasPeerInbox || myRelays.length > 0);
 
@@ -1215,7 +1211,6 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
     setTimer,
     isLoading: query.isLoading,
     canSend,
-    hasPeerInbox,
     send,
     react,
     removeReaction,

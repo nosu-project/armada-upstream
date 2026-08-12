@@ -1,12 +1,18 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { accountDataRelays } from "@/contexts/AppContext";
+import { accountDataRelays, effectiveDmRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { normalizeRelayUrl } from "@/lib/platform";
-import { queryExplicitRelays } from "@/lib/nip65";
+import {
+  KIND_RELAY_LIST,
+  newestRelayList,
+  parseRelayList,
+  queryExplicitRelays,
+  uniqueRelayUrls,
+} from "@/lib/nip65";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
@@ -36,6 +42,56 @@ export function parseDmRelays(event: { tags: string[][] } | undefined): string[]
 export interface DmRelayListQuery {
   event: NostrEvent | null;
   relays: string[];
+}
+
+type DmRelayQueryClient = Parameters<typeof queryExplicitRelays>[0];
+
+/** Newest kind-10050 event for one peer, using NIP-01 replaceable ordering. */
+function newestDmRelayList(events: NostrEvent[], peer: string): NostrEvent | undefined {
+  return events
+    .filter((event) => event.kind === KIND_DM_RELAYS && event.pubkey === peer)
+    .sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id))[0];
+}
+
+/**
+ * Discover a peer's NIP-17 inbox without assuming their kind-10050 event lives
+ * on Armada's app relays. First query every configured account/DM discovery
+ * relay independently (important for slow or NIP-42-authenticated relays), then
+ * follow the peer's NIP-65 WRITE relays and choose the newest replaceable event
+ * across both rounds. A newer empty list remains authoritative.
+ */
+export async function discoverDmRelaysFor(
+  nostr: DmRelayQueryClient,
+  peer: string,
+  discoveryRelays: Iterable<string>,
+  signal: AbortSignal,
+): Promise<string[]> {
+  const discoveryEvents = await queryExplicitRelays(
+    nostr,
+    discoveryRelays,
+    [
+      { kinds: [KIND_DM_RELAYS], authors: [peer], limit: 1 },
+      { kinds: [KIND_RELAY_LIST], authors: [peer], limit: 1 },
+    ],
+    signal,
+  );
+
+  const relayList = newestRelayList(
+    discoveryEvents.filter((event) => event.pubkey === peer),
+  );
+  const peerWriteRelays = relayList
+    ? parseRelayList(relayList).filter((relay) => relay.write).map((relay) => relay.url)
+    : [];
+  const peerEvents = peerWriteRelays.length > 0
+    ? await queryExplicitRelays(
+        nostr,
+        peerWriteRelays,
+        [{ kinds: [KIND_DM_RELAYS], authors: [peer], limit: 1 }],
+        signal,
+      )
+    : [];
+
+  return parseDmRelays(newestDmRelayList([...discoveryEvents, ...peerEvents], peer));
 }
 
 /**
@@ -129,9 +185,10 @@ export function useDmRelayList() {
 
 /**
  * Read another user's published kind-10050 DM relay list (NIP-17), so we can
- * deliver DMs to the relays where they actually read. Queried from the app
- * relays (where 10050 lists live), cached for an hour. Returns `[]` when the
- * peer has published no list — callers fall back to their own DM relays.
+ * deliver DMs to the relays where they actually read. Discovery covers the
+ * configured account/DM relays and follows the peer's NIP-65 write relays.
+ * Returns `[]` when no signed list is found; callers fall back to their own DM
+ * relays for compatibility with clients that never published kind 10050.
  *
  * This closes the cross-relay delivery gap: writing only to the *sender's*
  * relays silently fails when the peer doesn't read them. By unioning the peer's
@@ -140,20 +197,28 @@ export function useDmRelayList() {
  */
 export function useDmRelaysFor(peer: string | undefined): string[] {
   const { nostr } = useNostr();
+  const { user } = useCurrentUser();
   const { config } = useAppContext();
-  const relayKey = config.appRelays.join(",");
+  const discoveryRelays = uniqueRelayUrls([
+    ...accountDataRelays(config, user?.pubkey),
+    ...effectiveDmRelays(config),
+  ]);
+  const relayKey = discoveryRelays.join(",");
 
   const query = useQuery<string[]>({
     queryKey: ["dm-relay-list", "peer", peer, relayKey],
     enabled: !!peer,
-    staleTime: 60 * 60 * 1000,
+    // Missing lists are common with older clients. Recheck often enough that a
+    // newly published inbox is adopted without leaving a false result cached
+    // for an hour, while still keeping this off the hot path.
+    staleTime: 5 * 60 * 1000,
     queryFn: async ({ signal }) => {
-      const events = await nostr.group(config.appRelays).query(
-        [{ kinds: [KIND_DM_RELAYS], authors: [peer!], limit: 1 }],
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(6000)]) },
+      return discoverDmRelaysFor(
+        nostr,
+        peer!,
+        discoveryRelays,
+        AbortSignal.any([signal, AbortSignal.timeout(8000)]),
       );
-      const event = events.sort((a, b) => b.created_at - a.created_at)[0];
-      return parseDmRelays(event);
     },
   });
 
