@@ -417,13 +417,15 @@ export const MessageRow = memo(function MessageRow({
             {actions}
           </div>
         )}
+        {children}
         {continuation && (edited || pending) && (
-          // Continuation rows hide the header, so surface the (edited)/sending
-          // markers in the same floated slot the toolbar uses. The toolbar
-          // (z-20) takes over that slot on hover/active, so hand off: show this
-          // marker at rest and fade it out when the toolbar appears, so the two
-          // never stack on top of each other.
-          <div className="absolute right-2.5 -top-3 touch:-top-10 z-10 flex items-center gap-2 rounded-md border bg-background/95 px-1 py-0.5 shadow-sm transition-opacity pointer-events-none group-hover:opacity-0 group-data-[active]:opacity-0 group-focus-within:opacity-0">
+          // Continuation rows have no header to carry the (edited)/sending
+          // marker, so render it INLINE trailing the body, in normal flow.
+          // (The header rows put the same marker on the name/timestamp line.)
+          // In flow it takes its own space instead of floating over a
+          // neighbour, so it can never ride up and cover the message above the
+          // way the old absolutely-positioned pill did.
+          <div className="mt-0.5 flex items-center gap-2 leading-none">
             {edited && (
               <span className="text-[10px] text-muted-foreground/60 shrink-0" title="Edited">(edited)</span>
             )}
@@ -432,7 +434,6 @@ export const MessageRow = memo(function MessageRow({
             )}
           </div>
         )}
-        {children}
         {afterBody}
       </div>
       </div>
