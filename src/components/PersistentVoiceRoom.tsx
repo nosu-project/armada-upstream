@@ -609,11 +609,21 @@ function Nip29VoiceRoom({
 
   // Register the navigate-to-call handler so the floating video window's
   // "return to call" action lands on this room's channel/conversation.
-  const { registerFocusActiveCall } = useCall();
+  const { registerFocusActiveCall, registerCallSummary } = useCall();
   useEffect(() => {
     registerFocusActiveCall(goToChannel);
     return () => registerFocusActiveCall(null);
   }, [registerFocusActiveCall, goToChannel]);
+
+  // How the call reads in the Android ongoing-call notification. Plain text,
+  // so unlike the bar's `label` it can carry no custom-emoji images — and it
+  // re-registers as the group metadata / peer profile resolve.
+  useEffect(() => {
+    registerCallSummary(
+      isDm ? { title: peerName } : { title: `#${channelName}`, subtitle: serverName },
+    );
+    return () => registerCallSummary(null);
+  }, [registerCallSummary, isDm, peerName, channelName, serverName]);
 
   if (isLoading) return <>{<LoadingBar placeBar={placeBar} label="Requesting voice access…" />}</>;
   if (error || !tokenData) return <>{<ErrorBar placeBar={placeBar} error={error} onLeave={onLeave} />}</>;
@@ -693,7 +703,8 @@ function ConcordVoiceRoom({
 }) {
   const { community, channel, broker } = ctx;
   const { user } = useCurrentUser();
-  const { joinConcordCall, registerFocusActiveCall, setRaisedHands } = useCall();
+  const { joinConcordCall, registerFocusActiveCall, registerCallSummary, setRaisedHands } =
+    useCall();
   const navigate = useNavigate();
   // Live presence (§4): the identity→member verification input, the rendezvous
   // hint stream (§5), and the input to our own heartbeat below. Resolved before
@@ -735,6 +746,14 @@ function ConcordVoiceRoom({
     registerFocusActiveCall(go);
     return () => registerFocusActiveCall(null);
   }, [registerFocusActiveCall, navigate, community.idHex, channel.idHex]);
+
+  // How the call reads in the Android ongoing-call notification. The names are
+  // the decrypted Concord ones — they never leave the device, and the
+  // notification is drawn locally by a service in this same process.
+  useEffect(() => {
+    registerCallSummary({ title: `#${channel.name}`, subtitle: community.name });
+    return () => registerCallSummary(null);
+  }, [registerCallSummary, channel.name, community.name]);
 
   // Our own heartbeat (§4): `joined` every 30s, `left` on leave — also carrying
   // the sticky raised-hand state and, via `sendReaction`, transient emoji (both

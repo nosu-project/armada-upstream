@@ -69,6 +69,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(buzz.armada.app.db.ArmadaDbPlugin.class);
         registerPlugin(ArmadaCredentialPlugin.class);
         registerPlugin(BluetoothMeshPlugin.class);
+        registerPlugin(ArmadaCallPlugin.class);
         registerPlugin(WebReadyPlugin.class);
         registerPlugin(ShareTargetPlugin.class);
 

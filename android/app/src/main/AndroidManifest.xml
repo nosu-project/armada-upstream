@@ -112,6 +112,17 @@
             android:name=".MeshForegroundService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+
+        <!-- Ongoing voice call: the persistent call notification, and the
+             foreground state that keeps a backgrounded call connected and
+             audible. `microphone` is what lets capture continue off screen
+             (Android 11+ silences a backgrounded app's mic without it);
+             `mediaPlayback` is the floor the service falls back to while
+             RECORD_AUDIO is still ungranted, since calls are joined muted. -->
+        <service
+            android:name=".CallForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="microphone|mediaPlayback" />
     </application>
 
     <!-- Permissions -->
@@ -134,6 +145,11 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- The ongoing-call foreground service's two types. Without it the
+         backgrounded process is a cached one Android 12+ freezes within
+         seconds, which drops the call. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <!-- Let the user exempt Armada from battery optimization so the persistent
          relay connections survive Doze and the service can restart on boot
          (Android 15+). Only requested when background notifications are on. -->

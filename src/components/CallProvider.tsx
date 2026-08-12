@@ -2,8 +2,14 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 
 import { FloatingCallStage } from "@/components/chat/FloatingCallStage";
 import { MobileCallPreview } from "@/components/chat/MobileCallPreview";
+import { useCallForegroundService } from "@/hooks/useCallForegroundService";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { CallContext, type ActiveCall, type ConcordVoiceContext } from "@/contexts/CallContext";
+import {
+  CallContext,
+  type ActiveCall,
+  type CallSummary,
+  type ConcordVoiceContext,
+} from "@/contexts/CallContext";
 import { cn } from "@/lib/utils";
 
 /**
@@ -79,6 +85,11 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   // owns the correct route for its call type). Powers the floating window's
   // "return to call" action.
   const [focusActiveCall, setFocusActiveCall] = useState<(() => void) | null>(null);
+  // How the call is labelled outside the app (the Android ongoing-call
+  // notification), registered by the connected room — which is the only place
+  // that knows the room's name. Resolves a beat after the join, and again as
+  // late metadata lands.
+  const [callSummary, setCallSummary] = useState<CallSummary | null>(null);
   // Live speaker set (pubkeys), reported by the connected room so voice
   // activity can render outside the LiveKit context (sidebar rosters).
   const [speakingPubkeys, setSpeakingState] = useState<ReadonlySet<string>>(NO_SPEAKERS);
@@ -183,6 +194,20 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     // functional form (React would otherwise call it as an updater).
     setFocusActiveCall(() => fn);
   }, []);
+
+  // Value-guarded: the room re-registers on every render of its label inputs,
+  // and an unguarded set would re-post the OS notification each time.
+  const registerCallSummary = useCallback((summary: CallSummary | null) => {
+    setCallSummary((prev) =>
+      prev?.title === summary?.title && prev?.subtitle === summary?.subtitle ? prev : summary,
+    );
+  }, []);
+
+  // Android: the ongoing-call notification, and with it the foreground state
+  // that keeps a backgrounded call connected and audible. Driven off the call's
+  // whole lifetime — `exiting` included, so the notification outlives the
+  // slide-out animation exactly as the LiveKit connection does.
+  useCallForegroundService(Boolean(user && activeCall), callSummary, leaveCall);
 
   const hasNormalSlot = stageSlots.length > 0;
 
@@ -295,6 +320,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         setFloatingHidden,
         focusActiveCall,
         registerFocusActiveCall,
+        registerCallSummary,
         speakingPubkeys,
         setSpeakingPubkeys,
         mutedPubkeys,

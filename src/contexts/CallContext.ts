@@ -34,6 +34,21 @@ export interface ActiveCall {
   concord?: ConcordVoiceContext;
 }
 
+/**
+ * How the active call reads outside the app — currently the Android ongoing-call
+ * notification (see `useCallForegroundService`). Registered by the connected
+ * voice room, which is the only place that knows what the room is CALLED: the
+ * NIP-29 group's kind-39000 metadata, the DM peer's kind-0, or the Concord
+ * channel's decrypted name. Plain strings, since the destination is an OS
+ * notification rather than React.
+ */
+export interface CallSummary {
+  /** The room as the user knows it: "#general", or a DM peer's display name. */
+  title: string;
+  /** Where that room lives: a server or community name. Absent for DMs. */
+  subtitle?: string;
+}
+
 export interface CallContextType {
   /** The room the user is currently connected to, or null. */
   activeCall: ActiveCall | null;
@@ -124,6 +139,12 @@ export interface CallContextType {
   focusActiveCall: (() => void) | null;
   /** Internal: the connected room registers its navigate-to-call handler here. */
   registerFocusActiveCall: (fn: (() => void) | null) => void;
+  /**
+   * Internal: the connected room registers how the call should be labelled
+   * outside the app (the Android ongoing-call notification). Null while no room
+   * has resolved its name yet, which the notification renders generically.
+   */
+  registerCallSummary: (summary: CallSummary | null) => void;
   /**
    * Pubkeys currently speaking in the ACTIVE call (resolved from LiveKit
    * identities; unverified Concord identities are excluded). Lets UI outside
