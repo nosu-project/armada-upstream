@@ -41,8 +41,13 @@ import type { ConcordSub } from "@/concord/lib/concordNotifications";
 export interface PushWatchSet {
   /** The content-blind subscriptions to register with the gateway. */
   specs: PushSubscriptionSpec[];
-  /** Concord channels at their current epoch, above the `nothing` level. */
-  concord: ConcordSub[];
+  /**
+   * Concord channels at their current epoch, above the `nothing` level. Each
+   * carries `mentionOnly` (the channel is at the `mentions` level) so the iOS
+   * extension can suppress non-mention messages after decrypt — the gateway is
+   * content-blind and can't, so it wakes on every message either way.
+   */
+  concord: Array<ConcordSub & { mentionOnly: boolean }>;
   /** Peers whose DMs are not "requests": follows ∪ accepted ∪ pinned. */
   dmKnownPeers: string[];
   /**
@@ -191,9 +196,17 @@ export function usePushWatchSet(prefs: PushPrefs): PushWatchSet {
 
   const concord = useMemo(
     () =>
-      allConcordSubs.filter(
-        (sub) => concordChannelLevel("c2", sub.communityId, sub.channelId) !== "nothing",
-      ),
+      allConcordSubs
+        .map((sub) => ({
+          sub,
+          level: concordChannelLevel("c2", sub.communityId, sub.channelId),
+        }))
+        .filter(({ level }) => level !== "nothing")
+        // Carry the mentions-only flag through so the iOS extension (which CAN
+        // decrypt Concord) can suppress non-mention messages, mirroring the
+        // Android service. The gateway stays content-blind; enforcement is on
+        // the device after decrypt.
+        .map(({ sub, level }) => ({ ...sub, mentionOnly: level === "mentions" })),
     [allConcordSubs, concordChannelLevel],
   );
 

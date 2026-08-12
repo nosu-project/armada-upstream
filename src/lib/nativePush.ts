@@ -127,6 +127,13 @@ export interface IosPushConfig {
      * extension must not present it, so it drops it after decrypt.
      */
     banned?: string[];
+    /**
+     * "mentions only": the channel wakes iOS for every message (the gateway is
+     * content-blind and can't filter an encrypted wrap), but the extension —
+     * which decrypts — suppresses a message that doesn't `#p`-tag the user.
+     * Mirrors the Android service's per-community `mentionOnly`.
+     */
+    mentionOnly?: boolean;
   }>;
 }
 

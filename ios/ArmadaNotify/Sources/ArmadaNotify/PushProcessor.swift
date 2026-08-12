@@ -288,6 +288,12 @@ struct PushProcessor {
         // be read at all.
         if reaction && !mention { return .dropped }
 
+        // "Mentions only": the gateway can't filter an encrypted wrap, so it
+        // wakes us for every message on this channel; here — the first place the
+        // decrypted `p` tags are legible — we drop anything that doesn't tag the
+        // viewer, matching the Android service and the channel's chosen level.
+        if stream.mentionOnly && !mention { return .dropped }
+
         let profile = store?.profile(pubkey: opened.author)
         var message = NotificationPreview.Message(
             plane: .c2,

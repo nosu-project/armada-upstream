@@ -179,6 +179,7 @@ export function useIosPush(): UsePushNotificationsReturn {
             communityId: sub.communityId,
             channelId: sub.channelId,
             banned: sub.banned,
+            mentionOnly: sub.mentionOnly,
           }))
         ),
         // An nsec login decrypts on the device; a bunker login hands over the

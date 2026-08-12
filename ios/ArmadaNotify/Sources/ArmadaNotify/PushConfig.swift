@@ -18,6 +18,29 @@ struct ConcordStream {
     /// message is still stored — the timeline folds it away on read — but the
     /// extension must not present it, so `prepareConcord` drops it after decrypt.
     let banned: Set<String>
+    /// "mentions only": the gateway is content-blind and wakes iOS for every
+    /// message on this channel, but the extension decrypts, so `prepareConcord`
+    /// drops a message that doesn't `#p`-tag the viewer. Mirrors the Android
+    /// service's per-community `mentionOnly` (older configs omit it → notify all).
+    let mentionOnly: Bool
+
+    init(
+        pubkey: String,
+        conversationKey: String,
+        epoch: String,
+        communityId: String,
+        channelId: String,
+        banned: Set<String>,
+        mentionOnly: Bool = false
+    ) {
+        self.pubkey = pubkey
+        self.conversationKey = conversationKey
+        self.epoch = epoch
+        self.communityId = communityId
+        self.channelId = channelId
+        self.banned = banned
+        self.mentionOnly = mentionOnly
+    }
 }
 
 /// A bunker login's remote signer, as much of it as decryption needs.
@@ -127,7 +150,8 @@ struct PushConfig {
                 epoch: epoch,
                 communityId: communityId,
                 channelId: channelId,
-                banned: Set((entry["banned"] as? [String]) ?? [])
+                banned: Set((entry["banned"] as? [String]) ?? []),
+                mentionOnly: (entry["mentionOnly"] as? Bool) ?? false
             ))
         }
 

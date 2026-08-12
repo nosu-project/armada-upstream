@@ -273,6 +273,51 @@ final class StorelessTests: XCTestCase {
         )
         XCTAssertEqual(prepared?.drop, true, "a banned member's message must not notify")
     }
+
+    /// A channel at "mentions only" wakes iOS for every message (the gateway
+    /// can't read the encrypted wrap), so the extension — which decrypts — must
+    /// drop a message that doesn't `#p`-tag the viewer. Mirrors the Android
+    /// service's `mentionOnly`.
+    func testDropsANonMentionMessageUnderMentionsOnly() {
+        let concord = vectorObject("concord")
+        let wrap = concord["wrap"] as! [String: Any]
+        func stream(mentionOnly: Bool) -> ConcordStream {
+            ConcordStream(
+                pubkey: concord["streamPk"] as! String,
+                conversationKey: concord["convKey"] as! String,
+                epoch: concord["epoch"] as! String,
+                communityId: "cc",
+                channelId: concord["channelId"] as! String,
+                banned: [],
+                mentionOnly: mentionOnly
+            )
+        }
+        func processor(mentionOnly: Bool) -> PushProcessor {
+            PushProcessor(
+                store: nil,
+                config: PushConfig(
+                    policy: .generic, selfPubkey: self_, knownPeers: [], secretKey: nil,
+                    nip46: nil, concord: [stream(mentionOnly: mentionOnly)]
+                ),
+                now: 1_700_000_000
+            )
+        }
+        // Baseline: at "all messages" the same wrap (author bobPk, no `#p` for
+        // the all-`a` viewer) notifies.
+        XCTAssertNotEqual(
+            processor(mentionOnly: false)
+                .prepare(userInfo: ["scope": "c2", "event": wrap])?.drop,
+            true,
+            "a non-mention notifies a channel set to all messages"
+        )
+        // Mentions-only: the same non-mention wrap is dropped.
+        XCTAssertEqual(
+            processor(mentionOnly: true)
+                .prepare(userInfo: ["scope": "c2", "event": wrap])?.drop,
+            true,
+            "a non-mention must not notify a mentions-only channel"
+        )
+    }
 }
 
 /// Who a notification says it is FROM.
