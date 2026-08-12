@@ -81,6 +81,27 @@ describe("useConfigDocSync automatic delivery", () => {
     expect(h.publish).toHaveBeenCalledTimes(2);
   });
 
+  it("doubles the retry delay while delivery keeps failing", async () => {
+    h.publish
+      .mockRejectedValueOnce(new Error("relay down"))
+      .mockRejectedValueOnce(new Error("relay down"))
+      .mockResolvedValueOnce({});
+    const { rerender } = renderHook(() => useConfigDocSync("metadata"));
+
+    h.config = { ...h.config, theme: "dark" };
+    rerender();
+    await act(() => vi.advanceTimersByTimeAsync(800));
+    expect(h.publish).toHaveBeenCalledTimes(1);
+
+    await act(() => vi.advanceTimersByTimeAsync(5_000));
+    expect(h.publish).toHaveBeenCalledTimes(2);
+
+    await act(() => vi.advanceTimersByTimeAsync(9_999));
+    expect(h.publish).toHaveBeenCalledTimes(2);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(h.publish).toHaveBeenCalledTimes(3);
+  });
+
   it("publishes the latest snapshot when config changes during delivery", async () => {
     let finishFirst!: () => void;
     h.publish

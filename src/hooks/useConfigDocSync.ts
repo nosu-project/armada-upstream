@@ -12,6 +12,10 @@ import type { AppConfig } from "@/contexts/AppContext";
 const PUBLISH_DEBOUNCE_MS = 800;
 /** Retry a durable local settings edit whose relay delivery failed. */
 const PUBLISH_RETRY_MS = 5_000;
+/** Cap for the doubling retry delay: delivery keeps trying, but a device that
+ * is offline (or whose signer keeps refusing) must not re-sign every 5 s
+ * forever — each attempt is a fresh event and, on NIP-46, bunker traffic. */
+const PUBLISH_RETRY_MAX_MS = 5 * 60_000;
 
 /**
  * Publish baselines of the mounted {@link useConfigDocSync} instances, keyed
@@ -104,6 +108,11 @@ export function useConfigDocSync(name: ConfigDocName): void {
   // `accountGeneration`.
   const publishesInFlight = useRef(0);
   const accountGeneration = useRef(0);
+  // Consecutive failed attempts, for exponential retry backoff. Reset only on
+  // a success (or a fresh account/toggle state): a config-churn effect re-run
+  // may schedule an early attempt, but while delivery keeps failing the timer
+  // path's delay keeps growing toward the cap.
+  const retryCount = useRef(0);
   const cancelPublish = useCallback(() => {
     if (publishTimer.current) clearTimeout(publishTimer.current);
     publishTimer.current = null;
@@ -111,6 +120,7 @@ export function useConfigDocSync(name: ConfigDocName): void {
 
   useEffect(() => {
     accountGeneration.current += 1;
+    retryCount.current = 0;
     appliedId.current = undefined;
     appliedCreatedAt.current = undefined;
     lastPublished.current = undefined;
@@ -129,6 +139,7 @@ export function useConfigDocSync(name: ConfigDocName): void {
     // the generation prevents its completion from scheduling another write.
     // (`publishesInFlight` is deliberately left to drain on its own.)
     accountGeneration.current += 1;
+    retryCount.current = 0;
     cancelPublish();
   }, [automaticSettingsSync, cancelPublish]);
 
@@ -218,13 +229,19 @@ export function useConfigDocSync(name: ConfigDocName): void {
       update(patch)
         .then(() => {
           if (accountGeneration.current !== generation) return;
+          retryCount.current = 0;
           lastPublished.current = attemptSnapshot;
           succeeded = true;
         })
         .catch((err) => {
           if (accountGeneration.current !== generation) return;
+          const delay = Math.min(
+            PUBLISH_RETRY_MS * 2 ** retryCount.current,
+            PUBLISH_RETRY_MAX_MS,
+          );
+          retryCount.current += 1;
           console.warn(`Config sync failed for ${name}; retrying:`, err);
-          publishTimer.current = setTimeout(attempt, PUBLISH_RETRY_MS);
+          publishTimer.current = setTimeout(attempt, delay);
         })
         .finally(() => {
           // Decrement unconditionally to keep the counter balanced; only the
