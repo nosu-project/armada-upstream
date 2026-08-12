@@ -4,14 +4,7 @@ import { useEffect, useState } from "react";
 import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
 import type { BanPhase } from "@/concord/hooks/useModeration";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
@@ -53,7 +46,6 @@ export function BanMemberDialog({ targets, ineligible, willRotate, onClose, onCo
   const [stuck, setStuck] = useState(false);
   const busy = phase !== null;
   const count = targets?.length ?? 0;
-  const single = count === 1 ? targets?.[0] : undefined;
 
   // A fresh selection is a fresh flow.
   useEffect(() => {
@@ -110,38 +102,35 @@ export function BanMemberDialog({ targets, ineligible, willRotate, onClose, onCo
 
   return (
     <Dialog open={targets !== null && targets.length > 0} onOpenChange={(open) => !open && close()}>
-      <DialogContent className="sm:max-w-sm">
-        <DialogHeader>
-          <DialogTitle>
-            {single ? (
-              <>
-                Ban <TargetName pubkey={single} />?
-              </>
-            ) : (
-              <>Ban {count} members?</>
-            )}
-          </DialogTitle>
-          <DialogDescription>
+      <ChromeDialogContent title={count > 1 ? "Ban members" : "Ban member"} className="sm:max-w-sm">
+        <div className="flex flex-col items-center gap-2 text-center">
+          <div className="flex size-12 items-center justify-center clip-corner-lg bg-destructive/15 text-destructive">
+            <Ban className="size-6" />
+          </div>
+          <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
+            {count > 1 ? `ban ${count} members?` : "ban member?"}
+          </h2>
+          <p className="text-sm text-muted-foreground">
             They will be removed and silenced for everyone in this community.
-          </DialogDescription>
-        </DialogHeader>
+          </p>
+        </div>
 
-        {count > 1 && targets && (
-          <ul className="max-h-40 space-y-1 overflow-y-auto text-sm">
+        {targets && targets.length > 0 && (
+          <ul className="mt-5 max-h-40 space-y-1 overflow-y-auto text-sm">
             {targets.map((pk) => (
               <TargetRow key={pk} pubkey={pk} />
             ))}
           </ul>
         )}
         {ineligible && ineligible.length > 0 && (
-          <p className="text-xs text-muted-foreground">
+          <p className="mt-2 text-center text-xs text-muted-foreground">
             {ineligible.length} selected member{ineligible.length === 1 ? " is" : "s are"} skipped — you
             don't outrank them.
           </p>
         )}
 
         {busy && (
-          <ul className="space-y-1.5 text-sm" aria-live="polite">
+          <ul className="mt-4 space-y-1.5 text-sm" aria-live="polite">
             {steps.map((step) => {
               const state =
                 PHASE_ORDER[phase] > PHASE_ORDER[step.key]
@@ -167,32 +156,32 @@ export function BanMemberDialog({ targets, ineligible, willRotate, onClose, onCo
           </ul>
         )}
 
-        {error && <p className="text-sm text-destructive">{error}</p>}
+        {error && <p className="mt-4 text-center text-sm text-destructive">{error}</p>}
         {stuck && busy && (
-          <p className="text-sm text-muted-foreground">
+          <p className="mt-4 text-sm text-muted-foreground">
             This is taking longer than expected. Your signer may be slow or offline. You can close this
             and try again; anything already sent will finish on its own.
           </p>
         )}
 
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={close} disabled={busy && !stuck}>
+        <div className="mt-6 flex items-center gap-2">
+          <Button
+            type="button"
+            variant="ghost"
+            className="flex-1 clip-corner-lg"
+            onClick={close}
+            disabled={busy && !stuck}
+          >
             {busy && stuck ? "Close" : "Cancel"}
           </Button>
-          <Button type="button" variant="destructive" onClick={run} disabled={busy}>
+          <Button type="button" variant="destructive" className="flex-1 clip-corner-lg" onClick={run} disabled={busy}>
             {busy ? <Loader2 className="size-4 animate-spin" /> : <Ban className="size-4" />}
             {busy ? "Banning" : count > 1 ? `Ban ${count} members` : "Ban member"}
           </Button>
-        </DialogFooter>
-      </DialogContent>
+        </div>
+      </ChromeDialogContent>
     </Dialog>
   );
-}
-
-function TargetName({ pubkey }: { pubkey: string }) {
-  const author = useAuthor(pubkey);
-  const name = useScopedDisplayName(pubkey, author.data?.metadata);
-  return <DisplayName pubkey={pubkey} name={name} />;
 }
 
 function TargetRow({ pubkey }: { pubkey: string }) {

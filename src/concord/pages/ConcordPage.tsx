@@ -1851,6 +1851,13 @@ export function ConcordPage() {
   const [shareDiscoverOpen, setShareDiscoverOpen] = useState(false);
   const [banTarget, setBanTarget] = useState<string | null>(null);
   const [kickTarget, setKickTarget] = useState<string | null>(null);
+  // Stable single-element arrays for the confirm dialogs. A fresh `[target]`
+  // literal every render is a new prop identity, which retriggers the dialog's
+  // "reset on new selection" effect on every parent re-render — including the
+  // ones react-query fires while the kick/ban mutation is in flight, which
+  // wiped the progress and re-enabled the button mid-action.
+  const kickTargets = useMemo(() => (kickTarget ? [kickTarget] : null), [kickTarget]);
+  const banTargets = useMemo(() => (banTarget ? [banTarget] : null), [banTarget]);
   const [rotateKeysOpen, setRotateKeysOpen] = useState(false);
   /**
    * The pending "name a category" prompt. A category has no id, so naming one
@@ -3800,13 +3807,13 @@ export function ConcordPage() {
         communityId={community?.idHex}
       />
       <BanMemberDialog
-        targets={banTarget ? [banTarget] : null}
+        targets={banTargets}
         willRotate={banWillRotate}
         onClose={() => setBanTarget(null)}
         onConfirm={runBan}
       />
       <KickMembersDialog
-        targets={kickTarget ? [kickTarget] : null}
+        targets={kickTargets}
         onClose={() => setKickTarget(null)}
         onConfirm={runKick}
       />
