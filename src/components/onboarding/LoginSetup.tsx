@@ -68,15 +68,12 @@ const NOTIF_PROMPT_KEY = "armada:notif-prompt-shown";
 
 
 /**
- * Timestamp (ms) of the last battery-exemption nudge. Without the exemption,
- * Doze tears the persistent relay websockets down and the OS refuses background
- * foreground-service starts, so the boot/watchdog recovery paths can't bring
- * the service back — this is the single most important lever for reliable
- * background notifications. Unlike the notification ask this one re-nudges
- * (it's recoverable and high-value), but no more than once a day.
+ * Set once the battery-exemption step has been shown. Keep the original key so
+ * timestamps written by older releases also count as "already offered". A
+ * user who keeps Android's optimized setting has made a valid choice; the
+ * persistent warning in notification Settings remains the non-modal way back.
  */
-const BATTERY_NUDGE_KEY = "armada:battery-exemption-nudged-at";
-const NUDGE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const BATTERY_PROMPT_KEY = "armada:battery-exemption-nudged-at";
 
 function read(key: string): string | null {
   try {
@@ -94,14 +91,10 @@ function write(key: string, value: string): void {
   }
 }
 
-function batteryNudgeDue(): boolean {
-  return Date.now() - (Number(read(BATTERY_NUDGE_KEY)) || 0) >= NUDGE_INTERVAL_MS;
-}
-
 /** Whether the Android battery-optimization step should be offered right now. */
 async function batteryStepApplies(): Promise<boolean> {
   if (Capacitor.getPlatform() !== "android") return false;
-  if (!batteryNudgeDue()) return false;
+  if (read(BATTERY_PROMPT_KEY)) return false;
   return !(await isIgnoringBatteryOptimizations());
 }
 
@@ -213,7 +206,7 @@ export function LoginSetup() {
     if (step === "relays" && user?.pubkey) markRelayRecoveryPromptShown(user.pubkey);
     if (step === "notifications") write(NOTIF_PROMPT_KEY, "1");
     if (step === "webpush") markWebPushPromptShown();
-    if (step === "battery") write(BATTERY_NUDGE_KEY, String(Date.now()));
+    if (step === "battery") write(BATTERY_PROMPT_KEY, "1");
   }, [step, user?.pubkey]);
 
   // Do not paint one contradictory frame while the effect above removes a
