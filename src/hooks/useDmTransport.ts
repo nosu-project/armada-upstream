@@ -116,12 +116,6 @@ export function useDmTransport(peer: string): {
    * the per-conversation preference isn't pinned to legacy NIP-04.
    */
   dm17Enabled: boolean;
-  /**
-   * Whether private (NIP-17) delivery is GUARANTEED-reachable: the peer
-   * published a kind-10050 inbox. When false but `dm17Enabled` is true, the
-   * private DM is delivered best-effort to shared app/DM relays.
-   */
-  dm17DeliveryGuaranteed: boolean;
   /** Decrypt a placeholder message by id (on scroll into view). */
   decryptVisible: (id: string) => void;
   /** Explicitly decrypt one message (per-message "Decrypt" button). */
@@ -466,7 +460,6 @@ export function useDmTransport(peer: string): {
     encryptedIds,
     dm17Ids,
     dm17Enabled,
-    dm17DeliveryGuaranteed: dm17.hasPeerInbox,
     decryptVisible,
     decryptOne,
     decryptAll,

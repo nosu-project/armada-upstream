@@ -466,44 +466,6 @@ function DmLegacyBadge() {
 }
 
 /**
- * A small "best-effort delivery" pill for a private (NIP-17) DM to a peer who
- * hasn't published a kind-10050 inbox. The message is still fully encrypted;
- * we deliver it to shared app relays, so it reaches the peer once they read
- * them. Click/tap-to-open Popover, mirroring {@link DmLegacyBadge}.
- */
-function DmBestEffortBadge({
-  peer,
-  name,
-  className,
-}: {
-  peer: string;
-  name: string;
-  className?: string;
-}) {
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            "inline-flex items-center justify-center rounded-full bg-chrome p-0.5 text-muted-foreground/90 shadow-sm ring-1 ring-border/60 hover:text-foreground select-none",
-            className,
-          )}
-          aria-label="Private, best-effort delivery. Tap for details."
-        >
-          <Lock className="size-2.5" aria-hidden />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent side="bottom" className="w-64 p-3 text-xs font-normal text-muted-foreground">
-        <DisplayName pubkey={peer} name={name} /> hasn't set up private messaging yet. Your messages are still
-        fully private (encrypted). They're delivered to shared relays and reach
-        them once they open Armada.
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-/**
  * Shown in place of the composer when the peer can't receive private (NIP-17)
  * DMs. Sending would fall back to legacy NIP-04 (kind 4), which leaks metadata
  * (who's talking, and when), so we make the downgrade an explicit, informed
@@ -654,7 +616,7 @@ function Conversation({
   const name = noteToSelf ? NOTE_TO_SELF_NAME : getDisplayName(author.data?.metadata, peer);
   const dittoProfileHref = dittoProfileUrl(peer);
   const composerBoundsRef = useRef<HTMLElement | null>(null);
-  const { transport, entries, syncing, disappearingTimer, setDisappearingTimer, encryptedIds, dm17Ids, dm17Enabled, dm17DeliveryGuaranteed, legacyPinned, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
+  const { transport, entries, syncing, disappearingTimer, setDisappearingTimer, encryptedIds, dm17Ids, dm17Enabled, legacyPinned, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
     useDmTransport(peer);
   const { messages } = transport;
 
@@ -1000,7 +962,7 @@ function Conversation({
         >
           <ChevronLeft className="size-5" />
         </Button>
-        <div className="relative shrink-0">
+        <div className="shrink-0">
           {noteToSelf ? (
             <NoteToSelfAvatar sizePx={28} className="size-7" />
           ) : (
@@ -1010,12 +972,6 @@ function Conversation({
                 {name[0]?.toUpperCase()}
               </AvatarFallback>
             </Avatar>
-          )}
-          {/* Never on Note to Self: the badge means "this person may not be
-              reading the relays we can publish to", and the reader here is this
-              device, which already has the note before anything is published. */}
-          {dm17Enabled && !dm17DeliveryGuaranteed && !noteToSelf && (
-            <DmBestEffortBadge peer={peer} name={name} className="absolute -bottom-1 -right-1" />
           )}
         </div>
         <div className="flex items-center gap-1.5 flex-1 min-w-0">
