@@ -36,6 +36,7 @@ describe("NIP-17 DM relay discovery", () => {
       peer,
       ["wss://discovery.example"],
       new AbortController().signal,
+      { followPeerRelays: false },
     )).resolves.toEqual(["wss://inbox.example"]);
   });
 
@@ -71,12 +72,38 @@ describe("NIP-17 DM relay discovery", () => {
       peer,
       ["wss://discovery.example"],
       new AbortController().signal,
+      { followPeerRelays: true },
     )).resolves.toEqual(["wss://dm.example"]);
     expect(query).toHaveBeenCalledWith(
       "wss://private.example",
       [{ kinds: [KIND_DM_RELAYS], authors: [peer], limit: 1 }],
     );
     expect(query.mock.calls.some(([url]) => url === "wss://read.example")).toBe(false);
+  });
+
+  it("never dials a peer-named relay when following is not permitted", async () => {
+    const relayList = signedEvent(
+      KIND_RELAY_LIST,
+      [["r", "wss://private.example", "write"]],
+      2_000,
+    );
+    const query = vi.fn(async (url: string) => (
+      url === "wss://discovery.example" ? [relayList] : [] as NostrEvent[]
+    ));
+    const nostr = {
+      relay: (url: string) => ({ query: () => query(url) }),
+    };
+
+    // No inbox is found, and — the point of the case — the viewer's client
+    // never opens a socket to the relay the PEER named.
+    await expect(discoverDmRelaysFor(
+      nostr,
+      peer,
+      ["wss://discovery.example"],
+      new AbortController().signal,
+      { followPeerRelays: false },
+    )).resolves.toEqual([]);
+    expect(query.mock.calls.some(([url]) => url === "wss://private.example")).toBe(false);
   });
 
   it("honors a newer empty inbox list found on the peer's relays", async () => {
@@ -104,6 +131,7 @@ describe("NIP-17 DM relay discovery", () => {
       peer,
       ["wss://discovery.example"],
       new AbortController().signal,
+      { followPeerRelays: true },
     )).resolves.toEqual([]);
   });
 });
