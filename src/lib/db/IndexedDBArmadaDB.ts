@@ -18,6 +18,7 @@ import { openDB } from "idb";
 
 import { perfCount, perfMark, perfTime } from "@/lib/perf";
 
+import { ParsedFilter } from "./ParsedFilter";
 import { defaultIndexTags, matchesKvRange, resolveKvRange, tenantClass } from "./types";
 import { WrittenIds } from "./writtenIds";
 
@@ -74,6 +75,32 @@ function filterShape(filters: NostrFilter[]): string {
   return unique.length > 3 ? `${unique.slice(0, 3).join(" | ")} | +${unique.length - 3} more` : unique.join(" | ");
 }
 
+/**
+ * Drop the filters whose `search` names nothing this store can honor, or
+ * `undefined` when that leaves none.
+ *
+ * `NIndexedDB` implements NIP-50 itself as of 0.2.0, and its parse REMOVES the
+ * extension tokens (`key:value`) it doesn't support — so
+ * `{ search: "domain:example.com" }` reaches its planner with no keywords left
+ * and is answered with the whole tenant. `ParsedFilter.neverMatch` is the rule
+ * the SQLite engines apply to the same input (see its `search` branch): a
+ * narrowing query that isn't understood fails closed. This keeps the web
+ * adapter in step with them rather than having one engine widen where the
+ * others narrow — and keeps `remove()` from deleting a tenant it was asked to
+ * narrow.
+ *
+ * Only filters that actually carry a `search` are parsed, so the hot read path
+ * (ids, authors, tags) never pays for the check, and everything else — an
+ * unsatisfiable `{ ids: [] }`, say — reaches the delegate exactly as before.
+ */
+function honoredFilters(filters: NostrFilter[]): NostrFilter[] | undefined {
+  if (!filters.some((f) => typeof f.search === "string")) return filters;
+  const kept = filters.filter(
+    (f) => typeof f.search !== "string" || !new ParsedFilter(f).neverMatch,
+  );
+  return kept.length > 0 ? kept : undefined;
+}
+
 class IndexedDBRumorStore implements NRumorStore {
   private readonly store: NIndexedDB;
   /** Profiler label — the tenant's class, see {@link tenantClass}. */
@@ -114,12 +141,14 @@ class IndexedDBRumorStore implements NRumorStore {
   }
 
   async query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrRumor[]> {
+    const honored = honoredFilters(filters);
+    if (!honored) return [];
     // Rows RETURNED, not rows walked — the planner walks more than it yields
     // (an under-filled `limit` walks its whole index range), so a high mean with
     // a low row count is the signature of a scan and worth reading as one.
     const events = await perfTime(
       this.op("query"),
-      () => this.settled(this.store.query(filters, opts)),
+      () => this.settled(this.store.query(honored, opts)),
       (rows) => rows.length,
     );
     // Same elapsed time, bucketed by what was asked instead of by tenant — so a
@@ -233,17 +262,23 @@ class IndexedDBRumorStore implements NRumorStore {
     filters: NostrFilter[],
     opts?: { signal?: AbortSignal },
   ): Promise<{ count: number; approximate: boolean }> {
+    const honored = honoredFilters(filters);
+    if (!honored) return { count: 0, approximate: false };
     const { count, approximate } = await perfTime(this.op("count"), () =>
-      this.settled(this.store.count(filters, opts)),
+      this.settled(this.store.count(honored, opts)),
     );
     return { count, approximate: approximate ?? false };
   }
 
   remove(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<void> {
+    // Nothing matches, so nothing is removed — and `written` keeps its ids,
+    // since no row left the store.
+    const honored = honoredFilters(filters);
+    if (!honored) return Promise.resolve();
     // A removed event has to be storable again, and this class cannot evaluate
     // the filter that removed it.
     this.written.forget();
-    return perfTime(this.op("remove"), () => this.settled(this.store.remove(filters, opts)));
+    return perfTime(this.op("remove"), () => this.settled(this.store.remove(honored, opts)));
   }
 
   close(): Promise<void> {

@@ -4,7 +4,6 @@ import { createRoot } from "react-dom/client";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { clearChunkReloadGuard, tryChunkReload } from "@/lib/chunkReload";
 import { installDesktopDisplayMediaAudio, signalDesktopWebReady } from "@/lib/desktop";
-import { installNostrifySchemaCache } from "@/lib/nostrifySchemaCache";
 import { signalWebReady } from "@/lib/webReady";
 import { perfMark, startLoopLagSampler } from "@/lib/perf";
 // Side-effect import: installs `window.__armadaDbCensus()`, the read-only store
@@ -14,11 +13,6 @@ import "@/lib/db/dbCensus";
 
 import App from "./App.tsx";
 import "./index.css";
-
-// Nostrify rebuilds its zod wire schemas on every relay message, and zod
-// re-JITs a validator for each fresh instance. Memoize the factories before any
-// socket exists — this runs long before the pool is constructed.
-installNostrifySchemaCache();
 
 // Electron/Linux cannot put PipeWire audio directly on getDisplayMedia's
 // stream. Install the desktop bridge before LiveKit can request a share; this
