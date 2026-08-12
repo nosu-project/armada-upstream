@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LoginSetup } from "@/components/onboarding/LoginSetup";
@@ -16,10 +16,14 @@ const h = vi.hoisted(() => ({
   user: { pubkey: "a".repeat(64) },
   settings: { doc: null as unknown, isFetched: true },
   servers: [] as string[],
+  platform: "web",
+  nativeNotificationService: false,
+  checkPermission: vi.fn(),
+  isIgnoringBatteryOptimizations: vi.fn(),
 }));
 
 vi.mock("@capacitor/core", () => ({
-  Capacitor: { getPlatform: () => "web" },
+  Capacitor: { getPlatform: () => h.platform },
 }));
 
 vi.mock("@/components/onboarding/WizardShell", () => ({
@@ -41,7 +45,7 @@ vi.mock("@/hooks/useEncryptedSettings", () => ({ useEncryptedSettings: () => h.s
 vi.mock("@/hooks/useNip29Servers", () => ({ useNip29Servers: () => h.servers }));
 vi.mock("@/hooks/useNativeNotifications", () => ({
   enableNativeNotifications: vi.fn(),
-  hasNativeNotificationService: () => false,
+  hasNativeNotificationService: () => h.nativeNotificationService,
   nativeNotificationIntent: () => false,
 }));
 vi.mock("@/lib/decryptConsent", () => ({
@@ -50,8 +54,8 @@ vi.mock("@/lib/decryptConsent", () => ({
   setDecryptConsent: vi.fn(),
 }));
 vi.mock("@/lib/nativeNotifications", () => ({
-  ArmadaNotification: {},
-  isIgnoringBatteryOptimizations: vi.fn(),
+  ArmadaNotification: { checkPermission: h.checkPermission },
+  isIgnoringBatteryOptimizations: h.isIgnoringBatteryOptimizations,
   requestIgnoreBatteryOptimizations: vi.fn(),
 }));
 vi.mock("@/lib/webPushPrompt", () => ({
@@ -63,6 +67,10 @@ vi.mock("@/lib/webPushPrompt", () => ({
 describe("LoginSetup relay discovery", () => {
   beforeEach(() => {
     localStorage.clear();
+    h.platform = "web";
+    h.nativeNotificationService = false;
+    h.checkPermission.mockReset();
+    h.isIgnoringBatteryOptimizations.mockReset();
     h.config.relayMetadata = { relays: [], updatedAt: 0, pubkey: undefined };
     h.settings = { doc: null, isFetched: true };
     h.servers = [];
@@ -103,5 +111,43 @@ describe("LoginSetup relay discovery", () => {
     render(<LoginSetup />);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByRole("heading", { name: "restore your setup" })).not.toBeInTheDocument();
+  });
+});
+
+describe("LoginSetup Android battery optimization", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    h.platform = "android";
+    h.nativeNotificationService = true;
+    h.checkPermission.mockReset().mockResolvedValue({ granted: true });
+    h.isIgnoringBatteryOptimizations.mockReset().mockResolvedValue(false);
+    h.config.relayMetadata = { relays: [], updatedAt: 0, pubkey: undefined };
+    h.settings = { doc: { theme: "dark" }, isFetched: true };
+    h.servers = [];
+  });
+
+  it("does not offer the exemption again after the user dismisses it", async () => {
+    const view = render(<LoginSetup />);
+
+    expect(await screen.findByRole("heading", { name: "keep it connected" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("heading", { name: "keep it connected" })).not.toBeInTheDocument();
+    });
+
+    view.unmount();
+    render(<LoginSetup />);
+    await waitFor(() => expect(h.checkPermission).toHaveBeenCalled());
+    expect(screen.queryByRole("heading", { name: "keep it connected" })).not.toBeInTheDocument();
+    expect(h.isIgnoringBatteryOptimizations).toHaveBeenCalledTimes(1);
+  });
+
+  it("honors an old nudge timestamp as an already-offered prompt", async () => {
+    localStorage.setItem("armada:battery-exemption-nudged-at", "1");
+    render(<LoginSetup />);
+
+    await waitFor(() => expect(h.checkPermission).toHaveBeenCalled());
+    expect(screen.queryByRole("heading", { name: "keep it connected" })).not.toBeInTheDocument();
+    expect(h.isIgnoringBatteryOptimizations).not.toHaveBeenCalled();
   });
 });
