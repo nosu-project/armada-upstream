@@ -1,4 +1,4 @@
-import { DisconnectButton, useLocalParticipant } from "@livekit/components-react";
+import { DisconnectButton, useLocalParticipant, useRoomContext } from "@livekit/components-react";
 import {
   Hand,
   Loader2,
@@ -47,6 +47,7 @@ const CTRL = "inline-flex items-center justify-center rounded-md size-8 touch:si
 
 export function MicButton({ className }: { className?: string }) {
   const { localParticipant, isMicrophoneEnabled } = useLocalParticipant();
+  const room = useRoomContext();
   const pushToTalk = usePushToTalkRuntime();
   const label = pushToTalk.ready
     ? pushToTalk.pressed
@@ -75,7 +76,33 @@ export function MicButton({ className }: { className?: string }) {
         // Self-only feedback, on the click gesture (AudioContext unlocked).
         if (enabling) playUnmuteSound();
         else playMuteSound();
-        void localParticipant.setMicrophoneEnabled(enabling);
+        void (async () => {
+          try {
+            // `webAudioMix` plays remote audio through a Web Audio graph that
+            // starts suspended until a user gesture unlocks it; without this the
+            // mic can toggle while you hear nobody. Runs on the click gesture.
+            if (enabling && room && !room.canPlaybackAudio) {
+              await room.startAudio();
+            }
+            await localParticipant.setMicrophoneEnabled(enabling);
+          } catch (err) {
+            console.warn("failed to toggle microphone", err);
+            // A silently-swallowed unmute rejection is the reported "can't
+            // unmute" bug: retry once, then surface it instead of leaving the
+            // button showing muted with no explanation.
+            if (!enabling) return;
+            try {
+              await localParticipant.setMicrophoneEnabled(true);
+            } catch (retryErr) {
+              toast({
+                title: "Couldn't unmute",
+                description:
+                  retryErr instanceof Error ? retryErr.message : "The microphone is unavailable.",
+                variant: "destructive",
+              });
+            }
+          }
+        })();
       }}
       className={cn(
         CTRL,

@@ -8,11 +8,19 @@ import { MicButton } from "./CallControls";
 const setMicrophoneEnabled = vi.fn(async () => {});
 let micEnabled = true;
 
+const startAudio = vi.fn(async () => {});
+let canPlaybackAudio = true;
 vi.mock("@livekit/components-react", () => ({
   DisconnectButton: () => null,
   useLocalParticipant: () => ({
     localParticipant: { setMicrophoneEnabled },
     isMicrophoneEnabled: micEnabled,
+  }),
+  useRoomContext: () => ({
+    get canPlaybackAudio() {
+      return canPlaybackAudio;
+    },
+    startAudio,
   }),
 }));
 
@@ -29,6 +37,7 @@ vi.mock("@/contexts/CallSignalsContext", () => ({ useCallSignals: () => ({}) }))
 afterEach(() => {
   setPushToTalkRuntime({ ready: false, pressed: false, bindingLabel: null });
   micEnabled = true;
+  canPlaybackAudio = true;
   vi.clearAllMocks();
 });
 

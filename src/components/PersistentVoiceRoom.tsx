@@ -307,6 +307,10 @@ function useRoomOptions(extra?: Partial<RoomOptions>): RoomOptions {
         noiseSuppression: processing.noiseSuppression,
         echoCancellation: processing.echoCancellation,
         autoGainControl: processing.autoGainControl,
+        // Capture mono: a stereo interface that only populates one channel
+        // otherwise publishes a track that plays back from a single side for
+        // every listener, and a mono reference is cleaner for echo cancellation.
+        channelCount: 1,
       },
       videoCaptureDefaults: {
         ...(cameraId ? { deviceId: cameraId } : {}),
@@ -840,6 +844,10 @@ function ConcordVoiceRoom({
         noiseSuppression: processing.noiseSuppression,
         echoCancellation: processing.echoCancellation,
         autoGainControl: processing.autoGainControl,
+        // Capture mono: a stereo interface that only populates one channel
+        // otherwise publishes a track that plays back from a single side for
+        // every listener, and a mono reference is cleaner for echo cancellation.
+        channelCount: 1,
       },
       videoCaptureDefaults: {
         ...(cameraId ? { deviceId: cameraId } : {}),
