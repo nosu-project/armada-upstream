@@ -17,7 +17,7 @@ import type {
 import { SandboxFrame, type SandboxFrameHandle } from "@/components/SandboxFrame";
 import { getMimeType, bytesToBase64, injectScriptTags } from "@/lib/sandbox";
 import type { FileResponse } from "@/lib/sandbox";
-import { decryptBytes } from "@/lib/encryptedMedia";
+import { decryptBuffer, fetchCapped, verifyPlaintextHash } from "@/lib/encryptedMedia";
 import type { ImetaEncryption } from "@/lib/imeta";
 
 // ---------------------------------------------------------------------------
@@ -57,6 +57,9 @@ export interface WebxdcHandle {
 // by webxdc apps — but blocks any external network access.
 // ---------------------------------------------------------------------------
 
+/** Ceiling on a `.xdc` bundle. Real webxdc apps are a few MB at most. */
+const MAX_XDC_BYTES = 64 * 1024 * 1024;
+
 const WEBXDC_CSP = [
   "default-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' data: blob:",
   "base-uri 'self'",
@@ -73,12 +76,16 @@ async function resolveXdc(
   encryption?: ImetaEncryption,
 ): Promise<Uint8Array> {
   if (typeof xdc === "string") {
-    const res = await fetch(xdc);
-    if (!res.ok) throw new Error(`Failed to fetch xdc: ${res.status}`);
-    const bytes = new Uint8Array(await res.arrayBuffer());
+    // Capped: an app bundle is opened on a tap, but the size is still the
+    // sender's choice, and unzipping multiplies whatever we let through.
+    const raw = await fetchCapped(xdc, { maxBytes: MAX_XDC_BYTES });
     // Concord attachments are AES-GCM ciphertext on Blossom; decrypt to the
     // real ZIP before unzip (a plaintext attachment has no encryption params).
-    return encryption ? decryptBytes(bytes, encryption.key, encryption.nonce) : bytes;
+    const bytes = encryption
+      ? new Uint8Array(await decryptBuffer(raw, encryption.key, encryption.nonce))
+      : new Uint8Array(raw);
+    if (encryption) verifyPlaintextHash(bytes, encryption.ox);
+    return bytes;
   }
   return xdc;
 }

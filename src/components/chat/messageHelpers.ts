@@ -79,5 +79,6 @@ function refOf(entry: ImetaEntry): EncryptedRef {
     mime: entry.mime,
     dim: entry.dim,
     blurhash: entry.blurhash,
+    fallbacks: entry.fallbacks,
   };
 }

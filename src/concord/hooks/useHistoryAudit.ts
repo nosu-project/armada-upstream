@@ -59,7 +59,7 @@ import {
 import { queryChannelRumors, writeRumors } from "@/concord/lib/rumorStore";
 import type { Channel, Community } from "@/concord/lib/types";
 import { parseAuthorEvent } from "@/lib/authorCache";
-import { decryptBytes } from "@/lib/encryptedMedia";
+import { decryptBuffer, fetchCapped, verifyPlaintextHash } from "@/lib/encryptedMedia";
 import { parseImetaMap, type ImetaEntry } from "@/lib/imeta";
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
@@ -70,6 +70,8 @@ const MAX_BACKFILL_ROUNDS = 60;
 const ASSET_TOTAL_BUDGET = 40 * 1024 * 1024;
 /** No single asset larger than this is embedded (it stays a link instead). */
 const ASSET_MAX_EACH = 8 * 1024 * 1024;
+/** AES-GCM appends a 16-byte tag, so ciphertext runs that much past plaintext. */
+const GCM_TAG_BYTES = 16;
 /** kind-0 authors per relay query. */
 const PROFILE_BATCH = 100;
 
@@ -142,10 +144,21 @@ async function fetchImageDataUri(
   budget: { left: number },
 ): Promise<{ dataUri?: string; mime?: string; failed: boolean }> {
   try {
-    const res = await fetch(url, { signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    let bytes = new Uint8Array(await res.arrayBuffer());
-    if (enc) bytes = await decryptBytes(bytes, enc.key, enc.nonce);
+    // Cap the READ at the budget we'd enforce afterwards anyway (+ the GCM
+    // tag), so an oversized asset costs nothing rather than being buffered in
+    // full and then discarded. A `FileTooLargeError` lands in the catch below,
+    // which is the same outcome as the explicit check.
+    const raw = await fetchCapped(url, {
+      signal,
+      maxBytes: Math.min(ASSET_MAX_EACH, budget.left) + GCM_TAG_BYTES,
+    });
+    let bytes = new Uint8Array(raw);
+    if (enc) {
+      bytes = new Uint8Array(await decryptBuffer(raw, enc.key, enc.nonce));
+      // An export is evidence; embedding a blob the sender never hashed to
+      // would put bytes nobody vouched for inside an audit record.
+      verifyPlaintextHash(bytes, enc.ox);
+    }
     if (bytes.length > ASSET_MAX_EACH || bytes.length > budget.left) {
       // Too big to embed — a plaintext one stays a link, an encrypted one can't.
       return { failed: Boolean(enc) };

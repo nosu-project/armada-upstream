@@ -6,6 +6,7 @@ import { MediaFallback } from "@/components/chat/MediaFallback";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
 import { isValidBlurhash } from "@/lib/blurhash";
+import { companionEncryption } from "@/lib/imeta";
 import { cn } from "@/lib/utils";
 
 import type { ImetaEncryption } from "@/lib/imeta";
@@ -14,6 +15,8 @@ interface VideoPlayerProps {
   src: string;
   /** Poster image URL (from the imeta `thumb`/`image` field). */
   poster?: string;
+  /** Sender-declared alternative sources (imeta `fallback`), same key and nonce. */
+  fallbacks?: string[];
   /** Pixel dimensions from the imeta `dim` field, e.g. "1280x720". */
   dim?: string;
   /** Blurhash placeholder shown while an encrypted blob downloads/decrypts. */
@@ -36,15 +39,18 @@ interface VideoPlayerProps {
  * (Concord/Vector) attachments are AES-GCM ciphertext on Blossom, so the src
  * is fetched + decrypted to an object URL before it reaches the <video>.
  */
-export function VideoPlayer({ src, poster, dim, blurhash, mime, encryption, gif = false, className }: VideoPlayerProps) {
-  const { resolved, onError, failed, reset } = useMediaWithFallback({ url: src, encryption, mime });
+export function VideoPlayer({ src, poster, dim, blurhash, mime, encryption, fallbacks, gif = false, className }: VideoPlayerProps) {
+  const { resolved, onError, failed, fallbackProps } = useMediaWithFallback({ url: src, encryption, mime, fallbacks });
 
   // An encrypted poster is ciphertext on Blossom, so it has to be fetched and
   // decrypted before the <video> can use it. NIP-17 encrypts a `thumb` with the
-  // same key and nonce as its file, so the video's own params decrypt it.
+  // same key and nonce as its file, so the video's own params decrypt it — but
+  // only the key and nonce carry over, not the video's `ox`, which hashes a
+  // different blob entirely.
+  const posterEncryption = useMemo(() => companionEncryption(encryption), [encryption]);
   const resolvedPoster = useResolvedMediaSrc({
     url: poster ?? "",
-    encryption,
+    encryption: posterEncryption,
     mime: "image/jpeg",
   });
   const posterSrc = poster && resolvedPoster.status === "ready" ? resolvedPoster.src : undefined;
@@ -60,7 +66,7 @@ export function VideoPlayer({ src, poster, dim, blurhash, mime, encryption, gif 
   }, [dim]);
 
   if (failed) {
-    return <MediaFallback url={src} onRetry={reset} label={gif ? "GIF" : "Video"} />;
+    return <MediaFallback {...fallbackProps} label={gif ? "GIF" : "Video"} />;
   }
 
   return (

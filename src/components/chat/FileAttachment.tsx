@@ -4,7 +4,13 @@ import { useCallback, useState } from "react";
 
 import { toast } from "@/hooks/useToast";
 import { downloadBinaryFile } from "@/lib/downloadFile";
-import { decryptBytes } from "@/lib/encryptedMedia";
+import {
+  decryptBuffer,
+  fetchCapped,
+  MAX_EXPLICIT_DECRYPT_BYTES,
+  verifyPlaintextHash,
+} from "@/lib/encryptedMedia";
+import { formatBytes } from "@/lib/fileBytes";
 import { cn } from "@/lib/utils";
 
 import type { ImetaEncryption } from "@/lib/imeta";
@@ -20,23 +26,6 @@ interface FileAttachmentProps {
   /** AES-GCM decryption params for client-encrypted (Concord/Vector) blobs. */
   encryption?: ImetaEncryption;
   className?: string;
-}
-
-/** Hard ceiling on a decrypted download; guards against a hostile `size` lie
- *  turning a click into an unbounded fetch that OOMs the tab. */
-const MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024;
-
-/** Human-readable byte size (1024-based). */
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let n = bytes;
-  let i = 0;
-  while (n >= 1024 && i < units.length - 1) {
-    n /= 1024;
-    i++;
-  }
-  return `${n < 10 && i > 0 ? n.toFixed(1) : Math.round(n)} ${units[i]}`;
 }
 
 /**
@@ -92,14 +81,17 @@ export function FileAttachment({ url, mime, name, size, encryption, className }:
     if (status === "loading") return;
     setStatus("loading");
     try {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const raw = new Uint8Array(await res.arrayBuffer());
-      if (raw.byteLength > MAX_DOWNLOAD_BYTES) throw new Error("attachment too large");
+      // The ceiling is enforced while READING, not after: checking a fully
+      // buffered body has already spent the memory it was meant to protect,
+      // and a `size` field is sender-controlled so it proves nothing.
+      const raw = await fetchCapped(url, { maxBytes: MAX_EXPLICIT_DECRYPT_BYTES });
 
       const bytes = encryption
-        ? await decryptBytes(raw, encryption.key, encryption.nonce)
-        : raw;
+        ? new Uint8Array(await decryptBuffer(raw, encryption.key, encryption.nonce))
+        : new Uint8Array(raw);
+      // A swapped blob fails closed rather than being saved to the user's disk
+      // under the sender's filename.
+      if (encryption) verifyPlaintextHash(bytes, encryption.ox);
 
       // Force a save, never a render. The sender's real MIME is deliberately
       // discarded: the web branch of `downloadBinaryFile` hands the bytes over

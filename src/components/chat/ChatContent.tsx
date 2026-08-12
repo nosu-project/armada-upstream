@@ -100,9 +100,9 @@ type ImageRef = EncryptedRef;
 /** A parsed token from message content. */
 type ContentToken =
   | { type: "text"; value: string }
-  | { type: "image-embed"; url: string; encryption?: ImetaEncryption; mime?: string; dim?: string; blurhash?: string }
+  | { type: "image-embed"; url: string; encryption?: ImetaEncryption; mime?: string; dim?: string; blurhash?: string; fallbacks?: string[] }
   | { type: "image-gallery"; urls: ImageRef[] }
-  | { type: "media-embed"; url: string; encryption?: ImetaEncryption; mime?: string }
+  | { type: "media-embed"; url: string; encryption?: ImetaEncryption; mime?: string; fallbacks?: string[] }
   | { type: "file-embed"; url: string; encryption?: ImetaEncryption; mime?: string; name?: string; size?: number }
   | { type: "link-embed"; url: string }
   | { type: "invite-embed"; url: string }
@@ -481,6 +481,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
               mime: inlineImetaMime,
               dim: inlineImeta?.dim,
               blurhash: inlineImeta?.blurhash,
+              fallbacks: inlineImeta?.fallbacks,
             });
             lastIndex = index + fullMatch.length;
             const leadingWs = segment.substring(lastIndex).match(/^\s+/);
@@ -507,6 +508,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
               url,
               encryption: inlineImeta?.encryption,
               mime: imetaMime,
+              fallbacks: inlineImeta?.fallbacks,
             });
             lastIndex = index + fullMatch.length;
             const leadingWs = segment.substring(lastIndex).match(/^\s+/);
@@ -683,10 +685,10 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         if (!url || renderedUrls.has(url)) continue;
         const mime = imageMimeFor(entry);
         if (mime?.startsWith("image/")) {
-          result.push({ type: "image-embed", url, encryption: entry.encryption, mime, dim: entry.dim, blurhash: entry.blurhash });
+          result.push({ type: "image-embed", url, encryption: entry.encryption, mime, dim: entry.dim, blurhash: entry.blurhash, fallbacks: entry.fallbacks });
           renderedUrls.add(url);
         } else if (mime?.startsWith("audio/") || mime?.startsWith("video/")) {
-          result.push({ type: "media-embed", url, encryption: entry.encryption, mime });
+          result.push({ type: "media-embed", url, encryption: entry.encryption, mime, fallbacks: entry.fallbacks });
           renderedUrls.add(url);
         } else if (!entry.webxdc && mime !== "application/x-webxdc") {
           // Any other imeta attachment (PDF, zip, arbitrary document) is a
@@ -795,11 +797,11 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
     while (i < tokens.length) {
       const token = tokens[i];
       if (token.type === "image-embed") {
-        const run: ImageRef[] = [{ url: token.url, encryption: token.encryption, mime: token.mime, dim: token.dim, blurhash: token.blurhash }];
+        const run: ImageRef[] = [{ url: token.url, encryption: token.encryption, mime: token.mime, dim: token.dim, blurhash: token.blurhash, fallbacks: token.fallbacks }];
         let j = i + 1;
         while (j < tokens.length && tokens[j].type === "image-embed") {
           const t = tokens[j] as Extract<ContentToken, { type: "image-embed" }>;
-          run.push({ url: t.url, encryption: t.encryption, mime: t.mime, dim: t.dim, blurhash: t.blurhash });
+          run.push({ url: t.url, encryption: t.encryption, mime: t.mime, dim: t.dim, blurhash: t.blurhash, fallbacks: t.fallbacks });
           j++;
         }
         if (run.length >= 2) {
@@ -820,7 +822,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
   const allImages = useMemo<ImageRef[]>(
     () =>
       groupedTokens.flatMap((t) => {
-        if (t.type === "image-embed") return [{ url: t.url, encryption: t.encryption, mime: t.mime, dim: t.dim, blurhash: t.blurhash }];
+        if (t.type === "image-embed") return [{ url: t.url, encryption: t.encryption, mime: t.mime, dim: t.dim, blurhash: t.blurhash, fallbacks: t.fallbacks }];
         if (t.type === "image-gallery") return t.urls;
         return [];
       }),
@@ -982,7 +984,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         return (
           <InlineImage
             key={key}
-            image={{ url: token.url, encryption: token.encryption, mime: token.mime, dim: token.dim, blurhash: token.blurhash }}
+            image={{ url: token.url, encryption: token.encryption, mime: token.mime, dim: token.dim, blurhash: token.blurhash, fallbacks: token.fallbacks }}
             onClick={(e) => {
               e.stopPropagation();
               setLightboxIndex(imgIndex);
@@ -1023,6 +1025,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         // before the <audio>/<video> element can play them. Fall back to the
         // imeta entry for tokens created by pure extension match.
         const encryption = token.encryption ?? imeta?.encryption;
+        const fallbacks = token.fallbacks ?? imeta?.fallbacks;
         const isXdc = mime === "application/x-webxdc"
           || /\.xdc(\?[^\s]*)?$/i.test(token.url);
         if (isXdc) {
@@ -1038,6 +1041,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
               src={token.url}
               mime={mediaMime}
               encryption={encryption}
+              fallbacks={fallbacks}
               waveform={waveform}
               duration={duration}
             />
@@ -1052,6 +1056,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             blurhash={imeta?.blurhash}
             mime={mediaMime}
             encryption={encryption}
+            fallbacks={fallbacks}
             // A Tenor/Giphy-style .mp4 is really a GIF — present it looping and
             // chromeless rather than as a video with controls.
             gif={isGifLikeUrl(token.url)}
@@ -1318,13 +1323,13 @@ function getImetaField(tags: string[][], url: string, field: string): string | u
 /** Inline image thumbnail that opens the shared lightbox on click. */
 function InlineImage({ image, onClick }: { image: ImageRef; onClick: (e: React.MouseEvent) => void }) {
   const [loaded, setLoaded] = useState(false);
-  const { resolved, onError, failed, reset } = useMediaWithFallback(image);
+  const { resolved, onError, failed, fallbackProps } = useMediaWithFallback(image);
 
   // Once every mirror is exhausted, degrade to a link + manual retry. Block-level
   // (via MediaFallback) because the tokenizer stripped the surrounding newlines
   // expecting a block — an inline fallback would glue onto adjacent text.
   if (failed) {
-    return <MediaFallback url={image.url} onRetry={reset} label="Image" />;
+    return <MediaFallback {...fallbackProps} label="Image" />;
   }
 
   // A known `dim` lets us reserve the EXACT box the loaded image will occupy —
@@ -1410,12 +1415,12 @@ function ImageGrid({ images, onOpen }: { images: ImageRef[]; onOpen: (index: num
 /** A single grid cell image, decrypting on display when encrypted. */
 function GridImage({ image }: { image: ImageRef }) {
   const [loaded, setLoaded] = useState(false);
-  const { resolved, onError, failed, reset } = useMediaWithFallback(image);
+  const { resolved, onError, failed, fallbackProps } = useMediaWithFallback(image);
 
   // Once every mirror is exhausted, fill the cell with a retry control rather
   // than leaving a silently-blank tile (cross-server fallback runs before this).
   if (failed) {
-    return <MediaFallback url={image.url} onRetry={reset} compact />;
+    return <MediaFallback {...fallbackProps} compact />;
   }
 
   return (

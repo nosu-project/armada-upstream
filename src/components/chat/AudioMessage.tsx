@@ -18,6 +18,8 @@ interface AudioMessageProps {
   mime?: string;
   /** AES-GCM decryption params for client-encrypted (Concord/Vector) blobs. */
   encryption?: ImetaEncryption;
+  /** Sender-declared alternative sources (imeta `fallback`), same key and nonce. */
+  fallbacks?: string[];
   /** Space-separated 0–100 amplitude samples from the imeta `waveform` field. */
   waveform?: string;
   /** Duration in seconds from the imeta `duration` field. */
@@ -60,7 +62,7 @@ function toBars(waveform: string | undefined): number[] {
  * playback progress, and a duration label. Used for voice messages and
  * other audio attachments.
  */
-export function AudioMessage({ src, mime, encryption, waveform, duration, className }: AudioMessageProps) {
+export function AudioMessage({ src, mime, encryption, fallbacks, waveform, duration, className }: AudioMessageProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   // Set when a coordinated `play()` request arrives before the <audio> element
   // has mounted (encrypted blobs mount lazily once decrypted); consumed on the
@@ -76,7 +78,7 @@ export function AudioMessage({ src, mime, encryption, waveform, duration, classN
   // Encrypted (Concord/Vector) attachments are AES-GCM ciphertext on Blossom:
   // fetch + decrypt to an object URL before handing anything to <audio>.
   // Plain URLs resolve immediately to themselves.
-  const { resolved, onError, failed, reset } = useMediaWithFallback({ url: src, encryption, mime });
+  const { resolved, onError, failed, fallbackProps } = useMediaWithFallback({ url: src, encryption, mime, fallbacks });
 
   const bars = useMemo(() => toBars(waveform), [waveform]);
   const progress = mediaDuration > 0 ? currentTime / mediaDuration : 0;
@@ -161,7 +163,7 @@ export function AudioMessage({ src, mime, encryption, waveform, duration, classN
 
   // Every mirror failed (bad key, blob gone, all servers down): link + retry.
   if (failed) {
-    return <MediaFallback url={src} onRetry={reset} label="Audio" />;
+    return <MediaFallback {...fallbackProps} label="Audio" />;
   }
 
   return (

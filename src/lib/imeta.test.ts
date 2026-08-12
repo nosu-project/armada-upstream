@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseFileMessageTags, parseImetaMap } from "./imeta";
+import { companionEncryption, isSupportedEncryption, parseFileMessageTags, parseImetaMap } from "./imeta";
 
 describe("parseImetaMap encryption fields", () => {
   it("parses Vector / 0xChat encrypted-attachment imeta", () => {
@@ -27,7 +27,9 @@ describe("parseImetaMap encryption fields", () => {
       algorithm: "aes-gcm",
       key: "a".repeat(64),
       nonce: "b".repeat(32),
+      ox: "c".repeat(64),
     });
+    expect(isSupportedEncryption(entry!.encryption)).toBe(true);
   });
 
   it("omits encryption for plaintext imeta", () => {
@@ -35,7 +37,10 @@ describe("parseImetaMap encryption fields", () => {
     expect(parseImetaMap(tags).get("https://x/y.png")?.encryption).toBeUndefined();
   });
 
-  it("rejects malformed crypto params (wrong key length, non-hex, non-aes-gcm)", () => {
+  it("reports malformed crypto params as unsupported, NOT as plaintext", () => {
+    // The distinction is the whole point: `undefined` means "not encrypted",
+    // and a caller acts on that by rendering the URL — which for any of these
+    // is ciphertext painted into an <img>.
     const base = "url https://x/y.png";
     const cases = [
       ["imeta", base, "encryption-algorithm aes-gcm", "decryption-key short", `decryption-nonce ${"b".repeat(32)}`],
@@ -44,8 +49,59 @@ describe("parseImetaMap encryption fields", () => {
       ["imeta", base, "encryption-algorithm aes-gcm", `decryption-key ${"a".repeat(64)}`], // no nonce
     ];
     for (const tag of cases) {
-      expect(parseImetaMap([tag]).get("https://x/y.png")?.encryption).toBeUndefined();
+      const enc = parseImetaMap([tag]).get("https://x/y.png")?.encryption;
+      expect(enc).toBeDefined();
+      expect(isSupportedEncryption(enc)).toBe(false);
     }
+  });
+
+  it("accepts base64 key material as well as hex", () => {
+    // Neither NIP-17 nor NIP-94 pins an encoding for the decryption params.
+    const keyBytes = new Uint8Array(32).fill(0xab);
+    const nonceBytes = new Uint8Array(16).fill(0xcd);
+    const b64 = (b: Uint8Array) => btoa(String.fromCharCode(...b));
+    const tags = [
+      [
+        "imeta",
+        "url https://x/y.png",
+        "encryption-algorithm aes-gcm",
+        `decryption-key ${b64(keyBytes)}`,
+        `decryption-nonce ${b64(nonceBytes)}`,
+      ],
+    ];
+    const enc = parseImetaMap(tags).get("https://x/y.png")?.encryption;
+    // Normalized to hex at parse time, so everything downstream stays hex.
+    expect(enc?.key).toBe("ab".repeat(32));
+    expect(enc?.nonce).toBe("cd".repeat(16));
+    expect(isSupportedEncryption(enc)).toBe(true);
+  });
+
+  it("collects repeated `fallback` fields instead of collapsing them", () => {
+    const tags = [
+      [
+        "imeta",
+        "url https://a/blob",
+        "fallback https://b/blob",
+        "fallback https://c/blob",
+      ],
+    ];
+    expect(parseImetaMap(tags).get("https://a/blob")?.fallbacks).toEqual([
+      "https://b/blob",
+      "https://c/blob",
+    ]);
+  });
+
+  it("drops `ox` for a companion blob", () => {
+    // A thumb shares the key and nonce but is its own blob, so the file's
+    // plaintext hash does not describe it.
+    const enc = { algorithm: "aes-gcm", key: "a".repeat(64), nonce: "b".repeat(32), ox: "c".repeat(64) };
+    expect(companionEncryption(enc)).toEqual({
+      algorithm: "aes-gcm",
+      key: "a".repeat(64),
+      nonce: "b".repeat(32),
+    });
+    expect(companionEncryption(enc)?.ox).toBeUndefined();
+    expect(companionEncryption(undefined)).toBeUndefined();
   });
 
   it("prefers `thumb` then `image` for the thumbnail", () => {
@@ -140,6 +196,10 @@ describe("parseFileMessageTags (NIP-17 kind-15 top-level tags)", () => {
       algorithm: "aes-gcm",
       key: "2ba22dd1814e0587d73fbe9f544d0c08f58502ec1d078363380b362301507c7e",
       nonce: "84d8e88286054d466167d1394b6a98cd",
+      // `ox` hashes the PLAINTEXT, so it is verifiable only after decrypting —
+      // which is what makes a swapped blob fail closed. `x` hashes the
+      // ciphertext and is not what we check.
+      ox: "92b9ff334f9ab499a529f7a8c63b46400dd6971104079195b036ac53e09c0665",
     });
   });
 

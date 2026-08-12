@@ -1,12 +1,21 @@
-import { ExternalLink, ImageOff, RotateCw } from "lucide-react";
+import { ExternalLink, ImageOff, Lock, RotateCw } from "lucide-react";
 
+import { formatBytes } from "@/lib/fileBytes";
 import { cn } from "@/lib/utils";
 
-interface MediaFallbackProps {
+export interface MediaFallbackProps {
   /** The original media URL — the target of the "open" action. */
   url: string;
   /** Restart the load from the first server (manual retry). */
   onRetry: () => void;
+  /**
+   * Set when the blob is encrypted and past the inline decrypt cap: its size in
+   * bytes. A different situation from "unavailable" — the media is there and
+   * readable, we just declined to spend the memory unasked.
+   */
+  oversized?: number;
+  /** Decrypt the oversized blob anyway, at the user's request. */
+  onDecryptAnyway?: () => void;
   /** What the missing media is, e.g. "Image" / "Video" / "Audio". */
   label?: string;
   className?: string;
@@ -29,12 +38,72 @@ interface MediaFallbackProps {
  * was down and is back, recovered network) that automatic cross-server fallback
  * couldn't outlast; open is the escape hatch to the original URL.
  */
-export function MediaFallback({ url, onRetry, label = "Media", className, compact = false }: MediaFallbackProps) {
+export function MediaFallback({
+  url,
+  onRetry,
+  oversized,
+  onDecryptAnyway,
+  label = "Media",
+  className,
+  compact = false,
+}: MediaFallbackProps) {
   const retry = (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
     onRetry();
   };
+
+  // Oversized is its own case, not a failure: the blob is fine and the key
+  // works, we just won't hold that much in memory until asked. The retry
+  // affordance is "decrypt anyway", and the size is stated so the ask is
+  // informed rather than a dare.
+  if (oversized !== undefined && onDecryptAnyway) {
+    const decrypt = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      onDecryptAnyway();
+    };
+
+    if (compact) {
+      return (
+        <button
+          type="button"
+          onClick={decrypt}
+          className={cn(
+            "absolute inset-0 flex flex-col items-center justify-center gap-1 bg-muted text-muted-foreground hover:text-foreground transition-colors",
+            className,
+          )}
+          title={`${label} is ${formatBytes(oversized)} — tap to decrypt anyway`}
+          aria-label={`Decrypt ${label.toLowerCase()} anyway`}
+        >
+          <Lock className="size-5" />
+          <span className="text-[10px]">{formatBytes(oversized)}</span>
+        </button>
+      );
+    }
+
+    return (
+      <div
+        className={cn(
+          "my-1.5 flex max-w-sm items-center gap-2.5 rounded-lg border border-border bg-muted/40 px-3 py-2.5",
+          className,
+        )}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <Lock className="size-5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 text-sm text-muted-foreground">
+          {label} is large ({formatBytes(oversized)})
+        </span>
+        <button
+          type="button"
+          onClick={decrypt}
+          className="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10 transition-colors touch:min-h-11"
+        >
+          Decrypt anyway
+        </button>
+      </div>
+    );
+  }
 
   if (compact) {
     return (

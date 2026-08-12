@@ -1,6 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
+import { describe, expect, it, vi } from "vitest";
 
-import { decryptBytes, encryptBytes, encryptFileWithParams } from "./encryptedMedia";
+import {
+  decryptBytes,
+  encryptBytes,
+  encryptFileWithParams,
+  FileTooLargeError,
+  readCapped,
+  verifyPlaintextHash,
+} from "./encryptedMedia";
 
 /**
  * Interop guarantees for client-encrypted Blossom attachments (Vector / 0xChat):
@@ -78,5 +87,96 @@ describe("encryptFileWithParams", () => {
     // Blossom servers commonly reject application/octet-stream.
     const thumb = await encryptFileWithParams(file("poster", "clip.jpg", "image/jpeg"), key, nonce);
     expect(thumb.file.type).toBe("image/jpeg");
+  });
+});
+
+/**
+ * AES-GCM authenticates the whole message, so it can't be streamed: decrypting
+ * necessarily holds ciphertext and plaintext at once. Nothing about a message
+ * scrolling into view is an instruction to allocate, and the size is the
+ * SENDER's choice, so the read is capped before the bytes are resident — not
+ * after, which is the check that has already spent what it was guarding.
+ */
+describe("readCapped", () => {
+  /** A Response with a real streaming body, in `chunkSize` pieces. */
+  function streamed(bytes: Uint8Array, opts: { declare?: number | null; chunkSize?: number } = {}): Response {
+    const chunkSize = opts.chunkSize ?? (bytes.byteLength || 1);
+    let offset = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (offset >= bytes.byteLength) return controller.close();
+        controller.enqueue(bytes.subarray(offset, offset + chunkSize));
+        offset += chunkSize;
+      },
+    });
+    const headers = new Headers();
+    const declared = opts.declare === undefined ? bytes.byteLength : opts.declare;
+    if (declared !== null) headers.set("content-length", String(declared));
+    return new Response(body, { headers });
+  }
+
+  it("reads a body that fits", async () => {
+    const bytes = new Uint8Array([1, 2, 3, 4, 5]);
+    const out = await readCapped(streamed(bytes), 1024);
+    expect(Array.from(new Uint8Array(out))).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("refuses on Content-Length before consuming the body", async () => {
+    // The point of checking the header first is that an oversized blob costs
+    // nothing: we never open a reader on it, so nothing is buffered.
+    const res = streamed(new Uint8Array(4), { declare: 999999 });
+    const getReader = vi.spyOn(res.body!, "getReader");
+    await expect(readCapped(res, 1024)).rejects.toBeInstanceOf(FileTooLargeError);
+    expect(getReader).not.toHaveBeenCalled();
+  });
+
+  it("stops a server that under-reports Content-Length", async () => {
+    // The header is a promise from the same party serving the bytes, so the
+    // running count is what actually enforces the cap.
+    const res = streamed(new Uint8Array(400), { declare: 10, chunkSize: 50 });
+    await expect(readCapped(res, 100)).rejects.toBeInstanceOf(FileTooLargeError);
+  });
+
+  it("enforces the cap with no Content-Length at all", async () => {
+    const res = streamed(new Uint8Array(400), { declare: null, chunkSize: 50 });
+    await expect(readCapped(res, 100)).rejects.toBeInstanceOf(FileTooLargeError);
+  });
+
+  it("reports the size it refused", async () => {
+    const res = streamed(new Uint8Array(8), { declare: 9000 });
+    await expect(readCapped(res, 10)).rejects.toMatchObject({ byteSize: 9000 });
+  });
+
+  it("hands back only what arrived when the body is shorter than declared", async () => {
+    const res = streamed(new Uint8Array([7, 7, 7]), { declare: 10 });
+    const out = await readCapped(res, 1024);
+    expect(out.byteLength).toBe(3);
+  });
+});
+
+/**
+ * The key travels in the event, so anyone who can read the message can decrypt
+ * — but the blob sits on a media server nobody authenticated. `ox` is what
+ * makes a swapped blob fail closed instead of rendering.
+ */
+describe("verifyPlaintextHash", () => {
+  const bytes = new TextEncoder().encode("the real file");
+
+  it("accepts bytes matching `ox`", () => {
+    expect(() => verifyPlaintextHash(bytes, bytesToHex(sha256(bytes)))).not.toThrow();
+  });
+
+  it("accepts an uppercase `ox`", () => {
+    expect(() => verifyPlaintextHash(bytes, bytesToHex(sha256(bytes)).toUpperCase())).not.toThrow();
+  });
+
+  it("rejects a swapped blob", () => {
+    const other = new TextEncoder().encode("a different file");
+    expect(() => verifyPlaintextHash(other, bytesToHex(sha256(bytes)))).toThrow(/ox/);
+  });
+
+  it("skips verification when the sender published no `ox`", () => {
+    // A forward may not carry one; refusing those would break real messages.
+    expect(() => verifyPlaintextHash(bytes, undefined)).not.toThrow();
   });
 });

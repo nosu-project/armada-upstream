@@ -7,6 +7,19 @@
  * on module-init order).
  */
 
+/** Human-readable byte size (1024-based). Empty string for a non-size. */
+export function formatBytes(bytes: number | undefined): string {
+  if (bytes === undefined || !Number.isFinite(bytes) || bytes <= 0) return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let n = bytes;
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i++;
+  }
+  return `${n < 10 && i > 0 ? n.toFixed(1) : Math.round(n)} ${units[i]}`;
+}
+
 /** Base64-encode bytes in chunks (avoids arg-count limits on large inputs). */
 export function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";

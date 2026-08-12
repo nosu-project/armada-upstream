@@ -36,9 +36,11 @@ function PinImage({ entry, onOpen }: { entry: ImetaEntry; onOpen?: () => void })
   const [broken, setBroken] = useState(false);
   const src = resolved.status === "ready" ? resolved.src : undefined;
 
-  if (broken || resolved.status === "error") {
+  if (broken || resolved.status === "error" || resolved.status === "oversized") {
     // Never a dead end: fall back to the download affordance, which fetches
-    // and decrypts by the same route.
+    // and decrypts by the same route. That is also the right landing place for
+    // an oversized blob — a pin preview is not worth tens of megabytes unasked,
+    // but the card makes the whole file one deliberate tap away.
     return (
       <FileAttachment
         url={entry.url}

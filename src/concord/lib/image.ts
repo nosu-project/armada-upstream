@@ -12,12 +12,17 @@
  */
 
 import { sha256 } from "@noble/hashes/sha2.js";
-import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
+
+import { decryptBuffer, fetchCapped } from "@/lib/encryptedMedia";
 
 import type { ImagePointer } from "@/concord/lib/types";
 
 /** 16-byte (128-bit) nonce, matching Vector's AES-GCM parameters. */
 const NONCE_BYTES = 16;
+
+/** Ceiling on a community icon/banner read. Generous for an image, bounded. */
+const MAX_IMAGE_BYTES = 16 * 1024 * 1024;
 
 const CACHE_NAME = "concord-images";
 
@@ -118,12 +123,13 @@ export async function decryptImageBytes(
     return { bytes, mime: cached.type || sniffImageMime(bytes) };
   }
 
-  const res = await fetch(pointer.url, { signal });
-  if (!res.ok) throw new Error(`image fetch failed: HTTP ${res.status}`);
-  const ciphertext = new Uint8Array(await res.arrayBuffer());
+  // An icon or banner is small by definition, and this runs unprompted the
+  // moment a community renders — including in the push service worker, where
+  // there is no user and no UI to report a stall. Cap the read rather than
+  // letting a pointer choose how much memory a community costs to display.
+  const ciphertext = await fetchCapped(pointer.url, { signal, maxBytes: MAX_IMAGE_BYTES });
 
-  const cryptoKey = await crypto.subtle.importKey("raw", buf(hexToBytes(pointer.key)), "AES-GCM", false, ["decrypt"]);
-  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: buf(hexToBytes(pointer.nonce)) }, cryptoKey, buf(ciphertext));
+  const pt = await decryptBuffer(ciphertext, pointer.key, pointer.nonce);
   const plaintext = new Uint8Array(pt);
 
   if (bytesToHex(sha256(plaintext)) !== pointer.hash.toLowerCase()) {

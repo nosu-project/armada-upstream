@@ -1,3 +1,5 @@
+import { bytesToHex } from "@noble/hashes/utils.js";
+
 /** Parsed imeta entry from NIP-94 tags. */
 export interface ImetaEntry {
   url: string;
@@ -20,22 +22,66 @@ export interface ImetaEntry {
   /** Declared byte size from the NIP-94 `size` field (sender-reported; display only). */
   size?: string;
   /**
+   * Alternative sources for the same bytes, from repeated `fallback` fields.
+   * Per NIP-17 a fallback is encrypted with the same key and nonce as the file,
+   * so {@link encryption} decrypts every one of them.
+   */
+  fallbacks?: string[];
+  /**
    * Client-side blob encryption metadata, as sent by Vector/0xChat for
    * Blossom attachments: the blob at `url` is AES-GCM ciphertext, decryptable
-   * only with `key` + `nonce` (both lowercase hex). Present only when the
-   * imeta carried `encryption-algorithm`, `decryption-key`, `decryption-nonce`.
+   * only with `key` + `nonce`. Present whenever the imeta carried an
+   * `encryption-algorithm` AT ALL — including one we can't read, which is the
+   * whole point: see {@link isSupportedEncryption}.
    */
   encryption?: ImetaEncryption;
 }
 
 /** AES-GCM blob-encryption parameters carried in an imeta tag. */
 export interface ImetaEncryption {
-  /** Encryption algorithm, e.g. "aes-gcm" (only aes-gcm is supported). */
+  /** Encryption algorithm, lowercased as sent (only `aes-gcm` is supported). */
   algorithm: string;
-  /** AES-256 key as lowercase hex (64 chars). */
+  /** AES-256 key as lowercase hex (64 chars), or the raw value if undecodable. */
   key: string;
   /** AES-GCM nonce/IV as lowercase hex (Vector uses a 16-byte, 0xChat-compatible nonce). */
   nonce: string;
+  /**
+   * `ox` — SHA-256 (hex) of the PLAINTEXT, which the sender publishes alongside
+   * the key. Verified after decrypting, so a swapped blob fails closed rather
+   * than rendering. Optional: an uploader always knows it, a forward may not.
+   */
+  ox?: string;
+}
+
+/**
+ * Whether we can actually decrypt this attachment.
+ *
+ * Kept separate from parsing on purpose. An attachment whose `encryption-algorithm`
+ * we don't recognize — or whose key material is malformed — must NOT come back
+ * as `undefined`, because callers read that as "not encrypted" and hand the URL
+ * straight to an `<img src>`, painting ciphertext. They need to tell "plaintext"
+ * apart from "encrypted, but unreadable by us" so the second case can fail
+ * closed on a placeholder.
+ */
+export function isSupportedEncryption(enc: ImetaEncryption | undefined): boolean {
+  if (!enc) return false;
+  // A 32-byte AES-256 key and a non-empty nonce, both already normalized to hex.
+  return enc.algorithm === "aes-gcm" && isHex(enc.key, 64) && isHex(enc.nonce);
+}
+
+/**
+ * The same parameters, for a COMPANION blob — a `thumb`/`image` poster, or a
+ * `fallback` source of a *different* file.
+ *
+ * NIP-17 encrypts a companion with the same key and nonce as the file it
+ * belongs to, which is why one pair decrypts both. `ox` is the part that does
+ * NOT carry over: it hashes the file's plaintext, and a poster is its own
+ * blob, so verifying one against the other rejects a perfectly good thumbnail
+ * every time.
+ */
+export function companionEncryption(enc: ImetaEncryption | undefined): ImetaEncryption | undefined {
+  if (!enc) return undefined;
+  return { algorithm: enc.algorithm, key: enc.key, nonce: enc.nonce };
 }
 
 /** Parse all imeta tags into a map keyed by URL. Works for any event kind. */
@@ -44,13 +90,17 @@ export function parseImetaMap(tags: string[][]): Map<string, ImetaEntry> {
   for (const tag of tags) {
     if (tag[0] !== 'imeta') continue;
     const entry: Record<string, string> = {};
+    // `fallback` is the one repeatable field — every other one is single-valued,
+    // so collapsing repeats (last wins) is right for them and lossy for it.
+    const fallbacks: string[] = [];
     for (let i = 1; i < tag.length; i++) {
       const part = tag[i];
       const spaceIdx = part.indexOf(' ');
       if (spaceIdx === -1) continue;
       const key = part.slice(0, spaceIdx);
       const value = part.slice(spaceIdx + 1);
-      entry[key] = value;
+      if (key === 'fallback') fallbacks.push(value);
+      else entry[key] = value;
     }
     if (entry.url) {
       const enc = parseImetaEncryption(entry);
@@ -65,6 +115,7 @@ export function parseImetaMap(tags: string[][]): Map<string, ImetaEntry> {
         blurhash: entry.blurhash,
         name: entry.name,
         size: entry.size,
+        fallbacks: fallbacks.length ? fallbacks : undefined,
         encryption: enc,
       });
     }
@@ -88,8 +139,11 @@ export function parseImetaMap(tags: string[][]): Map<string, ImetaEntry> {
 export function parseFileMessageTags(url: string, tags: string[][]): ImetaEntry | undefined {
   if (!/^https?:\/\//i.test(url)) return undefined;
   const flat: Record<string, string> = {};
+  const fallbacks: string[] = [];
   for (const [name, value] of tags) {
-    if (name && value !== undefined && !(name in flat)) flat[name] = value;
+    if (!name || value === undefined) continue;
+    if (name === 'fallback') fallbacks.push(value);
+    else if (!(name in flat)) flat[name] = value;
   }
   return {
     url,
@@ -100,6 +154,7 @@ export function parseFileMessageTags(url: string, tags: string[][]): ImetaEntry 
     blurhash: flat.blurhash,
     name: flat.name,
     size: flat.size,
+    fallbacks: fallbacks.length ? fallbacks : undefined,
     encryption: parseImetaEncryption(flat),
   };
 }
@@ -111,19 +166,56 @@ function isHex(s: string | undefined, len?: number): s is string {
   return s.length % 2 === 0 && /^[0-9a-f]+$/i.test(s);
 }
 
+/** Decode a base64 (or base64url) string to bytes. */
+function base64ToBytes(value: string): Uint8Array | undefined {
+  try {
+    const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+    const binary = atob(normalized);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Normalize a `decryption-key` / `decryption-nonce` to lowercase hex.
+ *
+ * Neither NIP-17 nor the NIP-94 encryption extension pins an encoding, and
+ * senders in the wild use both hex and base64, so accept either. Hex wins the
+ * ambiguity — every known sender uses it, and a base64 string that happens to
+ * be all-hex-and-even-length decodes to the wrong LENGTH, which the 32-byte key
+ * check in {@link isSupportedEncryption} then rejects rather than silently
+ * mis-keying.
+ *
+ * Returns the value unchanged when it decodes as neither, so the caller can
+ * still tell that the attachment claims to be encrypted.
+ */
+function decodeKeyMaterial(value: string): string {
+  const trimmed = value.trim();
+  if (isHex(trimmed)) return trimmed.toLowerCase();
+  const bytes = base64ToBytes(trimmed);
+  return bytes && bytes.length > 0 ? bytesToHex(bytes) : value;
+}
+
 /**
  * Build an {@link ImetaEncryption} from a raw imeta field map, or `undefined`
- * when the attachment is not encrypted / the parameters are malformed. Only
- * `aes-gcm` is recognized; the key must be a 32-byte (64-hex) AES-256 key and
- * the nonce must be valid hex (Vector/0xChat use 16 bytes; we don't hardcode
- * the length so other senders' nonces still work).
+ * when the attachment is not encrypted.
+ *
+ * A value comes back whenever `encryption-algorithm` is present, EVEN IF the
+ * algorithm is one we don't implement or the key material is malformed —
+ * validity is {@link isSupportedEncryption}'s question, deliberately. Folding
+ * "unreadable" back into `undefined` here is what would make a caller treat the
+ * blob as plaintext and render ciphertext.
  */
 function parseImetaEncryption(entry: Record<string, string>): ImetaEncryption | undefined {
   const algorithm = entry["encryption-algorithm"];
-  const key = entry["decryption-key"];
-  const nonce = entry["decryption-nonce"];
   if (!algorithm) return undefined;
-  if (algorithm.toLowerCase() !== "aes-gcm") return undefined;
-  if (!isHex(key, 64) || !isHex(nonce)) return undefined;
-  return { algorithm: algorithm.toLowerCase(), key: key.toLowerCase(), nonce: nonce.toLowerCase() };
+  return {
+    algorithm: algorithm.toLowerCase(),
+    key: decodeKeyMaterial(entry["decryption-key"] ?? ""),
+    nonce: decodeKeyMaterial(entry["decryption-nonce"] ?? ""),
+    ox: isHex(entry.ox, 64) ? entry.ox.toLowerCase() : undefined,
+  };
 }
