@@ -242,7 +242,11 @@ export async function ingestWireEvents(
     if (!communityIdHex) continue;
     writeRumors(communityIdHex, opened);
     scopes.add(`c2:${channel.idHex}`);
-    for (const c of concordCandidates(opened, channel, communityIdHex, self)) candidates.push(c);
+    // A banned member's message is still stored (the timeline folds it away on
+    // read, like every other render surface) but must never raise a
+    // notification — the one surface where hiding it isn't enough.
+    const banned = communityIdHex ? spec?.concordBannedByCommunity.get(communityIdHex) : undefined;
+    for (const c of concordCandidates(opened, channel, communityIdHex, self, banned)) candidates.push(c);
   }
 
   // Concord CONTROL: decrypt with the community's control-stream keys → opened-event
@@ -373,6 +377,7 @@ function concordCandidates(
   channel: Channel,
   communityIdHex: string | undefined,
   self: string | undefined,
+  banned: Set<string> | undefined,
 ): NotifyCandidate[] {
   const out: NotifyCandidate[] = [];
   // A tap lands on the message, not merely the channel — so the path carries
@@ -385,6 +390,7 @@ function concordCandidates(
     room ? chatRoute(messageId ? { ...room, messageId } : room) : "";
   for (const r of opened) {
     if (self && r.author === self) continue; // never notify on our own message
+    if (banned?.has(r.author)) continue; // a banned member (CORD-04) never notifies
     const pTagsMe = Boolean(self) && r.tags.some(([n, v]) => n === "p" && v === self);
 
     // A reaction (kind 7) notifies ONLY when it p-tags the current user (i.e.

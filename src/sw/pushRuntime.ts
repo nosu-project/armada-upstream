@@ -433,6 +433,11 @@ async function prepareConcord(
   // tells us, and that is here.
   if (cfg?.self && opened.author === cfg.self) return DROP;
 
+  // A banned member (CORD-04): stored above like every other message, folded
+  // off the timeline on read, and — here — never announced. The author is on
+  // the encrypted rumor, so this is the first place it can be checked.
+  if (stream.banned?.includes(opened.author)) return DROP;
+
   const mention = Boolean(cfg?.self)
     && opened.tags.some(([n, v]) => n === "p" && v === cfg?.self);
   const reaction = opened.kind === KIND_REACTION;

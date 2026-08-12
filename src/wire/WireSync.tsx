@@ -229,7 +229,7 @@ function catchUpCommunity(
  * traffic. Control planes are deliberately NOT deferred (cheap, and they keep
  * the fold current for the moment the community comes back).
  */
-function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; communityIdHex: string; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }> {
+function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; communityIdHex: string; banned: Set<string>; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }> {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { readState } = useReadState();
@@ -295,7 +295,7 @@ function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; c
     [queryClient],
   );
 
-  const query = useQuery<Array<{ relays: string[]; channel: Channel; communityIdHex: string; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }>>({
+  const query = useQuery<Array<{ relays: string[]; channel: Channel; communityIdHex: string; banned: Set<string>; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }>>({
     queryKey: ["wire", "concord-channels", listSig, activationEpoch],
     enabled: entries.length > 0,
     staleTime: 30_000,
@@ -309,7 +309,7 @@ function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; c
       // would treat every deferred community as live and skip the catch-up
       // its cursor gap requires.
       await deferredFlags.ready();
-      const out: Array<{ relays: string[]; channel: Channel; communityIdHex: string; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }> = [];
+      const out: Array<{ relays: string[]; channel: Channel; communityIdHex: string; banned: Set<string>; gitAttachments: ReturnType<typeof channelGitRepositoryAttachments> }> = [];
       for (const entry of entries) {
         const community = rehydrateCommunity(entry);
         if (!community || community.relays.length === 0) continue;
@@ -388,6 +388,10 @@ function useWireConcordChannels(): Array<{ relays: string[]; channel: Channel; c
             relays: community.relays,
             channel,
             communityIdHex: community.idHex,
+            // The community's banned set (CORD-04) rides into the wire spec so
+            // ingest can keep a banned member's message off the notifier, the
+            // same way `foldTimeline` keeps it off the timeline.
+            banned: folded?.banned ?? new Set<string>(),
             gitAttachments: channelGitRepositoryAttachments(folded?.channels.get(channel.idHex)?.metadata ?? { name: channel.name, private: channel.isPrivate }),
           });
           keys.push(...channel.streams.map((s) => s.group));

@@ -2,7 +2,8 @@
 // It is important that all functionality in this file is preserved, and should only be modified if explicitly requested.
 
 import { useState } from 'react';
-import { ChevronDown, IdCard, LogOut, Smile, UserIcon, UserPlus, Wallet } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { ChevronDown, IdCard, LogOut, Smile, UserIcon, UserPen, UserPlus, Wallet } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,6 +24,7 @@ import { clearRenderedPlaintext } from '@/hooks/dmRenderCache';
 import { purgeClientStorage } from '@/lib/purgeClientStorage';
 import { clearWalletStorage } from '@/lib/walletStorage';
 import { useAppContext } from '@/hooks/useAppContext';
+import { cn } from '@/lib/utils';
 
 interface AccountSwitcherProps {
   onAddAccountClick: () => void;
@@ -30,6 +32,14 @@ interface AccountSwitcherProps {
 
 const getDisplayName = (account: Account): string => {
   return account.metadata.name || account.metadata.display_name || 'Anonymous';
+};
+
+/** Whether the account's kind-0 carries any name at all (vs. the 'Anonymous'
+ * fallback). A skipped onboarding profile step leaves this false, and the
+ * trigger then renders a self-describing "Set your name" empty state instead
+ * of pretending "Anonymous" is a name. */
+const hasName = (account: Account): boolean => {
+  return Boolean(account.metadata.name || account.metadata.display_name);
 };
 
 /**
@@ -57,8 +67,15 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
   const serverScope = useServerScope();
   const [serverIdentityOpen, setServerIdentityOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
+  const navigate = useNavigate();
 
   if (!currentUser) return null;
+
+  // The empty-profile "nudge": when the account has no name at all (the
+  // onboarding profile step is skippable), the trigger itself says so — a
+  // self-describing label plus a dot on the avatar — and it self-resolves the
+  // moment a name is saved, with no dismissal state to persist.
+  const profileIncomplete = !isLoading && !hasName(currentUser);
 
   const handleLogout = () => {
     // Close the dropdown first to avoid React error #300
@@ -88,14 +105,23 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
           {isLoading ? (
             <Skeleton className='w-8 h-8 rounded-full shrink-0' />
           ) : (
-            <Avatar shape={getAvatarShape(currentUser.metadata)} className='w-8 h-8'>
-              <AvatarImage src={currentUser.metadata.picture} alt={getDisplayName(currentUser)} />
-              <AvatarFallback>{getDisplayName(currentUser).charAt(0)}</AvatarFallback>
-            </Avatar>
+            <span className='relative shrink-0'>
+              <Avatar shape={getAvatarShape(currentUser.metadata)} className='w-8 h-8'>
+                <AvatarImage src={currentUser.metadata.picture} alt={getDisplayName(currentUser)} />
+                <AvatarFallback>
+                  {profileIncomplete ? <UserIcon className='size-4' /> : getDisplayName(currentUser).charAt(0)}
+                </AvatarFallback>
+              </Avatar>
+              {profileIncomplete && (
+                <span className='absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-primary ring-2 ring-background' aria-hidden />
+              )}
+            </span>
           )}
           <div className='flex-1 text-left block truncate min-w-0'>
             {isLoading ? (
               <Skeleton className='h-4 w-24' />
+            ) : profileIncomplete ? (
+              <p className='text-sm italic text-muted-foreground truncate'>Set your name</p>
             ) : (
               <p className='font-medium text-sm truncate'><AccountName account={currentUser} /></p>
             )}
@@ -103,13 +129,58 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
           <ChevronDown className='w-4 h-4 text-muted-foreground' />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent className='w-56 p-2 animate-scale-in'>
-        <div className='font-medium text-sm px-2 py-1.5'>Switch Account</div>
+      <DropdownMenuContent className='w-60 p-2 clip-corner-lg border-none shadow-xl animate-scale-in'>
+        {/* You: identity actions first — this menu hangs off your own card. */}
+        <DropdownMenuItem
+          onClick={() => navigate('/settings#profile')}
+          className={cn(
+            'flex items-center gap-2 cursor-pointer p-2 clip-corner-lg',
+            // Part of the empty-profile nudge: the same dot as the trigger's
+            // avatar, pointing at the way to resolve it.
+            profileIncomplete && 'text-primary focus:text-primary bg-primary/10',
+          )}
+        >
+          <UserPen className='w-4 h-4' />
+          <span>{profileIncomplete ? 'Set up your profile' : 'Edit profile'}</span>
+          {profileIncomplete && <span className='ml-auto size-2 rounded-full bg-primary' aria-hidden />}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onClick={() => setStatusOpen(true)}
+          className='flex items-center gap-2 cursor-pointer p-2 clip-corner-lg'
+        >
+          <Smile className='w-4 h-4' />
+          <span>Set status</span>
+        </DropdownMenuItem>
+        {serverScope && (
+          <DropdownMenuItem
+            onClick={() => setServerIdentityOpen(true)}
+            className='flex items-center gap-2 cursor-pointer p-2 clip-corner-lg'
+          >
+            <IdCard className='w-4 h-4' />
+            <span>Server identity</span>
+          </DropdownMenuItem>
+        )}
+        {config.zapsEnabled && (
+          <DropdownMenuItem
+            onClick={() => { setIsOpen(false); setWalletOpen(true); }}
+            className='flex items-center gap-2 cursor-pointer p-2 clip-corner-lg'
+          >
+            <Wallet className='w-4 h-4' />
+            <span>Wallet</span>
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuSeparator />
+        {/* Accounts: only label the section when there is something to switch to. */}
+        {otherUsers.length > 0 && (
+          <div className='px-2 pb-1 pt-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground'>
+            Switch account
+          </div>
+        )}
         {otherUsers.map((user) => (
           <DropdownMenuItem
             key={user.id}
             onClick={() => setLogin(user.id)}
-            className='flex items-center gap-2 cursor-pointer p-2 rounded-md'
+            className='flex items-center gap-2 cursor-pointer p-2 clip-corner-lg'
           >
             <Avatar shape={getAvatarShape(user.metadata)} className='w-8 h-8'>
               <AvatarImage src={user.metadata.picture} alt={getDisplayName(user)} />
@@ -121,42 +192,17 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
             {user.id === currentUser.id && <div className='w-2 h-2 rounded-full bg-primary'></div>}
           </DropdownMenuItem>
         ))}
-        <DropdownMenuSeparator />
-        {config.zapsEnabled && (
-          <DropdownMenuItem
-            onClick={() => { setIsOpen(false); setWalletOpen(true); }}
-            className='flex items-center gap-2 cursor-pointer p-2 rounded-md'
-          >
-            <Wallet className='w-4 h-4' />
-            <span>Wallet</span>
-          </DropdownMenuItem>
-        )}
-        <DropdownMenuItem
-          onClick={() => setStatusOpen(true)}
-          className='flex items-center gap-2 cursor-pointer p-2 rounded-md'
-        >
-          <Smile className='w-4 h-4' />
-          <span>Set status</span>
-        </DropdownMenuItem>
-        {serverScope && (
-          <DropdownMenuItem
-            onClick={() => setServerIdentityOpen(true)}
-            className='flex items-center gap-2 cursor-pointer p-2 rounded-md'
-          >
-            <IdCard className='w-4 h-4' />
-            <span>Server identity</span>
-          </DropdownMenuItem>
-        )}
         <DropdownMenuItem
           onClick={onAddAccountClick}
-          className='flex items-center gap-2 cursor-pointer p-2 rounded-md'
+          className='flex items-center gap-2 cursor-pointer p-2 clip-corner-lg'
         >
           <UserPlus className='w-4 h-4' />
           <span>Add another account</span>
         </DropdownMenuItem>
+        <DropdownMenuSeparator />
         <DropdownMenuItem
           onClick={handleLogout}
-          className='flex items-center gap-2 cursor-pointer p-2 rounded-md text-red-500'
+          className='flex items-center gap-2 cursor-pointer p-2 clip-corner-lg text-red-500'
         >
           <LogOut className='w-4 h-4' />
           <span>Log out</span>

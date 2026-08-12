@@ -446,9 +446,14 @@ public class NotificationRelayService extends Service {
         // Channel set to "mentions only": still subscribed (a mention has to
         // arrive to be seen), but non-mention traffic notifies nothing.
         final boolean mentionOnly;
+        // The community's banned authors (CORD-04), hex pubkeys. A banned
+        // member's rumor is still stored (the timeline folds it away on read)
+        // but must never notify, so handleEvent drops it after decrypt.
+        // Community-wide, so every channel's stream carries the same set.
+        final Set<String> banned;
         ConcordStream(byte[] convKey, String communityId, String channelId, String epoch,
                        String name, String url, CommunityRef community, long timerSecs,
-                       boolean mentionOnly) {
+                       boolean mentionOnly, Set<String> banned) {
             this.convKey = convKey;
             this.communityId = communityId;
             this.channelId = channelId;
@@ -458,6 +463,7 @@ public class NotificationRelayService extends Service {
             this.community = community;
             this.timerSecs = timerSecs;
             this.mentionOnly = mentionOnly;
+            this.banned = banned;
         }
     }
 
@@ -1113,6 +1119,19 @@ public class NotificationRelayService extends Service {
                 JSONArray relays = sub.optJSONArray("relays");
                 if (streams == null || relays == null) continue;
 
+                // The community's banned authors (CORD-04) — every channel's
+                // sub carries the same set. A banned member's rumor is stored
+                // like any other (the timeline folds it away on read) but never
+                // notifies.
+                Set<String> banned = new HashSet<>();
+                JSONArray bannedArr = sub.optJSONArray("banned");
+                if (bannedArr != null) {
+                    for (int j = 0; j < bannedArr.length(); j++) {
+                        String pk = bannedArr.optString(j, null);
+                        if (pk != null && !pk.isEmpty()) banned.add(pk);
+                    }
+                }
+
                 // The community this channel belongs to — its image/name
                 // brand the channel's notification. The community ref
                 // deep-links to the community; the notification itself links
@@ -1132,7 +1151,7 @@ public class NotificationRelayService extends Service {
                     pkToStream2.put(pk, new ConcordStream(
                             convKey, communityId, channelId, s.optString("epoch", ""),
                             name, url, ref, Math.max(0, sub.optLong("timerSecs", 0)),
-                            mentionOnly));
+                            mentionOnly, banned));
                 }
                 for (int j = 0; j < relays.length(); j++) {
                     String relay = relays.optString(j);
@@ -2862,6 +2881,14 @@ public class NotificationRelayService extends Service {
             final String author2 = rumor.optString("pubkey");
             if (author2.equals(userPubkey)) {
                 return; // our own message / reaction echoed back
+            }
+
+            // A banned member (CORD-04): the rumor is stored above like every
+            // other message (the timeline folds it away on read), but it must
+            // never notify. The author lives on the encrypted rumor, so this is
+            // the first point the ban set can be applied.
+            if (st.banned.contains(author2)) {
+                return;
             }
 
             // Reaction to your own message: mirror the NIP-29 path with a

@@ -130,7 +130,8 @@ final class ProtocolTests: XCTestCase {
             conversationKey: concordVector["convKey"] as! String,
             epoch: concordVector["epoch"] as! String,
             communityId: "cc",
-            channelId: concordVector["channelId"] as! String
+            channelId: concordVector["channelId"] as! String,
+            banned: []
         )
     }
 
@@ -154,7 +155,8 @@ final class ProtocolTests: XCTestCase {
             conversationKey: stream.conversationKey,
             epoch: stream.epoch,
             communityId: stream.communityId,
-            channelId: stream.channelId
+            channelId: stream.channelId,
+            banned: stream.banned
         )
         XCTAssertNil(Concord.open(wrap: concordWrap, stream: stream))
     }
@@ -168,7 +170,8 @@ final class ProtocolTests: XCTestCase {
             conversationKey: concordStream.conversationKey,
             epoch: concordStream.epoch,
             communityId: concordStream.communityId,
-            channelId: String(repeating: "cd", count: 32)
+            channelId: String(repeating: "cd", count: 32),
+            banned: []
         )
         XCTAssertNil(Concord.open(wrap: concordWrap, stream: spliced))
     }
@@ -179,7 +182,8 @@ final class ProtocolTests: XCTestCase {
             conversationKey: concordStream.conversationKey,
             epoch: "8",
             communityId: concordStream.communityId,
-            channelId: concordStream.channelId
+            channelId: concordStream.channelId,
+            banned: []
         )
         XCTAssertNil(Concord.open(wrap: concordWrap, stream: stale))
     }
@@ -190,7 +194,8 @@ final class ProtocolTests: XCTestCase {
             conversationKey: String(repeating: "ab", count: 32),
             epoch: concordStream.epoch,
             communityId: concordStream.communityId,
-            channelId: concordStream.channelId
+            channelId: concordStream.channelId,
+            banned: []
         )
         XCTAssertNil(Concord.open(wrap: concordWrap, stream: wrong))
     }

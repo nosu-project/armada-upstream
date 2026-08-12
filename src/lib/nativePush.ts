@@ -121,6 +121,12 @@ export interface IosPushConfig {
     epoch: string;
     communityId: string;
     channelId: string;
+    /**
+     * The community's banned authors (CORD-04), hex pubkeys. A banned member's
+     * message is still stored — the timeline folds it away on read — but the
+     * extension must not present it, so it drops it after decrypt.
+     */
+    banned?: string[];
   }>;
 }
 

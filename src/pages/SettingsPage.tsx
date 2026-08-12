@@ -24,8 +24,8 @@ import {
   Zap,
 } from "lucide-react";
 import { useNostrLogin } from "@nostrify/react/login";
-import { useCallback, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { lazy, Suspense } from "react";
 
 import { LoginArea } from "@/components/auth/LoginArea";
@@ -132,6 +132,13 @@ interface NavGroup {
  */
 export function SettingsPage() {
   const navigate = useNavigate();
+  // Deep-linked section (e.g. /settings#profile from the account switcher's
+  // "Edit profile"): that section renders expanded and is scrolled into view.
+  const targetSection = useLocation().hash.slice(1);
+  useEffect(() => {
+    if (!targetSection) return;
+    document.getElementById(`settings-${targetSection}`)?.scrollIntoView({ block: "start" });
+  }, [targetSection]);
   const { config, updateConfig } = useAppContext();
   const { user } = useCurrentUser();
   const { logins } = useNostrLogin();
@@ -777,6 +784,7 @@ export function SettingsPage() {
                     /* Dressed as a section header, but it opens a dialog. */
                     <div
                       key={item.id}
+                      id={`settings-${item.id}`}
                       className="bg-chrome clip-corner-lg overflow-hidden"
                     >
                       <button type="button" onClick={item.action} className={SECTION_HEADER_CLASS}>
@@ -791,6 +799,7 @@ export function SettingsPage() {
                     /* Single-item section: its row IS the list entry. */
                     <div
                       key={item.id}
+                      id={`settings-${item.id}`}
                       className="bg-chrome clip-corner-lg overflow-hidden [&>*]:border-chrome [&>*:not(:first-child)]:border-t"
                     >
                       {sectionBody(item.id)}
@@ -799,6 +808,8 @@ export function SettingsPage() {
                     /* Multi-control section: collapsible header, expands in place. */
                     <Collapsible
                       key={item.id}
+                      id={`settings-${item.id}`}
+                      defaultOpen={item.id === targetSection}
                       className="bg-chrome clip-corner-lg overflow-hidden"
                     >
                       <CollapsibleTrigger asChild>

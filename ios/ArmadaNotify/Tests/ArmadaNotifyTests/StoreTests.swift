@@ -247,6 +247,32 @@ final class StorelessTests: XCTestCase {
         let prepared = processor.prepare(userInfo: ["scope": "group", "event": event])
         XCTAssertEqual(prepared?.drop, true)
     }
+
+    /// A banned member (CORD-04) is folded off the timeline on read, and must
+    /// be folded off the notification too — the same decision, made here from
+    /// the decrypted author, which is the first place the ban set can be
+    /// applied to a Concord wrap.
+    func testDropsABannedMembersConcordMessage() {
+        let concord = vectorObject("concord")
+        let bobPk = vectorString("bobPk") // the vector wrap's real author
+        let stream = ConcordStream(
+            pubkey: concord["streamPk"] as! String,
+            conversationKey: concord["convKey"] as! String,
+            epoch: concord["epoch"] as! String,
+            communityId: "cc",
+            channelId: concord["channelId"] as! String,
+            banned: [bobPk]
+        )
+        let config = PushConfig(
+            policy: .generic, selfPubkey: self_, knownPeers: [], secretKey: nil,
+            nip46: nil, concord: [stream]
+        )
+        let processor = PushProcessor(store: nil, config: config, now: 1_700_000_000)
+        let prepared = processor.prepare(
+            userInfo: ["scope": "c2", "event": concord["wrap"] as! [String: Any]]
+        )
+        XCTAssertEqual(prepared?.drop, true, "a banned member's message must not notify")
+    }
 }
 
 /// Who a notification says it is FROM.

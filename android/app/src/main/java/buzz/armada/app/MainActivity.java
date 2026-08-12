@@ -7,6 +7,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.WebView;
@@ -117,6 +118,21 @@ public class MainActivity extends BridgeActivity {
                 }
             }
         );
+    }
+
+    // The androidx starting window held by setKeepOnScreenCondition does NOT
+    // consume input: while the cold-launch splash is still up, touches are
+    // delivered to the live WebView underneath, where the app is already
+    // interactive. An impatient tap during the splash therefore lands on
+    // whatever control sits at those coordinates — invisibly, so the splash
+    // lifts onto its result (e.g. the account switcher's full-width trigger at
+    // the bottom of list views opens its menu on bare pointerdown). Swallow
+    // touches until the splash's dismiss condition clears; the warm deep-link
+    // gate already eats its own via setClickable(true) in showDeepLinkGate.
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent ev) {
+        if (webNotReady) return true;
+        return super.dispatchTouchEvent(ev);
     }
 
     // Notification taps deep-link via the `armada://open<path>` data URI set on

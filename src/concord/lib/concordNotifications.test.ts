@@ -98,6 +98,27 @@ describe("buildConcordSubs", () => {
     );
   });
 
+  it("carries the community's banned set on every channel's sub, sorted", () => {
+    const { community, generalId } = mint();
+    const banA = "b".repeat(64);
+    const banB = "a".repeat(64);
+    const folded = foldedWith([
+      { channelIdHex: bytesToHex(generalId), name: "general", isPrivate: false, deleted: false, metadata: { name: "general", private: false } },
+    ]);
+    folded.banned = new Set([banA, banB]);
+
+    const { subs } = buildConcordSubs(community, folded);
+    // Sorted so the config signature is stable across refetches.
+    expect(subs[0].banned).toEqual([banB, banA]);
+  });
+
+  it("gives an unfolded community an empty banned set rather than undefined", () => {
+    const { community } = mint();
+    community.privateChannels.push({ id: random32(), key: random32(), epoch: 0n, name: "secret" });
+    const { subs } = buildConcordSubs(community, undefined);
+    expect(subs[0].banned).toEqual([]);
+  });
+
   it("skips deleted channels and communities without relays", () => {
     const { community, generalId } = mint();
     const folded = foldedWith([

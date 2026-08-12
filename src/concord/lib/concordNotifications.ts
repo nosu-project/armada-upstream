@@ -42,6 +42,17 @@ export interface ConcordSub {
   /** The CURRENT epoch's stream only — retired epochs are read-cutoff history and never notify. */
   streams: ConcordStream[];
   /**
+   * The community's folded set of banned authors (CORD-04), as sorted hex
+   * pubkeys. A community-level fact carried on every channel's sub so each
+   * background notifier (the Android service, the web-push worker, the iOS
+   * extension) can drop a banned member's message BEFORE it becomes a
+   * notification — the same suppression `foldTimeline` applies on read. Sorted
+   * for a stable config signature, so a mere refetch doesn't churn the native
+   * config. Optional so a synthetic sub without it is read as "no bans" rather
+   * than failing to type-check.
+   */
+  banned?: string[];
+  /**
    * The community's encrypted icon pointer (CORD-02 §6), for the native
    * per-community notification group summary. The service fetches the blob,
    * AES-GCM decrypts with `key`/`nonce`, and verifies `hash`. Omitted when the
@@ -84,6 +95,9 @@ export function buildConcordSubs(
     ? { url: icon.url, key: icon.key, nonce: icon.nonce, hash: icon.hash }
     : undefined;
   const timerSecs = messageExpirationOf(folded?.metadata);
+  // Community-wide, so the same set brands every channel's sub. Sorted so the
+  // config signature is stable across refetches.
+  const banned = folded ? [...folded.banned].sort() : [];
   for (const channel of channelsView(community, folded)) {
     if (channel.streams.length === 0) continue;
     // EVERY held epoch registers for NIP-42 stream auth (backfill still reads
@@ -105,6 +119,7 @@ export function buildConcordSubs(
           epoch: channel.current.epoch.toString(),
         },
       ],
+      banned,
       communityImage,
       timerSecs,
       gitAttachments: channelGitRepositoryAttachments(folded?.channels.get(channel.idHex)?.metadata ?? { name: channel.name, private: channel.isPrivate }),

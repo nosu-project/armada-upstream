@@ -14,6 +14,10 @@ struct ConcordStream {
     let communityId: String
     /// Channel id (hex) — the deep link and the rumor's `channel` binding tag.
     let channelId: String
+    /// The community's banned authors (CORD-04), hex pubkeys. A banned member's
+    /// message is still stored — the timeline folds it away on read — but the
+    /// extension must not present it, so `prepareConcord` drops it after decrypt.
+    let banned: Set<String>
 }
 
 /// A bunker login's remote signer, as much of it as decryption needs.
@@ -122,7 +126,8 @@ struct PushConfig {
                 conversationKey: convKey,
                 epoch: epoch,
                 communityId: communityId,
-                channelId: channelId
+                channelId: channelId,
+                banned: Set((entry["banned"] as? [String]) ?? [])
             ))
         }
 

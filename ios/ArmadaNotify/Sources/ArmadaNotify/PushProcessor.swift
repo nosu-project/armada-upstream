@@ -273,6 +273,12 @@ struct PushProcessor {
         // decrypted author says so, and that is here.
         if opened.author == config.selfPubkey { return .dropped }
 
+        // A banned member (CORD-04): stored above like every other message,
+        // folded off the timeline on read, and — here — never announced. The
+        // author is on the encrypted rumor, so this is the first place it can
+        // be checked.
+        if stream.banned.contains(opened.author) { return .dropped }
+
         let mention = opened.tags.contains {
             $0.count > 1 && $0[0] == "p" && $0[1] == config.selfPubkey
         }

@@ -60,6 +60,13 @@ export interface SwConcordStream {
   communityId: string;
   /** Channel id (hex) — the deep link and the rumor's `channel` binding tag. */
   channelId: string;
+  /**
+   * The community's banned authors (CORD-04), hex pubkeys. A banned member's
+   * message is still stored — the timeline folds it away on read — but must not
+   * raise a notification, so the worker drops it after decrypt. Community-wide,
+   * carried per stream because that is the flat shape the config already uses.
+   */
+  banned?: string[];
 }
 
 export interface SwPushConfig {

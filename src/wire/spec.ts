@@ -135,7 +135,19 @@ export interface WireInputs {
   /** Friends-only DM senders (kind-3 follows). */
   dmFollows: string[];
   /** Concord channels (each carries its stream GroupKeys for decrypt). */
-  concord: Array<{ relays: string[]; channel: Channel; communityIdHex: string }>;
+  concord: Array<{
+    relays: string[];
+    channel: Channel;
+    communityIdHex: string;
+    /**
+     * The community's folded set of banned authors (CORD-04). Carried per
+     * channel because that is the shape `useWireConcordChannels` produces, but
+     * it is a community-level fact — every channel of one community carries the
+     * same set. Used to keep a banned member's message from raising a
+     * notification, the same way `foldTimeline` keeps it off the timeline.
+     */
+    banned?: Set<string>;
+  }>;
   /**
    * Concord CONTROL planes (each carries its control-stream GroupKeys). A
    * standing subscription to these authors lands new control editions —
@@ -179,6 +191,8 @@ export interface WireSpec {
   concordByPk: Map<string, Channel>;
   /** Concord channel id hex → its owning community id hex (for notification routing). */
   concordCommunityByChannel: Map<string, string>;
+  /** Concord community id hex → its folded set of banned authors, for notification suppression. */
+  concordBannedByCommunity: Map<string, Set<string>>;
   /** Concord CONTROL stream address (wrap author) → its community, for decrypt + fold wake. */
   concordCtlByPk: Map<string, { idHex: string; groups: StreamKeyView[]; refounded: boolean }>;
   /** Repository address → channels/intervals that reference it. */
@@ -263,10 +277,12 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
   // the decode path enforces the cutoff either way.
   const concordByPk = new Map<string, Channel>();
   const concordCommunityByChannel = new Map<string, string>();
+  const concordBannedByCommunity = new Map<string, Set<string>>();
   const pksByRelay = new Map<string, Set<string>>();
-  for (const { relays, channel, communityIdHex } of inputs.concord) {
+  for (const { relays, channel, communityIdHex, banned } of inputs.concord) {
     for (const s of channel.streams) concordByPk.set(s.group.pk, channel);
     concordCommunityByChannel.set(channel.idHex, communityIdHex);
+    if (banned && banned.size > 0) concordBannedByCommunity.set(communityIdHex, banned);
     for (const url of relays) {
       const relay = normalizeRelayUrl(url);
       if (!relay) continue;
@@ -384,5 +400,5 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     .map(([relay, filters]) => ({ relay, filters }))
     .sort((a, b) => (a.relay < b.relay ? -1 : 1));
 
-  return { subs, concordByPk, concordCommunityByChannel, concordCtlByPk, gitByRepository, gitRootById, gitRootAuthorById, sig: JSON.stringify(subs) };
+  return { subs, concordByPk, concordCommunityByChannel, concordBannedByCommunity, concordCtlByPk, gitByRepository, gitRootById, gitRootAuthorById, sig: JSON.stringify(subs) };
 }

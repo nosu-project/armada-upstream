@@ -174,6 +174,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
             epoch: s.epoch,
             communityId: sub.communityId,
             channelId: sub.channelId,
+            banned: sub.banned,
           }))
         ),
         ...(dmSk ? { sk: dmSk } : {}),

@@ -83,6 +83,7 @@ function makeSinks(spec: Partial<WireSpec>, store = new FakeStore()) {
     subs: [],
     concordByPk: new Map(),
     concordCommunityByChannel: new Map(),
+    concordBannedByCommunity: new Map(),
     concordCtlByPk: new Map(),
     gitByRepository: new Map(),
     gitRootById: new Map(),
@@ -376,6 +377,31 @@ describe("ingestWireEvents — foreground notify candidates", () => {
       // A tap lands on the message, which is what the `/m/` segment names.
       path: `/c/comm-hex/${idHex}/m/${rumorId}`,
     });
+  });
+
+  it("suppresses a banned member's message but still notifies for everyone else", async () => {
+    // Two members posting to the same channel; only one is banned. The ban is
+    // per-author, so the other member's message must still raise a candidate.
+    // (Both rumors are still stored — that path runs before the ban filter and
+    // is covered by the store tests above.)
+    const { channel, idHex } = makeChannel();
+    const communityIdHex = "c".repeat(64);
+    const banned = signer();
+    const ok = signer();
+    const bannedWrap = await wrapChat(channel, banned, "banned hello");
+    const okWrap = await wrapChat(channel, ok, "welcome hello");
+    const { captured, off, sinks } = withSink({
+      concordByPk: new Map([[bannedWrap.pubkey, channel], [okWrap.pubkey, channel]]),
+      concordCommunityByChannel: new Map([[idHex, communityIdHex]]),
+      concordBannedByCommunity: new Map([[communityIdHex, new Set([banned.pubkey])]]),
+    });
+    try {
+      await ingestWireEvents(sinks, [bannedWrap, okWrap]);
+    } finally {
+      off();
+    }
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toMatchObject({ author: ok.pubkey, body: "welcome hello" });
   });
 
   it("routes every attached Git activity independently, honors intervals, and rejects spoofed statuses", async () => {

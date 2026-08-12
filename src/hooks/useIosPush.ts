@@ -178,6 +178,7 @@ export function useIosPush(): UsePushNotificationsReturn {
             epoch: stream.epoch,
             communityId: sub.communityId,
             channelId: sub.channelId,
+            banned: sub.banned,
           }))
         ),
         // An nsec login decrypts on the device; a bunker login hands over the

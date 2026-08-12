@@ -461,4 +461,54 @@ describe("preparePush — showing nothing on purpose", () => {
     });
     expect(p?.drop).toBe(true);
   });
+
+  it("drops a banned member's Concord message but still stores it", async () => {
+    const CHANNEL = "56".repeat(32);
+    const COMMUNITY = "78".repeat(32);
+    const streamSk = generateSecretKey();
+    const streamPk = getPublicKey(streamSk);
+    const convKey = getConversationKey(streamSk, streamPk);
+    const authorSk = generateSecretKey();
+    const authorPk = getPublicKey(authorSk);
+    const rumor = {
+      pubkey: authorPk,
+      kind: 9,
+      content: "message from a banned member",
+      tags: [["channel", CHANNEL], ["epoch", "1"]],
+      created_at: now(),
+    };
+    const withId = { ...rumor, id: getEventHash(rumor as Parameters<typeof getEventHash>[0]) };
+    const sealed = finalizeEvent(
+      { kind: 20013, content: nip44Encrypt(JSON.stringify(withId), convKey), tags: [], created_at: rumor.created_at },
+      authorSk,
+    );
+    const streamed = finalizeEvent(
+      {
+        kind: 1059,
+        content: nip44Encrypt(JSON.stringify(sealed), convKey),
+        tags: [["p", getPublicKey(generateSecretKey())]],
+        created_at: now(),
+      },
+      streamSk,
+    );
+
+    const p = await preparePush({ scope: "c2", event: streamed as never }, {
+      policy: "generic",
+      self: getPublicKey(generateSecretKey()),
+      knownPeers: [],
+      concord: [{
+        pk: streamPk,
+        convKey: bytesToHex(convKey),
+        epoch: "1",
+        communityId: COMMUNITY,
+        channelId: CHANNEL,
+        banned: [authorPk],
+      }],
+    });
+    expect(p?.drop).toBe(true);
+    // Stored regardless — the timeline folds the ban away on read, so the row
+    // still has to be there for that surface.
+    const rows = await queryChannelRumors(COMMUNITY, CHANNEL, { limit: 10 });
+    expect(rows.map((r) => r.content)).toContain("message from a banned member");
+  });
 });
