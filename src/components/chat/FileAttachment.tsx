@@ -1,6 +1,9 @@
+import { Capacitor } from "@capacitor/core";
 import { Download, File, FileArchive, FileText, Loader2 } from "lucide-react";
 import { useCallback, useState } from "react";
 
+import { toast } from "@/hooks/useToast";
+import { downloadBinaryFile } from "@/lib/downloadFile";
 import { decryptBytes } from "@/lib/encryptedMedia";
 import { cn } from "@/lib/utils";
 
@@ -70,9 +73,13 @@ function iconFor(mime: string | undefined) {
  * SECURITY: the bytes are never rendered, previewed, embedded, or opened
  * in-tab — a hostile PDF/HTML/SVG can't execute or be displayed here. On click
  * the blob is fetched (and AES-GCM-decrypted for encrypted Concord/Vector
- * attachments), then handed to the browser as a forced *save* via an
- * `application/octet-stream` object URL + a `download` filename. octet-stream
- * means even a stray navigation downloads rather than renders. The sender's
+ * attachments), then handed to {@link downloadBinaryFile} as a forced *save*.
+ * On the web that is an `application/octet-stream` object URL + a `download`
+ * filename, so even a stray navigation downloads rather than renders; on native
+ * the bytes go to the app's Documents directory, because the anchor pattern
+ * silently fails in the WebView — it reported success here while saving
+ * nothing. Only the filename survives to name the file, so what keeps a
+ * traversal or control-char name from escaping is `safeFilename`. The sender's
  * MIME is used only to choose an icon.
  */
 export function FileAttachment({ url, mime, name, size, encryption, className }: FileAttachmentProps) {
@@ -94,18 +101,13 @@ export function FileAttachment({ url, mime, name, size, encryption, className }:
         ? await decryptBytes(raw, encryption.key, encryption.nonce)
         : raw;
 
-      // Force a save, never a render: octet-stream + download attribute. The
-      // sender's real MIME is deliberately discarded here.
-      const blob = new Blob([bytes], { type: "application/octet-stream" });
-      const objectUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = objectUrl;
-      a.download = displayName;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      // Give the browser a tick to start the save before revoking.
-      setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000);
+      // Force a save, never a render. The sender's real MIME is deliberately
+      // discarded: the web branch of `downloadBinaryFile` hands the bytes over
+      // as octet-stream, and on native they are written to disk unopened.
+      await downloadBinaryFile(displayName, bytes);
+      if (Capacitor.isNativePlatform()) {
+        toast({ title: "Saved", description: "You'll find it in the Armada folder in Files." });
+      }
       setStatus("idle");
     } catch {
       setStatus("error");
