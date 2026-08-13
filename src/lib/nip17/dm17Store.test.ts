@@ -11,8 +11,10 @@ import {
   queryDm17Conversations,
   queryDm17Thread,
   queryDm17Timer,
+  readDm17Cursor,
   storedToDm17,
   sweepExpiredDm17Rumors,
+  updateDm17Cursor,
   writeDm17Rumors,
 } from "@/lib/nip17/dm17Store";
 import {
@@ -282,6 +284,67 @@ describe("dm17Store disappearing messages", () => {
 
     // A timer set on one conversation never leaks into another.
     expect(await queryDm17Timer(self, bob)).toBeUndefined();
+  });
+});
+
+describe("dm17Store relay cursors", () => {
+  it("advances each successful relay independently and preserves the others", async () => {
+    const viewer = getPublicKey(generateSecretKey());
+    await updateDm17Cursor(viewer, {
+      newest: 200,
+      oldest: 100,
+      exhausted: false,
+      relayNewest: { "wss://fast.example": 200 },
+    });
+    await updateDm17Cursor(viewer, {
+      newest: 180,
+      relayNewest: {
+        "wss://fast.example": 150,
+        "wss://slow.example": 180,
+      },
+    });
+
+    expect(await readDm17Cursor(viewer)).toEqual({
+      newest: 200,
+      oldest: 100,
+      exhausted: false,
+      relayNewest: {
+        "wss://fast.example": 200,
+        "wss://slow.example": 180,
+      },
+    });
+  });
+
+  it("drops watermarks for relays outside pruneRelaysTo and keeps the rest advancing", async () => {
+    const viewer = getPublicKey(generateSecretKey());
+    await updateDm17Cursor(viewer, {
+      newest: 200,
+      oldest: 100,
+      exhausted: false,
+      relayNewest: { "wss://kept.example": 200, "wss://removed.example": 150 },
+    });
+    await updateDm17Cursor(
+      viewer,
+      { relayNewest: { "wss://kept.example": 210 } },
+      { pruneRelaysTo: ["wss://kept.example"] },
+    );
+
+    expect((await readDm17Cursor(viewer))?.relayNewest).toEqual({
+      "wss://kept.example": 210,
+    });
+  });
+
+  it("leaves legacy global progress unattributed so every relay gets a recovery scan", async () => {
+    const viewer = getPublicKey(generateSecretKey());
+    await updateDm17Cursor(viewer, {
+      newest: 300,
+      oldest: 100,
+      exhausted: true,
+    });
+
+    const cursor = await readDm17Cursor(viewer);
+    expect(cursor?.newest).toBe(300);
+    expect(cursor?.relayNewest).toBeUndefined();
   });
 });
 
