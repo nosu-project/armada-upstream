@@ -315,6 +315,25 @@ describe("dm17Store relay cursors", () => {
     });
   });
 
+  it("drops watermarks for relays outside pruneRelaysTo and keeps the rest advancing", async () => {
+    const viewer = getPublicKey(generateSecretKey());
+    await updateDm17Cursor(viewer, {
+      newest: 200,
+      oldest: 100,
+      exhausted: false,
+      relayNewest: { "wss://kept.example": 200, "wss://removed.example": 150 },
+    });
+    await updateDm17Cursor(
+      viewer,
+      { relayNewest: { "wss://kept.example": 210 } },
+      { pruneRelaysTo: ["wss://kept.example"] },
+    );
+
+    expect((await readDm17Cursor(viewer))?.relayNewest).toEqual({
+      "wss://kept.example": 210,
+    });
+  });
+
   it("leaves legacy global progress unattributed so every relay gets a recovery scan", async () => {
     const viewer = getPublicKey(generateSecretKey());
     await updateDm17Cursor(viewer, {

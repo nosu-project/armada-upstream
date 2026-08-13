@@ -491,18 +491,25 @@ export async function sweepExpiredDm17Rumors(
 // The inbox scan's resume position, persisted so a cold launch tops up from
 // where it left off instead of re-reading the whole `#p` backlog. Wrap
 // timestamps are backdated ≤ 2 days (NIP-59), so consumers re-scan a slack
-// window behind `newest` — see useDm17's RESYNC_SLACK.
+// window behind each relay's `relayNewest` watermark — see useDm17's
+// RESYNC_SLACK and relayScanWatermarks.
 
 /** The DM inbox's persisted sync position. */
 export interface Dm17Cursor {
-  /** `created_at` of the newest wrap ingested. */
+  /**
+   * `created_at` of the newest wrap ingested, account-wide. Current inbox
+   * scans resume from `relayNewest` and never read this; it is still
+   * maintained so a build predating the per-relay watermarks resumes sanely.
+   */
   newest: number;
   /** `created_at` of the oldest wrap paged back to (the backfill `until`). */
   oldest: number;
   /** No relay had deeper history past `oldest` — stop older-backfills. */
   exhausted: boolean;
   /**
-   * Newest successfully scanned wrap timestamp per relay URL.
+   * Per-relay resume watermark: a timestamp at or below which that relay is
+   * proven scanned (the newest wrap it returned, floored by the NIP-59
+   * backdate horizon — see useDm17's relayScanWatermarks).
    *
    * A single account-wide cursor is not sufficient: inbox relays are
    * heterogeneous, and one may be offline or still completing NIP-42 while
@@ -522,14 +529,31 @@ export function readDm17Cursor(self: string): Promise<Dm17Cursor | undefined> {
 
 /**
  * Merge sync progress into the cursor (best-effort). `newest` only advances,
- * `oldest` only recedes, `exhausted` is sticky.
+ * `oldest` only recedes, `exhausted` is sticky, and each `relayNewest` entry
+ * only advances. There is no write lock: every field merges monotonically, so
+ * two overlapping read-modify-writes can only lose an advance one of them
+ * already made — costing a re-scan of an already-seen window, never a skip.
+ *
+ * `pruneRelaysTo` drops watermarks for relays no longer in the caller's set —
+ * the record lives inside this one row and is re-serialized on every pass, so
+ * without it a removed relay's entry would ride along forever.
  */
-export async function updateDm17Cursor(self: string, patch: Partial<Dm17Cursor>): Promise<void> {
+export async function updateDm17Cursor(
+  self: string,
+  patch: Partial<Dm17Cursor>,
+  opts?: { pruneRelaysTo?: readonly string[] },
+): Promise<void> {
   const prev = await readDm17Cursor(self);
   const relayNewest = { ...(prev?.relayNewest ?? {}) };
   for (const [relay, newest] of Object.entries(patch.relayNewest ?? {})) {
     if (!Number.isFinite(newest) || newest <= 0) continue;
     relayNewest[relay] = Math.max(relayNewest[relay] ?? 0, newest);
+  }
+  if (opts?.pruneRelaysTo) {
+    const keep = new Set(opts.pruneRelaysTo);
+    for (const relay of Object.keys(relayNewest)) {
+      if (!keep.has(relay)) delete relayNewest[relay];
+    }
   }
   const next: Dm17Cursor = {
     newest: Math.max(prev?.newest ?? 0, patch.newest ?? 0),

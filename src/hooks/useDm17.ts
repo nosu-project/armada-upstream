@@ -10,9 +10,12 @@
  *     viewer's DM relays. Every new wrap is opened once (consent-gated for
  *     prompting signers — two nip44 decrypts per wrap) and the rumor is
  *     stored decrypted; the ciphertext is never persisted. The scan is
- *     since-scoped: the 2-day slack window (NIP-59 backdating) is paid on the
- *     session's first pass and periodically after; routine polls between use a
- *     narrow overlap (the wire's standing sub owns live delivery).
+ *     since-scoped PER RELAY: each relay resumes from its own watermark, and
+ *     the 2-day slack window (NIP-59 backdating) is paid on a relay's first
+ *     pass of the session, periodically after, and on app resume; routine
+ *     polls between use a narrow overlap (the wire's standing sub owns live
+ *     delivery). A relay that fails a pass keeps its old watermark and stays
+ *     retryable — another relay's progress is never attributed to it.
  *   - THREAD: local-first store read + the shared inbox sync; per-thread
  *     older-history backfill pages the global `#p` gift-wrap stream with
  *     `until`, decrypting each wrap to sort it into its conversation.
@@ -28,7 +31,7 @@
  */
 
 import { useNostr } from "@nostrify/react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { onlineManager, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppContext } from "@/hooks/useAppContext";
@@ -38,9 +41,9 @@ import { useDmRelayList, useDmRelaysFor } from "@/hooks/useDmRelayList";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { customEmojiReactionTags } from "@/hooks/useReactions";
+import { useResumeEpoch } from "@/hooks/useResumeEpoch";
 import { effectiveDmRelays } from "@/contexts/AppContext";
-import { APP_RELAYS } from "@/lib/platform";
-import { onAppStateChange } from "@/lib/appStateEvents";
+import { APP_RELAYS, normalizeRelayUrl } from "@/lib/platform";
 import { mayBulkDecrypt, signerNeedsApproval } from "@/lib/bulkDecryptGate";
 import { getDecryptConsent } from "@/lib/decryptConsent";
 import { isDmSynced, markDmSynced } from "@/lib/dmSynced";
@@ -113,7 +116,9 @@ const NARROW_RESYNC_SLACK_SECS = 10 * 60;
 const FULL_SCAN_INTERVAL_MS = 15 * 60_000;
 /** Per-viewer + relay time of the last COMPLETED full-window scan. */
 const lastFullScanAt = new Map<string, number>();
-/** Avoid paying the full recovery window twice for one focus/visibility burst. */
+/** Minimum time away for a return to count as a resume (vs. an alt-tab). */
+const RESUME_MIN_AWAY_MS = 30_000;
+/** Avoid paying the full recovery window twice for one resume/reconnect burst. */
 const FOREGROUND_SYNC_MIN_MS = 30_000;
 const lastForegroundSyncAt = new Map<string, number>();
 /** Newest wraps fetched per inbox scan / backfill page. */
@@ -378,8 +383,8 @@ async function runLiveDm17Pass(
     rebufferLiveDmWraps(fresh);
     return "deferred";
   }
-  const newest = Math.max(...wraps.map((w) => w.created_at));
-  await updateDm17Cursor(ctx.self, { newest });
+  // No cursor write: inbox scans resume from per-relay watermarks, and the
+  // live buffer carries no relay attribution to raise one with.
   return "consumed";
 }
 
@@ -495,6 +500,24 @@ function mergeRelayPages(pages: Dm17RelayPage[]): NostrEvent[] {
   return [...byId.values()];
 }
 
+/**
+ * Watermark each successful page. A scan that completed at wall time S proves
+ * any wrap PUBLISHED after S carries `created_at ≥ S − MAX_WRAP_BACKDATE_SECS`
+ * (NIP-59 backdates, never forward-dates) — whatever the page contained. The
+ * watermark is that floor, raised to the newest wrap the page actually
+ * returned. An empty page therefore still bounds the next poll's window to
+ * the backdate horizon, without ever advancing past a backdated wrap still
+ * en route — which is what writing wall clock here would do.
+ */
+export function relayScanWatermarks(pages: Dm17RelayPage[], nowSecs: number): Record<string, number> {
+  const floor = nowSecs - MAX_WRAP_BACKDATE_SECS;
+  const out: Record<string, number> = {};
+  for (const page of pages) {
+    out[page.url] = Math.max(floor, ...page.events.map((event) => event.created_at));
+  }
+  return out;
+}
+
 /** Build one relay's top-up filter from that relay's own successful progress. */
 export function dm17InboxFilter(
   self: string,
@@ -552,20 +575,19 @@ async function runInboxSync(
     const fresh = wraps.filter((w) => !seen.has(w.id));
 
     if (!(await openAndStore(ctx, fresh, opts?.interactive ?? false))) return false; // deferred: retry later
-    // Only successful + consumed relay pages advance. A timed-out relay keeps
-    // no cursor (or its previous cursor) and remains a full-scan candidate.
+    // Only successful + consumed relay pages advance their watermark (see
+    // relayScanWatermarks for why an empty page advances to the backdate floor
+    // and not to wall clock). A timed-out relay keeps its previous watermark
+    // (or none) and remains a full-scan candidate.
     const nowSecs = Math.floor(now / 1000);
-    const relayNewest: Record<string, number> = {};
+    const relayNewest = relayScanWatermarks(result.pages, nowSecs);
     for (const page of result.pages) {
-      relayNewest[page.url] = page.events.length > 0
-        ? Math.max(...page.events.map((event) => event.created_at))
-        : nowSecs;
       if (fullRelays.has(page.url)) {
         lastFullScanAt.set(`${ctx.self}\u0000${page.url}`, now);
       }
     }
-    const newest = Math.max(...Object.values(relayNewest));
     if (wraps.length > 0) {
+      const newest = Math.max(...wraps.map((w) => w.created_at));
       const oldest = Math.min(...wraps.map((w) => w.created_at));
       await updateDm17Cursor(ctx.self, {
         newest,
@@ -576,16 +598,16 @@ async function runInboxSync(
           oldest,
           exhausted: result.failed.length === 0 && result.pages.every((page) => page.events.length < INBOX_PAGE),
         }),
-      });
+      }, { pruneRelaysTo: ctx.relays });
     } else {
       await updateDm17Cursor(ctx.self, {
-        newest,
         relayNewest,
         ...(cursor ? {} : {
+          newest: nowSecs,
           oldest: nowSecs,
           exhausted: result.failed.length === 0,
         }),
-      });
+      }, { pruneRelaysTo: ctx.relays });
     }
     return true;
   } catch {
@@ -652,8 +674,16 @@ function useDm17SyncCtx(): SyncCtx | undefined {
   // effectiveDmRelays is just the app relays and we'd miss wraps that landed
   // on our declared inbox. Unioning both is where our messages actually are.
   const { relays: publishedRelays } = useDmRelayList();
+  // Normalized so one relay spelled two ways (trailing slash, uppercase host)
+  // can't dial twice or fork the persisted per-relay watermark: config URLs
+  // arrive raw, while the published 10050 half is already normalized.
   const relays = useMemo(
-    () => [...new Set([...effectiveDmRelays(config), ...publishedRelays])],
+    () =>
+      [...new Set(
+        [...effectiveDmRelays(config), ...publishedRelays]
+          .map((url) => normalizeRelayUrl(url))
+          .filter((url): url is string => url !== undefined),
+      )],
     [config, publishedRelays],
   );
   const relayKey = relays.join(",");
@@ -670,43 +700,36 @@ function useDm17SyncCtx(): SyncCtx | undefined {
  * The standing wire subscription is the low-latency path, but a mobile WebView
  * or browser can return with that socket dead. NIP-59 backdates gift wraps by
  * up to two days, so an ordinary narrow poll is not a safe resume operation.
- * This hook is mounted once by DmSyncLifecycle and forces the full window from
- * Capacitor's authoritative app-state signal plus the web equivalents.
+ * This hook is mounted once by DmSyncLifecycle.
+ *
+ * "The app came back" is read from React Query's focusManager via
+ * useResumeEpoch — the one seam already driven from Capacitor's authoritative
+ * appStateChange on native (see App.tsx) and the browser's visibility events
+ * on web — rather than a second set of listeners that could disagree with it
+ * (see useResumeEpoch's header). The away floor keeps an alt-tab from paying
+ * the full recovery window. Regaining connectivity doesn't flip focus, so the
+ * same recovery also subscribes to onlineManager, the seam
+ * `refetchOnReconnect` already uses.
  */
 export function useDm17ForegroundSync(): void {
   const ctx = useDm17SyncCtx();
+  const epoch = useResumeEpoch(RESUME_MIN_AWAY_MS);
 
   useEffect(() => {
     if (!ctx) return;
 
-    const recover = (native = false) => {
-      // Android can report the document as hidden after the Activity is already
-      // active; Capacitor's lifecycle event is authoritative there.
-      if (!native && typeof document !== "undefined" && document.visibilityState !== "visible") return;
+    const recover = () => {
       const now = Date.now();
       if (now - (lastForegroundSyncAt.get(ctx.self) ?? 0) < FOREGROUND_SYNC_MIN_MS) return;
       lastForegroundSyncAt.set(ctx.self, now);
       void syncDm17Inbox(ctx, { force: true, full: true, interactive: false });
     };
 
-    const offNative = onAppStateChange((active) => {
-      if (active) recover(true);
+    if (epoch > 0) recover();
+    return onlineManager.subscribe((online) => {
+      if (online) recover();
     });
-    const onVisible = () => {
-      if (document.visibilityState === "visible") recover();
-    };
-    const onFocus = () => recover();
-    const onOnline = () => recover();
-    document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("focus", onFocus);
-    window.addEventListener("online", onOnline);
-    return () => {
-      offNative();
-      document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("focus", onFocus);
-      window.removeEventListener("online", onOnline);
-    };
-  }, [ctx]);
+  }, [ctx, epoch]);
 }
 
 // ── Thread ────────────────────────────────────────────────────────────────────
