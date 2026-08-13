@@ -29,6 +29,8 @@ import { useDmRelayList, useDmRelaysFor } from "@/hooks/useDmRelayList";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import {
   buildDmRumor,
+  dmConvKey,
+  dmConvPeers,
   dmTypingTags,
   KIND_DM_TYPING,
   KIND_DM_WRAP_EPHEMERAL,
@@ -47,7 +49,7 @@ const TYPING_WINDOW_MS = TYPING_WINDOW_SECS * 1000;
 const TYPING_THROTTLE_MS = 4_000;
 
 export interface DmTyping {
-  /** The peer, when they're currently typing; empty otherwise. */
+  /** Participants currently typing (sorted); empty when nobody is. */
   typers: string[];
   /** Fire on every keystroke; throttled internally. No-op when disabled. */
   publishTyping: () => void;
@@ -61,25 +63,39 @@ const IDLE: DmTyping = { typers: [], publishTyping: () => {} };
  * off, the signer can't do it, or there's no peer — callers can mount it
  * unconditionally.
  */
-export function useDmTyping(peer: string | undefined, enabled = true): DmTyping {
+export function useDmTyping(conversation: string | undefined, enabled = true): DmTyping {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { config } = useAppContext();
   const { relays: publishedRelays } = useDmRelayList();
-  const peerInboxRelays = useDmRelaysFor(peer);
-
-  const [typers, setTypers] = useState<string[]>([]);
-  const lastSeen = useRef(0);
-  const lastSent = useRef(0);
 
   const self = user?.pubkey;
+  const peers = useMemo(
+    () => (conversation ? dmConvPeers(conversation) : []),
+    [conversation],
+  );
+  // The one peer we publish OUR signal to. Groups deliberately receive but do
+  // not send: a signal has to be sealed per recipient, and a sequential signer
+  // round-trip per member every TYPING_THROTTLE_MS is a real cost on a bunker
+  // (and a visible one on a NIP-07 extension that prompts). Somebody else's
+  // signal still lights the indicator, so the feature degrades to one-way
+  // rather than off.
+  const publishPeer = peers.length === 1 && peers[0] !== self ? peers[0] : undefined;
+  const peerInboxRelays = useDmRelaysFor(publishPeer);
+  const senders = useMemo(() => new Set(peers), [peers]);
+
+  const [typers, setTypers] = useState<string[]>([]);
+  /** Newest signal timestamp (ms) per participant, for the decay sweep. */
+  const lastSeen = useRef(new Map<string, number>());
+  const lastSent = useRef(0);
+
   const on =
     enabled &&
     config.dmTypingIndicators &&
     !!self &&
-    !!peer &&
+    peers.length > 0 &&
     // A note-to-self thread would just show us our own indicator.
-    peer !== self &&
+    !(peers.length === 1 && peers[0] === self) &&
     !!user?.signer.nip44;
 
   // The same union the inbox sync reads from: our effective DM relays ∪ our
@@ -91,17 +107,26 @@ export function useDmTyping(peer: string | undefined, enabled = true): DmTyping 
   );
   const myRelayKey = myRelays.join(",");
   const peerRelayKey = peerInboxRelays.join(",");
+  const conversationKey = conversation ?? "";
 
   useEffect(() => {
     setTypers([]);
-    lastSeen.current = 0;
+    lastSeen.current = new Map();
     if (!on || myRelays.length === 0) return;
     const controller = new AbortController();
     const signer = user!.signer as unknown as Dm17Signer;
 
     const recompute = () => {
-      const live = Date.now() - lastSeen.current <= TYPING_WINDOW_MS;
-      setTypers((prev) => (prev.length === (live ? 1 : 0) ? prev : live ? [peer!] : []));
+      const cutoff = Date.now() - TYPING_WINDOW_MS;
+      const live: string[] = [];
+      for (const [pubkey, at] of lastSeen.current) {
+        if (at > cutoff) live.push(pubkey);
+        else lastSeen.current.delete(pubkey);
+      }
+      live.sort();
+      setTypers((prev) =>
+        prev.length === live.length && prev.every((pk, i) => pk === live[i]) ? prev : live,
+      );
     };
 
     const apply = async (wrap: NostrEvent) => {
@@ -112,12 +137,15 @@ export function useDmTyping(peer: string | undefined, enabled = true): DmTyping 
       }).catch(() => undefined);
       if (!opened || opened.kind !== KIND_DM_TYPING) return;
       // Only THIS conversation, and never our own signal echoing back off a
-      // shared relay (we publish to our own DM relays too).
-      if (opened.author !== peer || opened.peer !== peer) return;
+      // shared relay (we publish to our own DM relays too). The author check is
+      // what excludes our own copy; the conversation check is what keeps a
+      // signal from a 1:1 out of a group that shares its members.
+      if (!senders.has(opened.author)) return;
+      if (dmConvKey(opened.peers) !== conversationKey) return;
       const ms = opened.createdAt * 1000;
       if (Date.now() - ms > TYPING_WINDOW_MS) return;
-      if (ms <= lastSeen.current) return;
-      lastSeen.current = ms;
+      if (ms <= (lastSeen.current.get(opened.author) ?? 0)) return;
+      lastSeen.current.set(opened.author, ms);
       recompute();
     };
 
@@ -149,10 +177,10 @@ export function useDmTyping(peer: string | undefined, enabled = true): DmTyping 
     // `user` is read for its signer; keyed on the pubkey (the signer is stable
     // per login) so a profile refresh doesn't tear down the subscriptions.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nostr, on, self, peer, myRelayKey]);
+  }, [nostr, on, self, conversationKey, myRelayKey]);
 
   const publishTyping = useCallback(() => {
-    if (!on) return;
+    if (!on || !publishPeer) return;
     const now = Date.now();
     if (now - lastSent.current < TYPING_THROTTLE_MS) return;
     lastSent.current = now;
@@ -162,12 +190,12 @@ export function useDmTyping(peer: string | undefined, enabled = true): DmTyping 
         const rumor = buildDmRumor({
           kind: KIND_DM_TYPING,
           content: "",
-          tags: dmTypingTags(peer!),
+          tags: dmTypingTags([publishPeer]),
           pubkey: self!,
         });
         // Peer copy only — a self copy would just be our own indicator coming
         // back at us, at double the relay traffic.
-        const wrap = wrapDmSealEphemeral(await sealDmRumor(rumor, peer!, signer), peer!);
+        const wrap = wrapDmSealEphemeral(await sealDmRumor(rumor, publishPeer, signer), publishPeer);
         const targets = [...new Set([...peerInboxRelays, ...myRelays])];
         await Promise.allSettled(
           targets.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(6000) })),
@@ -177,7 +205,7 @@ export function useDmTyping(peer: string | undefined, enabled = true): DmTyping 
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nostr, on, self, peer, user, myRelayKey, peerRelayKey]);
+  }, [nostr, on, self, publishPeer, user, myRelayKey, peerRelayKey]);
 
   return on ? { typers, publishTyping } : IDLE;
 }

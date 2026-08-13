@@ -21,11 +21,15 @@ import { useEffect, useMemo, useState } from "react";
 import { getRenderedPlaintext } from "@/hooks/dmRenderCache";
 import { dmCounterparty } from "@/hooks/useDirectMessages";
 import { searchDm17Rumors } from "@/lib/nip17/dm17Store";
+import { dmConvKey } from "@/lib/nip17/protocol";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** A single conversation's best match for the active query. */
 export interface DmMessageMatch {
-  /** Conversation partner pubkey. */
+  /**
+   * The conversation key (see `dmConvKey`) — a bare pubkey for a 1:1, which is
+   * also what the kind-4 half below produces.
+   */
   peer: string;
   /** The matched message's decrypted text (for snippet + highlight). */
   text: string;
@@ -60,9 +64,10 @@ export function useDmMessageSearch(
       if (cancelled) return;
       const byPeer = new Map<string, DmMessageMatch>();
       for (const r of rumors) {
-        const cur = byPeer.get(r.peer);
+        const key = dmConvKey(r.peers);
+        const cur = byPeer.get(key);
         if (!cur || r.createdAt > cur.createdAt) {
-          byPeer.set(r.peer, { peer: r.peer, text: r.content, createdAt: r.createdAt });
+          byPeer.set(key, { peer: key, text: r.content, createdAt: r.createdAt });
         }
       }
       setDm17Matches(byPeer);

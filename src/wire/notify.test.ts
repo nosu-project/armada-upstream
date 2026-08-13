@@ -19,7 +19,7 @@ function opened(overrides: Partial<OpenedDm> = {}): OpenedDm {
     content: "hello",
     tags: [["p", SELF]],
     createdAt: 123,
-    peer: PEER,
+    peers: [PEER],
     wrapId: "wrap",
     ...overrides,
   };

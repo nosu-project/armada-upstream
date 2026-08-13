@@ -57,9 +57,14 @@ export class LegacyFallbackRequired extends Error {
 }
 
 /**
- * Build a {@link ChatTransport} for a 1:1 DM thread, so DMs render through the
+ * Build a {@link ChatTransport} for a DM thread, so DMs render through the
  * same `MessageTimeline` / `ChatMessage` path as NIP-29 groups and Concord
  * communities instead of a bespoke timeline.
+ *
+ * A GROUP conversation is NIP-17 only: kind-4 is a pairwise cipher with no
+ * group form, so the legacy plane is not merged, not offered, and cannot be
+ * fallen back to — `legacyPeer` is undefined for anything with more than one
+ * participant and every kind-4 input below degenerates to empty.
  *
  * The thread is the MERGE of two planes:
  *
@@ -83,7 +88,7 @@ export class LegacyFallbackRequired extends Error {
  *     (NIP-17 rumors are stored decrypted — never placeholders).
  *   - `decryptVisible`: decrypt a placeholder by id (IntersectionObserver).
  */
-export function useDmTransport(peer: string): {
+export function useDmTransport(conversation: string, peers: readonly string[]): {
   transport: ChatTransport;
   /**
    * The merged timeline as generalized entries: chat rows plus the
@@ -142,6 +147,9 @@ export function useDmTransport(peer: string): {
   send: (text: string, tags?: string[][], opts?: { allowLegacy?: boolean }) => Promise<void>;
 } {
   const { user } = useCurrentUser();
+  // The one peer the legacy plane can address. Undefined for a group, which
+  // takes every kind-4 branch below to its empty case.
+  const legacyPeer = peers.length === 1 ? peers[0] : undefined;
   const {
     messages,
     isLoading,
@@ -156,11 +164,14 @@ export function useDmTransport(peer: string): {
     decryptAll,
     decryptDeclined,
     hasEncrypted,
-  } = useDirectMessages(peer);
+  } = useDirectMessages(legacyPeer);
 
-  const dm17 = useDm17Thread(peer);
+  const dm17 = useDm17Thread(conversation);
   const self = user?.pubkey;
-  const { pref } = useDmProtocolPref(peer);
+  // A group has no legacy plane to pin to, so it is never "pinned to NIP-04"
+  // however the first participant's own 1:1 preference happens to be set.
+  const { pref: peerPref } = useDmProtocolPref(legacyPeer ?? "");
+  const pref = legacyPeer ? peerPref : "auto";
 
   // Adapt DecryptedDM → ChatMsg, preserving object identity for unchanged
   // messages so React.memo on the rows holds (a fresh array lands on every
@@ -406,16 +417,19 @@ export function useDmTransport(peer: string): {
     async (text: string, tags?: string[][], opts?: { allowLegacy?: boolean }) => {
       // Explicit per-conversation pin to legacy NIP-04: a deliberate, persisted
       // choice, so route kind-4 directly (no LegacyFallbackRequired dance).
-      if (pref === "nip04") {
+      if (pref === "nip04" && legacyPeer) {
         await sendKind4(text);
         return;
       }
       if (dm17Usable) {
-        // Drop group-scoping tags the composer builds for relay chats; keep
-        // content tags (imeta/q/emoji) inside the sealed rumor.
+        // Drop group-scoping tags the composer builds for relay chats, and the
+        // composer's own `p` mentions — the rumor's `p` set IS the room under
+        // NIP-17, so a mention smuggled in there would silently move the
+        // message into a different conversation. Content tags (imeta/q/emoji)
+        // ride inside the sealed rumor unchanged.
         const extraTags = (tags ?? []).filter(([name]) => name !== "h" && name !== "p");
         await dm17Send(text, extraTags);
-      } else if (opts?.allowLegacy) {
+      } else if (opts?.allowLegacy && legacyPeer) {
         // Explicit user opt-in only: kind-4 is a privacy downgrade, never the
         // silent default (see LegacyFallbackRequired).
         await sendKind4(text);
@@ -423,7 +437,7 @@ export function useDmTransport(peer: string): {
         throw new LegacyFallbackRequired();
       }
     },
-    [pref, dm17Usable, dm17Send, sendKind4],
+    [pref, dm17Usable, dm17Send, sendKind4, legacyPeer],
   );
 
   const isLoadingMerged = shouldShowDmTimelineLoading(

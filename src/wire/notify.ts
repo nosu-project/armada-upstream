@@ -1,5 +1,5 @@
 import { firstImetaMime, isThreadReply } from "@/lib/notificationPreview";
-import { KIND_DM_CHAT, KIND_DM_FILE, type OpenedDm } from "@/lib/nip17/protocol";
+import { dmConvKey, KIND_DM_CHAT, KIND_DM_FILE, type OpenedDm } from "@/lib/nip17/protocol";
 import { chatRoute } from "@/lib/routes";
 
 /**
@@ -69,7 +69,7 @@ export interface NotifyCandidate {
    * the relay/community the event belongs to:
    *   - NIP-29 group: `h:<relayUrl>|<groupId>`
    *   - Concord:   `c2:<channelIdHex>`
-   *   - DM:           `dm:<peerPubkey>`
+   *   - DM:           `dm:<conversationKey>`
    */
   roomKey: string;
   /** The read-state key (matches useReadState key shapes) for unread gating. */
@@ -82,7 +82,10 @@ export interface NotifyCandidate {
   groupId?: string;
   /** Concord channel id hex; set only for `plane === "c2"`. */
   channelIdHex?: string;
-  /** DM peer pubkey; set only for `plane === "dm"`. */
+  /**
+   * DM conversation key; set only for `plane === "dm"`. A bare pubkey for a
+   * 1:1 — see `dmConvKey`.
+   */
   peer?: string;
   /** Git activity details, when this is a repository event routed into a C2 channel. */
   git?: { action: string; repository: string; ticketId?: string; ticketTitle?: string };
@@ -99,6 +102,10 @@ export type NotifySink = (candidates: NotifyCandidate[]) => void;
 export function dm17NotifyCandidates(opened: OpenedDm[], self: string): NotifyCandidate[] {
   return opened.flatMap((dm) => {
     if (dm.author === self || (dm.kind !== KIND_DM_CHAT && dm.kind !== KIND_DM_FILE)) return [];
+    // Keyed by the CONVERSATION, not the sender: a group message must suppress
+    // against the group being on screen and mark the group read, and two
+    // members writing at once are one conversation's worth of notification.
+    const conversation = dmConvKey(dm.peers);
     return [{
       plane: "dm" as const,
       author: dm.author,
@@ -109,10 +116,10 @@ export function dm17NotifyCandidates(opened: OpenedDm[], self: string): NotifyCa
       content: dm.content,
       imetaMime: firstImetaMime(dm.tags),
       threadReply: isThreadReply(dm.kind, dm.tags),
-      roomKey: `dm:${dm.peer}`,
-      readKey: `dm:${dm.peer}`,
-      path: chatRoute({ kind: "dm", peer: dm.peer, messageId: dm.rumorId }),
-      peer: dm.peer,
+      roomKey: `dm:${conversation}`,
+      readKey: `dm:${conversation}`,
+      path: chatRoute({ kind: "dm", peer: conversation, messageId: dm.rumorId }),
+      peer: conversation,
       eventId: dm.rumorId,
     }];
   });

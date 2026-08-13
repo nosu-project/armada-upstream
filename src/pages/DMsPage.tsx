@@ -21,6 +21,7 @@ import { VoicePresence } from "@/components/VoicePresence";
 import { BotPill } from "@/components/BotPill";
 import { DeferredRow } from "@/components/DeferredRow";
 import { DisplayName } from "@/components/DisplayName";
+import { DmAvatar } from "@/components/DmAvatar";
 import { NoteToSelfAvatar, NoteToSelfIcon, NOTE_TO_SELF_NAME } from "@/components/NoteToSelfAvatar";
 import { ReportDialog } from "@/components/ReportDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -70,6 +71,7 @@ import {
 } from "@/hooks/useDirectMessages";
 import { useBotManifests } from "@/hooks/useBotManifests";
 import { useAdoptDmInbox, useDm17Backfill, useDm17Conversations, useDm17Support } from "@/hooks/useDm17";
+import { useDmConversationName } from "@/hooks/useDmConversationName";
 import { useDmMessageSearch } from "@/hooks/useDmMessageSearch";
 import { useDmProtocolPref } from "@/hooks/useDmProtocolPref";
 import { LegacyFallbackRequired, useDmTransport } from "@/hooks/useDmTransport";
@@ -89,6 +91,7 @@ import { useSharedCommunities } from "@/hooks/useSharedCommunities";
 import { useToast } from "@/hooks/useToast";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
+import { dmRouteParam, parseDmRouteParam } from "@/lib/dmConversation";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { deriveDmRoomId } from "@/lib/dmVoice";
 import { forwardableTags } from "@/lib/forwardMessage";
@@ -97,7 +100,7 @@ import { stashShare } from "@/lib/shareTarget";
 import { dittoProfileUrl } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { DISAPPEARING_PRESETS, disappearingNotice, formatDisappearingDuration } from "@/lib/nip17/disappearing";
-import { expirationOf, KIND_DM_CHAT, KIND_DM_FILE } from "@/lib/nip17/protocol";
+import { dmConvKey, dmConvPeers, expirationOf, KIND_DM_CHAT, KIND_DM_FILE } from "@/lib/nip17/protocol";
 import { pickEmojiTags, readDmListSnapshot, writeDmListSnapshot } from "@/lib/dmListSnapshot";
 import { resolvePubkey } from "@/lib/resolvePubkey";
 import { buildEmojiMap } from "@/lib/customEmoji";
@@ -151,7 +154,7 @@ function Highlight({
 }
 
 function ConversationRow({
-  peer,
+  peers,
   preview,
   previewText,
   unread,
@@ -171,7 +174,8 @@ function ConversationRow({
   onClose,
   onBlock,
 }: {
-  peer: string;
+  /** The conversation's participants: one for a 1:1, several for a group. */
+  peers: string[];
   preview: NostrRumor | undefined;
   previewText: string | undefined;
   unread: boolean;
@@ -198,19 +202,24 @@ function ConversationRow({
   onClose?: () => void;
   onBlock?: () => void;
 }) {
-  const author = useAuthor(peer);
-  const metadata = author.data?.metadata;
+  const group = peers.length > 1;
+  // A group's title is composed from every participant, so it needs their
+  // profiles rather than one. `useDmConversationName` resolves them all.
+  const { name, metadata, emojiTags } = useDmConversationName(peers, selfPubkey);
   // The conversation with yourself is Note to Self: Signal's name and mark in
   // place of your own profile, because a row showing your own face and handle
   // reads as a message FROM you rather than as the place your notes live.
-  const noteToSelf = peer === selfPubkey;
-  const name = noteToSelf ? NOTE_TO_SELF_NAME : getDisplayName(metadata, peer);
+  const noteToSelf = !group && peers[0] === selfPubkey;
 
   // Live voice presence for this DM (kind 39004), so we can show when the peer
   // is waiting in a call even if we haven't joined — mirroring the channel
   // list. Gated on a resolved LiveKit-capable relay (same relay-level
   // capability the call button uses).
-  const roomId = selfPubkey ? deriveDmRoomId(selfPubkey, peer) : undefined;
+  //
+  // 1:1 only: the room id is derived from the two pubkeys pairwise
+  // (`deriveDmRoomId`), and there is no defined derivation for a set — see the
+  // conversation header, which hides the call button for the same reason.
+  const roomId = selfPubkey && !group ? deriveDmRoomId(selfPubkey, peers[0]) : undefined;
   const { data: participants } = useLivekitParticipants(
     voiceRelay && roomId ? voiceRelay : undefined,
     voiceRelay && roomId ? roomId : undefined,
@@ -247,31 +256,31 @@ function ConversationRow({
             active ? "bg-secondary" : "hover:bg-secondary/60",
           )}
         >
-          {noteToSelf ? (
-            <NoteToSelfAvatar sizePx={48} className="size-12" />
-          ) : (
-            <Avatar shape={getAvatarShape(metadata)} className="size-12 shrink-0">
-              {/* A request's avatar is never fetched: the URL comes from the
-                  sender's own profile, so rendering it would confirm to an
-                  unknown party that their message reached a live reader. */}
-              {!request && <AvatarImage src={metadata?.picture} alt={name} />}
-              <AvatarFallback className="bg-primary/20 text-primary text-base">
-                {name[0]?.toUpperCase()}
-              </AvatarFallback>
-            </Avatar>
-          )}
+          {/* A request's avatar is never fetched: the URL comes from the
+              sender's own profile, so rendering it would confirm to an unknown
+              party that their message reached a live reader. */}
+          <DmAvatar
+            peers={peers}
+            selfPubkey={selfPubkey}
+            sizePx={48}
+            className="size-12"
+            anonymous={request}
+          />
           <div className="min-w-0 flex-1 space-y-0.5">
             <div className="flex items-center gap-1.5 min-w-0">
               <div className={cn("text-[15px] truncate", unread ? "font-semibold text-foreground" : "font-medium")}>
                 {q ? (
-                  <Highlight text={name} query={query} emojiTags={author.data?.event?.tags} />
-                ) : noteToSelf ? (
+                  <Highlight text={name} query={query} emojiTags={emojiTags} />
+                ) : noteToSelf || group ? (
+                  // A group's title is several names, so it is plain text: the
+                  // verified-handle chrome DisplayName adds belongs to one
+                  // person and would be ambiguous across a list of them.
                   name
                 ) : (
-                  <DisplayName pubkey={peer} name={name} />
+                  <DisplayName pubkey={peers[0]} name={name} />
                 )}
               </div>
-              {!noteToSelf && <BotPill metadata={metadata} />}
+              {!noteToSelf && !group && <BotPill metadata={metadata} />}
             </div>
             {(preview || secondLine) && (
               <div className={cn("text-sm truncate", unread ? "text-foreground/80" : "text-muted-foreground")}>
@@ -336,7 +345,12 @@ function ConversationRow({
             {/* Puts an icon for this person on the community rail, where it
                 behaves like any community: drag it, fold it, reorder it.
                 Clicking it opens this thread — not the DM list — so the
-                shortcut lands where it points on mobile too. */}
+                shortcut lands where it points on mobile too.
+
+                1:1 only: a rail icon is one avatar, and the rail's stored
+                arrangement holds bare pubkeys (`dmRailKey`), so a group has
+                nothing to put there without changing what that layout means. */}
+            {!group && (
             <ContextMenuItem onSelect={onToggleRail}>
               {onRail ? (
                 <>
@@ -348,6 +362,7 @@ function ConversationRow({
                 </>
               )}
             </ContextMenuItem>
+            )}
             {/* Note to Self is a fixture of the list, not a conversation the
                 user is in — there is nobody to stop hearing from, so it has no
                 close (the row would be back on the next render anyway). */}
@@ -551,10 +566,12 @@ function DmRequestNotice({
   onBlock,
   blocking,
 }: {
-  peer: string;
+  /** The one sender, for a 1:1 request. Absent for a group. */
+  peer?: string;
   name: string;
   sharedCommunity?: string;
-  onBlock: () => void;
+  /** Absent for a group: blocking has to name a person, and a group has several. */
+  onBlock?: () => void;
   blocking: boolean;
 }) {
   return (
@@ -572,52 +589,65 @@ function DmRequestNotice({
               the right trade against hiding what the notice is for. */}
           <p className="text-muted-foreground break-words">
             <span className="font-medium text-foreground">
-              <DisplayName pubkey={peer} name={name} />
+              {peer ? <DisplayName pubkey={peer} name={name} /> : name}
             </span>{" "}
-            isn't someone you follow
+            {peer ? "isn't someone you follow" : "includes people you don't follow"}
             {sharedCommunity && ` · also in ${sharedCommunity}`}
           </p>
           <p className="text-xs text-muted-foreground/80">
-            Reply to accept. They aren't notified.
+            Reply to accept. {peer ? "They aren't" : "Nobody here is"} notified.
           </p>
         </div>
-        <Button
-          size="sm"
-          variant="ghost"
-          className="shrink-0 touch:h-11 text-destructive hover:text-destructive"
-          onClick={onBlock}
-          disabled={blocking}
-        >
-          <UserX className="size-4" />
-          {blocking ? "Blocking…" : "Block"}
-        </Button>
+        {onBlock && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="shrink-0 touch:h-11 text-destructive hover:text-destructive"
+            onClick={onBlock}
+            disabled={blocking}
+          >
+            <UserX className="size-4" />
+            {blocking ? "Blocking…" : "Block"}
+          </Button>
+        )}
       </div>
     </div>
   );
 }
 
 function Conversation({
-  peer,
+  conversation,
+  peers,
   isRequest,
   onAccept,
   onBack,
 }: {
-  peer: string;
+  /** The conversation key — see `dmConvKey`. */
+  conversation: string;
+  /** Its participants: one for a 1:1, several for a group. */
+  peers: string[];
   isRequest: boolean;
   onAccept: () => void;
   onBack: () => void;
 }) {
   const { user } = useCurrentUser();
   const navigate = useNavigate();
-  const author = useAuthor(peer);
+  const group = peers.length > 1;
+  // A group has no single counterparty, so anything derived from ONE profile
+  // is 1:1-only below. `peer` is that counterparty where it exists, and is the
+  // first participant otherwise purely so per-person controls have something to
+  // name; every such control is hidden for a group.
+  const peer = peers[0] ?? "";
   // See ConversationRow: a thread with yourself is Note to Self throughout —
   // header, composer and empty state — not a thread with your own profile.
-  const noteToSelf = peer === user?.pubkey;
-  const name = noteToSelf ? NOTE_TO_SELF_NAME : getDisplayName(author.data?.metadata, peer);
-  const dittoProfileHref = dittoProfileUrl(peer);
+  const noteToSelf = !group && peer === user?.pubkey;
+  // One profile lookup per participant, shared by the header, the avatar and
+  // the bot affordances below.
+  const { name, metadata: peerMetadata } = useDmConversationName(peers, user?.pubkey);
+  const dittoProfileHref = group ? undefined : dittoProfileUrl(peer);
   const composerBoundsRef = useRef<HTMLElement | null>(null);
   const { transport, entries, syncing, disappearingTimer, setDisappearingTimer, encryptedIds, dm17Ids, dm17Enabled, legacyPinned, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
-    useDmTransport(peer);
+    useDmTransport(conversation, peers);
   const { messages } = transport;
 
   // When the counterparty is a bot, its declared command set lets the timeline
@@ -629,8 +659,8 @@ function Conversation({
   // the peer as a bot; otherwise opening every DM needlessly connects to all
   // discovery relays (and surfaces their transient WebSocket failures).
   const botRoster = useMemo(
-    () => (author.data?.metadata?.bot === true ? [peer] : []),
-    [author.data?.metadata?.bot, peer],
+    () => (peerMetadata?.bot === true ? [peer] : []),
+    [peerMetadata?.bot, peer],
   );
   const { entries: botCommandEntries } = useBotManifests(botRoster);
   const knownCommands = useMemo(
@@ -644,6 +674,9 @@ function Conversation({
   const { activeCall, joinDmCall, voiceRoomPubkeys } = useCall();
   const muteUser = useMuteUser();
   const mute = useMuteToggle(peer);
+  // Legacy NIP-04 has no group form at all, so the encryption choice — and the
+  // whole kind-4 fallback it selects — is 1:1 only. A group is NIP-17 or
+  // nothing.
   const { pref: dmProtocol, setPref: setDmProtocol } = useDmProtocolPref(peer);
   const isTouch = useIsTouch();
   // Typing indicators ride the ephemeral NIP-17 plane, so they're only
@@ -651,11 +684,14 @@ function Conversation({
   // carry them. Subject to the user's `dmTypingIndicators` — see useDmTyping.
   // Never on an unaccepted request: reading a stranger's message must not send
   // that stranger a live signal that someone is on the other end.
-  const { typers, publishTyping } = useDmTyping(peer, dm17Enabled && !isRequest);
+  const { typers, publishTyping } = useDmTyping(conversation, dm17Enabled && !isRequest);
   // The tier-2 hint, for the accept banner. One local read, and only while a
   // request is actually open.
-  const requestPeers = useMemo(() => (isRequest ? [peer] : []), [isRequest, peer]);
-  const sharedCommunity = useSharedCommunities(requestPeers, isRequest).get(peer);
+  const requestPeers = useMemo(
+    () => (isRequest && !group ? [peer] : []),
+    [isRequest, group, peer],
+  );
+  const sharedCommunity = useSharedCommunities(requestPeers, isRequest && !group).get(peer);
 
   // The shared row owns the inline field and keyboard behavior; this page only
   // tracks which NIP-17 row is active and hands the edit to the DM transport.
@@ -666,7 +702,7 @@ function Conversation({
   const [editingId, setEditingId] = useState<string | undefined>(undefined);
   const startEditing = useCallback((event: ChatMsg) => setEditingId(event.id), []);
   const cancelEditing = useCallback(() => setEditingId(undefined), []);
-  useEffect(() => setEditingId(undefined), [peer]);
+  useEffect(() => setEditingId(undefined), [conversation]);
   const handleEditSubmit = useCallback(async (original: ChatMsg, content: string) => {
     const trimmed = content.trim();
     if (!trimmed || trimmed === original.content.trim()) {
@@ -688,7 +724,7 @@ function Conversation({
   // Inline quote-reply state (NIP-17 sends only — a kind-4 send has no
   // in-band convention, so the control is hidden on legacy threads).
   const [replyTo, setReplyTo] = useState<NostrRumor | undefined>(undefined);
-  useEffect(() => setReplyTo(undefined), [peer]);
+  useEffect(() => setReplyTo(undefined), [conversation]);
 
   // Forward: hand the message's CONTENT (never its author, reply context or
   // this thread's disappearing timer — see forwardableTags) to the share
@@ -699,8 +735,10 @@ function Conversation({
   // chance to add a word or drop something before it goes.
   const handleForward = useCallback((event: ChatMsg) => {
     stashShare({ text: event.content, files: [], tags: forwardableTags(event) }, null);
-    navigate("/share", { state: { forwardFrom: chatRoute({ kind: "dm", peer }) } });
-  }, [navigate, peer]);
+    navigate("/share", {
+      state: { forwardFrom: chatRoute({ kind: "dm", peer: dmRouteParam(conversation) }) },
+    });
+  }, [navigate, conversation]);
 
   // Legacy-encryption opt-in. When the peer can't receive private (NIP-17)
   // DMs, we DON'T silently downgrade to kind-4 (which leaks who's talking and
@@ -708,7 +746,7 @@ function Conversation({
   // chooses to send with legacy encryption; the choice is per-conversation and
   // resets when switching peers.
   const [legacyAllowed, setLegacyAllowed] = useState(false);
-  useEffect(() => setLegacyAllowed(false), [peer]);
+  useEffect(() => setLegacyAllowed(false), [conversation]);
   // Block sending only once we KNOW the peer has no NIP-17 inbox. While the
   // thread (and the peer's kind-10050 lookup) is still loading, assume the
   // private path so we don't flash a legacy notice for a reachable peer.
@@ -731,7 +769,7 @@ function Conversation({
     isLoading: transport.isLoading,
     hasMore: transport.hasMore,
     loadOlder: transport.loadOlder,
-    resetKey: peer,
+    resetKey: conversation,
   });
 
   // The loaded thread by id, for resolving quoted parents locally (NIP-17
@@ -755,7 +793,7 @@ function Conversation({
   useEffect(() => {
     setSearchOpen(false);
     setSearchQuery("");
-  }, [peer]);
+  }, [conversation]);
 
   // Focus the search field when it expands. `preventScroll` is essential: the
   // input starts off-screen (translate-x-full) and slides in, so a default
@@ -787,7 +825,10 @@ function Conversation({
   // host the call. DMs are stored on general app relays (which usually don't
   // run LiveKit); the explicit/fallback voice relays are tried before the
   // general DM set so unsupported cross-origin endpoints aren't probed first.
-  const roomId = user ? deriveDmRoomId(user.pubkey, peer) : undefined;
+  // 1:1 only. `deriveDmRoomId` is a pairwise derivation with no defined
+  // extension to a set, so a group thread simply has no call button rather than
+  // a button that would put two members in different rooms.
+  const roomId = user && !group ? deriveDmRoomId(user.pubkey, peer) : undefined;
   const dmRelays = useMemo(() => effectiveDmRelays(config), [config]);
   const voiceCandidates = useMemo(
     () => {
@@ -872,12 +913,12 @@ function Conversation({
     const latest = messages[messages.length - 1]?.created_at ?? 0;
     if (latest <= 0) return;
     const stamp = () => {
-      if (document.visibilityState === "visible") markRead(dmReadKey(peer), latest);
+      if (document.visibilityState === "visible") markRead(dmReadKey(conversation), latest);
     };
     stamp();
     document.addEventListener("visibilitychange", stamp);
     return () => document.removeEventListener("visibilitychange", stamp);
-  }, [messages, peer, markRead]);
+  }, [messages, conversation, markRead]);
 
   const handleSubmit = useCallback(
     async (text: string, tags: string[][]) => {
@@ -963,22 +1004,13 @@ function Conversation({
           <ChevronLeft className="size-5" />
         </Button>
         <div className="shrink-0">
-          {noteToSelf ? (
-            <NoteToSelfAvatar sizePx={28} className="size-7" />
-          ) : (
-            <Avatar shape={getAvatarShape(author.data?.metadata)} className="size-7">
-              <AvatarImage src={author.data?.metadata?.picture} alt={name} />
-              <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
-                {name[0]?.toUpperCase()}
-              </AvatarFallback>
-            </Avatar>
-          )}
+          <DmAvatar peers={peers} selfPubkey={user?.pubkey} sizePx={28} className="size-7" />
         </div>
         <div className="flex items-center gap-1.5 flex-1 min-w-0">
           <h1 className="font-semibold truncate min-w-0">
-            {noteToSelf ? name : <DisplayName pubkey={peer} name={name} />}
+            {noteToSelf || group ? name : <DisplayName pubkey={peer} name={name} />}
           </h1>
-          {!noteToSelf && <BotPill metadata={author.data?.metadata} />}
+          {!noteToSelf && !group && <BotPill metadata={peerMetadata} />}
         </div>
         {/* Who's in this DM's voice room (others, not us) — shown whether or
             not we've joined, so the peer waiting in a call is visible. */}
@@ -1028,7 +1060,7 @@ function Conversation({
             <DropdownMenuSub>
               <DropdownMenuSubTrigger className="px-3 py-2">
                 {(() => {
-                  const lvl = dmLevel(peer);
+                  const lvl = dmLevel(conversation);
                   const Icon = lvl === "nothing" ? BellOff : lvl === "mentions" ? AtSign : Bell;
                   return <Icon className="mr-2 size-4" />;
                 })()}
@@ -1036,8 +1068,8 @@ function Conversation({
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent className="w-48">
                 <DropdownMenuRadioGroup
-                  value={dmLevel(peer)}
-                  onValueChange={(v) => setNotifLevel(dmScopeKey(peer), v as NotifLevel)}
+                  value={dmLevel(conversation)}
+                  onValueChange={(v) => setNotifLevel(dmScopeKey(conversation), v as NotifLevel)}
                 >
                   <DropdownMenuRadioItem value="all">
                     <Bell className="mr-2 size-4" /> All messages
@@ -1051,6 +1083,10 @@ function Conversation({
                 </DropdownMenuRadioGroup>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
+            {/* Legacy NIP-04 is a pairwise cipher with no group form, so a
+                group has no choice to offer: it is NIP-17 or it does not
+                exist. */}
+            {!group && (
             <DropdownMenuSub>
               <DropdownMenuSubTrigger className="px-3 py-2">
                 {dmProtocol === "nip04" ? (
@@ -1095,6 +1131,7 @@ function Conversation({
                 </DropdownMenuRadioGroup>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
+            )}
             {/* Disappearing messages ride the NIP-17 plane's sealed rumors
                 (the timer change is one, and the expiration tags go on the
                 gift wraps); legacy kind-4 has no in-band channel for either,
@@ -1118,8 +1155,8 @@ function Conversation({
                 </DropdownMenuSubTrigger>
                 <DropdownMenuSubContent className="w-56">
                   <p className="px-2 py-1.5 text-xs text-muted-foreground">
-                    New messages in this chat disappear for both of you after the
-                    time you pick. Either of you can change it.
+                    New messages in this chat disappear for everyone in it after
+                    the time you pick. Anyone here can change it.
                   </p>
                   <DropdownMenuRadioGroup
                     value={String(disappearingTimer)}
@@ -1144,8 +1181,14 @@ function Conversation({
             )}
             {/* Not offered on Note to Self. Mute writes the peer to the NIP-51
                 mute list, and the peer here is the viewer — muting yourself
-                would hide your own messages everywhere in the app. */}
-            {!noteToSelf && (
+                would hide your own messages everywhere in the app.
+
+                Not offered on a group either: both actions name ONE person,
+                and there is no non-arbitrary one to name. Muting any member
+                hides the whole conversation (see useDm17Conversations), so
+                offering it here without saying which member would be a
+                destructive guess. */}
+            {!noteToSelf && !group && (
               <>
                 <DropdownMenuSeparator />
                 {/* Muting closes the thread, so it confirms first. Unmuting is
@@ -1311,7 +1354,7 @@ function Conversation({
                 <MessageSquare className="size-10 text-muted-foreground/40 mb-3" />
                 <p className="text-sm text-muted-foreground">No messages yet</p>
                 <p className="text-xs text-muted-foreground/60 mt-1">
-                  Say hello to <DisplayName pubkey={peer} name={name} />!
+                  {group ? `Say hello to ${name}!` : <>Say hello to <DisplayName pubkey={peer} name={name} />!</>}
                 </p>
               </div>
             )
@@ -1332,7 +1375,7 @@ function Conversation({
               <ChatMessage
                 key={msg.id}
                 event={msg}
-                permalink={{ kind: "dm", peer }}
+                permalink={{ kind: "dm", peer: dmRouteParam(conversation) }}
                 canWrite={transport.canWrite}
                 canModerate={transport.canModerate}
                 sendStatus={transport.sendStatusFor?.(msg.id)}
@@ -1396,25 +1439,25 @@ function Conversation({
 
       {isRequest && (
         <DmRequestNotice
-          peer={peer}
+          peer={group ? undefined : peer}
           name={name}
           sharedCommunity={sharedCommunity}
-          onBlock={() => setMuteConfirmOpen(true)}
+          onBlock={group ? undefined : () => setMuteConfirmOpen(true)}
           blocking={muteUser.isPending}
         />
       )}
 
-      {legacyBlocked ? (
+      {legacyBlocked && !group ? (
         <DmLegacyFallbackNotice peer={peer} name={name} onEnable={() => setLegacyAllowed(true)} />
       ) : (
         <ChatComposer
           relayUrl="dm"
-          groupId={peer}
+          groupId={conversation}
           messages={[]}
           // If this peer is a bot, offer its `/` commands. A DM's recipient IS
           // the bot, so the invocation sends untagged (no routing leak, and it
           // rides inside NIP-17's sealed rumor like any other DM content).
-          botDmPeer={peer}
+          botDmPeer={group ? undefined : peer}
           placeholder={noteToSelf ? "Add a note…" : `Message ${name}…`}
           // Quote-replies use the NIP-C7 `q` marker (rich context, shared with
           // Concord's renderer); handleSubmit adds the NIP-17 `e` parent tag.
@@ -1576,45 +1619,113 @@ function ResolvedRecipientSuggestion({
   );
 }
 
+/** A chosen recipient in the group composer's "To:" field. */
+function RecipientChip({ pubkey, onRemove }: { pubkey: string; onRemove: () => void }) {
+  const author = useAuthor(pubkey);
+  const name = getDisplayName(author.data?.metadata, pubkey);
+  return (
+    <span className="inline-flex max-w-full items-center gap-1 rounded-full bg-secondary py-0.5 pl-0.5 pr-1.5 text-sm">
+      <Avatar shape={getAvatarShape(author.data?.metadata)} className="size-5 shrink-0">
+        <AvatarImage src={sanitizeUrl(author.data?.metadata?.picture)} alt={name} />
+        <AvatarFallback className="bg-primary/20 text-primary text-[9px]">
+          {name[0]?.toUpperCase()}
+        </AvatarFallback>
+      </Avatar>
+      <span className="truncate">{name}</span>
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={`Remove ${name}`}
+        className="shrink-0 rounded-full text-muted-foreground hover:text-foreground"
+      >
+        <X className="size-3.5" />
+      </button>
+    </span>
+  );
+}
+
 /**
  * The "start a new chat" pane. Renders in the thread column in place of the
  * empty-state prompt (no modal). A "To:" field drives debounced profile
  * autocomplete — followed contacts first, then NIP-50 relay hits, plus a pasted
  * npub/nprofile/hex as a direct match — and the suggestions render inline below
  * the field with full keyboard nav (↑/↓ to move, Enter to open, Esc to cancel).
+ *
+ * Two modes, because a single one cannot serve both well. In DIRECT mode a tap
+ * opens that person's thread immediately, which is what starting a DM has
+ * always cost and what the overwhelming majority of uses want. GROUP mode is
+ * entered deliberately from the row at the top and turns the same list into a
+ * multi-select: taps accumulate chips and an explicit button starts the
+ * conversation. Making every 1:1 pay a confirmation step to enable groups would
+ * be the wrong trade.
  */
 function NewDMPane({
-  onSelectRecipient,
+  onSelectRecipients,
   onCancel,
 }: {
-  onSelectRecipient: (pubkey: string) => void;
+  onSelectRecipients: (pubkeys: string[]) => void;
   onCancel: () => void;
 }) {
+  const { user } = useCurrentUser();
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
+  const [group, setGroup] = useState(false);
+  const [chosen, setChosen] = useState<string[]>([]);
   const { data: profiles, isFetching, followedPubkeys } = useSearchProfiles(query);
   const trimmed = query.trim();
 
   // A pasted npub/nprofile/hex resolves to a pubkey we can DM directly, even if
   // it isn't in the search results. Surface it first, de-duped against results.
   const direct = resolvePubkey(query);
+  const chosenSet = useMemo(() => new Set(chosen), [chosen]);
   const recipients = useMemo(() => {
     const fromSearch = (profiles ?? []).filter((p) => p.pubkey !== direct);
     const list: { pubkey: string; metadata?: SearchProfile["metadata"]; resolved?: boolean }[] = [];
     if (direct) list.push({ pubkey: direct, resolved: true });
     for (const p of fromSearch) list.push({ pubkey: p.pubkey, metadata: p.metadata });
-    return list;
-  }, [profiles, direct]);
+    // Already-chosen people drop out of the suggestions rather than sitting
+    // there inert: their chip above is where they are now.
+    return group ? list.filter((r) => !chosenSet.has(r.pubkey)) : list;
+  }, [profiles, direct, group, chosenSet]);
 
   // Reset the highlighted row whenever the candidate set changes.
   useEffect(() => {
     setActiveIndex(0);
   }, [recipients.length]);
 
+  const pick = (pubkey: string) => {
+    if (!group) {
+      onSelectRecipients([pubkey]);
+      return;
+    }
+    setChosen((prev) => (prev.includes(pubkey) ? prev : [...prev, pubkey]));
+    setQuery("");
+  };
+
+  // Note to Self is the conversation with yourself alone, so a group that
+  // includes you is just that group — your own copy is minted regardless.
+  const groupPeers = useMemo(
+    () => chosen.filter((pubkey) => pubkey !== user?.pubkey),
+    [chosen, user?.pubkey],
+  );
+  const canStart = groupPeers.length > 0;
+
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Escape") {
       e.preventDefault();
       onCancel();
+      return;
+    }
+    // Backspace on an empty field takes the last chip back — the standard
+    // token-field gesture, and the only way to undo a pick without the mouse.
+    if (e.key === "Backspace" && group && query === "" && chosen.length > 0) {
+      e.preventDefault();
+      setChosen((prev) => prev.slice(0, -1));
+      return;
+    }
+    if (e.key === "Enter" && group && recipients.length === 0 && canStart) {
+      e.preventDefault();
+      onSelectRecipients(groupPeers);
       return;
     }
     if (recipients.length === 0) return;
@@ -1626,8 +1737,8 @@ function NewDMPane({
       setActiveIndex((i) => (i - 1 + recipients.length) % recipients.length);
     } else if (e.key === "Enter") {
       e.preventDefault();
-      const chosen = recipients[activeIndex];
-      if (chosen) onSelectRecipient(chosen.pubkey);
+      const candidate = recipients[activeIndex];
+      if (candidate) pick(candidate.pubkey);
     }
   };
 
@@ -1643,8 +1754,24 @@ function NewDMPane({
         >
           <ChevronLeft className="size-5" />
         </Button>
-        <PenSquare className="size-4 text-muted-foreground shrink-0" />
-        <h1 className="font-semibold truncate flex-1 min-w-0">New message</h1>
+        {group ? (
+          <Users className="size-4 text-muted-foreground shrink-0" />
+        ) : (
+          <PenSquare className="size-4 text-muted-foreground shrink-0" />
+        )}
+        <h1 className="font-semibold truncate flex-1 min-w-0">
+          {group ? "New group" : "New message"}
+        </h1>
+        {group && (
+          <Button
+            size="sm"
+            className="shrink-0 clip-corner-lg"
+            disabled={!canStart}
+            onClick={() => onSelectRecipients(groupPeers)}
+          >
+            Start
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="icon"
@@ -1660,6 +1787,17 @@ function NewDMPane({
         <label htmlFor="dm-recipient" className="mb-1.5 block text-xs font-medium text-muted-foreground">
           To:
         </label>
+        {group && chosen.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {chosen.map((pubkey) => (
+              <RecipientChip
+                key={pubkey}
+                pubkey={pubkey}
+                onRemove={() => setChosen((prev) => prev.filter((p) => p !== pubkey))}
+              />
+            ))}
+          </div>
+        )}
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -1679,6 +1817,27 @@ function NewDMPane({
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-safe space-y-0.5">
+        {/* The one way into group mode. It sits with the suggestions rather than
+            in the header so it reads as another thing you can start, and it
+            leaves once you are in that mode. */}
+        {!group && (
+          <button
+            type="button"
+            onClick={() => setGroup(true)}
+            className="flex w-full items-center gap-3 rounded-lg p-2.5 text-left transition-colors hover:bg-secondary/60"
+          >
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/20 text-primary">
+              <Users className="size-4" aria-hidden />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium">New group</span>
+              <span className="block truncate text-xs text-muted-foreground">
+                Message several people at once
+              </span>
+            </span>
+            <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+          </button>
+        )}
         {recipients.length > 0 ? (
           recipients.map((r, index) =>
             r.resolved ? (
@@ -1687,7 +1846,7 @@ function NewDMPane({
                 pubkey={r.pubkey}
                 active={index === activeIndex}
                 followed={followedPubkeys.has(r.pubkey)}
-                onSelect={() => onSelectRecipient(r.pubkey)}
+                onSelect={() => pick(r.pubkey)}
               />
             ) : (
               <RecipientSuggestion
@@ -1696,7 +1855,7 @@ function NewDMPane({
                 metadata={r.metadata}
                 active={index === activeIndex}
                 followed={followedPubkeys.has(r.pubkey)}
-                onSelect={() => onSelectRecipient(r.pubkey)}
+                onSelect={() => pick(r.pubkey)}
               />
             ),
           )
@@ -1708,7 +1867,11 @@ function NewDMPane({
                 ? isFetching
                   ? "Searching…"
                   : "No one found. Try a different name, or paste an npub."
-                : "Search for someone by name, or paste their npub to start a conversation."}
+                : group
+                  ? canStart
+                    ? "Add anyone else, or press Start."
+                    : "Search for the people to include."
+                  : "Search for someone by name, or paste their npub to start a conversation."}
             </p>
           </div>
         )}
@@ -1800,7 +1963,10 @@ type DmListView = "inbox" | "requests";
  * started chat link, or Note to Self before its first note.
  */
 interface DmListRow {
-  peer: string;
+  /** The conversation key — see `dmConvKey`. */
+  conversation: string;
+  /** Its participants: one for a 1:1, several for a group. */
+  peers: string[];
   latest: NostrRumor;
   plaintext?: string;
   mine: boolean;
@@ -1858,21 +2024,22 @@ export function ConversationList({
   isLoadingMore,
   className,
 }: {
-  rows: { peer: string; latest: NostrRumor; plaintext?: string }[];
+  rows: DmListRow[];
   /** Conversations in the request tier — see useKnownDmPeers. */
-  requestRows: { peer: string; latest: NostrRumor; plaintext?: string }[];
+  requestRows: DmListRow[];
   view: DmListView;
   onViewChange: (view: DmListView) => void;
   previews: Record<string, string>;
   events: NostrRumor[];
+  /** The open conversation's key, if any. */
   activePeer: string | undefined;
   dmSupported: boolean;
   isLoading: boolean;
   hasUnread: boolean;
   onMarkAllRead: () => void;
   onCompose: () => void;
-  openPeer: (pubkey: string) => void;
-  closePeer: (pubkey: string, latest: NostrRumor | undefined) => void;
+  openPeer: (conversation: string) => void;
+  closePeer: (conversation: string, latest: NostrRumor | undefined) => void;
   loadMore: () => Promise<number>;
   hasMore: boolean;
   isLoadingMore: boolean;
@@ -1893,7 +2060,12 @@ export function ConversationList({
   // The tier-2 trust hint, resolved only while the request list is on screen —
   // it's one local IndexedDB read, so there's no reason to run it for an inbox
   // the user is just scrolling past.
-  const requestPeers = useMemo(() => requestRows.map((c) => c.peer), [requestRows]);
+  // The hint names ONE community two people share, so it only applies to a 1:1
+  // request. A group request has several senders and no single shared-with.
+  const requestPeers = useMemo(
+    () => requestRows.filter((c) => c.peers.length === 1).map((c) => c.peers[0]),
+    [requestRows],
+  );
   const sharedCommunities = useSharedCommunities(requestPeers, requesting);
 
   // Older-history recovery for the request tier, and the outcome of the last
@@ -1911,7 +2083,7 @@ export function ConversationList({
     () =>
       recovered === undefined
         ? undefined
-        : recovered.filter((peer) => requestRows.some((c) => c.peer === peer)).length,
+        : recovered.filter((key) => requestRows.some((c) => c.conversation === key)).length,
     [recovered, requestRows],
   );
 
@@ -1969,8 +2141,8 @@ export function ConversationList({
   const [pinnedRows, otherRows] = useMemo(() => {
     const pinnedSet = new Set(pinnedPeers);
     return [
-      rows.filter((c) => pinnedSet.has(c.peer)),
-      rows.filter((c) => !pinnedSet.has(c.peer)),
+      rows.filter((c) => pinnedSet.has(c.conversation)),
+      rows.filter((c) => !pinnedSet.has(c.conversation)),
     ];
   }, [rows, pinnedPeers]);
 
@@ -1987,37 +2159,39 @@ export function ConversationList({
   const gateRows = search.trim().length === 0;
 
   // Nothing but Note to Self — i.e. what used to be an empty list.
-  const onlyNoteToSelf = rows.length === 1 && rows[0]?.peer === user?.pubkey;
+  const onlyNoteToSelf = rows.length === 1 && rows[0]?.conversation === user?.pubkey;
 
-  const renderRow = (c: (typeof rows)[number], index: number, request = false) => (
-    <DeferredRow key={c.peer} active={gateRows && index >= EAGER_ROWS} minHeight={ROW_MIN_H}>
+  const renderRow = (c: DmListRow, index: number, request = false) => (
+    <DeferredRow key={c.conversation} active={gateRows && index >= EAGER_ROWS} minHeight={ROW_MIN_H}>
     <ConversationRow
-      peer={c.peer}
+      peers={c.peers}
       preview={c.latest}
-      previewText={c.plaintext ?? previews[c.peer]}
+      previewText={c.plaintext ?? previews[c.conversation]}
       query={search}
-      messageMatch={messageMatches.get(c.peer)?.text}
+      messageMatch={messageMatches.get(c.conversation)?.text}
       unread={
         Boolean(c.latest) &&
         c.latest.pubkey !== user?.pubkey &&
-        c.latest.created_at > getLastRead(dmReadKey(c.peer)) &&
-        c.peer !== activePeer
+        c.latest.created_at > getLastRead(dmReadKey(c.conversation)) &&
+        c.conversation !== activePeer
       }
-      active={c.peer === activePeer}
-      pinned={isPinned(c.peer)}
-      onRail={isOnRail(c.peer)}
+      active={c.conversation === activePeer}
+      pinned={isPinned(c.conversation)}
+      onRail={isOnRail(c.conversation)}
       request={request}
-      sharedCommunity={request ? sharedCommunities.get(c.peer) : undefined}
-      inCall={Boolean(activeCall?.dmPeer) && activeCall?.dmPeer === c.peer}
+      sharedCommunity={request ? sharedCommunities.get(c.conversation) : undefined}
+      inCall={Boolean(activeCall?.dmPeer) && activeCall?.dmPeer === c.conversation}
       selfPubkey={user?.pubkey}
       voiceRelay={voiceRelay ?? undefined}
-      onClick={() => openPeer(c.peer)}
-      onTogglePin={() => togglePin(c.peer)}
-      onToggleRail={() => toggleRail(c.peer)}
+      onClick={() => openPeer(c.conversation)}
+      onTogglePin={() => togglePin(c.conversation)}
+      onToggleRail={() => toggleRail(c.conversation)}
       // Note to Self is always in the list (see withNoteToSelf), so there is
       // nothing a close could achieve — the row is re-added on the next render.
-      onClose={c.peer === user?.pubkey ? undefined : () => closePeer(c.peer, c.latest)}
-      onBlock={() => void blockPeer(c.peer)}
+      onClose={c.conversation === user?.pubkey ? undefined : () => closePeer(c.conversation, c.latest)}
+      // Blocking a group request would have to name one of several senders, so
+      // it is offered on 1:1 requests only (ConversationRow hides the item).
+      onBlock={c.peers.length === 1 ? () => void blockPeer(c.peers[0]) : undefined}
     />
     </DeferredRow>
   );
@@ -2324,7 +2498,10 @@ export function DMsPage() {
   // (`kind4Loading` also covers the mute set, which gates upstream.)
   const isLoading = kind4Loading || dm17Loading || followsLoading;
 
-  const activePeer = rawPeer ? resolvePubkey(rawPeer) : undefined;
+  // The route param is one npub for a 1:1 and several for a group; either way
+  // it parses to a canonical conversation key (re-sorted, so a hand-ordered
+  // link can't mint a second conversation for the same people).
+  const activePeer = parseDmRouteParam(rawPeer);
 
   // Tell the native notification service this DM thread is on screen, so it
   // suppresses redundant tray entries (the live timeline already paints each
@@ -2375,15 +2552,20 @@ export function DMsPage() {
   // The split is the ONLY thing separating the two lists, so neither can gain
   // or lose a row the other doesn't correspondingly lose or gain.
   const [rows, requestRows] = useMemo(() => {
-    const byPeer = new Map<
-      string,
-      { peer: string; latest: NostrRumor; plaintext?: string; mine: boolean }
-    >();
+    // Keyed by CONVERSATION, which for every kind-4 row is just the peer — the
+    // legacy plane is pairwise, so its rows merge with the NIP-17 1:1 of the
+    // same person and never with a group.
+    const byConversation = new Map<string, DmListRow>();
     for (const c of conversations) {
-      byPeer.set(c.peer, { peer: c.peer, latest: c.latest, mine: c.mine });
+      byConversation.set(c.peer, {
+        conversation: c.peer,
+        peers: [c.peer],
+        latest: c.latest,
+        mine: c.mine,
+      });
     }
     for (const c of dm17Conversations) {
-      const existing = byPeer.get(c.peer);
+      const existing = byConversation.get(c.key);
       // Participation is sticky across planes: either plane having a
       // viewer-authored message keeps the row visible below.
       const mine = (existing?.mine ?? false) || c.mine;
@@ -2391,8 +2573,9 @@ export function DMsPage() {
         existing.mine = mine;
         continue;
       }
-      byPeer.set(c.peer, {
-        peer: c.peer,
+      byConversation.set(c.key, {
+        conversation: c.key,
+        peers: c.peers,
         latest: {
           id: c.latest.rumorId,
           pubkey: c.latest.author,
@@ -2405,10 +2588,17 @@ export function DMsPage() {
         mine,
       });
     }
-    const sorted = [...byPeer.values()].sort((a, b) => b.latest.created_at - a.latest.created_at);
-    const known: typeof sorted = [];
-    const requests: typeof sorted = [];
-    for (const c of sorted) (isKnown(c.peer, c.mine) ? known : requests).push(c);
+    const sorted = [...byConversation.values()].sort(
+      (a, b) => b.latest.created_at - a.latest.created_at,
+    );
+    const known: DmListRow[] = [];
+    const requests: DmListRow[] = [];
+    // A group is in the inbox only when EVERY participant is known — one
+    // stranger in the room makes it a request, exactly as a message from that
+    // stranger alone would.
+    for (const c of sorted) {
+      (c.peers.every((peer) => isKnown(peer, c.mine)) ? known : requests).push(c);
+    }
     // Threads seeded by following someone's chat link (`/<npub>`): message-less
     // like the active peer below, but kept after we navigate away — the whole
     // point of the link was to put this person in the list. Oldest-started
@@ -2416,8 +2606,13 @@ export function DMsPage() {
     for (const peer of startedPeers) {
       if (peer === activePeer) continue; // the rule below already places it
       if (peer === self) continue; // Note to Self places itself — see withNoteToSelf
-      if (sorted.some((c) => c.peer === peer)) continue; // it has real messages
-      known.unshift({ peer, latest: undefined as unknown as NostrRumor, mine: false });
+      if (sorted.some((c) => c.conversation === peer)) continue; // it has real messages
+      known.unshift({
+        conversation: peer,
+        peers: [peer],
+        latest: undefined as unknown as NostrRumor,
+        mine: false,
+      });
     }
     // A peer with no messages at all that we've navigated to is a thread the
     // user deliberately started: it belongs in the inbox, not the request pile.
@@ -2425,8 +2620,13 @@ export function DMsPage() {
     // the list switches to the request view to show it instead.)
     // Note to Self is excluded: it is in the list whether or not it is open, so
     // hoisting it on open would move the row under the user as they clicked it.
-    if (activePeer && activePeer !== self && !sorted.some((c) => c.peer === activePeer)) {
-      known.unshift({ peer: activePeer, latest: undefined as unknown as NostrRumor, mine: false });
+    if (activePeer && activePeer !== self && !sorted.some((c) => c.conversation === activePeer)) {
+      known.unshift({
+        conversation: activePeer,
+        peers: dmConvPeers(activePeer),
+        latest: undefined as unknown as NostrRumor,
+        mine: false,
+      });
     }
     return [known, requests];
   }, [conversations, dm17Conversations, activePeer, isKnown, startedPeers, self]);
@@ -2435,7 +2635,7 @@ export function DMsPage() {
   // either participant sends another message, it becomes visible immediately;
   // then remove the obsolete marker from synced settings.
   useEffect(() => {
-    reopenForNewMessages(rows);
+    reopenForNewMessages(rows.map((r) => ({ peer: r.conversation, latest: r.latest })));
   }, [rows, reopenForNewMessages]);
 
   // Note to Self is exempt: it is shown at all times, so a close marker could
@@ -2443,7 +2643,7 @@ export function DMsPage() {
   // message-less) rather than hide it. Markers from before it became a fixture
   // of the list are the case this actually covers.
   const isHidden = useCallback(
-    (row: DmListRow) => row.peer !== self && isDmClosed(row.peer, row.latest),
+    (row: DmListRow) => row.conversation !== self && isDmClosed(row.conversation, row.latest),
     [self, isDmClosed],
   );
 
@@ -2455,7 +2655,7 @@ export function DMsPage() {
   // (you replied, so `mine` flipped) shouldn't yank the list out from under the
   // conversation being read. The empty-list effect below handles that instead.
   useEffect(() => {
-    if (activePeer && requestRows.some((c) => c.peer === activePeer)) setListView("requests");
+    if (activePeer && requestRows.some((c) => c.conversation === activePeer)) setListView("requests");
   }, [activePeer, requestRows]);
   useEffect(() => {
     if (requestRows.length === 0) setListView("inbox");
@@ -2468,7 +2668,11 @@ export function DMsPage() {
   const restoredRows = useMemo(() => {
     const snapshot = readDmListSnapshot(user?.pubkey);
     return (snapshot ?? []).map((r) => ({
-      peer: r.peer,
+      conversation: r.peer,
+      // The snapshot predates group conversations and stores a bare key; every
+      // key IS its participant list, so decoding it covers both shapes without
+      // a stored-format change (see `dmConvKey`).
+      peers: dmConvPeers(r.peer),
       latest: {
         id: r.eventId ?? "",
         pubkey: r.author,
@@ -2506,8 +2710,16 @@ export function DMsPage() {
    */
   const withNoteToSelf = useCallback(
     (list: DmListRow[]): DmListRow[] => {
-      if (!self || list.some((r) => r.peer === self)) return list;
-      return [...list, { peer: self, latest: undefined as unknown as NostrRumor, mine: true }];
+      if (!self || list.some((r) => r.conversation === self)) return list;
+      return [
+        ...list,
+        {
+          conversation: self,
+          peers: [self],
+          latest: undefined as unknown as NostrRumor,
+          mine: true,
+        },
+      ];
     },
     [self],
   );
@@ -2518,11 +2730,16 @@ export function DMsPage() {
   const displayRows = useMemo(() => {
     if (!isLoading || visibleRestoredRows.length === 0) return withNoteToSelf(visibleRows);
     // Keep the open thread's row present even if it predates the snapshot.
-    if (!activePeer || visibleRestoredRows.some((r) => r.peer === activePeer)) {
+    if (!activePeer || visibleRestoredRows.some((r) => r.conversation === activePeer)) {
       return withNoteToSelf(visibleRestoredRows);
     }
     return withNoteToSelf([
-      { peer: activePeer, latest: undefined as unknown as NostrRumor, mine: false },
+      {
+        conversation: activePeer,
+        peers: dmConvPeers(activePeer),
+        latest: undefined as unknown as NostrRumor,
+        mine: false,
+      },
       ...visibleRestoredRows,
     ]);
   }, [isLoading, visibleRestoredRows, visibleRows, activePeer, withNoteToSelf]);
@@ -2542,11 +2759,11 @@ export function DMsPage() {
         visibleRows
           .filter((c) => c.latest)
           .map((c) => ({
-            peer: c.peer,
+            peer: c.conversation,
             eventId: c.latest.id,
             createdAt: c.latest.created_at,
             author: c.latest.pubkey,
-            preview: c.plaintext ?? previews[c.peer],
+            preview: c.plaintext ?? previews[c.conversation],
             emojiTags: pickEmojiTags(c.latest.tags),
             // Carried so a restored preview of a disappearing message is
             // dropped once its deadline passes (see readDmListSnapshot).
@@ -2559,36 +2776,47 @@ export function DMsPage() {
   }, [isLoading, visibleRows, previews, user?.pubkey]);
 
   const openPeer = useCallback(
-    (pubkey: string) => {
+    (conversation: string) => {
       setComposing(false);
       // Mount the thread synchronously in the same render that closes the
       // compose pane, so we never fall through to the empty state for a frame
       // between `composing` going false and the route-driven effect setting
       // `renderedPeer`. (Without this the "Select a conversation" screen flashes
       // when switching from a new-message draft to an existing conversation.)
-      setRenderedPeer(pubkey);
-      navigate(`/dm/${nip19.npubEncode(pubkey)}`);
+      setRenderedPeer(conversation);
+      navigate(chatRoute({ kind: "dm", peer: dmRouteParam(conversation) }));
     },
     [navigate],
   );
 
-  // Picking someone in the new-message pane is an explicit "I want to talk to
-  // this person", so it accepts them outright. Without this, composing to
+  // Accepting a conversation accepts every participant. `acceptedDms` is a set
+  // of PEOPLE, and the inbox/request split asks whether ALL of them are known —
+  // so accepting only one member would leave the row in the request pile.
+  const acceptConversation = useCallback(
+    (conversation: string) => {
+      for (const peer of dmConvPeers(conversation)) accept(peer);
+    },
+    [accept],
+  );
+
+  // Picking recipients in the new-message pane is an explicit "I want to talk
+  // to these people", so it accepts them outright. Without this, composing to
   // someone you don't follow would drop the thread into your own request pile
   // until the first message lands and `mine` flips.
-  const openNewRecipient = useCallback(
-    (pubkey: string) => {
-      reopenDm(pubkey);
-      accept(pubkey);
-      openPeer(pubkey);
+  const openNewRecipients = useCallback(
+    (pubkeys: string[]) => {
+      const conversation = dmConvKey([...new Set(pubkeys)].sort());
+      reopenDm(conversation);
+      acceptConversation(conversation);
+      openPeer(conversation);
     },
-    [reopenDm, accept, openPeer],
+    [reopenDm, acceptConversation, openPeer],
   );
 
   const closePeer = useCallback(
-    (pubkey: string, latest: NostrRumor | undefined) => {
-      closeDm(pubkey, latest);
-      if (activePeer === pubkey) {
+    (conversation: string, latest: NostrRumor | undefined) => {
+      closeDm(conversation, latest);
+      if (activePeer === conversation) {
         setRenderedPeer(undefined);
         navigate("/dm");
       }
@@ -2611,8 +2839,8 @@ export function DMsPage() {
       }
     }
     for (const c of dm17Conversations) {
-      if (c.latest.author !== user.pubkey && isKnown(c.peer, c.mine)) {
-        markRead(dmReadKey(c.peer), c.latest.createdAt);
+      if (c.latest.author !== user.pubkey && c.peers.every((peer) => isKnown(peer, c.mine))) {
+        markRead(dmReadKey(c.key), c.latest.createdAt);
       }
     }
   }, [user, conversations, dm17Conversations, isKnown, markRead]);
@@ -2629,7 +2857,7 @@ export function DMsPage() {
     navigate("/dm");
   };
   const returnToThread = () => {
-    if (renderedPeer) navigate(`/dm/${nip19.npubEncode(renderedPeer)}`);
+    if (renderedPeer) navigate(chatRoute({ kind: "dm", peer: dmRouteParam(renderedPeer) }));
   };
   const startComposing = () => {
     navigate("/dm");
@@ -2685,13 +2913,14 @@ export function DMsPage() {
         {renderedPeer ? (
           <Conversation
             key={renderedPeer}
-            peer={renderedPeer}
-            isRequest={requestRows.some((c) => c.peer === renderedPeer)}
-            onAccept={() => accept(renderedPeer)}
+            conversation={renderedPeer}
+            peers={dmConvPeers(renderedPeer)}
+            isRequest={requestRows.some((c) => c.conversation === renderedPeer)}
+            onAccept={() => acceptConversation(renderedPeer)}
             onBack={revealList}
           />
         ) : composing ? (
-          <NewDMPane onSelectRecipient={openNewRecipient} onCancel={revealList} />
+          <NewDMPane onSelectRecipients={openNewRecipients} onCancel={revealList} />
         ) : (
           <div className="flex flex-1 items-center justify-center text-muted-foreground p-8 text-center">
             <div className="flex flex-col items-center gap-3 max-w-sm">

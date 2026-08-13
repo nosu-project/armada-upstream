@@ -807,9 +807,12 @@ export function useHasUnreadDMs(): boolean {
     }
     return dm17Conversations.some(
       (c) =>
-        isKnown(c.peer, c.mine) &&
+        // A group is in the inbox only when EVERY participant is: one stranger
+        // in the room is enough to make it a request, exactly as a message from
+        // that stranger alone would be.
+        c.peers.every((peer) => isKnown(peer, c.mine)) &&
         c.latest.author !== user.pubkey &&
-        c.latest.createdAt > getLastRead(dmReadKey(c.peer)),
+        c.latest.createdAt > getLastRead(dmReadKey(c.key)),
     );
   }, [user, conversations, dm17Conversations, isKnown, getLastRead]);
 }
@@ -841,7 +844,7 @@ export function useDmPeerUnread(peer: string | undefined): boolean {
     if (kind4 && kind4.latest.pubkey !== user.pubkey && kind4.latest.created_at > lastRead) {
       return true;
     }
-    const dm17 = dm17Conversations.find((c) => c.peer === peer);
+    const dm17 = dm17Conversations.find((c) => c.key === peer);
     return Boolean(
       dm17 && dm17.latest.author !== user.pubkey && dm17.latest.createdAt > lastRead,
     );

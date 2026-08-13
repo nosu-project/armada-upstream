@@ -13,6 +13,13 @@
  * The recipient is addressed by the outer `["p", recipient]` tag, so a reader
  * fetches their inbox with `{kinds:[1059], "#p":[me]}` and decrypts each wrap.
  *
+ * GROUP CONVERSATIONS are the same wire format with more than one `p` on the
+ * rumor: the `p` set defines the room, and one seal+wrap is minted PER
+ * participant (plus the sender's own copy), each addressed to that participant
+ * and delivered to their own kind-10050 inbox. There is no group event, no
+ * shared key and no membership list — see the conversation-identity note above
+ * {@link dmPeersOf} for what that does and does not buy.
+ *
  * First contact: a wrap to a peer we've never messaged carries an outer
  * `["k", "14"]` hint so k-aware clients can index their cold inbox
  * (`{kinds:[1059], "#p":[me], "#k":["14"]}`) — the same trick Concord direct
@@ -176,16 +183,16 @@ export function buildDmRumor(opts: {
 }
 
 /**
- * Tags for a kind-14 chat rumor: the receiver's `p` (NIP-17: the `p` set
+ * Tags for a kind-14 chat rumor: one `p` per receiver (NIP-17: the `p` set
  * defines the room), an optional `e` reply parent, plus any extra tags the
- * composer built (imeta, q, emoji…). The peer `p` is FIRST — readers of our
- * own copies recover the conversation partner from it (see {@link dmPeerOf}).
+ * composer built (imeta, q, emoji…). The `p` set leads — readers of our own
+ * copies recover the conversation from it (see {@link dmPeersOf}).
  */
 export function dmChatTags(
-  peer: string,
+  peers: readonly string[],
   opts?: { replyTo?: string; extraTags?: string[][]; expiresAt?: number },
 ): string[][] {
-  const tags: string[][] = [["p", peer]];
+  const tags: string[][] = peers.map((peer) => ["p", peer]);
   if (opts?.replyTo) tags.push(["e", opts.replyTo]);
   for (const t of opts?.extraTags ?? []) tags.push(t);
   return withExpiration(tags, opts?.expiresAt);
@@ -193,18 +200,23 @@ export function dmChatTags(
 
 /**
  * Tags for a kind-7 reaction rumor targeting a message in this conversation.
- * The peer `p` leads (conversation attribution — NIP-17 receivers), then the
+ * The `p` set leads (conversation attribution — NIP-17 receivers), then the
  * NIP-25 `e` target and `k` target-kind.
  */
 export function dmReactionTags(
-  peer: string,
+  peers: readonly string[],
   targetId: string,
   targetKind: number,
   extraTags?: string[][],
   expiresAt?: number,
 ): string[][] {
   return withExpiration(
-    [["p", peer], ["e", targetId], ["k", String(targetKind)], ...(extraTags ?? [])],
+    [
+      ...peers.map((peer) => ["p", peer]),
+      ["e", targetId],
+      ["k", String(targetKind)],
+      ...(extraTags ?? []),
+    ],
     expiresAt,
   );
 }
@@ -215,8 +227,12 @@ export function dmReactionTags(
  * have been sent under a longer timer (or none at all) — an expiring delete
  * would let a message that outlives it come back.
  */
-export function dmDeleteTags(peer: string, targetId: string, targetKind: number): string[][] {
-  return [["p", peer], ["e", targetId], ["k", String(targetKind)]];
+export function dmDeleteTags(
+  peers: readonly string[],
+  targetId: string,
+  targetKind: number,
+): string[][] {
+  return [...peers.map((peer) => ["p", peer]), ["e", targetId], ["k", String(targetKind)]];
 }
 
 /** The two rumors that make one optional NIP-17 edit operation. */
@@ -237,7 +253,7 @@ export interface DmEditRumors {
  */
 export function buildDmEditRumors(
   original: NostrRumor,
-  peer: string,
+  peers: readonly string[],
   content: string,
   editedAt = Math.floor(Date.now() / 1000),
 ): DmEditRumors {
@@ -257,7 +273,7 @@ export function buildDmEditRumors(
   const deletion = buildDmRumor({
     kind: KIND_DM_DELETE,
     content: "",
-    tags: dmDeleteTags(peer, original.id, original.kind),
+    tags: dmDeleteTags(peers, original.id, original.kind),
     pubkey: original.pubkey,
     createdAt: editTimestamp,
   });
@@ -266,18 +282,21 @@ export function buildDmEditRumors(
 }
 
 /** Tags for a kind-1740 timer-change rumor. `seconds` of 0 turns it off. */
-export function dmTimerTags(peer: string, seconds: number): string[][] {
-  return [["p", peer], ["timer", String(Math.max(0, Math.floor(seconds)))]];
+export function dmTimerTags(peers: readonly string[], seconds: number): string[][] {
+  return [
+    ...peers.map((peer) => ["p", peer]),
+    ["timer", String(Math.max(0, Math.floor(seconds)))],
+  ];
 }
 
 /**
- * Tags for a kind-23311 typing rumor: the peer `p` and nothing else. No
+ * Tags for a kind-23311 typing rumor: the `p` set and nothing else. No
  * `expiration` — the freshness check is the rumor's own `created_at` against
  * {@link TYPING_WINDOW_SECS}, and a NIP-40 tag would only add a relay-visible
  * hint about a wrap the relay is already forbidden to keep.
  */
-export function dmTypingTags(peer: string): string[][] {
-  return [["p", peer]];
+export function dmTypingTags(peers: readonly string[]): string[][] {
+  return peers.map((peer) => ["p", peer]);
 }
 
 /**
@@ -292,14 +311,92 @@ export function dmTimerSeconds(rumor: { tags: readonly string[][] }): number | u
   return Number.isFinite(secs) && secs >= 0 ? Math.floor(secs) : undefined;
 }
 
+// ── Conversation identity ────────────────────────────────────────────────────
+//
+// A NIP-17 conversation is its PARTICIPANT SET, not a peer. The `p` set defines
+// the room (NIP-17), so a rumor names its own conversation and nothing has to be
+// stored beside it — the same reason the 1:1 partner was always derived rather
+// than injected (see dm17Store's PROVENANCE note).
+//
+// The set is canonicalized to "everyone but the viewer, sorted", which makes the
+// two directions of one conversation agree: a message Alice sends to {me, Bob}
+// reaches me as `pubkey: Alice, p: [me, Bob]` and my reply leaves as
+// `pubkey: me, p: [Alice, Bob]`, and both reduce to [Alice, Bob].
+//
+// For a 1:1 this yields exactly `[peer]` and for Note to Self exactly `[self]`,
+// so {@link dmConvKey} is byte-identical to the old single-pubkey key. That is
+// deliberate and load-bearing: every route, KV key, wire scope, read-state key
+// and thread snapshot on disk keeps working, and no existing conversation is
+// re-filed by the change of rule.
+//
+// NIP-17 gives a group no identity beyond this set, so adding or removing a
+// participant IS a different conversation. There is no fix for that inside the
+// protocol; Concord is where real membership lives.
+
 /**
- * The conversation partner of a rumor, from `self`'s perspective: the sender
- * for received rumors, the first `p` tag for our own copies. Undefined when
- * unattributable (an own copy with no `p` tag).
+ * Separator between participants in a conversation key. A single character
+ * that is legal unescaped in a URL path segment, so `/dm/<a>,<b>` stays
+ * readable (see `chatRoute`).
  */
-export function dmPeerOf(rumor: { pubkey: string; tags: string[][] }, self: string): string | undefined {
-  if (rumor.pubkey !== self) return rumor.pubkey;
-  return rumor.tags.find(([name, value]) => name === "p" && value)?.[1];
+export const DM_PEER_SEP = ",";
+
+/**
+ * The participants of a rumor's conversation, from `self`'s perspective:
+ * everyone involved except the viewer, sorted. `[self]` for Note to Self.
+ * Undefined when unattributable — an own copy with no `p` tag names no room,
+ * exactly as before, and callers drop it rather than guess.
+ */
+export function dmPeersOf(
+  rumor: { pubkey: string; tags: string[][] },
+  self: string,
+): string[] | undefined {
+  const recipients = new Set<string>();
+  for (const [name, value] of rumor.tags) {
+    if (name === "p" && value) recipients.add(value);
+  }
+
+  if (rumor.pubkey !== self) {
+    // Received: the sender is a participant whether or not they p-tagged
+    // themselves, and we are not one of our own peers.
+    const others = new Set(recipients);
+    others.add(rumor.pubkey);
+    others.delete(self);
+    return others.size === 0 ? undefined : [...others].sort();
+  }
+
+  // Our own copy: only the `p` set says where it went.
+  if (recipients.size === 0) return undefined;
+  const others = new Set(recipients);
+  others.delete(self);
+  return others.size === 0 ? [self] : [...others].sort();
+}
+
+/**
+ * The stable string key for a participant set. For a 1:1 (and Note to Self)
+ * this is just the other party's pubkey — see the note above on why that
+ * equivalence is not an accident.
+ */
+export function dmConvKey(peers: readonly string[]): string {
+  return peers.join(DM_PEER_SEP);
+}
+
+/** The participants a conversation key names. Inverse of {@link dmConvKey}. */
+export function dmConvPeers(key: string): string[] {
+  return key.split(DM_PEER_SEP).filter(Boolean);
+}
+
+/** Whether a conversation key names more than one other participant. */
+export function isDmGroupKey(key: string): boolean {
+  return key.includes(DM_PEER_SEP);
+}
+
+/** The conversation key a rumor belongs to, or undefined when unattributable. */
+export function dmConvKeyOf(
+  rumor: { pubkey: string; tags: string[][] },
+  self: string,
+): string | undefined {
+  const peers = dmPeersOf(rumor, self);
+  return peers && dmConvKey(peers);
 }
 
 // ── Sealing + wrapping (sending) ─────────────────────────────────────────────
@@ -400,10 +497,19 @@ export interface OpenedDm {
   tags: string[][];
   /** The rumor's real timestamp (seconds). */
   createdAt: number;
-  /** The conversation partner from the viewer's perspective. */
-  peer: string;
+  /**
+   * The conversation's participants from the viewer's perspective — everyone
+   * but them, sorted. One entry for a 1:1; `[self]` for Note to Self. See
+   * {@link dmPeersOf}.
+   */
+  peers: string[];
   /** The wrap's id (the relay-addressable carrier). */
   wrapId: string;
+}
+
+/** The conversation key of an opened rumor. Shorthand for the common pair. */
+export function dmConvKeyOfOpened(opened: Pick<OpenedDm, "peers">): string {
+  return dmConvKey(opened.peers);
 }
 
 /** The NIP-40 deadline this opened rumor disappears at, if any. */
@@ -478,8 +584,8 @@ export async function openDmWrap(
     });
     if (rumor.id !== undefined && rumor.id !== computedId) return undefined;
 
-    const peer = dmPeerOf(rumor, self);
-    if (!peer) return undefined;
+    const peers = dmPeersOf(rumor, self);
+    if (!peers) return undefined;
 
     return {
       rumorId: computedId,
@@ -488,7 +594,7 @@ export async function openDmWrap(
       content: rumor.content,
       tags: rumor.tags,
       createdAt: rumor.created_at,
-      peer,
+      peers,
       wrapId: wrap.id,
     };
   } catch {

@@ -21,7 +21,9 @@ import {
   buildDmEditRumors,
   buildDmRumor,
   dmChatTags,
+  dmConvKey,
   dmDeleteTags,
+  dmPeersOf,
   dmReactionTags,
   dmTimerTags,
   KIND_DM_CHAT,
@@ -45,7 +47,7 @@ function opened(opts: { author: string; peer: string; kind?: number; content?: s
   const createdAt = ++clock;
   const kind = opts.kind ?? KIND_DM_CHAT;
   const content = opts.content ?? "hello";
-  const tags = opts.tags ?? dmChatTags(opts.author === self ? opts.peer : self);
+  const tags = opts.tags ?? dmChatTags([opts.author === self ? opts.peer : self]);
   const rumor = buildDmRumor({ kind, content, tags, pubkey: opts.author, createdAt });
   return {
     rumorId: rumor.id,
@@ -54,7 +56,7 @@ function opened(opts: { author: string; peer: string; kind?: number; content?: s
     content,
     tags,
     createdAt,
-    peer: opts.peer,
+    peers: [opts.peer],
     wrapId: `wrap-${rumor.id.slice(0, 8)}`,
   };
 }
@@ -79,7 +81,7 @@ describe("dm17Store", () => {
     const fromBob = opened({ author: bob, peer: bob, content: "unrelated" });
     await writeDm17Rumors(self, [fromAlice, toAlice, fromBob]);
 
-    const thread = await queryDm17Thread(self, alice, { limit: 50 });
+    const thread = await queryDm17Thread(self, [alice], { limit: 50 });
     const ids = thread.map((r) => r.rumorId).sort();
     expect(ids).toEqual([fromAlice.rumorId, toAlice.rumorId].sort());
   });
@@ -100,13 +102,13 @@ describe("dm17Store", () => {
           author: scopedAlice,
           peer: scopedAlice,
           content: "scope alice",
-          tags: dmChatTags(scopedSelf),
+          tags: dmChatTags([scopedSelf]),
         }),
         opened({
           author: scopedBob,
           peer: scopedBob,
           content: "scope bob",
-          tags: dmChatTags(scopedSelf),
+          tags: dmChatTags([scopedSelf]),
         }),
       ]);
       await new Promise((resolve) => setTimeout(resolve, 75));
@@ -122,13 +124,13 @@ describe("dm17Store", () => {
 
   it("groups conversations by peer, newest message first", async () => {
     const convos = await queryDm17Conversations(self);
-    expect(convos.map((c) => c.peer)).toEqual([bob, alice]);
+    expect(convos.map((c) => c.key)).toEqual([bob, alice]);
     expect(convos[1].latest.content).toBe("hi back");
   });
 
   it("marks conversations the viewer has messaged as `mine`", async () => {
     const convos = await queryDm17Conversations(self);
-    const byPeer = new Map(convos.map((c) => [c.peer, c]));
+    const byPeer = new Map(convos.map((c) => [c.key, c]));
     // alice's thread has a self-authored "hi back"; bob only messaged us.
     expect(byPeer.get(alice)?.mine).toBe(true);
     expect(byPeer.get(bob)?.mine).toBe(false);
@@ -139,7 +141,7 @@ describe("dm17Store", () => {
     // Everything above was written as `self`. Another logged-in account reads
     // its own tenant, which has none of it — not a filtered view of one store.
     expect(await queryDm17Conversations(other)).toEqual([]);
-    expect(await queryDm17Thread(other, alice, { limit: 50 })).toEqual([]);
+    expect(await queryDm17Thread(other, [alice], { limit: 50 })).toEqual([]);
   });
 
   it("applies a kind-5 delete rumor to the author's own target only", async () => {
@@ -149,7 +151,7 @@ describe("dm17Store", () => {
       peer: alice,
       kind: KIND_DM_REACTION,
       content: "👍",
-      tags: dmReactionTags(self, target.rumorId, KIND_DM_CHAT),
+      tags: dmReactionTags([self], target.rumorId, KIND_DM_CHAT),
     });
     await writeDm17Rumors(self, [target, reaction]);
 
@@ -159,10 +161,10 @@ describe("dm17Store", () => {
       peer: bob,
       kind: KIND_DM_DELETE,
       content: "",
-      tags: dmDeleteTags(self, target.rumorId, KIND_DM_CHAT),
+      tags: dmDeleteTags([self], target.rumorId, KIND_DM_CHAT),
     });
     await writeDm17Rumors(self, [foreignDelete]);
-    let thread = await queryDm17Thread(self, alice, { limit: 50 });
+    let thread = await queryDm17Thread(self, [alice], { limit: 50 });
     expect(thread.some((r) => r.rumorId === target.rumorId)).toBe(true);
 
     // The author's own delete removes it.
@@ -171,10 +173,10 @@ describe("dm17Store", () => {
       peer: alice,
       kind: KIND_DM_DELETE,
       content: "",
-      tags: dmDeleteTags(self, target.rumorId, KIND_DM_CHAT),
+      tags: dmDeleteTags([self], target.rumorId, KIND_DM_CHAT),
     });
     await writeDm17Rumors(self, [ownDelete]);
-    thread = await queryDm17Thread(self, alice, { limit: 50 });
+    thread = await queryDm17Thread(self, [alice], { limit: 50 });
     expect(thread.some((r) => r.rumorId === target.rumorId)).toBe(false);
     // The reaction survives (deletes are per-target).
     expect(thread.some((r) => r.rumorId === reaction.rumorId)).toBe(true);
@@ -186,13 +188,13 @@ describe("dm17Store", () => {
       author: self,
       peer: editor,
       content: "uncorrected",
-      tags: dmChatTags(editor, { replyTo: "parent" }),
+      tags: dmChatTags([editor], { replyTo: "parent" }),
     });
     await writeDm17Rumors(self, [original]);
 
     const { replacement, deletion } = buildDmEditRumors(
       dm17ToStored(original),
-      editor,
+      [editor],
       "corrected",
       original.createdAt + 10,
     );
@@ -201,7 +203,7 @@ describe("dm17Store", () => {
       storedToDm17(deletion, self),
     ]);
 
-    const thread = await queryDm17Thread(self, editor, { limit: 50 });
+    const thread = await queryDm17Thread(self, [editor], { limit: 50 });
     expect(thread.some((r) => r.rumorId === original.rumorId)).toBe(false);
     expect(thread).toContainEqual(expect.objectContaining({
       rumorId: replacement.id,
@@ -227,10 +229,10 @@ describe("dm17Store disappearing messages", () => {
       author: carol,
       peer: carol,
       content: "should never land",
-      tags: dmChatTags(self, { expiresAt: now() - 1 }),
+      tags: dmChatTags([self], { expiresAt: now() - 1 }),
     });
     await writeDm17Rumors(self, [expired]);
-    const thread = await queryDm17Thread(self, carol, { limit: 50 });
+    const thread = await queryDm17Thread(self, [carol], { limit: 50 });
     expect(thread.some((r) => r.rumorId === expired.rumorId)).toBe(false);
   });
 
@@ -239,10 +241,10 @@ describe("dm17Store disappearing messages", () => {
       author: carol,
       peer: carol,
       content: "still here",
-      tags: dmChatTags(self, { expiresAt: now() + 3600 }),
+      tags: dmChatTags([self], { expiresAt: now() + 3600 }),
     });
     await writeDm17Rumors(self, [live]);
-    const thread = await queryDm17Thread(self, carol, { limit: 50 });
+    const thread = await queryDm17Thread(self, [carol], { limit: 50 });
     expect(thread.some((r) => r.rumorId === live.rumorId)).toBe(true);
   });
 
@@ -251,17 +253,17 @@ describe("dm17Store disappearing messages", () => {
       author: carol,
       peer: carol,
       content: "expired in storage",
-      tags: dmChatTags(self, { expiresAt: now() - 1 }),
+      tags: dmChatTags([self], { expiresAt: now() - 1 }),
     });
     await forceStore(stale);
 
     // Present in the raw store...
     expect((await dm17Store(self).query([{ ids: [stale.rumorId] }])).length).toBe(1);
     // ...but never handed to a reader.
-    const thread = await queryDm17Thread(self, carol, { limit: 50 });
+    const thread = await queryDm17Thread(self, [carol], { limit: 50 });
     expect(thread.some((r) => r.rumorId === stale.rumorId)).toBe(false);
     const convos = await queryDm17Conversations(self);
-    expect(convos.find((c) => c.peer === carol)?.latest.rumorId).not.toBe(stale.rumorId);
+    expect(convos.find((c) => c.key === carol)?.latest.rumorId).not.toBe(stale.rumorId);
 
     // Hiding is not disappearing: the sweep removes the plaintext.
     expect(await sweepExpiredDm17Rumors(self)).toBeGreaterThan(0);
@@ -269,21 +271,21 @@ describe("dm17Store disappearing messages", () => {
   });
 
   it("reads back the newest timer change, whichever side set it", async () => {
-    expect(await queryDm17Timer(self, carol)).toBeUndefined();
+    expect(await queryDm17Timer(self, [carol])).toBeUndefined();
 
     await writeDm17Rumors(self, [
-      opened({ author: self, peer: carol, kind: KIND_DM_TIMER, content: "", tags: dmTimerTags(carol, 86400) }),
+      opened({ author: self, peer: carol, kind: KIND_DM_TIMER, content: "", tags: dmTimerTags([carol], 86400) }),
     ]);
-    expect(await queryDm17Timer(self, carol)).toBe(86400);
+    expect(await queryDm17Timer(self, [carol])).toBe(86400);
 
     // The peer turns it off; the newer change wins.
     await writeDm17Rumors(self, [
-      opened({ author: carol, peer: carol, kind: KIND_DM_TIMER, content: "", tags: dmTimerTags(self, 0) }),
+      opened({ author: carol, peer: carol, kind: KIND_DM_TIMER, content: "", tags: dmTimerTags([self], 0) }),
     ]);
-    expect(await queryDm17Timer(self, carol)).toBe(0);
+    expect(await queryDm17Timer(self, [carol])).toBe(0);
 
     // A timer set on one conversation never leaks into another.
-    expect(await queryDm17Timer(self, bob)).toBeUndefined();
+    expect(await queryDm17Timer(self, [bob])).toBeUndefined();
   });
 });
 
@@ -356,21 +358,21 @@ describe("dm17Store note to self", () => {
   const friend = getPublicKey(generateSecretKey());
 
   it("reads back the notes addressed to yourself, and nothing else you sent", async () => {
-    const note = opened({ author: me, peer: me, tags: dmChatTags(me), content: "milk, eggs" });
-    const toFriend = opened({ author: me, peer: friend, tags: dmChatTags(friend), content: "sent to a person" });
-    const fromFriend = opened({ author: friend, peer: friend, tags: dmChatTags(me), content: "received" });
+    const note = opened({ author: me, peer: me, tags: dmChatTags([me]), content: "milk, eggs" });
+    const toFriend = opened({ author: me, peer: friend, tags: dmChatTags([friend]), content: "sent to a person" });
+    const fromFriend = opened({ author: friend, peer: friend, tags: dmChatTags([me]), content: "received" });
     await writeDm17Rumors(me, [note, toFriend, fromFriend]);
 
     // The general two-direction filter pair degenerates for a self thread: its
     // incoming half is `authors: [me]` unqualified, which is every DM this
     // account has ever SENT. Only the `p`-scoped half may run.
-    const thread = await queryDm17Thread(me, me, { limit: 50 });
+    const thread = await queryDm17Thread(me, [me], { limit: 50 });
     expect(thread.map((r) => r.content)).toEqual(["milk, eggs"]);
   });
 
   it("lists the notes as an ordinary conversation the viewer authored", async () => {
     const convos = await queryDm17Conversations(me);
-    const notes = convos.find((c) => c.peer === me);
+    const notes = convos.find((c) => c.key === me);
     expect(notes?.latest.content).toBe("milk, eggs");
     // `mine` is what keeps it out of the request tier.
     expect(notes?.mine).toBe(true);
@@ -378,10 +380,10 @@ describe("dm17Store note to self", () => {
 
   it("keeps a timer set with a person out of the notes", async () => {
     await writeDm17Rumors(me, [
-      opened({ author: me, peer: friend, kind: KIND_DM_TIMER, content: "", tags: dmTimerTags(friend, 3600) }),
+      opened({ author: me, peer: friend, kind: KIND_DM_TIMER, content: "", tags: dmTimerTags([friend], 3600) }),
     ]);
-    expect(await queryDm17Timer(me, friend)).toBe(3600);
-    expect(await queryDm17Timer(me, me)).toBeUndefined();
+    expect(await queryDm17Timer(me, [friend])).toBe(3600);
+    expect(await queryDm17Timer(me, [me])).toBeUndefined();
   });
 });
 
@@ -397,23 +399,23 @@ describe("dm17Store legacy drain", () => {
     const legacy = new NIndexedDB("armada-dm17-rumors");
 
     // Ana ↔ Carla, both directions.
-    const anaSent = opened({ author: ana, peer: carla, content: "ana to carla", tags: dmChatTags(carla) });
-    const anaGot = opened({ author: carla, peer: carla, content: "carla to ana", tags: dmChatTags(ana) });
+    const anaSent = opened({ author: ana, peer: carla, content: "ana to carla", tags: dmChatTags([carla]) });
+    const anaGot = opened({ author: carla, peer: carla, content: "carla to ana", tags: dmChatTags([ana]) });
     // Ben ↔ Carla, from the same device. Ana must never see these.
-    const benSent = opened({ author: ben, peer: carla, content: "ben to carla", tags: dmChatTags(carla) });
+    const benSent = opened({ author: ben, peer: carla, content: "ben to carla", tags: dmChatTags([carla]) });
     const anaReacted = opened({
       author: ana,
       peer: carla,
       kind: KIND_DM_REACTION,
       content: "👍",
-      tags: dmReactionTags(carla, anaGot.rumorId, KIND_DM_CHAT),
+      tags: dmReactionTags([carla], anaGot.rumorId, KIND_DM_CHAT),
     });
     for (const o of [anaSent, anaGot, benSent, anaReacted]) {
       await legacy.event({ ...dm17ToStored(o), sig: "" });
     }
     await legacy.close();
 
-    const drained = await queryDm17Thread(ana, carla, { limit: 50 });
+    const drained = await queryDm17Thread(ana, [carla], { limit: 50 });
     const ids = new Set(drained.map((r) => r.rumorId));
     expect(ids.has(anaSent.rumorId)).toBe(true);
     expect(ids.has(anaGot.rumorId)).toBe(true);
@@ -431,7 +433,7 @@ describe("dm17Store legacy drain", () => {
 
     const legacy = new NIndexedDB("armada-dm17-rumors");
     for (let i = 0; i < total; i++) {
-      const o = opened({ author: dana, peer: carla, content: `msg-${i}`, tags: dmChatTags(carla) });
+      const o = opened({ author: dana, peer: carla, content: `msg-${i}`, tags: dmChatTags([carla]) });
       await legacy.event({ ...dm17ToStored(o), sig: "" });
     }
     await legacy.close();
@@ -439,4 +441,124 @@ describe("dm17Store legacy drain", () => {
     await migrateLegacyDms(dana);
     expect((await dm17Store(dana).count([{ kinds: [KIND_DM_CHAT] }])).count).toBe(total);
   }, 60_000);
+});
+
+// Slower than the unit tests above on purpose: these are IndexedDB round-trips
+// against the store the rest of this file has been filling, so they carry an
+// explicit timeout rather than flaking at vitest's 5s default under a loaded
+// full-suite run.
+describe("group conversations", () => {
+  const me = getPublicKey(generateSecretKey());
+  const ana = getPublicKey(generateSecretKey());
+  const ben = getPublicKey(generateSecretKey());
+  const cy = getPublicKey(generateSecretKey());
+
+  /**
+   * An opened rumor addressed to an explicit room (`recipients` are its `p`
+   * tags). `peers` comes from the real derivation rather than being asserted
+   * here, so these rows are exactly what `openDmWrap` would have produced.
+   */
+  function room(
+    author: string,
+    recipients: string[],
+    content: string,
+    kind = KIND_DM_CHAT,
+    tags?: string[][],
+  ): OpenedDm {
+    const createdAt = ++clock;
+    const rumorTags = tags ?? dmChatTags(recipients);
+    return {
+      rumorId: `${author.slice(0, 4)}-${content}-${createdAt}`,
+      author,
+      kind,
+      content,
+      tags: rumorTags,
+      createdAt,
+      peers: dmPeersOf({ pubkey: author, tags: rumorTags }, me)!,
+      wrapId: "",
+    };
+  }
+
+  it("keeps a group thread separate from its members' 1:1s", async () => {
+    // The three conversations that share people: Ana alone, Ben alone, and the
+    // room with both. The filters cannot distinguish them (see
+    // conversationFilters), so this is the client-side match under test.
+    const oneToOneAna = room(ana, [me], "just ana");
+    const oneToOneBen = room(ben, [me], "just ben");
+    const groupFromAna = room(ana, [me, ben], "ana to the group");
+    const groupFromMe = room(me, [ana, ben], "me to the group");
+    await writeDm17Rumors(me, [oneToOneAna, oneToOneBen, groupFromAna, groupFromMe]);
+
+    expect((await queryDm17Thread(me, [ana], { limit: 50 })).map((m) => m.content))
+      .toEqual(["just ana"]);
+    expect((await queryDm17Thread(me, [ben], { limit: 50 })).map((m) => m.content))
+      .toEqual(["just ben"]);
+    expect(
+      (await queryDm17Thread(me, [ana, ben].sort(), { limit: 50 })).map((m) => m.content).sort(),
+    ).toEqual(["ana to the group", "me to the group"]);
+  }, 30_000);
+
+  it("lists a group as ONE conversation, not one row per member", async () => {
+    const convos = await queryDm17Conversations(me);
+    const keys = convos.map((c) => c.key);
+    expect(keys).toContain(dmConvKey([ana, ben].sort()));
+    expect(keys.filter((k) => k === dmConvKey([ana, ben].sort()))).toHaveLength(1);
+    const group = convos.find((c) => c.key === dmConvKey([ana, ben].sort()))!;
+    expect(group.peers).toEqual([ana, ben].sort());
+    // We authored one of its messages, so it is ours.
+    expect(group.mine).toBe(true);
+  }, 30_000);
+
+  it("does not let a superset room answer for a subset room", async () => {
+    const bigger = room(ana, [me, ben, cy], "all three");
+    await writeDm17Rumors(me, [bigger]);
+    expect((await queryDm17Thread(me, [ana, ben].sort(), { limit: 50 })).map((m) => m.content))
+      .not.toContain("all three");
+    expect(
+      (await queryDm17Thread(me, [ana, ben, cy].sort(), { limit: 50 })).map((m) => m.content),
+    ).toEqual(["all three"]);
+  }, 30_000);
+
+  it("rings the group's own wire scope, not its members'", async () => {
+    resetWireBus();
+    const seen = new Set<string>();
+    const off = onWireScopes((scopes) => {
+      for (const scope of scopes) seen.add(scope);
+    });
+    try {
+      await writeDm17Rumors(me, [room(ben, [me, ana], "ring")]);
+      // The bus debounces, so the ring lands a tick later (see the scoped-write
+      // test above).
+      await new Promise((resolve) => setTimeout(resolve, 75));
+      expect(seen).toEqual(new Set(["dm", dmThreadScope(dmConvKey([ana, ben].sort()))]));
+    } finally {
+      off();
+      resetWireBus();
+    }
+  }, 30_000);
+
+  it("scopes the disappearing timer to the group", async () => {
+    const groupKey = [ana, ben].sort();
+    expect(await queryDm17Timer(me, groupKey)).toBeUndefined();
+    await writeDm17Rumors(me, [
+      room(me, groupKey, "", KIND_DM_TIMER, dmTimerTags(groupKey, 3600)),
+    ]);
+    expect(await queryDm17Timer(me, groupKey)).toBe(3600);
+    // The members' own 1:1s are untouched by it.
+    expect(await queryDm17Timer(me, [ana])).toBeUndefined();
+    expect(await queryDm17Timer(me, [ben])).toBeUndefined();
+  }, 30_000);
+
+  it("applies a group member's delete inside the group", async () => {
+    const groupKey = [ana, ben].sort();
+    const target = room(ana, [me, ben], "regrettable");
+    await writeDm17Rumors(me, [target]);
+    expect((await queryDm17Thread(me, groupKey, { limit: 50 })).map((m) => m.rumorId))
+      .toContain(target.rumorId);
+    await writeDm17Rumors(me, [
+      room(ana, groupKey, "", KIND_DM_DELETE, dmDeleteTags(groupKey, target.rumorId, KIND_DM_CHAT)),
+    ]);
+    expect((await queryDm17Thread(me, groupKey, { limit: 50 })).map((m) => m.rumorId))
+      .not.toContain(target.rumorId);
+  }, 30_000);
 });

@@ -161,7 +161,11 @@ export function SharePage() {
   // matching the DM list's own ordering.
   const dmPeers = useMemo(() => {
     const pinnedSet = new Set(pinned);
-    const byRecency = conversations.map((c) => c.peer);
+    // 1:1 conversations only. Every destination below is rendered as a person
+    // (one avatar, one name), so adding groups here needs the composite row the
+    // DM list uses — deliberately left out of this pass rather than shipped as
+    // a group labelled with one member's face.
+    const byRecency = conversations.filter((c) => c.peers.length === 1).map((c) => c.peers[0]);
     const pinnedRanked = byRecency.filter((p) => pinnedSet.has(p));
     for (const p of pinned) if (!pinnedRanked.includes(p)) pinnedRanked.push(p);
     const rest = byRecency.filter((p) => !pinnedSet.has(p));

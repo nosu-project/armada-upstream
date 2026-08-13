@@ -318,7 +318,10 @@ export function useForegroundNotifications(): void {
       void (async () => {
         try {
           const rows = await queryDm17Conversations(user.pubkey);
-          minePeers.current = new Set(rows.filter((row) => row.mine).map((row) => row.peer));
+          // Every participant of a conversation the viewer has written in — a
+          // group makes all of its members people they've talked to, not just
+          // the one whose name the row happens to sort under.
+          minePeers.current = new Set(rows.filter((row) => row.mine).flatMap((row) => row.peers));
         } catch {
           // Store unavailable — follows ∪ accepted ∪ pinned still apply.
         } finally {

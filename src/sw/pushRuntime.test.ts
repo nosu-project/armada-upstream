@@ -70,7 +70,7 @@ describe("openDm", () => {
       kind: 14,
       content: "are you coming tonight?",
       createdAt: rumor.created_at,
-      peer: senderPk,
+      peers: [senderPk],
     });
   });
 
@@ -337,7 +337,7 @@ describe("preparePush — ingest", () => {
       { policy: "full", self: recipientPk, knownPeers: [], sk: bytesToHex(recipientSk) },
     );
 
-    const thread = await queryDm17Thread(recipientPk, senderPk, { limit: 10 });
+    const thread = await queryDm17Thread(recipientPk, [senderPk], { limit: 10 });
     expect(thread.map((m) => m.content)).toContain("stored while the tab was closed");
   });
 
@@ -414,7 +414,7 @@ describe("preparePush — showing nothing on purpose", () => {
     expect(p?.drop).toBe(true);
     // Still stored — that copy is how the other device's half of the
     // conversation gets here.
-    const thread = await queryDm17Thread(selfPk, peerPk, { limit: 10 });
+    const thread = await queryDm17Thread(selfPk, [peerPk], { limit: 10 });
     expect(thread.map((m) => m.content)).toContain("sent from my laptop");
   });
 

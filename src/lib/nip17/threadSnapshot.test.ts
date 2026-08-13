@@ -38,7 +38,7 @@ function row(id: string, createdAt: number, opts: { peer?: string; expiresAt?: n
     content: `msg ${id}`,
     tags: opts.expiresAt === undefined ? [] : [["expiration", String(opts.expiresAt)]],
     createdAt,
-    peer: opts.peer ?? PEER,
+    peers: [opts.peer ?? PEER],
   };
 }
 

@@ -37,7 +37,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDecryptConsent } from "@/hooks/useDecryptConsent";
-import { useDmRelayList, useDmRelaysFor } from "@/hooks/useDmRelayList";
+import { useDmRelayList, useDmRelaysForAll } from "@/hooks/useDmRelayList";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { customEmojiReactionTags } from "@/hooks/useReactions";
@@ -55,6 +55,7 @@ import {
   buildDmRumor,
   DM_RUMOR_KINDS,
   dmChatTags,
+  dmConvPeers,
   dmDeleteTags,
   dmReactionTags,
   dmTimerTags,
@@ -87,6 +88,7 @@ import {
   updateDm17Cursor,
   writeDm17Rumors,
   writeDm17SeenWrapIds,
+  type Dm17ConversationRow,
   type Dm17Cursor,
 } from "@/lib/nip17/dm17Store";
 import { persistDm17ThreadSnapshot, prewarmDm17ThreadSnapshot } from "@/lib/nip17/threadSnapshot";
@@ -810,8 +812,15 @@ export interface Dm17Thread {
   isLoadingOlder: boolean;
 }
 
-/** The decrypted NIP-17 thread with one peer, plus send/react/delete. */
-export function useDm17Thread(peer: string | undefined): Dm17Thread {
+/**
+ * The decrypted NIP-17 thread with one conversation, plus send/react/delete.
+ *
+ * `conversation` is a conversation KEY (see `dmConvKey`): a single pubkey for a
+ * 1:1 or Note to Self, several comma-joined for a group. Everything below works
+ * off the participant list it decodes to, so the 1:1 and group paths are one
+ * path — the only place the two differ is how many seals a send mints.
+ */
+export function useDm17Thread(conversation: string | undefined): Dm17Thread {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { config } = useAppContext();
@@ -820,38 +829,52 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
   const { consent } = useDecryptConsent();
   const support = useDm17Support();
   const eventStore = useEventStore();
-  const peerInboxRelays = useDmRelaysFor(peer);
+
+  const self = user?.pubkey;
+  const peers = useMemo(
+    () => (conversation ? dmConvPeers(conversation) : []),
+    [conversation],
+  );
+  // Who a wrap actually has to be minted for: the participants minus us. Empty
+  // for Note to Self, whose only copy IS the self copy.
+  const recipients = useMemo(
+    () => peers.filter((peer) => peer !== self),
+    [peers, self],
+  );
+  const inboxRelays = useDmRelaysForAll(recipients);
   // Where OUR copies live and where our other sessions read: the same union the
   // inbox sync uses (effective DM relays ∪ our published kind-10050 inbox).
   const myRelays = ctx?.relays ?? effectiveDmRelays(config);
 
-  const self = user?.pubkey;
   // NIP-17 send is possible when the signer does NIP-44 and we have SOMEWHERE
-  // to publish the gift wrap. The spec's canonical target is the peer's
+  // to publish the gift wraps. The spec's canonical target is each recipient's
   // published kind-10050 inbox; when they have none we fall back to our own
   // (app / DM) relays — fully private (still gift-wrapped, no metadata leak),
-  // and reachable whenever the peer reads those shared relays (the common
-  // Armada case). This is a routing fact, not a trustworthy user-readiness or
+  // and reachable whenever they read those shared relays (the common Armada
+  // case). This is a routing fact, not a trustworthy user-readiness or
   // delivery-status signal: older clients (including Ditto) never published
   // kind 10050 even when the conversation worked over shared relays.
-  const hasPeerInbox = peerInboxRelays.length > 0;
-  const canSend = support && !!peer && (hasPeerInbox || myRelays.length > 0);
+  const hasPeerInbox = recipients.some((peer) => (inboxRelays.get(peer)?.length ?? 0) > 0);
+  const canSend = support && peers.length > 0 && (hasPeerInbox || myRelays.length > 0);
 
   // Optimistic outgoing rumors (pending/failed), keyed by rumor id. Confirmed
   // sends land in the store and drop out of here.
   const [pending, setPending] = useState<Map<string, PendingRumor>>(new Map());
-  useEffect(() => setPending(new Map()), [self, peer]);
+  useEffect(() => setPending(new Map()), [self, conversation]);
 
-  const queryKey = useMemo(() => ["dm17", "thread", self, peer, consent] as const, [self, peer, consent]);
+  const queryKey = useMemo(
+    () => ["dm17", "thread", self, conversation, consent] as const,
+    [self, conversation, consent],
+  );
 
   // Paint the last window from KV while the store read runs. The read is
   // enabled on this very render, but it awaits the legacy drain and merges two
   // 300-row filters; the snapshot is one KV row, so it lands first and the real
   // data replaces it (seeded stale — see threadSnapshot).
   useEffect(() => {
-    if (!self || !peer || !support) return;
-    void prewarmDm17ThreadSnapshot(queryClient, self, peer, queryKey);
-  }, [queryClient, self, peer, support, queryKey]);
+    if (!self || !conversation || !support) return;
+    void prewarmDm17ThreadSnapshot(queryClient, self, conversation, queryKey);
+  }, [queryClient, self, conversation, support, queryKey]);
 
   const query = useQuery<OpenedDm[]>({
     queryKey,
@@ -859,11 +882,11 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
     // ladder holding `isPending` — and therefore the timeline's skeleton — over
     // rumors that are already on disk. See storeQuery.
     ...STORE_READ,
-    enabled: !!self && !!peer && support,
+    enabled: !!self && peers.length > 0 && support,
     queryFn: async ({ signal }) => {
       // LOCAL-FIRST: the store paints immediately; the inbox scan tops up in
       // the background (throttled) and rings the `dm` scope on new rumors.
-      const rows = await queryDm17Thread(self!, peer!, { limit: THREAD_WINDOW, signal });
+      const rows = await queryDm17Thread(self!, peers, { limit: THREAD_WINDOW, signal });
       if (ctx) void syncDm17Inbox(ctx, { interactive: true });
       sweepExpiredSoon(self!);
       return rows.sort((a, b) => a.createdAt - b.createdAt || (a.rumorId < b.rumorId ? -1 : 1));
@@ -877,11 +900,14 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
   // The live disappearing-messages timer, read on its own so a setting made
   // beyond the thread window is still in force (see queryDm17Timer). Shares
   // the thread's invalidation: a timer rumor lands through the same `dm` ring.
-  const timerQueryKey = useMemo(() => ["dm17", "timer", self, peer] as const, [self, peer]);
+  const timerQueryKey = useMemo(
+    () => ["dm17", "timer", self, conversation] as const,
+    [self, conversation],
+  );
   const timerQuery = useQuery<number>({
     queryKey: timerQueryKey,
-    enabled: !!self && !!peer && support,
-    queryFn: async ({ signal }) => (await queryDm17Timer(self!, peer!, { signal })) ?? 0,
+    enabled: !!self && peers.length > 0 && support,
+    queryFn: async ({ signal }) => (await queryDm17Timer(self!, peers, { signal })) ?? 0,
     staleTime: 10_000,
   });
   const timer = timerQuery.data;
@@ -897,16 +923,16 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
   //   - `dm-thread:<peer>` — a durable write changed this conversation. Re-read
   //     only; never decrypt again (that would loop on the write's own ring).
   useWireScopes((scopes) => {
-    if (!self || !peer) return;
+    if (!self || !conversation) return;
     if (ctx && scopes.has("dm:wrap")) {
       void openLiveDm17Wraps(ctx, { interactive: true }).then((result) => {
         if (result === "empty") void syncDm17Inbox(ctx, { force: true, interactive: true });
       });
     }
     // Opening a live wrap writes the recovered rumor first, and that durable
-    // write rings this peer-specific scope. Do not also re-read on `dm:wrap`
-    // before there is anything new in the store.
-    if (scopes.has(dmThreadScope(peer))) {
+    // write rings this conversation-specific scope. Do not also re-read on
+    // `dm:wrap` before there is anything new in the store.
+    if (scopes.has(dmThreadScope(conversation))) {
       void queryClient.invalidateQueries({ queryKey });
       // A timer change arrives as an ordinary rumor, so the same ring covers it.
       void queryClient.invalidateQueries({ queryKey: timerQueryKey });
@@ -1031,61 +1057,99 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
   // optimistic rows are not in the store, and a failed send must not come back
   // from a snapshot looking confirmed.
   useEffect(() => {
-    if (!self || !peer) return;
+    if (!self || !conversation) return;
     const rows = query.data;
     if (!rows || rows.length === 0) return;
-    void persistDm17ThreadSnapshot(self, peer, rows);
-  }, [self, peer, query.data]);
+    void persistDm17ThreadSnapshot(self, conversation, rows);
+  }, [self, conversation, query.data]);
 
   /**
-   * Seal + wrap + publish one rumor: the peer's copy to their kind-10050
-   * inbox relays (NIP-17 publishing rule), the self copy to the viewer's own
-   * DM relays. Resolves when the PEER copy is accepted; the self copy is
-   * best-effort (the rumor is already in the local store).
+   * Seal + wrap + publish one rumor: one copy PER recipient to that
+   * recipient's kind-10050 inbox relays (NIP-17 publishing rule), plus the self
+   * copy to the viewer's own DM relays. Resolves when every recipient copy is
+   * accepted; the self copy is best-effort (the rumor is already in the local
+   * store).
+   *
+   * A group costs N+1 seals, and they are SEQUENTIAL — NIP-07 extensions reject
+   * concurrent signEvent calls, and a bunker serializes approvals anyway. That
+   * is the real price of NIP-17 groups: a ten-person room is eleven signer
+   * round-trips per message. The UI does not wait on it (sends are optimistic),
+   * but the latency is genuinely there on a remote signer.
+   *
+   * Delivery is all-or-nothing from the caller's point of view: if any
+   * recipient's publish fails the whole send is marked failed and retried as a
+   * unit, which can re-deliver to recipients that already got it. Duplicate
+   * wraps of the same rumor dedupe on the rumor id at every reader, so a
+   * re-delivery is invisible; a partial success reported as a success would not
+   * be.
    */
   const publishRumor = useCallback(
     async (rumor: NostrRumor, opts?: { firstContact?: boolean }) => {
-      if (!user?.signer.nip44 || !self || !peer) throw new Error("NIP-17 not available");
+      if (!user?.signer.nip44 || !self || peers.length === 0) {
+        throw new Error("NIP-17 not available");
+      }
       const signer = user.signer as unknown as Dm17Signer;
-
-      // Sequential seals: NIP-07 extensions reject concurrent signEvent calls.
-      const sealPeer = await sealDmRumor(rumor, peer, signer);
-      const sealSelf = peer === self ? undefined : await sealDmRumor(rumor, self, signer);
 
       // The rumor's own NIP-40 deadline rides all the way out: sealDmRumor
       // copies it onto the seal, and the wrap repeats it in the clear so
       // NIP-40-aware relays drop their stored copy too.
       const expiresAt = expirationOf(rumor.tags);
-      const wrapPeer = wrapDmSeal(sealPeer, peer, { firstContact: opts?.firstContact, expiresAt });
-      const wrapSelf = sealSelf ? wrapDmSeal(sealSelf, self, { expiresAt }) : undefined;
+
+      // Sequential seals: NIP-07 extensions reject concurrent signEvent calls.
+      const outgoing: Array<{ wrap: NostrEvent; targets: string[] }> = [];
+      for (const recipient of recipients) {
+        const seal = await sealDmRumor(rumor, recipient, signer);
+        const wrap = wrapDmSeal(seal, recipient, {
+          firstContact: opts?.firstContact,
+          expiresAt,
+        });
+        // Deliver to their published inbox (NIP-17's rule) UNIONED with our own
+        // DM relays. Their 10050 relays are where a compliant client reads, but
+        // writing there ALSO requires us to reach them; adding our own relays
+        // hedges against an inbox we can't publish to (auth, downtime) and lets
+        // our other sessions / their fallback readers find the wrap. Deduped so
+        // shared relays aren't double-published.
+        outgoing.push({
+          wrap,
+          targets: [...new Set([...(inboxRelays.get(recipient) ?? []), ...myRelays])],
+        });
+      }
+      const sealSelf = await sealDmRumor(rumor, self, signer);
+      const wrapSelf = wrapDmSeal(sealSelf, self, { expiresAt });
 
       // Persist OUR self-addressed wrap locally BEFORE publishing. On Android
       // the event store is the same database the notification service dedupes
       // its kind-1059 inbox against, so when this wrap echoes back off the
       // relay it's recognized as already seen instead of firing a spurious
       // "New direct message".
-      const selfCopy = wrapSelf ?? wrapPeer; // peer === self ⇒ the peer copy IS the self copy
-      // Mark before either relay publish. The content-blind push server cannot
+      //
+      // Mark before any relay publish. The content-blind push server cannot
       // distinguish an incoming wrap from our NIP-17 self-copy, but the service
       // worker can suppress this exact event id without seeing plaintext.
-      await markOwnWebPushEvent(selfCopy.id);
-      await eventStore.then((s) => s.event(selfCopy)).catch(() => undefined);
+      await markOwnWebPushEvent(wrapSelf.id);
+      await eventStore.then((s) => s.event(wrapSelf)).catch(() => undefined);
 
-      // The self copy is fire-and-forget: it exists for OTHER devices/sessions,
-      // and this device already has the rumor locally.
-      if (wrapSelf && myRelays.length > 0) {
-        void nostr.group(myRelays).event(wrapSelf, { signal: AbortSignal.timeout(8000) }).catch(() => {});
+      // Note to Self has no recipients, so the self copy IS the send and its
+      // publish is what "sent" means. Everywhere else it is fire-and-forget: it
+      // exists for OTHER devices/sessions, and this device already has the
+      // rumor locally.
+      const selfPublish =
+        myRelays.length > 0
+          ? nostr.group(myRelays).event(wrapSelf, { signal: AbortSignal.timeout(8000) })
+          : Promise.resolve();
+      if (recipients.length === 0) {
+        await selfPublish;
+        return;
       }
-      // Deliver the peer copy to their published inbox (NIP-17's rule) UNIONED
-      // with our own DM relays. The peer's 10050 relays are where a compliant
-      // client reads, but writing there ALSO requires us to reach them; adding
-      // our own relays hedges against a peer inbox we can't publish to (auth,
-      // downtime) and lets our other sessions/the recipient's fallback readers
-      // find the wrap. Deduped so shared relays aren't double-published.
-      const peerTargets = [...new Set([...peerInboxRelays, ...myRelays])];
-      await nostr.group(peerTargets).event(wrapPeer, { signal: AbortSignal.timeout(8000) });
+      void selfPublish.catch(() => {});
+
+      await Promise.all(
+        outgoing.map(({ wrap, targets }) =>
+          nostr.group(targets).event(wrap, { signal: AbortSignal.timeout(8000) }),
+        ),
+      );
     },
-    [nostr, user, self, peer, peerInboxRelays, myRelays, eventStore],
+    [nostr, user, self, peers, recipients, inboxRelays, myRelays, eventStore],
   );
 
   /**
@@ -1143,10 +1207,10 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       content: rumor.content,
       tags: rumor.tags,
       createdAt: rumor.created_at,
-      peer: peer!,
+      peers,
       wrapId: "",
     }),
-    [peer],
+    [peers],
   );
 
   // The resolved timer, mirrored into a ref so a send can read the CURRENT
@@ -1166,9 +1230,9 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
   const resolveTimer = useCallback(async (): Promise<number> => {
     const known = timerRef.current;
     if (known !== undefined) return known;
-    if (!peer || !self) return 0;
-    return (await queryDm17Timer(self, peer).catch(() => undefined)) ?? 0;
-  }, [peer, self]);
+    if (peers.length === 0 || !self) return 0;
+    return (await queryDm17Timer(self, peers).catch(() => undefined)) ?? 0;
+  }, [peers, self]);
 
   /** The NIP-40 deadline for something sent right now, or undefined when off. */
   const resolveExpiry = useCallback(async (): Promise<number | undefined> => {
@@ -1178,21 +1242,23 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
 
   const send = useCallback(
     async (content: string, extraTags?: string[][]) => {
-      if (!canSend || !self || !peer) throw new Error("This person isn't reachable over private DMs yet.");
+      if (!canSend || !self || peers.length === 0) {
+        throw new Error("This conversation isn't reachable over private DMs yet.");
+      }
       const trimmed = content.trim();
       if (!trimmed) return;
       const expiresAt = await resolveExpiry();
       const rumor = buildDmRumor({
         kind: KIND_DM_CHAT,
         content: trimmed,
-        tags: dmChatTags(peer, { extraTags, expiresAt }),
+        tags: dmChatTags(peers, { extraTags, expiresAt }),
         pubkey: self,
       });
       // First contact = nothing in this thread yet: add the outer `k` hint so
       // a k-aware receiver can index their cold inbox.
       dispatchRumor(rumor, openedOf(rumor), { firstContact: messages.length === 0 });
     },
-    [canSend, self, peer, dispatchRumor, openedOf, messages.length, resolveExpiry],
+    [canSend, self, peers, dispatchRumor, openedOf, messages.length, resolveExpiry],
   );
 
   /**
@@ -1202,7 +1268,9 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
    */
   const editMessage = useCallback(
     async (targetId: string, content: string) => {
-      if (!canSend || !self || !peer) throw new Error("This person isn't reachable over private DMs yet.");
+      if (!canSend || !self || peers.length === 0) {
+        throw new Error("This conversation isn't reachable over private DMs yet.");
+      }
       const original = messages.find((message) => message.rumorId === targetId);
       if (!original || original.author !== self || original.kind !== KIND_DM_CHAT) {
         throw new Error("Only your own NIP-17 chat messages can be edited");
@@ -1218,7 +1286,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
         created_at: original.createdAt,
         pubkey: original.author,
       };
-      const { replacement, deletion } = buildDmEditRumors(source, peer, trimmed);
+      const { replacement, deletion } = buildDmEditRumors(source, peers, trimmed);
       const items: PendingPublish[] = [replacement, deletion].map((rumor) => ({
         rumor,
         opened: openedOf(rumor),
@@ -1227,12 +1295,12 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       // retains the original. The tombstone follows in the same retryable batch.
       dispatchBatch(items, replacement.id, original.rumorId);
     },
-    [canSend, self, peer, messages, openedOf, dispatchBatch],
+    [canSend, self, peers, messages, openedOf, dispatchBatch],
   );
 
   const react = useCallback(
     (targetId: string, targetKind: number, content: string, emojiUrl?: string) => {
-      if (!canSend || !self || !peer) return;
+      if (!canSend || !self || peers.length === 0) return;
       // Deferred by a microtask (or one store read on a cold open) so the
       // reaction inherits the same deadline a message sent now would get.
       void (async () => {
@@ -1241,7 +1309,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
           kind: KIND_DM_REACTION,
           content,
           tags: dmReactionTags(
-            peer,
+            peers,
             targetId,
             targetKind,
             customEmojiReactionTags(content, emojiUrl),
@@ -1252,7 +1320,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
         dispatchRumor(rumor, openedOf(rumor));
       })();
     },
-    [canSend, self, peer, dispatchRumor, openedOf, resolveExpiry],
+    [canSend, self, peers, dispatchRumor, openedOf, resolveExpiry],
   );
 
   /**
@@ -1263,7 +1331,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
    */
   const setTimer = useCallback(
     (seconds: number) => {
-      if (!canSend || !self || !peer) return;
+      if (!canSend || !self || peers.length === 0) return;
       const next = Math.max(0, Math.floor(seconds));
       void (async () => {
         // Compare against the RESOLVED timer, not a possibly-unloaded one:
@@ -1273,7 +1341,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
         const rumor = buildDmRumor({
           kind: KIND_DM_TIMER,
           content: "",
-          tags: dmTimerTags(peer, next),
+          tags: dmTimerTags(peers, next),
           pubkey: self,
         });
         await writeDm17Rumors(self, [openedOf(rumor)]);
@@ -1281,7 +1349,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
         await publishRumor(rumor).catch(() => {});
       })();
     },
-    [canSend, self, peer, resolveTimer, openedOf, publishRumor, queryClient, timerQueryKey],
+    [canSend, self, peers, resolveTimer, openedOf, publishRumor, queryClient, timerQueryKey],
   );
 
   /**
@@ -1290,11 +1358,11 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
    */
   const sendDelete = useCallback(
     (targetId: string, targetKind: number) => {
-      if (!canSend || !self || !peer) return;
+      if (!canSend || !self || peers.length === 0) return;
       const rumor = buildDmRumor({
         kind: KIND_DM_DELETE,
         content: "",
-        tags: dmDeleteTags(peer, targetId, targetKind),
+        tags: dmDeleteTags(peers, targetId, targetKind),
         pubkey: self,
       });
       // Drop an optimistic target immediately (it may not be in the store yet).
@@ -1307,7 +1375,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       void writeDm17Rumors(self, [openedOf(rumor)]);
       void publishRumor(rumor).catch(() => {});
     },
-    [canSend, self, peer, openedOf, publishRumor],
+    [canSend, self, peers, openedOf, publishRumor],
   );
 
   const removeReaction = useCallback(
@@ -1351,10 +1419,10 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
   useEffect(() => {
     oldestRef.current = undefined;
     setHasMore(true);
-  }, [self, peer]);
+  }, [self, conversation]);
 
   const loadOlder = useCallback(async (): Promise<number> => {
-    if (!ctx || !self || !peer || loadingRef.current || !hasMore) return 0;
+    if (!ctx || !self || peers.length === 0 || loadingRef.current || !hasMore) return 0;
     loadingRef.current = true;
     setIsLoadingOlder(true);
     try {
@@ -1363,11 +1431,11 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       const until =
         oldestRef.current ??
         (messages.length > 0 ? messages[0].createdAt : Math.floor(Date.now() / 1000));
-      const before = await queryDm17Thread(self, peer, { limit: THREAD_WINDOW * 2 });
+      const before = await queryDm17Thread(self, peers, { limit: THREAD_WINDOW * 2 });
       const { oldest, exhausted } = await pageOlderDmWraps(ctx, until, true);
       if (oldest !== undefined) oldestRef.current = oldest;
       if (exhausted) setHasMore(false);
-      const after = await queryDm17Thread(self, peer, { limit: THREAD_WINDOW * 2 });
+      const after = await queryDm17Thread(self, peers, { limit: THREAD_WINDOW * 2 });
       const added = Math.max(0, after.length - before.length);
       if (added > 0) void queryClient.invalidateQueries({ queryKey });
       return added;
@@ -1377,7 +1445,7 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
       loadingRef.current = false;
       setIsLoadingOlder(false);
     }
-  }, [ctx, self, peer, hasMore, messages, queryClient, queryKey]);
+  }, [ctx, self, peers, hasMore, messages, queryClient, queryKey]);
 
   return {
     messages,
@@ -1405,11 +1473,12 @@ export function useDm17Thread(peer: string | undefined): Dm17Thread {
 
 export interface Dm17Backfill {
   /**
-   * Page one screenful of older wraps. Resolves the peers that were NOT in the
-   * conversation list before the page — deliberately the raw peer list rather
-   * than a count, because a page recovers history for every correspondent at
-   * once and only the caller knows which tier (or mute state) each one lands
-   * in. A caller reporting "found N" must narrow this to the list it's showing.
+   * Page one screenful of older wraps. Resolves the conversation keys that were
+   * NOT in the conversation list before the page — deliberately the raw list
+   * rather than a count, because a page recovers history for every
+   * correspondent at once and only the caller knows which tier (or mute state)
+   * each one lands in. A caller reporting "found N" must narrow this to the
+   * list it's showing.
    */
   loadOlder: () => Promise<string[]>;
   /** False once a page comes back empty or short THIS session. */
@@ -1465,7 +1534,7 @@ export function useDm17Backfill(): Dm17Backfill {
         oldestRef.current ??
         (cursor?.oldest ? cursor.oldest - 1 : Math.floor(Date.now() / 1000));
       const before = await queryDm17Conversations(self);
-      const known = new Set(before.map((c) => c.peer));
+      const known = new Set(before.map((c) => c.key));
       const { oldest, exhausted } = await pageOlderDmWraps(ctx, until, true);
       if (oldest !== undefined) oldestRef.current = oldest;
       if (exhausted) setHasMore(false);
@@ -1473,7 +1542,7 @@ export function useDm17Backfill(): Dm17Backfill {
       // Unconditional: a page can add messages to conversations that already
       // exist without changing how many there are.
       void queryClient.invalidateQueries({ queryKey: ["dm17", "conversations"] });
-      return after.map((c) => c.peer).filter((peer) => !known.has(peer));
+      return after.map((c) => c.key).filter((key) => !known.has(key));
     } catch {
       return [];
     } finally {
@@ -1485,15 +1554,10 @@ export function useDm17Backfill(): Dm17Backfill {
   return { loadOlder, hasMore, isLoading };
 }
 
-export interface Dm17Conversation {
-  peer: string;
-  latest: OpenedDm;
-  /** The viewer has authored at least one message in this conversation. */
-  mine: boolean;
-}
+export type Dm17Conversation = Dm17ConversationRow;
 
 /**
- * The viewer's NIP-17 conversations: every conversation partner with the
+ * The viewer's NIP-17 conversations: every conversation with the
  * newest decrypted message, muted peers excluded. Local-first from the rumor
  * store; the shared inbox sync tops up in the background (prompt-gated —
  * pass `interactive` from user-facing surfaces so the one-time consent prompt
@@ -1563,9 +1627,15 @@ export function useDm17Conversations(opts?: { interactive?: boolean }): {
     }
   });
 
+  // A conversation is hidden when ANY participant is muted, not only when all
+  // of them are. Mute means "I don't want to see this person's messages", and a
+  // group has no per-sender filter to honour that with — the muted member's
+  // messages are addressed to the whole room and would render like anyone
+  // else's. Losing the rest of the group with them is the cost; it reduces to
+  // exactly the previous behaviour for a 1:1, and unmuting brings it back.
   const conversations = useMemo(() => {
     if (!muteReady) return [];
-    return (query.data ?? []).filter((c) => !mutedPubkeys.has(c.peer));
+    return (query.data ?? []).filter((c) => !c.peers.some((peer) => mutedPubkeys.has(peer)));
   }, [query.data, mutedPubkeys, muteReady]);
 
   return { conversations, isLoading: query.isLoading || !muteReady };

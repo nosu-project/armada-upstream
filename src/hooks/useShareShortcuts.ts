@@ -40,7 +40,10 @@ export function useShareShortcuts(): void {
   const peersKey = useMemo(() => {
     if (!user) return "";
     const pinnedSet = new Set(pinned);
-    const byRecency = conversations.map((c) => c.peer);
+    // 1:1 conversations only. A share shortcut is a person — one avatar, one
+    // name, and a direct-share slot the OS renders itself — so a group has
+    // nothing to put in it. (Note to Self is a 1:1 with yourself and stays.)
+    const byRecency = conversations.filter((c) => c.peers.length === 1).map((c) => c.peers[0]);
     const pinnedRanked = byRecency.filter((p) => pinnedSet.has(p));
     for (const p of pinned) if (!pinnedRanked.includes(p)) pinnedRanked.push(p);
     const rest = byRecency.filter((p) => !pinnedSet.has(p));

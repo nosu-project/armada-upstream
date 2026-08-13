@@ -27,6 +27,7 @@
  * `sanitizePlausibleUrl` is built on.
  */
 
+import { DM_PEER_SEP } from "@/lib/nip17/protocol";
 import { relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 import { shareOrigin } from "@/lib/shareOrigin";
 
@@ -79,7 +80,14 @@ export interface Concord2Route {
 
 export interface DmRoute {
   kind: "dm";
-  /** Absent ⇒ the conversation list. */
+  /**
+   * The CONVERSATION KEY, not necessarily one pubkey — see `dmConvKey`. A 1:1
+   * (and Note to Self) is a bare pubkey, so this is unchanged from when DMs
+   * were only ever pairwise and every existing `/dm/<npub>` link still
+   * resolves; a group is its participants joined by {@link DM_PEER_SEP}.
+   *
+   * Absent ⇒ the conversation list.
+   */
   peer?: string;
   messageId?: string;
 }
@@ -127,9 +135,14 @@ export function chatRoute(route: ChatRoute): string {
     }
     case "dm": {
       if (!route.peer) return "/dm";
-      return withFocus(`/dm/${encodeURIComponent(route.peer)}`, {
-        messageId: route.messageId,
-      });
+      // Each participant is escaped on its own so the separator survives as a
+      // literal — it is a legal sub-delim in a path segment, and `/dm/<a>,<b>`
+      // reads as what it is instead of `%2C`.
+      const segment = route.peer
+        .split(DM_PEER_SEP)
+        .map(encodeURIComponent)
+        .join(DM_PEER_SEP);
+      return withFocus(`/dm/${segment}`, { messageId: route.messageId });
     }
   }
 }
@@ -241,7 +254,10 @@ export function parseChatRoute(pathname: string): ChatRoute | null {
     case "dm":
     case "dms": {
       if (seg.length === 1) return { kind: "dm" };
-      const peer = decodeURIComponent(seg[1]);
+      const peer = seg[1]
+        .split(DM_PEER_SEP)
+        .map(decodeURIComponent)
+        .join(DM_PEER_SEP);
       if (seg.length === 2) return { kind: "dm", peer };
       const focus = parseFocus(seg.slice(2));
       // DMs have no thread panel, so `/t/` there names nothing.

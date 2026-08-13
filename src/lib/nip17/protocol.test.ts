@@ -9,7 +9,10 @@ import {
   dmChatTags,
   dmDeleteTags,
   dmExpiresAt,
-  dmPeerOf,
+  dmConvKey,
+  dmConvPeers,
+  dmPeersOf,
+  isDmGroupKey,
   dmReactionTags,
   dmTimerSeconds,
   dmTimerTags,
@@ -54,7 +57,7 @@ describe("NIP-17 seal + wrap round trip", () => {
     const rumor = buildDmRumor({
       kind: KIND_DM_CHAT,
       content: "hola, que tal?",
-      tags: dmChatTags(recipientPk),
+      tags: dmChatTags([recipientPk]),
       pubkey: senderPk,
     });
     const seal = await sealDmRumor(rumor, recipientPk, rawSigner(senderSk));
@@ -71,7 +74,7 @@ describe("NIP-17 seal + wrap round trip", () => {
     expect(opened!.author).toBe(senderPk);
     expect(opened!.content).toBe("hola, que tal?");
     expect(opened!.kind).toBe(KIND_DM_CHAT);
-    expect(opened!.peer).toBe(senderPk); // received: peer is the sender
+    expect(opened!.peers).toEqual([senderPk]); // received: the sender
     expect(opened!.wrapId).toBe(wrap.id);
   });
 
@@ -79,7 +82,7 @@ describe("NIP-17 seal + wrap round trip", () => {
     const rumor = buildDmRumor({
       kind: KIND_DM_CHAT,
       content: "self copy",
-      tags: dmChatTags(recipientPk),
+      tags: dmChatTags([recipientPk]),
       pubkey: senderPk,
     });
     const selfSeal = await sealDmRumor(rumor, senderPk, rawSigner(senderSk));
@@ -87,12 +90,12 @@ describe("NIP-17 seal + wrap round trip", () => {
 
     const opened = await openDmWrap(selfWrap, rawSigner(senderSk), senderPk);
     expect(opened?.author).toBe(senderPk);
-    expect(opened?.peer).toBe(recipientPk);
+    expect(opened?.peers).toEqual([recipientPk]);
   });
 
   it("backdates the wrap and seal within the NIP-59 window", async () => {
     const now = Math.floor(Date.now() / 1000);
-    const rumor = buildDmRumor({ kind: KIND_DM_CHAT, content: "x", tags: dmChatTags(recipientPk), pubkey: senderPk });
+    const rumor = buildDmRumor({ kind: KIND_DM_CHAT, content: "x", tags: dmChatTags([recipientPk]), pubkey: senderPk });
     const seal = await sealDmRumor(rumor, recipientPk, rawSigner(senderSk));
     const wrap = wrapDmSeal(seal, recipientPk);
     for (const ts of [seal.created_at, wrap.created_at]) {
@@ -104,7 +107,7 @@ describe("NIP-17 seal + wrap round trip", () => {
   });
 
   it("adds the first-contact k hint only when asked", async () => {
-    const rumor = buildDmRumor({ kind: KIND_DM_CHAT, content: "hi", tags: dmChatTags(recipientPk), pubkey: senderPk });
+    const rumor = buildDmRumor({ kind: KIND_DM_CHAT, content: "hi", tags: dmChatTags([recipientPk]), pubkey: senderPk });
     const seal = await sealDmRumor(rumor, recipientPk, rawSigner(senderSk));
     const first = wrapDmSeal(seal, recipientPk, { firstContact: true });
     const later = wrapDmSeal(seal, recipientPk);
@@ -117,7 +120,7 @@ describe("NIP-17 seal + wrap round trip", () => {
     const rumor = buildDmRumor({
       kind: KIND_DM_CHAT,
       content: "spoof",
-      tags: dmChatTags(recipientPk),
+      tags: dmChatTags([recipientPk]),
       pubkey: impostorPk, // claims someone else
     });
     const seal = await sealDmRumor(rumor, recipientPk, rawSigner(senderSk)); // sealed by sender
@@ -126,7 +129,7 @@ describe("NIP-17 seal + wrap round trip", () => {
   });
 
   it("rejects a rumor with a lying id", async () => {
-    const rumor = buildDmRumor({ kind: KIND_DM_CHAT, content: "real", tags: dmChatTags(recipientPk), pubkey: senderPk });
+    const rumor = buildDmRumor({ kind: KIND_DM_CHAT, content: "real", tags: dmChatTags([recipientPk]), pubkey: senderPk });
     const tampered = { ...rumor, content: "tampered" }; // id no longer matches
     const signer = rawSigner(senderSk);
     const seal = await signer.signEvent({
@@ -140,7 +143,7 @@ describe("NIP-17 seal + wrap round trip", () => {
   });
 
   it("yields undefined for a wrap addressed to someone else", async () => {
-    const rumor = buildDmRumor({ kind: KIND_DM_CHAT, content: "not yours", tags: dmChatTags(recipientPk), pubkey: senderPk });
+    const rumor = buildDmRumor({ kind: KIND_DM_CHAT, content: "not yours", tags: dmChatTags([recipientPk]), pubkey: senderPk });
     const seal = await sealDmRumor(rumor, recipientPk, rawSigner(senderSk));
     const wrap = wrapDmSeal(seal, recipientPk);
     const strangerSk = generateSecretKey();
@@ -151,7 +154,7 @@ describe("NIP-17 seal + wrap round trip", () => {
     const rumor = buildDmRumor({
       kind: KIND_DM_CHAT,
       content: "from the future",
-      tags: dmChatTags(recipientPk),
+      tags: dmChatTags([recipientPk]),
       pubkey: senderPk,
       createdAt: Math.floor(Date.now() / 1000) + 7 * 24 * 3600,
     });
@@ -166,12 +169,12 @@ describe("rumor tag builders + peer attribution", () => {
   const peer = getPublicKey(generateSecretKey());
 
   it("builds reaction and delete tags with the peer leading", () => {
-    expect(dmReactionTags(peer, "eid", KIND_DM_CHAT)).toEqual([
+    expect(dmReactionTags([peer], "eid", KIND_DM_CHAT)).toEqual([
       ["p", peer],
       ["e", "eid"],
       ["k", "14"],
     ]);
-    expect(dmDeleteTags(peer, "rid", KIND_DM_REACTION)).toEqual([
+    expect(dmDeleteTags([peer], "rid", KIND_DM_REACTION)).toEqual([
       ["p", peer],
       ["e", "rid"],
       ["k", "7"],
@@ -179,26 +182,28 @@ describe("rumor tag builders + peer attribution", () => {
   });
 
   it("resolves the conversation partner for sent and received rumors", () => {
-    expect(dmPeerOf({ pubkey: peer, tags: [["p", self]] }, self)).toBe(peer);
-    expect(dmPeerOf({ pubkey: self, tags: dmReactionTags(peer, "eid", KIND_DM_CHAT) }, self)).toBe(peer);
-    expect(dmPeerOf({ pubkey: self, tags: [] }, self)).toBeUndefined();
+    expect(dmPeersOf({ pubkey: peer, tags: [["p", self]] }, self)).toEqual([peer]);
+    expect(
+      dmPeersOf({ pubkey: self, tags: dmReactionTags([peer], "eid", KIND_DM_CHAT) }, self),
+    ).toEqual([peer]);
+    expect(dmPeersOf({ pubkey: self, tags: [] }, self)).toBeUndefined();
   });
 
   it("keeps delete rumors attributable", () => {
     const rumor = buildDmRumor({
       kind: KIND_DM_DELETE,
       content: "",
-      tags: dmDeleteTags(peer, "target", KIND_DM_CHAT),
+      tags: dmDeleteTags([peer], "target", KIND_DM_CHAT),
       pubkey: self,
     });
-    expect(dmPeerOf(rumor, self)).toBe(peer);
+    expect(dmPeersOf(rumor, self)).toEqual([peer]);
   });
 
   it("builds an edit as a same-time replacement plus a tombstone", () => {
     const original = buildDmRumor({
       kind: KIND_DM_CHAT,
       content: "before",
-      tags: dmChatTags(peer, {
+      tags: dmChatTags([peer], {
         replyTo: "parent",
         extraTags: [["q", "quoted"], ["edited", "100"]],
         expiresAt: 2_000_000_000,
@@ -209,7 +214,7 @@ describe("rumor tag builders + peer attribution", () => {
 
     const { replacement, deletion } = buildDmEditRumors(
       original,
-      peer,
+      [peer],
       "after",
       1_700_000_500,
     );
@@ -241,10 +246,10 @@ describe("rumor tag builders + peer attribution", () => {
     const reaction = buildDmRumor({
       kind: KIND_DM_REACTION,
       content: "+",
-      tags: dmReactionTags(peer, "target", KIND_DM_CHAT),
+      tags: dmReactionTags([peer], "target", KIND_DM_CHAT),
       pubkey: self,
     });
-    expect(() => buildDmEditRumors(reaction, peer, "changed")).toThrow(
+    expect(() => buildDmEditRumors(reaction, [peer], "changed")).toThrow(
       "Only NIP-17 chat messages can be edited",
     );
   });
@@ -263,7 +268,7 @@ describe("disappearing messages (NIP-40)", () => {
     return buildDmRumor({
       kind: KIND_DM_CHAT,
       content: "this will vanish",
-      tags: dmChatTags(recipientPk, { expiresAt: now() + inSecs }),
+      tags: dmChatTags([recipientPk], { expiresAt: now() + inSecs }),
       pubkey: senderPk,
     });
   }
@@ -342,7 +347,7 @@ describe("disappearing messages (NIP-40)", () => {
     const plain = buildDmRumor({
       kind: KIND_DM_CHAT,
       content: "ordinary",
-      tags: dmChatTags(recipientPk),
+      tags: dmChatTags([recipientPk]),
       pubkey: senderPk,
     });
     const ordinary = wrapDmSeal(await sealDmRumor(plain, recipientPk, rawSigner(senderSk)), recipientPk);
@@ -351,14 +356,14 @@ describe("disappearing messages (NIP-40)", () => {
   });
 
   it("never stamps a delete or a timer change", () => {
-    expect(dmDeleteTags(recipientPk, "rid", KIND_DM_CHAT).some(([n]) => n === "expiration")).toBe(false);
-    expect(dmTimerTags(recipientPk, 86400).some(([n]) => n === "expiration")).toBe(false);
+    expect(dmDeleteTags([recipientPk], "rid", KIND_DM_CHAT).some(([n]) => n === "expiration")).toBe(false);
+    expect(dmTimerTags([recipientPk], 86400).some(([n]) => n === "expiration")).toBe(false);
   });
 
   it("round-trips the timer value and refuses to guess at a malformed one", () => {
-    expect(dmTimerTags(recipientPk, 86400)).toEqual([["p", recipientPk], ["timer", "86400"]]);
-    expect(dmTimerSeconds({ tags: dmTimerTags(recipientPk, 0) })).toBe(0);
-    expect(dmTimerSeconds({ tags: dmTimerTags(recipientPk, 86400) })).toBe(86400);
+    expect(dmTimerTags([recipientPk], 86400)).toEqual([["p", recipientPk], ["timer", "86400"]]);
+    expect(dmTimerSeconds({ tags: dmTimerTags([recipientPk], 0) })).toBe(0);
+    expect(dmTimerSeconds({ tags: dmTimerTags([recipientPk], 86400) })).toBe(86400);
     // Missing / unparseable / negative are "unknown", never "off".
     expect(dmTimerSeconds({ tags: [["p", recipientPk]] })).toBeUndefined();
     expect(dmTimerSeconds({ tags: [["timer", "soon"]] })).toBeUndefined();
@@ -384,7 +389,7 @@ describe("typing indicators (ephemeral plane)", () => {
     const rumor = buildDmRumor({
       kind: KIND_DM_TYPING,
       content: "",
-      tags: dmTypingTags(recipientPk),
+      tags: dmTypingTags([recipientPk]),
       pubkey: senderPk,
     });
     return { rumor, seal: sealDmRumor(rumor, recipientPk, rawSigner(senderSk)) };
@@ -405,7 +410,7 @@ describe("typing indicators (ephemeral plane)", () => {
     expect(opened).toBeDefined();
     expect(opened!.kind).toBe(KIND_DM_TYPING);
     expect(opened!.author).toBe(senderPk);
-    expect(opened!.peer).toBe(senderPk);
+    expect(opened!.peers).toEqual([senderPk]);
     expect(opened!.content).toBe("");
     expect(opened!.rumorId).toBe(rumor.id);
   });
@@ -421,7 +426,7 @@ describe("typing indicators (ephemeral plane)", () => {
     const { seal } = typingWrap();
     const resolved = await seal;
     const wrap = wrapDmSealEphemeral(resolved, recipientPk);
-    expect(dmTypingTags(recipientPk).some(([n]) => n === "expiration")).toBe(false);
+    expect(dmTypingTags([recipientPk]).some(([n]) => n === "expiration")).toBe(false);
     expect(expirationOf(resolved.tags)).toBeUndefined();
     expect(expirationOf(wrap.tags)).toBeUndefined();
   });
@@ -446,5 +451,89 @@ describe("typing indicators (ephemeral plane)", () => {
 
   it("keeps the typing kind out of the stored/folded rumor set", () => {
     expect(DM_RUMOR_KINDS).not.toContain(KIND_DM_TYPING);
+  });
+});
+
+describe("group conversations", () => {
+  const self = "1".repeat(64);
+  const alice = "a".repeat(64);
+  const bob = "b".repeat(64);
+  const carol = "c".repeat(64);
+
+  // The whole design rests on this: the group rule must reduce to EXACTLY the
+  // old single-peer rule for one participant, or changing the derivation
+  // re-files every 1:1 already on disk (the peer is never stored — it is
+  // re-derived on every read).
+  it("reduces to the old single-peer key for a 1:1", () => {
+    expect(dmConvKey(dmPeersOf({ pubkey: alice, tags: [["p", self]] }, self)!)).toBe(alice);
+    expect(dmConvKey(dmPeersOf({ pubkey: self, tags: [["p", alice]] }, self)!)).toBe(alice);
+    // Note to Self keeps its own key too.
+    expect(dmConvKey(dmPeersOf({ pubkey: self, tags: [["p", self]] }, self)!)).toBe(self);
+  });
+
+  it("agrees on the conversation from either side", () => {
+    // Alice writes to the room {self, bob}; we reply to {alice, bob}. Both are
+    // the same conversation and must key the same.
+    const received = dmPeersOf({ pubkey: alice, tags: [["p", self], ["p", bob]] }, self);
+    const sent = dmPeersOf({ pubkey: self, tags: dmChatTags([alice, bob]) }, self);
+    expect(received).toEqual([alice, bob].sort());
+    expect(sent).toEqual([alice, bob].sort());
+    expect(dmConvKey(received!)).toBe(dmConvKey(sent!));
+  });
+
+  it("canonicalizes order and de-duplicates, so one room has one key", () => {
+    const a = dmPeersOf({ pubkey: self, tags: dmChatTags([carol, alice, bob]) }, self);
+    const b = dmPeersOf({ pubkey: self, tags: dmChatTags([bob, carol, alice, bob]) }, self);
+    expect(a).toEqual(b);
+    expect(dmConvKey(a!)).toBe([alice, bob, carol].sort().join(","));
+  });
+
+  it("never counts the viewer among their own peers", () => {
+    // A sender that p-tags the whole room, us included.
+    expect(dmPeersOf({ pubkey: alice, tags: [["p", self], ["p", alice], ["p", bob]] }, self))
+      .toEqual([alice, bob].sort());
+  });
+
+  it("still refuses an own copy that names no room", () => {
+    // Unattributable: unchanged from the single-peer rule, and openDmWrap drops
+    // it rather than filing it under a guess.
+    expect(dmPeersOf({ pubkey: self, tags: [] }, self)).toBeUndefined();
+    expect(dmPeersOf({ pubkey: self, tags: [["e", "x"]] }, self)).toBeUndefined();
+  });
+
+  it("round-trips a key through its participants", () => {
+    const key = dmConvKey([alice, bob]);
+    expect(dmConvPeers(key)).toEqual([alice, bob]);
+    expect(isDmGroupKey(key)).toBe(true);
+    expect(isDmGroupKey(alice)).toBe(false);
+  });
+
+  it("puts one `p` per recipient on every rumor shape", () => {
+    expect(dmChatTags([alice, bob]).filter(([n]) => n === "p")).toEqual([
+      ["p", alice],
+      ["p", bob],
+    ]);
+    expect(dmReactionTags([alice, bob], "eid", KIND_DM_CHAT).filter(([n]) => n === "p")).toEqual([
+      ["p", alice],
+      ["p", bob],
+    ]);
+    expect(dmDeleteTags([alice, bob], "eid", KIND_DM_CHAT).filter(([n]) => n === "p")).toEqual([
+      ["p", alice],
+      ["p", bob],
+    ]);
+    expect(dmTimerTags([alice, bob], 60).filter(([n]) => n === "p")).toEqual([
+      ["p", alice],
+      ["p", bob],
+    ]);
+  });
+
+  it("keeps a reaction and a delete in the same conversation as their target", () => {
+    const room = [alice, bob];
+    const chat = { pubkey: self, tags: dmChatTags(room) };
+    const reaction = { pubkey: self, tags: dmReactionTags(room, "eid", KIND_DM_CHAT) };
+    const del = { pubkey: self, tags: dmDeleteTags(room, "eid", KIND_DM_CHAT) };
+    const key = dmConvKey(dmPeersOf(chat, self)!);
+    expect(dmConvKey(dmPeersOf(reaction, self)!)).toBe(key);
+    expect(dmConvKey(dmPeersOf(del, self)!)).toBe(key);
   });
 });

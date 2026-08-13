@@ -13,15 +13,17 @@
  */
 
 import { matchPath } from "react-router-dom";
-import { nip19 } from "nostr-tools";
 
 import { channelsView } from "@/concord/lib/community";
 import { rehydrateCommunity, type CommunityListEntry } from "@/concord/lib/communityList";
 import { searchRumors } from "@/concord/lib/rumorStore";
 import { readControlFold } from "@/concord/lib/control";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
+import { dmRouteParam } from "@/lib/dmConversation";
 import { searchDm17Rumors } from "@/lib/nip17/dm17Store";
+import { dmConvKey } from "@/lib/nip17/protocol";
 import { relayToRouteParam, routeParamToRelay } from "@/lib/platform";
+import { chatRoute } from "@/lib/routes";
 
 import type { QueryClient } from "@tanstack/react-query";
 import type { ArmadaEventStore } from "@/contexts/EventStoreContext";
@@ -421,8 +423,11 @@ async function searchDmMessages(
     key: `msg:${h.rumorId}`,
     content: snippet(h.content),
     authorPubkey: h.author,
-    peerPubkey: h.peer,
-    route: `/dm/${nip19.npubEncode(h.peer)}`,
+    // The first participant stands in for the conversation's name here. A group
+    // hit is therefore labelled with one of its members rather than all of
+    // them; the route below still opens the right thread.
+    peerPubkey: h.peers[0],
+    route: chatRoute({ kind: "dm", peer: dmRouteParam(dmConvKey(h.peers)) }),
     createdAt: h.createdAt,
   }));
 }

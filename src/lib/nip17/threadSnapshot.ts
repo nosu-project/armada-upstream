@@ -24,7 +24,7 @@
  *  - Never overwrites a populated cache, and re-checked after the KV await, so
  *    a real read that lands mid-prewarm wins.
  *  - Rows are filtered to the conversation they claim, so a corrupted snapshot
- *    can never paint one peer's messages under another.
+ *    can never paint one conversation's messages under another.
  *
  * Plus one rule the channel snapshot has no need of: **NIP-40 expiry is applied
  * on both sides of the round-trip.** A disappearing message must not come back
@@ -41,7 +41,7 @@
  * store is outside ArmadaDB and outside its purge.
  */
 import { readFolded, writeFolded, encode } from "@/lib/foldedCache";
-import { isExpired } from "@/lib/nip17/protocol";
+import { dmConvKey, isExpired } from "@/lib/nip17/protocol";
 import { perfMark } from "@/lib/perf";
 
 import type { OpenedDm } from "@/lib/nip17/protocol";
@@ -58,9 +58,9 @@ import type { QueryClient } from "@tanstack/react-query";
  */
 const SNAP_WINDOW = 80;
 
-/** Both sides of the key: one account's view of one peer. */
-function snapKey(self: string, peer: string): string {
-  return `dm17-thread-snap:${self}:${peer}`;
+/** Both sides of the key: one account's view of one conversation. */
+function snapKey(self: string, conversation: string): string {
+  return `dm17-thread-snap:${self}:${conversation}`;
 }
 
 /** One prewarm attempt per query key per session; the write path keeps it fresh. */
@@ -75,7 +75,7 @@ const lastWritten = new Map<string, string>();
 export async function prewarmDm17ThreadSnapshot(
   queryClient: QueryClient,
   self: string,
-  peer: string,
+  conversation: string,
   queryKey: readonly unknown[],
 ): Promise<void> {
   // Keyed by the query key rather than the conversation: the thread's key
@@ -85,13 +85,17 @@ export async function prewarmDm17ThreadSnapshot(
   if (prewarmed.has(once)) return;
   prewarmed.add(once);
   if ((queryClient.getQueryData<OpenedDm[]>(queryKey)?.length ?? 0) > 0) return;
-  const snap = await readFolded<OpenedDm[]>(snapKey(self, peer));
+  const snap = await readFolded<OpenedDm[]>(snapKey(self, conversation));
   if (!snap || snap.length === 0) {
-    perfMark("dm17.snap.prewarm", `${peer.slice(0, 8)} miss`);
+    perfMark("dm17.snap.prewarm", `${conversation.slice(0, 8)} miss`);
     return;
   }
   const now = Math.floor(Date.now() / 1000);
-  const own = snap.filter((m) => m.peer === peer && !isExpired(m.tags, now));
+  // Rows are re-checked against the conversation they claim, so a corrupted or
+  // stale snapshot can never paint one conversation's messages under another.
+  const own = snap.filter(
+    (m) => dmConvKey(m.peers ?? []) === conversation && !isExpired(m.tags, now),
+  );
   if (own.length === 0) return;
   // Re-check after the await: the real store read may have landed meanwhile,
   // and it must win.
@@ -99,13 +103,13 @@ export async function prewarmDm17ThreadSnapshot(
   // Stale on arrival, so the query's mount still runs the store read and its
   // background inbox sync.
   queryClient.setQueryData<OpenedDm[]>(queryKey, own, { updatedAt: Date.now() - 60_000 });
-  perfMark("dm17.snap.prewarm", `${peer.slice(0, 8)} seeded ${own.length} row(s)`);
+  perfMark("dm17.snap.prewarm", `${conversation.slice(0, 8)} seeded ${own.length} row(s)`);
 }
 
 /** Persist the newest {@link SNAP_WINDOW} unexpired rows of `window`. */
 export function persistDm17ThreadSnapshot(
   self: string,
-  peer: string,
+  conversation: string,
   window: readonly OpenedDm[],
 ): Promise<void> {
   if (window.length === 0) return Promise.resolve();
@@ -115,12 +119,12 @@ export function persistDm17ThreadSnapshot(
     .sort((a, b) => b.createdAt - a.createdAt || (a.rumorId < b.rumorId ? -1 : 1))
     .slice(0, SNAP_WINDOW);
   if (newest.length === 0) return Promise.resolve();
-  const id = snapKey(self, peer);
+  const id = snapKey(self, conversation);
   const serialized = encode(newest);
   if (lastWritten.get(id) === serialized) return Promise.resolve();
   const firstWrite = !lastWritten.has(id);
   lastWritten.set(id, serialized);
-  if (firstWrite) perfMark("dm17.snap.persist", `${peer.slice(0, 8)} ${newest.length} row(s)`);
+  if (firstWrite) perfMark("dm17.snap.persist", `${conversation.slice(0, 8)} ${newest.length} row(s)`);
   return writeFolded(id, newest);
 }
 

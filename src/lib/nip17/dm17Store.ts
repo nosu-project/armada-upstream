@@ -42,7 +42,9 @@ import { readFolded, writeFolded } from "@/lib/foldedCache";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import {
   DM_RUMOR_KINDS,
-  dmPeerOf,
+  dmConvKey,
+  dmConvKeyOf,
+  dmPeersOf,
   isExpired,
   KIND_DM_CHAT,
   KIND_DM_FILE,
@@ -62,8 +64,8 @@ const LEGACY_DB_NAME = "armada-dm17-rumors";
  * bookkeeping made the stored row something its sender never signed — and made
  * the store's idea of a conversation forgeable by anyone who spelled `peer`
  * themselves. Neither value needed a tag: NIP-17 requires the rumor to name its
- * recipients in `p`, so the partner is always derivable ({@link dmPeerOf}), and
- * nothing on this side of the store reads a wrap id.
+ * recipients in `p`, so the conversation is always derivable
+ * ({@link dmPeersOf}), and nothing on this side of the store reads a wrap id.
  */
 const PROVENANCE = new Set(["peer", "wrap"]);
 
@@ -239,10 +241,9 @@ export function dm17ToStored(opened: OpenedDm): NostrRumor {
 /**
  * Reconstruct an OpenedDm from a stored rumor, as seen by `self`.
  *
- * The conversation partner is DERIVED from the rumor — see {@link dmPeerOf} —
- * which is why nothing has to be injected on the way in. `wrapId` is not
- * recoverable and nothing consumes it; the transport dedupes on wraps it holds
- * in hand.
+ * The conversation is DERIVED from the rumor — see {@link dmPeersOf} — which is
+ * why nothing has to be injected on the way in. `wrapId` is not recoverable and
+ * nothing consumes it; the transport dedupes on wraps it holds in hand.
  */
 export function storedToDm17(ev: NostrRumor, self: string): OpenedDm {
   return {
@@ -252,7 +253,7 @@ export function storedToDm17(ev: NostrRumor, self: string): OpenedDm {
     content: ev.content,
     tags: ev.tags,
     createdAt: ev.created_at,
-    peer: dmPeerOf(ev, self) ?? "",
+    peers: dmPeersOf(ev, self) ?? [],
     wrapId: "",
   };
 }
@@ -281,9 +282,24 @@ export async function writeDm17Rumors(self: string, opened: OpenedDm[]): Promise
     ),
   );
   const scopes = new Set<string>(["dm"]);
-  for (const rumor of fresh) if (rumor.peer) scopes.add(dmThreadScope(rumor.peer));
+  for (const rumor of fresh) {
+    if (rumor.peers.length > 0) scopes.add(dmThreadScope(dmConvKey(rumor.peers)));
+  }
   emitWireScopes(scopes);
 }
+
+/**
+ * How much wider than the requested window the store is read.
+ *
+ * {@link conversationFilters} can only OVER-select (see its note), so the
+ * conversation match is applied client-side and the raw page has to be deep
+ * enough to still yield `limit` rows of the right conversation. Three screens'
+ * worth is generous for the realistic case — a handful of groups sharing
+ * members with a busy 1:1 — and a conversation whose window is genuinely
+ * swamped by its neighbours pages the rest in through `loadOlder` rather than
+ * silently showing a short thread.
+ */
+const CONVERSATION_OVERFETCH = 3;
 
 /**
  * Read one conversation's cached rumors (messages, reactions, deletes),
@@ -292,16 +308,20 @@ export async function writeDm17Rumors(self: string, opened: OpenedDm[]): Promise
  */
 export async function queryDm17Thread(
   self: string,
-  peer: string,
+  peers: readonly string[],
   opts: { limit: number; before?: number; signal?: AbortSignal },
 ): Promise<OpenedDm[]> {
   await migrateLegacyDms(self).catch(() => undefined);
+  const key = dmConvKey(peers);
   const events = await dm17Store(self).query(
-    conversationFilters(self, peer, { limit: opts.limit, before: opts.before }),
+    conversationFilters(self, peers, {
+      limit: opts.limit * CONVERSATION_OVERFETCH,
+      before: opts.before,
+    }),
     { signal: opts.signal },
   );
   return events
-    .filter((ev) => !isExpired(ev.tags))
+    .filter((ev) => !isExpired(ev.tags) && dmConvKeyOf(ev, self) === key)
     .map((ev) => storedToDm17(ev, self))
     .slice(0, opts.limit);
 }
@@ -310,10 +330,19 @@ export async function queryDm17Thread(
  * The filters selecting one conversation, from `self`'s side.
  *
  * A conversation is two directions and they are indexed differently: what the
- * peer sent names them as the AUTHOR, what we sent names them in a `p` tag. The
- * two are OR'd, so each is an ordinary indexed lookup — the author scan on
- * `(tenant, pubkey)`, ours on the `p` tag token — and the store merges and
+ * others sent names them as the AUTHOR, what we sent names them in `p` tags.
+ * The two are OR'd, so each is an ordinary indexed lookup — the author scan on
+ * `(tenant, pubkey)`, ours on the `p` tag tokens — and the store merges and
  * de-duplicates them.
+ *
+ * These filters are deliberately WIDER than the conversation. A Nostr filter is
+ * an OR over tag values, so there is no way to ask for "exactly this
+ * participant set": `authors: [alice, bob]` also matches everything Alice sent
+ * in a different room, and `"#p": [alice, bob]` matches every message we sent
+ * to either of them separately. Callers therefore re-derive each row's
+ * conversation ({@link dmConvKeyOf}) and keep the exact matches — which is also
+ * what finally files a foreign client's group message somewhere other than its
+ * sender's 1:1 thread.
  *
  * Each filter carries the full limit, so the union can be up to twice it; the
  * caller slices after the merge has put them in order.
@@ -328,18 +357,21 @@ export async function queryDm17Thread(
  */
 export function conversationFilters(
   self: string,
-  peer: string,
+  peers: readonly string[],
   opts: { limit?: number; before?: number } = {},
 ): NostrFilter[] {
   const bounds: { limit?: number; until?: number } = {};
   if (opts.limit !== undefined) bounds.limit = opts.limit;
   if (opts.before !== undefined) bounds.until = opts.before - 1;
 
-  if (peer === self) return [{ kinds: DM_RUMOR_KINDS, authors: [self], "#p": [self], ...bounds }];
+  const others = peers.filter((peer) => peer !== self);
+  if (others.length === 0) {
+    return [{ kinds: DM_RUMOR_KINDS, authors: [self], "#p": [self], ...bounds }];
+  }
 
   return [
-    { kinds: DM_RUMOR_KINDS, authors: [peer], ...bounds },
-    { kinds: DM_RUMOR_KINDS, authors: [self], "#p": [peer], ...bounds },
+    { kinds: DM_RUMOR_KINDS, authors: others, ...bounds },
+    { kinds: DM_RUMOR_KINDS, authors: [self], "#p": others, ...bounds },
   ];
 }
 
@@ -347,31 +379,61 @@ export function conversationFilters(
  * The conversation's current disappearing-messages timer in seconds (0 = off),
  * or undefined when neither side has ever set one.
  *
- * Read as its own single-row query rather than off the thread window: a timer
- * set months ago is still in force today, and the thread only reads back the
+ * Read as its own small query rather than off the thread window: a timer set
+ * months ago is still in force today, and the thread only reads back the
  * newest few hundred rumors. Timer rumors never expire, so the newest one is
  * always the live setting — whichever participant sent it.
+ *
+ * NOT `limit: 1`: the filters over-select (see {@link conversationFilters}), so
+ * the newest matching row may not be the newest row returned — a `limit: 1`
+ * page could hand back a timer belonging to a neighbouring conversation, which
+ * would silently misreport whether this one disappears.
  */
+const TIMER_SCAN = 32;
+
 export async function queryDm17Timer(
   self: string,
-  peer: string,
+  peers: readonly string[],
   opts: { signal?: AbortSignal } = {},
 ): Promise<number | undefined> {
   await migrateLegacyDms(self).catch(() => undefined);
+  const key = dmConvKey(peers);
   const events = await dm17Store(self).query(
-    conversationFilters(self, peer, { limit: 1 }).map((f) => ({ ...f, kinds: [KIND_DM_TIMER] })),
+    conversationFilters(self, peers, { limit: TIMER_SCAN }).map((f) => ({
+      ...f,
+      kinds: [KIND_DM_TIMER],
+    })),
     { signal: opts.signal },
   );
-  const raw = events[0]?.tags.find((t) => t[0] === "timer")?.[1];
+  const newest = events
+    .filter((ev) => dmConvKeyOf(ev, self) === key)
+    .sort((a, b) => b.created_at - a.created_at || (a.id < b.id ? -1 : 1))[0];
+  const raw = newest?.tags.find((t) => t[0] === "timer")?.[1];
   if (raw === undefined) return undefined;
   const secs = Number(raw);
   return Number.isFinite(secs) && secs >= 0 ? Math.floor(secs) : undefined;
 }
 
+/** One row of the conversation list: a participant set and its newest message. */
+export interface Dm17ConversationRow {
+  /** The conversation key — see {@link dmConvKey}. */
+  key: string;
+  /** The participants, everyone but the viewer (`[self]` for Note to Self). */
+  peers: string[];
+  latest: OpenedDm;
+  /** The viewer has authored at least one message in this conversation. */
+  mine: boolean;
+}
+
 /**
- * The newest chat/file rumor per conversation partner — the NIP-17 side of
- * the conversation list. Reads the newest `limit` message rumors and groups
- * client-side (fine at DM scale; reactions/deletes never surface a peer).
+ * The newest chat/file rumor per conversation — the NIP-17 side of the
+ * conversation list. Reads the newest `limit` message rumors and groups
+ * client-side by participant set (fine at DM scale; reactions/deletes never
+ * surface a conversation of their own).
+ *
+ * Grouping by the full set is what makes a group thread ONE row rather than one
+ * per member: the same message reaches this loop once, and its key is the same
+ * whether we sent it or received it.
  *
  * `mine` marks conversations the viewer has participated in (authored at least
  * one message to), so the list can keep a thread you started with someone you
@@ -380,24 +442,25 @@ export async function queryDm17Timer(
 export async function queryDm17Conversations(
   self: string,
   opts: { limit?: number; signal?: AbortSignal } = {},
-): Promise<Array<{ peer: string; latest: OpenedDm; mine: boolean }>> {
+): Promise<Dm17ConversationRow[]> {
   await migrateLegacyDms(self).catch(() => undefined);
   const events = await dm17Store(self).query(
     [{ kinds: [KIND_DM_CHAT, KIND_DM_FILE], limit: opts.limit ?? 500 }],
     { signal: opts.signal },
   );
-  const byPeer = new Map<string, OpenedDm>();
+  const byConversation = new Map<string, OpenedDm>();
   const mine = new Set<string>();
   for (const ev of events) {
     if (isExpired(ev.tags)) continue;
     const opened = storedToDm17(ev, self);
-    if (!opened.peer) continue;
-    if (opened.author === self) mine.add(opened.peer);
-    const cur = byPeer.get(opened.peer);
-    if (!cur || opened.createdAt > cur.createdAt) byPeer.set(opened.peer, opened);
+    if (opened.peers.length === 0) continue;
+    const key = dmConvKey(opened.peers);
+    if (opened.author === self) mine.add(key);
+    const cur = byConversation.get(key);
+    if (!cur || opened.createdAt > cur.createdAt) byConversation.set(key, opened);
   }
-  return [...byPeer.entries()]
-    .map(([peer, latest]) => ({ peer, latest, mine: mine.has(peer) }))
+  return [...byConversation.entries()]
+    .map(([key, latest]) => ({ key, peers: latest.peers, latest, mine: mine.has(key) }))
     .sort((a, b) => b.latest.createdAt - a.latest.createdAt);
 }
 
@@ -422,7 +485,7 @@ export async function searchDm17Rumors(
   const matches = events
     .filter((ev) => !isExpired(ev.tags))
     .map((ev) => storedToDm17(ev, self))
-    .filter((o) => o.peer && o.content.toLowerCase().includes(needle))
+    .filter((o) => o.peers.length > 0 && o.content.toLowerCase().includes(needle))
     .sort((a, b) => b.createdAt - a.createdAt);
   return matches.slice(0, opts.limit ?? 200);
 }
@@ -451,7 +514,7 @@ export async function sweepExpiredDm17Rumors(
   const now = Math.floor(Date.now() / 1000);
   let until: number | undefined;
   let removed = 0;
-  const peers = new Set<string>();
+  const conversations = new Set<string>();
 
   for (let page = 0; page < SWEEP_MAX_PAGES; page++) {
     const filter: { kinds: number[]; limit: number; until?: number } = {
@@ -468,8 +531,8 @@ export async function sweepExpiredDm17Rumors(
       await s.remove([{ ids }], { signal: opts.signal });
       removed += ids.length;
       for (const ev of expired) {
-        const peer = dmPeerOf(ev, self);
-        if (peer) peers.add(peer);
+        const key = dmConvKeyOf(ev, self);
+        if (key) conversations.add(key);
       }
     }
     if (events.length < SWEEP_PAGE) break;
@@ -481,7 +544,7 @@ export async function sweepExpiredDm17Rumors(
   }
 
   if (removed > 0) {
-    emitWireScopes(["dm", ...[...peers].map(dmThreadScope)]);
+    emitWireScopes(["dm", ...[...conversations].map(dmThreadScope)]);
   }
   return removed;
 }

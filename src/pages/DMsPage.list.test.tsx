@@ -57,6 +57,16 @@ vi.mock("@/hooks/useMuteList", () => ({
 vi.mock("@/hooks/useToast", () => ({ useToast: () => ({ toast: () => {} }) }));
 vi.mock("@/hooks/useSharedCommunities", () => ({ useSharedCommunities: () => new Map() }));
 vi.mock("@/hooks/useDmMessageSearch", () => ({ useDmMessageSearch: () => new Map() }));
+// Composes the row's title from every participant's profile, which means a
+// query client and the profile sync topic. The names are not what this file
+// asserts on, so it takes the same stub treatment as the rest of the stack.
+vi.mock("@/hooks/useDmConversationName", () => ({
+  useDmConversationName: (peers: string[]) => ({
+    name: peers.join(", "),
+    names: peers,
+    metadata: undefined,
+  }),
+}));
 vi.mock("@/hooks/usePinnedDms", () => ({
   usePinnedDms: () => ({ pinned: [], isPinned: () => false, togglePin: () => {} }),
 }));
@@ -118,7 +128,8 @@ function conversations(n: number) {
   return Array.from({ length: n }, (_, i) => {
     const peer = getPublicKey(generateSecretKey());
     return {
-      peer,
+      conversation: peer,
+      peers: [peer],
       latest: {
         id: `${i}`,
         pubkey: peer,
@@ -128,6 +139,7 @@ function conversations(n: number) {
         tags: [],
       } as NostrRumor,
       plaintext: `message ${i}`,
+      mine: false,
     };
   });
 }

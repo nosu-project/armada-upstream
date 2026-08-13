@@ -151,7 +151,9 @@ export function useNostrPush(): UsePushNotificationsReturn {
       let minePeers: string[] = [];
       try {
         const rows = await queryDm17Conversations(user.pubkey);
-        minePeers = rows.filter((row) => row.mine).map((row) => row.peer);
+        // Every participant of a conversation the viewer has written in — see
+        // useForegroundNotifications for why a group contributes all of them.
+        minePeers = rows.filter((row) => row.mine).flatMap((row) => row.peers);
       } catch {
         // Store unavailable — follows ∪ accepted ∪ pinned still apply.
       }

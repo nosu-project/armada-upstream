@@ -218,6 +218,30 @@ export function useDmRelayList() {
  * recipient is actually listening.
  */
 export function useDmRelaysFor(peer: string | undefined): string[] {
+  const peers = useMemo(() => (peer ? [peer] : []), [peer]);
+  const byPeer = useDmRelaysForAll(peers);
+  return byPeer.get(peer ?? "") ?? EMPTY_RELAYS;
+}
+
+/** Shared empty result, so a peerless render keeps a stable array identity. */
+const EMPTY_RELAYS: string[] = [];
+
+/**
+ * The multi-participant form of {@link useDmRelaysFor}: every recipient's
+ * published NIP-17 inbox, keyed by pubkey.
+ *
+ * A group DM is delivered as one gift wrap PER participant, each to that
+ * participant's own inbox, so the send path needs all of them resolved before
+ * it can route anything. They are resolved concurrently rather than through N
+ * hook instances (a hook per peer would be a conditional hook the moment the
+ * participant set changes) and cached under one key.
+ *
+ * The `followPeerRelays` disclosure decision stays PER PEER — see
+ * {@link discoverDmRelaysFor}. Reaching past our own relays hands the peer's
+ * infrastructure our IP and pubkey, and being in a group with someone we
+ * haven't accepted must not spend that on their behalf.
+ */
+export function useDmRelaysForAll(peers: readonly string[]): Map<string, string[]> {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { config } = useAppContext();
@@ -231,31 +255,32 @@ export function useDmRelaysFor(peer: string | undefined): string[] {
   );
   const relayKey = discoveryRelays.join(",");
 
-  // Reaching past our own relays means dialing relays the PEER named, which
-  // discloses our IP and (via NIP-42) our pubkey to their infrastructure —
-  // turning "opened a stranger's message" into a signal they can observe. Spend
-  // that only on peers already past the request tier, which is the same line
-  // `useKnownDmPeers` draws for placement. `mine` is not available here, but
-  // `isAccepted` is exactly `mine` without the conversation-query lag.
-  //
-  // In the query key because follows load asynchronously: a peer promoted to
-  // known after the first read must re-run discovery rather than keep the
-  // gated `[]`.
-  const known = !!peer && isKnown(peer, false);
+  // Sorted so two orderings of the same set share one cache entry, and joined
+  // with the known-flags so a peer promoted out of the request tier re-runs
+  // discovery rather than keeping its gated `[]`.
+  const targets = useMemo(
+    () => [...new Set(peers)].filter(Boolean).sort(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [peers.join(",")],
+  );
+  const knownKey = targets.map((peer) => (isKnown(peer, false) ? "1" : "0")).join("");
 
-  const query = useQuery<string[]>({
-    queryKey: ["dm-relay-list", "peer", peer, relayKey, known],
-    enabled: !!peer,
-    // Missing lists are common with older clients. Recheck often enough that a
-    // newly published inbox is adopted without leaving a false result cached
-    // for an hour, while still keeping this off the hot path.
+  const query = useQuery<Record<string, string[]>>({
+    queryKey: ["dm-relay-list", "peers", targets.join(","), relayKey, knownKey],
+    enabled: targets.length > 0,
     staleTime: 5 * 60 * 1000,
     queryFn: async ({ signal }) => {
-      return discoverDmRelaysFor(nostr, peer!, discoveryRelays, signal, {
-        followPeerRelays: known,
-      });
+      const settled = await Promise.all(
+        targets.map(async (peer) => {
+          const relays = await discoverDmRelaysFor(nostr, peer, discoveryRelays, signal, {
+            followPeerRelays: isKnown(peer, false),
+          }).catch(() => [] as string[]);
+          return [peer, relays] as const;
+        }),
+      );
+      return Object.fromEntries(settled);
     },
   });
 
-  return query.data ?? [];
+  return useMemo(() => new Map(Object.entries(query.data ?? {})), [query.data]);
 }
