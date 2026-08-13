@@ -4,6 +4,44 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.52.0] - 2026-08-13
+
+Direct messages can now include several people at once: pick the recipients in the compose pane, and the conversation carries everyone's names and faces. Armada is on Google Play and Zapstore, linked from the landing and downloads pages. Video attachments preview before you send them, play full-window in the lightbox, and loop inline. Communities gain kick and ban from the message menu, Android shows an ongoing-call notification, and direct message sync now recovers relay by relay.
+
+### Added
+- Group direct messages — pick several people with "New group" in the compose pane; the conversation is titled with everyone's names and shows their faces together
+- Install buttons for Google Play and Zapstore on the landing and downloads pages
+- Video attachments preview in the composer before you send them
+- Kick and ban a member straight from a message's context menu in a community
+- Broadcast relays, editable in settings and defaulting to relay.primal.net, that your profile and other public posts are also sent to
+- Automatic settings sync, with a switch to leave a single device out of it, plus shared app DM relays and media servers carried across your clients
+- An ongoing-call notification on Android, with a Leave action, that keeps a call running while you're in another app
+- Editing your profile from the account switcher
+- Community unread counts in the desktop app's badge
+
+### Changed
+- Video attachments play full-window in the lightbox instead of a dialog, and inline videos loop
+- The landing page's closing sections are grouped into one screen with store buttons
+- Voice calls capture mono audio
+- Swiping and rail navigation on mobile are smoother, no longer re-rendering as you drag
+
+### Fixed
+- Direct message sync recovers relay by relay, so one failing or slow relay no longer stalls the rest, and a full catch-up runs when you reconnect
+- Direct message inboxes are discovered across more of your relays, and people using other clients are no longer marked as unable to receive messages
+- Encrypted media that can't be decrypted now fails instead of loading the file unencrypted, and very large attachments ask before decrypting
+- Rapid settings changes, such as rearranging the server rail, no longer revert each other
+- A channel's unread badge clears when its newest message is deleted, expired, or from a banned member
+- Voice calls no longer reuse a cached token for a different room, and a failed encryption setup shows an error instead of joining unencrypted
+- Channels set to mentions-only are honored by push notifications on iPhone and iPad
+- The Android battery optimization prompt is a one-time offer instead of a daily nudge
+- Opening a link into the app holds the splash until the destination is ready, instead of flashing a default screen first
+- A swipe interrupted by switching apps no longer leaves the pane stuck partway
+- Discover keeps its last good results when a fetch comes back empty
+- The message action toolbar is no longer clipped in search results and mention rows
+- Poll composing can be exited, and editing a message puts the cursor at the end
+- Saving a file attachment works in the app builds
+- Banned members' messages no longer raise notifications
+
 ## [0.51.2] - 2026-08-11
 
 Reactions in a voice call now float up the full window so everyone in the call sees them. The post-login sync screen is restyled as a jack-in sequence, editing a community's picture reuses the same crop tool as creating one, and an empty channel now reads as still loading rather than claiming the relays are unreachable. Deleted private channels no longer reappear, and emoji autocomplete works right after a native emoji with no space before the colon.
