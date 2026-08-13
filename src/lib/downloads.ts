@@ -119,6 +119,45 @@ export const DOWNLOAD_TARGETS: DownloadTarget[] = [
   { os: "ios", name: "iPhone & iPad", assets: [] },
 ];
 
+/** An external app store listing, as opposed to a file CI publishes. */
+export interface AppStore {
+  label: string;
+  /** One line saying what the store is, where there's room for it. */
+  hint: string;
+  url: string;
+  /**
+   * The store's own mark, as a path under `public/`. A file rather than an
+   * inline component because one of the two is only distributed as a raster
+   * logo, and a table where one row is a path and the other a React node
+   * couldn't be rendered by one loop.
+   */
+  icon: string;
+}
+
+/**
+ * Where an Android user can get the app without sideloading.
+ *
+ * These sit BESIDE {@link DOWNLOAD_TARGETS} rather than in it because
+ * `downloads.test.ts` asserts that every asset in that table is a filename one
+ * of the CI workflows publishes, and a store listing is neither a file nor
+ * ours. Both the landing page and `/downloads` render this list, so the URLs
+ * and the marks are written down once.
+ */
+export const ANDROID_STORES: AppStore[] = [
+  {
+    label: "Google Play",
+    hint: "Install from the Play Store",
+    url: "https://play.google.com/store/apps/details?id=buzz.armada.app&hl=en-US",
+    icon: "/stores/google-play.svg",
+  },
+  {
+    label: "Zapstore",
+    hint: "The Nostr-native app store",
+    url: "https://zapstore.dev/apps/buzz.armada.app",
+    icon: "/stores/zapstore.png",
+  },
+];
+
 /** The absolute URL a download button points at. */
 export function downloadUrl(file: string): string {
   return `${DOWNLOADS_BASE_URL}/${file}`;
