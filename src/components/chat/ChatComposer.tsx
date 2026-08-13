@@ -7,6 +7,7 @@ import {
   Mic,
   MonitorPlay,
   Paperclip,
+  Play,
   Plus,
   Quote,
   Reply,
@@ -29,10 +30,12 @@ import { Lightbox } from "@/components/chat/Lightbox";
 import { MentionAutocomplete } from "@/components/chat/MentionAutocomplete";
 import { SlashCommandAutocomplete } from "@/components/chat/SlashCommandAutocomplete";
 import { StickerPicker } from "@/components/chat/StickerPicker";
+import { VideoPlayer } from "@/components/chat/VideoPlayer";
 import { WebxdcGamePicker } from "@/components/chat/WebxdcGamePicker";
 import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
@@ -62,6 +65,7 @@ import { extractHashtags } from "@/lib/hashtag";
 import { buzzThreadRef } from "@/buzz/protocol";
 import { collectEmojiTags } from "@/lib/customEmoji";
 import { encryptFileForUpload, encryptFileWithParams } from "@/lib/encryptedMedia";
+import { companionEncryption } from "@/lib/imeta";
 import { extractWebxdcMeta } from "@/lib/webxdcMeta";
 import { contentTagsFor, forwardedAttachment, stripUrlsFromText } from "@/lib/forwardMessage";
 import { IMETA_MEDIA_URL_REGEX, mimeFromExt } from "@/lib/mediaUrls";
@@ -804,6 +808,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         const blurhash = tags.find((t) => t[0] === "blurhash")?.[1];
         const summary = tags.find((t) => t[0] === "summary")?.[1];
         const name = tags.find((t) => t[0] === "name")?.[1];
+        // A webxdc's app icon, or a video's poster frame (uploaded alongside
+        // the video and, when encrypted, under the same key and nonce).
         const icon = tags.find((t) => t[0] === "image" || t[0] === "thumb")?.[1];
         const isWebxdc = mime === "application/x-webxdc";
         return {
@@ -812,6 +818,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           name: summary ?? name,
           icon,
           isImage: mime.startsWith("image/"),
+          isVideo: mime.startsWith("video/"),
           isWebxdc,
           encryption,
           dim,
@@ -858,6 +865,14 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   );
   const lightboxNext = useCallback(() => stepLightbox(1), [stepLightbox]);
   const lightboxPrev = useCallback(() => stepLightbox(-1), [stepLightbox]);
+
+  // Videos preview in their own dialog rather than the (image-only) lightbox,
+  // tracked by URL for the same reason: removing the attachment while it's open
+  // closes the dialog instead of swapping in a different video.
+  const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null);
+  const videoPreview = videoPreviewUrl
+    ? attachments.find((att) => att.url === videoPreviewUrl && att.isVideo)
+    : undefined;
 
   const removeAttachment = useCallback((url: string) => {
     setUploadedFileGroups((prev) => {
@@ -1845,7 +1860,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         </div>
       )}
 
-      {/* Attachment previews — uploaded images render as inline thumbnails. */}
+      {/* Attachment previews — uploaded images render as inline thumbnails,
+          videos as their poster frame behind a play badge. */}
       {(attachments.length > 0 || pendingUploads.length > 0) && (
         <div className="flex flex-wrap gap-2 px-3 pt-2 animate-in slide-in-from-top-2 fade-in-0 duration-200">
           {attachments.map((att) => (
@@ -1865,6 +1881,30 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                     mime={att.mime}
                     encryption={att.encryption}
                   />
+                </button>
+              ) : att.isVideo ? (
+                <button
+                  type="button"
+                  aria-label="Preview video"
+                  onClick={() => setVideoPreviewUrl(att.url)}
+                  className="size-full relative cursor-zoom-in bg-black/40"
+                >
+                  {att.icon ? (
+                    <AttachmentPreviewImage
+                      url={att.icon}
+                      mime="image/jpeg"
+                      encryption={companionEncryption(att.encryption)}
+                    />
+                  ) : (
+                    <span className="absolute inset-x-0 bottom-1 text-[10px] text-white/80 truncate px-1">
+                      {att.mime.split("/")[1] || "video"}
+                    </span>
+                  )}
+                  <span className="absolute inset-0 flex items-center justify-center">
+                    <span className="rounded-full bg-black/55 p-1.5">
+                      <Play className="size-4 text-white" fill="currentColor" />
+                    </span>
+                  </span>
                 </button>
               ) : att.isWebxdc ? (
                 <div className="size-full flex flex-col items-center justify-center gap-1 text-muted-foreground p-1">
@@ -2486,6 +2526,24 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
           onNext={lightboxNext}
           onPrev={lightboxPrev}
         />
+      )}
+
+      {/* Video chips open here instead — the lightbox gallery is images only. */}
+      {videoPreview && (
+        <Dialog open onOpenChange={(open) => !open && setVideoPreviewUrl(null)}>
+          <DialogContent className="max-w-2xl p-3">
+            <DialogTitle className="sr-only">Video preview</DialogTitle>
+            <VideoPlayer
+              src={videoPreview.url}
+              poster={videoPreview.icon}
+              mime={videoPreview.mime}
+              dim={videoPreview.dim}
+              blurhash={videoPreview.blurhash}
+              encryption={videoPreview.encryption}
+              className="my-0 max-w-full"
+            />
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );
