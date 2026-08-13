@@ -26,7 +26,7 @@ interface VideoPlayerProps {
   /** AES-GCM decryption params for client-encrypted (Concord/Vector) blobs. */
   encryption?: ImetaEncryption;
   /**
-   * Present as a GIF: autoplay, loop, muted, no controls, transparent chrome.
+   * Present as a GIF: autoplay, muted, no controls, transparent chrome.
    * Set for Tenor/Giphy-style `.mp4` renditions that are really animated GIFs.
    */
   gif?: boolean;
@@ -87,7 +87,7 @@ export function VideoPlayer({ src, poster, dim, blurhash, mime, encryption, fall
           poster={gif ? undefined : posterSrc}
           controls={!gif}
           autoPlay={gif}
-          loop={gif}
+          loop
           muted={gif}
           disablePictureInPicture={gif}
           preload="metadata"
