@@ -47,7 +47,7 @@ export function AccountStandingDialog({ open, onOpenChange }: AccountStandingDia
           <StandingMeter />
 
           <p className="mt-6 text-sm font-medium leading-snug text-muted-foreground">
-            No score. No strikes. Nobody can ban you.
+            No score. No strikes. We can't ban you.
           </p>
         </div>
       </ChromeDialogContent>
