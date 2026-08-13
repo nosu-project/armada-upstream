@@ -252,7 +252,7 @@ describe("useEdgeSwipe", () => {
     rerender({ enabled: false });
 
     expect(result.current.dragging).toBe(false);
-    expect(result.current.dragX).toBe(0);
+    expect(result.current.dragXRef.current).toBe(0);
     expect(onCommit).not.toHaveBeenCalled();
   });
 
@@ -301,7 +301,7 @@ describe("useEdgeSwipe", () => {
     });
 
     expect(result.current.dragging).toBe(false);
-    expect(result.current.dragX).toBe(0);
+    expect(result.current.dragXRef.current).toBe(0);
   });
 
   it("ends the drag when the app is backgrounded mid-gesture", () => {
@@ -329,7 +329,7 @@ describe("useEdgeSwipe", () => {
     }
 
     expect(result.current.dragging).toBe(false);
-    expect(result.current.dragX).toBe(0);
+    expect(result.current.dragXRef.current).toBe(0);
   });
 
   it("works for the close direction (leftward drag)", () => {

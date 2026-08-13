@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useEdgeSwipe } from "@/hooks/useEdgeSwipe";
@@ -8,6 +8,9 @@ import { cn } from "@/lib/utils";
 
 /** Settle/enter transition length (ms). Matches the `duration-200` classes. */
 const SETTLE_MS = 200;
+
+/** Parallax shift of the underlay at full cover (% of its own width). */
+const UNDERLAY_SHIFT_PCT = 18;
 
 interface SwipeRevealProps {
   /**
@@ -43,6 +46,19 @@ interface SwipeRevealProps {
  *
  * A cancelled drag springs back. On desktop / non-touch it degrades to a plain
  * side-by-side flex row.
+ *
+ * Two things keep the gesture off the main-thread hot path:
+ *
+ * - The live drag position is written straight onto the panes' `style` in a
+ *   rAF (see `applyDrag`), never through React state — a render per
+ *   pointermove would put the whole page tree between the finger and the
+ *   frame.
+ * - A committed gesture settles OPTIMISTICALLY (`pendingOpen`) and the
+ *   navigation that makes it real is deferred until the settle transition has
+ *   started on the compositor (`deferCommit`). Calling `onReveal` synchronously
+ *   in the pointerup handler put the route change's re-render — the entire
+ *   destination view — on the exact frame the settle had to start from, which
+ *   is what made releasing the swipe visibly hitch.
  */
 export function SwipeReveal({ underlay, children, open, onReveal, onClose }: SwipeRevealProps) {
   const isTouch = useIsTouch();
@@ -62,16 +78,97 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
 
   const swipeEnabled = isTouch && narrow;
 
+  // A committed gesture's optimistic resting state, applied on the release
+  // frame; `null` whenever the `open` prop is authoritative. Cleared the
+  // moment the prop catches up (or a navigation overrides it).
+  const [pendingOpen, setPendingOpen] = useState<boolean | null>(null);
+  const effectiveOpen = pendingOpen ?? open;
+
+  const paneRef = useRef<HTMLDivElement>(null);
+  const underlayRef = useRef<HTMLDivElement>(null);
+
+  // Direct, rAF-coalesced drag writes. Coalescing matters on displays whose
+  // touch sampling outruns the frame rate; the write itself is two compositor
+  // properties on already-promoted layers.
+  const dragRaf = useRef<number | null>(null);
+  const pendingDragOffset = useRef(0);
+  const applyDrag = useCallback((offset: number) => {
+    pendingDragOffset.current = offset;
+    if (dragRaf.current !== null) return;
+    dragRaf.current = requestAnimationFrame(() => {
+      dragRaf.current = null;
+      const width = window.innerWidth || 1;
+      const off = Math.max(0, Math.min(pendingDragOffset.current, width));
+      const progress = off / width;
+      if (paneRef.current) {
+        paneRef.current.style.transform = `translate3d(${off}px, 0, 0)`;
+      }
+      if (underlayRef.current) {
+        underlayRef.current.style.transform =
+          `translateX(${-(1 - progress) * UNDERLAY_SHIFT_PCT}%)`;
+      }
+    });
+  }, []);
+  useEffect(() => () => {
+    if (dragRaf.current !== null) cancelAnimationFrame(dragRaf.current);
+  }, []);
+
+  // Latest navigation callbacks for the deferred commit below.
+  const onRevealRef = useRef(onReveal);
+  onRevealRef.current = onReveal;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  // Run the navigation callback once the settle transition is underway: the
+  // first frame paints the new resting transform (the CSS transition starts
+  // and is owned by the compositor from then on), the second hands the main
+  // thread to the navigation render, which can now overrun a frame budget
+  // without stuttering the slide.
+  const commitRaf = useRef<number | null>(null);
+  const deferCommit = useCallback((fn: () => void) => {
+    if (commitRaf.current !== null) cancelAnimationFrame(commitRaf.current);
+    commitRaf.current = requestAnimationFrame(() => {
+      commitRaf.current = requestAnimationFrame(() => {
+        commitRaf.current = null;
+        fn();
+      });
+    });
+  }, []);
+  useEffect(() => () => {
+    if (commitRaf.current !== null) cancelAnimationFrame(commitRaf.current);
+  }, []);
+
+  // A gesture-driven reveal/close should animate to its resting position (the
+  // Discord settle). An `open` change from *navigation* (switching
+  // server/community reuses this page instance and flips `open` via a route
+  // effect) must NOT animate — otherwise the chat pane visibly slides across the
+  // screen ("dives into a channel") before landing on the channel list, which
+  // reads as a glitch. We flag the next `open` change as gesture-driven when a
+  // swipe commits, and snap (no transition) for every other `open` change.
+  const gestureCommit = useRef(false);
+  const commitReveal = useCallback(() => {
+    gestureCommit.current = true;
+    setPendingOpen(true);
+    deferCommit(() => onRevealRef.current());
+  }, [deferCommit]);
+  const commitClose = useCallback(() => {
+    gestureCommit.current = true;
+    setPendingOpen(false);
+    deferCommit(() => onCloseRef.current());
+  }, [deferCommit]);
+
   // Android system back gesture / button. On the mobile drill-down, when the
   // chat is showing (list hidden), "back" reveals the channel list — one level
   // up, the Discord behavior. This is also the only reliable left-edge gesture
   // on Android, where the OS reserves the screen edges for its own gesture nav
   // and eats an in-WebView edge swipe before our pointer handlers see it. When
   // the list is already revealed, we defer (return false) so back leaves the
-  // server/community via normal history navigation.
+  // server/community via normal history navigation. Routed through the same
+  // committed-gesture path as a swipe, so it animates the settle and keeps the
+  // navigation render off the release frame.
   useAndroidBack(() => {
-    if (!open) {
-      onReveal();
+    if (!effectiveOpen) {
+      commitReveal();
       return true;
     }
     return false;
@@ -89,31 +186,22 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
   // one more transition after it.
   const [enterAnim] = useState(() => swipeEnabled && !open && !isRecentDeepLinkNavigation());
 
-  // A gesture-driven reveal/close should animate to its resting position (the
-  // Discord settle). An `open` change from *navigation* (switching
-  // server/community reuses this page instance and flips `open` via a route
-  // effect) must NOT animate — otherwise the chat pane visibly slides across the
-  // screen ("dives into a channel") before landing on the channel list, which
-  // reads as a glitch. We flag the next `open` change as gesture-driven when a
-  // swipe commits, and snap (no transition) for every other `open` change.
-  const gestureCommit = useRef(false);
   // Opening: rightward drag from the left edge of the chat (only when closed).
   const openSwipe = useEdgeSwipe({
-    enabled: swipeEnabled && !open,
+    enabled: swipeEnabled && !effectiveOpen,
     direction: "open",
-    onCommit: () => {
-      gestureCommit.current = true;
-      onReveal();
-    },
+    onCommit: commitReveal,
+    onDragMove: applyDrag,
   });
   // Closing: leftward drag on the revealed list (only when open).
   const closeSwipe = useEdgeSwipe({
-    enabled: swipeEnabled && open,
+    enabled: swipeEnabled && effectiveOpen,
     direction: "close",
-    onCommit: () => {
-      gestureCommit.current = true;
-      onClose();
-    },
+    onCommit: commitClose,
+    onDragMove: useCallback(
+      (dragX: number) => applyDrag((window.innerWidth || 1) - dragX),
+      [applyDrag],
+    ),
   });
 
   // Suppress the transform transition for one render whenever `open` flips
@@ -133,6 +221,8 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
       // onReveal/onClose, so this is a no-op on that path.
       cancelOpenSwipe();
       cancelCloseSwipe();
+      // The prop caught up with (or overrode) any optimistic commit state.
+      setPendingOpen(null);
     }
     gestureCommit.current = false;
   }, [open, cancelOpenSwipe, cancelCloseSwipe]);
@@ -160,12 +250,59 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
       return;
     }
     setMoving(true);
-  }, [open, openSwipe.dragging, closeSwipe.dragging]);
+  }, [effectiveOpen, openSwipe.dragging, closeSwipe.dragging]);
   useEffect(() => {
     if (!moving || openSwipe.dragging || closeSwipe.dragging) return;
     const id = window.setTimeout(() => setMoving(false), SETTLE_MS);
     return () => window.clearTimeout(id);
   }, [moving, openSwipe.dragging, closeSwipe.dragging]);
+
+  const width = typeof window !== "undefined" ? window.innerWidth : 1;
+  // Only a drag that pulls the pane AWAY from its current resting position can
+  // drive the offset: "open" drags the chat off a closed pane, "close" drags it
+  // back over an open one. Pairing each with the `open` it started from means a
+  // drag left over from before an `open` flip is inert rather than authoritative
+  // — the pane follows navigation instead of being pinned mid-slide by a gesture
+  // that can no longer end (the stuck sliver-of-channel-list state).
+  const openDragging = openSwipe.dragging && !effectiveOpen;
+  const closeDragging = closeSwipe.dragging && effectiveOpen;
+  // Chat resting offset: fully out (= width) when revealed, else flush (0).
+  // Live drags add/subtract from that rest position (read from the gesture's
+  // ref, so a render that happens mid-drag paints the current position).
+  let offset: number;
+  if (openDragging) {
+    offset = openSwipe.dragXRef.current; // 0 → width as it slides out
+  } else if (closeDragging) {
+    offset = width - closeSwipe.dragXRef.current; // width → 0 as it slides back
+  } else {
+    offset = effectiveOpen ? width : 0;
+  }
+  offset = Math.max(0, Math.min(offset, width));
+  const dragging = openDragging || closeDragging;
+
+  const progress = width > 0 ? offset / width : 0;
+  // Parallax the underlay in from the left (Discord slides the list slightly
+  // rather than holding it static).
+  const underlayShift = -(1 - progress) * UNDERLAY_SHIFT_PCT;
+
+  // At rest, make the rendered position authoritative in the DOM. The drag
+  // writes transforms imperatively, so React's style prop can hold a stale
+  // value it would skip re-writing on the next render; this runs before paint
+  // on every commit and lands the settle target with the transition classes
+  // already in place.
+  useLayoutEffect(() => {
+    if (!swipeEnabled || dragging) return;
+    if (dragRaf.current !== null) {
+      cancelAnimationFrame(dragRaf.current);
+      dragRaf.current = null;
+    }
+    if (paneRef.current) {
+      paneRef.current.style.transform = `translate3d(${offset}px, 0, 0)`;
+    }
+    if (underlayRef.current) {
+      underlayRef.current.style.transform = `translateX(${underlayShift}%)`;
+    }
+  });
 
   if (!swipeEnabled) {
     // Desktop: static side-by-side panes.
@@ -176,33 +313,6 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
       </>
     );
   }
-
-  const width = typeof window !== "undefined" ? window.innerWidth : 1;
-  // Only a drag that pulls the pane AWAY from its current resting position can
-  // drive the offset: "open" drags the chat off a closed pane, "close" drags it
-  // back over an open one. Pairing each with the `open` it started from means a
-  // drag left over from before an `open` flip is inert rather than authoritative
-  // — the pane follows navigation instead of being pinned mid-slide by a gesture
-  // that can no longer end (the stuck sliver-of-channel-list state).
-  const openDragging = openSwipe.dragging && !open;
-  const closeDragging = closeSwipe.dragging && open;
-  // Chat resting offset: fully out (= width) when revealed, else flush (0).
-  // Live drags add/subtract from that rest position.
-  let offset: number;
-  if (openDragging) {
-    offset = openSwipe.dragX; // 0 → width as it slides out
-  } else if (closeDragging) {
-    offset = width - closeSwipe.dragX; // width → 0 as it slides back
-  } else {
-    offset = open ? width : 0;
-  }
-  offset = Math.max(0, Math.min(offset, width));
-  const dragging = openDragging || closeDragging;
-
-  const progress = width > 0 ? offset / width : 0;
-  // Parallax the underlay in from the left (Discord slides the list slightly
-  // rather than holding it static).
-  const underlayShift = -(1 - progress) * 18; // % of its own width
 
   return (
     <>
@@ -215,6 +325,7 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
           flip used to do) removed the very pointerup/pointercancel that ends
           the drag, stranding it. */}
       <div
+        ref={underlayRef}
         {...closeSwipe.handlers}
         className={cn(
           "absolute inset-0 flex [contain:layout_paint]",
@@ -228,7 +339,11 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
         )}
         style={{
           transform: `translateX(${underlayShift}%)`,
-          touchAction: open ? "pan-y" : undefined,
+          touchAction: effectiveOpen ? "pan-y" : undefined,
+          // Its transform moves every drag frame in step with the pane's, so it
+          // earns the layer for exactly the same window (dropped at rest for
+          // the same reason — see the pane below).
+          willChange: moving ? "transform" : undefined,
         }}
         aria-hidden={progress === 0}
       >
@@ -247,6 +362,7 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
           property is documented against. `contain` keeps the chat tree's mount
           from invalidating the rest of the page. */}
       <div
+        ref={paneRef}
         {...openSwipe.handlers}
         className={cn(
           "absolute inset-0 z-10 flex flex-col bg-background shadow-2xl [contain:layout_paint]",
@@ -259,8 +375,10 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
           // (no active call) falls back to 0.
           "max-sidebar:pb-[var(--call-bar-h,0px)]",
           // When fully revealed the chat is off-screen — don't let it block the
-          // list's taps/gestures underneath.
-          open && !dragging && "pointer-events-none",
+          // list's taps/gestures underneath. Keyed on the OPTIMISTIC state so a
+          // committed reveal frees the list for taps on the release frame, not
+          // after the deferred navigation lands.
+          effectiveOpen && !dragging && "pointer-events-none",
         )}
         style={{
           transform: `translate3d(${offset}px, 0, 0)`,

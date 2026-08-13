@@ -2341,9 +2341,24 @@ export function DMsPage() {
       setRenderedPeer(activePeer);
       return;
     }
-    // No active peer: keep the last thread mounted for the slide-out, then drop.
-    const timer = setTimeout(() => setRenderedPeer(undefined), 250);
-    return () => clearTimeout(timer);
+    // No active peer: keep the last thread mounted for the slide-out, then
+    // drop it — at IDLE, not on a bare timer. Unmounting a full message
+    // timeline (unvirtualized rows, media embeds, composer) is one synchronous
+    // commit; on a fixed 250ms timer it landed right at the 200ms settle
+    // transition's tail and read as an end-of-gesture stutter. The timeout
+    // bound still tears it down if the main thread never goes idle.
+    let idleId: number | undefined;
+    const timer = setTimeout(() => {
+      if (typeof requestIdleCallback === "function") {
+        idleId = requestIdleCallback(() => setRenderedPeer(undefined), { timeout: 1000 });
+      } else {
+        setRenderedPeer(undefined);
+      }
+    }, 300);
+    return () => {
+      clearTimeout(timer);
+      if (idleId !== undefined) cancelIdleCallback(idleId);
+    };
   }, [activePeer]);
 
   // Composing takes over the thread column immediately — drop any lingering

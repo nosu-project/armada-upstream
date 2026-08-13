@@ -19,17 +19,6 @@ const STALL_RESET_MS = 3000;
 /** How often the stale-drag watchdog checks. */
 const STALL_POLL_MS = 500;
 
-export interface EdgeSwipeState {
-  /**
-   * Live drag progress in px toward the gesture's target, 0..width.
-   * For an "open" gesture this is how far the chat has slid right; for a
-   * "close" gesture it's how far it has slid back left from fully-open.
-   */
-  dragX: number;
-  /** True while the finger is actively dragging. */
-  dragging: boolean;
-}
-
 export interface UseEdgeSwipeOptions {
   /** Disable the gesture entirely (e.g. on desktop / non-touch). */
   enabled?: boolean;
@@ -40,6 +29,14 @@ export interface UseEdgeSwipeOptions {
   direction?: "open" | "close";
   /** Called when a drag crosses the commit threshold and is released. */
   onCommit: () => void;
+  /**
+   * Streamed synchronously per pointermove with the live drag progress in px
+   * toward the gesture's target (0..width) — NOT a React state update. The
+   * caller maps it onto a transform with a direct style write, so tracking
+   * the finger never re-renders the (heavy) page tree. Only `dragging`
+   * (claim/release, twice per gesture) goes through state.
+   */
+  onDragMove?: (dragX: number) => void;
 }
 
 /**
@@ -66,7 +63,8 @@ function startsInRightwardScroller(
 
 /**
  * Discord-style horizontal "swipe back/forward" gesture. Tracks a horizontal
- * drag and reports a live `dragX` (progress toward the target) the caller maps
+ * drag and streams the live progress toward the target through `onDragMove`
+ * (see its doc for why it is a callback, not state) for the caller to map
  * onto a `translateX`. On release it either commits (`onCommit`) or springs
  * back.
  *
@@ -83,8 +81,15 @@ export function useEdgeSwipe({
   enabled = true,
   direction = "open",
   onCommit,
+  onDragMove,
 }: UseEdgeSwipeOptions) {
-  const [state, setState] = useState<EdgeSwipeState>({ dragX: 0, dragging: false });
+  /** True while the finger is actively dragging (claimed). */
+  const [dragging, setDragging] = useState(false);
+
+  // Latest per-move callback, read through a ref so an inline closure from the
+  // caller doesn't re-bind the pointer handlers every render.
+  const onDragMoveRef = useRef(onDragMove);
+  onDragMoveRef.current = onDragMove;
 
   // Mutable gesture bookkeeping kept off React state to avoid re-renders mid-drag.
   const startX = useRef(0);
@@ -128,10 +133,10 @@ export function useEdgeSwipe({
     dragXRef.current = 0;
     touchTarget.current?.removeEventListener("touchmove", onNativeTouchMove);
     touchTarget.current = null;
-    // Functional + identity-preserving so calling this when nothing is in
-    // flight (the `enabled` teardown below runs on every disabled mount) is a
-    // true no-op rather than a wasted render.
-    setState((s) => (s.dragging || s.dragX !== 0 ? { dragX: 0, dragging: false } : s));
+    // React bails out when the value is unchanged, so calling this when
+    // nothing is in flight (the `enabled` teardown below runs on every
+    // disabled mount) is a true no-op rather than a wasted render.
+    setDragging(false);
   }, [onNativeTouchMove]);
 
   // Abandon an in-flight gesture the moment the hook is disabled. `enabled` is
@@ -215,7 +220,10 @@ export function useEdgeSwipe({
 
       const clamped = Math.max(0, Math.min(dx, widthRef.current));
       dragXRef.current = clamped;
-      setState({ dragX: clamped, dragging: true });
+      // Stream the position to the caller's direct style write; only the
+      // claim itself renders (setDragging bails out once already true).
+      onDragMoveRef.current?.(clamped);
+      setDragging(true);
     },
     [sign],
   );
@@ -245,7 +253,7 @@ export function useEdgeSwipe({
   // container, so `finish` has already run and nulled `pointerId` by the time
   // these see the event, making them a no-op on the normal path.
   useEffect(() => {
-    if (!state.dragging) return;
+    if (!dragging) return;
     const onEnd = (e: PointerEvent) => {
       if (pointerId.current === null || pointerId.current === e.pointerId) reset();
     };
@@ -271,7 +279,7 @@ export function useEdgeSwipe({
       window.removeEventListener("pagehide", onPageHide);
       offAppState();
     };
-  }, [state.dragging, reset]);
+  }, [dragging, reset]);
 
   // Stale-drag watchdog, the net under the nets: every path above still needs
   // SOME event to be delivered, and the stuck-sliver reports show the WebView
@@ -279,15 +287,22 @@ export function useEdgeSwipe({
   // no pointer traffic for STALL_RESET_MS cannot still be a live gesture, so
   // it springs back on a timer that depends on nothing but the event loop.
   useEffect(() => {
-    if (!state.dragging) return;
+    if (!dragging) return;
     const id = window.setInterval(() => {
       if (performance.now() - lastT.current > STALL_RESET_MS) reset();
     }, STALL_POLL_MS);
     return () => window.clearInterval(id);
-  }, [state.dragging, reset]);
+  }, [dragging, reset]);
 
   return {
-    ...state,
+    dragging,
+    /**
+     * Live drag progress in px toward the gesture's target, 0..width, updated
+     * synchronously per pointermove. A ref rather than state so a render that
+     * happens mid-drag (for unrelated reasons) can still paint the current
+     * position without the gesture itself ever forcing one.
+     */
+    dragXRef,
     /**
      * Abandon any in-flight drag and spring back. Exposed so the caller can
      * make a programmatic state change (navigation) win over a stale gesture.

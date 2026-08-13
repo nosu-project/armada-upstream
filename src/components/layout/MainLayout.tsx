@@ -29,14 +29,15 @@ export function MainLayout() {
   return (
     <CallProvider>
       <AppsProvider>
-        {/* The persistent server rail on the desktop side-by-side layout: a
-            sibling of the routed page (not a child), so navigating between
-            communities no longer unmounts and rebuilds the whole rail — its
-            per-item hook fan-out and the tap target — on every switch. On the
-            touch drill-down it renders nothing; there each page still owns its
-            own rail inside its SwipeReveal underlay. `AppsProvider` passes
-            children straight through, so this lands as the first flex child of
-            CallProvider's row — exactly where the page-owned rail sat. */}
+        {/* The ONE persistent server rail, owned here so navigating between
+            sections never unmounts and rebuilds it — its per-item hook fan-out
+            and the tap target — on every switch. On the desktop side-by-side
+            layout it renders in place as a sibling of the routed page
+            (`AppsProvider` passes children straight through, so this lands as
+            the first flex child of CallProvider's row). On the touch
+            drill-down it renders through a portal into a shared container
+            whose DOM each page's `<ServerRail />` slot adopts inside its
+            SwipeReveal underlay — see the note above `getRailPortalNode`. */}
         <ServerRail variant="shell" />
         <Outlet />
         <DirectInviteNotifier />

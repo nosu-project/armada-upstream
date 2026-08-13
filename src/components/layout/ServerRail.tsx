@@ -1,6 +1,7 @@
 import { Bluetooth, Compass, FolderOpen, Headphones, Lock, LogOut, MailPlus, MessageSquare, PanelLeftDashed, Plus, Settings, Trash2 } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
 import type React from "react";
@@ -136,6 +137,15 @@ interface RailDragProps {
   onDragPointerDown?: (e: PointerEvent) => void;
   /** Returns true if a click should be suppressed (a drag just finished). */
   shouldSuppressClick?: () => boolean;
+  /**
+   * Optimistic active highlight: this entry was just tapped and its navigation
+   * is still rendering. Styled exactly like `isActive` so the destination
+   * lights up on the tap frame, not when the (startTransition-wrapped) route
+   * render finally commits.
+   */
+  pending?: boolean;
+  /** Report a (non-suppressed) tap for the optimistic highlight above. */
+  onPressed?: () => void;
 }
 
 /** data-* attributes identifying a draggable node for slot hit-testing. */
@@ -445,6 +455,8 @@ const ServerButton = memo(function ServerButton({
   dragParent,
   onDragPointerDown,
   shouldSuppressClick,
+  pending,
+  onPressed,
 }: {
   url: string;
   onNavigate?: () => void;
@@ -581,6 +593,7 @@ const ServerButton = memo(function ServerButton({
                     e.preventDefault();
                     return;
                   }
+                  onPressed?.();
                   onNavigate?.();
                 }}
                 // A STRING, not a function: this NavLink is cloned by the
@@ -591,7 +604,9 @@ const ServerButton = memo(function ServerButton({
                 className={cn(triggerClass, dragClass)}
                 {...interactionProps}
               >
-                {({ isActive }) => <DragSlot dragging={dragging}>{inner(isActive)}</DragSlot>}
+                {({ isActive }) => (
+                  <DragSlot dragging={dragging}>{inner(isActive || Boolean(pending))}</DragSlot>
+                )}
               </NavLink>
             )}
           </ContextMenuTrigger>
@@ -638,6 +653,8 @@ const Concord2Button = memo(function Concord2Button({
   dragParent,
   onDragPointerDown,
   shouldSuppressClick,
+  pending,
+  onPressed,
 }: {
   communityId: string;
   name: string;
@@ -704,6 +721,7 @@ const Concord2Button = memo(function Concord2Button({
               e.preventDefault();
               return;
             }
+            onPressed?.();
             onNavigate?.();
           }}
           className={cn(
@@ -713,7 +731,9 @@ const Concord2Button = memo(function Concord2Button({
           )}
           {...(draggable ? dragAttrs(itemAnchor(concordKey(communityId)), dragParent) : {})}
         >
-          {({ isActive }) => (
+          {({ isActive: routeActive }) => {
+            const isActive = routeActive || Boolean(pending);
+            return (
             <DragSlot dragging={dragging}>
               <>
                 {/* Active marker: the same neon blade servers get, so the
@@ -774,7 +794,8 @@ const Concord2Button = memo(function Concord2Button({
                 </span>
               </>
             </DragSlot>
-          )}
+            );
+          }}
         </NavLink>
           </ContextMenuTrigger>
         </TooltipTrigger>
@@ -818,6 +839,8 @@ const DmButton = memo(function DmButton({
   dragParent,
   onDragPointerDown,
   shouldSuppressClick,
+  pending,
+  onPressed,
 }: {
   pubkey: string;
   onNavigate?: () => void;
@@ -862,6 +885,7 @@ const DmButton = memo(function DmButton({
                   e.preventDefault();
                   return;
                 }
+                onPressed?.();
                 onNavigate?.();
               }}
               className={cn(
@@ -871,7 +895,9 @@ const DmButton = memo(function DmButton({
               )}
               {...(draggable ? dragAttrs(itemAnchor(dmRailKey(pubkey)), dragParent) : {})}
             >
-              {({ isActive }) => (
+              {({ isActive: routeActive }) => {
+                const isActive = routeActive || Boolean(pending);
+                return (
                 <DragSlot dragging={dragging}>
                   <>
                     {/* The same neon blade every rail entry gets. */}
@@ -918,7 +944,8 @@ const DmButton = memo(function DmButton({
                     </span>
                   </>
                 </DragSlot>
-              )}
+                );
+              }}
             </NavLink>
           </ContextMenuTrigger>
         </TooltipTrigger>
@@ -1154,6 +1181,51 @@ function useSideBySideLayout(): boolean {
   return !(isTouch && narrow);
 }
 
+// ─── Persistent drill-down rail ──────────────────────────────────────────
+//
+// On the touch drill-down every page shows the rail inside its SwipeReveal
+// underlay, so switching sections (DMs ↔ a community) used to unmount and
+// rebuild the entire rail — its per-item hook fan-out AND the very button the
+// user had just tapped — as part of the route transition. That rebuild is a
+// large slice of the main-thread work that made the first tap after a section
+// switch feel dead. The fix mirrors what `variant="shell"` did for desktop,
+// except the rail's DOM has to LIVE inside each page's underlay (the chat
+// pane slides over it and the parallax translates it), so a shell sibling
+// won't do. Instead the drill-down rail is rendered ONCE — by MainLayout's
+// shell ServerRail, through a portal into this detached container — and each
+// page's plain `<ServerRail />` renders a slot that ADOPTS the container's
+// DOM node on mount. Moving a DOM node between slots is cheap and invisible
+// to React: the component tree, its hooks and their subscriptions survive
+// every section switch.
+let railPortalNode: HTMLDivElement | null = null;
+function getRailPortalNode(): HTMLDivElement {
+  if (!railPortalNode) {
+    railPortalNode = document.createElement("div");
+    // Both this container and the slot are `display: contents`, so the rail's
+    // root element participates in the underlay's flex row exactly as if the
+    // page had rendered it inline.
+    railPortalNode.style.display = "contents";
+  }
+  return railPortalNode;
+}
+
+function RailSlot() {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const slot = ref.current;
+    if (!slot) return;
+    const node = getRailPortalNode();
+    // appendChild MOVES the node if something still holds it; in the normal
+    // route-switch commit the outgoing slot's cleanup has already run, so this
+    // is an append of a detached node before paint — no railless frame.
+    slot.appendChild(node);
+    return () => {
+      if (node.parentNode === slot) slot.removeChild(node);
+    };
+  }, []);
+  return <div style={{ display: "contents" }} ref={ref} />;
+}
+
 export interface ServerRailProps {
   onNavigate?: () => void;
   /** When set, tapping a server fires this instead of navigating (drawer mode). */
@@ -1162,12 +1234,14 @@ export interface ServerRailProps {
   selectedServer?: string;
   className?: string;
   /**
-   * `shell` = the single persistent rail MainLayout renders on the desktop
-   * side-by-side layout. `page` (default) = the rail a page renders inside its
-   * mobile drill-down. Exactly one is live per layout — the other renders
-   * nothing — so navigating between communities on desktop no longer unmounts
-   * and rebuilds the rail (its whole per-item hook fan-out) on every switch,
-   * and the tap target the user is clicking stays mounted.
+   * `shell` = the single persistent rail MainLayout owns: rendered in place on
+   * the desktop side-by-side layout, and portaled into the shared drill-down
+   * container (see `getRailPortalNode`) on touch. `page` (default) = what a
+   * page renders inside its mobile drill-down underlay — a SLOT that adopts
+   * the persistent rail's DOM (or nothing on desktop). Either way the rail
+   * component itself survives navigation, so its whole per-item hook fan-out
+   * isn't rebuilt on every switch and the tap target the user is clicking
+   * stays mounted.
    */
   variant?: "shell" | "page";
 }
@@ -1175,14 +1249,25 @@ export interface ServerRailProps {
 export function ServerRail({ variant = "page", ...props }: ServerRailProps) {
   const sideBySide = useSideBySideLayout();
   const { user } = useCurrentUser();
-  // shell lives only in the side-by-side layout; page only in the drill-down.
-  if (variant === "shell" ? !sideBySide : sideBySide) return null;
-  // The persistent shell rail is part of the logged-in app frame; a logged-out
-  // visitor sitting on /welcome (nested under MainLayout) has no communities and
-  // must not see the rail's +/Discover/Settings chrome. The page-variant rail is
-  // owned by pages that manage their own logged-out state, so leave it alone.
-  if (variant === "shell" && !user) return null;
-  return <ServerRailInner {...props} />;
+  if (variant === "shell") {
+    // Drill-down: host the ONE persistent rail; page slots adopt its DOM.
+    // No `user` gate here — the drill-down rail belongs to pages that manage
+    // their own logged-out state (it always rendered for them), and with no
+    // slot mounted (e.g. /welcome) the container simply stays detached.
+    if (!sideBySide) return createPortal(<ServerRailInner {...props} />, getRailPortalNode());
+    // The persistent shell rail is part of the logged-in app frame; a logged-out
+    // visitor sitting on /welcome (nested under MainLayout) has no communities and
+    // must not see the rail's +/Discover/Settings chrome.
+    if (!user) return null;
+    return <ServerRailInner {...props} />;
+  }
+  // page variant lives only in the drill-down.
+  if (sideBySide) return null;
+  // A page that customizes its rail (MeshPage's onNavigate, drawer mode) keeps
+  // a private instance; the plain `<ServerRail />` everywhere else shares the
+  // persistent one through a slot.
+  if (props.onNavigate || props.onServerSelect) return <ServerRailInner {...props} />;
+  return <RailSlot />;
 }
 
 function ServerRailInner({
@@ -1205,6 +1290,34 @@ function ServerRailInner({
   const { mutateAsync: updateList } = useUpdateUserGroupList();
   const concord = useLiveCommunities();
   const [addOpen, setAddOpen] = useState(false);
+
+  // Optimistic "this is where we're going" highlight. React Router v7 wraps
+  // every navigation in startTransition, so on a slow section switch the
+  // tapped entry wouldn't light until the whole destination page had rendered
+  // — reading as a dead tap. Set synchronously on click (a high-priority
+  // update that paints on the tap frame), cleared when the location actually
+  // changes; the timeout covers a tap whose navigation never moves the
+  // location (re-tapping the active entry).
+  const [pendingNav, setPendingNav] = useState<string | null>(null);
+  useEffect(() => {
+    setPendingNav(null);
+  }, [location]);
+  useEffect(() => {
+    if (pendingNav === null) return;
+    const timer = window.setTimeout(() => setPendingNav(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [pendingNav]);
+  // Cached per key so the memoized buttons keep their bailout (same reason as
+  // dragPointerDownFor below).
+  const pressedByKey = useRef(new Map<string, () => void>());
+  const onPressedFor = (key: string) => {
+    let fn = pressedByKey.current.get(key);
+    if (!fn) {
+      fn = () => setPendingNav(key);
+      pressedByKey.current.set(key, fn);
+    }
+    return fn;
+  };
 
   // The NIP-29 half of the rail: the servers in the user's kind 10009 list, so
   // the rail shows only servers the user actually added or joined.
@@ -1470,6 +1583,8 @@ function ServerRailInner({
       dragParent: parentFolderId,
       onDragPointerDown: dragPointerDownFor(item.key),
       shouldSuppressClick,
+      pending: pendingNav === item.key,
+      onPressed: onPressedFor(item.key),
     };
     if (item.kind === "server") {
       return (
@@ -1559,7 +1674,10 @@ function ServerRailInner({
               <NavLink
                 to="/mesh"
                 aria-label="Nearby mesh"
-                onClick={onNavigate}
+                onClick={() => {
+                  onPressedFor("nav:mesh")();
+                  onNavigate?.();
+                }}
                 className="group relative flex items-center justify-center shrink-0"
               >
                 {/* Active marker: the same neon blade the community buttons use
@@ -1570,6 +1688,7 @@ function ServerRailInner({
                     "absolute -left-2 w-[3px] bg-primary transition-all",
                     "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
                     "group-aria-[current=page]:h-12 group-aria-[current=page]:opacity-100",
+                    pendingNav === "nav:mesh" && "h-12 opacity-100",
                   )}
                 />
                 <span
@@ -1584,6 +1703,7 @@ function ServerRailInner({
                       "bg-muted text-primary opacity-50 saturate-50",
                       "group-hover:opacity-100 group-hover:saturate-100",
                       "group-aria-[current=page]:opacity-100 group-aria-[current=page]:saturate-100",
+                      pendingNav === "nav:mesh" && "opacity-100 saturate-100",
                     )}
                   >
                     <Bluetooth className="size-5" />
@@ -1605,17 +1725,22 @@ function ServerRailInner({
               <NavLink
                 to="/dm"
                 aria-label="Direct messages"
-                onClick={onNavigate}
+                onClick={() => {
+                  onPressedFor("nav:dm")();
+                  onNavigate?.();
+                }}
                 className="group relative flex items-center justify-center shrink-0"
               >
                 {/* Active marker: the same neon blade the community buttons use
                     (see `inner`), so DMs/Mesh signal the active route identically.
-                    Driven by aria-current=page rather than an isActive prop. */}
+                    Driven by aria-current=page rather than an isActive prop; the
+                    `pendingNav` classes are the optimistic tap highlight. */}
                 <span
                   className={cn(
                     "absolute -left-2 w-[3px] bg-primary transition-all",
                     "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
                     "group-aria-[current=page]:h-12 group-aria-[current=page]:opacity-100",
+                    pendingNav === "nav:dm" && "h-12 opacity-100",
                   )}
                 />
                 <span
@@ -1630,6 +1755,7 @@ function ServerRailInner({
                       "bg-muted text-primary opacity-50 saturate-50",
                       "group-hover:opacity-100 group-hover:saturate-100",
                       "group-aria-[current=page]:opacity-100 group-aria-[current=page]:saturate-100",
+                      pendingNav === "nav:dm" && "opacity-100 saturate-100",
                     )}
                   >
                     <MessageSquare className="size-5" />
@@ -1664,7 +1790,10 @@ function ServerRailInner({
               <NavLink
                 to="/invites"
                 aria-label="Invites"
-                onClick={onNavigate}
+                onClick={() => {
+                  onPressedFor("nav:invites")();
+                  onNavigate?.();
+                }}
                 className="group relative flex items-center justify-center shrink-0"
               >
                 <span
@@ -1672,6 +1801,7 @@ function ServerRailInner({
                     "absolute -left-2 w-[3px] bg-primary transition-all",
                     "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
                     "group-aria-[current=page]:h-12 group-aria-[current=page]:opacity-100",
+                    pendingNav === "nav:invites" && "h-12 opacity-100",
                   )}
                 />
                 <span
@@ -1686,6 +1816,7 @@ function ServerRailInner({
                       "bg-muted text-success opacity-60 saturate-50",
                       "group-hover:opacity-100 group-hover:saturate-100",
                       "group-aria-[current=page]:opacity-100 group-aria-[current=page]:saturate-100",
+                      pendingNav === "nav:invites" && "opacity-100 saturate-100",
                     )}
                   >
                     <MailPlus className="size-5" />
@@ -1761,7 +1892,10 @@ function ServerRailInner({
             <NavLink
               to="/discover"
               aria-label="Discover"
-              onClick={onNavigate}
+              onClick={() => {
+                onPressedFor("nav:discover")();
+                onNavigate?.();
+              }}
               className="group relative flex items-center justify-center shrink-0"
             >
               <span
@@ -1769,6 +1903,7 @@ function ServerRailInner({
                   "absolute -left-2 w-[3px] bg-primary transition-all",
                   "h-2 opacity-0 group-hover:opacity-60 group-hover:h-6",
                   "group-aria-[current=page]:h-12 group-aria-[current=page]:opacity-100",
+                  pendingNav === "nav:discover" && "h-12 opacity-100",
                 )}
               />
               <span
@@ -1783,6 +1918,7 @@ function ServerRailInner({
                     "bg-muted text-primary opacity-50 saturate-50",
                     "group-hover:opacity-100 group-hover:saturate-100",
                     "group-aria-[current=page]:opacity-100 group-aria-[current=page]:saturate-100",
+                    pendingNav === "nav:discover" && "opacity-100 saturate-100",
                   )}
                 >
                   <Compass className="size-5" />
