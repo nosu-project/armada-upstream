@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 
 import { BlurhashCanvas } from "@/components/BlurhashCanvas";
 import { MediaFallback } from "@/components/chat/MediaFallback";
+import { VideoPlayer } from "@/components/chat/VideoPlayer";
 import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { useResolvedMediaSrc } from "@/hooks/useResolvedMediaSrc";
@@ -15,8 +16,19 @@ import { cn } from "@/lib/utils";
 
 import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
 
+/** One gallery entry: an image, or a video with an optional poster frame. */
+export interface LightboxItem extends EncryptedRef {
+  /** Video poster frame (NIP-94 `image`/`thumb`); ignored for images. */
+  poster?: string;
+}
+
+/** Videos get a player slot instead of a zoomable image one. */
+function isVideoItem(item: LightboxItem): boolean {
+  return item.mime?.startsWith("video/") ?? false;
+}
+
 interface LightboxProps {
-  images: EncryptedRef[];
+  media: LightboxItem[];
   currentIndex: number;
   onClose: () => void;
   onNext: () => void;
@@ -27,9 +39,9 @@ const EASING = "cubic-bezier(0.25, 0.46, 0.45, 0.94)";
 const DURATION = 280;
 
 /**
- * Fullscreen image lightbox — cinematic gallery ported from Ditto.
+ * Fullscreen media lightbox — cinematic gallery ported from Ditto.
  *
- * Features: horizontal swipe between images (a slot strip that keeps decoded
+ * Features: horizontal swipe between items (a slot strip that keeps decoded
  * images in memory so neighbours don't reload), pinch / wheel / double-tap zoom
  * and pan per image, vertical swipe-to-dismiss (disabled while zoomed), keyboard
  * navigation (arrows + Escape), dot indicators, and a download / open-original
@@ -37,11 +49,17 @@ const DURATION = 280;
  *
  * Each slot is rendered at a stable key and positioned absolutely at
  * `translateX((index - currentIndex) * 100vw + dragOffset)`; only the current
- * image and its immediate neighbours are mounted to cap DOM size.
+ * item and its immediate neighbours are mounted to cap DOM size.
+ *
+ * A video slot plays in place with native controls, which is why every gesture
+ * here — the strip drag, swipe-to-dismiss, the backdrop click and the arrow
+ * keys — bows out when the interaction starts on a `<video>`: the scrubber and
+ * the volume slider are drags too, and losing them to a slide or a dismiss
+ * makes the controls unusable.
  */
-export function Lightbox({ images, currentIndex, onClose, onNext, onPrev }: LightboxProps) {
-  const hasMultiple = images.length > 1;
-  const canGoNext = currentIndex < images.length - 1;
+export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: LightboxProps) {
+  const hasMultiple = media.length > 1;
+  const canGoNext = currentIndex < media.length - 1;
   const canGoPrev = currentIndex > 0;
 
   // System back (Android gesture/button) closes the lightbox instead of
@@ -64,6 +82,8 @@ export function Lightbox({ images, currentIndex, onClose, onNext, onPrev }: Ligh
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
+      // Arrows seek a focused video; only navigate when one isn't handling them.
+      else if ((e.target as HTMLElement | null)?.closest?.("video")) return;
       else if (e.key === "ArrowRight" && canGoNext) onNext();
       else if (e.key === "ArrowLeft" && canGoPrev) onPrev();
     };
@@ -117,11 +137,17 @@ export function Lightbox({ images, currentIndex, onClose, onNext, onPrev }: Ligh
     }
   }, []);
 
+  const currentIsVideo = media[currentIndex] ? isVideoItem(media[currentIndex]) : false;
+
   // Snap all slots into place when the index changes (keyboard/button nav).
   useEffect(() => {
     dragOffsetRef.current = 0;
     snapAll(0);
-  }, [currentIndex, snapAll]);
+    // Only an image slot reports its zoom, so arriving at a video would inherit
+    // whatever the last image left behind — and a stale lock freezes the strip
+    // and dismiss gestures on a slot that can't clear it.
+    if (currentIsVideo) childZoomedRef.current = false;
+  }, [currentIndex, currentIsVideo, snapAll]);
 
   // Clear the animating lock on unmount so stale refs can't block controls.
   useEffect(() => () => {
@@ -130,6 +156,12 @@ export function Lightbox({ images, currentIndex, onClose, onNext, onPrev }: Ligh
 
   const onTouchStart = (e: React.TouchEvent) => {
     if (animating.current) return;
+    // A touch that lands on a video belongs to its controls, not to the strip.
+    if ((e.target as HTMLElement).closest("video")) {
+      dragX.current = null;
+      dragY.current = null;
+      return;
+    }
     if (e.touches.length >= 2) {
       dragX.current = null;
       dragY.current = null;
@@ -237,15 +269,23 @@ export function Lightbox({ images, currentIndex, onClose, onNext, onPrev }: Ligh
 
   const handleBackdropClick = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
-    if (target.tagName === "IMG" || target.closest("button") || target.closest("[data-gallery-topbar]")) return;
+    if (
+      target.tagName === "IMG" ||
+      // Tapping a video toggles playback / works its controls; it never closes.
+      target.closest("video") ||
+      target.closest("button") ||
+      target.closest("[data-gallery-topbar]")
+    ) {
+      return;
+    }
     e.stopPropagation();
     e.preventDefault();
     onClose();
   };
 
-  // Only the current image and its immediate neighbours are mounted.
+  // Only the current item and its immediate neighbours are mounted.
   const visibleIndices = [currentIndex - 1, currentIndex, currentIndex + 1].filter(
-    (i) => i >= 0 && i < images.length,
+    (i) => i >= 0 && i < media.length,
   );
 
   return createPortal(
@@ -270,14 +310,14 @@ export function Lightbox({ images, currentIndex, onClose, onNext, onPrev }: Ligh
         >
           {hasMultiple ? (
             <span className="text-white/80 text-sm font-medium tabular-nums">
-              {currentIndex + 1} / {images.length}
+              {currentIndex + 1} / {media.length}
             </span>
           ) : (
             <span />
           )}
           <div className="flex items-center gap-1">
-            <LightboxShareButton image={images[currentIndex]} />
-            <LightboxDownloadButton image={images[currentIndex]} />
+            <LightboxShareButton item={media[currentIndex]} />
+            <LightboxDownloadButton item={media[currentIndex]} />
             <button
               type="button"
               aria-label="Close"
@@ -298,7 +338,7 @@ export function Lightbox({ images, currentIndex, onClose, onNext, onPrev }: Ligh
         {canGoPrev && (
           <button
             type="button"
-            aria-label="Previous image"
+            aria-label="Previous"
             title="Previous"
             onClick={(e) => {
               e.stopPropagation();
@@ -312,7 +352,7 @@ export function Lightbox({ images, currentIndex, onClose, onNext, onPrev }: Ligh
         {canGoNext && (
           <button
             type="button"
-            aria-label="Next image"
+            aria-label="Next"
             title="Next"
             onClick={(e) => {
               e.stopPropagation();
@@ -330,7 +370,7 @@ export function Lightbox({ images, currentIndex, onClose, onNext, onPrev }: Ligh
             const initialX = (i - currentIndex) * window.innerWidth;
             return (
               <div
-                key={images[i].url || i}
+                key={media[i].url || i}
                 ref={(el) => {
                   if (el) slotRefs.current.set(i, el);
                   else slotRefs.current.delete(i);
@@ -338,26 +378,30 @@ export function Lightbox({ images, currentIndex, onClose, onNext, onPrev }: Ligh
                 className="absolute inset-0 flex items-center justify-center will-change-transform py-6 pt-14 px-4 sm:px-12"
                 style={{ transform: `translateX(${initialX}px)` }}
               >
-                <LightboxImage
-                  image={images[i]}
-                  isActive={i === currentIndex}
-                  onSwipeBlocked={() => {
-                    dragX.current = null;
-                    axis.current = null;
-                  }}
-                  onZoomChange={(zoomed) => {
-                    if (i === currentIndex) childZoomedRef.current = zoomed;
-                  }}
-                />
+                {isVideoItem(media[i]) ? (
+                  <LightboxVideo video={media[i]} isActive={i === currentIndex} />
+                ) : (
+                  <LightboxImage
+                    image={media[i]}
+                    isActive={i === currentIndex}
+                    onSwipeBlocked={() => {
+                      dragX.current = null;
+                      axis.current = null;
+                    }}
+                    onZoomChange={(zoomed) => {
+                      if (i === currentIndex) childZoomedRef.current = zoomed;
+                    }}
+                  />
+                )}
               </div>
             );
           })}
         </div>
 
         {/* Dot indicators (mobile) */}
-        {hasMultiple && images.length <= 10 && (
+        {hasMultiple && media.length <= 10 && (
           <div className="absolute left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 bottom-6 sm:hidden">
-            {images.map((_, i) => (
+            {media.map((_, i) => (
               <div
                 key={i}
                 className={cn(
@@ -375,16 +419,17 @@ export function Lightbox({ images, currentIndex, onClose, onNext, onPrev }: Ligh
 }
 
 /**
- * Top-bar button that saves the current image to the device.
+ * Top-bar button that saves the current item to the device.
  *
  * The bytes are fetched from the *resolved* source (a local `blob:` URL for
  * encrypted / Buzz media, the original `https:` URL otherwise) and written to
  * disk — Downloads on the web, the app's Documents directory on native, where
  * a `blob:` anchor download silently fails. Cross-origin hosts without CORS
- * can't be read, so `downloadUrl` falls back to opening the image instead.
+ * can't be read, so `downloadUrl` falls back to opening the file instead.
  */
-function LightboxDownloadButton({ image }: { image: EncryptedRef }) {
-  const resolved = useResolvedMediaSrc(image);
+function LightboxDownloadButton({ item }: { item: LightboxItem }) {
+  const noun = isVideoItem(item) ? "video" : "image";
+  const resolved = useResolvedMediaSrc(item);
   const [downloading, setDownloading] = useState(false);
 
   const handleDownload = useCallback(
@@ -394,7 +439,7 @@ function LightboxDownloadButton({ image }: { image: EncryptedRef }) {
       if (downloading || resolved.status !== "ready") return;
       setDownloading(true);
       try {
-        const result = await downloadUrl(resolved.src, { nameHint: image.url, mime: image.mime });
+        const result = await downloadUrl(resolved.src, { nameHint: item.url, mime: item.mime });
         if (result === "downloaded") {
           toast(
             Capacitor.isNativePlatform()
@@ -404,27 +449,27 @@ function LightboxDownloadButton({ image }: { image: EncryptedRef }) {
         } else {
           toast({
             title: "Opened in a new tab",
-            description: "This image couldn't be saved directly, so it opened instead.",
+            description: `This ${noun} couldn't be saved directly, so it opened instead.`,
           });
         }
       } catch {
         toast({
           title: "Download failed",
-          description: "Could not save this image. Please try again.",
+          description: `Could not save this ${noun}. Please try again.`,
           variant: "destructive",
         });
       } finally {
         setDownloading(false);
       }
     },
-    [downloading, resolved, image.url, image.mime],
+    [downloading, resolved, item.url, item.mime, noun],
   );
 
   if (resolved.status !== "ready") return null;
   return (
     <button
       type="button"
-      aria-label="Download image"
+      aria-label={`Download ${noun}`}
       title="Download"
       disabled={downloading}
       className="p-2.5 rounded-full text-white/70 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-60 disabled:cursor-wait"
@@ -436,7 +481,7 @@ function LightboxDownloadButton({ image }: { image: EncryptedRef }) {
 }
 
 /**
- * Top-bar button that hands the current image to the system share sheet.
+ * Top-bar button that hands the current item to the system share sheet.
  *
  * Shares the FILE, never the URL: an encrypted attachment's `url` points at
  * ciphertext whose key never leaves this client, and the resolved `blob:` src
@@ -445,8 +490,9 @@ function LightboxDownloadButton({ image }: { image: EncryptedRef }) {
  * share sheet can't carry a file (desktop Firefox, older Safari), since the
  * download button already covers that case.
  */
-function LightboxShareButton({ image }: { image: EncryptedRef }) {
-  const resolved = useResolvedMediaSrc(image);
+function LightboxShareButton({ item }: { item: LightboxItem }) {
+  const noun = isVideoItem(item) ? "video" : "image";
+  const resolved = useResolvedMediaSrc(item);
   const [sharing, setSharing] = useState(false);
 
   const handleShare = useCallback(
@@ -457,13 +503,13 @@ function LightboxShareButton({ image }: { image: EncryptedRef }) {
       setSharing(true);
       try {
         const shared = await shareFile(resolved.src, {
-          nameHint: image.url,
-          mime: image.mime,
-          dialogTitle: "Share image",
+          nameHint: item.url,
+          mime: item.mime,
+          dialogTitle: `Share ${noun}`,
         });
         if (!shared) {
           toast({
-            title: "Couldn't share this image",
+            title: `Couldn't share this ${noun}`,
             description: "Try downloading it instead.",
             variant: "destructive",
           });
@@ -472,14 +518,14 @@ function LightboxShareButton({ image }: { image: EncryptedRef }) {
         setSharing(false);
       }
     },
-    [sharing, resolved, image.url, image.mime],
+    [sharing, resolved, item.url, item.mime, noun],
   );
 
   if (resolved.status !== "ready" || !canShareFiles()) return null;
   return (
     <button
       type="button"
-      aria-label="Share image"
+      aria-label={`Share ${noun}`}
       title="Share"
       disabled={sharing}
       className="p-2.5 rounded-full text-white/70 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-60 disabled:cursor-wait"
@@ -487,6 +533,43 @@ function LightboxShareButton({ image }: { image: EncryptedRef }) {
     >
       {sharing ? <Loader2 className="size-5 animate-spin" /> : <Share2 className="size-5" />}
     </button>
+  );
+}
+
+/**
+ * A single lightbox video — the same {@link VideoPlayer} the message list uses,
+ * scaled to the slot.
+ *
+ * No zoom or pan: the native controls own this surface, and the parent's
+ * gestures already stand down for touches that start on a `<video>`. Playback
+ * starts paused (a slide is not consent to make noise) and a slot that stops
+ * being current is paused, so swiping on won't leave audio playing behind the
+ * item you're looking at.
+ */
+function LightboxVideo({ video, isActive }: { video: LightboxItem; isActive: boolean }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    if (!isActive) videoRef.current?.pause();
+  }, [isActive]);
+
+  return (
+    <div className="w-full h-full flex items-center justify-center">
+      <VideoPlayer
+        videoRef={videoRef}
+        src={video.url}
+        poster={video.poster}
+        mime={video.mime}
+        dim={video.dim}
+        blurhash={video.blurhash}
+        encryption={video.encryption}
+        fallbacks={video.fallbacks}
+        // The player's inline chrome (framed black card, capped at max-w-md)
+        // is wrong at full screen: let it fill the slot and drop the frame, so
+        // any letterboxing is just the backdrop showing through.
+        className="my-0 w-full max-w-4xl max-h-full border-0 rounded-none bg-transparent"
+      />
+    </div>
   );
 }
 

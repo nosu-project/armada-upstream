@@ -244,7 +244,7 @@ export function PinnedBar({
       </div>
       {galleryIndex !== null && galleryImages.length > 0 && (
         <Lightbox
-          images={galleryImages}
+          media={galleryImages}
           currentIndex={galleryIndex}
           onClose={closeGallery}
           onNext={nextImage}

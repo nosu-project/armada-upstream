@@ -30,12 +30,10 @@ import { Lightbox } from "@/components/chat/Lightbox";
 import { MentionAutocomplete } from "@/components/chat/MentionAutocomplete";
 import { SlashCommandAutocomplete } from "@/components/chat/SlashCommandAutocomplete";
 import { StickerPicker } from "@/components/chat/StickerPicker";
-import { VideoPlayer } from "@/components/chat/VideoPlayer";
 import { WebxdcGamePicker } from "@/components/chat/WebxdcGamePicker";
 import { DisplayName } from "@/components/DisplayName";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
@@ -828,51 +826,45 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       [uploadedFileGroups],
     );
 
-  /** Image-only attachments, in chip order — the composer lightbox gallery. */
-  const imageAttachments = useMemo(
+  /** Previewable attachments (images + video), in chip order — the gallery. */
+  const galleryAttachments = useMemo(
     () =>
       attachments
-        .filter((att) => att.isImage)
-        .map(({ url, mime, encryption, dim, blurhash }) => ({
+        .filter((att) => att.isImage || att.isVideo)
+        .map(({ url, mime, encryption, dim, blurhash, icon, isVideo }) => ({
           url,
           mime,
           encryption,
           dim,
           blurhash,
+          // The poster frame belongs to the video; on an image `icon` is unset.
+          poster: isVideo ? icon : undefined,
         })),
     [attachments],
   );
 
-  // The open lightbox image is tracked by URL rather than index so that removing
+  // The open lightbox item is tracked by URL rather than index so that removing
   // an attachment while it's open resolves to -1 and closes the lightbox instead
-  // of silently showing a different image.
+  // of silently showing a different one.
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const lightboxIndex = lightboxUrl
-    ? imageAttachments.findIndex((img) => img.url === lightboxUrl)
+    ? galleryAttachments.findIndex((item) => item.url === lightboxUrl)
     : -1;
   const closeLightbox = useCallback(() => setLightboxUrl(null), []);
   const stepLightbox = useCallback(
     (delta: number) => {
       setLightboxUrl((prev) => {
         if (prev === null) return prev;
-        const at = imageAttachments.findIndex((img) => img.url === prev);
+        const at = galleryAttachments.findIndex((item) => item.url === prev);
         if (at === -1) return null;
-        const len = imageAttachments.length;
-        return imageAttachments[(at + delta + len) % len].url;
+        const len = galleryAttachments.length;
+        return galleryAttachments[(at + delta + len) % len].url;
       });
     },
-    [imageAttachments],
+    [galleryAttachments],
   );
   const lightboxNext = useCallback(() => stepLightbox(1), [stepLightbox]);
   const lightboxPrev = useCallback(() => stepLightbox(-1), [stepLightbox]);
-
-  // Videos preview in their own dialog rather than the (image-only) lightbox,
-  // tracked by URL for the same reason: removing the attachment while it's open
-  // closes the dialog instead of swapping in a different video.
-  const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null);
-  const videoPreview = videoPreviewUrl
-    ? attachments.find((att) => att.url === videoPreviewUrl && att.isVideo)
-    : undefined;
 
   const removeAttachment = useCallback((url: string) => {
     setUploadedFileGroups((prev) => {
@@ -1886,7 +1878,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 <button
                   type="button"
                   aria-label="Preview video"
-                  onClick={() => setVideoPreviewUrl(att.url)}
+                  onClick={() => setLightboxUrl(att.url)}
                   className="size-full relative cursor-zoom-in bg-black/40"
                 >
                   {att.icon ? (
@@ -2520,30 +2512,12 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       {/* Tap an attachment chip to preview it full-screen before sending. */}
       {lightboxIndex !== -1 && (
         <Lightbox
-          images={imageAttachments}
+          media={galleryAttachments}
           currentIndex={lightboxIndex}
           onClose={closeLightbox}
           onNext={lightboxNext}
           onPrev={lightboxPrev}
         />
-      )}
-
-      {/* Video chips open here instead — the lightbox gallery is images only. */}
-      {videoPreview && (
-        <Dialog open onOpenChange={(open) => !open && setVideoPreviewUrl(null)}>
-          <DialogContent className="max-w-2xl p-3">
-            <DialogTitle className="sr-only">Video preview</DialogTitle>
-            <VideoPlayer
-              src={videoPreview.url}
-              poster={videoPreview.icon}
-              mime={videoPreview.mime}
-              dim={videoPreview.dim}
-              blurhash={videoPreview.blurhash}
-              encryption={videoPreview.encryption}
-              className="my-0 max-w-full"
-            />
-          </DialogContent>
-        </Dialog>
       )}
     </div>
   );

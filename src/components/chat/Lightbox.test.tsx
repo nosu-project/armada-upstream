@@ -1,0 +1,135 @@
+import { fireEvent, render, screen } from "@testing-library/react";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { Lightbox } from "@/components/chat/Lightbox";
+
+import type { LightboxItem } from "@/components/chat/Lightbox";
+
+// The media hooks read Blossom mirror config off the app context; none of these
+// URLs have a mirror, so an empty config keeps the resolver on the plain URL.
+vi.mock("@/hooks/useAppContext", () => ({
+  useAppContext: () => ({
+    config: {
+      appBlossomServers: [],
+      blossomServerMetadata: { servers: [] },
+      useAppBlossomServers: false,
+    },
+    updateConfig: vi.fn(),
+  }),
+}));
+
+const VIDEO: LightboxItem = {
+  url: "https://example.com/clip.mp4",
+  mime: "video/mp4",
+  poster: "https://example.com/clip.jpg",
+};
+const IMAGE: LightboxItem = { url: "https://example.com/pic.png", mime: "image/png" };
+
+// jsdom has no media stack, so pause() is "not implemented" — stub it out and
+// use the stub to observe the slot's own pause-when-inactive behavior.
+const pause = vi.fn();
+beforeAll(() => {
+  HTMLMediaElement.prototype.pause = pause;
+});
+beforeEach(() => pause.mockClear());
+
+function renderLightbox(media: LightboxItem[], currentIndex = 0) {
+  const onClose = vi.fn();
+  const view = render(
+    <Lightbox
+      media={media}
+      currentIndex={currentIndex}
+      onClose={onClose}
+      onNext={vi.fn()}
+      onPrev={vi.fn()}
+    />,
+  );
+  return { onClose, view };
+}
+
+describe("Lightbox", () => {
+  it("gives a video item a player rather than an image slot", () => {
+    renderLightbox([VIDEO]);
+
+    const video = document.querySelector("video");
+    expect(video).not.toBeNull();
+    expect(video).toHaveAttribute("src", VIDEO.url);
+    expect(document.querySelector("img")).toBeNull();
+  });
+
+  it("loops the video, so a short clip keeps playing", () => {
+    renderLightbox([VIDEO]);
+
+    expect(document.querySelector("video")).toHaveProperty("loop", true);
+  });
+
+  it("still renders an image item as a zoomable image", () => {
+    renderLightbox([IMAGE]);
+
+    expect(document.querySelector("img")).toHaveAttribute("src", IMAGE.url);
+    expect(document.querySelector("video")).toBeNull();
+  });
+
+  it("names the kind of media in the download button", () => {
+    const { view } = renderLightbox([VIDEO]);
+    expect(screen.getByLabelText("Download video")).toBeInTheDocument();
+
+    view.unmount();
+    renderLightbox([IMAGE]);
+    expect(screen.getByLabelText("Download image")).toBeInTheDocument();
+  });
+
+  it("does not close when the video is clicked — the click is play/pause", () => {
+    const { onClose } = renderLightbox([VIDEO]);
+
+    fireEvent.click(document.querySelector("video")!);
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("still closes on a backdrop click", () => {
+    const { onClose } = renderLightbox([VIDEO]);
+
+    fireEvent.click(document.querySelector("[data-lightbox-content]")!);
+
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("leaves the arrow keys to a focused video so they seek instead of paging", () => {
+    const media = [VIDEO, IMAGE];
+    const onNext = vi.fn();
+    render(
+      <Lightbox
+        media={media}
+        currentIndex={0}
+        onClose={vi.fn()}
+        onNext={onNext}
+        onPrev={vi.fn()}
+      />,
+    );
+
+    fireEvent.keyDown(document.querySelector("video")!, { key: "ArrowRight" });
+    expect(onNext).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(onNext).toHaveBeenCalled();
+  });
+
+  it("pauses a video slot once it is no longer the current one", () => {
+    const second: LightboxItem = { url: "https://example.com/other.mp4", mime: "video/mp4" };
+    const { view } = renderLightbox([VIDEO, second], 0);
+    pause.mockClear();
+
+    view.rerender(
+      <Lightbox
+        media={[VIDEO, second]}
+        currentIndex={1}
+        onClose={vi.fn()}
+        onNext={vi.fn()}
+        onPrev={vi.fn()}
+      />,
+    );
+
+    expect(pause).toHaveBeenCalled();
+  });
+});

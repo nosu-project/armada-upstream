@@ -1192,7 +1192,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
 
       {lightboxIndex !== null && (
         <Lightbox
-          images={allImages}
+          media={allImages}
           currentIndex={lightboxIndex}
           onClose={closeLightbox}
           onNext={goNext}

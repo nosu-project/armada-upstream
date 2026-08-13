@@ -10,6 +10,7 @@ import { companionEncryption } from "@/lib/imeta";
 import { cn } from "@/lib/utils";
 
 import type { ImetaEncryption } from "@/lib/imeta";
+import type { Ref } from "react";
 
 interface VideoPlayerProps {
   src: string;
@@ -30,6 +31,8 @@ interface VideoPlayerProps {
    * Set for Tenor/Giphy-style `.mp4` renditions that are really animated GIFs.
    */
   gif?: boolean;
+  /** Handle on the underlying element, for callers that pause it themselves. */
+  videoRef?: Ref<HTMLVideoElement>;
   className?: string;
 }
 
@@ -39,7 +42,7 @@ interface VideoPlayerProps {
  * (Concord/Vector) attachments are AES-GCM ciphertext on Blossom, so the src
  * is fetched + decrypted to an object URL before it reaches the <video>.
  */
-export function VideoPlayer({ src, poster, dim, blurhash, mime, encryption, fallbacks, gif = false, className }: VideoPlayerProps) {
+export function VideoPlayer({ src, poster, dim, blurhash, mime, encryption, fallbacks, gif = false, videoRef, className }: VideoPlayerProps) {
   const { resolved, onError, failed, fallbackProps } = useMediaWithFallback({ url: src, encryption, mime, fallbacks });
 
   // An encrypted poster is ciphertext on Blossom, so it has to be fetched and
@@ -83,6 +86,7 @@ export function VideoPlayer({ src, poster, dim, blurhash, mime, encryption, fall
     >
       {resolved.status === "ready" ? (
         <video
+          ref={videoRef}
           src={resolved.src}
           poster={gif ? undefined : posterSrc}
           controls={!gif}
