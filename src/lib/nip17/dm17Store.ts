@@ -501,6 +501,16 @@ export interface Dm17Cursor {
   oldest: number;
   /** No relay had deeper history past `oldest` — stop older-backfills. */
   exhausted: boolean;
+  /**
+   * Newest successfully scanned wrap timestamp per relay URL.
+   *
+   * A single account-wide cursor is not sufficient: inbox relays are
+   * heterogeneous, and one may be offline or still completing NIP-42 while
+   * another answers. Missing entries deliberately mean "never completed a
+   * scan" so an upgrade from the legacy cursor performs one full pass on every
+   * relay instead of inheriting progress another relay made.
+   */
+  relayNewest?: Record<string, number>;
 }
 
 const cursorKey = (self: string) => `dm17-cursor:${self}`;
@@ -516,6 +526,11 @@ export function readDm17Cursor(self: string): Promise<Dm17Cursor | undefined> {
  */
 export async function updateDm17Cursor(self: string, patch: Partial<Dm17Cursor>): Promise<void> {
   const prev = await readDm17Cursor(self);
+  const relayNewest = { ...(prev?.relayNewest ?? {}) };
+  for (const [relay, newest] of Object.entries(patch.relayNewest ?? {})) {
+    if (!Number.isFinite(newest) || newest <= 0) continue;
+    relayNewest[relay] = Math.max(relayNewest[relay] ?? 0, newest);
+  }
   const next: Dm17Cursor = {
     newest: Math.max(prev?.newest ?? 0, patch.newest ?? 0),
     oldest:
@@ -525,6 +540,7 @@ export async function updateDm17Cursor(self: string, patch: Partial<Dm17Cursor>)
           : patch.oldest
         : (prev?.oldest ?? 0),
     exhausted: patch.exhausted ?? prev?.exhausted ?? false,
+    ...(Object.keys(relayNewest).length > 0 ? { relayNewest } : {}),
   };
   await writeFolded(cursorKey(self), next);
 }

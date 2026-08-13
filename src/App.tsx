@@ -13,6 +13,7 @@ import { DBMigrationGate } from "@/components/DBMigrationGate";
 import { ControlPlaneSync } from "@/components/ControlPlaneSync";
 import { DeepLinkWarmup } from "@/components/DeepLinkWarmup";
 import { DesktopBadge } from "@/components/DesktopBadge";
+import { DmSyncLifecycle } from "@/components/DmSyncLifecycle";
 import { MeshProvider } from "@/components/MeshProvider";
 import { MutedPubkeysProvider } from "@/components/MutedPubkeysProvider";
 import { NativeNotifications } from "@/components/NativeNotifications";
@@ -89,6 +90,7 @@ export function App() {
                     <ReadStateProvider>
                       <MutedPubkeysProvider>
                       <WireSync />
+                      <DmSyncLifecycle />
                       <NostrSync />
                       <PublishOutbox />
                       <SyncGate />
