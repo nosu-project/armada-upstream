@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  accountDataRelays,
+  broadcastWriteRelays,
   defaultConfig,
   effectiveDmRelays,
   selfStateRelays,
 } from "@/contexts/AppContext";
-import { DM_RELAYS } from "@/lib/platform";
+import { BROADCAST_RELAYS, DM_RELAYS } from "@/lib/platform";
 
 describe("portable network configuration", () => {
   it("enables automatic settings sync only as a fresh device-local default", () => {
@@ -57,6 +59,47 @@ describe("portable network configuration", () => {
       },
     }, "a".repeat(64));
     expect(relays).toEqual([]);
+  });
+
+  it("ships the build's write-only relays as the default broadcast set", () => {
+    expect(defaultConfig.broadcastRelays).toEqual(BROADCAST_RELAYS);
+    expect(BROADCAST_RELAYS).toContain("wss://relay.primal.net");
+  });
+
+  it("drops broadcast relays when the app relays are switched off", () => {
+    expect(broadcastWriteRelays({ ...defaultConfig, useAppRelays: false })).toEqual([]);
+  });
+
+  it("normalizes and dedupes the broadcast set", () => {
+    const relays = broadcastWriteRelays({
+      ...defaultConfig,
+      broadcastRelays: [
+        "wss://broadcast.example/",
+        "wss://broadcast.example",
+        "not a relay",
+        "  ",
+      ],
+    });
+    expect(relays).toEqual(["wss://broadcast.example"]);
+  });
+
+  it("keeps broadcast relays out of every set that is ever read from", () => {
+    const config = {
+      ...defaultConfig,
+      appRelays: ["wss://account.example"],
+      appDmRelays: [],
+      broadcastRelays: ["wss://broadcast.example"],
+      relayMetadata: {
+        pubkey: "a".repeat(64),
+        updatedAt: 1,
+        relays: [{ url: "wss://write.example", read: false, write: true }],
+      },
+    };
+    const pubkey = "a".repeat(64);
+    expect(broadcastWriteRelays(config)).toEqual(["wss://broadcast.example"]);
+    expect(accountDataRelays(config, pubkey)).not.toContain("wss://broadcast.example");
+    expect(selfStateRelays(config, pubkey)).not.toContain("wss://broadcast.example");
+    expect(effectiveDmRelays(config)).not.toContain("wss://broadcast.example");
   });
 
   it("does not reuse a previous account's NIP-65 relays", () => {

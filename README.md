@@ -70,6 +70,13 @@ the box; other hostnames need HTTPS.
   (kind 0), group lists (kind 10009) — in the style of Ditto's app relays
   (default `wss://relay.ditto.pub,wss://relay.dreamith.to`); users can edit the
   list in Settings, including removing all of them for air-gapped use.
+- `VITE_BROADCAST_RELAYS` — write-only relays (default `wss://relay.primal.net`).
+  Everything the general relay pool publishes — the profile, the user's personal
+  lists — is sent here in addition to the app relays, so other Nostr clients
+  that index these relays can find it; nothing is ever read from them, and
+  community, group and direct-message traffic never routes here. User-editable
+  in Settings, and turned off along with the app relays. Set it empty to publish
+  nowhere but the app relays.
 - `VITE_SEARCH_RELAYS` — relays used for NIP-50 full-text search (profile /
   mention autocomplete); `search` filters route only to these (default
   `wss://relay.ditto.pub,wss://relay.dreamith.to`). User-editable in Settings;

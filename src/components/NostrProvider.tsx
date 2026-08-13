@@ -6,7 +6,7 @@ import { NUser, useNostrLogin } from "@nostrify/react/login";
 import type { NostrSigner } from "@nostrify/types";
 
 import { EventStoreContext, type EventStoreContextType } from "@/contexts/EventStoreContext";
-import { userReadRelays, userWriteRelays } from "@/contexts/AppContext";
+import { broadcastWriteRelays, userReadRelays, userWriteRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCachedNip29Servers } from "@/hooks/useCachedNip29Servers";
 import { poolReqTargets } from "@/lib/poolRouting";
@@ -184,6 +184,13 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
       const normalized = normalizeRelayUrl(url);
       if (normalized) urls.add(normalized);
     }
+    // Write-only relays: reach for what this client publishes, without joining
+    // any read set. This is the ONLY set they appear in, so they are never
+    // subscribed to, never queried, and never a place account data has to come
+    // back from. Gated with the app relays — turning those off means "don't put
+    // my account data on the app's relays", which this would otherwise quietly
+    // keep doing.
+    for (const url of broadcastWriteRelays(config)) urls.add(url);
     return [...urls];
   }, [basePoolRelays, config, activePubkey]);
 

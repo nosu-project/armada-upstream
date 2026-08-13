@@ -5,6 +5,8 @@ interface ImportMetaEnv {
   /** KLIPY GIF API key, injected at build time. */
   readonly VITE_KLIPY_API_KEY?: string;
   readonly VITE_APP_RELAYS?: string;
+  /** Comma-separated write-only relays: published to, never read from. */
+  readonly VITE_BROADCAST_RELAYS?: string;
   readonly VITE_SEARCH_RELAYS?: string;
   /** Comma-separated NIP-65 indexers used only for bounded login discovery. */
   readonly VITE_NIP65_DISCOVERY_RELAYS?: string;

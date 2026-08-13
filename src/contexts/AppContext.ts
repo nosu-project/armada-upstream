@@ -2,7 +2,7 @@ import { createContext } from "react";
 
 import { STOCK_RELAYS } from "@/concord/lib/stockRelays";
 import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
-import { APP_RELAYS, DM_RELAYS, normalizeRelayUrl, SEARCH_RELAYS } from "@/lib/platform";
+import { APP_RELAYS, BROADCAST_RELAYS, DM_RELAYS, normalizeRelayUrl, SEARCH_RELAYS } from "@/lib/platform";
 import { loadPushPrefs, type PushPrefs } from "@/lib/pushPrefs";
 import { getPreferredVoiceServer } from "@/lib/voiceDevices";
 
@@ -110,6 +110,19 @@ export interface AppConfig {
    * Group-scoped events never route here.
    */
   appRelays: string[];
+  /**
+   * Write-only relays. Everything the pool's `eventRouter` publishes — the
+   * profile, the personal lists, general notes — is sent here as well as to
+   * the app relays, but nothing is ever READ from them: they are absent from
+   * `poolReadRelays`, `poolGeneralRelays`, `accountDataRelays` and the DM set,
+   * so they cost nothing on load and no account data depends on them. Seeded
+   * from VITE_BROADCAST_RELAYS (default: relay.primal.net); user-editable, and
+   * gated off with the app relays by `useAppRelays`.
+   *
+   * Group-scoped and Concord traffic never routes here, for the same reason it
+   * never routes to the app relays: it goes straight to its own relays.
+   */
+  broadcastRelays: string[];
   /**
    * The home relays a NEW Concord community is minted on — the create dialog's
    * pre-selected set, editable there per community and here as the standing
@@ -428,6 +441,7 @@ export const METADATA_CONFIG_KEYS = [
   "theme",
   "customTheme",
   "appRelays",
+  "broadcastRelays",
   "communityRelays",
   "preferredVoiceServer",
   "useAppRelays",
@@ -504,6 +518,7 @@ export const defaultConfig: AppConfig = {
   railOpenFolders: [],
   collapsedChannelCategories: {},
   appRelays: [...APP_RELAYS],
+  broadcastRelays: [...BROADCAST_RELAYS],
   communityRelays: [...STOCK_RELAYS],
   searchRelays: [...SEARCH_RELAYS],
   preferredVoiceServer: getPreferredVoiceServer(),
@@ -570,6 +585,29 @@ export function effectiveDmRelays(config: AppConfig): string[] {
   }
   if (config.useOwnDmRelays) {
     for (const url of config.dmRelays) out.add(url);
+  }
+  return [...out];
+}
+
+/**
+ * The write-only relays the general pool's EVENT routing publishes to on top
+ * of everything else (`config.broadcastRelays`), or none when the app relays
+ * are switched off.
+ *
+ * The ONE caller is `NostrProvider`'s `poolWriteRelays`. This is a function
+ * rather than an inline fold so the invariant it exists for can be tested: the
+ * result must never reach a read set — not `poolReadRelays`, not
+ * `poolGeneralRelays`, not `accountDataRelays`/`selfStateRelays`, not
+ * `effectiveDmRelays`. A broadcast relay is somewhere this client SPEAKS; it is
+ * never somewhere this client expects to find anything, so nothing may come to
+ * depend on it being reachable, honest, or even still there.
+ */
+export function broadcastWriteRelays(config: AppConfig): string[] {
+  if (!config.useAppRelays) return [];
+  const out = new Set<string>();
+  for (const url of config.broadcastRelays) {
+    const normalized = normalizeRelayUrl(url);
+    if (normalized) out.add(normalized);
   }
   return [...out];
 }

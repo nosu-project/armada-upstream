@@ -3,6 +3,8 @@
  *
  * - `VITE_APP_RELAYS` — comma-separated default app relays used for
  *   non-NIP-29 traffic (profiles, lists). User-overridable in Settings.
+ * - `VITE_BROADCAST_RELAYS` — comma-separated write-only relays that general
+ *   pool traffic is ALSO published to. User-overridable in Settings.
  * - `VITE_APP_NAME` — display name of the deployment.
  * - `VITE_APP_ID` — fork identifier namespacing the app's own NIP-78 `d` tags.
  */
@@ -107,6 +109,31 @@ export function isStandalonePwa(): boolean {
  * These seed `AppConfig.appRelays`, which the user can edit in Settings.
  */
 export const APP_RELAYS: string[] = (import.meta.env.VITE_APP_RELAYS || "wss://relay.ditto.pub,wss://relay.dreamith.to")
+  .split(",")
+  .map((url: string) => normalizeRelayUrl(url))
+  .filter((url: string | undefined): url is string => Boolean(url));
+
+/**
+ * Write-only relays: general pool traffic (the profile, the personal lists —
+ * everything routed by the pool's `eventRouter`) is published here too, but
+ * they are never subscribed to, never queried, and never counted as a place
+ * data can be read back from. The point is reach — a note or a kind 0 written
+ * here shows up in clients that index this relay — without paying for it on
+ * every read, and without the relay ever being load-bearing for the account.
+ *
+ * Deliberately NOT a marker on `appRelays`: that list is also the DM set
+ * (`effectiveDmRelays`) and the account-data read/write set
+ * (`accountDataRelays`), so a write-only entry there would send gift wraps and
+ * settings documents somewhere they are never read from. This set is folded
+ * into `poolWriteRelays` and nowhere else. Concord and NIP-29 traffic reach
+ * their relays through `nostr.relay(url)` and never touch the router, so
+ * community content is not published here.
+ *
+ * Seeds `AppConfig.broadcastRelays`, which the user can edit in Settings.
+ */
+export const BROADCAST_RELAYS: string[] = (
+  import.meta.env.VITE_BROADCAST_RELAYS ?? "wss://relay.primal.net"
+)
   .split(",")
   .map((url: string) => normalizeRelayUrl(url))
   .filter((url: string | undefined): url is string => Boolean(url));

@@ -58,7 +58,7 @@ import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
 import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { STOCK_RELAYS } from "@/concord/lib/stockRelays";
-import { APP_RELAYS, DM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
+import { APP_RELAYS, BROADCAST_RELAYS, DM_RELAYS, SEARCH_RELAYS } from "@/lib/platform";
 import {
   getAudioProcessing,
   setAudioProcessing,
@@ -185,6 +185,10 @@ export function SettingsPage() {
    */
   const setAppRelays = (relays: string[]) => {
     updateConfig((current) => ({ ...current, appRelays: relays }));
+  };
+
+  const setBroadcastRelays = (relays: string[]) => {
+    updateConfig((current) => ({ ...current, broadcastRelays: relays }));
   };
 
   const setAppDmRelays = (relays: string[]) => {
@@ -493,6 +497,22 @@ export function SettingsPage() {
                 onChange={setAppRelays}
                 onReset={() => setAppRelays([...APP_RELAYS])}
                 emptyText="No app relays yet. Your account data lives on your joined servers only."
+              />
+            </SettingsRow>
+            <SettingsRow>
+              <p className="text-xs text-muted-foreground leading-snug">
+                Broadcast relays. Your profile and other public account data are
+                also published here so other Nostr apps can find them. Armada
+                never reads from these, so removing one costs you nothing but
+                reach. Your communities and messages are never sent here.
+              </p>
+            </SettingsRow>
+            <SettingsRow>
+              <RelayListEditor
+                relays={config.broadcastRelays}
+                onChange={setBroadcastRelays}
+                onReset={() => setBroadcastRelays([...BROADCAST_RELAYS])}
+                emptyText="No broadcast relays. Your public data goes only to the relays above."
               />
             </SettingsRow>
             <SettingsRow
