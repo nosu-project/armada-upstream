@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { AppWindow, ArrowLeft, Check, Copy, Download, ExternalLink, Globe, Laptop, Smartphone, Terminal } from "lucide-react";
+import { AppWindow, ArrowLeft, Check, Copy, Download, Globe, Laptop, Smartphone, Terminal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/useToast";
 import { writeClipboardText } from "@/lib/clipboard";
 import {
+  ANDROID_STORES,
   DOWNLOAD_TARGETS,
   type DownloadOs,
   type DownloadTarget,
@@ -43,25 +44,6 @@ const OS_CAVEAT: Partial<Record<DownloadOs, string>> = {
   macos: "Ad-hoc signed rather than notarized, so the first launch needs Control-click → Open, then Open Anyway.",
   android: "Sideloading the APK asks Android to allow installs from your browser.",
 };
-
-/**
- * Where Android users can get the app without sideloading. External stores,
- * not CI-published files, which is why these live here rather than as assets
- * in `lib/downloads.ts`: the manifest/workflow test there asserts every asset
- * filename is something CI publishes.
- */
-const ANDROID_STORES = [
-  {
-    label: "Google Play",
-    hint: "Install from the Play Store",
-    url: "https://play.google.com/store/apps/details?id=buzz.armada.app&hl=en-US",
-  },
-  {
-    label: "Zapstore",
-    hint: "The Nostr-native app store",
-    url: "https://zapstore.dev/apps/buzz.armada.app",
-  },
-];
 
 /** True when the user has asked the OS to keep motion to a minimum. */
 function prefersReducedMotion() {
@@ -200,7 +182,9 @@ function TargetCard({ target, manifest, featured }: {
                 className="h-auto py-2.5 touch:py-3 justify-start text-left clip-corner-lg"
               >
                 <a href={store.url} target="_blank" rel="noreferrer">
-                  <ExternalLink className="size-4 shrink-0" />
+                  {/* The store's own mark, not a generic link glyph: it is
+                      what the user is scanning for. */}
+                  <img src={store.icon} alt="" className="size-4 shrink-0" />
                   <span className="flex flex-col gap-0.5 min-w-0">
                     <span className="font-medium leading-tight">{store.label}</span>
                     <span className="text-xs font-normal opacity-70 leading-tight whitespace-normal">{store.hint}</span>

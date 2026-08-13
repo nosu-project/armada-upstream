@@ -1,3 +1,4 @@
+import { Download } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -6,6 +7,7 @@ import { BrandMark } from "@/components/brand/BrandMark";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { RELAY_DICTIONARY } from "@/concord/lib/stockRelays";
+import { ANDROID_STORES } from "@/lib/downloads";
 import { relayToHttpUrl } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
@@ -173,112 +175,104 @@ export function LandingPage({
         {/* ── The quiz ─────────────────────────────────────────────────── */}
         <EncryptionQuiz />
 
-        {/* ── What else it does ────────────────────────────────────────── */}
-        <section className="mx-auto flex min-h-[100svh] max-w-2xl flex-col items-center justify-center gap-6 px-6 py-16 text-center">
+        {/* ── The closer ───────────────────────────────────────────────────
+            What else it does, where it runs, and the way in — one screen
+            rather than three. Split up they read as three more things to
+            scroll past before anything is asked of the reader; together the
+            ask arrives with its reasons still on screen.
+
+            `pb` clears the gradient floor below, which paints OVER this
+            section: centered content in a screen-tall box would otherwise put
+            the Join button inside the darkest band. */}
+        <section className="mx-auto flex min-h-[100svh] max-w-2xl flex-col items-center justify-center gap-6 px-6 pb-48 pt-16 text-center safe-area-bottom">
           <h2 className="text-balance font-mono text-xl font-bold tracking-tight text-foreground sm:text-3xl">
-            We have voice and video too
+            Everything, on every deck
           </h2>
+          {/* The platform list is prose rather than the mono strip it used to
+              be: it has to share the screen with the store buttons now, and a
+              sentence carries the same six names in one block instead of two. */}
           <p className="max-w-xl text-pretty text-sm leading-relaxed text-muted-foreground sm:text-base">
-            Armada has everything you need to use it seriously. If not, you can
-            always{" "}
+            Text, voice and video — on Linux, Windows, macOS, Android, iPhone
+            and right here in your browser. Your key is your account, so every
+            one of them is the same place.
+          </p>
+
+          {/* The same mono caption strip the relay lights and "Host your own"
+              use. Kept above the buttons rather than below the Join: a strip
+              under the page's last CTA would be competing with it, and would
+              sit inside the gradient floor. */}
+          <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 font-mono text-xs tracking-wide text-muted-foreground/70">
+            <a
+              href="https://soapbox.pub/armada"
+              target="_blank"
+              rel="noreferrer"
+              className="underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:text-foreground hover:decoration-current"
+            >
+              All the features
+            </a>
             <a
               href="https://gitworkshop.dev/soapbox.pub/relay.ngit.dev/armada/issues"
               target="_blank"
               rel="noreferrer"
-              className="text-foreground underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:decoration-current"
+              className="underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:text-foreground hover:decoration-current"
             >
-              request a feature
-            </a>{" "}
-            or{" "}
+              Request a feature
+            </a>
             <a
               href="https://gitworkshop.dev/soapbox.pub/relay.ngit.dev/armada"
               target="_blank"
               rel="noreferrer"
-              className="text-foreground underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:decoration-current"
+              className="underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:text-foreground hover:decoration-current"
             >
-              hack it
-            </a>{" "}
-            too.
-          </p>
-          {/* Set in the body face, not mono: it reads as the paragraph's own
-              next step rather than as another line of the caption strip. */}
-          <a
-            href="https://soapbox.pub/armada"
-            target="_blank"
-            rel="noreferrer"
-            className="group inline-flex items-center gap-1.5 text-sm font-medium text-foreground/80 transition-colors hover:text-foreground sm:text-base"
-          >
-            Armada features
-            {/* U+2192, for the reason the hero's ↓ is U+2193: WGL4 core, so
-                every system font has a real glyph rather than tofu. */}
-            <span
-              aria-hidden="true"
-              className="text-[hsl(var(--accent2)/0.75)] transition-transform group-hover:translate-x-0.5 group-hover:text-[hsl(var(--accent2))]"
-            >
-              &#8594;
-            </span>
-          </a>
-        </section>
+              Hack it
+            </a>
+          </div>
 
-        {/* ── Platforms ────────────────────────────────────────────────────
-            Where to take it. Names in the same mono caption strip as the
-            relay lights: an enumeration of facts, subordinate to the heading,
-            with the downloads page one arrow-link away. */}
-        <section className="mx-auto flex min-h-[100svh] max-w-2xl flex-col items-center justify-center gap-6 px-6 py-16 text-center">
-          <h2 className="text-balance font-mono text-xl font-bold tracking-tight text-foreground sm:text-3xl">
-            The same Armada on every deck
-          </h2>
-          <p className="max-w-xl text-pretty text-sm leading-relaxed text-muted-foreground sm:text-base">
-            Your key is your account, so the desktop app, the phone app and this
-            browser are all the same place. Install it where you live.
-          </p>
-          <ul className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2.5 font-mono text-xs tracking-wide text-muted-foreground/70">
-            <li>Linux</li>
-            <li>Windows</li>
-            <li>macOS</li>
-            <li>Android</li>
-            <li>iPhone &amp; iPad</li>
-            <li>Web</li>
-          </ul>
-          {/* Body face, not mono, like the features link above: the
-              paragraph's own next step rather than another caption line. */}
-          <Link
-            to="/downloads"
-            className="group inline-flex items-center gap-1.5 text-sm font-medium text-foreground/80 transition-colors hover:text-foreground sm:text-base"
-          >
-            Get the apps
-            {/* U+2192 again: WGL4 core, real glyph everywhere. */}
-            <span
-              aria-hidden="true"
-              className="text-[hsl(var(--accent2)/0.75)] transition-transform group-hover:translate-x-0.5 group-hover:text-[hsl(var(--accent2))]"
+          {/* Translucent rather than solid, like the cards on /downloads, so
+              the swell stays faintly visible under them and the solid Join
+              button below keeps the only full-weight fill on the screen. The
+              stores are Android-only, so the third button is what everyone
+              else presses — it is a peer, not a footnote. */}
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            {ANDROID_STORES.map((store) => (
+              <Button
+                key={store.url}
+                asChild
+                variant="outline"
+                className="h-11 touch:h-12 clip-corner-lg bg-background/40 px-5"
+              >
+                <a href={store.url} target="_blank" rel="noreferrer">
+                  {/* An <img> of the store's own mark: it is the thing being
+                      scanned for, and neither logo is ours to redraw. */}
+                  <img src={store.icon} alt="" className="size-5 shrink-0" />
+                  {store.label}
+                </a>
+              </Button>
+            ))}
+            <Button
+              asChild
+              variant="outline"
+              className="h-11 touch:h-12 clip-corner-lg bg-background/40 px-5"
             >
-              &#8594;
-            </span>
-          </Link>
-        </section>
+              <Link to="/downloads">
+                <Download className="size-4 shrink-0" />
+                All downloads
+              </Link>
+            </Button>
+          </div>
 
-        {/* ── The closer ───────────────────────────────────────────────────
-            A screen of its own, bookending the hero: the same control over
-            the same sea, with nothing else on it to read. */}
-        <section className="mx-auto flex min-h-[100svh] max-w-xl flex-col items-center justify-center gap-8 px-6 py-16 text-center safe-area-bottom">
           {/* The sign-off returns to the hero's prompt: same cyan `$`, same
               magenta line, same blinking caret as {@link BrandMark}, so the
               page ends at the terminal it opened on. `armada-caret` comes from
               the crest's keyframes, already mounted below. */}
-          <div className="flex flex-col items-center gap-2">
-            <p className="text-balance text-sm text-muted-foreground sm:text-base">
-              What are you waiting for?
-            </p>
+          <div className="mt-4 flex w-full max-w-sm flex-col items-center gap-5">
             <p className="font-mono text-xl text-[hsl(var(--primary))] sm:text-2xl">
               <span className="text-[hsl(var(--accent2,180_90%_55%))]">$ </span>
               sail the seas
               <span className="animate-[armada-caret_1s_step-end_infinite]">_</span>
             </p>
-          </div>
-
-          {/* The reader who scrolled the whole way shouldn't have to go back
-              up to act on it. */}
-          <div className="w-full max-w-sm">
+            {/* The reader who scrolled the whole way shouldn't have to go back
+                up to act on it. */}
             <Button
               size="lg"
               onClick={onJoin}
