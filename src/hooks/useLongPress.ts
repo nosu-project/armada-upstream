@@ -34,12 +34,16 @@ const INTERACTIVE = "button, a, input, textarea, select, [role='button'], [role=
  * a slow click open a menu.
  *
  * A hold is given every benefit of the doubt, because the failure the user sees
- * is not a wrong menu — it is a press that does nothing. Exactly ONE thing
- * disqualifies one: the finger travelling past {@link LONG_PRESS_SLOP_PX}. A
- * bare `pointercancel` does not, since the platform fires it the moment it
- * claims a gesture. Nothing else may be consulted at fire time — a check that
- * runs a beat AFTER the hold completes can only ever swallow a press the user
- * has already committed to, which is the one failure this must not have.
+ * is not a wrong menu — it is a press that does nothing. Two things disqualify
+ * one: the finger travelling past {@link LONG_PRESS_SLOP_PX}, and a
+ * `pointercancel` arriving before the hold has served its time. The second is
+ * how a scroll actually presents: the browser suppresses the pointermoves
+ * inside its OWN slop (~8–10px, under ours) and fires `pointercancel` the
+ * moment it claims the pan, so the travel check alone never sees a scroll
+ * coming and the armed timer would open the menu mid-scroll. A cancel whose
+ * hardware timestamps already span the threshold is different — that is the
+ * platform confiscating a completed hold (selection, callout, the system
+ * long-press at ~500ms), and it fires rather than being swallowed.
  *
  * `allowInteractive` lifts the "ignore presses that start on a button/link"
  * guard, for the case where the interactive element IS the intended long-press
@@ -56,9 +60,6 @@ export function useLongPress(
   // Set once the press fires, so the click and context menu that follow the
   // release don't act on top of the menu we just opened.
   const fired = useRef(false);
-  // Set once the finger travels past the slop. Only then is a `pointercancel`
-  // evidence of a scroll rather than of the platform helping itself to the hold.
-  const drifted = useRef(false);
   // The down event's own timestamp. The wall-clock timer measures when events
   // were PROCESSED, and a main-thread stall (closing the previous sheet costs
   // ~600ms of it) delays processing: a real 700ms hold can reach JS as a
@@ -79,7 +80,6 @@ export function useLongPress(
       if (!onLongPress || e.pointerType !== "touch") return;
       if (!allowInteractive && (e.target as HTMLElement).closest(INTERACTIVE)) return;
       fired.current = false;
-      drifted.current = false;
       origin.current = { x: e.clientX, y: e.clientY };
       downStamp.current = e.timeStamp;
       if (timer.current) clearTimeout(timer.current);
@@ -93,16 +93,13 @@ export function useLongPress(
     onPointerMove: (e: React.PointerEvent) => {
       if (!timer.current || !origin.current) return;
       const { x, y } = origin.current;
-      if (Math.hypot(e.clientX - x, e.clientY - y) > LONG_PRESS_SLOP_PX) {
-        drifted.current = true;
-        cancel();
-      }
+      if (Math.hypot(e.clientX - x, e.clientY - y) > LONG_PRESS_SLOP_PX) cancel();
     },
     onPointerUp: (e: React.PointerEvent) => {
       // A hold the timer never got to finish — event processing stalled, so
       // the down and this up reached JS together — is still a hold: the
       // hardware timestamps prove it out. Fire late rather than not at all.
-      if (onLongPress && timer.current && !drifted.current && e.timeStamp - downStamp.current >= LONG_PRESS_MS) {
+      if (onLongPress && timer.current && e.timeStamp - downStamp.current >= LONG_PRESS_MS) {
         cancel();
         fired.current = true;
         onLongPress();
@@ -111,21 +108,18 @@ export function useLongPress(
       cancel();
     },
     onPointerCancel: (e: React.PointerEvent) => {
-      // `pointercancel` is the platform announcing it has TAKEN the gesture —
-      // for a scroll probe, a text selection, a callout, an image drag. Treating
-      // that as "no long press" hands the feature to whichever heuristic fires
-      // first, which is why a hold intermittently did nothing at all. Only a
-      // gesture that has already moved is evidence of a scroll; a finger that
-      // stayed put is a hold being confiscated, so keep the timer running — and
-      // if the hardware timestamps say the hold already served its time, fire
-      // here and now.
-      if (onLongPress && timer.current && !drifted.current && e.timeStamp - downStamp.current >= LONG_PRESS_MS) {
+      // A cancel whose timestamps span the threshold is the platform
+      // confiscating a hold that already served its time (selection, callout,
+      // the system long-press): fire now. An EARLIER cancel is the browser
+      // claiming a scroll — its pointermoves never reached us — so disarm, or
+      // the timer would open the menu mid-scroll.
+      if (onLongPress && timer.current && e.timeStamp - downStamp.current >= LONG_PRESS_MS) {
         cancel();
         fired.current = true;
         onLongPress();
         return;
       }
-      if (drifted.current) cancel();
+      cancel();
     },
     onClick: (e: React.MouseEvent) => {
       if (!fired.current) return;

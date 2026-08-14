@@ -102,18 +102,19 @@ describe("useLongPress", () => {
     expect(onLongPress).toHaveBeenCalledTimes(1);
   });
 
-  it("survives a pointercancel from a finger that never moved", () => {
-    // The platform claims the gesture (scroll probe, selection, callout) on a
-    // hold the user very much intended. Losing it there is the press that
-    // silently does nothing.
+  it("disarms on an early pointercancel — a scroll whose moves never reached us", () => {
+    // The browser suppresses pointermoves inside its own slop and fires
+    // `pointercancel` the moment it claims the pan, so a scroll arrives here
+    // with no drift on record. Leaving the timer armed opens the menu
+    // mid-scroll.
     const onLongPress = vi.fn();
     const { result } = renderHook(() => useLongPress(onLongPress));
 
-    act(() => result.current.onPointerDown?.(pointer(100, 100)));
-    act(() => result.current.onPointerCancel?.(pointer(100, 100)));
-    act(() => void vi.advanceTimersByTime(LONG_PRESS_MS));
+    act(() => result.current.onPointerDown?.(pointer(100, 100, { timeStamp: 1000 })));
+    act(() => result.current.onPointerCancel?.(pointer(100, 100, { timeStamp: 1060 })));
+    act(() => void vi.advanceTimersByTime(LONG_PRESS_MS * 2));
 
-    expect(onLongPress).toHaveBeenCalledTimes(1);
+    expect(onLongPress).not.toHaveBeenCalled();
   });
 
   it("still drops a pointercancel that follows real movement", () => {
