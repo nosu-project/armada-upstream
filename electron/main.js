@@ -48,6 +48,7 @@ const {
   nativeImage,
   nativeTheme,
   ipcMain,
+  MessageChannelMain,
   desktopCapturer,
   session,
   systemPreferences,
@@ -76,8 +77,32 @@ const createLinuxStatusNotifier =
     : null;
 const path = require("node:path");
 const fs = require("node:fs");
+const { randomUUID } = require("node:crypto");
 const { resolveDistRoot } = require("./bundleStore");
 const { spawnSync } = require("node:child_process");
+const {
+  DEFAULT_LINUX_VIDEO_ENCODER_MODE,
+  configureLinuxVideoEncoding,
+  readLinuxVideoEncoderMode,
+  writeLinuxVideoEncoderMode,
+} = require("./linuxVideoAcceleration");
+const {
+  createHevcScreenShareController,
+  detectCachedHevcCapability,
+} = require("./hevcScreenShare");
+const { displayMediaGrant, displayMediaHandlerOptions } = require("./displayMediaPolicy");
+
+// Encoder selection is process-wide in Chromium and must be installed before
+// app readiness (and therefore before the GPU process starts). Software is the
+// Linux default because it is the reliable H.264 + E2EE path; hardware remains
+// an explicit device-local preference for VP8/VP9 workloads.
+const activeLinuxVideoEncoderMode =
+  readLinuxVideoEncoderMode({ userDataPath: app.getPath("userData") }) ??
+  DEFAULT_LINUX_VIDEO_ENCODER_MODE;
+configureLinuxVideoEncoding({
+  commandLine: app.commandLine,
+  mode: activeLinuxVideoEncoderMode,
+});
 
 // Keep Linux's desktop-file identity stable in both the AppImage and Flatpak.
 // Electron must receive this before ready so notifications and tray hosts can
@@ -1055,15 +1080,12 @@ function installDisplayMediaHandler() {
             complete({}, false);
             return;
           }
-          // Electron's loopback capture is Windows-only. Linux audio is added
-          // by the PipeWire virtual microphone below after this video stream
-          // reaches the renderer.
-          complete({
-            video: source,
-            ...(process.platform === "win32" && request.audioRequested
-              ? { audio: "loopback" }
-              : {}),
-          });
+          // Linux audio is attached through venmic. On macOS 15+ the trusted
+          // system picker bypasses this handler and owns its audio selection.
+          complete(displayMediaGrant(source, {
+            platform: process.platform,
+            audioRequested: request.audioRequested,
+          }));
         } catch (error) {
           screenShareSources.clear();
           console.warn("[screen-share] display capture request failed", error);
@@ -1072,9 +1094,9 @@ function installDisplayMediaHandler() {
       };
       void pick();
     },
-    // useSystemPicker: true would defer to the OS picker on platforms that have
-    // one (Windows/macOS recents); we use our own picker for consistency.
-    { useSystemPicker: false },
+    // Electron falls back to this handler on macOS versions without the
+    // trusted system picker.
+    displayMediaHandlerOptions(process.platform),
   );
 }
 
@@ -1209,6 +1231,44 @@ function installLinuxShareAudioIpc() {
       console.warn("[screen-share] failed to stop PipeWire audio", error);
     }
   });
+}
+
+// ── Linux H.265 screen share (FFmpeg/VA-API → LiveKit) ────────────────────
+
+const hevcScreenShare = createHevcScreenShareController({
+  sendStatus(status) {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send("armada:hevc-screen-share-status", status);
+  },
+});
+
+function installHevcScreenShareIpc() {
+  ipcMain.handle("armada:hevc-screen-share-capability", () => detectCachedHevcCapability());
+  ipcMain.handle("armada:hevc-screen-share-status", () => hevcScreenShare.status());
+  ipcMain.handle("armada:hevc-screen-share-start", async (event, config) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents) {
+      throw new Error("H.265 publishing is available only to Armada's main window.");
+    }
+    const { port1, port2 } = new MessageChannelMain();
+    const sessionId = randomUUID();
+    try {
+      const status = await hevcScreenShare.start(config, port1, sessionId);
+      // Keep high-volume video frames off ordinary request/response IPC. The
+      // renderer sends cloned ArrayBuffers over this dedicated port because
+      // Electron 43 turns transferred ArrayBuffers into null at MessagePortMain.
+      event.sender.postMessage(
+        "armada:hevc-screen-share-port",
+        { sessionId },
+        [port2],
+      );
+      return { ...status, sessionId };
+    } catch (error) {
+      port1.close();
+      port2.close();
+      throw error;
+    }
+  });
+  ipcMain.handle("armada:hevc-screen-share-stop", () => hevcScreenShare.stop("requested"));
 }
 
 // ── Permissions (microphone/camera for voice) ───────────────────────────────
@@ -1444,6 +1504,31 @@ function installIpc() {
     platform: process.platform,
     version: app.getVersion(),
   }));
+  ipcMain.handle("armada:video-encoder-mode", () => ({
+    available: process.platform === "linux",
+    active: process.platform === "linux" ? activeLinuxVideoEncoderMode : null,
+    configured: readLinuxVideoEncoderMode({ userDataPath: app.getPath("userData") }),
+  }));
+  ipcMain.handle("armada:set-video-encoder-mode", (_event, mode) => {
+    try {
+      const saved = writeLinuxVideoEncoderMode(mode, { userDataPath: app.getPath("userData") });
+      const configured = readLinuxVideoEncoderMode({ userDataPath: app.getPath("userData") });
+      return {
+        available: process.platform === "linux",
+        active: process.platform === "linux" ? activeLinuxVideoEncoderMode : null,
+        configured,
+        restartRequired: saved && configured !== activeLinuxVideoEncoderMode,
+      };
+    } catch (error) {
+      console.warn("failed to save video encoder mode", error);
+      return {
+        available: process.platform === "linux",
+        active: process.platform === "linux" ? activeLinuxVideoEncoderMode : null,
+        configured: activeLinuxVideoEncoderMode,
+        restartRequired: false,
+      };
+    }
+  });
 
   // OS-level microphone access status. On macOS/Windows this reflects the
   // system privacy setting (not our in-app permission handler); on Linux it's
@@ -1475,6 +1560,28 @@ function installIpc() {
         return true;
       }
       return false;
+    } catch {
+      return false;
+    }
+  });
+
+  // macOS Screen Recording is a separate TCC permission from camera/mic.
+  // Other platforms do not expose a useful OS-level display-capture status.
+  ipcMain.handle("armada:screen-capture-access-status", () => {
+    if (process.platform !== "darwin") return "unknown";
+    try {
+      return systemPreferences.getMediaAccessStatus("screen");
+    } catch {
+      return "unknown";
+    }
+  });
+  ipcMain.handle("armada:open-screen-capture-settings", async () => {
+    if (process.platform !== "darwin") return false;
+    try {
+      await shell.openExternal(
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+      );
+      return true;
     } catch {
       return false;
     }
@@ -1522,6 +1629,7 @@ if (!gotLock) {
     installDbIpc();
     installDisplayMediaHandler();
     installLinuxShareAudioIpc();
+    installHevcScreenShareIpc();
     installBundleIpc();
     installAutoUpdater();
     // A suspended or locked machine may never deliver the physical key-up.
@@ -1565,6 +1673,7 @@ if (!gotLock) {
   app.on("before-quit", () => {
     isQuitting = true;
     stopHiddenTrayMonitor();
+    hevcScreenShare.stop("app-quit");
     // Not awaited: before-quit is synchronous. The catch keeps a bus teardown
   // rejection from surfacing as an unhandled rejection during shutdown.
   void pushToTalk.destroy().catch(() => {});

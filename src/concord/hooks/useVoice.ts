@@ -38,6 +38,16 @@ import type { NostrEvent } from "@nostrify/nostrify";
 /** The stable empty fold (so idle rows keep constant props). */
 const EMPTY_FOLD: VoicePresenceFold = { present: [], claims: new Map() };
 
+function sameClaims(left: Map<string, string[]>, right: Map<string, string[]>): boolean {
+  if (left.size !== right.size) return false;
+  for (const [identity, authors] of left) {
+    const next = right.get(identity);
+    if (!next || next.length !== authors.length) return false;
+    if (authors.some((author, index) => author !== next[index])) return false;
+  }
+  return true;
+}
+
 /**
  * Shared presence memory, keyed by the channel's current wrap address (one map
  * of author → latest entry per channel+epoch). Presence is ephemeral — never
@@ -108,8 +118,11 @@ export function useVoicePresence(
               p.author === next.present[i].author &&
               p.identity === next.present[i].identity &&
               p.broker === next.present[i].broker &&
-              p.hand === next.present[i].hand,
-          )
+              p.hand === next.present[i].hand &&
+              p.screenShareIdentities.join("\0") ===
+                next.present[i].screenShareIdentities.join("\0"),
+          ) &&
+          sameClaims(prev.claims, next.claims)
         ) {
           return prev;
         }
@@ -176,7 +189,11 @@ export function useVoiceHeartbeat(
   identity: string | undefined,
   broker: string | undefined,
   handRaised = false,
-): { sendReaction: (emoji: string) => void } {
+  additionalIdentities: readonly string[] = [],
+): {
+  sendReaction: (emoji: string) => void;
+  announceAdditionalIdentities: (identities: readonly string[]) => Promise<void>;
+} {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
 
@@ -186,6 +203,9 @@ export function useVoiceHeartbeat(
   // toggle itself for immediacy.
   const handRef = useRef(handRaised);
   handRef.current = handRaised;
+  const additionalIdentitiesRef = useRef(additionalIdentities);
+  additionalIdentitiesRef.current = additionalIdentities;
+  const additionalIdentitiesKey = additionalIdentities.join("\0");
 
   const publish = useCallback(
     async (
@@ -194,13 +214,16 @@ export function useVoiceHeartbeat(
       origin?: string,
       reaction?: { emoji: string; nonce: string },
     ) => {
-      if (!user || !community || !channel) return;
+      if (!user || !community || !channel) return false;
       const rumor = buildRumor({
         kind: KIND_VOICE_PRESENCE,
         content: status,
         tags: [
           ...channelBindingTags(channel.idHex, channel.current.epoch),
-          ...presenceTags(status, id, origin, { hand: handRef.current }),
+          ...presenceTags(status, id, origin, {
+            hand: handRef.current,
+            additionalIdentities: additionalIdentitiesRef.current,
+          }),
           ...(reaction ? [reactionTag(reaction.emoji, reaction.nonce)] : []),
         ],
         pubkey: user.pubkey,
@@ -208,9 +231,10 @@ export function useVoiceHeartbeat(
       });
       const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, user.signer);
       const wrap = wrapSeal(seal, channel.current.group, { ephemeral: true });
-      await Promise.allSettled(
+      const results = await Promise.allSettled(
         community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(6000) })),
       );
+      return results.some((result) => result.status === "fulfilled");
     },
     [nostr, user, community, channel],
   );
@@ -249,6 +273,20 @@ export function useVoiceHeartbeat(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handRaised, identity, broker]);
 
+  // Republish when a sidecar publisher identity appears or disappears. Keep
+  // this separate from the main heartbeat lifecycle: tearing that effect down
+  // would emit a transient `left` and make the member flicker out of the call.
+  const identitiesMounted = useRef(false);
+  useEffect(() => {
+    if (!identity || !broker) return;
+    if (!identitiesMounted.current) {
+      identitiesMounted.current = true;
+      return;
+    }
+    void publish("joined", identity, broker).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [additionalIdentitiesKey, identity, broker]);
+
   const sendReaction = useCallback(
     (emoji: string) => {
       if (!identity || !broker) return;
@@ -261,7 +299,21 @@ export function useVoiceHeartbeat(
     [publish, identity, broker],
   );
 
-  return { sendReaction };
+  const announceAdditionalIdentities = useCallback(
+    async (identities: readonly string[]) => {
+      additionalIdentitiesRef.current = identities;
+      if (!identity || !broker) return;
+      const delivered = await publish("joined", identity, broker);
+      if (identities.length > 0 && !delivered) {
+        throw new Error(
+          "Could not announce the H.265 publisher identity to a community relay.",
+        );
+      }
+    },
+    [broker, identity, publish],
+  );
+
+  return { sendReaction, announceAdditionalIdentities };
 }
 
 /** How long a received reaction floats before it's aged out. */

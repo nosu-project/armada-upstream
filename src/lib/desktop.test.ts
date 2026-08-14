@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { signalDesktopWebReady } from "@/lib/desktop";
+import {
+  desktopHevcScreenShareCapability,
+  desktopScreenCaptureAccessStatus,
+  openDesktopScreenCaptureSettings,
+  signalDesktopWebReady,
+  stopDesktopHevcScreenShare,
+} from "@/lib/desktop";
 
 function installBridge() {
   const bridge = {
@@ -31,6 +37,8 @@ beforeEach(() => {
 afterEach(() => {
   delete window.armadaDesktop;
   Reflect.deleteProperty(navigator, "mediaDevices");
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("Electron Linux display audio", () => {
@@ -339,5 +347,257 @@ describe("desktop bundle boot signal", () => {
     };
 
     expect(() => signalDesktopWebReady()).not.toThrow();
+  });
+});
+
+describe("desktop H.265 and Screen Recording bridges", () => {
+  it("fails closed when an older shell has no custom publisher", async () => {
+    installBridge();
+
+    await expect(desktopHevcScreenShareCapability()).resolves.toMatchObject({
+      available: false,
+      reason: expect.stringMatching(/does not contain/i),
+    });
+    await expect(stopDesktopHevcScreenShare()).resolves.toEqual({
+      state: "idle",
+      active: false,
+    });
+  });
+
+  it("forwards the custom publisher capability and stop lifecycle", async () => {
+    const bridge = installBridge();
+    const capability = {
+      available: true,
+      encoder: "hevc_vaapi",
+      backend: "FFmpeg",
+      device: "/dev/dri/renderD128",
+      reason: null,
+    };
+    const stopped = { state: "stopped" as const, active: false };
+    window.armadaDesktop = {
+      ...bridge,
+      getHevcScreenShareCapability: vi.fn(async () => capability),
+      stopHevcScreenShare: vi.fn(async () => stopped),
+    };
+
+    await expect(desktopHevcScreenShareCapability()).resolves.toEqual(capability);
+    await expect(stopDesktopHevcScreenShare()).resolves.toEqual(stopped);
+    expect(window.armadaDesktop.stopHevcScreenShare).toHaveBeenCalledOnce();
+  });
+
+  it("forwards macOS Screen Recording state and settings actions", async () => {
+    const bridge = installBridge();
+    const openScreenCapturePrivacySettings = vi.fn(async () => true);
+    window.armadaDesktop = {
+      ...bridge,
+      getScreenCaptureAccessStatus: vi.fn(async () => "denied" as const),
+      openScreenCapturePrivacySettings,
+    };
+
+    await expect(desktopScreenCaptureAccessStatus()).resolves.toBe("denied");
+    await expect(openDesktopScreenCaptureSettings()).resolves.toBe(true);
+    expect(openScreenCapturePrivacySettings).toHaveBeenCalledOnce();
+  });
+});
+
+describe("desktop H.265 frame-pump lifecycle", () => {
+  const stopped = { state: "stopped" as const, active: false };
+  const liveTrack = () => ({
+    readyState: "live",
+    contentHint: "",
+  }) as unknown as MediaStreamTrack;
+
+  function installConversionCapability() {
+    vi.stubGlobal("VideoFrame", class {});
+    vi.stubGlobal("OffscreenCanvas", class {});
+  }
+
+  it("cancels a start stopped during its initial shell teardown", async () => {
+    installConversionCapability();
+    const bridge = installBridge();
+    let releaseInitialStop!: () => void;
+    const initialStop = new Promise<typeof stopped>((resolve) => {
+      releaseInitialStop = () => resolve(stopped);
+    });
+    const stopHevcScreenShare = vi
+      .fn<() => Promise<typeof stopped>>()
+      .mockReturnValueOnce(initialStop)
+      .mockResolvedValue(stopped);
+    const startHevcScreenShare = vi.fn();
+    window.armadaDesktop = {
+      ...bridge,
+      stopHevcScreenShare,
+      startHevcScreenShare,
+    };
+
+    const desktop = await import("@/lib/desktop");
+    const starting = desktop.startDesktopHevcScreenShare(liveTrack(), {
+      url: "wss://sfu.example",
+      token: "token",
+      keyMaterial: "a2V5",
+      width: 1920,
+      height: 1080,
+      frameRate: 30,
+      bitrate: 5_000_000,
+    });
+    const rejected = expect(starting).rejects.toThrow(/cancelled/i);
+    await vi.waitFor(() => expect(stopHevcScreenShare).toHaveBeenCalledTimes(1));
+
+    await desktop.stopDesktopHevcScreenShare();
+    releaseInitialStop();
+
+    await rejected;
+    expect(startHevcScreenShare).not.toHaveBeenCalled();
+  });
+
+  it("lets a newer start supersede one waiting in the initial shell stop", async () => {
+    installConversionCapability();
+    const bridge = installBridge();
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    const firstStop = new Promise<typeof stopped>((resolve) => {
+      releaseFirst = () => resolve(stopped);
+    });
+    const secondStop = new Promise<typeof stopped>((resolve) => {
+      releaseSecond = () => resolve(stopped);
+    });
+    const stopHevcScreenShare = vi
+      .fn<() => Promise<typeof stopped>>()
+      .mockReturnValueOnce(firstStop)
+      .mockReturnValueOnce(secondStop);
+    const startHevcScreenShare = vi.fn();
+    window.armadaDesktop = {
+      ...bridge,
+      stopHevcScreenShare,
+      startHevcScreenShare,
+    };
+    const desktop = await import("@/lib/desktop");
+    const config = {
+      url: "wss://sfu.example",
+      token: "token",
+      keyMaterial: "a2V5",
+      width: 1920,
+      height: 1080,
+      frameRate: 30,
+      bitrate: 5_000_000,
+    };
+
+    const first = desktop.startDesktopHevcScreenShare(liveTrack(), config);
+    const firstRejected = expect(first).rejects.toThrow(/cancelled/i);
+    await vi.waitFor(() => expect(stopHevcScreenShare).toHaveBeenCalledTimes(1));
+    const secondTrack = { readyState: "ended", contentHint: "" } as unknown as MediaStreamTrack;
+    const second = desktop.startDesktopHevcScreenShare(secondTrack, config);
+    const secondRejected = expect(second).rejects.toThrow(/ended before capture/i);
+    await vi.waitFor(() => expect(stopHevcScreenShare).toHaveBeenCalledTimes(2));
+
+    releaseSecond();
+    releaseFirst();
+
+    await Promise.all([firstRejected, secondRejected]);
+    expect(startHevcScreenShare).not.toHaveBeenCalled();
+  });
+
+  it("binds frames only to the MessagePort for the active shell session", async () => {
+    class FakeVideoFrame {
+      displayWidth = 1280;
+      displayHeight = 720;
+      codedWidth = 1280;
+      codedHeight = 720;
+      timestamp = 1;
+      duration = null;
+      copyTo = vi.fn(async () => undefined);
+      close = vi.fn();
+    }
+    class FakeOffscreenCanvas {
+      getContext() {
+        return {
+          fillStyle: "black",
+          fillRect: vi.fn(),
+          drawImage: vi.fn(),
+        };
+      }
+    }
+    class FakeMediaStream {
+      constructor(readonly tracks: MediaStreamTrack[]) {}
+    }
+    class FakePort extends EventTarget {
+      closed = false;
+      messages: unknown[] = [];
+      start = vi.fn();
+      close = vi.fn(() => {
+        this.closed = true;
+      });
+      postMessage = vi.fn((message: { type?: string; sequence?: number }) => {
+        this.messages.push(message);
+        if (message.type === "frame") {
+          queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", {
+            data: { type: "frame-ack", sequence: message.sequence },
+          })));
+        }
+      });
+    }
+    vi.stubGlobal("VideoFrame", FakeVideoFrame);
+    vi.stubGlobal("OffscreenCanvas", FakeOffscreenCanvas);
+    vi.stubGlobal("MediaStream", FakeMediaStream);
+
+    const video = document.createElement("video");
+    Object.defineProperties(video, {
+      readyState: { configurable: true, value: HTMLMediaElement.HAVE_CURRENT_DATA },
+      videoWidth: { configurable: true, value: 1280 },
+      videoHeight: { configurable: true, value: 720 },
+    });
+    video.play = vi.fn(async () => undefined);
+    video.pause = vi.fn();
+    vi.spyOn(document, "createElement").mockReturnValue(video);
+
+    const trackEvents = new EventTarget();
+    const track = Object.assign(trackEvents, {
+      readyState: "live",
+      muted: false,
+      contentHint: "",
+      getSettings: () => ({ width: 1280, height: 720 }),
+      stop: vi.fn(),
+    }) as unknown as MediaStreamTrack;
+    const stalePort = new FakePort();
+    const activePort = new FakePort();
+    const bridge = installBridge();
+    const desktopModule = await import("@/lib/desktop");
+    const startHevcScreenShare = vi.fn(async () => {
+      desktopModule.acceptDesktopHevcScreenShareFramePort(
+        "stale-session",
+        stalePort as unknown as MessagePort,
+      );
+      window.setTimeout(() => desktopModule.acceptDesktopHevcScreenShareFramePort(
+        "active-session",
+        activePort as unknown as MessagePort,
+      ), 0);
+      return { state: "starting" as const, active: true, sessionId: "active-session" };
+    });
+    window.armadaDesktop = {
+      ...bridge,
+      stopHevcScreenShare: vi.fn(async () => stopped),
+      startHevcScreenShare,
+      getHevcScreenShareStatus: vi.fn(async () => ({
+        state: "published" as const,
+        active: true,
+        sessionId: "active-session",
+        encodedBytes: 1024,
+      })),
+    };
+    await expect(desktopModule.startDesktopHevcScreenShare(track, {
+      url: "wss://sfu.example",
+      token: "token",
+      keyMaterial: "a2V5",
+      width: 1280,
+      height: 720,
+      frameRate: 30,
+      bitrate: 5_000_000,
+    })).resolves.toMatchObject({ state: "published", encodedBytes: 1024 });
+
+    expect(stalePort.messages).toEqual([]);
+    expect(activePort.messages).toContainEqual(expect.objectContaining({ type: "frame" }));
+    await desktopModule.stopDesktopHevcScreenShare();
+    expect(stalePort.close).toHaveBeenCalled();
+    expect(activePort.close).toHaveBeenCalled();
   });
 });

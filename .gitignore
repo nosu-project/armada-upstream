@@ -17,6 +17,7 @@ android/app/google-services.json
 # Desktop (Electron) build outputs.
 electron/dist/
 electron/release/
+electron/generated/hevc/
 # Built from src/lib/db by vite.config.electron.ts (npm run build:electron-db).
 electron/db.cjs
 # Chromium profile for `npm run electron:dev` (its own, so a dev build never

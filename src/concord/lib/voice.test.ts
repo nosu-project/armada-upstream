@@ -12,6 +12,7 @@ import {
   foldVoicePresence,
   heartbeatDelayMs,
   KIND_HTTP_AUTH,
+  isVerifiedScreenShareIdentity,
   orderBrokers,
   parsePresence,
   parseReaction,
@@ -199,6 +200,8 @@ describe("parsePresence (§4)", () => {
       author: "a".repeat(64),
       status: "joined",
       identity: "id-1",
+      identities: ["id-1"],
+      screenShareIdentities: [],
       broker: "https://b.example",
       hand: false,
       ms: 1_000_000,
@@ -227,6 +230,23 @@ describe("parsePresence (§4)", () => {
     expect(parsePresence(openedPresence({ content: "join" }))).toBeNull();
     expect(parsePresence(openedPresence({ tags: [] }))).toBeNull();
   });
+
+  it("accepts bounded, deduplicated sidecar identities with the primary first", () => {
+    const p = parsePresence(openedPresence({
+      tags: [
+        ["identity", "id-1"],
+        ["identity", "hevc-1", "screen-share"],
+        ["identity", "id-1"],
+        ["identity", "hevc-2"],
+        ["identity", "hevc-3"],
+        ["identity", "ignored-fifth"],
+      ],
+    }));
+
+    expect(p?.identity).toBe("id-1");
+    expect(p?.identities).toEqual(["id-1", "hevc-1", "hevc-2", "hevc-3"]);
+    expect(p?.screenShareIdentities).toEqual(["hevc-1"]);
+  });
 });
 
 describe("presence tags (client extensions)", () => {
@@ -235,6 +255,20 @@ describe("presence tags (client extensions)", () => {
     expect(presenceTags("joined", "id-1", "https://b.example", { hand: false })).not.toContainEqual(["hand", "1"]);
     // A `left` never advertises a hand.
     expect(presenceTags("left", undefined, undefined, { hand: true })).not.toContainEqual(["hand", "1"]);
+  });
+
+  it("emits each additional sidecar identity once while joined", () => {
+    expect(presenceTags("joined", "id-1", "https://b.example", {
+      additionalIdentities: ["hevc-1", "id-1", "hevc-1", "hevc-2"],
+    })).toEqual([
+      ["identity", "id-1"],
+      ["identity", "hevc-1", "screen-share"],
+      ["identity", "hevc-2", "screen-share"],
+      ["broker", "https://b.example"],
+    ]);
+    expect(presenceTags("left", undefined, undefined, {
+      additionalIdentities: ["hevc-1"],
+    })).toEqual([]);
   });
 
   it("builds a react tag as [react, emoji, nonce]", () => {
@@ -293,6 +327,19 @@ describe("foldVoicePresence (§4)", () => {
     const sole = foldVoicePresence([entry({})], now);
     expect(verifiedAuthorOf(sole, "id-1")).toBe("a".repeat(64));
     expect(verifiedAuthorOf(sole, "unclaimed")).toBeUndefined();
+  });
+
+  it("maps a sidecar SFU identity to the same verified author", () => {
+    const fold = foldVoicePresence([entry({
+      identities: ["id-1", "hevc-1"],
+      screenShareIdentities: ["hevc-1"],
+    })], now);
+
+    expect(verifiedAuthorOf(fold, "id-1")).toBe("a".repeat(64));
+    expect(verifiedAuthorOf(fold, "hevc-1")).toBe("a".repeat(64));
+    expect(isVerifiedScreenShareIdentity(fold, "hevc-1")).toBe(true);
+    expect(isVerifiedScreenShareIdentity(fold, "id-1")).toBe(false);
+    expect(fold.present).toHaveLength(1);
   });
 });
 

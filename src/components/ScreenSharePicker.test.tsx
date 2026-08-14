@@ -86,4 +86,39 @@ describe("ScreenSharePicker", () => {
     await expect(result).resolves.toBeNull();
     expect(stopLinuxShareAudio).not.toHaveBeenCalled();
   });
+
+  it("guides a denied macOS user to Screen Recording settings", async () => {
+    let pickSource: (() => Promise<string | null>) | undefined;
+    const openScreenCapturePrivacySettings = vi.fn(async () => true);
+    window.armadaDesktop = {
+      isDesktop: true,
+      setBadge: vi.fn(),
+      getInfo: vi.fn(async () => ({ platform: "darwin", version: "1.0.0" })),
+      getScreenSources: vi.fn(async () => {
+        throw new Error("screen capture denied");
+      }),
+      onPickScreenSource: vi.fn((handler) => {
+        pickSource = handler;
+      }),
+      getLinuxShareAudioSources: vi.fn(async () => ({
+        supported: false,
+        reason: null,
+        sources: [],
+      })),
+      getMicAccessStatus: vi.fn(async () => "granted" as const),
+      openMicPrivacySettings: vi.fn(async () => false),
+      getScreenCaptureAccessStatus: vi.fn(async () => "denied" as const),
+      openScreenCapturePrivacySettings,
+    };
+
+    render(<ScreenSharePicker />);
+    await act(async () => {
+      void pickSource?.();
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByText(/needs Screen Recording permission/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /open Screen Recording settings/i }));
+    expect(openScreenCapturePrivacySettings).toHaveBeenCalledOnce();
+  });
 });

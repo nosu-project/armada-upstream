@@ -19,7 +19,9 @@ It also adds desktop-native behavior the web build can't:
 - **Screen and application sharing** — the in-app picker can switch the active
   screen/window without ending the share. Windows captures system audio;
   Linux uses PipeWire plus `@vencord/venmic` for either the entire system or a
-  selected application's audio.
+  selected application's audio. Resolution, frame rate, bitrate, codec and
+  delivery mode are configurable, and either side can open live stream details
+  or make the shared content genuinely full-screen.
 - **Global push to talk** — Windows, macOS and X11 use `uiohook-napi`; Wayland
   uses the trusted Global Shortcuts portal, including sandboxed Flatpak builds.
 - **Package-aware updates** — installed Windows and AppImage editions update
@@ -140,6 +142,55 @@ GNOME AppIndicator extension). Stock GNOME has no visible tray host. Armada
 verifies its own registration before allowing close-to-tray; without a usable
 host the close button exits instead of leaving calls running in an invisible
 process. Non-GNOME X11 desktops may use Electron's legacy tray fallback.
+
+## Screen-share quality and codecs
+
+The screen-share dialog controls the requested output resolution, frames per
+second, maximum bitrate, codec and delivery mode. The bitrate is an encoder
+ceiling rather than a promise that static content will consume every bit. The
+stream-details dialog reports the measured encoded rate and input cadence; a
+`missed` frame is a capture deadline for which no fresh frame arrived, not a
+frame that was encoded and then lost on the network.
+
+VP8 is the compatibility fallback. Encrypted H.264 prefers packetization mode
+1 and, on Linux, can use the software compatibility path when the platform
+encoder is not interoperable. Standard H.265 is exposed only when Chromium
+reports an encoder for the current Windows or macOS machine, so there is no
+separate FFmpeg helper to install on those systems. A receiver must also have
+H.265 decoding support; older Armada builds that do not negotiate H.265 need
+to be updated or should receive VP8/H.264 instead.
+
+Chromium does not expose H.265 WebRTC encoding on Linux, so Armada has a
+Linux-only E2EE pipeline: Electron captures the trusted picker selection,
+FFmpeg encodes HEVC Main through VA-API, and the bundled
+`armada-hevc-publisher` sends the pre-encoded track through LiveKit. The
+publisher is packaged into AppImage, deb and Flatpak builds from one generated
+binary; it is deliberately excluded from Windows and macOS packages. Its
+auxiliary LiveKit identity is authenticated by signed Concord presence and is
+folded into the presenter's tile rather than shown as another caller.
+
+For AppImage and deb, the host must provide an FFmpeg build with
+`hevc_vaapi`, an HEVC-capable VA-API driver, and access to a
+`/dev/dri/renderD*` node. Capability detection runs a small real encode probe
+and reports the failing driver/device instead of offering a broken choice.
+The Flatpak uses its Freedesktop runtime FFmpeg/VA-API stack and grants render
+device access in the manifest. Do not bundle an arbitrary static FFmpeg for
+AppImage: VA-API must load the host's matching libva/libdrm driver stack.
+
+Build the publisher with the Go version declared in
+`hevc-publisher/go.mod`:
+
+```sh
+cd electron
+./scripts/build-hevc-publisher.sh --arch x64
+```
+
+The script vendors dependencies in a temporary directory, applies the local
+LiveKit primary-codec metadata patch, runs the Go tests, and stages a static
+binary under `generated/hevc/x64/`. `npm run dist:linux` performs this step
+automatically before electron-builder packages the AppImage and deb; the
+Flatpak is then built from that AppImage so their publisher and renderer cannot
+drift.
 
 ## Push to talk
 

@@ -48,6 +48,9 @@ modules:
     build-commands:
       - chmod +x Armada.AppImage
       - ./Armada.AppImage --appimage-extract
+      # Linux installers all carry the same pre-tested publisher. Keeping it in
+      # the AppImage before repackaging prevents Flatpak/AppImage helper drift.
+      - test -x squashfs-root/resources/armada-hevc-publisher
       # venmic 7.x's published addon requires GLIBCXX_3.4.35, newer than the
       # 25.08 runtime (3.4.34). Its 6.1 addon exposes the capture API Armada
       # uses and was built against GLIBCXX_3.4.32, so replace only the native
@@ -61,6 +64,11 @@ modules:
     sources:
       - type: file
         path: ../release/Armada.AppImage
+      # Content marker maintained by build.sh. Including it makes the module's
+      # cache key unambiguously follow the AppImage bytes in local test cycles.
+      - type: file
+        path: ../release/Armada.AppImage.sha256
+        dest-filename: Armada.AppImage.sha256
       - type: archive
         url: https://registry.npmjs.org/@vencord/venmic/-/venmic-6.1.0.tgz
         sha256: 7d8694997ff2eeffe1dea6205df1af56df8f2d2656d9ba966bc884b23cb08c1f
