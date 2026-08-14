@@ -40,7 +40,7 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
   open: boolean;
   onOpenChange: (open: boolean) => void;
   connectedCoordinates: ReadonlySet<string>;
-  onCreateText: (name: string, opts?: { isPrivate?: boolean }) => Promise<unknown>;
+  onCreateText: (name: string, opts?: { isPrivate?: boolean; accessRoleName?: string }) => Promise<unknown>;
   onCreateRepository: (name: string, repository: PickedRepository) => Promise<unknown>;
 }) {
   const [step, setStep] = useState<Step>("text");
@@ -49,6 +49,9 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPrivate, setIsPrivate] = useState(true);
+  // The access role's name — display only, the binding is the role's scope
+  // (CORD-04 §2). Left empty it matches the channel, the common case.
+  const [roleName, setRoleName] = useState("");
 
   // Fresh dialog every time it opens.
   useEffect(() => {
@@ -59,6 +62,7 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
     setCreating(false);
     setError(null);
     setIsPrivate(true);
+    setRoleName("");
   }, [open]);
 
   const choose = useCallback((repository: PickedRepository) => {
@@ -78,7 +82,10 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
         await onCreateRepository(channelName, selected);
         toast({ title: "Repository channel created", description: `#${channelName} · ${selected.displayName}` });
       } else {
-        await onCreateText(channelName, isPrivate ? { isPrivate: true } : undefined);
+        await onCreateText(
+          channelName,
+          isPrivate ? { isPrivate: true, accessRoleName: roleName.trim() || undefined } : undefined,
+        );
         toast({ title: isPrivate ? "Private channel created" : "Channel created", description: `#${channelName}` });
       }
       onOpenChange(false);
@@ -87,7 +94,7 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
     } finally {
       setCreating(false);
     }
-  }, [name, creating, step, selected, isPrivate, onCreateRepository, onCreateText, onOpenChange]);
+  }, [name, creating, step, selected, isPrivate, roleName, onCreateRepository, onCreateText, onOpenChange]);
 
   // The repository detour is the only thing there is to come back from.
   const back = step === "repo"
@@ -167,11 +174,28 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
                     <Lock className="size-3.5" /> Private channel
                   </span>
                   <span className="block text-xs text-muted-foreground">
-                    Gets its own key, and a role of the same name that decides who
-                    can read it. Enforced in every client.
+                    Gets its own key, and a role that decides who can read it.
+                    Enforced in every client.
                   </span>
                 </span>
               </label>
+
+              {isPrivate && (
+                <div className="space-y-1">
+                  <Input
+                    value={roleName}
+                    onChange={(event) => setRoleName(event.target.value)}
+                    placeholder={name.trim() ? `Role name (default: ${name.trim()})` : "Role name (default: channel name)"}
+                    aria-label="Access role name"
+                    disabled={creating}
+                    maxLength={64}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Members holding this role can read the channel. More roles can
+                    be added later from the channel's access settings.
+                  </p>
+                </div>
+              )}
 
               {error && <p className="text-xs text-destructive">{error}</p>}
 

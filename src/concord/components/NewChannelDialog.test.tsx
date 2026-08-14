@@ -77,4 +77,32 @@ describe("NewChannelDialog — privacy controls reach the create call", () => {
     await waitFor(() => expect(onCreateText).toHaveBeenCalled());
     expect(onCreateText).toHaveBeenCalledWith("general", undefined);
   });
+
+  it("carries a typed access role name — the role's name is not chained to the channel's", async () => {
+    // The binding is the role's scope (CORD-04 §2), the name is display; a
+    // channel #planning gated by an "editors" role is the whole point.
+    const { onCreateText } = setup();
+
+    typeName("planning");
+    fireEvent.change(screen.getByLabelText("Access role name"), { target: { value: "editors" } });
+    submit();
+
+    await waitFor(() => expect(onCreateText).toHaveBeenCalled());
+    expect(onCreateText).toHaveBeenCalledWith("planning", { isPrivate: true, accessRoleName: "editors" });
+  });
+
+  it("hides the role name field for a public channel and drops a stale draft", async () => {
+    // Untick after typing a role name: the channel is public, so no role is
+    // minted and the drafted name must not leak into the call.
+    const { onCreateText } = setup();
+
+    typeName("general");
+    fireEvent.change(screen.getByLabelText("Access role name"), { target: { value: "editors" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /Private channel/i }));
+    expect(screen.queryByLabelText("Access role name")).not.toBeInTheDocument();
+    submit();
+
+    await waitFor(() => expect(onCreateText).toHaveBeenCalled());
+    expect(onCreateText).toHaveBeenCalledWith("general", undefined);
+  });
 });

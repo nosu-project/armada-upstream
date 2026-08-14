@@ -1665,7 +1665,7 @@ export function ConcordPage() {
     return () => document.removeEventListener("visibilitychange", stamp);
   }, [readerPubkey, channelIdForRead, mixedEntries, allMessages, threads, markChannelRead, markMentionsRead, markThreadRead]);
 
-  const { leave, isLeaving, dissolve, createChannel, privatiseChannel, setChannelCategory, arrangeChannels } =
+  const { leave, isLeaving, dissolve, createChannel, privatiseChannel, mintAccessRole, setChannelCategory, arrangeChannels } =
     useCommunityManagement(community);
 
   /**
@@ -2167,8 +2167,12 @@ export function ConcordPage() {
   // The dialog is about ONE channel's access; switching rooms closes it.
   useEffect(() => setAddMembersOpen(false), [channel?.idHex]);
 
-  const handleCreateTextChannel = useCallback(async (name: string, opts?: { isPrivate?: boolean }) => {
-    const { channelIdHex: created } = await createChannel({ name, isPrivate: opts?.isPrivate });
+  const handleCreateTextChannel = useCallback(async (name: string, opts?: { isPrivate?: boolean; accessRoleName?: string }) => {
+    const { channelIdHex: created } = await createChannel({
+      name,
+      isPrivate: opts?.isPrivate,
+      accessRoleName: opts?.accessRoleName,
+    });
     // A newborn Private Channel is born alongside the Role that names who may
     // read it, and nobody holds that Role yet — so there is nobody to vend to.
     // Access starts empty and is handed out by granting the Role, which is the
@@ -2195,25 +2199,39 @@ export function ConcordPage() {
 
   /**
    * Convert a public channel to private (CORD-03 §2). It gets its own key and
-   * a Role scoped to it; access is then granted by handing out that Role.
+   * a Role scoped to it; access is then granted by handing out that Role. The
+   * role's name is the caller's choice (display only — the scope is the
+   * binding), defaulting to the channel's own name.
    */
-  const handlePrivatiseChannel = useCallback(async (channelIdHex: string) => {
+  const handlePrivatiseChannel = useCallback(async (channelIdHex: string, accessRoleName?: string) => {
     const def = folded?.channels.get(channelIdHex);
     if (!def) throw new Error("Channel not found in the control fold yet; try again shortly.");
+    const roleName = accessRoleName?.trim() || def.name;
     // The conversion moves the conversation to a new stream and cannot reach
     // back over what has already been said, so the trade is stated plainly.
     const ok = confirm(
       `Make #${def.name} private?\n\n` +
-      "It gets its own key from here on, and a role of the same name decides who may read it — nobody holds that role yet, so grant it to the members who should have access. " +
+      `It gets its own key from here on, and the "${roleName}" role decides who may read it — nobody holds that role yet, so grant it to the members who should have access. ` +
       "Messages already posted stay readable to everyone in the community; a restriction can't be applied backwards.",
     );
     if (!ok) return;
-    await privatiseChannel({ channelIdHex });
+    await privatiseChannel({ channelIdHex, accessRoleName: roleName });
     toast({
       title: "Channel is now private",
-      description: `Grant the "${def.name}" role to give members access.`,
+      description: `Grant the "${roleName}" role to give members access.`,
     });
   }, [folded, privatiseChannel]);
+
+  /**
+   * Mint an additional access Role for a private channel, under a chosen
+   * name. Entitlement is any-of over the channel's scoped Roles, so this
+   * widens who CAN be let in without touching who already is: the newborn
+   * role is held by nobody and vends its first key on its first grant.
+   */
+  const handleMintAccessRole = useCallback(async (channelIdHex: string, name: string) => {
+    await mintAccessRole({ channelIdHex, name });
+    toast({ title: "Access role created", description: `Grant "${name.trim()}" to give members access.` });
+  }, [mintAccessRole]);
 
 
   // Inline-reply plumbing: a by-id lookup over the decoded set (rumors aren't
@@ -3450,6 +3468,7 @@ export function ConcordPage() {
                       channelRoles={channelRoleCatalog}
                       onPrivatiseChannel={canManageChannels ? handlePrivatiseChannel : undefined}
                       onRotateChannelKey={canRekeyChannel ? handleRotateChannelKey : undefined}
+                      onMintAccessRole={canManageRoles ? handleMintAccessRole : undefined}
                     />
                   )}
                 </div>

@@ -679,8 +679,10 @@ export function useCommunityManagement(community: Community | undefined) {
   });
 
   /**
-   * Mint the Role that confers read access to a Private Channel (CORD-04 §2
-   * `scope`), named after the channel.
+   * Mint a Role that confers read access to a Private Channel (CORD-04 §2
+   * `scope`). The binding is the scope's channel_id; the NAME is display only
+   * (callers default it to the channel's name, but any name is as good — the
+   * spec's own example gates `#testers` with a `Tester` role, CORD-06 §0).
    *
    * It carries NO permission bits: read access is key possession (CORD-04 §1)
    * and a Role "mints no key, so granting it hands a member rank, never a
@@ -692,7 +694,7 @@ export function useCommunityManagement(community: Community | undefined) {
    * bits, so an access Role placed at the signer's ceiling would promote
    * every grantee to the signer's own rank (see `accessRolePosition`).
    */
-  const mintChannelRole = async (channelId: Uint8Array, channelName: string): Promise<string | undefined> => {
+  const mintChannelRole = async (channelId: Uint8Array, roleName: string): Promise<string | undefined> => {
     if (!user || !community) return undefined;
     const ownerHex = folded?.ownerHex ?? community.owner;
     // Below every existing Role and strictly below the signer, or nothing at
@@ -718,7 +720,7 @@ export function useCommunityManagement(community: Community | undefined) {
       buildRoleEdition(
         {
           roleId,
-          name: channelName.slice(0, 64),
+          name: roleName.slice(0, 64),
           position,
           permissions: 0n,
           scope: { kind: "channel", channelId: bytesToHex(channelId) },
@@ -730,12 +732,31 @@ export function useCommunityManagement(community: Community | undefined) {
     return roleId;
   };
 
+  /**
+   * Mint an ADDITIONAL access Role for an existing Private Channel, under a
+   * caller-chosen name. Entitlement is any-of over the Roles scoped to a
+   * channel (`channelRoles`/`isEntitled`), so several Roles gating one room —
+   * "editors" and "advisors" both reading #planning — is already how every
+   * read path works; this is just the mint. The newborn Role is held by
+   * nobody: it starts conferring access only as it is granted (the grant is
+   * what vends the key, see handleToggleRole).
+   */
+  const mintAccessRole = useMutation<string | undefined, Error, { channelIdHex: string; name: string }>({
+    mutationFn: async ({ channelIdHex, name }) => {
+      const trimmed = name.trim();
+      if (!trimmed) throw new Error("Role name is required.");
+      const roleId = await mintChannelRole(hex32(channelIdHex), trimmed);
+      if (community) invalidateControl(queryClient, community.idHex);
+      return roleId;
+    },
+  });
+
   const createChannel = useMutation<
     { channelIdHex: string; minted?: PrivateChannelKey },
     Error,
-    { name: string; repository?: { address: string; relayHints: string[] }; isPrivate?: boolean }
+    { name: string; repository?: { address: string; relayHints: string[] }; isPrivate?: boolean; accessRoleName?: string }
   >({
-    mutationFn: async ({ name, repository, isPrivate }) => {
+    mutationFn: async ({ name, repository, isPrivate, accessRoleName }) => {
       if (!user || !community) throw new Error("Not ready.");
       const trimmed = name.trim();
       if (!trimmed) throw new Error("Channel name is required.");
@@ -778,7 +799,7 @@ export function useCommunityManagement(community: Community | undefined) {
         // (it confers no key and grants nothing), while a channel whose role
         // mint then failed is a live room the whole community can see — and
         // the retry that follows the error would mint a SECOND one.
-        if (isPrivate) await mintChannelRole(channelId, trimmed);
+        if (isPrivate) await mintChannelRole(channelId, accessRoleName?.trim() || trimmed);
         await publishEdition(
           nostr,
           community,
@@ -849,9 +870,9 @@ export function useCommunityManagement(community: Community | undefined) {
   const privatiseChannel = useMutation<
     { minted?: PrivateChannelKey; roleId?: string },
     Error,
-    { channelIdHex: string }
+    { channelIdHex: string; accessRoleName?: string }
   >({
-    mutationFn: async ({ channelIdHex }) => {
+    mutationFn: async ({ channelIdHex, accessRoleName }) => {
       if (!user || !community) throw new Error("Not ready.");
       const def = folded?.channels.get(channelIdHex);
       if (!def) throw new Error("Channel not found in the control fold yet; try again shortly.");
@@ -914,7 +935,7 @@ export function useCommunityManagement(community: Community | undefined) {
         // inert, while a privatised channel whose role mint then failed is a
         // room whose access list nobody can ever be added to, and a retry
         // would re-run the whole conversion against a now-private channel.
-        roleId = await mintChannelRole(channelId, def.name);
+        roleId = await mintChannelRole(channelId, accessRoleName?.trim() || def.name);
         await publishEdition(
           nostr,
           community,
@@ -1269,6 +1290,8 @@ export function useCommunityManagement(community: Community | undefined) {
     isRenaming: renameChannel.isPending,
     privatiseChannel: privatiseChannel.mutateAsync,
     publiciseChannel: publiciseChannel.mutateAsync,
+    mintAccessRole: mintAccessRole.mutateAsync,
+    isMintingAccessRole: mintAccessRole.isPending,
     deleteChannel: deleteChannel.mutateAsync,
     attachRepository: attachRepository.mutateAsync,
     detachRepository: detachRepository.mutateAsync,

@@ -115,6 +115,7 @@ export function CommunitySettingsView({
   channelRoles,
   onPrivatiseChannel,
   onRotateChannelKey,
+  onMintAccessRole,
 }: {
   community: Community;
   metadata: CommunityMetadata | undefined;
@@ -124,10 +125,12 @@ export function CommunitySettingsView({
   canManageChannels: boolean;
   /** Per channel id, the Roles scoped to it — its access list (CORD-04 §2). */
   channelRoles?: ReadonlyMap<string, Array<{ id: string; name: string }>>;
-  /** Convert a public channel to private (CORD-03 §2). */
-  onPrivatiseChannel?: (channelIdHex: string) => Promise<void>;
+  /** Convert a public channel to private (CORD-03 §2), naming its access role. */
+  onPrivatiseChannel?: (channelIdHex: string, accessRoleName?: string) => Promise<void>;
   /** Re-key a private channel to exactly its entitled members. */
   onRotateChannelKey?: (channelIdHex: string) => Promise<void>;
+  /** Mint another Role scoped to a private channel — widen its access list. */
+  onMintAccessRole?: (channelIdHex: string, name: string) => Promise<void>;
 }) {
   const { updateMetadata, isUpdating } = useMetadataActions(community);
   const { mutateAsync: uploadFile } = useUploadFile();
@@ -416,7 +419,7 @@ export function CommunitySettingsView({
       )}
 
       {tab === "channels" && (
-        <ChannelsSection community={community} canManage={canManageChannels} channelRoles={channelRoles} onPrivatiseChannel={onPrivatiseChannel} onRotateChannelKey={onRotateChannelKey} />
+        <ChannelsSection community={community} canManage={canManageChannels} channelRoles={channelRoles} onPrivatiseChannel={onPrivatiseChannel} onRotateChannelKey={onRotateChannelKey} onMintAccessRole={onMintAccessRole} />
       )}
 
       {tab === "integrations" && (
@@ -805,12 +808,14 @@ function ChannelsSection({
   channelRoles,
   onPrivatiseChannel,
   onRotateChannelKey,
+  onMintAccessRole,
 }: {
   community: Community;
   canManage: boolean;
   channelRoles?: ReadonlyMap<string, Array<{ id: string; name: string }>>;
-  onPrivatiseChannel?: (channelIdHex: string) => Promise<void>;
+  onPrivatiseChannel?: (channelIdHex: string, accessRoleName?: string) => Promise<void>;
   onRotateChannelKey?: (channelIdHex: string) => Promise<void>;
+  onMintAccessRole?: (channelIdHex: string, name: string) => Promise<void>;
 }) {
   const channels = useChannels(community);
   const { renameChannel, isRenaming, setChannelCategory, isFiling, deleteChannel, createChannel, isAddingChannel, moveChannel, isMovingChannel } =
@@ -876,8 +881,9 @@ function ChannelsSection({
             canMoveUp={index > 0}
             canMoveDown={index < channels.length - 1}
             accessRoles={channelRoles?.get(ch.idHex) ?? []}
-            onPrivatise={onPrivatiseChannel ? () => onPrivatiseChannel(ch.idHex) : undefined}
+            onPrivatise={onPrivatiseChannel ? (roleName) => onPrivatiseChannel(ch.idHex, roleName) : undefined}
             onRotateKey={onRotateChannelKey ? () => onRotateChannelKey(ch.idHex) : undefined}
+            onMintAccessRole={onMintAccessRole ? (name) => onMintAccessRole(ch.idHex, name) : undefined}
             onSetCategory={(category) => setChannelCategory({ channelIdHex: ch.idHex, category })}
             onDelete={
               canManage && channels.length > 1
@@ -951,6 +957,7 @@ function ChannelRow({
   accessRoles,
   onPrivatise,
   onRotateKey,
+  onMintAccessRole,
 }: {
   channel: Channel;
   canManage: boolean;
@@ -966,10 +973,12 @@ function ChannelRow({
   canMoveDown?: boolean;
   /** The Roles scoped to this channel — who may read it (CORD-03/04 §2). */
   accessRoles?: Array<{ id: string; name: string }>;
-  /** Convert a public channel to private (CORD-03 §2). */
-  onPrivatise?: () => Promise<void>;
+  /** Convert a public channel to private (CORD-03 §2), naming its access role. */
+  onPrivatise?: (accessRoleName?: string) => Promise<void>;
   /** Re-key to exactly the currently-entitled members (drift/leak repair). */
   onRotateKey?: () => Promise<void>;
+  /** Mint another Role scoped to this channel — widen its access list. */
+  onMintAccessRole?: (name: string) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(channel.name);
@@ -977,6 +986,10 @@ function ChannelRow({
   const [busy, setBusy] = useState(false);
   const [naming, setNaming] = useState(false);
   const [categoryDraft, setCategoryDraft] = useState("");
+  // Drafts for the access panel: the role a privatise mints (left empty it
+  // matches the channel), and an additional role for an already-private one.
+  const [roleDraft, setRoleDraft] = useState("");
+  const [addingRole, setAddingRole] = useState(false);
 
   const file = async (name: string | undefined) => {
     try {
@@ -994,6 +1007,13 @@ function ChannelRow({
   useEffect(() => {
     setValue(channel.name);
   }, [channel.name]);
+
+  // A closed access panel drops its drafts, so re-opening starts clean.
+  useEffect(() => {
+    if (accessOpen) return;
+    setRoleDraft("");
+    setAddingRole(false);
+  }, [accessOpen]);
 
   const run = async (fn: () => Promise<void>, failTitle: string) => {
     setBusy(true);
@@ -1196,17 +1216,73 @@ function ChannelRow({
             ) : (
               <p className="text-xs text-muted-foreground">
                 No role is scoped to this channel, so only the owner and existing key holders can
-                read it. Create one in Roles, scoped to #{channel.name}.
+                read it. Create one below{onMintAccessRole ? "" : " in Roles, scoped to this channel"}.
               </p>
             )}
             <p className="text-xs text-muted-foreground">
               Grant one of these roles to give a member access; revoking it rotates the key away.
             </p>
+            {onMintAccessRole && addingRole && (
+              <form
+                className="flex items-center gap-1"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const trimmed = roleDraft.trim();
+                  if (!trimmed) return;
+                  void run(async () => {
+                    await onMintAccessRole(trimmed);
+                    setRoleDraft("");
+                    setAddingRole(false);
+                  }, "Couldn't create the role");
+                }}
+              >
+                <Shield className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+                <Input
+                  value={roleDraft}
+                  onChange={(e) => setRoleDraft(e.target.value)}
+                  placeholder="Role name"
+                  aria-label="New access role name"
+                  autoFocus
+                  maxLength={64}
+                  disabled={busy}
+                  className="h-7 text-sm"
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      setAddingRole(false);
+                      setRoleDraft("");
+                    }
+                  }}
+                />
+                <Button
+                  type="submit"
+                  size="icon"
+                  variant="ghost"
+                  className="size-7 shrink-0"
+                  disabled={busy || !roleDraft.trim()}
+                  aria-label="Create access role"
+                >
+                  {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+                </Button>
+              </form>
+            )}
           </>
         ) : (
-          <p className="text-xs text-muted-foreground">
-            Readable by every member — a public channel's key comes from the community root.
-          </p>
+          <>
+            <p className="text-xs text-muted-foreground">
+              Readable by every member — a public channel's key comes from the community root.
+            </p>
+            {onPrivatise && (
+              <Input
+                value={roleDraft}
+                onChange={(e) => setRoleDraft(e.target.value)}
+                placeholder={`Access role name (default: ${channel.name})`}
+                aria-label="Access role name"
+                maxLength={64}
+                disabled={busy}
+                className="h-7 text-sm"
+              />
+            )}
+          </>
         )}
         <div className="flex items-center justify-end gap-2 pt-1">
           {!channel.isPrivate && onPrivatise && (
@@ -1216,9 +1292,26 @@ function ChannelRow({
               variant="ghost"
               className="mr-auto text-muted-foreground"
               disabled={busy}
-              onClick={() => run(async () => { await onPrivatise(); setAccessOpen(false); }, "Couldn't make the channel private")}
+              onClick={() => run(async () => {
+                await onPrivatise(roleDraft.trim() || undefined);
+                setRoleDraft("");
+                setAccessOpen(false);
+              }, "Couldn't make the channel private")}
             >
               {busy ? <Loader2 className="size-3.5 animate-spin" /> : "Make private"}
+            </Button>
+          )}
+          {channel.isPrivate && onMintAccessRole && !addingRole && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="mr-auto text-muted-foreground"
+              disabled={busy}
+              title="Mint another role scoped to this channel. Holding any of its roles grants access."
+              onClick={() => setAddingRole(true)}
+            >
+              New role
             </Button>
           )}
           {channel.isPrivate && onRotateKey && (
@@ -1226,7 +1319,7 @@ function ChannelRow({
               type="button"
               size="sm"
               variant="ghost"
-              className="mr-auto text-muted-foreground"
+              className={cn("text-muted-foreground", !onMintAccessRole && "mr-auto")}
               disabled={busy}
               title="Mint a fresh key for exactly the members entitled today. Anyone else loses access from here on."
               onClick={() => {
