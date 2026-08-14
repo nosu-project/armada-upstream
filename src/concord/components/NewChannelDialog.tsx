@@ -49,7 +49,7 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPrivate, setIsPrivate] = useState(true);
-  // The access role's name — display only, the binding is the role's scope
+  // The access role's name, display only: the binding is the role's scope
   // (CORD-04 §2). Left empty it matches the channel, the common case.
   const [roleName, setRoleName] = useState("");
 
@@ -86,7 +86,17 @@ export function NewChannelDialog({ open, onOpenChange, connectedCoordinates, onC
           channelName,
           isPrivate ? { isPrivate: true, accessRoleName: roleName.trim() || undefined } : undefined,
         );
-        toast({ title: isPrivate ? "Private channel created" : "Channel created", description: `#${channelName}` });
+        // A newborn private channel has an access role nobody holds yet, so
+        // point at the door that grants it rather than leaving the creator in
+        // a room that looks like it simply has no members.
+        toast(
+          isPrivate
+            ? {
+                title: "Private channel created",
+                description: `Only you can read #${channelName} so far. Use Add members in the channel menu to let others in.`,
+              }
+            : { title: "Channel created", description: `#${channelName}` },
+        );
       }
       onOpenChange(false);
     } catch (e) {

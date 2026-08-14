@@ -78,7 +78,7 @@ describe("NewChannelDialog — privacy controls reach the create call", () => {
     expect(onCreateText).toHaveBeenCalledWith("general", undefined);
   });
 
-  it("carries a typed access role name — the role's name is not chained to the channel's", async () => {
+  it("carries a typed access role name: the role's name is not chained to the channel's", async () => {
     // The binding is the role's scope (CORD-04 §2), the name is display; a
     // channel #planning gated by an "editors" role is the whole point.
     const { onCreateText } = setup();

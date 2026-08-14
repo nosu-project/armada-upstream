@@ -129,7 +129,7 @@ export function CommunitySettingsView({
   onPrivatiseChannel?: (channelIdHex: string, accessRoleName?: string) => Promise<void>;
   /** Re-key a private channel to exactly its entitled members. */
   onRotateChannelKey?: (channelIdHex: string) => Promise<void>;
-  /** Mint another Role scoped to a private channel — widen its access list. */
+  /** Mint another Role scoped to a private channel, widening its access list. */
   onMintAccessRole?: (channelIdHex: string, name: string) => Promise<void>;
 }) {
   const { updateMetadata, isUpdating } = useMetadataActions(community);
@@ -977,7 +977,7 @@ function ChannelRow({
   onPrivatise?: (accessRoleName?: string) => Promise<void>;
   /** Re-key to exactly the currently-entitled members (drift/leak repair). */
   onRotateKey?: () => Promise<void>;
-  /** Mint another Role scoped to this channel — widen its access list. */
+  /** Mint another Role scoped to this channel, widening its access list. */
   onMintAccessRole?: (name: string) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
@@ -1269,7 +1269,7 @@ function ChannelRow({
         ) : (
           <>
             <p className="text-xs text-muted-foreground">
-              Readable by every member — a public channel's key comes from the community root.
+              Readable by every member. A public channel's key comes from the community root.
             </p>
             {onPrivatise && (
               <Input

@@ -1,4 +1,4 @@
-import { GripVertical, Hash, Loader2, Plus, Shield, ShieldOff } from "lucide-react";
+import { GripVertical, Hash, Loader2, Lock, Plus, Shield, ShieldOff, Users } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
 import { DisplayName } from "@/components/DisplayName";
@@ -104,6 +104,18 @@ function RolesBody({ community }: { community: Community }) {
   );
   const channelName = (channelId: string) =>
     folded?.channels.get(channelId)?.name ?? "deleted channel";
+  const channelIsPrivate = (channelId: string) =>
+    Boolean(folded?.channels.get(channelId)?.isPrivate);
+
+  // Per role, how many grants list it: Discord's member count, and the
+  // fastest read of "is this access role actually granting anyone anything".
+  const holderCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const g of folded?.roster.grants ?? []) {
+      for (const id of g.roleIds) counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    return counts;
+  }, [folded]);
 
   const ownerHex = folded?.ownerHex ?? community.owner;
 
@@ -470,7 +482,8 @@ function RolesBody({ community }: { community: Community }) {
     return (
       <RoleEditor
         role={editing}
-        channels={channels.map((c) => ({ idHex: c.channelIdHex, name: c.name }))}
+        channels={channels.map((c) => ({ idHex: c.channelIdHex, name: c.name, isPrivate: c.isPrivate }))}
+        holders={holderCounts.get(editing.roleId) ?? 0}
         saving={isSavingRole}
         error={error}
         canRevoke={roles.some((r) => r.roleId === editing.roleId) && mayTouch(editing.position)}
@@ -575,11 +588,27 @@ function RolesBody({ community }: { community: Community }) {
                     {r.name}
                   </span>
                   {r.scope.kind === "channel" && (
-                    <span className="inline-flex min-w-0 items-center gap-0.5 text-[11px] text-muted-foreground">
-                      <Hash className="size-3 shrink-0" aria-hidden />
+                    <span
+                      className="inline-flex min-w-0 items-center gap-0.5 text-[11px] text-muted-foreground"
+                      title={
+                        channelIsPrivate(r.scope.channelId)
+                          ? `Access role: holders can read #${channelName(r.scope.channelId)}`
+                          : `Permissions apply only in #${channelName(r.scope.channelId)}`
+                      }
+                    >
+                      {channelIsPrivate(r.scope.channelId)
+                        ? <Lock className="size-3 shrink-0" aria-label="Private channel access" />
+                        : <Hash className="size-3 shrink-0" aria-hidden />}
                       <span className="truncate max-w-24">{channelName(r.scope.channelId)}</span>
                     </span>
                   )}
+                  <span
+                    className="inline-flex shrink-0 items-center gap-0.5 text-[11px] tabular-nums text-muted-foreground"
+                    title={`${holderCounts.get(r.roleId) ?? 0} member${(holderCounts.get(r.roleId) ?? 0) === 1 ? "" : "s"} hold this role`}
+                  >
+                    <Users className="size-3" aria-hidden />
+                    {holderCounts.get(r.roleId) ?? 0}
+                  </span>
                 </button>
               </div>
             );
@@ -626,6 +655,7 @@ function RolesBody({ community }: { community: Community }) {
 function RoleEditor({
   role,
   channels,
+  holders,
   saving,
   error,
   canRevoke,
@@ -634,7 +664,9 @@ function RoleEditor({
   onCancel,
 }: {
   role: Role;
-  channels: Array<{ idHex: string; name: string }>;
+  channels: Array<{ idHex: string; name: string; isPrivate?: boolean }>;
+  /** How many grants list this role; 0 for a role being created. */
+  holders: number;
   saving: boolean;
   error: string | null;
   canRevoke: boolean;
@@ -668,11 +700,38 @@ function RoleEditor({
     return opts;
   }, [channels, role.scope]);
 
+  const selectedChannel = scopeValue === "server" ? undefined : scopeOptions.find((c) => c.idHex === scopeValue);
+  // The channel this role gates TODAY (its saved scope), for the rescope guard.
+  const savedChannel = role.scope.kind === "channel"
+    ? scopeOptions.find((c) => role.scope.kind === "channel" && c.idHex === role.scope.channelId)
+    : undefined;
+
   return (
     <form
       onSubmit={(e) => {
         e.preventDefault();
         const scope: RoleScope = scopeValue === "server" ? { kind: "server" } : { kind: "channel", channelId: scopeValue };
+        const rescoped = role.scope.kind === "channel" && (scope.kind !== "channel" || scope.channelId !== role.scope.channelId);
+        // Scope doubles as a private channel's access list (CORD-04 §2): the
+        // roles scoped to a channel name who may read it. A save is not a key
+        // operation, so both directions leave custody where it was; say so
+        // before publishing rather than after members notice.
+        if (rescoped && savedChannel?.isPrivate) {
+          const ok = confirm(
+            `Move this role off #${savedChannel.name}?\n\n` +
+            `It is part of #${savedChannel.name}'s access list. Holders will no longer count as members of the channel, but they keep the key they already have. Rotate the channel's key (community settings, channel access) to cut them off from what's said next.`,
+          );
+          if (!ok) return;
+        }
+        const gainsPrivate = scope.kind === "channel" && selectedChannel?.isPrivate &&
+          !(role.scope.kind === "channel" && role.scope.channelId === scope.channelId);
+        if (gainsPrivate && holders > 0) {
+          const ok = confirm(
+            `Make this an access role for #${selectedChannel.name}?\n\n` +
+            `Its ${holders === 1 ? "holder" : `${holders} holders`} may read #${selectedChannel.name} from now on, but a save does NOT send them the channel key. Re-grant the role from the member list (or the channel's Add members) to deliver it.`,
+          );
+          if (!ok) return;
+        }
         onSave({ ...role, name: name.trim() || "Role", permissions: perms, color, scope, display: display || undefined });
       }}
       className="flex flex-col gap-5"
@@ -719,14 +778,22 @@ function RoleEditor({
             {scopeOptions.map((c) => (
               <SelectItem key={c.idHex} value={c.idHex}>
                 <span className="inline-flex items-center gap-1">
-                  <Hash className="size-3.5 text-muted-foreground" aria-hidden /> {c.name}
+                  {c.isPrivate
+                    ? <Lock className="size-3.5 text-muted-foreground" aria-label="Private channel" />
+                    : <Hash className="size-3.5 text-muted-foreground" aria-hidden />}
+                  {c.name}
+                  {c.isPrivate && <span className="text-xs text-muted-foreground">· grants access</span>}
                 </span>
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground">
-          A channel-scoped role's permissions apply only inside that channel.
+          {selectedChannel?.isPrivate
+            ? <>Holders of this role can read <span className="font-medium">#{selectedChannel.name}</span>. Scoping a role to a private channel is how it grants access: granting the role sends the channel key, revoking it rotates the key away. Permission bits apply only inside the channel.</>
+            : selectedChannel
+              ? "A channel-scoped role's permissions apply only inside that channel."
+              : "Permissions apply across the whole community."}
         </p>
       </div>
 

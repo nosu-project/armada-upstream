@@ -2200,7 +2200,7 @@ export function ConcordPage() {
   /**
    * Convert a public channel to private (CORD-03 §2). It gets its own key and
    * a Role scoped to it; access is then granted by handing out that Role. The
-   * role's name is the caller's choice (display only — the scope is the
+   * role's name is the caller's choice (display only; the scope is the
    * binding), defaulting to the channel's own name.
    */
   const handlePrivatiseChannel = useCallback(async (channelIdHex: string, accessRoleName?: string) => {
@@ -2211,7 +2211,7 @@ export function ConcordPage() {
     // back over what has already been said, so the trade is stated plainly.
     const ok = confirm(
       `Make #${def.name} private?\n\n` +
-      `It gets its own key from here on, and the "${roleName}" role decides who may read it — nobody holds that role yet, so grant it to the members who should have access. ` +
+      `It gets its own key from here on, and the "${roleName}" role decides who may read it. Nobody holds that role yet, so grant it to the members who should have access. ` +
       "Messages already posted stay readable to everyone in the community; a restriction can't be applied backwards.",
     );
     if (!ok) return;
@@ -3319,6 +3319,16 @@ export function ConcordPage() {
                     <Users className="size-4" />
                     Members
                   </DropdownMenuItem>
+                  {/* The private channel's "who can read this" door, on the
+                      channel itself: the same dialog the member panel's Add
+                      members button opens, for viewers who can grant one of
+                      the channel's access roles. */}
+                  {view === "channel" && channel?.isPrivate && addableChannelRoles.length > 0 && (
+                    <DropdownMenuItem className="px-3 py-2" onClick={openAddMembers}>
+                      <UserPlus className="size-4" />
+                      Add members
+                    </DropdownMenuItem>
+                  )}
                   {user && !dissolved && (
                     <DropdownMenuItem className="px-3 py-2" onClick={() => setInviteOpen(true)}>
                       <UserPlus className="size-4" />

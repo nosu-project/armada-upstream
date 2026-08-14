@@ -252,18 +252,18 @@ describe("publiciseChannel (CORD-03 §2, the reverse conversion)", () => {
 
 // ── CORD-04 §2: the access role's name is the caller's, the scope the binding ─
 
-describe("createChannel — the private channel's access role name", () => {
+describe("createChannel: the private channel's access role name", () => {
   const vskOf = (e: { tags: string[][] }) => e.tags.find((t) => t[0] === "vsk")?.[1];
   const eidOf = (e: { tags: string[][] }) => e.tags.find((t) => t[0] === "eid")?.[1];
 
-  it("mints the role under a caller-chosen name — #planning gated by \"editors\"", async () => {
+  it("mints the role under a caller-chosen name: #planning gated by \"editors\"", async () => {
     // The spec ties access to the role's scope.channel_id, never its name
     // (CORD-04 §2; CORD-06's own example gates #testers with a Tester role).
     const { result } = renderHook(() => useCommunityManagement(community), { wrapper });
 
     await result.current.createChannel({ name: "planning", isPrivate: true, accessRoleName: "editors" });
 
-    // Role (vsk 1) before its channel (vsk 2) — createChannel's ordering.
+    // Role (vsk 1) before its channel (vsk 2), createChannel's ordering.
     expect(h.editions.map(vskOf)).toEqual(["1", "2"]);
     const role = JSON.parse(h.editions[0].content);
     expect(role).toMatchObject({ name: "editors", permissions: "0" });
@@ -280,7 +280,7 @@ describe("createChannel — the private channel's access role name", () => {
   });
 });
 
-describe("mintAccessRole — widening an existing private channel's access list", () => {
+describe("mintAccessRole: widening an existing private channel's access list", () => {
   it("mints another zero-bit role scoped to the channel, under the given name", async () => {
     // Entitlement is any-of over the roles scoped to a channel, so a second
     // role widens who CAN be granted access without touching who already is.

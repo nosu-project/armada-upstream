@@ -681,7 +681,7 @@ export function useCommunityManagement(community: Community | undefined) {
   /**
    * Mint a Role that confers read access to a Private Channel (CORD-04 §2
    * `scope`). The binding is the scope's channel_id; the NAME is display only
-   * (callers default it to the channel's name, but any name is as good — the
+   * (callers default it to the channel's name, but any name is as good; the
    * spec's own example gates `#testers` with a `Tester` role, CORD-06 §0).
    *
    * It carries NO permission bits: read access is key possession (CORD-04 §1)
@@ -735,8 +735,8 @@ export function useCommunityManagement(community: Community | undefined) {
   /**
    * Mint an ADDITIONAL access Role for an existing Private Channel, under a
    * caller-chosen name. Entitlement is any-of over the Roles scoped to a
-   * channel (`channelRoles`/`isEntitled`), so several Roles gating one room —
-   * "editors" and "advisors" both reading #planning — is already how every
+   * channel (`channelRoles`/`isEntitled`), so several Roles gating one room
+   * ("editors" and "advisors" both reading #planning) is already how every
    * read path works; this is just the mint. The newborn Role is held by
    * nobody: it starts conferring access only as it is granted (the grant is
    * what vends the key, see handleToggleRole).
