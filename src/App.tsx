@@ -7,6 +7,7 @@ import { NostrLoginProvider } from "@nostrify/react/login";
 import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { ensureAndroidBackListener } from "@/hooks/useAndroidBack";
+import { ActiveAccountSync } from "@/components/ActiveAccountSync";
 import { AppProvider } from "@/components/AppProvider";
 import { ArmadaDBProvider } from "@/components/ArmadaDBProvider";
 import { DBMigrationGate } from "@/components/DBMigrationGate";
@@ -32,6 +33,8 @@ import { WebPushNotifications } from "@/components/WebPushNotifications";
 import { WireSync } from "@/wire/WireSync";
 import { initGroupKeyPersistence } from "@/concord/lib/groupKeyPersist";
 import { secureStorage } from "@/lib/secureStorage";
+import { APP_CONFIG_STORAGE_KEY } from "@/lib/activeAccount";
+import { LOGIN_STORAGE_KEY } from "@/lib/switchAccount";
 
 import AppRouter from "./AppRouter";
 
@@ -79,11 +82,12 @@ if (Capacitor.isNativePlatform()) {
 
 export function App() {
   return (
-    <AppProvider storageKey="armada:app-config">
+    <AppProvider storageKey={APP_CONFIG_STORAGE_KEY}>
       <ArmadaDBProvider>
         <PlausibleProvider>
           <QueryClientProvider client={queryClient}>
-            <NostrLoginProvider storageKey="armada:login" storage={secureStorage}>
+            <NostrLoginProvider storageKey={LOGIN_STORAGE_KEY} storage={secureStorage}>
+              <ActiveAccountSync />
               <NostrProvider>
                 <WalletProvider>
                   <TooltipProvider>

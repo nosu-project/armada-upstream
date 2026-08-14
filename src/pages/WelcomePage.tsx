@@ -1,5 +1,4 @@
 import { useNostr } from "@nostrify/react";
-import { useNostrLogin } from "@nostrify/react/login";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { AlertTriangle, Check, Copy, Download, Eye, EyeOff } from "lucide-react";
@@ -18,6 +17,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { suppressNextSyncGate } from "@/hooks/useFreshLogin";
 import { setOnboardingActive } from "@/hooks/useOnboarding";
+import { APP_CONFIG_STORAGE_KEY, seedAccountConfig } from "@/lib/activeAccount";
 import { clearPendingJoin, peekPendingJoin, type JoinLink } from "@/lib/joinLink";
 import { publishSignedEventToRelays, uniqueRelayUrls } from "@/lib/nip65";
 import { markRelayRecoveryPromptShown } from "@/lib/relayRecoveryPrompt";
@@ -84,10 +84,9 @@ function SignupShell({ step, maxWidth, onBack, onClose, children }: {
 }
 
 export function WelcomePage() {
-  const { config, updateConfig } = useAppContext();
+  const { config } = useAppContext();
   const { user } = useCurrentUser();
   const { nostr } = useNostr();
-  const { logins } = useNostrLogin();
   const { mesh } = useMeshTransport();
   const online = useOnlineStatus();
   const navigate = useNavigate();
@@ -244,18 +243,15 @@ export function WelcomePage() {
     // link, otherwise the app's default relays.
     const homeRelays = uniqueRelayUrls(join ? join.relays : config.appRelays);
 
-    if (join) {
-      // A referral/join link: seed the operator's relays into app config. On a
-      // first/only account adopt their set; with other accounts on the device
-      // only ADD them, so an existing account's relays are never rewritten.
-      updateConfig((current) => ({
-        ...current,
-        appRelays: logins.length === 0
-          ? homeRelays
-          : uniqueRelayUrls([...current.appRelays, ...homeRelays]),
-      }));
-      clearPendingJoin();
-    }
+    // Everything this step settles about the new account's config is written to
+    // THAT account's own scoped blob, below, rather than through `updateConfig`
+    // — which would still be pointed at the outgoing account (or at no account
+    // at all) until the login commits. Config is per-account now, so an
+    // existing account's relays are never rewritten by construction; the
+    // previous version had to special-case `logins.length` to get that.
+    const configSeed: Record<string, unknown> = { appRelays: homeRelays };
+
+    if (join) clearPendingJoin();
 
     // Publish a default NIP-65 relay list for the key we just generated. This
     // is the ONE safe exception to the never-auto-publish rule: a key minted
@@ -280,17 +276,18 @@ export function WelcomePage() {
           sk,
         );
         pendingRelayList.current = { pubkey: identity.pubkey, event, relays: homeRelays };
-        updateConfig((current) => ({
-          ...current,
-          relayMetadata: {
-            relays: homeRelays.map((url) => ({ url, read: true, write: true })),
-            updatedAt: event.created_at,
-            pubkey: identity.pubkey,
-          },
-        }));
+        configSeed.relayMetadata = {
+          relays: homeRelays.map((url) => ({ url, read: true, write: true })),
+          updatedAt: event.created_at,
+          pubkey: identity.pubkey,
+        };
       } catch {
         // Best effort: the account still works on its local app relays.
       }
+    }
+
+    if (identity) {
+      seedAccountConfig(APP_CONFIG_STORAGE_KEY, identity.pubkey, configSeed);
     }
     // Mark onboarding in progress BEFORE login so it's already true on the
     // commit that first exposes the user — otherwise the headless web-push

@@ -16,6 +16,7 @@ import { EmojifiedText } from '@/components/chat/CustomEmoji';
 import { getAvatarShape } from '@/lib/avatarShape';
 import { Skeleton } from '@/components/ui/skeleton.tsx';
 import { useLoggedInAccounts, type Account } from '@/hooks/useLoggedInAccounts';
+import { useSwitchAccount } from '@/hooks/useSwitchAccount';
 import { useServerScope } from '@/contexts/ServerScopeContext';
 import { ServerProfileDialog } from '@/components/dialogs/ServerProfileDialog';
 import { StatusDialog } from '@/components/dialogs/StatusDialog';
@@ -58,7 +59,11 @@ function AccountName({ account }: { account: Account }) {
 }
 
 export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
-  const { currentUser, otherUsers, isLoading, setLogin, removeLogin } = useLoggedInAccounts();
+  const { currentUser, otherUsers, isLoading, removeLogin } = useLoggedInAccounts();
+  // Both of these reload the app — see `switchAccount`. Anything that changes
+  // which account is `logins[0]` has to, or the incoming account inherits the
+  // outgoing one's caches.
+  const { switchTo, signOut } = useSwitchAccount();
   const { config } = useAppContext();
   const [isOpen, setIsOpen] = useState(false);
   const [walletOpen, setWalletOpen] = useState(false);
@@ -86,13 +91,19 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
     const isLastAccount = otherUsers.length === 0;
     // Use setTimeout to ensure the dropdown closes before removing login
     setTimeout(() => {
-      removeLogin(currentUser.id);
       // The removed account's NWC wallet secrets must not outlive it (the
       // full purge below only runs on the final logout).
       clearWalletStorage(currentUser.pubkey);
       clearRenderedPlaintext();
       if (isLastAccount) {
+        removeLogin(currentUser.id);
         void purgeClientStorage().finally(() => window.location.assign('/welcome'));
+      } else {
+        // Another account is about to become active, which is an account
+        // SWITCH — so it takes the switch path, reload included, rather than
+        // inheriting this account's caches in place. `signOut` persists the
+        // remaining logins itself; `removeLogin`'s dispatch would only race it.
+        signOut(currentUser.id);
       }
     }, 0);
   };
@@ -179,7 +190,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
         {otherUsers.map((user) => (
           <DropdownMenuItem
             key={user.id}
-            onClick={() => setLogin(user.id)}
+            onClick={() => switchTo(user.id)}
             className='flex items-center gap-2 cursor-pointer p-2 clip-corner-lg'
           >
             <Avatar shape={getAvatarShape(user.metadata)} className='w-8 h-8'>

@@ -1,7 +1,13 @@
-import { useEffect, useLayoutEffect } from "react";
+import { useEffect, useLayoutEffect, useMemo, useSyncExternalStore } from "react";
 
 import { AppConfigSchema } from "@/lib/schemas";
 import { AppContext, defaultConfig, type AppConfig } from "@/contexts/AppContext";
+import {
+  accountScopedKey,
+  adoptLegacyConfig,
+  getActivePubkey,
+  subscribeActivePubkey,
+} from "@/lib/activeAccount";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { hslStringToHex, isDarkTheme } from "@/lib/colorUtils";
 import { syncNativeStatusBar } from "@/lib/statusBar";
@@ -114,7 +120,28 @@ interface AppProviderProps {
 }
 
 export function AppProvider({ storageKey, children }: AppProviderProps) {
-  const [config, setConfig] = useLocalStorage<AppConfig>(storageKey, defaultConfig, {
+  // The config blob is PER ACCOUNT. It carries the DM peer lists
+  // (`startedDms`, `acceptedDms`, `pinnedDms`, …) and the rail's arrangement,
+  // so one shared blob meant every account on the device showed every other
+  // account's conversations — and, because `docToConfigPatch` only copies keys
+  // the incoming NIP-78 document actually has, each account then republished
+  // the others' peers as its own.
+  //
+  // The pubkey can't come from the login context: `AppProvider` is mounted
+  // ABOVE `NostrLoginProvider` (whose storage is an async keychain read on
+  // native), and this hook has to pick a key on its first render. It reads the
+  // synchronous marker instead — see `lib/activeAccount.ts`.
+  const pubkey = useSyncExternalStore(subscribeActivePubkey, getActivePubkey);
+
+  // `adoptLegacyConfig` is idempotent and synchronous, and has to run before
+  // the scoped key is read: on upgrade the one pre-scoping blob is handed to
+  // whichever account is active first, and to that account only.
+  const scopedKey = useMemo(() => {
+    if (pubkey) adoptLegacyConfig(storageKey, pubkey);
+    return accountScopedKey(storageKey, pubkey);
+  }, [storageKey, pubkey]);
+
+  const [config, setConfig] = useLocalStorage<AppConfig>(scopedKey, defaultConfig, {
     serialize: JSON.stringify,
     deserialize: deserializeConfig,
   });

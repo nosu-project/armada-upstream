@@ -16,6 +16,7 @@ import { Nip46Signer } from "@/lib/nip46Signer";
 import { Nip46Transport } from "@/lib/nip46Transport";
 import { normalizeRelayUrl } from "@/lib/platform";
 import { purgeClientStorage } from "@/lib/purgeClientStorage";
+import { signOutAccount } from "@/lib/switchAccount";
 import { clearWalletStorage } from "@/lib/walletStorage";
 import { clearEsploraStorage } from "@/lib/esploraStorage";
 import { logSync } from "@/lib/syncLog";
@@ -237,7 +238,6 @@ export function useLoginActions() {
     async logout(): Promise<void> {
       const login = logins[0];
       if (login) {
-        removeLogin(login.id);
         // The removed account's NWC wallet secrets must not outlive it —
         // purgeClientStorage below only runs on the FINAL logout.
         clearWalletStorage(login.pubkey);
@@ -251,12 +251,19 @@ export function useLoginActions() {
       // If that was the last identity, wipe all client-side persistence (event
       // cache, drafts, read-state, relay-info, theme, added servers, decrypted
       // images…) and hard-redirect to the landing page so nothing is held onto
-      // and the next session boots from clean storage. When other accounts
-      // remain, leave their caches intact.
+      // and the next session boots from clean storage.
       if (logins.length <= 1) {
+        if (login) removeLogin(login.id);
         await purgeClientStorage();
         window.location.assign("/welcome");
+        return;
       }
+      // Otherwise another account is about to become active, which is an
+      // account SWITCH — so it takes the switch path, reload included, rather
+      // than leaving this account's caches for the next one to read. That path
+      // persists the remaining logins itself; `removeLogin`'s dispatch would
+      // only race it.
+      if (login) await signOutAccount(logins, login.id);
     },
   };
 }

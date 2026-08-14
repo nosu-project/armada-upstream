@@ -173,7 +173,9 @@ export function useChannelTimeline(
   const { nostr } = useNostr();
   const queryClient = useQueryClient();
   const moderation = useChatModeration(community);
-  // Only so the flood heuristic can leave the reader's own messages alone.
+  // The flood heuristic leaves the reader's own messages alone — and the
+  // persisted snapshot is keyed by this pubkey, since it is the one cache read
+  // from the ROUTE's channel id before any key proves membership.
   const { user: readingUser } = useCurrentUser();
   // The community's active pause (CORD-04 §8), so the fold collapses non-staff
   // messages posted while it holds — the read side of the pause signal. Via
@@ -195,9 +197,11 @@ export function useChannelTimeline(
   // channel id is known — before the fold chain resolves a Channel — so a
   // warm reload paints messages instead of a skeleton. Stale-seeded, so the
   // real store read still runs and replaces it (see timelineSnapshot).
+  const viewerPubkey = readingUser?.pubkey;
   useEffect(() => {
-    if (channelIdHex) void prewarmTimelineSnapshot(queryClient, channelIdHex, channelKey(channelIdHex));
-  }, [channelIdHex, queryClient]);
+    if (!viewerPubkey || !channelIdHex) return;
+    void prewarmTimelineSnapshot(queryClient, viewerPubkey, channelIdHex, channelKey(channelIdHex));
+  }, [viewerPubkey, channelIdHex, queryClient]);
 
   // Physically purge expired disappearing messages (CORD-08 §3). Hiding them
   // is the read filter's job; the plaintext leaving the store is this one's.
@@ -364,10 +368,10 @@ export function useChannelTimeline(
   // Keep the persisted window current. Content-compared inside, so repaint
   // churn does not rewrite it.
   useEffect(() => {
-    if (channelIdHex && query.data && query.data.length > 0) {
-      void persistTimelineSnapshot(channelIdHex, query.data);
+    if (viewerPubkey && channelIdHex && query.data && query.data.length > 0) {
+      void persistTimelineSnapshot(viewerPubkey, channelIdHex, query.data);
     }
-  }, [channelIdHex, query.data]);
+  }, [viewerPubkey, channelIdHex, query.data]);
 
   const loadOlder = useCallback(async (): Promise<number> => {
     if (!hasMore || isLoadingOlder) return 0;

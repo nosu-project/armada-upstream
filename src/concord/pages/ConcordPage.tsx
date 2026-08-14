@@ -113,6 +113,7 @@ import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
 import { useNotifLevels, concordChannelScopeKey } from "@/hooks/useNotifLevels";
 import { NotifLevelMenu } from "@/components/NotifLevelMenu";
 import { toast } from "@/hooks/useToast";
+import { CommunityNoAccess } from "@/concord/components/CommunityNoAccess";
 import { useCommunity, useCommunityList, useIsExcluded } from "@/concord/hooks/useCommunityList";
 import { channelDecodeDeadEnd } from "@/concord/lib/channelSync";
 import { activateScope, concordScope } from "@/wire/activation";
@@ -2323,10 +2324,21 @@ export function ConcordPage() {
   // device. Scoped so a resolved list with no such community (a bad link, a
   // left community) still falls through to the page's not-found handling
   // instead of spinning forever.
-  const { isLoading: communityListLoading } = useCommunityList();
+  const { data: listData, isLoading: communityListLoading } = useCommunityList();
   const gateResolving = Boolean(
     !channel && communityId && (communityListLoading || (baseCommunity && !folded)),
   );
+  // No live entry for this community in the ACTIVE account's vault: it holds no
+  // keys for it, so there is nothing here it may see (rendered by
+  // `CommunityNoAccess`, below).
+  //
+  // Only once the list has genuinely resolved. `data` being present is the
+  // load-bearing half — a list that hasn't been read yet, or one whose decrypt
+  // failed because a remote signer's nip44 isn't up, is indistinguishable from
+  // an empty one, and treating either as "not a member" would lock a member out
+  // of their own community for as long as their signer took to answer.
+  const membershipResolved = Boolean(listData && !listData.decryptFailed && !communityListLoading);
+  const noAccess = Boolean(communityId && !baseCommunity && membershipResolved);
   // A catch-up stuck in its retry loop: the scheduler alternates error
   // (backoff) and pending (retry) forever against an unreachable relay set,
   // so the verdict must LATCH across that cycle — it clears only when a round
@@ -2451,6 +2463,10 @@ export function ConcordPage() {
   // local, per-member action.
 
   if (!communityId) return <Navigate to="/" replace />;
+  // Render NOTHING of the community to a non-member — not the timeline, not the
+  // name, not the channel list. Placed before every one of those so there is no
+  // ordering to get wrong later.
+  if (noAccess) return <CommunityNoAccess />;
 
   const handleSend = async (content: string, tags: string[][]) => {
     // The composer's content-derived tags (emoji, imeta, mentions) are sealed

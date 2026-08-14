@@ -342,18 +342,24 @@ export function AppRouter() {
             <Route path="/s/:server/:groupId/m/:messageId" element={<GroupPage />} />
             <Route path="/s/:server/:groupId/t/:threadRoot" element={<GroupPage />} />
             <Route path="/s/:server/:groupId/t/:threadRoot/m/:messageId" element={<GroupPage />} />
-            <Route path="/c/:communityId" element={<ConcordPage />} />
+            {/* Every Concord route is behind auth. Membership IS a key the
+                account holds (its kind-13302 vault), so there is no signed-out
+                view of a community to render — and without this the page
+                mounted its whole hook chain, timeline snapshot prewarm
+                included, on a route id alone. `CommunityNoAccess` then handles
+                the signed-in-but-not-a-member half. */}
+            <Route path="/c/:communityId" element={<RequireAuth><ConcordPage /></RequireAuth>} />
             <Route path="/c/:communityId/history" element={<RequireAuth><HistoryAuditPage /></RequireAuth>} />
             {/* Community-wide panes. Static segments outrank `:channelId`, and
                 Concord channel ids are hex, so these can never be shadowed by
                 a real channel. Kept in one place: `CONCORD2_PANES`. */}
             {CONCORD2_PANES.map((pane) => (
-              <Route key={pane} path={`/c/:communityId/${pane}`} element={<ConcordPage />} />
+              <Route key={pane} path={`/c/:communityId/${pane}`} element={<RequireAuth><ConcordPage /></RequireAuth>} />
             ))}
-            <Route path="/c/:communityId/:channelId" element={<ConcordPage />} />
-            <Route path="/c/:communityId/:channelId/m/:messageId" element={<ConcordPage />} />
-            <Route path="/c/:communityId/:channelId/t/:threadRoot" element={<ConcordPage />} />
-            <Route path="/c/:communityId/:channelId/t/:threadRoot/m/:messageId" element={<ConcordPage />} />
+            <Route path="/c/:communityId/:channelId" element={<RequireAuth><ConcordPage /></RequireAuth>} />
+            <Route path="/c/:communityId/:channelId/m/:messageId" element={<RequireAuth><ConcordPage /></RequireAuth>} />
+            <Route path="/c/:communityId/:channelId/t/:threadRoot" element={<RequireAuth><ConcordPage /></RequireAuth>} />
+            <Route path="/c/:communityId/:channelId/t/:threadRoot/m/:messageId" element={<RequireAuth><ConcordPage /></RequireAuth>} />
             {/* Concord invite links carry an naddr path segment at
                 /invite/<naddr>#… (CORD-05). A Buzz relay invite shares the
                 same `/invite/<code>` path (its code is a dotted HMAC token,
