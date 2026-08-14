@@ -429,6 +429,80 @@ describe("CORD-04 §1 — Editions", () => {
     expect(fold([low, high], 0n).head).toBe(0);
   });
 
+  it("O-14c: a planted equal-version sibling cannot break the chain it sits on", () => {
+    // The freeze this guards against. `tiebreakId` is the rumor id — a hash of
+    // content the publisher chooses — so anyone able to publish at the control
+    // address can mint junk at a tracking client's own head version with an id
+    // that sorts below the real edition's. If the fold settled the per-version
+    // winner by id BEFORE walking the chain, that junk became "the" edition at
+    // the floor, its hash would not match the floor we recorded, the anchor
+    // would fail, and every candidate above the floor would be dropped —
+    // pinning the entity forever, on content that never faced an authority
+    // gate. Siblings are carried instead, and the LINK picks the real one.
+    const floorHash = new Uint8Array(32).fill(2);
+    const real = ed(2n, 1, 2, 0xb0); // the head we already accepted
+    const junk = ed(2n, 9, 9, 0x01); // same version, lower id, unrelated hashes
+    const next = ed(3n, 2, 3); // links to `real`, not to `junk`
+
+    const attacked = fold([junk, real, next], 2n, floorHash);
+    expect(attacked.gap).toBe(false);
+    expect(attacked.head).toBe(2); // advanced to v3
+    // And identically whichever order the relay serves them in.
+    expect(fold([real, junk, next], 2n, floorHash)).toEqual(attacked);
+
+    // A cold walk is protected the same way: the junk sibling at v1 has no
+    // valid `prev === undefined` anchor, so the real v1 still anchors.
+    const cold = fold([ed(1n, 7, 9, 0x01), ed(1n, undefined, 1, 0xb0), ed(2n, 1, 2)], 0n);
+    expect(cold.gap).toBe(false);
+    expect(cold.head).toBe(2);
+  });
+
+  it("O-14d: under a gap, only the floor's OWN edition may be re-seated", async () => {
+    // The sibling of O-13. There, the replay was a LOWER version and was
+    // refused by refuse-to-downgrade. Here it is the same version number
+    // carrying different content — so refuse-to-downgrade never fires, and the
+    // only thing standing between a tracking client and the fork is that the
+    // surviving floor-version candidate be the edition we actually accepted.
+    const { owner, communityId, control } = makeCommunity();
+    const target = keypair();
+    const b1 = await round(
+      buildBanlistEdition(communityId, [target.pubkey], { actorPubkey: owner.pubkey, version: 1n }),
+      control,
+      owner,
+    );
+    const b2 = await round(
+      buildBanlistEdition(communityId, [], { actorPubkey: owner.pubkey, version: 2n, prevHash: b1.selfHash }),
+      control,
+      owner,
+    );
+    const synced = foldControlState([b1, b2], communityId, owner.pubkey);
+    expect(synced.banned.has(target.pubkey)).toBe(false);
+
+    // A fork of the head: same entity, same version, same prev — different
+    // content, so a different edition hash. Signed by the owner, so authority
+    // is not what stops it; only the floor-hash check is.
+    const fork = await round(
+      buildBanlistEdition(communityId, [target.pubkey], {
+        actorPubkey: owner.pubkey,
+        version: 2n,
+        prevHash: b1.selfHash,
+      }),
+      control,
+      owner,
+    );
+    expect(bytesToHex(fork.selfHash)).not.toBe(bytesToHex(b2.selfHash));
+
+    const attacked = foldControlState([fork], communityId, owner.pubkey, synced.heads);
+    expect(attacked.banned.has(target.pubkey)).toBe(false);
+    expect(attacked.incomplete).toContain(bytesToHex(banlistLocator(communityId)));
+
+    // The genuine head, re-served alone, is still accepted: this must reject
+    // forks, not every re-serve.
+    const reserved = foldControlState([b2], communityId, owner.pubkey, synced.heads);
+    expect(reserved.banned.has(target.pubkey)).toBe(false);
+    expect(reserved.incomplete).not.toContain(bytesToHex(banlistLocator(communityId)));
+  });
+
   it("O-14b: the tie-break never uses the author-settable timestamp", () => {
     // Same version, same everything but created_at — which an author picks
     // freely, so letting it decide would hand the fork to whoever lies best.

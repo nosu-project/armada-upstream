@@ -84,7 +84,7 @@ import {
   type CommunityMetadata,
   type Community,
 } from "@/concord/lib/types";
-import { bootstrapHead, fold, type Edition } from "@/concord/lib/version";
+import { bootstrapHead, bytesEq, fold, type Edition } from "@/concord/lib/version";
 
 // ── Addressing ───────────────────────────────────────────────────────────────
 
@@ -563,6 +563,14 @@ function headCandidates(
       // snapshot) remains admissible, so the entity never downgrades to a
       // dangling head either.
       if (gapped && e.version > floor!.version) return false;
+      // ...and "verify against our snapshot" has to actually verify. Without
+      // this the surviving floor-version candidate was merely the lowest rumor
+      // id at that version, so an equal-version FORK — same version, different
+      // content, grindable id — silently replaced the head we had already
+      // accepted, and `pickHead` then recorded the fork's hash as the new
+      // floor. A re-served head is admissible; a different edition wearing its
+      // version number is not.
+      if (gapped && !bytesEq(e.selfHash, floor!.hash)) return false;
       return true;
     })
     .sort((a, b) => {
