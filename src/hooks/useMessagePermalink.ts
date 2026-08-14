@@ -5,6 +5,8 @@ import { chatRoute, parseChatRoute, withoutMessage } from "@/lib/routes";
 
 /** Older pages the hunt may pull before giving up on a permalink target. */
 const MAX_HUNT_PAGES = 8;
+/** Frames allowed for a loaded row's rendering surface/ref to become ready. */
+const MAX_SCROLL_RETRIES = 4;
 
 /**
  * Consume a `/m/<event id>` message permalink on a chat route.
@@ -70,6 +72,7 @@ export function useMessagePermalink(opts: {
   // Pages pulled for the current target, whether a pull is in flight, and
   // whether the hunt for this arrival has settled.
   const pagesRef = useRef(0);
+  const scrollRetriesRef = useRef(0);
   const busyRef = useRef(false);
   const doneRef = useRef(false);
   // Re-runs the effect when a pull settles WITHOUT changing `messages`
@@ -78,6 +81,7 @@ export function useMessagePermalink(opts: {
 
   useEffect(() => {
     pagesRef.current = 0;
+    scrollRetriesRef.current = 0;
     doneRef.current = false;
   }, [target, location.key]);
 
@@ -94,11 +98,30 @@ export function useMessagePermalink(opts: {
   useEffect(() => {
     if (!target || !enabled || isLoading || doneRef.current) return;
     if (messages.some((m) => m.id === target)) {
-      scrollTo(target);
-      // Satisfied: the segment stays in the URL (it names where the reader
-      // is), but it must not fire again as the conversation moves on.
-      doneRef.current = true;
-      return;
+      // The data can beat the surface that renders it. Search results, channel
+      // switches and opening skeletons all temporarily leave the timeline ref
+      // unavailable; accepting that failed scroll would consume the permalink
+      // and let the eventual timeline mount at the newest message. Only a
+      // timeline that actually accepted the target settles the arrival.
+      if (scrollTo(target)) {
+        // Satisfied: the segment stays in the URL (it names where the reader
+        // is), but it must not fire again as the conversation moves on.
+        doneRef.current = true;
+        scrollRetriesRef.current = 0;
+        return;
+      }
+      // A ref can become available without changing any hook input (the child
+      // mounts later in this same surface), so a false return needs its own
+      // bounded retry signal. Bound it because a loaded-but-intentionally
+      // hidden row — for example a muted author — will never become scrollable.
+      if (scrollRetriesRef.current >= MAX_SCROLL_RETRIES) {
+        doneRef.current = true;
+        clear();
+        return;
+      }
+      scrollRetriesRef.current += 1;
+      const frame = requestAnimationFrame(() => setPulse((n) => n + 1));
+      return () => cancelAnimationFrame(frame);
     }
     if (!hasMore || !loadOlder || pagesRef.current >= MAX_HUNT_PAGES) {
       doneRef.current = true;

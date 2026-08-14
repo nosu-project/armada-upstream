@@ -35,16 +35,19 @@ vi.mock("@/hooks/useEventStore", () => ({
   useEventStore: () =>
     Promise.resolve({
       query: async (
-        filters: Array<{ kinds?: number[]; "#h"?: string[]; limit?: number }>,
+        filters: Array<{ ids?: string[]; kinds?: number[]; "#h"?: string[]; limit?: number }>,
       ) => {
         const events = h.store.events as NostrEvent[];
         const out: NostrEvent[] = [];
         for (const f of filters) {
+          const matches: NostrEvent[] = [];
           for (const ev of events) {
+            if (f.ids && !f.ids.includes(ev.id)) continue;
             if (f.kinds && !f.kinds.includes(ev.kind)) continue;
             if (f["#h"] && !ev.tags.some(([n, v]) => n === "h" && f["#h"]!.includes(v))) continue;
-            out.push(ev);
+            matches.push(ev);
           }
+          out.push(...(f.limit === undefined ? matches : matches.slice(0, f.limit)));
         }
         return out;
       },
@@ -107,6 +110,30 @@ describe("useGroupMessages (wire hydration)", () => {
 
     await waitFor(() => expect(result.current.data?.length).toBe(2));
     expect(result.current.data?.map((e) => e.id)).toEqual([a.id, b.id]); // oldest-first
+  });
+
+  it("hydrates an exact old permalink target outside the newest local window", async () => {
+    const { wrapper, queryClient } = setup();
+    const rows = Array.from({ length: 31 }, (_, index) =>
+      ({ ...msg("g1", { created_at: 1_000 + index }), id: `focus-${index}` }),
+    ).reverse();
+    h.store.events.push(...rows);
+    const oldest = rows.at(-1)!;
+
+    const { result } = renderHook(
+      () => useGroupMessages(RELAY, "g1", { messageId: oldest.id }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.data?.some((event) => event.id === oldest.id)).toBe(true));
+    expect(result.current.data).toHaveLength(31);
+
+    // Refetching the bounded room window cannot evict the separately-resolved
+    // target while its `/m/` route remains active.
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: ["nip29", "messages"] });
+    });
+    expect(result.current.data?.some((event) => event.id === oldest.id)).toBe(true);
   });
 
   it("renders a new message when the wire rings the bus (no socket in the hook)", async () => {

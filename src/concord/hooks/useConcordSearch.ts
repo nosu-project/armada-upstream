@@ -33,7 +33,11 @@ export function useConcordSearch(
 
   // Debounce only the text; author/media/channel changes take effect at once.
   const effective: SearchFilters = { ...filters, query: debouncedQuery };
-  const active = searchIsActive(effective);
+  // Activation waits for the debounced query, but deactivation is immediate.
+  // In particular, closing search passes EMPTY_SEARCH_FILTERS while the old
+  // debounced text survives for 300ms; treating that stale text as active keeps
+  // the results pane mounted and the message timeline absent during a jump.
+  const active = searchIsActive(filters) && searchIsActive(effective);
 
   const channelsKey = [...channelIds].sort().join(",");
   const authorsKey = [...filters.authors].sort().join(",");

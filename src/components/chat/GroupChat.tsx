@@ -1,5 +1,6 @@
 import { Hash, Loader2, Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage, ReplyContextLine, ReplyPreview, ReplyThumbnail } from "@/components/chat/ChatMessage";
@@ -35,6 +36,7 @@ import { toast } from "@/hooks/useToast";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useLegacyFocusParams } from "@/hooks/useLegacyFocusParams";
 import { withSignature } from "@/lib/publishOutbox";
+import { parseChatRoute } from "@/lib/routes";
 import { type SlashAction } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
@@ -244,9 +246,19 @@ interface GroupChatProps {
  */
 export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = false, canModerate, calendar, searchQuery = "" }: GroupChatProps) {
   const { user } = useCurrentUser();
+  const location = useLocation();
   const composerBoundsRef = useRef<HTMLElement | null>(null);
   const { data: groupDetails } = useGroup(relayUrl, groupId);
   const channelName = groupDetails?.group?.name;
+  const routeFocus = useMemo(() => {
+    const route = parseChatRoute(location.pathname);
+    if (
+      route?.kind !== "nip29" ||
+      route.relayUrl !== relayUrl ||
+      route.groupId !== groupId
+    ) return undefined;
+    return { messageId: route.messageId, threadRoot: route.threadRoot };
+  }, [location.pathname, relayUrl, groupId]);
   const {
     data: messages = [],
     isLoading,
@@ -258,7 +270,7 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
     loadOlder,
     hasMore,
     isLoadingOlder,
-  } = useGroupMessages(relayUrl, groupId);
+  } = useGroupMessages(relayUrl, groupId, routeFocus);
   const { deleteEvent, removeUser } = useGroupModeration(relayUrl, groupId);
   const { isPinned, pin, unpin } = usePinnedMessages(relayUrl, groupId);  const { mutateAsync: republish } = useRepublish();
   const { mutateAsync: editMessage } = useEditMessage(relayUrl, groupId);

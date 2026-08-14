@@ -1,7 +1,7 @@
 import { AtSign, Bell, BellOff, CheckCheck, ChevronLeft, ChevronRight, Flag, Headphones, Inbox, Loader2, Lock, MessageSquare, MoreVertical, PanelLeft, PanelLeftDashed, PenSquare, Phone, Pin, PinOff, Plus, Search, ShieldCheck, Sparkles, Timer, UserCheck, Users, UserX, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type UIEvent } from "react";
-import { useNavigate, useParams, Navigate } from "react-router-dom";
+import { useLocation, useNavigate, useParams, Navigate } from "react-router-dom";
 
 import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { DittoIcon } from "@/components/brand/DittoIcon";
@@ -95,7 +95,7 @@ import { dmRouteParam, parseDmRouteParam } from "@/lib/dmConversation";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { deriveDmRoomId } from "@/lib/dmVoice";
 import { forwardableTags } from "@/lib/forwardMessage";
-import { chatRoute } from "@/lib/routes";
+import { chatRoute, parseChatRoute } from "@/lib/routes";
 import { stashShare } from "@/lib/shareTarget";
 import { dittoProfileUrl } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
@@ -631,6 +631,7 @@ function Conversation({
   onBack: () => void;
 }) {
   const { user } = useCurrentUser();
+  const location = useLocation();
   const navigate = useNavigate();
   const group = peers.length > 1;
   // A group has no single counterparty, so anything derived from ONE profile
@@ -646,8 +647,14 @@ function Conversation({
   const { name, metadata: peerMetadata } = useDmConversationName(peers, user?.pubkey);
   const dittoProfileHref = group ? undefined : dittoProfileUrl(peer);
   const composerBoundsRef = useRef<HTMLElement | null>(null);
+  const focusedRumorId = useMemo(() => {
+    const route = parseChatRoute(location.pathname);
+    return route?.kind === "dm" && parseDmRouteParam(route.peer) === conversation
+      ? route.messageId
+      : undefined;
+  }, [location.pathname, conversation]);
   const { transport, entries, syncing, disappearingTimer, setDisappearingTimer, encryptedIds, dm17Ids, dm17Enabled, legacyPinned, decryptVisible, decryptOne, decryptAll, decryptDeclined, hasEncrypted, send } =
-    useDmTransport(conversation, peers);
+    useDmTransport(conversation, peers, focusedRumorId);
   const { messages } = transport;
 
   // When the counterparty is a bot, its declared command set lets the timeline

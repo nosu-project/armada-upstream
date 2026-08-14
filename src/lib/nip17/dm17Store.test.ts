@@ -9,6 +9,7 @@ import {
   dm17ToStored,
   migrateLegacyDms,
   queryDm17Conversations,
+  queryDm17Rumor,
   queryDm17Thread,
   queryDm17Timer,
   readDm17Cursor,
@@ -84,6 +85,14 @@ describe("dm17Store", () => {
     const thread = await queryDm17Thread(self, [alice], { limit: 50 });
     const ids = thread.map((r) => r.rumorId).sort();
     expect(ids).toEqual([fromAlice.rumorId, toAlice.rumorId].sort());
+
+    // A focused search hit bypasses the newest-first thread window, but remains
+    // strictly scoped to the conversation named by the route.
+    expect(await queryDm17Rumor(self, [alice], fromAlice.rumorId)).toEqual({
+      ...fromAlice,
+      wrapId: "",
+    });
+    expect(await queryDm17Rumor(self, [bob], fromAlice.rumorId)).toBeUndefined();
   });
 
   it("rings the inbox and each affected thread after a durable write", async () => {
@@ -496,6 +505,13 @@ describe("group conversations", () => {
     expect(
       (await queryDm17Thread(me, [ana, ben].sort(), { limit: 50 })).map((m) => m.content).sort(),
     ).toEqual(["ana to the group", "me to the group"]);
+
+    // Exact search hydration is scoped to the whole participant set too: a
+    // shared member must not let a group hit leak into their 1:1, or vice versa.
+    expect(await queryDm17Rumor(me, [ana, ben].sort(), groupFromAna.rumorId))
+      .toEqual(expect.objectContaining({ content: "ana to the group" }));
+    expect(await queryDm17Rumor(me, [ana], groupFromAna.rumorId)).toBeUndefined();
+    expect(await queryDm17Rumor(me, [ana, ben].sort(), oneToOneAna.rumorId)).toBeUndefined();
   }, 30_000);
 
   it("lists a group as ONE conversation, not one row per member", async () => {

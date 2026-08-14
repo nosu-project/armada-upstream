@@ -79,6 +79,7 @@ import {
   drainLiveDmWraps,
   hasBufferedLiveDmWraps,
   queryDm17Conversations,
+  queryDm17Rumor,
   queryDm17Thread,
   queryDm17Timer,
   readDm17Cursor,
@@ -636,7 +637,7 @@ async function pageOlderDmWraps(
   ctx: SyncCtx,
   until: number,
   interactive: boolean,
-): Promise<{ oldest?: number; exhausted: boolean }> {
+): Promise<{ oldest?: number; exhausted: boolean; scanned: number }> {
   const result = await queryWrapsPerRelay(
     ctx.nostr,
     ctx.relays,
@@ -648,7 +649,7 @@ async function pageOlderDmWraps(
   if (result.pages.length === 0) throw new Error("DM backfill failed on every relay");
   const wraps = mergeRelayPages(result.pages);
   if (wraps.length === 0) {
-    return { exhausted: result.failed.length === 0 };
+    return { exhausted: result.failed.length === 0, scanned: 0 };
   }
   const oldest = Math.min(...wraps.map((w) => w.created_at)) - 1;
   await loadSeenWraps(ctx.self);
@@ -662,6 +663,7 @@ async function pageOlderDmWraps(
   return {
     oldest,
     exhausted: result.failed.length === 0 && result.pages.every((page) => page.events.length < INBOX_PAGE),
+    scanned: wraps.length,
   };
 }
 
@@ -819,8 +821,15 @@ export interface Dm17Thread {
  * 1:1 or Note to Self, several comma-joined for a group. Everything below works
  * off the participant list it decodes to, so the 1:1 and group paths are one
  * path — the only place the two differ is how many seals a send mints.
+ *
+ * `focusedRumorId` is an optional local-store hit (for example from message
+ * search) that should be admitted even when it lies behind the newest-first
+ * thread window. It does not move the history cursor or widen ordinary reads.
  */
-export function useDm17Thread(conversation: string | undefined): Dm17Thread {
+export function useDm17Thread(
+  conversation: string | undefined,
+  focusedRumorId?: string,
+): Dm17Thread {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { config } = useAppContext();
@@ -867,6 +876,23 @@ export function useDm17Thread(conversation: string | undefined): Dm17Thread {
     [self, conversation, consent],
   );
 
+  // The store query starts bounded, then grows monotonically as explicit
+  // backfill pages land. Keeping the limit in a ref gives every later poll /
+  // focus refetch the same floor; a fixed THREAD_WINDOW refetch used to discard
+  // the rows loadOlder had just stored, making a DM appear unable to cross the
+  // first dense day of history.
+  const threadWindowRef = useRef<{
+    self: string | undefined;
+    conversation: string | undefined;
+    limit: number;
+  }>({ self, conversation, limit: THREAD_WINDOW });
+  if (
+    threadWindowRef.current.self !== self ||
+    threadWindowRef.current.conversation !== conversation
+  ) {
+    threadWindowRef.current = { self, conversation, limit: THREAD_WINDOW };
+  }
+
   // Paint the last window from KV while the store read runs. The read is
   // enabled on this very render, but it awaits the legacy drain and merges two
   // 300-row filters; the snapshot is one KV row, so it lands first and the real
@@ -886,7 +912,28 @@ export function useDm17Thread(conversation: string | undefined): Dm17Thread {
     queryFn: async ({ signal }) => {
       // LOCAL-FIRST: the store paints immediately; the inbox scan tops up in
       // the background (throttled) and rings the `dm` scope on new rumors.
-      const rows = await queryDm17Thread(self!, peers, { limit: THREAD_WINDOW, signal });
+      const window = threadWindowRef.current;
+      const before = queryClient.getQueryData<OpenedDm[]>(queryKey) ?? [];
+      let rows = await queryDm17Thread(self!, peers, {
+        limit: window.limit,
+        signal,
+      });
+      // Once history has filled the window, a new live rumor would otherwise
+      // take one slot from its newest edge and silently evict the oldest row on
+      // every poll. Grow by the newly-seen rows and re-read, so refetching never
+      // undoes history the reader explicitly paged into view. The second read is
+      // paid only when a full window actually receives something new.
+      if (before.length >= window.limit) {
+        const beforeIds = new Set(before.map((row) => row.rumorId));
+        const incoming = rows.reduce(
+          (count, row) => count + (beforeIds.has(row.rumorId) ? 0 : 1),
+          0,
+        );
+        if (incoming > 0) {
+          window.limit += incoming;
+          rows = await queryDm17Thread(self!, peers, { limit: window.limit, signal });
+        }
+      }
       if (ctx) void syncDm17Inbox(ctx, { interactive: true });
       sweepExpiredSoon(self!);
       return rows.sort((a, b) => a.createdAt - b.createdAt || (a.rumorId < b.rumorId ? -1 : 1));
@@ -895,6 +942,19 @@ export function useDm17Thread(conversation: string | undefined): Dm17Thread {
     refetchInterval: 60_000,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
+  });
+
+  // A focused result can be much older than the growing window. Read that one
+  // rumor by id and merge it only into the render fold below. Keeping it out of
+  // `query.data` means a normal refetch cannot shrink it away, and—equally
+  // importantly—it cannot drag the older-history cursor past the gap between it
+  // and the newest loaded page.
+  const focusedQuery = useQuery<OpenedDm | undefined>({
+    queryKey: ["dm17", "thread-focus", self, conversation, focusedRumorId ?? null],
+    ...STORE_READ,
+    enabled: !!self && peers.length > 0 && !!focusedRumorId && support,
+    queryFn: ({ signal }) => queryDm17Rumor(self!, peers, focusedRumorId!, { signal }),
+    staleTime: 10_000,
   });
 
   // The live disappearing-messages timer, read on its own so a setting made
@@ -952,6 +1012,7 @@ export function useDm17Thread(conversation: string | undefined): Dm17Thread {
     const now = Math.floor(Date.now() / 1000);
     const byId = new Map<string, OpenedDm>();
     for (const r of query.data ?? []) byId.set(r.rumorId, r);
+    if (focusedQuery.data) byId.set(focusedQuery.data.rumorId, focusedQuery.data);
     for (const p of pending.values()) if (!byId.has(p.opened.rumorId)) byId.set(p.opened.rumorId, p.opened);
 
     const deleted = new Set<string>();
@@ -993,7 +1054,7 @@ export function useDm17Thread(conversation: string | undefined): Dm17Thread {
     timerChanges.sort((a, b) => a.createdAt - b.createdAt || (a.rumorId < b.rumorId ? -1 : 1));
     return { messages, reactionsByTarget, timerChanges, nextExpiry };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query.data, pending, expiryTick]);
+  }, [query.data, focusedQuery.data, pending, expiryTick]);
 
   // Re-fold exactly when the next message expires (and sweep it off disk).
   // setTimeout is clamped to ~24.8 days by the 32-bit delay; a longer deadline
@@ -1426,18 +1487,31 @@ export function useDm17Thread(conversation: string | undefined): Dm17Thread {
     loadingRef.current = true;
     setIsLoadingOlder(true);
     try {
+      const window = threadWindowRef.current;
+      const before = queryClient.getQueryData<OpenedDm[]>(queryKey) ?? [];
       // Wraps for a message sent at T are backdated to ≤ T, so `until` at the
-      // oldest rendered rumor's timestamp reaches everything older.
+      // oldest WINDOW rumor's timestamp reaches everything older. A separately
+      // hydrated focus hit must not move this cursor past the unloaded gap.
       const until =
         oldestRef.current ??
-        (messages.length > 0 ? messages[0].createdAt : Math.floor(Date.now() / 1000));
-      const before = await queryDm17Thread(self, peers, { limit: THREAD_WINDOW * 2 });
-      const { oldest, exhausted } = await pageOlderDmWraps(ctx, until, true);
+        (before.length > 0 ? before[0].createdAt : Math.floor(Date.now() / 1000));
+      const { oldest, exhausted, scanned } = await pageOlderDmWraps(ctx, until, true);
       if (oldest !== undefined) oldestRef.current = oldest;
       if (exhausted) setHasMore(false);
-      const after = await queryDm17Thread(self, peers, { limit: THREAD_WINDOW * 2 });
-      const added = Math.max(0, after.length - before.length);
-      if (added > 0) void queryClient.invalidateQueries({ queryKey });
+
+      // One wrap yields at most one stored rumor. Growing by every scanned wrap
+      // is deliberately conservative (duplicates and other peers merely add
+      // headroom) and guarantees this conversation's rows fit beside every row
+      // that was already visible. Capture `window` before the await so a
+      // late result from the previous conversation cannot grow the next one's
+      // window.
+      window.limit = Math.max(window.limit, before.length) + scanned;
+      const after = await queryDm17Thread(self, peers, { limit: window.limit });
+      const beforeIds = new Set(before.map((row) => row.rumorId));
+      const added = after.reduce((count, row) => count + (beforeIds.has(row.rumorId) ? 0 : 1), 0);
+      queryClient.setQueryData<OpenedDm[]>(queryKey, after.sort(
+        (a, b) => a.createdAt - b.createdAt || (a.rumorId < b.rumorId ? -1 : 1),
+      ));
       return added;
     } catch {
       return 0;
@@ -1445,7 +1519,7 @@ export function useDm17Thread(conversation: string | undefined): Dm17Thread {
       loadingRef.current = false;
       setIsLoadingOlder(false);
     }
-  }, [ctx, self, peers, hasMore, messages, queryClient, queryKey]);
+  }, [ctx, self, peers, hasMore, queryClient, queryKey]);
 
   return {
     messages,
@@ -1453,7 +1527,10 @@ export function useDm17Thread(conversation: string | undefined): Dm17Thread {
     timerChanges,
     timer,
     setTimer,
-    isLoading: query.isLoading,
+    // A focused search/permalink row is part of this thread's first usable
+    // paint. Waiting for its exact local lookup prevents the generic permalink
+    // hunter from starting network backfill before that lookup can answer.
+    isLoading: query.isLoading || (Boolean(focusedRumorId) && focusedQuery.isLoading),
     canSend,
     send,
     react,

@@ -6,6 +6,7 @@ import {
   useMessageActions,
   useSendMessage,
   useSendStatus,
+  type ChannelTimelineFocus,
 } from "@/concord/hooks/useChannel";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
@@ -67,6 +68,8 @@ export function useTransport(
   canModerate: boolean,
   /** The route's channel id, for the pre-fold snapshot seed (see useChannelTimeline). */
   routeChannelIdHex?: string | null,
+  /** Exact message/thread targets parsed from the active route. */
+  focus?: ChannelTimelineFocus,
 ): {
   transport: ChatTransport;
   reactionsFor: (id: string) => MessageReactions;
@@ -89,7 +92,12 @@ export function useTransport(
   const { user } = useCurrentUser();
   const { mutedPubkeys } = useMutedPubkeys();
   const queryClient = useQueryClient();
-  const { folded, raw, isLoading, loadOlder, hasMore, isLoadingOlder } = useChannelTimeline(community, channel, routeChannelIdHex);
+  const { folded, raw, isLoading, loadOlder, hasMore, isLoadingOlder } = useChannelTimeline(
+    community,
+    channel,
+    routeChannelIdHex,
+    focus,
+  );
   const { mutateAsync: send } = useSendMessage(community, channel);
   const { retry, discard, deleteMessage } = useMessageActions(community, channel);
   const sendStatus = useSendStatus(channel);

@@ -17,6 +17,7 @@ import {
   peekPendingWraps,
   queryChannelFirstSeen,
   queryChannelRumors,
+  queryChannelRumorsByIds,
   queryMentionRumors,
   queryPlane,
   queryRumorsByChannel,
@@ -156,6 +157,13 @@ describe("concord rumor store", () => {
     expect(got.length).toBe(3);
     const msgs = got.filter((m) => m.kind === KIND_MESSAGE).map((m) => m.content).sort();
     expect(msgs).toEqual(["first", "second"]);
+
+    const firstId = opened.find((event) => event.content === "first")!.rumorId;
+    expect((await queryChannelRumorsByIds(CID, idHex, [firstId])).map((event) => event.content))
+      .toEqual(["first"]);
+    // Route ids are tenant-wide input; the channel constraint prevents an id
+    // from another room in the same community from crossing into this one.
+    expect(await queryChannelRumorsByIds(CID, "ff".repeat(32), [firstId])).toEqual([]);
 
     // A different channel id matches nothing.
     const none = await queryChannelRumors(CID, "ff".repeat(32), { limit: 100 });

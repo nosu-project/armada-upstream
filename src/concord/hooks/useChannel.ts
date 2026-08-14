@@ -22,6 +22,7 @@ import {
   clearChannelExhausted,
   queryChannelFirstSeen,
   queryChannelRumors,
+  queryChannelRumorsByIds,
   readChannelCursor,
   sweepExpiredCommunityRumors,
   updateChannelCursor,
@@ -80,6 +81,12 @@ const FLOOD_HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const FLOOD_HISTORY_MAX_ROWS = 4000;
 
 const EMPTY_RAW: OpenedChat[] = [];
+
+/** Exact route targets that must be read independently of the newest window. */
+export interface ChannelTimelineFocus {
+  messageId?: string;
+  threadRoot?: string;
+}
 
 /** Upsert opened events into the raw set, deduped by rumor id, sorted by ms. */
 export function upsertOpenedChat(old: OpenedChat[] | undefined, incoming: OpenedChat[]): OpenedChat[] {
@@ -169,6 +176,8 @@ export function useChannelTimeline(
    * the cache key and the snapshot; the query stays disabled until `channel`.
    */
   routeChannelIdHex?: string | null,
+  /** `/m/<id>` and `/t/<root>` targets parsed from the active route. */
+  focus?: ChannelTimelineFocus,
 ) {
   const { nostr } = useNostr();
   const queryClient = useQueryClient();
@@ -191,7 +200,12 @@ export function useChannelTimeline(
   // Cutoffs ride the signature too: a merge can teach this device an epoch's
   // retirement without changing the epoch set, and the store must re-read.
   const epochSig = channel?.streams.map((s) => `${s.epoch}:${s.retiredAt ?? ""}`).join(",") ?? "";
-  const queryKey = channelKey(channelIdHex);
+  const queryKey = useMemo(() => channelKey(channelIdHex), [channelIdHex]);
+  const focusIds = useMemo(
+    () => [...new Set([focus?.threadRoot, focus?.messageId].filter((id): id is string => Boolean(id)))],
+    [focus?.threadRoot, focus?.messageId],
+  );
+  const focusSig = focusIds.join(",");
 
   // Seed the cache from the persisted last-painted window the moment the
   // channel id is known — before the fold chain resolves a Channel — so a
@@ -265,6 +279,21 @@ export function useChannelTimeline(
     if (mine) {
       void queryClient.invalidateQueries({ queryKey: channelKey(channelIdHex) });
     }
+  });
+
+  // A route target is an exact local-store lookup, not a reason to walk the
+  // newest-page window eight pages at a time. Keep it in a separate query key
+  // so changing `/m/<id>` inside the same channel always performs the lookup
+  // even while the ordinary channel query is still fresh. Both a thread root
+  // and its focused reply are requested together, letting the panel resolve in
+  // one store transaction.
+  const focusQuery = useQuery<OpenedChat[]>({
+    ...STORE_READ,
+    queryKey: ["concord", "channel-focus", community?.idHex ?? null, channelIdHex, focusSig],
+    queryFn: ({ signal }) =>
+      queryChannelRumorsByIds(community!.idHex, channelIdHex!, focusIds, { signal }),
+    enabled: Boolean(community && channel && channelIdHex && focusIds.length > 0),
+    staleTime: Infinity,
   });
 
   const query = useQuery<OpenedChat[]>({
@@ -365,17 +394,35 @@ export function useChannelTimeline(
     },
   });
 
+  // Make focused rows visible immediately from the exact query, then retain
+  // them in the channel cache. Retention matters after `/m/` is cleared: the
+  // row the reader just visited must not disappear merely because it lies
+  // outside the newest bounded window.
+  const raw = useMemo(
+    () =>
+      channel
+        ? filterEpochCutoff(upsert(query.data, focusQuery.data ?? EMPTY_RAW), channel)
+        : query.data ?? EMPTY_RAW,
+    [query.data, focusQuery.data, channel],
+  );
+  useEffect(() => {
+    if (!channel || !focusQuery.data || focusQuery.data.length === 0) return;
+    queryClient.setQueryData<OpenedChat[]>(queryKey, (old) =>
+      filterEpochCutoff(upsert(old, focusQuery.data!), channel),
+    );
+  }, [channel, focusQuery.data, queryClient, queryKey]);
+
   // Keep the persisted window current. Content-compared inside, so repaint
   // churn does not rewrite it.
   useEffect(() => {
-    if (viewerPubkey && channelIdHex && query.data && query.data.length > 0) {
-      void persistTimelineSnapshot(viewerPubkey, channelIdHex, query.data);
+    if (viewerPubkey && channelIdHex && raw.length > 0) {
+      void persistTimelineSnapshot(viewerPubkey, channelIdHex, raw);
     }
-  }, [viewerPubkey, channelIdHex, query.data]);
+  }, [viewerPubkey, channelIdHex, raw]);
 
   const loadOlder = useCallback(async (): Promise<number> => {
     if (!hasMore || isLoadingOlder) return 0;
-    const before = query.data?.filter((m) => m.kind === KIND_MESSAGE || m.kind === KIND_POLL).length ?? 0;
+    const before = raw.filter((m) => m.kind === KIND_MESSAGE || m.kind === KIND_POLL).length;
     const cursorKeyId = channelIdHex ?? "";
     setIsLoadingOlder(true);
     try {
@@ -421,7 +468,7 @@ export function useChannelTimeline(
     } finally {
       setIsLoadingOlder(false);
     }
-  }, [hasMore, isLoadingOlder, query, nostr, community, channel, channelIdHex, queryClient, queryKey]);
+  }, [hasMore, isLoadingOlder, raw, query, nostr, community, channel, channelIdHex, queryClient, queryKey]);
 
   // The folded view (moderation + edits + reaction tallies), plus the
   // optimistic-delete overlay.
@@ -488,7 +535,7 @@ export function useChannelTimeline(
 
   const folded: FoldedTimeline = useMemo(() => {
     void memoryRev;
-    const result = foldTimeline(query.data ?? [], moderation, {
+    const result = foldTimeline(raw, moderation, {
       ...(readingUser?.pubkey !== undefined ? { self: readingUser.pubkey } : {}),
       ...(firstSeen ? { firstSeen } : {}),
       ...(establishedSinceMs !== undefined ? { establishedSinceMs } : {}),
@@ -518,7 +565,7 @@ export function useChannelTimeline(
       return { ...merged, messages: merged.messages.filter((m) => !hidden.has(m.rumorId)) };
     }
     return merged;
-  }, [query.data, moderation, optimisticDeleted, readingUser?.pubkey, firstSeen, establishedSinceMs, pauseSince, community?.idHex, channelIdHex, memoryRev]);
+  }, [raw, moderation, optimisticDeleted, readingUser?.pubkey, firstSeen, establishedSinceMs, pauseSince, community?.idHex, channelIdHex, memoryRev]);
 
   // Remember what this fold decided (merge-only), so the verdict survives the
   // session even when its evidence — history, arrival order, the wave around
@@ -535,11 +582,11 @@ export function useChannelTimeline(
   useEffect(() => {
     if (!community?.idHex || !channelIdHex || folded.quarantined.size === 0) return;
     const entries: Array<[string, number]> = [];
-    for (const m of query.data ?? []) {
+    for (const m of raw) {
       if (folded.quarantined.has(m.rumorId) && !folded.paused.has(m.rumorId)) entries.push([m.rumorId, m.ms]);
     }
     if (entries.length > 0) rememberQuarantined(community.idHex, channelIdHex, entries);
-  }, [folded.quarantined, folded.paused, query.data, community?.idHex, channelIdHex]);
+  }, [folded.quarantined, folded.paused, raw, community?.idHex, channelIdHex]);
 
   return {
     /** The folded, moderated timeline + reaction tallies. */
@@ -549,7 +596,7 @@ export function useChannelTimeline(
      * reactions into their targets, so they exist nowhere else — and a Pin
      * needs the Edit rumor itself to prove a revision (CORD-04 §7).
      */
-    raw: query.data ?? EMPTY_RAW,
+    raw,
     // Loading skeleton gate: the LOCAL read, and nothing else. `isPending` is
     // true from the moment the query mounts until its queryFn resolves, and
     // that queryFn resolves on the rumor-store read — so a channel whose
@@ -563,7 +610,9 @@ export function useChannelTimeline(
     // channels haven't folded yet, or never will) reads as not-loading instead
     // of hanging on a skeleton forever — `isPending` alone stays true for a
     // disabled query.
-    isLoading: Boolean(channel) && query.isPending,
+    isLoading:
+      Boolean(channel) &&
+      (query.isPending || (focusIds.length > 0 && focusQuery.isPending)),
     loadOlder,
     hasMore,
     isLoadingOlder,

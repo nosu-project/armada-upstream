@@ -9,6 +9,13 @@ import { MessageActionToolbar } from "@/components/chat/MessageActionToolbar";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
 import { ReactionBar } from "@/components/chat/ReactionBar";
 import { flashRow } from "@/components/chat/rowFlash";
+import {
+  captureScrollAnchor,
+  clampedScrollTop,
+  distanceFromBottom,
+  restoreScrollAnchor,
+  type ScrollAnchor,
+} from "@/components/chat/scrollAnchor";
 import { ReportDialog } from "@/components/ReportDialog";
 import { ZapDialog } from "@/components/chat/ZapDialog";
 import { ZapPill } from "@/components/chat/ZapPill";
@@ -563,27 +570,55 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
 
   // --- Auto-scroll + jump-to-latest ---
   // A plain scroller, like the main timeline: replies are real DOM in normal
-  // flow, so the browser anchors the reading position itself when a reply grows
-  // (image, embed, reaction) instead of a virtualizer re-measuring and guessing.
+  // flow. A stable row anchor explicitly preserves reading position when one
+  // grows (image, embed, reaction), including on WebKit where CSS anchoring is
+  // unavailable.
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const distanceRef = useRef(0);
+  const readingAnchorRef = useRef<ScrollAnchor | null>(null);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+
+  const captureReadingAnchor = useCallback(() => {
+    const el = scrollRef.current;
+    const content = contentRef.current;
+    if (!el || !content || distanceRef.current <= AT_BOTTOM_PX) {
+      readingAnchorRef.current = null;
+      return;
+    }
+    if (el.scrollTop !== clampedScrollTop(el)) return;
+    readingAnchorRef.current = captureScrollAnchor(el, content, readingAnchorRef.current);
+  }, []);
+
+  const restoreReadingAnchor = useCallback(() => {
+    const el = scrollRef.current;
+    const content = contentRef.current;
+    const anchor = readingAnchorRef.current;
+    if (!el || !content || !anchor) return false;
+    if (!restoreScrollAnchor(el, content, anchor)) {
+      readingAnchorRef.current = null;
+      return false;
+    }
+    distanceRef.current = distanceFromBottom(el);
+    return true;
+  }, []);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior });
     distanceRef.current = 0;
+    readingAnchorRef.current = null;
     setShowJumpToLatest(false);
   }, []);
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    distanceRef.current = el.scrollHeight - el.scrollTop - el.clientHeight;
+    distanceRef.current = distanceFromBottom(el);
+    if (el.scrollTop === clampedScrollTop(el)) captureReadingAnchor();
     setShowJumpToLatest(distanceRef.current > 120);
-  }, []);
+  }, [captureReadingAnchor]);
 
   // Open each thread at its newest reply.
   useLayoutEffect(() => {
@@ -603,10 +638,11 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
     // would: the ResizeObserver re-pins to the bottom while that reads as
     // zero, which would undo the jump the moment a reply's image resolves.
     const el = scrollRef.current;
-    if (el) distanceRef.current = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (el) distanceRef.current = distanceFromBottom(el);
+    captureReadingAnchor();
     setShowJumpToLatest(distanceRef.current > 120);
     return true;
-  }, []);
+  }, [captureReadingAnchor]);
   const clearReplyFocus = useMessagePermalink({
     // The root is addressable in here too: it has a timeline identity
     // (`/m/<root>`) and a thread identity (`/t/<root>/m/<root>`), and "Copy
@@ -630,25 +666,29 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
   // Replies growing after mount (images, link previews, reactions) and the panel
   // itself resizing (expand/collapse, the composer growing) both land here; hold
   // the reader's distance from the newest reply across either.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = scrollRef.current;
     const content = contentRef.current;
     if (!el || !content) return;
     const ro = new ResizeObserver(() => {
-      if (distanceRef.current > AT_BOTTOM_PX) return;
-      el.scrollTop = el.scrollHeight - el.clientHeight - distanceRef.current;
+      if (distanceRef.current > AT_BOTTOM_PX) {
+        restoreReadingAnchor();
+      } else {
+        el.scrollTop = el.scrollHeight - el.clientHeight - distanceRef.current;
+        readingAnchorRef.current = null;
+      }
     });
     ro.observe(content);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [restoreReadingAnchor]);
 
   // Scrolls with the content above the replies: the root message (or its
   // tombstone), the reply-count divider, and the loading spinner.
   const listHeader = (
     <>
       {isTombstoneRoot(root) || rootMuted ? (
-        <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground/70">
+        <div data-scroll-anchor={`root:${root.id}`} className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground/70">
           <MessagesSquare className="size-4 shrink-0" />
           <span className="italic">
             {rootMuted
@@ -657,7 +697,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
           </span>
         </div>
       ) : (
-        <div data-event-id={root.id}>
+        <div data-event-id={root.id} data-scroll-anchor={`root:${root.id}`}>
         <ThreadMessage event={root} permalink={permalink} reactions={reactionsFor?.(root.id)} zaps={zapsFor?.(root.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} onDelete={onDelete} isEditing={editingId === root.id} onEdit={(e) => setEditingId(e.id)} onEditSubmit={handleEditSubmit} onEditCancel={() => setEditingId(undefined)} />
         </div>
       )}
@@ -710,12 +750,12 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
         <div
           ref={scrollRef}
           onScroll={handleScroll}
-          className="h-full overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable"
+          className="h-full overflow-y-auto overflow-x-clip overscroll-contain [overflow-anchor:none] scrollbar-stable"
         >
           {/* Top padding leaves room for the root message's floated hover
               toolbar, which sits above its row's top edge and would otherwise
               be clipped by the scroll viewport's top. */}
-          <div ref={contentRef} className="pt-3">
+          <div ref={contentRef} className="relative pt-3">
             {listHeader}
             {!isLoading && replies.map((reply, index) => {
               // Collapse consecutive same-author replies within a short window
@@ -728,7 +768,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
                 prev.pubkey === reply.pubkey &&
                 reply.created_at - prev.created_at < CONTINUATION_WINDOW_SECONDS;
               return (
-                <div key={reply.id} data-event-id={reply.id} className="pt-1">
+                <div key={reply.id} data-event-id={reply.id} data-scroll-anchor={`reply:${reply.id}`} className="pt-1">
                   <ThreadMessage event={reply} permalink={permalink} reactions={reactionsFor?.(reply.id)} zaps={zapsFor?.(reply.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} continuation={continuation} onDelete={onDelete} isEditing={editingId === reply.id} onEdit={(e) => setEditingId(e.id)} onEditSubmit={handleEditSubmit} onEditCancel={() => setEditingId(undefined)} />
                 </div>
               );
