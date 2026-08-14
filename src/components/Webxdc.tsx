@@ -57,8 +57,8 @@ export interface WebxdcHandle {
 // by webxdc apps — but blocks any external network access.
 // ---------------------------------------------------------------------------
 
-/** Ceiling on a `.xdc` bundle. Real webxdc apps are a few MB at most. */
-const MAX_XDC_BYTES = 64 * 1024 * 1024;
+/** Ceiling on a `.xdc` bundle. This is a decent amount larger than the current largest xdc and should be safe */
+const MAX_XDC_BYTES = 500 * 1024 * 1024;
 
 const WEBXDC_CSP = [
   "default-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' data: blob:",
