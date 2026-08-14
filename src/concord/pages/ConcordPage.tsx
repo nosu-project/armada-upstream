@@ -718,7 +718,7 @@ function MentionsView({
   channels: Channel[];
   mentions: ChatMsg[];
   isLoading: boolean;
-  onJump: (channelIdHex: string, messageId: string) => void;
+  onJump: (channelIdHex: string, message: ChatMsg) => void;
 }) {
   const nameByChannel = useMemo(() => {
     const m = new Map<string, Channel>();
@@ -751,7 +751,7 @@ function MentionsView({
             </div>
             <MentionMessage
               event={msg}
-              onJump={ch ? () => onJump(channelIdHex, msg.id) : undefined}
+              onJump={ch ? () => onJump(channelIdHex, msg) : undefined}
             />
           </div>
         );
@@ -1217,14 +1217,20 @@ export function ConcordPage() {
   const [openTicket, setOpenTicket] = useState<GitTicket | undefined>();
   const channelNameById = useMemo(() => new Map(channels.map((c) => [c.idHex, c.name])), [channels]);
   const projects = useGitProjects(gitAttachmentsByChannel, channelNameById, projectsTouched || Boolean(openTicket));
-  // Clicking a mention: navigate to its channel with the message focused. The
-  // cross-channel wait is the permalink's — `/m/<id>` names the target, and
-  // the hunt resolves it once that channel's timeline has it — so there is no
-  // pending-jump state to keep in step with the route.
+  // Clicking a mention/search result: navigate to the surface that actually
+  // renders it. Top-level rows use `/m/<id>`; kind-1111 replies live only in a
+  // thread panel, so they use `/t/<root>/m/<id>`. The permalink hunt resolves
+  // older pages once that channel is active.
   const jumpToMention = useCallback(
-    (channelIdHex: string, messageId: string) => {
+    (channelIdHex: string, message: ChatMsg) => {
       if (!communityId) return;
-      navigateTo(chatRoute({ kind: "concord", communityId, channelId: channelIdHex, messageId }));
+      navigateTo(chatRoute({
+        kind: "concord",
+        communityId,
+        channelId: channelIdHex,
+        threadRoot: replyTargetOf(message),
+        messageId: message.id,
+      }));
       setChannelsOpen(false);
     },
     [communityId, navigateTo],
@@ -1451,7 +1457,14 @@ export function ConcordPage() {
     [canManageRoles, canKickAny, canBanAny, canCreateInvite, canReadReports, dissolved],
   );
 
-  const { transport: baseTransport, reactionsFor, allMessages, calendar, timerEntries, openedById } = useTransport(community, channel, canWrite, canModerateMessages, channelIdHex);
+  const { transport: baseTransport, reactionsFor, allMessages, calendar, timerEntries, openedById } = useTransport(
+    community,
+    channel,
+    canWrite,
+    canModerateMessages,
+    channelIdHex,
+    route,
+  );
 
   // Physically purge this community's expired disappearing messages
   // (CORD-08 §3) — the sweep self-gates to one walk per interval, and every
@@ -2290,11 +2303,15 @@ export function ConcordPage() {
     activeId,
     toggleActive,
   } = useTimelineFocus({
-    messages: allMessages,
+    // Only top-level messages exist in MessageTimeline. Thread replies in
+    // `allMessages` belong to ThreadPanel and have their own scoped permalink.
+    messages: baseTransport.messages,
     isLoading: Boolean(baseTransport.isLoading),
     hasMore: transport.hasMore,
     loadOlder: transport.loadOlder,
-    enabled: view === "channel",
+    // Search results replace (unmount) the timeline, so they cannot consume a
+    // focus arrival. This mirrors the NIP-29 and Buzz chat surfaces.
+    enabled: view === "channel" && !searching,
   });
 
   // Background catch-up. `channelSyncing` = the channel on screen is being
@@ -3469,9 +3486,9 @@ export function ConcordPage() {
                     results={searchResults}
                     isLoading={searchLoading}
                     query={searchFilters.query}
-                    onJump={(channelIdHex, messageId) => {
+                    onJump={(channelIdHex, message) => {
                       closeSearch();
-                      jumpToMention(channelIdHex, messageId);
+                      jumpToMention(channelIdHex, message);
                     }}
                   />
                 </div>

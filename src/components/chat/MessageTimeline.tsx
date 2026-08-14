@@ -10,6 +10,13 @@ import {
   WINDOW_STEP,
 } from "@/components/chat/timelineWindow";
 import { flashRow } from "@/components/chat/rowFlash";
+import {
+  captureScrollAnchor,
+  clampedScrollTop,
+  distanceFromBottom,
+  restoreScrollAnchor,
+  type ScrollAnchor,
+} from "@/components/chat/scrollAnchor";
 import { Skeleton } from "@/components/ui/skeleton";
 import { markBootPainted } from "@/lib/bootGate";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
@@ -243,42 +250,6 @@ function relatedGitEntries(
   return related.length > 1 ? related : undefined;
 }
 
-/** A row's identity plus its position relative to the viewport's top edge. */
-interface ScrollAnchor {
-  /** The `items` array this anchor was captured against. */
-  items: TimelineItem[];
-  key: string;
-  offset: number;
-}
-
-/**
- * Record the topmost row still touching the viewport, and how far its top edge
- * sits from the viewport's. Called during render — before React commits — so it
- * reads the DOM as the reader currently sees it; {@link restoreAnchor} then puts
- * that same row back under the same pixel once the new rows are in.
- *
- * This is the entire scroll-position-preservation story for prepends: no height
- * bookkeeping, no scrollTop arithmetic against a remembered `scrollHeight` (which
- * goes wrong the moment anything above resizes between the two measurements).
- */
-function captureAnchor(scroller: HTMLElement, content: HTMLElement, items: TimelineItem[]): ScrollAnchor | null {
-  const rows = content.querySelectorAll<HTMLElement>("[data-row-key]");
-  const top = scroller.scrollTop;
-  for (const row of rows) {
-    if (row.offsetTop + row.offsetHeight > top) {
-      return { items, key: row.dataset.rowKey ?? "", offset: row.offsetTop - top };
-    }
-  }
-  return null;
-}
-
-/** Put the anchored row back under the pixel it was under when captured. */
-function restoreAnchor(scroller: HTMLElement, content: HTMLElement, anchor: ScrollAnchor): void {
-  const row = content.querySelector<HTMLElement>(`[data-row-key="${anchor.key}"]`);
-  if (!row) return;
-  scroller.scrollTop = row.offsetTop - anchor.offset;
-}
-
 /** Imperative handle a parent can use to jump the timeline to a message by id. */
 export interface MessageTimelineHandle {
   /**
@@ -449,13 +420,10 @@ const TimelineSkeleton = memo(function TimelineSkeleton() {
  *   React mounting, not O(loaded history)). Nearing the top reveals
  *   {@link WINDOW_STEP} more already-loaded messages, then asks the transport
  *   for older ones. Returning to the bottom trims back down.
- * - **Anchored position.** The window is anchored to a message ID, and any
- *   change to the top of the rendered slice is compensated by measuring one row
- *   before the commit and putting it back afterwards ({@link captureAnchor}).
- * - **Async row growth** is left to the browser: content that resizes above the
- *   viewport is absorbed by native scroll anchoring, so a row that grows late
- *   costs nothing instead of teleporting the view. (Safari has no
- *   `overflow-anchor`; there it degrades to the same shift a plain page has.)
+ * - **Anchored position.** The first row touching the viewport and its pixel
+ *   offset are tracked while reading. Reveals, prepends and late row growth put
+ *   that row back under the same pixel. This is explicit rather than delegated
+ *   to CSS scroll anchoring, which WebKit does not implement.
  * - **Stick-to-bottom** restores the reader's *distance* from the bottom rather
  *   than snapping to it, so a reader who has just started scrolling up isn't
  *   yanked back when an image below them finishes decoding.
@@ -571,11 +539,20 @@ export function MessageTimeline({
   // A transport backfill is in flight (independent of the transport's own,
   // possibly lagging, `isLoadingOlder`).
   const loadingOlderRef = useRef(false);
+  // A scroll-triggered transport page landed above the currently-rendered
+  // first row. The timeline reveals one step from that page automatically;
+  // otherwise a reader already at scrollTop=0 has no further upward scroll
+  // event with which to expose it (especially once Safari bounce is clamped).
+  const backfillRevealRef = useRef<{ boundaryId: string } | null>(null);
+  const [backfillPulse, setBackfillPulse] = useState(0);
   // The next layout should pin to the bottom (first paint, conversation switch).
   const pinBottomRef = useRef(true);
   // A message to reveal-and-jump-to once it's in the rendered window.
   const pendingJumpRef = useRef<{ id: string; focus: boolean } | null>(null);
-  const anchorRef = useRef<ScrollAnchor | null>(null);
+  // The first stable row touching the viewport while the reader is away from
+  // the newest edge. Persistent (rather than tied to one render) so it survives
+  // React 19 interrupted renders and can also absorb asynchronous row resizes.
+  const readingAnchorRef = useRef<ScrollAnchor | null>(null);
   // Previous scroll offset, to tell a reader moving up from this component's
   // own downward scrolls (see `handleScroll`).
   const lastScrollTopRef = useRef(Number.POSITIVE_INFINITY);
@@ -727,26 +704,35 @@ export function MessageTimeline({
     return out;
   }, [timelineEntries, startIndex, newDividerId, rotationDividerIds, quarantinedIds, pausedIds]);
 
-  // Rows are about to change at the top of the slice (a revealed batch, a
-  // backfill prepend, a trim). Measure the reader's anchor row NOW, while the
-  // DOM still shows the old slice — render runs before React touches the DOM.
-  const prevFirstKeyRef = useRef<string | null>(null);
-  const firstKey = items[0]?.key ?? null;
-  if (firstKey !== prevFirstKeyRef.current) {
+  /** Refresh the live reading anchor against the DOM currently on screen. */
+  const captureReadingAnchor = useCallback(() => {
     const scroller = scrollRef.current;
     const content = contentRef.current;
-    if (
-      prevFirstKeyRef.current !== null &&
-      firstKey !== null &&
-      !anchorLost &&
-      distanceRef.current > AT_BOTTOM_PX &&
-      scroller &&
-      content
-    ) {
-      anchorRef.current = captureAnchor(scroller, content, items);
+    if (!scroller || !content || distanceRef.current <= AT_BOTTOM_PX) {
+      readingAnchorRef.current = null;
+      return;
     }
-    prevFirstKeyRef.current = firstKey;
-  }
+    // WebKit exposes rubber-band positions outside the real scroll range. Keep
+    // the last valid anchor through that transient instead of recording an
+    // offset measured in the stretched/bounced coordinate system.
+    if (scroller.scrollTop !== clampedScrollTop(scroller)) return;
+    readingAnchorRef.current = captureScrollAnchor(scroller, content, readingAnchorRef.current);
+  }, []);
+
+  /** Restore the live reading anchor and synchronize all scroll bookkeeping. */
+  const restoreReadingAnchor = useCallback(() => {
+    const scroller = scrollRef.current;
+    const content = contentRef.current;
+    const anchor = readingAnchorRef.current;
+    if (!scroller || !content || !anchor) return false;
+    if (!restoreScrollAnchor(scroller, content, anchor)) {
+      readingAnchorRef.current = null;
+      return false;
+    }
+    distanceRef.current = distanceFromBottom(scroller);
+    lastScrollTopRef.current = clampedScrollTop(scroller);
+    return true;
+  }, []);
 
   /** Jump to the newest message and resume following it. */
   const pinToBottomNow = useCallback(() => {
@@ -754,7 +740,8 @@ export function MessageTimeline({
     if (!el) return;
     el.scrollTop = el.scrollHeight;
     distanceRef.current = 0;
-    lastScrollTopRef.current = el.scrollTop;
+    lastScrollTopRef.current = clampedScrollTop(el);
+    readingAnchorRef.current = null;
     setShowJumpPill(false);
   }, []);
 
@@ -769,7 +756,8 @@ export function MessageTimeline({
     if (!el) return;
     if (distanceRef.current > AT_BOTTOM_PX) return;
     el.scrollTop = el.scrollHeight - el.clientHeight - distanceRef.current;
-    lastScrollTopRef.current = el.scrollTop;
+    lastScrollTopRef.current = clampedScrollTop(el);
+    readingAnchorRef.current = null;
   }, []);
 
   /** Center a mounted row and flash a highlight over it. */
@@ -780,7 +768,9 @@ export function MessageTimeline({
       const row = contentRef.current?.querySelector<HTMLElement>(`[data-event-id="${id}"]`);
       if (!row) return;
       flashRow(row, focus);
-      distanceRef.current = el.scrollHeight - el.scrollTop - el.clientHeight;
+      distanceRef.current = distanceFromBottom(el);
+      lastScrollTopRef.current = clampedScrollTop(el);
+      captureReadingAnchor();
     };
     if (contentRef.current?.querySelector(`[data-event-id="${id}"]`)) {
       settle();
@@ -793,7 +783,7 @@ export function MessageTimeline({
     if (!runKey) return;
     setExpandedFloods((prev) => (prev.has(runKey) ? prev : new Set(prev).add(runKey)));
     requestAnimationFrame(settle);
-  }, []);
+  }, [captureReadingAnchor]);
 
   // The one place scroll position is adjusted for a rendered-slice change.
   // Exactly one of these applies, in priority order.
@@ -805,7 +795,7 @@ export function MessageTimeline({
       // The window's anchor message is gone: different conversation (or the
       // transport dropped the front of its history). Fall back to the newest
       // messages, pinned to the bottom. Runs before paint, so no flash.
-      anchorRef.current = null;
+      readingAnchorRef.current = null;
       pinBottomRef.current = true;
       setRampStep(0);
       setWindowStart(null);
@@ -814,49 +804,70 @@ export function MessageTimeline({
     const jump = pendingJumpRef.current;
     if (jump) {
       pendingJumpRef.current = null;
-      anchorRef.current = null;
+      readingAnchorRef.current = null;
       pinBottomRef.current = false;
       jumpToRow(jump.id, jump.focus);
       return;
     }
+    const backfill = backfillRevealRef.current;
+    if (backfill) {
+      const boundaryIndex = timelineEntries.findIndex((entry) => entry.id === backfill.boundaryId);
+      if (boundaryIndex > 0) {
+        // The prop update may itself have changed the rendered tail (a short
+        // opening window). Restore the old viewport first, then capture it
+        // afresh for the commit that exposes rows from the new page.
+        if (distanceRef.current > AT_BOTTOM_PX) restoreReadingAnchor();
+        captureReadingAnchor();
+        const nextIndex = stepBackRows(
+          timelineEntries,
+          boundaryIndex,
+          WINDOW_STEP,
+          (entry) => entry.type === "chat" && Boolean(quarantinedIdsRef.current?.has(entry.message.id)),
+        );
+        const next = timelineEntries[nextIndex];
+        backfillRevealRef.current = null;
+        if (next) {
+          setWindowStart(next.id);
+          return;
+        }
+      } else if (!loadingOlderRef.current) {
+        // Empty/duplicate/error page: release the pending reveal. The pulse in
+        // the promise's finally block guarantees this branch gets a render.
+        backfillRevealRef.current = null;
+      }
+    }
     if (pinBottomRef.current) {
       pinBottomRef.current = false;
-      anchorRef.current = null;
+      readingAnchorRef.current = null;
       pinToBottomNow();
       return;
     }
-    const anchor = anchorRef.current;
-    anchorRef.current = null;
-    if (anchor && anchor.items === items) {
-      restoreAnchor(el, contentRef.current!, anchor);
-      distanceRef.current = el.scrollHeight - el.scrollTop - el.clientHeight;
-      lastScrollTopRef.current = el.scrollTop;
-      return;
-    }
+    if (distanceRef.current > AT_BOTTOM_PX && restoreReadingAnchor()) return;
     stickToBottom();
     // `listVisible` is a dependency because the scroller is what this effect
     // moves: every commit before it mounts returns at the `!el` guard above, so
     // without this the pin would be missed entirely whenever the window is
     // already full by the time the skeleton clears.
-  }, [items, listVisible, anchorLost, setWindowStart, jumpToRow, pinToBottomNow, stickToBottom]);
+  }, [items, listVisible, anchorLost, timelineEntries, backfillPulse, captureReadingAnchor, setWindowStart, jumpToRow, pinToBottomNow, restoreReadingAnchor, stickToBottom]);
 
   // Content that grows or shrinks without the message list changing (images,
   // link previews, embeds, reactions) and container reflows (the thread panel
   // animating its width, the composer swapping for a join prompt) both land
   // here. Callers used to drive this by polling `maintainBottom` from a rAF
   // loop for ~260ms; the observer sees every frame of it and nothing else.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = scrollRef.current;
     const content = contentRef.current;
     if (!el || !content) return;
     const ro = new ResizeObserver(() => {
-      if (anchorRef.current || pinBottomRef.current || pendingJumpRef.current) return;
-      stickToBottom();
+      if (pinBottomRef.current || pendingJumpRef.current) return;
+      if (distanceRef.current > AT_BOTTOM_PX) restoreReadingAnchor();
+      else stickToBottom();
     });
     ro.observe(content);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [listVisible, stickToBottom]);
+  }, [listVisible, restoreReadingAnchor, stickToBottom]);
 
   /**
    * Near the top: reveal more already-loaded messages, or — once the window
@@ -872,7 +883,7 @@ export function MessageTimeline({
     if (distanceRef.current <= AT_BOTTOM_PX) return;
     const start = startIndexRef.current;
     if (start > 0) {
-      if (el.scrollTop >= REVEAL_TRIGGER_PX) return;
+      if (clampedScrollTop(el) >= REVEAL_TRIGGER_PX) return;
       const next = entriesRef.current[
         stepBackRows(entriesRef.current, start, WINDOW_STEP, (entry) =>
           entry.type === "chat" ? !!quarantinedIdsRef.current?.has(entry.message.id) : false,
@@ -880,16 +891,21 @@ export function MessageTimeline({
       ];
       if (!next) return;
       extendLockRef.current = true;
+      captureReadingAnchor();
       setWindowStart(next.id);
       return;
     }
-    if (el.scrollTop >= BACKFILL_TRIGGER_PX) return;
+    if (clampedScrollTop(el) >= BACKFILL_TRIGGER_PX) return;
     if (!loadOlder || !hasMore || isLoadingOlder || loadingOlderRef.current) return;
     loadingOlderRef.current = true;
+    captureReadingAnchor();
+    const boundaryId = entriesRef.current[0]?.id;
+    if (boundaryId) backfillRevealRef.current = { boundaryId };
     void loadOlder().finally(() => {
       loadingOlderRef.current = false;
+      setBackfillPulse((pulse) => pulse + 1);
     });
-  }, [paused, loadOlder, hasMore, isLoadingOlder, setWindowStart]);
+  }, [paused, loadOlder, hasMore, isLoadingOlder, captureReadingAnchor, setWindowStart]);
 
   /**
    * Extend while the rendered slice does not even fill the scroller.
@@ -917,15 +933,19 @@ export function MessageTimeline({
           entry.type === "chat" ? !!quarantinedIdsRef.current?.has(entry.message.id) : false,
         )
       ];
-      if (next) setWindowStart(next.id);
+      if (next) {
+        captureReadingAnchor();
+        setWindowStart(next.id);
+      }
       return;
     }
     if (!loadOlder || !hasMore || isLoadingOlder || loadingOlderRef.current) return;
     loadingOlderRef.current = true;
+    captureReadingAnchor();
     void loadOlder().finally(() => {
       loadingOlderRef.current = false;
     });
-  }, [items, listVisible, paused, loadOlder, hasMore, isLoadingOlder, setWindowStart]);
+  }, [items, listVisible, paused, loadOlder, hasMore, isLoadingOlder, captureReadingAnchor, setWindowStart]);
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -935,8 +955,9 @@ export function MessageTimeline({
     // anchor restore after rows land above — records its own offset, so this
     // one comparison keeps the timeline from reacting to its own scrolling and
     // walking a channel's history in the moment it opens.
-    const movingUp = el.scrollTop < lastScrollTopRef.current;
-    lastScrollTopRef.current = el.scrollTop;
+    const top = clampedScrollTop(el);
+    const movingUp = top < lastScrollTopRef.current;
+    lastScrollTopRef.current = top;
     // A row that grows *below* the fold — a DM decrypting out of its
     // placeholder skeleton, an image decoding, a reply context resolving —
     // raises the distance without touching `scrollTop`. Scroll events are
@@ -946,11 +967,12 @@ export function MessageTimeline({
     // past AT_BOTTOM_PX) for the rest of the mount and strand a freshly-opened
     // conversation short of its newest message. Shrinking distance is always
     // safe to record; growth counts only when the reader is the one moving.
-    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const distance = distanceFromBottom(el);
     if (movingUp || distance <= distanceRef.current) distanceRef.current = distance;
     setShowJumpPill(distanceRef.current > JUMP_PILL_PX);
+    if (el.scrollTop === top) captureReadingAnchor();
     if (movingUp) maybeExtend();
-  }, [maybeExtend]);
+  }, [captureReadingAnchor, maybeExtend]);
 
   // Walk the opening ramp, a frame at a time. Rows land above a reader who is
   // pinned to the bottom, so nothing moves as the window fills out.
@@ -1038,7 +1060,7 @@ export function MessageTimeline({
           <div
             ref={scrollRef}
             onScroll={handleScroll}
-            className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable px-3"
+            className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain [overflow-anchor:none] scrollbar-stable px-3"
           >
             {/* Positioned, so every row's `offsetTop` is measured against it. */}
             <div ref={contentRef} className="relative">
@@ -1050,6 +1072,7 @@ export function MessageTimeline({
                 <div
                   key={item.key}
                   data-row-key={item.key}
+                  data-scroll-anchor={item.key}
                   className="relative hover:z-10 focus-within:z-10"
                 >
                   {item.type === "date" ? (

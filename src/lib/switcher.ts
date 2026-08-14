@@ -15,6 +15,7 @@
 import { matchPath } from "react-router-dom";
 
 import { channelsView } from "@/concord/lib/community";
+import { replyTargetOf } from "@/concord/lib/chat";
 import { rehydrateCommunity, type CommunityListEntry } from "@/concord/lib/communityList";
 import { searchRumors } from "@/concord/lib/rumorStore";
 import { readControlFold } from "@/concord/lib/control";
@@ -23,7 +24,7 @@ import { dmRouteParam } from "@/lib/dmConversation";
 import { searchDm17Rumors } from "@/lib/nip17/dm17Store";
 import { dmConvKey } from "@/lib/nip17/protocol";
 import { relayToRouteParam, routeParamToRelay } from "@/lib/platform";
-import { chatRoute } from "@/lib/routes";
+import { chatRoute, parseChatRoute } from "@/lib/routes";
 
 import type { QueryClient } from "@tanstack/react-query";
 import type { ArmadaEventStore } from "@/contexts/EventStoreContext";
@@ -303,6 +304,24 @@ export interface MessageEntry {
   peerPubkey?: string;
 }
 
+/**
+ * Add a message focus to one of the switcher's canonical conversation routes.
+ * Thread roots apply only to room transports; DMs have no thread surface.
+ * Exported as a small pure seam for route-regression coverage.
+ */
+export function focusMessageRoute(route: string, messageId: string, threadRoot?: string): string {
+  const parsed = parseChatRoute(route);
+  if (!parsed) return route;
+  switch (parsed.kind) {
+    case "concord":
+      return chatRoute({ ...parsed, threadRoot, messageId });
+    case "nip29":
+      return chatRoute({ ...parsed, threadRoot, messageId });
+    case "dm":
+      return chatRoute({ ...parsed, messageId });
+  }
+}
+
 /** NIP-29 timeline kinds whose content is searchable (chat + NIP-88 polls). */
 const NIP29_MESSAGE_KINDS = [KIND_GROUP_CHAT, 1068];
 /** Newest-first store scan cap per NIP-29 search (content isn't indexed). */
@@ -353,7 +372,7 @@ async function searchConcordMessages(
       content: snippet(h.content),
       authorPubkey: h.author,
       source: `${ch.name} · ${ch.spaceName}`,
-      route: ch.route,
+      route: focusMessageRoute(ch.route, h.rumorId, replyTargetOf(h)),
       createdAt: h.createdAt,
     });
   }
@@ -404,7 +423,7 @@ async function searchNip29Messages(
       content: snippet(ev.content),
       authorPubkey: ev.pubkey,
       source: `${ch.name} · ${ch.spaceName}`,
-      route: ch.route,
+      route: focusMessageRoute(ch.route, ev.id),
       createdAt: ev.created_at,
     });
     if (out.length >= PER_CORPUS_LIMIT) break;
@@ -427,7 +446,10 @@ async function searchDmMessages(
     // hit is therefore labelled with one of its members rather than all of
     // them; the route below still opens the right thread.
     peerPubkey: h.peers[0],
-    route: chatRoute({ kind: "dm", peer: dmRouteParam(dmConvKey(h.peers)) }),
+    route: focusMessageRoute(
+      chatRoute({ kind: "dm", peer: dmRouteParam(dmConvKey(h.peers)) }),
+      h.rumorId,
+    ),
     createdAt: h.createdAt,
   }));
 }

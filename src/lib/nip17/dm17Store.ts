@@ -327,6 +327,34 @@ export async function queryDm17Thread(
 }
 
 /**
+ * Read one exact rumor from a conversation, independently of the thread's
+ * newest-first window.
+ *
+ * Message-search results can name history far behind the rows a thread has
+ * paged into memory. Querying by id lets that one row be focused immediately
+ * without widening every ordinary thread read to the whole local archive. The
+ * participant-set check is essential: rumor ids are account-tenant scoped, not
+ * conversation scoped, so an id from another DM must never be admitted into
+ * the open thread merely because it exists on this device.
+ */
+export async function queryDm17Rumor(
+  self: string,
+  peers: readonly string[],
+  rumorId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<OpenedDm | undefined> {
+  await migrateLegacyDms(self).catch(() => undefined);
+  const events = await dm17Store(self).query(
+    [{ ids: [rumorId], kinds: DM_RUMOR_KINDS, limit: 1 }],
+    { signal: opts.signal },
+  );
+  const event = events.find((ev) => ev.id === rumorId);
+  if (!event || isExpired(event.tags)) return undefined;
+  const opened = storedToDm17(event, self);
+  return dmConvKey(opened.peers) === dmConvKey(peers) ? opened : undefined;
+}
+
+/**
  * The filters selecting one conversation, from `self`'s side.
  *
  * A conversation is two directions and they are indexed differently: what the

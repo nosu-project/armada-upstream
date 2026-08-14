@@ -49,6 +49,73 @@ describe("useMessagePermalink", () => {
     expect(scrollTo).toHaveBeenCalledTimes(1);
   });
 
+  it("waits for a temporarily absent timeline instead of consuming the focus", () => {
+    const { wrapper, at } = harness("/c/comm/ch/m/old");
+    let mounted = false;
+    const scrollTo = vi.fn(() => mounted);
+    const { rerender } = renderHook((props: Opts) => useMessagePermalink(props), {
+      initialProps: {
+        messages: [{ id: "old" }],
+        isLoading: false,
+        scrollTo,
+        enabled: true,
+      },
+      wrapper,
+    });
+
+    // The result is loaded, but search still owns the content area and the
+    // timeline ref cannot accept it yet.
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    expect(at()).toBe("/c/comm/ch/m/old");
+
+    rerender({ messages: [{ id: "old" }], isLoading: false, scrollTo, enabled: false });
+    mounted = true;
+    rerender({ messages: [{ id: "old" }], isLoading: false, scrollTo, enabled: true });
+
+    expect(scrollTo).toHaveBeenCalledTimes(2);
+    expect(at()).toBe("/c/comm/ch/m/old");
+
+    // Once accepted, ordinary timeline updates do not snap back again.
+    rerender({
+      messages: [{ id: "old" }, { id: "new" }],
+      isLoading: false,
+      scrollTo,
+      enabled: true,
+    });
+    expect(scrollTo).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries when only the rendering ref becomes ready, then clears a permanently hidden row", async () => {
+    const readyHarness = harness("/dm/peer/m/old");
+    let mounted = false;
+    const scrollTo = vi.fn(() => mounted);
+    renderHook(
+      () => useMessagePermalink({ messages: [{ id: "old" }], isLoading: false, scrollTo }),
+      { wrapper: readyHarness.wrapper },
+    );
+
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    mounted = true;
+    await act(async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    });
+    expect(scrollTo).toHaveBeenCalledTimes(2);
+    expect(readyHarness.at()).toBe("/dm/peer/m/old");
+
+    const hiddenHarness = harness("/dm/peer/m/muted");
+    const hiddenScroll = vi.fn(() => false);
+    renderHook(
+      () => useMessagePermalink({ messages: [{ id: "muted" }], isLoading: false, scrollTo: hiddenScroll }),
+      { wrapper: hiddenHarness.wrapper },
+    );
+    for (let frame = 0; frame < 6; frame++) {
+      await act(async () => {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      });
+    }
+    expect(hiddenHarness.at()).toBe("/dm/peer");
+  });
+
   it("leaves a thread reply's permalink to the thread panel", () => {
     const { wrapper, at } = harness("/s/relay.example/g/t/r1/m/reply");
     const scrollTo = vi.fn(() => true);

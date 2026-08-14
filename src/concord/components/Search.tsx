@@ -329,7 +329,7 @@ export function SearchResultsView({
   results: ChatMsg[];
   isLoading: boolean;
   query: string;
-  onJump: (channelIdHex: string, messageId: string) => void;
+  onJump: (channelIdHex: string, message: ChatMsg) => void;
 }) {
   const nameByChannel = useMemo(() => {
     const m = new Map<string, Channel>();
@@ -370,7 +370,7 @@ export function SearchResultsView({
             <SearchRow
               event={msg}
               highlight={query}
-              onJump={ch ? () => onJump(channelIdHex, msg.id) : undefined}
+              onJump={ch ? () => onJump(channelIdHex, msg) : undefined}
             />
           </div>
         );

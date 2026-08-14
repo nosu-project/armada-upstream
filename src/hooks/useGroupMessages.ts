@@ -43,6 +43,12 @@ function statusKey(relayUrl: string | undefined, groupId: string | undefined) {
   return ["nip29", "msg-status", relayUrl, groupId] as const;
 }
 
+/** Exact route targets read independently of the newest room window. */
+export interface GroupMessageFocus {
+  messageId?: string;
+  threadRoot?: string;
+}
+
 /**
  * Sort ascending (oldest-first) and de-duplicate a message list by id.
  *
@@ -98,10 +104,19 @@ function paginationCursor(events: NostrRumor[]): number | undefined {
  * event shares its id with the relay echo (which arrives via the wire), so
  * de-duplication is automatic.
  */
-export function useGroupMessages(relayUrl: string | undefined, groupId: string | undefined) {
+export function useGroupMessages(
+  relayUrl: string | undefined,
+  groupId: string | undefined,
+  focus?: GroupMessageFocus,
+) {
   const { nostr } = useNostr();
   const eventStore = useEventStore();
   const queryClient = useQueryClient();
+  const focusIds = useMemo(
+    () => [...new Set([focus?.threadRoot, focus?.messageId].filter((id): id is string => Boolean(id)))],
+    [focus?.threadRoot, focus?.messageId],
+  );
+  const focusSig = focusIds.join(",");
 
   // Backfill state. `cursor` is the next `until` to request; `hasMore` is false
   // once a page comes back short (the relay has no older history left).
@@ -221,6 +236,30 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
         : undefined,
   });
 
+  // Global message search can find a locally-persisted row far behind the
+  // newest page. Resolve the route's exact ids from that same relay tenant so
+  // the permalink does not need a network walk (and works offline). Keep this
+  // result outside the ordinary query cache: a lone old hit must not drag its
+  // pagination cursor across the unloaded gap.
+  const focusQuery = useQuery<NostrRumor[]>({
+    ...STORE_READ,
+    queryKey: ["nip29", "message-focus", relayUrl, groupId, focusSig],
+    queryFn: async ({ signal }) => {
+      const store = await eventStore;
+      return store.query(
+        [{ ids: focusIds, kinds: NIP29_TIMELINE_KINDS, "#h": [groupId!], limit: focusIds.length }],
+        { relay: relayUrl, signal },
+      );
+    },
+    enabled: Boolean(relayUrl && groupId && focusIds.length > 0),
+    staleTime: Infinity,
+  });
+
+  const focusedData = useMemo(
+    () => sortDedupe([...(query.data ?? []), ...(focusQuery.data ?? [])]),
+    [query.data, focusQuery.data],
+  );
+
   // Wire hydration: when this group's store changes, re-read it. (The queryFn
   // is a cheap local read; its relay pull is independently throttled.)
   useWireScopes((scopes) => {
@@ -337,7 +376,9 @@ export function useGroupMessages(relayUrl: string | undefined, groupId: string |
   // or fresh-stamped topic releases the gate, so an empty room shows its
   // empty state instead of a skeleton forever.
   const isLoading =
-    query.isLoading || ((query.data?.length ?? 0) === 0 && sync.status === "pending");
+    query.isLoading ||
+    (focusIds.length > 0 && focusQuery.isLoading) ||
+    ((query.data?.length ?? 0) === 0 && sync.status === "pending");
 
-  return { ...query, ...helpers, isLoading };
+  return { ...query, ...helpers, data: focusedData, isLoading };
 }

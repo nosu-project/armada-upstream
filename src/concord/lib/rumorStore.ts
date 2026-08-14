@@ -332,6 +332,31 @@ export async function queryChannelRumors(
 }
 
 /**
+ * Read exact cached chat rows for a channel.
+ *
+ * A permalink names an id, not a position in the newest-page window. Keep the
+ * channel selector alongside `ids`: a rumor id supplied by a route must not be
+ * allowed to pull a row from another channel in the same community tenant.
+ * Side-events are deliberately excluded — only rows can be permalink/thread
+ * targets, while reactions, edits and deletes still arrive with the ordinary
+ * bounded channel read.
+ */
+export async function queryChannelRumorsByIds(
+  communityIdHex: string,
+  channelIdHex: string,
+  ids: string[],
+  opts?: { signal?: AbortSignal },
+): Promise<OpenedChat[]> {
+  const unique = [...new Set(ids.filter(Boolean))];
+  if (unique.length === 0) return [];
+  const events = await rumorStore(communityIdHex).query(
+    [{ ids: unique, kinds: CHAT_ROW_KINDS, "#channel": [channelIdHex] }],
+    { signal: opts?.signal },
+  );
+  return notExpired(events).map((ev) => storedToOpenedChat(ev, channelIdHex));
+}
+
+/**
  * When each author was first heard in this channel — the flood detector's
  * notion of who was already here ({@link FloodOptions.firstSeen} in
  * `floodCluster.ts`).

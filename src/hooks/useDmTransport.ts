@@ -88,7 +88,11 @@ export class LegacyFallbackRequired extends Error {
  *     (NIP-17 rumors are stored decrypted — never placeholders).
  *   - `decryptVisible`: decrypt a placeholder by id (IntersectionObserver).
  */
-export function useDmTransport(conversation: string, peers: readonly string[]): {
+export function useDmTransport(
+  conversation: string,
+  peers: readonly string[],
+  focusedRumorId?: string,
+): {
   transport: ChatTransport;
   /**
    * The merged timeline as generalized entries: chat rows plus the
@@ -166,7 +170,7 @@ export function useDmTransport(conversation: string, peers: readonly string[]): 
     hasEncrypted,
   } = useDirectMessages(legacyPeer);
 
-  const dm17 = useDm17Thread(conversation);
+  const dm17 = useDm17Thread(conversation, focusedRumorId);
   const self = user?.pubkey;
   // A group has no legacy plane to pin to, so it is never "pinned to NIP-04"
   // however the first participant's own 1:1 preference happens to be set.
