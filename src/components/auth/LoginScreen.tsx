@@ -24,6 +24,7 @@ import {
 } from '@/hooks/useLoginActions';
 import { AndroidSignerOptions } from '@/components/auth/AndroidSignerOptions';
 import { getNsecCredential } from '@/lib/credentialManager';
+import { useLoggedInAccounts } from '@/hooks/useLoggedInAccounts';
 import { APP_NAME } from '@/lib/platform';
 import { shareOrigin } from '@/lib/shareOrigin';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -101,6 +102,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const login = useLoginActions();
+  const { currentUser } = useLoggedInAccounts();
 
   // Keep stable refs to props/actions so the listening effect below doesn't
   // re-run on every parent render (parents typically pass inline arrow
@@ -331,10 +333,18 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
   // this shows the native credential chooser; everywhere else it resolves null
   // and nothing happens. Note this is the WEB Credential Management API only —
   // WebKit implements no `PasswordCredential`, so it is inert on iOS (there is
-  // no iCloud Keychain picker here), and Android's Credential Manager is a
-  // separate native plugin used for saving, not for this read.
+  // no iCloud Keychain picker here). It is NOT inert on Android, though: the
+  // WebView is Chromium and reads from Google Password Manager, independently of
+  // the native Credential Manager plugin (which is save-only).
+  //
+  // Only auto-fill when there is no logged-in user, i.e. a cold login. When a
+  // user is already signed in this dialog was opened by "Add another account",
+  // where the whole point is to enter a *different* key — a silent auto-login
+  // (`mediation: "optional"` returns the one saved credential with no chooser)
+  // would re-log the same account and close the dialog before the user could
+  // type, making it impossible to add a second account.
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || currentUser) return;
     let cancelled = false;
 
     getNsecCredential().then((cred) => {
