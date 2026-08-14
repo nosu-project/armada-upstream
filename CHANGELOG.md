@@ -4,6 +4,26 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.52.2] - 2026-08-14
+
+You can now follow people straight from their profile card, with mute, report, and unfollow tucked into a menu so the card leads with Message, Mention, and Follow. Private channels let you name their access role and add more roles later, and you can add members right from the channel header. Jumping to a message from search now lands on the exact message across communities, servers, and direct messages, with older history filling in as you scroll up. Rounding it out is a batch of touch and navigation fixes.
+
+### Added
+- Follow anyone directly from their profile card
+- Name a private channel's access role when you create or make it private, and add more access roles to it later
+- Add members to a private channel from its header menu
+
+### Changed
+- The profile card leads with Message, Mention, and Follow; mute, report, and unfollow move into a "…" menu on the card
+- Private channel roles show a lock badge, a member count, and clearer access wording in the role editor
+
+### Fixed
+- Jumping to a message from search lands on the exact message across communities, servers, and direct messages
+- Direct message history grows as you scroll up, and newly loaded older days appear at the top without the view jumping
+- The message action menu closes when you press Android's back button
+- Long-press is steadier on touch, and the back-swipe gesture no longer fires when you press on a menu or overlay
+- The people list in the invite dialog can now be scrolled
+
 ## [0.52.1] - 2026-08-14
 
 Each account on a shared device now keeps its own conversations and layout to itself, and switching accounts reloads cleanly into the one you picked. Message images gain their own actions — long-press or right-click a picture in chat to open, save, or share it alongside the usual message actions — with the long-press gesture made more reliable on touch. Web apps can now be up to 500 MB.
