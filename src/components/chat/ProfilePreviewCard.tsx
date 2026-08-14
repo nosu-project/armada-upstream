@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { DittoIcon } from "@/components/brand/DittoIcon";
 import { BotPill } from "@/components/BotPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
+import { FollowButton } from "@/components/FollowButton";
 import { ReportDialog } from "@/components/ReportDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -232,6 +233,12 @@ function ProfilePreviewBody({
             </Button>
           </div>
         )}
+
+        {/* Follow. Its own row rather than a third of the one above: the card
+            is w-72, and the two buttons there already carry icons. Hides itself
+            for self / logged-out, and deliberately leaves the card open so the
+            state flip is visible. */}
+        <FollowButton pubkey={pubkey} className="mt-2 w-full clip-corner-lg h-8" />
 
         {/* View this person on ditto.pub — the fuller social view. */}
         {dittoProfileHref && (
