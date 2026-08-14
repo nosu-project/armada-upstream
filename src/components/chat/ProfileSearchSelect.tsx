@@ -74,7 +74,10 @@ export function ProfileSearchSelect({
         sideOffset={6}
         onOpenAutoFocus={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()}
-        className="w-[var(--radix-popover-trigger-width)] max-h-60 overflow-y-auto p-1"
+        // Clamped to the space Radix measured, not a flat 15rem: inside a
+        // dialog the content box is the popover's clipping ancestor, so rows
+        // past its edge would be cut off rather than reachable by scrolling.
+        className="w-[var(--radix-popover-trigger-width)] max-h-[min(15rem,var(--radix-popover-content-available-height))] overflow-y-auto p-1"
       >
         {pastedPubkey ? (
           <PastedPubkeyRow

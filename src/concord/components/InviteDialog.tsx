@@ -15,6 +15,7 @@ import { Switch } from "@/components/ui/switch";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useInviteActions } from "@/concord/hooks/useInvites";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { PortalContainerProvider } from "@/hooks/usePortalContainer";
 import { toast } from "@/hooks/useToast";
 import type { SearchProfile } from "@/hooks/useSearchProfiles";
 import { writeClipboardText } from "@/lib/clipboard";
@@ -49,11 +50,21 @@ export function InviteDialog({
   canCreateLink: boolean;
 }) {
   const isMobile = useIsMobile();
+  // Radix's RemoveScroll allowlists the overlay subtree and the dialog's own
+  // content node (its `shards`) — nothing else. A popover portaled to <body>
+  // therefore has its wheel/touch scroll prevented, which is what left the
+  // search results list unscrollable. Portaling into the content node puts it
+  // back inside the allowlist, and on the phone it also lets vaul read the
+  // list as a scrollable child rather than a swipe on the sheet.
+  const [portalNode, setPortalNode] = useState<HTMLDivElement | null>(null);
 
   if (isMobile) {
     return (
       <Drawer open={open} onOpenChange={onOpenChange}>
-        <DrawerContent className="mt-0 h-[100dvh] max-h-[100dvh] rounded-t-none bg-chrome pt-[env(safe-area-inset-top)]">
+        <DrawerContent
+          ref={setPortalNode}
+          className="mt-0 h-[100dvh] max-h-[100dvh] rounded-t-none bg-chrome pt-[env(safe-area-inset-top)]"
+        >
           <DrawerTitle className="sr-only">Invite people</DrawerTitle>
           {/* A full-screen sheet has no visible edge to swipe from, so the
               drag handle alone isn't a discoverable way out. */}
@@ -68,8 +79,13 @@ export function InviteDialog({
               <X className="size-5" />
             </Button>
           </DrawerClose>
+          {/* The container is the sheet, not this scroller: the popover is
+              position:fixed against the transformed sheet, so an overflow box
+              in between would clip it. */}
           <div className="chrome-dialog flex-1 overflow-y-auto overscroll-contain px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-6">
-            <InviteBody community={community} canCreateLink={canCreateLink} />
+            <PortalContainerProvider value={portalNode ?? undefined}>
+              <InviteBody community={community} canCreateLink={canCreateLink} />
+            </PortalContainerProvider>
           </div>
           <ArmadaCrestKeyframes />
         </DrawerContent>
@@ -79,8 +95,10 @@ export function InviteDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChromeDialogContent title="Invite people">
-        <InviteBody community={community} canCreateLink={canCreateLink} />
+      <ChromeDialogContent ref={setPortalNode} title="Invite people">
+        <PortalContainerProvider value={portalNode ?? undefined}>
+          <InviteBody community={community} canCreateLink={canCreateLink} />
+        </PortalContainerProvider>
         <ArmadaCrestKeyframes />
       </ChromeDialogContent>
     </Dialog>
