@@ -4,6 +4,21 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.52.1] - 2026-08-14
+
+Each account on a shared device now keeps its own conversations and layout to itself, and switching accounts reloads cleanly into the one you picked. Message images gain their own actions — long-press or right-click a picture in chat to open, save, or share it alongside the usual message actions — with the long-press gesture made more reliable on touch. Web apps can now be up to 500 MB.
+
+### Added
+- Long-press or right-click an image in chat to open its own menu — open, save, or share the picture — together with the message's actions
+
+### Changed
+- Web apps can now be up to 500 MB
+
+### Fixed
+- Each account on a device keeps its own conversations, pinned chats, and rail arrangement, so signing into a second account no longer shows or republishes the first one's chats
+- One account's messages no longer leak into another's view when visiting a community link
+- Switching accounts, and logging out with others still signed in, reloads cleanly into the right account
+
 ## [0.52.0] - 2026-08-13
 
 Direct messages can now include several people at once: pick the recipients in the compose pane, and the conversation carries everyone's names and faces. Armada is on Google Play and Zapstore, linked from the landing and downloads pages. Video attachments preview before you send them, play full-window in the lightbox, and loop inline. Communities gain kick and ban from the message menu, Android shows an ongoing-call notification, and direct message sync now recovers relay by relay.
