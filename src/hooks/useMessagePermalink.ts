@@ -119,8 +119,16 @@ export function useMessagePermalink(opts: {
         clear();
         return;
       }
-      scrollRetriesRef.current += 1;
-      const frame = requestAnimationFrame(() => setPulse((n) => n + 1));
+      // The budget counts FRAMES, so it is spent only by retries this effect
+      // asked for. An opening conversation re-runs it for reasons that have
+      // nothing to do with the target — `messages` gains a row, `loadOlder` is
+      // rebuilt when the transport's raw set changes — and charging those runs
+      // would clear the permalink during the exact moments the surface is
+      // still mounting, which is the failure this retry exists to prevent.
+      const frame = requestAnimationFrame(() => {
+        scrollRetriesRef.current += 1;
+        setPulse((n) => n + 1);
+      });
       return () => cancelAnimationFrame(frame);
     }
     if (!hasMore || !loadOlder || pagesRef.current >= MAX_HUNT_PAGES) {

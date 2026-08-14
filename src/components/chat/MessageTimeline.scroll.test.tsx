@@ -195,4 +195,66 @@ describe("MessageTimeline reading anchor", () => {
     expect(content.querySelector('[data-scroll-anchor^="date-"]')).not.toBeNull();
     expect(rowViewportOffset(content, scroller, "m0")).toBe(0);
   });
+
+  it("still reveals the backfill when the boundary row is dropped with it", async () => {
+    // The reveal is armed against the oldest entry on screen, and a page can
+    // land in the same commit that removes it: a disappearing message hitting
+    // its expiry, a delete folding in, a moderation drop. The rows above are
+    // real either way, and the reader is still at scrollTop 0 with no upward
+    // gesture left to ask for them.
+    const loadOlder = vi.fn<() => Promise<number>>();
+
+    function DmHistory() {
+      const [messages, setMessages] = useState(() =>
+        Array.from({ length: 30 }, (_, index) => message(index)),
+      );
+      const backfill = useCallback(async () => {
+        const priorDay = Array.from({ length: 40 }, (_, index) => ({
+          ...message(index - 40),
+          id: `old${index}`,
+          content: `old ${index}`,
+          created_at: 1_700_000_000 - 3 * 24 * 60 * 60 + index,
+        }));
+        setMessages((current) => [...priorDay, ...current.filter((msg) => msg.id !== "m0")]);
+        return priorDay.length;
+      }, []);
+      loadOlder.mockImplementation(backfill);
+      return (
+        <MessageTimeline
+          transport={{
+            ...transportOf(messages),
+            hasMore: true,
+            loadOlder,
+          }}
+          renderMessage={(msg) => <span data-event-id={msg.id}>chat:{msg.id}</span>}
+        />
+      );
+    }
+
+    const rendered = render(<DmHistory />);
+    await screen.findByText("chat:m0");
+    const scroller = rendered.container.querySelector<HTMLElement>(".scrollbar-stable")!;
+    const content = scroller.firstElementChild as HTMLElement;
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 500 },
+      scrollHeight: {
+        configurable: true,
+        get: () => content.querySelectorAll("[data-scroll-anchor]").length * 100,
+      },
+    });
+
+    scroll(scroller, 2_500);
+    scroll(scroller, 0);
+
+    await waitFor(() => expect(loadOlder).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText("chat:old0")).toBeInTheDocument());
+    expect(content.querySelector('[data-scroll-anchor^="date-"]')).not.toBeNull();
+    // The anchored row is gone, so the anchor falls through to its follower —
+    // which keeps the pixel it held while `m0` was still above it. What matters
+    // is that the reader is still looking at their own rows and not at the top
+    // of a page of prior-day history they never asked to be moved to.
+    const offset = rowViewportOffset(content, scroller, "m1");
+    expect(offset).toBeGreaterThanOrEqual(0);
+    expect(offset).toBeLessThan(scroller.clientHeight);
+  });
 });

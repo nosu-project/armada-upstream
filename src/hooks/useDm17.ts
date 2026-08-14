@@ -1499,14 +1499,20 @@ export function useDm17Thread(
       if (oldest !== undefined) oldestRef.current = oldest;
       if (exhausted) setHasMore(false);
 
-      // One wrap yields at most one stored rumor. Growing by every scanned wrap
-      // is deliberately conservative (duplicates and other peers merely add
-      // headroom) and guarantees this conversation's rows fit beside every row
-      // that was already visible. Capture `window` before the await so a
-      // late result from the previous conversation cannot grow the next one's
-      // window.
-      window.limit = Math.max(window.limit, before.length) + scanned;
-      const after = await queryDm17Thread(self, peers, { limit: window.limit });
+      // One wrap yields at most one stored rumor, so a limit of "everything
+      // visible plus everything scanned" is guaranteed deep enough to hold
+      // this conversation's rows beside every row that was already there.
+      // That is a PROBE, not the new floor: the wrap stream is global (see
+      // pageOlderDmWraps), so `scanned` counts the whole inbox page and most
+      // of it belongs to other correspondents. Persisting it would inflate
+      // every later poll by their history — trebled, since queryDm17Thread
+      // reads CONVERSATION_OVERFETCH times its limit — so the floor is clamped
+      // to what this conversation actually returned. Capture `window` before
+      // the await so a late result from the previous conversation cannot grow
+      // the next one's window.
+      const probe = Math.max(window.limit, before.length) + scanned;
+      const after = await queryDm17Thread(self, peers, { limit: probe });
+      window.limit = Math.max(window.limit, after.length);
       const beforeIds = new Set(before.map((row) => row.rumorId));
       const added = after.reduce((count, row) => count + (beforeIds.has(row.rumorId) ? 0 : 1), 0);
       queryClient.setQueryData<OpenedDm[]>(queryKey, after.sort(

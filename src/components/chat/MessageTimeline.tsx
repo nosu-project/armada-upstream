@@ -543,7 +543,7 @@ export function MessageTimeline({
   // first row. The timeline reveals one step from that page automatically;
   // otherwise a reader already at scrollTop=0 has no further upward scroll
   // event with which to expose it (especially once Safari bounce is clamped).
-  const backfillRevealRef = useRef<{ boundaryId: string } | null>(null);
+  const backfillRevealRef = useRef<{ boundaryId: string; count: number } | null>(null);
   const [backfillPulse, setBackfillPulse] = useState(0);
   // The next layout should pin to the bottom (first paint, conversation switch).
   const pinBottomRef = useRef(true);
@@ -811,7 +811,16 @@ export function MessageTimeline({
     }
     const backfill = backfillRevealRef.current;
     if (backfill) {
-      const boundaryIndex = timelineEntries.findIndex((entry) => entry.id === backfill.boundaryId);
+      // The reveal is armed against the oldest entry on screen, and a page can
+      // land in the very commit that removes it: a disappearing message hitting
+      // its expiry, a delete folding in, a moderation drop. The rows above are
+      // real either way, so a grown entry list falls back to the top of the
+      // rendered slice — dropping the reveal would strand a reader at
+      // scrollTop 0 with no upward gesture left to ask for them, which is the
+      // whole reason this is automatic.
+      const found = timelineEntries.findIndex((entry) => entry.id === backfill.boundaryId);
+      const boundaryIndex =
+        found >= 0 ? found : timelineEntries.length > backfill.count ? startIndexRef.current : -1;
       if (boundaryIndex > 0) {
         // The prop update may itself have changed the rendered tail (a short
         // opening window). Restore the old viewport first, then capture it
@@ -900,7 +909,9 @@ export function MessageTimeline({
     loadingOlderRef.current = true;
     captureReadingAnchor();
     const boundaryId = entriesRef.current[0]?.id;
-    if (boundaryId) backfillRevealRef.current = { boundaryId };
+    if (boundaryId) {
+      backfillRevealRef.current = { boundaryId, count: entriesRef.current.length };
+    }
     void loadOlder().finally(() => {
       loadingOlderRef.current = false;
       setBackfillPulse((pulse) => pulse + 1);
@@ -1071,7 +1082,6 @@ export function MessageTimeline({
                 // isn't painted under the row above.
                 <div
                   key={item.key}
-                  data-row-key={item.key}
                   data-scroll-anchor={item.key}
                   className="relative hover:z-10 focus-within:z-10"
                 >

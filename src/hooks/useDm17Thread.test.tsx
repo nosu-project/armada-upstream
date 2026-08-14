@@ -216,6 +216,64 @@ describe("useDm17Thread history window", () => {
     expect(result.current.messages[0]?.rumorId).toBe("rumor-0");
   });
 
+  it("grows the floor by this conversation's rows, not the whole inbox page", async () => {
+    // The gift-wrap stream is global (a wrap's author is ephemeral, so there
+    // is no per-peer filter): one backfill page pulls older history for EVERY
+    // correspondent at once. A busy account therefore scans hundreds of wraps
+    // to find a handful for the open thread — and since queryDm17Thread reads
+    // CONVERSATION_OVERFETCH times its limit, charging the floor for the whole
+    // page makes every later poll re-read other people's archives.
+    h.rows = Array.from({ length: 300 }, (_, index) => row(index + 1_000, 1_700_000_000 + index));
+
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
+    });
+    const { result } = renderHook(() => useDm17Thread(h.peer), {
+      wrapper: wrapperFor(client),
+    });
+
+    await waitFor(() => expect(result.current.messages).toHaveLength(300));
+
+    const other = `stranger-${h.scope}`;
+    const page: OpenedDm[] = [
+      ...Array.from({ length: 10 }, (_, index) => row(index, 1_699_000_000 + index)),
+      ...Array.from({ length: 190 }, (_, index) => ({
+        ...row(index, 1_699_000_000 + index),
+        rumorId: `other-rumor-${index}`,
+        wrapId: `other-wrap-${index}`,
+        peers: [other],
+      })),
+    ];
+    h.relayEvents = page.map((opened) => {
+      const wrap = {
+        id: opened.wrapId,
+        kind: 1059,
+        pubkey: `ephemeral-${opened.rumorId}`,
+        created_at: opened.createdAt,
+        content: "wrapped",
+        tags: [["p", h.self]],
+        sig: "",
+      } satisfies NostrEvent;
+      h.openedByWrap.set(wrap.id, opened);
+      return wrap;
+    });
+
+    let added = 0;
+    await act(async () => {
+      added = await result.current.loadOlder();
+    });
+    expect(added).toBe(10);
+    await waitFor(() => expect(result.current.messages).toHaveLength(310));
+
+    // The next ordinary poll must read the 310 rows this thread has, not the
+    // 500 the page happened to scan.
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ["dm17", "thread"] });
+    });
+    expect(h.queryLimits.at(-1)).toBe(310);
+    expect(result.current.messages).toHaveLength(310);
+  });
+
   it("hydrates one focused rumor outside the bounded window without moving its floor", async () => {
     h.rows = Array.from({ length: 301 }, (_, index) => row(index, 1_700_000_000 + index));
     const focused = h.rows[0];

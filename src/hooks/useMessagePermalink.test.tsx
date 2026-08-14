@@ -85,6 +85,32 @@ describe("useMessagePermalink", () => {
     expect(scrollTo).toHaveBeenCalledTimes(2);
   });
 
+  it("does not spend the retry budget on ordinary prop churn", () => {
+    // A channel opening re-runs this effect for reasons that have nothing to
+    // do with the target: `messages` gains a row, `loadOlder` is rebuilt when
+    // the transport's raw set changes, `hasMore` settles. If those runs spent
+    // the budget the permalink would be cleared during the exact moment the
+    // surface is still mounting — the failure the retry exists to prevent.
+    const { wrapper, at } = harness("/c/comm/ch/m/old");
+    const scrollTo = vi.fn(() => false);
+    const props = (): Opts => ({
+      // A fresh array each time, as a re-read of the transport produces.
+      messages: [{ id: "old" }],
+      isLoading: false,
+      scrollTo,
+      loadOlder: () => Promise.resolve(0),
+    });
+    const { rerender } = renderHook((p: Opts) => useMessagePermalink(p), {
+      initialProps: props(),
+      wrapper,
+    });
+
+    for (let i = 0; i < 8; i++) rerender(props());
+
+    expect(at()).toBe("/c/comm/ch/m/old");
+    expect(scrollTo).toHaveBeenCalledTimes(9);
+  });
+
   it("retries when only the rendering ref becomes ready, then clears a permanently hidden row", async () => {
     const readyHarness = harness("/dm/peer/m/old");
     let mounted = false;

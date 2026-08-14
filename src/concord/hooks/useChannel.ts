@@ -406,11 +406,25 @@ export function useChannelTimeline(
     [query.data, focusQuery.data, channel],
   );
   useEffect(() => {
-    if (!channel || !focusQuery.data || focusQuery.data.length === 0) return;
-    queryClient.setQueryData<OpenedChat[]>(queryKey, (old) =>
-      filterEpochCutoff(upsert(old, focusQuery.data!), channel),
-    );
-  }, [channel, focusQuery.data, queryClient, queryKey]);
+    const rows = focusQuery.data;
+    if (!channel || !rows || rows.length === 0) return;
+    // Only ever ADD to a window the channel's own read has already produced.
+    // Seeding an empty (or placeholder-backed) cache entry would RESOLVE the
+    // query to these rows alone: `isLoading` drops on a one-row timeline,
+    // MessageTimeline pins that to the bottom, and the permalink is satisfied
+    // against a dataset about to be replaced — which lands the reader at the
+    // newest message, the exact jump this focus read exists to prevent. The
+    // `raw` memo above is what paints the hit; this effect is only retention.
+    const old = queryClient.getQueryData<OpenedChat[]>(queryKey);
+    if (!old || old.length === 0) return;
+    // Growth is also the termination condition: `query.data` is a dependency
+    // so this runs again when the window lands, and `upsert` returns a fresh
+    // array every time. A row the cutoff refuses never grows the window, so it
+    // is written once at most either way.
+    const next = filterEpochCutoff(upsert(old, rows), channel);
+    if (next.length === old.length) return;
+    queryClient.setQueryData<OpenedChat[]>(queryKey, next);
+  }, [channel, focusQuery.data, query.data, queryClient, queryKey]);
 
   // Keep the persisted window current. Content-compared inside, so repaint
   // churn does not rewrite it.
