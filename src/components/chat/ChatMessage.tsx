@@ -45,6 +45,7 @@ import { useMuteToggle } from "@/hooks/useMuteList";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { getComposerCollisionPadding, useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
+import { ChatImageMenuContext, withImageActions, type ChatImageMenu } from "@/contexts/ChatImageMenuContext";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { buildEmojiMap } from "@/lib/customEmoji";
 import { writeClipboardText } from "@/lib/clipboard";
@@ -575,6 +576,10 @@ const ChatMessageInner = memo(function ChatMessageInner({
   const [confirmDelete, setConfirmDelete] = useState(false);
   // The touch long-press menu.
   const [sheetOpen, setSheetOpen] = useState(false);
+  // Image actions contributed by the image under a long-press / right-click,
+  // prepended to this row's own actions in whichever surface opens. Null for a
+  // press on text or away from any image. Cleared as each surface closes.
+  const [imageActions, setImageActions] = useState<MessageActionItem[] | null>(null);
 
   // Raw-event JSON viewer (rumor context menu).
   const [jsonOpen, setJsonOpen] = useState(false);
@@ -625,16 +630,36 @@ const ChatMessageInner = memo(function ChatMessageInner({
   }, [isEditing, event.content]);
 
   // The long-press sheet also marks the row active, so the message you pressed
-  // stays visibly picked out behind the sheet.
+  // stays visibly picked out behind the sheet. (The opening gesture's spurious
+  // dismiss is refused inside MessageActionSheet, so onOpenChange only ever
+  // carries a real close here.)
   const openSheet = useCallback(() => {
+    // A long-press on the row's text carries no image actions.
+    setImageActions(null);
     setSheetOpen(true);
     if (!active) onToggleActive?.(event.id);
   }, [active, onToggleActive, event.id]);
 
   const handleSheetOpenChange = useCallback((open: boolean) => {
     setSheetOpen(open);
+    if (!open) setImageActions(null);
     if (!open && active) onToggleActive?.(event.id);
   }, [active, onToggleActive, event.id]);
+
+  // The image-menu bridge: an image hands its own actions up to whichever
+  // surface this row opens. Touch long-press opens the sheet with them
+  // prepended; a desktop right-click stages them for the context menu that the
+  // same click opens (see the ContextMenuTrigger below).
+  const openImageSheet = useCallback((acts: MessageActionItem[]) => {
+    setImageActions(acts);
+    setSheetOpen(true);
+    if (!active) onToggleActive?.(event.id);
+  }, [active, onToggleActive, event.id]);
+
+  const imageMenu = useMemo<ChatImageMenu>(
+    () => ({ isTouch, openSheet: openImageSheet, stage: setImageActions }),
+    [isTouch, openImageSheet],
+  );
 
   const copyMessageId = useCallback(() => {
     try {
@@ -1009,25 +1034,28 @@ const ChatMessageInner = memo(function ChatMessageInner({
             continuation && !hasReplyContext && !isEditing && !isPinned && !mentionsMe
           }
           className={cn(
-            (active || sheetOpen) && "bg-secondary/40",
+            // The picked-out highlight tracks the sheet alone: the row's
+            // `active` state is set and cleared together with it, so keying the
+            // background off `active` too only risks it lingering without a menu.
+            sheetOpen && "bg-secondary/40",
             isPinned && "bg-amber-500/5",
             mentionsMe && "bg-primary/10 hover:bg-primary/15 border-l-2 border-primary pl-2",
             isPending && "opacity-60",
             isFailed && "bg-destructive/5",
           )}
           containerProps={{
-            "data-active": active || sheetOpen || undefined,
+            "data-active": sheetOpen || undefined,
             "data-event-id": event.id,
           } as React.HTMLAttributes<HTMLDivElement>}
           onSwipeReply={isTouch && onReply ? () => onReply(event) : undefined}
-          onLongPress={isTouch && menuActions.length > 0 ? openSheet : undefined}
+          onLongPress={isTouch && !isEditing && menuActions.length > 0 ? openSheet : undefined}
         >
           {body}
         </MessageRow>
   );
 
   return (
-    <>
+    <ChatImageMenuContext.Provider value={imageMenu}>
     {/* On touch the long-press gesture belongs to the action sheet, so the
         Discord-style right-click ContextMenu isn't mounted at all — one fewer
         Radix root per row on the platform whose per-row render budget is
@@ -1036,10 +1064,13 @@ const ChatMessageInner = memo(function ChatMessageInner({
     {isTouch ? (
       row
     ) : (
-      <ContextMenu>
-        <ContextMenuTrigger className="block">{row}</ContextMenuTrigger>
+      // Clearing image actions on close, and again in the trigger's capture
+      // phase (which runs before an image's own contextmenu handler restages
+      // them), keeps a right-click on text from inheriting the last image's.
+      <ContextMenu onOpenChange={(open) => { if (!open) setImageActions(null); }}>
+        <ContextMenuTrigger className="block" onContextMenuCapture={() => setImageActions(null)}>{row}</ContextMenuTrigger>
         <ContextMenuContent className="w-52" collisionPadding={getComposerCollisionPadding(composerBoundsRef)}>
-          {menuActions.map((action) => (
+          {withImageActions(imageActions, menuActions).map((action) => (
             <div key={action.id}>
               {action.groupStart && <ContextMenuSeparator />}
               <ContextMenuItem
@@ -1058,7 +1089,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
       <MessageActionSheet
         open={sheetOpen}
         onOpenChange={handleSheetOpenChange}
-        actions={menuActions}
+        actions={withImageActions(imageActions, menuActions)}
         reactions={canWrite && !isEditing && reactions ? reactions : undefined}
       />
     )}
@@ -1109,6 +1140,6 @@ const ChatMessageInner = memo(function ChatMessageInner({
         }
       />
     )}
-    </>
+    </ChatImageMenuContext.Provider>
   );
 });

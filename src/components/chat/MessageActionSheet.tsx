@@ -1,5 +1,5 @@
 import { SmilePlus } from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useRef, useState } from "react";
 
 import { ReactionGlyph } from "@/components/chat/ReactionBar";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
@@ -11,6 +11,15 @@ import { cn } from "@/lib/utils";
 
 import type { MessageActionItem } from "@/components/chat/messageActions";
 import type { ReactInput, ReactionTally } from "@/hooks/useReactions";
+
+/**
+ * How long after opening to refuse an "outside interaction" dismiss. On touch
+ * the very press that opens the sheet leaves a trailing pointer/synthetic event
+ * the dismissable layer reads as an outside tap; refusing it HERE (rather than
+ * in the parent's `onOpenChange`) keeps vaul from ever committing that close,
+ * so the controlled `open` prop can't desync and wedge the sheet shut.
+ */
+const OPEN_GUARD_MS = 400;
 
 const LazyEmojiPicker = lazy(() =>
   import("@/components/chat/EmojiPicker").then((m) => ({ default: m.EmojiPicker })),
@@ -52,11 +61,24 @@ export function MessageActionSheet({
   const { emojis: customEmojis } = useCustomEmojis();
   const frequent = useFrequentReactions(user?.pubkey, QUICK_SLOTS_SHEET);
 
-  // Always reopen on the actions page, never on whatever page the last message
-  // was left on.
-  useEffect(() => {
-    if (!open) setPickerOpen(false);
-  }, [open]);
+  // When the sheet last opened, to reject the dismiss the opening gesture
+  // itself provokes (see OPEN_GUARD_MS).
+  const openedAt = useRef(0);
+
+  // Stamped during the render that opens the sheet, NOT in an effect. A passive
+  // effect runs after commit, by which point the dismissable layer is already
+  // listening — and the stale value it would race against is the PREVIOUS
+  // open's, seconds old, so the guard wouldn't merely be missing, it would read
+  // as long expired and wave the dismiss through. That is the reopen-right-
+  // after-dismiss case: the sheet opens and is shut again before it is seen.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (open) openedAt.current = Date.now();
+    // Always reopen on the actions page, never on whatever page the last
+    // message was left on.
+    else setPickerOpen(false);
+  }
 
   const react = useCallback(
     (key: string, url?: string) => {
@@ -71,7 +93,19 @@ export function MessageActionSheet({
 
   return (
     <Drawer open={open} onOpenChange={onOpenChange}>
-      <DrawerContent className="max-h-[85dvh]">
+      <DrawerContent
+        className="max-h-[85dvh]"
+        // Refuse the opening gesture's own trailing event; a genuine dismiss
+        // arrives later. Prevented here, vaul never closes, so `open` stays in
+        // sync and a later long-press can reopen (a stale close would leave the
+        // row highlighted with no menu).
+        onPointerDownOutside={(e) => {
+          if (Date.now() - openedAt.current < OPEN_GUARD_MS) e.preventDefault();
+        }}
+        onInteractOutside={(e) => {
+          if (Date.now() - openedAt.current < OPEN_GUARD_MS) e.preventDefault();
+        }}
+      >
         <DrawerTitle className="sr-only">Message actions</DrawerTitle>
 
         {pickerOpen ? (

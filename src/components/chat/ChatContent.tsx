@@ -1,3 +1,5 @@
+import { Capacitor } from "@capacitor/core";
+import { Download, Expand, Share2 } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
@@ -37,12 +39,17 @@ import { AUDIO_EXTS, EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX, isGifLikeUrl, mimeF
 import { relayToRouteParam } from "@/lib/platform";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
+import { downloadUrl } from "@/lib/downloadFile";
+import { canShareFiles, shareFile } from "@/lib/share";
 import { bolt11AmountSats, formatSats } from "@/lib/zaps";
+import { useLongPress } from "@/hooks/useLongPress";
 import { useMediaWithFallback } from "@/hooks/useMediaWithFallback";
-import { useToast } from "@/hooks/useToast";
+import { toast, useToast } from "@/hooks/useToast";
 import { useWallet } from "@/hooks/useWallet";
+import { useChatImageMenu } from "@/contexts/ChatImageMenuContext";
 
 import type { AddrCoords } from "@/hooks/useEvent";
+import type { MessageActionItem } from "@/components/chat/messageActions";
 import type { ImetaEncryption, ImetaEntry } from "@/lib/imeta";
 import type { EncryptedRef } from "@/hooks/useResolvedMediaSrc";
 import type { ReactNode } from "react";
@@ -985,10 +992,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           <InlineImage
             key={key}
             image={{ url: token.url, encryption: token.encryption, mime: token.mime, dim: token.dim, blurhash: token.blurhash, fallbacks: token.fallbacks }}
-            onClick={(e) => {
-              e.stopPropagation();
-              setLightboxIndex(imgIndex);
-            }}
+            onOpen={() => setLightboxIndex(imgIndex)}
           />
         );
       }
@@ -1320,10 +1324,129 @@ function getImetaField(tags: string[][], url: string, field: string): string | u
   return undefined;
 }
 
+/**
+ * Save a message image to the device from its already-resolved (and, for
+ * encrypted media, already-decrypted) source — mirroring the lightbox's own
+ * download button so the two behave identically.
+ */
+async function saveImage(src: string, image: ImageRef): Promise<void> {
+  try {
+    const result = await downloadUrl(src, { nameHint: image.url, mime: image.mime });
+    toast(
+      result === "downloaded"
+        ? Capacitor.isNativePlatform()
+          ? { title: "Saved", description: "You'll find it in the Armada folder in Files." }
+          : { title: "Saved", description: "Check your downloads folder." }
+        : {
+            title: "Opened in a new tab",
+            description: "This image couldn't be saved directly, so it opened instead.",
+          },
+    );
+  } catch {
+    toast({
+      title: "Download failed",
+      description: "Could not save this image. Please try again.",
+      variant: "destructive",
+    });
+  }
+}
+
+/** Hand a message image to the system share sheet (the file, never the URL). */
+async function shareImage(src: string, image: ImageRef): Promise<void> {
+  const shared = await shareFile(src, {
+    nameHint: image.url,
+    mime: image.mime,
+    dialogTitle: "Share image",
+  });
+  if (!shared) {
+    toast({
+      title: "Couldn't share this image",
+      description: "Try downloading it instead.",
+      variant: "destructive",
+    });
+  }
+}
+
+/**
+ * Wire an image's tap / long-press / right-click, returning the handlers to
+ * spread on its `<button>`.
+ *
+ * Tap opens the shared lightbox. A touch long-press or a desktop right-click
+ * opens the MESSAGE menu with this image's own actions (open / save / share)
+ * prepended — built here, where the resolved source is in hand, and handed to
+ * the row via {@link useChatImageMenu}. Save/share appear only once the source
+ * has resolved; open always does.
+ */
+function useImageMenu(image: ImageRef, resolvedSrc: string | null, onOpen: () => void) {
+  const menu = useChatImageMenu();
+
+  const actions = useMemo<MessageActionItem[]>(() => {
+    const list: MessageActionItem[] = [
+      { id: "img-open", label: "Open image", icon: Expand, onSelect: onOpen },
+    ];
+    if (resolvedSrc) {
+      list.push({
+        id: "img-save",
+        label: "Save image",
+        icon: Download,
+        onSelect: () => void saveImage(resolvedSrc, image),
+      });
+      if (canShareFiles()) {
+        list.push({
+          id: "img-share",
+          label: "Share image",
+          icon: Share2,
+          onSelect: () => void shareImage(resolvedSrc, image),
+        });
+      }
+    }
+    return list;
+  }, [image, resolvedSrc, onOpen]);
+
+  // Touch only, and `allowInteractive` because the <button> IS the intended
+  // long-press target. On a pointer device the same actions arrive through the
+  // right-click handler instead.
+  const longPress = useLongPress(
+    menu?.isTouch ? () => menu.openSheet(actions) : undefined,
+    { allowInteractive: true },
+  );
+
+  return {
+    onPointerDown: longPress.onPointerDown,
+    onPointerMove: longPress.onPointerMove,
+    onPointerUp: longPress.onPointerUp,
+    onPointerCancel: longPress.onPointerCancel,
+    // A drag starting on the image is the platform trying to pick it up; that
+    // gesture cancels the pointer stream (and our timer) mid-hold, so refuse it.
+    onDragStart: (e: React.DragEvent) => e.preventDefault(),
+    onClick: (e: React.MouseEvent) => {
+      // A long-press that just fired swallows the click that follows the
+      // release, so the lightbox doesn't open on top of the sheet.
+      longPress.onClick(e);
+      if (e.defaultPrevented) return;
+      e.stopPropagation();
+      onOpen();
+    },
+    onContextMenu: (e: React.MouseEvent) => {
+      longPress.onContextMenu(e);
+      if (menu?.isTouch) {
+        // Our sheet (or nothing) is the touch menu — never the platform's own
+        // image callout, which fires here whether or not our hold won the race.
+        e.preventDefault();
+      } else if (menu) {
+        // Desktop: stage the image actions and let the event bubble to the
+        // row's context menu, which opens and shows them above the message's.
+        menu.stage(actions);
+      }
+    },
+  };
+}
+
 /** Inline image thumbnail that opens the shared lightbox on click. */
-function InlineImage({ image, onClick }: { image: ImageRef; onClick: (e: React.MouseEvent) => void }) {
+function InlineImage({ image, onOpen }: { image: ImageRef; onOpen: () => void }) {
   const [loaded, setLoaded] = useState(false);
   const { resolved, onError, failed, fallbackProps } = useMediaWithFallback(image);
+  const menu = useImageMenu(image, resolved.status === "ready" ? resolved.src : null, onOpen);
 
   // Once every mirror is exhausted, degrade to a link + manual retry. Block-level
   // (via MediaFallback) because the tokenizer stripped the surrounding newlines
@@ -1342,8 +1465,8 @@ function InlineImage({ image, onClick }: { image: ImageRef; onClick: (e: React.M
   return (
     <button
       type="button"
-      className="block my-1.5 rounded-lg overflow-hidden max-w-sm cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-      onClick={onClick}
+      className="block my-1.5 rounded-lg overflow-hidden max-w-sm cursor-pointer select-none [-webkit-user-select:none] [-webkit-touch-callout:none] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      {...menu}
     >
       <div
         className={cn(
@@ -1366,8 +1489,11 @@ function InlineImage({ image, onClick }: { image: ImageRef; onClick: (e: React.M
           <img
             src={resolved.src}
             alt=""
+            // Native image drag/callout starts on the same hold as our
+            // long-press and cancels it (a buzz, no menu) — off on both axes.
+            draggable={false}
             className={cn(
-              "block rounded-lg hover:opacity-90 transition-opacity",
+              "block rounded-lg hover:opacity-90 transition-opacity [-webkit-user-drag:none]",
               // With a reserved box the image fills it (the box already carries
               // its aspect ratio, so object-cover cannot crop); without one it
               // falls back to natural size under the same max-w/max-h caps.
@@ -1391,54 +1517,72 @@ function ImageGrid({ images, onOpen }: { images: ImageRef[]; onOpen: (index: num
   return (
     <div className="grid grid-cols-2 gap-1 my-1.5 max-w-sm">
       {visible.map((image, i) => (
-        <button
+        <GridImage
           key={i}
-          type="button"
-          className="relative aspect-square rounded-lg overflow-hidden bg-muted cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-          onClick={(e) => {
-            e.stopPropagation();
-            onOpen(i);
-          }}
-        >
-          <GridImage image={image} />
-          {i === visible.length - 1 && extra > 0 && (
-            <span className="absolute inset-0 bg-black/60 flex items-center justify-center text-white text-lg font-semibold">
-              +{extra}
-            </span>
-          )}
-        </button>
+          image={image}
+          onOpen={() => onOpen(i)}
+          overflow={i === visible.length - 1 && extra > 0 ? extra : undefined}
+        />
       ))}
     </div>
   );
 }
 
-/** A single grid cell image, decrypting on display when encrypted. */
-function GridImage({ image }: { image: ImageRef }) {
+/**
+ * A single grid cell image, decrypting on display when encrypted. Owns its own
+ * `<button>` (rather than being wrapped by the grid) so the image menu built by
+ * {@link useImageMenu} has this cell's resolved source in hand.
+ */
+function GridImage({
+  image,
+  onOpen,
+  overflow,
+}: {
+  image: ImageRef;
+  onOpen: () => void;
+  /** When set, this is the last visible cell and covers `+N` more images. */
+  overflow?: number;
+}) {
   const [loaded, setLoaded] = useState(false);
   const { resolved, onError, failed, fallbackProps } = useMediaWithFallback(image);
-
-  // Once every mirror is exhausted, fill the cell with a retry control rather
-  // than leaving a silently-blank tile (cross-server fallback runs before this).
-  if (failed) {
-    return <MediaFallback {...fallbackProps} compact />;
-  }
+  const menu = useImageMenu(image, resolved.status === "ready" ? resolved.src : null, onOpen);
 
   return (
-    <>
-      {!loaded && image.blurhash && (
-        <BlurhashCanvas hash={image.blurhash} className="absolute inset-0" />
+    <button
+      type="button"
+      className="relative aspect-square rounded-lg overflow-hidden bg-muted cursor-pointer select-none [-webkit-user-select:none] [-webkit-touch-callout:none] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      {...menu}
+    >
+      {failed ? (
+        // Once every mirror is exhausted, fill the cell with a retry control
+        // rather than leaving a silently-blank tile (cross-server fallback runs
+        // before this).
+        <MediaFallback {...fallbackProps} compact />
+      ) : (
+        <>
+          {!loaded && image.blurhash && (
+            <BlurhashCanvas hash={image.blurhash} className="absolute inset-0" />
+          )}
+          {resolved.status === "ready" && (
+            <img
+              src={resolved.src}
+              alt=""
+              // See InlineImage: native drag/callout would eat the long-press.
+              draggable={false}
+              loading="lazy"
+              onLoad={() => setLoaded(true)}
+              onError={onError}
+              className="absolute inset-0 w-full h-full object-cover hover:opacity-90 transition-opacity [-webkit-user-drag:none]"
+            />
+          )}
+        </>
       )}
-      {resolved.status === "ready" && (
-        <img
-          src={resolved.src}
-          alt=""
-          loading="lazy"
-          onLoad={() => setLoaded(true)}
-          onError={onError}
-          className="absolute inset-0 w-full h-full object-cover hover:opacity-90 transition-opacity"
-        />
+      {overflow !== undefined && (
+        <span className="absolute inset-0 bg-black/60 flex items-center justify-center text-white text-lg font-semibold">
+          +{overflow}
+        </span>
       )}
-    </>
+    </button>
   );
 }
 

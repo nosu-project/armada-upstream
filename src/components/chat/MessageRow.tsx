@@ -253,6 +253,12 @@ export const MessageRow = memo(function MessageRow({
       className={cn(
         "group relative flex items-start gap-3 px-2.5 rounded hover:bg-secondary/40 transition-colors hover:z-10 focus-within:z-10",
         continuation ? "py-0.5" : "py-1.5",
+        // A held finger on selectable text starts the platform's own selection
+        // / callout around the same 500ms, which fires `pointercancel` and eats
+        // the long-press before it opens the sheet — intermittently, depending
+        // on whether the press landed on text. Suppress both on the long-press
+        // surface (touch only; the "Copy text" action replaces manual select).
+        onLongPress && "select-none [-webkit-user-select:none] [-webkit-touch-callout:none]",
         className,
         containerProps?.className,
       )}

@@ -7,12 +7,13 @@ import { LONG_PRESS_MS, useLongPress } from "@/hooks/useLongPress";
 function pointer(
   x: number,
   y: number,
-  { pointerType = "touch", target }: { pointerType?: string; target?: unknown } = {},
+  { pointerType = "touch", target, timeStamp = 0 }: { pointerType?: string; target?: unknown; timeStamp?: number } = {},
 ) {
   return {
     pointerType,
     clientX: x,
     clientY: y,
+    timeStamp,
     target: target ?? { closest: () => null },
   } as unknown as React.PointerEvent;
 }
@@ -41,7 +42,7 @@ describe("useLongPress", () => {
 
     act(() => result.current.onPointerDown?.(pointer(100, 100)));
     act(() => void vi.advanceTimersByTime(LONG_PRESS_MS - 50));
-    act(() => result.current.onPointerUp?.());
+    act(() => result.current.onPointerUp?.(pointer(100, 100)));
     act(() => void vi.advanceTimersByTime(200));
 
     expect(onLongPress).not.toHaveBeenCalled();
@@ -87,6 +88,86 @@ describe("useLongPress", () => {
     act(() => void vi.advanceTimersByTime(LONG_PRESS_MS));
 
     expect(onLongPress).not.toHaveBeenCalled();
+  });
+
+  it("fires on an interactive target when allowInteractive is set", () => {
+    // The image case: the <button> IS the intended long-press target, so the
+    // guard that protects a container from its nested controls must lift.
+    const onLongPress = vi.fn();
+    const { result } = renderHook(() => useLongPress(onLongPress, { allowInteractive: true }));
+
+    act(() => result.current.onPointerDown?.(pointer(100, 100, { target: interactiveTarget })));
+    act(() => void vi.advanceTimersByTime(LONG_PRESS_MS));
+
+    expect(onLongPress).toHaveBeenCalledTimes(1);
+  });
+
+  it("survives a pointercancel from a finger that never moved", () => {
+    // The platform claims the gesture (scroll probe, selection, callout) on a
+    // hold the user very much intended. Losing it there is the press that
+    // silently does nothing.
+    const onLongPress = vi.fn();
+    const { result } = renderHook(() => useLongPress(onLongPress));
+
+    act(() => result.current.onPointerDown?.(pointer(100, 100)));
+    act(() => result.current.onPointerCancel?.(pointer(100, 100)));
+    act(() => void vi.advanceTimersByTime(LONG_PRESS_MS));
+
+    expect(onLongPress).toHaveBeenCalledTimes(1);
+  });
+
+  it("still drops a pointercancel that follows real movement", () => {
+    const onLongPress = vi.fn();
+    const { result } = renderHook(() => useLongPress(onLongPress));
+
+    act(() => result.current.onPointerDown?.(pointer(100, 100)));
+    act(() => result.current.onPointerMove?.(pointer(100, 160)));
+    act(() => result.current.onPointerCancel?.(pointer(100, 100)));
+    act(() => void vi.advanceTimersByTime(LONG_PRESS_MS));
+
+    expect(onLongPress).not.toHaveBeenCalled();
+  });
+
+  it("fires on release when a stall compressed the dispatch of a real hold", () => {
+    // A main-thread stall (e.g. the previous sheet closing) can hold up event
+    // processing so a genuine 700ms hold reaches JS as a down+up pair
+    // milliseconds apart. The hardware timestamps still carry the true story.
+    const onLongPress = vi.fn();
+    const { result } = renderHook(() => useLongPress(onLongPress));
+
+    act(() => result.current.onPointerDown?.(pointer(100, 100, { timeStamp: 1000 })));
+    act(() => void vi.advanceTimersByTime(5));
+    act(() => result.current.onPointerUp?.(pointer(100, 100, { timeStamp: 1700 })));
+
+    expect(onLongPress).toHaveBeenCalledTimes(1);
+    // ...and the click that follows the release is swallowed, as usual.
+    const click = { preventDefault: vi.fn(), stopPropagation: vi.fn() } as unknown as React.MouseEvent;
+    act(() => result.current.onClick?.(click));
+    expect(click.preventDefault).toHaveBeenCalled();
+  });
+
+  it("a compressed quick tap still does not fire", () => {
+    const onLongPress = vi.fn();
+    const { result } = renderHook(() => useLongPress(onLongPress));
+
+    act(() => result.current.onPointerDown?.(pointer(100, 100, { timeStamp: 1000 })));
+    act(() => result.current.onPointerUp?.(pointer(100, 100, { timeStamp: 1150 })));
+    act(() => void vi.advanceTimersByTime(LONG_PRESS_MS));
+
+    expect(onLongPress).not.toHaveBeenCalled();
+  });
+
+  it("fires on a stationary pointercancel whose timestamps already span the hold", () => {
+    const onLongPress = vi.fn();
+    const { result } = renderHook(() => useLongPress(onLongPress));
+
+    act(() => result.current.onPointerDown?.(pointer(100, 100, { timeStamp: 1000 })));
+    act(() => result.current.onPointerCancel?.(pointer(100, 100, { timeStamp: 1600 })));
+
+    expect(onLongPress).toHaveBeenCalledTimes(1);
+    // The timer must be dead: no double fire later.
+    act(() => void vi.advanceTimersByTime(LONG_PRESS_MS * 2));
+    expect(onLongPress).toHaveBeenCalledTimes(1);
   });
 
   it("swallows the click that follows a fired press", () => {

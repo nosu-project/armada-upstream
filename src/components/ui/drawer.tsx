@@ -26,7 +26,16 @@ const DrawerOverlay = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DrawerPrimitive.Overlay
     ref={ref}
-    className={cn("fixed inset-0 z-50 bg-black/80", className)}
+    // The exit animation keeps the overlay mounted — and hit-testable — for
+    // 500ms after a dismiss, longer when the main thread is busy. A press
+    // landed in that window targets the overlay, which then unmounts
+    // mid-gesture and strands the pointer stream: the row never sees a
+    // pointerdown, only the stray cancel/up afterwards. That is the
+    // "long-press right after closing does nothing" report.
+    //
+    // `!` is load-bearing: Radix's Dialog Overlay hardcodes an INLINE
+    // `pointer-events: auto`, which an ordinary class cannot outrank.
+    className={cn("fixed inset-0 z-50 bg-black/80 data-[state=closed]:!pointer-events-none", className)}
     {...props}
   />
 ))
@@ -44,7 +53,10 @@ const DrawerContent = React.forwardRef<
         // No border: a sheet's sides and bottom sit against the screen edge, so
         // a full outline only ever draws a stray hairline there. The rounded
         // top plus the overlay is what separates it from the page.
-        "fixed inset-x-0 bottom-0 z-50 mt-24 flex h-auto flex-col rounded-t-2xl bg-background shadow-[0_-8px_30px_rgba(0,0,0,0.25)]",
+        // Non-interactive on close for the same reason as the overlay, and `!`
+        // for the same reason too — the dismissable layer sets pointer-events
+        // inline.
+        "fixed inset-x-0 bottom-0 z-50 mt-24 flex h-auto flex-col rounded-t-2xl bg-background shadow-[0_-8px_30px_rgba(0,0,0,0.25)] data-[state=closed]:!pointer-events-none",
         className
       )}
       onClick={(e) => {

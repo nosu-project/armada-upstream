@@ -184,7 +184,9 @@ function ThreadMessage({
   }, [event.id, event.pubkey]);
 
   const openSheet = useCallback(() => setSheetOpen(true), []);
-  const longPress = useLongPress(isTouch ? openSheet : undefined);
+  // Not while editing: the row hosts a textarea then, and both the sheet and
+  // the `-webkit-user-select:none` that guards it would fight the edit caret.
+  const longPress = useLongPress(isTouch && !isEditing ? openSheet : undefined);
 
   // One action list drives the touch long-press sheet, the desktop `⋯`
   // overflow and the right-click menu, so they can't drift apart — matching
@@ -265,6 +267,10 @@ function ThreadMessage({
             "group/threadmsg relative flex items-start gap-3 px-2.5 rounded hover:bg-secondary/40 transition-colors hover:z-10 focus-within:z-10",
             continuation ? "py-0.5" : "py-1.5",
             sheetOpen && "bg-secondary/40",
+            // Stop the platform's text selection / callout from firing
+            // `pointercancel` and eating the long-press before the sheet opens
+            // (see MessageRow); "Copy text" covers manual selection.
+            isTouch && !isEditing && "select-none [-webkit-user-select:none] [-webkit-touch-callout:none]",
           )}
         >
           {continuation ? (
