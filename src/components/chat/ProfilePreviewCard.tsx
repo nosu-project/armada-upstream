@@ -1,4 +1,4 @@
-import { AtSign, Check, Copy, Flag, MessageSquare, Music, UserCheck, UserX } from "lucide-react";
+import { AtSign, Check, Copy, Flag, MessageSquare, MoreHorizontal, Music, UserCheck, UserMinus, UserX } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -9,12 +9,19 @@ import { FollowButton } from "@/components/FollowButton";
 import { ReportDialog } from "@/components/ReportDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useChatScope } from "@/hooks/useChatScope";
 import { useMuteToggle } from "@/hooks/useMuteList";
 import { useMemberRoles } from "@/hooks/useMemberRoles";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useFollowToggle } from "@/hooks/useFollowToggle";
 import { requestMention } from "@/hooks/useMentionBus";
 import { useProfileTheme, usePrefetchProfileTheme } from "@/hooks/useProfileTheme";
 import { isStatusExpired, useUserStatus } from "@/hooks/useUserStatus";
@@ -61,6 +68,7 @@ function ProfilePreviewBody({
   const [copied, setCopied] = useState(false);
   const isSelf = user?.pubkey === pubkey;
   const mute = useMuteToggle(pubkey);
+  const { isFollowing, isPending: followPending, toggle: toggleFollow } = useFollowToggle(pubkey);
 
   const copyNpub = () => {
     if (!npub) return;
@@ -93,6 +101,63 @@ function ProfilePreviewBody({
       <div className="h-16 bg-secondary relative">
         {metadata?.banner && (
           <img src={metadata.banner} alt="" className="w-full h-full object-cover" loading="lazy" />
+        )}
+
+        {/* Overflow menu, floated top-right over the banner. Holds the negative,
+            easy-to-misfire actions (unfollow, mute, report) so the card body
+            reads as Message / Mention / Follow, not a stack of red buttons. */}
+        {!isSelf && (isFollowing || mute.canMute || (user && onReport)) && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label="More actions"
+                className="absolute right-1.5 top-1.5 z-10 size-8 rounded-full text-foreground drop-shadow hover:bg-background/40"
+              >
+                <MoreHorizontal className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              {/* Unfollow leaves the card open so the state flip back to a
+                  Follow button is visible. */}
+              {isFollowing && (
+                <DropdownMenuItem
+                  disabled={followPending}
+                  onSelect={() => void toggleFollow()}
+                >
+                  <UserMinus className="mr-2 size-4" />
+                  Unfollow
+                </DropdownMenuItem>
+              )}
+              {mute.canMute && (
+                <DropdownMenuItem
+                  disabled={mute.pending}
+                  className={!mute.muted ? "text-destructive focus:text-destructive" : undefined}
+                  onSelect={() => {
+                    // Muting hides the person, which unmounts the card — close
+                    // the popover first, as Report does.
+                    onAction?.();
+                    void mute.toggle();
+                  }}
+                >
+                  {mute.muted
+                    ? <UserCheck className="mr-2 size-4" />
+                    : <UserX className="mr-2 size-4" />}
+                  {mute.label}
+                </DropdownMenuItem>
+              )}
+              {user && onReport && (
+                <DropdownMenuItem
+                  className="text-destructive focus:text-destructive"
+                  onSelect={onReport}
+                >
+                  <Flag className="mr-2 size-4" />
+                  Report
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
       </div>
 
@@ -215,7 +280,9 @@ function ProfilePreviewBody({
           </p>
         )}
 
-        {/* Actions */}
+        {/* Actions. Negative actions (unfollow, mute, report) live in the
+            overflow menu floated over the banner, so this row stays a clean
+            Message / Mention pair. */}
         {!isSelf && (
           <div className="mt-3 flex items-center gap-2">
             <Button size="sm" className="flex-1 clip-corner-lg h-8" onClick={message}>
@@ -236,9 +303,9 @@ function ProfilePreviewBody({
 
         {/* Follow. Its own row rather than a third of the one above: the card
             is w-72, and the two buttons there already carry icons. Hides itself
-            for self / logged-out, and deliberately leaves the card open so the
-            state flip is visible. */}
-        <FollowButton pubkey={pubkey} className="mt-2 w-full clip-corner-lg h-8" />
+            for self / logged-out / already-following (unfollow lives in the
+            overflow menu), and styled like the Mention button. */}
+        <FollowButton pubkey={pubkey} className="mt-2 w-full h-8" />
 
         {/* View this person on ditto.pub — the fuller social view. */}
         {dittoProfileHref && (
@@ -257,45 +324,6 @@ function ProfilePreviewBody({
               <DittoIcon className="size-3.5 mr-1.5" />
               View on Ditto
             </a>
-          </Button>
-        )}
-
-        {/* The two off-ramps for a person, as opposed to the message-level
-            actions in the timeline's own menu. Mute is offered wherever the
-            card is; report only where the surrounding room gives it somewhere
-            to go. */}
-        {mute.canMute && (
-          <Button
-            size="sm"
-            variant="ghost"
-            className={cn(
-              "mt-2 w-full clip-corner-lg h-8",
-              !mute.muted && "text-destructive hover:text-destructive hover:bg-destructive/10",
-            )}
-            disabled={mute.pending}
-            onClick={() => {
-              // Muting hides the person, which unmounts the card mid-click if
-              // the popover is still open — close it first, as Report does.
-              onAction?.();
-              void mute.toggle();
-            }}
-          >
-            {mute.muted
-              ? <UserCheck className="size-3.5 mr-1.5" />
-              : <UserX className="size-3.5 mr-1.5" />}
-            {mute.label}
-          </Button>
-        )}
-
-        {!isSelf && user && onReport && (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="mt-2 w-full clip-corner-lg h-8 text-destructive hover:text-destructive hover:bg-destructive/10"
-            onClick={onReport}
-          >
-            <Flag className="size-3.5 mr-1.5" />
-            Report
           </Button>
         )}
       </div>
