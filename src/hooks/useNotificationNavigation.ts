@@ -65,6 +65,14 @@ export function useNotificationNavigation(): void {
     let cancelled = false;
 
     const applyDeepLink = (path: string) => {
+      // Drop any editor focus held over from before the app was backgrounded.
+      // Android re-shows the IME for a still-focused editor the moment the
+      // window regains focus (SHOW_AUTO_EDITOR_FORWARD_NAV), so a composer
+      // left focused in the previous room pops the keyboard over the
+      // deep-link transition — on top of a destination that hasn't mounted.
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
       // Mark before the navigate so the destination's SwipeReveal, mounting
       // in this very commit, sees it and skips its entrance slide.
       markDeepLinkNavigation();
