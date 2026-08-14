@@ -214,6 +214,26 @@ describe("useEdgeSwipe", () => {
     expect(onCommit).toHaveBeenCalledOnce();
   });
 
+  it("ignores a press that lands in a portaled overlay", () => {
+    // The message action sheet's DOM hangs off <body>, but React bubbles its
+    // pointer events through the COMPONENT tree into the pane's handlers. A
+    // drag starting there must not slide the chat out from under the open menu.
+    const onCommit = vi.fn();
+    const { result } = renderHook(() => useEdgeSwipe({ onCommit }));
+    const el = makeEl(400);
+    const overlay = document.createElement("div");
+    document.body.appendChild(overlay);
+
+    const h = result.current.handlers;
+    act(() => h.onPointerDown(mockPointerEvent({ x: 0, y: 0, timeStamp: 0, currentTarget: el, target: overlay })));
+    act(() => h.onPointerMove(mockPointerEvent({ x: 200, y: 0, timeStamp: 100, currentTarget: el, target: overlay })));
+    act(() => h.onPointerUp(mockPointerEvent({ x: 200, y: 0, timeStamp: 100, currentTarget: el, target: overlay })));
+
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(result.current.dragging).toBe(false);
+    overlay.remove();
+  });
+
   it("does nothing when disabled", () => {
     const onCommit = vi.fn();
     const { result } = renderHook(() => useEdgeSwipe({ onCommit, enabled: false }));

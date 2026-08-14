@@ -161,6 +161,15 @@ export function useEdgeSwipe({
       if (e.pointerType === "mouse") return;
       const x = e.clientX;
       const el = e.currentTarget as HTMLElement;
+      // A press inside a portaled overlay (the message action sheet, a dialog)
+      // still lands here: React propagates synthetic events through the
+      // COMPONENT tree, and the drawer is a React child of the pane even
+      // though its DOM hangs off <body>. It is not a press on the pane —
+      // letting it arm a drag slides the chat out from under the open menu.
+      if (e.target instanceof Node && !el.contains(e.target)) {
+        rejected.current = true;
+        return;
+      }
       // Opening can start anywhere on the pane; it's the drag length/direction
       // that reveals the list, not where it began. Bail only if the drag starts
       // inside something that can itself scroll right (code block, tile row).
