@@ -3,6 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { useAndroidBack } from "@/hooks/useAndroidBack";
 import { useEdgeSwipe } from "@/hooks/useEdgeSwipe";
 import { useIsTouch } from "@/hooks/useIsMobile";
+import { onAppStateChange } from "@/lib/appStateEvents";
 import { isRecentDeepLinkNavigation } from "@/lib/deepLinkNav";
 import { cn } from "@/lib/utils";
 
@@ -11,6 +12,32 @@ const SETTLE_MS = 200;
 
 /** Parallax shift of the underlay at full cover (% of its own width). */
 const UNDERLAY_SHIFT_PCT = 18;
+
+/**
+ * Hard deadline for removing the mount slide-in keyframe class. A RUNNING CSS
+ * animation outranks inline style in the cascade, so every corrective
+ * `style.transform` write this component makes is silently overridden while
+ * the keyframe is live — and the Android WebView can freeze the animation
+ * timeline across a background/resume transition (the same defect MainActivity
+ * documents for visibility), pinning the pane at a mid-slide frame that no
+ * later write can move. Timers survive that freeze (resumeTimers un-freezes
+ * them), so a timeout is the reliable way to guarantee the class comes off;
+ * `animationend` handles the normal case sooner.
+ */
+const ENTER_ANIM_MAX_MS = 600;
+
+/**
+ * How long a committed gesture's optimistic `pendingOpen` may wait for the
+ * `open` prop to catch up before it is abandoned. Normally the deferred
+ * navigation flips the prop within a frame or two; if the commit callback was
+ * lost (see `deferCommit`), pendingOpen alone would otherwise hold
+ * `pointer-events-none` on a pane that is still visually covering the screen —
+ * the frozen-taps state — forever.
+ */
+const PENDING_OPEN_MAX_MS = 1000;
+
+/** setTimeout backstop for `deferCommit`'s rAF chain (see there). */
+const COMMIT_FALLBACK_MS = 80;
 
 interface SwipeRevealProps {
   /**
@@ -124,19 +151,42 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
   // and is owned by the compositor from then on), the second hands the main
   // thread to the navigation render, which can now overrun a frame budget
   // without stuttering the slide.
+  //
+  // The rAF chain carries a real hazard on Android: the WebView can stop
+  // servicing rAF across a background/resume transition while timers keep
+  // running, and a commit parked on a dead rAF strands `pendingOpen` — the
+  // pane is `pointer-events-none` (React thinks it revealed) but the
+  // navigation that would make that true never runs, which reads as the whole
+  // screen ignoring touches. The setTimeout backstop guarantees the callback
+  // by the means that provably survives those transitions; whichever fires
+  // first wins.
   const commitRaf = useRef<number | null>(null);
+  const commitTimeout = useRef<number | null>(null);
+  const clearCommitSchedules = useCallback(() => {
+    if (commitRaf.current !== null) {
+      cancelAnimationFrame(commitRaf.current);
+      commitRaf.current = null;
+    }
+    if (commitTimeout.current !== null) {
+      window.clearTimeout(commitTimeout.current);
+      commitTimeout.current = null;
+    }
+  }, []);
   const deferCommit = useCallback((fn: () => void) => {
-    if (commitRaf.current !== null) cancelAnimationFrame(commitRaf.current);
+    clearCommitSchedules();
+    const run = () => {
+      clearCommitSchedules();
+      fn();
+    };
     commitRaf.current = requestAnimationFrame(() => {
       commitRaf.current = requestAnimationFrame(() => {
         commitRaf.current = null;
-        fn();
+        run();
       });
     });
-  }, []);
-  useEffect(() => () => {
-    if (commitRaf.current !== null) cancelAnimationFrame(commitRaf.current);
-  }, []);
+    commitTimeout.current = window.setTimeout(run, COMMIT_FALLBACK_MS);
+  }, [clearCommitSchedules]);
+  useEffect(() => () => clearCommitSchedules(), [clearCommitSchedules]);
 
   // A gesture-driven reveal/close should animate to its resting position (the
   // Discord settle). An `open` change from *navigation* (switching
@@ -184,7 +234,19 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
   // and not for a deep-link arrival (notification tap, App Link), which should
   // LAND on its destination when the native crest gate/splash lifts, not play
   // one more transition after it.
-  const [enterAnim] = useState(() => swipeEnabled && !open && !isRecentDeepLinkNavigation());
+  const [enterAnim, setEnterAnim] = useState(() => swipeEnabled && !open && !isRecentDeepLinkNavigation());
+
+  // Remove the keyframe class once the slide-in has played. Leaving it on is
+  // not cosmetic debt: a keyframe animation outranks inline style, so a wedged
+  // animation timeline (see ENTER_ANIM_MAX_MS) pins the pane at a mid-slide
+  // frame that the at-rest transform reconciliation below cannot override.
+  // `animationend` is the normal path; the timeout is the one that still fires
+  // after a background/resume cut the animation short.
+  useEffect(() => {
+    if (!enterAnim) return;
+    const id = window.setTimeout(() => setEnterAnim(false), ENTER_ANIM_MAX_MS);
+    return () => window.clearTimeout(id);
+  }, [enterAnim]);
 
   // Opening: rightward drag from the left edge of the chat (only when closed).
   const openSwipe = useEdgeSwipe({
@@ -233,6 +295,40 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
     const id = requestAnimationFrame(() => setSnap(false));
     return () => cancelAnimationFrame(id);
   }, [snap]);
+
+  // Spring `pendingOpen` back to the prop's truth if the deferred navigation
+  // never lands. The optimistic state exists to bridge two frames; if the
+  // `open` prop hasn't caught up in PENDING_OPEN_MAX_MS the commit was lost,
+  // and holding pendingOpen would hold `pointer-events-none` on a pane the
+  // user is looking at (and tapping).
+  useEffect(() => {
+    if (pendingOpen === null || pendingOpen === open) return;
+    const id = window.setTimeout(() => setPendingOpen(null), PENDING_OPEN_MAX_MS);
+    return () => window.clearTimeout(id);
+  }, [pendingOpen, open]);
+
+  // Resume reconciliation. A background/resume transition is the one moment
+  // this component's DOM can diverge from its React state — a cut touch
+  // stream, a frozen rAF, a wedged keyframe timeline — and Capacitor's
+  // `appStateChange` is the signal that reliably fires on it (the renderer's
+  // own visibility events don't, per App.tsx). Drop every transient the drag
+  // machinery holds and force a commit, so the at-rest layout effect below
+  // rewrites the transforms from the prop truth on the next frame the user
+  // sees.
+  const [, bumpResync] = useState(0);
+  useEffect(() => {
+    if (!swipeEnabled) return;
+    return onAppStateChange((active) => {
+      if (!active) return;
+      cancelOpenSwipe();
+      cancelCloseSwipe();
+      setPendingOpen(null);
+      setEnterAnim(false);
+      // The clears above may all be no-ops on an already-consistent tree;
+      // bump unconditionally so the reconciling commit still happens.
+      bumpResync((n) => n + 1);
+    });
+  }, [swipeEnabled, cancelOpenSwipe, cancelCloseSwipe]);
 
   // Whether the chat pane is currently in motion: a live drag, the settle
   // transition after one, or the mount slide-in. This gates `will-change`
@@ -364,6 +460,12 @@ export function SwipeReveal({ underlay, children, open, onReveal, onClose }: Swi
       <div
         ref={paneRef}
         {...openSwipe.handlers}
+        // The slide-in keyframe has played out — drop the class (see the
+        // enterAnim effect for why it must not linger). Scoped to the pane's
+        // own animation; children's animations bubble through here too.
+        onAnimationEnd={(e) => {
+          if (enterAnim && e.target === e.currentTarget) setEnterAnim(false);
+        }}
         className={cn(
           "absolute inset-0 z-10 flex flex-col bg-background shadow-2xl [contain:layout_paint]",
           dragging || snap ? "" : "transition-transform duration-200 ease-out",
