@@ -202,6 +202,90 @@ describe("syncCommunityList — reconcile", () => {
     }
   });
 
+  it("a fragment declaring an insane frags count cannot wedge or crash the sync", async () => {
+    // `frags` is wire-declared and only integer-checked: a corrupt fragment
+    // declaring 2^40 must not allocate its way to a tab crash on every sync —
+    // it reads as junk (incomplete → read-only), and the sync still returns.
+    const [frag0] = fragment({ entries: [entry("bb", "Corrupt Count")], tombstones: [] });
+    frag0.frags = 2 ** 40;
+    const local: CommunityList = { entries: [entry("aa", "Local")], tombstones: [] };
+
+    const { data, published } = await runSync([fragEvent(frag0, 0)], local);
+
+    expect(isLive(data.list, "bb".repeat(32))).toBe(true); // still readable
+    expect(published).toHaveLength(0); // never writable
+  });
+
+  it("a same-second collision resolves to the LOWEST event id, like the relay will", async () => {
+    const [winnerFrag] = fragment({ entries: [entry("bb", "Winner")], tombstones: [] });
+    const [loserFrag] = fragment({ entries: [entry("bb", "Loser")], tombstones: [] });
+    const winner = { ...fragEvent(winnerFrag, 0, 1_722_000_000), id: "0".repeat(64) };
+    const loser = { ...fragEvent(loserFrag, 0, 1_722_000_000), id: "f".repeat(64) };
+
+    // Order of arrival must not matter.
+    const a = await runSync([loser, winner], undefined);
+    expect(a.data.list.entries[0]?.current.name).toBe("Winner");
+    const b = await runSync([winner, loser], undefined);
+    expect(b.data.list.entries[0]?.current.name).toBe("Winner");
+  });
+
+  it("a frags disagreement at equal age resolves to the LARGER count", async () => {
+    // Index 0 (declaring 1) and index 2 (declaring 3) share a created_at. The
+    // larger count governs — index 1 is missing, so the read is INCOMPLETE and
+    // refuses to write. Resolving to the smaller count would instead call this
+    // read complete and rewrite over the fragment we can't see.
+    const [frag0] = fragment({ entries: [entry("bb", "B")], tombstones: [] });
+    frag0.frags = 1;
+    const [frag2] = fragment({ entries: [entry("cc", "C")], tombstones: [] });
+    frag2.frags = 3;
+    const wire = [fragEvent(frag0, 0, 1_722_000_000), fragEvent(frag2, 2, 1_722_000_000)];
+    const local: CommunityList = { entries: [entry("aa", "Local")], tombstones: [] };
+
+    const { published } = await runSync(wire, local);
+
+    expect(published).toHaveLength(0);
+  });
+
+  it("a stale fossil index above the declared count is emptied in ONE pass", async () => {
+    // Relays evicted the middle of an old lattice; a non-empty index 9
+    // survives above declared=1. Left alone it is dormant, not inert — any
+    // later growth past index 9 re-reads its stale memberships. The reconcile
+    // must empty the ACTUAL read index now, not one count-step per sync.
+    const [frag0] = fragment({ entries: [entry("bb", "Current")], tombstones: [] });
+    const [fossil] = fragment({ entries: [entry("cc", "Fossil")], tombstones: [] });
+    fossil.frags = 10;
+    const wire = [fragEvent(frag0, 0, 1_722_000_100), fragEvent(fossil, 9, 1_722_000_000)];
+    const local: CommunityList = { entries: [entry("aa", "Local")], tombstones: [] };
+
+    const { published } = await runSync(wire, local);
+
+    const nine = published.find((e) => e.tags.find((t) => t[0] === "d")?.[1] === "9");
+    expect(nine).toBeDefined();
+    expect(parseFragList(nine!.content.slice(4))).toEqual({ frags: 1, entries: [], tombstones: [], extra: {} });
+  });
+
+  it("publishes the TOP index first, so an interrupted grow never wedges completeness", async () => {
+    // Ascending order is a deadlock: fragment 0 (declaring the new total)
+    // lands, the network dies before the brand-new top index exists, and every
+    // later read is incomplete forever — while the incomplete-read refusal
+    // blocks the only write that could repair it.
+    const entries: CommunityListEntry[] = [];
+    for (let i = 0; i < 200; i++) {
+      const cid = i.toString(16).padStart(2, "0").padStart(64, "0").slice(0, 64);
+      const m = { ...jm("00", `community ${i}`), community_id: cid };
+      entries.push({ community_id: cid, seed: structuredClone(m), current: m, added_at: 1_719_800_000_000 });
+    }
+    const local: CommunityList = { entries, tombstones: [] };
+    const wire = fragment({ entries: [entries[0]], tombstones: [] }).map((f, i) => fragEvent(f, i));
+
+    const { published } = await runSync(wire, local);
+
+    const dTags = published.map((e) => Number(e.tags.find((t) => t[0] === "d")?.[1]));
+    expect(dTags.length).toBeGreaterThan(1); // 200 memberships must span fragments
+    const sorted = [...dTags].sort((a, b) => b - a);
+    expect(dTags).toEqual(sorted); // descending — top index lands first
+  });
+
   it("refuses to write over a SHORT read — the missing fragment may hold anything", async () => {
     // Fragment 0 declares a two-fragment List but index 1 never arrived; the
     // union knows more than what was read, and publishing would rewrite a set

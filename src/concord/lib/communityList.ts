@@ -172,11 +172,15 @@ export function canonicalJson(value: unknown): string {
 function sortKeys(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortKeys);
   if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-      out[key] = sortKeys((value as Record<string, unknown>)[key]);
-    }
-    return out;
+    // fromEntries defines own data properties, so a "__proto__" key from a
+    // foreign document stays an ordinary field (as serde treats it) instead of
+    // silently vanishing through the inherited accessor — which would fork the
+    // canonical bytes, and the tie-breaks that compare them, across clients.
+    return Object.fromEntries(
+      Object.keys(value as Record<string, unknown>)
+        .sort()
+        .map((key) => [key, sortKeys((value as Record<string, unknown>)[key])]),
+    );
   }
   return value;
 }
@@ -361,8 +365,12 @@ export function mergeCommunityLists(a: CommunityList, b: CommunityList): Communi
   return {
     ...a,
     ...b,
-    entries: [...entries.values()].sort((x, y) => x.community_id.localeCompare(y.community_id)),
-    tombstones: [...tombstones.values()].sort((x, y) => x.community_id.localeCompare(y.community_id)),
+    // Plain code-unit order, not localeCompare: this order feeds the fragment
+    // packer, whose layout must match the reference's BTreeMap byte order for
+    // identical state to produce identical fragments. For lowercase hex the
+    // two happen to agree, but only one of them is locale-proof.
+    entries: [...entries.values()].sort((x, y) => (x.community_id < y.community_id ? -1 : 1)),
+    tombstones: [...tombstones.values()].sort((x, y) => (x.community_id < y.community_id ? -1 : 1)),
   };
 }
 

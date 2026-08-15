@@ -248,6 +248,44 @@ describe("parsing strictness (mirrors the reference deserializer)", () => {
     ).toThrow();
   });
 
+  it("only SAFE unsigned integers parse — beyond 2^53 the bytes already lied", () => {
+    // 2^60 lost precision in JSON.parse and would re-serialize in exponential
+    // notation serde_json cannot read back as a u64 — an Armada-authored
+    // fragment every Rust client would treat as permanently unreadable.
+    expect(() =>
+      parseFragList(
+        '{"frags":1,"entries":[{"community_id":"aa","current":{"owner":"o","owner_salt":"s","community_root":"r","root_epoch":1,"name":"n"},"added_at":1152921504606846976}]}',
+      ),
+    ).toThrow();
+    expect(() => parseFragList('{"frags":-0}')).toThrow();
+  });
+
+  it("an explicit null for an Option field reads as absent, exactly as serde does", () => {
+    const wire =
+      '{"frags":1,"entries":[{"community_id":"aa","seed":null,"current":{"owner":"o","owner_salt":"s","community_root":"r","root_epoch":1,"control_pk":null,"channels":[{"id":"c1","key":null,"epoch":0,"name":"locked"}],"name":"n"},"added_at":5}]}';
+    const parsed = parseFragList(wire);
+    expect(parsed.entries[0].seed).toBeUndefined();
+    expect(parsed.entries[0].current.control_pk).toBeUndefined();
+    expect(parsed.entries[0].current.channels[0].key).toBeUndefined();
+    // ...and the nulls are serialized away, matching serde's bytes.
+    expect(serializeFragList(parsed)).not.toContain("null");
+  });
+
+  it('a "__proto__" unknown field survives the round-trip as an ordinary key', () => {
+    // serde keeps it as an ordinary map key; JS assignment would swap a
+    // prototype and silently drop it, forking the bytes between clients.
+    const wire = '{"frags":1,"__proto__":{"carried":1}}';
+    expect(serializeFragList(parseFragList(wire))).toBe(wire);
+  });
+
+  it("a corrupt internal snapshot fails the publish loudly, not as invalid JSON", () => {
+    const bad = jm("x");
+    // A damaged folded cache can hand us anything; Rust's types make this
+    // unrepresentable, so the port must refuse rather than seal garbage.
+    (bad as Record<string, unknown>).name = undefined;
+    expect(() => fragment(listOf([entry(structuredClone(jm("x")), bad)]))).toThrow(/malformed join material/);
+  });
+
   it("a keyless channel parses and is never written back with a key", () => {
     // GOLDEN, cross-client: a channel the account holds NO key for omits `key`
     // entirely. One such channel must never reject the whole vault document.

@@ -154,16 +154,30 @@ const TOMBSTONE_KEYS = ["community_id", "removed_at"] as const;
 const LIST_KEYS = ["frags", "entries", "tombstones"] as const;
 
 function splitExtra(src: Record<string, unknown>, named: readonly string[]): Record<string, unknown> {
-  const extra: Record<string, unknown> = {};
-  for (const k of Object.keys(src)) {
-    if (named.includes(k)) continue;
-    if (src[k] === undefined) continue;
-    extra[k] = src[k];
-  }
-  return extra;
+  // Object.fromEntries defines OWN data properties, so a hostile "__proto__"
+  // key survives as an ordinary field — exactly as serde keeps it as an
+  // ordinary map key. Plain `extra[k] = v` would instead hit the inherited
+  // accessor and silently drop the key, forking the bytes from the reference.
+  return Object.fromEntries(
+    Object.keys(src)
+      .filter((k) => !named.includes(k) && src[k] !== undefined)
+      .map((k) => [k, src[k]]),
+  );
 }
 
 function material(src: JoinMaterial): FragMaterial {
+  // A corrupt internal snapshot (a damaged folded cache) must fail the publish
+  // LOUDLY here, not seal `"name":undefined` — invalid JSON — into an event
+  // every client rejects. Rust's types make this unrepresentable.
+  if (
+    typeof src.owner !== "string" ||
+    typeof src.owner_salt !== "string" ||
+    typeof src.community_root !== "string" ||
+    typeof src.name !== "string" ||
+    typeof src.root_epoch !== "number"
+  ) {
+    throw new Error("malformed join material — refusing to serialize a corrupt snapshot");
+  }
   const out: FragMaterial = {
     owner: b64(src.owner),
     owner_salt: b64(src.owner_salt),
@@ -253,7 +267,11 @@ export function defragment(frags: FragList[]): CommunityList {
       } as CommunityTombstone);
     }
     for (const [k, v] of Object.entries(f.extra)) {
-      if (!Object.prototype.hasOwnProperty.call(out, k)) out[k] = v;
+      if (!Object.prototype.hasOwnProperty.call(out, k)) {
+        // defineProperty, not assignment: a "__proto__" list-extra must land as
+        // an own data property (as serde would keep it), never as a prototype swap.
+        Object.defineProperty(out, k, { value: v, enumerable: true, writable: true, configurable: true });
+      }
     }
   }
   return out;
@@ -327,9 +345,18 @@ function asObject(v: unknown, what: string): Record<string, unknown> {
   return v as Record<string, unknown>;
 }
 
-/** Rust u64: an unsigned integer — floats and negatives reject the fragment. */
+/**
+ * Rust u64: an unsigned integer — floats and negatives reject the fragment.
+ * SAFE integers only: beyond 2^53 the value already lost precision in
+ * JSON.parse, and re-serializing it emits exponential notation serde_json
+ * cannot read back as a u64 — an Armada-authored fragment every Rust client
+ * would treat as permanently unreadable. (`-0` re-serializes as `0`, which is
+ * a byte change too.)
+ */
 function asU64(v: unknown, what: string): number {
-  if (typeof v !== "number" || !Number.isInteger(v) || v < 0) throw new FragParseError(`${what} is not an unsigned integer`);
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 0 || Object.is(v, -0)) {
+    throw new FragParseError(`${what} is not an unsigned integer`);
+  }
   return v;
 }
 
@@ -337,6 +364,12 @@ function asString(v: unknown, what: string): string {
   if (typeof v !== "string") throw new FragParseError(`${what} is not a string`);
   return v;
 }
+
+// serde reads an explicit `null` for an Option field as absent and serializes
+// it away — mirror that for the four Option fields (`key`, `seed`,
+// `control_pk`, `control_root`) so a null-emitting client round-trips to the
+// same bytes here as through the reference.
+const absent = (v: unknown): v is undefined | null => v === undefined || v === null;
 
 function parseChannel(v: unknown): FragChannel {
   const o = asObject(v, "channel");
@@ -346,7 +379,7 @@ function parseChannel(v: unknown): FragChannel {
     name: asString(o.name, "channel.name"),
     extra: splitExtra(o, [...CHANNEL_KEYS]),
   };
-  if (o.key !== undefined) out.key = asString(o.key, "channel.key");
+  if (!absent(o.key)) out.key = asString(o.key, "channel.key");
   return out;
 }
 
@@ -362,8 +395,8 @@ function parseMaterial(v: unknown, what: string): FragMaterial {
     name: asString(o.name, `${what}.name`),
     extra: splitExtra(o, [...MATERIAL_KEYS]),
   };
-  if (o.control_pk !== undefined) out.control_pk = asString(o.control_pk, `${what}.control_pk`);
-  if (o.control_root !== undefined) out.control_root = asString(o.control_root, `${what}.control_root`);
+  if (!absent(o.control_pk)) out.control_pk = asString(o.control_pk, `${what}.control_pk`);
+  if (!absent(o.control_root)) out.control_root = asString(o.control_root, `${what}.control_root`);
   return out;
 }
 
@@ -375,7 +408,7 @@ function parseEntry(v: unknown): FragEntry {
     added_at: asU64(o.added_at, "entry.added_at"),
     extra: splitExtra(o, [...ENTRY_KEYS]),
   };
-  if (o.seed !== undefined) out.seed = parseMaterial(o.seed, "entry.seed");
+  if (!absent(o.seed)) out.seed = parseMaterial(o.seed, "entry.seed");
   return out;
 }
 
