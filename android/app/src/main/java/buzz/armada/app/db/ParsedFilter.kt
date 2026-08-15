@@ -40,11 +40,23 @@ internal class ParsedFilter(filter: JSONObject) {
 
     /**
      * The NIP-50 keywords parsed out of `search`. Extension tokens
-     * (`key:value`) are parsed and removed — none are supported, and per NIP-50
-     * unsupported extensions are ignored. Null when the filter has no `search`,
+     * (`key:value`) are [terms] instead. Null when the filter has no `search`,
      * or when it parses to no keywords (in which case it imposes no constraint).
      */
     val searchKeywords: SearchKeywords?
+
+    /**
+     * The NIP-50 extension tokens (`key:value`) named by `search`, spelled back
+     * exactly as written. Every one of them must be among the rumor's derived
+     * index terms, which the store resolves against `rumor_terms` rather than
+     * against anything the rumor says.
+     *
+     * A term no policy in this tenant emits therefore matches nothing, which is
+     * how an unsupported extension (`domain:example.com`) still FAILS CLOSED:
+     * it narrows to an empty index lookup rather than being dropped and
+     * answering a narrowing query with the whole tenant.
+     */
+    val terms: List<String>
 
     /**
      * The same keywords as an FTS5 `MATCH` expression, or null when they can't
@@ -143,13 +155,22 @@ internal class ParsedFilter(filter: JSONObject) {
 
         var keywords: SearchKeywords? = null
         var query: String? = null
+        val terms = ArrayList<String>()
 
         if (search != null) {
             val required = ArrayList<String>()
             val negated = ArrayList<String>()
 
             for (token in Nip50.parseInput(search)) {
-                if (token !is String) continue // extension token: removed
+                if (token !is String) {
+                    // An extension token is a lookup in the derived term index.
+                    // NOT lowercased: a term is an opaque string a policy
+                    // returned, and folding its case would make two distinct
+                    // ones the same lookup.
+                    val extension = token as Nip50.Extension
+                    terms.add("${extension.key}:${extension.value}")
+                    continue
+                }
                 val keyword = token.lowercase()
                 if (keyword.startsWith("-")) {
                     if (keyword.length > 1) negated.add(keyword.substring(1))
@@ -161,7 +182,7 @@ internal class ParsedFilter(filter: JSONObject) {
             if (required.isNotEmpty() || negated.isNotEmpty()) {
                 keywords = SearchKeywords(required, negated)
                 query = toFtsQuery(required, negated)
-            } else if (search.isNotBlank()) {
+            } else if (terms.isEmpty() && search.isNotBlank()) {
                 // The caller asked for something, and every part of it was
                 // consumed by the parse: an extension nobody implements
                 // (`domain:example.com`), or punctuation that tokenizes to
@@ -179,6 +200,7 @@ internal class ParsedFilter(filter: JSONObject) {
 
         this.searchKeywords = keywords
         this.searchQuery = query
+        this.terms = terms
         this.neverMatch = never
     }
 
@@ -283,7 +305,10 @@ internal object Nip50 {
 
     private val TOKEN = Regex("""(\B-\w+:[^\s"]+)|(\b\w+:[^\s"]+)|(".*?")|(\S+)""")
 
-    /** An extension token: `key:value`, none of which Armada supports. */
+    /**
+     * An extension token: `key:value`. Armada resolves these against the
+     * tenant's derived term index — see [ParsedFilter.terms].
+     */
     class Extension(val key: String, val value: String)
 
     /** Keywords (as [String]) and extension tokens (as [Extension]), in order. */

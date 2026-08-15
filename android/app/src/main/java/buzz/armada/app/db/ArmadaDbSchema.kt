@@ -37,9 +37,15 @@ internal object ArmadaDbSchema {
      *      rumor — so the id, kind, pubkey and created_at columns were stored
      *      twice, and the tenant id was repeated in every row of the table and
      *      of its five indexes.
-     *   1  the current layout below.
+     *   1  the tenant-interned layout, without a term index.
+     *   2  the current layout below: adds `rumor_terms` and
+     *      `rumor_term_tenants`. There is no rebuild — the new tables are empty
+     *      and a `CREATE IF NOT EXISTS` installs them — because a term cannot
+     *      be derived in SQL. Rows written before it are indexed by the
+     *      per-tenant backfill instead, which is gated on `rumor_term_tenants`
+     *      and so is indifferent to which version the file arrived at it from.
      */
-    const val VERSION = 1L
+    const val VERSION = 2L
 
     /** The tables, indexes and triggers every ArmadaDB file has. */
     val BASE: List<String> = listOf(
@@ -119,6 +125,30 @@ internal object ArmadaDbSchema {
         """CREATE TABLE IF NOT EXISTS kv (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        ) WITHOUT ROWID""",
+        // The derived term index: facts a tenant's TermPolicy computes from a
+        // rumor, which no tag of its own states — a NIP-17 conversation being
+        // its participant SET. `seq` is the rumor's rowid and encodes time, so
+        // the primary key's third column orders each term's rumors newest-last;
+        // read backwards, a term lookup is one contiguous range walk that stops
+        // at the limit. WITHOUT ROWID because the key IS the whole row.
+        """CREATE TABLE IF NOT EXISTS rumor_terms (
+            tenant INTEGER NOT NULL,
+            term TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            PRIMARY KEY (tenant, term, seq)
+        ) WITHOUT ROWID""",
+        // The delete path goes the other way — by rumor, not by term — and has
+        // no term to seek with, so it needs an index of its own or every
+        // deletion scans the table.
+        "CREATE INDEX IF NOT EXISTS rumor_terms_seq ON rumor_terms (seq)",
+        """CREATE TRIGGER IF NOT EXISTS rumors_terms_delete AFTER DELETE ON rumors BEGIN
+            DELETE FROM rumor_terms WHERE seq = old.seq;
+        END""",
+        // Which tenants' pre-existing rows have been through their policy. A
+        // row here means the backfill is done and reads need not wait again.
+        """CREATE TABLE IF NOT EXISTS rumor_term_tenants (
+            tenant INTEGER PRIMARY KEY
         ) WITHOUT ROWID""",
     )
 

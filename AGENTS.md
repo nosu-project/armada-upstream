@@ -578,9 +578,10 @@ Things to know before touching it:
   either.** Its tags are the bytes its id commits to, so bookkeeping written
   into them makes the row something the sender never signed, and makes whatever
   reads that tag forgeable by anyone who spells it. Derive instead: a DM's
-  partner comes from `pubkey` and the `p` tags NIP-17 requires (`dmPeerOf`), and
-  a thread is two ordinary indexed filters — `authors: [peer]` and
-  `authors: [self], "#p": [peer]`. A Concord plane is its KINDS
+  conversation comes from `pubkey` and the `p` tags NIP-17 requires
+  (`dmPeersOf`), and where the derivation is more than a filter can express it
+  becomes a derived TERM rather than a tag (see below). A Concord plane is its
+  KINDS
   (`PLANE_RULES`/`queryPlane`), and a rekey round names its own scope and epoch
   in the tags `parseRekey` reads — so neither the stream address, the carrier
   wrap id nor the seal kind is stored at all. They are checked ONCE, at ingest
@@ -593,6 +594,29 @@ Things to know before touching it:
   genuinely not in the rumor. It lives in KV as a set of rumor ids per control
   stream address (`c2snap:<community>:<pk>`, `readControlSnapshot`) — the fact
   itself, not an event-shaped row impersonating one.
+- **Where the derivation is real but unfilterable, index a TERM.** A NIP-01
+  filter can only ask about what a rumor literally says, and a NIP-17
+  conversation is the SET of its participants — half in `pubkey`, half in the
+  `p` tags, and a tag filter is an OR over values, so `authors: [ana, ben]` also
+  matches everything Ana sent in another room. Every such read could therefore
+  only OVER-select and be narrowed in JavaScript afterwards, at a fixed 3×
+  over-fetch per filter. A tenant may instead declare a `TermPolicy` (`db/types.ts`):
+  a pure function of the stored rumor returning opaque strings, indexed beside it
+  and looked up as a NIP-50 extension token (`{ search: "conv:<key>" }`). Not a
+  tag on the rumor and not a row impersonating one — a CACHE of a derivation,
+  discardable and rebuildable, unforgeable by a sender spelling anything, and
+  read by nothing but the index. Three rules make it safe: the ENGINES never
+  interpret a tenant id or a term (`db/termPolicies.ts` is the only table that
+  does, and `TermPolicies.kt` / `TermPolicies.swift` must agree with it exactly);
+  the policy binds to the TENANT, not to a write, so the Android service and the
+  iOS extension file rows correctly while knowing nothing about terms; and an
+  unknown term FAILS CLOSED, matching nothing rather than dropping the
+  constraint. SQLite gets a b-tree (`rumor_terms`, schema v2) rather than more
+  FTS tokens because `(tenant, term, seq)` is already time-ordered, so a lookup
+  is a bounded backwards walk — and because a b-tree can be GROUPED, which is
+  what a future fix for the inbox list's global 500-row window needs. Existing
+  rows are indexed by a one-time per-tenant backfill, since a term cannot be
+  derived in SQL; only reads that name a term wait for it.
 - **A drain converts to the CURRENT shape; it does not copy rows across.** The
   pre-ArmadaDB store folded `stream`/`wrap`/`sealkind`/`seal` into the stored
   event's tags and told the planes apart by the `stream` tag at read time, so

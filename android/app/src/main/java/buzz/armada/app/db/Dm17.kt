@@ -26,7 +26,7 @@ internal object Dm17 {
     val KINDS = setOf(5, 7, 14, 15, 1740)
 
     /** The ArmadaDB tenant holding one viewer's opened DMs. */
-    fun tenant(self: String): String = "dm17:$self"
+    fun tenant(self: String): String = TENANT_PREFIX + self
 
     /**
      * The NIP-40 deadline these tags carry, or null. `Number(raw)` semantics:
@@ -46,15 +46,75 @@ internal object Dm17 {
     }
 
     /**
-     * The conversation partner of a rumor, from `self`'s perspective: the sender
-     * for received rumors, the first `p` tag for our own copies. Null when
-     * unattributable (an own copy with no `p` tag).
+     * The participants of a rumor's conversation, from `self`'s perspective:
+     * everyone involved except the viewer, sorted. `[self]` for Note to Self.
+     * Null when unattributable — an own copy with no `p` tag names no room, and
+     * callers drop it rather than guess.
+     *
+     * A port of `dmPeersOf` in `src/lib/nip17/conversation.ts`, and it has to
+     * agree with it exactly: this is what [convTerm] files a rumor under, and a
+     * rumor filed under a term the WebView does not look up is a message that
+     * arrived while the app was dead and is then invisible in the thread.
+     *
+     * A NIP-17 conversation is its participant SET, not a peer — the `p` set
+     * defines the room. Canonicalizing to "everyone but the viewer, sorted"
+     * makes the two directions agree: a message Alice sends to {me, Bob} arrives
+     * as `pubkey: Alice, p: [me, Bob]` and my reply leaves as
+     * `pubkey: me, p: [Alice, Bob]`, and both reduce to [Alice, Bob]. For a 1:1
+     * it yields exactly `[peer]`, which is why the keys did not change when
+     * groups arrived.
      */
-    fun peerOf(rumor: Rumor, self: String): String? {
-        if (rumor.pubkey != self) return rumor.pubkey
-        return rumor.tags.firstOrNull { it.getOrNull(0) == "p" && !it.getOrNull(1).isNullOrEmpty() }
-            ?.get(1)
+    fun peersOf(rumor: Rumor, self: String): List<String>? {
+        val recipients = LinkedHashSet<String>()
+        for (tag in rumor.tags) {
+            val value = tag.getOrNull(1)
+            if (tag.getOrNull(0) == "p" && !value.isNullOrEmpty()) recipients.add(value)
+        }
+
+        if (rumor.pubkey != self) {
+            // Received: the sender is a participant whether or not they p-tagged
+            // themselves, and we are not one of our own peers.
+            val others = LinkedHashSet(recipients)
+            others.add(rumor.pubkey)
+            others.remove(self)
+            return if (others.isEmpty()) null else others.sorted()
+        }
+
+        // Our own copy: only the `p` set says where it went.
+        if (recipients.isEmpty()) return null
+        val others = LinkedHashSet(recipients)
+        others.remove(self)
+        return if (others.isEmpty()) listOf(self) else others.sorted()
     }
+
+    /**
+     * The derived index term for a participant set — the port of `dmConvTerm`.
+     *
+     * Joined with NOTHING rather than with a separator: a term crosses a NIP-50
+     * search string, whose parse ends a token at whitespace. Pubkeys are
+     * fixed-width 64-char hex, so concatenating them is unambiguous.
+     */
+    fun convTerm(peers: List<String>): String = "conv:" + peers.sorted().joinToString("")
+
+    /**
+     * The [TermPolicy] for a `dm17:<self>` tenant: each rumor filed under the
+     * one conversation it belongs to.
+     *
+     * `self` comes from the TENANT ID, which is the whole shape of the
+     * contract — [SqliteArmadaDb] never interprets a tenant id or a term, and
+     * this is the layer that spells `dm17:` in the first place.
+     */
+    fun termsOf(rumor: Rumor, tenantId: String): List<String> {
+        val self = tenantSelf(tenantId) ?: return emptyList()
+        val peers = peersOf(rumor, self) ?: return emptyList()
+        return listOf(convTerm(peers))
+    }
+
+    /** The pubkey in a `dm17:<self>` tenant id, or null for any other id. */
+    fun tenantSelf(tenantId: String): String? =
+        if (tenantId.startsWith(TENANT_PREFIX)) tenantId.substring(TENANT_PREFIX.length) else null
+
+    private const val TENANT_PREFIX = "dm17:"
 
     /**
      * Whether an opened DM rumor may be stored.
@@ -63,8 +123,8 @@ internal object Dm17 {
      * in. A rumor's tags are the bytes its id commits to, so bookkeeping
      * written into them makes the stored row something its sender never signed,
      * and makes the store's own idea of a conversation forgeable by anyone who
-     * spells that tag themselves. The partner is derived on read instead, from
-     * the author and `p` tags ([peerOf]).
+     * spells that tag themselves. The conversation is derived on read instead,
+     * from the author and `p` tags ([peersOf]).
      *
      * Refused when:
      *
@@ -74,13 +134,13 @@ internal object Dm17 {
      *    writer goes through, which is why the check lives here and not only at
      *    the point of decryption: a disappearing message that arrives late is
      *    simply never stored;
-     *  - it has no attributable conversation partner, so no read could ever
-     *    surface it in a thread.
+     *  - it has no attributable conversation, so no read could ever surface it
+     *    in a thread.
      */
     fun storable(self: String, rumor: Rumor, now: Long): Boolean {
         if (self.isEmpty()) return false
         if (rumor.kind !in KINDS) return false
         if (isExpired(rumor.tags, now)) return false
-        return peerOf(rumor, self) != null
+        return peersOf(rumor, self) != null
     }
 }

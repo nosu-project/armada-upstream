@@ -43,11 +43,21 @@ struct ParsedFilter {
     let search: String?
 
     /// The NIP-50 keywords parsed out of `search`. Extension tokens
-    /// (`key:value`) are parsed and removed — none are supported, and per
-    /// NIP-50 unsupported extensions are ignored. Nil when the filter has no
-    /// `search`, or when it parses to no keywords (in which case it imposes no
+    /// (`key:value`) are `terms` instead. Nil when the filter has no `search`,
+    /// or when it parses to no keywords (in which case it imposes no
     /// constraint).
     let searchKeywords: SearchKeywords?
+
+    /// The NIP-50 extension tokens (`key:value`) named by `search`, spelled
+    /// back exactly as written. Every one of them must be among the rumor's
+    /// derived index terms, which the store resolves against `rumor_terms`
+    /// rather than against anything the rumor says.
+    ///
+    /// A term no policy in this tenant emits therefore matches nothing, which
+    /// is how an unsupported extension (`domain:example.com`) still FAILS
+    /// CLOSED: it narrows to an empty index lookup rather than being dropped
+    /// and answering a narrowing query with the whole tenant.
+    let terms: [String]
 
     /// The same keywords as an FTS5 `MATCH` expression, or nil when they can't
     /// be expressed as one. FTS5 has no way to say "everything except X", so a
@@ -149,13 +159,21 @@ struct ParsedFilter {
 
         var keywords: SearchKeywords?
         var query: String?
+        var terms = [String]()
 
         if let search {
             var required = [String]()
             var negated = [String]()
 
             for token in Nip50.parseInput(search) {
-                guard case let .keyword(text) = token else { continue }  // extension: removed
+                guard case let .keyword(text) = token else {
+                    // An extension token is a lookup in the derived term index.
+                    // NOT lowercased: a term is an opaque string a policy
+                    // returned, and folding its case would make two distinct
+                    // ones the same lookup.
+                    if case let .extensionToken(key, value) = token { terms.append("\(key):\(value)") }
+                    continue
+                }
                 let keyword = text.lowercased()
                 if keyword.hasPrefix("-") {
                     if keyword.count > 1 { negated.append(String(keyword.dropFirst())) }
@@ -167,7 +185,9 @@ struct ParsedFilter {
             if !required.isEmpty || !negated.isEmpty {
                 keywords = SearchKeywords(required: required, negated: negated)
                 query = Self.toFtsQuery(required: required, negated: negated)
-            } else if !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            } else if terms.isEmpty,
+                !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
                 // The caller asked for something, and every part of it was
                 // consumed by the parse: an extension nobody implements
                 // (`domain:example.com`), or punctuation that tokenizes to
@@ -185,6 +205,7 @@ struct ParsedFilter {
 
         self.searchKeywords = keywords
         self.searchQuery = query
+        self.terms = terms
         self.neverMatch = never
     }
 
@@ -316,8 +337,9 @@ extension String {
 /// parsing.
 enum Nip50 {
 
-    /// A parsed token: a keyword, or an extension `key:value` (none of which
-    /// Armada supports).
+    /// A parsed token: a keyword, or an extension `key:value`. Armada resolves
+    /// extensions against the tenant's derived term index — see
+    /// `ParsedFilter.terms`.
     enum Token {
         case keyword(String)
         case extensionToken(key: String, value: String)

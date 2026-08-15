@@ -68,8 +68,27 @@ public final class SqliteArmadaDb {
     /// (`#channel`, `#stream`, `#peer`).
     private let indexTags: (Rumor) -> [[String?]]
 
+    /// A tenant's DERIVED index terms: facts re-derivable from a stored rumor
+    /// that no tag of its own states, filed in `rumor_terms` and looked up as a
+    /// NIP-50 extension token (`{"search": "conv:<key>"}`).
+    ///
+    /// This engine never interprets a tenant id or a term — `TermPolicies` is
+    /// where that knowledge lives, and `src/lib/db/termPolicies.ts` is its
+    /// counterpart on the other side of the bridge. The two must agree exactly,
+    /// because a rumor filed under a term the WebView does not look up is a
+    /// message the notification extension received while the app was closed and
+    /// that the thread then never shows.
+    ///
+    /// Bound to the TENANT rather than named at each write for that same
+    /// reason: the extension writes here knowing nothing about terms, and is
+    /// covered anyway.
+    private let termsOf: (Rumor, String) -> [String]
+
     /// Memoised tenant ordinals — one lookup per tenant, not per token.
     private var ords = [String: Int]()
+
+    /// Tenants whose pre-existing rows are known to have been through a policy.
+    private var backfilled = Set<String>()
 
     private let lock = NSRecursiveLock()
 
@@ -77,11 +96,13 @@ public final class SqliteArmadaDb {
         db: ArmadaSqlDriver,
         search: Bool = true,
         migrate: Bool = true,
-        indexTags: @escaping (Rumor) -> [[String?]] = defaultIndexTags
+        indexTags: @escaping (Rumor) -> [[String?]] = defaultIndexTags,
+        termsOf: @escaping (Rumor, String) -> [String] = TermPolicies.terms(of:tenantId:)
     ) throws {
         self.db = db
         self.search = search
         self.indexTags = indexTags
+        self.termsOf = termsOf
         if migrate { try self.migrate() }
     }
 
@@ -164,12 +185,18 @@ public final class SqliteArmadaDb {
                 try db.run("INSERT INTO rumors_fts (rumors_fts) VALUES ('delete-all')")
             }
             try db.run("DELETE FROM rumor_coords")
+            // Emptied explicitly rather than left to the trigger, for the same
+            // reason as `delete-all` above: a row orphaned by a crash outlives
+            // the rumor that would have taken it.
+            try db.run("DELETE FROM rumor_terms")
+            try db.run("DELETE FROM rumor_term_tenants")
             try db.run("DELETE FROM tenants")
             try db.run("DELETE FROM kv")
         }
         // Interned ids are reallocated from scratch after this, so a remembered
         // one would name the wrong tenant.
         ords.removeAll()
+        backfilled.removeAll()
     }
 
     public func close() {
@@ -210,6 +237,7 @@ public final class SqliteArmadaDb {
     private func writeRumor(_ tenant: String, _ rumor: Rumor) throws {
         let ord = try internTenant(tenant)
         let prefix = "t\(ord)"
+        let terms = termsOf(rumor, tenant)
 
         if Kinds.replaceable(rumor.kind) || Kinds.addressable(rumor.kind) {
             let coord = Self.coordOf(rumor)
@@ -228,7 +256,7 @@ public final class SqliteArmadaDb {
                 try deleteRumors(ord, [existing.seq])
             }
 
-            guard let seq = try insertRumor(ord, prefix, rumor) else { return }
+            guard let seq = try insertRumor(ord, prefix, rumor, terms) else { return }
 
             try db.run(
                 """
@@ -241,7 +269,7 @@ public final class SqliteArmadaDb {
                 ]
             )
         } else {
-            guard try insertRumor(ord, prefix, rumor) != nil else { return }
+            guard try insertRumor(ord, prefix, rumor, terms) != nil else { return }
         }
 
         // Applied after the insert so a kind 5 arriving alongside its targets in
@@ -259,7 +287,9 @@ public final class SqliteArmadaDb {
     /// other. The rowid is allocated by LOOKING rather than from a counter held
     /// in memory, so a second writer on the same file can't be handed the same
     /// one; the bucket spans tenants, since the rowid is global.
-    private func insertRumor(_ ord: Int, _ prefix: String, _ rumor: Rumor) throws -> Int64? {
+    private func insertRumor(
+        _ ord: Int, _ prefix: String, _ rumor: Rumor, _ terms: [String]
+    ) throws -> Int64? {
         let base = Self.bucket(rumor.createdAt)
 
         let row = try db.query(
@@ -306,7 +336,100 @@ public final class SqliteArmadaDb {
             [.int(seq), .text(tagTokens(prefix, rumor))]
         )
 
+        try insertTerms(ord, seq, terms)
+
         return seq
+    }
+
+    /// File a rumor's derived terms. `OR IGNORE` because a policy may return
+    /// the same term twice, and because the backfill runs over rows a live
+    /// write may already have indexed.
+    private func insertTerms(_ ord: Int, _ seq: Int64, _ terms: [String]) throws {
+        for term in terms where !term.isEmpty {
+            try db.run(
+                "INSERT OR IGNORE INTO rumor_terms (tenant, term, seq) VALUES (?, ?, ?)",
+                [.int(Int64(ord)), .text(term), .int(seq)]
+            )
+        }
+    }
+
+    /// Derive and store the terms of every rumor already in `tenant`, once.
+    ///
+    /// A term can't be computed in SQL — the policy is Swift here and
+    /// TypeScript on the other side of the bridge — so a schema migration can't
+    /// build this index the way it can rebuild a column. It is filled by
+    /// walking the tenant instead, newest-first in pages, and the fact that it
+    /// HAS been walked is recorded in `rumor_term_tenants` so the pass happens
+    /// once per file rather than once per launch.
+    ///
+    /// Writes made while it runs are not a hazard: they go through the same
+    /// policy, and every insert is `OR IGNORE`.
+    private func backfillTerms(_ tenant: String) throws {
+        if backfilled.contains(tenant) { return }
+        // Never written to, so nothing to index — and no ordinal to record the
+        // fact against. Asking again next time costs one lookup.
+        guard let ord = try tenantOrd(tenant) else { return }
+
+        let done = try !db.query(
+            "SELECT 1 FROM rumor_term_tenants WHERE tenant = ?",
+            [.int(Int64(ord))]
+        ) { $0.int(0) }.isEmpty
+
+        if done {
+            backfilled.insert(tenant)
+            return
+        }
+
+        var before: Int64?
+
+        while true {
+            let sql = before == nil
+                ? """
+                SELECT seq, \(Self.rumorColumns) FROM rumors INDEXED BY rumors_tenant
+                    WHERE tenant = ? ORDER BY seq DESC LIMIT ?
+                """
+                : """
+                SELECT seq, \(Self.rumorColumns) FROM rumors INDEXED BY rumors_tenant
+                    WHERE tenant = ? AND seq < ? ORDER BY seq DESC LIMIT ?
+                """
+            var params: [SqlValue] = [.int(Int64(ord))]
+            if let before { params.append(.int(before)) }
+            params.append(.int(Int64(Self.backfillPage)))
+
+            let page = try db.query(sql.collapsedWhitespace, params) { row in
+                (row.int(0), try Self.rumorFromRow(row, 1))
+            }
+            if page.isEmpty { break }
+
+            try transaction {
+                for (seq, rumor) in page {
+                    try insertTerms(ord, seq, termsOf(rumor, tenant))
+                }
+            }
+
+            before = page[page.count - 1].0
+            if page.count < Self.backfillPage { break }
+        }
+
+        try transaction {
+            try db.run(
+                "INSERT OR IGNORE INTO rumor_term_tenants (tenant) VALUES (?)",
+                [.int(Int64(ord))]
+            )
+        }
+        backfilled.insert(tenant)
+    }
+
+    /// Make sure `tenant`'s term index is complete, if a read is about to
+    /// depend on it.
+    ///
+    /// Only reads that name a term wait. An ordinary read is unaffected by a
+    /// half-built term index, and putting a full pass over the tenant in front
+    /// of it would charge every caller for a migration none of them asked
+    /// about.
+    private func awaitTerms(_ tenant: String, _ filters: [ParsedFilter]) throws {
+        guard filters.contains(where: { !$0.terms.isEmpty }) else { return }
+        try backfillTerms(tenant)
     }
 
     /// A rumor's index terms as a single space-separated token string: its
@@ -480,6 +603,9 @@ public final class SqliteArmadaDb {
         lock.lock()
         defer { lock.unlock() }
 
+        let parsed = filters.map { ParsedFilter($0) }
+        try awaitTerms(tenant, parsed)
+
         // A tenant that was never written to holds nothing, whatever the
         // filters.
         guard let ord = try tenantOrd(tenant) else { return [] }
@@ -487,8 +613,8 @@ public final class SqliteArmadaDb {
 
         var byId = [String: Rumor]()
 
-        for filter in filters {
-            for rumor in try queryFilter(ord, prefix, ParsedFilter(filter)) {
+        for filter in parsed {
+            for rumor in try queryFilter(ord, prefix, filter) {
                 byId[rumor.id] = rumor
             }
         }
@@ -662,18 +788,23 @@ public final class SqliteArmadaDb {
         case let .table(cursor):
             var conditions = cursor.where
             params.append(contentsOf: cursor.params)
+            // A scan of the rumors table alone is ordered and paged by its own
+            // rowid; a scan driven by an index table beside it (`rumor_terms`)
+            // is ordered by the copy of that rowid in the driver, so the walk
+            // belongs to the index and not to a sort of what it found.
+            let key = cursor.key
 
             if let before {
-                conditions.append("seq < ?")
+                conditions.append("\(key) < ?")
                 params.append(.int(before))
             }
 
             // The key is only read when a later page has to resume from it; a
             // scan that answers the whole query in one go leaves the column out.
             sql = """
-                SELECT \(keys ? "seq, " : "")\(Self.rumorColumns) FROM \(cursor.from)\
+                SELECT \(keys ? "\(key) AS seq, " : "")\(cursor.columns) FROM \(cursor.from)\
                 \(Sql.whereClause(conditions)) \
-                ORDER BY seq DESC\(limit == nil ? "" : " LIMIT ?")
+                ORDER BY \(key) DESC\(limit == nil ? "" : " LIMIT ?")
                 """
         }
 
@@ -764,12 +895,18 @@ public final class SqliteArmadaDb {
     /// already, so each is read newest-first, within one namespace, with no
     /// sorter.
     private func planScan(_ ord: Int, _ prefix: String, _ filter: ParsedFilter) -> ScanPlan {
+        let time = Self.timeRange(filter)
+
+        // 0. derived terms — ahead of everything, including ids, because
+        //    nothing else can apply them: they are not in the rumor, so a plan
+        //    that didn't resolve them in the index has no way to check them
+        //    afterwards.
+        if !filter.terms.isEmpty { return planTerms(ord, filter, time) }
+
         // 1. ids — the (tenant, id) unique index.
         if let ids = filter.ids {
             return ScanPlan(ids: ids, cursors: [], sqlOnly: false, searched: false)
         }
-
-        let time = Self.timeRange(filter)
 
         // Without the content index there is nothing to resolve keywords
         // against, so they fall through to the in-memory match instead.
@@ -901,6 +1038,137 @@ public final class SqliteArmadaDb {
         )
     }
 
+    /// Plan a filter that names derived terms: `rumor_terms` drives, and
+    /// everything else is tested on the rows it finds.
+    ///
+    /// One term is a seek to `(tenant, term)` and a backwards walk of the `seq`
+    /// range under it — already time-ordered, so the walk stops at the limit
+    /// with no sorter and no bodies read past it. Further terms are `EXISTS`
+    /// against the same table, which is a point lookup per candidate rather
+    /// than a second scan to intersect.
+    ///
+    /// The `CROSS JOIN` fixes the join order for the reason it does in
+    /// `readPage`: the rumors table must be the INNER side, seeked by rowid, or
+    /// a condition on one of its columns is enough to make the planner drive
+    /// from there and sort the result afterwards.
+    private func planTerms(_ ord: Int, _ filter: ParsedFilter, _ time: TimeRange) -> ScanPlan {
+        var conditions = ["x.tenant = ?", "x.term = ?"]
+        var params: [SqlValue] = [.int(Int64(ord)), .text(filter.terms[0])]
+
+        if let min = time.min {
+            conditions.append("x.seq >= ?")
+            params.append(.int(min))
+        }
+        if let max = time.max {
+            conditions.append("x.seq <= ?")
+            params.append(.int(max))
+        }
+
+        for term in filter.terms.dropFirst() {
+            conditions.append(
+                "EXISTS (SELECT 1 FROM rumor_terms y WHERE y.tenant = x.tenant AND y.term = ? AND y.seq = x.seq)"
+            )
+            params.append(.text(term))
+        }
+
+        var complete = true
+
+        // ids are pushed down here rather than taking the ids plan: that plan
+        // can't apply a term, and this one can apply an id.
+        if let ids = filter.ids {
+            if ids.count <= Self.maxPushdown {
+                conditions.append(Sql.memberOf("r.id", ids.count))
+                params.append(contentsOf: ids.map { .text($0) })
+            } else {
+                complete = false
+            }
+        }
+
+        if let kinds = filter.kinds {
+            if kinds.count <= Self.maxPushdown {
+                conditions.append(Sql.memberOf("r.kind", kinds.count))
+                params.append(contentsOf: kinds.map { .int(Int64($0)) })
+            } else {
+                complete = false
+            }
+        }
+
+        if let authors = filter.authors {
+            if authors.count <= Self.maxPushdown {
+                conditions.append(Sql.memberOf("r.pubkey", authors.count))
+                params.append(contentsOf: authors.map { .text($0) })
+            } else {
+                complete = false
+            }
+        }
+
+        // Timestamps the rowid encoding had to clamp are re-checked exactly.
+        if !time.exact {
+            if let since = filter.since {
+                conditions.append("r.created_at >= ?")
+                params.append(.int(since))
+            }
+            if let until = filter.until {
+                conditions.append("r.created_at <= ?")
+                params.append(.int(until))
+            }
+        }
+
+        // Tags and keywords are each a full-text index, and the term index is a
+        // third — so rather than intersect indexes (which SQLite cannot do
+        // across tables) each is resolved to a rowid set the term's walk tests
+        // against. The term drives because it is the selective one: a
+        // conversation is a handful of rows where `#p` is everything ever sent
+        // to a person.
+        if !filter.tags.isEmpty {
+            // A value list long enough to need splitting has no split to be
+            // given here — there is one statement, not one cursor per chunk —
+            // so it goes to the in-memory matcher instead, which reads the tags
+            // off rows the term has already narrowed to.
+            if filter.tags.contains(where: { $0.values.count > Self.maxOr }) {
+                complete = false
+            } else {
+                conditions.append(
+                    "x.seq IN (SELECT rowid FROM rumor_tags_fts WHERE rumor_tags_fts MATCH ?)"
+                )
+                params.append(
+                    .text(
+                        Self.matchExpr(
+                            filter.tags.map { tag in
+                                tag.values.map { Self.tagToken("t\(ord)", tag.name, $0) }
+                            }
+                        )
+                    )
+                )
+            }
+        }
+
+        let search = self.search ? filter.searchQuery : nil
+        let searched = filter.searchKeywords == nil || search != nil
+
+        if let search {
+            conditions.append("x.seq IN (SELECT rowid FROM rumors_fts WHERE rumors_fts MATCH ?)")
+            params.append(.text(search))
+        }
+
+        return ScanPlan(
+            ids: nil,
+            cursors: [
+                .table(
+                    TableCursor(
+                        from: "rumor_terms x CROSS JOIN rumors r ON r.seq = x.seq",
+                        where: conditions,
+                        params: params,
+                        key: "x.seq",
+                        columns: Self.rRumorColumns
+                    )
+                )
+            ],
+            sqlOnly: complete && searched,
+            searched: searched
+        )
+    }
+
     /// Plan a filter as one or more MATCH expressions, or nil when the index
     /// can't drive it.
     ///
@@ -1024,6 +1292,7 @@ public final class SqliteArmadaDb {
         if filters.count == 1 {
             let filter = ParsedFilter(filters[0])
             if filter.neverMatch { return Count(0) }
+            try awaitTerms(tenant, [filter])
 
             if filter.limit == nil {
                 // A tenant that was never written to holds nothing to count.
@@ -1329,6 +1598,9 @@ public final class SqliteArmadaDb {
     /// Longest value list used to *filter* (rather than drive) a scan.
     private static let maxPushdown = 100
 
+    /// How many rumors one page of the derived-term backfill re-derives.
+    private static let backfillPage = 500
+
     /// The columns a stored rumor is reassembled from.
     private static let rumorColumns = "id, kind, pubkey, created_at, tags, content"
 
@@ -1603,11 +1875,20 @@ private struct FtsCursor {
     let params: [SqlValue]
 }
 
-/// A scan of the rumors table with a forced index.
+/// A b-tree scan: the rumors table with a forced index, or an index table
+/// joined to it (the derived-term index).
 private struct TableCursor {
     let from: String
     let `where`: [String]
     let params: [SqlValue]
+    /// The expression the scan is ordered and paged by.
+    ///
+    /// A join names it on the DRIVING table (`x.seq`), which is what keeps the
+    /// walk inside that table's index instead of sorting whatever the join
+    /// produced.
+    var key: String = "seq"
+    /// The rumor columns, aliased when the scan is a join.
+    var columns: String = "id, kind, pubkey, created_at, tags, content"
 }
 
 /// A planned scan: how to fetch a single filter's rumors.

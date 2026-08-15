@@ -28,6 +28,19 @@ final class ArmadaDbTests: XCTestCase {
         return db
     }
 
+    /// The same store with a stand-in term policy, so the derived-term tests
+    /// exercise the index rather than NIP-17. The engine never interprets a
+    /// term — that is the contract — so any policy is as good as the real one.
+    private func openWithTerms(
+        _ policy: @escaping (Rumor, String) -> [String]
+    ) throws -> SqliteArmadaDb {
+        let recording = RecordingDriver(try SqliteDriver(path: ":memory:"))
+        driver = recording
+        let db = try SqliteArmadaDb(db: recording, termsOf: policy)
+        store = db
+        return db
+    }
+
     override func tearDown() {
         store?.close()
         store = nil
@@ -1071,7 +1084,316 @@ final class ArmadaDbTests: XCTestCase {
         try db.event(tenant: "t", rumor: try rumor(id: "a"))
 
         let recording = try XCTUnwrap(driver)
-        XCTAssertEqual(try recording.query("PRAGMA user_version") { $0.int(0) }.first, 1)
+        XCTAssertEqual(
+            try recording.query("PRAGMA user_version") { $0.int(0) }.first,
+            ArmadaDbSchema.version
+        )
+    }
+
+    // MARK: - Derived terms
+    //
+    // The term index: facts a policy computes from a rumor, queried as NIP-50
+    // extension tokens. Ported from `ArmadaDB.test.ts`'s "derived terms" block
+    // and `ArmadaDbTest.kt`'s, and NIP-17-free for the same reason it is there
+    // — the engine never interprets a term.
+
+    /// Files each rumor under the sorted set of its `p` tags.
+    private let peersPolicy: (Rumor, String) -> [String] = { rumor, _ in
+        let set = Set(rumor.tags.filter { $0.first == "p" }.compactMap { $0.count >= 2 ? $0[1] : nil })
+        return set.isEmpty ? [] : ["conv:" + set.sorted().joined()]
+    }
+
+    /// Every `p` tag as its own term, so one rumor carries several.
+    private let eachPolicy: (Rumor, String) -> [String] = { rumor, _ in
+        rumor.tags.filter { $0.first == "p" }.compactMap { $0.count >= 2 ? $0[1] : nil }
+            .map { "with:\($0)" }
+    }
+
+    func testSelectsExactlyTheRumorsAPolicyFiledUnderATerm() throws {
+        let db = try openWithTerms(peersPolicy)
+        try db.event(tenant: "t", rumor: rumor(id: "pair", tags: [["p", "ana"], ["p", "ben"]]))
+        try db.event(tenant: "t", rumor: rumor(id: "ana", tags: [["p", "ana"]]))
+        try db.event(tenant: "t", rumor: rumor(id: "ben", tags: [["p", "ben"]]))
+
+        // The exact set, and neither of the 1:1s that share its members — which
+        // is the whole thing a tag filter cannot express.
+        XCTAssertEqual(
+            try db.query(tenant: "t", filters: filters(#"{"search":"conv:anaben"}"#)).map(\.id),
+            ["pair"]
+        )
+        XCTAssertEqual(
+            try db.query(tenant: "t", filters: filters(#"{"search":"conv:ana"}"#)).map(\.id),
+            ["ana"]
+        )
+        XCTAssertEqual(
+            try db.query(tenant: "t", filters: filters(#"{"search":"conv:ben"}"#)).map(\.id),
+            ["ben"]
+        )
+    }
+
+    func testRequiresEveryTermAFilterNames() throws {
+        let db = try openWithTerms(eachPolicy)
+        try db.event(
+            tenant: "t",
+            rumor: rumor(id: "both", createdAt: 200, tags: [["p", "ana"], ["p", "ben"]])
+        )
+        try db.event(tenant: "t", rumor: rumor(id: "one", createdAt: 100, tags: [["p", "ana"]]))
+
+        XCTAssertEqual(
+            try db.query(tenant: "t", filters: filters(#"{"search":"with:ana"}"#)).map(\.id),
+            ["both", "one"]
+        )
+        // Conditions within a filter AND, terms included.
+        XCTAssertEqual(
+            try db.query(tenant: "t", filters: filters(#"{"search":"with:ana with:ben"}"#)).map(\.id),
+            ["both"]
+        )
+        XCTAssertEqual(
+            try db.query(tenant: "t", filters: filters(#"{"search":"with:ana with:cy"}"#)).map(\.id),
+            []
+        )
+    }
+
+    func testMatchesNothingForATermInATenantThatDerivesNone() throws {
+        let db = try open()
+        try db.event(tenant: "t", rumor: rumor(id: "a", tags: [["p", "ana"]]))
+
+        // Fails closed, exactly like an unsupported NIP-50 extension: a
+        // narrowing query that can't be honored answers with nothing.
+        XCTAssertEqual(
+            try db.query(tenant: "t", filters: filters(#"{"search":"conv:ana"}"#)).map(\.id),
+            []
+        )
+        XCTAssertEqual(try db.count(tenant: "t", filters: filters(#"{"search":"conv:ana"}"#)).count, 0)
+    }
+
+    func testATermCannotBeForgedByATagTheSenderWrote() throws {
+        let db = try openWithTerms(peersPolicy)
+        try db.event(tenant: "t", rumor: rumor(id: "real", tags: [["p", "ana"]]))
+        // A sender claiming a term for a conversation they are not in. Terms
+        // live in their own table, so there is nothing here for a tag to reach.
+        try db.event(
+            tenant: "t",
+            rumor: rumor(id: "fake", tags: [["conv", "ana"], ["~", "conv:ana"]])
+        )
+
+        XCTAssertEqual(
+            try db.query(tenant: "t", filters: filters(#"{"search":"conv:ana"}"#)).map(\.id),
+            ["real"]
+        )
+    }
+
+    func testNarrowsATermAlongsideTheFiltersOtherConstraints() throws {
+        let db = try openWithTerms(peersPolicy)
+        try db.event(
+            tenant: "t",
+            rumor: rumor(id: "kept", pubkey: "ana", kind: 14, tags: [["p", "ana"]])
+        )
+        try db.event(
+            tenant: "t",
+            rumor: rumor(id: "wrongkind", pubkey: "ana", kind: 7, tags: [["p", "ana"]])
+        )
+        try db.event(
+            tenant: "t",
+            rumor: rumor(id: "wrongauthor", pubkey: "ben", kind: 14, tags: [["p", "ana"]])
+        )
+        try db.event(
+            tenant: "t",
+            rumor: rumor(id: "wrongconv", pubkey: "ana", kind: 14, tags: [["p", "ben"]])
+        )
+
+        XCTAssertEqual(
+            try db.query(
+                tenant: "t",
+                filters: filters(#"{"search":"conv:ana","kinds":[14],"authors":["ana"]}"#)
+            ).map(\.id),
+            ["kept"]
+        )
+    }
+
+    func testAppliesTheLimitToTheTermsOwnRows() throws {
+        let db = try openWithTerms(peersPolicy)
+        // Interleaved, so a limit applied before the term would come back short.
+        for i in 0..<6 {
+            try db.event(
+                tenant: "t",
+                rumor: rumor(id: "ana-\(i)", createdAt: Int64(100 + i * 2), tags: [["p", "ana"]])
+            )
+            try db.event(
+                tenant: "t",
+                rumor: rumor(id: "ben-\(i)", createdAt: Int64(101 + i * 2), tags: [["p", "ben"]])
+            )
+        }
+
+        XCTAssertEqual(
+            try db.query(tenant: "t", filters: filters(#"{"search":"conv:ana","limit":3}"#)).map(\.id),
+            ["ana-5", "ana-4", "ana-3"]
+        )
+    }
+
+    func testDrivesATermLookupOffItsOwnIndex() throws {
+        let db = try openWithTerms(peersPolicy)
+        try db.event(tenant: "t", rumor: rumor(id: "a", tags: [["p", "ana"]]))
+        let recording = try XCTUnwrap(driver)
+        recording.selects.removeAll()
+        _ = try db.query(tenant: "t", filters: filters(#"{"search":"conv:ana","limit":10}"#))
+
+        // The CROSS JOIN is what fixes the join order: the rumors table must be
+        // the inner side, seeked by rowid, or a condition on one of its columns
+        // makes the planner drive from there and sort afterwards.
+        let scan = try XCTUnwrap(recording.selects.first { $0.sql.contains("rumor_terms x") }).sql
+        XCTAssertTrue(scan.contains("CROSS JOIN rumors r ON r.seq = x.seq"), scan)
+        XCTAssertTrue(scan.contains("ORDER BY x.seq DESC"), scan)
+        XCTAssertTrue(scan.contains("LIMIT ?"), scan)
+    }
+
+    func testCountsAndRemovesByTerm() throws {
+        let db = try openWithTerms(peersPolicy)
+        try db.event(tenant: "t", rumor: rumor(id: "ana", tags: [["p", "ana"]]))
+        try db.event(tenant: "t", rumor: rumor(id: "ben", tags: [["p", "ben"]]))
+
+        XCTAssertEqual(try db.count(tenant: "t", filters: filters(#"{"search":"conv:ana"}"#)).count, 1)
+        try db.remove(tenant: "t", filters: filters(#"{"search":"conv:ana"}"#))
+        XCTAssertEqual(try db.query(tenant: "t", filters: filters("{}")).map(\.id), ["ben"])
+    }
+
+    func testForgetsATermWhenItsRumorIsDeleted() throws {
+        let db = try openWithTerms(peersPolicy)
+        try db.event(tenant: "t", rumor: rumor(id: "gone", pubkey: "ana", tags: [["p", "ana"]]))
+        try db.event(
+            tenant: "t",
+            rumor: rumor(id: "req", pubkey: "ana", kind: 5, tags: [["e", "gone"]])
+        )
+
+        XCTAssertEqual(
+            try db.query(tenant: "t", filters: filters(#"{"search":"conv:ana"}"#)).map(\.id),
+            []
+        )
+        // The trigger cleared the index row, not just the rumor.
+        XCTAssertEqual(try rowCount("rumor_terms"), 0)
+    }
+
+    func testKeepsATermInsideItsOwnTenant() throws {
+        let db = try openWithTerms(peersPolicy)
+        try db.event(tenant: "a", rumor: rumor(id: "mine", tags: [["p", "ana"]]))
+        try db.event(tenant: "b", rumor: rumor(id: "theirs", tags: [["p", "ana"]]))
+
+        XCTAssertEqual(
+            try db.query(tenant: "a", filters: filters(#"{"search":"conv:ana"}"#)).map(\.id),
+            ["mine"]
+        )
+    }
+
+    func testCombinesATermWithAKeyword() throws {
+        let db = try openWithTerms(peersPolicy)
+        try db.event(
+            tenant: "t",
+            rumor: rumor(id: "hit", tags: [["p", "ana"]], content: "the quick brown fox")
+        )
+        try db.event(
+            tenant: "t",
+            rumor: rumor(id: "otherconv", tags: [["p", "ben"]], content: "the quick brown fox")
+        )
+        try db.event(
+            tenant: "t",
+            rumor: rumor(id: "othertext", tags: [["p", "ana"]], content: "nothing here")
+        )
+
+        XCTAssertEqual(
+            try db.query(tenant: "t", filters: filters(#"{"search":"brown conv:ana"}"#)).map(\.id),
+            ["hit"]
+        )
+    }
+
+    func testIndexesRowsAlreadyStoredWhenThePolicyArrived() throws {
+        // The extension and the WebView open the same file, and a policy can be
+        // added by an app update — so the rows already there have to be walked
+        // once. Reads that name a term wait for that; ordinary reads don't.
+        let recording = RecordingDriver(try SqliteDriver(path: ":memory:"))
+        driver = recording
+        let before = try SqliteArmadaDb(db: recording)
+        store = before
+        try before.event(tenant: "t", rumor: rumor(id: "old", createdAt: 100, tags: [["p", "ana"]]))
+
+        let after = try SqliteArmadaDb(db: recording, termsOf: peersPolicy)
+        store = after
+        try after.event(tenant: "t", rumor: rumor(id: "fresh", createdAt: 200, tags: [["p", "ana"]]))
+
+        XCTAssertEqual(
+            try after.query(tenant: "t", filters: filters(#"{"search":"conv:ana"}"#)).map(\.id),
+            ["fresh", "old"]
+        )
+
+        // And only once: the second store recorded that it walked the tenant.
+        let third = try SqliteArmadaDb(
+            db: recording,
+            termsOf: { _, _ in
+                XCTFail("the tenant was walked a second time")
+                return []
+            }
+        )
+        store = third
+        XCTAssertEqual(
+            try third.query(tenant: "t", filters: filters(#"{"search":"conv:ana"}"#)).map(\.id),
+            ["fresh", "old"]
+        )
+    }
+
+    // MARK: - NIP-17 conversation terms
+    //
+    // These must agree with `src/lib/nip17/conversation.ts` and `Dm17.kt`
+    // exactly. The term this derivation produces is what a rumor is FILED
+    // under, and the WebView looks it up by deriving it independently — so a
+    // divergence is a message received while the app was closed that the thread
+    // never shows.
+
+    func testAGroupIsTheParticipantSetFromEitherDirection() throws {
+        let me = "self"
+        // Received: the sender joins the room whether or not they p-tagged
+        // themselves, and the viewer is never their own peer.
+        let received = try rumor(id: "r", pubkey: "alice", tags: [["p", me], ["p", "bob"]])
+        XCTAssertEqual(Dm17Conversation.peers(of: received, self: me), ["alice", "bob"])
+
+        // Our own copy of the same room reduces to the same set, which is what
+        // makes both halves of one conversation one conversation.
+        let mine = try rumor(id: "m", pubkey: me, tags: [["p", "alice"], ["p", "bob"]])
+        XCTAssertEqual(Dm17Conversation.peers(of: mine, self: me), ["alice", "bob"])
+        XCTAssertEqual(
+            Dm17Conversation.term(["alice", "bob"]),
+            Dm17Conversation.term(["bob", "alice"])
+        )
+    }
+
+    func testNoteToSelfIsItsOwnConversation() throws {
+        let me = "self"
+        let note = try rumor(id: "n", pubkey: me, tags: [["p", me]])
+        XCTAssertEqual(Dm17Conversation.peers(of: note, self: me), [me])
+    }
+
+    func testAOneToOneTermIsThePeerAloneUnseparated() {
+        // Pubkeys are fixed-width hex, so a set is joined with nothing — a term
+        // crosses a NIP-50 search string, whose parse ends a token at
+        // whitespace.
+        XCTAssertEqual(Dm17Conversation.term(["alice"]), "conv:alice")
+        XCTAssertEqual(Dm17Conversation.term(["bob", "alice"]), "conv:alicebob")
+    }
+
+    func testFilesARumorUnderTheConversationItsTenantNames() throws {
+        let me = "self"
+        let received = try rumor(id: "r", pubkey: "alice", tags: [["p", me], ["p", "bob"]])
+        XCTAssertEqual(
+            TermPolicies.terms(of: received, tenantId: "dm17:\(me)"),
+            ["conv:alicebob"]
+        )
+        // A tenant that derives no terms says so, rather than guessing.
+        XCTAssertEqual(TermPolicies.terms(of: received, tenantId: "main"), [])
+    }
+
+    func testAnUnattributableRumorIsFiledUnderNothing() throws {
+        let me = "self"
+        let orphan = try rumor(id: "o", pubkey: me)
+        XCTAssertNil(Dm17Conversation.peers(of: orphan, self: me))
+        XCTAssertEqual(TermPolicies.terms(of: orphan, tenantId: "dm17:\(me)"), [])
     }
 
     // MARK: - Helpers

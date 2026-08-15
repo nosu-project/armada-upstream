@@ -36,7 +36,14 @@ enum ArmadaDbSchema {
     /// and an unrecognized version is refused rather than opened, since
     /// `CREATE IF NOT EXISTS` against an unknown layout silently succeeds and
     /// then misreads every row.
-    static let version: Int64 = 1
+    ///
+    /// v1 → v2 adds `rumor_terms` and `rumor_term_tenants` and needs no
+    /// rebuild: the new tables are empty and `CREATE IF NOT EXISTS` installs
+    /// them. A term cannot be derived in SQL, so the rows written before them
+    /// are indexed by the per-tenant backfill instead, gated on
+    /// `rumor_term_tenants` — which makes it indifferent to which version the
+    /// file arrived at it from.
+    static let version: Int64 = 2
 
     /// The tables, indexes and triggers every ArmadaDB file has.
     static let base: [String] = [
@@ -127,6 +134,36 @@ enum ArmadaDbSchema {
         CREATE TABLE IF NOT EXISTS kv (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        ) WITHOUT ROWID
+        """,
+        // The derived term index: facts a tenant's TermPolicy computes from a
+        // rumor, which no tag of its own states — a NIP-17 conversation being
+        // its participant SET. `seq` is the rumor's rowid and encodes time, so
+        // the primary key's third column orders each term's rumors newest-last;
+        // read backwards, a term lookup is one contiguous range walk that stops
+        // at the limit. WITHOUT ROWID because the key IS the whole row.
+        """
+        CREATE TABLE IF NOT EXISTS rumor_terms (
+            tenant INTEGER NOT NULL,
+            term TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            PRIMARY KEY (tenant, term, seq)
+        ) WITHOUT ROWID
+        """,
+        // The delete path goes the other way — by rumor, not by term — and has
+        // no term to seek with, so it needs an index of its own or every
+        // deletion scans the table.
+        "CREATE INDEX IF NOT EXISTS rumor_terms_seq ON rumor_terms (seq)",
+        """
+        CREATE TRIGGER IF NOT EXISTS rumors_terms_delete AFTER DELETE ON rumors BEGIN
+            DELETE FROM rumor_terms WHERE seq = old.seq;
+        END
+        """,
+        // Which tenants' pre-existing rows have been through their policy. A
+        // row here means the backfill is done and reads need not wait again.
+        """
+        CREATE TABLE IF NOT EXISTS rumor_term_tenants (
+            tenant INTEGER PRIMARY KEY
         ) WITHOUT ROWID
         """,
     ]

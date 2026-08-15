@@ -34,6 +34,17 @@ class ArmadaDbTest {
         return SqliteArmadaDb(recording, search = search).also { store = it }
     }
 
+    /**
+     * The same store with a stand-in term policy, so the derived-term tests
+     * exercise the index rather than NIP-17. The engine never interprets a term
+     * — that is the contract — so any policy is as good as the real one here.
+     */
+    private fun openWithTerms(policy: (Rumor, String) -> List<String>): SqliteArmadaDb {
+        val recording = RecordingDriver(BundledSqlDriver(":memory:"))
+        driver = recording
+        return SqliteArmadaDb(recording, termsOf = policy).also { store = it }
+    }
+
     @After
     fun tearDown() {
         runCatching { store?.close() }
@@ -802,7 +813,7 @@ class ArmadaDbTest {
     // ── Schema migration ──────────────────────────────────────────────────────
 
     @Test
-    fun `rebuilds a v0 file into the v1 layout, preserving everything`() {
+    fun `rebuilds a v0 file into the current layout, preserving everything`() {
         val raw = BundledSqlDriver(":memory:")
 
         // The v0 layout, as shipped before schema versioning.
@@ -861,7 +872,7 @@ class ArmadaDbTest {
         // The layout moved...
         val columns = recording.query("SELECT name FROM pragma_table_info('rumors')") { it.text(0) }
         assertEquals(listOf("seq", "tenant", "id", "kind", "pubkey", "created_at", "tags", "content"), columns)
-        assertEquals(1L, recording.query("PRAGMA user_version") { it.long(0) }.first())
+        assertEquals(ArmadaDbSchema.VERSION, recording.query("PRAGMA user_version") { it.long(0) }.first())
 
         // ...and nothing else did: bodies, the tag index, the search index,
         // the coordinate and the KV all survive, with their old rowids.
@@ -883,6 +894,185 @@ class ArmadaDbTest {
 
     private fun rowCount(table: String): Long =
         driver!!.query("SELECT COUNT(*) FROM $table") { it.long(0) }.first()
+
+    // ── Derived terms ─────────────────────────────────────────────────────────
+    //
+    // The term index: facts a policy computes from a rumor, queried as NIP-50
+    // extension tokens. Ported from `ArmadaDB.test.ts`'s "derived terms" block,
+    // and NIP-17-free for the same reason it is there — the engine never
+    // interprets a term.
+
+    /** Files each rumor under the sorted set of its `p` tags. */
+    private val peersPolicy: (Rumor, String) -> List<String> = { rumor, _ ->
+        val set = rumor.tags.filter { it.getOrNull(0) == "p" }.mapNotNull { it.getOrNull(1) }
+            .distinct().sorted()
+        if (set.isEmpty()) emptyList() else listOf("conv:" + set.joinToString(""))
+    }
+
+    /** Every `p` tag as its own term, so one rumor carries several. */
+    private val eachPolicy: (Rumor, String) -> List<String> = { rumor, _ ->
+        rumor.tags.filter { it.getOrNull(0) == "p" }.mapNotNull { it.getOrNull(1) }.map { "with:$it" }
+    }
+
+    @Test
+    fun `selects exactly the rumors a policy filed under a term`() {
+        val db = openWithTerms(peersPolicy)
+        db.event("t", rumor(id = "pair", tags = listOf(listOf("p", "ana"), listOf("p", "ben"))))
+        db.event("t", rumor(id = "ana", tags = listOf(listOf("p", "ana"))))
+        db.event("t", rumor(id = "ben", tags = listOf(listOf("p", "ben"))))
+
+        // The exact set, and neither of the 1:1s that share its members — which
+        // is the whole thing a tag filter cannot express.
+        assertEquals(listOf("pair"), db.query("t", filters("{\"search\":\"conv:anaben\"}")).map { it.id })
+        assertEquals(listOf("ana"), db.query("t", filters("{\"search\":\"conv:ana\"}")).map { it.id })
+        assertEquals(listOf("ben"), db.query("t", filters("{\"search\":\"conv:ben\"}")).map { it.id })
+    }
+
+    @Test
+    fun `requires every term a filter names`() {
+        val db = openWithTerms(eachPolicy)
+        db.event("t", rumor(id = "both", createdAt = 200, tags = listOf(listOf("p", "ana"), listOf("p", "ben"))))
+        db.event("t", rumor(id = "one", createdAt = 100, tags = listOf(listOf("p", "ana"))))
+
+        assertEquals(listOf("both", "one"), db.query("t", filters("{\"search\":\"with:ana\"}")).map { it.id })
+        // Conditions within a filter AND, terms included.
+        assertEquals(listOf("both"), db.query("t", filters("{\"search\":\"with:ana with:ben\"}")).map { it.id })
+        assertEquals(emptyList<String>(), db.query("t", filters("{\"search\":\"with:ana with:cy\"}")).map { it.id })
+    }
+
+    @Test
+    fun `matches nothing for a term in a tenant that derives none`() {
+        val db = open()
+        db.event("t", rumor(id = "a", tags = listOf(listOf("p", "ana"))))
+
+        // Fails closed, exactly like an unsupported NIP-50 extension: a
+        // narrowing query that can't be honored answers with nothing.
+        assertEquals(emptyList<String>(), db.query("t", filters("{\"search\":\"conv:ana\"}")).map { it.id })
+        assertEquals(0L, db.count("t", filters("{\"search\":\"conv:ana\"}")).count)
+    }
+
+    @Test
+    fun `a term cannot be forged by a tag the sender wrote`() {
+        val db = openWithTerms(peersPolicy)
+        db.event("t", rumor(id = "real", tags = listOf(listOf("p", "ana"))))
+        // A sender claiming a term for a conversation they are not in. Terms
+        // live in their own table, so there is nothing here for a tag to reach.
+        db.event("t", rumor(id = "fake", tags = listOf(listOf("conv", "ana"), listOf("~", "conv:ana"))))
+
+        assertEquals(listOf("real"), db.query("t", filters("{\"search\":\"conv:ana\"}")).map { it.id })
+    }
+
+    @Test
+    fun `narrows a term alongside the filter's other constraints`() {
+        val db = openWithTerms(peersPolicy)
+        db.event("t", rumor(id = "kept", kind = 14, pubkey = "ana", tags = listOf(listOf("p", "ana"))))
+        db.event("t", rumor(id = "wrongkind", kind = 7, pubkey = "ana", tags = listOf(listOf("p", "ana"))))
+        db.event("t", rumor(id = "wrongauthor", kind = 14, pubkey = "ben", tags = listOf(listOf("p", "ana"))))
+        db.event("t", rumor(id = "wrongconv", kind = 14, pubkey = "ana", tags = listOf(listOf("p", "ben"))))
+
+        val got = db.query("t", filters("{\"search\":\"conv:ana\",\"kinds\":[14],\"authors\":[\"ana\"]}"))
+        assertEquals(listOf("kept"), got.map { it.id })
+    }
+
+    @Test
+    fun `applies the limit to the term's own rows`() {
+        val db = openWithTerms(peersPolicy)
+        // Interleaved, so a limit applied before the term would come back short.
+        for (i in 0 until 6) {
+            db.event("t", rumor(id = "ana-$i", createdAt = 100 + i * 2L, tags = listOf(listOf("p", "ana"))))
+            db.event("t", rumor(id = "ben-$i", createdAt = 101 + i * 2L, tags = listOf(listOf("p", "ben"))))
+        }
+
+        val got = db.query("t", filters("{\"search\":\"conv:ana\",\"limit\":3}"))
+        assertEquals(listOf("ana-5", "ana-4", "ana-3"), got.map { it.id })
+    }
+
+    @Test
+    fun `drives a term lookup off its own index, newest-first`() {
+        val db = openWithTerms(peersPolicy)
+        db.event("t", rumor(id = "a", tags = listOf(listOf("p", "ana"))))
+        driver!!.selects.clear()
+        db.query("t", filters("{\"search\":\"conv:ana\",\"limit\":10}"))
+
+        // The CROSS JOIN is what fixes the join order: the rumors table must be
+        // the inner side, seeked by rowid, or a condition on one of its columns
+        // makes the planner drive from there and sort afterwards.
+        val scan = driver!!.selects.first { it.first.contains("rumor_terms x") }.first
+        assertTrue(scan.contains("CROSS JOIN rumors r ON r.seq = x.seq"))
+        assertTrue(scan.contains("ORDER BY x.seq DESC"))
+        assertTrue(scan.contains("LIMIT ?"))
+    }
+
+    @Test
+    fun `counts and removes by term`() {
+        val db = openWithTerms(peersPolicy)
+        db.event("t", rumor(id = "ana", tags = listOf(listOf("p", "ana"))))
+        db.event("t", rumor(id = "ben", tags = listOf(listOf("p", "ben"))))
+
+        assertEquals(1L, db.count("t", filters("{\"search\":\"conv:ana\"}")).count)
+        db.remove("t", filters("{\"search\":\"conv:ana\"}"))
+        assertEquals(listOf("ben"), db.query("t", filters("{}")).map { it.id })
+    }
+
+    @Test
+    fun `forgets a term when its rumor is deleted`() {
+        val db = openWithTerms(peersPolicy)
+        db.event("t", rumor(id = "gone", pubkey = "ana", tags = listOf(listOf("p", "ana"))))
+        db.event("t", rumor(id = "req", kind = 5, pubkey = "ana", tags = listOf(listOf("e", "gone"))))
+
+        assertEquals(emptyList<String>(), db.query("t", filters("{\"search\":\"conv:ana\"}")).map { it.id })
+        // The trigger cleared the index row, not just the rumor.
+        assertEquals(
+            emptyList<Long>(),
+            driver!!.query("SELECT seq FROM rumor_terms WHERE term = ?", listOf("conv:ana")) { it.long(0) },
+        )
+    }
+
+    @Test
+    fun `keeps a term inside its own tenant`() {
+        val db = openWithTerms(peersPolicy)
+        db.event("a", rumor(id = "mine", tags = listOf(listOf("p", "ana"))))
+        db.event("b", rumor(id = "theirs", tags = listOf(listOf("p", "ana"))))
+
+        assertEquals(listOf("mine"), db.query("a", filters("{\"search\":\"conv:ana\"}")).map { it.id })
+    }
+
+    @Test
+    fun `combines a term with a keyword`() {
+        val db = openWithTerms(peersPolicy)
+        db.event("t", rumor(id = "hit", content = "the quick brown fox", tags = listOf(listOf("p", "ana"))))
+        db.event("t", rumor(id = "otherconv", content = "the quick brown fox", tags = listOf(listOf("p", "ben"))))
+        db.event("t", rumor(id = "othertext", content = "nothing here", tags = listOf(listOf("p", "ana"))))
+
+        assertEquals(listOf("hit"), db.query("t", filters("{\"search\":\"brown conv:ana\"}")).map { it.id })
+    }
+
+    @Test
+    fun `indexes rows that were already stored when the policy arrived`() {
+        // The service and the WebView open the same file, and a policy can be
+        // added by an app update — so the rows already there have to be walked
+        // once. Reads that name a term wait for that; ordinary reads don't.
+        val recording = RecordingDriver(BundledSqlDriver(":memory:"))
+        driver = recording
+        val before = SqliteArmadaDb(recording, migrate = true).also { store = it }
+        before.event("t", rumor(id = "old", createdAt = 100, tags = listOf(listOf("p", "ana"))))
+
+        val after = SqliteArmadaDb(recording, termsOf = peersPolicy).also { store = it }
+        after.event("t", rumor(id = "fresh", createdAt = 200, tags = listOf(listOf("p", "ana"))))
+
+        assertEquals(
+            listOf("fresh", "old"),
+            after.query("t", filters("{\"search\":\"conv:ana\"}")).map { it.id },
+        )
+
+        // And only once: the second store records that it walked the tenant.
+        val third = SqliteArmadaDb(recording, termsOf = { _, _ -> error("re-walked") })
+            .also { store = it }
+        assertEquals(
+            listOf("fresh", "old"),
+            third.query("t", filters("{\"search\":\"conv:ana\"}")).map { it.id },
+        )
+    }
 
     private fun filters(vararg json: String): List<JSONObject> = json.map { JSONObject(it) }
 
