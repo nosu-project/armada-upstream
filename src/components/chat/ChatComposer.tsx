@@ -409,6 +409,17 @@ interface ChatComposerProps {
    * Ignored on the `sendOverride` path, where the caller owns the kind.
    */
   messageKind?: number;
+  /**
+   * Open an inline edit on the user's most recent editable message, invoked when
+   * ArrowUp is pressed in an EMPTY composer (the Slack/Discord gesture). The
+   * surface owns which message that is — it has the real timeline (this
+   * component is passed `messages={[]}` on the DM/Concord/thread paths) and its
+   * own edit rules and pending state (see `lastEditableOwnMessage`). Return true
+   * if an edit was opened and the composer swallows the key; a false/undefined
+   * return leaves ArrowUp an ordinary no-op. Omit on surfaces without inline
+   * edit.
+   */
+  onEditLast?: () => boolean;
 }
 
 /**
@@ -421,7 +432,7 @@ interface ChatComposerProps {
  * same input/upload/picker UX, but sending is delegated to the caller and
  * group-only features (polls, NIP-29 tagging) are disabled.
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, sendOverride, canSend, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, replyExtraTags, messageKind = KIND_GROUP_CHAT }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, sendOverride, canSend, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, replyExtraTags, messageKind = KIND_GROUP_CHAT, onEditLast }: ChatComposerProps) {
   const { user } = useCurrentUser();
   const composerBoundsRef = useComposerBoundsRef();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
@@ -1805,6 +1816,23 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       // clicking away doesn't dismiss it (it's inline composer state, not a modal).
       e.preventDefault();
       setMode("post");
+    } else if (
+      e.key === "ArrowUp" &&
+      onEditLast &&
+      mode === "post" &&
+      !replyTo &&
+      !hasContent &&
+      pendingUploads.length === 0 &&
+      !e.shiftKey &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      !e.nativeEvent.isComposing
+    ) {
+      // Only from a truly empty composer, where ArrowUp is otherwise a no-op and
+      // no autocomplete overlay (which needs trigger text) is open to claim the
+      // key: reopen the user's last message for editing, à la Slack/Discord.
+      if (onEditLast()) e.preventDefault();
     }
   };
 

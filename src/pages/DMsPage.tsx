@@ -7,6 +7,7 @@ import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { DittoIcon } from "@/components/brand/DittoIcon";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage } from "@/components/chat/ChatMessage";
+import { lastEditableOwnMessage } from "@/components/chat/transport";
 import type { ChatMsg } from "@/components/chat/transport";
 import { getQuoteReplyToId } from "@/components/chat/messageHelpers";
 import { ReplyContext } from "@/components/chat/ReplyContext";
@@ -1429,6 +1430,12 @@ function Conversation({
           // the user turned typing indicators on.
           onTyping={publishTyping}
           sendOverride={handleSubmit}
+          onEditLast={() => {
+            const target = lastEditableOwnMessage(transportRef.current.messages, user?.pubkey, (id) => transportRef.current.sendStatusFor?.(id) !== undefined);
+            if (!target) return false;
+            setEditingId(target.id);
+            return true;
+          }}
         />
       )}
 

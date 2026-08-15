@@ -67,7 +67,7 @@ import { withSignature } from "@/lib/publishOutbox";
 import { type SlashAction } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
-import { threadSummary } from "@/components/chat/transport";
+import { lastEditableOwnMessage, threadSummary } from "@/components/chat/transport";
 import type { ChatMsg, ChatTransport } from "@/components/chat/transport";
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -923,6 +923,12 @@ export function BuzzChat({
             canModerate={canModerate}
             onTyping={publishTyping}
             onSlashAction={handleSlashAction}
+            onEditLast={() => {
+              const target = lastEditableOwnMessage(timeline, user?.pubkey, (id) => sendStatus[id] !== undefined);
+              if (!target) return false;
+              setEditingId(target.id);
+              return true;
+            }}
           />
         ) : membershipPending ? (
           <div className="p-2" aria-hidden>

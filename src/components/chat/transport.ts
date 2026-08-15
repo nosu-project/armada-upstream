@@ -20,6 +20,8 @@ import type { CalendarEvent, RsvpStatus, RsvpTally } from "@/lib/calendar";
 import type { PollOption, PollTally, PollType } from "@/lib/polls";
 import type { ZapTally } from "@/lib/zaps";
 import type { NostrRumor } from "@/lib/nostrRumor";
+import { KIND_GROUP_CHAT } from "@/lib/nip29";
+import { KIND_DM_CHAT } from "@/lib/nip17/protocol";
 
 export type { ReactInput, ReactionTally, SendStatus };
 
@@ -366,4 +368,35 @@ export function threadSummary(replies: ChatMsg[]): {
     }
   }
   return { participants, lastReplyAt };
+}
+
+/**
+ * The user's most recent message that an inline edit can reopen, scanning a
+ * chronological (oldest-first) list from the end. Drives the "ArrowUp in an
+ * empty composer edits your last message" gesture, and applies the SAME
+ * editability gate as `ChatMessage`'s `canEdit`: the message is the user's own,
+ * is plain chat text (NIP-29 group kind 9 or NIP-17 kind 14 — polls, files and
+ * other structured rows carry semantics a text field can't preserve), and is
+ * not an in-flight optimistic send (its id isn't a relay event yet, so the
+ * delete-and-republish edit would have nothing to act on). Returns undefined
+ * when there is nothing to edit.
+ *
+ * `isPending` reports whether an id is a still-pending/failed optimistic send
+ * (typically `(id) => transport.sendStatusFor?.(id) !== undefined`); omit it on
+ * transports that don't track optimistic status.
+ */
+export function lastEditableOwnMessage(
+  messages: readonly ChatMsg[],
+  userPubkey: string | undefined,
+  isPending?: (id: string) => boolean,
+): ChatMsg | undefined {
+  if (!userPubkey) return undefined;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.pubkey !== userPubkey) continue;
+    if (m.kind !== KIND_GROUP_CHAT && m.kind !== KIND_DM_CHAT) continue;
+    if (isPending?.(m.id)) continue;
+    return m;
+  }
+  return undefined;
 }

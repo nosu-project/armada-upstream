@@ -162,7 +162,7 @@ import { useLegacyFocusParams } from "@/hooks/useLegacyFocusParams";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { shortTimeAgo } from "@/lib/formatTime";
 
-import { authorsByRecency, threadSummary } from "@/components/chat/transport";
+import { authorsByRecency, lastEditableOwnMessage, threadSummary } from "@/components/chat/transport";
 import type { ChatMsg, MessageCalendar, MessagePoll, MessageReactions, MessageZaps, OnchainZapAnnouncement, SendStatus, ZapPayment } from "@/components/chat/transport";
 
 /** Stable empty replies array so a thread-less row keeps a constant prop. */
@@ -3752,6 +3752,12 @@ export function ConcordPage() {
                           onCancelReply={() => setReplyTo(undefined)}
                           onTyping={publishTyping}
                           encryptAttachments
+                          onEditLast={canWrite ? () => {
+                            const target = lastEditableOwnMessage(transportRef.current.messages, user?.pubkey, (id) => transportRef.current.sendStatusFor?.(id) !== undefined);
+                            if (!target) return false;
+                            setEditingId(target.id);
+                            return true;
+                          } : undefined}
                         />
                       </>
                     )

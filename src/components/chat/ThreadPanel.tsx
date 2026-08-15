@@ -61,6 +61,7 @@ import { chatUrl, type ChatRoute } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 import type { MessageActionItem } from "@/components/chat/messageActions";
+import { lastEditableOwnMessage } from "@/components/chat/transport";
 import type { ChatMsg, ChatTransport, MessageReactions, MessageZaps, OnchainZapAnnouncement, ZapPayment } from "@/components/chat/transport";
 
 /**
@@ -535,6 +536,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
   const canModerate = transport.canModerate;
   const onDelete = transport.deleteMessage;
   const editMessage = transport.editMessage;
+  const { user } = useCurrentUser();
   const composerBoundsRef = useRef<HTMLElement | null>(null);
 
   const [editingId, setEditingId] = useState<string | undefined>(undefined);
@@ -809,6 +811,13 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
             // reader is parked at some older one.
             clearReplyFocus();
           }}
+          onEditLast={editMessage ? () => {
+            // The thread's own messages, oldest-first: the root, then its replies.
+            const target = lastEditableOwnMessage([root, ...replies], user?.pubkey, (id) => transport.sendStatusFor?.(id) !== undefined);
+            if (!target) return false;
+            setEditingId(target.id);
+            return true;
+          } : undefined}
         />
       ) : (
         <div className="p-3 shrink-0 pb-safe">
