@@ -1130,13 +1130,213 @@ class ArmadaDbTest {
         )
     }
 
+    // ── distinct: collapsing a read to one rumor per group ───────────────────
+    //
+    // Ported from `ArmadaDB.test.ts`'s "collapsing a read with distinct:" block,
+    // and NIP-17-free for the same reason: the engine never interprets a term.
+
+    /**
+     * Files each rumor under the sorted set of its `p` tags, in two namespaces —
+     * `conv:` for every kind and `msg:` for kind 1 only. That is the shape the DM
+     * list uses: a collapse can then name the newest MESSAGE of a conversation
+     * without the engine reading any rumor's kind.
+     */
+    private val convPolicy: (Rumor, String) -> List<String> = { rumor, _ ->
+        val set = rumor.tags.filter { it.getOrNull(0) == "p" }.mapNotNull { it.getOrNull(1) }
+            .distinct().sorted()
+        if (set.isEmpty()) {
+            emptyList()
+        } else {
+            val key = set.joinToString("")
+            if (rumor.kind == 1) listOf("conv:$key", "msg:$key") else listOf("conv:$key")
+        }
+    }
+
+    @Test
+    fun `returns the newest rumor of every group`() {
+        val db = openWithTerms(convPolicy)
+        db.event("t", rumor(id = "ana-old", createdAt = 100, tags = listOf(listOf("p", "ana"))))
+        db.event("t", rumor(id = "ana-new", createdAt = 300, tags = listOf(listOf("p", "ana"))))
+        db.event("t", rumor(id = "ben", createdAt = 200, tags = listOf(listOf("p", "ben"))))
+        db.event(
+            "t",
+            rumor(id = "group", createdAt = 150, tags = listOf(listOf("p", "ana"), listOf("p", "ben"))),
+        )
+
+        // One row per participant SET, ordered by that row — not the newest
+        // rumors, which is what an ungrouped read with a limit would have given.
+        assertEquals(
+            listOf("ana-new", "ben", "group"),
+            db.query("t", filters("{\"search\":\"distinct:conv\"}")).map { it.id },
+        )
+    }
+
+    @Test
+    fun `counts groups against the limit, not rows`() {
+        val db = openWithTerms(convPolicy)
+        for (i in 0 until 5) {
+            db.event("t", rumor(id = "busy-$i", createdAt = 200L + i, tags = listOf(listOf("p", "ana"))))
+        }
+        db.event("t", rumor(id = "quiet", createdAt = 100, tags = listOf(listOf("p", "ben"))))
+
+        // The old shape's bug in one assertion: the newest two ROWS are two
+        // messages of the busy thread and no sign of the quiet one.
+        assertEquals(
+            listOf("busy-4", "quiet"),
+            db.query("t", filters("{\"search\":\"distinct:conv\",\"limit\":2}")).map { it.id },
+        )
+    }
+
+    @Test
+    fun `excludes a rumor with no term in the namespace`() {
+        val db = openWithTerms(convPolicy)
+        db.event("t", rumor(id = "listed", tags = listOf(listOf("p", "ana"))))
+        // In a conversation, but not in the `msg:` grouping.
+        db.event("t", rumor(id = "reaction", kind = 7, tags = listOf(listOf("p", "ana"))))
+        // In no conversation at all.
+        db.event("t", rumor(id = "orphan"))
+
+        assertEquals(
+            listOf("listed"),
+            db.query("t", filters("{\"search\":\"distinct:msg\"}")).map { it.id },
+        )
+    }
+
+    @Test
+    fun `names one namespace, whatever the delimiter`() {
+        val db = openWithTerms(convPolicy)
+        db.event("t", rumor(id = "ana", tags = listOf(listOf("p", "ana"))))
+
+        assertEquals(
+            listOf("ana"),
+            db.query("t", filters("{\"search\":\"distinct:conv\"}")).map { it.id },
+        )
+        assertEquals(
+            listOf("ana"),
+            db.query("t", filters("{\"search\":\"distinct:conv:\"}")).map { it.id },
+        )
+    }
+
+    @Test
+    fun `applies the rest of the filter before collapsing`() {
+        val db = openWithTerms(convPolicy)
+        db.event(
+            "t",
+            rumor(id = "mine", pubkey = "me", createdAt = 100, tags = listOf(listOf("p", "ana"))),
+        )
+        db.event(
+            "t",
+            rumor(id = "theirs", pubkey = "ana", createdAt = 200, tags = listOf(listOf("p", "ana"))),
+        )
+
+        // The newest rumor of the group is theirs; the newest MATCHING one is
+        // mine. Collapsing first and filtering after would answer with nothing.
+        assertEquals(
+            listOf("mine"),
+            db.query("t", filters("{\"search\":\"distinct:conv\",\"authors\":[\"me\"]}")).map { it.id },
+        )
+        assertEquals(
+            emptyList<String>(),
+            db.query("t", filters("{\"search\":\"distinct:conv\",\"kinds\":[7]}")).map { it.id },
+        )
+    }
+
+    @Test
+    fun `bounds the window before collapsing too`() {
+        val db = openWithTerms(convPolicy)
+        db.event("t", rumor(id = "early", createdAt = 100, tags = listOf(listOf("p", "ana"))))
+        db.event("t", rumor(id = "late", createdAt = 300, tags = listOf(listOf("p", "ana"))))
+
+        assertEquals(
+            listOf("early"),
+            db.query("t", filters("{\"search\":\"distinct:conv\",\"until\":200}")).map { it.id },
+        )
+        assertEquals(
+            listOf("late"),
+            db.query("t", filters("{\"search\":\"distinct:conv\",\"since\":200}")).map { it.id },
+        )
+        assertEquals(
+            emptyList<String>(),
+            db.query("t", filters("{\"search\":\"distinct:conv\",\"since\":400}")).map { it.id },
+        )
+    }
+
+    @Test
+    fun `combines a collapse with a term`() {
+        val db = openWithTerms(convPolicy)
+        db.event("t", rumor(id = "ana", tags = listOf(listOf("p", "ana"))))
+        db.event("t", rumor(id = "ben", tags = listOf(listOf("p", "ben"))))
+
+        assertEquals(
+            listOf("ana"),
+            db.query("t", filters("{\"search\":\"distinct:conv conv:ana\"}")).map { it.id },
+        )
+    }
+
+    @Test
+    fun `counts the groups`() {
+        val db = openWithTerms(convPolicy)
+        db.event("t", rumor(id = "a1", tags = listOf(listOf("p", "ana"))))
+        db.event("t", rumor(id = "a2", tags = listOf(listOf("p", "ana"))))
+        db.event("t", rumor(id = "b1", tags = listOf(listOf("p", "ben"))))
+
+        assertEquals(2L, db.count("t", filters("{\"search\":\"distinct:conv\"}")).count)
+    }
+
+    @Test
+    fun `refuses to remove by a collapse`() {
+        val db = openWithTerms(convPolicy)
+        db.event("t", rumor(id = "older", createdAt = 100, tags = listOf(listOf("p", "ana"))))
+        db.event("t", rumor(id = "newer", createdAt = 200, tags = listOf(listOf("p", "ana"))))
+
+        db.remove("t", filters("{\"search\":\"distinct:conv\"}"))
+
+        assertEquals(
+            listOf("newer", "older"),
+            db.query("t", filters("{\"search\":\"conv:ana\"}")).map { it.id },
+        )
+    }
+
+    @Test
+    fun `collapse matches nothing in a tenant that derives no terms`() {
+        val db = open()
+        db.event("t", rumor(id = "a", tags = listOf(listOf("p", "ana"))))
+
+        assertEquals(
+            emptyList<String>(),
+            db.query("t", filters("{\"search\":\"distinct:conv\"}")).map { it.id },
+        )
+    }
+
+    @Test
+    fun `refuses two collapses rather than picking one`() {
+        val db = openWithTerms(convPolicy)
+        db.event("t", rumor(id = "a", tags = listOf(listOf("p", "ana"))))
+
+        assertEquals(
+            emptyList<String>(),
+            db.query("t", filters("{\"search\":\"distinct:conv distinct:msg\"}")).map { it.id },
+        )
+    }
+
+    @Test
+    fun `refuses a namespace that isn't one`() {
+        val db = openWithTerms(convPolicy)
+        db.event("t", rumor(id = "a", tags = listOf(listOf("p", "ana"))))
+
+        assertEquals(
+            emptyList<String>(),
+            db.query("t", filters("{\"search\":\"distinct:conv:ana\"}")).map { it.id },
+        )
+    }
+
     @Test
     fun `pins the term generation to the other ports`() {
         // One number, written into a file three engines share: two ports that
         // disagree would each read the other's as stale and rebuild the index on
         // every open. `TERM_GENERATION` in `src/lib/db/termPolicies.ts` and
         // `TermPolicies.generation` in Swift are this literal.
-        assertEquals(1L, TermPolicies.GENERATION)
+        assertEquals(2L, TermPolicies.GENERATION)
     }
 
     private fun filters(vararg json: String): List<JSONObject> = json.map { JSONObject(it) }

@@ -581,7 +581,7 @@ class SqliteArmadaDb(
         val byId = LinkedHashMap<String, Rumor>()
 
         for (filter in parsed) {
-            for (rumor in queryFilter(ord, prefix, filter)) {
+            for (rumor in queryFilter(ord, prefix, tenant, filter)) {
                 byId[rumor.id] = rumor
             }
         }
@@ -590,7 +590,12 @@ class SqliteArmadaDb(
     }
 
     /** Run a single parsed filter through the planner. */
-    private fun queryFilter(ord: Int, prefix: String, filter: ParsedFilter): List<Rumor> {
+    private fun queryFilter(
+        ord: Int,
+        prefix: String,
+        tenant: String,
+        filter: ParsedFilter,
+    ): List<Rumor> {
         if (filter.neverMatch) return emptyList()
 
         val limit = filter.limit ?: Int.MAX_VALUE
@@ -601,10 +606,16 @@ class SqliteArmadaDb(
         // ids plans are lookups by key, not scans.
         plan.ids?.let { return queryIds(ord, it, filter, limit) }
 
+        // A collapse the index couldn't group is applied here instead: the rows
+        // come back in order and the first of each group survives. `limit` still
+        // means groups, so a page that collapses to fewer rows is followed by
+        // another rather than silently answering short.
+        val collapse = filter.distinct != null && !plan.grouped
+
         // A cursor yields only rows its conditions kept, and the limit is
         // applied after them, so a single complete plan IS the answer: run it
         // once and read the rumor bodies straight out of it.
-        if (plan.cursors.size == 1 && plan.sqlOnly) {
+        if (!collapse && plan.cursors.size == 1 && plan.sqlOnly) {
             val rows = readPage(
                 plan.cursors[0],
                 before = null,
@@ -616,11 +627,15 @@ class SqliteArmadaDb(
 
         val collected = ArrayList<Rumor>()
         val seen = HashSet<String>()
+        /** Groups already represented, when collapsing. */
+        val groups = HashSet<String>()
 
         // A complete plan yields only matches, so a page need be no larger than
         // what's still wanted; an incomplete one pages in chunks so a filter
-        // that matches little doesn't materialize the whole range.
-        var pageSize = if (plan.sqlOnly) minOf(limit, MAX_PAGE) else CHUNK_SIZE
+        // that matches little doesn't materialize the whole range. A collapsing
+        // one cannot size its page from the limit at all: how many rows a group
+        // costs isn't known until they are read.
+        var pageSize = if (plan.sqlOnly && !collapse) minOf(limit, MAX_PAGE) else CHUNK_SIZE
         var before: Long? = null
 
         while (collected.size < limit) {
@@ -632,9 +647,17 @@ class SqliteArmadaDb(
             for (candidate in page) {
                 if (collected.size >= limit) break
                 if (!seen.add(candidate.rumor.id)) continue
-                if (plan.sqlOnly || filter.matches(candidate.rumor, plan.searched)) {
-                    collected.add(candidate.rumor)
+                if (!(plan.sqlOnly || filter.matches(candidate.rumor, plan.searched))) continue
+
+                if (collapse) {
+                    // A rumor with no term in the namespace belongs to no group
+                    // and is excluded — the same "no term, no match" a term
+                    // lookup gives.
+                    val key = filter.collapseKey(termsOf(candidate.rumor, tenant))
+                    if (key == null || !groups.add(key)) continue
                 }
+
+                collected.add(candidate.rumor)
             }
 
             // A short page means the scan is exhausted.
@@ -849,20 +872,29 @@ class SqliteArmadaDb(
     private fun planScan(ord: Int, prefix: String, filter: ParsedFilter): ScanPlan {
         val time = timeRange(filter)
 
-        // 0. derived terms — ahead of everything, including ids, because
+        // 0. a collapse — one rumor per term in a namespace. Grouped in the
+        //    index when nothing outside it has to be tested; otherwise the
+        //    filter is planned as usual and collapsed as the rows come back
+        //    (see [queryFilter]), which is the only shape that can honour a row
+        //    condition BEFORE the collapse.
+        if (filter.distinct != null) {
+            planDistinct(ord, filter, time)?.let { return it }
+        }
+
+        // 1. derived terms — ahead of everything else, including ids, because
         //    nothing else can apply them: they are not in the rumor, so a plan
         //    that didn't resolve them in the index has no way to check them
         //    afterwards.
         if (filter.terms.isNotEmpty()) return planTerms(ord, filter, time)
 
-        // 1. ids — the (tenant, id) unique index.
+        // 2. ids — the (tenant, id) unique index.
         filter.ids?.let { return ScanPlan(ids = it, cursors = emptyList(), sqlOnly = false, searched = false) }
 
         // Without the content index there is nothing to resolve keywords
         // against, so they fall through to the in-memory match instead.
         val search = if (this.search) filter.searchQuery else null
 
-        // 2. tags, or a NIP-50 search: the index drives.
+        // 3. tags, or a NIP-50 search: the index drives.
         if (filter.tags.isNotEmpty() || search != null) {
             planFts(ord, prefix, filter, search, time)?.let { return it }
         }
@@ -895,7 +927,7 @@ class SqliteArmadaDb(
         val authors = filter.authors
         val pushKinds = kinds == null || kinds.size <= MAX_PUSHDOWN
 
-        // 3. authors + kinds, from the composite index. The seeks land in an
+        // 4. authors + kinds, from the composite index. The seeks land in an
         //    index whose entries are (tenant, pubkey, kind, time) in that order,
         //    so each walks straight to the newest rumors of a combination and
         //    stops.
@@ -916,7 +948,7 @@ class SqliteArmadaDb(
             return ScanPlan(null, cursors, sqlOnly = searched, searched = searched)
         }
 
-        // 4. authors alone, with kinds filtering the scan when there are few
+        // 5. authors alone, with kinds filtering the scan when there are few
         //    enough of them to be worth binding.
         if (authors != null) {
             val cursors = Sql.batch(authors, MAX_IN).map { chunk ->
@@ -936,7 +968,7 @@ class SqliteArmadaDb(
             return ScanPlan(null, cursors, sqlOnly = searched && pushKinds, searched = searched)
         }
 
-        // 5. kinds.
+        // 6. kinds.
         if (kinds != null) {
             val cursors = Sql.batch(kinds, MAX_IN).map { chunk ->
                 val conditions = arrayListOf("tenant = ?", Sql.memberOf("kind", chunk))
@@ -949,7 +981,7 @@ class SqliteArmadaDb(
             return ScanPlan(null, cursors, sqlOnly = searched, searched = searched)
         }
 
-        // 6. fallback — the whole tenant, newest-first. `(tenant)` is `(tenant,
+        // 7. fallback — the whole tenant, newest-first. `(tenant)` is `(tenant,
         //    seq)`, so this is a backwards walk of one contiguous index range.
         val conditions = arrayListOf("tenant = ?")
         val params = ArrayList<Any?>()
@@ -961,6 +993,84 @@ class SqliteArmadaDb(
             listOf(TableCursor("rumors INDEXED BY rumors_tenant", conditions, params)),
             sqlOnly = searched,
             searched = searched,
+        )
+    }
+
+    /**
+     * Plan a `distinct:<namespace>` collapse in the INDEX: one row per term in
+     * the namespace, each the newest under it.
+     *
+     * This is the plan the conversation list exists for. `rumor_terms` is keyed
+     * `(tenant, term, seq)`, so a namespace is one contiguous range and
+     * `GROUP BY term` is an ordered walk of it — no temp b-tree to group, and
+     * `MAX(seq)` is the last row of each block. What comes out is at most one
+     * `seq` per group, so the sorter that orders them by recency sorts
+     * CONVERSATIONS rather than messages, and the join reads exactly one rumor
+     * body per row returned.
+     *
+     * Returns null — leaving the caller to plan the filter as usual and collapse
+     * the rows afterwards — when anything outside the term index has to be
+     * tested. Row conditions apply BEFORE the collapse, and testing `kind` or
+     * `pubkey` inside the grouping would mean a rowid lookup and a whole row read
+     * per index row, which is precisely the cost this plan exists to avoid. Extra
+     * TERMS are the exception: they live in the same table, so they stay
+     * index-only as an `EXISTS`.
+     */
+    private fun planDistinct(ord: Int, filter: ParsedFilter, time: TimeRange): ScanPlan? {
+        val range = TermRange.of(filter.distinct!!) ?: return null
+
+        // Anything a row carries has to narrow the candidates, not the
+        // survivors, so it cannot be applied after the grouping — and applying
+        // it inside means reading the rows. A time bound the rowid encoding had
+        // to clamp counts as one of those, since only `created_at` can settle it.
+        if (
+            filter.ids != null || filter.kinds != null || filter.authors != null ||
+            filter.tags.isNotEmpty() || filter.searchKeywords != null ||
+            (!time.exact && (filter.since != null || filter.until != null))
+        ) {
+            return null
+        }
+
+        val conditions = arrayListOf("x.tenant = ?", "x.term >= ?")
+        val params = ArrayList<Any?>()
+        params.add(ord)
+        params.add(range.lower)
+
+        range.upper?.let {
+            conditions.add("x.term < ?")
+            params.add(it)
+        }
+        time.min?.let {
+            conditions.add("x.seq >= ?")
+            params.add(it)
+        }
+        time.max?.let {
+            conditions.add("x.seq <= ?")
+            params.add(it)
+        }
+        for (term in filter.terms) {
+            conditions.add(
+                "EXISTS (SELECT 1 FROM rumor_terms y WHERE y.tenant = x.tenant AND y.term = ? AND y.seq = x.seq)",
+            )
+            params.add(term)
+        }
+
+        val grouped = "(SELECT MAX(x.seq) AS seq FROM rumor_terms x${Sql.where(conditions)} GROUP BY x.term)"
+
+        return ScanPlan(
+            null,
+            listOf(
+                TableCursor(
+                    from = "$grouped g CROSS JOIN rumors r ON r.seq = g.seq",
+                    where = emptyList(),
+                    params = params,
+                    key = "g.seq",
+                    columns = R_RUMOR_COLUMNS,
+                ),
+            ),
+            sqlOnly = true,
+            searched = true,
+            grouped = true,
         )
     }
 
@@ -1256,7 +1366,15 @@ class SqliteArmadaDb(
 
     /** Remove every rumor in [tenant] matching the filters. */
     fun remove(tenant: String, filters: List<JSONObject>) = lock.withLock {
-        val rumors = query(tenant, filters)
+        // A `distinct:` collapse names one rumor per group, which is not something
+        // a deletion can coherently be asked for — and answering it as written
+        // would delete the newest message of every conversation. Dropped, so the
+        // filter removes nothing, which is the same direction every other
+        // unhonourable narrowing takes.
+        val deletable = filters.filter { ParsedFilter(it).distinct == null }
+        if (deletable.isEmpty()) return@withLock
+
+        val rumors = query(tenant, deletable)
         if (rumors.isEmpty()) return@withLock
 
         // Non-empty results mean the tenant has been written to, so it has an
@@ -1769,6 +1887,13 @@ private class ScanPlan(
     val sqlOnly: Boolean,
     /** Whether the plan applies the filter's NIP-50 keywords itself. */
     val searched: Boolean,
+    /**
+     * Whether the cursor already yields one row per `distinct:` group. When it
+     * doesn't, a collapsed filter is collapsed row by row as its pages come
+     * back, and `limit` counts groups rather than rows — so no limit may be
+     * pushed into the SQL.
+     */
+    val grouped: Boolean = false,
 )
 
 /**

@@ -49,8 +49,12 @@ const POLICIES: ReadonlyArray<readonly [prefix: string, policy: TermPolicy]> = [
  * conformance suites pin the literal.
  *
  *   1  `conv:<peers>` — a rumor filed under its NIP-17 conversation.
+ *   2  adds `convmsg:<peers>` (chat and file rumors only) and
+ *      `convmine:<peers>` (the same, authored by the viewer), which is what
+ *      makes the conversation list a collapse over an index rather than a
+ *      sample of the newest rumors.
  */
-export const TERM_GENERATION = 1;
+export const TERM_GENERATION = 2;
 
 /**
  * The policy governing `tenantId`, or `undefined` when it derives no terms —

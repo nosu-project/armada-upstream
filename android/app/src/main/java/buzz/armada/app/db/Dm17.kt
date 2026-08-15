@@ -25,6 +25,12 @@ internal object Dm17 {
      */
     val KINDS = setOf(5, 7, 14, 15, 1740)
 
+    /**
+     * The kinds worth LISTING — a chat message or a file — which [MSG_TERM] and
+     * [MINE_TERM] cover. The port of `DM_MESSAGE_KINDS`.
+     */
+    val MESSAGE_KINDS = setOf(14, 15)
+
     /** The ArmadaDB tenant holding one viewer's opened DMs. */
     fun tenant(self: String): String = TENANT_PREFIX + self
 
@@ -94,20 +100,51 @@ internal object Dm17 {
      * search string, whose parse ends a token at whitespace. Pubkeys are
      * fixed-width 64-char hex, so concatenating them is unambiguous.
      */
-    fun convTerm(peers: List<String>): String = "conv:" + peers.sorted().joinToString("")
+    fun convTerm(peers: List<String>, namespace: String = CONV_TERM): String =
+        "$namespace:" + peers.sorted().joinToString("")
+
+    /** The namespace every rumor of a conversation is filed under. */
+    const val CONV_TERM = "conv"
+
+    /**
+     * The namespace holding only the rumors worth listing (chat and file), so
+     * `distinct:convmsg` can name the newest MESSAGE of every conversation
+     * without any engine reading a rumor's kind. See `DM_MSG_TERM`.
+     */
+    const val MSG_TERM = "convmsg"
+
+    /**
+     * The same, restricted to messages the VIEWER sent — "conversations I have
+     * written in", which is what tells the notification path that a sender is not
+     * a stranger. See `DM_MINE_TERM`.
+     */
+    const val MINE_TERM = "convmine"
 
     /**
      * The [TermPolicy] for a `dm17:<self>` tenant: each rumor filed under the
-     * one conversation it belongs to.
+     * one conversation it belongs to, in every namespace it qualifies for.
      *
      * `self` comes from the TENANT ID, which is the whole shape of the
      * contract — [SqliteArmadaDb] never interprets a tenant id or a term, and
      * this is the layer that spells `dm17:` in the first place.
+     *
+     * Exactly one term per namespace, which `distinct:` requires: a rumor that
+     * was the newest of two groups could only ever be returned once.
+     *
+     * The service writes through this while the app is dead, so a message that
+     * arrives then is already in the conversation list's index when the app
+     * opens — which is the whole reason a policy binds to the tenant.
      */
     fun termsOf(rumor: Rumor, tenantId: String): List<String> {
         val self = tenantSelf(tenantId) ?: return emptyList()
         val peers = peersOf(rumor, self) ?: return emptyList()
-        return listOf(convTerm(peers))
+
+        val terms = mutableListOf(convTerm(peers))
+        if (rumor.kind in MESSAGE_KINDS) {
+            terms.add(convTerm(peers, MSG_TERM))
+            if (rumor.pubkey == self) terms.add(convTerm(peers, MINE_TERM))
+        }
+        return terms
     }
 
     /** The pubkey in a `dm17:<self>` tenant id, or null for any other id. */

@@ -41,7 +41,12 @@ import { tenantOptsFor } from "@/lib/db/termPolicies";
 import type { NRumorStore } from "@/lib/db/types";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import type { NostrRumor } from "@/lib/nostrRumor";
-import { dmConvTerm } from "@/lib/nip17/conversation";
+import {
+  DM_MESSAGE_KINDS,
+  DM_MINE_TERM,
+  DM_MSG_TERM,
+  dmConvTerm,
+} from "@/lib/nip17/conversation";
 import {
   DM_RUMOR_KINDS,
   dmConvKey,
@@ -449,42 +454,100 @@ export interface Dm17ConversationRow {
 
 /**
  * The newest chat/file rumor per conversation — the NIP-17 side of the
- * conversation list. Reads the newest `limit` message rumors and groups
- * client-side by participant set (fine at DM scale; reactions/deletes never
- * surface a conversation of their own).
+ * conversation list.
  *
- * Grouping by the full set is what makes a group thread ONE row rather than one
- * per member: the same message reaches this loop once, and its key is the same
- * whether we sent it or received it.
+ * TWO collapsed reads, and no window at all. `distinct:convmsg` returns the
+ * newest message of every conversation, one row each, and `distinct:convmine`
+ * the newest the VIEWER sent — so the list is complete and `mine` is complete,
+ * for a cost per conversation rather than per message. What this replaces read
+ * the newest 500 message rumors and grouped them in memory, which was not a
+ * window on the list but a SAMPLE of it: one busy thread with 500 recent
+ * messages hid every other conversation, and a peer the viewer had written to a
+ * year ago fell out of `mine` — which the push gateways read as "stranger", so
+ * their next message arrived as a request (see `useNostrPush`).
  *
- * `mine` marks conversations the viewer has participated in (authored at least
- * one message to), so the list can keep a thread you started with someone you
- * don't follow.
+ * Grouping by the full participant set is what makes a group thread ONE row
+ * rather than one per member, and the key is the same whether we sent the
+ * message or received it. The key is still re-derived from every row rather than
+ * read off the term that fetched it: a divergence between the two should cost a
+ * missing message, never a message in the wrong thread.
+ *
+ * `mine` marks conversations the viewer has authored a message in, so the list
+ * can keep a thread you started with someone you don't follow.
  */
 export async function queryDm17Conversations(
   self: string,
   opts: { limit?: number; signal?: AbortSignal } = {},
 ): Promise<Dm17ConversationRow[]> {
   await migrateLegacyDms(self).catch(() => undefined);
-  const events = await dm17Store(self).query(
-    [{ kinds: [KIND_DM_CHAT, KIND_DM_FILE], limit: opts.limit ?? 500 }],
+  const collapse = (namespace: string): NostrFilter => {
+    const filter: NostrFilter = { search: `distinct:${namespace}` };
+    // Deliberately no `kinds`: the namespace already means chat-or-file, and a
+    // kind constraint would have to be tested INSIDE the grouping, which costs a
+    // row read per index entry. The loop below asserts the kinds instead.
+    if (opts.limit !== undefined) filter.limit = opts.limit;
+    return filter;
+  };
+  const store = dm17Store(self);
+  const events = await store.query(
+    [collapse(DM_MSG_TERM), collapse(DM_MINE_TERM)],
     { signal: opts.signal },
   );
+
   const byConversation = new Map<string, OpenedDm>();
   const mine = new Set<string>();
-  for (const ev of events) {
-    if (isExpired(ev.tags)) continue;
+  /** Conversations whose newest message is expired but not yet swept. */
+  const stale = new Map<string, OpenedDm>();
+
+  const fold = (ev: NostrRumor): void => {
     const opened = storedToDm17(ev, self);
-    if (opened.peers.length === 0) continue;
+    if (opened.peers.length === 0) return;
+    if (!DM_MESSAGE_KINDS.includes(ev.kind)) return;
     const key = dmConvKey(opened.peers);
+    if (isExpired(ev.tags)) {
+      const worst = stale.get(key);
+      if (!worst || opened.createdAt > worst.createdAt) stale.set(key, opened);
+      return;
+    }
     if (opened.author === self) mine.add(key);
     const cur = byConversation.get(key);
     if (!cur || opened.createdAt > cur.createdAt) byConversation.set(key, opened);
+  };
+
+  for (const ev of events) fold(ev);
+
+  // A conversation whose collapsed row turned out to be expired has no row at
+  // all yet, though an older live message may still be in it — the collapse
+  // returns one rumor per group and cannot know which of them a sweep is about
+  // to remove. Those conversations are re-read once, by term, below the expired
+  // row: one filter each, all in one call, and only when disappearing messages
+  // are in play.
+  const missing = [...stale].filter(([key]) => !byConversation.has(key));
+  if (missing.length > 0) {
+    const retry = await store.query(
+      missing.map(([, latest]) => ({
+        kinds: [KIND_DM_CHAT, KIND_DM_FILE],
+        search: dmConvTerm(latest.peers),
+        until: latest.createdAt - 1,
+        limit: EXPIRED_RETRY,
+      })),
+      { signal: opts.signal },
+    );
+    for (const ev of retry) fold(ev);
   }
+
   return [...byConversation.entries()]
     .map(([key, latest]) => ({ key, peers: latest.peers, latest, mine: mine.has(key) }))
     .sort((a, b) => b.latest.createdAt - a.latest.createdAt);
 }
+
+/**
+ * How far back the conversation list looks for a live message when the newest
+ * one has expired. A handful, not a page: a thread whose last several messages
+ * have all expired unswept is a thread with nothing to show, and the sweep is
+ * what settles it.
+ */
+const EXPIRED_RETRY = 8;
 
 /**
  * Every locally-cached chat/file rumor whose decrypted content matches

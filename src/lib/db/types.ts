@@ -174,6 +174,19 @@ export interface ArmadaKVListOptions {
  * layer that spells the tenant id is the layer that decides what its rows mean
  * (see `termPolicy.ts`).
  *
+ * A term is therefore `<namespace>:<body>`, with the namespace everything up to
+ * the FIRST colon. That is not a new restriction — a token is the only way to
+ * name a term in a filter, and it is reassembled as `key:value`, so a term
+ * without a colon has never been queryable — but it is relied on by
+ * {@link TERM_NAMESPACES_RESERVED} and by `distinct:<namespace>`, which reduces
+ * a read to one rumor per term within one namespace. Two rules come with that:
+ *
+ *  - A policy must derive AT MOST ONE term per namespace per rumor. A rumor that
+ *    is the newest of two groups can only be returned once (a read de-duplicates
+ *    by id), so the second group would silently lose its representative.
+ *  - A namespace in {@link TERM_NAMESPACES_RESERVED} is a directive, not a term,
+ *    and a term under one could never be looked up.
+ *
  * The policy is bound to the TENANT rather than passed at each write, because
  * two of the writers aren't in JavaScript: Android's notification service and
  * iOS's notification extension write into `dm17:<self>` while the app is dead,
@@ -185,6 +198,20 @@ export interface ArmadaKVListOptions {
  * (`TermPolicy.kt`, `TermPolicy.swift`).
  */
 export type TermPolicy = (rumor: NostrRumor, tenantId: string) => string[];
+
+/** Separates a term's namespace from its body. See {@link TermPolicy}. */
+export const TERM_NAMESPACE_SEP = ":";
+
+/**
+ * Extension-token keys that are DIRECTIVES to the store rather than terms, and
+ * so are not available as term namespaces.
+ *
+ * Currently one: `distinct:<namespace>` collapses a read to the newest rumor per
+ * term in that namespace (ditto-relay spells the same operation `distinct:author`
+ * over a field). A policy deriving `distinct:…` would be deriving a term no
+ * filter could ever name, since the filter parser reads it as the directive.
+ */
+export const TERM_NAMESPACES_RESERVED: readonly string[] = ["distinct"];
 
 export interface TenantOpts {
   /**
@@ -287,6 +314,30 @@ export function prefixUpperBound(prefix: string): string | undefined {
   const last = prefix.charCodeAt(prefix.length - 1);
   if (last === 0xffff) return undefined;
   return prefix.slice(0, -1) + String.fromCharCode(last + 1);
+}
+
+/**
+ * The half-open term range a namespace covers: every term of the form
+ * `<namespace>:<anything>`.
+ *
+ * The engines compute this rather than being handed a prefix, so that a prefix
+ * SPANNING namespaces cannot be spelled. `distinct:conv` collapsing groups from
+ * `conv:`, `convmsg:` and `convmine:` at once would be a silently wrong answer —
+ * every conversation returned up to three times, each with a different newest
+ * row — and a missing trailing delimiter would be enough to ask for it.
+ *
+ * Splitting a term on its first colon is the only interpreting of a term any
+ * engine does, and it is the delimiter the read path already required (see
+ * {@link TermPolicy}). A trailing delimiter on the namespace is tolerated, so
+ * `distinct:conv` and `distinct:conv:` name the same range.
+ */
+export function termNamespaceRange(
+  namespace: string,
+): { lower: string; upper: string | undefined } | undefined {
+  const name = namespace.endsWith(TERM_NAMESPACE_SEP) ? namespace.slice(0, -1) : namespace;
+  if (!name || name.includes(TERM_NAMESPACE_SEP)) return undefined;
+  const lower = name + TERM_NAMESPACE_SEP;
+  return { lower, upper: prefixUpperBound(lower) };
 }
 
 /**

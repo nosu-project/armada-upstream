@@ -59,6 +59,19 @@ struct ParsedFilter {
     /// and answering a narrowing query with the whole tenant.
     let terms: [String]
 
+    /// The term NAMESPACE this filter is collapsed by, from a
+    /// `distinct:<namespace>` token: the result holds at most one rumor per term
+    /// in that namespace — the newest, since a read is newest-first — and `limit`
+    /// therefore counts groups without ceasing to count rows.
+    ///
+    /// The port of `ParsedFilter.distinct` in TypeScript; every rule about it is
+    /// written down there. The two that shape this file: it is NOT a term (no
+    /// policy derives `distinct:…`, so a term lookup would match nothing), and a
+    /// collapse the store cannot honour EXACTLY fails closed rather than being
+    /// dropped — answering without it would return every row of a read that asked
+    /// for one row per group.
+    let distinct: String?
+
     /// The same keywords as an FTS5 `MATCH` expression, or nil when they can't
     /// be expressed as one. FTS5 has no way to say "everything except X", so a
     /// search that is nothing but negations has no query; those fall back to
@@ -160,6 +173,8 @@ struct ParsedFilter {
         var keywords: SearchKeywords?
         var query: String?
         var terms = [String]()
+        var collapse: String?
+        var collapseTokens = 0
 
         if let search {
             var required = [String]()
@@ -167,11 +182,22 @@ struct ParsedFilter {
 
             for token in Nip50.parseInput(search) {
                 guard case let .keyword(text) = token else {
-                    // An extension token is a lookup in the derived term index.
-                    // NOT lowercased: a term is an opaque string a policy
-                    // returned, and folding its case would make two distinct
-                    // ones the same lookup.
-                    if case let .extensionToken(key, value) = token { terms.append("\(key):\(value)") }
+                    if case let .extensionToken(key, value) = token {
+                        // A reserved key is a DIRECTIVE to the store, not a term.
+                        // It is read here and nowhere else, so an engine
+                        // resolving terms in its index never sees it as one to
+                        // look up.
+                        if key == distinctKey {
+                            collapseTokens += 1
+                            collapse = value
+                            continue
+                        }
+                        // An extension token is a lookup in the derived term
+                        // index. NOT lowercased: a term is an opaque string a
+                        // policy returned, and folding its case would make two
+                        // distinct ones the same lookup.
+                        terms.append("\(key):\(value)")
+                    }
                     continue
                 }
                 let keyword = text.lowercased()
@@ -185,7 +211,7 @@ struct ParsedFilter {
             if !required.isEmpty || !negated.isEmpty {
                 keywords = SearchKeywords(required: required, negated: negated)
                 query = Self.toFtsQuery(required: required, negated: negated)
-            } else if terms.isEmpty,
+            } else if terms.isEmpty, collapse == nil,
                 !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             {
                 // The caller asked for something, and every part of it was
@@ -206,7 +232,29 @@ struct ParsedFilter {
         self.searchKeywords = keywords
         self.searchQuery = query
         self.terms = terms
+
+        // A collapse the store cannot honour exactly is refused, never
+        // approximated: two dimensions it cannot group by at once, or a namespace
+        // that isn't one (empty, or itself containing the delimiter).
+        var namespace: String?
+        if let collapse {
+            if let range = TermRange(namespace: collapse), collapseTokens == 1 {
+                namespace = range.namespace
+            } else {
+                never = true
+            }
+        }
+        self.distinct = namespace
         self.neverMatch = never
+    }
+
+    /// Which group a rumor with these derived terms collapses into — its one term
+    /// in the `distinct` namespace — or nil when it has none and so is excluded
+    /// from a collapsed read.
+    func collapseKey(_ derived: [String]) -> String? {
+        guard let distinct else { return nil }
+        let prefix = "\(distinct):"
+        return derived.first { $0.hasPrefix(prefix) }
     }
 
     /// Full NIP-01 match of a rumor against every condition in this filter.
@@ -330,6 +378,56 @@ extension String {
     func containsLiteral(_ other: String) -> Bool {
         if other.isEmpty { return true }
         return range(of: other, options: .literal) != nil
+    }
+}
+
+/// The extension-token key that is a DIRECTIVE to the store rather than a term:
+/// `distinct:<namespace>` collapses a read to one rumor per term in that
+/// namespace. A policy must never derive a term under it — see `TermPolicy` in
+/// `src/lib/db/types.ts`.
+let distinctKey = "distinct"
+
+/// The half-open term range a namespace covers: every term of the form
+/// `<namespace>:<anything>`. The port of `termNamespaceRange`.
+///
+/// Derived from the namespace rather than taken as a prefix, so a prefix SPANNING
+/// namespaces cannot be spelled — `distinct:conv` collapsing groups from `conv:`,
+/// `convmsg:` and `convmine:` at once would be a silently wrong answer, and a
+/// missing delimiter would be enough to ask for it. A trailing delimiter is
+/// tolerated, so `conv` and `conv:` name the same range.
+///
+/// Splitting a term on its first colon is the only interpreting of a term this
+/// engine does, and it is the delimiter the read path already required: a term is
+/// named in a filter as a NIP-50 token, which is reassembled as `key:value`.
+struct TermRange {
+
+    /// The namespace, with no trailing delimiter.
+    let namespace: String
+    /// Inclusive lower bound: `<namespace>:`.
+    let lower: String
+    /// Exclusive upper bound, or nil when the prefix has none.
+    let upper: String?
+
+    init?(namespace: String) {
+        let name = namespace.hasSuffix(":") ? String(namespace.dropLast()) : namespace
+        if name.isEmpty || name.contains(":") { return nil }
+        self.namespace = name
+        self.lower = name + ":"
+        self.upper = Self.upperBound(self.lower)
+    }
+
+    /// The exclusive upper bound of the keys starting with `prefix`, or nil when
+    /// there isn't one — a prefix ending in the maximal UTF-16 code unit is
+    /// open-ended.
+    ///
+    /// Bounded by UTF-16 code unit, as the KV ranges are: it is the order the
+    /// engine's own string comparison uses, and the only one the other two ports
+    /// agree with.
+    private static func upperBound(_ prefix: String) -> String? {
+        var units = Array(prefix.utf16)
+        guard let last = units.last, last != 0xFFFF else { return nil }
+        units[units.count - 1] = last + 1
+        return String(decoding: units, as: UTF16.self)
     }
 }
 

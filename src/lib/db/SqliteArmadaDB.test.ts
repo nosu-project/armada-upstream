@@ -268,6 +268,40 @@ describe("SqliteArmadaDB — query plans", () => {
     expect(driver.plans().some((detail) => detail.includes("rumors_tenant"))).toBe(true);
   });
 
+  it("groups a collapse inside the term index, reading one body per group", async () => {
+    const { db, driver } = makeDb();
+    const terms = (r: NostrRumor): string[] =>
+      r.tags.filter(([n]) => n === "p").map(([, v]) => `conv:${v}`);
+    const store = db.tenant("t", { terms, termsGeneration: 1 });
+    for (const peer of ["ana", "ben"]) {
+      for (let i = 0; i < 3; i++) {
+        await store.event(rumor({ created_at: 100 + i, tags: [["p", peer]] }));
+      }
+    }
+
+    driver.selects.length = 0;
+    expect(await store.query([{ search: "distinct:conv" }])).toHaveLength(2);
+
+    // One statement, and the whole grouping happens in `rumor_terms`: its
+    // primary key already orders (tenant, term, seq), so SQLite streams the
+    // groups out of one ranged walk as a co-routine — no temp b-tree to build
+    // them, no message body read to decide which is newest — and `rumors` is
+    // then reached by rowid once per group rather than once per message.
+    expect(driver.selects).toHaveLength(1);
+    expect(driver.selects[0].sql).toContain("GROUP BY x.term");
+    const plans = driver.plans();
+    expect(plans.some((detail) => /SEARCH x USING PRIMARY KEY \(tenant=\? AND term>\? AND term<\?\)/.test(detail)))
+      .toBe(true);
+    expect(plans.some((detail) => detail.includes("CO-ROUTINE"))).toBe(true);
+    expect(plans.some((detail) => /SCAN r\b/.test(detail))).toBe(false);
+    expect(plans.some((detail) => detail.includes("SEARCH r USING INTEGER PRIMARY KEY"))).toBe(true);
+    // The one sort left orders the GROUPS by recency — as many rows as there are
+    // conversations, which is the whole point of grouping in the index first.
+    expect(plans.filter((detail) => detail.includes("TEMP B-TREE"))).toEqual([
+      "USE TEMP B-TREE FOR ORDER BY",
+    ]);
+  });
+
   it("reads a single covered scan without a second key lookup", async () => {
     const { db, driver } = makeDb();
     await db.tenant("t").event(rumor({ kind: 1 }));

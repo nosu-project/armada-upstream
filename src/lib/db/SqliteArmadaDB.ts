@@ -86,7 +86,7 @@ import {
   ARMADA_DB_SCHEMA,
   ARMADA_DB_VERSION,
 } from "./sqliteSchema";
-import { defaultIndexTags, matchesKvRange, resolveKvRange } from "./types";
+import { defaultIndexTags, matchesKvRange, resolveKvRange, termNamespaceRange } from "./types";
 
 import type { NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -798,7 +798,7 @@ export class SqliteArmadaDB implements ArmadaDB {
     // would buy nothing and could interleave badly.
     for (const filter of filters) {
       const parsed = new ParsedFilter(filter);
-      for (const rumor of await this.queryFilter(ord, prefix, parsed, opts?.signal)) {
+      for (const rumor of await this.queryFilter(ord, prefix, tenant, parsed, opts?.signal)) {
         byId.set(rumor.id, rumor);
       }
     }
@@ -810,6 +810,7 @@ export class SqliteArmadaDB implements ArmadaDB {
   private async queryFilter(
     ord: number,
     prefix: string,
+    tenant: string,
     filter: ParsedFilter,
     signal?: AbortSignal,
   ): Promise<NostrRumor[]> {
@@ -827,10 +828,17 @@ export class SqliteArmadaDB implements ArmadaDB {
       return await this.queryIds(ord, plan.ids, filter, limit);
     }
 
+    // A collapse the index couldn't group is applied here instead: the rows come
+    // back in order and the first of each group survives. It costs whatever the
+    // scan costs — the point of it is that `limit` still means groups, so a
+    // page that collapses to fewer rows is followed by another rather than
+    // silently answering short (see `distinct`).
+    const collapse = filter.distinct !== undefined && !plan.grouped;
+
     // A cursor yields only rows its conditions kept, and the limit is applied
     // after them, so a single complete plan IS the answer: run it once and
     // read the rumor bodies straight out of it.
-    if (plan.cursors.length === 1 && plan.sqlOnly) {
+    if (!collapse && plan.cursors.length === 1 && plan.sqlOnly) {
       const rows = await this.readPage(
         plan.cursors[0],
         undefined,
@@ -844,11 +852,15 @@ export class SqliteArmadaDB implements ArmadaDB {
 
     const collected: NostrRumor[] = [];
     const seen = new Set<string>();
+    /** Groups already represented, when collapsing. */
+    const groups = new Set<string>();
 
     // A complete plan yields only matches, so a page need be no larger than
     // what's still wanted; an incomplete one pages in chunks so a filter that
-    // matches little doesn't materialize the whole range.
-    let pageSize = plan.sqlOnly ? Math.min(limit, MAX_PAGE) : CHUNK_SIZE;
+    // matches little doesn't materialize the whole range. A collapsing one
+    // cannot size its page from the limit at all: how many rows a group costs
+    // isn't known until they are read.
+    let pageSize = plan.sqlOnly && !collapse ? Math.min(limit, MAX_PAGE) : CHUNK_SIZE;
 
     let before: number | undefined;
 
@@ -865,7 +877,17 @@ export class SqliteArmadaDB implements ArmadaDB {
         if (seen.has(rumor.id)) continue;
         seen.add(rumor.id);
 
-        if (plan.sqlOnly || filter.matches(rumor, plan.searched)) collected.push(rumor);
+        if (!(plan.sqlOnly || filter.matches(rumor, plan.searched))) continue;
+
+        if (collapse) {
+          // A rumor with no term in the namespace belongs to no group and is
+          // excluded — the same "no term, no match" a term lookup gives.
+          const key = filter.collapseKey(this.termsOf(tenant, rumor));
+          if (key === undefined || groups.has(key)) continue;
+          groups.add(key);
+        }
+
+        collected.push(rumor);
       }
 
       // A short page means the scan is exhausted.
@@ -1074,14 +1096,24 @@ export class SqliteArmadaDB implements ArmadaDB {
   private planScan(ord: number, prefix: string, filter: ParsedFilter): ScanPlan {
     const { min, max, exact } = timeRange(filter);
 
-    // 0. derived terms — ahead of everything, including ids, because nothing
-    //    else can apply them: they are not in the rumor, so a plan that didn't
-    //    resolve them in the index has no way to check them afterwards.
+    // 0. a collapse — one rumor per term in a namespace. Grouped in the index
+    //    when nothing outside it has to be tested; otherwise the filter is
+    //    planned as usual and collapsed as the rows come back (see
+    //    `queryFilter`), which is the only shape that can honour a row
+    //    condition BEFORE the collapse.
+    if (filter.distinct !== undefined) {
+      const plan = this.planDistinct(ord, filter, min, max, exact);
+      if (plan) return plan;
+    }
+
+    // 1. derived terms — ahead of everything else, including ids, because
+    //    nothing else can apply them: they are not in the rumor, so a plan that
+    //    didn't resolve them in the index has no way to check them afterwards.
     if (filter.terms.length > 0) {
       return this.planTerms(ord, filter, min, max, exact);
     }
 
-    // 1. ids — the (tenant, id) unique index.
+    // 2. ids — the (tenant, id) unique index.
     if (filter.ids) {
       return { ids: filter.ids, cursors: [], sqlOnly: false, searched: false };
     }
@@ -1090,7 +1122,7 @@ export class SqliteArmadaDB implements ArmadaDB {
     // so they fall through to the in-memory match instead.
     const search = this.search ? filter.searchQuery : undefined;
 
-    // 2. tags, or a NIP-50 search: the index drives.
+    // 3. tags, or a NIP-50 search: the index drives.
     if (filter.tags.length > 0 || search) {
       const plan = this.planFts(ord, prefix, filter, search, min, max, exact);
       if (plan) return plan;
@@ -1121,7 +1153,7 @@ export class SqliteArmadaDB implements ArmadaDB {
     const searched = !filter.searchKeywords;
     const pushKinds = !filter.kinds || filter.kinds.length <= MAX_PUSHDOWN;
 
-    // 3. authors + kinds, from the composite index. The seeks land in an index
+    // 4. authors + kinds, from the composite index. The seeks land in an index
     //    whose entries are (tenant, pubkey, kind, time) in that order, so each
     //    walks straight to the newest rumors of a combination and stops.
     if (filter.authors && filter.kinds && pushKinds) {
@@ -1141,7 +1173,7 @@ export class SqliteArmadaDB implements ArmadaDB {
       return { cursors, sqlOnly: searched, searched };
     }
 
-    // 4. authors alone, with kinds filtering the scan when there are few
+    // 5. authors alone, with kinds filtering the scan when there are few
     //    enough of them to be worth binding.
     if (filter.authors) {
       const cursors = [...batch(filter.authors, MAX_IN)].map((authors): ScanCursor => {
@@ -1161,7 +1193,7 @@ export class SqliteArmadaDB implements ArmadaDB {
       return { cursors, sqlOnly: searched && pushKinds, searched };
     }
 
-    // 5. kinds.
+    // 6. kinds.
     if (filter.kinds) {
       const cursors = [...batch(filter.kinds, MAX_IN)].map((kinds): ScanCursor => {
         const conditions = ["tenant = ?", memberOf("kind", kinds)];
@@ -1175,7 +1207,7 @@ export class SqliteArmadaDB implements ArmadaDB {
       return { cursors, sqlOnly: searched, searched };
     }
 
-    // 6. fallback — the whole tenant, newest-first. `(tenant)` is `(tenant,
+    // 7. fallback — the whole tenant, newest-first. `(tenant)` is `(tenant,
     //    seq)`, so this is a backwards walk of one contiguous index range.
     const conditions = ["tenant = ?"];
     const params: SqlValue[] = [ord];
@@ -1286,6 +1318,92 @@ export class SqliteArmadaDB implements ArmadaDB {
     }));
 
     return { cursors, sqlOnly: complete && searched, searched };
+  }
+
+  /**
+   * Plan a `distinct:<namespace>` collapse in the INDEX: one row per term in
+   * the namespace, each the newest under it.
+   *
+   * This is the plan the conversation list exists for. `rumor_terms` is keyed
+   * `(tenant, term, seq)`, so a namespace is one contiguous range and
+   * `GROUP BY term` is an ordered walk of it — no temp b-tree to group, and
+   * `MAX(seq)` is the last row of each block. What comes out is at most one
+   * `seq` per group, so the sorter that orders them by recency sorts
+   * CONVERSATIONS rather than messages, and the join reads exactly one rumor
+   * body per row returned. Bodies are what the old shape spent its budget on:
+   * it read the newest 500 rumors and grouped them in memory, so a busy thread
+   * hid every other conversation.
+   *
+   * Returns `undefined` — leaving the caller to plan the filter as usual and
+   * collapse the rows afterwards — when anything outside the term index has to
+   * be tested. Row conditions apply BEFORE the collapse, and testing `kind` or
+   * `pubkey` inside the grouping would mean a rowid lookup and a full row read
+   * per index row, which is precisely the cost this plan exists to avoid. Extra
+   * TERMS are the exception: they live in the same table, so they stay index-only
+   * as an `EXISTS`.
+   *
+   * The `CROSS JOIN` fixes the join order as it does in {@link planTerms}: the
+   * grouped subquery must drive and `rumors` must be seeked by rowid.
+   */
+  private planDistinct(
+    ord: number,
+    filter: ParsedFilter,
+    min: number | undefined,
+    max: number | undefined,
+    exact: boolean,
+  ): ScanPlan | undefined {
+    const range = termNamespaceRange(filter.distinct!);
+    if (!range) return undefined;
+
+    // Anything a row carries has to narrow the candidates, not the survivors,
+    // so it cannot be applied after the grouping — and applying it inside means
+    // reading the rows. A time bound the rowid encoding had to clamp counts as
+    // one of those, since only `created_at` can settle it.
+    if (
+      filter.ids || filter.kinds || filter.authors || filter.tags.length > 0 ||
+      filter.searchKeywords || (!exact && (filter.since !== undefined || filter.until !== undefined))
+    ) {
+      return undefined;
+    }
+
+    const conditions = ["x.tenant = ?", "x.term >= ?"];
+    const params: SqlValue[] = [ord, range.lower];
+
+    if (range.upper !== undefined) {
+      conditions.push("x.term < ?");
+      params.push(range.upper);
+    }
+    if (min !== undefined) {
+      conditions.push("x.seq >= ?");
+      params.push(min);
+    }
+    if (max !== undefined) {
+      conditions.push("x.seq <= ?");
+      params.push(max);
+    }
+    for (const term of filter.terms) {
+      conditions.push(
+        "EXISTS (SELECT 1 FROM rumor_terms y WHERE y.tenant = x.tenant AND y.term = ? AND y.seq = x.seq)",
+      );
+      params.push(term);
+    }
+
+    const grouped = `(SELECT MAX(x.seq) AS seq FROM rumor_terms x${
+      where(conditions)
+    } GROUP BY x.term)`;
+
+    return {
+      cursors: [{
+        from: `${grouped} g CROSS JOIN rumors r ON r.seq = g.seq`,
+        key: "g.seq",
+        columns: R_RUMOR_COLUMNS,
+        where: [],
+        params,
+      }],
+      grouped: true,
+      sqlOnly: true,
+      searched: true,
+    };
   }
 
   /**
@@ -1481,7 +1599,15 @@ export class SqliteArmadaDB implements ArmadaDB {
     filters: NostrFilter[],
     opts?: { signal?: AbortSignal },
   ): Promise<void> {
-    const rumors = await this.queryTenant(tenant, filters, opts);
+    // A `distinct:` collapse names one rumor per group, which is not something a
+    // deletion can coherently be asked for — and answering it as written would
+    // delete the newest message of every conversation. Dropped, so the filter
+    // removes nothing, which is the same direction every other unhonourable
+    // narrowing takes (see `ParsedFilter.neverMatch`).
+    const deletable = filters.filter((filter) => new ParsedFilter(filter).distinct === undefined);
+    if (deletable.length === 0) return;
+
+    const rumors = await this.queryTenant(tenant, deletable, opts);
     if (rumors.length === 0) return;
 
     // Non-empty results mean the tenant has been written to, so it has an
@@ -1849,4 +1975,11 @@ interface ScanPlan {
   sqlOnly: boolean;
   /** Whether the plan applies the filter's NIP-50 keywords itself. */
   searched: boolean;
+  /**
+   * Whether the cursor already yields one row per `distinct:` group. When it
+   * doesn't, a collapsed filter is collapsed row by row as its pages come back,
+   * and `limit` counts groups rather than rows — so no limit may be pushed into
+   * the SQL.
+   */
+  grouped?: boolean;
 }

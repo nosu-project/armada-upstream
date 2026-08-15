@@ -19,7 +19,14 @@ import { openDB } from "idb";
 import { perfCount, perfMark, perfTime } from "@/lib/perf";
 
 import { ParsedFilter } from "./ParsedFilter";
-import { defaultIndexTags, matchesKvRange, resolveKvRange, TERM_TAG, tenantClass } from "./types";
+import {
+  defaultIndexTags,
+  matchesKvRange,
+  resolveKvRange,
+  TERM_TAG,
+  tenantClass,
+  termNamespaceRange,
+} from "./types";
 import { WrittenIds } from "./writtenIds";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
@@ -42,6 +49,25 @@ import type {
 function toRumor(event: NostrEvent): NostrRumor {
   const { sig: _sig, ...rumor } = event;
   return rumor;
+}
+
+/**
+ * The rumor in a row read STRAIGHT out of the delegate's object store, which
+ * carries its derived index fields (`_tagsCreated`) alongside the event.
+ *
+ * Rebuilt field by field rather than by deleting the ones we know about: the
+ * delegate may derive more of them in a later release, and a rumor with an extra
+ * property is one that compares unequal to the same rumor read any other way.
+ */
+function rowRumor(row: Record<string, unknown>): NostrRumor {
+  return {
+    id: row.id as string,
+    pubkey: row.pubkey as string,
+    created_at: row.created_at as number,
+    kind: row.kind as number,
+    tags: row.tags as string[][],
+    content: row.content as string,
+  };
 }
 
 /** Present a rumor as an event for `NIndexedDB`, which types `sig` required. */
@@ -90,6 +116,25 @@ interface DelegateJob {
   check?: (rumor: NostrRumor) => boolean;
   /** Re-applied after `check`, since the delegate could not be given it. */
   limit?: number;
+  /** A `distinct:` collapse to apply to the rows — see {@link Collapse}. */
+  collapse?: Collapse;
+}
+
+/**
+ * A `distinct:<namespace>` collapse: the job's rows are reduced to the newest
+ * per term in `namespace` before `limit` is applied.
+ *
+ * `indexOnly` says the namespace ALONE selects the rows — no ids, kinds,
+ * authors, tags or keywords to test — which is the case the tag index can answer
+ * by seeking once per group instead of reading every row (see
+ * {@link IndexedDBRumorStore.groupScan}). Time bounds don't disqualify it: the
+ * index key carries `created_at`.
+ */
+interface Collapse {
+  namespace: string;
+  indexOnly: boolean;
+  since?: number;
+  until?: number;
 }
 
 /**
@@ -143,19 +188,48 @@ function planFilters(
     const parsed = new ParsedFilter(filter);
     if (parsed.neverMatch) continue;
 
-    if (parsed.terms.length === 0) {
+    if (parsed.terms.length === 0 && parsed.distinct === undefined) {
       plain.push(filter);
       continue;
     }
 
-    // A term in a tenant that derives none can never match, and asking the
-    // delegate would drop the constraint and widen the answer instead.
+    // A term (or a collapse over one's namespace) in a tenant that derives none
+    // can never match, and asking the delegate would drop the constraint and
+    // widen the answer instead.
     if (!policy) continue;
 
-    const term = { [`#${TERM_TAG}`]: [parsed.terms[0]] };
+    const term = parsed.terms.length > 0 ? { [`#${TERM_TAG}`]: [parsed.terms[0]] } : {};
     const bounded: NostrFilter = { ...term };
     if (filter.since !== undefined) bounded.since = filter.since;
     if (filter.until !== undefined) bounded.until = filter.until;
+
+    if (parsed.distinct !== undefined) {
+      // A collapse can never be handed a limit: the delegate counts rows and the
+      // filter counts groups, so a limited page would be truncated before it was
+      // grouped — which is the whole bug this replaces. Everything else the
+      // filter says is applied here, BEFORE the collapse, so the survivor of a
+      // group is the newest row that matched rather than the newest row that
+      // exists.
+      const indexOnly = parsed.terms.length === 0 && !parsed.ids && !parsed.authors &&
+        !parsed.kinds && parsed.tags.length === 0 && !parsed.searchKeywords;
+      jobs.push({
+        // The delegate cannot narrow by a namespace — only by a whole term — so
+        // an index-only collapse hands it nothing and is answered by the group
+        // scan; anything else is the ordinary read, collapsed afterwards.
+        filters: [indexOnly ? {} : bounded],
+        check: indexOnly
+          ? undefined
+          : (rumor) => parsed.matches(rumor) && parsed.matchesTerms(policy(rumor, tenant)),
+        limit: filter.limit,
+        collapse: {
+          namespace: parsed.distinct,
+          indexOnly,
+          since: filter.since,
+          until: filter.until,
+        },
+      });
+      continue;
+    }
 
     // Nothing but the term (and the time window, which the delegate folds into
     // its key range rather than re-checking): the tag index answers it exactly.
@@ -184,10 +258,38 @@ function mergeJobs(results: NostrRumor[][]): NostrRumor[] {
   if (results.length === 1) return results[0];
   const byId = new Map<string, NostrRumor>();
   for (const rumors of results) for (const rumor of rumors) byId.set(rumor.id, rumor);
-  return [...byId.values()].sort((a, b) =>
-    a.created_at !== b.created_at ? b.created_at - a.created_at : a.id < b.id ? -1 : a.id > b.id ? 1 : 0
-  );
+  return [...byId.values()].sort(compareNewest);
 }
+
+/** Newest first, ties by id — the order every read comes back in. */
+function compareNewest(a: NostrRumor, b: NostrRumor): number {
+  if (a.created_at !== b.created_at) return b.created_at - a.created_at;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/**
+ * The one term of `derived` in `namespace` — which group a rumor collapses into
+ * — or `undefined` when it has none.
+ */
+function keyIn(namespace: string, derived: string[]): string | undefined {
+  const prefix = `${namespace}:`;
+  return derived.find((term) => term.startsWith(prefix));
+}
+
+/**
+ * The object store and index `NIndexedDB` keeps its rows in, which
+ * {@link IndexedDBRumorStore.groupScan} reads directly.
+ *
+ * Reaching into the delegate's own database is a coupling, and a deliberate one:
+ * enumerating the DISTINCT values of an index is not something any store API
+ * exposes, and it is the whole difference between one seek per conversation and
+ * a walk of every rumor. Every use is guarded and falls back to the walk, so a
+ * Nostrify release that renamed either of these would make the conversation list
+ * slower and nothing else. Its schema version is 1 and this opens at 1 with an
+ * upgrade that throws, so a database that does not exist yet is NOT created
+ * half-formed — the aborted upgrade reverts it.
+ */
+const DELEGATE = { store: "events", tagIndex: "by-tag", version: 1 } as const;
 
 /** How many rumors one page of the term backfill re-indexes. */
 const BACKFILL_PAGE = 500;
@@ -222,9 +324,11 @@ class IndexedDBRumorStore implements NRumorStore {
   private opened = false;
   /** Ids already committed, so the relay cache's re-writes cost nothing. */
   private readonly written = new WrittenIds();
+  /** The second, read-only handle {@link groupScan} walks. Opened at most once. */
+  private raw?: Promise<IDBPDatabase | null>;
 
   constructor(
-    name: string,
+    private readonly name: string,
     indexTags: (rumor: NostrRumor) => string[][],
     label: string,
     private readonly tenantId: string,
@@ -326,6 +430,11 @@ class IndexedDBRumorStore implements NRumorStore {
       this.op("query"),
       () =>
         this.settled(Promise.all(jobs.map(async (job) => {
+          if (job.collapse) {
+            const rumors = await this.runCollapse(job, job.collapse, opts);
+            returned += rumors.length;
+            return rumors;
+          }
           const events = await this.store.query(job.filters, opts);
           returned += events.length;
           let rumors = events.map(toRumor);
@@ -339,6 +448,161 @@ class IndexedDBRumorStore implements NRumorStore {
     // total can be attributed to a caller rather than only to a store.
     perfCount(`shape ${this.label} ${filterShape(filters)}`, 0, returned);
     return mergeJobs(results);
+  }
+
+  /**
+   * One collapsed job: the newest rumor per term in a namespace.
+   *
+   * Two ways to get there, and they must answer identically — the conformance
+   * suite asserts it, because which one runs is an optimization the caller
+   * cannot see. {@link groupScan} seeks once per group and reads only the rows it
+   * returns; the fallback reads what the filter selects and keeps the first of
+   * each group. The fallback is the one that can honour a row condition, and it
+   * is also what a browser whose delegate layout this build doesn't recognize
+   * gets — slower, never wrong.
+   */
+  private async runCollapse(
+    job: DelegateJob,
+    collapse: Collapse,
+    opts?: { signal?: AbortSignal },
+  ): Promise<NostrRumor[]> {
+    const policy = this.terms;
+    if (!policy) return [];
+
+    if (collapse.indexOnly) {
+      const scanned = await this.groupScan(collapse);
+      if (scanned) {
+        const sorted = scanned.sort(compareNewest);
+        return job.limit === undefined ? sorted : sorted.slice(0, job.limit);
+      }
+    }
+
+    const events = await this.store.query(job.filters, opts);
+    let rumors = events.map(toRumor);
+    if (job.check) rumors = rumors.filter(job.check);
+    rumors.sort(compareNewest);
+
+    const groups = new Set<string>();
+    const kept: NostrRumor[] = [];
+
+    for (const rumor of rumors) {
+      if (job.limit !== undefined && kept.length >= job.limit) break;
+      // A rumor with no term in the namespace belongs to no group and is
+      // excluded — the same "no term, no match" a term lookup gives.
+      const key = keyIn(collapse.namespace, policy(rumor, this.tenantId));
+      if (key === undefined || groups.has(key)) continue;
+      groups.add(key);
+      kept.push(rumor);
+    }
+
+    return kept;
+  }
+
+  /**
+   * Every group in `namespace`, each as its newest rumor, by seeking the tag
+   * index once per group.
+   *
+   * A loose index scan: the index key is `[name, value, created_at]`, so one
+   * DESCENDING cursor over the namespace's range starts at the newest entry of
+   * the last term, and `continue([TERM_TAG, term, -Infinity])` jumps to the
+   * newest entry of the term before it — a seek per group rather than a step per
+   * row. `openCursor` hands back the row itself, so the rumors come out of the
+   * same walk.
+   *
+   * Every group is enumerated even when the filter had a `limit`, because the
+   * walk is in TERM order and the limit is by recency: which groups are newest
+   * isn't known until they all are. That is a seek per conversation, not per
+   * message, which is the point.
+   *
+   * Returns `undefined` if the delegate's database isn't there to read, or isn't
+   * laid out the way this expects — the caller then falls back to the walk.
+   */
+  private async groupScan(collapse: Collapse): Promise<NostrRumor[] | undefined> {
+    const range = termNamespaceRange(collapse.namespace);
+    if (!range) return undefined;
+
+    try {
+      const db = await this.delegateDb();
+      if (!db) return undefined;
+
+      const index = db.transaction(DELEGATE.store, "readonly")
+        .objectStore(DELEGATE.store)
+        .index(DELEGATE.tagIndex);
+
+      const bounds = IDBKeyRange.bound(
+        [TERM_TAG, range.lower, -Infinity],
+        range.upper === undefined ? [TERM_TAG, [], -Infinity] : [TERM_TAG, range.upper, -Infinity],
+        false,
+        true,
+      );
+
+      const found: NostrRumor[] = [];
+      let cursor = await index.openCursor(bounds, "prev");
+
+      while (cursor) {
+        const key = cursor.key as [string, string, number];
+        const term = key[1];
+        const at = key[2];
+
+        // The newest entry of this group is above the window: seek down inside
+        // the same group. The result may land in an earlier one, which the next
+        // turn of the loop reads as such.
+        if (collapse.until !== undefined && at > collapse.until) {
+          cursor = await cursor.continue([TERM_TAG, term, collapse.until]);
+          continue;
+        }
+
+        // …and if the NEWEST entry of the group is already too old, no entry of
+        // it can qualify, so the whole group is skipped rather than walked.
+        if (collapse.since !== undefined && at < collapse.since) {
+          cursor = await cursor.continue([TERM_TAG, term, -Infinity]);
+          continue;
+        }
+
+        found.push(rowRumor(cursor.value as Record<string, unknown>));
+        cursor = await cursor.continue([TERM_TAG, term, -Infinity]);
+      }
+
+      return found;
+    } catch {
+      // A layout this build doesn't recognize, a database that isn't there, or a
+      // key type the engine won't compare. All of them mean "read it the slow
+      // way", never "answer with less".
+      return undefined;
+    }
+  }
+
+  /**
+   * A read-only handle on the delegate's own database, or `undefined` when there
+   * isn't one to open.
+   *
+   * Opened at the delegate's schema version with an upgrade that throws, so this
+   * can only ever attach to a database `NIndexedDB` already created: a database
+   * that doesn't exist would run the upgrade, and the throw aborts the
+   * versionchange transaction, which reverts the creation. Opening it
+   * version-less instead would leave behind an empty database with no object
+   * store, at the version the delegate expects — and the delegate would then
+   * never run its own upgrade, so the tenant would be permanently broken.
+   */
+  private delegateDb(): Promise<IDBPDatabase | null> {
+    this.raw ??= (async () => {
+      if (typeof indexedDB === "undefined") return null;
+      try {
+        return await openDB(this.name, DELEGATE.version, {
+          upgrade() {
+            throw new Error("not this adapter's database to create");
+          },
+          blocking(_current, _blocked, event) {
+            // A newer layout wants in. Let go of it: the group scan is an
+            // optimization, and the fallback needs no handle.
+            (event.target as IDBDatabase | null)?.close();
+          },
+        });
+      } catch {
+        return null;
+      }
+    })();
+    return this.raw;
   }
 
   /**
@@ -452,8 +716,9 @@ class IndexedDBRumorStore implements NRumorStore {
     // Anything the delegate can only over-select has to be counted from the
     // rows themselves — its own count would include the ones `check` drops —
     // and so does a multi-job read, whose counts would double-count a rumor
-    // two jobs both found.
-    if (jobs.length > 1 || jobs[0].check) {
+    // two jobs both found. A collapsed read counts GROUPS, which is likewise
+    // only knowable from the rows.
+    if (jobs.length > 1 || jobs[0].check || jobs[0].collapse) {
       return { count: (await this.query(filters, opts)).length, approximate: false };
     }
     const { count, approximate } = await perfTime(this.op("count"), () =>
@@ -464,9 +729,16 @@ class IndexedDBRumorStore implements NRumorStore {
 
   async remove(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<void> {
     await this.awaitTerms(filters);
+    // A `distinct:` collapse names one rumor per group, which is not something a
+    // deletion can coherently be asked for — and answering it as written would
+    // delete the newest message of every conversation. Dropped BEFORE planning,
+    // so it is gone from the id fallback below too, which resolves the filters by
+    // reading them.
+    const deletable = filters.filter((filter) => new ParsedFilter(filter).distinct === undefined);
+    if (deletable.length === 0) return;
     // Nothing matches, so nothing is removed — and `written` keeps its ids,
     // since no row left the store.
-    const jobs = planFilters(filters, this.tenantId, this.terms);
+    const jobs = planFilters(deletable, this.tenantId, this.terms);
     if (jobs.length === 0) return;
     // A removed event has to be storable again, and this class cannot evaluate
     // the filter that removed it.
@@ -477,15 +749,18 @@ class IndexedDBRumorStore implements NRumorStore {
     if (jobs.length === 1 && !jobs[0].check) {
       target = jobs[0].filters;
     } else {
-      const ids = (await this.query(filters, opts)).map((rumor) => rumor.id);
+      const ids = (await this.query(deletable, opts)).map((rumor) => rumor.id);
       if (ids.length === 0) return;
       target = [{ ids }];
     }
     await perfTime(this.op("remove"), () => this.settled(this.store.remove(target, opts)));
   }
 
-  close(): Promise<void> {
-    return this.store.close();
+  async close(): Promise<void> {
+    const raw = this.raw;
+    this.raw = undefined;
+    (await raw)?.close();
+    await this.store.close();
   }
 
   [Symbol.toStringTag] = "IndexedDBRumorStore";

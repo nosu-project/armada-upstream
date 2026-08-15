@@ -427,6 +427,169 @@ describe.each(backends)("$name", ({ create }) => {
       expect(await same.query([{ search: "conv:ana" }])).toEqual([stored]);
       expect(await same.query([{ search: "with:ana" }])).toEqual([later]);
     });
+
+    it("pins the term generation to the other ports", async () => {
+      // One number, written into a file three engines share: two ports that
+      // disagree would each read the other's as stale and rebuild the index on
+      // every open. `TermPolicies.GENERATION` (Kotlin) and
+      // `TermPolicies.generation` (Swift) are this literal.
+      const { TERM_GENERATION } = await import("./termPolicies");
+      expect(TERM_GENERATION).toBe(2);
+    });
+  });
+
+  describe("derived terms: collapsing a read with distinct:", () => {
+    /**
+     * Files each rumor under the sorted set of its `p` tags, in two namespaces:
+     * `conv:` covers every kind and `msg:` only kind 1. That is the shape the DM
+     * list uses — a collapse can then name the newest MESSAGE of a conversation
+     * without any engine reading a rumor's kind.
+     */
+    const conv = (rumor: NostrRumor): string[] => {
+      const set = [...new Set(rumor.tags.filter(([n]) => n === "p").map(([, v]) => v))].sort();
+      if (set.length === 0) return [];
+      const key = set.join("");
+      return rumor.kind === 1 ? [`conv:${key}`, `msg:${key}`] : [`conv:${key}`];
+    };
+
+    const opened = () => db.tenant("t", { terms: conv, termsGeneration: 1 });
+
+    it("returns the newest rumor of every group", async () => {
+      const s = opened();
+      const anaOld = rumor({ id: "ana-old", created_at: 100, tags: [["p", "ana"]] });
+      const anaNew = rumor({ id: "ana-new", created_at: 300, tags: [["p", "ana"]] });
+      const ben = rumor({ id: "ben", created_at: 200, tags: [["p", "ben"]] });
+      const group = rumor({ id: "group", created_at: 150, tags: [["p", "ana"], ["p", "ben"]] });
+      for (const r of [anaOld, anaNew, ben, group]) await s.event(r);
+
+      // One row per participant SET, ordered by that row — not the newest rumors,
+      // which is what an ungrouped read with a limit would have given.
+      expect(await s.query([{ search: "distinct:conv" }])).toEqual([anaNew, ben, group]);
+    });
+
+    it("counts groups against the limit, not rows", async () => {
+      const s = opened();
+      // A busy conversation, and a quiet one older than every message in it.
+      for (let i = 0; i < 5; i++) {
+        await s.event(rumor({ id: `busy-${i}`, created_at: 200 + i, tags: [["p", "ana"]] }));
+      }
+      const quiet = rumor({ id: "quiet", created_at: 100, tags: [["p", "ben"]] });
+      await s.event(quiet);
+
+      // The old shape's bug in one assertion: the newest two ROWS are two
+      // messages of the busy thread and no sign of the quiet one.
+      const rows = await s.query([{ search: "distinct:conv", limit: 2 }]);
+      expect(rows.map((r) => r.id)).toEqual(["busy-4", "quiet"]);
+    });
+
+    it("excludes a rumor with no term in the namespace", async () => {
+      const s = opened();
+      const listed = rumor({ id: "listed", tags: [["p", "ana"]] });
+      await s.event(listed);
+      // In a conversation, but not in the `msg:` grouping.
+      await s.event(rumor({ id: "reaction", kind: 7, tags: [["p", "ana"]] }));
+      // In no conversation at all.
+      await s.event(rumor({ id: "orphan" }));
+
+      expect(await s.query([{ search: "distinct:msg" }])).toEqual([listed]);
+    });
+
+    it("names one namespace, whatever the delimiter", async () => {
+      const s = opened();
+      const ana = rumor({ id: "ana", tags: [["p", "ana"]] });
+      await s.event(ana);
+
+      // `conv` and `conv:` are the same namespace, and neither reaches `msg:`.
+      expect(await s.query([{ search: "distinct:conv" }])).toEqual([ana]);
+      expect(await s.query([{ search: "distinct:conv:" }])).toEqual([ana]);
+    });
+
+    it("applies the rest of the filter before collapsing", async () => {
+      const s = opened();
+      const mine = rumor({ id: "mine", pubkey: "me", created_at: 100, tags: [["p", "ana"]] });
+      const theirs = rumor({ id: "theirs", pubkey: "ana", created_at: 200, tags: [["p", "ana"]] });
+      for (const r of [mine, theirs]) await s.event(r);
+
+      // The newest rumor of the group is theirs; the newest MATCHING one is mine.
+      // Collapsing first and filtering after would answer with nothing.
+      expect(await s.query([{ search: "distinct:conv", authors: ["me"] }])).toEqual([mine]);
+      expect(await s.query([{ search: "distinct:conv", kinds: [7] }])).toEqual([]);
+    });
+
+    it("bounds the window before collapsing too", async () => {
+      const s = opened();
+      const early = rumor({ id: "early", created_at: 100, tags: [["p", "ana"]] });
+      const late = rumor({ id: "late", created_at: 300, tags: [["p", "ana"]] });
+      for (const r of [early, late]) await s.event(r);
+
+      expect(await s.query([{ search: "distinct:conv", until: 200 }])).toEqual([early]);
+      expect(await s.query([{ search: "distinct:conv", since: 200 }])).toEqual([late]);
+      expect(await s.query([{ search: "distinct:conv", since: 400 }])).toEqual([]);
+    });
+
+    it("combines a collapse with a term", async () => {
+      const s = opened();
+      const ana = rumor({ id: "ana", tags: [["p", "ana"]] });
+      const ben = rumor({ id: "ben", tags: [["p", "ben"]] });
+      for (const r of [ana, ben]) await s.event(r);
+
+      // The collapse says one row per conversation; the term says which one.
+      expect(await s.query([{ search: "distinct:conv conv:ana" }])).toEqual([ana]);
+    });
+
+    it("counts the groups", async () => {
+      const s = opened();
+      for (const r of [
+        rumor({ tags: [["p", "ana"]] }),
+        rumor({ tags: [["p", "ana"]] }),
+        rumor({ tags: [["p", "ben"]] }),
+      ]) await s.event(r);
+
+      expect(await s.count([{ search: "distinct:conv" }])).toEqual({
+        count: 2,
+        approximate: false,
+      });
+    });
+
+    it("refuses to remove by a collapse", async () => {
+      const s = opened();
+      const older = rumor({ id: "older", created_at: 100, tags: [["p", "ana"]] });
+      const newer = rumor({ id: "newer", created_at: 200, tags: [["p", "ana"]] });
+      for (const r of [older, newer]) await s.event(r);
+
+      // "Delete one rumor per conversation" is not a deletion anyone should be
+      // able to ask for, so it deletes nothing rather than the newest message of
+      // every thread.
+      await s.remove([{ search: "distinct:conv" }]);
+      expect(await s.query([{ search: "conv:ana" }])).toEqual([newer, older]);
+    });
+
+    it("matches nothing in a tenant that derives no terms", async () => {
+      const bare = db.tenant("bare");
+      await bare.event(rumor({ tags: [["p", "ana"]] }));
+
+      // Failing closed: there is no grouping to apply, and answering the read
+      // without the collapse would hand back the whole tenant.
+      expect(await bare.query([{ search: "distinct:conv" }])).toEqual([]);
+    });
+
+    it("refuses two collapses rather than picking one", async () => {
+      const s = opened();
+      await s.event(rumor({ tags: [["p", "ana"]] }));
+
+      // A term names one dimension, so grouping by a pair is not answerable.
+      expect(await s.query([{ search: "distinct:conv distinct:msg" }])).toEqual([]);
+    });
+
+    it("refuses a namespace that isn't one", async () => {
+      const s = opened();
+      await s.event(rumor({ tags: [["p", "ana"]] }));
+
+      // A whole term is not a namespace. Naming one group's key is `conv:ana` on
+      // its own, and reading it as a namespace would silently answer a different
+      // question.
+      expect(await s.query([{ search: "distinct:conv:ana" }])).toEqual([]);
+    });
   });
 
   describe("replaceable rumors", () => {

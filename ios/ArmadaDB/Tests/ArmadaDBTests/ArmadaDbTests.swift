@@ -1397,12 +1397,216 @@ final class ArmadaDbTests: XCTestCase {
         )
     }
 
+    // MARK: - distinct: collapsing a read to one rumor per group
+    //
+    // Ported from `ArmadaDB.test.ts`'s "collapsing a read with distinct:" block,
+    // and NIP-17-free for the same reason: the engine never interprets a term.
+
+    /// Files each rumor under the sorted set of its `p` tags, in two namespaces —
+    /// `conv:` for every kind and `msg:` for kind 1 only. That is the shape the DM
+    /// list uses: a collapse can then name the newest MESSAGE of a conversation
+    /// without the engine reading any rumor's kind.
+    private let convPolicy: (Rumor, String) -> [String] = { rumor, _ in
+        let set = Set(rumor.tags.filter { $0.first == "p" }.compactMap { $0.count >= 2 ? $0[1] : nil })
+        if set.isEmpty { return [] }
+        let key = set.sorted().joined()
+        return rumor.kind == 1 ? ["conv:\(key)", "msg:\(key)"] : ["conv:\(key)"]
+    }
+
+    func testReturnsTheNewestRumorOfEveryGroup() throws {
+        let db = try openWithTerms(convPolicy)
+        try db.event(tenant: "t", rumor: rumor(id: "ana-old", createdAt: 100, tags: [["p", "ana"]]))
+        try db.event(tenant: "t", rumor: rumor(id: "ana-new", createdAt: 300, tags: [["p", "ana"]]))
+        try db.event(tenant: "t", rumor: rumor(id: "ben", createdAt: 200, tags: [["p", "ben"]]))
+        try db.event(
+            tenant: "t",
+            rumor: rumor(id: "group", createdAt: 150, tags: [["p", "ana"], ["p", "ben"]])
+        )
+
+        // One row per participant SET, ordered by that row — not the newest
+        // rumors, which is what an ungrouped read with a limit would have given.
+        XCTAssertEqual(
+            try db.query(tenant: "t", filters: filters(#"{"search":"distinct:conv"}"#)).map(\.id),
+            ["ana-new", "ben", "group"]
+        )
+    }
+
+    func testCountsGroupsAgainstTheLimitNotRows() throws {
+        let db = try openWithTerms(convPolicy)
+        for i in 0..<5 {
+            try db.event(
+                tenant: "t",
+                rumor: rumor(id: "busy-\(i)", createdAt: Int64(200 + i), tags: [["p", "ana"]])
+            )
+        }
+        try db.event(tenant: "t", rumor: rumor(id: "quiet", createdAt: 100, tags: [["p", "ben"]]))
+
+        // The old shape's bug in one assertion: the newest two ROWS are two
+        // messages of the busy thread and no sign of the quiet one.
+        XCTAssertEqual(
+            try db.query(
+                tenant: "t", filters: filters(#"{"search":"distinct:conv","limit":2}"#)
+            ).map(\.id),
+            ["busy-4", "quiet"]
+        )
+    }
+
+    func testExcludesARumorWithNoTermInTheNamespace() throws {
+        let db = try openWithTerms(convPolicy)
+        try db.event(tenant: "t", rumor: rumor(id: "listed", tags: [["p", "ana"]]))
+        // In a conversation, but not in the `msg:` grouping.
+        try db.event(tenant: "t", rumor: rumor(id: "reaction", kind: 7, tags: [["p", "ana"]]))
+        // In no conversation at all.
+        try db.event(tenant: "t", rumor: rumor(id: "orphan"))
+
+        XCTAssertEqual(
+            try db.query(tenant: "t", filters: filters(#"{"search":"distinct:msg"}"#)).map(\.id),
+            ["listed"]
+        )
+    }
+
+    func testNamesOneNamespaceWhateverTheDelimiter() throws {
+        let db = try openWithTerms(convPolicy)
+        try db.event(tenant: "t", rumor: rumor(id: "ana", tags: [["p", "ana"]]))
+
+        XCTAssertEqual(
+            try db.query(tenant: "t", filters: filters(#"{"search":"distinct:conv"}"#)).map(\.id),
+            ["ana"]
+        )
+        XCTAssertEqual(
+            try db.query(tenant: "t", filters: filters(#"{"search":"distinct:conv:"}"#)).map(\.id),
+            ["ana"]
+        )
+    }
+
+    func testAppliesTheRestOfTheFilterBeforeCollapsing() throws {
+        let db = try openWithTerms(convPolicy)
+        try db.event(
+            tenant: "t",
+            rumor: rumor(id: "mine", pubkey: "me", createdAt: 100, tags: [["p", "ana"]])
+        )
+        try db.event(
+            tenant: "t",
+            rumor: rumor(id: "theirs", pubkey: "ana", createdAt: 200, tags: [["p", "ana"]])
+        )
+
+        // The newest rumor of the group is theirs; the newest MATCHING one is
+        // mine. Collapsing first and filtering after would answer with nothing.
+        XCTAssertEqual(
+            try db.query(
+                tenant: "t", filters: filters(#"{"search":"distinct:conv","authors":["me"]}"#)
+            ).map(\.id),
+            ["mine"]
+        )
+        XCTAssertEqual(
+            try db.query(
+                tenant: "t", filters: filters(#"{"search":"distinct:conv","kinds":[7]}"#)
+            ).map(\.id),
+            []
+        )
+    }
+
+    func testBoundsTheWindowBeforeCollapsingToo() throws {
+        let db = try openWithTerms(convPolicy)
+        try db.event(tenant: "t", rumor: rumor(id: "early", createdAt: 100, tags: [["p", "ana"]]))
+        try db.event(tenant: "t", rumor: rumor(id: "late", createdAt: 300, tags: [["p", "ana"]]))
+
+        XCTAssertEqual(
+            try db.query(
+                tenant: "t", filters: filters(#"{"search":"distinct:conv","until":200}"#)
+            ).map(\.id),
+            ["early"]
+        )
+        XCTAssertEqual(
+            try db.query(
+                tenant: "t", filters: filters(#"{"search":"distinct:conv","since":200}"#)
+            ).map(\.id),
+            ["late"]
+        )
+        XCTAssertEqual(
+            try db.query(
+                tenant: "t", filters: filters(#"{"search":"distinct:conv","since":400}"#)
+            ).map(\.id),
+            []
+        )
+    }
+
+    func testCombinesACollapseWithATerm() throws {
+        let db = try openWithTerms(convPolicy)
+        try db.event(tenant: "t", rumor: rumor(id: "ana", tags: [["p", "ana"]]))
+        try db.event(tenant: "t", rumor: rumor(id: "ben", tags: [["p", "ben"]]))
+
+        XCTAssertEqual(
+            try db.query(
+                tenant: "t", filters: filters(#"{"search":"distinct:conv conv:ana"}"#)
+            ).map(\.id),
+            ["ana"]
+        )
+    }
+
+    func testCountsTheGroups() throws {
+        let db = try openWithTerms(convPolicy)
+        try db.event(tenant: "t", rumor: rumor(id: "a1", tags: [["p", "ana"]]))
+        try db.event(tenant: "t", rumor: rumor(id: "a2", tags: [["p", "ana"]]))
+        try db.event(tenant: "t", rumor: rumor(id: "b1", tags: [["p", "ben"]]))
+
+        XCTAssertEqual(
+            try db.count(tenant: "t", filters: filters(#"{"search":"distinct:conv"}"#)).count,
+            2
+        )
+    }
+
+    func testRefusesToRemoveByACollapse() throws {
+        let db = try openWithTerms(convPolicy)
+        try db.event(tenant: "t", rumor: rumor(id: "older", createdAt: 100, tags: [["p", "ana"]]))
+        try db.event(tenant: "t", rumor: rumor(id: "newer", createdAt: 200, tags: [["p", "ana"]]))
+
+        try db.remove(tenant: "t", filters: filters(#"{"search":"distinct:conv"}"#))
+
+        XCTAssertEqual(
+            try db.query(tenant: "t", filters: filters(#"{"search":"conv:ana"}"#)).map(\.id),
+            ["newer", "older"]
+        )
+    }
+
+    func testCollapseMatchesNothingInATenantThatDerivesNoTerms() throws {
+        let db = try open()
+        try db.event(tenant: "t", rumor: rumor(id: "a", tags: [["p", "ana"]]))
+
+        XCTAssertEqual(
+            try db.query(tenant: "t", filters: filters(#"{"search":"distinct:conv"}"#)).map(\.id),
+            []
+        )
+    }
+
+    func testRefusesTwoCollapsesRatherThanPickingOne() throws {
+        let db = try openWithTerms(convPolicy)
+        try db.event(tenant: "t", rumor: rumor(id: "a", tags: [["p", "ana"]]))
+
+        XCTAssertEqual(
+            try db.query(
+                tenant: "t", filters: filters(#"{"search":"distinct:conv distinct:msg"}"#)
+            ).map(\.id),
+            []
+        )
+    }
+
+    func testRefusesANamespaceThatIsNotOne() throws {
+        let db = try openWithTerms(convPolicy)
+        try db.event(tenant: "t", rumor: rumor(id: "a", tags: [["p", "ana"]]))
+
+        XCTAssertEqual(
+            try db.query(tenant: "t", filters: filters(#"{"search":"distinct:conv:ana"}"#)).map(\.id),
+            []
+        )
+    }
+
     func testPinsTheTermGenerationToTheOtherPorts() {
         // One number, written into a file three engines share: two ports that
         // disagree would each read the other's as stale and rebuild the index on
         // every open. `TERM_GENERATION` in `src/lib/db/termPolicies.ts` and
         // `TermPolicies.GENERATION` in Kotlin are this literal.
-        XCTAssertEqual(TermPolicies.generation, 1)
+        XCTAssertEqual(TermPolicies.generation, 2)
     }
 
     // MARK: - NIP-17 conversation terms
@@ -1446,13 +1650,37 @@ final class ArmadaDbTests: XCTestCase {
 
     func testFilesARumorUnderTheConversationItsTenantNames() throws {
         let me = "self"
-        let received = try rumor(id: "r", pubkey: "alice", tags: [["p", me], ["p", "bob"]])
+        let received = try rumor(
+            id: "r", pubkey: "alice", kind: 14, tags: [["p", me], ["p", "bob"]]
+        )
+        // Every rumor of the conversation, plus the message-only namespace the
+        // conversation list collapses over.
         XCTAssertEqual(
             TermPolicies.terms(of: received, tenantId: "dm17:\(me)"),
-            ["conv:alicebob"]
+            ["conv:alicebob", "convmsg:alicebob"]
         )
         // A tenant that derives no terms says so, rather than guessing.
         XCTAssertEqual(TermPolicies.terms(of: received, tenantId: "main"), [])
+    }
+
+    func testFilesTheViewersOwnMessageUnderTheMineNamespaceToo() throws {
+        let me = "self"
+        let sent = try rumor(id: "s", pubkey: me, kind: 14, tags: [["p", "alice"]])
+        // `convmine:` is what "conversations I have written in" is a collapse
+        // over — the set that keeps a thread with someone the viewer doesn't
+        // follow, and that tells the notification path they are not a stranger.
+        XCTAssertEqual(
+            TermPolicies.terms(of: sent, tenantId: "dm17:\(me)"),
+            ["conv:alice", "convmsg:alice", "convmine:alice"]
+        )
+    }
+
+    func testKeepsAReactionOutOfTheMessageNamespaces() throws {
+        let me = "self"
+        // A reaction belongs to the conversation but is not a row the list can
+        // show, and `distinct:convmsg` is how it never becomes one.
+        let reaction = try rumor(id: "x", pubkey: me, kind: 7, tags: [["p", "alice"]])
+        XCTAssertEqual(TermPolicies.terms(of: reaction, tenantId: "dm17:\(me)"), ["conv:alice"])
     }
 
     func testAnUnattributableRumorIsFiledUnderNothing() throws {

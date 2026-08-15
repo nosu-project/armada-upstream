@@ -35,8 +35,12 @@ internal object TermPolicies {
      * `ArmadaDbTest` pins the literal.
      *
      *   1  `conv:<peers>` — a rumor filed under its NIP-17 conversation.
+     *   2  adds `convmsg:<peers>` (chat and file rumors only) and
+     *      `convmine:<peers>` (the same, authored by the viewer), which is what
+     *      makes the conversation list a collapse over an index rather than a
+     *      sample of the newest rumors.
      */
-    const val GENERATION = 1L
+    const val GENERATION = 2L
 
     /**
      * The derived terms of a rumor stored in [tenantId], or empty when that

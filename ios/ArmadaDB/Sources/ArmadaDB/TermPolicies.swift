@@ -33,7 +33,11 @@ public enum TermPolicies {
     /// `ArmadaDbTests` pins the literal.
     ///
     ///   1  `conv:<peers>` — a rumor filed under its NIP-17 conversation.
-    public static let generation: Int64 = 1
+    ///   2  adds `convmsg:<peers>` (chat and file rumors only) and
+    ///      `convmine:<peers>` (the same, authored by the viewer), which is what
+    ///      makes the conversation list a collapse over an index rather than a
+    ///      sample of the newest rumors.
+    public static let generation: Int64 = 2
 
     /// The derived terms of a rumor stored in `tenantId`, or empty when that
     /// tenant derives none — which is most of them, and means a term read
@@ -97,26 +101,56 @@ public enum Dm17Conversation {
         return others.isEmpty ? [selfPubkey] : sorted(others)
     }
 
-    /// The derived index term for a participant set.
+    /// The namespace every rumor of a conversation is filed under.
+    public static let convTerm = "conv"
+
+    /// The namespace holding only the rumors worth listing (chat and file), so
+    /// `distinct:convmsg` can name the newest MESSAGE of every conversation
+    /// without any engine reading a rumor's kind. See `DM_MSG_TERM`.
+    public static let msgTerm = "convmsg"
+
+    /// The same, restricted to messages the VIEWER sent — "conversations I have
+    /// written in", which is what tells the notification path that a sender is
+    /// not a stranger. See `DM_MINE_TERM`.
+    public static let mineTerm = "convmine"
+
+    /// The kinds `msgTerm` and `mineTerm` cover: a chat message or a file.
+    public static let messageKinds: Set<Int> = [14, 15]
+
+    /// The derived index term for a participant set, in `namespace`.
     ///
     /// Joined with NOTHING rather than with a separator: a term crosses a NIP-50
     /// search string, whose parse ends a token at whitespace. Pubkeys are
     /// fixed-width 64-char hex, so concatenating them is unambiguous.
-    public static func term(_ peers: [String]) -> String {
-        "conv:" + sorted(peers).joined()
+    public static func term(_ peers: [String], namespace: String = convTerm) -> String {
+        "\(namespace):" + sorted(peers).joined()
     }
 
     /// The policy for a `dm17:<self>` tenant: each rumor filed under the one
-    /// conversation it belongs to.
+    /// conversation it belongs to, in every namespace it qualifies for.
     ///
     /// `self` comes from the TENANT ID, which is the whole shape of the
     /// contract — the engine never interprets a tenant id, and this is the layer
     /// that spells `dm17:` in the first place.
+    ///
+    /// Exactly one term per namespace, which `distinct:` requires: a rumor that
+    /// was the newest of two groups could only ever be returned once.
+    ///
+    /// The notification extension writes through this while the app is closed, so
+    /// a message that arrives then is already in the conversation list's index
+    /// when the app opens — which is the whole reason a policy binds to the
+    /// tenant.
     public static func terms(of rumor: Rumor, tenantId: String) -> [String] {
         guard let selfPubkey = tenantSelf(tenantId),
               let peers = peers(of: rumor, self: selfPubkey)
         else { return [] }
-        return [term(peers)]
+
+        var terms = [term(peers)]
+        if messageKinds.contains(rumor.kind) {
+            terms.append(term(peers, namespace: msgTerm))
+            if rumor.pubkey == selfPubkey { terms.append(term(peers, namespace: mineTerm)) }
+        }
+        return terms
     }
 
     /// Sorted by UTF-16 code unit, matching the engine's own string order.

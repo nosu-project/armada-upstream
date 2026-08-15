@@ -14,9 +14,12 @@
  *
  * One addition to those: a NIP-50 extension token (`key:value`) is a lookup in
  * the tenant's DERIVED term index rather than something read off the rumor —
- * see `terms` and `TermPolicy`.
+ * see `terms` and `TermPolicy`. One token key is reserved as a DIRECTIVE instead:
+ * `distinct:<namespace>` — see {@link ParsedFilter.distinct}.
  */
 import { NIP50 } from "@nostrify/nostrify";
+
+import { TERM_NAMESPACES_RESERVED, termNamespaceRange } from "./types";
 
 import type { NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -62,6 +65,38 @@ export class ParsedFilter {
    * a local store answering its own queries has no one to negotiate with.
    */
   readonly terms: string[];
+
+  /**
+   * The term NAMESPACE this filter is collapsed by, from a `distinct:<namespace>`
+   * token: the result holds at most one rumor per term in that namespace — the
+   * newest, since a read is newest-first — and `limit` therefore counts groups
+   * without ceasing to count rows.
+   *
+   * ditto-relay spells the same operation `distinct:author` over a field
+   * (`src/opensearch.ts`), for the same reason it exists here: collapsing has to
+   * happen INSIDE the read, because de-duplicating the answer afterwards can
+   * only shrink an already-truncated page. That is precisely the NIP-17
+   * conversation list, which sampled the newest 500 rumors and grouped them in
+   * memory — so one busy thread hid every other conversation.
+   *
+   * The operand names a namespace, not a prefix, and the engines derive the
+   * range from it ({@link termNamespaceRange}) — a prefix operand would make a
+   * dropped delimiter ask for something subtly different rather than for
+   * nothing. Semantics, which every engine must agree on:
+   *
+   *  - Row conditions apply BEFORE the collapse: the newest MATCHING rumor per
+   *    group, so `kinds` and `authors` narrow the candidates rather than the
+   *    survivors.
+   *  - A rumor with no term in the namespace is excluded, not grouped under a
+   *    null key — the same "no term, no match" a term lookup gives.
+   *  - Two `distinct:` tokens can't be honoured (a term names one dimension, and
+   *    the index cannot group by a pair), so they fail closed rather than pick
+   *    one.
+   *
+   * `undefined` when the filter names no such token — which is every filter but
+   * the conversation list's.
+   */
+  readonly distinct?: string;
 
   /**
    * The same keywords as an FTS5 `MATCH` expression, or `undefined` when they
@@ -129,6 +164,8 @@ export class ParsedFilter {
     this.kindSet = this.kinds && new Set(this.kinds);
 
     const terms: string[] = [];
+    let distinct: string | undefined;
+    let distinctTokens = 0;
 
     if (this.search !== undefined) {
       const required: string[] = [];
@@ -136,6 +173,15 @@ export class ParsedFilter {
 
       for (const token of NIP50.parseInput(this.search)) {
         if (typeof token !== "string") {
+          // A reserved key is a DIRECTIVE to the store, not a term. It is read
+          // here and nowhere else, so an engine that resolves terms in its index
+          // never sees it as one to look up.
+          if (token.key === "distinct") {
+            distinctTokens++;
+            distinct = token.value;
+            continue;
+          }
+          if (TERM_NAMESPACES_RESERVED.includes(token.key)) continue;
           // An extension token is a lookup in the derived term index. It is
           // NOT lowercased: a term is an opaque string a policy returned, and
           // folding its case would make two distinct ones the same lookup.
@@ -153,7 +199,7 @@ export class ParsedFilter {
       if (required.length > 0 || negated.length > 0) {
         this.searchKeywords = { required, negated };
         this.searchQuery = toFtsQuery(required, negated);
-      } else if (terms.length === 0 && this.search.trim() !== "") {
+      } else if (terms.length === 0 && distinct === undefined && this.search.trim() !== "") {
         // The caller asked for something, and every part of it was consumed by
         // the parse: an extension nobody implements (`domain:example.com`), or
         // punctuation that tokenizes to nothing (`""`). Falling through to "no
@@ -168,7 +214,39 @@ export class ParsedFilter {
     }
 
     this.terms = terms;
+
+    // A collapse the store cannot honour exactly is refused, never approximated:
+    // two dimensions it can't group by at once, or a namespace that isn't one
+    // (empty, or itself containing the delimiter). Answering the filter WITHOUT
+    // the collapse would return every row of a read the caller asked for one row
+    // per group of — which for a conversation list is every message in the
+    // store presented as a list of conversations.
+    if (distinct !== undefined) {
+      const range = termNamespaceRange(distinct);
+      if (distinctTokens > 1 || !range) neverMatch = true;
+      // Kept normalized (no trailing delimiter), so `distinct:conv` and
+      // `distinct:conv:` are one namespace to everything downstream.
+      else this.distinct = range.lower.slice(0, -1);
+    }
+
     this.neverMatch = neverMatch;
+  }
+
+  /**
+   * Which group a rumor with these derived terms collapses into — its one term
+   * in the {@link distinct} namespace — or `undefined` when it has none and so
+   * is excluded from a collapsed read.
+   *
+   * A policy derives at most one term per namespace (see {@link TermPolicy}), so
+   * the first match is the answer; a policy that broke that rule would have its
+   * rumor claim whichever group it was scanned under, which is also what an
+   * index-side collapse does with it.
+   */
+  collapseKey(derived: Iterable<string>): string | undefined {
+    if (this.distinct === undefined) return undefined;
+    const prefix = `${this.distinct}:`;
+    for (const term of derived) if (term.startsWith(prefix)) return term;
+    return undefined;
   }
 
   /**
@@ -190,7 +268,11 @@ export class ParsedFilter {
    * Full NIP-01 match of a rumor against every condition in this filter.
    *
    * {@link terms} are NOT checked — they aren't derivable from the rumor
-   * alone; see {@link matchesTerms}.
+   * alone; see {@link matchesTerms}. Neither is {@link distinct}, which is not a
+   * property of a rumor at all: it selects between rumors that all match. A
+   * caller applying this row-wise therefore OVER-selects a collapsed filter by
+   * exactly the collapse, which is the safe direction — the read narrows it,
+   * rather than a row escaping the filter.
    *
    * Pass `skipSearch` when FTS5 has already applied the keywords. Re-checking
    * them here would be worse than redundant: FTS5 matches whole words and this

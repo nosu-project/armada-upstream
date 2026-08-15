@@ -144,12 +144,34 @@ class Dm17Test {
             pubkey = "alice",
             tags = listOf(listOf("p", self), listOf("p", "bob")),
         )
+        // Every rumor of the conversation, plus the message-only namespace the
+        // conversation list collapses over.
         assertEquals(
-            listOf("conv:alicebob"),
+            listOf("conv:alicebob", "convmsg:alicebob"),
             TermPolicies.termsOf(received, Dm17.tenant(self)),
         )
         // A tenant that derives no terms says so, rather than guessing.
         assertEquals(emptyList<String>(), TermPolicies.termsOf(received, "main"))
+    }
+
+    @Test
+    fun `files the viewer's own message under the mine namespace too`() {
+        val sent = rumor(kind = 14, pubkey = self, tags = listOf(listOf("p", "alice")))
+        // `convmine:` is what "conversations I have written in" is a collapse
+        // over — the set that keeps a thread with someone the viewer doesn't
+        // follow, and that tells the notification path they are not a stranger.
+        assertEquals(
+            listOf("conv:alice", "convmsg:alice", "convmine:alice"),
+            TermPolicies.termsOf(sent, Dm17.tenant(self)),
+        )
+    }
+
+    @Test
+    fun `keeps a reaction out of the message namespaces`() {
+        // A reaction belongs to the conversation but is not a row the list can
+        // show, and `distinct:convmsg` is how it never becomes one.
+        val reaction = rumor(kind = 7, pubkey = self, tags = listOf(listOf("p", "alice")))
+        assertEquals(listOf("conv:alice"), TermPolicies.termsOf(reaction, Dm17.tenant(self)))
     }
 
     @Test

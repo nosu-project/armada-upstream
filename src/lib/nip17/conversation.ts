@@ -102,7 +102,42 @@ export function dmConvKeyOf(
 export const DM_CONV_TERM = "conv";
 
 /**
- * The index term for a conversation key.
+ * The namespace holding only the rumors worth LISTING: a chat message or a file,
+ * never a reaction, a deletion or a timer.
+ *
+ * It exists so `distinct:convmsg` can name the newest MESSAGE of every
+ * conversation without any engine reading a rumor's kind. A collapse over
+ * `conv:` would have to test `kind` inside the grouping, which means a rowid
+ * lookup and a whole row read per index row — the cost the grouping exists to
+ * avoid. One extra index row per message buys the conversation list.
+ */
+export const DM_MSG_TERM = "convmsg";
+
+/**
+ * The same, restricted to messages the VIEWER sent — so "conversations I have
+ * written in" is a collapse rather than a scan of everything the viewer ever
+ * sent.
+ *
+ * That set is what keeps a thread you started with someone you don't follow in
+ * the list, and what tells the push gateways that a sender is not a stranger. It
+ * has to be COMPLETE for the second one: a conversation missing from it becomes a
+ * message request from someone the viewer has been talking to for a year.
+ */
+export const DM_MINE_TERM = "convmine";
+
+/**
+ * The kinds {@link DM_MSG_TERM} covers, spelled here rather than imported.
+ *
+ * This module is deliberately dependency-free (see the note above) and
+ * `protocol.ts` — where the wire kinds live — pulls in nostr-tools' crypto, so
+ * the numbers are repeated. `dm17Store.test.ts` asserts the two agree: a policy
+ * that disagreed with the reader about what counts as a message would file rows
+ * nothing lists.
+ */
+export const DM_MESSAGE_KINDS: readonly number[] = [14, 15];
+
+/**
+ * The index term for a conversation key, in `namespace`.
  *
  * The participants are joined with NOTHING rather than with
  * {@link DM_PEER_SEP}, because a term crosses a NIP-50 search string and the
@@ -114,13 +149,13 @@ export const DM_CONV_TERM = "conv";
  * Note to Self is `[self]` and so is a term like any other; there is no case
  * here that a 1:1 doesn't already cover.
  */
-export function dmConvTerm(peers: readonly string[]): string {
-  return `${DM_CONV_TERM}:${[...peers].sort().join("")}`;
+export function dmConvTerm(peers: readonly string[], namespace = DM_CONV_TERM): string {
+  return `${namespace}:${[...peers].sort().join("")}`;
 }
 
 /**
  * The `TermPolicy` for a `dm17:<self>` tenant: each stored rumor filed under
- * the one conversation it belongs to.
+ * the one conversation it belongs to, in every namespace it qualifies for.
  *
  * `self` comes from the TENANT ID, not from anywhere the engine knows — which
  * is the whole shape of the contract. The engines never interpret a term, and
@@ -129,12 +164,23 @@ export function dmConvTerm(peers: readonly string[]): string {
  * A rumor with no attributable conversation gets no term, and so is invisible
  * to a conversation read. That is correct rather than lossy: it was already
  * invisible, since every reader derived the same key and dropped it.
+ *
+ * Exactly one term per namespace, which `distinct:` requires: a rumor that was
+ * the newest of two groups could only ever be returned once, so the second group
+ * would silently lose its row.
  */
 export function dmTermPolicy(rumor: NostrRumor, tenantId: string): string[] {
   const self = dm17TenantSelf(tenantId);
   if (!self) return [];
   const peers = dmPeersOf(rumor, self);
-  return peers ? [dmConvTerm(peers)] : [];
+  if (!peers) return [];
+
+  const terms = [dmConvTerm(peers)];
+  if (DM_MESSAGE_KINDS.includes(rumor.kind)) {
+    terms.push(dmConvTerm(peers, DM_MSG_TERM));
+    if (rumor.pubkey === self) terms.push(dmConvTerm(peers, DM_MINE_TERM));
+  }
+  return terms;
 }
 
 /** The `dm17:` tenant prefix, and the viewer a tenant id names. */

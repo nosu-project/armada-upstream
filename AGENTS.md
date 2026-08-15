@@ -611,12 +611,35 @@ Things to know before touching it:
   the policy binds to the TENANT, not to a write, so the Android service and the
   iOS extension file rows correctly while knowing nothing about terms; and an
   unknown term FAILS CLOSED, matching nothing rather than dropping the
-  constraint. SQLite gets a b-tree (`rumor_terms`, schema v2) rather than more
+  constraint. SQLite gets a b-tree (`rumor_terms`, schema v3) rather than more
   FTS tokens because `(tenant, term, seq)` is already time-ordered, so a lookup
   is a bounded backwards walk — and because a b-tree can be GROUPED, which is
-  what a future fix for the inbox list's global 500-row window needs. Existing
-  rows are indexed by a one-time per-tenant backfill, since a term cannot be
-  derived in SQL; only reads that name a term wait for it.
+  what `distinct:` below is. Existing rows are indexed by a one-time per-tenant
+  backfill, since a term cannot be derived in SQL; only reads that name a term
+  wait for it, and the GENERATION that walked them is recorded beside the tenant
+  — one number, identical in all three ports, because a policy edit without it
+  leaves earlier rows carrying terms nothing looks up, and two ports that
+  disagree rebuild the index against each other on every open.
+- **`distinct:<namespace>` collapses a read to one rumor per group.** A term is
+  namespaced (`<namespace>:<body>`, which the read path always required since a
+  term is named as a `key:value` token), and this reserved token returns the
+  NEWEST rumor per term in one namespace — so `limit` counts conversations while
+  still counting rows. ditto-relay spells the same operation `distinct:author`
+  over a field, and for the same reason: collapsing has to happen INSIDE the read,
+  because de-duplicating the answer afterwards can only shrink an already
+  truncated page. That was the NIP-17 conversation list, which sampled the newest
+  500 message rumors and grouped them in memory — one busy thread hid every other
+  conversation, and a peer written to a year ago fell out of the `mine` set the
+  push gateways read as "not a stranger". Two plans, which must answer
+  identically: `GROUP BY term` over the namespace's range (index-only, one body
+  read per group) when nothing outside the term index has to be tested, and a
+  collapse-as-you-scan otherwise — row conditions apply BEFORE the collapse, so
+  `kinds` would have to be tested inside the grouping, which is why the policy
+  files a message-only namespace (`convmsg:`) instead. It is a DIRECTIVE, not a
+  term: query-only (a `remove()` naming it deletes nothing, since "one rumor per
+  conversation" is not a deletion anyone should be able to ask for), never
+  matched row-wise, and refused outright rather than approximated — two of them,
+  or a namespace that isn't one, fail closed.
 - **A drain converts to the CURRENT shape; it does not copy rows across.** The
   pre-ArmadaDB store folded `stream`/`wrap`/`sealkind`/`seal` into the stored
   event's tags and told the planes apart by the `stream` tag at read time, so

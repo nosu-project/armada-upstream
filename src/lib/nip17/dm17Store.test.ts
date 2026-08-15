@@ -29,6 +29,7 @@ import {
   dmTimerTags,
   KIND_DM_CHAT,
   KIND_DM_DELETE,
+  KIND_DM_FILE,
   KIND_DM_REACTION,
   KIND_DM_TIMER,
   type OpenedDm,
@@ -578,4 +579,85 @@ describe("group conversations", () => {
     expect((await queryDm17Thread(me, groupKey, { limit: 50 })).map((m) => m.rumorId))
       .not.toContain(target.rumorId);
   }, 30_000);
+});
+
+describe("the conversation list is a list, not a sample", () => {
+  const me = getPublicKey(generateSecretKey());
+  const chatty = getPublicKey(generateSecretKey());
+  const quiet = getPublicKey(generateSecretKey());
+
+  function said(author: string, peer: string, content: string): OpenedDm {
+    const createdAt = ++clock;
+    const tags = dmChatTags([author === me ? peer : me]);
+    const rumor = buildDmRumor({ kind: KIND_DM_CHAT, content, tags, pubkey: author, createdAt });
+    return {
+      rumorId: rumor.id,
+      author,
+      kind: KIND_DM_CHAT,
+      content,
+      tags,
+      createdAt,
+      peers: [peer],
+      wrapId: `wrap-${rumor.id.slice(0, 8)}`,
+    };
+  }
+
+  it("keeps an old conversation that a busy one has buried", async () => {
+    // The viewer wrote to `quiet` once, long ago, and then had a long
+    // conversation with `chatty`. The list used to read the newest 500 message
+    // rumors, so a busy enough thread pushed everything else out of it — the
+    // conversation vanished from the DMs page, and `mine` lost it too, which is
+    // what the push gateways read as "this sender is a stranger".
+    await writeDm17Rumors(me, [said(me, quiet, "long ago")]);
+    const flood: OpenedDm[] = [];
+    for (let i = 0; i < 40; i++) flood.push(said(chatty, chatty, `chatter ${i}`));
+    await writeDm17Rumors(me, flood);
+
+    const rows = await queryDm17Conversations(me);
+    expect(rows.map((row) => row.key)).toEqual([chatty, quiet]);
+    expect(rows.find((row) => row.key === quiet)?.mine).toBe(true);
+    expect(rows.find((row) => row.key === quiet)?.latest.content).toBe("long ago");
+  }, 30_000);
+
+  it("counts conversations against a limit, not messages", async () => {
+    // Two conversations exist, and the busiest one holds far more than two
+    // messages: a limit of 2 is two CONVERSATIONS.
+    const rows = await queryDm17Conversations(me, { limit: 2 });
+    expect(rows.map((row) => row.key)).toEqual([chatty, quiet]);
+  }, 30_000);
+
+  it("lists no conversation for a reaction alone", async () => {
+    // A reaction is in the conversation but is not a row the list can show, and
+    // `convmsg:` is what keeps it from becoming one.
+    const stranger = getPublicKey(generateSecretKey());
+    const createdAt = ++clock;
+    const tags = dmReactionTags([stranger], "some-id", KIND_DM_CHAT);
+    const rumor = buildDmRumor({
+      kind: KIND_DM_REACTION,
+      content: "+",
+      tags,
+      pubkey: stranger,
+      createdAt,
+    });
+    await writeDm17Rumors(me, [{
+      rumorId: rumor.id,
+      author: stranger,
+      kind: KIND_DM_REACTION,
+      content: "+",
+      tags,
+      createdAt,
+      peers: [stranger],
+      wrapId: `wrap-${rumor.id.slice(0, 8)}`,
+    }]);
+
+    const rows = await queryDm17Conversations(me);
+    expect(rows.map((row) => row.key)).not.toContain(stranger);
+  }, 30_000);
+
+  it("agrees with the wire kinds about what a message is", async () => {
+    // `conversation.ts` is dependency-free and so spells the numbers itself. A
+    // policy that disagreed with the reader would file rows nothing lists.
+    const { DM_MESSAGE_KINDS } = await import("@/lib/nip17/conversation");
+    expect([...DM_MESSAGE_KINDS].sort()).toEqual([KIND_DM_CHAT, KIND_DM_FILE].sort());
+  });
 });

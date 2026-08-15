@@ -340,6 +340,7 @@ export function dmTimerSeconds(rumor: { tags: readonly string[][] }): number | u
 // here so every existing caller keeps its one import.
 
 export {
+  DM_MESSAGE_KINDS,
   DM_PEER_SEP,
   dmConvKey,
   dmConvKeyOf,
