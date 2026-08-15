@@ -9,6 +9,10 @@ staged_appimage="$release_dir/Armada.AppImage"
 build_dir="$release_dir/flatpak-build"
 repo_dir="$release_dir/flatpak-repo"
 bundle="$release_dir/Armada-flatpak-$(uname -m).flatpak"
+# A sideloaded bundle otherwise creates a disabled origin with no URL, leaving
+# Flatpak nowhere to check for Armada updates. Embedding the hosted OSTree
+# repository makes the normal `flatpak update` path own future releases.
+ARMADA_FLATPAK_REPO_URL=${ARMADA_FLATPAK_REPO_URL:-https://armada.buzz/flatpak/}
 
 builder=system
 if command -v flatpak-builder >/dev/null 2>&1; then
@@ -54,7 +58,7 @@ case "$builder" in
     else
       flatpak build-update-repo "$repo_dir"
     fi
-    flatpak build-bundle "$repo_dir" "$bundle" buzz.armada.app stable
+    flatpak build-bundle --repo-url="$ARMADA_FLATPAK_REPO_URL" "$repo_dir" "$bundle" buzz.armada.app stable
     ;;
   flatpak-user)
     flatpak run --user --command=sh \
@@ -62,6 +66,7 @@ case "$builder" in
       --env=ARMADA_FLATPAK_MANIFEST="$manifest" \
       --env=ARMADA_FLATPAK_REPO_DIR="$repo_dir" \
       --env=ARMADA_FLATPAK_BUNDLE="$bundle" \
+      --env=ARMADA_FLATPAK_REPO_URL="$ARMADA_FLATPAK_REPO_URL" \
       --env=FLATPAK_GPG_KEY="${FLATPAK_GPG_KEY:-}" \
       org.flatpak.Builder -c '
         set -eu
@@ -73,7 +78,7 @@ case "$builder" in
         else
           flatpak build-update-repo "$ARMADA_FLATPAK_REPO_DIR"
         fi
-        flatpak build-bundle "$ARMADA_FLATPAK_REPO_DIR" "$ARMADA_FLATPAK_BUNDLE" buzz.armada.app stable
+        flatpak build-bundle --repo-url="$ARMADA_FLATPAK_REPO_URL" "$ARMADA_FLATPAK_REPO_DIR" "$ARMADA_FLATPAK_BUNDLE" buzz.armada.app stable
       ' sh "$@"
     ;;
   flatpak-system)
@@ -82,6 +87,7 @@ case "$builder" in
       --env=ARMADA_FLATPAK_MANIFEST="$manifest" \
       --env=ARMADA_FLATPAK_REPO_DIR="$repo_dir" \
       --env=ARMADA_FLATPAK_BUNDLE="$bundle" \
+      --env=ARMADA_FLATPAK_REPO_URL="$ARMADA_FLATPAK_REPO_URL" \
       --env=FLATPAK_GPG_KEY="${FLATPAK_GPG_KEY:-}" \
       org.flatpak.Builder -c '
         set -eu
@@ -93,7 +99,7 @@ case "$builder" in
         else
           flatpak build-update-repo "$ARMADA_FLATPAK_REPO_DIR"
         fi
-        flatpak build-bundle "$ARMADA_FLATPAK_REPO_DIR" "$ARMADA_FLATPAK_BUNDLE" buzz.armada.app stable
+        flatpak build-bundle --repo-url="$ARMADA_FLATPAK_REPO_URL" "$ARMADA_FLATPAK_REPO_DIR" "$ARMADA_FLATPAK_BUNDLE" buzz.armada.app stable
       ' sh "$@"
     ;;
 esac
