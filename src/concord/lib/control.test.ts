@@ -985,6 +985,228 @@ describe("control plane fold (CORD-04)", () => {
     expect(folded.banned.size).toBe(0);
   });
 
+  /**
+   * Banning is acting on a member, so it takes the BAN bit AND a strict
+   * outrank — the rule kicks and grants already follow. The gate used to ask
+   * only for the bit, and the list "replaces entire", which together let a
+   * moderator ban the admins above them, lift bans they could never have
+   * issued, and (since a ban does not strip the role) publish the very version
+   * that unbanned themselves.
+   */
+  async function staffedCommunity() {
+    const base = await makeCommunity();
+    const { owner, communityId, control } = base;
+    const admin = signer();
+    const mod = signer();
+    const adm = adminRole(bytesToHex(random32()));
+    const mrole = moderatorRole(bytesToHex(random32())); // position 2, holds BAN
+
+    const admGrant = await sealEdition(
+      buildGrantEdition(communityId, { member: admin.pubkey, roleIds: [adm.roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
+      control,
+      owner,
+    );
+    const modGrant = await sealEdition(
+      buildGrantEdition(communityId, { member: mod.pubkey, roleIds: [mrole.roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
+      control,
+      owner,
+    );
+    const wraps: NostrEvent[] = [
+      await sealEdition(buildRoleEdition(adm, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      await sealEdition(buildRoleEdition(mrole, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      admGrant,
+      modGrant,
+    ];
+    return { ...base, admin, mod, adm, mrole, admGrant, modGrant, wraps };
+  }
+
+  it("an equal-version metadata fork cannot grind out the owner's edition", async () => {
+    // The banlist is not the only entity whose tie fell to the rumor id: any
+    // MANAGE_METADATA holder could fork the owner's edition at the same
+    // version and mine an id that sorted first, renaming the community
+    // indefinitely without ever outranking them.
+    const { owner, communityId, control } = await makeCommunity();
+    const admin = signer();
+    const adm = adminRole(bytesToHex(random32()));
+    const admGrant = await sealEdition(
+      buildGrantEdition(communityId, { member: admin.pubkey, roleIds: [adm.roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
+      control,
+      owner,
+    );
+    const { realWrap, forgedWrap } = await grindFork(
+      control,
+      {
+        build: (t) => buildMetadataEdition(communityId, { name: "Real", relays: [] }, { actorPubkey: owner.pubkey, version: 1n, createdAtSecs: t }),
+        by: owner,
+      },
+      {
+        build: (t) =>
+          buildMetadataEdition(communityId, { name: "Hijacked", relays: [] }, {
+            actorPubkey: admin.pubkey,
+            version: 1n,
+            createdAtSecs: t,
+            authority: citeGrant(admGrant, control),
+          }),
+        by: admin,
+      },
+    );
+
+    const wraps = [
+      await sealEdition(buildRoleEdition(adm, { actorPubkey: owner.pubkey, version: 1n }), control, owner),
+      admGrant,
+      realWrap,
+      forgedWrap,
+    ];
+    const folded = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
+    expect(folded.metadata?.name).toBe("Real");
+  });
+
+  it("a moderator's banlist cannot name the admins above them", async () => {
+    const { owner, communityId, control, admin, mod, modGrant, wraps } = await staffedCommunity();
+    const outsider = signer();
+    wraps.push(
+      await sealEdition(
+        buildBanlistEdition(communityId, [admin.pubkey, outsider.pubkey], {
+          actorPubkey: mod.pubkey,
+          version: 1n,
+          authority: citeGrant(modGrant, control),
+        }),
+        control,
+        mod,
+      ),
+    );
+
+    const folded = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
+    expect(folded.banned.has(admin.pubkey)).toBe(false);
+    expect(folded.banned.has(outsider.pubkey)).toBe(true); // honored in part
+    // Nor may the entry backdate-suppress them from the member list.
+    expect(folded.bannedAt.has(admin.pubkey)).toBe(false);
+  });
+
+  it("a moderator cannot ban a peer moderator (equal does not act on equal)", async () => {
+    const { owner, communityId, control, mod, mrole, modGrant, wraps } = await staffedCommunity();
+    const peer = signer();
+    wraps.push(
+      await sealEdition(
+        buildGrantEdition(communityId, { member: peer.pubkey, roleIds: [mrole.roleId] }, { actorPubkey: owner.pubkey, version: 1n }),
+        control,
+        owner,
+      ),
+      await sealEdition(
+        buildBanlistEdition(communityId, [peer.pubkey], { actorPubkey: mod.pubkey, version: 1n, authority: citeGrant(modGrant, control) }),
+        control,
+        mod,
+      ),
+    );
+
+    const folded = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
+    expect(folded.banned.has(peer.pubkey)).toBe(false);
+  });
+
+  it("a banned moderator cannot publish the version that unbans them", async () => {
+    const { owner, communityId, control, mod, modGrant, wraps } = await staffedCommunity();
+    const v1 = await sealEdition(
+      buildBanlistEdition(communityId, [mod.pubkey], { actorPubkey: owner.pubkey, version: 1n }),
+      control,
+      owner,
+    );
+    const [v1Parsed] = openControlWraps([v1], [control]);
+    wraps.push(
+      v1,
+      await sealEdition(
+        buildBanlistEdition(communityId, [], {
+          actorPubkey: mod.pubkey,
+          version: 2n,
+          prevHash: v1Parsed.selfHash,
+          authority: citeGrant(modGrant, control),
+        }),
+        control,
+        mod,
+      ),
+    );
+
+    const folded = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
+    expect(folded.banned.has(mod.pubkey)).toBe(true);
+  });
+
+  it("a moderator's list does not lift a ban the owner issued on someone above them", async () => {
+    const { owner, communityId, control, admin, mod, modGrant, wraps } = await staffedCommunity();
+    const outsider = signer();
+    const v1 = await sealEdition(
+      buildBanlistEdition(communityId, [admin.pubkey], { actorPubkey: owner.pubkey, version: 1n }),
+      control,
+      owner,
+    );
+    const [v1Parsed] = openControlWraps([v1], [control]);
+    wraps.push(
+      v1,
+      await sealEdition(
+        buildBanlistEdition(communityId, [outsider.pubkey], {
+          actorPubkey: mod.pubkey,
+          version: 2n,
+          prevHash: v1Parsed.selfHash,
+          authority: citeGrant(modGrant, control),
+        }),
+        control,
+        mod,
+      ),
+    );
+
+    const folded = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
+    expect(folded.banned.has(admin.pubkey)).toBe(true); // carried: outside the mod's reach
+    expect(folded.banned.has(outsider.pubkey)).toBe(true); // their own entry stands
+  });
+
+  it("the owner still lifts any ban, and a moderator lifts one they issued", async () => {
+    const { owner, communityId, control, mod, modGrant, wraps } = await staffedCommunity();
+    const outsider = signer();
+    const v1 = await sealEdition(
+      buildBanlistEdition(communityId, [outsider.pubkey], { actorPubkey: mod.pubkey, version: 1n, authority: citeGrant(modGrant, control) }),
+      control,
+      mod,
+    );
+    const [v1Parsed] = openControlWraps([v1], [control]);
+    wraps.push(
+      v1,
+      await sealEdition(
+        buildBanlistEdition(communityId, [], { actorPubkey: owner.pubkey, version: 2n, prevHash: v1Parsed.selfHash }),
+        control,
+        owner,
+      ),
+    );
+
+    const folded = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
+    expect(folded.banned.size).toBe(0);
+  });
+
+  it("an equal-version banlist fork from a BAN holder cannot grind out the owner's ban", async () => {
+    const { owner, communityId, control, mod, modGrant, wraps } = await staffedCommunity();
+    const outsider = signer();
+    // Both siblings are authorized, so the gate cannot separate them and both
+    // link to nothing, so neither can the chain: the tiebreak is all there is.
+    const { realWrap, forgedWrap } = await grindFork(
+      control,
+      {
+        build: (t) => buildBanlistEdition(communityId, [outsider.pubkey], { actorPubkey: owner.pubkey, version: 1n, createdAtSecs: t }),
+        by: owner,
+      },
+      {
+        build: (t) =>
+          buildBanlistEdition(communityId, [], {
+            actorPubkey: mod.pubkey,
+            version: 1n,
+            createdAtSecs: t,
+            authority: citeGrant(modGrant, control),
+          }),
+        by: mod,
+      },
+    );
+
+    wraps.push(realWrap, forgedWrap);
+    const folded = foldControlState(openControlWraps(wraps, [control]), communityId, owner.pubkey);
+    expect(folded.banned.has(outsider.pubkey)).toBe(true);
+  });
+
   it("registry: each creator owns exactly their own list; the aggregate is the Public flag", async () => {
     const { owner, communityId, control } = await makeCommunity();
     const linkSigner = bytesToHex(random32());
