@@ -5,7 +5,10 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "node_modules", "coverage", "android", "electron"] },
+  // `ios` holds no JavaScript, and its SwiftPM `.build` directories are
+  // root-owned when the suites are run through a Swift container — which makes
+  // the walk itself fail, not merely waste time.
+  { ignores: ["dist", "node_modules", "coverage", "android", "electron", "ios"] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ["**/*.{ts,tsx}"],
