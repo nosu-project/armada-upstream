@@ -191,6 +191,10 @@ export function directInviteExpired(bundle: InviteBundle, nowMs = Date.now()): b
 /** What an already-joined member currently holds, for catch-up classification. */
 export interface HeldMembership {
   rootEpoch: number;
+  /** The base access key currently held (hex). A catch-up may never change it. */
+  communityRoot: string;
+  /** The Control Plane signer pubkey currently held (hex), when this epoch has one. */
+  controlPk?: string;
   /** channel id (hex) → held channel epoch. */
   channelEpochs: ReadonlyMap<string, number>;
   /**
@@ -203,25 +207,50 @@ export interface HeldMembership {
 }
 
 /**
+ * Compare two optional hex fields. A bundle is another client's document, and
+ * CORD-01 says hex is lowercase while foreign input may not be — an unmatched
+ * spelling here would read as a changed base and drop a legitimate vend.
+ */
+function hexEq(a: string | undefined, b: string | undefined): boolean {
+  return a?.toLowerCase() === b?.toLowerCase();
+}
+
+/**
  * Is an incoming bundle for an already-joined community a CATCH-UP worth
- * parking (vs. noise to skip)? Two shapes qualify:
+ * parking (vs. noise to skip)? Exactly one shape qualifies: a bundle continuing
+ * the SAME base the member already holds, carrying a private-channel key they
+ * lack or hold at an older channel epoch — a role-gate key vend (CORD.md).
  *
- *  - a strictly fresher root epoch — an admin healing a stranded member
- *    (CORD-05 §6 re-handoff);
- *  - a same-or-newer root carrying a private-channel key the member lacks, or
- *    holds at an older channel epoch — a role-gate key vend (CORD.md).
+ * It may never move the base. Nothing binds a bundle's `community_root` to its
+ * `community_id`: the id self-certifies the OWNER (CORD-02 §1, A.4) and the root
+ * is "deliberately not derived from" it (CORD-02 §2), so a hostile bundle can
+ * carry a real community's id, owner and salt beside an attacker-chosen root and
+ * still pass `validateBundle`. Accepting one for a community already held merges
+ * it through the Community List's `freshest` (CORD-02 §8) — a rule written for
+ * reconciling a member's OWN devices, whose input is a self-signed, self-encrypted
+ * document, not a stranger's giftwrap — and relocates every future message the
+ * member writes onto streams the attacker reads. The precondition is only
+ * `(community_id, owner, owner_salt)`, which ride in every bundle and are not
+ * revoked by removal, so any past link-holder retains it forever.
  *
- * Both merge monotonically on accept (epoch-forward roots, per-channel
- * epoch-max union), so neither can move the membership backward. A LOWER-epoch
- * root is stale and never a catch-up, whatever channels it claims.
+ * The base advances by exactly one spec-sanctioned route, and it is not this
+ * one: a CORD-06 §2 rekey blob, adopted only when its `prevcommit` proves the
+ * rotation extends the very key already held. A member who slept through a
+ * Refounding heals from that blob, parked at an address derived from the root
+ * they still hold (CORD-08 §1) — so refusing base changes here strands nobody.
+ * Consistent with CORD-05 §6: a Direct Invite "grants exactly what it carries".
  */
 export function isCatchUpBundle(
   held: HeldMembership | undefined,
-  bundle: Pick<InviteBundle, "root_epoch" | "channels">,
+  bundle: Pick<InviteBundle, "root_epoch" | "channels" | "community_root" | "control_pk">,
 ): boolean {
   if (held === undefined) return false;
-  if (bundle.root_epoch > held.rootEpoch) return true;
-  if (bundle.root_epoch < held.rootEpoch) return false;
+  // Same base, or it is not a catch-up at any epoch. `control_pk` rides along:
+  // swapping it alone eclipses the member onto an attacker's Control Plane,
+  // which CORD-05 §1 accepts only as self-harm by an inviter a JOINER chose.
+  if (!hexEq(bundle.community_root, held.communityRoot)) return false;
+  if (!hexEq(bundle.control_pk, held.controlPk)) return false;
+  if (bundle.root_epoch !== held.rootEpoch) return false;
   // A bundle is another client's document: normalize its id spelling before
   // consulting the cut floor (CORD-01: hex is lowercase; foreign input may
   // not be, and an unmatched spelling here would re-park revoked access).

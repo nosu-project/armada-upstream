@@ -171,14 +171,13 @@ function InviteDetail({
             <ArmadaCrest size={72} />
             <div className="space-y-1">
               <h2 className="font-mono font-bold lowercase tracking-tight text-foreground">
-                {isCatchUp ? "updated community keys" : "encrypted community invite"}
+                {isCatchUp ? "additional channel keys" : "encrypted community invite"}
               </h2>
               <p className="text-sm text-muted-foreground">
                 {isCatchUp ? (
                   <>
-                    An admin sent you the current keys for a community you're already in. Its keys
-                    were rotated and yours were out of date. Accept to catch up and keep reading new
-                    messages.
+                    Someone sent you keys to private channels in a community you're already in.
+                    Accepting adds those channels; it changes nothing else about your membership.
                   </>
                 ) : (
                   <>
@@ -211,7 +210,7 @@ function InviteDetail({
               ) : (
                 <Check className="size-4 mr-2" />
               )}
-              {accepting ? (isCatchUp ? "Updating…" : "Joining…") : isCatchUp ? "Update keys" : "Accept"}
+              {accepting ? (isCatchUp ? "Adding…" : "Joining…") : isCatchUp ? "Add channels" : "Accept"}
             </Button>
           </div>
         </div>

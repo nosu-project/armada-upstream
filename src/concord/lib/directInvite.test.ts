@@ -234,33 +234,77 @@ describe("direct-invite inbox store", () => {
 });
 
 describe("catch-up classification (isCatchUpBundle)", () => {
-  const held = { rootEpoch: 3, channelEpochs: new Map([["aa", 2]]) };
+  const ROOT = "a".repeat(64);
+  const OTHER_ROOT = "b".repeat(64);
+  const held = { rootEpoch: 3, communityRoot: ROOT, channelEpochs: new Map([["aa", 2]]) };
   const ch = (id: string, epoch: number) => ({ id, key: "1".repeat(64), epoch, name: "c" });
+  const b = (over: Partial<InviteBundle>) =>
+    ({ root_epoch: 3, community_root: ROOT, channels: [], ...over }) as Pick<
+      InviteBundle,
+      "root_epoch" | "channels" | "community_root" | "control_pk"
+    >;
 
-  it("a fresher root epoch is a catch-up regardless of channels", () => {
-    expect(isCatchUpBundle(held, { root_epoch: 4, channels: [] })).toBe(true);
+  it("a vend carrying a channel key the member lacks is a catch-up", () => {
+    // A role-gate key vend rides the SAME root epoch and was once skipped as
+    // "already a member", so the key never arrived.
+    expect(isCatchUpBundle(held, b({ channels: [ch("bb", 0)] }))).toBe(true);
+    // A higher CHANNEL epoch for a held channel also qualifies (post-rotation vend).
+    expect(isCatchUpBundle(held, b({ channels: [ch("aa", 3)] }))).toBe(true);
   });
 
-  it("a same-epoch vend carrying a channel key the member lacks is a catch-up", () => {
-    // The exact field bug: a role-gate key vend rides the SAME root epoch and
-    // was skipped as "already a member", so the key never arrived.
-    expect(isCatchUpBundle(held, { root_epoch: 3, channels: [ch("bb", 0)] })).toBe(true);
-    // A higher CHANNEL epoch for a held channel also qualifies (post-rotation vend).
-    expect(isCatchUpBundle(held, { root_epoch: 3, channels: [ch("aa", 3)] })).toBe(true);
+  it("never treats a bundle proposing a DIFFERENT base as a catch-up", () => {
+    // The relocation attack: nothing binds `community_root` to `community_id`
+    // (CORD-02 §1 vs §2), so a stranger holding only the public triple can offer
+    // a real community's id beside a root they chose. At a higher epoch it would
+    // win the CORD-02 §8 merge outright and move every future message the member
+    // writes onto streams the attacker reads.
+    expect(isCatchUpBundle(held, b({ root_epoch: 4, community_root: OTHER_ROOT }))).toBe(false);
+    expect(
+      isCatchUpBundle(held, b({ root_epoch: 4, community_root: OTHER_ROOT, channels: [ch("bb", 0)] })),
+    ).toBe(false);
+    // ...and at the same epoch, where `freshest` falls through to a grindable
+    // canonical-bytes tiebreak.
+    expect(isCatchUpBundle(held, b({ community_root: OTHER_ROOT, channels: [ch("bb", 0)] }))).toBe(false);
+  });
+
+  it("never lets a catch-up swap the Control Plane signer", () => {
+    const staffHeld = { ...held, controlPk: "c".repeat(64) };
+    expect(
+      isCatchUpBundle(staffHeld, b({ control_pk: "d".repeat(64), channels: [ch("bb", 0)] })),
+    ).toBe(false);
+    expect(
+      isCatchUpBundle(staffHeld, b({ control_pk: "c".repeat(64), channels: [ch("bb", 0)] })),
+    ).toBe(true);
+  });
+
+  it("advancing the root epoch is the rekey path's job, not an invite's", () => {
+    // Even carrying the member's own current root, a bundle claiming a fresher
+    // epoch is refused: CORD-06 §2 advances the base only on a blob whose
+    // `prevcommit` proves it extends the key already held.
+    expect(isCatchUpBundle(held, b({ root_epoch: 4 }))).toBe(false);
+  });
+
+  it("matches a base whose hex spelling differs in case", () => {
+    expect(isCatchUpBundle(held, b({ community_root: ROOT.toUpperCase(), channels: [ch("bb", 0)] }))).toBe(true);
   });
 
   it("a bundle carrying a channel key I was CUT from is not a vend", () => {
     // Cut out of "bb" at channel epoch 2: an old bundle holding bb@0 is the
     // access that was revoked, so it must not park as a fresh key.
-    const cut = { rootEpoch: 3, channelEpochs: new Map<string, number>(), channelCuts: new Map([["bb", 2]]) };
-    expect(isCatchUpBundle(cut, { root_epoch: 3, channels: [ch("bb", 0)] })).toBe(false);
+    const cut = {
+      rootEpoch: 3,
+      communityRoot: ROOT,
+      channelEpochs: new Map<string, number>(),
+      channelCuts: new Map([["bb", 2]]),
+    };
+    expect(isCatchUpBundle(cut, b({ channels: [ch("bb", 0)] }))).toBe(false);
     // A key at/above the cut epoch is a genuine re-admission.
-    expect(isCatchUpBundle(cut, { root_epoch: 3, channels: [ch("bb", 2)] })).toBe(true);
+    expect(isCatchUpBundle(cut, b({ channels: [ch("bb", 2)] }))).toBe(true);
   });
 
-  it("same-epoch bundles with nothing new, stale roots, and non-members never park", () => {
-    expect(isCatchUpBundle(held, { root_epoch: 3, channels: [ch("aa", 2)] })).toBe(false);
-    expect(isCatchUpBundle(held, { root_epoch: 2, channels: [ch("bb", 0)] })).toBe(false);
-    expect(isCatchUpBundle(undefined, { root_epoch: 9, channels: [ch("bb", 0)] })).toBe(false);
+  it("bundles with nothing new, stale roots, and non-members never park", () => {
+    expect(isCatchUpBundle(held, b({ channels: [ch("aa", 2)] }))).toBe(false);
+    expect(isCatchUpBundle(held, b({ root_epoch: 2, channels: [ch("bb", 0)] }))).toBe(false);
+    expect(isCatchUpBundle(undefined, b({ root_epoch: 9, channels: [ch("bb", 0)] }))).toBe(false);
   });
 });

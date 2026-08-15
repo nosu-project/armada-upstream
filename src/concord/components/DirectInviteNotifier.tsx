@@ -48,7 +48,7 @@ export function DirectInviteNotifier() {
       fresh.length > 1
         ? `${fresh.length} new community invites`
         : newest.catchUp
-          ? "Community keys updated"
+          ? "New channel keys offered"
           : "New community invite";
 
     toast({

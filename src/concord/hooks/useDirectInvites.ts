@@ -175,16 +175,18 @@ export function useDirectInvites() {
         }
       }
 
-      // What each already-joined community currently holds (root epoch + the
-      // private-channel keys), so a fresher bundle — an admin healing a
-      // stranded member (CORD-05 §6 re-handoff), or a role-gate key vend
-      // carrying a channel key we lack (CORD.md) — is recognised as a
-      // CATCH-UP rather than skipped as "already a member".
+      // What each already-joined community currently holds (the base, its epoch
+      // and the private-channel keys), so a role-gate key vend carrying a
+      // channel key we lack (CORD.md) is recognised as a CATCH-UP rather than
+      // skipped as "already a member" — and so a bundle proposing a DIFFERENT
+      // base is recognised as neither, and dropped (isCatchUpBundle).
       const heldByCommunity = new Map<string, HeldMembership>();
       if (list) {
         for (const e of liveEntries(list.list)) {
           heldByCommunity.set(e.community_id, {
             rootEpoch: e.current.root_epoch,
+            communityRoot: e.current.community_root,
+            ...(e.current.control_pk ? { controlPk: e.current.control_pk } : {}),
             // Lowercase keys: isCatchUpBundle normalizes the bundle side the
             // same way, so one channel is one entry whatever a foreign list
             // copy's spelling was.
@@ -209,9 +211,9 @@ export function useDirectInvites() {
         // gate is anti-nag, not authority).
         const buriedAt = tombstonedAt.get(bundle.community_id);
         if (buriedAt !== undefined && record.rumor.created_at * 1000 <= buriedAt) continue;
-        // A stranded-member heal (fresher root) or a role-gate key vend (a
-        // channel key we lack) both park as catch-ups; anything else for an
-        // already-joined community is noise and skips.
+        // A role-gate key vend (a channel key we lack, on the base we already
+        // hold) parks as a catch-up; anything else for an already-joined
+        // community is noise — or a base swap — and skips.
         const catchUp = isCatchUpBundle(heldByCommunity.get(bundle.community_id), bundle);
         if (known.has(bundle.community_id) && !catchUp) continue;
         parked.set(record.wrapId, {
@@ -294,16 +296,20 @@ export function useAcceptDirectInvite() {
       if (directInviteExpired(bundle)) throw new Error("This invite has expired.");
 
       const entry = bundleToEntry(bundle);
-      // A banned npub must not accept an invite either (CORD-04 §4) — a catch-up
-      // (already a member, healing forward) skips the check, since a still-valid
-      // member folding a fresher bundle isn't "joining".
-      if (!invite.catchUp) {
-        const community = rehydrateCommunity(entry);
-        if (community) await assertNotBanned(nostr, community, user.pubkey);
-      }
-      // `add` → mergeCommunityLists → mergeEntry → freshest: epoch-monotonic, so
-      // this both onboards a new member and heals an existing one FORWARD, never
-      // backward (a stale bundle can't lower `current.root_epoch`).
+      // A banned npub must not accept an invite (CORD-04 §4). This runs for a
+      // catch-up too: the check is cheap, and the reasoning that once excused it
+      // ("a still-valid member folding a fresher bundle isn't joining") rested on
+      // the bundle being from an admin, which nothing here proves — the sender is
+      // seal-verified but never rank-checked. A catch-up now rides the base the
+      // member already holds (isCatchUpBundle), so this folds a Control Plane
+      // under a root that is theirs rather than one the bundle chose.
+      const community = rehydrateCommunity(entry);
+      if (community) await assertNotBanned(nostr, community, user.pubkey);
+      // `add` → mergeCommunityLists → mergeEntry → freshest (CORD-02 §8). That
+      // merge reconciles a member's own devices and takes the higher epoch's
+      // whole snapshot wholesale, base included — which is safe here only
+      // because a catch-up is pinned to the base already held, so the sole
+      // thing this can contribute for a known community is channel keys.
       await updateList({ type: "add", entry });
 
       // A catch-up is not a new membership: I'm already announced. Re-sending a
@@ -313,7 +319,6 @@ export function useAcceptDirectInvite() {
         // beats an unverified creator_npub claim) — coalesce self-heals if it
         // never lands.
         void (async () => {
-          const community = rehydrateCommunity(entry);
           if (!community) return;
           const rumor = buildJoinRumor(user.pubkey, Date.now(), { creator: invite.sender, label: bundle.label });
           const wrap = await sealGuestbook(rumor, currentGuestbookGroup(community), user.signer);
