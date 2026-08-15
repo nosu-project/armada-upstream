@@ -790,9 +790,9 @@ function RoleEditor({
         </Select>
         <p className="text-xs text-muted-foreground">
           {selectedChannel?.isPrivate
-            ? <>Holders of this role can read <span className="font-medium">#{selectedChannel.name}</span>. Scoping a role to a private channel is how it grants access: granting the role sends the channel key, revoking it rotates the key away. Permission bits apply only inside the channel.</>
+            ? <>Holders of this role can read <span className="font-medium">#{selectedChannel.name}</span>. Scoping a role to a private channel is how it grants access: granting the role sends the channel key, revoking it rotates the key away.</>
             : selectedChannel
-              ? "A channel-scoped role's permissions apply only inside that channel."
+              ? "Scoping names the channel this role is about. It does not confine the permission bits below."
               : "Permissions apply across the whole community."}
         </p>
       </div>
@@ -807,6 +807,21 @@ function RoleEditor({
 
       <div className="space-y-2">
         <Label>Permissions</Label>
+        {selectedChannel && (
+          // CORD-04 defines `scope` on a Role (§2) and then never gives it a
+          // meaning: §3 unions a member's bits with no scope filter and §5's
+          // authorization has no scope step, so every conforming client honors
+          // these bits community-wide. Saying otherwise here (as this pane once
+          // did) walks an admin into granting community-wide power — and, for
+          // the six staff bits, into mailing the `control_root` (CORD-04 §3).
+          <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+            These bits are <span className="font-medium">community-wide</span>, not limited to
+            #{selectedChannel.name} — the protocol has no channel-limited permissions. Ticking one
+            of Manage roles, Manage channels, Manage community, Ban, Create invites or Pin messages
+            also makes the holder staff and sends them the community's control key. For access
+            alone, leave every box unchecked.
+          </p>
+        )}
         <div className="space-y-2 rounded-lg bg-secondary/40 p-3">
           {PERMISSION_LABELS.map(({ bit, label, hint }) => {
             const id = `perm2-${bit.toString()}`;
