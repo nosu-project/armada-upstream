@@ -32,9 +32,10 @@ import {
  * useNostrPush
  *
  * Web Push against a content-blind nostr-push gateway (NIP-PUSH), the
- * replacement for the deprecated armada-relay push endpoint. Unlike the legacy
- * gateway — which is embedded in a relay and sees every stored event — this
- * server only matches the raw filters we register and sends a static wake-up;
+ * replacement for the deprecated push endpoint the client used to reach on the
+ * relay itself. Unlike that legacy gateway — which is embedded in a relay and
+ * sees every stored event — this server only matches the raw filters we
+ * register and sends a static wake-up;
  * the service worker fetches and decrypts/renders the referenced event
  * (`sw.js`).
  *

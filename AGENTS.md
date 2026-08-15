@@ -25,10 +25,11 @@ keys, the Android `concord2Subs` pref, and the cross-client `concord2|` app
 scope key — deliberately left at their old spelling so existing installs keep
 their data. Don't "finish" the rename.
 
-The optional self-hostable backend (NIP-29 relay + LiveKit voice + Concord AV
-broker) and all deployment/hosting docs live in the separate
-[`armada-relay`](https://gitlab.com/soapbox-pub/armada-relay) repository — this
-client does not depend on it at build time.
+The optional self-hostable backend (LiveKit voice + Concord AV broker) and its
+deployment/hosting docs live in the separate
+[`armada-av`](https://gitworkshop.dev/chad@chadwick.site/relay.ngit.dev/armada-av)
+repository — this client does not depend on it at build time. The NIP-29 side
+needs no Armada-specific server at all: any NIP-29 relay serves it.
 
 ## Repo layout
 
@@ -225,8 +226,8 @@ The LiveKit JS SDK **always appends `/rtc`** to the server URL it's given, so a
 voice server URL must be the bare origin (e.g. `wss://armada.example.com`), never
 `.../rtc`. When bumping `livekit-client` in `package.json`, the self-hostable
 LiveKit **server image** must be bumped to a matching/newer release in
-`armada-relay` (signaling protocol skew makes clients full-reconnect every
-~16s). Full voice/LiveKit hosting guidance lives in `armada-relay`'s `AGENTS.md`.
+`armada-av` (signaling protocol skew makes clients full-reconnect every
+~16s). Full voice/LiveKit hosting guidance lives in `armada-av`'s `AGENTS.md`.
 
 ## Android App Links (deep linking)
 

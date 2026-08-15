@@ -2460,7 +2460,8 @@ export function ConversationList({
 /**
  * Top-level Direct Messages surface (Discord-style: DMs live at the account
  * layer, not inside any server). A conversation list on the left, the active
- * thread on the right. DMs are NIP-04 kind-4 events on the Armada relay.
+ * thread on the right. DMs ride either plane — legacy NIP-04 kind-4 events or
+ * NIP-17 sealed rumors — over the user's own configured relays.
  */
 export function DMsPage() {
   const navigate = useNavigate();

@@ -108,7 +108,9 @@ export const MIGRATIONS: Migration[] = [
     // relay served each kind-39000, and NIP-29 events are now stored in a tenant
     // per relay, so the fact is the tenant id. Listed so the abandoned database
     // is deleted rather than lingering forever; the KV space it was drained into
-    // is dropped by schema migration 3.
+    // is dropped by schema migration 3. `legacy` is the ON-DISK IndexedDB name
+    // on installs that predate the move — respell it and the old database is
+    // never deleted.
     id: "provenance",
     label: "Clearing relay provenance",
     legacy: ["armada-relay-provenance"],

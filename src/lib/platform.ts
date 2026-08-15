@@ -395,7 +395,7 @@ export const PLAUSIBLE_ENDPOINT: string = (import.meta.env.VITE_PLAUSIBLE_ENDPOI
 
 /**
  * nostr-push web-push server (the NIP-PUSH gateway that replaced the removed
- * armada-relay push endpoint).
+ * relay-embedded push endpoint).
  *
  * - `VITE_NOSTR_PUSH_PUBKEY` — the push server's Nostr identity (npub or hex).
  *   Clients address it by `#p`-tagging this pubkey on kind-25742 RPC events.
