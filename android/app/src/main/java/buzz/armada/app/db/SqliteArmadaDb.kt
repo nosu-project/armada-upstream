@@ -91,6 +91,12 @@ class SqliteArmadaDb(
      * covered anyway.
      */
     private val termsOf: (Rumor, String) -> List<String> = TermPolicies::termsOf,
+    /**
+     * Which revision of [termsOf] the index is built by — see
+     * [TermPolicies.GENERATION]. Recorded per tenant, and a recorded generation
+     * that differs makes the tenant's terms be dropped and derived again.
+     */
+    private val termsGeneration: Long = TermPolicies.GENERATION,
 ) : AutoCloseable {
 
     /** Memoised tenant ordinals — one lookup per tenant, not per token. */
@@ -143,6 +149,15 @@ class SqliteArmadaDb(
             }
 
             val schema = if (search) ArmadaDbSchema.BASE + ArmadaDbSchema.SEARCH else ArmadaDbSchema.BASE
+
+            // The term index is dropped before the schema recreates it, so a
+            // file that predates the generation column loses an index it can
+            // rebuild rather than keeping one whose provenance is unknown.
+            // Idempotent on a fresh file.
+            if (version < 3L) {
+                for (statement in ArmadaDbSchema.REBUILD_V3) db.run(statement)
+            }
+
             for (statement in schema) db.run(statement.collapseWhitespace())
 
             db.run("PRAGMA user_version = ${ArmadaDbSchema.VERSION}")
@@ -311,17 +326,26 @@ class SqliteArmadaDb(
     }
 
     /**
-     * Derive and store the terms of every rumor already in `tenant`, once.
+     * Derive and store the terms of every rumor already in `tenant`, once per
+     * generation of its policy.
      *
      * A term can't be computed in SQL — the policy is Kotlin here and
      * TypeScript on the other side of the bridge — so a schema migration can't
      * build this index the way it can rebuild a column. It is filled by walking
-     * the tenant instead, newest-first in pages, and the fact that it HAS been
-     * walked is recorded in `rumor_term_tenants` so the pass happens once per
-     * file rather than once per launch.
+     * the tenant instead, newest-first in pages, and the generation that walked
+     * it is recorded in `rumor_term_tenants` so the pass happens once per file
+     * rather than once per launch.
+     *
+     * A RECORDED generation that differs from [termsGeneration] means the index
+     * holds terms some earlier derivation produced. Those are dropped first: the
+     * walk only inserts, so a term the policy no longer derives would otherwise
+     * survive every rebuild and stay matchable forever.
      *
      * Writes made while it runs are not a hazard: they go through the same
-     * policy, and every insert is `OR IGNORE`.
+     * policy, and every insert is `OR IGNORE`. The WebView's engine racing the
+     * same rebuild on the same file is likewise benign, if briefly untidy —
+     * both delete what both are about to re-derive, and the loser's inserts
+     * land anyway.
      */
     private fun backfillTerms(tenant: String) {
         if (tenant in backfilled) return
@@ -333,13 +357,18 @@ class SqliteArmadaDb(
         }
 
         val done = db.query(
-            "SELECT 1 FROM rumor_term_tenants WHERE tenant = ?",
+            "SELECT generation FROM rumor_term_tenants WHERE tenant = ?",
             listOf(ord),
-        ) { it.long(0) }.isNotEmpty()
+        ) { it.long(0) }.firstOrNull()
 
-        if (done) {
+        if (done == termsGeneration) {
             backfilled.add(tenant)
             return
+        }
+        if (done != null) {
+            transaction {
+                db.run("DELETE FROM rumor_terms WHERE tenant = ?", listOf(ord))
+            }
         }
 
         var before: Long? = null
@@ -372,7 +401,10 @@ class SqliteArmadaDb(
         }
 
         transaction {
-            db.run("INSERT OR IGNORE INTO rumor_term_tenants (tenant) VALUES (?)", listOf(ord))
+            db.run(
+                "INSERT OR REPLACE INTO rumor_term_tenants (tenant, generation) VALUES (?, ?)",
+                listOf(ord, termsGeneration),
+            )
         }
         backfilled.add(tenant)
     }

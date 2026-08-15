@@ -202,6 +202,26 @@ export interface TenantOpts {
    * backfill of that tenant's index; reads that name a term wait for it.
    */
   terms?: TermPolicy;
+  /**
+   * Which revision of {@link terms} the index was built by — bumped whenever a
+   * policy changes what it derives, so the rows written under the old one are
+   * re-indexed instead of being left with terms nothing looks up.
+   *
+   * The backfill records this alongside the tenant, and a recorded generation
+   * that differs from the one asked for makes the tenant's terms be dropped and
+   * derived again. Without it a policy edit is silent and permanent: existing
+   * rows keep the terms they were written with, a term read returns only the
+   * rows written since, and nothing anywhere reports a problem.
+   *
+   * It is ONE number for every policy, and the same number in every port
+   * (`TERM_GENERATION` here, `TermPolicies.GENERATION` in Kotlin,
+   * `TermPolicies.generation` in Swift) — because it is written into a file that
+   * three engines share. Two ports that disagree would each read the other's
+   * generation as stale and rebuild the index on every open, forever. A
+   * per-policy number would be three tables to keep in step rather than one
+   * constant, and buys only that an unrelated tenant is not re-walked.
+   */
+  termsGeneration?: number;
 }
 
 export interface ArmadaDB {

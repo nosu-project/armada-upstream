@@ -82,6 +82,7 @@ import { batch, memberOf, where } from "./sql";
 import {
   ARMADA_DB_FTS_SCHEMA,
   ARMADA_DB_REBUILD_V1,
+  ARMADA_DB_REBUILD_V3,
   ARMADA_DB_SCHEMA,
   ARMADA_DB_VERSION,
 } from "./sqliteSchema";
@@ -235,7 +236,7 @@ export class SqliteArmadaDB implements ArmadaDB {
       store = new SqliteRumorStore(this, id);
       this.stores.set(id, store);
     }
-    if (opts.terms) this.installTerms(id, opts.terms);
+    if (opts.terms) this.installTerms(id, opts.terms, opts.termsGeneration ?? 0);
     return store;
   }
 
@@ -247,14 +248,14 @@ export class SqliteArmadaDB implements ArmadaDB {
    * for the store without naming one still writes the terms — which is the
    * whole point of binding it here rather than at each write.
    */
-  private installTerms(tenant: string, policy: TermPolicy): void {
+  private installTerms(tenant: string, policy: TermPolicy, generation: number): void {
     if (this.termPolicies.get(tenant) === policy) return;
     this.termPolicies.set(tenant, policy);
     // Rows written before this call carry none of the policy's terms, so the
     // index is incomplete until they have been through it. Kept as a promise
     // rather than awaited: acquiring a store is synchronous, and only a read
     // that actually NAMES a term has to wait (see `awaitTerms`).
-    this.backfills.set(tenant, this.backfillTerms(tenant).catch(() => {}));
+    this.backfills.set(tenant, this.backfillTerms(tenant, generation).catch(() => {}));
   }
 
   /** A rumor's derived terms in `tenant`, or none when it has no policy. */
@@ -278,19 +279,28 @@ export class SqliteArmadaDB implements ArmadaDB {
   }
 
   /**
-   * Derive and store the terms of every rumor already in `tenant`, once.
+   * Derive and store the terms of every rumor already in `tenant`, once per
+   * generation of its policy.
    *
    * A term can't be computed in SQL — the policy is JavaScript, and on the
    * native engines it is Kotlin or Swift — so a schema migration can't build
    * this index the way it can rebuild a column. It is filled by walking the
-   * tenant instead, newest-first in pages, and the fact that it HAS been
-   * walked is recorded in `rumor_term_tenants` so the pass happens once per
-   * file rather than once per boot.
+   * tenant instead, newest-first in pages, and the generation that walked it is
+   * recorded in `rumor_term_tenants` so the pass happens once per file rather
+   * than once per boot.
+   *
+   * A RECORDED generation that differs from the one asked for means the index
+   * holds terms some earlier derivation produced. Those are dropped first: the
+   * walk only inserts, so a term the policy no longer derives would otherwise
+   * survive every rebuild and stay matchable forever.
    *
    * Writes made while it runs are not a hazard: they go through the same
-   * policy, and every insert here is `OR IGNORE`.
+   * policy, and every insert here is `OR IGNORE`. A SECOND engine on the same
+   * file (Android's notification service) racing the same rebuild is likewise
+   * benign, if briefly untidy — both delete what both are about to re-derive,
+   * and the loser's inserts land anyway.
    */
-  private async backfillTerms(tenant: string): Promise<void> {
+  private async backfillTerms(tenant: string, generation: number): Promise<void> {
     await this.ready;
 
     // A tenant that has never been written to has nothing to index — and no
@@ -300,10 +310,13 @@ export class SqliteArmadaDB implements ArmadaDB {
     if (ord === undefined) return;
 
     const [done] = await this.all(
-      `SELECT 1 AS done FROM rumor_term_tenants WHERE tenant = ?`,
+      `SELECT generation FROM rumor_term_tenants WHERE tenant = ?`,
       [ord],
     );
-    if (done) return;
+    if (done && Number(done.generation) === generation) return;
+    if (done) {
+      await this.transaction(() => this.run(`DELETE FROM rumor_terms WHERE tenant = ?`, [ord]));
+    }
 
     let before: number | undefined;
 
@@ -327,7 +340,10 @@ export class SqliteArmadaDB implements ArmadaDB {
     }
 
     await this.transaction(() =>
-      this.run(`INSERT OR IGNORE INTO rumor_term_tenants (tenant) VALUES (?)`, [ord])
+      this.run(
+        `INSERT OR REPLACE INTO rumor_term_tenants (tenant, generation) VALUES (?, ?)`,
+        [ord, generation],
+      )
     );
   }
 
@@ -369,6 +385,13 @@ export class SqliteArmadaDB implements ArmadaDB {
     const schema = this.search
       ? [...ARMADA_DB_SCHEMA, ...ARMADA_DB_FTS_SCHEMA]
       : ARMADA_DB_SCHEMA;
+
+    // The term index is dropped before the schema recreates it, so a file that
+    // predates the generation column loses an index it can rebuild rather than
+    // keeping one whose provenance is unknown. Idempotent on a fresh file.
+    if (Number(version?.user_version ?? 0) < 3) {
+      for (const statement of ARMADA_DB_REBUILD_V3) await this.run(statement);
+    }
 
     for (const statement of schema) {
       await this.run(statement.trim().replace(/\s+/g, " "));

@@ -255,8 +255,18 @@ class IndexedDBRumorStore implements NRumorStore {
    * written again. It goes through `NIndexedDB` directly rather than this
    * class's `event()`, whose whole job is to skip a write of a row the store
    * already holds.
+   *
+   * A generation bump needs nothing more than the same pass. Terms live in the
+   * row's own index entries here, and a re-`put` REPLACES them wholesale, so a
+   * term the policy no longer derives cannot survive — unlike the SQLite
+   * engines, where the index is a table beside the rumors and stale rows have to
+   * be deleted first.
    */
-  installTerms(policy: TermPolicy, done: () => Promise<boolean>, finish: () => Promise<void>): void {
+  installTerms(
+    policy: TermPolicy,
+    done: () => Promise<boolean>,
+    finish: () => Promise<void>,
+  ): void {
     if (this.terms === policy) return;
     this.terms = policy;
     this.backfill = (async () => {
@@ -492,11 +502,16 @@ interface KVSchema extends DBSchema {
    */
   tenants: { key: string; value: true };
   /**
-   * Tenant ids whose existing rows have been through their `TermPolicy` — the
-   * marker that makes the term backfill run once per browser rather than once
-   * per boot. `rumor_term_tenants` is the same record in the SQLite engines.
+   * Tenant ids whose existing rows have been through their `TermPolicy`, valued
+   * by the GENERATION of that policy — the marker that makes the term backfill
+   * run once per browser rather than once per boot, and run again when a policy
+   * changes what it derives. `rumor_term_tenants` is the same record in the
+   * SQLite engines.
+   *
+   * An install predating generations holds `true` here, which matches no
+   * generation and so simply re-runs the pass once.
    */
-  termed: { key: string; value: true };
+  termed: { key: string; value: number | true };
 }
 
 /**
@@ -559,11 +574,18 @@ class IndexedDBKV implements ArmadaKV {
     }
   }
 
-  /** Whether `id`'s existing rows have already been through its term policy. */
-  async isTermed(id: string): Promise<boolean> {
+  /**
+   * Whether `id`'s existing rows have already been through generation
+   * `generation` of its term policy.
+   *
+   * A value that isn't the generation asked for — an older number, or the bare
+   * `true` an install predating generations wrote — is treated as not done, so
+   * the pass runs again under the new derivation.
+   */
+  async isTermed(id: string, generation: number): Promise<boolean> {
     try {
       const db = await this.db;
-      return (await db?.get("termed", id)) === true;
+      return (await db?.get("termed", id)) === generation;
     } catch {
       // Unanswerable: treated as not done, so the backfill runs again. A
       // re-`put` of a row already indexed changes nothing.
@@ -571,11 +593,11 @@ class IndexedDBKV implements ArmadaKV {
     }
   }
 
-  /** Record that `id`'s backfill has completed (best-effort). */
-  async setTermed(id: string): Promise<void> {
+  /** Record that `id`'s backfill has completed for `generation` (best-effort). */
+  async setTermed(id: string, generation: number): Promise<void> {
     try {
       const db = await this.db;
-      await db?.put("termed", true, id);
+      await db?.put("termed", generation, id);
     } catch {
       // The pass simply runs again next boot.
     }
@@ -804,8 +826,8 @@ export class IndexedDBArmadaDB implements ArmadaDB {
     if (opts.terms) {
       store.installTerms(
         opts.terms,
-        () => this.kv.isTermed(id),
-        () => this.kv.setTermed(id),
+        () => this.kv.isTermed(id, opts.termsGeneration ?? 0),
+        () => this.kv.setTermed(id, opts.termsGeneration ?? 0),
       );
     }
     return store;

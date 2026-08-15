@@ -1339,6 +1339,72 @@ final class ArmadaDbTests: XCTestCase {
         )
     }
 
+    func testReDerivesEveryTermWhenTheGenerationChanges() throws {
+        let recording = RecordingDriver(try SqliteDriver(path: ":memory:"))
+        driver = recording
+        let first = try SqliteArmadaDb(db: recording, termsOf: peersPolicy, termsGeneration: 1)
+        store = first
+        try first.event(tenant: "t", rumor: rumor(id: "stored", tags: [["p", "ana"]]))
+        XCTAssertEqual(
+            try first.query(tenant: "t", filters: filters(#"{"search":"conv:ana"}"#)).map(\.id),
+            ["stored"]
+        )
+
+        // The same rows, a different derivation. Both halves matter: the new
+        // term has to reach rows written before it, and the old one has to STOP
+        // matching — an index that only ever gains terms would keep answering a
+        // lookup no policy derives any more.
+        let renamed = try SqliteArmadaDb(db: recording, termsOf: eachPolicy, termsGeneration: 2)
+        store = renamed
+        XCTAssertEqual(
+            try renamed.query(tenant: "t", filters: filters(#"{"search":"with:ana"}"#)).map(\.id),
+            ["stored"]
+        )
+        XCTAssertEqual(
+            try renamed.query(tenant: "t", filters: filters(#"{"search":"conv:ana"}"#)).map(\.id),
+            []
+        )
+    }
+
+    func testLeavesTheIndexAloneWhenTheGenerationIsUnchanged() throws {
+        let recording = RecordingDriver(try SqliteDriver(path: ":memory:"))
+        driver = recording
+        let first = try SqliteArmadaDb(db: recording, termsOf: peersPolicy, termsGeneration: 1)
+        store = first
+        try first.event(
+            tenant: "t", rumor: rumor(id: "stored", createdAt: 100, tags: [["p", "ana"]])
+        )
+        _ = try first.query(tenant: "t", filters: filters(#"{"search":"conv:ana"}"#))
+
+        // A different policy at the SAME generation: the marker says this tenant
+        // is done, so the pass doesn't run and the stored row keeps the terms it
+        // was written with. That is what makes the backfill once-per-file rather
+        // than once-per-launch — the generation is the only thing that reopens
+        // it.
+        let same = try SqliteArmadaDb(db: recording, termsOf: eachPolicy, termsGeneration: 1)
+        store = same
+        try same.event(
+            tenant: "t", rumor: rumor(id: "later", createdAt: 200, tags: [["p", "ana"]])
+        )
+
+        XCTAssertEqual(
+            try same.query(tenant: "t", filters: filters(#"{"search":"conv:ana"}"#)).map(\.id),
+            ["stored"]
+        )
+        XCTAssertEqual(
+            try same.query(tenant: "t", filters: filters(#"{"search":"with:ana"}"#)).map(\.id),
+            ["later"]
+        )
+    }
+
+    func testPinsTheTermGenerationToTheOtherPorts() {
+        // One number, written into a file three engines share: two ports that
+        // disagree would each read the other's as stale and rebuild the index on
+        // every open. `TERM_GENERATION` in `src/lib/db/termPolicies.ts` and
+        // `TermPolicies.GENERATION` in Kotlin are this literal.
+        XCTAssertEqual(TermPolicies.generation, 1)
+    }
+
     // MARK: - NIP-17 conversation terms
     //
     // These must agree with `src/lib/nip17/conversation.ts` and `Dm17.kt`

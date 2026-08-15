@@ -38,14 +38,18 @@ internal object ArmadaDbSchema {
      *      twice, and the tenant id was repeated in every row of the table and
      *      of its five indexes.
      *   1  the tenant-interned layout, without a term index.
-     *   2  the current layout below: adds `rumor_terms` and
-     *      `rumor_term_tenants`. There is no rebuild — the new tables are empty
-     *      and a `CREATE IF NOT EXISTS` installs them — because a term cannot
-     *      be derived in SQL. Rows written before it are indexed by the
-     *      per-tenant backfill instead, which is gated on `rumor_term_tenants`
-     *      and so is indifferent to which version the file arrived at it from.
+     *   2  `rumor_terms` and `rumor_term_tenants`, the latter recording only
+     *      THAT a tenant had been indexed.
+     *   3  the current layout below: `rumor_term_tenants` also records WHICH
+     *      generation of the policy indexed it. The upgrade is [REBUILD_V3] —
+     *      it throws the term index away rather than migrating it, which it can
+     *      afford to do because a term is a cache of a derivation and the
+     *      per-tenant backfill rebuilds it. A term cannot be derived in SQL, so
+     *      that pass is the only thing that can build this index at all, and it
+     *      is gated on `rumor_term_tenants` — which makes it indifferent to the
+     *      version the file arrived from.
      */
-    const val VERSION = 2L
+    const val VERSION = 3L
 
     /** The tables, indexes and triggers every ArmadaDB file has. */
     val BASE: List<String> = listOf(
@@ -145,11 +149,37 @@ internal object ArmadaDbSchema {
         """CREATE TRIGGER IF NOT EXISTS rumors_terms_delete AFTER DELETE ON rumors BEGIN
             DELETE FROM rumor_terms WHERE seq = old.seq;
         END""",
-        // Which tenants' pre-existing rows have been through their policy. A
-        // row here means the backfill is done and reads need not wait again.
+        // Which tenants' pre-existing rows have been through their policy, and
+        // which generation of it. A row whose generation matches the policy
+        // being installed means the backfill is done and reads need not wait
+        // again; one that differs means the index was built by a derivation
+        // nothing looks up any more.
         """CREATE TABLE IF NOT EXISTS rumor_term_tenants (
-            tenant INTEGER PRIMARY KEY
+            tenant INTEGER PRIMARY KEY,
+            generation INTEGER NOT NULL
         ) WITHOUT ROWID""",
+    )
+
+    /**
+     * The v2 → v3 upgrade: drop the term index and its marker so the
+     * generation-aware table above replaces them.
+     *
+     * Dropped rather than migrated, and this is the one schema step that can be:
+     * a term is a CACHE of a derivation, so the whole index is reconstructible
+     * from the rumors that are still there, and the per-tenant backfill is
+     * already the thing that reconstructs it. Migrating instead would mean
+     * inventing a generation for rows built by a policy revision nobody
+     * recorded — a number that, if it happened to match the current one, would
+     * freeze a stale index in place permanently.
+     *
+     * `IF EXISTS` on both, so this is also a no-op on a fresh file. The trigger
+     * that references `rumor_terms` survives the drop unfired — SQLite resolves
+     * a trigger body when it fires, and the table is recreated in the same
+     * migration.
+     */
+    val REBUILD_V3: List<String> = listOf(
+        "DROP TABLE IF EXISTS rumor_terms",
+        "DROP TABLE IF EXISTS rumor_term_tenants",
     )
 
     /**

@@ -19,6 +19,22 @@
 /// The derived-term policies, by tenant.
 public enum TermPolicies {
 
+    /// Which revision of the policies below the index is built by — the same
+    /// number as `TERM_GENERATION` in `src/lib/db/termPolicies.ts` and
+    /// `TermPolicies.GENERATION` in Kotlin.
+    ///
+    /// BUMP IT whenever `terms(of:tenantId:)` changes what it derives. The index
+    /// is built by a one-time pass per tenant which records this number; a
+    /// derivation that changes without it is silent and permanent, since rows
+    /// already on disk keep the terms they were written with.
+    ///
+    /// All three ports write it into ONE file, so two that disagree would each
+    /// read the other's as stale and rebuild the index on every open, forever.
+    /// `ArmadaDbTests` pins the literal.
+    ///
+    ///   1  `conv:<peers>` — a rumor filed under its NIP-17 conversation.
+    public static let generation: Int64 = 1
+
     /// The derived terms of a rumor stored in `tenantId`, or empty when that
     /// tenant derives none — which is most of them, and means a term read
     /// against one matches nothing.

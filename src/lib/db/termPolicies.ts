@@ -21,7 +21,7 @@
 
 import { DM17_TENANT_PREFIX, dmTermPolicy } from "@/lib/nip17/conversation";
 
-import type { TermPolicy } from "./types";
+import type { TenantOpts, TermPolicy } from "./types";
 
 /** Tenant id prefix → the policy for every tenant under it. */
 const POLICIES: ReadonlyArray<readonly [prefix: string, policy: TermPolicy]> = [
@@ -29,6 +29,28 @@ const POLICIES: ReadonlyArray<readonly [prefix: string, policy: TermPolicy]> = [
   // over-select. See `nip17/conversation.ts`.
   [DM17_TENANT_PREFIX, dmTermPolicy],
 ];
+
+/**
+ * BUMP THIS whenever any policy above changes what it derives — a namespace
+ * added or renamed, a rumor filed under more or fewer terms, a canonicalization
+ * altered.
+ *
+ * The index is built by a one-time pass per tenant, and the pass records this
+ * number. A derivation that changes without it is silent and permanent: rows
+ * already on disk keep the terms they were written with, a read of a new term
+ * sees only what has been written since, and nothing reports a problem. With it,
+ * the recorded number no longer matches, the tenant's terms are dropped and
+ * derived again.
+ *
+ * It is ONE number for every policy, and the SAME number in
+ * `TermPolicies.GENERATION` (Kotlin) and `TermPolicies.generation` (Swift). All
+ * three write it into one file, so two ports that disagree would each read the
+ * other's as stale and rebuild the index on every open, forever. The
+ * conformance suites pin the literal.
+ *
+ *   1  `conv:<peers>` — a rumor filed under its NIP-17 conversation.
+ */
+export const TERM_GENERATION = 1;
 
 /**
  * The policy governing `tenantId`, or `undefined` when it derives no terms —
@@ -40,9 +62,10 @@ export function termPolicyFor(tenantId: string): TermPolicy | undefined {
 
 /**
  * {@link termPolicyFor} as the options a `tenant()` call takes, so acquiring a
- * store is one expression and no caller has to remember the shape.
+ * store is one expression and no caller has to remember the shape — including
+ * the generation, which is the part a caller would otherwise get wrong.
  */
-export function tenantOptsFor(tenantId: string): { terms?: TermPolicy } {
+export function tenantOptsFor(tenantId: string): TenantOpts {
   const terms = termPolicyFor(tenantId);
-  return terms ? { terms } : {};
+  return terms ? { terms, termsGeneration: TERM_GENERATION } : {};
 }

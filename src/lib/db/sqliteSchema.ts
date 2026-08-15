@@ -77,8 +77,9 @@
  *                  is how "the newest rumor of every conversation" stops being
  *                  a scan of the tenant.
  *   rumor_term_tenants
- *                  which tenants' existing rows have been indexed by their
- *                  policy — the marker that makes the backfill run once. See
+ *                  which tenants' existing rows have been indexed, and by which
+ *                  generation of their policy — the marker that makes the
+ *                  backfill run once, and run again when a policy changes. See
  *                  `SqliteArmadaDB.backfillTerms`.
  *   rumor_coords   replaceable/addressable coordinates (`kind:pubkey:d`) → the
  *                  rumor currently stored there, so supersession is one
@@ -102,14 +103,18 @@
  *      the tenant id was repeated in every row of the table and of its five
  *      indexes.
  *   1  the tenant-interned layout, without a term index.
- *   2  the current layout below: adds `rumor_terms` and
- *      `rumor_term_tenants`. There is no rebuild — the new tables are empty
- *      and a `CREATE IF NOT EXISTS` installs them — because a term cannot be
- *      derived in SQL. Rows written before it are indexed by the per-tenant
- *      backfill instead, which is gated on `rumor_term_tenants` and so is
- *      indifferent to which version the file arrived at it from.
+ *   2  `rumor_terms` and `rumor_term_tenants`, the latter recording only THAT a
+ *      tenant had been indexed.
+ *   3  the current layout below: `rumor_term_tenants` also records WHICH
+ *      generation of the policy indexed it (see {@link TenantOpts.termsGeneration}).
+ *      The upgrade is {@link ARMADA_DB_REBUILD_V3} — it throws the term index
+ *      away rather than migrating it, which it can afford to do because a term
+ *      is a cache of a derivation and the per-tenant backfill rebuilds it. A
+ *      term cannot be derived in SQL, so that pass is the only thing that can
+ *      build this index at all, and it is gated on `rumor_term_tenants` — which
+ *      makes it indifferent to the version the file arrived from.
  */
-export const ARMADA_DB_VERSION = 2;
+export const ARMADA_DB_VERSION = 3;
 
 export const ARMADA_DB_SCHEMA: readonly string[] = [
   // `seq` is the rowid and encodes `created_at`, so the table is stored in
@@ -215,11 +220,36 @@ export const ARMADA_DB_SCHEMA: readonly string[] = [
   `CREATE TRIGGER IF NOT EXISTS rumors_terms_delete AFTER DELETE ON rumors BEGIN
     DELETE FROM rumor_terms WHERE seq = old.seq;
   END`,
-  // Which tenants' pre-existing rows have been through their policy. A row
-  // here means the backfill is done and reads need not wait for it again.
+  // Which tenants' pre-existing rows have been through their policy, and which
+  // generation of it. A row whose generation matches the policy being installed
+  // means the backfill is done and reads need not wait for it again; one that
+  // differs means the index was built by a derivation nothing looks up any more.
   `CREATE TABLE IF NOT EXISTS rumor_term_tenants (
-    tenant INTEGER PRIMARY KEY
+    tenant INTEGER PRIMARY KEY,
+    generation INTEGER NOT NULL
   ) WITHOUT ROWID`,
+];
+
+/**
+ * The v2 → v3 upgrade: drop the term index and its marker so the
+ * generation-aware table below replaces them.
+ *
+ * Dropped rather than migrated, and this is the one schema step that can be:
+ * a term is a CACHE of a derivation, so the whole index is reconstructible from
+ * the rumors that are still there, and the per-tenant backfill is already the
+ * thing that reconstructs it. Migrating instead would mean inventing a
+ * generation for rows built by a policy revision nobody recorded — a number
+ * that, if it happened to match the current one, would freeze a stale index in
+ * place permanently.
+ *
+ * `IF EXISTS` on both, so this is also a no-op on a fresh file, where the
+ * `CREATE IF NOT EXISTS` statements above simply create them. The trigger that
+ * references `rumor_terms` survives the drop unfired — SQLite resolves a
+ * trigger body when it fires, and the table is recreated in the same migration.
+ */
+export const ARMADA_DB_REBUILD_V3: readonly string[] = [
+  `DROP TABLE IF EXISTS rumor_terms`,
+  `DROP TABLE IF EXISTS rumor_term_tenants`,
 ];
 
 /**

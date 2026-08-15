@@ -37,13 +37,16 @@ enum ArmadaDbSchema {
     /// `CREATE IF NOT EXISTS` against an unknown layout silently succeeds and
     /// then misreads every row.
     ///
-    /// v1 → v2 adds `rumor_terms` and `rumor_term_tenants` and needs no
-    /// rebuild: the new tables are empty and `CREATE IF NOT EXISTS` installs
-    /// them. A term cannot be derived in SQL, so the rows written before them
-    /// are indexed by the per-tenant backfill instead, gated on
-    /// `rumor_term_tenants` — which makes it indifferent to which version the
-    /// file arrived at it from.
-    static let version: Int64 = 2
+    /// v1 → v2 added `rumor_terms` and `rumor_term_tenants`, the latter
+    /// recording only THAT a tenant had been indexed. v2 → v3 has it record
+    /// WHICH generation of the policy indexed it, and the upgrade is
+    /// `rebuildV3` — it throws the term index away rather than migrating it,
+    /// which it can afford to do because a term is a cache of a derivation and
+    /// the per-tenant backfill rebuilds it. A term cannot be derived in SQL, so
+    /// that pass is the only thing that can build this index at all, and it is
+    /// gated on `rumor_term_tenants` — which makes it indifferent to which
+    /// version the file arrived at it from.
+    static let version: Int64 = 3
 
     /// The tables, indexes and triggers every ArmadaDB file has.
     static let base: [String] = [
@@ -159,13 +162,37 @@ enum ArmadaDbSchema {
             DELETE FROM rumor_terms WHERE seq = old.seq;
         END
         """,
-        // Which tenants' pre-existing rows have been through their policy. A
-        // row here means the backfill is done and reads need not wait again.
+        // Which tenants' pre-existing rows have been through their policy, and
+        // which generation of it. A row whose generation matches the policy
+        // being installed means the backfill is done and reads need not wait
+        // again; one that differs means the index was built by a derivation
+        // nothing looks up any more.
         """
         CREATE TABLE IF NOT EXISTS rumor_term_tenants (
-            tenant INTEGER PRIMARY KEY
+            tenant INTEGER PRIMARY KEY,
+            generation INTEGER NOT NULL
         ) WITHOUT ROWID
         """,
+    ]
+
+    /// The v2 → v3 upgrade: drop the term index and its marker so the
+    /// generation-aware table above replaces them.
+    ///
+    /// Dropped rather than migrated, and this is the one schema step that can
+    /// be: a term is a CACHE of a derivation, so the whole index is
+    /// reconstructible from the rumors that are still there, and the per-tenant
+    /// backfill is already the thing that reconstructs it. Migrating instead
+    /// would mean inventing a generation for rows built by a policy revision
+    /// nobody recorded — a number that, if it happened to match the current
+    /// one, would freeze a stale index in place permanently.
+    ///
+    /// `IF EXISTS` on both, so this is also a no-op on a fresh file. The trigger
+    /// that references `rumor_terms` survives the drop unfired — SQLite resolves
+    /// a trigger body when it fires, and the table is recreated in the same
+    /// migration.
+    static let rebuildV3: [String] = [
+        "DROP TABLE IF EXISTS rumor_terms",
+        "DROP TABLE IF EXISTS rumor_term_tenants",
     ]
 
     /// The NIP-50 search index, installed on top of `base`.

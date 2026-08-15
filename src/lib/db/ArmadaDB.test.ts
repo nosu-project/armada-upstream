@@ -390,6 +390,43 @@ describe.each(backends)("$name", ({ create }) => {
 
       expect(await store.query([{ search: "brown conv:ana" }])).toEqual([hit]);
     });
+
+    it("re-derives every term when the generation changes", async () => {
+      // Written before any policy is installed, so the first install's backfill
+      // is a real pass and records the generation that made it. (A tenant with
+      // no rows yet has nothing to record the fact against, and is walked again
+      // next time — which is why this doesn't start from an empty one.)
+      const stored = rumor({ id: "stored", tags: [["p", "ana"]] });
+      await db.tenant("t").event(stored);
+
+      const store = db.tenant("t", { terms: peers, termsGeneration: 1 });
+      expect(await store.query([{ search: "conv:ana" }])).toEqual([stored]);
+
+      // The same rows, a different derivation. Both halves matter: the new term
+      // has to reach rows written before it, and the old one has to STOP
+      // matching — an index that only ever gains terms would keep answering a
+      // lookup no policy derives any more.
+      const renamed = db.tenant("t", { terms: each, termsGeneration: 2 });
+      expect(await renamed.query([{ search: "with:ana" }])).toEqual([stored]);
+      expect(await renamed.query([{ search: "conv:ana" }])).toEqual([]);
+    });
+
+    it("leaves the index alone when the generation is unchanged", async () => {
+      const stored = rumor({ id: "stored", created_at: 100, tags: [["p", "ana"]] });
+      await db.tenant("t").event(stored);
+      await db.tenant("t", { terms: peers, termsGeneration: 1 }).query([{ search: "conv:ana" }]);
+
+      // A different policy at the SAME generation: the marker says this tenant
+      // is done, so the pass doesn't run and the stored row keeps the terms it
+      // was written with. That is what makes the backfill once-per-file rather
+      // than once-per-boot — the generation is the only thing that reopens it.
+      const same = db.tenant("t", { terms: each, termsGeneration: 1 });
+      const later = rumor({ id: "later", created_at: 200, tags: [["p", "ana"]] });
+      await same.event(later);
+
+      expect(await same.query([{ search: "conv:ana" }])).toEqual([stored]);
+      expect(await same.query([{ search: "with:ana" }])).toEqual([later]);
+    });
   });
 
   describe("replaceable rumors", () => {

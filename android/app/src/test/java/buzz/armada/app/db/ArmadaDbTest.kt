@@ -1074,6 +1074,71 @@ class ArmadaDbTest {
         )
     }
 
+    @Test
+    fun `re-derives every term when the generation changes`() {
+        val recording = RecordingDriver(BundledSqlDriver(":memory:"))
+        driver = recording
+        val first = SqliteArmadaDb(recording, termsOf = peersPolicy, termsGeneration = 1)
+            .also { store = it }
+        first.event("t", rumor(id = "stored", tags = listOf(listOf("p", "ana"))))
+        assertEquals(
+            listOf("stored"),
+            first.query("t", filters("{\"search\":\"conv:ana\"}")).map { it.id },
+        )
+
+        // The same rows, a different derivation. Both halves matter: the new
+        // term has to reach rows written before it, and the old one has to STOP
+        // matching — an index that only ever gains terms would keep answering a
+        // lookup no policy derives any more.
+        val renamed = SqliteArmadaDb(recording, termsOf = eachPolicy, termsGeneration = 2)
+            .also { store = it }
+        assertEquals(
+            listOf("stored"),
+            renamed.query("t", filters("{\"search\":\"with:ana\"}")).map { it.id },
+        )
+        assertEquals(
+            emptyList<String>(),
+            renamed.query("t", filters("{\"search\":\"conv:ana\"}")).map { it.id },
+        )
+    }
+
+    @Test
+    fun `leaves the index alone when the generation is unchanged`() {
+        val recording = RecordingDriver(BundledSqlDriver(":memory:"))
+        driver = recording
+        val first = SqliteArmadaDb(recording, termsOf = peersPolicy, termsGeneration = 1)
+            .also { store = it }
+        first.event("t", rumor(id = "stored", createdAt = 100, tags = listOf(listOf("p", "ana"))))
+        first.query("t", filters("{\"search\":\"conv:ana\"}"))
+
+        // A different policy at the SAME generation: the marker says this tenant
+        // is done, so the pass doesn't run and the stored row keeps the terms it
+        // was written with. That is what makes the backfill once-per-file rather
+        // than once-per-launch — the generation is the only thing that reopens
+        // it.
+        val same = SqliteArmadaDb(recording, termsOf = eachPolicy, termsGeneration = 1)
+            .also { store = it }
+        same.event("t", rumor(id = "later", createdAt = 200, tags = listOf(listOf("p", "ana"))))
+
+        assertEquals(
+            listOf("stored"),
+            same.query("t", filters("{\"search\":\"conv:ana\"}")).map { it.id },
+        )
+        assertEquals(
+            listOf("later"),
+            same.query("t", filters("{\"search\":\"with:ana\"}")).map { it.id },
+        )
+    }
+
+    @Test
+    fun `pins the term generation to the other ports`() {
+        // One number, written into a file three engines share: two ports that
+        // disagree would each read the other's as stale and rebuild the index on
+        // every open. `TERM_GENERATION` in `src/lib/db/termPolicies.ts` and
+        // `TermPolicies.generation` in Swift are this literal.
+        assertEquals(1L, TermPolicies.GENERATION)
+    }
+
     private fun filters(vararg json: String): List<JSONObject> = json.map { JSONObject(it) }
 
     private fun rumor(

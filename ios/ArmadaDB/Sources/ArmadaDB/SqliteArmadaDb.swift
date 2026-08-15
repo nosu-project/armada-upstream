@@ -84,6 +84,11 @@ public final class SqliteArmadaDb {
     /// covered anyway.
     private let termsOf: (Rumor, String) -> [String]
 
+    /// Which revision of `termsOf` the index is built by — see
+    /// `TermPolicies.generation`. Recorded per tenant, and a recorded generation
+    /// that differs makes the tenant's terms be dropped and derived again.
+    private let termsGeneration: Int64
+
     /// Memoised tenant ordinals — one lookup per tenant, not per token.
     private var ords = [String: Int]()
 
@@ -97,12 +102,14 @@ public final class SqliteArmadaDb {
         search: Bool = true,
         migrate: Bool = true,
         indexTags: @escaping (Rumor) -> [[String?]] = defaultIndexTags,
-        termsOf: @escaping (Rumor, String) -> [String] = TermPolicies.terms(of:tenantId:)
+        termsOf: @escaping (Rumor, String) -> [String] = TermPolicies.terms(of:tenantId:),
+        termsGeneration: Int64 = TermPolicies.generation
     ) throws {
         self.db = db
         self.search = search
         self.indexTags = indexTags
         self.termsOf = termsOf
+        self.termsGeneration = termsGeneration
         if migrate { try self.migrate() }
     }
 
@@ -165,6 +172,15 @@ public final class SqliteArmadaDb {
 
         let schema =
             search ? ArmadaDbSchema.base + ArmadaDbSchema.search : ArmadaDbSchema.base
+
+        // The term index is dropped before the schema recreates it, so a file
+        // that predates the generation column loses an index it can rebuild
+        // rather than keeping one whose provenance is unknown. Idempotent on a
+        // fresh file.
+        if version < 3 {
+            for statement in ArmadaDbSchema.rebuildV3 { try db.run(statement) }
+        }
+
         for statement in schema { try db.run(statement.collapsedWhitespace) }
 
         try db.run("PRAGMA user_version = \(ArmadaDbSchema.version)")
@@ -353,31 +369,45 @@ public final class SqliteArmadaDb {
         }
     }
 
-    /// Derive and store the terms of every rumor already in `tenant`, once.
+    /// Derive and store the terms of every rumor already in `tenant`, once per
+    /// generation of its policy.
     ///
     /// A term can't be computed in SQL — the policy is Swift here and
     /// TypeScript on the other side of the bridge — so a schema migration can't
     /// build this index the way it can rebuild a column. It is filled by
-    /// walking the tenant instead, newest-first in pages, and the fact that it
-    /// HAS been walked is recorded in `rumor_term_tenants` so the pass happens
+    /// walking the tenant instead, newest-first in pages, and the generation
+    /// that walked it is recorded in `rumor_term_tenants` so the pass happens
     /// once per file rather than once per launch.
     ///
+    /// A RECORDED generation that differs from `termsGeneration` means the index
+    /// holds terms some earlier derivation produced. Those are dropped first:
+    /// the walk only inserts, so a term the policy no longer derives would
+    /// otherwise survive every rebuild and stay matchable forever.
+    ///
     /// Writes made while it runs are not a hazard: they go through the same
-    /// policy, and every insert is `OR IGNORE`.
+    /// policy, and every insert is `OR IGNORE`. The app's engine racing the same
+    /// rebuild on the same file is likewise benign, if briefly untidy — both
+    /// delete what both are about to re-derive, and the loser's inserts land
+    /// anyway.
     private func backfillTerms(_ tenant: String) throws {
         if backfilled.contains(tenant) { return }
         // Never written to, so nothing to index — and no ordinal to record the
         // fact against. Asking again next time costs one lookup.
         guard let ord = try tenantOrd(tenant) else { return }
 
-        let done = try !db.query(
-            "SELECT 1 FROM rumor_term_tenants WHERE tenant = ?",
+        let done = try db.query(
+            "SELECT generation FROM rumor_term_tenants WHERE tenant = ?",
             [.int(Int64(ord))]
-        ) { $0.int(0) }.isEmpty
+        ) { $0.int(0) }.first
 
-        if done {
+        if done == termsGeneration {
             backfilled.insert(tenant)
             return
+        }
+        if done != nil {
+            try transaction {
+                try db.run("DELETE FROM rumor_terms WHERE tenant = ?", [.int(Int64(ord))])
+            }
         }
 
         var before: Int64?
@@ -413,8 +443,8 @@ public final class SqliteArmadaDb {
 
         try transaction {
             try db.run(
-                "INSERT OR IGNORE INTO rumor_term_tenants (tenant) VALUES (?)",
-                [.int(Int64(ord))]
+                "INSERT OR REPLACE INTO rumor_term_tenants (tenant, generation) VALUES (?, ?)",
+                [.int(Int64(ord)), .int(termsGeneration)]
             )
         }
         backfilled.insert(tenant)
