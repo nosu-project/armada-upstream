@@ -138,6 +138,51 @@ class Dm17Test {
     }
 
     @Test
+    fun `a one-to-one conversation key is the peer alone`() {
+        // The equivalence the notification path rests on: a 1:1 room key, its
+        // read marker and its `/dm/<key>` deep link are byte-identical to the
+        // single-pubkey spelling that predates group DMs, so making the service
+        // conversation-keyed re-files no existing thread.
+        assertEquals("alice", Dm17.convKey(listOf("alice")))
+        assertEquals(listOf("alice"), Dm17.convPeers("alice"))
+        // Note to Self is `[self]`, and so is a key like any other.
+        assertEquals(self, Dm17.convKey(listOf(self)))
+    }
+
+    @Test
+    fun `a group conversation key round-trips through its participants`() {
+        // Sorted, so the two directions of one conversation name one key —
+        // and separated, unlike a term, because a key is read back apart to
+        // become the `p` tags of a reply.
+        assertEquals("alice,bob", Dm17.convKey(listOf("bob", "alice")))
+        assertEquals(listOf("alice", "bob"), Dm17.convPeers("alice,bob"))
+        assertEquals(
+            Dm17.convKey(listOf("alice", "bob")),
+            Dm17.convKey(listOf("bob", "alice")),
+        )
+    }
+
+    @Test
+    fun `an empty conversation key names nobody`() {
+        // What `canReply` leans on: a room key the service can't decode is one
+        // it must not seal a reply for.
+        assertEquals(emptyList<String>(), Dm17.convPeers(""))
+        assertEquals(emptyList<String>(), Dm17.convPeers(","))
+    }
+
+    @Test
+    fun `a rumor's conversation key is its participant set`() {
+        // The derivation the notification path makes: keyed by the SENDER, a
+        // group message would land in the 1:1 thread with whoever spoke.
+        val received = rumor(
+            kind = 14,
+            pubkey = "alice",
+            tags = listOf(listOf("p", self), listOf("p", "bob")),
+        )
+        assertEquals("alice,bob", Dm17.convKey(Dm17.peersOf(received, self)!!))
+    }
+
+    @Test
     fun `files a rumor under the conversation its tenant names`() {
         val received = rumor(
             kind = 14,

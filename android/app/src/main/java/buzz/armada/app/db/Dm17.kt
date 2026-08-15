@@ -94,6 +94,31 @@ internal object Dm17 {
     }
 
     /**
+     * Separator between participants in a conversation KEY — the port of
+     * `DM_PEER_SEP`. Legal unescaped in a URL path segment, so the deep link a
+     * notification carries stays `/dm/<a>,<b>`.
+     */
+    const val PEER_SEP = ","
+
+    /**
+     * The stable string key for a participant set — the port of `dmConvKey`.
+     *
+     * For a 1:1 (and Note to Self) this is exactly the other party's pubkey, so
+     * a `dm:<convKey>` room key, its read marker and its deep link are all
+     * byte-identical to the single-peer spelling this replaced. That is what
+     * lets the notification path become conversation-keyed without re-filing a
+     * single existing 1:1 thread.
+     *
+     * Unlike [convTerm] this joins with [PEER_SEP], because a key is read back
+     * apart again ([convPeers]) while a term is only ever compared whole.
+     */
+    fun convKey(peers: List<String>): String = peers.sorted().joinToString(PEER_SEP)
+
+    /** The participants a conversation key names. Inverse of [convKey]. */
+    fun convPeers(key: String): List<String> =
+        key.split(PEER_SEP).filter { it.isNotEmpty() }
+
+    /**
      * The derived index term for a participant set — the port of `dmConvTerm`.
      *
      * Joined with NOTHING rather than with a separator: a term crosses a NIP-50
