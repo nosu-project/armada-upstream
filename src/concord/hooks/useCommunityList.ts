@@ -318,6 +318,25 @@ async function publishFragments(
 }
 
 /**
+ * Whether publishing `frags` would change what the relays hold: some rebuilt
+ * fragment differs byte-wise from the wire copy at its index, or an index the
+ * wire holds beyond the rebuilt set isn't already the matching empty List.
+ * Exactly the writes {@link publishFragments} would NOT skip.
+ */
+function wireDiffers(frags: FragList[], read: Map<number, FragList>, readCount: number): boolean {
+  for (let i = 0; i < frags.length; i++) {
+    const old = read.get(i);
+    if (!old || serializeFragList(old) !== serializeFragList(frags[i])) return true;
+  }
+  const empty = serializeFragList(emptyFragList(frags.length));
+  for (let i = frags.length; i < readCount; i++) {
+    const old = read.get(i);
+    if (!old || serializeFragList(old) !== empty) return true;
+  }
+  return false;
+}
+
+/**
  * Every relay answered EOSE with zero fragments — the only reading of "empty"
  * strong enough to seed over. The aggregate fetch that precedes this cannot
  * distinguish "no fragments" from "the relay holding them never answered";
@@ -412,10 +431,44 @@ export async function syncCommunityList(
   );
 
   // Merge, never replace: a transient short relay read can't drop rooms;
-  // the deterministic merge still honors genuine tombstones.
-  const merged = prev ? mergeCommunityLists(prev.list, set.list) : set.list;
+  // the deterministic merge still honors genuine tombstones. On the first
+  // sync of a boot the query cache may not be primed yet, so fall back to the
+  // folded plaintext — it is what holds the memberships recorded under the
+  // retired single-event list, which only exist locally.
+  const local =
+    prev?.list ?? (await readFolded<PersistedList>(foldKeyOf(user.pubkey)))?.list;
+  const merged = local ? mergeCommunityLists(local, set.list) : set.list;
   const next: ListData = { event: set.newestEvent, list: merged, decryptFailed: false };
   void writeFolded(foldKeyOf(user.pubkey), { event: set.newestEvent, list: merged } satisfies PersistedList);
+
+  // Reconcile — the migration write. Seeding only covers an account whose
+  // fragment read is CONFIRMED empty; an account whose OTHER client (Vector)
+  // already seeded §8 arrives here with a non-empty wire that lacks the
+  // memberships this device recorded under the retired 13302 — and, having
+  // "finished" migrating, has no membership edit left to trigger a write
+  // (CORD-02 §8's stranding trap). So when the union knows more than the
+  // wire — different bytes after a COMPLETE read — publish it. Timestamps are
+  // untouched (a tombstoned membership stays dead, seed anchors only widen),
+  // it is read-modify-write over the fragments just read, and the per-fragment
+  // no-op skip makes it free once converged.
+  if (selfRelays && set.complete && user.signer.nip44) {
+    try {
+      const rebuilt = fragment(merged);
+      if (wireDiffers(rebuilt, set.readFrags, set.createdAt.size)) {
+        logSync("list2", "reconcile: the union knows more than the wire — publishing it");
+        const newest = await publishFragments(nostr, user, merged, set.createdAt, set.readFrags);
+        void writeFolded(seedKeyOf(user.pubkey), true);
+        if (newest) next.event = newest;
+      }
+    } catch (err) {
+      // Non-fatal: the read side of this sync already succeeded, and the
+      // reconcile re-arms on every later sync until it lands.
+      logSync(
+        "list2",
+        `reconcile publish failed (${err instanceof Error ? err.message : String(err)}) — retrying on a later sync`,
+      );
+    }
+  }
   return next;
 }
 
