@@ -9,6 +9,7 @@ import {
   type ActiveCall,
   type CallSummary,
   type ConcordVoiceContext,
+  type DmVoiceContext,
 } from "@/contexts/CallContext";
 import { cn } from "@/lib/utils";
 
@@ -120,14 +121,17 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     setActiveCall({ relayUrl, groupId });
   }, []);
 
-  const joinDmCall = useCallback((relayUrl: string, roomId: string, peer: string) => {
+  const joinDmCall = useCallback((ctx: DmVoiceContext) => {
     if (exitTimer.current) {
       clearTimeout(exitTimer.current);
       exitTimer.current = null;
     }
     setExiting(false);
     setStageOpen(true);
-    setActiveCall({ relayUrl, groupId: roomId, dmPeer: peer });
+    // relayUrl/groupId are display/remount coordinates (the remount key is
+    // `${relayUrl}|${groupId}`), so a new call to the same peer — a new call
+    // id — rebuilds the room and remints against the new secret.
+    setActiveCall({ relayUrl: ctx.broker, groupId: ctx.callId, dmPeer: ctx.peer, dm: ctx });
   }, []);
 
   const joinConcordCall = useCallback((ctx: ConcordVoiceContext) => {

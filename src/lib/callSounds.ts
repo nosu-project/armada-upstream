@@ -95,6 +95,68 @@ export function playUnmuteSound(): void {
 }
 
 /**
+ * Looping call tones, synthesized like everything else here. Incoming ring: a
+ * bright four-note phrase repeated every 2s. Outgoing ringback: the classic
+ * long soft dual-tone burst every 3s, so the caller hears that the peer is
+ * being rung. Each is a singleton loop — starting it twice is a no-op — and
+ * the stop functions are safe to call unconditionally.
+ */
+
+let ringTimer: ReturnType<typeof setInterval> | null = null;
+let ringbackTimer: ReturnType<typeof setInterval> | null = null;
+
+function ringPhrase(): void {
+  playNotes(
+    [
+      { freq: 1046.5, start: 0, dur: 0.15 },
+      { freq: 1318.5, start: 0.16, dur: 0.15 },
+      { freq: 1046.5, start: 0.32, dur: 0.15 },
+      { freq: 1318.5, start: 0.48, dur: 0.22 },
+    ],
+    0.14,
+  );
+}
+
+/** Start the incoming-call ring loop (no-op if already ringing). */
+export function startIncomingRing(): void {
+  if (ringTimer !== null) return;
+  ringPhrase();
+  ringTimer = setInterval(ringPhrase, 2000);
+}
+
+export function stopIncomingRing(): void {
+  if (ringTimer !== null) {
+    clearInterval(ringTimer);
+    ringTimer = null;
+  }
+}
+
+function ringbackBurst(): void {
+  // Two simultaneous soft tones (~North American ringback: 440+480 Hz), 1.4s.
+  playNotes(
+    [
+      { freq: 440, start: 0, dur: 1.4 },
+      { freq: 480, start: 0, dur: 1.4 },
+    ],
+    0.05,
+  );
+}
+
+/** Start the outgoing ringback loop (no-op if already playing). */
+export function startRingback(): void {
+  if (ringbackTimer !== null) return;
+  ringbackBurst();
+  ringbackTimer = setInterval(ringbackBurst, 3000);
+}
+
+export function stopRingback(): void {
+  if (ringbackTimer !== null) {
+    clearInterval(ringbackTimer);
+    ringbackTimer = null;
+  }
+}
+
+/**
  * A screenshare started: a bright, rising three-note arpeggio (C6 → E6 → G6)
  * to mark the more notable event of a screen going live, distinct from the
  * two-note join chirp.

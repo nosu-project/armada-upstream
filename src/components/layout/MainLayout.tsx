@@ -2,6 +2,7 @@ import { Outlet } from "react-router-dom";
 
 import { AppsProvider } from "@/components/AppsProvider";
 import { CallProvider } from "@/components/CallProvider";
+import { DmCallProvider } from "@/components/DmCallProvider";
 import { DirectInviteNotifier } from "@/concord/components/DirectInviteNotifier";
 import { QuickSwitcher } from "@/components/QuickSwitcher";
 import { ServerRail } from "@/components/layout/ServerRail";
@@ -28,6 +29,10 @@ export function MainLayout() {
   useShareShortcuts();
   return (
     <CallProvider>
+      {/* DM call signaling (ring in/out, offer/answer rumors) sits inside
+          CallProvider so it can join/leave the room, and inside the router so
+          the Android Answer deep link (`?call=`) reaches it. */}
+      <DmCallProvider>
       <AppsProvider>
         {/* The ONE persistent server rail, owned here so navigating between
             sections never unmounts and rebuilds it — its per-item hook fan-out
@@ -43,6 +48,7 @@ export function MainLayout() {
         <DirectInviteNotifier />
         <QuickSwitcher />
       </AppsProvider>
+      </DmCallProvider>
     </CallProvider>
   );
 }

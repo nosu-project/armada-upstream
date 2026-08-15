@@ -14,19 +14,12 @@ import type { ReactNode } from "react";
  * is about which rows MOUNT and nothing else.
  */
 
-const spies = vi.hoisted(() => ({ useAuthor: vi.fn(), useLivekitParticipants: vi.fn() }));
+const spies = vi.hoisted(() => ({ useAuthor: vi.fn() }));
 
 vi.mock("@/hooks/useAuthor", () => ({
   useAuthor: (pubkey?: string) => {
     spies.useAuthor(pubkey);
     return { data: undefined };
-  },
-}));
-vi.mock("@/hooks/useLivekit", () => ({
-  useDmVoiceRelay: () => ({ data: undefined }),
-  useLivekitParticipants: (relay?: string, room?: string) => {
-    spies.useLivekitParticipants(relay, room);
-    return { data: [] };
   },
 }));
 vi.mock("@/hooks/useCurrentUser", () => ({

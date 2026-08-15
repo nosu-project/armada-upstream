@@ -88,6 +88,25 @@ export const KIND_DM_SEAL = 13;
 /** NIP-59 gift wrap. */
 export const KIND_DM_WRAP = 1059;
 /**
+ * Voice-call signal (Armada extension; see `src/lib/dmCall.ts` for the whole
+ * scheme). The content is the phase — "offer", "answer", "decline", "end" —
+ * and the tags carry the call binding (and, on an offer, the per-call secret
+ * + broker rendezvous hint). Rides the EPHEMERAL kind-21059 wrap, like every
+ * other live signal in this codebase (typing, Concord voice presence): a
+ * relay broadcasts it and stores nothing, so no record that a call happened
+ * ever sits at rest anywhere — a durable wrap would leave one, and its
+ * NIP-40 tag would even betray the true send time through the backdating.
+ * Every live listener still rings: the web provider and the Android relay
+ * service each hold a standing 21059 subscription. What is traded away is a
+ * missed-call record on a device that was OFFLINE during the ring window,
+ * which is exactly the trade typing indicators already make.
+ *
+ * Deliberately NOT in {@link DM_RUMOR_KINDS}: a call signal is state, not
+ * conversation history, and it must never reach the rumor store — it is
+ * dispatched to the live call layer at open time and then it's gone.
+ */
+export const KIND_DM_CALL = 23314;
+/**
  * Ephemeral gift wrap (Armada extension, mirroring Concord's kind-21059
  * wrap). Relays in the 20000–29999 range broadcast to current subscribers and
  * store nothing, which is the whole point: a durable kind-1059 typing signal

@@ -77,7 +77,7 @@ import { useDmProtocolPref } from "@/hooks/useDmProtocolPref";
 import { LegacyFallbackRequired, useDmTransport } from "@/hooks/useDmTransport";
 import { useDmTyping } from "@/hooks/useDmTyping";
 import { useIsTouch } from "@/hooks/useIsMobile";
-import { useDmVoiceRelay, useLivekitParticipants } from "@/hooks/useLivekit";
+import { useDmCall } from "@/contexts/DmCallContext";
 import { useSearchProfiles, type SearchProfile } from "@/hooks/useSearchProfiles";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
 import { useNotifLevels, dmScopeKey, type NotifLevel } from "@/hooks/useNotifLevels";
@@ -89,11 +89,9 @@ import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
 import { useStartedDms } from "@/hooks/useStartedDms";
 import { useSharedCommunities } from "@/hooks/useSharedCommunities";
 import { useToast } from "@/hooks/useToast";
-import { effectiveDmRelays } from "@/contexts/AppContext";
 import { ComposerBoundsProvider } from "@/contexts/ComposerBoundsContext";
 import { dmRouteParam, parseDmRouteParam } from "@/lib/dmConversation";
 import { getAvatarShape } from "@/lib/avatarShape";
-import { deriveDmRoomId } from "@/lib/dmVoice";
 import { forwardableTags } from "@/lib/forwardMessage";
 import { chatRoute, parseChatRoute } from "@/lib/routes";
 import { stashShare } from "@/lib/shareTarget";
@@ -105,10 +103,8 @@ import { pickEmojiTags, readDmListSnapshot, writeDmListSnapshot } from "@/lib/dm
 import { resolvePubkey } from "@/lib/resolvePubkey";
 import { buildEmojiMap } from "@/lib/customEmoji";
 import { emojify } from "@/components/chat/emojify";
-import { DM_VOICE_RELAYS } from "@/lib/platform";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
-import { effectiveDmVoiceRelays } from "@/lib/voiceDevices";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 
@@ -160,7 +156,6 @@ function ConversationRow({
   unread,
   inCall,
   selfPubkey,
-  voiceRelay,
   query,
   messageMatch,
   active,
@@ -181,7 +176,6 @@ function ConversationRow({
   unread: boolean;
   inCall: boolean;
   selfPubkey: string | undefined;
-  voiceRelay: string | undefined;
   query: string;
   messageMatch: string | undefined;
   active: boolean;
@@ -210,24 +204,6 @@ function ConversationRow({
   // place of your own profile, because a row showing your own face and handle
   // reads as a message FROM you rather than as the place your notes live.
   const noteToSelf = !group && peers[0] === selfPubkey;
-
-  // Live voice presence for this DM (kind 39004), so we can show when the peer
-  // is waiting in a call even if we haven't joined — mirroring the channel
-  // list. Gated on a resolved LiveKit-capable relay (same relay-level
-  // capability the call button uses).
-  //
-  // 1:1 only: the room id is derived from the two pubkeys pairwise
-  // (`deriveDmRoomId`), and there is no defined derivation for a set — see the
-  // conversation header, which hides the call button for the same reason.
-  const roomId = selfPubkey && !group ? deriveDmRoomId(selfPubkey, peers[0]) : undefined;
-  const { data: participants } = useLivekitParticipants(
-    voiceRelay && roomId ? voiceRelay : undefined,
-    voiceRelay && roomId ? roomId : undefined,
-  );
-  // Others in the DM room (exclude ourselves; our own presence is shown by
-  // `inCall`). For a 1:1 DM this is just the peer.
-  const others = (participants ?? []).filter((pk) => pk !== selfPubkey);
-  const othersInVoice = !inCall && others.length > 0;
 
   // When searching, hide rows that match neither the contact name / handle nor
   // any locally-decrypted message. A message hit (`messageMatch`, resolved by
@@ -312,8 +288,6 @@ function ConversationRow({
             >
               <Headphones className="size-3.5" />
             </span>
-          ) : othersInVoice ? (
-            <VoicePresence participants={others} className="text-success/90" />
           ) : unread ? (
             <span className="shrink-0 size-2.5 rounded-full bg-primary" aria-label="Unread messages" />
           ) : null}
@@ -677,8 +651,7 @@ function Conversation({
   const { markRead } = useReadState();
   const { dmLevel, setLevel: setNotifLevel } = useNotifLevels();
   const { toast } = useToast();
-  const { config } = useAppContext();
-  const { activeCall, joinDmCall, voiceRoomPubkeys } = useCall();
+  const { activeCall, voiceRoomPubkeys } = useCall();
   const muteUser = useMuteUser();
   const mute = useMuteToggle(peer);
   // Legacy NIP-04 has no group form at all, so the encryption choice — and the
@@ -828,44 +801,20 @@ function Conversation({
     [messages, encryptedIds, normalizedSearch],
   );
 
-  // Voice: derive the shared DM room id and find a LiveKit-capable relay to
-  // host the call. DMs are stored on general app relays (which usually don't
-  // run LiveKit); the explicit/fallback voice relays are tried before the
-  // general DM set so unsupported cross-origin endpoints aren't probed first.
-  // 1:1 only. `deriveDmRoomId` is a pairwise derivation with no defined
-  // extension to a set, so a group thread simply has no call button rather than
-  // a button that would put two members in different rooms.
-  const roomId = user && !group ? deriveDmRoomId(user.pubkey, peer) : undefined;
-  const dmRelays = useMemo(() => effectiveDmRelays(config), [config]);
-  const voiceCandidates = useMemo(
-    () => {
-      // A custom Settings -> Voice server replaces the built-in voice relay;
-      // general DM relays remain a last capability-probed fallback.
-      const configured = effectiveDmVoiceRelays(DM_VOICE_RELAYS);
-      const ordered = [...configured, ...dmRelays];
-      return ordered.filter((r, i) => ordered.indexOf(r) === i);
-    },
-    [dmRelays],
-  );
-  const { data: voiceRelay } = useDmVoiceRelay(voiceCandidates);
-  const hasVoice = Boolean(roomId && voiceRelay);
-  const inThisCall = Boolean(roomId && activeCall?.groupId === roomId);
+  // Voice: DM calls ride the blind-broker path (see DmCallProvider), so there
+  // is no relay capability to probe — the call button shows for any 1:1 with
+  // a NIP-44-capable login. Group threads have no pairwise call, and Note to
+  // Self can't ring itself.
+  const { startCall, canCall } = useDmCall();
+  const callable = canCall && Boolean(user) && !group && !noteToSelf;
+  const inThisCall = Boolean(activeCall?.dmPeer && activeCall.dmPeer === peer);
 
-  // Live presence in the DM room (kind 39004), so both peers see who's in.
-  const { data: participants } = useLivekitParticipants(
-    hasVoice ? voiceRelay! : undefined,
-    hasVoice ? roomId : undefined,
-  );
-  // While WE are in this call, the connected room's live LiveKit roster is
-  // authoritative — kind-39004 presence rides webhooks + relay memory and
-  // desyncs too easily. It remains the only source for calls we're not in.
-  const roster = (inThisCall ? voiceRoomPubkeys : null) ?? participants;
-  const inCallCount = roster?.length ?? 0;
-  // Others (exclude us) currently in this DM's voice room — for the presence
-  // avatar stack in the header.
+  // Who else is in this call's room, from the connected room's own roster —
+  // known only while WE are in the call (a blind-broker room has no relay-side
+  // presence; the ring itself is the "call happening" signal).
   const dmOthersInVoice = useMemo(
-    () => (roster ?? []).filter((pk) => pk !== user?.pubkey),
-    [roster, user?.pubkey],
+    () => (inThisCall ? voiceRoomPubkeys ?? [] : []).filter((pk) => pk !== user?.pubkey),
+    [inThisCall, voiceRoomPubkeys, user?.pubkey],
   );
 
   // Lazy decryption: a single IntersectionObserver decrypts placeholder rows as
@@ -1024,7 +973,7 @@ function Conversation({
         {dmOthersInVoice.length > 0 && (
           <VoicePresence participants={dmOthersInVoice} className="text-success/90" />
         )}
-        {hasVoice && !inThisCall && (
+        {callable && !inThisCall && (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -1032,17 +981,12 @@ function Conversation({
                 size="icon"
                 aria-label="Start voice call"
                 className="relative size-8 touch:size-11 shrink-0 text-muted-foreground hover:text-success"
-                onClick={() => joinDmCall(voiceRelay!, roomId!, peer)}
+                onClick={() => void startCall(peer)}
               >
                 <Phone className="size-4" />
-                {inCallCount > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-success" aria-hidden />
-                )}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>
-              {inCallCount > 0 ? "Join voice call (active)" : "Start voice call"}
-            </TooltipContent>
+            <TooltipContent>Start voice call</TooltipContent>
           </Tooltip>
         )}
         {/* Secondary actions overflow into a … menu to keep the bar uncluttered:
@@ -2124,22 +2068,6 @@ export function ConversationList({
     setSearch("");
   }, []);
 
-  // The shared DM voice relay (same derivation as the open conversation): a
-  // LiveKit-capable voice relay, then the user's DM relays.
-  // Computed once here so each row can query its peer's voice presence without
-  // re-resolving the relay per row.
-  const dmRelays = useMemo(() => effectiveDmRelays(config), [config]);
-  const voiceCandidates = useMemo(
-    () => {
-      // Match the conversation header's replacement semantics and fallback.
-      const configured = effectiveDmVoiceRelays(DM_VOICE_RELAYS);
-      const ordered = [...configured, ...dmRelays];
-      return ordered.filter((r, i) => ordered.indexOf(r) === i);
-    },
-    [dmRelays],
-  );
-  const { data: voiceRelay } = useDmVoiceRelay(voiceCandidates);
-
   // Pinned conversations are lifted into their own section above the rest.
   // Both sections stay in `rows` order — newest message first — so a pinned
   // conversation that just received a message rises to the top of its section.
@@ -2189,7 +2117,6 @@ export function ConversationList({
       sharedCommunity={request ? sharedCommunities.get(c.conversation) : undefined}
       inCall={Boolean(activeCall?.dmPeer) && activeCall?.dmPeer === c.conversation}
       selfPubkey={user?.pubkey}
-      voiceRelay={voiceRelay ?? undefined}
       onClick={() => openPeer(c.conversation)}
       onTogglePin={() => togglePin(c.conversation)}
       onToggleRail={() => toggleRail(c.conversation)}

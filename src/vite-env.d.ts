@@ -14,7 +14,6 @@ interface ImportMetaEnv {
   readonly VITE_GIT_DISCOVERY_RELAY?: string;
   readonly VITE_APP_BLOSSOM_SERVERS?: string;
   readonly VITE_CONCORD_AV_SERVERS?: string;
-  readonly VITE_DM_VOICE_RELAYS?: string;
   readonly VITE_DEFAULT_NOISE_SUPPRESSION?: string;
   readonly VITE_DEFAULT_ECHO_CANCELLATION?: string;
   readonly VITE_DEFAULT_AUTO_GAIN_CONTROL?: string;

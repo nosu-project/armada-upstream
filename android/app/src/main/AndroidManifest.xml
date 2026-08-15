@@ -134,6 +134,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Incoming DM calls: lets the relay service's CallStyle notification
+         launch its full-screen ring on a locked/idle device. Normal-level
+         (declared, no runtime prompt); Android 14+ users can revoke it in
+         Settings, where the ring degrades to a heads-up notification. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <!-- Restart the notification service after device reboot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 

@@ -21,6 +21,7 @@ import {
   type RoomOptions,
 } from "livekit-client";
 import { Capacitor } from "@capacitor/core";
+import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -39,11 +40,12 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useGroup } from "@/hooks/useGroup";
 import { useLivekitToken } from "@/hooks/useLivekit";
 import { useRelayInfo } from "@/hooks/useRelayInfo";
-import { type ActiveCall, type ConcordVoiceContext } from "@/contexts/CallContext";
+import { type ActiveCall, type ConcordVoiceContext, type DmVoiceContext } from "@/contexts/CallContext";
 import { useVoiceIdentity, VoiceIdentityContext, type VoiceIdentityResolver } from "@/contexts/VoiceIdentityContext";
 import { ServerScopeProvider } from "@/components/ServerScopeProvider";
 import { random32, voiceSenderKey } from "@/concord/lib/derive";
-import { rendezvousCandidates, verifiedAuthorOf } from "@/concord/lib/voice";
+import { fetchAvTokenFromAny, rendezvousCandidates, verifiedAuthorOf, type AvToken } from "@/concord/lib/voice";
+import { dmCallKeys } from "@/lib/dmCall";
 import { useCallSync } from "@/concord/hooks/useCallSync";
 import {
   ownAvServers,
@@ -563,9 +565,11 @@ function VoiceRoomShell({
 }
 
 /**
- * NIP-29 (group / DM) voice room: token from the relay's NIP-29 LiveKit
- * endpoint, authorized by group membership (or DM pair). No media E2EE — the
- * relay-trusted SFU is part of the trust model here.
+ * NIP-29 group voice room: token from the relay's NIP-29 LiveKit endpoint,
+ * authorized by group membership. No media E2EE — the relay-trusted SFU is
+ * part of the trust model here. (DM calls used to share this path via the
+ * relay's `livekit-dm` endpoint; they now ride the blind-broker DmVoiceRoom
+ * below.)
  */
 function Nip29VoiceRoom({
   call,
@@ -581,16 +585,11 @@ function Nip29VoiceRoom({
   stageOpen: boolean;
 }) {
   const navigate = useNavigate();
-  const isDm = Boolean(call.dmPeer);
   const { data: tokenData, error, isLoading } = useLivekitToken(call.relayUrl, call.groupId, true);
-  const { data: details } = useGroup(call.relayUrl, isDm ? undefined : call.groupId);
+  const { data: details } = useGroup(call.relayUrl, call.groupId);
   const { data: relayInfo } = useRelayInfo(call.relayUrl);
-  const peerAuthor = useAuthor(isDm ? call.dmPeer : undefined);
-  const peerName = getDisplayName(peerAuthor.data?.metadata, call.dmPeer ?? "");
-  // DMs label the bar with the peer's name instead (rendered below, so custom
-  // emoji in it resolve to images).
   const channelName = details?.group?.name ?? "voice";
-  const serverName = isDm ? "Direct message" : relayInfo?.name ?? call.relayUrl.replace(/^wss?:\/\//, "");
+  const serverName = relayInfo?.name ?? call.relayUrl.replace(/^wss?:\/\//, "");
   const options = useRoomOptions();
 
   const handleDisconnected = useCallback(
@@ -604,15 +603,11 @@ function Nip29VoiceRoom({
   );
 
   const goToChannel = useCallback(() => {
-    if (isDm && call.dmPeer) {
-      navigate(`/dm/${nip19.npubEncode(call.dmPeer)}`);
-      return;
-    }
     navigate(`/s/${relayToRouteParam(call.relayUrl)}/${encodeURIComponent(call.groupId)}`);
-  }, [navigate, isDm, call.dmPeer, call.relayUrl, call.groupId]);
+  }, [navigate, call.relayUrl, call.groupId]);
 
   // Register the navigate-to-call handler so the floating video window's
-  // "return to call" action lands on this room's channel/conversation.
+  // "return to call" action lands on this room's channel.
   const { registerFocusActiveCall, registerCallSummary } = useCall();
   useEffect(() => {
     registerFocusActiveCall(goToChannel);
@@ -621,22 +616,16 @@ function Nip29VoiceRoom({
 
   // How the call reads in the Android ongoing-call notification. Plain text,
   // so unlike the bar's `label` it can carry no custom-emoji images — and it
-  // re-registers as the group metadata / peer profile resolve.
+  // re-registers as the group metadata resolves.
   useEffect(() => {
-    registerCallSummary(
-      isDm ? { title: peerName } : { title: `#${channelName}`, subtitle: serverName },
-    );
+    registerCallSummary({ title: `#${channelName}`, subtitle: serverName });
     return () => registerCallSummary(null);
-  }, [registerCallSummary, isDm, peerName, channelName, serverName]);
+  }, [registerCallSummary, channelName, serverName]);
 
   if (isLoading) return <>{<LoadingBar placeBar={placeBar} label="Requesting voice access…" />}</>;
   if (error || !tokenData) return <>{<ErrorBar placeBar={placeBar} error={error} onLeave={onLeave} />}</>;
 
-  const label = isDm ? (
-    <button type="button" onClick={goToChannel} className="truncate hover:underline text-left">
-      <DisplayName pubkey={call.dmPeer} name={peerName} />
-    </button>
-  ) : (
+  const label = (
     <button type="button" onClick={goToChannel} className="hover:underline text-left">
       {/* The server name is desktop-only; on the compact mobile bar we show just
           the channel (e.g. "#general"). */}
@@ -654,7 +643,7 @@ function Nip29VoiceRoom({
       placeStage={placeStage}
       stageOpen={stageOpen}
       label={label}
-      scopeRelayUrl={isDm ? undefined : call.relayUrl}
+      scopeRelayUrl={call.relayUrl}
     />
   );
 }
@@ -684,6 +673,87 @@ class SenderKeyProvider extends BaseKeyProvider {
     ]);
     this.onSetEncryptionKey(key, identity);
   }
+}
+
+/**
+ * A single shared frame key for every publisher — the profile DM calls use.
+ * A 1:1 call has exactly two senders and a fresh random per-call secret, so
+ * the nonce-domain-partitioning rationale behind Concord's per-sender keys
+ * (many members, one derivation root per epoch) doesn't apply, and a shared
+ * key needs no in-band identity exchange — which a DM call, having no
+ * presence plane, could not carry anyway. Ratchet/failure knobs match
+ * SenderKeyProvider: the key is externally derived and must never drift.
+ */
+class SharedKeyProvider extends BaseKeyProvider {
+  constructor() {
+    super({ sharedKey: true, ratchetWindowSize: 0, failureTolerance: -1, keySize: 256 });
+  }
+
+  /** Install the call-wide frame-key material (HKDF input). */
+  async setSharedMaterial(material: Uint8Array): Promise<void> {
+    const key = await crypto.subtle.importKey("raw", material.slice().buffer, "HKDF", false, [
+      "deriveBits",
+      "deriveKey",
+    ]);
+    this.onSetEncryptionKey(key);
+  }
+}
+
+/**
+ * Construct the E2EE worker + Room for a blind-broker call (Concord or DM).
+ * Runs during render (inside a useMemo), so the worker construction is
+ * guarded: a stale tab after a deploy whose hashed e2ee-worker chunk now 404s
+ * (answered by the SPA fallback as HTML), a browser that rejects the module
+ * worker, or a CSP that blocks it would otherwise take down the whole tree as
+ * an opaque hard join error. E2EE-required rooms must never fall back to
+ * plaintext, so the failure is captured and rendered as a clean, leavable
+ * error by the caller instead.
+ */
+function buildE2eeRoom(keyProvider: BaseKeyProvider): {
+  room: Room | null;
+  worker: Worker | null;
+  error?: unknown;
+} {
+  let worker: Worker;
+  try {
+    worker = new Worker(new URL("livekit-client/e2ee-worker", import.meta.url), {
+      type: "module",
+    });
+  } catch (err) {
+    console.error("voice: E2EE worker failed to start", err);
+    return { room: null, worker: null, error: err };
+  }
+  const micId = getPreferredMicId();
+  const cameraId = getPreferredCameraId();
+  const processing = getAudioProcessing();
+  const opts: RoomOptions = {
+    adaptiveStream: true,
+    dynacast: true,
+    // See useRoomOptions: source-specific 0–200% playback needs GainNodes.
+    webAudioMix: true,
+    disconnectOnPageLeave,
+    e2ee: { keyProvider, worker },
+    audioCaptureDefaults: {
+      ...(micId ? { deviceId: micId } : {}),
+      noiseSuppression: processing.noiseSuppression,
+      echoCancellation: processing.echoCancellation,
+      autoGainControl: processing.autoGainControl,
+      // Capture mono: a stereo interface that only populates one channel
+      // otherwise publishes a track that plays back from a single side for
+      // every listener, and a mono reference is cleaner for echo cancellation.
+      channelCount: 1,
+    },
+    videoCaptureDefaults: {
+      ...(cameraId ? { deviceId: cameraId } : {}),
+      resolution: VideoPresets.h720.resolution,
+    },
+    publishDefaults: {
+      ...audioPublishDefaults,
+      videoSimulcastLayers: [VideoPresets.h180, VideoPresets.h360, VideoPresets.h720],
+      screenShareEncoding: VideoPresets.h1080.encoding,
+    },
+  };
+  return { room: new Room(opts), worker };
 }
 
 /**
@@ -802,7 +872,10 @@ function ConcordVoiceRoom({
     [tokenData, handRaised, sendReaction, reactions],
   );
 
-  // Build the E2EE-enabled Room once (the component remounts per room/epoch/broker).
+  // Build the E2EE-enabled Room once (the component remounts per
+  // room/epoch/broker). Concord media MUST be end-to-end encrypted — the
+  // broker/SFU are blind and untrusted — so a failed worker construction is
+  // captured and rendered as a leavable error below (see buildE2eeRoom).
   const e2ee = useMemo((): {
     room: Room | null;
     keyProvider: SenderKeyProvider;
@@ -810,56 +883,7 @@ function ConcordVoiceRoom({
     error?: unknown;
   } => {
     const keyProvider = new SenderKeyProvider();
-    // Constructing the E2EE worker can throw, and this runs during render, so an
-    // unguarded throw takes down the whole tree — surfacing as an opaque "hard
-    // join error" even though the SFU token minted fine and the participant may
-    // already be visible at the SFU (rendering to peers as an undecodable,
-    // Unverified ghost). Known triggers: a stale tab after a deploy whose hashed
-    // e2ee-worker chunk now 404s and is answered by the SPA fallback as HTML, a
-    // browser that rejects the module worker, or a CSP that blocks it. Concord
-    // media MUST be end-to-end encrypted (the broker/SFU are blind and
-    // untrusted), so falling back to a plaintext room is not an option — capture
-    // the failure and render a clean, leavable error below instead.
-    let worker: Worker;
-    try {
-      worker = new Worker(new URL("livekit-client/e2ee-worker", import.meta.url), {
-        type: "module",
-      });
-    } catch (err) {
-      console.error("Concord voice: E2EE worker failed to start", err);
-      return { room: null, keyProvider, worker: null, error: err };
-    }
-    const micId = getPreferredMicId();
-    const cameraId = getPreferredCameraId();
-    const processing = getAudioProcessing();
-    const opts: RoomOptions = {
-      adaptiveStream: true,
-      dynacast: true,
-      // See useRoomOptions: source-specific 0–200% playback needs GainNodes.
-      webAudioMix: true,
-      disconnectOnPageLeave,
-      e2ee: { keyProvider, worker },
-      audioCaptureDefaults: {
-        ...(micId ? { deviceId: micId } : {}),
-        noiseSuppression: processing.noiseSuppression,
-        echoCancellation: processing.echoCancellation,
-        autoGainControl: processing.autoGainControl,
-        // Capture mono: a stereo interface that only populates one channel
-        // otherwise publishes a track that plays back from a single side for
-        // every listener, and a mono reference is cleaner for echo cancellation.
-        channelCount: 1,
-      },
-      videoCaptureDefaults: {
-        ...(cameraId ? { deviceId: cameraId } : {}),
-        resolution: VideoPresets.h720.resolution,
-      },
-      publishDefaults: {
-        ...audioPublishDefaults,
-        videoSimulcastLayers: [VideoPresets.h180, VideoPresets.h360, VideoPresets.h720],
-        screenShareEncoding: VideoPresets.h1080.encoding,
-      },
-    };
-    return { room: new Room(opts), keyProvider, worker };
+    return { keyProvider, ...buildE2eeRoom(keyProvider) };
   }, []);
 
   // Key management (§3 + §7): every VERIFIED participant's frame key derives
@@ -1018,6 +1042,169 @@ function ConcordVoiceRoom({
 }
 
 /**
+ * DM (1:1) voice room: the blind-broker path applied to a direct conversation
+ * (see src/lib/dmCall.ts). Token from a Concord AV broker, authorized by
+ * possession of the per-call room key both sides derive from the offer's
+ * secret; media end-to-end encrypted under one shared per-call key. The
+ * broker only coordinates — it never learns who is calling whom and never
+ * sees plaintext media. Ring/answer/decline signaling lives in
+ * DmCallProvider, not here; this component is only the connected room.
+ */
+function DmVoiceRoom({
+  ctx,
+  onLeave,
+  placeBar,
+  placeStage,
+  stageOpen,
+}: {
+  ctx: DmVoiceContext;
+  onLeave: () => void;
+  placeBar: PlaceBar;
+  placeStage: PlaceStage;
+  stageOpen: boolean;
+}) {
+  const { user } = useCurrentUser();
+  const navigate = useNavigate();
+  const keys = useMemo(() => dmCallKeys(ctx.secretHex), [ctx.secretHex]);
+
+  // Mint from the call's broker first, falling through to our own defaults —
+  // the same fall-through shape as Concord's §5 (a reachable broker can still
+  // fail to mint). Never refetch while mounted: the token embeds our identity.
+  const { data: tokenData, error, isLoading } = useQuery<AvToken>({
+    queryKey: ["dm", "av-token", ctx.callId, ctx.broker],
+    queryFn: () =>
+      fetchAvTokenFromAny(
+        [ctx.broker, ...ownAvServers().filter((o) => o !== ctx.broker)],
+        keys.room,
+      ),
+    staleTime: Infinity,
+    gcTime: 0,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: 1,
+  });
+
+  const peerAuthor = useAuthor(ctx.peer);
+  const peerName = getDisplayName(peerAuthor.data?.metadata, ctx.peer);
+
+  // DM media MUST be end-to-end encrypted (the broker/SFU only coordinate and
+  // are never trusted with plaintext), so a failed worker construction renders
+  // a leavable error below rather than ever joining plaintext.
+  const e2ee = useMemo((): {
+    room: Room | null;
+    keyProvider: SharedKeyProvider;
+    worker: Worker | null;
+    error?: unknown;
+  } => {
+    const keyProvider = new SharedKeyProvider();
+    return { keyProvider, ...buildE2eeRoom(keyProvider) };
+  }, []);
+
+  // Install the shared frame key. Both sides derive it from the call secret,
+  // so there is nothing to exchange and nothing to sync per participant.
+  useEffect(() => {
+    if (!e2ee.room) return;
+    void e2ee.keyProvider
+      .setSharedMaterial(keys.mediaKey)
+      .catch((err) => console.error("DM voice: failed to install frame key", err));
+  }, [e2ee, keys]);
+
+  // Enable E2EE once connected material is in place; terminate the worker on
+  // unmount (mirrors ConcordVoiceRoom).
+  useEffect(() => {
+    if (!tokenData || !e2ee.room) return;
+    const room = e2ee.room;
+    let cancelled = false;
+    void (async () => {
+      try {
+        if (!cancelled) await room.setE2EEEnabled(true);
+      } catch (err) {
+        console.error("DM voice: failed to enable E2EE", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [e2ee, tokenData]);
+  useEffect(() => () => e2ee.worker?.terminate(), [e2ee]);
+
+  // Identity → member resolution: our broker-assigned identity is ourselves;
+  // anyone else in a 1:1 room is the peer. Only the two secret-holders can
+  // sign this room's token grant, and a party without the media key (a
+  // hostile broker seating itself) produces no decodable media — at worst a
+  // silent tile, never impersonated audio or video.
+  const resolveIdentity = useCallback<VoiceIdentityResolver>(
+    (identity) => {
+      if (tokenData && identity === tokenData.identity && user) {
+        return { pubkey: user.pubkey, verified: true };
+      }
+      return { pubkey: ctx.peer, verified: true };
+    },
+    [tokenData, user, ctx.peer],
+  );
+
+  const goToConversation = useCallback(() => {
+    navigate(`/dm/${nip19.npubEncode(ctx.peer)}`);
+  }, [navigate, ctx.peer]);
+
+  const { registerFocusActiveCall, registerCallSummary } = useCall();
+  useEffect(() => {
+    registerFocusActiveCall(goToConversation);
+    return () => registerFocusActiveCall(null);
+  }, [registerFocusActiveCall, goToConversation]);
+
+  // The Android ongoing-call notification label: the peer's name, plain text.
+  useEffect(() => {
+    registerCallSummary({ title: peerName });
+    return () => registerCallSummary(null);
+  }, [registerCallSummary, peerName]);
+
+  const handleDisconnected = useCallback(
+    (reason?: DisconnectReason) => {
+      if (reason !== undefined && reason !== DisconnectReason.CLIENT_INITIATED) {
+        console.warn("dm voice disconnected", { reason: DisconnectReason[reason] ?? reason });
+      }
+      onLeave();
+    },
+    [onLeave],
+  );
+
+  if (isLoading) return <>{<LoadingBar placeBar={placeBar} label="Requesting voice access…" />}</>;
+  if (error || !tokenData) return <>{<ErrorBar placeBar={placeBar} error={error} onLeave={onLeave} />}</>;
+  const room = e2ee.room;
+  if (e2ee.error || !room) {
+    const e2eeError =
+      e2ee.error instanceof Error
+        ? e2ee.error
+        : new Error("Voice encryption couldn’t start in this browser. Reload to update, then rejoin.");
+    return <>{<ErrorBar placeBar={placeBar} error={e2eeError} onLeave={onLeave} />}</>;
+  }
+
+  const label = (
+    <button type="button" onClick={goToConversation} className="truncate hover:underline text-left">
+      <DisplayName pubkey={ctx.peer} name={peerName} />
+    </button>
+  );
+
+  return (
+    <VoiceIdentityContext.Provider value={resolveIdentity}>
+      <VoiceRoomShell
+        serverUrl={tokenData.url}
+        token={tokenData.token}
+        options={{}}
+        room={room}
+        onDisconnected={handleDisconnected}
+        placeBar={placeBar}
+        placeStage={placeStage}
+        stageOpen={stageOpen}
+        label={label}
+      />
+    </VoiceIdentityContext.Provider>
+  );
+}
+
+/**
  * The persistent voice room. Mounted (lazily) by `CallProvider` — which lives
  * in the never-unmounting MainLayout — so the LiveKit connection survives
  * navigation between channels and servers.
@@ -1050,6 +1237,17 @@ export default function PersistentVoiceRoom({
     return (
       <ConcordVoiceRoom
         ctx={call.concord}
+        onLeave={onLeave}
+        placeBar={placeBar}
+        placeStage={placeStage}
+        stageOpen={stageOpen}
+      />
+    );
+  }
+  if (call.dm) {
+    return (
+      <DmVoiceRoom
+        ctx={call.dm}
         onLeave={onLeave}
         placeBar={placeBar}
         placeStage={placeStage}

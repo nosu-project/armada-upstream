@@ -198,24 +198,6 @@ export const CONCORD_AV_SERVERS: string[] = (
   .filter((s: string) => Boolean(s));
 
 /**
- * Default LiveKit-capable NIP-29 relay(s) to host **DM** voice rooms, when none
- * of the user's own DM relays speak the NIP-29 LiveKit extension.
- *
- * DM voice runs over a relay's NIP-29 LiveKit token endpoint, which none of the
- * default app relays host — so this defaults to the public Armada instance
- * (`wss://armada.buzz`) so 1:1 calls work out of the box. Operators can
- * override with `VITE_DM_VOICE_RELAYS` (comma-separated ws/wss URLs) or set it
- * empty to disable the fallback.
- */
-const DEFAULT_PUBLIC_DM_VOICE_RELAY = "wss://armada.buzz";
-export const DM_VOICE_RELAYS: string[] = (
-  import.meta.env.VITE_DM_VOICE_RELAYS ?? DEFAULT_PUBLIC_DM_VOICE_RELAY
-)
-  .split(",")
-  .map((url: string) => normalizeRelayUrl(url))
-  .filter((url: string | undefined): url is string => Boolean(url));
-
-/**
  * Default DM relay(s): the fallback direct-message relays used when a user has
  * not configured their own (no kind-10050 inbox, `useOwnDmRelays` off). Added
  * to the app relays in `effectiveDmRelays` so gift-wrapped DMs (NIP-17, kind
@@ -224,7 +206,7 @@ export const DM_VOICE_RELAYS: string[] = (
  * continue to use the general app relays alongside it.
  *
  * Defaults to Armada's public gift-wrap relay for every build (like
- * `DM_VOICE_RELAYS` / `CONCORD_AV_SERVERS`); operators can override with
+ * `CONCORD_AV_SERVERS`); operators can override with
  * `VITE_DM_RELAYS` (comma-separated ws/wss) or set it empty to disable.
  */
 const DEFAULT_PUBLIC_DM_RELAY = "wss://relay.armada.buzz";

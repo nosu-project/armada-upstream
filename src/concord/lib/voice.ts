@@ -150,13 +150,18 @@ export function signAvGrant(voice: GroupKey, url: string): string {
   return btoa(JSON.stringify(event));
 }
 
-/** Probe a broker's capability endpoint. */
+/**
+ * Probe a broker's capability endpoint. Strictly 204 — the endpoint's
+ * documented answer — never a general `res.ok`: an SPA origin answers every
+ * unknown path 200 with its HTML shell, which is precisely the misconfigured
+ * candidate this probe exists to skip.
+ */
 export async function probeAvBroker(origin: string, signal?: AbortSignal): Promise<boolean> {
   try {
     const res = await fetch(avCapabilityUrl(origin), {
       signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(5000)]),
     });
-    return res.status === 204 || res.ok;
+    return res.status === 204;
   } catch {
     return false;
   }

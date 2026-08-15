@@ -3,7 +3,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { isDmRoomId } from "@/lib/dmVoice";
 import { KIND_GROUP_PARTICIPANTS, parseGroupParticipants } from "@/lib/nip29";
 import { relayToHttpUrl } from "@/lib/platform";
 
@@ -23,6 +22,12 @@ interface LivekitTokenResponse {
 /**
  * Check whether a relay supports the NIP-29 LiveKit extension
  * (HTTP 204 at /.well-known/nip29/livekit).
+ *
+ * STRICTLY 204, never a general `res.ok`: an origin that is really an SPA
+ * answers every unknown path 200 with the HTML shell (that is exactly how
+ * armada.buzz reads once the relay moved off it), and a 200-tolerant probe
+ * then declares voice support on a host whose token endpoint can only ever
+ * return HTML — a call button that always fails.
  */
 export function useRelayLivekitSupport(relayUrl: string | undefined) {
   return useQuery({
@@ -32,7 +37,7 @@ export function useRelayLivekitSupport(relayUrl: string | undefined) {
         const res = await fetch(`${relayToHttpUrl(relayUrl!)}/.well-known/nip29/livekit`, {
           signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
         });
-        return res.status === 204 || res.ok;
+        return res.status === 204;
       } catch {
         return false;
       }
@@ -43,54 +48,22 @@ export function useRelayLivekitSupport(relayUrl: string | undefined) {
 }
 
 /**
- * Find the first relay in `relayUrls` that supports the NIP-29 LiveKit
- * extension (HTTP 204 at /.well-known/nip29/livekit). DMs may route over
- * several app relays; a DM voice room must be hosted on one that speaks
- * LiveKit. Returns the chosen relay URL, or null if none support it.
- */
-export function useDmVoiceRelay(relayUrls: string[]) {
-  const key = relayUrls.join(",");
-  return useQuery<string | null>({
-    queryKey: ["nip29", "dm-voice-relay", key],
-    queryFn: async ({ signal }) => {
-      for (const relayUrl of relayUrls) {
-        try {
-          const res = await fetch(`${relayToHttpUrl(relayUrl)}/.well-known/nip29/livekit`, {
-            signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
-          });
-          if (res.status === 204 || res.ok) return relayUrl;
-        } catch {
-          // try the next relay
-        }
-      }
-      return null;
-    },
-    enabled: relayUrls.length > 0,
-    staleTime: 5 * 60 * 1000,
-  });
-}
-
-/**
  * Fetch a LiveKit JWT from the relay's NIP-29 token endpoint using a
- * NIP-98 Authorization event signed by the user's signer.
- *
- * `roomId` is either a NIP-29 group id (token endpoint: `…/livekit/<id>`) or a
- * DM voice room id (`dm:<a>:<b>` → `…/livekit-dm/<id>`, authorized by
- * participant pubkey instead of group membership).
+ * NIP-98 Authorization event signed by the user's signer. `roomId` is a
+ * NIP-29 group id. (DM calls no longer use a relay token endpoint — they ride
+ * the blind-broker path in `src/lib/dmCall.ts`.)
  */
 async function fetchLivekitToken(
   relayUrl: string,
   roomId: string,
   signer: NostrSigner,
 ): Promise<LivekitTokenResponse> {
-  const path = isDmRoomId(roomId) ? "livekit-dm" : "livekit";
   // Do NOT percent-encode the id: the relay reconstructs the expected NIP-98
-  // `u` URL from the decoded request path, so an encoded `u` tag (e.g. the
-  // colons in `dm:a:b` → `%3A`) would never match and auth would 401. Colons
-  // and hex are legal in a path segment; only escape characters that would
-  // break the path structure (`/`, `?`, `#`, whitespace).
+  // `u` URL from the decoded request path, so an encoded `u` tag would never
+  // match and auth would 401. Only escape characters that would break the
+  // path structure (`/`, `?`, `#`, whitespace).
   const safeId = roomId.replace(/[/?#\s]/g, (c) => encodeURIComponent(c));
-  const endpointUrl = `${relayToHttpUrl(relayUrl)}/.well-known/nip29/${path}/${safeId}`;
+  const endpointUrl = `${relayToHttpUrl(relayUrl)}/.well-known/nip29/livekit/${safeId}`;
 
   const event = await signer.signEvent({
     kind: KIND_HTTP_AUTH,
@@ -112,6 +85,12 @@ async function fetchLivekitToken(
   if (!res.ok) {
     throw new Error(`LiveKit token request failed: HTTP ${res.status}`);
   }
+  // An SPA catch-all answers unknown paths 200 with the HTML shell; parsing
+  // that as JSON produced the old, cryptic "Unexpected token '<'" join error.
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.includes("json")) {
+    throw new Error("The relay did not return a voice token (no LiveKit support?)");
+  }
 
   const data: Record<string, string> = await res.json();
   const token = data.participant_token ?? data.token;
@@ -122,7 +101,7 @@ async function fetchLivekitToken(
   return { token, url };
 }
 
-/** Request a LiveKit token for a group or DM voice room (only when `enabled`). */
+/** Request a LiveKit token for a NIP-29 group voice room (only when `enabled`). */
 export function useLivekitToken(relayUrl: string, roomId: string, enabled: boolean) {
   const { user } = useCurrentUser();
 

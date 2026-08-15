@@ -94,7 +94,7 @@ export function rememberVoiceDevice(kind: MediaDeviceKind, deviceId: string): vo
  * The user's preferred voice server, raw as typed (empty = use the build-time
  * defaults). This is a CLIENT setting, not community state: it's consulted
  * ahead of the deployment defaults when starting a call in an empty Concord
- * voice channel, and when picking a LiveKit-capable relay to host a DM call.
+ * voice channel, and when placing a 1:1 DM call (both blind-broker paths).
  * Once anyone is in a Concord call, their presence-announced broker is the
  * rendezvous point and overrides this (CORD-07 §5).
  */
@@ -139,21 +139,9 @@ export function preferredVoiceServerOrigin(): string | undefined {
   }
 }
 
-/** The preference as a wss relay URL (the NIP-29 DM-voice form). */
-export function preferredDmVoiceRelay(): string | undefined {
-  const origin = preferredVoiceServerOrigin();
-  return origin ? origin.replace(/^https:\/\//, "wss://") : undefined;
-}
-
 /** Custom AV preference as an exact replacement, or the deployment defaults. */
 export function effectiveAvServers(defaults: string[]): string[] {
   const preferred = preferredVoiceServerOrigin();
-  return preferred ? [preferred] : [...defaults];
-}
-
-/** DM-voice form of the same exact-replacement preference. */
-export function effectiveDmVoiceRelays(defaults: string[]): string[] {
-  const preferred = preferredDmVoiceRelay();
   return preferred ? [preferred] : [...defaults];
 }
 

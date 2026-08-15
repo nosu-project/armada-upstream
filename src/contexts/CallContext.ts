@@ -15,17 +15,33 @@ export interface ConcordVoiceContext {
   broker: string;
 }
 
-/** Identifies a single voice room (a NIP-29 group, a 1:1 DM room, or a Concord channel). */
+/**
+ * A 1:1 DM voice room (see `src/lib/dmCall.ts`): the peer, the per-call
+ * secret both sides derive the room + media keys from, the call id (the SFU
+ * room name that secret derives), and the blind broker origin hosting the
+ * call. Present only for DM calls; the room uses the same blind-broker token
+ * path as Concord, with shared-key E2EE media.
+ */
+export interface DmVoiceContext {
+  peer: string;
+  callId: string;
+  secretHex: string;
+  broker: string;
+}
+
+/** Identifies a single voice room (a NIP-29 group, a 1:1 DM call, or a Concord channel). */
 export interface ActiveCall {
   relayUrl: string;
-  /** The LiveKit room id: a NIP-29 group id, or a `dm:<a>:<b>` DM room id. */
+  /** The LiveKit room id: a NIP-29 group id, or a DM call id (room pubkey). */
   groupId: string;
   /**
-   * For DM calls, the peer's hex pubkey. Set drives DM-specific labeling and
-   * navigation (back to the conversation rather than a channel). Absent for
-   * group calls.
+   * For DM calls, the peer's hex pubkey (mirror of `dm.peer`). Kept as its own
+   * field so DM surfaces can test "am I in a call with this peer" without
+   * reaching into the full context. Absent for group calls.
    */
   dmPeer?: string;
+  /** For DM calls, the blind-broker voice context. */
+  dm?: DmVoiceContext;
   /**
    * For Concord calls, the serverless voice context. When set, the room uses
    * the blind-broker token path + per-sender E2EE media instead of the NIP-29
@@ -55,11 +71,12 @@ export interface CallContextType {
   /** Connect to a group's voice room (replaces any current call). */
   joinCall: (relayUrl: string, groupId: string) => void;
   /**
-   * Connect to a 1:1 DM voice room with `peer` (replaces any current call).
-   * `roomId` is the shared `dm:<a>:<b>` id; `relayUrl` is a LiveKit-capable
-   * relay that hosts the room.
+   * Connect to a 1:1 DM voice room (replaces any current call). Uses the
+   * blind-broker token path + shared-key E2EE media derived from the per-call
+   * secret. Callers reach here from DmCallProvider, which owns the call
+   * signaling (offer/answer/decline/end) around the room itself.
    */
-  joinDmCall: (relayUrl: string, roomId: string, peer: string) => void;
+  joinDmCall: (ctx: DmVoiceContext) => void;
   /**
    * Connect to a Concord voice channel's serverless room (replaces any current
    * call). Uses the CORD-07 blind-broker token path + per-sender E2EE media

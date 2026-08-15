@@ -206,6 +206,28 @@ public class NotificationRelayService extends Service {
     private final java.util.Map<String, java.util.ArrayDeque<Long>> alertBurst = new java.util.HashMap<>();
     private final java.util.Map<String, java.util.ArrayDeque<Long>> mentionBurst = new java.util.HashMap<>();
 
+    // ── Incoming DM calls ─────────────────────────────────────────────────────
+    // Voice-call signal rumor kind (Armada extension — see src/lib/dmCall.ts:
+    // content is the phase "offer"/"answer"/"decline"/"end", tags carry the
+    // `call` binding). Never stored (not a Dm17 kind); acted on here.
+    private static final int KIND_DM_CALL = 23314;
+    // Ring only while the offer is at most this old (the rumor's REAL
+    // created_at); an older — but NIP-40-unexpired — offer surfaces as a
+    // "Missed call" line in the conversation's notification instead.
+    private static final long CALL_RING_WINDOW_MS = 60_000;
+    // Dedicated channel: IMPORTANCE_HIGH with the device RINGTONE, not the
+    // message blip, so an incoming call sounds like a call.
+    private static final String CALL_CHANNEL_ID = "armada_calls";
+    // Outside the room-id band ([2, 2e9+1]) and the retired summary band.
+    private static final int INCOMING_CALL_NOTIF_ID = 2_146_000_000;
+    static final String ACTION_DECLINE_CALL = "buzz.armada.app.action.DECLINE_CALL";
+    static final String EXTRA_CALL_ID = "armada_call_id";
+    static final String EXTRA_CALL_PEER = "armada_call_peer";
+    // The call currently ringing in the tray (main-thread confined, like
+    // roomNotifs). Null when none.
+    private String ringingCallId;
+    private String ringingPeer;
+
     private static final long INITIAL_BACKOFF_MS = 1_000;
     private static final long MAX_BACKOFF_MS = 5 * 60 * 1_000;
     // A connection must survive this long before a subsequent failure resets
@@ -826,6 +848,14 @@ public class NotificationRelayService extends Service {
             handleReply(intent);
             return START_STICKY;
         }
+        // The incoming-call notification's "Decline" — dismiss the ring and
+        // send the peer a gift-wrapped decline over the same live sockets.
+        if (intent != null && ACTION_DECLINE_CALL.equals(intent.getAction())) {
+            BootReceiver.scheduleWatchdog(this);
+            if (connections.isEmpty()) loadConfigAndReconnect();
+            handleDeclineCall(intent);
+            return START_STICKY;
+        }
         // Re-arm the self-healing watchdog on every start so it survives a
         // START_STICKY relaunch. It's cancelled when the user turns
         // notifications off (loadConfigAndReconnect's disabled branch).
@@ -1251,6 +1281,7 @@ public class NotificationRelayService extends Service {
         final String groupPrefix = "ah-" + Long.toHexString(System.nanoTime() + 5) + "-";
         final String subConcord = "a2-" + Long.toHexString(System.nanoTime() + 6);
         final String subDm17 = "a7-" + Long.toHexString(System.nanoTime() + 7);
+        final String subDmEph = "a8-" + Long.toHexString(System.nanoTime() + 8);
         final String subGitRoots = "ag-" + Long.toHexString(System.nanoTime() + 8);
         final String subGitChildren = "ai-" + Long.toHexString(System.nanoTime() + 9);
         final String subSelf = "as-" + Long.toHexString(System.nanoTime() + 11);
@@ -1413,6 +1444,18 @@ public class NotificationRelayService extends Service {
                     f6.put("since", Math.max(0, sinceSec - DM17_SINCE_REWIND_SEC));
                     f6.put("limit", 0);
                     webSocket.send(reqMessage(subDm17, f6));
+
+                    // Ephemeral gift wraps (kind 21059) addressed to me: the
+                    // DM plane's live signals — the service acts on voice-call
+                    // rumors (kind 23314) and discards the rest (typing) after
+                    // decrypt. Broadcast-only: relays store nothing and the
+                    // wrap's timestamp is real, so a plain `since` is right
+                    // and there is no replay to skip.
+                    JSONObject f7 = new JSONObject();
+                    f7.put("kinds", new JSONArray().put(21059));
+                    f7.put("#p", new JSONArray().put(userPubkey));
+                    f7.put("since", sinceSec);
+                    webSocket.send(reqMessage(subDmEph, f7));
                 }
                 // Concord channel wraps on this relay: kind-1059 events
                 // AUTHORED BY the derived stream keys (no routing tag at all).
@@ -2551,6 +2594,275 @@ public class NotificationRelayService extends Service {
     }
 
     /**
+     * An ephemeral (kind 21059) DM wrap: the envelope voice-call signals ride
+     * (src/lib/dmCall.ts) — sealed and wrapped exactly like a durable NIP-17
+     * message, but broadcast-only, so no record that a call happened ever
+     * rests on a relay. Opened with the shared signer; anything that isn't a
+     * call rumor (typing indicators share the filter) is discarded after
+     * decrypt. Our OWN signals arrive here too via the self copy, which is
+     * how ringing stops on this device when the call was answered or
+     * declined on another.
+     */
+    private void handleDmEphemeralWrap(JSONObject wrap, String relayUrl) {
+        NativeSigner signer = nativeSigner;
+        if (signer == null) return;
+        signer.decrypt44(wrap.optString("pubkey"), wrap.optString("content"), (sealJson, unavailable) -> {
+            if (sealJson == null) return;
+            try {
+                JSONObject seal = new JSONObject(sealJson);
+                if (seal.optInt("kind", -1) != 13) return;
+                // The seal is the sender's real signature (NIP-17); verify so
+                // a relay-supplied forgery can't ring the phone as a friend.
+                if (!NostrCrypto.verifyEvent(seal)) return;
+                final String author = seal.optString("pubkey", "");
+                if (author.length() != 64) return;
+                signer.decrypt44(author, seal.optString("content", ""), (rumorJson, unavailable2) -> {
+                    if (rumorJson == null) return;
+                    try {
+                        JSONObject rumor = new JSONObject(rumorJson);
+                        if (!author.equals(rumor.optString("pubkey"))) return;
+                        if (!stampRumorId(rumor)) return;
+                        if (rumor.optInt("kind", -1) != KIND_DM_CALL) return;
+                        if (author.equals(userPubkey)) {
+                            // Our own signal from another device: an answer or
+                            // decline elsewhere stops this device's ring.
+                            String phase = rumor.optString("content", "");
+                            if (!"answer".equals(phase) && !"decline".equals(phase)) return;
+                            final String ownCallId = tagValue(rumor, "call");
+                            if (ownCallId != null) {
+                                handler.post(() -> cancelIncomingCall(ownCallId, /*missed=*/false));
+                            }
+                            return;
+                        }
+                        handler.post(() -> handleDmCallRumor(author, rumor, relayUrl));
+                    } catch (Exception ignored) {
+                        // Malformed rumor JSON — silent.
+                    }
+                });
+            } catch (Exception ignored) {
+                // Malformed seal JSON — silent.
+            }
+        });
+    }
+
+    /**
+     * Fold one opened voice-call rumor (kind 23314, from the peer) into the
+     * ring state. Main thread only (callers post here).
+     *
+     * An "offer" RINGS — full-screen CallStyle notification with the device
+     * ringtone — but only when it is FRESH (its real created_at inside
+     * {@link #CALL_RING_WINDOW_MS}; an ephemeral event only ever arrives
+     * moments after send, so anything outside the window is clock skew or
+     * forgery) and its author is someone the user FOLLOWS: the caller
+     * controls the name a ring would put on the lock screen, so a stranger
+     * must not be able to make the phone ring on demand. A fresh offer for a
+     * thread the WebView is showing is left to the in-app ring.
+     * "answer"/"decline" dismiss the ring; "end" while ringing is the caller
+     * giving up — a missed call.
+     */
+    private void handleDmCallRumor(String peer, JSONObject rumor, String relayUrl) {
+        final String phase = rumor.optString("content", "");
+        final String callId = tagValue(rumor, "call");
+        if (callId == null || callId.length() != 64) return;
+        final long tsMs = rumor.optLong("created_at", 0) * 1000L;
+        if ("offer".equals(phase)) {
+            if (!prefBool("directMessages", true)) return;
+            if (!dmFollows.contains(peer)) return;
+            long age = System.currentTimeMillis() - tsMs;
+            if (age > CALL_RING_WINDOW_MS || age < -CALL_RING_WINDOW_MS) return;
+            // The Answer action must hand the WebView everything it needs to
+            // join: the offer is ephemeral, so a cold-started app can never
+            // re-fetch it. No secret/broker ⇒ nothing to answer with.
+            final String secret = tagValue(rumor, "secret");
+            final String broker = tagValue(rumor, "broker");
+            if (secret == null || secret.length() != 64) return;
+            if (broker == null || !broker.startsWith("https://")) return;
+            if (activeRoomKeys.contains("dm:" + peer)) return;
+            postIncomingCall(peer, callId, secret, broker, relayUrl, tsMs);
+        } else if ("answer".equals(phase) || "decline".equals(phase)) {
+            cancelIncomingCall(callId, /*missed=*/false);
+        } else if ("end".equals(phase)) {
+            cancelIncomingCall(callId, /*missed=*/true);
+        }
+    }
+
+    /** Post the full-screen incoming-call notification for a fresh offer. */
+    private void postIncomingCall(String peer, String callId, String secret, String broker,
+                                  String relayUrl, long tsMs) {
+        ringingCallId = callId;
+        ringingPeer = peer;
+        resolveAuthor(peer, relayUrl, profile -> {
+            // Cancelled (or replaced) while the profile resolved.
+            if (!callId.equals(ringingCallId)) return;
+            String name = displayName(profile);
+            Person caller = new Person.Builder().setKey(peer).setName(name).build();
+
+            // Answer: deep-link into the conversation carrying the whole call
+            // context — the offer rode an ephemeral wrap, so a cold-started
+            // WebView can never re-fetch it. The parameters stay inside this
+            // app (an explicit, immutable PendingIntent to our own activity);
+            // DmCallProvider re-verifies the secret→room binding and joins.
+            Intent answer = deepLinkIntent("/dm/" + peer + "?call=" + callId
+                    + "&csecret=" + secret + "&cbroker=" + uriEncode(broker));
+            answer.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            PendingIntent answerPi = PendingIntent.getActivity(
+                    this, INCOMING_CALL_NOTIF_ID, answer,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+            // Decline: handled by the service itself (no WebView needed) —
+            // dismisses the ring and publishes the decline rumor.
+            Intent decline = new Intent(this, NotificationRelayService.class);
+            decline.setAction(ACTION_DECLINE_CALL);
+            decline.setData(Uri.parse("armada-call-decline:" + callId));
+            decline.putExtra(EXTRA_CALL_ID, callId);
+            decline.putExtra(EXTRA_CALL_PEER, peer);
+            PendingIntent declinePi = PendingIntent.getService(
+                    this, INCOMING_CALL_NOTIF_ID + 1, decline,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+            // Ring only as long as the offer stays fresh; the caller's own
+            // give-up ("end") usually lands first and cancels explicitly.
+            long timeout = Math.max(5_000, tsMs + CALL_RING_WINDOW_MS - System.currentTimeMillis());
+            NotificationCompat.Builder b = new NotificationCompat.Builder(this, CALL_CHANNEL_ID)
+                    .setSmallIcon(R.drawable.ic_stat_armada)
+                    .setContentTitle(name)
+                    .setContentText("Incoming call")
+                    .setCategory(NotificationCompat.CATEGORY_CALL)
+                    .setPriority(NotificationCompat.PRIORITY_MAX)
+                    .setOngoing(true)
+                    .setOnlyAlertOnce(true)
+                    .setWhen(tsMs)
+                    .setTimeoutAfter(timeout)
+                    .setContentIntent(answerPi)
+                    // The full phone-call surface: on a locked/idle device the
+                    // activity launches full screen; unlocked it heads-up.
+                    .setFullScreenIntent(answerPi, true)
+                    .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, declinePi, answerPi));
+            NotificationManager m = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            try {
+                if (m != null) m.notify(INCOMING_CALL_NOTIF_ID, b.build());
+            } catch (Exception e) {
+                // CallStyle validation differs across OEM/API levels; a ring
+                // that cannot post must still surface as a missed call.
+                Log.w(TAG, "incoming-call notification failed", e);
+                notifyMissedCall(peer, relayUrl, tsMs);
+            }
+        });
+    }
+
+    /** Dismiss the ringing notification for {@code callId}, if it is up. */
+    private void cancelIncomingCall(String callId, boolean missed) {
+        if (ringingCallId == null || !ringingCallId.equals(callId)) return;
+        String peer = ringingPeer;
+        ringingCallId = null;
+        ringingPeer = null;
+        NotificationManager m = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (m != null) m.cancel(INCOMING_CALL_NOTIF_ID);
+        if (missed && peer != null) notifyMissedCall(peer, null, System.currentTimeMillis());
+    }
+
+    /** A call that ended un-answered: an ordinary line in the DM's thread notification. */
+    private void notifyMissedCall(String peer, String relayUrl, long tsMs) {
+        if (!prefBool("directMessages", true)) return;
+        if (!dmFollows.contains(peer)) return;
+        if (activeRoomKeys.contains("dm:" + peer)) return;
+        resolveAuthor(peer, relayUrl, profile -> {
+            String name = displayName(profile);
+            String picture = profile != null ? profile.picture : null;
+            enqueueRoomMessage(/*community=*/null, "dm:" + peer, name, "/dm/" + peer,
+                    peer, name, picture, "Missed call", tsMs, /*mention=*/true);
+        });
+    }
+
+    /**
+     * The incoming-call notification's Decline: dismiss the ring, then publish
+     * a "decline" call rumor through the same NIP-17 envelope the quick reply
+     * uses — peer copy to their inbox, self copy to our own DM relays so our
+     * other (also ringing) devices stop too.
+     */
+    private void handleDeclineCall(Intent intent) {
+        final String callId = intent.getStringExtra(EXTRA_CALL_ID);
+        final String peer = intent.getStringExtra(EXTRA_CALL_PEER);
+        if (callId != null) handler.post(() -> cancelIncomingCall(callId, /*missed=*/false));
+        NativeSigner signer = nativeSigner;
+        if (signer == null || peer == null || peer.length() != 64
+                || callId == null || callId.length() != 64 || userPubkey == null) {
+            return;
+        }
+        final long nowSecs = System.currentTimeMillis() / 1000;
+        JSONArray tags = new JSONArray()
+                .put(new JSONArray().put("p").put(peer))
+                .put(new JSONArray().put("call").put(callId));
+        final JSONObject rumor = new JSONObject();
+        try {
+            rumor.put("id", NostrCrypto.eventId(userPubkey, nowSecs, KIND_DM_CALL, tags, "decline"));
+            rumor.put("pubkey", userPubkey);
+            rumor.put("created_at", nowSecs);
+            rumor.put("kind", KIND_DM_CALL);
+            rumor.put("tags", tags);
+            rumor.put("content", "decline");
+        } catch (JSONException e) {
+            return;
+        }
+        final String rumorJson = rumor.toString();
+        resolveDmInbox(peer, inboxRelays -> {
+            // Unlike a message reply, a decline is not gated on a published
+            // inbox: the offer reached us, so the caller reads our shared DM
+            // relays at minimum.
+            List<String> targets = new ArrayList<>(inboxRelays);
+            for (String r : dmRelays) if (!targets.contains(r)) targets.add(r);
+            if (targets.isEmpty()) return;
+            buildDmEphemeralEnvelope(signer, rumorJson, peer, wrap -> {
+                if (wrap != null) publishEvent(wrap, targets, ok -> { });
+            });
+            buildDmEphemeralEnvelope(signer, rumorJson, userPubkey, selfWrap -> {
+                if (selfWrap != null && !dmRelays.isEmpty()) {
+                    publishEvent(selfWrap, new ArrayList<>(dmRelays), ok -> { });
+                }
+            });
+        });
+    }
+
+    /**
+     * Seal + wrap a DM rumor into an EPHEMERAL (kind 21059) envelope — the
+     * same crypto as {@link #buildDmEnvelope}, but a REAL (un-backdated) wrap
+     * timestamp and no expiration: the envelope is broadcast-only, so there
+     * is nothing at rest to blur or to expire (mirrors wrapDmSealEphemeral in
+     * nip17/protocol.ts; the seal inside stays backdated like every seal).
+     */
+    private void buildDmEphemeralEnvelope(NativeSigner signer, String rumorJson, String recipient,
+                                          EnvelopeCallback cb) {
+        signer.encrypt44(recipient, rumorJson, (sealContent, unavailable) -> {
+            if (sealContent == null) {
+                handler.post(() -> cb.onWrap(null));
+                return;
+            }
+            signer.signEvent(13, sealContent, new JSONArray(), tweakedPast(), seal ->
+                    handler.post(() -> {
+                        JSONObject wrap = null;
+                        if (seal != null) {
+                            try {
+                                byte[] wrapSk = randomSecretKey();
+                                byte[] convKey = NostrCrypto.conversationKey(wrapSk, recipient);
+                                String ct = convKey != null
+                                        ? ConcordCrypto.encrypt(convKey, seal.toString()) : null;
+                                if (ct != null) {
+                                    JSONArray tags = new JSONArray()
+                                            .put(new JSONArray().put("p").put(recipient));
+                                    wrap = NostrCrypto.finalizeEvent(
+                                            21059, ct, tags,
+                                            System.currentTimeMillis() / 1000, wrapSk);
+                                }
+                            } catch (Exception ignored) {
+                                // Resolves null below.
+                            }
+                        }
+                        cb.onWrap(wrap);
+                    }));
+        });
+    }
+
+    /**
      * The unattributed fallback: an inbox wrap we could not open (no signer, or
      * the signer was unreachable). Better a generic ping than silence — the
      * WebView attributes it on open.
@@ -2806,6 +3118,16 @@ public class NotificationRelayService extends Service {
                 break;
             default:
                 break;
+        }
+
+        // Ephemeral DM signal wraps (voice calls): never stored, never fed to
+        // the WebView's ingest — opened for the one thing the service acts on
+        // while the app is dead, ringing the phone. notifiedIds still dedupes
+        // the same broadcast off several relays.
+        if (kind == 21059) {
+            notifiedIds.add(id);
+            handleDmEphemeralWrap(event, relayUrl);
+            return;
         }
 
         // Concord (E2E): the outer event is a kind-1059 wrap SIGNED BY a
@@ -3281,6 +3603,10 @@ public class NotificationRelayService extends Service {
                 if (pks != null && pks.contains(event.optString("pubkey"))) return true;
                 return dmRelays.contains(relayUrl) && pTags(event).contains(userPubkey);
             }
+            case 21059:
+                // {kinds:[21059], "#p":[me]} — ephemeral DM signals (calls),
+                // on the DM relays only.
+                return dmRelays.contains(relayUrl) && pTags(event).contains(userPubkey);
             default:
                 // The user's own replaceable documents: authored by us, and
                 // only on the relays we actually asked. SelfState.storable
@@ -4850,6 +5176,23 @@ public class NotificationRelayService extends Service {
         msg.enableVibration(true);
         msg.setVibrationPattern(MSG_VIBRATION_PATTERN);
         m.createNotificationChannel(msg);
+
+        // Incoming calls: the device RINGTONE (audible through the ringer
+        // stream, repeats per system behavior for CallStyle) plus a long,
+        // insistent vibration — a call has to sound like a call, not a text.
+        NotificationChannel calls = new NotificationChannel(
+                CALL_CHANNEL_ID, "Incoming calls", NotificationManager.IMPORTANCE_HIGH);
+        calls.setDescription("Voice call rings");
+        calls.enableVibration(true);
+        calls.setVibrationPattern(new long[] { 0L, 800L, 400L, 800L, 400L, 800L });
+        android.media.AudioAttributes ringAttrs = new android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build();
+        calls.setSound(
+                android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_RINGTONE),
+                ringAttrs);
+        m.createNotificationChannel(calls);
     }
 
     // ── Network monitoring ────────────────────────────────────────────────────
