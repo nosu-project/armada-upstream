@@ -1,4 +1,10 @@
 import Foundation
+// `URLSession` and `URLSessionWebSocketTask` are in Foundation proper on Apple
+// platforms and in FoundationNetworking on Linux — where this package's suite
+// runs, so the split has to be spelled out or the whole module fails to build.
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
 
 /// A single-purpose NIP-46 client: ask the user's bunker to `nip44_decrypt`.
 ///
