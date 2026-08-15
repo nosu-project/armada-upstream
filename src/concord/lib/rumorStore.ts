@@ -938,12 +938,56 @@ export async function sweepExpiredCommunityRumors(
 // are indexed only by their author (the stream address) so a plane can read
 // exactly its own.
 //
-// Lives in its own ArmadaDB tenant. Wraps are stored WITHOUT their signature:
-// a wrap is signed by a throwaway ephemeral key, `openWrap` never checks that
-// signature, and everything authenticating the message is the seal sealed
-// inside it — so there is nothing here to preserve.
+// Lives in its own ArmadaDB tenant, which stores RUMORS — `NostrRumor` is
+// `Omit<NostrEvent, "sig">`, so a wrap's signature structurally cannot live in
+// the row. It is kept beside it in KV instead, and reattached on peek.
+//
+// That signature is not decoration on every plane. The ephemeral key is the
+// wrap's `p` TAG, not its author: a stream wrap is signed by the stream key,
+// and a WRITE-RESTRICTED stream (CORD-01) splits that key from the read key so
+// only staff can mint one. The Control Plane is exactly such a stream (CORD-02
+// §5: "A reader subscribes by `control_pk` ... checks each wrap's signature
+// against it"), and `openWrap` enforces it for any `restricted` group. Dropping
+// the signature therefore made every control edition that arrived through the
+// park path — bans, role revocations, metadata — permanently undecodable:
+// refused with `bad-wrap-signature`, never acked, held until the 14-day prune.
+// Chat and Guestbook wraps are unaffected either way (their signer is a key
+// every reader holds, so the check is skipped and proves nothing).
 
 const PENDING_TENANT = ARMADA_TENANTS.c2Park;
+
+/** KV prefix holding parked wraps' signatures, keyed by wrap id. */
+const PARK_SIG_PREFIX = "c2parksig:";
+
+const parkSigKey = (wrapId: string) => `${PARK_SIG_PREFIX}${wrapId}`;
+
+/**
+ * Reunite parked wraps with the signatures parked alongside them.
+ *
+ * One `list` rather than a `get` per wrap: on Android every KV read is a bridge
+ * round trip, and the prefix holds only what is currently parked (usually
+ * nothing). A wrap whose signature is missing — parked by a build that predates
+ * this, or ack'd raced — comes back with `""`, which fails the restricted check
+ * exactly as it did before and is ignored on every other plane.
+ */
+async function attachParkedSigs(wraps: NostrRumor[]): Promise<NostrEvent[]> {
+  if (wraps.length === 0) return [];
+  let byId = new Map<string, string>();
+  try {
+    const entries = await getArmadaDB().kv.list<string>({ prefix: PARK_SIG_PREFIX });
+    byId = new Map(entries.map((e) => [e.key.slice(PARK_SIG_PREFIX.length), e.value]));
+  } catch {
+    // A KV failure costs the restricted planes this round, not the others.
+  }
+  return wraps.map((w) => ({ ...w, sig: byId.get(w.id) ?? "" }) as NostrEvent);
+}
+
+/** Forget the signatures of wraps that are no longer parked. */
+function forgetParkedSigs(wrapIds: string[]): void {
+  if (wrapIds.length === 0) return;
+  const kv = getArmadaDB().kv;
+  void Promise.all(wrapIds.map((id) => kv.delete(parkSigKey(id)))).catch(() => undefined);
+}
 
 /** Parked wraps older than this are pruned (key never arrived / dead plane). */
 const PENDING_MAX_AGE_SECS = 14 * 24 * 3600;
@@ -981,8 +1025,12 @@ export function parkPendingWraps(wraps: NostrEvent[]): void {
   if (wraps.length === 0) return;
   pendingKnownEmpty = false;
   const s = pendingStore();
+  const kv = getArmadaDB().kv;
   void Promise.all(
-    wraps.map(({ sig: _sig, ...wrap }) => s.event(wrap)),
+    wraps.flatMap(({ sig, ...wrap }) => [
+      s.event(wrap),
+      ...(typeof sig === "string" && sig.length > 0 ? [kv.set(parkSigKey(wrap.id), sig)] : []),
+    ]),
   ).catch(() => undefined);
 }
 
@@ -996,7 +1044,7 @@ export function parkPendingWraps(wraps: NostrEvent[]): void {
  * every {@link PENDING_PRUNE_INTERVAL_MS} — age-prunes permanently-undecodable
  * stragglers (a readwrite scan kept off the per-peek path).
  */
-export async function peekPendingWraps(streamPks: string[]): Promise<NostrRumor[]> {
+export async function peekPendingWraps(streamPks: string[]): Promise<NostrEvent[]> {
   if (streamPks.length === 0) return [];
   if (pendingKnownEmpty === true) return [];
   const s = pendingStore();
@@ -1014,9 +1062,18 @@ export async function peekPendingWraps(streamPks: string[]): Promise<NostrRumor[
     if (now - lastPendingPruneAt >= PENDING_PRUNE_INTERVAL_MS) {
       lastPendingPruneAt = now;
       const cutoff = Math.floor(now / 1000) - PENDING_MAX_AGE_SECS;
-      void s.remove([{ kinds: [1059, 21059], until: cutoff }]).catch(() => undefined);
+      // Read the doomed ids first so their signatures go with them — a KV entry
+      // whose wrap is gone would otherwise leak for the life of the install.
+      void (async () => {
+        const stale = { kinds: [1059, 21059], until: cutoff };
+        const doomed = await s.query([stale]);
+        await s.remove([stale]);
+        forgetParkedSigs(doomed.map((w) => w.id));
+      })().catch(() => undefined);
     }
-    return await s.query([{ kinds: [1059, 21059], authors: streamPks, limit: 1000 }]);
+    return await attachParkedSigs(
+      await s.query([{ kinds: [1059, 21059], authors: streamPks, limit: 1000 }]),
+    );
   } catch {
     return [];
   }
@@ -1027,6 +1084,7 @@ export function ackPendingWraps(wrapIds: string[]): void {
   if (wrapIds.length === 0) return;
   const s = pendingStore();
   void s.remove([{ ids: wrapIds }]).catch(() => undefined);
+  forgetParkedSigs(wrapIds);
 }
 
 // ── Sync cursor ───────────────────────────────────────────────────────────────

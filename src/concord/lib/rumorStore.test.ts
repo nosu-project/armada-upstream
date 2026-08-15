@@ -291,6 +291,14 @@ describe("concord rumor store", () => {
     parkPendingWraps([wrap]);
     const peeked = await eventually(() => peekPendingWraps([control.pk]), (r) => r.length === 1);
     expect(peeked.map((w) => w.id)).toEqual([wrap.id]);
+    // The wrap SIGNATURE survives the round trip. The tenant stores rumors
+    // (`Omit<NostrEvent, "sig">`), so it rides in KV beside the row — and it is
+    // load-bearing rather than decoration: a write-restricted Control Plane
+    // stream (CORD-01, CORD-02 §5) has `openWrap` verify it against
+    // `control_pk`, so a signature-less parked wrap could never be opened at
+    // all, and every control edition delivered by this path was stuck until the
+    // 14-day prune.
+    expect(peeked[0].sig).toBe(wrap.sig);
     // Peeking is non-destructive: an interrupted decode round must be able to
     // find the wrap again (issue #19 — a notified message must never be
     // locally destructible before its rumor is stored).
@@ -322,6 +330,8 @@ describe("concord rumor store", () => {
     const fresh = await import("@/concord/lib/rumorStore");
     const parked = await fresh.peekPendingWraps([control.pk]);
     expect(parked.map((w) => w.id)).toEqual([wrap.id]);
+    // The signature is durable too — it is in KV, not module state.
+    expect(parked[0].sig).toBe(wrap.sig);
   });
 
   it("surfaces a mention buried DEEPER than the per-channel scan window", async () => {
