@@ -1,10 +1,12 @@
 /**
  * Concord Community List — CORD-02 §8.
  *
- * A member's memberships sync across devices (and clients) as one kind-13302
- * replaceable event, NIP-44-encrypted to self. Every Community they're in AND
- * every one they've left lives in the document — liveness is DERIVED, never
- * deletion, or merges would depend on gossip order.
+ * A member's memberships sync across devices (and clients) as kind-33302
+ * fragment events, NIP-44-encrypted to self (the wire layer lives in
+ * `listFrag.ts`; this module is the merge algebra over the unioned document,
+ * hex-internal throughout). Every Community they're in AND every one they've
+ * left lives in the document — liveness is DERIVED, never deletion, or merges
+ * would depend on gossip order.
  *
  * Per entry, two snapshots solve opposite problems: `seed` holds the EARLIEST
  * epoch ever held (the full-history backfill anchor, only ever moves backward
@@ -18,7 +20,6 @@ import { bytesToHex, controlSignerGroupKey, hex32, verifyCommunityId } from "@/c
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 import {
-  MAX_LIST_MEMBERSHIPS,
   capRelays,
   type Community,
   type HeldRoot,
@@ -544,17 +545,6 @@ export function setControlRoot(
     return { ...e, current: { ...e.current, control_root: controlRootHex } };
   });
   return { ...list, entries };
-}
-
-/**
- * Enforce the membership cap: the count bounds the common case, the NIP-44
- * byte cap is the law — the caller must ALSO verify the serialized list fits
- * before publishing (CORD-02 §8).
- */
-export function assertListBounds(list: CommunityList): void {
-  if (liveEntries(list).length > MAX_LIST_MEMBERSHIPS) {
-    throw new Error(`the Community List caps at ${MAX_LIST_MEMBERSHIPS} memberships`);
-  }
 }
 
 // ── Join material ⇄ runtime community ───────────────────────────────────────

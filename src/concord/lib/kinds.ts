@@ -115,8 +115,17 @@ export const KIND_REKEY = 3303;
 
 /** Public invite bundle: addressable, signed by the per-link keypair, empty `d`. */
 export const KIND_INVITE_BUNDLE = 33301;
-/** A member's self-encrypted Community List (replaceable, one per user). */
-export const KIND_COMMUNITY_LIST = 13302;
+/**
+ * A member's self-encrypted Community List (CORD-02 §8): addressable, one
+ * event per FRAGMENT at `d` = the fragment index in decimal.
+ */
+export const KIND_COMMUNITY_LIST_FRAG = 33302;
+/**
+ * RETIRED: the single-event Community List, superseded by 33302 once it
+ * outgrew one event (a replaceable kind cannot fragment). Never read, never
+ * written — a client that speaks §8 ignores it entirely.
+ */
+export const KIND_COMMUNITY_LIST_RETIRED = 13302;
 /** A creator's self-encrypted Invite List (replaceable, one per user). */
 export const KIND_INVITE_LIST = 13303;
 

@@ -17,12 +17,12 @@ import {
 const chan = (id: string, epoch: number, key = "1".repeat(64)) => ({ id, key, epoch, name: "c" });
 
 describe("CORD-02 §8 — Community List", () => {
-  it.todo("O-1: the list is one kind 13302 replaceable, NIP-44-encrypted to self (communityList tests)");
+  it.todo("O-1: the list is kind 33302 fragments, NIP-44-encrypted to self, d = the index in decimal (listFrag tests)");
   it.todo("O-2: seed only ever moves BACKWARD on merge; current only forward (communityList.test.ts)");
   it.todo("O-3: an epoch tie breaks on the lexicographically lowest canonical bytes (communityList.test.ts)");
   it.todo("O-4: tombstones are permanent and per-community; newest of added_at/removed_at wins");
-  it.todo("O-5: the list caps at 50 memberships and MUST fit its NIP-44 envelope before publishing");
-  it.todo("O-6: unknown fields round-trip untouched (communityList.test.ts rehydration case)");
+  it.todo("O-5: each FRAGMENT sizes against the encoded event, packed to the 56KiB target (listFrag tests)");
+  it.todo("O-6: unknown fields round-trip untouched at every level (listFrag tests + communityList.test.ts)");
 
   it("O-7: a channel id compares case-insensitively in the key union (CORD-01: hex is lowercase; foreign input may not be)", () => {
     // The same channel spelled two ways must fold to ONE entry, not two —

@@ -134,7 +134,7 @@ export interface AppConfig {
    * community lives, nor the reverse. It is equally separate from the three
    * roles `STOCK_RELAYS` plays that are NOT preferences and must stay frozen —
    * the CORD-05 fragment codec (the set `FLAG_STOCK_SET` names, shared
-   * byte-for-byte with other clients), the kind-13302 vault rescue floor (whose
+   * byte-for-byte with other clients), the kind-33302 vault rescue floor (whose
    * job is to work when the user's relay config doesn't), and invite
    * bootstrap/delivery fallbacks (which are about reaching other people).
    */

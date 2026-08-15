@@ -1153,7 +1153,7 @@ export function ConcordPage() {
   // rotation on another device / by another admin doesn't leave them stale.
   useLinkRefreshWatch(baseCommunity);
   // Follow the fold's relay list (CORD-02 §6): a Metadata edition that moves
-  // the community's relays re-points this member (and, via the 13302
+  // the community's relays re-points this member (and, via the 33302
   // write-back, their other devices) at the new set.
   useRelayFollow(baseCommunity);
   // Honest-client compliance: a stripped CREATE_INVITE means my own live

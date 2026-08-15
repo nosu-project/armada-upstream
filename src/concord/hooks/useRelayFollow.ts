@@ -17,7 +17,7 @@ import { logSync } from "@/lib/syncLog";
  * sweeps, publishes, stream-key auth scopes all read `community.relays`).
  *
  * The write-back also keeps the bootstrap ladder fresh: the member's OTHER
- * devices sync the 13302 and reconnect on the new relays even if they never
+ * devices sync the 33302 List and reconnect on the new relays even if they never
  * saw the edition on the old ones.
  */
 export function useRelayFollow(community: Community | undefined): void {
