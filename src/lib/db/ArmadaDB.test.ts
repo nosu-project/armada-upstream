@@ -329,6 +329,34 @@ describe.each(backends)("$name", ({ create }) => {
       expect(got.map((r) => r.id)).toEqual(["ana-5", "ana-4", "ana-3"]);
     });
 
+    it("finds a match far below a term's newest rows", async () => {
+      const store = db.tenant("t", { terms: peers });
+      // One matching rumor, underneath a term's whole history. An adapter that
+      // narrows in memory has to read down to it — and one that pages while
+      // doing so must page until the range is EXHAUSTED, not until some budget
+      // is: a search budget dressed as a page limit turns a rumor that exists
+      // into one the store denies having.
+      await store.event(rumor({ id: "deep", created_at: 100, content: "needle", tags: [["p", "ana"]] }));
+      await Promise.all(Array.from({ length: 200 }, (_, i) =>
+        store.event(rumor({ id: `hay-${i}`, created_at: 200 + i, content: "hay", tags: [["p", "ana"]] }))));
+
+      const got = await store.query([{ search: "conv:ana needle", limit: 1 }]);
+      expect(got.map((r) => r.id)).toEqual(["deep"]);
+    });
+
+    it("finds a match among more rumors than a page, all at one timestamp", async () => {
+      const store = db.tenant("t", { terms: peers });
+      // Every rumor shares a `created_at`, so a pager walking a time bound can
+      // never advance past them — the whole second is one boundary. Reading a
+      // page and stepping below its oldest row would skip the rest of it.
+      await Promise.all(Array.from({ length: 200 }, (_, i) =>
+        store.event(rumor({ id: `tie-${i}`, created_at: 500, content: "hay", tags: [["p", "ana"]] }))));
+      await store.event(rumor({ id: "zz-buried", created_at: 500, content: "needle", tags: [["p", "ana"]] }));
+
+      const got = await store.query([{ search: "conv:ana needle", limit: 1 }]);
+      expect(got.map((r) => r.id)).toEqual(["zz-buried"]);
+    });
+
     it("counts and removes by term", async () => {
       const store = db.tenant("t", { terms: peers });
       const ben = rumor({ id: "ben", tags: [["p", "ben"]] });

@@ -78,7 +78,7 @@ import { NKinds } from "@nostrify/nostrify";
 import { utf8ToBytes } from "@noble/hashes/utils.js";
 
 import { ParsedFilter } from "./ParsedFilter";
-import { batch, memberOf, where } from "./sql";
+import { batch, memberOf, qs, where } from "./sql";
 import {
   ARMADA_DB_FTS_SCHEMA,
   ARMADA_DB_REBUILD_V1,
@@ -480,9 +480,22 @@ export class SqliteArmadaDB implements ArmadaDB {
     try {
       await this.ready;
       await this.transaction(async () => {
+        const batched = new RumorBatch();
         for (const { tenant, rumor } of writes) {
-          await this.writeRumor(tenant, rumor);
+          // A rumor that has to READ what the batch has written so far — a
+          // replaceable one superseding its coordinate, a kind 5 deleting its
+          // targets — needs those rows in the table, not in an accumulator.
+          // Flushing first keeps every such rumor seeing exactly what it saw
+          // when each write was its own statement: everything before it in the
+          // batch, and nothing after.
+          if (needsOwnStatement(rumor)) {
+            await this.writeBatch(batched);
+            await this.writeRumor(tenant, rumor, batched);
+          } else {
+            await this.stageRumor(tenant, rumor, batched);
+          }
         }
+        await this.writeBatch(batched);
       });
     } catch (error) {
       for (const write of writes) write.reject(error);
@@ -493,8 +506,44 @@ export class SqliteArmadaDB implements ArmadaDB {
     for (const write of writes) write.resolve();
   }
 
+  /**
+   * Stage one ordinary rumor's rows into `batch`, to be written with the rest
+   * of its burst — see {@link RumorBatch}.
+   *
+   * Everything up to the INSERTs is what it always was, including the rowid
+   * lookup, and it happens in the same order. The only difference is where the
+   * rows go.
+   */
+  private async stageRumor(tenant: string, rumor: NostrRumor, batch: RumorBatch): Promise<void> {
+    const ord = await this.internTenant(tenant);
+    const seq = await this.reserveSeq(ord, rumor, batch);
+    if (seq === undefined) return;
+    batch.add(seq, ord, rumor, this.tagTokens(`t${ord}`, rumor), this.termsOf(tenant, rumor));
+  }
+
+  /**
+   * Write a staged batch: one multi-row INSERT per table, per chunk.
+   *
+   * This is the whole reason for staging. `rumors` carries an AFTER INSERT
+   * trigger maintaining the content index, and SQLite runs a trigger's
+   * sub-program per INSERT STATEMENT rather than folding it into the row loop —
+   * so a row per statement paid that setup 4000 times for 4000 rumors and cost
+   * 76µs a row, against 17µs for the same rows and the same trigger written in
+   * batches of 200. Half the cost of a NIP-17 write was this and nothing else.
+   *
+   * Rows are written in staging order, which is arrival order, and the three
+   * tables are written back to front: a `rumors` row is what makes a rumor
+   * VISIBLE, so its index rows exist by the time anything can find it — which
+   * matters to nothing inside this transaction, and to a reader on another
+   * connection it is the difference between a rumor with no tags and no rumor.
+   */
+  private async writeBatch(batch: RumorBatch): Promise<void> {
+    for (const [sql, params] of batch.statements()) await this.run(sql, params);
+    batch.clear();
+  }
+
   /** Apply a single rumor's writes. Runs inside the batch transaction. */
-  private async writeRumor(tenant: string, rumor: NostrRumor): Promise<void> {
+  private async writeRumor(tenant: string, rumor: NostrRumor, batch: RumorBatch): Promise<void> {
     const ord = await this.internTenant(tenant);
     const prefix = `t${ord}`;
     const terms = this.termsOf(tenant, rumor);
@@ -516,7 +565,7 @@ export class SqliteArmadaDB implements ArmadaDB {
         await this.deleteRumors(ord, [Number(existing.seq)]);
       }
 
-      seq = await this.insertRumor(ord, prefix, rumor, terms);
+      seq = await this.insertRumor(ord, prefix, rumor, terms, batch);
       if (seq === undefined) return;
 
       await this.run(
@@ -525,7 +574,7 @@ export class SqliteArmadaDB implements ArmadaDB {
         [ord, coord, rumor.id, seq, rumor.created_at],
       );
     } else {
-      seq = await this.insertRumor(ord, prefix, rumor, terms);
+      seq = await this.insertRumor(ord, prefix, rumor, terms, batch);
       if (seq === undefined) return;
     }
 
@@ -537,19 +586,17 @@ export class SqliteArmadaDB implements ArmadaDB {
   }
 
   /**
-   * Write the rumor row and its token index row, and return the rowid taken —
-   * or `undefined` if the rumor was already stored, which makes a re-delivery
-   * a no-op.
+   * Write ONE rumor's row and index rows immediately, returning the rowid
+   * taken — or `undefined` if it was already stored.
    *
-   * Everything the write needs to know first — whether this rumor is already
-   * here, and which rowid is free at its timestamp — is one statement, since
-   * each is a scalar subquery over an index and neither depends on the other.
-   * The rowid is allocated by LOOKING rather than from a counter held in
-   * memory, so a second writer on the same file (the Android service) can't be
-   * handed the same one; the bucket spans tenants, since the rowid is global.
+   * The path for a rumor that can't be staged into its burst's batch (see
+   * {@link needsOwnStatement}), which is every replaceable, addressable or
+   * deletion rumor and nothing else. Those are a small minority of a sync and
+   * each has to see the rows before it, so they keep the row-per-statement
+   * shape every write used to have.
    *
-   * Folding that lookup into the INSERT with `RETURNING` would make this one
-   * statement rather than two, and measured 2.7× SLOWER: an INSERT that
+   * Folding the rowid lookup into the INSERT with `RETURNING` would make this
+   * one statement rather than two, and measured 2.7× SLOWER: an INSERT that
    * returns rows gives up SQLite's fast path and pays a result set per write,
    * which costs far more than the extra round trip saves.
    */
@@ -558,27 +605,10 @@ export class SqliteArmadaDB implements ArmadaDB {
     prefix: string,
     rumor: NostrRumor,
     terms: string[],
+    batch: RumorBatch,
   ): Promise<number | undefined> {
-    const base = bucket(rumor.created_at);
-
-    const [row] = await this.all(
-      `SELECT (SELECT seq FROM rumors WHERE tenant = ? AND id = ?) AS existing,
-        (SELECT MAX(seq) FROM rumors WHERE seq >= ? AND seq < ?) AS last`,
-      [ord, rumor.id, base, base + SEQ_SPACE],
-    );
-
-    // Already stored: a re-delivered rumor is a no-op.
-    if (row?.existing !== null && row?.existing !== undefined) return undefined;
-
-    const seq = row?.last === null || row?.last === undefined ? base : Number(row.last) + 1;
-
-    // One second may hold 2²⁰ rumors. Anything that manages more of them at
-    // the same timestamp has outgrown this encoding, and silently reordering
-    // them — or spilling into the next second's rowids — would be worse than
-    // saying so.
-    if (seq >= base + SEQ_SPACE) {
-      throw new Error(`ArmadaDB: too many rumors at created_at ${rumor.created_at}`);
-    }
+    const seq = await this.reserveSeq(ord, rumor, batch);
+    if (seq === undefined) return undefined;
 
     await this.run(
       `INSERT INTO rumors (seq, tenant, id, kind, pubkey, created_at, tags, content)
@@ -608,18 +638,84 @@ export class SqliteArmadaDB implements ArmadaDB {
   }
 
   /**
-   * File a rumor's derived terms. `OR IGNORE` because a policy may return the
-   * same term twice, and because the backfill runs over rows a live write may
-   * already have indexed.
+   * The rowid this rumor takes, or `undefined` if it is already stored — which
+   * makes a re-delivery a no-op.
+   *
+   * Everything the write needs to know first — whether this rumor is here, and
+   * which rowid is free at its timestamp — is one statement, since each is a
+   * scalar subquery over an index and neither depends on the other. The rowid
+   * is allocated by LOOKING rather than from a counter held across writes, so a
+   * second writer on the same file (the Android service) can't be handed the
+   * same one; the bucket spans tenants, since the rowid is global.
+   *
+   * `batch` is what keeps that true now that a burst's rows are written
+   * together: rowids reserved but not yet inserted are invisible to the
+   * lookup, so two rumors sharing a `created_at` in one burst would both be
+   * handed the same one. It is consulted for exactly as long as the
+   * transaction that reserved them, and the transaction is what excludes the
+   * other writer — `BEGIN IMMEDIATE` takes the write lock before the first of
+   * these reads, so nothing can land between reserving a rowid and using it.
+   */
+  private async reserveSeq(
+    ord: number,
+    rumor: NostrRumor,
+    batch: RumorBatch,
+  ): Promise<number | undefined> {
+    const base = bucket(rumor.created_at);
+
+    // The same id twice in one burst is one rumor, and the second copy would
+    // otherwise reserve a rowid and collide on the unique index.
+    if (batch.staged(ord, rumor.id)) return undefined;
+
+    const [row] = await this.all(
+      `SELECT (SELECT seq FROM rumors WHERE tenant = ? AND id = ?) AS existing,
+        (SELECT MAX(seq) FROM rumors WHERE seq >= ? AND seq < ?) AS last`,
+      [ord, rumor.id, base, base + SEQ_SPACE],
+    );
+
+    // Already stored: a re-delivered rumor is a no-op.
+    if (row?.existing !== null && row?.existing !== undefined) return undefined;
+
+    const stored = row?.last === null || row?.last === undefined ? undefined : Number(row.last);
+    const seq = Math.max(stored ?? base - 1, batch.lastSeq(base) ?? base - 1) + 1;
+
+    // One second may hold 2²⁰ rumors. Anything that manages more of them at
+    // the same timestamp has outgrown this encoding, and silently reordering
+    // them — or spilling into the next second's rowids — would be worse than
+    // saying so.
+    if (seq >= base + SEQ_SPACE) {
+      throw new Error(`ArmadaDB: too many rumors at created_at ${rumor.created_at}`);
+    }
+
+    batch.reserve(ord, rumor.id, base, seq);
+    return seq;
+  }
+
+  /**
+   * File a rumor's derived terms, in ONE statement however many there are.
+   *
+   * `OR IGNORE` because a policy may return the same term twice, and because
+   * the backfill runs over rows a live write may already have indexed.
+   *
+   * A row per statement was the obvious shape and the wrong one: a NIP-17
+   * message is filed under three terms, so the term index alone tripled the
+   * statements a write costs. The text varies with the count, which is exactly
+   * what a driver's statement cache is for — a policy emits the same handful of
+   * counts forever, so this is a few cached shapes, not one per write.
    */
   private async insertTerms(ord: number, seq: number, terms: string[]): Promise<void> {
-    for (const term of terms) {
-      if (typeof term !== "string" || term === "") continue;
-      await this.run(
-        `INSERT OR IGNORE INTO rumor_terms (tenant, term, seq) VALUES (?, ?, ?)`,
-        [ord, term, seq],
-      );
-    }
+    const usable = terms.filter((term) => typeof term === "string" && term !== "");
+    if (usable.length === 0) return;
+
+    const params: SqlValue[] = [];
+    for (const term of usable) params.push(ord, term, seq);
+
+    await this.run(
+      `INSERT OR IGNORE INTO rumor_terms (tenant, term, seq) VALUES ${
+        usable.map(() => "(?, ?, ?)").join(", ")
+      }`,
+      params,
+    );
   }
 
   /**
@@ -1901,6 +1997,134 @@ function matchExpr(groups: string[][]): string {
  */
 function phrase(token: string): string {
   return `"${token.replace(/"/g, '""')}"`;
+}
+
+/**
+ * Whether a rumor has to be written by a statement of its own rather than
+ * staged into its burst's batch.
+ *
+ * Only the ones that READ the rows around them: a replaceable or addressable
+ * rumor resolves its coordinate and deletes what it supersedes, and a deletion
+ * request removes the rumors it names. Both must see the batch so far and must
+ * not see the rest of it — which is what a staged row can't offer, and what
+ * flushing before one of these restores.
+ */
+function needsOwnStatement(rumor: NostrRumor): boolean {
+  return rumor.kind === 5 || NKinds.replaceable(rumor.kind) || NKinds.addressable(rumor.kind);
+}
+
+/**
+ * Parameters one staged INSERT will carry.
+ *
+ * SQLite's `SQLITE_MAX_VARIABLE_NUMBER` is 32766 in every build this schema
+ * requires, but was 999 for a decade before 3.32 and is a compile-time option
+ * any packager may still set — and a native transport (Android's, iOS's) is
+ * somebody else's build. A budget below the old default costs nothing
+ * measurable, since the trigger overhead this batching exists to amortize is
+ * already gone by ~100 rows a statement, and it cannot be the thing that breaks
+ * on a platform nobody tested.
+ */
+const BATCH_PARAMS = 900;
+
+/**
+ * One burst's rows, staged for a multi-row INSERT per table.
+ *
+ * It is also the burst's rowid ledger — see
+ * {@link SqliteArmadaDB.reserveSeq} — because a rowid reserved for a staged
+ * row isn't in the table yet and so is invisible to the lookup that reserves
+ * the next one.
+ *
+ * Lives exactly as long as one transaction. Nothing here outlives a commit,
+ * which is what keeps the ledger from becoming a cache of what another writer
+ * may since have changed.
+ */
+class RumorBatch {
+  /** 8 parameters per row, in `rumors` column order. */
+  private rumors: SqlValue[] = [];
+  /** 2 per row: rowid and its tag tokens. */
+  private tags: SqlValue[] = [];
+  /** 3 per row: tenant, term, rowid. */
+  private terms: SqlValue[] = [];
+  /** `<ord>:<id>` of every rumor reserved in this transaction. */
+  private ids = new Set<string>();
+  /** The highest rowid handed out per `created_at` bucket. */
+  private seqs = new Map<number, number>();
+
+  /** Whether this transaction already reserved a rowid for `(ord, id)`. */
+  staged(ord: number, id: string): boolean {
+    return this.ids.has(`${ord}:${id}`);
+  }
+
+  /** The highest rowid handed out in `base`'s bucket, if any. */
+  lastSeq(base: number): number | undefined {
+    return this.seqs.get(base);
+  }
+
+  /** Record a rowid as taken, before the row it belongs to exists. */
+  reserve(ord: number, id: string, base: number, seq: number): void {
+    this.ids.add(`${ord}:${id}`);
+    this.seqs.set(base, seq);
+  }
+
+  add(seq: number, ord: number, rumor: NostrRumor, tokens: string, terms: string[]): void {
+    this.rumors.push(
+      seq,
+      ord,
+      rumor.id,
+      rumor.kind,
+      rumor.pubkey,
+      rumor.created_at,
+      JSON.stringify(rumor.tags),
+      rumor.content,
+    );
+    this.tags.push(seq, tokens);
+    for (const term of terms) {
+      if (typeof term === "string" && term !== "") this.terms.push(ord, term, seq);
+    }
+  }
+
+  /** The staged INSERTs, in the order they must run. */
+  *statements(): Generator<[sql: string, params: SqlValue[]]> {
+    // Index rows first, so a rumor is never findable before the index that
+    // finds it — see `SqliteArmadaDB.writeBatch`.
+    yield* rows(
+      this.tags,
+      2,
+      (values) => `INSERT INTO rumor_tags_fts (rowid, tokens) VALUES ${values}`,
+    );
+    yield* rows(
+      this.terms,
+      3,
+      (values) => `INSERT OR IGNORE INTO rumor_terms (tenant, term, seq) VALUES ${values}`,
+    );
+    yield* rows(
+      this.rumors,
+      8,
+      (values) =>
+        `INSERT INTO rumors (seq, tenant, id, kind, pubkey, created_at, tags, content) VALUES ${values}`,
+    );
+  }
+
+  /** Drop the staged rows, keeping the ledger for the rest of the transaction. */
+  clear(): void {
+    this.rumors = [];
+    this.tags = [];
+    this.terms = [];
+  }
+}
+
+/** Chunk flat parameters into multi-row INSERTs of at most {@link BATCH_PARAMS}. */
+function* rows(
+  params: SqlValue[],
+  width: number,
+  sql: (values: string) => string,
+): Generator<[sql: string, params: SqlValue[]]> {
+  const perStatement = Math.max(1, Math.floor(BATCH_PARAMS / width)) * width;
+  for (let i = 0; i < params.length; i += perStatement) {
+    const chunk = params.slice(i, i + perStatement);
+    const values = new Array(chunk.length / width).fill(`(${qs(width)})`).join(", ");
+    yield [sql(values), chunk];
+  }
 }
 
 /** A rumor queued for the next batched commit, with its caller's settlers. */

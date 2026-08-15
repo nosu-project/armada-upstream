@@ -118,6 +118,13 @@ interface DelegateJob {
   limit?: number;
   /** A `distinct:` collapse to apply to the rows — see {@link Collapse}. */
   collapse?: Collapse;
+  /**
+   * The filters this job could be DRIVEN by, when `check` means the delegate
+   * can only over-select — see {@link IndexedDBRumorStore.runChecked}. Each is
+   * a superset of the answer on its own; the runner picks the one that selects
+   * fewest rows and narrows it here.
+   */
+  drivers?: NostrFilter[];
 }
 
 /**
@@ -242,8 +249,10 @@ function planFilters(
       continue;
     }
 
+    const rest = restDriver(filter, parsed);
     jobs.push({
       filters: [bounded],
+      drivers: rest ? [bounded, rest] : [bounded],
       check: (rumor) => parsed.matches(rumor) && parsed.matchesTerms(policy(rumor, tenant)),
       limit: filter.limit,
     });
@@ -251,6 +260,41 @@ function planFilters(
 
   if (plain.length > 0) jobs.unshift({ filters: plain });
   return jobs;
+}
+
+/**
+ * The filter's NON-term half as a driving filter — everything it says except
+ * the term, which the check re-applies anyway — or `undefined` when it isn't
+ * worth offering.
+ *
+ * A term is not always the selective half. The conversation's timer is one row
+ * at the very BOTTOM of a thread (`queryDm17Timer`), so driving by the term
+ * walks every message ever exchanged to reach it, while kind 1740 is a handful
+ * of rows across the whole tenant. Which is cheaper is a property of the data,
+ * not of the query, so {@link IndexedDBRumorStore.runChecked} counts both
+ * rather than guessing — and this is the candidate it counts against the term.
+ *
+ * Two things disqualify one, both because the count has to be cheaper than the
+ * read it saves:
+ *
+ *  - Nothing to drive BY. A filter naming only a time window selects the whole
+ *    tenant, and counting that is a walk of it.
+ *  - A shape `NIndexedDB` can't count from its index alone. Its fast path wants
+ *    one "major" field (ids, authors, kinds, or a tag) — or authors and kinds
+ *    together, which its `by-pubkey-kind` index covers — and anything else
+ *    falls back to running the query, which is exactly the work being avoided.
+ *
+ * `ids` is the exception that skips the counting entirely: the delegate answers
+ * an ids plan with primary-key gets, so it can never be beaten.
+ */
+function restDriver(filter: NostrFilter, parsed: ParsedFilter): NostrFilter | undefined {
+  const { search: _search, limit: _limit, ...rest } = filter;
+  if (parsed.ids) return rest;
+
+  const majors = (parsed.authors ? 1 : 0) + (parsed.kinds ? 1 : 0) + parsed.tags.length;
+  if (majors === 0) return undefined;
+  if (majors > 1 && !(majors === 2 && parsed.authors && parsed.kinds)) return undefined;
+  return rest;
 }
 
 /** Run the jobs, merge them by id and put them back in the store's order. */
@@ -293,6 +337,31 @@ const DELEGATE = { store: "events", tagIndex: "by-tag", version: 1 } as const;
 
 /** How many rumors one page of the term backfill re-indexes. */
 const BACKFILL_PAGE = 500;
+
+/**
+ * The largest range a checked read will take WHOLE rather than page through —
+ * see {@link IndexedDBRumorStore.runChecked}.
+ *
+ * The delegate answers an unlimited filter with one `getAll` and a limited one
+ * with a cursor step per row, so for a small range the whole thing in one
+ * request beats a walk of part of it. Sized as a page of rows worth
+ * deserializing to answer any single query, since that is the cost when the
+ * check then throws most of them away.
+ */
+const CHECKED_PAGE = 128;
+
+/**
+ * A loop guard on a checked read's paging, not a budget on it.
+ *
+ * Paging must be EXHAUSTIVE: the read it replaces fetched the whole range and
+ * filtered it, so a page limit doubling as a search budget would turn a rumor
+ * that exists into one the store denies having — a timer set a year ago
+ * reported as "no timer", not as a slow read. Every round therefore either
+ * advances `until` strictly downward or widens the page, so the walk reaches
+ * the end of the range on its own and this is only reached if a delegate
+ * answers in a way that makes neither true.
+ */
+const CHECKED_MAX_PAGES = 1024;
 
 class IndexedDBRumorStore implements NRumorStore {
   private readonly store: NIndexedDB;
@@ -435,10 +504,14 @@ class IndexedDBRumorStore implements NRumorStore {
             returned += rumors.length;
             return rumors;
           }
+          if (job.check) {
+            const rumors = await this.runChecked(job, opts);
+            returned += rumors.length;
+            return rumors;
+          }
           const events = await this.store.query(job.filters, opts);
           returned += events.length;
           let rumors = events.map(toRumor);
-          if (job.check) rumors = rumors.filter(job.check);
           if (job.limit !== undefined && rumors.length > job.limit) rumors = rumors.slice(0, job.limit);
           return rumors;
         }))),
@@ -448,6 +521,125 @@ class IndexedDBRumorStore implements NRumorStore {
     // total can be attributed to a caller rather than only to a store.
     perfCount(`shape ${this.label} ${filterShape(filters)}`, 0, returned);
     return mergeJobs(results);
+  }
+
+  /**
+   * One job the delegate can only over-select: read the cheaper of its
+   * {@link DelegateJob.drivers}, and narrow what comes back here.
+   *
+   * The narrowing is unavoidable — a derived term lives in the index and
+   * nowhere else, so the moment a filter names anything besides one, the
+   * delegate has to be asked for a superset (see {@link planFilters}). What is
+   * avoidable is asking for a superset the size of the conversation. Two things
+   * do that:
+   *
+   *  - **The cheaper driver wins.** Both candidates contain the answer, so
+   *    either may be read; one `count` each — index-only in the delegate, no
+   *    rows deserialized — says which is smaller. A thread page is the term
+   *    (every kind is in the thread); the same thread's TIMER is the kind (one
+   *    row per conversation, against every message ever sent in one).
+   *  - **A limit is paged, not dropped.** The delegate can't be handed the
+   *    filter's limit, because rows this check rejects would count against it
+   *    and the page would come back short. Reading the whole range instead
+   *    made a 50-row page of a 1200-message thread deserialize all 1200. Pages
+   *    of {@link CHECKED_PAGE} walk down `until` until the limit is met, so the
+   *    cost is the answer's, and only a filter whose check rejects nearly
+   *    everything pays for more than one.
+   */
+  private async runChecked(
+    job: DelegateJob,
+    opts?: { signal?: AbortSignal },
+  ): Promise<NostrRumor[]> {
+    const check = job.check ?? (() => true);
+    const { driver, rows } = await this.chooseDriver(job, opts);
+
+    // A range small enough to hold in memory is read whole, in ONE request,
+    // rather than walked a page at a time — the delegate answers an unlimited
+    // filter with `getAll` and a limited one with a cursor step per row. This is
+    // the timer read: a handful of rows tenant-wide, and the count that chose
+    // the driver already said so.
+    if (job.limit === undefined || (rows !== undefined && rows <= CHECKED_PAGE)) {
+      const events = await this.store.query([driver], opts);
+      const rumors = events.map(toRumor).filter(check);
+      return job.limit === undefined ? rumors : rumors.slice(0, job.limit);
+    }
+
+    const kept: NostrRumor[] = [];
+    const seen = new Set<string>();
+    let until = driver.until;
+    // The first page is exactly what was asked for, so a check that rejects
+    // nothing — a thread page, where every kind in the filter is in the thread
+    // — costs one round trip and not one row more.
+    let page = job.limit;
+
+    for (let round = 0; round < CHECKED_MAX_PAGES && kept.length < job.limit; round++) {
+      const filter: NostrFilter = { ...driver, limit: page };
+      if (until !== undefined) filter.until = until;
+
+      const events = await this.store.query([filter], opts);
+      let fresh = 0;
+      let oldest = Infinity;
+
+      for (const event of events) {
+        oldest = Math.min(oldest, event.created_at);
+        if (seen.has(event.id)) continue;
+        seen.add(event.id);
+        fresh++;
+        const rumor = toRumor(event);
+        if (check(rumor) && kept.length < job.limit) kept.push(rumor);
+      }
+
+      // A short page is the end of the range, whatever the limit still wants.
+      if (events.length < page) break;
+      // `until` is INCLUSIVE, so the next page re-reads the boundary second
+      // rather than stepping over the rows sharing it; `seen` drops the
+      // repeats. Stepping below it would silently lose every other rumor
+      // written in that second. When a page was ENTIRELY repeats, one second
+      // holds more rows than the page does and no `until` can get past it —
+      // which the widening below is what rescues.
+      if (fresh > 0) until = oldest;
+      // Reaching here means the check is selective, so widen fast rather than
+      // pay a round trip per `limit` rows of a range that mostly fails it.
+      page *= 4;
+    }
+
+    return kept;
+  }
+
+  /**
+   * Which of a job's drivers to read: the one selecting fewest rows.
+   *
+   * An `ids` driver skips the counting — the delegate answers those with
+   * primary-key gets, so nothing can beat it — and a count that fails is read
+   * as "unusable", never as "cheapest", so a delegate that can't answer one
+   * leaves the term driving exactly as it did before.
+   */
+  private async chooseDriver(
+    job: DelegateJob,
+    opts?: { signal?: AbortSignal },
+  ): Promise<{ driver: NostrFilter; rows?: number }> {
+    const drivers = job.drivers ?? job.filters;
+    if (drivers.length === 1) return { driver: drivers[0] };
+
+    const ids = drivers.find((driver) => driver.ids !== undefined);
+    if (ids) return { driver: ids, rows: ids.ids?.length };
+
+    const counts = await Promise.all(drivers.map(async (driver) => {
+      try {
+        // Without a limit, so the delegate answers from its index alone.
+        const { limit: _limit, ...unlimited } = driver;
+        return (await this.store.count([unlimited], opts)).count;
+      } catch {
+        return Infinity;
+      }
+    }));
+
+    let best = 0;
+    for (let i = 1; i < drivers.length; i++) if (counts[i] < counts[best]) best = i;
+    return {
+      driver: drivers[best],
+      rows: Number.isFinite(counts[best]) ? counts[best] : undefined,
+    };
   }
 
   /**

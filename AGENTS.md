@@ -528,6 +528,36 @@ Things to know before touching it:
   user-controlled string containing one; and a KV prefix upper bound that lands
   on an unpaired surrogate is reported as NO bound, because Swift strings can't
   hold one — the scan widens and the range check does the filtering.
+- **A burst is one statement per table, not one per rumor** — and on SQLite
+  that is most of what a write costs. `rumors` carries an AFTER INSERT trigger
+  maintaining the content index, and SQLite runs a trigger's sub-program per
+  INSERT STATEMENT rather than folding it into the row loop, so a row per
+  statement paid that setup once per rumor: 76µs a row against 17µs for the
+  same rows, the same trigger and the same transaction written in batches of
+  200. `flushWrites` therefore STAGES a burst (`RumorBatch`) and emits one
+  multi-row INSERT per table per chunk — measured 287µs → 61µs per NIP-17
+  rumor, and 4.0 → 1.0 statements. Two things it must keep doing, and the
+  Kotlin and Swift ports with it: a rumor that READS the rows around it (a
+  replaceable one superseding its coordinate, a kind 5 deleting its targets)
+  flushes the batch and writes alone, so it still sees everything before it and
+  nothing after; and the rowid ledger lives in the batch, because a rowid
+  reserved for a staged row is invisible to the `MAX(seq)` that reserves the
+  next one. Both are in `ArmadaDB.test.ts`, so a port that skips either fails
+  the conformance suite rather than the field. The per-rumor `INSERT OR IGNORE`
+  into `rumor_terms` went the same way — a NIP-17 message is filed under three
+  terms, which alone tripled a write's statements.
+- **A term read that names anything else is planned by COUNTING, on
+  IndexedDB.** A derived term lives in the index and nowhere else, so the
+  moment a filter names a term plus anything, `NIndexedDB` has to be asked for
+  a superset and narrowed here (`runChecked`) — and which superset is smaller
+  is a property of the data. A thread page is the term, since every kind in the
+  filter is in the thread; the same thread's TIMER is the kind, one row per
+  conversation against every message ever sent in one. One index-only `count`
+  each decides it, and the limit is PAGED rather than dropped — reading the
+  range whole made a 50-row page of a 300-message thread deserialize the whole
+  thread. The paging must stay exhaustive: it is a walk to the end of the
+  range, not a search budget, or a timer set a year ago is reported as no timer
+  at all.
 - **SQLite is bundled, not borrowed.** The schema needs FTS5 with
   `contentless_delete` (3.43+) and JSON1; Android's platform SQLite is 3.9 on
   minSdk 24 and has neither. `androidx.sqlite:sqlite-bundled` ships 3.50.1 per
