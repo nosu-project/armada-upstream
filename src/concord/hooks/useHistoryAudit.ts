@@ -61,6 +61,7 @@ import type { Channel, Community } from "@/concord/lib/types";
 import { parseAuthorEvent } from "@/lib/authorCache";
 import { decryptBuffer, fetchCapped, verifyPlaintextHash } from "@/lib/encryptedMedia";
 import { parseImetaMap, type ImetaEntry } from "@/lib/imeta";
+import { sanitizeUrl } from "@/lib/sanitizeUrl";
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
 
@@ -363,7 +364,11 @@ export function useHistoryAudit(community: Community | undefined) {
           for (const [pk, ev] of newest) {
             const { metadata } = parseAuthorEvent(ev);
             const name = metadata?.name || metadata?.display_name || "";
-            profiles[pk] = { pubkey: pk, name, ...(metadata?.picture ? { picture: metadata.picture } : {}) };
+            // A member controls their own kind-0, and this one ends up inside a
+            // `<style>` rule in the export (historyExport's avatarStyleParts).
+            // Scheme-check it at the source as well as at that sink.
+            const picture = sanitizeUrl(metadata?.picture);
+            profiles[pk] = { pubkey: pk, name, ...(picture ? { picture } : {}) };
           }
         }
         for (const pk of authorList) profiles[pk] ??= { pubkey: pk, name: "" };
@@ -383,7 +388,9 @@ export function useHistoryAudit(community: Community | undefined) {
           for (const pk of authorList) {
             if (signal.aborted) throw new Error("cancelled");
             const pic = profiles[pk].picture;
-            if (pic && /^https?:\/\//i.test(pic)) {
+            // Already scheme-checked above, so every picture is inlined or
+            // dropped — none is left as a remote URL the opened file fetches.
+            if (pic) {
               const r = await fetchImageDataUri(pic, undefined, signal, budget);
               // Drop a remote avatar we couldn't inline: a self-contained file
               // must not phone home for it on open.

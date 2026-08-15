@@ -19,6 +19,8 @@
  * orchestrator builds from the LOCAL RUMOR STORE after the sweep populates it.
  */
 
+import { sanitizeUrl } from "@/lib/sanitizeUrl";
+
 // ── The normalized model (assembled by the orchestrator) ─────────────────────
 
 export interface ExportProfile {
@@ -140,6 +142,48 @@ export function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
 }
 
+/**
+ * A media URL safe to place in an `href`/`src`, or `undefined` to render no
+ * link at all.
+ *
+ * `data:` passes because the embed pass mints those itself; everything else
+ * must be http(s), so a `javascript:` URL riding a member's `imeta` tag or
+ * kind-0 never reaches the document. `escapeHtml` alone does NOT cover this:
+ * it stops an attribute breakout and says nothing about the scheme.
+ */
+function safeMediaUrl(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  return raw.startsWith("data:") ? raw : sanitizeUrl(raw);
+}
+
+/** Characters that may sit unescaped inside `url("…")` in a `<style>`. */
+const CSS_URL_SAFE = /[^\w!#$&+,\-./:;=?@[\]~%]/g;
+
+/**
+ * The same URL, safe to interpolate into `url("…")` inside a `<style>` element.
+ *
+ * Two contexts stack here, and only escaping for the inner one is a hole. The
+ * CSS string wants `"` and `\` neutralised — but a `<style>` is **RAWTEXT**, so
+ * a literal `</style>` in its text ends the element and everything after it is
+ * parsed as markup. A `<` is script injection in this position even though the
+ * CSS grammar is unbothered by it, which is exactly what stripping quotes and
+ * backslashes alone missed: a kind-0 `picture` of `x</style><script>…` escaped
+ * into the document with the whole decrypted history in the DOM.
+ *
+ * Percent-encoding is lossless for a URL, and the base64 `data:` URIs the embed
+ * pass mints contain none of the encoded characters, so this is a no-op on the
+ * common path.
+ */
+function cssUrl(raw: string | undefined): string | undefined {
+  const safe = safeMediaUrl(raw);
+  if (safe === undefined) return undefined;
+  return safe.replace(CSS_URL_SAFE, (c) =>
+    [...new TextEncoder().encode(c)]
+      .map((b) => `%${b.toString(16).padStart(2, "0").toUpperCase()}`)
+      .join(""),
+  );
+}
+
 /** Escape, linkify bare URLs, and turn newlines into <br>. Enough for a transcript. */
 function renderContent(text: string): string {
   const escaped = escapeHtml(text);
@@ -154,27 +198,53 @@ function renderContent(text: string): string {
  * message — the difference between a sane export and a multi-gigabyte one.
  */
 function avatarHtml(model: ExportModel, pubkey: string): string {
-  if (model.profiles[pubkey]?.picture) return `<span class="avatar av-${pubkey}"></span>`;
+  // Must agree with avatarStyleParts, or a rejected picture leaves the class on
+  // an element with no rule behind it — an empty circle instead of a monogram.
+  if (avatarCssUrl(model, pubkey) !== undefined) return `<span class="avatar av-${pubkey}"></span>`;
   const initial = escapeHtml(nameOf(model, pubkey).slice(0, 1).toUpperCase() || "?");
   return `<span class="avatar avatar-fallback">${initial}</span>`;
 }
 
-/** One `background-image` rule per author with a picture, for the avatar dedupe. */
+/**
+ * A key safe to interpolate into a CSS class selector. In practice these are
+ * hex pubkeys, but the model types them as bare strings, so this guards the
+ * hazard rather than the expected shape: nothing here can close the `<style>`
+ * element or the rule it sits in.
+ */
+const CSS_CLASS_SAFE = /^[0-9A-Za-z_-]+$/;
+
+/** The `url(…)` for an author's avatar, or `undefined` to render the monogram. */
+function avatarCssUrl(model: ExportModel, pubkey: string): string | undefined {
+  if (!CSS_CLASS_SAFE.test(pubkey)) return undefined;
+  return cssUrl(model.profiles[pubkey]?.picture);
+}
+
+/** One `background-image` rule per author with a usable picture, for the dedupe. */
 function avatarStyleParts(model: ExportModel): string[] {
   const parts: string[] = [];
-  for (const [pk, p] of Object.entries(model.profiles)) {
-    // Keys are hex pubkeys (safe as class suffixes); strip anything that could
-    // break out of the url("…") string defensively (data URIs never contain it).
-    if (p.picture) parts.push(`.av-${pk}{background-image:url("${p.picture.replace(/["\\\n\r]/g, "")}")}`);
+  for (const pk of Object.keys(model.profiles)) {
+    // The key is interpolated into a selector inside the same RAWTEXT `<style>`
+    // as the URL, so it needs its own guard: a non-hex key would break out of
+    // the element exactly as an unescaped URL would.
+    const url = avatarCssUrl(model, pk);
+    if (url !== undefined) parts.push(`.av-${pk}{background-image:url("${url}")}`);
   }
   return parts;
 }
 
 function attachmentHtml(a: ExportAttachment): string {
+  // The URL is a member's `imeta` value, so it reaches an href only through
+  // safeMediaUrl. Where it doesn't survive that, the attachment still renders —
+  // as its own text, unlinked — rather than vanishing from the transcript.
   if (a.failed) {
-    return `<div class="attachment failed">Attachment could not be decrypted for offline embedding. <a href="${escapeHtml(a.url)}" rel="noopener noreferrer" target="_blank">Source link</a></div>`;
+    const source = safeMediaUrl(a.url);
+    const link = source
+      ? ` <a href="${escapeHtml(source)}" rel="noopener noreferrer" target="_blank">Source link</a>`
+      : "";
+    return `<div class="attachment failed">Attachment could not be decrypted for offline embedding.${link}</div>`;
   }
-  const src = a.dataUri ?? a.url;
+  const src = safeMediaUrl(a.dataUri ?? a.url);
+  if (src === undefined) return `<div class="attachment file">${escapeHtml(a.url)}</div>`;
   if ((a.mime ?? "").startsWith("image/") || a.dataUri?.startsWith("data:image/")) {
     return `<img class="attachment" src="${escapeHtml(src)}" alt="" loading="lazy">`;
   }
@@ -278,7 +348,8 @@ const SWITCH_SCRIPT = `
 `;
 
 function communityGlyph(model: ExportModel): string {
-  if (model.icon) return `<img src="${escapeHtml(model.icon)}" alt="">`;
+  const icon = safeMediaUrl(model.icon);
+  if (icon) return `<img src="${escapeHtml(icon)}" alt="">`;
   const initial = escapeHtml((model.communityName.slice(0, 1) || "#").toUpperCase());
   return `<span class="fallback">${initial}</span>`;
 }

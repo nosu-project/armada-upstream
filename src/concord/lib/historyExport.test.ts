@@ -150,6 +150,66 @@ describe("exportHtml (mini-Armada)", () => {
   });
 });
 
+describe("exportHtml (untrusted URLs)", () => {
+  it("does not let a kind-0 picture escape the <style> element", () => {
+    const html = exportHtml(
+      model({
+        profiles: {
+          aa: { pubkey: "aa", name: "Mallory", picture: "x</style><script>alert(1)</script><style>" },
+        },
+      }),
+    );
+    expect(html).not.toContain("</style><script>");
+    expect(html).not.toContain("<script>alert(1)");
+    // Refused outright, so the author renders as a monogram rather than as an
+    // element carrying a class with no rule behind it.
+    expect(html).toContain("avatar-fallback");
+  });
+
+  it("percent-encodes a picture URL instead of trusting a quote strip", () => {
+    const html = exportHtml(
+      model({ profiles: { aa: { pubkey: "aa", name: "A", picture: "https://x.example/a<b" } } }),
+    );
+    expect(html).not.toMatch(/url\("[^"]*</);
+    expect(html).toContain("%3C");
+  });
+
+  it("still embeds an ordinary data: avatar", () => {
+    expect(exportHtml(model())).toContain('.av-aa{background-image:url("data:image/png;base64,AAAA")}');
+  });
+
+  it("refuses a profile key that would break out of the stylesheet", () => {
+    const key = "aa</style><script>alert(1)</script>";
+    const html = exportHtml(
+      model({ profiles: { [key]: { pubkey: key, name: "X", picture: "data:image/png;base64,AAAA" } } }),
+    );
+    expect(html).not.toContain("</style><script>");
+    expect(html).not.toContain("<script>alert(1)");
+  });
+
+  it("refuses a javascript: attachment URL as a link, but still shows it", () => {
+    const m = model();
+    m.channels[0].messages[0].attachments = [{ url: "javascript:alert(1)" }];
+    const html = exportHtml(m);
+    expect(html).not.toContain('href="javascript:');
+    expect(html).toContain("javascript:alert(1)");
+  });
+
+  it("refuses a javascript: source link on an undecryptable attachment", () => {
+    const m = model();
+    m.channels[0].messages[0].attachments = [{ url: "javascript:alert(1)", failed: true }];
+    const html = exportHtml(m);
+    expect(html).not.toContain('href="javascript:');
+    expect(html).toContain("could not be decrypted");
+  });
+
+  it("keeps a plain https attachment link", () => {
+    const m = model();
+    m.channels[0].messages[0].attachments = [{ url: "https://blossom.example/f.bin" }];
+    expect(exportHtml(m)).toContain('href="https://blossom.example/f.bin"');
+  });
+});
+
 describe("format registry + filename", () => {
   it("exposes only html", () => {
     expect(Object.keys(EXPORT_FORMATS)).toEqual(["html"]);
