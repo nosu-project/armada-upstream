@@ -1415,7 +1415,32 @@ export function useRefound(community: Community | undefined) {
       // and there is no other trigger to heal it before the next Refounding. A
       // persistent failure warns the refounder (the rotation itself already
       // succeeded) so they can reopen the community to retry.
-      {
+      //
+      // NOT when this rotation EXCLUDED somebody. A refresh re-posts the new
+      // keys behind the SAME URL, and the URL is a bearer credential: whoever
+      // holds it opens the bundle, the excluded member included. Refreshing
+      // after a severance therefore hands back exactly what the severance took,
+      // and no floor can catch it — the cut is recorded at the excluding epoch
+      // and the refreshed bundle vends that same epoch, so the two are
+      // indistinguishable (the same reasoning that already vends `channels: []`
+      // above, applied to the base the bundle must always carry).
+      //
+      // The spec's own sequencing is why CORD-05 §2 can call a refresh safe: a
+      // ban-Refounding happens in a PRIVATE Community (CORD-06 §3), and Private
+      // means the live-link registry is empty (CORD-05 §5) — so per spec there
+      // are no links to refresh at this point. Armada reaches here with the
+      // refounder's own links live (banShouldRotateMany only vetoes on FOREIGN
+      // ones), so it has to make the choice the spec never faces. Leaving them
+      // on the dead epoch is the safe half: the link stops working rather than
+      // reopening the door, which is the state useInvites already documents for
+      // an unrevokable link.
+      if (exclude.length > 0) {
+        toast({
+          title: "Your invite links no longer work",
+          description:
+            "The keys rotated to cut off the removed member, and your live links were left on the old epoch on purpose — refreshing them would have handed the new keys to anyone holding the URL. Revoke them and mint new ones.",
+        });
+      } else {
         const fresh = {
           ...community,
           root: newRoot,

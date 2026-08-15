@@ -1253,18 +1253,24 @@ describe("useRefound (CORD-06 §3 channel rotations)", () => {
         }),
       );
 
-      // …and the refreshed invite bundle advances the ROOT epoch while
-      // carrying no Private Channel key at all. A link's audience is whoever
-      // the URL reaches (CORD-05 §2) and holds no scoped Role, so it is
-      // entitled to none (CORD-03 §1) — and vending one here would be worse
-      // than at mint time, because this refresh follows a rotation that just
-      // severed Mallory at exactly this epoch, which the `channel_cuts` floor
-      // cannot tell from a re-admission.
-      const refreshed = relay.published.filter((e) => e.pubkey === link.pk).at(-1)!;
-      expect(refreshed).toBeDefined();
-      const vended = parseBundleEvent(refreshed, link.pk, token, Date.now());
-      expect(vended.root_epoch).toBe(1);
-      expect(vended.channels).toEqual([]);
+      // …and the link is NOT refreshed, because this rotation EXCLUDED someone.
+      //
+      // A refresh re-posts the current keys behind the SAME URL, and the URL is
+      // a bearer credential: Mallory holds it exactly like everyone else the
+      // link ever reached, so refreshing would hand her the fresh base root and
+      // undo the severance the whole Refounding exists to perform. The reasoning
+      // that already forces `channels: []` — at one epoch a cut and a
+      // re-admission are indistinguishable — governs the BASE too, and unlike a
+      // channel key the base is something every bundle must carry.
+      //
+      // CORD-05 §2 can call a refresh safe only because of the sequencing
+      // around it: CORD-06 §3 refounds for a ban in a PRIVATE community, and
+      // CORD-05 §5 makes Private mean the live-link registry is empty — so per
+      // spec there are no links in existence at this point. Armada gets here
+      // with the refounder's own links live (banShouldRotateMany vetoes only on
+      // FOREIGN ones), so it leaves them stranded on the dead epoch: the link
+      // stops working rather than reopening the door.
+      expect(relay.published.filter((e) => e.pubkey === link.pk)).toEqual([]);
       // The rotated key still exists — it just travels by grant, not by link.
       expect(newChKey).toBeDefined();
     },
