@@ -988,6 +988,38 @@ class ArmadaDbTest {
     }
 
     @Test
+    fun `finds a match far below a term's newest rows`() {
+        val db = openWithTerms(peersPolicy)
+        // One matching rumor, underneath a term's whole history. An adapter that
+        // narrows in memory has to read down to it — and one that pages while
+        // doing so must page until the range is EXHAUSTED, not until some budget
+        // is: a search budget dressed as a page limit turns a rumor that exists
+        // into one the store denies having.
+        db.event("t", rumor(id = "deep", createdAt = 100, content = "needle", tags = listOf(listOf("p", "ana"))))
+        for (i in 0 until 200) {
+            db.event("t", rumor(id = "hay-$i", createdAt = 200 + i.toLong(), content = "hay", tags = listOf(listOf("p", "ana"))))
+        }
+
+        val got = db.query("t", filters("{\"search\":\"conv:ana needle\",\"limit\":1}"))
+        assertEquals(listOf("deep"), got.map { it.id })
+    }
+
+    @Test
+    fun `finds a match among more rumors than a page, all at one timestamp`() {
+        val db = openWithTerms(peersPolicy)
+        // Every rumor shares a `created_at`, so a pager walking a time bound can
+        // never advance past them — the whole second is one boundary. Reading a
+        // page and stepping below its oldest row would skip the rest of it.
+        for (i in 0 until 200) {
+            db.event("t", rumor(id = "tie-$i", createdAt = 500, content = "hay", tags = listOf(listOf("p", "ana"))))
+        }
+        db.event("t", rumor(id = "zz-buried", createdAt = 500, content = "needle", tags = listOf(listOf("p", "ana"))))
+
+        val got = db.query("t", filters("{\"search\":\"conv:ana needle\",\"limit\":1}"))
+        assertEquals(listOf("zz-buried"), got.map { it.id })
+    }
+
+    @Test
     fun `drives a term lookup off its own index, newest-first`() {
         val db = openWithTerms(peersPolicy)
         db.event("t", rumor(id = "a", tags = listOf(listOf("p", "ana"))))

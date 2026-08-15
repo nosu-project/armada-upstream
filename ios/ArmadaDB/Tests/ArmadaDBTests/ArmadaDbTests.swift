@@ -1231,6 +1231,58 @@ final class ArmadaDbTests: XCTestCase {
         )
     }
 
+    func testFindsAMatchFarBelowATermsNewestRows() throws {
+        let db = try openWithTerms(peersPolicy)
+        // One matching rumor, underneath a term's whole history. An adapter that
+        // narrows in memory has to read down to it — and one that pages while
+        // doing so must page until the range is EXHAUSTED, not until some budget
+        // is: a search budget dressed as a page limit turns a rumor that exists
+        // into one the store denies having.
+        try db.event(
+            tenant: "t",
+            rumor: rumor(id: "deep", createdAt: 100, tags: [["p", "ana"]], content: "needle")
+        )
+        for i in 0..<200 {
+            try db.event(
+                tenant: "t",
+                rumor: rumor(
+                    id: "hay-\(i)", createdAt: Int64(200 + i), tags: [["p", "ana"]], content: "hay"
+                )
+            )
+        }
+
+        XCTAssertEqual(
+            try db.query(
+                tenant: "t", filters: filters(#"{"search":"conv:ana needle","limit":1}"#)
+            ).map(\.id),
+            ["deep"]
+        )
+    }
+
+    func testFindsAMatchAmongMoreRumorsThanAPageAtOneTimestamp() throws {
+        let db = try openWithTerms(peersPolicy)
+        // Every rumor shares a `created_at`, so a pager walking a time bound can
+        // never advance past them — the whole second is one boundary. Reading a
+        // page and stepping below its oldest row would skip the rest of it.
+        for i in 0..<200 {
+            try db.event(
+                tenant: "t",
+                rumor: rumor(id: "tie-\(i)", createdAt: 500, tags: [["p", "ana"]], content: "hay")
+            )
+        }
+        try db.event(
+            tenant: "t",
+            rumor: rumor(id: "zz-buried", createdAt: 500, tags: [["p", "ana"]], content: "needle")
+        )
+
+        XCTAssertEqual(
+            try db.query(
+                tenant: "t", filters: filters(#"{"search":"conv:ana needle","limit":1}"#)
+            ).map(\.id),
+            ["zz-buried"]
+        )
+    }
+
     func testDrivesATermLookupOffItsOwnIndex() throws {
         let db = try openWithTerms(peersPolicy)
         try db.event(tenant: "t", rumor: rumor(id: "a", tags: [["p", "ana"]]))

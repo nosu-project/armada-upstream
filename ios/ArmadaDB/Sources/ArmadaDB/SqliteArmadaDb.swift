@@ -245,12 +245,60 @@ public final class SqliteArmadaDb {
         defer { lock.unlock() }
 
         try transaction {
-            for write in storable { try writeRumor(write.tenant, write.rumor) }
+            let batched = RumorBatch()
+            for write in storable {
+                // A rumor that has to READ what the batch has written so far —
+                // a replaceable one superseding its coordinate, a kind 5
+                // deleting its targets — needs those rows in the table, not in
+                // an accumulator. Flushing first keeps every such rumor seeing
+                // exactly what it saw when each write was its own statement:
+                // everything before it in the batch, and nothing after.
+                if Self.needsOwnStatement(write.rumor) {
+                    try writeBatch(batched)
+                    try writeRumor(write.tenant, write.rumor, batched)
+                } else {
+                    try stageRumor(write.tenant, write.rumor, batched)
+                }
+            }
+            try writeBatch(batched)
         }
     }
 
+    /// Stage one ordinary rumor's rows into `batch`, to be written with the rest
+    /// of its burst — see `RumorBatch`.
+    ///
+    /// Everything up to the INSERTs is what it always was, including the rowid
+    /// lookup, and it happens in the same order. The only difference is where
+    /// the rows go.
+    private func stageRumor(_ tenant: String, _ rumor: Rumor, _ batch: RumorBatch) throws {
+        let ord = try internTenant(tenant)
+        guard let seq = try reserveSeq(ord, rumor, batch) else { return }
+        batch.add(seq, ord, rumor, tagTokens("t\(ord)", rumor), termsOf(rumor, tenant))
+    }
+
+    /// Write a staged batch: one multi-row INSERT per table, per chunk.
+    ///
+    /// This is the whole reason for staging. `rumors` carries an AFTER INSERT
+    /// trigger maintaining the content index, and SQLite runs a trigger's
+    /// sub-program per INSERT STATEMENT rather than folding it into the row loop
+    /// — so a row per statement paid that setup 4000 times for 4000 rumors and
+    /// cost 76µs a row, against 17µs for the same rows and the same trigger
+    /// written in batches of 200. Half the cost of a NIP-17 write was this and
+    /// nothing else.
+    ///
+    /// Rows are written in staging order, which is arrival order, and the three
+    /// tables are written back to front: a `rumors` row is what makes a rumor
+    /// VISIBLE, so its index rows exist by the time anything can find it — which
+    /// matters to nothing inside this transaction, and to a reader on another
+    /// connection (the app, against the notification extension's writes) it is
+    /// the difference between a rumor with no tags and no rumor.
+    private func writeBatch(_ batch: RumorBatch) throws {
+        for (sql, params) in batch.statements() { try db.run(sql, params) }
+        batch.clear()
+    }
+
     /// Apply a single rumor's writes. Runs inside the batch transaction.
-    private func writeRumor(_ tenant: String, _ rumor: Rumor) throws {
+    private func writeRumor(_ tenant: String, _ rumor: Rumor, _ batch: RumorBatch) throws {
         let ord = try internTenant(tenant)
         let prefix = "t\(ord)"
         let terms = termsOf(rumor, tenant)
@@ -272,7 +320,7 @@ public final class SqliteArmadaDb {
                 try deleteRumors(ord, [existing.seq])
             }
 
-            guard let seq = try insertRumor(ord, prefix, rumor, terms) else { return }
+            guard let seq = try insertRumor(ord, prefix, rumor, terms, batch) else { return }
 
             try db.run(
                 """
@@ -285,7 +333,7 @@ public final class SqliteArmadaDb {
                 ]
             )
         } else {
-            guard try insertRumor(ord, prefix, rumor, terms) != nil else { return }
+            guard try insertRumor(ord, prefix, rumor, terms, batch) != nil else { return }
         }
 
         // Applied after the insert so a kind 5 arriving alongside its targets in
@@ -293,44 +341,23 @@ public final class SqliteArmadaDb {
         if rumor.kind == 5 { try applyDeletion(ord, rumor) }
     }
 
-    /// Write the rumor row and its token index row, and return the rowid taken
-    /// — or nil if the rumor was already stored, which makes a re-delivery a
-    /// no-op.
+    /// Write ONE rumor's row and index rows immediately, returning the rowid
+    /// taken — or nil if it was already stored.
     ///
-    /// Everything the write needs to know first — whether this rumor is already
-    /// here, and which rowid is free at its timestamp — is one statement, since
-    /// each is a scalar subquery over an index and neither depends on the
-    /// other. The rowid is allocated by LOOKING rather than from a counter held
-    /// in memory, so a second writer on the same file can't be handed the same
-    /// one; the bucket spans tenants, since the rowid is global.
+    /// The path for a rumor that can't be staged into its burst's batch (see
+    /// `needsOwnStatement`), which is every replaceable, addressable or deletion
+    /// rumor and nothing else. Those are a small minority of a sync and each has
+    /// to see the rows before it, so they keep the row-per-statement shape every
+    /// write used to have.
+    ///
+    /// Folding the rowid lookup into the INSERT with `RETURNING` would make this
+    /// one statement rather than two, and measured 2.7× SLOWER: an INSERT that
+    /// returns rows gives up SQLite's fast path and pays a result set per write,
+    /// which costs far more than the extra round trip saves.
     private func insertRumor(
-        _ ord: Int, _ prefix: String, _ rumor: Rumor, _ terms: [String]
+        _ ord: Int, _ prefix: String, _ rumor: Rumor, _ terms: [String], _ batch: RumorBatch
     ) throws -> Int64? {
-        let base = Self.bucket(rumor.createdAt)
-
-        let row = try db.query(
-            """
-            SELECT (SELECT seq FROM rumors WHERE tenant = ? AND id = ?) AS existing,
-                (SELECT MAX(seq) FROM rumors WHERE seq >= ? AND seq < ?) AS last
-            """.collapsedWhitespace,
-            [.int(Int64(ord)), .text(rumor.id), .int(base), .int(base + Self.seqSpace)]
-        ) { ($0.intOrNull(0), $0.intOrNull(1)) }.first
-
-        // Already stored: a re-delivered rumor is a no-op.
-        if row?.0 != nil { return nil }
-
-        let last = row?.1
-        let seq = last.map { $0 + 1 } ?? base
-
-        // One second may hold 2²⁰ rumors. Anything that manages more of them at
-        // the same timestamp has outgrown this encoding, and silently
-        // reordering them — or spilling into the next second's rowids — would
-        // be worse than saying so.
-        guard seq < base + Self.seqSpace else {
-            throw ArmadaDbError.unusable(
-                "too many rumors at created_at \(rumor.createdAt)"
-            )
-        }
+        guard let seq = try reserveSeq(ord, rumor, batch) else { return nil }
 
         try db.run(
             """
@@ -357,16 +384,84 @@ public final class SqliteArmadaDb {
         return seq
     }
 
-    /// File a rumor's derived terms. `OR IGNORE` because a policy may return
-    /// the same term twice, and because the backfill runs over rows a live
-    /// write may already have indexed.
-    private func insertTerms(_ ord: Int, _ seq: Int64, _ terms: [String]) throws {
-        for term in terms where !term.isEmpty {
-            try db.run(
-                "INSERT OR IGNORE INTO rumor_terms (tenant, term, seq) VALUES (?, ?, ?)",
-                [.int(Int64(ord)), .text(term), .int(seq)]
+    /// The rowid this rumor takes, or nil if it is already stored — which makes
+    /// a re-delivery a no-op.
+    ///
+    /// Everything the write needs to know first — whether this rumor is here,
+    /// and which rowid is free at its timestamp — is one statement, since each
+    /// is a scalar subquery over an index and neither depends on the other. The
+    /// rowid is allocated by LOOKING rather than from a counter held across
+    /// writes, so a second writer on the same file (the notification extension,
+    /// against the app) can't be handed the same one; the bucket spans tenants,
+    /// since the rowid is global.
+    ///
+    /// `batch` is what keeps that true now that a burst's rows are written
+    /// together: rowids reserved but not yet inserted are invisible to the
+    /// lookup, so two rumors sharing a `created_at` in one burst would both be
+    /// handed the same one. It is consulted for exactly as long as the
+    /// transaction that reserved them, and the transaction is what excludes the
+    /// other writer — `BEGIN IMMEDIATE` takes the write lock before the first of
+    /// these reads, so nothing can land between reserving a rowid and using it.
+    private func reserveSeq(_ ord: Int, _ rumor: Rumor, _ batch: RumorBatch) throws -> Int64? {
+        let base = Self.bucket(rumor.createdAt)
+
+        // The same id twice in one burst is one rumor, and the second copy would
+        // otherwise reserve a rowid and collide on the unique index.
+        if batch.staged(ord, rumor.id) { return nil }
+
+        let row = try db.query(
+            """
+            SELECT (SELECT seq FROM rumors WHERE tenant = ? AND id = ?) AS existing,
+                (SELECT MAX(seq) FROM rumors WHERE seq >= ? AND seq < ?) AS last
+            """.collapsedWhitespace,
+            [.int(Int64(ord)), .text(rumor.id), .int(base), .int(base + Self.seqSpace)]
+        ) { ($0.intOrNull(0), $0.intOrNull(1)) }.first
+
+        // Already stored: a re-delivered rumor is a no-op.
+        if row?.0 != nil { return nil }
+
+        let stored = row?.1 ?? base - 1
+        let seq = Swift.max(stored, batch.lastSeq(base) ?? base - 1) + 1
+
+        // One second may hold 2²⁰ rumors. Anything that manages more of them at
+        // the same timestamp has outgrown this encoding, and silently
+        // reordering them — or spilling into the next second's rowids — would
+        // be worse than saying so.
+        guard seq < base + Self.seqSpace else {
+            throw ArmadaDbError.unusable(
+                "too many rumors at created_at \(rumor.createdAt)"
             )
         }
+
+        batch.reserve(ord, rumor.id, base, seq)
+        return seq
+    }
+
+    /// File a rumor's derived terms, in ONE statement however many there are.
+    ///
+    /// `OR IGNORE` because a policy may return the same term twice, and because
+    /// the backfill runs over rows a live write may already have indexed.
+    ///
+    /// A row per statement was the obvious shape and the wrong one: a NIP-17
+    /// message is filed under three terms, so the term index alone tripled the
+    /// statements a write costs. The text varies with the count, which is
+    /// exactly what a driver's statement cache is for — a policy emits the same
+    /// handful of counts forever, so this is a few cached shapes, not one per
+    /// write.
+    private func insertTerms(_ ord: Int, _ seq: Int64, _ terms: [String]) throws {
+        let usable = terms.filter { !$0.isEmpty }
+        if usable.isEmpty { return }
+
+        var params: [SqlValue] = []
+        params.reserveCapacity(usable.count * 3)
+        for term in usable {
+            params.append(.int(Int64(ord)))
+            params.append(.text(term))
+            params.append(.int(seq))
+        }
+
+        let values = Array(repeating: "(?, ?, ?)", count: usable.count).joined(separator: ", ")
+        try db.run("INSERT OR IGNORE INTO rumor_terms (tenant, term, seq) VALUES \(values)", params)
     }
 
     /// Derive and store the terms of every rumor already in `tenant`, once per
@@ -1769,6 +1864,18 @@ public final class SqliteArmadaDb {
         Swift.min(Swift.max(createdAt, 0), maxTime) * seqSpace
     }
 
+    /// Whether a rumor has to be written by a statement of its own rather than
+    /// staged into its burst's batch.
+    ///
+    /// Only the ones that READ the rows around them: a replaceable or
+    /// addressable rumor resolves its coordinate and deletes what it supersedes,
+    /// and a deletion request removes the rumors it names. Both must see the
+    /// batch so far and must not see the rest of it — which is what a staged row
+    /// can't offer, and what flushing before one of these restores.
+    private static func needsOwnStatement(_ rumor: Rumor) -> Bool {
+        rumor.kind == 5 || Kinds.replaceable(rumor.kind) || Kinds.addressable(rumor.kind)
+    }
+
     /// Per NIP-01, `a` is "newer" than `b` (same coordinate) when its created_at
     /// is greater, or — on a tie — its id is lexicographically smaller.
     private static func isNewer(
@@ -2055,6 +2162,112 @@ private struct ScanPlan {
     /// back, and `limit` counts groups rather than rows — so no limit may be
     /// pushed into the SQL.
     var grouped: Bool = false
+}
+
+/// Parameters one staged INSERT will carry.
+///
+/// SQLite's `SQLITE_MAX_VARIABLE_NUMBER` is 32766 in every build this schema
+/// requires, but was 999 for a decade before 3.32 and is a compile-time option
+/// any packager may still set. A budget below the old default costs nothing
+/// measurable, since the trigger overhead this batching exists to amortize is
+/// already gone by ~100 rows a statement, and it cannot be the thing that breaks
+/// on a platform nobody tested.
+private let batchParams = 900
+
+/// One burst's rows, staged for a multi-row INSERT per table.
+///
+/// It is also the burst's rowid ledger — see `SqliteArmadaDb.reserveSeq` —
+/// because a rowid reserved for a staged row isn't in the table yet and so is
+/// invisible to the lookup that reserves the next one.
+///
+/// Lives exactly as long as one transaction. Nothing here outlives a commit,
+/// which is what keeps the ledger from becoming a cache of what another writer
+/// may since have changed. A class rather than a struct so the store's own
+/// methods mutate the one instance the transaction threads through them.
+private final class RumorBatch {
+    /// 8 parameters per row, in `rumors` column order.
+    private var rumors: [SqlValue] = []
+    /// 2 per row: rowid and its tag tokens.
+    private var tags: [SqlValue] = []
+    /// 3 per row: tenant, term, rowid.
+    private var terms: [SqlValue] = []
+    /// `<ord>:<id>` of every rumor reserved in this transaction.
+    private var ids: Set<String> = []
+    /// The highest rowid handed out per `created_at` bucket.
+    private var seqs: [Int64: Int64] = [:]
+
+    /// Whether this transaction already reserved a rowid for (`ord`, `id`).
+    func staged(_ ord: Int, _ id: String) -> Bool {
+        ids.contains("\(ord):\(id)")
+    }
+
+    /// The highest rowid handed out in `base`'s bucket, if any.
+    func lastSeq(_ base: Int64) -> Int64? {
+        seqs[base]
+    }
+
+    /// Record a rowid as taken, before the row it belongs to exists.
+    func reserve(_ ord: Int, _ id: String, _ base: Int64, _ seq: Int64) {
+        ids.insert("\(ord):\(id)")
+        seqs[base] = seq
+    }
+
+    func add(_ seq: Int64, _ ord: Int, _ rumor: Rumor, _ tokens: String, _ terms: [String]) {
+        rumors.append(contentsOf: [
+            .int(seq), .int(Int64(ord)), .text(rumor.id), .int(Int64(rumor.kind)),
+            .text(rumor.pubkey), .int(rumor.createdAt), .text(rumor.tagsJson()),
+            .text(rumor.content),
+        ])
+
+        tags.append(contentsOf: [.int(seq), .text(tokens)])
+
+        for term in terms where !term.isEmpty {
+            self.terms.append(contentsOf: [.int(Int64(ord)), .text(term), .int(seq)])
+        }
+    }
+
+    /// The staged INSERTs, in the order they must run.
+    func statements() -> [(String, [SqlValue])] {
+        var out: [(String, [SqlValue])] = []
+        // Index rows first, so a rumor is never findable before the index that
+        // finds it — see `SqliteArmadaDb.writeBatch`.
+        append(&out, tags, 2) { "INSERT INTO rumor_tags_fts (rowid, tokens) VALUES \($0)" }
+        append(&out, terms, 3) {
+            "INSERT OR IGNORE INTO rumor_terms (tenant, term, seq) VALUES \($0)"
+        }
+        append(&out, rumors, 8) {
+            """
+            INSERT INTO rumors (seq, tenant, id, kind, pubkey, created_at, tags, content) \
+            VALUES \($0)
+            """
+        }
+        return out
+    }
+
+    /// Drop the staged rows, keeping the ledger for the rest of the transaction.
+    func clear() {
+        rumors = []
+        tags = []
+        terms = []
+    }
+
+    /// Chunk flat parameters into multi-row INSERTs of at most `batchParams`.
+    private func append(
+        _ out: inout [(String, [SqlValue])],
+        _ params: [SqlValue],
+        _ width: Int,
+        _ sql: (String) -> String
+    ) {
+        let perStatement = Swift.max(1, batchParams / width) * width
+        var i = 0
+        while i < params.count {
+            let chunk = Array(params[i ..< Swift.min(i + perStatement, params.count)])
+            let values = Array(repeating: "(\(Sql.qs(width)))", count: chunk.count / width)
+                .joined(separator: ", ")
+            out.append((sql(values), chunk))
+            i += perStatement
+        }
+    }
 }
 
 /// Default tag index policy: index every tag with a short name and a non-empty
