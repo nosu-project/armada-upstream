@@ -50,6 +50,8 @@ import type { EventTemplate, NostrEvent, UnsignedEvent } from "nostr-tools/pure"
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 
+import { dmConvKey, dmPeersOf } from "./conversation";
+
 // ── Kinds ────────────────────────────────────────────────────────────────────
 
 /** NIP-17 chat message rumor. */
@@ -332,91 +334,19 @@ export function dmTimerSeconds(rumor: { tags: readonly string[][] }): number | u
 
 // ── Conversation identity ────────────────────────────────────────────────────
 //
-// A NIP-17 conversation is its PARTICIPANT SET, not a peer. The `p` set defines
-// the room (NIP-17), so a rumor names its own conversation and nothing has to be
-// stored beside it — the same reason the 1:1 partner was always derived rather
-// than injected (see dm17Store's PROVENANCE note).
-//
-// The set is canonicalized to "everyone but the viewer, sorted", which makes the
-// two directions of one conversation agree: a message Alice sends to {me, Bob}
-// reaches me as `pubkey: Alice, p: [me, Bob]` and my reply leaves as
-// `pubkey: me, p: [Alice, Bob]`, and both reduce to [Alice, Bob].
-//
-// For a 1:1 this yields exactly `[peer]` and for Note to Self exactly `[self]`,
-// so {@link dmConvKey} is byte-identical to the old single-pubkey key. That is
-// deliberate and load-bearing: every route, KV key, wire scope, read-state key
-// and thread snapshot on disk keeps working, and no existing conversation is
-// re-filed by the change of rule.
-//
-// NIP-17 gives a group no identity beyond this set, so adding or removing a
-// participant IS a different conversation. There is no fix for that inside the
-// protocol; Concord is where real membership lives.
+// Lives in `conversation.ts`, which has no imports — `db/termPolicies.ts` needs
+// the derivation and is bundled into the Electron main process, which has no
+// business linking this module's crypto to file a database row. Re-exported
+// here so every existing caller keeps its one import.
 
-/**
- * Separator between participants in a conversation key. A single character
- * that is legal unescaped in a URL path segment, so `/dm/<a>,<b>` stays
- * readable (see `chatRoute`).
- */
-export const DM_PEER_SEP = ",";
-
-/**
- * The participants of a rumor's conversation, from `self`'s perspective:
- * everyone involved except the viewer, sorted. `[self]` for Note to Self.
- * Undefined when unattributable — an own copy with no `p` tag names no room,
- * exactly as before, and callers drop it rather than guess.
- */
-export function dmPeersOf(
-  rumor: { pubkey: string; tags: string[][] },
-  self: string,
-): string[] | undefined {
-  const recipients = new Set<string>();
-  for (const [name, value] of rumor.tags) {
-    if (name === "p" && value) recipients.add(value);
-  }
-
-  if (rumor.pubkey !== self) {
-    // Received: the sender is a participant whether or not they p-tagged
-    // themselves, and we are not one of our own peers.
-    const others = new Set(recipients);
-    others.add(rumor.pubkey);
-    others.delete(self);
-    return others.size === 0 ? undefined : [...others].sort();
-  }
-
-  // Our own copy: only the `p` set says where it went.
-  if (recipients.size === 0) return undefined;
-  const others = new Set(recipients);
-  others.delete(self);
-  return others.size === 0 ? [self] : [...others].sort();
-}
-
-/**
- * The stable string key for a participant set. For a 1:1 (and Note to Self)
- * this is just the other party's pubkey — see the note above on why that
- * equivalence is not an accident.
- */
-export function dmConvKey(peers: readonly string[]): string {
-  return peers.join(DM_PEER_SEP);
-}
-
-/** The participants a conversation key names. Inverse of {@link dmConvKey}. */
-export function dmConvPeers(key: string): string[] {
-  return key.split(DM_PEER_SEP).filter(Boolean);
-}
-
-/** Whether a conversation key names more than one other participant. */
-export function isDmGroupKey(key: string): boolean {
-  return key.includes(DM_PEER_SEP);
-}
-
-/** The conversation key a rumor belongs to, or undefined when unattributable. */
-export function dmConvKeyOf(
-  rumor: { pubkey: string; tags: string[][] },
-  self: string,
-): string | undefined {
-  const peers = dmPeersOf(rumor, self);
-  return peers && dmConvKey(peers);
-}
+export {
+  DM_PEER_SEP,
+  dmConvKey,
+  dmConvKeyOf,
+  dmConvPeers,
+  dmPeersOf,
+  isDmGroupKey,
+} from "./conversation";
 
 // ── Sealing + wrapping (sending) ─────────────────────────────────────────────
 

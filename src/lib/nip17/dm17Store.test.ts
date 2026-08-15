@@ -490,8 +490,9 @@ describe("group conversations", () => {
 
   it("keeps a group thread separate from its members' 1:1s", async () => {
     // The three conversations that share people: Ana alone, Ben alone, and the
-    // room with both. The filters cannot distinguish them (see
-    // conversationFilters), so this is the client-side match under test.
+    // room with both. A NIP-01 filter cannot distinguish them at all, so what
+    // is under test is the derived term index the read seeks instead (see
+    // conversationFilters).
     const oneToOneAna = room(ana, [me], "just ana");
     const oneToOneBen = room(ben, [me], "just ben");
     const groupFromAna = room(ana, [me, ben], "ana to the group");
