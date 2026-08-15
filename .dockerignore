@@ -3,3 +3,29 @@ dist
 .eslintcache
 .tsbuildinfo
 Dockerfile
+
+# The web build needs src/, public/, index.html and the config+package files.
+# Everything below is context the `COPY . .` in the build stage would otherwise
+# ship — it never reaches the runtime image (that stage copies only /app/dist),
+# but it is transferred on every build and lands in the build-stage layer.
+#
+# scratch/ is the one that matters beyond build time: it is gitignored because
+# it may hold invite secrets, and it has no business in a layer.
+scratch/
+.git
+.gitignore
+
+# The other Capacitor/Electron targets. ~380 MB that vite never reads.
+android/
+ios/
+electron/
+
+# CI definitions and the runner image (its own Dockerfile lives here).
+.ngit/
+.gitlab-ci.yml
+
+# Docs and agent instructions.
+docs/
+*.md
+.claude/
+.agents/
