@@ -67,6 +67,19 @@
  *                  index tokens name it by.
  *   rumors_fts     NIP-50 search over `content` (see
  *                  {@link ARMADA_DB_FTS_SCHEMA}), tokenized for prose.
+ *   rumor_terms    the DERIVED term index: one row per (tenant, term, rumor),
+ *                  written from the tenant's `TermPolicy`. A b-tree rather
+ *                  than more tokens in `rumor_tags_fts`, for two reasons —
+ *                  `(tenant, term, seq)` puts a term's rumors in one
+ *                  contiguous, already-time-ordered range, so a lookup is a
+ *                  backwards walk with an exact `LIMIT` and no posting-list
+ *                  merge; and being an ordinary table it can be GROUPED, which
+ *                  is how "the newest rumor of every conversation" stops being
+ *                  a scan of the tenant.
+ *   rumor_term_tenants
+ *                  which tenants' existing rows have been indexed by their
+ *                  policy — the marker that makes the backfill run once. See
+ *                  `SqliteArmadaDB.backfillTerms`.
  *   rumor_coords   replaceable/addressable coordinates (`kind:pubkey:d`) → the
  *                  rumor currently stored there, so supersession is one
  *                  primary-key lookup rather than a scan.
@@ -88,9 +101,15 @@
  *      so the id, kind, pubkey and created_at columns were stored twice, and
  *      the tenant id was repeated in every row of the table and of its five
  *      indexes.
- *   1  the current layout below.
+ *   1  the tenant-interned layout, without a term index.
+ *   2  the current layout below: adds `rumor_terms` and
+ *      `rumor_term_tenants`. There is no rebuild — the new tables are empty
+ *      and a `CREATE IF NOT EXISTS` installs them — because a term cannot be
+ *      derived in SQL. Rows written before it are indexed by the per-tenant
+ *      backfill instead, which is gated on `rumor_term_tenants` and so is
+ *      indifferent to which version the file arrived at it from.
  */
-export const ARMADA_DB_VERSION = 1;
+export const ARMADA_DB_VERSION = 2;
 
 export const ARMADA_DB_SCHEMA: readonly string[] = [
   // `seq` is the rowid and encodes `created_at`, so the table is stored in
@@ -175,6 +194,31 @@ export const ARMADA_DB_SCHEMA: readonly string[] = [
   `CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
+  ) WITHOUT ROWID`,
+  // The derived term index. `seq` is the rumor's rowid and encodes time, so
+  // the primary key's third column orders each term's rumors newest-last —
+  // read backwards, a term lookup is one contiguous range walk that stops at
+  // the limit, with no sorter and no bodies touched until the join.
+  //
+  // WITHOUT ROWID because the key IS the whole row: an ordinary table would
+  // store the same three columns again in an index beside it.
+  `CREATE TABLE IF NOT EXISTS rumor_terms (
+    tenant INTEGER NOT NULL,
+    term TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    PRIMARY KEY (tenant, term, seq)
+  ) WITHOUT ROWID`,
+  // The delete path goes the other way — by rumor, not by term — and has no
+  // term to seek with, so it needs an index of its own or every deletion
+  // scans the table.
+  `CREATE INDEX IF NOT EXISTS rumor_terms_seq ON rumor_terms (seq)`,
+  `CREATE TRIGGER IF NOT EXISTS rumors_terms_delete AFTER DELETE ON rumors BEGIN
+    DELETE FROM rumor_terms WHERE seq = old.seq;
+  END`,
+  // Which tenants' pre-existing rows have been through their policy. A row
+  // here means the backfill is done and reads need not wait for it again.
+  `CREATE TABLE IF NOT EXISTS rumor_term_tenants (
+    tenant INTEGER PRIMARY KEY
   ) WITHOUT ROWID`,
 ];
 

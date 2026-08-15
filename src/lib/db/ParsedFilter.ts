@@ -11,6 +11,10 @@
  *     the set. The name may be single- or multi-letter (`#e`, `#channel`).
  *   - `since`/`until`: inclusive created_at bounds.
  *   - multiple filters in a query are OR'd; conditions within a filter AND.
+ *
+ * One addition to those: a NIP-50 extension token (`key:value`) is a lookup in
+ * the tenant's DERIVED term index rather than something read off the rumor —
+ * see `terms` and `TermPolicy`.
  */
 import { NIP50 } from "@nostrify/nostrify";
 
@@ -38,12 +42,26 @@ export class ParsedFilter {
   /**
    * The NIP-50 keywords parsed out of `search`, pre-lowercased: `required`
    * keywords must all appear in a rumor's content, `negated` ones (`-keyword`
-   * tokens) must not. Extension tokens (`key:value`) are parsed and removed —
-   * none are supported, and per NIP-50 unsupported extensions are ignored.
+   * tokens) must not. Extension tokens (`key:value`) are {@link terms} instead.
    * `undefined` when the filter has no `search`, or when it parses to no
    * keywords (in which case it imposes no constraint).
    */
   readonly searchKeywords?: { required: string[]; negated: string[] };
+
+  /**
+   * The NIP-50 extension tokens (`key:value`) named by `search`, spelled back
+   * exactly as written. Every one of them must be among the rumor's derived
+   * index terms — see {@link TermPolicy} — and the store resolves them against
+   * that index rather than against anything the rumor says.
+   *
+   * A term no policy in this tenant emits therefore matches nothing, which is
+   * how an unsupported extension (`domain:example.com`) still FAILS CLOSED: it
+   * narrows to an empty index lookup rather than being dropped and answering a
+   * narrowing query with the whole tenant. That is also why an extension is not
+   * treated as an unsupported no-op the way NIP-50 allows a relay to treat it —
+   * a local store answering its own queries has no one to negotiate with.
+   */
+  readonly terms: string[];
 
   /**
    * The same keywords as an FTS5 `MATCH` expression, or `undefined` when they
@@ -110,12 +128,20 @@ export class ParsedFilter {
     this.authorSet = this.authors && new Set(this.authors);
     this.kindSet = this.kinds && new Set(this.kinds);
 
+    const terms: string[] = [];
+
     if (this.search !== undefined) {
       const required: string[] = [];
       const negated: string[] = [];
 
       for (const token of NIP50.parseInput(this.search)) {
-        if (typeof token !== "string") continue; // extension token: removed
+        if (typeof token !== "string") {
+          // An extension token is a lookup in the derived term index. It is
+          // NOT lowercased: a term is an opaque string a policy returned, and
+          // folding its case would make two distinct ones the same lookup.
+          terms.push(`${token.key}:${token.value}`);
+          continue;
+        }
         const keyword = token.toLowerCase();
         if (keyword.startsWith("-")) {
           if (keyword.length > 1) negated.push(keyword.slice(1));
@@ -127,7 +153,7 @@ export class ParsedFilter {
       if (required.length > 0 || negated.length > 0) {
         this.searchKeywords = { required, negated };
         this.searchQuery = toFtsQuery(required, negated);
-      } else if (this.search.trim() !== "") {
+      } else if (terms.length === 0 && this.search.trim() !== "") {
         // The caller asked for something, and every part of it was consumed by
         // the parse: an extension nobody implements (`domain:example.com`), or
         // punctuation that tokenizes to nothing (`""`). Falling through to "no
@@ -141,11 +167,30 @@ export class ParsedFilter {
       }
     }
 
+    this.terms = terms;
     this.neverMatch = neverMatch;
   }
 
   /**
+   * Whether a rumor whose derived terms are `derived` satisfies this filter's
+   * {@link terms} — all of them, since conditions within a filter AND.
+   *
+   * Separate from {@link matches} because a term is not in the rumor: it comes
+   * from the tenant's {@link TermPolicy}, which only the store holds. An engine
+   * that resolved the terms in its index has already applied this; one that
+   * couldn't re-derives the row's terms and calls it here.
+   */
+  matchesTerms(derived: Iterable<string>): boolean {
+    if (this.terms.length === 0) return true;
+    const set = derived instanceof Set ? derived : new Set(derived);
+    return this.terms.every((term) => set.has(term));
+  }
+
+  /**
    * Full NIP-01 match of a rumor against every condition in this filter.
+   *
+   * {@link terms} are NOT checked — they aren't derivable from the rumor
+   * alone; see {@link matchesTerms}.
    *
    * Pass `skipSearch` when FTS5 has already applied the keywords. Re-checking
    * them here would be worse than redundant: FTS5 matches whole words and this

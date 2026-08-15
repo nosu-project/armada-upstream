@@ -149,12 +149,67 @@ export interface ArmadaKVListOptions {
   reverse?: boolean;
 }
 
+/**
+ * A tenant's DERIVED index terms: facts about a rumor that are re-derivable
+ * from it at any time, but that no tag of its own states.
+ *
+ * A NIP-01 filter can only ask about what a rumor literally says. Some of what
+ * a reader needs to select on isn't said anywhere: a NIP-17 conversation is the
+ * SET of its participants, which lives half in `pubkey` and half in the `p`
+ * tags, and no filter can express "exactly this set" (a tag filter is an OR
+ * over values, so it can only over-select and be narrowed in memory
+ * afterwards).
+ *
+ * A term closes that gap without putting anything beside the rumor that a
+ * reader could mistake for the rumor. The policy is a pure function of the
+ * stored row, so a term is a CACHE of a derivation and never a fact of its own:
+ * it can be thrown away and rebuilt, it can't be forged by a sender spelling a
+ * tag, and nothing reads it back out — it exists only to be looked up. That is
+ * what distinguishes it from injecting a tag into the stored rumor, which
+ * AGENTS.md forbids and which this is not.
+ *
+ * Terms are queried as NIP-50 extension tokens — `{ search: "conv:<key>" }` —
+ * and matched WHOLE and exactly against the strings the policy returned. The
+ * engines never interpret a term, so nothing NIP-17-shaped is inside them; the
+ * layer that spells the tenant id is the layer that decides what its rows mean
+ * (see `termPolicy.ts`).
+ *
+ * The policy is bound to the TENANT rather than passed at each write, because
+ * two of the writers aren't in JavaScript: Android's notification service and
+ * iOS's notification extension write into `dm17:<self>` while the app is dead,
+ * through their own engines. A per-write option is one every writer has to
+ * remember, and a writer that forgets it stores a row that a term read then
+ * cannot see — which is exactly the message-received-while-closed case. Bound
+ * to the tenant, a writer is covered whether or not it knows terms exist; the
+ * native engines declare the same policy for the same tenant ids
+ * (`TermPolicy.kt`, `TermPolicy.swift`).
+ */
+export type TermPolicy = (rumor: NostrRumor, tenantId: string) => string[];
+
+export interface TenantOpts {
+  /**
+   * The tenant's {@link TermPolicy}, installed on the store and applied to
+   * every write — including ones made through a handle acquired without it,
+   * since a tenant is one store however many times it is asked for.
+   *
+   * Declare it at the single site that spells the tenant id. A second
+   * acquisition may repeat it (it replaces the installed one, which is a no-op
+   * when they agree), but two sites that DISAGREE are a bug the store can't
+   * detect: rows already written keep the terms of the policy in force at the
+   * time.
+   *
+   * Installing a policy on a tenant whose rows predate it schedules a one-time
+   * backfill of that tenant's index; reads that name a term wait for it.
+   */
+  terms?: TermPolicy;
+}
+
 export interface ArmadaDB {
   /**
    * The event store for `id`, created on first use. Repeated calls with the
    * same id return the same store, so writes batch together.
    */
-  tenant(id: string): NRumorStore;
+  tenant(id: string, opts?: TenantOpts): NRumorStore;
   kv: ArmadaKV;
 }
 
@@ -167,8 +222,21 @@ export interface ArmadaDBOpts {
 }
 
 /**
+ * The tag name an engine may use to file a {@link TermPolicy}'s terms in its
+ * ORDINARY tag index, rather than in an index of their own — which is what the
+ * IndexedDB adapter does, `NIndexedDB`'s `indexTags` hook being the only place
+ * it can add an index term at all.
+ *
+ * Reserved: {@link defaultIndexTags} refuses it, so nothing a sender writes can
+ * reach the namespace, and a term is only ever a string a policy returned.
+ * (Adapters verify the derivation anyway — see `matchesTerms` — so this is the
+ * second lock on the same door.)
+ */
+export const TERM_TAG = "~";
+
+/**
  * Default tag index policy: index every tag with a short name and a non-empty
- * value under 200 chars.
+ * value under 200 chars, except the reserved {@link TERM_TAG}.
  *
  * Unlike relay/`NPostgres` policy this is NOT limited to single-letter tags —
  * Armada's local planes query on multi-letter names (`#channel`, `#stream`,
@@ -178,7 +246,8 @@ export interface ArmadaDBOpts {
  */
 export function defaultIndexTags(rumor: NostrRumor): string[][] {
   return rumor.tags.filter(
-    ([name, value]) => !!name && name.length <= 20 && !!value && value.length < 200,
+    ([name, value]) =>
+      !!name && name !== TERM_TAG && name.length <= 20 && !!value && value.length < 200,
   );
 }
 

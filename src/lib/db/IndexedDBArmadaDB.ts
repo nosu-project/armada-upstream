@@ -19,7 +19,7 @@ import { openDB } from "idb";
 import { perfCount, perfMark, perfTime } from "@/lib/perf";
 
 import { ParsedFilter } from "./ParsedFilter";
-import { defaultIndexTags, matchesKvRange, resolveKvRange, tenantClass } from "./types";
+import { defaultIndexTags, matchesKvRange, resolveKvRange, TERM_TAG, tenantClass } from "./types";
 import { WrittenIds } from "./writtenIds";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
@@ -34,6 +34,8 @@ import type {
   ArmadaKVSelector,
   KvRange,
   NRumorStore,
+  TenantOpts,
+  TermPolicy,
 } from "./types";
 
 /** Strip the placeholder signature `NIndexedDB` round-trips. */
@@ -76,36 +78,136 @@ function filterShape(filters: NostrFilter[]): string {
 }
 
 /**
- * Drop the filters whose `search` names nothing this store can honor, or
- * `undefined` when that leaves none.
+ * One call to the delegate, and what the caller must still do to its answer.
  *
- * `NIndexedDB` implements NIP-50 itself as of 0.2.0, and its parse REMOVES the
- * extension tokens (`key:value`) it doesn't support — so
- * `{ search: "domain:example.com" }` reaches its planner with no keywords left
- * and is answered with the whole tenant. `ParsedFilter.neverMatch` is the rule
- * the SQLite engines apply to the same input (see its `search` branch): a
- * narrowing query that isn't understood fails closed. This keeps the web
- * adapter in step with them rather than having one engine widen where the
- * others narrow — and keeps `remove()` from deleting a tenant it was asked to
- * narrow.
+ * Most reads are a single job with nothing to do: the delegate's answer IS the
+ * answer. A job with a `check` is one the delegate can only over-select.
+ */
+interface DelegateJob {
+  /** The filters as `NIndexedDB` should receive them. */
+  filters: NostrFilter[];
+  /** Applied to every row the delegate returned, when it over-selects. */
+  check?: (rumor: NostrRumor) => boolean;
+  /** Re-applied after `check`, since the delegate could not be given it. */
+  limit?: number;
+}
+
+/**
+ * Plan a read against a tenant whose terms are indexed under {@link TERM_TAG}.
+ *
+ * A term has to become an ordinary tag filter, `indexTags` being the only place
+ * `NIndexedDB` lets an index term exist at all — and that is exact only while
+ * the term is the ONLY thing the delegate is asked for. Its planner re-checks a
+ * tag filter against the event's literal tags whenever the plan isn't
+ * index-only, and a term is not among them: it lives in the index and nowhere
+ * else, which is the whole point. So a filter naming a term alone is handed
+ * over as written, limit and all, and one naming anything besides is handed
+ * over as the term alone — an index seek down one term's rows — with the rest
+ * of the filter, and its limit, applied here.
+ *
+ * That is also why a term-bearing filter gets a job to itself. Filters are OR'd
+ * and each carries its own limit, and neither survives being merged into one
+ * over-selecting call.
+ *
+ * An empty result means nothing can match — every filter either failed closed
+ * or named a term in a tenant that derives none.
+ *
+ * Failing closed is the other half of this, and it is why the filters are
+ * parsed here at all. `NIndexedDB` implements NIP-50 itself, and its parse
+ * REMOVES the extension tokens it doesn't support — so `domain:example.com`
+ * would reach its planner with no keywords left and be answered with the whole
+ * tenant. Dropping such a filter keeps the web adapter narrowing where the
+ * SQLite engines narrow (see `ParsedFilter`'s `search` branch), and keeps
+ * `remove()` from deleting a tenant it was asked to narrow.
  *
  * Only filters that actually carry a `search` are parsed, so the hot read path
- * (ids, authors, tags) never pays for the check, and everything else — an
+ * (ids, authors, tags) never pays for any of this, and everything else — an
  * unsatisfiable `{ ids: [] }`, say — reaches the delegate exactly as before.
  */
-function honoredFilters(filters: NostrFilter[]): NostrFilter[] | undefined {
-  if (!filters.some((f) => typeof f.search === "string")) return filters;
-  const kept = filters.filter(
-    (f) => typeof f.search !== "string" || !new ParsedFilter(f).neverMatch,
-  );
-  return kept.length > 0 ? kept : undefined;
+function planFilters(
+  filters: NostrFilter[],
+  tenant: string,
+  policy: TermPolicy | undefined,
+): DelegateJob[] {
+  if (!filters.some((f) => typeof f.search === "string")) return [{ filters }];
+
+  const plain: NostrFilter[] = [];
+  const jobs: DelegateJob[] = [];
+
+  for (const filter of filters) {
+    if (typeof filter.search !== "string") {
+      plain.push(filter);
+      continue;
+    }
+
+    const parsed = new ParsedFilter(filter);
+    if (parsed.neverMatch) continue;
+
+    if (parsed.terms.length === 0) {
+      plain.push(filter);
+      continue;
+    }
+
+    // A term in a tenant that derives none can never match, and asking the
+    // delegate would drop the constraint and widen the answer instead.
+    if (!policy) continue;
+
+    const term = { [`#${TERM_TAG}`]: [parsed.terms[0]] };
+    const bounded: NostrFilter = { ...term };
+    if (filter.since !== undefined) bounded.since = filter.since;
+    if (filter.until !== undefined) bounded.until = filter.until;
+
+    // Nothing but the term (and the time window, which the delegate folds into
+    // its key range rather than re-checking): the tag index answers it exactly.
+    if (
+      parsed.terms.length === 1 && !parsed.ids && !parsed.authors && !parsed.kinds &&
+      parsed.tags.length === 0 && !parsed.searchKeywords
+    ) {
+      if (filter.limit !== undefined) bounded.limit = filter.limit;
+      plain.push(bounded);
+      continue;
+    }
+
+    jobs.push({
+      filters: [bounded],
+      check: (rumor) => parsed.matches(rumor) && parsed.matchesTerms(policy(rumor, tenant)),
+      limit: filter.limit,
+    });
+  }
+
+  if (plain.length > 0) jobs.unshift({ filters: plain });
+  return jobs;
 }
+
+/** Run the jobs, merge them by id and put them back in the store's order. */
+function mergeJobs(results: NostrRumor[][]): NostrRumor[] {
+  if (results.length === 1) return results[0];
+  const byId = new Map<string, NostrRumor>();
+  for (const rumors of results) for (const rumor of rumors) byId.set(rumor.id, rumor);
+  return [...byId.values()].sort((a, b) =>
+    a.created_at !== b.created_at ? b.created_at - a.created_at : a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+  );
+}
+
+/** How many rumors one page of the term backfill re-indexes. */
+const BACKFILL_PAGE = 500;
 
 class IndexedDBRumorStore implements NRumorStore {
   private readonly store: NIndexedDB;
   /** Profiler label — the tenant's class, see {@link tenantClass}. */
   private readonly label: string;
   private readonly indexTags: (rumor: NostrRumor) => string[][];
+  /**
+   * The tenant's {@link TermPolicy}, or `undefined` while it has none.
+   *
+   * Read through a closure by the `indexTags` hook below rather than captured,
+   * so a policy declared after the store was first acquired still governs every
+   * later write — the binding is to the TENANT, and a tenant is one store
+   * however many times it is asked for.
+   */
+  private terms?: TermPolicy;
+  /** The one-time pass over rows written before the policy was installed. */
+  private backfill?: Promise<void>;
   /**
    * Whether this store's connection is known open.
    *
@@ -121,10 +223,72 @@ class IndexedDBRumorStore implements NRumorStore {
   /** Ids already committed, so the relay cache's re-writes cost nothing. */
   private readonly written = new WrittenIds();
 
-  constructor(name: string, indexTags: (rumor: NostrRumor) => string[][], label: string) {
-    this.store = new NIndexedDB(name, { indexTags: (event) => indexTags(event) });
+  constructor(
+    name: string,
+    indexTags: (rumor: NostrRumor) => string[][],
+    label: string,
+    private readonly tenantId: string,
+  ) {
+    // Derived terms ride in the ORDINARY tag index under the reserved
+    // `TERM_TAG` name, because `indexTags` is the only place `NIndexedDB` lets
+    // an index term be added at all — there is no second index to give them.
+    // `defaultIndexTags` refuses that name, so nothing a sender writes can
+    // reach the namespace.
+    this.store = new NIndexedDB(name, {
+      indexTags: (event) => {
+        const tags = indexTags(event);
+        const policy = this.terms;
+        if (!policy) return tags;
+        return [...tags, ...policy(event, tenantId).map((term) => [TERM_TAG, term])];
+      },
+    });
     this.label = label;
     this.indexTags = indexTags;
+  }
+
+  /**
+   * Bind the tenant's {@link TermPolicy}, and index the rows written before it
+   * against it.
+   *
+   * The backfill is a re-`put` of every stored rumor: `indexTags` runs on write
+   * and nowhere else, so a row already on disk carries no term until it is
+   * written again. It goes through `NIndexedDB` directly rather than this
+   * class's `event()`, whose whole job is to skip a write of a row the store
+   * already holds.
+   */
+  installTerms(policy: TermPolicy, done: () => Promise<boolean>, finish: () => Promise<void>): void {
+    if (this.terms === policy) return;
+    this.terms = policy;
+    this.backfill = (async () => {
+      if (await done()) return;
+      let until: number | undefined;
+      for (;;) {
+        const page = await this.store.query([{ limit: BACKFILL_PAGE, until }]);
+        if (page.length === 0) break;
+        await Promise.all(page.map((event) => this.store.event(event)));
+        const oldest = page[page.length - 1].created_at;
+        // Paged by `until`, which is INCLUSIVE, so a page that ends inside a
+        // run of equal timestamps would otherwise repeat forever. Stepping
+        // below the oldest one re-reads at worst that timestamp's rows, and
+        // a re-put is idempotent.
+        if (until !== undefined && oldest >= until) break;
+        until = oldest;
+        if (page.length < BACKFILL_PAGE) break;
+      }
+      await finish();
+    })().catch(() => {});
+  }
+
+  /**
+   * Wait for the term backfill, if a read is about to depend on it. Only reads
+   * that name a term wait; an ordinary read is unaffected by a half-built term
+   * index, and queueing it behind a full pass over the tenant would put that
+   * pass in front of the first thing the UI asks for.
+   */
+  private async awaitTerms(filters: NostrFilter[]): Promise<void> {
+    if (!this.backfill) return;
+    if (!filters.some((filter) => typeof filter.search === "string")) return;
+    await this.backfill;
   }
 
   /** `db.<op> <class>` once the connection is up, `db.<op> <class> (cold)` before. */
@@ -141,20 +305,30 @@ class IndexedDBRumorStore implements NRumorStore {
   }
 
   async query(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<NostrRumor[]> {
-    const honored = honoredFilters(filters);
-    if (!honored) return [];
+    await this.awaitTerms(filters);
+    const jobs = planFilters(filters, this.tenantId, this.terms);
+    if (jobs.length === 0) return [];
     // Rows RETURNED, not rows walked — the planner walks more than it yields
     // (an under-filled `limit` walks its whole index range), so a high mean with
     // a low row count is the signature of a scan and worth reading as one.
-    const events = await perfTime(
+    let returned = 0;
+    const results = await perfTime(
       this.op("query"),
-      () => this.settled(this.store.query(honored, opts)),
-      (rows) => rows.length,
+      () =>
+        this.settled(Promise.all(jobs.map(async (job) => {
+          const events = await this.store.query(job.filters, opts);
+          returned += events.length;
+          let rumors = events.map(toRumor);
+          if (job.check) rumors = rumors.filter(job.check);
+          if (job.limit !== undefined && rumors.length > job.limit) rumors = rumors.slice(0, job.limit);
+          return rumors;
+        }))),
+      () => returned,
     );
     // Same elapsed time, bucketed by what was asked instead of by tenant — so a
     // total can be attributed to a caller rather than only to a store.
-    perfCount(`shape ${this.label} ${filterShape(filters)}`, 0, events.length);
-    return events.map(toRumor);
+    perfCount(`shape ${this.label} ${filterShape(filters)}`, 0, returned);
+    return mergeJobs(results);
   }
 
   /**
@@ -262,23 +436,42 @@ class IndexedDBRumorStore implements NRumorStore {
     filters: NostrFilter[],
     opts?: { signal?: AbortSignal },
   ): Promise<{ count: number; approximate: boolean }> {
-    const honored = honoredFilters(filters);
-    if (!honored) return { count: 0, approximate: false };
+    await this.awaitTerms(filters);
+    const jobs = planFilters(filters, this.tenantId, this.terms);
+    if (jobs.length === 0) return { count: 0, approximate: false };
+    // Anything the delegate can only over-select has to be counted from the
+    // rows themselves — its own count would include the ones `check` drops —
+    // and so does a multi-job read, whose counts would double-count a rumor
+    // two jobs both found.
+    if (jobs.length > 1 || jobs[0].check) {
+      return { count: (await this.query(filters, opts)).length, approximate: false };
+    }
     const { count, approximate } = await perfTime(this.op("count"), () =>
-      this.settled(this.store.count(honored, opts)),
+      this.settled(this.store.count(jobs[0].filters, opts)),
     );
     return { count, approximate: approximate ?? false };
   }
 
-  remove(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<void> {
+  async remove(filters: NostrFilter[], opts?: { signal?: AbortSignal }): Promise<void> {
+    await this.awaitTerms(filters);
     // Nothing matches, so nothing is removed — and `written` keeps its ids,
     // since no row left the store.
-    const honored = honoredFilters(filters);
-    if (!honored) return Promise.resolve();
+    const jobs = planFilters(filters, this.tenantId, this.terms);
+    if (jobs.length === 0) return;
     // A removed event has to be storable again, and this class cannot evaluate
     // the filter that removed it.
     this.written.forget();
-    return perfTime(this.op("remove"), () => this.settled(this.store.remove(honored, opts)));
+    // Anything over-selecting is resolved to ids first: handing the delegate a
+    // widened filter would delete the rows `check` was there to spare.
+    let target: NostrFilter[];
+    if (jobs.length === 1 && !jobs[0].check) {
+      target = jobs[0].filters;
+    } else {
+      const ids = (await this.query(filters, opts)).map((rumor) => rumor.id);
+      if (ids.length === 0) return;
+      target = [{ ids }];
+    }
+    await perfTime(this.op("remove"), () => this.settled(this.store.remove(target, opts)));
   }
 
   close(): Promise<void> {
@@ -298,6 +491,12 @@ interface KVSchema extends DBSchema {
    * caller's key.
    */
   tenants: { key: string; value: true };
+  /**
+   * Tenant ids whose existing rows have been through their `TermPolicy` — the
+   * marker that makes the term backfill run once per browser rather than once
+   * per boot. `rumor_term_tenants` is the same record in the SQLite engines.
+   */
+  termed: { key: string; value: true };
 }
 
 /**
@@ -308,7 +507,7 @@ interface KVSchema extends DBSchema {
  * the keys mean and what shape their values are in is `ARMADA_DB_VERSION` in
  * `schema.ts`, which spans every database and both adapters.
  */
-const KV_DB_VERSION = 2;
+const KV_DB_VERSION = 3;
 
 /**
  * KV over its own database, which also holds the tenant registry. Values are
@@ -334,10 +533,11 @@ class IndexedDBKV implements ArmadaKV {
       return await perfTime("db.open kv", () =>
         openDB<KVSchema>(name, KV_DB_VERSION, {
           upgrade(db) {
-            // Idempotent: an upgrade from v1 already has `kv`, a fresh open has
-            // neither.
+            // Idempotent: an upgrade from an earlier version already has the
+            // stores it added, a fresh open has none of them.
             if (!db.objectStoreNames.contains("kv")) db.createObjectStore("kv");
             if (!db.objectStoreNames.contains("tenants")) db.createObjectStore("tenants");
+            if (!db.objectStoreNames.contains("termed")) db.createObjectStore("termed");
           },
         }),
       );
@@ -356,6 +556,28 @@ class IndexedDBKV implements ArmadaKV {
     } catch {
       // A purge still finds open tenants via the in-memory map.
       this.registered.delete(id);
+    }
+  }
+
+  /** Whether `id`'s existing rows have already been through its term policy. */
+  async isTermed(id: string): Promise<boolean> {
+    try {
+      const db = await this.db;
+      return (await db?.get("termed", id)) === true;
+    } catch {
+      // Unanswerable: treated as not done, so the backfill runs again. A
+      // re-`put` of a row already indexed changes nothing.
+      return false;
+    }
+  }
+
+  /** Record that `id`'s backfill has completed (best-effort). */
+  async setTermed(id: string): Promise<void> {
+    try {
+      const db = await this.db;
+      await db?.put("termed", true, id);
+    } catch {
+      // The pass simply runs again next boot.
     }
   }
 
@@ -560,7 +782,7 @@ export class IndexedDBArmadaDB implements ArmadaDB {
     this.kv = new IndexedDBKV(`${name}:kv`);
   }
 
-  tenant(id: string): NRumorStore {
+  tenant(id: string, opts: TenantOpts = {}): NRumorStore {
     let store = this.stores.get(id);
     if (!store) {
       // One IndexedDB database per tenant, so each of these is a distinct
@@ -572,11 +794,19 @@ export class IndexedDBArmadaDB implements ArmadaDB {
         IndexedDBArmadaDB.databaseName(this.name, id),
         this.indexTags,
         tenantClass(id),
+        id,
       );
       this.stores.set(id, store);
       // Registered on open, not on first write: an empty tenant still has a
       // database, and a purge has to delete that too.
       void this.kv.rememberTenant(id);
+    }
+    if (opts.terms) {
+      store.installTerms(
+        opts.terms,
+        () => this.kv.isTermed(id),
+        () => this.kv.setTermed(id),
+      );
     }
     return store;
   }

@@ -10,6 +10,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { SqliteArmadaDB } from "./SqliteArmadaDB";
+import { ARMADA_DB_VERSION } from "./sqliteSchema";
 
 import type { SqliteArmadaDBOpts } from "./SqliteArmadaDB";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -862,7 +863,7 @@ describe("SqliteArmadaDB — v0 migration", () => {
     driver.run(`INSERT INTO rumor_tags_fts (rowid, tokens) VALUES (?, ?)`, [seq, tokens]);
   }
 
-  it("rebuilds a v0 file into the v1 layout, preserving everything", async () => {
+  it("rebuilds a v0 file into the current layout, preserving everything", async () => {
     const driver = new RecordingDriver();
     drivers.push(driver);
     for (const statement of V0_SCHEMA) driver.run(statement);
@@ -893,7 +894,7 @@ describe("SqliteArmadaDB — v0 migration", () => {
     const columns = rows(driver, `SELECT name FROM pragma_table_info('rumors')`)
       .map((row) => row.name);
     expect(columns).toEqual(["seq", "tenant", "id", "kind", "pubkey", "created_at", "tags", "content"]);
-    expect(Number(rows(driver, `PRAGMA user_version`)[0].user_version)).toBe(1);
+    expect(Number(rows(driver, `PRAGMA user_version`)[0].user_version)).toBe(ARMADA_DB_VERSION);
 
     // ...and nothing else did: bodies, the tag index, the search index, the
     // coordinate and the KV all survive, with their old rowids.
