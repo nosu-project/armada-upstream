@@ -454,13 +454,35 @@ class SqliteArmadaDb(
      * same rebuild on the same file is likewise benign, if briefly untidy —
      * both delete what both are about to re-derive, and the loser's inserts
      * land anyway.
+     *
+     * At most one attempt per tenant per process, whatever the outcome — which
+     * is what [backfilled] records, and it is marked BEFORE the walk rather than
+     * after it. A failure (an unreadable row, a disk error) leaves the tenant's
+     * index partly built and its generation unrecorded, so the next launch tries
+     * again; retrying inside this one would put a full tenant walk in front of
+     * every term read for as long as the store stays broken. The failure is
+     * swallowed for the same reason the TypeScript engine swallows it: the read
+     * that triggered the pass is answerable from the index as it stands, and
+     * failing it instead would take every DM read down with one bad row.
      */
     private fun backfillTerms(tenant: String) {
         if (tenant in backfilled) return
+        backfilled.add(tenant)
+        try {
+            walkTerms(tenant)
+        } catch (_: Exception) {
+            // Partly built, generation unrecorded: the next launch walks it again.
+        }
+    }
+
+    /** [backfillTerms]'s walk, without its once-per-process bookkeeping. */
+    private fun walkTerms(tenant: String) {
         val ord = tenantOrd(tenant)
         if (ord == null) {
             // Never written to, so nothing to index — and no ordinal to record
-            // the fact against. Asking again next time costs one lookup.
+            // the fact against. The next launch asks again, which costs one
+            // lookup; rows written in the meantime carry their terms already,
+            // since the write path derives them.
             return
         }
 
@@ -469,10 +491,7 @@ class SqliteArmadaDb(
             listOf(ord),
         ) { it.long(0) }.firstOrNull()
 
-        if (done == termsGeneration) {
-            backfilled.add(tenant)
-            return
-        }
+        if (done == termsGeneration) return
         if (done != null) {
             transaction {
                 db.run("DELETE FROM rumor_terms WHERE tenant = ?", listOf(ord))
@@ -514,19 +533,26 @@ class SqliteArmadaDb(
                 listOf(ord, termsGeneration),
             )
         }
-        backfilled.add(tenant)
     }
 
     /**
      * Make sure `tenant`'s term index is complete, if a read is about to depend
      * on it.
      *
-     * Only reads that name a term wait. An ordinary read is unaffected by a
-     * half-built term index, and putting a full pass over the tenant in front of
+     * Only reads that reach the term index wait. An ordinary read is unaffected
+     * by a half-built one, and putting a full pass over the tenant in front of
      * it would charge every caller for a migration none of them asked about.
+     *
+     * The test is whether a filter carries a `search` AT ALL, not whether it
+     * parsed to a term — the same test `SqliteArmadaDB.ts` makes, and it has to
+     * be, because `distinct:<namespace>` reads `rumor_terms` while parsing to no
+     * term of its own (it is a directive; see [ParsedFilter.distinct]). Gating on
+     * [ParsedFilter.terms] left the NIP-17 conversation list — the one read that
+     * is nothing BUT a collapse — grouping over an index no one had built, so it
+     * listed only conversations written since the upgrade.
      */
     private fun awaitTerms(tenant: String, filters: List<ParsedFilter>) {
-        if (filters.none { it.terms.isNotEmpty() }) return
+        if (filters.none { it.search != null }) return
         backfillTerms(tenant)
     }
 
@@ -1433,7 +1459,17 @@ class SqliteArmadaDb(
 
                 val plan = planScan(ord, "t$ord", filter)
 
-                if (plan.sqlOnly && plan.ids == null && plan.cursors.size == 1) {
+                // A collapse the index could not GROUP is applied while scanning
+                // the rows (see [query]), so the index counts rows where the
+                // caller asked for groups. [planDistinct] bails on anything it
+                // can't test inside the grouping — kinds, authors, a tag, a
+                // keyword, an inexact bound — and the filter then falls through
+                // to the ordinary cascade, where `COUNT(*)` would answer a
+                // conversation list with the number of messages in it. Counted
+                // from the rows instead, as every other engine does.
+                val collapsed = filter.distinct != null && !plan.grouped
+
+                if (!collapsed && plan.sqlOnly && plan.ids == null && plan.cursors.size == 1) {
                     val cursor = plan.cursors[0]
                     val params = ArrayList<Any?>()
 
@@ -2128,12 +2164,26 @@ private class RumorBatch {
 }
 
 /**
+ * The tag name an engine may use to file a term policy's terms in its ORDINARY
+ * tag index, rather than in an index of their own — which is what the web
+ * client's IndexedDB adapter does (`TERM_TAG` in `src/lib/db/types.ts`), the
+ * `indexTags` hook being the only place `NIndexedDB` can add an index term.
+ *
+ * This engine has `rumor_terms` and needs no such thing, but the name is
+ * reserved here too: the tag index is content the four engines are held to
+ * agree on for identical input, and one that indexed `~` would answer
+ * `{"#~": [...]}` for a tag a sender wrote where the others answer nothing.
+ */
+internal const val TERM_TAG = "~"
+
+/**
  * Default tag index policy: index every tag with a short name and a non-empty
- * value under 200 chars. The value length cap is what keeps blobs (a serialized
- * seal, an embedded proof) out of the index.
+ * value under 200 chars, except the reserved [TERM_TAG]. The value length cap is
+ * what keeps blobs (a serialized seal, an embedded proof) out of the index.
  */
 internal fun defaultIndexTags(rumor: Rumor): List<List<String?>> = rumor.tags.filter { row ->
     val name = row.getOrNull(0)
     val value = row.getOrNull(1)
-    !name.isNullOrEmpty() && name.length <= 20 && !value.isNullOrEmpty() && value.length < 200
+    !name.isNullOrEmpty() && name != TERM_TAG && name.length <= 20 &&
+        !value.isNullOrEmpty() && value.length < 200
 }

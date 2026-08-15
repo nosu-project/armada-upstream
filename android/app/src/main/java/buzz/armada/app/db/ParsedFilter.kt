@@ -189,6 +189,7 @@ internal class ParsedFilter(filter: JSONObject) {
                         collapse = extension.value
                         continue
                     }
+                    if (extension.key in RESERVED_NAMESPACES) continue
                     // An extension token is a lookup in the derived term index.
                     // NOT lowercased: a term is an opaque string a policy
                     // returned, and folding its case would make two distinct
@@ -353,6 +354,16 @@ internal class ParsedFilter(filter: JSONObject) {
  * `src/lib/db/types.ts`.
  */
 internal const val DISTINCT = "distinct"
+
+/**
+ * Every such key, the counterpart of `TERM_NAMESPACES_RESERVED` in
+ * `src/lib/db/types.ts` — one today, and a set rather than a comparison so that
+ * a second one is a line in each port rather than a silent disagreement about
+ * what an unrecognized directive means. A reserved key is CONSUMED here: filing
+ * it as a term instead would fail closed (nothing matches) where the TypeScript
+ * side drops it, so the two would narrow in opposite directions.
+ */
+internal val RESERVED_NAMESPACES = setOf(DISTINCT)
 
 /**
  * The half-open term range a namespace covers: every term of the form

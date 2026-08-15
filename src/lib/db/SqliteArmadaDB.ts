@@ -254,7 +254,17 @@ export class SqliteArmadaDB implements ArmadaDB {
     // Rows written before this call carry none of the policy's terms, so the
     // index is incomplete until they have been through it. Kept as a promise
     // rather than awaited: acquiring a store is synchronous, and only a read
-    // that actually NAMES a term has to wait (see `awaitTerms`).
+    // that reaches the term index has to wait (see `awaitTerms`).
+    //
+    // Starting it HERE rather than at that read is this engine's optimization
+    // and not the contract — the native ports have no eager pass at all, since
+    // their engines are synchronous and there is no thread to run one on, so
+    // there the first such read is what triggers the walk. What all four must
+    // agree on is that a read which touches the index does not see a
+    // half-built one, and that a failed pass leaves the generation unrecorded
+    // so the next process retries. The swallow below is the other half of
+    // that: a pass that dies on one unreadable row must not fail the read,
+    // which is answerable from the index as it stands.
     this.backfills.set(tenant, this.backfillTerms(tenant, generation).catch(() => {}));
   }
 
@@ -267,9 +277,15 @@ export class SqliteArmadaDB implements ArmadaDB {
   /**
    * Wait for `tenant`'s term backfill, if a read is about to depend on it.
    *
-   * Only reads that name a term wait. Ordinary reads are unaffected by a
-   * half-built term index, and making them queue behind it would put a full
-   * pass over the tenant in front of the first thing the UI asks for.
+   * Only reads that reach the term index wait. Ordinary reads are unaffected by
+   * a half-built one, and making them queue behind it would put a full pass over
+   * the tenant in front of the first thing the UI asks for.
+   *
+   * The test is whether a filter carries a `search` AT ALL, and must stay that
+   * way in every port: `distinct:<namespace>` reads `rumor_terms` while parsing
+   * to no term of its own (it is a directive — see `ParsedFilter.distinct`), so
+   * a gate on `ParsedFilter.terms` lets the conversation list — the one read
+   * that is nothing BUT a collapse — group over an index nothing had built.
    */
   private async awaitTerms(tenant: string, filters: NostrFilter[]): Promise<void> {
     const pending = this.backfills.get(tenant);
@@ -1653,7 +1669,17 @@ export class SqliteArmadaDB implements ArmadaDB {
 
         const plan = this.planScan(ord, `t${ord}`, filter);
 
-        if (plan.sqlOnly && !plan.ids && plan.cursors.length === 1) {
+        // A collapse the index could not GROUP is applied while scanning the
+        // rows (see `queryTenant`), so the index counts rows where the caller
+        // asked for groups. `planDistinct` bails on anything it can't test
+        // inside the grouping — `kinds`, `authors`, a tag, a keyword, an
+        // inexact bound — and the filter then falls through to the ordinary
+        // cascade, where `COUNT(*)` would answer a conversation list with the
+        // number of messages in it. Counted from the rows instead, which is
+        // what `IndexedDBArmadaDB` does for the same case.
+        const collapsed = filter.distinct !== undefined && !plan.grouped;
+
+        if (!collapsed && plan.sqlOnly && !plan.ids && plan.cursors.length === 1) {
           const [cursor] = plan.cursors;
           let sql: string;
           const params: SqlValue[] = [];

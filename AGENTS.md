@@ -645,11 +645,19 @@ Things to know before touching it:
   FTS tokens because `(tenant, term, seq)` is already time-ordered, so a lookup
   is a bounded backwards walk — and because a b-tree can be GROUPED, which is
   what `distinct:` below is. Existing rows are indexed by a one-time per-tenant
-  backfill, since a term cannot be derived in SQL; only reads that name a term
-  wait for it, and the GENERATION that walked them is recorded beside the tenant
-  — one number, identical in all three ports, because a policy edit without it
-  leaves earlier rows carrying terms nothing looks up, and two ports that
-  disagree rebuild the index against each other on every open.
+  backfill, since a term cannot be derived in SQL; only reads that TOUCH the
+  index wait for it — which is every read carrying a `search`, and must be
+  tested that way rather than on the terms the filter parsed to, because
+  `distinct:` reaches the index while naming no term of its own. (Gating on the
+  parsed terms is what left the Kotlin and Swift engines answering the
+  conversation list from an index nothing had built.) The GENERATION that walked
+  the tenant is recorded beside it — one number, identical in all three ports,
+  because a policy edit without it leaves earlier rows carrying terms nothing
+  looks up, and two ports that disagree rebuild the index against each other on
+  every open. A pass runs at most once per tenant per process whatever the
+  outcome, and a failed one is swallowed with its generation unrecorded: the
+  read that triggered it is answerable from the index as it stands, and the next
+  launch walks the tenant again.
 - **`distinct:<namespace>` collapses a read to one rumor per group.** A term is
   namespaced (`<namespace>:<body>`, which the read path always required since a
   term is named as a `key:value` token), and this reserved token returns the

@@ -484,10 +484,33 @@ public final class SqliteArmadaDb {
     /// rebuild on the same file is likewise benign, if briefly untidy — both
     /// delete what both are about to re-derive, and the loser's inserts land
     /// anyway.
-    private func backfillTerms(_ tenant: String) throws {
+    ///
+    /// At most one attempt per tenant per process, whatever the outcome — which
+    /// is what `backfilled` records, and it is marked BEFORE the walk rather
+    /// than after it. A failure (an unreadable row, a disk error) leaves the
+    /// tenant's index partly built and its generation unrecorded, so the next
+    /// launch tries again; retrying inside this one would put a full tenant walk
+    /// in front of every term read for as long as the store stays broken. The
+    /// failure is swallowed for the same reason the TypeScript engine swallows
+    /// it: the read that triggered the pass is answerable from the index as it
+    /// stands, and failing it instead would take every DM read down with one bad
+    /// row.
+    private func backfillTerms(_ tenant: String) {
         if backfilled.contains(tenant) { return }
+        backfilled.insert(tenant)
+        do {
+            try walkTerms(tenant)
+        } catch {
+            // Partly built, generation unrecorded: the next launch walks it again.
+        }
+    }
+
+    /// `backfillTerms`'s walk, without its once-per-process bookkeeping.
+    private func walkTerms(_ tenant: String) throws {
         // Never written to, so nothing to index — and no ordinal to record the
-        // fact against. Asking again next time costs one lookup.
+        // fact against. The next launch asks again, which costs one lookup; rows
+        // written in the meantime carry their terms already, since the write
+        // path derives them.
         guard let ord = try tenantOrd(tenant) else { return }
 
         let done = try db.query(
@@ -495,10 +518,7 @@ public final class SqliteArmadaDb {
             [.int(Int64(ord))]
         ) { $0.int(0) }.first
 
-        if done == termsGeneration {
-            backfilled.insert(tenant)
-            return
-        }
+        if done == termsGeneration { return }
         if done != nil {
             try transaction {
                 try db.run("DELETE FROM rumor_terms WHERE tenant = ?", [.int(Int64(ord))])
@@ -542,19 +562,25 @@ public final class SqliteArmadaDb {
                 [.int(Int64(ord)), .int(termsGeneration)]
             )
         }
-        backfilled.insert(tenant)
     }
 
     /// Make sure `tenant`'s term index is complete, if a read is about to
     /// depend on it.
     ///
-    /// Only reads that name a term wait. An ordinary read is unaffected by a
-    /// half-built term index, and putting a full pass over the tenant in front
-    /// of it would charge every caller for a migration none of them asked
-    /// about.
-    private func awaitTerms(_ tenant: String, _ filters: [ParsedFilter]) throws {
-        guard filters.contains(where: { !$0.terms.isEmpty }) else { return }
-        try backfillTerms(tenant)
+    /// Only reads that reach the term index wait. An ordinary read is unaffected
+    /// by a half-built one, and putting a full pass over the tenant in front of
+    /// it would charge every caller for a migration none of them asked about.
+    ///
+    /// The test is whether a filter carries a `search` AT ALL, not whether it
+    /// parsed to a term — the same test `SqliteArmadaDB.ts` makes, and it has to
+    /// be, because `distinct:<namespace>` reads `rumor_terms` while parsing to
+    /// no term of its own (it is a directive; see `ParsedFilter.distinct`).
+    /// Gating on `ParsedFilter.terms` left the NIP-17 conversation list — the
+    /// one read that is nothing BUT a collapse — grouping over an index no one
+    /// had built, so it listed only conversations written since the upgrade.
+    private func awaitTerms(_ tenant: String, _ filters: [ParsedFilter]) {
+        guard filters.contains(where: { $0.search != nil }) else { return }
+        backfillTerms(tenant)
     }
 
     /// A rumor's index terms as a single space-separated token string: its
@@ -729,7 +755,7 @@ public final class SqliteArmadaDb {
         defer { lock.unlock() }
 
         let parsed = filters.map { ParsedFilter($0) }
-        try awaitTerms(tenant, parsed)
+        awaitTerms(tenant, parsed)
 
         // A tenant that was never written to holds nothing, whatever the
         // filters.
@@ -1526,7 +1552,7 @@ public final class SqliteArmadaDb {
         if filters.count == 1 {
             let filter = ParsedFilter(filters[0])
             if filter.neverMatch { return Count(0) }
-            try awaitTerms(tenant, [filter])
+            awaitTerms(tenant, [filter])
 
             if filter.limit == nil {
                 // A tenant that was never written to holds nothing to count.
@@ -1534,7 +1560,17 @@ public final class SqliteArmadaDb {
 
                 let plan = planScan(ord, "t\(ord)", filter)
 
-                if plan.sqlOnly && plan.ids == nil && plan.cursors.count == 1 {
+                // A collapse the index could not GROUP is applied while scanning
+                // the rows (see `query`), so the index counts rows where the
+                // caller asked for groups. `planDistinct` bails on anything it
+                // can't test inside the grouping — kinds, authors, a tag, a
+                // keyword, an inexact bound — and the filter then falls through
+                // to the ordinary cascade, where `COUNT(*)` would answer a
+                // conversation list with the number of messages in it. Counted
+                // from the rows instead, as every other engine does.
+                let collapsed = filter.distinct != nil && !plan.grouped
+
+                if !collapsed && plan.sqlOnly && plan.ids == nil && plan.cursors.count == 1 {
                     var params = [SqlValue]()
                     let sql: String
 
@@ -2270,12 +2306,29 @@ private final class RumorBatch {
     }
 }
 
+/// The tag name an engine may use to file a term policy's terms in its ORDINARY
+/// tag index, rather than in an index of their own — which is what the web
+/// client's IndexedDB adapter does (`TERM_TAG` in `src/lib/db/types.ts`), the
+/// `indexTags` hook being the only place `NIndexedDB` can add an index term.
+///
+/// This engine has `rumor_terms` and needs no such thing, but the name is
+/// reserved here too: the tag index is content the four engines are held to
+/// agree on for identical input, and one that indexed `~` would answer
+/// `{"#~": [...]}` for a tag a sender wrote where the others answer nothing.
+public let termTag = "~"
+
 /// Default tag index policy: index every tag with a short name and a non-empty
-/// value under 200 chars. The value length cap is what keeps blobs (a serialized
-/// seal, an embedded proof) out of the index.
+/// value under 200 chars, except the reserved `termTag`. The value length cap is
+/// what keeps blobs (a serialized seal, an embedded proof) out of the index.
+///
+/// The caps count UTF-16 code units, not Characters: the other three engines
+/// measure a JavaScript/Kotlin `length`, and `String.count` is grapheme
+/// clusters — so a name of twenty combining-mark-bearing graphemes would be
+/// indexed here and skipped everywhere else.
 public func defaultIndexTags(_ rumor: Rumor) -> [[String?]] {
     rumor.tags.filter { row in
         guard row.count >= 2, let name = row[0], let value = row[1] else { return false }
-        return !name.isEmpty && name.count <= 20 && !value.isEmpty && value.count < 200
+        return !name.isEmpty && name != termTag && name.utf16.count <= 20
+            && !value.isEmpty && value.utf16.count < 200
     }
 }

@@ -1608,6 +1608,22 @@ final class ArmadaDbTests: XCTestCase {
         )
     }
 
+    func testCountsGroupsWhenTheFilterNarrowsTheRowsToo() throws {
+        let db = try openWithTerms(convPolicy)
+        try db.event(tenant: "t", rumor: rumor(id: "a1", tags: [["p", "ana"]]))
+        try db.event(tenant: "t", rumor: rumor(id: "a2", tags: [["p", "ana"]]))
+        try db.event(tenant: "t", rumor: rumor(id: "b1", tags: [["p", "ben"]]))
+        try db.event(tenant: "t", rumor: rumor(id: "c1", kind: 7, tags: [["p", "cat"]]))
+
+        // A row condition the index can't test inside the grouping (here
+        // `kinds`) makes the collapse happen while scanning instead — and a
+        // count that reads its answer out of the index would then count ROWS,
+        // reporting a conversation list as the number of messages in it.
+        let filter = filters(#"{"search":"distinct:conv","kinds":[1]}"#)
+        XCTAssertEqual(try db.count(tenant: "t", filters: filter).count, 2)
+        XCTAssertEqual(try db.query(tenant: "t", filters: filter).count, 2)
+    }
+
     func testRefusesToRemoveByACollapse() throws {
         let db = try openWithTerms(convPolicy)
         try db.event(tenant: "t", rumor: rumor(id: "older", createdAt: 100, tags: [["p", "ana"]]))
@@ -1628,6 +1644,34 @@ final class ArmadaDbTests: XCTestCase {
         XCTAssertEqual(
             try db.query(tenant: "t", filters: filters(#"{"search":"distinct:conv"}"#)).map(\.id),
             []
+        )
+    }
+
+    func testCollapsesRowsAlreadyStoredWhenThePolicyArrived() throws {
+        // The pass that indexes a tenant's existing rows is triggered by a read
+        // that reaches the term index — and a collapse reaches it while naming
+        // no term of its own. Waiting only on a filter's parsed TERMS leaves
+        // this read grouping over an index nothing has built, which is the DM
+        // list of every install that upgrades into the feature.
+        let recording = RecordingDriver(try SqliteDriver(path: ":memory:"))
+        driver = recording
+        let before = try SqliteArmadaDb(db: recording)
+        store = before
+        try before.event(
+            tenant: "t", rumor: rumor(id: "ana-old", createdAt: 100, tags: [["p", "ana"]])
+        )
+        try before.event(
+            tenant: "t", rumor: rumor(id: "ana-new", createdAt: 300, tags: [["p", "ana"]])
+        )
+        try before.event(
+            tenant: "t", rumor: rumor(id: "ben", createdAt: 200, tags: [["p", "ben"]])
+        )
+
+        let after = try SqliteArmadaDb(db: recording, termsOf: convPolicy)
+        store = after
+        XCTAssertEqual(
+            try after.query(tenant: "t", filters: filters(#"{"search":"distinct:conv"}"#)).map(\.id),
+            ["ana-new", "ben"]
         )
     }
 

@@ -579,6 +579,40 @@ describe.each(backends)("$name", ({ create }) => {
       });
     });
 
+    it("counts groups when the filter narrows the rows too", async () => {
+      const s = opened();
+      for (const r of [
+        rumor({ tags: [["p", "ana"]] }),
+        rumor({ tags: [["p", "ana"]] }),
+        rumor({ tags: [["p", "ben"]] }),
+        rumor({ kind: 7, tags: [["p", "cat"]] }),
+      ]) await s.event(r);
+
+      // A row condition the index can't test inside the grouping (here `kinds`)
+      // makes the collapse happen while scanning instead — and a count that
+      // reads its answer out of the index would then count ROWS, reporting a
+      // conversation list as the number of messages in it. `count` and
+      // `query().length` are one number.
+      const filter = { search: "distinct:conv", kinds: [1] };
+      expect(await s.count([filter])).toEqual({ count: 2, approximate: false });
+      expect((await s.query([filter])).length).toBe(2);
+    });
+
+    it("collapses rows that were already stored when the policy arrived", async () => {
+      // The pass that indexes a tenant's existing rows is triggered by a read
+      // that reaches the term index — and a collapse reaches it while naming no
+      // term of its own. An engine that waits only on a filter's parsed TERMS
+      // therefore groups over an index nothing has built yet, which is the DM
+      // list of every install that upgrades into the feature.
+      const before = db.tenant("t");
+      const anaOld = rumor({ id: "ana-old", created_at: 100, tags: [["p", "ana"]] });
+      const anaNew = rumor({ id: "ana-new", created_at: 300, tags: [["p", "ana"]] });
+      const ben = rumor({ id: "ben", created_at: 200, tags: [["p", "ben"]] });
+      for (const r of [anaOld, anaNew, ben]) await before.event(r);
+
+      expect(await opened().query([{ search: "distinct:conv" }])).toEqual([anaNew, ben]);
+    });
+
     it("refuses to remove by a collapse", async () => {
       const s = opened();
       const older = rumor({ id: "older", created_at: 100, tags: [["p", "ana"]] });

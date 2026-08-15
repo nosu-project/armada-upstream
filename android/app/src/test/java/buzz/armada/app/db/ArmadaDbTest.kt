@@ -1316,6 +1316,23 @@ class ArmadaDbTest {
     }
 
     @Test
+    fun `counts groups when the filter narrows the rows too`() {
+        val db = openWithTerms(convPolicy)
+        db.event("t", rumor(id = "a1", tags = listOf(listOf("p", "ana"))))
+        db.event("t", rumor(id = "a2", tags = listOf(listOf("p", "ana"))))
+        db.event("t", rumor(id = "b1", tags = listOf(listOf("p", "ben"))))
+        db.event("t", rumor(id = "c1", kind = 7, tags = listOf(listOf("p", "cat"))))
+
+        // A row condition the index can't test inside the grouping (here
+        // `kinds`) makes the collapse happen while scanning instead — and a
+        // count that reads its answer out of the index would then count ROWS,
+        // reporting a conversation list as the number of messages in it.
+        val filter = filters("{\"search\":\"distinct:conv\",\"kinds\":[1]}")
+        assertEquals(2L, db.count("t", filter).count)
+        assertEquals(2, db.query("t", filter).size)
+    }
+
+    @Test
     fun `refuses to remove by a collapse`() {
         val db = openWithTerms(convPolicy)
         db.event("t", rumor(id = "older", createdAt = 100, tags = listOf(listOf("p", "ana"))))
@@ -1337,6 +1354,27 @@ class ArmadaDbTest {
         assertEquals(
             emptyList<String>(),
             db.query("t", filters("{\"search\":\"distinct:conv\"}")).map { it.id },
+        )
+    }
+
+    @Test
+    fun `collapses rows that were already stored when the policy arrived`() {
+        // The pass that indexes a tenant's existing rows is triggered by a read
+        // that reaches the term index — and a collapse reaches it while naming
+        // no term of its own. Waiting only on a filter's parsed TERMS leaves
+        // this read grouping over an index nothing has built, which is the DM
+        // list of every install that upgrades into the feature.
+        val recording = RecordingDriver(BundledSqlDriver(":memory:"))
+        driver = recording
+        val before = SqliteArmadaDb(recording, migrate = true).also { store = it }
+        before.event("t", rumor(id = "ana-old", createdAt = 100, tags = listOf(listOf("p", "ana"))))
+        before.event("t", rumor(id = "ana-new", createdAt = 300, tags = listOf(listOf("p", "ana"))))
+        before.event("t", rumor(id = "ben", createdAt = 200, tags = listOf(listOf("p", "ben"))))
+
+        val after = SqliteArmadaDb(recording, termsOf = convPolicy).also { store = it }
+        assertEquals(
+            listOf("ana-new", "ben"),
+            after.query("t", filters("{\"search\":\"distinct:conv\"}")).map { it.id },
         )
     }
 

@@ -172,9 +172,18 @@ internal object Dm17 {
         return terms
     }
 
-    /** The pubkey in a `dm17:<self>` tenant id, or null for any other id. */
-    fun tenantSelf(tenantId: String): String? =
-        if (tenantId.startsWith(TENANT_PREFIX)) tenantId.substring(TENANT_PREFIX.length) else null
+    /**
+     * The pubkey in a `dm17:<self>` tenant id, or null for any other id —
+     * including a bare `dm17:`, which names no viewer. Falling through with an
+     * empty `self` would file every participant of every rumor as a peer, where
+     * the TypeScript policy (whose `!self` check is the same test) derives
+     * nothing; the id is malformed either way, and the two must agree on what a
+     * malformed one means.
+     */
+    fun tenantSelf(tenantId: String): String? {
+        if (!tenantId.startsWith(TENANT_PREFIX)) return null
+        return tenantId.substring(TENANT_PREFIX.length).ifEmpty { null }
+    }
 
     private const val TENANT_PREFIX = "dm17:"
 

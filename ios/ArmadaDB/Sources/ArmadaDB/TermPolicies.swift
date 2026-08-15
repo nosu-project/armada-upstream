@@ -69,10 +69,16 @@ public enum Dm17Conversation {
     /// The `dm17:` tenant prefix.
     public static let tenantPrefix = "dm17:"
 
-    /// The pubkey in a `dm17:<self>` tenant id, or nil for any other id.
+    /// The pubkey in a `dm17:<self>` tenant id, or nil for any other id —
+    /// including a bare `dm17:`, which names no viewer. Falling through with an
+    /// empty `self` would file every participant of every rumor as a peer, where
+    /// the TypeScript policy (whose `!self` check is the same test) derives
+    /// nothing; the id is malformed either way, and the two must agree on what a
+    /// malformed one means.
     public static func tenantSelf(_ tenantId: String) -> String? {
         guard tenantId.hasPrefix(tenantPrefix) else { return nil }
-        return String(tenantId.dropFirst(tenantPrefix.count))
+        let rest = String(tenantId.dropFirst(tenantPrefix.count))
+        return rest.isEmpty ? nil : rest
     }
 
     /// The participants of a rumor's conversation, from `selfPubkey`'s

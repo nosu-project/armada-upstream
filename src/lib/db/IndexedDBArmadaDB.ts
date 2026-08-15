@@ -464,9 +464,15 @@ class IndexedDBRumorStore implements NRumorStore {
 
   /**
    * Wait for the term backfill, if a read is about to depend on it. Only reads
-   * that name a term wait; an ordinary read is unaffected by a half-built term
-   * index, and queueing it behind a full pass over the tenant would put that
-   * pass in front of the first thing the UI asks for.
+   * that reach the term index wait; an ordinary read is unaffected by a
+   * half-built one, and queueing it behind a full pass over the tenant would put
+   * that pass in front of the first thing the UI asks for.
+   *
+   * The test is whether a filter carries a `search` AT ALL, and must stay that
+   * way: `distinct:<namespace>` reads the index while parsing to no term of its
+   * own, so a gate on `ParsedFilter.terms` would let the conversation list —
+   * the one read that is nothing BUT a collapse — group over an index nothing
+   * had built. That is exactly what the Kotlin and Swift ports did.
    */
   private async awaitTerms(filters: NostrFilter[]): Promise<void> {
     if (!this.backfill) return;
