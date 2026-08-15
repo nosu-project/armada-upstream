@@ -1,11 +1,18 @@
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 
 import { useDebounce } from "@/hooks/useDebounce";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
+import { useChatModeration } from "@/concord/hooks/useChannel";
 import { openedToChatMsg } from "@/concord/hooks/useTransport";
+import {
+  quarantineMemoryRevision,
+  recallQuarantined,
+  subscribeQuarantineMemory,
+} from "@/concord/lib/quarantineMemory";
 import { searchRumors } from "@/concord/lib/rumorStore";
 import { searchIsActive, type SearchFilters } from "@/concord/lib/search";
+import type { Community } from "@/concord/lib/types";
 
 import type { ChatMsg } from "@/components/chat/transport";
 
@@ -22,10 +29,11 @@ import type { ChatMsg } from "@/components/chat/transport";
  *   the filter selects no specific channels).
  */
 export function useConcordSearch(
-  communityIdHex: string | undefined,
+  community: Community | undefined,
   allChannelIds: string[],
   filters: SearchFilters,
 ) {
+  const communityIdHex = community?.idHex;
   const debouncedQuery = useDebounce(filters.query.trim(), 300);
 
   // Effective scope: the chosen channels, or every channel when none picked.
@@ -67,13 +75,39 @@ export function useConcordSearch(
     },
   });
 
-  // Search reads the store directly rather than the timeline, so it is its own
-  // path back to a muted person's messages — filter it here too.
+  // Search reads the store directly rather than the timeline, so every drop the
+  // fold performs has to be repeated here or search becomes the way around it.
+  //
+  // The Banlist is the sharp one. A moderator's delete never removes the row —
+  // the store refuses a kind-5 whose author isn't the target (NIP-09), so it is
+  // dropped in the fold and nowhere else — which means an abusive message whose
+  // author was deleted and banned was still sitting in `c2:<communityId>`,
+  // verbatim and findable by every member, indefinitely. CORD-04 §4 is explicit
+  // that every honest client drops every event from a banned npub.
   const { mutedPubkeys } = useMutedPubkeys();
+  const moderation = useChatModeration(community);
+  // Re-derive when the persisted quarantine warms or grows, as the mentions tab
+  // does: a flood the fold quarantined must not be reachable through search.
+  const memoryRev = useSyncExternalStore(subscribeQuarantineMemory, quarantineMemoryRevision);
+  const channelsSig = channelIds.join(",");
   const results = useMemo(() => {
-    const all = search.data ?? [];
-    return mutedPubkeys.size === 0 ? all : all.filter((m) => !mutedPubkeys.has(m.pubkey));
-  }, [search.data, mutedPubkeys]);
+    void memoryRev;
+    let list = search.data ?? [];
+    if (mutedPubkeys.size > 0) list = list.filter((m) => !mutedPubkeys.has(m.pubkey));
+    if (moderation.banned.size > 0) list = list.filter((m) => !moderation.banned.has(m.pubkey));
+    if (communityIdHex) {
+      let quarantined: Set<string> | undefined;
+      for (const idHex of channelIds) {
+        const remembered = recallQuarantined(communityIdHex, idHex);
+        if (!remembered) continue;
+        quarantined ??= new Set();
+        for (const id of remembered) quarantined.add(id);
+      }
+      if (quarantined && quarantined.size > 0) list = list.filter((m) => !quarantined.has(m.id));
+    }
+    return list;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search.data, mutedPubkeys, moderation, communityIdHex, channelsSig, memoryRev]);
 
   return {
     results,

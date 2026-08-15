@@ -2,10 +2,11 @@ import { useCallback, useMemo } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
+import { useChatModeration } from "@/concord/hooks/useChannel";
 import { useCommunityRumors } from "@/concord/hooks/useCommunityRumors";
 import { foldTimeline, replyTargetOf, type OpenedChat } from "@/concord/lib/chat";
 import { openedToChatMsg } from "@/concord/hooks/useTransport";
-import type { Channel } from "@/concord/lib/types";
+import type { Channel, Community } from "@/concord/lib/types";
 import type { ChatMsg } from "@/components/chat/transport";
 import type { NostrEvent } from "@nostrify/nostrify";
 import { concordThreadReadKey, useReadState } from "@/hooks/useReadState";
@@ -53,7 +54,7 @@ export interface ConcordThread {
  * recomputes instantly. Reading a channel that shows a thread's replies also
  * advances that thread's stamp (the open-channel effect in ConcordPage).
  */
-export function useConcordThreads(communityIdHex: string | undefined, channels: Channel[]): {
+export function useConcordThreads(community: Community | undefined, channels: Channel[]): {
   threads: ConcordThread[];
   isLoading: boolean;
   hasNew: boolean;
@@ -64,6 +65,15 @@ export function useConcordThreads(communityIdHex: string | undefined, channels: 
   const pubkey = user?.pubkey;
   const { mutedPubkeys } = useMutedPubkeys();
   const { readState, markRead: sharedMarkRead } = useReadState();
+  const communityIdHex = community?.idHex;
+  // The same context the channel timeline folds under. Without it the fold
+  // silently skips the Banlist drop and every moderator delete (both branches
+  // short-circuit on `moderation &&`), so a banned author's replies kept
+  // rendering here — and kept inflating reply counts, participant stacks and
+  // the "new replies" dot — after they had vanished from the channel itself.
+  // CORD-04 §4 admits no such exemption: every honest client drops EVERY event
+  // from a banned npub.
+  const moderation = useChatModeration(community);
 
   const channelSig = channels.map((c) => c.idHex).join(",");
   const channelIds = useMemo(() => channels.map((c) => c.idHex), [channelSig]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -90,8 +100,10 @@ export function useConcordThreads(communityIdHex: string | undefined, channels: 
       // stack, nor a "new replies" dot. A thread whose ROOT is muted vanishes
       // with it: `byId` no longer resolves the root, and it degrades to the
       // same tombstone an out-of-window root gets.
-      const messages = foldTimeline(rumors).messages
-        .filter((m) => !mutedPubkeys.has(m.author));
+      const folded = foldTimeline(rumors, moderation);
+      const messages = folded.messages.filter(
+        (m) => !mutedPubkeys.has(m.author) && !folded.quarantined.has(m.rumorId),
+      );
       const byId = new Map(messages.map((m) => [m.rumorId, m]));
 
       // Bucket thread replies by their root. A thread reply is a NIP-22
@@ -148,7 +160,7 @@ export function useConcordThreads(communityIdHex: string | undefined, channels: 
 
     out.sort((a, b) => b.lastReplyAt - a.lastReplyAt);
     return out;
-  }, [rumorsByChannel, pubkey, mutedPubkeys]);
+  }, [rumorsByChannel, pubkey, mutedPubkeys, moderation]);
 
   // Layer per-thread "new" on top as pure arithmetic against the shared
   // read-state map (`c2t:<rootId>` stamps).

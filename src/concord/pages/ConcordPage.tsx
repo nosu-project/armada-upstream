@@ -1098,7 +1098,7 @@ export function ConcordPage() {
     () => [...gitAttachmentsByChannel.values()].some((list) => list.some((attachment) => attachment.detachedAt === undefined)),
     [gitAttachmentsByChannel],
   );
-  const { byChannel: unreadByChannel, markRead: markChannelRead } = useConcordUnread(community?.idHex, channels, communityGitActivity.byChannel);
+  const { byChannel: unreadByChannel, markRead: markChannelRead } = useConcordUnread(community, channels, communityGitActivity.byChannel);
 
   // "Mark all as read": stamp every unread channel to its newest unread
   // message (monotonic stamps, so already-read channels no-op).
@@ -1132,7 +1132,7 @@ export function ConcordPage() {
     hasNew: hasNewThreadReplies,
     markRead: markThreadRead,
     markAllRead: markAllThreadsRead,
-  } = useConcordThreads(community?.idHex, channels);
+  } = useConcordThreads(community, channels);
 
   // Authenticate the connection as this community's per-channel stream keys
   // (control/guestbook/dissolved keys are registered app-wide in MainLayout).
@@ -2262,7 +2262,7 @@ export function ConcordPage() {
     isLoading: searchLoading,
     active: searching,
   } = useConcordSearch(
-    community?.idHex,
+    community,
     allChannelIds,
     searchOpen ? searchFilters : EMPTY_SEARCH_FILTERS,
   );

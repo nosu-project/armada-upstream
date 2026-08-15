@@ -24,12 +24,16 @@ const CH = "d".repeat(64);
 const h = vi.hoisted(() => ({
   rumors: [] as OpenedChat[],
   readState: {} as Record<string, number>,
+  banned: new Set<string>(),
 }));
 
 vi.mock("@/hooks/useCurrentUser", () => ({ useCurrentUser: () => ({ user: { pubkey: ME } }) }));
 vi.mock("@/hooks/useMuteList", () => ({ useMutedPubkeys: () => ({ mutedPubkeys: new Set<string>() }) }));
 vi.mock("@/concord/hooks/useCommunityRumors", () => ({
   useCommunityRumors: () => ({ byChannel: new Map([[CH, h.rumors]]), isLoading: false }),
+}));
+vi.mock("@/concord/hooks/useChannel", () => ({
+  useChatModeration: () => ({ banned: h.banned, canDelete: () => false }),
 }));
 vi.mock("@/concord/lib/floodCluster", () => ({ quarantinedIn: () => new Set<string>() }));
 vi.mock("@/concord/lib/quarantineMemory", () => ({
@@ -69,11 +73,13 @@ function row(
   } as OpenedChat;
 }
 
-const render = () => renderHook(() => useConcordUnread("cc".repeat(32), [{ idHex: CH } as never]));
+const render = () =>
+  renderHook(() => useConcordUnread({ idHex: "cc".repeat(32) } as never, [{ idHex: CH } as never]));
 
 beforeEach(() => {
   h.rumors = [];
   h.readState = {};
+  h.banned = new Set<string>();
 });
 
 describe("useConcordUnread — deletes fold into the badge", () => {
@@ -104,6 +110,32 @@ describe("useConcordUnread — deletes fold into the badge", () => {
       row("delB", Y, KIND_DELETE, 205, [["e", "B"], ["k", "9"]]),
     ];
     h.readState[`c2:${CH}`] = 100;
+    expect(render().result.current.byChannel[CH]).toEqual({ latest: 200, mention: false });
+  });
+});
+
+describe("useConcordUnread — the Banlist folds into the badge", () => {
+  it("a banned author's message does not light the channel", () => {
+    // This scan reads the raw store, so it does not inherit the fold's Banlist
+    // drop. Without its own, a banned member kept badging a channel whose
+    // timeline renders nothing of theirs — a dot no open can clear.
+    h.rumors = [row("A", X, KIND_MESSAGE, 100), row("B", X, KIND_MESSAGE, 200)];
+    h.readState[`c2:${CH}`] = 100;
+    h.banned = new Set([X]);
+    expect(render().result.current.byChannel[CH]).toBeUndefined();
+  });
+
+  it("a banned author's mention does not light the mention badge either", () => {
+    h.rumors = [row("B", X, KIND_MESSAGE, 200, [["p", ME]])];
+    h.readState[`c2:${CH}`] = 100;
+    h.banned = new Set([X]);
+    expect(render().result.current.byChannel[CH]).toBeUndefined();
+  });
+
+  it("an unbanned author still badges (the drop is not blanket)", () => {
+    h.rumors = [row("B", X, KIND_MESSAGE, 200)];
+    h.readState[`c2:${CH}`] = 100;
+    h.banned = new Set([Y]);
     expect(render().result.current.byChannel[CH]).toEqual({ latest: 200, mention: false });
   });
 });

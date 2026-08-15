@@ -89,7 +89,7 @@ function ConcordUnreadCounter({
 }) {
   const community = useCommunity(communityId);
   const channels = useChannels(community, false);
-  const { byChannel } = useConcordUnread(community?.idHex, channels);
+  const { byChannel } = useConcordUnread(community, channels);
   const { isConcordChannelMuted } = useMutes();
   // Mirror the rail: a muted channel doesn't count unless it holds a mention.
   const count = Object.entries(byChannel).filter(

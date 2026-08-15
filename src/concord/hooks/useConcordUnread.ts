@@ -11,7 +11,8 @@ import {
   subscribeQuarantineMemory,
 } from "@/concord/lib/quarantineMemory";
 import { KIND_DELETE, KIND_MESSAGE } from "@/concord/lib/kinds";
-import type { Channel } from "@/concord/lib/types";
+import type { Channel, Community } from "@/concord/lib/types";
+import { useChatModeration } from "@/concord/hooks/useChannel";
 import { concordReadKey, useReadState } from "@/hooks/useReadState";
 import type { GitTimelineActivity } from "@/lib/gitActivity";
 
@@ -39,7 +40,7 @@ export interface ConcordUnread {
  * ts)` to advance a channel's read stamp, and a `getLastRead` accessor.
  */
 export function useConcordUnread(
-  communityIdHex: string | undefined,
+  community: Community | undefined,
   channels: Channel[],
   gitByChannel: ReadonlyMap<string, readonly GitTimelineActivity[]> = new Map(),
 ): {
@@ -47,9 +48,14 @@ export function useConcordUnread(
   markRead: (channelIdHex: string, timestamp: number) => void;
   getLastRead: (channelIdHex: string) => number;
 } {
+  const communityIdHex = community?.idHex;
   const { user } = useCurrentUser();
   const pubkey = user?.pubkey;
   const { mutedPubkeys } = useMutedPubkeys();
+  // This scan reads the raw store, so the Banlist has to be applied here as
+  // well as in the fold — otherwise a banned author keeps lighting channel
+  // badges the timeline has nothing in it to clear (CORD-04 §4).
+  const { banned } = useChatModeration(community);
   const {
     readState,
     getLastRead: sharedGetLastRead,
@@ -134,6 +140,8 @@ export function useConcordUnread(
         // ...nor from someone muted: the timeline won't render their message,
         // so a badge counting it would be one the channel can never clear.
         if (mutedPubkeys.has(r.author)) continue;
+        // ...nor from a banned one: the fold drops their events entirely.
+        if (banned.has(r.author)) continue;
         // ...nor a message its author has since deleted (same reasoning).
         if (selfDeleted.has(r.rumorId)) continue;
         if (quarantined.has(r.rumorId)) continue;
@@ -157,7 +165,7 @@ export function useConcordUnread(
       if (latest > lastRead) next[idHex] = { latest, mention: latestMention > lastRead };
     }
     return next;
-  }, [rumorsByChannel, readState, pubkey, gitByChannel, mutedPubkeys, communityIdHex, memoryRev]);
+  }, [rumorsByChannel, readState, pubkey, gitByChannel, mutedPubkeys, banned, communityIdHex, memoryRev]);
 
   const markRead = useCallback(
     (channelIdHex: string, timestamp: number) => {
