@@ -1,33 +1,40 @@
 import { describe, expect, it } from "vitest";
 
-import { noteStripFor, NOTE_TO_SELF_NAME } from "@/components/NoteToSelfAvatar";
+import { NOTE_TO_SELF_NAME, NOTE_VIEWBOX, notePathsFor, noteStrokeFor } from "@/components/NoteToSelfAvatar";
+
+/** Writing lines in a lines path, one `M` per rule. */
+const lines = (d: string) => (d.match(/M/g) ?? []).length;
 
 describe("note to self mark", () => {
-  it("carries Signal's four-path notepad on each strip", () => {
+  it("draws a page and its writing lines on one viewport", () => {
+    expect(NOTE_VIEWBOX).toBe("0 0 24 24");
     for (const px of [16, 48, 96]) {
-      const strip = noteStripFor(px);
-      expect(strip.paths).toHaveLength(4);
-      for (const d of strip.paths) expect(d.startsWith("M")).toBe(true);
+      const [page, rules] = notePathsFor(px);
+      expect(page.startsWith("M")).toBe(true);
+      expect(lines(rules)).toBeGreaterThanOrEqual(2);
     }
   });
 
-  it("draws each strip on the viewport its own drawable used", () => {
-    // The paths are Signal's geometry verbatim, so a strip rendered on the
-    // wrong viewport is silently mis-scaled rather than broken.
-    expect(noteStripFor(16).viewBox).toBe("0 0 16 16");
-    expect(noteStripFor(48).viewBox).toBe("0 0 24 24");
-    expect(noteStripFor(96).viewBox).toBe("0 0 40 40");
+  it("drops to two lines only where three cannot stay distinct", () => {
+    expect(lines(notePathsFor(16)[1])).toBe(2);
+    expect(lines(notePathsFor(31)[1])).toBe(2);
+    expect(lines(notePathsFor(32)[1])).toBe(3);
+    expect(lines(notePathsFor(96)[1])).toBe(3);
   });
 
-  it("switches strip at Signal's own size boundaries", () => {
-    // FallbackAvatar.getSizeByDp: SMALL under 32, LARGE at 80 and up.
-    expect(noteStripFor(31)).toBe(noteStripFor(16));
-    expect(noteStripFor(32)).toBe(noteStripFor(48));
-    expect(noteStripFor(79)).toBe(noteStripFor(48));
-    expect(noteStripFor(80)).toBe(noteStripFor(400));
+  it("thickens the stroke as the mark gets smaller", () => {
+    expect(noteStrokeFor(16)).toBeGreaterThan(noteStrokeFor(48));
+    expect(noteStrokeFor(48)).toBeGreaterThan(noteStrokeFor(96));
   });
 
-  it("uses Signal's own label", () => {
+  it("steps the weight at fixed size boundaries", () => {
+    expect(noteStrokeFor(31)).toBe(noteStrokeFor(16));
+    expect(noteStrokeFor(32)).toBe(noteStrokeFor(48));
+    expect(noteStrokeFor(79)).toBe(noteStrokeFor(48));
+    expect(noteStrokeFor(80)).toBe(noteStrokeFor(400));
+  });
+
+  it("labels the conversation", () => {
     expect(NOTE_TO_SELF_NAME).toBe("Note to Self");
   });
 });

@@ -125,23 +125,19 @@ the box; other hostnames need HTTPS.
 
 [AGPL-3.0](LICENSE)
 
-### Third-party assets
+### Additional permission for app store distribution
 
-- **Disappearing-message timer icon** — the 13 clock frames in
-  `src/components/chat/ExpirationTimerIcon.tsx` are the `ic_timer_NN_12` vector
-  drawables from [Signal-Android](https://github.com/signalapp/Signal-Android)
-  (`app/src/main/res/drawable/`), copyright Signal Messenger, LLC, converted
-  from Android `<vector>` `pathData` to SVG `d` attributes with the geometry
-  unchanged. Signal-Android is licensed AGPL-3.0, the same license as Armada,
-  so the copy is license-compatible; the frames remain under their original
-  copyright and license.
-- **Note to Self icon** — the three notepad glyphs in
-  `src/components/NoteToSelfAvatar.tsx` are the `symbol_note_compact_16`,
-  `symbol_note_24` and `symbol_note_display_bold_40` vector drawables from
-  [Signal-Android](https://github.com/signalapp/Signal-Android)
-  (`app/src/main/res/drawable/`), copyright Signal Messenger, LLC, converted
-  from Android `<vector>` `pathData` to SVG `d` attributes with the geometry
-  unchanged. Signal's size thresholds and its 0.625 icon-to-circle inset
-  (`FallbackAvatar`) are kept, as is its "Note to Self" label; the circle's
-  colours are Armada's. Same AGPL-3.0 compatibility as above; the glyphs remain
-  under their original copyright and license.
+App stores make you agree to terms (device limits, DRM) that section 10 of the
+AGPL forbids adding on top of it, so shipping an AGPL app through one needs an
+explicit additional permission from the copyright holder:
+
+> As an additional permission under section 7 of the GNU Affero General Public
+> License version 3, Soapbox Technology LLC grants permission to convey the
+> Program, and works based on it, through Apple's App Store and any other
+> application distribution platform, notwithstanding the additional
+> restrictions those platforms' terms of service impose on the recipient's
+> exercise of the rights granted by this License.
+
+This does not narrow the AGPL, and section 7 lets any recipient remove it from
+their own copy.
+

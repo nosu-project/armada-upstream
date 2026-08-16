@@ -13,11 +13,56 @@ const HOUR = 3600;
 const EXPIRES = CREATED + HOUR;
 const at = (secs: number) => (CREATED + secs) * 1000;
 
+/** Subpaths in a `d`, i.e. dots in a frame's dot strip. */
+const subpaths = (d: string) => (d.match(/M/g) ?? []).length;
+
 describe("timer frames", () => {
-  it("carries Signal's full 13-frame strip", () => {
+  it("generates the full 13-frame strip", () => {
     expect(TIMER_FRAMES).toHaveLength(13);
     expect(LAST_FRAME).toBe(12);
-    for (const d of TIMER_FRAMES) expect(d.startsWith("M")).toBe(true);
+    for (const { hand } of TIMER_FRAMES) expect(hand.startsWith("M")).toBe(true);
+  });
+
+  it("trades one dot for one twelfth of ring per frame", () => {
+    // The two halves of the face are complementary: what the ring has given up
+    // is exactly what the dots show, so no frame can be drawn short or double.
+    for (const [frame, { ring, dots }] of TIMER_FRAMES.entries()) {
+      expect(subpaths(dots)).toBe(12 - frame);
+      expect(ring === "").toBe(frame === 0);
+    }
+  });
+
+  it("closes the ring only when the message is untouched", () => {
+    // A full turn is two half-turn arcs; every partial frame is one arc.
+    expect(subpaths(TIMER_FRAMES[12].ring)).toBe(1);
+    expect(TIMER_FRAMES[12].ring.match(/A/g)).toHaveLength(2);
+    expect(TIMER_FRAMES[11].ring.match(/A/g)).toHaveLength(1);
+    expect(TIMER_FRAMES[12].dots).toBe("");
+  });
+
+  it("points the hand at the depletion boundary", () => {
+    // The hand, the live arc's moving end and the newest gap must share one
+    // angle, or the hand drifts away from where the ring is being spent.
+    for (let frame = 1; frame < 12; frame++) {
+      const { ring, hand } = TIMER_FRAMES[frame];
+      const [rx, ry] = ring.match(/M ([\d.-]+) ([\d.-]+)/)!.slice(1).map(Number);
+      const [hx, hy] = hand.match(/L ([\d.-]+) ([\d.-]+)/)!.slice(1).map(Number);
+      const ringAngle = Math.atan2(rx - 6, 6 - ry);
+      const handAngle = Math.atan2(hx - 6, 6 - hy);
+      // The emitted coordinates are rounded to 3 decimals, so the angles can
+      // disagree by up to ~1e-4 radians without the geometry being wrong.
+      expect(handAngle).toBeCloseTo(ringAngle, 3);
+    }
+  });
+
+  it("sweeps the hand a full turn, ending where it started", () => {
+    // Up at 12, down at 6, back up at 0, so the two ends coincide and the
+    // half-way frame is its opposite.
+    expect(TIMER_FRAMES[0].hand).toBe(TIMER_FRAMES[12].hand);
+    expect(TIMER_FRAMES[12].hand).toBe("M 6 6 L 6 2.5");
+    expect(TIMER_FRAMES[6].hand).toBe("M 6 6 L 6 9.5");
+    // COUNTERCLOCKWISE: a quarter spent points the hand at 9 o'clock, not 3.
+    expect(TIMER_FRAMES[9].hand).toBe("M 6 6 L 2.5 6");
   });
 });
 
