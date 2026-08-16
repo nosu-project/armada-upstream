@@ -10,6 +10,11 @@ import { useFollowList } from "@/hooks/useFollowList";
 import { KIND_EMOJI_SET, emojiPackEntries, emojiPackName } from "@/hooks/useEmojiPacks";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { resolveBundle } from "@/concord/hooks/useCommunityActions";
+import {
+  activityByLinkSigner,
+  discoverActivityBatches,
+  type DiscoverActivityTarget,
+} from "@/concord/lib/discoverActivity";
 import { parseInviteLink } from "@/concord/lib/invite";
 import {
   KIND_COMMUNITY_ANNOUNCEMENT,
@@ -647,6 +652,69 @@ function keepLastGoodPage(
   if (q) return undefined;
   const prev = queryClient.getQueryData<NostrRumor[]>(queryKey);
   return prev && prev.length > 0 ? prev : undefined;
+}
+
+/**
+ * How long to wait after the last activity-target change before issuing the
+ * batched last-wrap REQ. Control peeks land one-by-one and each expands a
+ * card's author set (public chat streams); without a coalesce window that
+ * re-keyed this query per peek (~N REQs for N cards).
+ */
+const ACTIVITY_DEBOUNCE_MS = 1000;
+
+/**
+ * Batched last-active probe for Discover community cards: a `limit: 1` filter
+ * per community (newest kind-1059 wrap across that community's derivable
+ * stream authors), grouped into one REQ per relay set. Cards paint first; this
+ * fills in timestamps without blocking. No decrypt — only wrap metadata.
+ *
+ * Target updates are debounced so a burst of Control-peek enrichments collapses
+ * into a single REQ; `placeholderData` keeps the prior timestamps on screen
+ * while the coalesced fetch runs.
+ */
+export function useDiscoverCommunityActivity(
+  targets: DiscoverActivityTarget[],
+): Record<string, number> {
+  const { nostr } = useNostr();
+
+  // Stable key: linkSigner → sorted authors + relays. Reorders of the same
+  // set must not refetch.
+  const targetsKey = useMemo(() => {
+    const rows = targets
+      .filter((t) => t.authors.length > 0 && t.relays.length > 0)
+      .map((t) => ({
+        linkSigner: t.linkSigner,
+        authors: [...t.authors].sort(),
+        relays: [...t.relays].map(normalizeRelayUrl).filter(Boolean).sort(),
+      }))
+      .sort((a, b) => a.linkSigner.localeCompare(b.linkSigner));
+    return JSON.stringify(rows);
+  }, [targets]);
+
+  const debouncedTargetsKey = useDebounce(targetsKey, ACTIVITY_DEBOUNCE_MS);
+
+  const result = useQuery<Record<string, number>>({
+    queryKey: ["discover", "community-activity", debouncedTargetsKey],
+    enabled: debouncedTargetsKey !== "[]",
+    staleTime: 5 * 60_000,
+    placeholderData: (prev) => prev,
+    queryFn: async ({ signal }) => {
+      const parsed = JSON.parse(debouncedTargetsKey) as DiscoverActivityTarget[];
+      const now = Math.floor(Date.now() / 1000);
+      const batches = discoverActivityBatches(parsed, now);
+      if (batches.length === 0) return {};
+      const deadline = AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]);
+      // allSettled: one unreachable relay set must cost only its own listings
+      // their timestamp, not every listing in the grid.
+      const pages = await Promise.allSettled(
+        batches.map((b) => nostr.group(b.relays).query(b.filters, { signal: deadline })),
+      );
+      const events = pages.flatMap((p) => (p.status === "fulfilled" ? p.value : []));
+      return activityByLinkSigner(parsed, events, now);
+    },
+  });
+
+  return result.data ?? {};
 }
 
 /** NIP-30 emoji packs (kind 30030). */
