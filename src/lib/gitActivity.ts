@@ -43,6 +43,8 @@ export interface GitRepositoryAddress {
   owner: string;
   identifier: string;
   coordinate: string;
+  /** Normalized relay hint from the NIP-34 `a` tag, when present. */
+  relayHint?: string;
 }
 
 /** Parse a canonical `30617:<owner-pubkey>:<d>` repository coordinate. */
@@ -157,8 +159,14 @@ export function parseGitTicket(event: NostrRumor): GitTicket | undefined {
     ? { name: branchName || undefined, base: base || undefined, head: head || undefined }
     : undefined;
 
-  const repositoryAddresses = tagValues(event, "a")
-    .map(parseGitRepositoryAddress)
+  const repositoryAddresses = event.tags
+    .filter(([name]) => name === "a")
+    .map(([, coordinate, relayHint]) => {
+      const address = parseGitRepositoryAddress(coordinate);
+      if (!address) return undefined;
+      const normalizedRelayHint = normalizeRelayUrl(relayHint ?? "");
+      return normalizedRelayHint ? { ...address, relayHint: normalizedRelayHint } : address;
+    })
     .filter((address): address is GitRepositoryAddress => Boolean(address));
 
   return {

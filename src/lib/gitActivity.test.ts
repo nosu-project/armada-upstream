@@ -122,7 +122,7 @@ describe("ticket, status, and comment parsing", () => {
       pubkey: AUTHOR,
       content: "\n  First meaningful line\n\nBody",
       tags: [
-        ["a", `30617:${OWNER}:armada`],
+        ["a", `30617:${OWNER}:armada`, "wss://gleasonator.dev/relay/"],
         ["t", "Bug"],
         ["t", "bug"],
         ["branch-name", "feature/git"],
@@ -135,7 +135,10 @@ describe("ticket, status, and comment parsing", () => {
       type: "pull-request",
       subject: "First meaningful line",
       labels: ["bug"],
-      repositoryAddress: { coordinate: `30617:${OWNER}:armada` },
+      repositoryAddress: {
+        coordinate: `30617:${OWNER}:armada`,
+        relayHint: "wss://gleasonator.dev/relay",
+      },
       branches: { name: "feature/git", base: "main", head: "abc123" },
       author: AUTHOR,
     });
