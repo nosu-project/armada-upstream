@@ -84,7 +84,7 @@ export const DOWNLOAD_TARGETS: DownloadTarget[] = [
     assets: [
       { id: "linux-appimage", label: "AppImage", hint: "Any distribution. Mark it executable and run it", file: "Armada.AppImage", command: "chmod +x Armada.AppImage && ./Armada.AppImage" },
       { id: "linux-deb", label: "Debian package", hint: "Debian, Ubuntu and derivatives", file: "Armada.deb", command: "sudo apt install ./Armada.deb" },
-      { id: "linux-flatpak", label: "Flatpak", hint: "Sandboxed, any distribution with Flatpak", file: "Armada.flatpak", command: "flatpak install Armada.flatpak" },
+      { id: "linux-flatpak", label: "Flatpak", hint: "Sandboxed, any distribution with Flatpak", file: "Armada.flatpak", command: "flatpak install --user ./Armada.flatpak" },
     ],
   },
   {

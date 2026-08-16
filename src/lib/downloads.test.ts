@@ -85,6 +85,16 @@ describe("download targets", () => {
     expect(DOWNLOAD_TARGETS.find((t) => t.os === "ios")?.assets).toEqual([]);
   });
 
+  it("installs the Flatpak bundle into the current user's package store", () => {
+    const flatpak = DOWNLOAD_TARGETS
+      .find((target) => target.os === "linux")
+      ?.assets.find((asset) => asset.id === "linux-flatpak");
+
+    expect(flatpak).toMatchObject({
+      file: "Armada.flatpak",
+      command: "flatpak install --user ./Armada.flatpak",
+    });
+  });
 });
 
 /**
