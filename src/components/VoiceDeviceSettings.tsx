@@ -591,10 +591,10 @@ export function VoiceDeviceSettings() {
         </div>
       )}
 
-      {/* Voice server (advanced). The server your client uses to START a call
-          in an empty Concord voice channel and to host 1:1 DM calls; once
-          anyone is in a Concord call, their announced server is the rendezvous
-          point, so this only matters for cold-starting or self-hosting. */}
+      {/* Voice server (advanced). Consulted only where no community answers the
+          question: a community that sets its own (Settings → Network) uses
+          those and nothing else, so this covers communities that set none, and
+          1:1 DM calls, which have no community to set any. */}
       <div className="space-y-2.5">
         <div className="flex items-center gap-2">
           <Globe className="size-4 text-muted-foreground shrink-0" />
@@ -626,9 +626,11 @@ export function VoiceDeviceSettings() {
           </p>
         )}
         <p className="text-xs text-muted-foreground">
-          Used to start calls in empty voice channels and for direct-message calls. Leave empty
-          for the default{CONCORD_AV_SERVERS[0] ? ` (${CONCORD_AV_SERVERS[0]})` : ""}. A custom
-          address replaces the built-in Armada voice servers on every synced client.
+          Used for direct-message calls and for communities that set no voice servers of their
+          own; a community that sets them uses only those, and this is ignored there. Leave empty
+          for the default
+          {CONCORD_AV_SERVERS[0] ? ` (${CONCORD_AV_SERVERS[0]})` : ""}. A custom address replaces
+          the built-in Armada voice servers on every synced client.
         </p>
       </div>
     </div>

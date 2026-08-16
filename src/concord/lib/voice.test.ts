@@ -4,9 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { voiceGroupKey } from "@/concord/lib/derive";
 import { KIND_VOICE_PRESENCE } from "@/concord/lib/kinds";
 import type { OpenedEvent } from "@/concord/lib/stream";
+import { MAX_COMMUNITY_AV_BROKERS } from "@/concord/lib/types";
 import {
   brokerRank,
   canonicalOrigin,
+  communityAvBrokers,
   fetchAvToken,
   fetchAvTokenFromAny,
   foldVoicePresence,
@@ -19,6 +21,7 @@ import {
   presenceTags,
   reactionTag,
   rendezvousCandidates,
+  occupantsElsewhere,
   signAvGrant,
   verifiedAuthorOf,
   VOICE_HEARTBEAT_MS,
@@ -343,34 +346,99 @@ describe("foldVoicePresence (§4)", () => {
   });
 });
 
-describe("rendezvous (§5)", () => {
+describe("rendezvous (config, not the §5 hint)", () => {
   const room = "ab".repeat(32);
   const now = 10_000_000;
 
-  it("prefers occupied brokers (tie-break ordered), then own defaults", () => {
-    const fold = foldVoicePresence(
-      [
-        {
-          author: "a".repeat(64),
-          status: "joined",
-          identity: "id-1",
-          broker: "https://x.example",
-          ms: now - 1000,
-          rumorId: "r1",
-        },
-      ],
-      now,
-    );
-    const candidates = rendezvousCandidates(room, fold, ["https://own.example"]);
-    expect(candidates[0]).toBe("https://x.example");
-    expect(candidates).toContain("https://own.example");
+  const joinedOn = (broker: string, n: number) => ({
+    author: String(n).repeat(64).slice(0, 64),
+    status: "joined" as const,
+    identity: `id-${n}`,
+    broker,
+    ms: now - 1000,
+    rumorId: `r${n}`,
   });
 
-  it("an empty room falls back to the defaults in their stated order", () => {
-    const fold = foldVoicePresence([], now);
-    expect(rendezvousCandidates(room, fold, ["https://one.example", "https://two.example"])).toEqual([
+  it("with no community list, the client's own defaults in their stated order", () => {
+    expect(rendezvousCandidates(room, ["https://one.example", "https://two.example"])).toEqual([
       "https://one.example",
       "https://two.example",
     ]);
+  });
+
+  it("a community's brokers are the whole set — the client's own are not consulted", () => {
+    const candidates = rendezvousCandidates(room, ["https://own.example"], [
+      "https://c1.example",
+      "https://c2.example",
+    ]);
+    expect(candidates).toEqual(orderBrokers(room, ["https://c1.example", "https://c2.example"]));
+    expect(candidates).not.toContain("https://own.example");
+  });
+
+  it("orders a community's brokers by the room-keyed tie-break, so members converge unprompted", () => {
+    const listed = ["https://c1.example", "https://c2.example", "https://c3.example"];
+    // Two members, different personal servers, one list, nobody in the room:
+    // the pick must not depend on whose client is asking.
+    const ana = rendezvousCandidates(room, ["https://ana.example"], listed);
+    const ben = rendezvousCandidates(room, ["https://ben.example"], [...listed].reverse());
+    expect(ana).toEqual(ben);
+    // ...and another room leads with another broker, spreading a community's
+    // channels across the list rather than piling them onto its first.
+    const other = rendezvousCandidates("cd".repeat(32), [], listed);
+    expect(listed.map((b) => canonicalOrigin(b))).toContain(other[0]);
+  });
+
+  it("ignores the presence broker tag entirely — a call elsewhere does not move the answer", () => {
+    // The signature takes no fold at all; this is the behavioral statement of
+    // that. A member announcing a broker cannot steer anyone, listed or not.
+    const listed = ["https://listed.example"];
+    expect(rendezvousCandidates(room, ["https://own.example"], listed)).toEqual([
+      "https://listed.example",
+    ]);
+    expect(rendezvousCandidates(room, ["https://own.example"])).toEqual(["https://own.example"]);
+  });
+
+  it("reports members on another broker than the one we joined, for the UI to offer", () => {
+    const fold = foldVoicePresence(
+      [joinedOn("https://ours.example", 1), joinedOn("https://elsewhere.example", 2)],
+      now,
+    );
+    expect(occupantsElsewhere(fold, "https://ours.example").map((p) => p.identity)).toEqual(["id-2"]);
+    // Canonicalized on both sides, so a spelling difference isn't a split...
+    expect(occupantsElsewhere(fold, "https://Ours.Example:443/")).toHaveLength(1);
+    // ...and nobody is "elsewhere" when everyone is where we are.
+    expect(occupantsElsewhere(foldVoicePresence([joinedOn("https://ours.example", 1)], now), "https://ours.example")).toEqual([]);
+  });
+});
+
+describe("communityAvBrokers (CORD-02 §6)", () => {
+  it("canonicalizes, dedupes and caps; ignores unreadable entries", () => {
+    expect(
+      communityAvBrokers({
+        name: "c",
+        relays: [],
+        av_brokers: [
+          "https://A.Example:443/",
+          "https://a.example",
+          "http://insecure.example",
+          "not a url",
+          42 as unknown as string,
+          "https://b.example",
+        ],
+      }),
+    ).toEqual(["https://a.example", "https://b.example"]);
+  });
+
+  it("reads absent, empty and malformed lists as no brokers", () => {
+    expect(communityAvBrokers(undefined)).toEqual([]);
+    expect(communityAvBrokers({ name: "c", relays: [] })).toEqual([]);
+    expect(communityAvBrokers({ name: "c", relays: [], av_brokers: "https://x.example" as unknown as string[] })).toEqual([]);
+  });
+
+  it("caps at the protocol recommendation", () => {
+    const many = Array.from({ length: MAX_COMMUNITY_AV_BROKERS + 3 }, (_, i) => `https://b${i}.example`);
+    expect(communityAvBrokers({ name: "c", relays: [], av_brokers: many })).toHaveLength(
+      MAX_COMMUNITY_AV_BROKERS,
+    );
   });
 });

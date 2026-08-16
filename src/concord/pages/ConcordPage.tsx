@@ -150,7 +150,7 @@ import { EMPTY_SEARCH_FILTERS, type SearchFilters } from "@/concord/lib/search";
 import { useConcordThreads, type ConcordThread } from "@/concord/hooks/useConcordThreads";
 import { useTyping, useTypingPublisher } from "@/concord/hooks/useTyping";
 import { resolveVoiceBroker, useVoiceBroker, useVoicePresence } from "@/concord/hooks/useVoice";
-import type { VoicePresenceFold } from "@/concord/lib/voice";
+import { communityAvBrokers } from "@/concord/lib/voice";
 import { useRegisterChannelStreamKeys } from "@/concord/hooks/useStreamAuth";
 import { completeMemberlist } from "@/concord/lib/guestbook";
 import { badgeOf, byDisplayOrder, canActOnMember, canActOnPosition, isAuthorized, isAuthorizedIn, MAX_ROLES_PER_MEMBER, Permissions } from "@/concord/lib/roles";
@@ -509,6 +509,7 @@ function CategoryNameDialog({
 const ChannelRow = memo(function ChannelRow({
   community,
   channel,
+  avBrokers,
   active,
   inCall,
   speaking,
@@ -522,6 +523,8 @@ const ChannelRow = memo(function ChannelRow({
 }: {
   community: Community | undefined;
   channel: Channel;
+  /** The community's own AV brokers (CORD-02 §6) — the §5 rendezvous's middle tier. */
+  avBrokers: string[];
   active: boolean;
   /** Whether the user's current call is THIS channel's voice room. */
   inCall: boolean;
@@ -531,7 +534,7 @@ const ChannelRow = memo(function ChannelRow({
   muted?: ReadonlySet<string>;
   unread?: ConcordUnread;
   onSelect: (channelIdHex: string) => void;
-  onJoinVoice: (channel: Channel, broker: string | null, fold?: VoicePresenceFold) => void;
+  onJoinVoice: (channel: Channel, broker: string | null) => void;
   /** Category names already in use, offered so near-duplicates aren't retyped. */
   categories?: string[];
   /** Undefined for a member without MANAGE_CHANNELS: no filing menu at all. */
@@ -543,7 +546,7 @@ const ChannelRow = memo(function ChannelRow({
   // nested roster under the row whenever a call is active, and the rendezvous
   // broker is resolved ahead of the click so joining a call is instant.
   const fold = useVoicePresence(community, channel);
-  const { data: broker } = useVoiceBroker(channel, fold);
+  const { data: broker } = useVoiceBroker(channel, avBrokers);
   const { voiceRoomPubkeys } = useCall();
   const { isConcordChannelMuted } = useMutes();
   const { concordChannelLevel, setLevel: setNotifLevel } = useNotifLevels();
@@ -627,7 +630,7 @@ const ChannelRow = memo(function ChannelRow({
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  onJoinVoice(channel, broker ?? null, fold);
+                  onJoinVoice(channel, broker ?? null);
                 }}
                 aria-label={occupied ? "Join call" : "Start call"}
                 title={occupied ? "Join call" : "Start call"}
@@ -1819,17 +1822,21 @@ export function ConcordPage() {
   );
   const { coalesced } = useGuestbook(community);
 
-  // Voice (CORD-07): the active channel's live presence + rendezvous broker
-  // (both no-op for text channels) power the join button.
+  // Voice (CORD-07): the rendezvous broker (a no-op for text channels) powers
+  // the join button. No presence subscription here — the broker is resolved
+  // from config alone, and the channel row that renders the call's roster
+  // subscribes for itself.
   const { joinConcordCall, activeCall, speakingPubkeys, mutedPubkeys } = useCall();
-  const activeFold = useVoicePresence(community, channel);
-  const { data: activeBroker } = useVoiceBroker(channel, activeFold);
+  // The community's own brokers (CORD-02 §6), read off the fold this page
+  // already holds rather than subscribed to again in every channel row.
+  const avBrokers = useMemo(() => communityAvBrokers(folded?.metadata), [folded?.metadata]);
+  const { data: activeBroker } = useVoiceBroker(channel, avBrokers);
   const inThisVoice = Boolean(
     activeCall?.concord && channel && activeCall.concord.channel.idHex === channel.idHex,
   );
 
   const handleJoinVoice = useCallback(
-    async (ch: Channel, broker: string | null, fold?: VoicePresenceFold) => {
+    async (ch: Channel, broker: string | null) => {
       if (!community || !user) return;
       if (activeCall?.concord?.channel.idHex === ch.idHex) return; // already there
       let resolved = broker;
@@ -1837,21 +1844,23 @@ export function ConcordPage() {
         // The broker query may still be loading, or a transient probe failure
         // cached `null` — re-run the rendezvous live instead of refusing.
         const roomHex = ch.voice.room.pk;
-        resolved = roomHex
-          ? await resolveVoiceBroker(roomHex, fold ?? { present: [], claims: new Map() })
-          : null;
+        resolved = roomHex ? await resolveVoiceBroker(roomHex, avBrokers) : null;
       }
       if (!resolved) {
         toast({
           title: "Voice unavailable",
-          description: "No reachable voice server. You can set one under Settings → Voice.",
+          description: avBrokers.length > 0
+            ? "None of this community's voice servers answered. Your own server isn't used here, because a community that sets voice servers uses only those."
+            : "No reachable voice server. Add one to this community under Settings → Network, or set your own under Settings → Voice.",
           variant: "destructive",
         });
         return;
       }
+      // Members on another broker are reported by the room itself, which knows
+      // the origin that actually minted rather than the one nominated here.
       joinConcordCall({ community, channel: ch, broker: resolved });
     },
-    [community, user, activeCall, joinConcordCall],
+    [community, user, activeCall, joinConcordCall, avBrokers],
   );
 
   // Compliant self-removal: if the folded Banlist names ME, silently tear
@@ -2731,6 +2740,7 @@ export function ConcordPage() {
       <ChannelRow
         community={community}
         channel={c}
+        avBrokers={avBrokers}
         active={Boolean(view === "channel" && channel && channel.idHex === c.idHex)}
         inCall={inCall}
         speaking={inCall ? speakingPubkeys : undefined}
@@ -3221,7 +3231,7 @@ export function ConcordPage() {
                       className={cn("size-8 touch:size-11", inThisVoice && "text-success")}
                       aria-label={inThisVoice ? "In voice" : "Join voice"}
                       disabled={inThisVoice}
-                      onClick={() => channel && handleJoinVoice(channel, activeBroker ?? null, activeFold)}
+                      onClick={() => channel && handleJoinVoice(channel, activeBroker ?? null)}
                     >
                       {inThisVoice ? <Headphones className="size-4" /> : <Phone className="size-4" />}
                     </Button>

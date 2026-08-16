@@ -13,7 +13,9 @@ import {
   sealRumor,
   wrapSeal,
 } from "@/concord/lib/stream";
+import { useControlFold } from "@/concord/hooks/useControlPlane";
 import {
+  communityAvBrokers,
   fetchAvTokenFromAny,
   foldVoicePresence,
   heartbeatDelayMs,
@@ -393,44 +395,65 @@ export function useVoiceReactions(
  * The client's own default AV servers, in preference order: the user's
  * Settings → Voice server when set, otherwise the deployment's build-time
  * defaults. A synchronized custom address is a replacement, not an additive
- * hint. Consulted only when a room is empty — an occupied room's
- * presence-announced brokers always win the rendezvous (§5).
+ * hint. Consulted only where no community answers the question: a community
+ * that publishes brokers uses those exclusively (§5), so this is what a
+ * community publishing none falls back to — and what a DM call, which has no
+ * community to publish any, uses alone.
  */
 export function ownAvServers(): string[] {
   return effectiveAvServers(CONCORD_AV_SERVERS);
 }
 
 /**
- * Imperatively resolve a reachable broker for a room (the same §5 rendezvous
+ * The community's own brokers (CORD-02 §6), following the Control fold rather
+ * than a join-time snapshot: a staff edit reaches a mounted call the same way
+ * a relay change does. Callers already holding the fold should read
+ * `communityAvBrokers(folded?.metadata)` directly instead of subscribing again.
+ */
+export function useCommunityAvBrokers(community: Community | undefined): string[] {
+  const { data: folded } = useControlFold(community);
+  return useMemo(() => communityAvBrokers(folded?.metadata), [folded?.metadata]);
+}
+
+/**
+ * Imperatively resolve a reachable broker for a room (the same rendezvous
  * `useVoiceBroker` runs, but live). Used at join time when the cached query
  * value is missing or a previous probe failed — a stale `null` must not block
  * a join that would succeed now.
  */
 export async function resolveVoiceBroker(
   roomHex: string,
-  fold: VoicePresenceFold,
+  communityBrokers: string[] = [],
   signal?: AbortSignal,
 ): Promise<string | null> {
-  for (const origin of rendezvousCandidates(roomHex, fold, ownAvServers())) {
+  for (const origin of rendezvousCandidates(roomHex, ownAvServers(), communityBrokers)) {
     if (await probeAvBroker(origin, signal)) return origin;
   }
   return null;
 }
 
 /**
- * The §5 rendezvous: resolve the broker to join this channel's call through.
- * If anyone is present, their broker wins (tie-break ordered); an empty room
- * falls back to the deployment's own defaults. Every candidate is probed
- * (`GET /.well-known/concord/av` → 204) and the first reachable one is it.
+ * Resolve the broker to join this channel's call through: the community's own
+ * when it publishes any, this client's configuration otherwise — never the
+ * broker a fellow member's presence points at (see `rendezvousCandidates`).
+ * Every candidate is probed (`GET /.well-known/concord/av` → 204) and the
+ * first reachable one is it.
+ *
+ * Deliberately takes no presence fold: the answer is a property of config and
+ * the room, so it is the same before anyone joins as after, and a channel's
+ * idle rows don't re-resolve on every heartbeat.
  */
 export function useVoiceBroker(
   channel: Channel | undefined,
-  fold: VoicePresenceFold,
+  communityBrokers: string[] = [],
 ): { data: string | null | undefined; isLoading: boolean } {
   const roomHex = channel?.voice.room.pk;
+  // Keyed by CONTENT: this is called per channel row, and a caller passing a
+  // fresh array literal would otherwise re-run the rendezvous every render.
+  const brokersKey = communityBrokers.join(",");
   const candidates = useMemo(
-    () => (roomHex ? rendezvousCandidates(roomHex, fold, ownAvServers()) : []),
-    [roomHex, fold],
+    () => (roomHex ? rendezvousCandidates(roomHex, ownAvServers(), brokersKey ? brokersKey.split(",") : []) : []),
+    [roomHex, brokersKey],
   );
   // The probe answers a question about an ORIGIN, not about a channel, and
   // `candidatesKey` already captures everything the queryFn reads (including

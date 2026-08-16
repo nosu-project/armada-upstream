@@ -46,17 +46,22 @@ import { useVoiceIdentity, VoiceIdentityContext, type VoiceIdentityResolver } fr
 import { ServerScopeProvider } from "@/components/ServerScopeProvider";
 import { random32, voiceSenderKey } from "@/concord/lib/derive";
 import {
+  canonicalOrigin,
   fetchAvToken,
   fetchAvTokenFromAny,
   isVerifiedScreenShareIdentity,
+  occupantsElsewhere,
   rendezvousCandidates,
   verifiedAuthorOf,
   type AvToken,
 } from "@/concord/lib/voice";
+import { toast } from "@/hooks/useToast";
+import { ToastAction } from "@/components/ui/toast";
 import { dmCallKeys } from "@/lib/dmCall";
 import { useCallSync } from "@/concord/hooks/useCallSync";
 import {
   ownAvServers,
+  useCommunityAvBrokers,
   useAvToken,
   useVoiceHeartbeat,
   useVoicePresence,
@@ -852,16 +857,21 @@ function ConcordVoiceRoom({
   // hint stream (§5), and the input to our own heartbeat below. Resolved before
   // the token so a failed mint has somewhere to fall through to.
   const fold = useVoicePresence(community, channel);
+  // Followed live rather than snapshotted into `ctx`: a staff edit to the
+  // community's brokers reaches a mounted call, like a relay change does.
+  const communityBrokers = useCommunityAvBrokers(community);
 
-  // The §5 candidates behind `ctx.broker`. `resolveVoiceBroker` already probed
-  // one at join time, but a probe only proves the broker answered a moment ago —
-  // it can still fail to mint, and without these that is a dead end.
+  // The remaining candidates behind `ctx.broker`. `resolveVoiceBroker` already
+  // probed one at join time, but a probe only proves the broker answered a
+  // moment ago — it can still fail to mint, and without these that is a dead
+  // end. Same config-only set, so a fall-through can't leave the community's
+  // brokers either.
   const fallbackBrokers = useMemo(
     () =>
       channel.voice.room.pk
-        ? rendezvousCandidates(channel.voice.room.pk, fold, ownAvServers()).filter((o) => o !== broker)
-        : ownAvServers().filter((o) => o !== broker),
-    [channel.voice.room.pk, fold, broker],
+        ? rendezvousCandidates(channel.voice.room.pk, ownAvServers(), communityBrokers).filter((o) => o !== broker)
+        : (communityBrokers.length > 0 ? communityBrokers : ownAvServers()).filter((o) => o !== broker),
+    [channel.voice.room.pk, broker, communityBrokers],
   );
 
   const { data: tokenData, error, isLoading } = useAvToken(channel, broker, true, fallbackBrokers);
@@ -1391,27 +1401,59 @@ function ConcordVoiceRoom({
     [tokenData, handRaised, sendReaction, reactions, hevcScreenShare],
   );
 
-  // Split healing (§5): if presence shows the call occupied on an origin that
-  // beats ours in the tie-break, migrate there (once per mount — the remount
-  // key includes the broker, so a migration builds a fresh room).
-  const migrated = useRef(false);
-  useEffect(() => {
-    if (!tokenData || migrated.current) return;
-    const roomHex = channel.voice.room.pk;
-    if (!roomHex) return;
-    const winner = rendezvousCandidates(roomHex, fold, [])[0];
-    const occupiedByOther = fold.present.some(
-      (p) => p.broker === winner && p.identity !== tokenData.identity,
-    );
-    // Compared against the origin we are actually connected through, not the
-    // one `ctx` nominated — after a mint fall-through those differ, and using
-    // `ctx.broker` would either migrate us to where we already are or hide a
-    // migration we genuinely need.
-    if (winner && winner !== tokenData.origin && occupiedByOther) {
-      migrated.current = true;
-      joinConcordCall({ ...ctx, broker: winner });
+  // No split healing: §5's heal is a migration TO whichever broker presence
+  // says is winning, which is the same untrusted hint this client declines to
+  // route on — one member announcing a broker could otherwise pull a whole
+  // call off the community's list mid-flight, which is the migration working
+  // exactly as designed. Candidates come from config, so members converge
+  // before anyone joins instead of after; what's left is a member whose fold
+  // is stale or whose network reached a different candidate, and that is
+  // reported (`occupantsElsewhere`) rather than chased.
+  //
+  // Compared against `tokenData.origin`, the origin we ACTUALLY minted
+  // through: after a fall-through it differs from the one `ctx` nominated.
+  const strandedFrom = useMemo(
+    () => (tokenData ? occupantsElsewhere(fold, tokenData.origin) : []),
+    [fold, tokenData],
+  );
+  // Where most of them are, so the offer names one server rather than a set.
+  const elsewhereOrigin = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const p of strandedFrom) {
+      const origin = p.broker ? canonicalOrigin(p.broker) : null;
+      if (origin) counts.set(origin, (counts.get(origin) ?? 0) + 1);
     }
-  }, [fold, tokenData, channel, ctx, joinConcordCall]);
+    let best: string | null = null;
+    let bestCount = 0;
+    for (const [origin, count] of counts) {
+      if (count > bestCount) [best, bestCount] = [origin, count];
+    }
+    return best;
+  }, [strandedFrom]);
+
+  // Offered, never taken automatically. Following the crowd is what turns an
+  // untrusted hint into routing; a member choosing to follow it, told plainly
+  // that the server is in nobody's settings, is a decision rather than a
+  // redirect — and the one case (a stale fold either side) where the crowd is
+  // simply right is the one where they'd want to.
+  const warnedSplit = useRef(false);
+  useEffect(() => {
+    if (warnedSplit.current || strandedFrom.length === 0 || !elsewhereOrigin) return;
+    warnedSplit.current = true;
+    const host = elsewhereOrigin.replace(/^https:\/\//, "");
+    toast({
+      title: `${strandedFrom.length} ${strandedFrom.length === 1 ? "member is" : "members are"} on another voice server`,
+      description: `They're on ${host}, ${communityBrokers.length > 0 ? "not one this community sets" : "not your voice server"}, so they're in a separate call you won't hear.`,
+      action: (
+        <ToastAction
+          altText={`Join the call on ${host}`}
+          onClick={() => joinConcordCall({ ...ctx, broker: elsewhereOrigin })}
+        >
+          Join them
+        </ToastAction>
+      ),
+    });
+  }, [strandedFrom, elsewhereOrigin, communityBrokers, ctx, joinConcordCall]);
 
   // Identity → member resolution for the call UI (§4): our own identity is
   // ourselves; anyone else's renders as a member only under a sole fresh

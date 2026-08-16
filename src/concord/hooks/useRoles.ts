@@ -47,7 +47,7 @@ async function controlWrapOwed(
 
 /**
  * Metadata mutations (vsk 0, MANAGE_METADATA): edit name / description /
- * icon / banner / relays, version-chained off the held head. Unknown fields
+ * icon / banner / relays / AV brokers, version-chained off the held head. Unknown fields
  * (`custom`, vendor extensions) round-trip untouched (CORD-02 §6).
  */
 export function useMetadataActions(community: Community | undefined) {
@@ -59,7 +59,7 @@ export function useMetadataActions(community: Community | undefined) {
   const updateMetadata = useMutation<
     void,
     Error,
-    { name?: string; description?: string; icon?: ImagePointer | null; banner?: ImagePointer | null; relays?: string[]; message_expiration?: number }
+    { name?: string; description?: string; icon?: ImagePointer | null; banner?: ImagePointer | null; relays?: string[]; av_brokers?: string[]; message_expiration?: number }
   >({
     mutationFn: async (patch) => {
       if (!user || !community) throw new Error("Not ready.");
@@ -72,6 +72,13 @@ export function useMetadataActions(community: Community | undefined) {
       if (patch.icon !== undefined) next.icon = patch.icon ?? undefined;
       if (patch.banner !== undefined) next.banner = patch.banner ?? undefined;
       if (patch.relays !== undefined) next.relays = patch.relays;
+      // CORD-02 §6: "none" is the field's ABSENCE — members then fall back to
+      // their own configured broker, and the entity stays clean for clients
+      // that predate the field.
+      if (patch.av_brokers !== undefined) {
+        if (patch.av_brokers.length > 0) next.av_brokers = patch.av_brokers;
+        else delete next.av_brokers;
+      }
       // CORD-08: off is the field's ABSENCE (absent/0 both read as off, but
       // writing nothing keeps the entity clean for clients that predate it).
       if (patch.message_expiration !== undefined) {

@@ -1,8 +1,9 @@
-import { ImagePlus, Loader2, Pencil, ShieldCheck } from "lucide-react";
+import { ImagePlus, Loader2, Pencil, Plus, ShieldCheck, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ArmadaCrest } from "@/components/brand/ArmadaCrest";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ImageCropDialog } from "@/components/ImageCropDialog";
 import { RelayListEditor } from "@/components/RelayListEditor";
 import { WizardShell } from "@/components/onboarding/WizardShell";
@@ -18,10 +19,14 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useCommunityActions, useCreateRelayCandidates } from "@/concord/hooks/useCommunityActions";
+import { ownAvServers } from "@/concord/hooks/useVoice";
+import { canonicalOrigin } from "@/concord/lib/voice";
+import { faviconUrl } from "@/lib/faviconUrl";
 import { COMMUNITY_TIMER_PRESETS, DEFAULT_MESSAGE_EXPIRATION_SECS } from "@/concord/lib/disappearing";
 import { encryptImageBlob } from "@/concord/lib/image";
 import {
   DESCRIPTION_MAX_BYTES,
+  MAX_COMMUNITY_AV_BROKERS,
   NAME_MAX_BYTES,
   utf8Len,
   type ImagePointer,
@@ -36,10 +41,12 @@ import { cn } from "@/lib/utils";
  * name field, a retention timer and a relay list read as one undifferentiated
  * stack.
  *
- * Relays and the timer are two steps rather than one "how it works" because the
- * relay editor is five rows tall: stacked with anything else it pushed the
- * create button off the bottom of a phone. The short one goes last, so the
- * irreversible action is never the thing that needs scrolling to.
+ * "Where it lives" carries both lists a community is addressed by — relays for
+ * its messages, voice servers for its calls — since they are one question and
+ * one editor shape. The timer stays a step of its own: the relay editor is five
+ * rows tall, and stacked with the create button it pushed it off the bottom of
+ * a phone. The short step goes last, so the irreversible action is never the
+ * thing that needs scrolling to.
  */
 const CREATE_STEPS = ["name", "look", "relays", "rules"] as const;
 type CreateStep = (typeof CREATE_STEPS)[number];
@@ -91,6 +98,19 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
   const [relays, setRelays] = useState<string[] | null>(null);
   const candidates = useCreateRelayCandidates();
   const effectiveRelays = relays ?? candidates;
+
+  // The community's voice servers (CORD-02 §6). Prefilled with the creator's
+  // own, because that is what the community would otherwise be minted with
+  // silently — and once minted, every member's calls resolve from this list
+  // rather than from their own setting (CORD-07 §5), which is a decision worth
+  // showing the person making it. Emptying it is a real answer: it leaves
+  // every member on their own server.
+  const [avBrokers, setAvBrokers] = useState<string[]>(() =>
+    ownAvServers()
+      .map(canonicalOrigin)
+      .filter((origin): origin is string => Boolean(origin))
+      .slice(0, MAX_COMMUNITY_AV_BROKERS),
+  );
 
   const nameTooLong = utf8Len(name.trim()) > NAME_MAX_BYTES;
   const descriptionTooLong = utf8Len(description.trim()) > DESCRIPTION_MAX_BYTES;
@@ -176,6 +196,8 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
         // on exactly the relays the user was told about (create derives the same
         // default from config when this is empty).
         relays: effectiveRelays,
+        // Exactly the list the previous step showed, empty included.
+        avBrokers,
         messageExpirationSecs: expiration,
         description: description.trim() || undefined,
         icon: icon?.pointer,
@@ -329,15 +351,32 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
         <div className="flex flex-col gap-6">
           <StepHeading
             title="where it lives"
-            description="Everyone in the community reads and posts here, so pick relays that will let you post."
+            description="Messages live on the relays; calls run through the voice servers. Pick relays that will let you post."
           />
 
-          <RelayListEditor
-            relays={effectiveRelays}
-            onChange={setRelays}
-            onReset={() => setRelays(candidates)}
-            emptyText="Add at least one relay to host this community."
-          />
+          <div className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Relays
+            </p>
+            <RelayListEditor
+              relays={effectiveRelays}
+              onChange={setRelays}
+              onReset={() => setRelays(candidates)}
+              emptyText="Add at least one relay to host this community."
+            />
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Voice servers
+            </p>
+            <VoiceServerListEditor servers={avBrokers} onChange={setAvBrokers} />
+            <p className="text-xs text-muted-foreground">
+              {avBrokers.length > 0
+                ? "Every call in this community runs through these. They never see the calls themselves, which are encrypted end to end, but they do see who connects and when."
+                : "With none set, every member calls through whatever voice server they've set themselves."}
+            </p>
+          </div>
 
           <Button
             type="button"
@@ -413,6 +452,107 @@ export function CreateCommunityWizard({ onClose }: { onClose: () => void }) {
         />
       )}
     </WizardShell>
+  );
+}
+
+/**
+ * The voice-server list, in the relay editor's shape: an identity row per
+ * server, a remove button, an add form that validates on submit, and a cap
+ * past which the form goes away. Not `RelayListEditor` itself, because its
+ * rows are a NIP-11 lookup — name, AUTH/search badges — and a broker publishes
+ * no document to look up; it answers one capability probe and nothing else.
+ *
+ * So the icon is the host's **favicon**, through the same service template
+ * Ditto uses (`faviconUrl`), and the fallback is the host's initial: the shape
+ * of a relay row without inventing metadata the protocol doesn't define. A
+ * broken or missing favicon degrades to that initial on its own, so nothing
+ * here distinguishes "no icon" from "not a website".
+ */
+function VoiceServerListEditor({
+  servers,
+  onChange,
+}: {
+  servers: string[];
+  onChange: (servers: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+
+  const handleAdd = () => {
+    const raw = draft.trim();
+    // A bare host is the common way to type one; anything not https is refused,
+    // the token grant being a bearer credential (CORD-07 §2).
+    const origin = canonicalOrigin(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`);
+    if (!origin) {
+      toast({
+        title: "Invalid voice server",
+        description: "Enter an https address, like voice.example.com.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (servers.includes(origin)) {
+      toast({ title: "Already in the list", description: origin });
+      setDraft("");
+      return;
+    }
+    onChange([...servers, origin]);
+    setDraft("");
+  };
+
+  return (
+    <div className="space-y-1.5">
+      {servers.map((origin) => {
+        const host = origin.replace(/^https:\/\//, "");
+        return (
+          <div key={origin} className="flex items-center gap-2 rounded-md bg-background/40 px-3 py-2.5">
+            <Avatar className="size-7 shrink-0 rounded-md">
+              <AvatarImage src={faviconUrl(origin)} alt="" />
+              <AvatarFallback className="rounded-md bg-secondary text-xs text-secondary-foreground">
+                {host.charAt(0).toUpperCase()}
+              </AvatarFallback>
+            </Avatar>
+            <span className="min-w-0 flex-1 truncate font-mono text-sm">{host}</span>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={`Remove ${origin}`}
+              className="size-7 shrink-0 text-muted-foreground hover:text-destructive"
+              onClick={() => onChange(servers.filter((s) => s !== origin))}
+            >
+              <X className="size-4" />
+            </Button>
+          </div>
+        );
+      })}
+
+      {servers.length === 0 && (
+        <p className="py-1 text-sm text-muted-foreground">
+          No voice servers. Members will use their own.
+        </p>
+      )}
+
+      {servers.length < MAX_COMMUNITY_AV_BROKERS && (
+        <form
+          className="flex gap-2 pt-1"
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleAdd();
+          }}
+        >
+          <Input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="voice.example.com"
+            aria-label="Add voice server"
+            autoComplete="off"
+            className="bg-background/40 border-transparent text-base md:text-sm"
+          />
+          <Button type="submit" disabled={!draft.trim()} className="clip-corner-lg shrink-0">
+            <Plus className="size-4 mr-1.5" /> Add
+          </Button>
+        </form>
+      )}
+    </div>
   );
 }
 
