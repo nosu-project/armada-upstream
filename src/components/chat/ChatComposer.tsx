@@ -37,6 +37,7 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useComposerBoundsRef } from "@/contexts/ComposerBoundsContext";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useApps } from "@/hooks/useApps";
 import { useChatScope } from "@/hooks/useChatScope";
@@ -70,6 +71,7 @@ import { IMETA_MEDIA_URL_REGEX, mimeFromExt } from "@/lib/mediaUrls";
 import { KIND_GROUP_CHAT, relayRejectionMessage } from "@/lib/nip29";
 import { resizeImage } from "@/lib/resizeImage";
 import { consumeShareFor, onShareStashChanged } from "@/lib/shareTarget";
+import { stripTrackingParamsInText } from "@/lib/trackingParams";
 import { processVideo } from "@/lib/video/processVideo";
 import { invocationTags, parseInvocation, usageLine, validateInvocation, type BotCommandEntry } from "@/lib/botCommands";
 import { executeSlashCommand, parseSlashCommand, resolveNpubArg, type SlashAction, type SlashCapability, type SlashCommand } from "@/lib/slashCommands";
@@ -439,6 +441,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const { mutateAsync: uploadFile } = useUploadFile();
   const { emojis: customEmojis } = useCustomEmojis();
   const { toast } = useToast();
+  const { config } = useAppContext();
   const isMobile = useIsMobile();
   // The chat scope (NIP-29 group / Concord channel), provided by the page. Used
   // to launch in-chat apps from the "+" menu. Undefined in DMs (no scope).
@@ -1599,12 +1602,26 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     requestAnimationFrame(() => textareaRef.current?.focus());
   }, [botCommand, sendInvocation]);
 
+  /**
+   * Strip tracking parameters from the links in an outgoing body, when the
+   * user hasn't turned that off. Applied to the TYPED text before anything
+   * else reads it, so slash-command parsing, bot invocations and
+   * `buildMessageTags` all see the canonical URL and what is published is
+   * clean for every future reader — but deliberately before attachment URLs
+   * are appended, since an upload's URL is matched against its `imeta` tag by
+   * exact string and must never be rewritten.
+   */
+  const canonicalizeLinks = useCallback(
+    (text: string) => (config.stripTrackingParams ? stripTrackingParamsInText(text) : text),
+    [config.stripTrackingParams],
+  );
+
   const handleSend = useCallback(async () => {
     // An attachment is still uploading — its URL isn't in `attachments` yet, so
     // sending now would silently drop the file. Wait for it.
     if (isUploading) return;
 
-    const text = content.trim();
+    const text = canonicalizeLinks(content.trim());
 
     // Slash commands: when the message is purely a "/command …" with no
     // attachments. Text commands (/me, /shrug) rewrite the outgoing message;
@@ -1657,7 +1674,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
       .filter((url) => !text.includes(url));
     const finalText = [text, ...extraUrls].filter(Boolean).join("\n");
     await publishMessage(finalText);
-  }, [content, attachments, isUploading, executeSlash, publishMessage, botEntries, sendInvocation, toast]);
+  }, [content, attachments, isUploading, canonicalizeLinks, executeSlash, publishMessage, botEntries, sendInvocation, toast]);
 
   const pollFilledCount = pollOptions.filter((o) => o.label.trim()).length;
   const isPollValid = content.trim().length > 0 && pollFilledCount >= 2;
@@ -1665,7 +1682,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
   const hasContent = content.trim().length > 0 || attachments.length > 0;
 
   const handlePollSubmit = useCallback(async () => {
-    const finalContent = content.trim();
+    const finalContent = canonicalizeLinks(content.trim());
     const filledOptions = pollOptions
       .filter((o) => o.label.trim())
       .map((o) => ({ id: o.id, label: o.label.trim() }));
@@ -1699,7 +1716,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     } catch {
       toast({ title: "Error", description: "Failed to publish poll.", variant: "destructive" });
     }
-  }, [content, pollOptions, user, isSending, isUploading, canSend, buildMessageTags, pollType, pollDuration, createEvent, relayUrl, resetComposeState, onSent, toast, onPollSubmit]);
+  }, [content, pollOptions, user, isSending, isUploading, canSend, canonicalizeLinks, buildMessageTags, pollType, pollDuration, createEvent, relayUrl, resetComposeState, onSent, toast, onPollSubmit]);
 
   /** Stop recording, upload, and send as a voice message (kind 9 + imeta). */
   const handleStopAndSendVoice = useCallback(async () => {

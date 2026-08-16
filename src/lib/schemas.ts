@@ -117,6 +117,7 @@ export const AppConfigSchema = z.object({
   startedDms: z.array(z.string()).catch([]),
   showDmRequests: z.boolean().catch(defaultConfig.showDmRequests),
   discoverAllContent: z.boolean().catch(defaultConfig.discoverAllContent),
+  stripTrackingParams: z.boolean().catch(defaultConfig.stripTrackingParams),
   defaultZapAmount: z.number().catch(defaultConfig.defaultZapAmount),
   defaultZapMethod: z.enum(["lightning", "bitcoin"]).catch(defaultConfig.defaultZapMethod),
   zapsEnabled: z.boolean().catch(defaultConfig.zapsEnabled),
@@ -178,6 +179,8 @@ export const MetadataDocSchema = z.looseObject({
   showDmRequests: z.boolean().optional(),
   /** Whether Discover shows the unfiltered firehose vs the allow-list (see AppConfig). */
   discoverAllContent: z.boolean().optional(),
+  /** Whether tracking parameters are stripped from links, sent and shown (see AppConfig). */
+  stripTrackingParams: z.boolean().optional(),
   /** Preselected zap amount, in sats. */
   defaultZapAmount: z.number().optional(),
   /** Default zap payment method. */

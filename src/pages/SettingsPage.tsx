@@ -8,6 +8,7 @@ import {
   FileText,
   Image,
   KeyRound,
+  Link2,
   MessageSquareLock,
   Mic,
   Palette,
@@ -88,6 +89,7 @@ type SectionId =
   | "search-relays"
   | "dms"
   | "media"
+  | "links"
   | "discover"
   | "emojis"
   | "wallet"
@@ -342,6 +344,14 @@ export function SettingsPage() {
     updateConfig((current) => ({ ...current, useAppBlossomServers: value }));
   };
 
+  /**
+   * Toggle tracking-parameter stripping. Publishes nothing; affects both what
+   * this client sends and how it renders links it receives. Synced.
+   */
+  const setStripTrackingParams = (value: boolean) => {
+    updateConfig((current) => ({ ...current, stripTrackingParams: value }));
+  };
+
   // Section list, gated the same way the old flat sections were.
   const navGroups = useMemo<NavGroup[]>(() => {
     const userItems: NavItem[] = [
@@ -379,6 +389,7 @@ export function SettingsPage() {
       { id: "search-relays", title: "Search relays", icon: Search },
       { id: "dms", title: "Direct messages", icon: MessageSquareLock },
       { id: "media", title: "Media servers", icon: Image },
+      { id: "links", title: "Links", icon: Link2 },
       { id: "discover", title: "Discover", icon: Compass },
     ];
     if (user) {
@@ -742,6 +753,18 @@ export function SettingsPage() {
               </SettingsRow>
             )}
           </>
+        );
+      case "links":
+        return (
+          <SettingsRow
+            label="Clean up links"
+            description="Remove tracking parameters from links — YouTube's ?si=, utm_ campaign tags, and the click ids ad networks add. Applied to links you send, so they're clean for everyone who reads them, and to links you receive, so nothing they carry reaches the sites your app loads previews from. Only known tracking parameters are removed; the link still goes to the same page."
+          >
+            <Switch
+              checked={config.stripTrackingParams}
+              onCheckedChange={setStripTrackingParams}
+            />
+          </SettingsRow>
         );
       case "discover":
         return (
