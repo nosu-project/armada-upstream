@@ -4,6 +4,24 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.53.0] - 2026-08-16
+
+Armada gains screen sharing you can tune — pick the resolution, frame rate, bitrate, and codec, watch live sender and viewer diagnostics, and go true fullscreen. Voice now belongs to the community: a community can host its own voice servers, chosen when you create it or later in its settings, and everyone's calls resolve to the same place. Incoming direct-message calls ring with a full-screen overlay, and on Android you can answer or decline from the notification even with the app closed. Discover shows how active each community is, communities gain a right-click "Mark as read", and pressing Up in an empty composer edits your last message.
+
+### Added
+- Screen sharing with configurable quality — resolution, frame rate, bitrate, and codec controls, with live sender and viewer diagnostics and true fullscreen playback
+- A community can host its own voice servers, set when you create it or later under its settings, so everyone in it calls to the same place
+- Incoming direct-message calls ring with a full-screen overlay, and on Android you can answer or decline from the notification even when the app is closed
+- Community cards in Discover show how active each community is
+- "Mark as read" for a whole community or server from its right-click menu
+- Press Up in an empty composer to edit your most recent message
+
+### Changed
+- A channel shows a small badge when its notifications are muted or set to mentions-only
+
+### Fixed
+- Messages from banned members are now hidden from search, threads, and unread counts too
+
 ## [0.52.2] - 2026-08-14
 
 You can now follow people straight from their profile card, with mute, report, and unfollow tucked into a menu so the card leads with Message, Mention, and Follow. Private channels let you name their access role and add more roles later, and you can add members right from the channel header. Jumping to a message from search now lands on the exact message across communities, servers, and direct messages, with older history filling in as you scroll up. Rounding it out is a batch of touch and navigation fixes.
