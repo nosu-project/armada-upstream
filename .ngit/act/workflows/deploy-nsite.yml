@@ -1,0 +1,199 @@
+name: Deploy nsite
+
+# Builds the web client and publishes it as the named nsite "armada" (NIP-5A
+# kind 35128) described by .nsite/config.json: the files become Blossom blobs,
+# the manifest mapping path -> sha256 goes to relays, and a gateway
+# (nsite.lol, nosto.re, …) glues the two together. Same tool and the same
+# NSYTE_BUNKER secret name as soapbox-pub/yourspace.
+#
+# Two triggers doing different amounts of work:
+#   push to main   deploy — republishes the named site manifest, which IS the
+#                  live site.
+#   push of a v*   deploy AND publish an immutable manifest snapshot (kind
+#                  5128) titled with the tag, so a release stays addressable
+#                  at v<snapshotIdB36>.<gateway> after the named site has
+#                  moved on to the next build.
+#
+# ── Secrets (provisioned by the ngit-ci operator for this repo's alias) ──────
+# ngit-ci injects ${{ secrets.* }} ONLY on maintainer-authored triggers — a
+# push to a watched repo always qualifies — and ONLY for secrets the operator
+# has provisioned for this repo (there is no GITHUB_TOKEN, nothing is injected
+# by default). Ask the operator to set, keyed to this repo's #ALIAS:
+#   NSYTE_BUNKER              nbunksec1... — a pre-established NIP-46 session,
+#                             the form nsyte documents for CI (`nsyte ci`).
+#                             The SIGNING PUBKEY IS THE SITE ADDRESS, so this
+#                             secret decides whose namespace the site lives in.
+#   KLIPY_API_KEY             KLIPY production API key used by GIF search
+#   VITE_NOSTR_PUSH_PUBKEY    public hex/npub identity of the NIP-PUSH gateway
+#   VITE_NOSTR_PUSH_RELAYS    comma-separated rendezvous relays for its RPC
+#   VITE_BRIDGE_PORTAL_URL    (optional) Discord bridge portal origin
+# Unlike deploy-web.yml, an empty NSYTE_BUNKER FAILS the job rather than
+# skipping quietly: there is no other publisher for this site, so a skipped
+# run leaves the nsite silently pinned to an older build.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      # Vite inlines VITE_* at build time.
+      VITE_KLIPY_API_KEY: ${{ secrets.KLIPY_API_KEY }}
+      VITE_NOSTR_PUSH_PUBKEY: ${{ secrets.VITE_NOSTR_PUSH_PUBKEY }}
+      VITE_NOSTR_PUSH_RELAYS: ${{ secrets.VITE_NOSTR_PUSH_RELAYS }}
+      VITE_BRIDGE_PORTAL_URL: ${{ secrets.VITE_BRIDGE_PORTAL_URL }}
+      # Deliberately NO VITE_PLAUSIBLE_*: that secret names armada.buzz as the
+      # site, and this build is served from a gateway subdomain, so it would
+      # file its traffic under a domain it isn't. Empty = tracker never
+      # initialized, i.e. no telemetry.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+
+      # Build the SPA (npm build also copies dist/index.html -> dist/404.html,
+      # which is the path NIP-5A host servers fall back to).
+      - run: npm run build
+
+      - name: Publish to Blossom + relays
+        env:
+          NSYTE_BUNKER: ${{ secrets.NSYTE_BUNKER }}
+        run: |
+          set -eu
+          # No apostrophe in that message: bash treats a single quote inside
+          # ${var:?word} as opening a quoted section, even within the double
+          # quotes, and swallows the rest of the script.
+          : "${NSYTE_BUNKER:?NSYTE_BUNKER is not set; ask the ngit-ci operator to provision it for the #ALIAS of this repo.}"
+
+          # Install the PINNED nsyte binary (act images are minimal). The pin
+          # is not tidiness: an unversioned install has been observed pulling
+          # 0.10.1, which emits the legacy kind-34128 events that every
+          # current gateway ignores while reporting a successful deploy.
+          # 0.27.2 is the newest release carrying a Linux binary asset.
+          curl -sSL -o /usr/local/bin/nsyte \
+            https://github.com/sandwichfarm/nsyte/releases/download/v0.27.2/nsyte-linux-0.27.2
+          chmod +x /usr/local/bin/nsyte
+
+          TAG=""
+          case "${GITHUB_REF:-}" in
+            refs/tags/v*) TAG="${GITHUB_REF#refs/tags/}" ;;
+          esac
+
+          # The site's own title, as committed. Restored after a tag run.
+          SITE_TITLE="$(node -p 'JSON.parse(require("fs").readFileSync(".nsite/config.json","utf8")).title')"
+
+          set_title() {
+            node -e '
+              const fs = require("fs");
+              const path = ".nsite/config.json";
+              const config = JSON.parse(fs.readFileSync(path, "utf8"));
+              config.title = process.argv[1];
+              fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\n");
+            ' "$1"
+          }
+
+          # Relays/servers/site id all come from .nsite/config.json, so they
+          # are versioned with the client rather than split across this file.
+          # The secrets scan is skipped because it prompts on false positives
+          # in our own bundle (pubkeys, bunker:// parsing code), and a prompt
+          # is unanswerable here — with -i it defaults to N and aborts.
+          deploy() {
+            set +e
+            nsyte deploy dist \
+              --sec "$NSYTE_BUNKER" \
+              --concurrency 2 \
+              --non-interactive \
+              --skip-secrets-scan \
+              "$@" 2>&1 | tee /tmp/nsyte-deploy.log
+            status="${PIPESTATUS[0]}"
+            set -e
+            # A deploy that changes no file exits NON-ZERO with "No new files
+            # to upload". That is success: the manifest already on the relays
+            # describes exactly this build.
+            if [ "$status" -ne 0 ] && ! grep -q "No new files to upload" /tmp/nsyte-deploy.log; then
+              exit "$status"
+            fi
+          }
+
+          if [ -z "$TAG" ]; then
+            deploy
+            exit 0
+          fi
+
+          # ── Tag: deploy, then snapshot it under the tag name ───────────────
+          #
+          # `nsyte snapshot` copies its tags from the manifest it FETCHES off
+          # the relays and has no --title of its own, so the only way the tag
+          # name reaches the snapshot is to be the title of the manifest the
+          # snapshot is taken from. Hence retitle -> deploy -> snapshot ->
+          # retitle -> deploy, which leaves the live site titled "Armada" and
+          # the immutable snapshot titled "v1.2.3".
+          #
+          # --sync is load-bearing here: a tag usually points at the commit
+          # main just deployed, so every blob is already on the servers and a
+          # plain deploy would exit before publishing any manifest at all —
+          # taking the retitle with it. --sync keeps the upload path alive
+          # while the per-server HEAD preflight still skips blobs that exist.
+          echo "Tag $TAG: deploying and snapshotting."
+          set_title "$TAG"
+          deploy --sync
+
+          # Confirm the relays are actually serving the retitled manifest
+          # before snapshotting it. The snapshot captures whatever it can
+          # fetch, so a slow relay — or this workflow's own main-push run
+          # racing this one — would otherwise be recorded under the wrong
+          # title, in an event that by design is never replaced. --dry-run
+          # builds the same event without signing or publishing it.
+          snapshot_titled() {
+            rm -rf /tmp/nsyte-snapshot-preview
+            nsyte snapshot \
+              --sec "$NSYTE_BUNKER" \
+              --dry-run \
+              --dry-run-output /tmp/nsyte-snapshot-preview >/dev/null 2>&1 || return 1
+            node -e '
+              const fs = require("fs");
+              const [dir, want] = process.argv.slice(1);
+              const ok = fs.readdirSync(dir)
+                .filter((f) => f.endsWith(".json"))
+                .some((f) => {
+                  const event = JSON.parse(fs.readFileSync(`${dir}/${f}`, "utf8"));
+                  return event.kind === 5128 &&
+                    (event.tags || []).some((t) => t[0] === "title" && t[1] === want);
+                });
+              process.exit(ok ? 0 : 1);
+            ' /tmp/nsyte-snapshot-preview "$TAG"
+          }
+
+          ready=0
+          for _ in 1 2 3 4 5; do
+            if snapshot_titled; then ready=1; break; fi
+            sleep 6
+          done
+
+          snapshot_status=0
+          if [ "$ready" -eq 1 ]; then
+            set +e
+            nsyte snapshot --sec "$NSYTE_BUNKER" 2>&1 | tee /tmp/nsyte-snapshot.log
+            snapshot_status="${PIPESTATUS[0]}"
+            set -e
+          else
+            echo "Relays are not serving a manifest titled $TAG; refusing to publish a mistitled snapshot." >&2
+            snapshot_status=1
+          fi
+
+          # Put the site's own title back whatever happened above — including
+          # the give-up branch, which has published a retitled manifest and not
+          # snapshotted it. A live manifest left titled with a version is the
+          # one piece of state this job can strand.
+          set_title "$SITE_TITLE"
+          deploy --sync
+
+          exit "$snapshot_status"

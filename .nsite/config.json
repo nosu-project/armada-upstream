@@ -1,0 +1,20 @@
+{
+  "$schema": "https://nsyte.run/schemas/config.schema.json",
+  "relays": [
+    "wss://relay.ditto.pub",
+    "wss://relay.dreamith.to",
+    "wss://relay.primal.net"
+  ],
+  "id": "armada",
+  "servers": [
+    "https://blossom.ditto.pub",
+    "https://blossom.dreamith.to",
+    "https://blossom.primal.net"
+  ],
+  "fallback": "/index.html",
+  "publishRelayList": false,
+  "publishServerList": false,
+  "title": "Armada",
+  "description": "A sovereign harbor on the open relays — private communities, channels, and voice. Your keys, your fleet.",
+  "source": "nostr://soapbox@ditto.pub/relay.ngit.dev/armada"
+}

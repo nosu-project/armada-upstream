@@ -70,6 +70,7 @@ commit/PR.
 | `deploy-web.yml` | push to `main` | build + rsync-over-SSH deploy of the hosted client (armada.buzz); skips deploy if the SSH secret isn't provisioned |
 | `release.yml` | tag `v*` | signed Android APK + AAB, published as run artifacts and the APK to `armada.buzz/downloads/`, then Zapstore publish, then Google Play publish (draft release while the app is unpublished in Play Console; skips Play if the service-account secret isn't provisioned) |
 | `desktop.yml` | tag `v*` | Electron Linux (AppImage + deb), Windows (NSIS + portable) and macOS (ad-hoc signed .app zips, cross-built); published as run artifacts and rsynced to `armada.buzz/downloads/` |
+| `deploy-nsite.yml` | push to `main` + tag `v*` | build + `nsyte deploy` of the client as the named nsite `armada` (NIP-5A kind 35128) onto relays + Blossom; a tag additionally publishes an immutable kind-5128 manifest snapshot titled with the tag |
 
 Notes specific to ngit-ci (vs the old GitLab pipeline):
 

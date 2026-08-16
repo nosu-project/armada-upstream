@@ -10,6 +10,7 @@
     "build": "vite build -l error && npm run build:sw-runtime && cp dist/index.html dist/404.html",
     "build:electron-db": "vite build -l error -c vite.config.electron.ts",
     "build:sw-runtime": "vite build -l error -c vite.config.sw-runtime.ts",
+    "deploy:nsite": "npm run build && nsyte deploy dist --prompt-sec",
     "test": "tsc --noEmit && eslint --cache . && vitest run --passWithNoTests --reporter=dot && vite build -l error && npm run build:sw-runtime && npm run build:electron-db"
   },
   "engines": {
