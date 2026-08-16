@@ -179,7 +179,14 @@ export async function peekDiscoverControl(
   // exactly one edition, so a truncated plane under-counts — and caching that
   // would paint the wrong number from the warm seed in every later session,
   // long after the relay that timed out came back.
-  if (read.complete) writeCachedControlPeek(bundle.community_id, peek);
+  //
+  // A missing metadata head is the other way this read can be complete and
+  // still partial: reading one epoch is sound because a Refounding compacts
+  // every head forward under the new address (CORD-06 §3), but it re-wraps
+  // them one at a time, so an epoch caught mid-roll answers with only the
+  // heads that have landed. Every community has metadata — its absence means
+  // the compaction is still in flight, not that there is nothing here.
+  if (read.complete && folded.metadata) writeCachedControlPeek(bundle.community_id, peek);
   return peek;
 }
 

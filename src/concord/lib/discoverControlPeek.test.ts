@@ -9,6 +9,7 @@ import {
   readCachedControlPeek,
 } from "@/concord/lib/discoverControlPeek";
 import { KIND_WRAP } from "@/concord/lib/kinds";
+import { buildChannelEdition, buildMetadataEdition, sealEdition } from "@/concord/lib/control";
 import { getArmadaDB } from "@/lib/db/armadaDB";
 import {
   bytesToHex,
@@ -19,8 +20,10 @@ import {
 } from "@/concord/lib/derive";
 import type { InviteBundle } from "@/concord/lib/invite";
 
+import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools";
+
 import type { NostrFilter } from "@nostrify/nostrify";
-import type { NostrEvent } from "nostr-tools";
+import type { EventTemplate, NostrEvent } from "nostr-tools";
 
 function makeBundle(over: Partial<InviteBundle> = {}): InviteBundle {
   const owner = random32();
@@ -138,6 +141,69 @@ function descendingWraps(author: string, count: number, newest: number): NostrEv
   return Array.from({ length: count }, (_, i) => junkWrap(author, newest - i));
 }
 
+function signer(sk = generateSecretKey()) {
+  return {
+    sk,
+    pubkey: getPublicKey(sk),
+    signEvent: async (t: EventTemplate) => finalizeEvent(t, sk),
+  };
+}
+
+/**
+ * A real community whose LEGACY control address the bundle alone can derive —
+ * so the peek's own `controlViewFromBundle` both opens the wraps below and is
+ * the thing under test.
+ */
+async function realCommunity(channels: Array<{ name: string; private: boolean }>) {
+  const owner = signer();
+  const ownerSalt = random32();
+  const communityId = communityIdOf(hex32(owner.pubkey), ownerSalt);
+  const root = random32();
+  const control = controlGroupKey(root, communityId, 0);
+  const bundle: InviteBundle = {
+    community_id: bytesToHex(communityId),
+    owner: owner.pubkey,
+    owner_salt: bytesToHex(ownerSalt),
+    community_root: bytesToHex(root),
+    root_epoch: 0,
+    channels: [],
+    relays: ["wss://one"],
+    name: "Test",
+  };
+  const channelIds = channels.map(() => random32());
+  return {
+    bundle,
+    control,
+    owner,
+    communityId,
+    channelIds,
+    /** The metadata head every community has — absent only mid-compaction. */
+    metadataWrap: () =>
+      sealEdition(
+        buildMetadataEdition(communityId, { name: "Test", relays: [] }, {
+          actorPubkey: owner.pubkey,
+          version: 1n,
+        }),
+        control,
+        owner,
+      ),
+    channelWraps: () =>
+      Promise.all(
+        channels.map((c, i) =>
+          sealEdition(
+            buildChannelEdition(
+              channelIds[i],
+              { name: c.name, private: c.private, deleted: false },
+              { actorPubkey: owner.pubkey, version: 1n },
+            ),
+            control,
+            owner,
+          ),
+        ),
+      ),
+  };
+}
+
 describe("peekDiscoverControl paging", () => {
   it("pages each relay on its own cursor", async () => {
     const bundle = makeBundle({ relays: ["wss://deep", "wss://shallow"] });
@@ -180,34 +246,64 @@ describe("peekDiscoverControl paging", () => {
 });
 
 describe("peekDiscoverControl caching", () => {
-  it("caches a complete read", async () => {
-    const bundle = makeBundle({ relays: ["wss://one"] });
-    const author = controlViewFromBundle(bundle)!.pk;
-    const relays: Record<string, FakeRelay> = {
-      "wss://one": { events: descendingWraps(author, 3, 9_000), calls: [] },
-    };
+  it("folds real editions and caches a complete read", async () => {
+    const c = await realCommunity([
+      { name: "general", private: false },
+      { name: "staff", private: true },
+    ]);
+    const events = [await c.metadataWrap(), ...(await c.channelWraps())].sort(
+      (a, b) => b.created_at - a.created_at,
+    );
+    const relays: Record<string, FakeRelay> = { "wss://one": { events, calls: [] } };
 
-    const peek = await peekDiscoverControl(fakeNostr(relays), bundle);
-    expect(peek).toEqual({ channelCount: 0, publicChannelIdHexes: [] });
+    const peek = await peekDiscoverControl(fakeNostr(relays), c.bundle);
+    // A non-member counts both channels but can name only the public one —
+    // the private id is what a last-active probe has no key for.
+    expect(peek).toEqual({
+      channelCount: 2,
+      publicChannelIdHexes: [bytesToHex(c.channelIds[0])],
+    });
     await new Promise((r) => setTimeout(r, 10));
-    await expect(readCachedControlPeek(bundle.community_id)).resolves.toEqual(peek);
+    await expect(readCachedControlPeek(c.bundle.community_id)).resolves.toEqual(peek);
   });
 
   it("does NOT cache a read that a relay dropped mid-walk", async () => {
-    const bundle = makeBundle({ relays: ["wss://one"] });
-    const author = controlViewFromBundle(bundle)!.pk;
+    const c = await realCommunity([{ name: "general", private: false }]);
+    // Real heads at the top so the fold IS complete-looking (metadata present);
+    // truncation is then the only reason the result must not be cached.
+    const events = [
+      await c.metadataWrap(),
+      ...(await c.channelWraps()),
+      ...descendingWraps(c.control.pk, PAGE + 100, 8_000),
+    ].sort((a, b) => b.created_at - a.created_at);
     const relays: Record<string, FakeRelay> = {
-      "wss://one": { events: descendingWraps(author, PAGE + 100, 9_000), calls: [], failAfter: 1 },
+      "wss://one": { events, calls: [], failAfter: 1 },
     };
 
     // The card still gets a number to paint from the editions that did arrive…
-    await expect(peekDiscoverControl(fakeNostr(relays), bundle)).resolves.toEqual({
-      channelCount: 0,
-      publicChannelIdHexes: [],
+    await expect(peekDiscoverControl(fakeNostr(relays), c.bundle)).resolves.toEqual({
+      channelCount: 1,
+      publicChannelIdHexes: [bytesToHex(c.channelIds[0])],
     });
     // …but an under-count must not outlive the outage that produced it.
     await new Promise((r) => setTimeout(r, 10));
-    await expect(readCachedControlPeek(bundle.community_id)).resolves.toBeUndefined();
+    await expect(readCachedControlPeek(c.bundle.community_id)).resolves.toBeUndefined();
+  });
+
+  it("does NOT cache an epoch caught mid-compaction (no metadata head)", async () => {
+    // A Refounding re-wraps each head under the new address one at a time, so
+    // an epoch can answer completely while carrying only some of its state.
+    const c = await realCommunity([{ name: "general", private: false }]);
+    const relays: Record<string, FakeRelay> = {
+      "wss://one": { events: await c.channelWraps(), calls: [] },
+    };
+
+    await expect(peekDiscoverControl(fakeNostr(relays), c.bundle)).resolves.toEqual({
+      channelCount: 1,
+      publicChannelIdHexes: [bytesToHex(c.channelIds[0])],
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    await expect(readCachedControlPeek(c.bundle.community_id)).resolves.toBeUndefined();
   });
 
   it("does not cache when no relay answered at all", async () => {

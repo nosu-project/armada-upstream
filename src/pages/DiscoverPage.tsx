@@ -262,26 +262,36 @@ function CommunitiesTab({ query }: { query: string }) {
   const [activityTargets, setActivityTargets] = useState<Record<string, DiscoverActivityTarget>>(
     {},
   );
-  const onActivityTarget = useCallback((target: DiscoverActivityTarget) => {
-    const normalized: DiscoverActivityTarget = {
-      ...target,
-      authors: [...target.authors].sort(),
-      relays: [...target.relays],
-    };
-    setActivityTargets((prev) => {
-      const cur = prev[normalized.linkSigner];
-      if (
-        cur
-        && cur.authors.length === normalized.authors.length
-        && cur.authors.every((a, i) => a === normalized.authors[i])
-        && cur.relays.length === normalized.relays.length
-        && cur.relays.every((r, i) => r === normalized.relays[i])
-      ) {
-        return prev;
-      }
-      return { ...prev, [normalized.linkSigner]: normalized };
-    });
-  }, []);
+  const onActivityTarget = useCallback(
+    (linkSigner: string, target: DiscoverActivityTarget | null) => {
+      setActivityTargets((prev) => {
+        // Withdrawn: the card unmounted or lost the search. Drop it, or the
+        // REQ keeps asking about listings that are no longer on screen.
+        if (!target) {
+          if (!(linkSigner in prev)) return prev;
+          const { [linkSigner]: _gone, ...rest } = prev;
+          return rest;
+        }
+        const normalized: DiscoverActivityTarget = {
+          ...target,
+          authors: [...target.authors].sort(),
+          relays: [...target.relays],
+        };
+        const cur = prev[linkSigner];
+        if (
+          cur
+          && cur.authors.length === normalized.authors.length
+          && cur.authors.every((a, i) => a === normalized.authors[i])
+          && cur.relays.length === normalized.relays.length
+          && cur.relays.every((r, i) => r === normalized.relays[i])
+        ) {
+          return prev;
+        }
+        return { ...prev, [linkSigner]: normalized };
+      });
+    },
+    [],
+  );
   const activityTargetList = useMemo(() => Object.values(activityTargets), [activityTargets]);
   const lastActiveBySigner = useDiscoverCommunityActivity(activityTargetList);
 
