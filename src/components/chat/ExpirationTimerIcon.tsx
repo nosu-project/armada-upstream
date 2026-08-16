@@ -1,22 +1,18 @@
 /**
- * Signal's disappearing-message timer: a clock whose ring depletes and whose
- * hand sweeps a full turn over the message's lifetime, ending as a bare ring of
- * dots the instant before it vanishes.
+ * The disappearing-message clock: a ring that gives up a twelfth at a time
+ * while the hand sweeps a full turn, ending as a bare ring of dots the instant
+ * before the message vanishes.
  *
- * ARTWORK PROVENANCE. The 13 frames below are the `ic_timer_NN_12` vector
- * drawables from Signal-Android (github.com/signalapp/Signal-Android,
- * `app/src/main/res/drawable/`), Copyright (C) Signal Messenger, LLC, used
- * under the GNU Affero General Public License v3. They are copied verbatim:
- * each Android `<vector>` carried a single `android:pathData`, reproduced here
- * unchanged as an SVG `d` on the same 12x12 viewport. Armada is AGPL-3.0 too,
- * so the copy is license-compatible; see the README's License section.
- * Nothing about the geometry is ours — only the frame selection and the
- * scheduling below.
+ * The artwork is GENERATED from the constants below rather than authored as 13
+ * path strings. The frames differ only in one arc length, one dot count and
+ * one angle, so the drawing is a handful of numbers and the strip is derived
+ * once at module load. Two of those numbers carry the design: a dot's radius is
+ * half the stroke width and the dots sit ON the ring, so the dot at 12 o'clock
+ * reads as the round cap of the arc's fixed end rather than as a collision.
  *
- * Frames run empty (index 0) to full (index 12). Signal picks the frame with
- * `ceil(fractionRemaining * 12)` and redraws on a 1s timer (50ms in the last
- * 30s). We pick the same frame but schedule the NEXT REDRAW for the exact
- * moment the frame changes — with only 13 states a poll mostly repaints
+ * Frames run empty (index 0) to full (index 12): the frame is
+ * `ceil(fractionRemaining * 12)`, and the NEXT REDRAW is scheduled for the
+ * exact moment that changes. With only 13 states a poll mostly repaints
  * identical pixels, and a thread can hold hundreds of these at once.
  */
 
@@ -24,25 +20,100 @@ import { memo, useEffect, useState } from "react";
 
 import { cn } from "@/lib/utils";
 
-/** The 13 depletion frames, emptiest first. Verbatim Signal path geometry. */
-export const TIMER_FRAMES: readonly string[] = [
-  "M6.75,6a0.75,0.75 0,0 1,-1.5 0c0,-0.414 0.475,-3.581 0.5,-3.75S5.862,2 6,2s0.226,0.087 0.25,0.25S6.75,5.589 6.75,6ZM5.375,0.625A0.625,0.625 0,1 0,6 0,0.625 0.625,0 0,0 5.375,0.625ZM0,6a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0 6ZM10.75,6a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,10.75 6ZM5.375,11.375A0.625,0.625 0,1 0,6 10.75,0.625 0.625,0 0,0 5.375,11.375ZM2.688,1.345A0.625,0.625 0,1 0,3.313 0.72,0.624 0.624,0 0,0 2.688,1.345ZM0.72,8.687a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0.72 8.687ZM10.03,3.312a0.625,0.625 0,1 0,0.625 -0.624A0.626,0.626 0,0 0,10.03 3.312ZM8.062,10.655a0.625,0.625 0,1 0,0.626 -0.625A0.625,0.625 0,0 0,8.062 10.655ZM0.72,3.312a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0.72 3.312ZM2.688,10.655a0.625,0.625 0,1 0,0.625 -0.625A0.624,0.624 0,0 0,2.688 10.655ZM8.063,1.345A0.625,0.625 0,1 0,8.688 0.72,0.624 0.624,0 0,0 8.063,1.345ZM10.03,8.687a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,10.03 8.687Z",
-  "M6.65,6.375a0.75,0.75 0,0 1,-1.3 -0.75c0.208,-0.359 2.2,-2.864 2.308,-3a0.25,0.25 0,0 1,0.434 0.25C8.034,3.022 6.855,6.019 6.65,6.375ZM9.183,1.486A0.5,0.5 0,0 0,9 0.8,6 6,0 0,0 6,0 0.5,0.5 0,0 0,6 1a5,5 0,0 1,2.5 0.668,0.493 0.493,0 0,0 0.25,0.068A0.5,0.5 0,0 0,9.183 1.486ZM0,6a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0 6ZM10.75,6a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,10.75 6ZM5.375,11.375A0.625,0.625 0,1 0,6 10.75,0.625 0.625,0 0,0 5.375,11.375ZM2.688,1.345A0.625,0.625 0,1 0,3.313 0.72,0.624 0.624,0 0,0 2.688,1.345ZM0.72,8.687a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0.72 8.687ZM10.03,3.312a0.625,0.625 0,1 0,0.625 -0.624A0.626,0.626 0,0 0,10.03 3.312ZM8.062,10.655a0.625,0.625 0,1 0,0.626 -0.625A0.625,0.625 0,0 0,8.062 10.655ZM0.72,3.312a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0.72 3.312ZM2.688,10.655a0.625,0.625 0,1 0,0.625 -0.625A0.624,0.624 0,0 0,2.688 10.655ZM10.03,8.687a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,10.03 8.687Z",
-  "M6.375,6.65a0.75,0.75 0,0 1,-0.75 -1.3c0.359,-0.207 3.339,-1.379 3.5,-1.442A0.245,0.245 0,0 1,9.464 4a0.25,0.25 0,0 1,-0.091 0.342C9.251,4.439 6.731,6.444 6.375,6.65ZM11.014,3.682A0.5,0.5 0,0 0,11.2 3,6.021 6.021,0 0,0 6,0 0.5,0.5 0,0 0,6 1a5.021,5.021 0,0 1,4.331 2.5,0.5 0.5,0 0,0 0.433,0.25A0.49,0.49 0,0 0,11.014 3.682ZM0,6a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0 6ZM10.75,6a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,10.75 6ZM5.375,11.375A0.625,0.625 0,1 0,6 10.75,0.625 0.625,0 0,0 5.375,11.375ZM2.688,1.345A0.625,0.625 0,1 0,3.313 0.72,0.624 0.624,0 0,0 2.688,1.345ZM0.72,8.687a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0.72 8.687ZM8.062,10.655a0.625,0.625 0,1 0,0.626 -0.625A0.625,0.625 0,0 0,8.062 10.655ZM0.72,3.312a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0.72 3.312ZM2.688,10.655a0.625,0.625 0,1 0,0.625 -0.625A0.624,0.624 0,0 0,2.688 10.655ZM10.03,8.687a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,10.03 8.687Z",
-  "M6,6.75a0.75,0.75 0,0 1,0 -1.5c0.414,0 3.581,0.475 3.75,0.5S10,5.862 10,6s-0.087,0.226 -0.25,0.25S6.411,6.75 6,6.75ZM12,6A6.006,6.006 0,0 0,6 0,0.5 0.5,0 0,0 6,1a5.006,5.006 0,0 1,5 5,0.5 0.5,0 0,0 1,0ZM0,6a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0 6ZM5.375,11.375A0.625,0.625 0,1 0,6 10.75,0.625 0.625,0 0,0 5.375,11.375ZM2.688,1.345A0.625,0.625 0,1 0,3.313 0.72,0.624 0.624,0 0,0 2.688,1.345ZM0.72,8.687a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0.72 8.687ZM8.062,10.655a0.625,0.625 0,1 0,0.626 -0.625A0.625,0.625 0,0 0,8.062 10.655ZM0.72,3.312a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0.72 3.312ZM2.688,10.655a0.625,0.625 0,1 0,0.625 -0.625A0.624,0.624 0,0 0,2.688 10.655ZM10.03,8.687a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,10.03 8.687Z",
-  "M5.625,6.65a0.75,0.75 0,0 1,0.75 -1.3c0.359,0.208 2.864,2.2 3,2.308a0.25,0.25 0,0 1,-0.25 0.434C8.978,8.034 5.981,6.855 5.625,6.65ZM11.2,9A6,6 0,0 0,6 0,0.5 0.5,0 0,0 6,1a5,5 0,0 1,4.331 7.5A0.5,0.5 0,0 0,11.2 9ZM0,6a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0 6ZM5.375,11.375A0.625,0.625 0,1 0,6 10.75,0.625 0.625,0 0,0 5.375,11.375ZM2.688,1.345A0.625,0.625 0,1 0,3.313 0.72,0.624 0.624,0 0,0 2.688,1.345ZM0.72,8.687a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0.72 8.687ZM8.062,10.655a0.625,0.625 0,1 0,0.626 -0.625A0.625,0.625 0,0 0,8.062 10.655ZM0.72,3.312a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0.72 3.312ZM2.688,10.655a0.625,0.625 0,1 0,0.625 -0.625A0.624,0.624 0,0 0,2.688 10.655Z",
-  "M5.35,6.375a0.75,0.75 0,0 1,1.3 -0.75c0.207,0.359 1.379,3.339 1.442,3.5A0.245,0.245 0,0 1,8 9.464a0.25,0.25 0,0 1,-0.342 -0.091C7.561,9.251 5.556,6.731 5.35,6.375ZM9,11.2A6,6 0,0 0,6 0,0.5 0.5,0 0,0 6,1a5,5 0,0 1,2.5 9.332A0.5,0.5 0,1 0,9 11.2ZM0,6a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0 6ZM5.375,11.375A0.625,0.625 0,1 0,6 10.75,0.625 0.625,0 0,0 5.375,11.375ZM2.688,1.345A0.625,0.625 0,1 0,3.313 0.72,0.624 0.624,0 0,0 2.688,1.345ZM0.72,8.687a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0.72 8.687ZM0.72,3.312a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0.72 3.312ZM2.688,10.655a0.625,0.625 0,1 0,0.625 -0.625A0.624,0.624 0,0 0,2.688 10.655Z",
-  "M5.25,6a0.75,0.75 0,0 1,1.5 0c0,0.414 -0.475,3.581 -0.5,3.75S6.138,10 6,10s-0.226,-0.087 -0.25,-0.25S5.25,6.411 5.25,6ZM12,6A6.006,6.006 0,0 0,6 0,0.5 0.5,0 0,0 6,1 5,5 0,0 1,6 11a0.5,0.5 0,0 0,0 1A6.006,6.006 0,0 0,12 6ZM0,6a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0 6ZM2.688,1.345A0.625,0.625 0,1 0,3.313 0.72,0.624 0.624,0 0,0 2.688,1.345ZM0.72,8.687a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0.72 8.687ZM0.72,3.312a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0.72 3.312ZM2.688,10.655a0.625,0.625 0,1 0,0.625 -0.625A0.624,0.624 0,0 0,2.688 10.655Z",
-  "M5.35,5.625a0.75,0.75 0,1 1,1.3 0.75c-0.208,0.359 -2.2,2.864 -2.308,3a0.25,0.25 0,0 1,-0.434 -0.25C3.966,8.978 5.145,5.981 5.35,5.625ZM12,6A6.006,6.006 0,0 0,6 0,0.5 0.5,0 0,0 6,1a5,5 0,1 1,-2.5 9.332A0.5,0.5 0,1 0,3 11.2,6 6,0 0,0 12,6ZM0,6a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0 6ZM2.688,1.345A0.625,0.625 0,1 0,3.313 0.72,0.624 0.624,0 0,0 2.688,1.345ZM0.72,8.687a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0.72 8.687ZM0.72,3.312a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0.72 3.312Z",
-  "M5.625,5.35a0.75,0.75 0,1 1,0.75 1.3c-0.359,0.207 -3.339,1.379 -3.5,1.442A0.245,0.245 0,0 1,2.536 8a0.25,0.25 0,0 1,0.091 -0.342C2.749,7.561 5.269,5.556 5.625,5.35ZM0,6a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0 6ZM2.688,1.345A0.625,0.625 0,1 0,3.313 0.72,0.624 0.624,0 0,0 2.688,1.345ZM0.72,3.312a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0.72 3.312ZM12,6A6.006,6.006 0,0 0,6 0,0.5 0.5,0 0,0 6,1 5,5 0,1 1,1.669 8.5,0.5 0.5,0 0,0 0.8,9 6,6 0,0 0,12 6Z",
-  "M6,5.25a0.75,0.75 0,0 1,0 1.5c-0.414,0 -3.581,-0.475 -3.75,-0.5S2,6.138 2,6s0.087,-0.226 0.25,-0.25S5.589,5.25 6,5.25ZM2.688,1.35A0.625,0.625 0,1 0,3.313 0.72,0.624 0.624,0 0,0 2.688,1.345ZM0.72,3.312a0.625,0.625 0,1 0,0.625 -0.625A0.625,0.625 0,0 0,0.72 3.312ZM12,6A6.006,6.006 0,0 0,6 0,0.5 0.5,0 0,0 6,1 5,5 0,1 1,1 6,0.5 0.5,0 0,0 0,6 6,6 0,0 0,12 6Z",
-  "M6.375,5.35a0.75,0.75 0,1 1,-0.75 1.3c-0.359,-0.208 -2.864,-2.2 -3,-2.308a0.25,0.25 0,0 1,0.25 -0.434C3.022,3.966 6.019,5.145 6.375,5.35ZM2.688,1.35A0.625,0.625 0,1 0,3.313 0.72,0.624 0.624,0 0,0 2.688,1.345ZM12,6A6.006,6.006 0,0 0,6 0,0.5 0.5,0 0,0 6,1 5,5 0,1 1,1.669 3.5,0.5 0.5,0 1,0 0.8,3 6,6 0,1 0,12 6Z",
-  "M6.65,5.625a0.75,0.75 0,0 1,-1.3 0.75c-0.207,-0.359 -1.379,-3.339 -1.442,-3.5A0.245,0.245 0,0 1,4 2.536a0.25,0.25 0,0 1,0.342 0.091C4.439,2.749 6.444,5.269 6.65,5.625ZM12,6A6.006,6.006 0,0 0,6 0,0.5 0.5,0 0,0 6,1a5,5 0,1 1,-2.5 0.668A0.5,0.5 0,1 0,3 0.8,6 6,0 1,0 12,6Z",
-  "M6.75,6a0.75,0.75 0,0 1,-1.5 0c0,-0.414 0.475,-3.581 0.5,-3.75S5.862,2 6,2s0.226,0.087 0.25,0.25S6.75,5.589 6.75,6ZM12,6a6,6 0,1 0,-6 6A6.006,6.006 0,0 0,12 6ZM11,6A5,5 0,1 1,6 1,5.006 5.006,0 0,1 11,6Z",
-];
+/** Frames in the strip (0 = empty, 12 = full), one per twelfth of the life. */
+export const LAST_FRAME = 12;
 
-/** Frames in the strip (0 = empty, 12 = full). */
-export const LAST_FRAME = TIMER_FRAMES.length - 1;
+/** The 12x12 viewport's centre. */
+const CENTER = 6;
+/**
+ * Where the ring runs, and where the dots that replace it sit. These two are
+ * sized to the PIXEL GRID, not to taste: the icon renders at 12 CSS px, and a
+ * ring at radius 5.5 with a 1-unit stroke puts the stroke's edges 5 and 6
+ * units from centre, so at the cardinal points the axis-aligned band covers
+ * exactly one pixel row or column. Any off-grid radius smears those points
+ * across two half-covered pixels, worst at 3 and 9 o'clock where nothing
+ * else overlaps the ring to hide it.
+ */
+const RING_R = 5.5;
+const STROKE = 1;
+/** Half the stroke, so a dot is exactly the cap the arc would have had. */
+const DOT_R = STROKE / 2;
+const HAND_R = 3.5;
+/**
+ * The pivot hub. The hand's round cap overshoots the centre by half the
+ * stroke on the side away from the tip, which reads as the hand sitting
+ * slightly off centre; a hub wider than that overshoot hides it and gives the
+ * hand a spindle to turn on.
+ */
+const HUB_R = 0.8;
+
+/** Trim float noise so the emitted path data stays short. */
+const n = (v: number) => Number(v.toFixed(3)).toString();
+
+/** A point `deg` counterclockwise from 12 o'clock, `r` out from the centre. */
+function polar(deg: number, r: number): [number, number] {
+  const rad = (deg * Math.PI) / 180;
+  return [CENTER - r * Math.sin(rad), CENTER - r * Math.cos(rad)];
+}
+
+const pt = (deg: number, r: number) => polar(deg, r).map(n).join(" ");
+
+/**
+ * The time still to run: an arc from the depletion boundary (where the hand
+ * points) counterclockwise round to 12 o'clock. The boundary advances
+ * counterclockwise as the twelfths are spent, so the arc, the dots and the
+ * hand all move together.
+ */
+function ringPath(frame: number): string {
+  if (frame <= 0) return "";
+  // A full turn has no two endpoints to name (an arc command that starts where
+  // it ends draws nothing at all), so the whole ring is two half turns.
+  if (frame >= LAST_FRAME) {
+    return `M ${pt(0, RING_R)} A ${RING_R} ${RING_R} 0 1 0 ${pt(180, RING_R)}` +
+      ` A ${RING_R} ${RING_R} 0 1 0 ${pt(0, RING_R)}`;
+  }
+  const sweep = (frame / LAST_FRAME) * 360;
+  return `M ${pt(360 - sweep, RING_R)} A ${RING_R} ${RING_R} 0 ${sweep > 180 ? 1 : 0} 0 ${pt(360, RING_R)}`;
+}
+
+/** The twelfths already spent: dots from 12 o'clock counterclockwise to the hand. */
+function dotsPath(frame: number): string {
+  const dots: string[] = [];
+  for (let i = 0; i < LAST_FRAME - frame; i++) {
+    const [cx, cy] = polar(i * (360 / LAST_FRAME), RING_R);
+    dots.push(
+      `M ${n(cx - DOT_R)} ${n(cy)} a ${DOT_R} ${DOT_R} 0 1 0 ${n(DOT_R * 2)} 0` +
+        ` a ${DOT_R} ${DOT_R} 0 1 0 ${n(-DOT_R * 2)} 0Z`,
+    );
+  }
+  return dots.join(" ");
+}
+
+/**
+ * The hand, a full turn over the message's lifetime: straight up when it lands
+ * (frame 12), pointing at 6 o'clock when half the time is gone, back up as the
+ * last of it runs out.
+ */
+function handPath(frame: number): string {
+  return `M ${CENTER} ${CENTER} L ${pt((1 - frame / LAST_FRAME) * 360, HAND_R)}`;
+}
+
+/** One frame's three strokes. `ring` is empty at 0, `dots` at {@link LAST_FRAME}. */
+export interface TimerFrame {
+  ring: string;
+  dots: string;
+  hand: string;
+}
+
+/** The 13 depletion frames, emptiest first. */
+export const TIMER_FRAMES: readonly TimerFrame[] = Array.from(
+  { length: LAST_FRAME + 1 },
+  (_, frame) => ({
+    ring: ringPath(frame),
+    dots: dotsPath(frame),
+    hand: handPath(frame),
+  }),
+);
 
 interface ExpirationTimerIconProps {
   /** When the countdown started — the message's own `created_at` (seconds). */
@@ -100,14 +171,22 @@ export const ExpirationTimerIcon = memo(function ExpirationTimerIcon({
     return () => clearTimeout(id);
   }, [createdAt, expiresAt, frame]);
 
+  const { ring, dots, hand } = TIMER_FRAMES[frame];
+
   return (
     <svg
       viewBox="0 0 12 12"
-      fill="currentColor"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={STROKE}
       aria-hidden
       className={cn("size-3 shrink-0", className)}
     >
-      <path d={TIMER_FRAMES[frame]} />
+      {/* Butt caps: the arc must end ON its twelfth, since the next dot is there. */}
+      {ring && <path d={ring} />}
+      {dots && <path d={dots} fill="currentColor" stroke="none" />}
+      <path d={hand} strokeLinecap="round" />
+      <circle cx={CENTER} cy={CENTER} r={HUB_R} fill="currentColor" stroke="none" />
     </svg>
   );
 });

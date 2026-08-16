@@ -19,7 +19,9 @@ It also adds desktop-native behavior the web build can't:
 - **Screen and application sharing** — the in-app picker can switch the active
   screen/window without ending the share. Windows captures system audio;
   Linux uses PipeWire plus `@vencord/venmic` for either the entire system or a
-  selected application's audio.
+  selected application's audio. Resolution, frame rate, bitrate, codec and
+  delivery mode are configurable, and either side can open live stream details
+  or make the shared content genuinely full-screen.
 - **Global push to talk** — Windows, macOS and X11 use `uiohook-napi`; Wayland
   uses the trusted Global Shortcuts portal, including sandboxed Flatpak builds.
 - **Package-aware updates** — installed Windows and AppImage editions update
@@ -141,6 +143,55 @@ verifies its own registration before allowing close-to-tray; without a usable
 host the close button exits instead of leaving calls running in an invisible
 process. Non-GNOME X11 desktops may use Electron's legacy tray fallback.
 
+## Screen-share quality and codecs
+
+The screen-share dialog controls the requested output resolution, frames per
+second, maximum bitrate, codec and delivery mode. The bitrate is an encoder
+ceiling rather than a promise that static content will consume every bit. The
+stream-details dialog reports the measured encoded rate and input cadence; a
+`missed` frame is a capture deadline for which no fresh frame arrived, not a
+frame that was encoded and then lost on the network.
+
+VP8 is the compatibility fallback. Encrypted H.264 prefers packetization mode
+1 and, on Linux, can use the software compatibility path when the platform
+encoder is not interoperable. Standard H.265 is exposed only when Chromium
+reports an encoder for the current Windows or macOS machine, so there is no
+separate FFmpeg helper to install on those systems. A receiver must also have
+H.265 decoding support; older Armada builds that do not negotiate H.265 need
+to be updated or should receive VP8/H.264 instead.
+
+Chromium does not expose H.265 WebRTC encoding on Linux, so Armada has a
+Linux-only E2EE pipeline: Electron captures the trusted picker selection,
+FFmpeg encodes HEVC Main through VA-API, and the bundled
+`armada-hevc-publisher` sends the pre-encoded track through LiveKit. The
+publisher is packaged into AppImage, deb and Flatpak builds from one generated
+binary; it is deliberately excluded from Windows and macOS packages. Its
+auxiliary LiveKit identity is authenticated by signed Concord presence and is
+folded into the presenter's tile rather than shown as another caller.
+
+For AppImage and deb, the host must provide an FFmpeg build with
+`hevc_vaapi`, an HEVC-capable VA-API driver, and access to a
+`/dev/dri/renderD*` node. Capability detection runs a small real encode probe
+and reports the failing driver/device instead of offering a broken choice.
+The Flatpak uses its Freedesktop runtime FFmpeg/VA-API stack and grants render
+device access in the manifest. Do not bundle an arbitrary static FFmpeg for
+AppImage: VA-API must load the host's matching libva/libdrm driver stack.
+
+Build the publisher with the Go version declared in
+`hevc-publisher/go.mod`:
+
+```sh
+cd electron
+./scripts/build-hevc-publisher.sh --arch x64
+```
+
+The script vendors dependencies in a temporary directory, applies the local
+LiveKit primary-codec metadata patch, runs the Go tests, and stages a static
+binary under `generated/hevc/x64/`. `npm run dist:linux` performs this step
+automatically before electron-builder packages the AppImage and deb; the
+Flatpak is then built from that AppImage so their publisher and renderer cannot
+drift.
+
 ## Push to talk
 
 Enable push to talk and record a physical key under Settings → Voice. The
@@ -168,7 +219,7 @@ Every edition has exactly one update owner:
 | CI cross-built ad-hoc macOS zip | Replace manually; marked no-self-update |
 | Linux AppImage | Armada replaces the running AppImage from `/desktop` |
 | Linux deb | apt/dpkg repository; in-app updater disabled |
-| Linux Flatpak | configured Flatpak remote; in-app updater disabled |
+| Linux Flatpak | embedded Armada Flatpak remote; in-app updater disabled |
 
 `electron-builder.yml` points `electron-updater` at
 `https://armada.buzz/desktop`. Tagged CI releases deploy the exact NSIS and
@@ -217,6 +268,36 @@ npm run dist:flatpak
 flatpak install --user ./release/Armada-flatpak-x86_64.flatpak
 ```
 
+For an end-user installation directly from Armada's hosted repository:
+
+```sh
+flatpak remote-add --user --if-not-exists --no-gpg-verify \
+  armada https://armada.buzz/flatpak/
+flatpak install --user armada buzz.armada.app
+flatpak run buzz.armada.app
+```
+
+Armada itself comes from that remote, not Flathub. Its Freedesktop and Electron
+runtimes still need a configured Flathub remote; most Flatpak installations
+already have one. If needed, add it first with the `flathub` command in the
+builder setup above.
+
+Alternatively, install the stable standalone bundle. It records the same
+Armada repository as its origin during installation:
+
+```sh
+curl --fail --location --output Armada.flatpak \
+  https://armada.buzz/downloads/Armada.flatpak
+flatpak install --user ./Armada.flatpak
+flatpak run buzz.armada.app
+```
+
+Future releases use Flatpak's normal package-manager update path either way:
+
+```sh
+flatpak update --user buzz.armada.app
+```
+
 For a local package-manager update cycle:
 
 ```sh
@@ -227,10 +308,18 @@ flatpak update --user buzz.armada.app
 ```
 
 Tagged releases publish that OSTree repository at
-`https://armada.buzz/flatpak/`. Until its exports are GPG-signed, a test remote
-must be added with `--no-gpg-verify`; production distribution should set
-`FLATPAK_GPG_KEY` and distribute the matching public key. The manifest swaps
-only venmic's native prebuild to its Freedesktop-25.08-compatible 6.1 build;
+`https://armada.buzz/flatpak/`. Release bundles embed that URL, so bundle
+installs also configure Armada's repository as the app's origin. Installs
+made from an older bundle with a blank origin must either repair that remote or
+remove the old app (without `--delete-data`) before installing a corrected
+bundle; installing over the existing deployment can retain its blank origin.
+
+Current repository exports are unsigned, so their update trust boundary is
+HTTPS and the deployment host. `FLATPAK_GPG_KEY` signs the repository, but a
+signed production bundle must also embed the exported public key with
+`flatpak build-bundle --gpg-keys`; signing the repository alone does not enable
+verification for its automatically configured origin. The manifest swaps only
+venmic's native prebuild to its Freedesktop-25.08-compatible 6.1 build;
 AppImage and deb retain the lockfile-pinned 7.x build.
 
 ## CI

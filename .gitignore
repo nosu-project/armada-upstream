@@ -17,19 +17,26 @@ android/app/google-services.json
 # Desktop (Electron) build outputs.
 electron/dist/
 electron/release/
+electron/generated/hevc/
 # Built from src/lib/db by vite.config.electron.ts (npm run build:electron-db).
 electron/db.cjs
 # Chromium profile for `npm run electron:dev` (its own, so a dev build never
 # writes an installed Armada's armada.db).
 electron/.dev-profile/
 
-# SwiftPM build output for the iOS ArmadaDB package (the vendored SQLite
-# amalgamation under Sources/ IS committed; this is only what building it makes).
+# SwiftPM build output for the iOS packages (the vendored SQLite and libsecp256k1
+# sources under Sources/ ARE committed; this is only what building them makes).
+# Root-owned when the suites are run through a Swift container, which is why git
+# warns rather than ignoring quietly if only one of them is listed.
 ios/ArmadaDB/.build/
+ios/ArmadaNotify/.build/
 
 # Local diagnostic scratch (may hold invite secrets) — never commit.
 scratch/
 
-# Local deploy script (personal hosts/paths); CI deploys via
-# .ngit/act/workflows/deploy-web.yml.
+# Local deploy script (personal hosts/paths).
 deploy.sh
+
+# Left by a manual `go build` in the publisher package; the packaged binary
+# is written to electron/generated/hevc/ by scripts/build-hevc-publisher.sh.
+electron/hevc-publisher/hevc-publisher

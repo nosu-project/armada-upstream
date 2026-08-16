@@ -33,9 +33,12 @@ import {
   type ParsedInviteLink,
 } from "@/concord/lib/invite";
 import { KIND_INVITE_BUNDLE, VSK_INVITE_REVOKED } from "@/concord/lib/kinds";
+import { ownAvServers } from "@/concord/hooks/useVoice";
+import { canonicalOrigin } from "@/concord/lib/voice";
 import {
   capRelays,
   channelGitRepositoryAttachments,
+  MAX_COMMUNITY_AV_BROKERS,
   NAME_MAX_BYTES,
   utf8Len,
   withChannelGitRepositoryAttachments,
@@ -443,6 +446,8 @@ export function useCommunityActions() {
     {
       name: string;
       relays?: string[];
+      /** The community's voice servers (CORD-02 §6); omitted = the creator's own. */
+      avBrokers?: string[];
       messageExpirationSecs?: number;
       /** Optional genesis presentation (CORD-02 §6), from the creation wizard. */
       description?: string;
@@ -450,7 +455,7 @@ export function useCommunityActions() {
       banner?: ImagePointer;
     }
   >({
-    mutationFn: async ({ name, relays: chosen, messageExpirationSecs, description, icon, banner }) => {
+    mutationFn: async ({ name, relays: chosen, avBrokers: chosenBrokers, messageExpirationSecs, description, icon, banner }) => {
       if (!user) throw new Error("Sign in to start an encrypted community.");
       if (!user.signer.nip44) throw new Error("This signer can't hold encrypted communities (NIP-44 unsupported).");
       const trimmed = name.trim();
@@ -478,6 +483,16 @@ export function useCommunityActions() {
       // the creator never saw. Absent fields write no key at all.
       const trimmedDescription = description?.trim();
 
+      // The community's voice servers: whatever the wizard showed the creator,
+      // or their own server when the caller names none — the same shape as
+      // relays, and for the same reason. Members resolve calls from this and
+      // not from their own preference (CORD-07 §5), so an explicitly EMPTY
+      // list is meaningful and survives: it puts every member back on theirs.
+      const avBrokers = (chosenBrokers ?? ownAvServers())
+        .map(canonicalOrigin)
+        .filter((origin): origin is string => Boolean(origin))
+        .slice(0, MAX_COMMUNITY_AV_BROKERS);
+
       // Genesis: two owner-signed editions, nothing more (CORD-02 §1).
       await publishEdition(
         nostr,
@@ -488,6 +503,7 @@ export function useCommunityActions() {
           {
             name: trimmed,
             relays: community.relays,
+            ...(avBrokers.length > 0 ? { av_brokers: avBrokers } : {}),
             ...(trimmedDescription ? { description: trimmedDescription } : {}),
             ...(icon ? { icon } : {}),
             ...(banner ? { banner } : {}),

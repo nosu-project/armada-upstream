@@ -1,5 +1,4 @@
 import { ArrowUpRight, Braces, CheckCircle2, ChevronDown, ChevronRight, CircleDot, CircleSlash, Clock, ExternalLink, GitPullRequest, Loader2, MessageCircle, Paperclip, Pencil, ScrollText, Trash2, X, XCircle } from "lucide-react";
-import { nip19 } from "nostr-tools";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 
@@ -33,6 +32,7 @@ import {
   type GitTicketStatus,
   type GitTimelineActivity,
 } from "@/lib/gitActivity";
+import { gitworkshopTicketUrl } from "@/lib/gitworkshopUrl";
 import { cn } from "@/lib/utils";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import type { ReactNode } from "react";
@@ -655,22 +655,9 @@ function TicketCommentComposer({ ticket, onComment }: { ticket: GitTicket; onCom
   );
 }
 
-/** The ticket's public home on gitworkshop.dev, the reference NIP-34 web client. */
-function gitworkshopUrl(ticket: GitTicket): string | undefined {
-  const address = ticket.repositoryAddress;
-  if (!address) return undefined;
-  try {
-    const npub = nip19.npubEncode(address.owner);
-    const nevent = nip19.neventEncode({ id: ticket.id, author: ticket.author, kind: ticket.kind });
-    return `https://gitworkshop.dev/${npub}/${encodeURIComponent(address.identifier)}/${ticket.type === "issue" ? "issues" : "prs"}/${nevent}`;
-  } catch {
-    return undefined;
-  }
-}
-
 function TicketPanelBody({ ticket, members, activities, actions }: { ticket: GitTicket; members: ReadonlySet<string>; activities: readonly GitTimelineActivity[]; actions?: TicketPanelActions }) {
   const [jsonOpen, setJsonOpen] = useState(false);
-  const workshopUrl = useMemo(() => gitworkshopUrl(ticket), [ticket]);
+  const workshopUrl = useMemo(() => gitworkshopTicketUrl(ticket), [ticket]);
   const { comments, latestStatus } = useMemo(() => {
     const related = activities.filter(
       (activity): activity is Exclude<GitTimelineActivity, { type: "ci-run" }> =>

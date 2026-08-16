@@ -40,7 +40,7 @@ import { parseChatRoute } from "@/lib/routes";
 import { type SlashAction } from "@/lib/slashCommands";
 import { cn } from "@/lib/utils";
 
-import { threadSummary } from "@/components/chat/transport";
+import { lastEditableOwnMessage, threadSummary } from "@/components/chat/transport";
 import type { ChatMsg, ChatTransport, MessageCalendar } from "@/components/chat/transport";
 import type { CalendarTransport } from "@/lib/calendar";
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -663,6 +663,12 @@ export function GroupChat({ relayUrl, groupId, canWrite, membershipPending = fal
             canModerate={canModerate}
             botCommands
             onSlashAction={handleSlashAction}
+            onEditLast={() => {
+              const target = lastEditableOwnMessage(timelineMessages, user?.pubkey, (id) => sendStatus[id] !== undefined);
+              if (!target) return false;
+              setEditingId(target.id);
+              return true;
+            }}
           />
         ) : membershipPending ? (
           // Membership is still resolving — don't flash the "join to message"

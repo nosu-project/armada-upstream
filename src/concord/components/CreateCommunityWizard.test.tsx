@@ -12,6 +12,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CreateCommunityWizard } from "@/concord/components/CreateCommunityWizard";
+import { ownAvServers } from "@/concord/hooks/useVoice";
 
 import type { ReactNode } from "react";
 
@@ -19,6 +20,7 @@ import type { ReactNode } from "react";
 interface CreateArg {
   name: string;
   relays?: string[];
+  avBrokers?: string[];
   messageExpirationSecs?: number;
   description?: string;
   icon?: { url: string; key: string; nonce: string; hash: string };
@@ -176,27 +178,85 @@ describe("CreateCommunityWizard", () => {
    * they are two steps rather than one because stacked they ran past the bottom
    * of a phone and took the create button with them.
    */
-  it("gives the relays and the timer a step each, ending on the short one", async () => {
+  it("gives both lists one step and the timer another, ending on the short one", async () => {
     render(<CreateCommunityWizard onClose={vi.fn()} />);
 
     nameAndContinue();
     expect(screen.queryByText("relay editor")).not.toBeInTheDocument();
 
-    // Relays: shown outright, not folded away behind a disclosure.
+    // Where it lives: relays and voice servers together, both shown outright
+    // rather than folded away behind a disclosure.
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(screen.getByText("where it lives")).toBeInTheDocument();
     expect(screen.getByText("relay editor")).toBeInTheDocument();
+    expect(screen.getByLabelText("Add voice server")).toBeInTheDocument();
     expect(screen.queryByLabelText("Disappearing messages timer")).not.toBeInTheDocument();
 
     // The timer is alone with the create button, so nothing can push it off.
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(screen.getByLabelText("Disappearing messages timer")).toBeInTheDocument();
     expect(screen.queryByText("relay editor")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Add voice server")).not.toBeInTheDocument();
 
     fireEvent.click(createButton());
     await waitFor(() => expect(h.create).toHaveBeenCalledTimes(1));
     // The default carries even when the picker is never touched.
     expect(h.create.mock.calls[0][0].messageExpirationSecs).toBeGreaterThan(0);
+  });
+
+  /** Onto "where it lives", where both lists are edited. */
+  function reachTheListsStep() {
+    nameAndContinue();
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  }
+
+  it("carries the voice servers the step showed into create, prefilled with the creator's own", async () => {
+    render(<CreateCommunityWizard onClose={vi.fn()} />);
+    reachTheListsStep();
+
+    // Prefilled — this list is what the community would otherwise have been
+    // minted with without anyone being shown it.
+    const prefilled = ownAvServers()[0].replace(/^https:\/\//, "");
+    expect(screen.getByText(prefilled)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Add voice server"), { target: { value: "voice.example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: /add/i }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(createButton());
+    await waitFor(() => expect(h.create).toHaveBeenCalledTimes(1));
+    // A bare host arrives as the canonical https origin CORD-07 §5 hashes.
+    expect(h.create.mock.calls[0][0].avBrokers).toEqual([
+      ownAvServers()[0],
+      "https://voice.example.com",
+    ]);
+  });
+
+  it("mints no voice servers at all when the list is emptied", async () => {
+    render(<CreateCommunityWizard onClose={vi.fn()} />);
+    reachTheListsStep();
+
+    for (const origin of ownAvServers()) {
+      fireEvent.click(screen.getByRole("button", { name: `Remove ${origin}` }));
+    }
+    expect(screen.getByText(/members will use their own/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(createButton());
+    await waitFor(() => expect(h.create).toHaveBeenCalledTimes(1));
+    // Explicitly empty, not absent: members then use their own servers, and
+    // `create` must not substitute the creator's back in.
+    expect(h.create.mock.calls[0][0].avBrokers).toEqual([]);
+  });
+
+  it("refuses an unusable voice address instead of adding it", () => {
+    render(<CreateCommunityWizard onClose={vi.fn()} />);
+    reachTheListsStep();
+
+    fireEvent.change(screen.getByLabelText("Add voice server"), { target: { value: "http://insecure.example" } });
+    fireEvent.click(screen.getByRole("button", { name: /add/i }));
+
+    expect(screen.queryByText("insecure.example")).not.toBeInTheDocument();
   });
 
   it("will not advance without a name", () => {

@@ -36,7 +36,7 @@
 
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
 import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { foldTimeline, openChatBatch, type OpenedChat } from "@/concord/lib/chat";
 import { mintCommunity } from "@/concord/lib/community";
@@ -478,6 +478,14 @@ function score(flagged: ReadonlySet<string>, c: Corpus) {
 }
 
 // ── 1. The vulnerability ─────────────────────────────────────────────────────
+
+
+// Every case here signs hundreds of real events with secp256k1, so the tests
+// cost seconds rather than milliseconds — 2.2s to 3.9s each, measured. The 5s
+// default left no headroom, and they timed out whenever the rest of the suite
+// was running in parallel beside them: a red suite that said nothing about the
+// code under test.
+vi.setConfig({ testTimeout: 30_000 });
 
 describe("a sybil flood on a public channel", () => {
   it("passes every gate the read path has", async () => {

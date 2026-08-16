@@ -12,7 +12,11 @@
  * Who is in a call is announced over the Channel itself (§4): ephemeral
  * kind-23313 rumors in 21059 wraps at the Channel's own address, sealed
  * encrypted like everything else on the Chat Plane, so relays and brokers stay
- * blind. The `broker` tag on live presence is the rendezvous hint (§5).
+ * blind. Presence still carries the §5 `broker` tag — it is protocol, other
+ * clients rendezvous on it, and it is what tells a member they are on a
+ * different broker than the rest — but this client does not ROUTE on it: which
+ * broker a call uses is config, the Community's or the member's own
+ * (`rendezvousCandidates`).
  */
 
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -21,6 +25,7 @@ import { finalizeEvent } from "nostr-tools/pure";
 import { bytesToHex, hexToBytes, random32, type GroupKey } from "@/concord/lib/derive";
 import { KIND_VOICE_PRESENCE } from "@/concord/lib/kinds";
 import type { OpenedEvent } from "@/concord/lib/stream";
+import { MAX_COMMUNITY_AV_BROKERS, type CommunityMetadata } from "@/concord/lib/types";
 
 // ── Protocol constants (CORD-07) ─────────────────────────────────────────────
 
@@ -44,9 +49,6 @@ export const VOICE_STALE_MS = 90_000;
 export function heartbeatDelayMs(random: () => number = Math.random): number {
   return VOICE_HEARTBEAT_MS * (0.8 + random() * 0.2);
 }
-/** Bound the broker candidates taken from (untrusted) presence hints (§5). */
-export const MAX_VOICE_BROKERS = 3;
-
 const ASCII = new TextEncoder();
 
 // ── Origins (§5) ─────────────────────────────────────────────────────────────
@@ -91,6 +93,28 @@ export function brokerRank(roomHex: string, origin: string): string {
 export function orderBrokers(roomHex: string, origins: string[]): string[] {
   const canonical = [...new Set(origins.map(canonicalOrigin).filter((o): o is string => Boolean(o)))];
   return canonical.sort((a, b) => (brokerRank(roomHex, a) < brokerRank(roomHex, b) ? -1 : 1));
+}
+
+/**
+ * The Community's own brokers, read defensively off its folded metadata
+ * (CORD-02 §6). Entries are staff-authored strings from another client, so an
+ * unreadable one is ignored rather than taken to invalidate the entity — and
+ * only valid entries count against the cap, so a typo costs a working broker
+ * its slot rather than the list its length.
+ */
+export function communityAvBrokers(metadata: CommunityMetadata | undefined): string[] {
+  const raw = metadata?.av_brokers;
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const entry of raw) {
+    if (out.length >= MAX_COMMUNITY_AV_BROKERS) break;
+    const origin = typeof entry === "string" ? canonicalOrigin(entry) : null;
+    if (!origin || seen.has(origin)) continue;
+    seen.add(origin);
+    out.push(origin);
+  }
+  return out;
 }
 
 // ── The broker (§2) ──────────────────────────────────────────────────────────
@@ -226,6 +250,14 @@ export interface VoicePresenceEntry {
   status: "joined" | "left";
   /** The broker-assigned SFU identity (joined only). */
   identity?: string;
+  /**
+   * All identities this member currently authenticates, primary first. Armada
+   * uses one additional identity for its custom H.265 screen-share publisher.
+   * Older clients safely ignore the repeated additive identity tag.
+   */
+  identities?: string[];
+  /** Auxiliary identities explicitly assigned the custom screen-share role. */
+  screenShareIdentities?: string[];
   /** The broker origin hint, canonicalized (joined only). */
   broker?: string;
   /**
@@ -252,10 +284,20 @@ export function presenceTags(
   status: "joined" | "left",
   identity?: string,
   broker?: string,
-  opts?: { hand?: boolean },
+  opts?: { hand?: boolean; additionalIdentities?: readonly string[] },
 ): string[][] {
   const tags: string[][] = [];
   if (status === "joined" && identity) tags.push(["identity", identity]);
+  if (status === "joined" && identity) {
+    const seen = new Set([identity]);
+    for (const additional of opts?.additionalIdentities ?? []) {
+      if (!additional || seen.has(additional)) continue;
+      seen.add(additional);
+      // The third value is signed durable role metadata. Older clients still
+      // read the first two values and safely treat this as a repeated identity.
+      tags.push(["identity", additional, "screen-share"]);
+    }
+  }
   if (status === "joined" && broker) tags.push(["broker", broker]);
   if (status === "joined" && opts?.hand) tags.push(["hand", "1"]);
   return tags;
@@ -320,21 +362,47 @@ export function parsePresence(opened: OpenedEvent): VoicePresenceEntry | null {
   if (opened.kind !== KIND_VOICE_PRESENCE) return null;
   if (opened.content !== "joined" && opened.content !== "left") return null;
   const status = opened.content;
-  const rawIdentity = opened.tags.find((t) => t[0] === "identity")?.[1];
+  const rawIdentities = opened.tags
+    .filter((tag) => tag[0] === "identity")
+    .map((tag) => tag[1])
+    .filter(
+      (identity): identity is string =>
+        typeof identity === "string" && identity.length > 0 && identity.length <= 128,
+    );
+  // A member needs only one auxiliary identity today. Keep a small explicit
+  // bound so hostile members cannot inflate the claims map with repeated tags.
+  const identities = [...new Set(rawIdentities)].slice(0, 4);
+  const allowedIdentities = new Set(identities);
+  const screenShareIdentities = [...new Set(
+    opened.tags
+      .filter((tag) => tag[0] === "identity" && tag[2] === "screen-share")
+      .map((tag) => tag[1])
+      .filter(
+        (identity): identity is string =>
+          typeof identity === "string" && allowedIdentities.has(identity),
+      ),
+  )].filter((candidate) => candidate !== identities[0]);
   const rawBroker = opened.tags.find((t) => t[0] === "broker")?.[1];
   // Identities are broker-assigned opaque strings; bound them so a hostile
   // member can't bloat presence state.
-  const identity =
-    status === "joined" && typeof rawIdentity === "string" && rawIdentity.length > 0 && rawIdentity.length <= 128
-      ? rawIdentity
-      : undefined;
+  const identity = status === "joined" ? identities[0] : undefined;
   if (status === "joined" && !identity) return null;
   const broker =
     status === "joined" && typeof rawBroker === "string" && rawBroker.length <= 512
       ? canonicalOrigin(rawBroker) ?? undefined
       : undefined;
   const hand = status === "joined" && opened.tags.some((t) => t[0] === "hand" && t[1] === "1");
-  return { author: opened.author, status, identity, broker, hand, ms: opened.ms, rumorId: opened.rumorId };
+  return {
+    author: opened.author,
+    status,
+    identity,
+    identities: status === "joined" ? identities : undefined,
+    screenShareIdentities: status === "joined" ? screenShareIdentities : undefined,
+    broker,
+    hand,
+    ms: opened.ms,
+    rumorId: opened.rumorId,
+  };
 }
 
 /** A verified-present participant: one fresh `joined` per author. */
@@ -342,6 +410,8 @@ export interface VoicePresent {
   author: string;
   identity: string;
   broker?: string;
+  /** Signed auxiliary identities owned by this member's screen-share publisher. */
+  screenShareIdentities: string[];
   /** Whether this member's latest presence has their hand raised (client ext). */
   hand: boolean;
   ms: number;
@@ -376,10 +446,19 @@ export function foldVoicePresence(entries: VoicePresenceEntry[], nowMs: number):
   for (const e of latest.values()) {
     if (e.status !== "joined" || !e.identity) continue;
     if (nowMs - e.ms > VOICE_STALE_MS) continue;
-    present.push({ author: e.author, identity: e.identity, broker: e.broker, hand: e.hand ?? false, ms: e.ms });
-    const list = claims.get(e.identity);
-    if (list) list.push(e.author);
-    else claims.set(e.identity, [e.author]);
+    present.push({
+      author: e.author,
+      identity: e.identity,
+      broker: e.broker,
+      screenShareIdentities: e.screenShareIdentities ?? [],
+      hand: e.hand ?? false,
+      ms: e.ms,
+    });
+    for (const identity of e.identities?.length ? e.identities : [e.identity]) {
+      const list = claims.get(identity);
+      if (list) list.push(e.author);
+      else claims.set(identity, [e.author]);
+    }
   }
   present.sort((a, b) => a.ms - b.ms || (a.author < b.author ? -1 : 1));
   return { present, claims };
@@ -395,19 +474,68 @@ export function verifiedAuthorOf(fold: VoicePresenceFold, identity: string): str
   return claimants && claimants.length === 1 ? claimants[0] : undefined;
 }
 
+/** Whether signed fresh presence assigns this verified identity to a screen-share sidecar. */
+export function isVerifiedScreenShareIdentity(
+  fold: VoicePresenceFold,
+  identity: string,
+): boolean {
+  const author = verifiedAuthorOf(fold, identity);
+  if (!author) return false;
+  return Boolean(
+    fold.present.find((present) => present.author === author)
+      ?.screenShareIdentities.includes(identity),
+  );
+}
+
 /**
- * The §5 rendezvous decision: if anyone is present, their brokers (ordered by
- * the tie-break) are the candidates; an empty room falls back to the client's
- * own defaults, in their stated order. The presence hints are untrusted input
- * from fellow members, so they're canonicalized and capped.
+ * The rendezvous candidates for a room: the Community's own brokers (CORD-02
+ * §6) when it publishes any, and the client's own configuration when it does
+ * not. Nothing else — in particular NOT the `broker` tag on presence.
+ *
+ * That tag is §5's rendezvous hint, and this client does not route on it. A
+ * hint is a fellow member's untrusted input; the list is the Community's own
+ * instruction, delivered over the same Control Plane as its relays and gated
+ * by the same permission. Where the two disagree the hint is not evidence
+ * about where the call belongs — it is a stale fold, or a member steering the
+ * call at a broker of their choosing, which is precisely the attack §5
+ * concedes and the only part of it a client can decline. Config answers the
+ * question instead, so the answer is the same for every member before anyone
+ * has joined, and cannot be moved by anyone who joins later.
+ *
+ * Both sources are ordered by the room-keyed tie-break, which is what makes
+ * one list converge without coordination — every member ranks the same origins
+ * the same way for a given room — and what spreads a Community's channels
+ * across its brokers rather than piling them onto the first.
+ *
+ * What config cannot do is make an unreachable broker work: with every listed
+ * origin down there is no call, the same way a community whose relays are all
+ * down has no chat. Callers probe in order and take the first that answers.
  */
-export function rendezvousCandidates(roomHex: string, fold: VoicePresenceFold, defaults: string[]): string[] {
-  const occupied = orderBrokers(
-    roomHex,
-    fold.present.map((p) => p.broker).filter((b): b is string => Boolean(b)),
-  ).slice(0, MAX_VOICE_BROKERS);
-  const own = defaults.map(canonicalOrigin).filter((o): o is string => Boolean(o));
-  // Occupied origins first (join the call where it is), own defaults as the
-  // fallback when they're empty or unreachable.
-  return [...new Set([...occupied, ...own])];
+export function rendezvousCandidates(
+  roomHex: string,
+  defaults: string[],
+  communityBrokers: string[] = [],
+): string[] {
+  const community = orderBrokers(roomHex, communityBrokers);
+  if (community.length > 0) return community;
+  return [...new Set(defaults.map(canonicalOrigin).filter((o): o is string => Boolean(o)))];
+}
+
+/**
+ * Members whose presence puts them on a different broker than the one we
+ * joined — a separate call, whose members we cannot hear despite the roster
+ * showing them. Presence never routes this client (see above), so the residual
+ * causes are ordinary: a list edited mid-call, or a member who reached a
+ * candidate we couldn't. Surfaced rather than swallowed, because a roster
+ * naming people you can't hear is indistinguishable from broken audio.
+ *
+ * A `joined` with no broker tag is not counted: it says nothing either way.
+ */
+export function occupantsElsewhere(fold: VoicePresenceFold, origin: string): VoicePresent[] {
+  const ours = canonicalOrigin(origin);
+  if (!ours) return [];
+  return fold.present.filter((p) => {
+    const theirs = p.broker ? canonicalOrigin(p.broker) : null;
+    return Boolean(theirs) && theirs !== ours;
+  });
 }

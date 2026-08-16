@@ -12,7 +12,7 @@ import { useSwitchAccount } from "@/hooks/useSwitchAccount";
  * for that community.
  *
  * Membership in Concord is possession of keys, and those keys live in the
- * account's own kind-13302 vault — so "not a member" and "cannot decrypt a
+ * account's own kind-33302 vault — so "not a member" and "cannot decrypt a
  * single byte of this" are the same statement. The page therefore renders
  * nothing about the community: not its name, not its channel list, not a
  * timeline. There is no non-leaking version of those, and a screen that named

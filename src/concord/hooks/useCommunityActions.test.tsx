@@ -360,6 +360,29 @@ describe("create — genesis plus the starter rooms", () => {
     expect(metadata.banner).toEqual(banner);
   });
 
+  /**
+   * The voice step's answer rides genesis for the same reason the icon does —
+   * but it carries a second rule the presentation fields don't: members
+   * resolve calls from this list and NOT from their own setting (CORD-07 §5),
+   * so an empty answer has to stay empty. Substituting the creator's own
+   * server back in would make every community quietly adopt whatever its
+   * founder happened to have configured.
+   */
+  it("seals the wizard's voice server into genesis, and writes none when it named none", async () => {
+    const { result } = renderHook(() => useCommunityActions(), { wrapper });
+
+    await result.current.create({
+      name: "Fleet",
+      relays: ["wss://relay.test"],
+      avBrokers: ["https://Voice.Example:443/"],
+    });
+    expect(JSON.parse(h.editions[0].content).av_brokers).toEqual(["https://voice.example"]);
+
+    h.editions.length = 0;
+    await result.current.create({ name: "Fleet", relays: ["wss://relay.test"], avBrokers: [] });
+    expect(JSON.parse(h.editions[0].content)).not.toHaveProperty("av_brokers");
+  });
+
   it("writes no presentation keys at all when the wizard's second step was left empty", async () => {
     const { result } = renderHook(() => useCommunityActions(), { wrapper });
 

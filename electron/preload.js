@@ -9,6 +9,28 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 let screenSourcePicker = null;
 
+ipcRenderer.on("armada:hevc-screen-share-port", (event, message) => {
+  const next = event.ports?.[0];
+  const sessionId = message?.sessionId;
+  if (!next || typeof sessionId !== "string" || !sessionId) {
+    next?.close();
+    return;
+  }
+  if (typeof window === "undefined") {
+    next.close();
+    return;
+  }
+  // IPC arrives in this isolated preload world. Transfer the port once into
+  // the page's main world, following Electron's context-isolated MessagePort
+  // pattern. Frames then travel main-world → main-process without passing
+  // through contextBridge's per-call request/response serializer.
+  window.postMessage(
+    { type: "armada:hevc-screen-share-port", sessionId },
+    "*",
+    [next],
+  );
+});
+
 // Main → preload → renderer request/response bridge for getDisplayMedia.
 // Context isolation gives preload and the page different global objects, so a
 // callback stored directly on preload's `window` is not visible to main-world
@@ -45,6 +67,25 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
   /** { platform, version } of the desktop shell. */
   getInfo: () => ipcRenderer.invoke("armada:platform"),
 
+  /** Linux WebRTC encoder policy. Changes take effect after an app restart. */
+  getVideoEncoderMode: () => ipcRenderer.invoke("armada:video-encoder-mode"),
+  setVideoEncoderMode: (mode) => ipcRenderer.invoke("armada:set-video-encoder-mode", mode),
+
+  /** Linux FFmpeg/VA-API H.265 publisher capability and lifecycle. */
+  getHevcScreenShareCapability: () =>
+    ipcRenderer.invoke("armada:hevc-screen-share-capability"),
+  getHevcScreenShareStatus: () =>
+    ipcRenderer.invoke("armada:hevc-screen-share-status"),
+  startHevcScreenShare: (config) =>
+    ipcRenderer.invoke("armada:hevc-screen-share-start", config),
+  stopHevcScreenShare: () => ipcRenderer.invoke("armada:hevc-screen-share-stop"),
+  onHevcScreenShareStatus: (handler) => {
+    if (typeof handler !== "function") return () => {};
+    const listener = (_event, status) => handler(status);
+    ipcRenderer.on("armada:hevc-screen-share-status", listener);
+    return () => ipcRenderer.removeListener("armada:hevc-screen-share-status", listener);
+  },
+
   /**
    * OS-level microphone access status. Reflects the system privacy setting
    * (macOS TCC / Windows "let desktop apps use the microphone"), independent of
@@ -59,6 +100,12 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
    * platform has no deep link.
    */
   openMicPrivacySettings: () => ipcRenderer.invoke("armada:open-mic-settings"),
+
+  /** macOS Screen Recording permission status and Settings shortcut. */
+  getScreenCaptureAccessStatus: () =>
+    ipcRenderer.invoke("armada:screen-capture-access-status"),
+  openScreenCapturePrivacySettings: () =>
+    ipcRenderer.invoke("armada:open-screen-capture-settings"),
 
   /**
    * Register (or clear with null) the physical key used for desktop push to

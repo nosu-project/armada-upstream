@@ -47,6 +47,9 @@ files:
   - desktopIntegration.js
   - updateSupport.js
   - linuxAudioSources.js
+  - linuxVideoAcceleration.js
+  - displayMediaPolicy.js
+  - hevcScreenShare.js
   - linuxGlobalShortcuts.js
   - linuxStatusNotifier.js
   - pushToTalk.js
@@ -88,6 +91,12 @@ linux:
   # Preserve Armada's clipped-corner tile instead of letting launchers wrap
   # the plain square logo in their generic application background.
   icon: build/linux-icon.png
+  # The same static publisher is shared by AppImage, deb and the Flatpak that
+  # repackages this AppImage. FFmpeg itself stays platform-provided because
+  # VA-API must load the host/runtime's matching libva, libdrm and GPU driver.
+  extraResources:
+    - from: generated/hevc/${arch}/armada-hevc-publisher
+      to: armada-hevc-publisher
   syncDesktopName: true
   target:
     - AppImage
@@ -100,8 +109,13 @@ linux:
 
 # ── Windows ────────────────────────────────────────────────────────────────────
 win:
+  # venmic + DBus are Linux/PipeWire-only. Excluding them here prevents their
+  # native Linux payloads and transitive dependencies from entering Windows.
   files:
     - "!.flatpak-builder{,/**/*}"
+    - "!flatpak{,/**/*}"
+    - "!generated{,/**/*}"
+    - "!hevc-publisher{,/**/*}"
     - "!node_modules/@vencord/venmic{,/**/*}"
     - "!node_modules/@jellybrick/dbus-next{,/**/*}"
   target:
@@ -125,6 +139,9 @@ mac:
   category: public.app-category.social-networking
   files:
     - "!.flatpak-builder{,/**/*}"
+    - "!flatpak{,/**/*}"
+    - "!generated{,/**/*}"
+    - "!hevc-publisher{,/**/*}"
     - "!node_modules/@vencord/venmic{,/**/*}"
     - "!node_modules/@jellybrick/dbus-next{,/**/*}"
   target:
@@ -141,6 +158,7 @@ mac:
   extendInfo:
     NSMicrophoneUsageDescription: Armada uses the microphone for voice calls.
     NSCameraUsageDescription: Armada uses the camera for video calls.
+    NSAudioCaptureUsageDescription: Armada shares system audio when you choose it while sharing your screen.
 
 # Stable, predictable artifact names for the CI upload step.
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}

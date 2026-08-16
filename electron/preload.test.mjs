@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 function loadPreload({ dbAvailable = true } = {}) {
   let api;
   const listeners = new Map();
+  const windowObject = { postMessage: vi.fn() };
   const ipcRenderer = {
     invoke: vi.fn(),
     send: vi.fn(),
@@ -26,12 +27,13 @@ function loadPreload({ dbAvailable = true } = {}) {
   };
   const source = fs.readFileSync(new URL("./preload.js", import.meta.url), "utf8");
   vm.runInNewContext(source, {
+    window: windowObject,
     require: (specifier) => {
       if (specifier === "electron") return { contextBridge, ipcRenderer };
       throw new Error(`unexpected preload dependency: ${specifier}`);
     },
   });
-  return { api, ipcRenderer, listeners };
+  return { api, ipcRenderer, listeners, windowObject };
 }
 
 describe("desktop database preload bridge", () => {
@@ -54,6 +56,70 @@ describe("desktop database preload bridge", () => {
 });
 
 describe("screen-share preload bridge", () => {
+  it("transfers the dedicated H.265 frame port into the renderer world", () => {
+    const { listeners, windowObject } = loadPreload();
+    const port = { close: vi.fn() };
+
+    listeners.get("armada:hevc-screen-share-port")(
+      { ports: [port] },
+      { sessionId: "screen-session" },
+    );
+
+    expect(windowObject.postMessage).toHaveBeenCalledWith(
+      { type: "armada:hevc-screen-share-port", sessionId: "screen-session" },
+      "*",
+      [port],
+    );
+    expect(port.close).not.toHaveBeenCalled();
+  });
+
+  it("closes a frame port whose session identity is missing", () => {
+    const { listeners, windowObject } = loadPreload();
+    const port = { close: vi.fn() };
+
+    listeners.get("armada:hevc-screen-share-port")({ ports: [port] }, {});
+
+    expect(port.close).toHaveBeenCalledOnce();
+    expect(windowObject.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("forwards H.265 lifecycle and macOS Screen Recording calls", () => {
+    const { api, ipcRenderer } = loadPreload();
+    const config = { width: 2560, height: 1440, frameRate: 60, bitrate: 25_000_000 };
+
+    api.getHevcScreenShareCapability();
+    api.getHevcScreenShareStatus();
+    api.startHevcScreenShare(config);
+    api.stopHevcScreenShare();
+    api.getScreenCaptureAccessStatus();
+    api.openScreenCapturePrivacySettings();
+
+    expect(ipcRenderer.invoke.mock.calls).toEqual(expect.arrayContaining([
+      ["armada:hevc-screen-share-capability"],
+      ["armada:hevc-screen-share-status"],
+      ["armada:hevc-screen-share-start", config],
+      ["armada:hevc-screen-share-stop"],
+      ["armada:screen-capture-access-status"],
+      ["armada:open-screen-capture-settings"],
+    ]));
+  });
+
+  it("subscribes and unsubscribes from H.265 publisher status", () => {
+    const { api, ipcRenderer, listeners } = loadPreload();
+    const handler = vi.fn();
+    const unsubscribe = api.onHevcScreenShareStatus(handler);
+    const status = { state: "published", encodedBytes: 4096 };
+
+    listeners.get("armada:hevc-screen-share-status")({}, status);
+    expect(handler).toHaveBeenCalledWith(status);
+    const listener = listeners.get("armada:hevc-screen-share-status");
+    unsubscribe();
+    expect(ipcRenderer.removeListener).toHaveBeenCalledWith(
+      "armada:hevc-screen-share-status",
+      listener,
+    );
+  });
+
   it("returns the React picker's source to main over IPC", async () => {
     const { api, ipcRenderer, listeners } = loadPreload();
     api.onPickScreenSource(vi.fn(async () => "screen:portal:1"));

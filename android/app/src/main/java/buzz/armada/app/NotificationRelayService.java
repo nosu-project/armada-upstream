@@ -54,6 +54,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -2216,9 +2217,10 @@ public class NotificationRelayService extends Service {
      * `relay` tags): the shared store first (the WebView caches peers' lists
      * there), else a one-shot broadcast REQ to every open relay, gathering the
      * newest list for {@link #DM_INBOX_TIMEOUT_MS}. Resolves with an EMPTY
-     * list when the peer has published none — DM sends are gated on a
-     * published inbox (matching the WebView), so an empty resolve fails the
-     * reply rather than publishing ciphertext somewhere the peer never reads.
+     * list when the peer has published none, which is not by itself a failure:
+     * {@link #sendDmReply} unions our own DM relays in, as the WebView's
+     * `publishRumor` does, so a peer who never published a 10050 is still
+     * reachable wherever we both read.
      */
     private void resolveDmInbox(String pubkey, InboxCallback cb) {
         List<String> cached = ServiceStore.dmInboxRelays(this, pubkey);
@@ -2528,6 +2530,20 @@ public class NotificationRelayService extends Service {
                             }
                             // "full" falls through and notifies like a friend.
                         }
+                        // A NIP-17 conversation is its PARTICIPANT SET, not its
+                        // sender (nip17/conversation.ts) — so the room this
+                        // belongs to is derived exactly as the WebView derives
+                        // it, and for a 1:1 the key is still bare `<peer>`.
+                        // Keyed by the sender instead, a group message landed in
+                        // the 1:1 thread with whoever happened to speak, put its
+                        // read marker there, and sent the quick reply there too.
+                        // A received rumor always names a room (its sender is a
+                        // participant); the fallback only ensures that a
+                        // derivation that somehow failed costs no notification.
+                        final String convKey = ServiceStore.dm17ConvKey(userPubkey, rumor);
+                        final String room = convKey != null ? convKey : peer;
+                        final List<String> convPeers = ServiceStore.dm17ConvPeers(room);
+                        final boolean group = convPeers.size() > 1;
                         final String preview =
                                 rumorKind == 15 ? "Sent a file" : messagePreview(rumor);
                         final long rts = rumor.optLong("created_at", 0);
@@ -2537,12 +2553,17 @@ public class NotificationRelayService extends Service {
                             String picture = profile != null ? profile.picture : null;
                             String line = preview.isEmpty() ? "Sent you a direct message" : preview;
                             if (BuildConfig.DEBUG) Log.d(TAG, "NOTIFY dm17 (signer) from=" + name);
+                            // A group's title is the room, not the last speaker
+                            // — MessagingStyle already names the sender on the
+                            // line itself. A 1:1 keeps the peer's name as the
+                            // title, which is what makes it render as a 1:1.
+                            String title = group ? dmGroupTitle(convPeers) : name;
                             // mention=false: a DM is suppressed while its own
                             // thread is on screen (the peer isn't known until
                             // decrypt, so enqueueRoomMessage's active-room gate
                             // does it here rather than a synchronous pre-check).
-                            enqueueRoomMessage(/*community=*/null, "dm:" + peer, name,
-                                    appendMessageSegment("/dm/" + peer, rumor.optString("id", "")),
+                            enqueueRoomMessage(/*community=*/null, "dm:" + room, title,
+                                    appendMessageSegment("/dm/" + room, rumor.optString("id", "")),
                                     peer, name, picture, line, fTs, /*mention=*/false);
                         });
                     } catch (Exception ignored) {
@@ -3525,6 +3546,64 @@ public class NotificationRelayService extends Service {
         return null;
     }
 
+    /**
+     * The conversation title for a group DM: its members' names, in the
+     * canonical (sorted-pubkey) order of the conversation key, so the title is
+     * stable rather than reordering with whoever spoke last.
+     *
+     * Resolved from what is already held — never the network. A group of five
+     * would otherwise put five relay round-trips in front of one notification,
+     * and the one name that genuinely matters, the sender's, is resolved
+     * properly through {@link #resolveAuthor} for the message line's Person.
+     * Past {@link #TITLE_NAMES_MAX} the rest become a "+N", which is what keeps
+     * a large room's title from filling the lock screen.
+     */
+    private String dmGroupTitle(List<String> peers) {
+        StringBuilder sb = new StringBuilder();
+        int shown = Math.min(peers.size(), TITLE_NAMES_MAX);
+        for (int i = 0; i < shown; i++) {
+            if (i > 0) sb.append(", ");
+            sb.append(mentionName(peers.get(i)));
+        }
+        int rest = peers.size() - shown;
+        if (rest > 0) sb.append(" +").append(rest);
+        return sb.toString();
+    }
+
+    /** How many members a group DM's title names before it says "+N". */
+    private static final int TITLE_NAMES_MAX = 3;
+
+    /**
+     * Whether a string is a well-formed conversation key: one or more 64-char
+     * hex pubkeys joined by `,` (see `dmConvKey`). Checked rather than assumed
+     * because the key decides the `p` tags of an event we are about to seal,
+     * wrap and publish.
+     */
+    private static boolean isDmConvKey(String convKey) {
+        List<String> peers = ServiceStore.dm17ConvPeers(convKey);
+        if (peers.isEmpty()) return false;
+        for (String peer : peers) {
+            if (peer.length() != 64) return false;
+            for (int i = 0; i < 64; i++) {
+                char c = peer.charAt(i);
+                boolean hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+                if (!hex) return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Whether a room key names a DM conversation with more than one other
+     * participant. Derived from the KEY rather than remembered on the
+     * {@link RoomNotif}, so a room rebuilt from nothing after a cold start (see
+     * {@link #appendOutgoing}) still renders — and replies — as the group it is.
+     */
+    private static boolean isDmGroupKey(String roomKey) {
+        return roomKey != null && roomKey.startsWith("dm:")
+                && ServiceStore.dm17ConvPeers(roomKey.substring(3)).size() > 1;
+    }
+
     /** Display name from a resolved profile, falling back to "Anonymous". */
     private static String displayName(Profile profile) {
         if (profile != null && profile.name != null && !profile.name.isEmpty()) {
@@ -3919,12 +3998,17 @@ public class NotificationRelayService extends Service {
         // in place of the app icon — the peer's avatar for a 1:1 DM, the
         // community image for a channel (like a Signal group chat).
         boolean isDm = room.community == null;
+        // A group DM is a DM — no community brands it — that nonetheless has
+        // several people speaking in it, so it takes a conversation title like
+        // a channel does. Without one the system titles the notification with
+        // whichever member spoke last, which reads as a 1:1 with them.
+        boolean titled = !isDm || isDmGroupKey(room.roomKey);
 
         // The local user, who a sent quick reply is attributed to: their own
         // kind-0 name + avatar when we hold one, "You" when we don't.
         Person self = selfPerson();
         NotificationCompat.MessagingStyle style = new NotificationCompat.MessagingStyle(self);
-        if (isDm) {
+        if (!titled) {
             // 1:1: no conversation title — the system titles it with the
             // sender Person's name (a title would make it render as a group).
             style.setGroupConversation(false);
@@ -4166,7 +4250,7 @@ public class NotificationRelayService extends Service {
     private boolean canReply(RoomNotif room) {
         if (nativeSigner == null || userPubkey == null || room.roomKey == null) return false;
         String key = room.roomKey;
-        if (key.startsWith("dm:")) return key.length() == 3 + 64;
+        if (key.startsWith("dm:")) return isDmConvKey(key.substring(3));
         if (key.startsWith("h:")) return key.substring(2).lastIndexOf('|') > 0;
         // Config-only check (no DB read on every post); the stream secret is
         // resolved from the store at send time and fails the reply visibly if
@@ -4486,24 +4570,42 @@ public class NotificationRelayService extends Service {
      * WebView's), and the self copy to the user's own DM relays. Success is
      * the peer's copy landing; the self copy and the store write ride along.
      */
-    private void sendDmReply(NativeSigner signer, String peer, String text, String roomKey, MsgEntry sent) {
-        if (peer.length() != 64 || userPubkey == null) {
+    private void sendDmReply(NativeSigner signer, String convKey, String text, String roomKey,
+                             MsgEntry sent) {
+        final List<String> peers = ServiceStore.dm17ConvPeers(convKey);
+        if (userPubkey == null || peers.isEmpty()) {
             finishReply(roomKey, sent, false);
             return;
         }
-        resolveDmInbox(peer, inboxRelays -> {
-            if (inboxRelays.isEmpty()) {
+        for (String p : peers) {
+            if (p.length() != 64) {
                 finishReply(roomKey, sent, false);
                 return;
             }
+        }
+        // NIP-17 mints one seal + wrap PER RECIPIENT — there is no group event
+        // (nip17/protocol.ts). Everyone but us is a recipient; Note to Self has
+        // none, and its self copy IS the send.
+        final List<String> recipients = new ArrayList<>();
+        for (String p : peers) {
+            if (!p.equals(userPubkey)) recipients.add(p);
+        }
+        resolveDmInboxes(recipients, inboxes -> {
             long nowSecs = System.currentTimeMillis() / 1000;
             // Disappearing messages: while the conversation's timer is set
             // (the newest kind-1740 in the stored thread), the rumor commits
             // its NIP-40 deadline; the seal and both wraps repeat it below —
             // all three levels, matching nip17/protocol.ts.
-            long timerSecs = ServiceStore.dm17TimerSecs(this, userPubkey, peer);
+            long timerSecs = ServiceStore.dm17TimerSecs(this, userPubkey, convKey);
             final long expiresAt = timerSecs > 0 ? nowSecs + timerSecs : 0;
-            JSONArray rumorTags = new JSONArray().put(new JSONArray().put("p").put(peer));
+            // Every participant is p-tagged, which is what makes the reply land
+            // in the conversation being replied to: the `p` set IS the room, so
+            // a reply tagging only the last speaker would silently open a 1:1
+            // with them instead of answering the group.
+            JSONArray rumorTags = new JSONArray();
+            for (String p : peers) {
+                rumorTags.put(new JSONArray().put("p").put(p));
+            }
             if (expiresAt > 0) {
                 rumorTags.put(new JSONArray().put("expiration").put(String.valueOf(expiresAt)));
             }
@@ -4520,29 +4622,112 @@ public class NotificationRelayService extends Service {
                 return;
             }
             final String rumorJson = rumor.toString();
-            buildDmEnvelope(signer, rumorJson, peer, expiresAt, peerWrap -> {
-                if (peerWrap == null) {
+
+            // Where each recipient's own wrap goes: their published inbox
+            // UNIONED with our own DM relays, exactly as `publishRumor` does.
+            // Their 10050 is where a compliant client reads, but writing there
+            // also requires us to reach it, and a peer who published none is
+            // still reachable on the relays we share — the common Armada case,
+            // which this used to refuse to send to at all.
+            final Map<String, List<String>> targets = new LinkedHashMap<>();
+            for (String r : recipients) {
+                List<String> published = inboxes.get(r);
+                List<String> merged =
+                        new ArrayList<>(published != null ? published : new ArrayList<>());
+                for (String d : dmRelays) {
+                    if (!merged.contains(d)) merged.add(d);
+                }
+                if (merged.isEmpty()) {
+                    // Nowhere at all to put this member's copy. A partial send
+                    // reported as success is the one outcome worth refusing.
                     finishReply(roomKey, sent, false);
                     return;
                 }
-                publishEvent(peerWrap, inboxRelays, ok -> {
-                    if (ok) {
-                        // The thread shows the reply on next open, exactly as
-                        // if the WebView had sent it.
-                        ServiceStore.storeDm17Rumor(this, userPubkey, rumor);
-                    }
-                    finishReply(roomKey, sent, ok);
-                });
-                // The self copy, sealed + wrapped to ourselves, to our own DM
-                // relays. Best-effort: the peer copy above decides success, and
-                // the store write above is what our own thread reads anyway.
+                targets.put(r, merged);
+            }
+
+            if (recipients.isEmpty()) {
+                // Note to Self: the self copy IS the send, so it decides.
                 buildDmEnvelope(signer, rumorJson, userPubkey, expiresAt, selfWrap -> {
-                    if (selfWrap != null && !dmRelays.isEmpty()) {
-                        publishEvent(selfWrap, new ArrayList<>(dmRelays), selfOk -> { });
+                    if (selfWrap == null || dmRelays.isEmpty()) {
+                        finishReply(roomKey, sent, false);
+                        return;
                     }
+                    publishEvent(selfWrap, new ArrayList<>(dmRelays), ok -> {
+                        if (ok) ServiceStore.storeDm17Rumor(this, userPubkey, rumor);
+                        finishReply(roomKey, sent, ok);
+                    });
                 });
+                return;
+            }
+
+            // EVERY recipient's copy must land, matching `publishRumor`'s
+            // Promise.all: a group message that reached three of four members
+            // is one somebody never got, and reporting it as sent is what would
+            // hide that. Tallied on the main handler so the counter is touched
+            // from one thread whether a publish resolved from a relay socket or
+            // from its timeout.
+            final int[] remaining = { recipients.size() };
+            final boolean[] allOk = { true };
+            PublishCallback tally = ok -> {
+                if (!ok) allOk[0] = false;
+                if (--remaining[0] != 0) return;
+                if (allOk[0]) {
+                    // The thread shows the reply on next open, exactly as if
+                    // the WebView had sent it.
+                    ServiceStore.storeDm17Rumor(this, userPubkey, rumor);
+                }
+                finishReply(roomKey, sent, allOk[0]);
+            };
+            for (Map.Entry<String, List<String>> entry : targets.entrySet()) {
+                final List<String> relays = entry.getValue();
+                buildDmEnvelope(signer, rumorJson, entry.getKey(), expiresAt, wrap -> {
+                    if (wrap == null) {
+                        handler.post(() -> tally.done(false));
+                        return;
+                    }
+                    publishEvent(wrap, relays, ok -> handler.post(() -> tally.done(ok)));
+                });
+            }
+            // The self copy, sealed + wrapped to ourselves, to our own DM
+            // relays. Best-effort: the recipients' copies decide success, and
+            // the store write above is what our own thread reads anyway.
+            buildDmEnvelope(signer, rumorJson, userPubkey, expiresAt, selfWrap -> {
+                if (selfWrap != null && !dmRelays.isEmpty()) {
+                    publishEvent(selfWrap, new ArrayList<>(dmRelays), selfOk -> { });
+                }
             });
         });
+    }
+
+    private interface InboxesCallback {
+        void onInboxes(Map<String, List<String>> inboxes);
+    }
+
+    /**
+     * Resolve every recipient's NIP-17 inbox relays, joining on the main
+     * handler. The lookups run concurrently, so a group costs one
+     * {@link #DM_INBOX_TIMEOUT_MS} rather than one per member — which matters
+     * because the whole fan-out sits in front of a reply the user has already
+     * watched appear in the notification.
+     *
+     * A member with no published list resolves EMPTY rather than failing the
+     * group: the caller unions our own DM relays in, and only a recipient with
+     * no reachable relay at all fails the send.
+     */
+    private void resolveDmInboxes(List<String> peers, InboxesCallback cb) {
+        final Map<String, List<String>> out = new LinkedHashMap<>();
+        if (peers.isEmpty()) {
+            cb.onInboxes(out);
+            return;
+        }
+        final int[] remaining = { peers.size() };
+        for (String peer : peers) {
+            resolveDmInbox(peer, relays -> handler.post(() -> {
+                out.put(peer, relays);
+                if (--remaining[0] == 0) cb.onInboxes(out);
+            }));
+        }
     }
 
     private interface EnvelopeCallback {

@@ -7,6 +7,7 @@ import { CallStageSlot } from "@/components/chat/CallStageSlot";
 import { DittoIcon } from "@/components/brand/DittoIcon";
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { ChatMessage } from "@/components/chat/ChatMessage";
+import { lastEditableOwnMessage } from "@/components/chat/transport";
 import type { ChatMsg } from "@/components/chat/transport";
 import { getQuoteReplyToId } from "@/components/chat/messageHelpers";
 import { ReplyContext } from "@/components/chat/ReplyContext";
@@ -1429,6 +1430,12 @@ function Conversation({
           // the user turned typing indicators on.
           onTyping={publishTyping}
           sendOverride={handleSubmit}
+          onEditLast={() => {
+            const target = lastEditableOwnMessage(transportRef.current.messages, user?.pubkey, (id) => transportRef.current.sendStatusFor?.(id) !== undefined);
+            if (!target) return false;
+            setEditingId(target.id);
+            return true;
+          }}
         />
       )}
 
@@ -2441,7 +2448,9 @@ export function DMsPage() {
   // Tell the native notification service this DM thread is on screen, so it
   // suppresses redundant tray entries (the live timeline already paints each
   // message). Cleared on unmount/background. The roomKey shape must match the
-  // service's `enqueueRoomMessage` key: `dm:<peerPubkey>`.
+  // service's `enqueueRoomMessage` key: `dm:<conversationKey>`, the participant
+  // set rather than a sender — which is why a group thread on screen suppresses
+  // the group's own notifications and nothing else's.
   useActiveRoom(activePeer ? `dm:${activePeer}` : undefined);
 
   // The peer whose thread is mounted. It lags behind `activePeer` so the thread

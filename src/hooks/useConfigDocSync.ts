@@ -183,9 +183,12 @@ export function useConfigDocSync(name: ConfigDocName): void {
 
     appliedId.current = resolved.event.id;
     appliedCreatedAt.current = resolved.event.created_at;
-    const patch = docToConfigPatch(name, resolved.doc as Record<string, unknown>);
 
     updateConfig((current: AppConfig) => {
+      // Compute the patch INSIDE the updater: the `dms` merge unions the
+      // incoming per-peer maps against `current`, so a hide this device holds
+      // isn't dropped by a doc another device published from a stale copy.
+      const patch = docToConfigPatch(name, resolved.doc as Record<string, unknown>, current);
       const next = { ...current, ...patch };
       // Record what we just applied so the publish watcher treats it as
       // already-synced and doesn't echo it straight back out.

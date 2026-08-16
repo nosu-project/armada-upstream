@@ -54,6 +54,11 @@ jobs:
         with:
           node-version: 22
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: electron/hevc-publisher/go.mod
+          cache-dependency-path: electron/hevc-publisher/go.sum
+
       - name: Build standalone web bundle
         env:
           VITE_KLIPY_API_KEY: ${{ secrets.KLIPY_API_KEY }}
@@ -115,7 +120,20 @@ jobs:
           cd electron
           sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" package.json
           npm ci --no-audit --no-fund
+          ./scripts/build-hevc-publisher.sh --arch x64
+          test -x generated/hevc/x64/armada-hevc-publisher
           npx electron-builder --linux --win --config electron-builder.yml --publish never
+          test -x release/linux-unpacked/resources/armada-hevc-publisher
+          cmp generated/hevc/x64/armada-hevc-publisher \
+            release/linux-unpacked/resources/armada-hevc-publisher
+          asar_check=$(mktemp -d)
+          npx asar extract release/linux-unpacked/resources/app.asar "$asar_check/linux"
+          npx asar extract release/win-unpacked/resources/app.asar "$asar_check/windows"
+          diff -qr dist "$asar_check/linux/dist"
+          diff -qr dist "$asar_check/windows/dist"
+          test ! -e "$asar_check/windows/generated"
+          test ! -e "$asar_check/windows/flatpak"
+          test ! -e "$asar_check/windows/hevc-publisher"
 
       # Flatpak is deliberately derived from the just-built AppImage, so it
       # contains the identical application bundle. build.sh emits both a
@@ -369,15 +387,14 @@ jobs:
           path: ${{ steps.collect.outputs.feed }}
           if-no-files-found: error
 
-      # Publish to https://armada.buzz/downloads/ over the SAME rrsync-jailed
-      # deploy user the web build uses (deploy-web.yml). Pushing the staged
-      # `downloads` DIRECTORY (no trailing slash) into the jail root ":/" is
-      # what creates/updates the directory there, mirroring how the web job
-      # pushes `dist/`. Note the web deploy runs without `--delete`, which is
-      # what lets downloads/ survive every subsequent site deploy — don't add
-      # one there without excluding /downloads.
+      # Publish to https://armada.buzz/downloads/ over the rrsync-jailed deploy
+      # user. Pushing the staged `downloads` DIRECTORY (no trailing slash) into
+      # the jail root ":/" is what creates/updates the directory there. This
+      # rsync runs without `--delete`, as release.yml's does — the two publish
+      # into one jail root and would otherwise delete each other's installers,
+      # so don't add one without excluding the other's files.
       #
-      # Secrets are the web deploy's (operator-provisioned, maintainer-gated):
+      # Secrets (operator-provisioned, maintainer-gated), shared with release.yml:
       # DEPLOY_SSH_KEY_BASE64, DEPLOY_SSH_CONFIG_BASE64, DEPLOY_TARGET. With no
       # key provisioned the installers are still built and uploaded as run
       # artifacts; only the publish is skipped.

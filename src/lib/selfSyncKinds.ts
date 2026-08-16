@@ -46,8 +46,12 @@ export const KIND_DM_RELAYS = 10050;
 export const KIND_BLOSSOM_SERVERS = 10063;
 /** NIP-51 user custom emoji list (10030). */
 export const KIND_USER_EMOJIS = 10030;
-/** Concord community list — the membership vault (CORD-02, 13302). */
-export const KIND_COMMUNITY_LIST = 13302;
+/**
+ * Concord community list — the membership vault (CORD-02 §8, 33302).
+ * Addressable, one event per FRAGMENT (`d` = the fragment index), so the
+ * standing REQ streams every fragment and the echo-dedup must key per `d`.
+ */
+export const KIND_COMMUNITY_LIST_FRAG = 33302;
 /** Concord invite list — the creator's minted-link bookkeeping (CORD-05, 13303). */
 export const KIND_INVITE_LIST = 13303;
 /** NIP-78 application-specific data (30078) — vault, settings, and private app data. */
@@ -57,9 +61,11 @@ export const KIND_APP_SPECIFIC = SETTINGS_KIND;
 export const T_ARMADA_GIF_FAVORITES = "armada-gif-favorites";
 
 /**
- * The bare replaceable kinds (10000–19999 band + kind 3) synced with a simple
- * `{ authors:[me], kinds:[…] }` filter. Addressable kind 30078 is handled
- * separately with a `#d` filter (see {@link SELF_SYNC_DTAGS}).
+ * The kinds synced with a simple `{ authors:[me], kinds:[…] }` filter — the
+ * bare replaceables (10000–19999 band + kind 3) plus the addressable Community
+ * List fragments (33302, where EVERY `d` belongs to the account and all of
+ * them are wanted). Addressable kind 30078 is handled separately with a `#d`
+ * filter (see {@link SELF_SYNC_DTAGS}).
  */
 export const SELF_SYNC_REPLACEABLE_KINDS: number[] = [
   KIND_FOLLOW_LIST,
@@ -69,7 +75,7 @@ export const SELF_SYNC_REPLACEABLE_KINDS: number[] = [
   KIND_DM_RELAYS,
   KIND_BLOSSOM_SERVERS,
   KIND_USER_EMOJIS,
-  KIND_COMMUNITY_LIST,
+  KIND_COMMUNITY_LIST_FRAG,
   KIND_INVITE_LIST,
 ];
 
@@ -106,7 +112,7 @@ export function queryKeysForSelfEvent(
       return [["blossom-server-list"]];
     case KIND_USER_EMOJIS:
       return [["custom-emojis"]];
-    case KIND_COMMUNITY_LIST:
+    case KIND_COMMUNITY_LIST_FRAG:
       return [["concord", "list"]];
     case KIND_INVITE_LIST:
       return [["concord", "invite-list"]];

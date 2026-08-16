@@ -13,7 +13,9 @@ import {
   sealRumor,
   wrapSeal,
 } from "@/concord/lib/stream";
+import { useControlFold } from "@/concord/hooks/useControlPlane";
 import {
+  communityAvBrokers,
   fetchAvTokenFromAny,
   foldVoicePresence,
   heartbeatDelayMs,
@@ -37,6 +39,16 @@ import type { NostrEvent } from "@nostrify/nostrify";
 
 /** The stable empty fold (so idle rows keep constant props). */
 const EMPTY_FOLD: VoicePresenceFold = { present: [], claims: new Map() };
+
+function sameClaims(left: Map<string, string[]>, right: Map<string, string[]>): boolean {
+  if (left.size !== right.size) return false;
+  for (const [identity, authors] of left) {
+    const next = right.get(identity);
+    if (!next || next.length !== authors.length) return false;
+    if (authors.some((author, index) => author !== next[index])) return false;
+  }
+  return true;
+}
 
 /**
  * Shared presence memory, keyed by the channel's current wrap address (one map
@@ -108,8 +120,11 @@ export function useVoicePresence(
               p.author === next.present[i].author &&
               p.identity === next.present[i].identity &&
               p.broker === next.present[i].broker &&
-              p.hand === next.present[i].hand,
-          )
+              p.hand === next.present[i].hand &&
+              p.screenShareIdentities.join("\0") ===
+                next.present[i].screenShareIdentities.join("\0"),
+          ) &&
+          sameClaims(prev.claims, next.claims)
         ) {
           return prev;
         }
@@ -176,7 +191,11 @@ export function useVoiceHeartbeat(
   identity: string | undefined,
   broker: string | undefined,
   handRaised = false,
-): { sendReaction: (emoji: string) => void } {
+  additionalIdentities: readonly string[] = [],
+): {
+  sendReaction: (emoji: string) => void;
+  announceAdditionalIdentities: (identities: readonly string[]) => Promise<void>;
+} {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
 
@@ -186,6 +205,9 @@ export function useVoiceHeartbeat(
   // toggle itself for immediacy.
   const handRef = useRef(handRaised);
   handRef.current = handRaised;
+  const additionalIdentitiesRef = useRef(additionalIdentities);
+  additionalIdentitiesRef.current = additionalIdentities;
+  const additionalIdentitiesKey = additionalIdentities.join("\0");
 
   const publish = useCallback(
     async (
@@ -194,13 +216,16 @@ export function useVoiceHeartbeat(
       origin?: string,
       reaction?: { emoji: string; nonce: string },
     ) => {
-      if (!user || !community || !channel) return;
+      if (!user || !community || !channel) return false;
       const rumor = buildRumor({
         kind: KIND_VOICE_PRESENCE,
         content: status,
         tags: [
           ...channelBindingTags(channel.idHex, channel.current.epoch),
-          ...presenceTags(status, id, origin, { hand: handRef.current }),
+          ...presenceTags(status, id, origin, {
+            hand: handRef.current,
+            additionalIdentities: additionalIdentitiesRef.current,
+          }),
           ...(reaction ? [reactionTag(reaction.emoji, reaction.nonce)] : []),
         ],
         pubkey: user.pubkey,
@@ -208,9 +233,10 @@ export function useVoiceHeartbeat(
       });
       const seal = await sealRumor(rumor, KIND_SEAL_ENCRYPTED, channel.current.group, user.signer);
       const wrap = wrapSeal(seal, channel.current.group, { ephemeral: true });
-      await Promise.allSettled(
+      const results = await Promise.allSettled(
         community.relays.map((url) => nostr.relay(url).event(wrap, { signal: AbortSignal.timeout(6000) })),
       );
+      return results.some((result) => result.status === "fulfilled");
     },
     [nostr, user, community, channel],
   );
@@ -249,6 +275,20 @@ export function useVoiceHeartbeat(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handRaised, identity, broker]);
 
+  // Republish when a sidecar publisher identity appears or disappears. Keep
+  // this separate from the main heartbeat lifecycle: tearing that effect down
+  // would emit a transient `left` and make the member flicker out of the call.
+  const identitiesMounted = useRef(false);
+  useEffect(() => {
+    if (!identity || !broker) return;
+    if (!identitiesMounted.current) {
+      identitiesMounted.current = true;
+      return;
+    }
+    void publish("joined", identity, broker).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [additionalIdentitiesKey, identity, broker]);
+
   const sendReaction = useCallback(
     (emoji: string) => {
       if (!identity || !broker) return;
@@ -261,7 +301,21 @@ export function useVoiceHeartbeat(
     [publish, identity, broker],
   );
 
-  return { sendReaction };
+  const announceAdditionalIdentities = useCallback(
+    async (identities: readonly string[]) => {
+      additionalIdentitiesRef.current = identities;
+      if (!identity || !broker) return;
+      const delivered = await publish("joined", identity, broker);
+      if (identities.length > 0 && !delivered) {
+        throw new Error(
+          "Could not announce the H.265 publisher identity to a community relay.",
+        );
+      }
+    },
+    [broker, identity, publish],
+  );
+
+  return { sendReaction, announceAdditionalIdentities };
 }
 
 /** How long a received reaction floats before it's aged out. */
@@ -341,44 +395,65 @@ export function useVoiceReactions(
  * The client's own default AV servers, in preference order: the user's
  * Settings → Voice server when set, otherwise the deployment's build-time
  * defaults. A synchronized custom address is a replacement, not an additive
- * hint. Consulted only when a room is empty — an occupied room's
- * presence-announced brokers always win the rendezvous (§5).
+ * hint. Consulted only where no community answers the question: a community
+ * that publishes brokers uses those exclusively (§5), so this is what a
+ * community publishing none falls back to — and what a DM call, which has no
+ * community to publish any, uses alone.
  */
 export function ownAvServers(): string[] {
   return effectiveAvServers(CONCORD_AV_SERVERS);
 }
 
 /**
- * Imperatively resolve a reachable broker for a room (the same §5 rendezvous
+ * The community's own brokers (CORD-02 §6), following the Control fold rather
+ * than a join-time snapshot: a staff edit reaches a mounted call the same way
+ * a relay change does. Callers already holding the fold should read
+ * `communityAvBrokers(folded?.metadata)` directly instead of subscribing again.
+ */
+export function useCommunityAvBrokers(community: Community | undefined): string[] {
+  const { data: folded } = useControlFold(community);
+  return useMemo(() => communityAvBrokers(folded?.metadata), [folded?.metadata]);
+}
+
+/**
+ * Imperatively resolve a reachable broker for a room (the same rendezvous
  * `useVoiceBroker` runs, but live). Used at join time when the cached query
  * value is missing or a previous probe failed — a stale `null` must not block
  * a join that would succeed now.
  */
 export async function resolveVoiceBroker(
   roomHex: string,
-  fold: VoicePresenceFold,
+  communityBrokers: string[] = [],
   signal?: AbortSignal,
 ): Promise<string | null> {
-  for (const origin of rendezvousCandidates(roomHex, fold, ownAvServers())) {
+  for (const origin of rendezvousCandidates(roomHex, ownAvServers(), communityBrokers)) {
     if (await probeAvBroker(origin, signal)) return origin;
   }
   return null;
 }
 
 /**
- * The §5 rendezvous: resolve the broker to join this channel's call through.
- * If anyone is present, their broker wins (tie-break ordered); an empty room
- * falls back to the deployment's own defaults. Every candidate is probed
- * (`GET /.well-known/concord/av` → 204) and the first reachable one is it.
+ * Resolve the broker to join this channel's call through: the community's own
+ * when it publishes any, this client's configuration otherwise — never the
+ * broker a fellow member's presence points at (see `rendezvousCandidates`).
+ * Every candidate is probed (`GET /.well-known/concord/av` → 204) and the
+ * first reachable one is it.
+ *
+ * Deliberately takes no presence fold: the answer is a property of config and
+ * the room, so it is the same before anyone joins as after, and a channel's
+ * idle rows don't re-resolve on every heartbeat.
  */
 export function useVoiceBroker(
   channel: Channel | undefined,
-  fold: VoicePresenceFold,
+  communityBrokers: string[] = [],
 ): { data: string | null | undefined; isLoading: boolean } {
   const roomHex = channel?.voice.room.pk;
+  // Keyed by CONTENT: this is called per channel row, and a caller passing a
+  // fresh array literal would otherwise re-run the rendezvous every render.
+  const brokersKey = communityBrokers.join(",");
   const candidates = useMemo(
-    () => (roomHex ? rendezvousCandidates(roomHex, fold, ownAvServers()) : []),
-    [roomHex, fold],
+    () => (roomHex ? rendezvousCandidates(roomHex, ownAvServers(), brokersKey ? brokersKey.split(",") : []) : []),
+    [roomHex, brokersKey],
   );
   // The probe answers a question about an ORIGIN, not about a channel, and
   // `candidatesKey` already captures everything the queryFn reads (including

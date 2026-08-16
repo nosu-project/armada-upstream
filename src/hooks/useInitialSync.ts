@@ -3,7 +3,7 @@ import { useNostrLogin } from "@nostrify/react/login";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
-import { accountDataRelays } from "@/contexts/AppContext";
+import { accountDataRelays, selfStateRelays } from "@/contexts/AppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useAppContext } from "@/hooks/useAppContext";
 import {
@@ -127,7 +127,7 @@ const PHASE_OPENING: Record<Exclude<SyncPhase, "done">, string> = {
  *   4. Catch up on the newest page of messages for each joined channel (capped),
  *      priming the same caches useGroupMessages reads so timelines render
  *      instantly once the gate lifts.
- *   5. Fetch + decrypt the Concord Community List (kind 13302), seed the
+ *   5. Fetch + decrypt the Concord Community List (kind 33302 fragments), seed the
  *      ["concord","list"] cache, then WARM the communities themselves:
  *      register stream keys, sweep the control/guestbook planes, persist the
  *      control folds, and decrypt the newest page of every channel into the
@@ -585,7 +585,16 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       if (user.signer.nip44) {
         const vId = begin("communities");
         try {
-          const listData = await syncCommunityList(nostr, user, queryClient, stepSignal());
+          // The login gate is the natural seeding moment for an account
+          // migrating off the retired single-event list: pass the self-state
+          // write set so a confirmed-empty read can seed §8 from local state.
+          const listData = await syncCommunityList(
+            nostr,
+            user,
+            queryClient,
+            stepSignal(),
+            selfStateRelays(configRef.current, pubkey),
+          );
           logSync(
             "gate",
             `concord list fetched: event=${listData.event ? listData.event.id.slice(0, 8) : "none"} entries=${listData.list.entries.length} live=${liveEntries(listData.list).length} decryptFailed=${Boolean(listData.decryptFailed)}`,

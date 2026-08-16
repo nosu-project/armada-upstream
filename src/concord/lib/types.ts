@@ -16,6 +16,8 @@ import {
 
 /** Protocol recommendation for a community's relay set (CORD-02 §6). */
 export const MAX_COMMUNITY_RELAYS = 5;
+/** Same recommendation, same reasons, for the community's AV brokers (CORD-02 §6). */
+export const MAX_COMMUNITY_AV_BROKERS = 5;
 
 /** Community/channel/role name cap: 64 bytes of UTF-8 (CORD-02 §6). */
 export const NAME_MAX_BYTES = 64;
@@ -23,8 +25,6 @@ export const NAME_MAX_BYTES = 64;
 export const DESCRIPTION_MAX_BYTES = 10_000;
 /** Hostile-bundle bound: reject an invite carrying more channels than this (CORD-05 §1). */
 export const MAX_BUNDLE_CHANNELS = 256;
-/** The Community List caps at 50 memberships (CORD-02 §8). */
-export const MAX_LIST_MEMBERSHIPS = 50;
 /** Bound hostile channel metadata while retaining a useful attachment history. */
 export const MAX_CHANNEL_GIT_ATTACHMENTS = 128;
 /** Relay hints are hints, not an unbounded metadata transport. */
@@ -93,6 +93,15 @@ export interface CommunityMetadata {
   description?: string;
   /** The Community's evolving relay set (the fold is the authority). */
   relays: string[];
+  /**
+   * The Community's own AV brokers (CORD-02 §6), as https origins — where its
+   * calls rendezvous when a room is empty (CORD-07 §5). Absent or empty means
+   * every member falls back to their own configured broker, which is both the
+   * pre-field behavior and the DM-call path. Read through `communityAvBrokers`
+   * rather than directly: these are another client's strings, and only §5's
+   * canonical origin form hashes the same on every client.
+   */
+  av_brokers?: string[];
   icon?: ImagePointer;
   banner?: ImagePointer;
   /**

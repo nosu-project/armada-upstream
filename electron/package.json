@@ -13,11 +13,12 @@
   "main": "main.js",
   "scripts": {
     "stage:web": "npm --prefix .. run build && npm --prefix .. run build:electron-db && node scripts/stage-web.mjs",
+    "build:hevc-publisher": "./scripts/build-hevc-publisher.sh --arch x64",
     "prestart": "npm run stage:web",
     "start": "electron .",
     "predist": "npm run stage:web",
     "dist": "electron-builder",
-    "predist:linux": "npm run stage:web",
+    "predist:linux": "npm run stage:web && npm run build:hevc-publisher",
     "dist:linux": "electron-builder --linux",
     "dist:flatpak": "./flatpak/build.sh",
     "predist:win": "npm run stage:web",
@@ -30,7 +31,8 @@
     "electron": "^43.3.0",
     "electron-builder": "^26.15.3",
     "js-yaml": "^5.2.3",
-    "png2icons": "^2.0.1"
+    "png2icons": "^2.0.1",
+    "plist": "^3.1.0"
   },
   "dependencies": {
     "@jellybrick/dbus-next": "^0.11.3",

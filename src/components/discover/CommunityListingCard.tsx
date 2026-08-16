@@ -1,7 +1,7 @@
 import { useNostr } from "@nostrify/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Check, Copy, ShieldCheck } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { DisplayName } from "@/components/DisplayName";
@@ -14,6 +14,15 @@ import { useCommunity, useCommunityEntry } from "@/concord/hooks/useCommunityLis
 import { useControlFold } from "@/concord/hooks/useControlPlane";
 import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import {
+  discoverStreamAuthors,
+  type DiscoverActivityTarget,
+} from "@/concord/lib/discoverActivity";
+import {
+  enqueueDiscoverControlPeek,
+  peekDiscoverControl,
+  readCachedControlPeek,
+} from "@/concord/lib/discoverControlPeek";
+import {
   inviteUrlToLocalRoute,
   type DiscoveredInvite,
 } from "@/concord/lib/inviteDiscovery";
@@ -22,6 +31,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { toast } from "@/hooks/useToast";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { writeClipboardText } from "@/lib/clipboard";
+import { shortTimeAgo } from "@/lib/formatTime";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { cn } from "@/lib/utils";
 
@@ -43,7 +53,27 @@ interface CommunityListingCardProps {
    * becomes knowable.
    */
   onResolved?: (linkSigner: string, communityId: string, owner: string) => void;
+  /**
+   * Reports the stream-author probe target for the batched Discover last-active
+   * REQ (guestbook / control / vended private channels, plus public channels
+   * when this viewer is a member and holds the Control fold), or `null` to
+   * withdraw it when this card stops being listed.
+   */
+  onActivityTarget?: (linkSigner: string, target: DiscoverActivityTarget | null) => void;
+  /** Newest kind-1059 wrap `created_at` (unix seconds) from the batched probe. */
+  lastActiveAt?: number;
 }
+
+/**
+ * What "Active" actually measures, for the reader who reasonably assumes it
+ * means chat. The probe is the newest wrap across the stream addresses this
+ * invite can derive — which is every channel for a member, but for a listing
+ * is the guestbook and Control planes plus whatever channels the bundle vends
+ * or the Control peek turned up. So it is community activity, not message
+ * activity, and a community whose channels are all private still registers.
+ */
+const ACTIVITY_HINT =
+  "Newest activity on the streams this invite can see — channel messages, join requests and admin changes.";
 
 /** The card-shaped placeholder shown while a listing's bundle resolves. */
 export function CommunityListingCardSkeleton({ className }: { className?: string }) {
@@ -79,7 +109,14 @@ export function CommunityListingCardSkeleton({ className }: { className?: string
  * (which resolves + joins, prompting sign-in). Skeleton-shaped until the
  * bundle settles, so no placeholder name ever flashes.
  */
-export function CommunityListingCard({ invite, className, filter, onResolved }: CommunityListingCardProps) {
+export function CommunityListingCard({
+  invite,
+  className,
+  filter,
+  onResolved,
+  onActivityTarget,
+  lastActiveAt,
+}: CommunityListingCardProps) {
   const navigate = useNavigate();
   const { nostr } = useNostr();
   const parsed = useMemo(() => parseInviteLink(invite.inviteUrl), [invite.inviteUrl]);
@@ -151,6 +188,45 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
   const memberCommunity = useCommunity(memberEntry?.community_id);
   const { data: folded } = useControlFold(memberCommunity);
 
+  // A Control peek is a whole plane read plus its decrypt, and the queue below
+  // runs them one at a time — so a card that has never been scrolled to must
+  // not hold a card that has. Latched: scrolling away mid-peek doesn't cancel
+  // it, and scrolling back doesn't ask again.
+  const [cardEl, setCardEl] = useState<HTMLDivElement | null>(null);
+  const onScreen = useSeenOnScreen(cardEl);
+
+  // Background Control peek for non-members: channel count + public channel
+  // ids for last-active. Serialized globally so the grid does one community
+  // at a time; members already hold the fold and skip this.
+  const controlPeekKey = ["discover", "control-peek", bundle?.community_id] as const;
+  const { data: controlPeek } = useQuery({
+    queryKey: controlPeekKey,
+    enabled: !!bundle && !isMember && !!bundle.community_id && onScreen,
+    staleTime: 10 * 60_000,
+    retry: false,
+    queryFn: ({ signal }) =>
+      enqueueDiscoverControlPeek(() => peekDiscoverControl(nostr, bundle!, signal)),
+  });
+
+  // Same warm-seed pattern as invite bundles / the Discover directory: last
+  // session's peek paints channel count immediately; seeded STALE so the
+  // live peek above still refreshes.
+  useEffect(() => {
+    if (!bundle?.community_id || isMember || !onScreen) return;
+    let cancelled = false;
+    void (async () => {
+      const cached = await readCachedControlPeek(bundle.community_id);
+      if (cancelled || !cached) return;
+      if (queryClient.getQueryData(controlPeekKey) !== undefined) return;
+      queryClient.setQueryData(controlPeekKey, cached, { updatedAt: 0 });
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // controlPeekKey's community_id is what matters; the array identity is stable per id.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bundle?.community_id, isMember, onScreen, queryClient]);
+
   const icon = folded?.metadata?.icon ?? bundle?.icon;
   const banner = folded?.metadata?.banner ?? bundle?.banner;
   const iconUrl = useDecryptedImage(icon);
@@ -161,11 +237,64 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
   // bundle's capped preview copy.
   const description = folded?.metadata?.description?.trim() || bundle?.description?.trim() || "";
   const initial = name.charAt(0).toUpperCase() || "·";
-  const channelCount = Array.isArray(bundle?.channels) ? bundle!.channels.length : 0;
+  // The fold is authoritative, the peek is the non-member's version of it, and
+  // the bundle's vended channels are the floor both fall back to — a member
+  // waiting on their fold showed a count before this probe existed and must
+  // not now count down to zero while it loads.
+  const bundleChannelCount = Array.isArray(bundle?.channels) ? bundle.channels.length : 0;
+  const channelCount = folded
+    ? [...folded.channels.values()].filter((c) => !c.deleted).length
+    : (controlPeek?.channelCount ?? bundleChannelCount);
+  const stats: Array<{ key: string; text: string; hint?: string }> = [];
+  if (channelCount > 0) {
+    stats.push({ key: "channels", text: `${channelCount} channel${channelCount === 1 ? "" : "s"}` });
+  }
+  if (lastActiveAt != null && lastActiveAt > 0) {
+    stats.push({ key: "active", text: `Active ${shortTimeAgo(lastActiveAt)}`, hint: ACTIVITY_HINT });
+  }
+  const publicChannelIdHexes = useMemo(() => {
+    if (folded) {
+      return [...folded.channels.values()]
+        .filter((c) => !c.deleted && !c.isPrivate)
+        .map((c) => c.channelIdHex)
+        .sort();
+    }
+    return controlPeek?.publicChannelIdHexes;
+  }, [folded, controlPeek?.publicChannelIdHexes]);
 
   useEffect(() => {
     if (bundle?.community_id) onResolved?.(invite.linkSigner, bundle.community_id, bundle.owner);
   }, [bundle?.community_id, bundle?.owner, invite.linkSigner, onResolved]);
+
+  // Whether this card is actually in the grid. A listing that resolved and
+  // then lost the search, or whose link never resolved at all, renders nothing
+  // below — and must stop being probed too, or the REQ keeps asking about
+  // communities no one is looking at for as long as the tab is open.
+  const needle = filter?.trim().toLowerCase();
+  const listed =
+    !bundleLoading
+    && !bundleError
+    && !!parsed
+    && !!bundle
+    && (!needle || name.toLowerCase().includes(needle));
+
+  // Probe target for the tab-level batched last-active REQ. Public chat
+  // stream authors land once the fold (member) or Control peek (listing)
+  // knows channel ids. The cleanup withdraws it: on unmount that is the prune,
+  // and on a dep change it is batched with the re-report in the same commit.
+  useEffect(() => {
+    if (!onActivityTarget) return;
+    if (!listed || !bundle) {
+      onActivityTarget(invite.linkSigner, null);
+      return;
+    }
+    onActivityTarget(invite.linkSigner, {
+      linkSigner: invite.linkSigner,
+      authors: discoverStreamAuthors(bundle, { publicChannelIdHexes }),
+      relays: Array.isArray(bundle.relays) ? bundle.relays : [],
+    });
+    return () => onActivityTarget(invite.linkSigner, null);
+  }, [listed, bundle, publicChannelIdHexes, invite.linkSigner, onActivityTarget]);
 
   const onJoin = () => navigate(inviteUrlToLocalRoute(invite.inviteUrl));
   const onOpen = () => navigate(`/c/${encodeURIComponent(bundle!.community_id)}`);
@@ -186,13 +315,12 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
   // A link that doesn't resolve (revoked, expired, dead relays) is not a
   // joinable community — hide it rather than list a junk placeholder card.
   // This is also what makes revoking a shared link an effective un-listing.
-  if (bundleError || !parsed || !bundle) return null;
-
-  const needle = filter?.trim().toLowerCase();
-  if (needle && !name.toLowerCase().includes(needle)) return null;
+  // `listed` folds in the search miss; `bundle` is re-tested for the narrowing.
+  if (!listed || !bundle) return null;
 
   return (
     <div
+      ref={setCardEl}
       className={cn(
         "flex flex-col w-full rounded-xl border border-border/60 bg-card overflow-hidden",
         className,
@@ -270,11 +398,17 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
             ) : (
               <p className="font-semibold truncate leading-tight">{name}</p>
             )}
-            <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-              <ShieldCheck className="size-3 shrink-0" />
-              Encrypted community
-              {channelCount > 0 && ` · ${channelCount} channel${channelCount === 1 ? "" : "s"}`}
-            </span>
+            {/* The shield alone carries "encrypted"; the stats append as their
+                background peeks land, without reshaping the row. */}
+            <p className="text-[11px] leading-snug text-muted-foreground">
+              <ShieldCheck className="mr-1 inline size-3 align-[-0.125em]" />
+              {stats.map((stat, i) => (
+                <Fragment key={stat.key}>
+                  {i > 0 ? " · " : null}
+                  <span title={stat.hint}>{stat.text}</span>
+                </Fragment>
+              ))}
+            </p>
           </div>
         </div>
 
@@ -325,4 +459,41 @@ export function CommunityListingCard({ invite, className, filter, onResolved }: 
       </div>
     </div>
   );
+}
+
+/**
+ * Latches true the first time `el` comes within a screenful of the viewport.
+ *
+ * Deliberately one-way, like {@link DeferredRow}'s mount gate: the point is to
+ * stop a grid of listings from all paying for an off-screen probe at once, not
+ * to un-do work when the reader scrolls past. Without an observer at all
+ * (jsdom, an old WebView) it reports true, so the gate can only ever delay
+ * work, never remove it.
+ */
+function useSeenOnScreen(el: Element | null): boolean {
+  const [seen, setSeen] = useState(false);
+
+  useEffect(() => {
+    if (seen) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setSeen(true);
+      return;
+    }
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setSeen(true);
+          io.disconnect();
+        }
+      },
+      // A screenful of lead time, so the peek is usually done by the time the
+      // card is actually looked at.
+      { rootMargin: "300px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [el, seen]);
+
+  return seen;
 }

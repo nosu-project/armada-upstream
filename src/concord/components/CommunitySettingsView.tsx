@@ -72,7 +72,9 @@ import { toast } from "@/hooks/useToast";
 import { useUploadFile } from "@/hooks/useUploadFile";
 import { encryptImageBlob } from "@/concord/lib/image";
 import { mirrorHistoryToRelays, type MirrorProgress } from "@/concord/lib/relayMirror";
+import { canonicalOrigin, communityAvBrokers, probeAvBroker } from "@/concord/lib/voice";
 import {
+  MAX_COMMUNITY_AV_BROKERS,
   MAX_COMMUNITY_RELAYS,
   type Channel,
   type CommunityMetadata,
@@ -90,15 +92,15 @@ const SETTINGS_TABS: readonly PillTab<SettingsTab>[] = [
   { id: "overview", label: "Overview", icon: Info },
   { id: "channels", label: "Channels", icon: Hash },
   { id: "integrations", label: "Integrations", icon: Plug },
-  { id: "relays", label: "Relays", icon: Radio },
+  { id: "relays", label: "Network", icon: Radio },
 ];
 
 /**
  * The community settings pane — the single "community" surface, rendered as a
  * full page in the main content column (like the audit log), one tab per
  * concern: Overview (identity, owner, disappearing messages), Channels,
- * Integrations (git repositories + Discord bridge), and Relays (relay set +
- * history export). The same view is shown to everyone; viewers with
+ * Integrations (git repositories + Discord bridge), and Network (relay set,
+ * voice servers + history export). The same view is shown to everyone; viewers with
  * MANAGE_METADATA can edit the name / description / icon / banner inline
  * (Signal-style — tap to change); viewers with MANAGE_CHANNELS can rename,
  * delete and add channels. Edits publish version-chained editions; every
@@ -138,6 +140,9 @@ export function CommunitySettingsView({
   const name = metadata?.name || community.name;
   const description = metadata?.description?.trim();
   const relays = metadata?.relays ?? community.relays;
+  // No `community` fallback: unlike relays, brokers are not bootstrap material,
+  // so the fold is the only place they live (CORD-02 §6).
+  const avBrokers = useMemo(() => communityAvBrokers(metadata), [metadata]);
 
   const bannerUrl = useDecryptedImage(metadata?.banner);
   const iconUrl = useDecryptedImage(metadata?.icon);
@@ -436,6 +441,12 @@ export function CommunitySettingsView({
             community={community}
             metadata={metadata}
             relays={relays}
+            canManage={canManageMetadata}
+          />
+
+          <VoiceServersSection
+            community={community}
+            brokers={avBrokers}
             canManage={canManageMetadata}
           />
 
@@ -1485,6 +1496,237 @@ function DisappearingSection({
           ? "Messages in every channel are deleted for everyone after this long. Changes apply to new messages only."
           : "Messages are kept forever. When set, messages in every channel delete for everyone after the chosen time."}
       </p>
+    </div>
+  );
+}
+
+/**
+ * The community's own voice servers — the AV brokers of CORD-02 §6, which
+ * CORD-07 §5 draws from when a call's room is empty. Read-only for everyone;
+ * editable for viewers with MANAGE_METADATA.
+ *
+ * An empty list is a valid, unremarkable state (and what every community
+ * predating the field has): members then fall back to their own Settings →
+ * Voice server. A non-empty one is EXCLUSIVE — members use these and nothing
+ * else, neither their own server nor a broker another member's presence points
+ * at — which is what makes it the community's decision rather than a
+ * suggestion, and what makes an all-down list mean no calls, as an all-down
+ * relay set means no chat. It buys no trust: a broker holds no community
+ * secrets, cannot tell which community a room belongs to, and only ever
+ * forwards end-to-end-encrypted media (CORD-07 §2–3), so the choice is whose
+ * service sees members' IPs and call timing.
+ */
+function VoiceServersSection({
+  community,
+  brokers,
+  canManage,
+}: {
+  community: Community;
+  brokers: string[];
+  canManage: boolean;
+}) {
+  const { updateMetadata } = useMetadataActions(community);
+
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<string[]>([]);
+  const [addValue, setAddValue] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
+
+  if (brokers.length === 0 && !canManage) return null;
+
+  const startEditing = () => {
+    setDraft(brokers);
+    setAddValue("");
+    setError(null);
+    setWarning(null);
+    setEditing(true);
+  };
+
+  const addBroker = async () => {
+    setError(null);
+    setWarning(null);
+    const raw = addValue.trim();
+    // A bare host is the common way to type one; anything not https is refused
+    // outright, since the token grant is a bearer credential (CORD-07 §2).
+    const origin = canonicalOrigin(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`);
+    if (!origin) {
+      setError("Enter an https address, like https://voice.example.com");
+      return;
+    }
+    if (draft.includes(origin)) {
+      setAddValue("");
+      return;
+    }
+    if (draft.length >= MAX_COMMUNITY_AV_BROKERS) return;
+    // Probed, but never gating: a broker that is merely down today is still the
+    // one this community means to use, and the rendezvous already falls through.
+    setChecking(true);
+    const reachable = await probeAvBroker(origin).catch(() => false);
+    setChecking(false);
+    setDraft([...draft, origin]);
+    setAddValue("");
+    if (!reachable) {
+      setWarning(`${origin.replace(/^https:\/\//, "")} didn't answer the voice-server probe. It stays in the list, but members will skip past it until it does.`);
+    }
+  };
+
+  const handleSave = async () => {
+    setError(null);
+    if (draft.length === brokers.length && draft.every((b, i) => b === brokers[i])) {
+      setEditing(false);
+      return;
+    }
+    try {
+      setSaving(true);
+      await updateMetadata({ av_brokers: draft });
+      toast({
+        title: draft.length > 0 ? "Voice servers updated" : "Voice servers cleared",
+        ...(draft.length === 0
+          ? { description: "Members will use their own configured voice server." }
+          : {}),
+      });
+      setEditing(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't update the voice servers.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Voice servers
+        </span>
+        {canManage && !editing && (
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="size-6 shrink-0 text-muted-foreground"
+            aria-label="Edit voice servers"
+            onClick={startEditing}
+          >
+            <Pencil className="size-3" />
+          </Button>
+        )}
+      </div>
+
+      {!editing ? (
+        brokers.length === 0 ? (
+          <p className="text-[11px] text-muted-foreground">
+            None set, so calls use each member's own voice server. Setting them here makes every
+            call in this community use these, and only these.
+          </p>
+        ) : (
+          <ul className="space-y-1">
+            {brokers.map((b) => (
+              <li key={b} className="truncate rounded-md bg-secondary/40 px-2 py-1 text-xs font-mono">
+                {b}
+              </li>
+            ))}
+          </ul>
+        )
+      ) : (
+        <div className="space-y-1.5">
+          <ul className="space-y-1">
+            {draft.map((b) => (
+              <li
+                key={b}
+                className="flex items-center gap-1 rounded-md bg-secondary/40 py-0.5 pl-2 pr-0.5 text-xs font-mono"
+              >
+                <span className="min-w-0 flex-1 truncate">{b}</span>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="size-6 shrink-0 text-muted-foreground hover:text-destructive"
+                  aria-label={`Remove ${b}`}
+                  disabled={saving || checking}
+                  onClick={() => setDraft(draft.filter((x) => x !== b))}
+                >
+                  <Trash2 className="size-3" />
+                </Button>
+              </li>
+            ))}
+          </ul>
+
+          {draft.length < MAX_COMMUNITY_AV_BROKERS ? (
+            <form
+              className="flex items-center gap-1"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void addBroker();
+              }}
+            >
+              <Input
+                value={addValue}
+                onChange={(e) => setAddValue(e.target.value)}
+                placeholder="https://voice.example.com"
+                disabled={saving || checking}
+                className="h-7 flex-1 font-mono text-xs"
+              />
+              <Button
+                type="submit"
+                size="icon"
+                variant="ghost"
+                className="size-7 shrink-0"
+                disabled={saving || checking || !addValue.trim()}
+                aria-label="Add voice server"
+              >
+                {checking ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
+              </Button>
+            </form>
+          ) : (
+            <p className="text-[11px] text-muted-foreground">
+              Up to {MAX_COMMUNITY_AV_BROKERS} voice servers; past that, clients trim the list.
+            </p>
+          )}
+
+          <p className="text-[11px] text-muted-foreground">
+            Calls use only these, spread across them by channel. Members' own voice servers are
+            ignored here, so if none of these answer, calls can't start. Leave it empty to let
+            every member use their own.
+          </p>
+
+          {error && (
+            <Alert variant="destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+
+          {warning && <p className="text-[11px] text-amber-500">{warning}</p>}
+
+          <div className="flex justify-end gap-1">
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className="size-7 shrink-0"
+              aria-label="Save voice servers"
+              disabled={saving || checking}
+              onClick={handleSave}
+            >
+              {saving ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+            </Button>
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className="size-7 shrink-0 text-muted-foreground"
+              aria-label="Cancel"
+              disabled={saving}
+              onClick={() => setEditing(false)}
+            >
+              <X className="size-4" />
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

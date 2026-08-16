@@ -67,9 +67,9 @@ commit/PR.
 | Workflow | Trigger | What |
 |----------|---------|------|
 | `test.yml` | push (any branch) + PR | `npm run test` (tsc + eslint + vitest + build), both Swift suites (`swift test --package-path ios/{ArmadaDB,ArmadaNotify}`), and `npm audit --audit-level=high` |
-| `deploy-web.yml` | push to `main` | build + rsync-over-SSH deploy of the hosted client (armada.buzz); skips deploy if the SSH secret isn't provisioned |
 | `release.yml` | tag `v*` | signed Android APK + AAB, published as run artifacts and the APK to `armada.buzz/downloads/`, then Zapstore publish, then Google Play publish (draft release while the app is unpublished in Play Console; skips Play if the service-account secret isn't provisioned) |
 | `desktop.yml` | tag `v*` | Electron Linux (AppImage + deb), Windows (NSIS + portable) and macOS (ad-hoc signed .app zips, cross-built); published as run artifacts and rsynced to `armada.buzz/downloads/` |
+| `deploy-nsite.yml` | push to `main` + tag `v*` | build + `nsyte deploy` of the client as the named nsite `armada` (NIP-5A kind 35128) onto relays + Blossom; a tag additionally publishes an immutable kind-5128 manifest snapshot titled with the tag |
 
 Notes specific to ngit-ci (vs the old GitLab pipeline):
 
@@ -166,7 +166,9 @@ in production on the next tag.
 **armada.buzz is served by Caddy, not by this repo's `nginx.conf`.** The hosted
 config lives on the venus VPS at `/etc/caddy/sites-available/armada.buzz` and is
 not in version control; `nginx.conf` covers only the Dockerfile self-host path,
-where the rules differ enough to be worth stating separately. Traps:
+where the rules differ enough to be worth stating separately. CI does not
+deploy the SPA there — only the installers, rsynced by `desktop.yml` and
+`release.yml`. Traps:
 
 - **A missing installer must 404, and by default it does not.** Caddy's
   catch-all ends in `try_files {path} /index.html`, so a pruned, misspelled or
@@ -183,9 +185,10 @@ where the rules differ enough to be worth stating separately. Traps:
   Caddy's `try_files` skips directories, so `/downloads` renders the SPA either
   way. nginx's `try_files $uri $uri/ /index.html` matches `$uri/` against the
   real directory and stops — with no index and autoindex off, a **403** on
-  reload or a shared link. `deploy-web.yml` uploads `dist/index.html` as
-  `downloads/index.html`, which fixes nginx and also gives Caddy's
-  `handle /downloads/*` something to serve for a bare `/downloads/`.
+  reload or a shared link. `nginx.conf` answers that with an exact-match
+  `location = /downloads/` falling back to `/index.html`, so a self-host needs
+  no `downloads/index.html` at all. armada.buzz has one, which is what Caddy's
+  `handle /downloads/*` serves for a bare `/downloads/`.
 - **`.AppImage` content type differs by server.** Caddy knows it
   (`application/vnd.appimage`); nginx's `mime.types` does not, so it inherits
   `default_type` — `text/plain` by default, i.e. a browser rendering a 100 MB
@@ -199,9 +202,9 @@ where the rules differ enough to be worth stating separately. Traps:
   carry only a version label and file sizes; the page treats them as decoration
   so a failed fetch never costs a working button.
 
-The rsyncs are additive (**no `--delete`**, on any of the three workflows) —
-that is what lets installers, the page's index, and the site build coexist in
-one jail root. Don't add one without excluding `/downloads`.
+The rsyncs are additive (**no `--delete`**, on both workflows) — that is what
+lets the two platforms' installers, the page's index and the site build coexist
+in one jail root. Don't add one.
 
 ## How the client reaches backends (no build-time coupling)
 
@@ -321,6 +324,11 @@ number doesn't exceed the previous one.
 - **Export compliance lives in the comment at `ios/App/App/Info.plist`.** Read it
   before touching `ITSAppUsesNonExemptEncryption`; the position rests on Armada's
   source staying publicly available.
+- **Store builds rely on the section 7 additional permission in the README's
+  License section** (App Store terms are the extra restrictions AGPL section 10
+  forbids — this is what took VLC off the App Store). Soapbox can only grant it
+  for copyright it holds, so **no copyleft code or artwork you don't own may
+  enter a store build** unless its holder has granted the same permission.
 
 Android-only pieces that are simply absent on iOS, and are gated so they don't
 surface dead UI or throw: the `ArmadaNotification` background relay service
@@ -528,6 +536,36 @@ Things to know before touching it:
   user-controlled string containing one; and a KV prefix upper bound that lands
   on an unpaired surrogate is reported as NO bound, because Swift strings can't
   hold one — the scan widens and the range check does the filtering.
+- **A burst is one statement per table, not one per rumor** — and on SQLite
+  that is most of what a write costs. `rumors` carries an AFTER INSERT trigger
+  maintaining the content index, and SQLite runs a trigger's sub-program per
+  INSERT STATEMENT rather than folding it into the row loop, so a row per
+  statement paid that setup once per rumor: 76µs a row against 17µs for the
+  same rows, the same trigger and the same transaction written in batches of
+  200. `flushWrites` therefore STAGES a burst (`RumorBatch`) and emits one
+  multi-row INSERT per table per chunk — measured 287µs → 61µs per NIP-17
+  rumor, and 4.0 → 1.0 statements. Two things it must keep doing, and the
+  Kotlin and Swift ports with it: a rumor that READS the rows around it (a
+  replaceable one superseding its coordinate, a kind 5 deleting its targets)
+  flushes the batch and writes alone, so it still sees everything before it and
+  nothing after; and the rowid ledger lives in the batch, because a rowid
+  reserved for a staged row is invisible to the `MAX(seq)` that reserves the
+  next one. Both are in `ArmadaDB.test.ts`, so a port that skips either fails
+  the conformance suite rather than the field. The per-rumor `INSERT OR IGNORE`
+  into `rumor_terms` went the same way — a NIP-17 message is filed under three
+  terms, which alone tripled a write's statements.
+- **A term read that names anything else is planned by COUNTING, on
+  IndexedDB.** A derived term lives in the index and nowhere else, so the
+  moment a filter names a term plus anything, `NIndexedDB` has to be asked for
+  a superset and narrowed here (`runChecked`) — and which superset is smaller
+  is a property of the data. A thread page is the term, since every kind in the
+  filter is in the thread; the same thread's TIMER is the kind, one row per
+  conversation against every message ever sent in one. One index-only `count`
+  each decides it, and the limit is PAGED rather than dropped — reading the
+  range whole made a 50-row page of a 300-message thread deserialize the whole
+  thread. The paging must stay exhaustive: it is a walk to the end of the
+  range, not a search budget, or a timer set a year ago is reported as no timer
+  at all.
 - **SQLite is bundled, not borrowed.** The schema needs FTS5 with
   `contentless_delete` (3.43+) and JSON1; Android's platform SQLite is 3.9 on
   minSdk 24 and has neither. `androidx.sqlite:sqlite-bundled` ships 3.50.1 per
@@ -578,9 +616,10 @@ Things to know before touching it:
   either.** Its tags are the bytes its id commits to, so bookkeeping written
   into them makes the row something the sender never signed, and makes whatever
   reads that tag forgeable by anyone who spells it. Derive instead: a DM's
-  partner comes from `pubkey` and the `p` tags NIP-17 requires (`dmPeerOf`), and
-  a thread is two ordinary indexed filters — `authors: [peer]` and
-  `authors: [self], "#p": [peer]`. A Concord plane is its KINDS
+  conversation comes from `pubkey` and the `p` tags NIP-17 requires
+  (`dmPeersOf`), and where the derivation is more than a filter can express it
+  becomes a derived TERM rather than a tag (see below). A Concord plane is its
+  KINDS
   (`PLANE_RULES`/`queryPlane`), and a rekey round names its own scope and epoch
   in the tags `parseRekey` reads — so neither the stream address, the carrier
   wrap id nor the seal kind is stored at all. They are checked ONCE, at ingest
@@ -593,6 +632,60 @@ Things to know before touching it:
   genuinely not in the rumor. It lives in KV as a set of rumor ids per control
   stream address (`c2snap:<community>:<pk>`, `readControlSnapshot`) — the fact
   itself, not an event-shaped row impersonating one.
+- **Where the derivation is real but unfilterable, index a TERM.** A NIP-01
+  filter can only ask about what a rumor literally says, and a NIP-17
+  conversation is the SET of its participants — half in `pubkey`, half in the
+  `p` tags, and a tag filter is an OR over values, so `authors: [ana, ben]` also
+  matches everything Ana sent in another room. Every such read could therefore
+  only OVER-select and be narrowed in JavaScript afterwards, at a fixed 3×
+  over-fetch per filter. A tenant may instead declare a `TermPolicy` (`db/types.ts`):
+  a pure function of the stored rumor returning opaque strings, indexed beside it
+  and looked up as a NIP-50 extension token (`{ search: "conv:<key>" }`). Not a
+  tag on the rumor and not a row impersonating one — a CACHE of a derivation,
+  discardable and rebuildable, unforgeable by a sender spelling anything, and
+  read by nothing but the index. Three rules make it safe: the ENGINES never
+  interpret a tenant id or a term (`db/termPolicies.ts` is the only table that
+  does, and `TermPolicies.kt` / `TermPolicies.swift` must agree with it exactly);
+  the policy binds to the TENANT, not to a write, so the Android service and the
+  iOS extension file rows correctly while knowing nothing about terms; and an
+  unknown term FAILS CLOSED, matching nothing rather than dropping the
+  constraint. SQLite gets a b-tree (`rumor_terms`, schema v2) rather than more
+  FTS tokens because `(tenant, term, seq)` is already time-ordered, so a lookup
+  is a bounded backwards walk — and because a b-tree can be GROUPED, which is
+  what `distinct:` below is. Existing rows are indexed by a one-time per-tenant
+  backfill, since a term cannot be derived in SQL; only reads that TOUCH the
+  index wait for it — which is every read carrying a `search`, and must be
+  tested that way rather than on the terms the filter parsed to, because
+  `distinct:` reaches the index while naming no term of its own. (Gating on the
+  parsed terms is what left the Kotlin and Swift engines answering the
+  conversation list from an index nothing had built.) The GENERATION that walked
+  the tenant is recorded beside it — one number, identical in all three ports,
+  because a policy edit without it leaves earlier rows carrying terms nothing
+  looks up, and two ports that disagree rebuild the index against each other on
+  every open. A pass runs at most once per tenant per process whatever the
+  outcome, and a failed one is swallowed with its generation unrecorded: the
+  read that triggered it is answerable from the index as it stands, and the next
+  launch walks the tenant again.
+- **`distinct:<namespace>` collapses a read to one rumor per group.** A term is
+  namespaced (`<namespace>:<body>`, which the read path always required since a
+  term is named as a `key:value` token), and this reserved token returns the
+  NEWEST rumor per term in one namespace — so `limit` counts conversations while
+  still counting rows. ditto-relay spells the same operation `distinct:author`
+  over a field, and for the same reason: collapsing has to happen INSIDE the read,
+  because de-duplicating the answer afterwards can only shrink an already
+  truncated page. That was the NIP-17 conversation list, which sampled the newest
+  500 message rumors and grouped them in memory — one busy thread hid every other
+  conversation, and a peer written to a year ago fell out of the `mine` set the
+  push gateways read as "not a stranger". Two plans, which must answer
+  identically: `GROUP BY term` over the namespace's range (index-only, one body
+  read per group) when nothing outside the term index has to be tested, and a
+  collapse-as-you-scan otherwise — row conditions apply BEFORE the collapse, so
+  `kinds` would have to be tested inside the grouping, which is why the policy
+  files a message-only namespace (`convmsg:`) instead. It is a DIRECTIVE, not a
+  term: query-only (a `remove()` naming it deletes nothing, since "one rumor per
+  conversation" is not a deletion anyone should be able to ask for), never
+  matched row-wise, and refused outright rather than approximated — two of them,
+  or a namespace that isn't one, fail closed.
 - **A drain converts to the CURRENT shape; it does not copy rows across.** The
   pre-ArmadaDB store folded `stream`/`wrap`/`sealkind`/`seal` into the stored
   event's tags and told the planes apart by the `stream` tag at read time, so

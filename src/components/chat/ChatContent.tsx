@@ -1,7 +1,7 @@
 import { Capacitor } from "@capacitor/core";
 import { Download, Expand, Share2 } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { BlurhashCanvas } from "@/components/BlurhashCanvas";
@@ -20,6 +20,7 @@ import { renderInlineMarkdown } from "@/components/chat/markdownRender";
 import { VideoPlayer } from "@/components/chat/VideoPlayer";
 import { XdcAttachment } from "@/components/chat/XdcAttachment";
 import { DisplayName } from "@/components/DisplayName";
+import { AppContext, defaultConfig } from "@/contexts/AppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useChannelNav } from "@/hooks/useChannelNav";
 import { type MentionNameMap, useMentionNameMap } from "@/hooks/useMentionNameMap";
@@ -38,6 +39,7 @@ import { splitInlineCode, splitMarkdownBlocks, splitMarkdownLinks } from "@/lib/
 import { AUDIO_EXTS, EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX, isGifLikeUrl, mimeFromExt } from "@/lib/mediaUrls";
 import { relayToRouteParam } from "@/lib/platform";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
+import { stripTrackingParams } from "@/lib/trackingParams";
 import { cn } from "@/lib/utils";
 import { downloadUrl } from "@/lib/downloadFile";
 import { canShareFiles, shareFile } from "@/lib/share";
@@ -352,11 +354,25 @@ const SEGMENT_RE = new RegExp(
 );
 
 function ChatContentInner({ event, className, disableNoteEmbeds = false, highlight, contentOverride, noMentionAtPrefix = false, clampLines, documentMarkdown = false }: ChatContentProps) {
+  // Canonicalize links on the way in as well as on the way out: a URL that
+  // arrived from another client, a forward, or a message predating the setting
+  // still carries its share/click ids, and rendering it hands them to whatever
+  // fetches the link — the preview unfurler included, which runs before any
+  // click.
+  //
+  // Read through `useContext` rather than `useAppContext`, which throws without
+  // a provider: this renderer is deliberately mountable bare (the render-cost
+  // tests measure it that way, and wrapping them in a real `AppProvider` would
+  // measure the provider too). Absent one, the default applies.
+  const cleanLinks =
+    useContext(AppContext)?.config.stripTrackingParams ?? defaultConfig.stripTrackingParams;
+
   const rawTokens = useMemo(() => {
     const text = contentOverride ?? event.content;
     // The dialect is part of the identity: the same event tokenizes
-    // differently in document mode (headings, lists, [text](url)).
-    const cacheKey = documentMarkdown ? `doc:${event.id}` : event.id;
+    // differently in document mode (headings, lists, [text](url)), and with
+    // link cleaning off the URLs themselves differ.
+    const cacheKey = `${documentMarkdown ? "doc" : "msg"}:${cleanLinks ? "c" : "r"}:${event.id}`;
     const cached = TOKEN_CACHE.get(cacheKey);
     if (cached && cached.content === text) return cached.tokens;
 
@@ -399,6 +415,9 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
       const fromName = entry.name ? entry.name.split(".").pop()?.toLowerCase() : undefined;
       return fromName ? usableMime(mimeFromExt(fromName)) : undefined;
     };
+
+    /** Strip tracking parameters from a link, unless the user turned that off. */
+    const cleanUrl = (url: string) => (cleanLinks ? stripTrackingParams(url) : url);
 
     // Tokenize one plain-text segment (already free of markdown code spans):
     // BOLT11 invoices | URLs | nostr:-prefixed NIP-19 ids | @-prefixed or
@@ -459,6 +478,13 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
               fullMatch = urlWithoutPunct;
             }
           }
+
+          // Canonicalize before anything classifies, renders or fetches the
+          // link. `fullMatch` is deliberately left alone — it measures how much
+          // of the original text this token consumed. An imeta-declared URL is
+          // skipped: it's matched to its tag by exact string, and an uploaded
+          // attachment has no tracking to strip in the first place.
+          if (!imetaByUrl.has(url)) url = cleanUrl(url);
 
           // WebSocket relay URLs → internal server page link
           if (/^wss?:\/\//i.test(url)) {
@@ -624,8 +650,11 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           out.push({ type: "inline-code", code: seg.value });
         } else if (documentMarkdown) {
           for (const part of splitMarkdownLinks(seg.value)) {
-            if (part.type === "link") out.push({ type: "md-link", text: part.text, url: part.url });
-            else out.push(...tokenizeSegment(part.value));
+            if (part.type === "link") {
+              out.push({ type: "md-link", text: part.text, url: cleanUrl(part.url) });
+            } else {
+              out.push(...tokenizeSegment(part.value));
+            }
           }
         } else {
           out.push(...tokenizeSegment(seg.value));
@@ -766,7 +795,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
       text,
       result.filter((t) => !(t.type === "text" && t.value === "")),
     );
-  }, [event, contentOverride, documentMarkdown]);
+  }, [event, contentOverride, documentMarkdown, cleanLinks]);
 
   // Resolve `@name` mentions carried as plain text + `p` tags (Buzz/legacy
   // style) back to pubkeys, then split them out of the text leaves. NIP-27

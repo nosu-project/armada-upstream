@@ -117,6 +117,7 @@ export const AppConfigSchema = z.object({
   startedDms: z.array(z.string()).catch([]),
   showDmRequests: z.boolean().catch(defaultConfig.showDmRequests),
   discoverAllContent: z.boolean().catch(defaultConfig.discoverAllContent),
+  stripTrackingParams: z.boolean().catch(defaultConfig.stripTrackingParams),
   defaultZapAmount: z.number().catch(defaultConfig.defaultZapAmount),
   defaultZapMethod: z.enum(["lightning", "bitcoin"]).catch(defaultConfig.defaultZapMethod),
   zapsEnabled: z.boolean().catch(defaultConfig.zapsEnabled),
@@ -178,6 +179,8 @@ export const MetadataDocSchema = z.looseObject({
   showDmRequests: z.boolean().optional(),
   /** Whether Discover shows the unfiltered firehose vs the allow-list (see AppConfig). */
   discoverAllContent: z.boolean().optional(),
+  /** Whether tracking parameters are stripped from links, sent and shown (see AppConfig). */
+  stripTrackingParams: z.boolean().optional(),
   /** Preselected zap amount, in sats. */
   defaultZapAmount: z.number().optional(),
   /** Default zap payment method. */
@@ -283,10 +286,16 @@ export const NotificationsDocSchema = z.looseObject({
 });
 
 /**
- * `${APP_ID}/dms` — per-peer direct-message state. Four maps and a record,
- * each keyed by peer pubkey and each of which only ever grows with the number
- * of people the user has talked to. Replaced wholesale (an unpin, an un-close
- * and a protocol reset all have to propagate).
+ * `${APP_ID}/dms` — per-peer direct-message state, keyed by peer pubkey.
+ *
+ * The document is one last-writer-wins blob, but its additive maps
+ * (`closedDms`, `pinnedDms`, `acceptedDms`, `startedDms`) are UNIONED into
+ * local state on apply rather than replaced — see `mergeDmMaps` in
+ * `syncedConfig.ts`. Without that, a device editing any field here republishes
+ * a stale whole map and wipes a hide/pin another device just made. The
+ * trade-off is that a removal (reopen, unpin) is best-effort across devices;
+ * `dmProtocol` alone is a mutable setting with no additive state and stays
+ * wholesale.
  */
 export const DmsDocSchema = z.looseObject({
   dmProtocol: z.record(z.string(), z.enum(["auto", "nip17", "nip04"])).optional(),

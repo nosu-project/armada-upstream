@@ -38,6 +38,7 @@ export function ScreenSharePicker() {
   const [open, setOpen] = useState(false);
   const [sources, setSources] = useState<ScreenSource[]>([]);
   const [sourceError, setSourceError] = useState<string | null>(null);
+  const [showScreenRecordingSettings, setShowScreenRecordingSettings] = useState(false);
   const [audio, setAudio] = useState<LinuxShareAudioSources | null>(null);
   const [audioChoice, setAudioChoice] = useState("system");
   const [audioError, setAudioError] = useState<string | null>(null);
@@ -59,11 +60,27 @@ export function ScreenSharePicker() {
         setSourceError(
           screenSources.length === 0 ? "No screens or windows are available to share." : null,
         );
+        setShowScreenRecordingSettings(false);
         setAudio(audioSources.reason === null && !audioSources.supported ? null : audioSources);
       } catch {
         setSources([]);
+        let macDenied = false;
+        try {
+          const [{ platform }, status] = await Promise.all([
+            bridge.getInfo(),
+            bridge.getScreenCaptureAccessStatus?.() ?? Promise.resolve("unknown"),
+          ]);
+          macDenied = platform === "darwin" && (status === "denied" || status === "restricted");
+        } catch {
+          // Fall through to the generic operating-system guidance.
+        }
         setSourceError(
-          "Armada couldn't open the system screen picker. Check your desktop's screen-capture portal and try again.",
+          macDenied
+            ? "Armada needs Screen Recording permission in macOS Privacy & Security."
+            : "Armada couldn't open the system screen picker. Check your operating system's screen-capture permission or picker service and try again.",
+        );
+        setShowScreenRecordingSettings(
+          macDenied && Boolean(bridge.openScreenCapturePrivacySettings),
         );
         setAudio(null);
       }
@@ -149,7 +166,18 @@ export function ScreenSharePicker() {
             </button>
           ))}
           {sourceError && (
-            <p className="col-span-full text-sm text-destructive">{sourceError}</p>
+            <div className="col-span-full space-y-2">
+              <p className="text-sm text-destructive">{sourceError}</p>
+              {showScreenRecordingSettings && (
+                <button
+                  type="button"
+                  className="text-sm font-medium text-primary hover:underline"
+                  onClick={() => void desktop()?.openScreenCapturePrivacySettings?.()}
+                >
+                  Open Screen Recording settings
+                </button>
+              )}
+            </div>
           )}
         </div>
         {audio && (

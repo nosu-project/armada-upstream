@@ -18,6 +18,7 @@ import {
   Track,
   VideoPresets,
   type RemoteParticipant,
+  type LocalTrack,
   type RoomOptions,
 } from "livekit-client";
 import { Capacitor } from "@capacitor/core";
@@ -44,11 +45,23 @@ import { type ActiveCall, type ConcordVoiceContext, type DmVoiceContext } from "
 import { useVoiceIdentity, VoiceIdentityContext, type VoiceIdentityResolver } from "@/contexts/VoiceIdentityContext";
 import { ServerScopeProvider } from "@/components/ServerScopeProvider";
 import { random32, voiceSenderKey } from "@/concord/lib/derive";
-import { fetchAvTokenFromAny, rendezvousCandidates, verifiedAuthorOf, type AvToken } from "@/concord/lib/voice";
+import {
+  canonicalOrigin,
+  fetchAvToken,
+  fetchAvTokenFromAny,
+  isVerifiedScreenShareIdentity,
+  occupantsElsewhere,
+  rendezvousCandidates,
+  verifiedAuthorOf,
+  type AvToken,
+} from "@/concord/lib/voice";
+import { toast } from "@/hooks/useToast";
+import { ToastAction } from "@/components/ui/toast";
 import { dmCallKeys } from "@/lib/dmCall";
 import { useCallSync } from "@/concord/hooks/useCallSync";
 import {
   ownAvServers,
+  useCommunityAvBrokers,
   useAvToken,
   useVoiceHeartbeat,
   useVoicePresence,
@@ -68,6 +81,22 @@ import {
 } from "@/lib/voiceDevices";
 import { syncRnnoise } from "@/lib/voiceProcessor";
 import { cn } from "@/lib/utils";
+import { bytesToBase64 } from "@/lib/fileBytes";
+import {
+  HevcScreenShareSessionTracker,
+  isHevcScreenShareParticipant,
+  stopHevcCapturedMedia,
+} from "@/lib/hevcScreenShare";
+import {
+  cancelDesktopHevcScreenShareFrames,
+  desktopHevcScreenShareCapability,
+  startDesktopHevcScreenShare,
+  stopDesktopHevcScreenShare,
+  subscribeDesktopHevcScreenShareStatus,
+  type DesktopHevcScreenShareCapability,
+  type DesktopHevcScreenShareStatus,
+} from "@/lib/desktop";
+import { SCREEN_SHARE_RESOLUTIONS, type ScreenShareQuality } from "@/lib/screenShareQuality";
 import { nip19 } from "nostr-tools";
 
 /**
@@ -94,6 +123,7 @@ function SpeakingReporter() {
   useEffect(() => {
     const pubkeys = new Set<string>();
     for (const p of speakingParticipants) {
+      if (isHevcScreenShareParticipant(p, resolveIdentity)) continue;
       const { pubkey, verified } = resolveIdentity(p.identity);
       if (verified) pubkeys.add(pubkey);
     }
@@ -124,7 +154,11 @@ function MutedReporter() {
   useEffect(() => {
     const pubkeys = new Set<string>();
     for (const p of participants) {
-      if (!p.identity || p.isMicrophoneEnabled) continue;
+      if (
+        !p.identity ||
+        p.isMicrophoneEnabled ||
+        isHevcScreenShareParticipant(p, resolveIdentity)
+      ) continue;
       const { pubkey, verified } = resolveIdentity(p.identity);
       if (verified) pubkeys.add(pubkey);
     }
@@ -159,7 +193,7 @@ function RosterReporter() {
     for (const p of participants) {
       // The local participant exists before the connection completes, with an
       // empty identity — skip until it's real.
-      if (!p.identity) continue;
+      if (!p.identity || isHevcScreenShareParticipant(p, resolveIdentity)) continue;
       const { pubkey, verified } = resolveIdentity(p.identity);
       if (!verified || seen.has(pubkey)) continue;
       seen.add(pubkey);
@@ -190,7 +224,11 @@ function PlaybackVolumeApplier() {
   useEffect(() => {
     const apply = () => {
       for (const p of participants) {
-        if (p.isLocal || !p.identity) continue;
+        if (
+          p.isLocal ||
+          !p.identity ||
+          isHevcScreenShareParticipant(p, resolveIdentity)
+        ) continue;
         const { pubkey } = resolveIdentity(p.identity);
         const remote = p as RemoteParticipant;
         remote.setVolume(getUserVolume(pubkey), Track.Source.Microphone);
@@ -211,25 +249,55 @@ function PlaybackVolumeApplier() {
  */
 function CallSoundEffects() {
   const room = useRoomContext();
+  const resolveIdentity = useVoiceIdentity();
+  const resolveRef = useRef(resolveIdentity);
+  resolveRef.current = resolveIdentity;
 
   useEffect(() => {
-    const onJoin = () => playJoinSound();
-    const onLeave = () => playLeaveSound();
+    const timers = new Set<number>();
+    const participantKey = (identity: string): string | null => {
+      if (!identity) return null;
+      const resolved = resolveRef.current(identity);
+      return resolved.verified ? `pubkey:${resolved.pubkey}` : `identity:${identity}`;
+    };
+    const hasSibling = (participant: RemoteParticipant): boolean => {
+      const key = participantKey(participant.identity);
+      if (!key) return false;
+      return [room.localParticipant, ...room.remoteParticipants.values()].some(
+        (candidate) =>
+          candidate !== participant && participantKey(candidate.identity) === key,
+      );
+    };
+    const schedule = (participant: RemoteParticipant, kind: "join" | "leave") => {
+      const timer = window.setTimeout(() => {
+        timers.delete(timer);
+        if (isHevcScreenShareParticipant(participant, resolveRef.current)) return;
+        if (kind === "join" && room.remoteParticipants.get(participant.identity) !== participant) return;
+        if (hasSibling(participant)) return;
+        if (kind === "join") playJoinSound();
+        else playLeaveSound();
+      }, 750);
+      timers.add(timer);
+    };
+    const onJoin = (participant: RemoteParticipant) => schedule(participant, "join");
+    const onLeave = (participant: RemoteParticipant) => schedule(participant, "leave");
+    const onConnected = () => playJoinSound();
     // Your own join: RoomEvent.Connected fires once the local participant has
     // joined. If the room is already connected by the time this mounts (e.g. a
     // fast reconnect), play it immediately so you always get audible feedback.
     if (room.state === ConnectionState.Connected) {
       playJoinSound();
     } else {
-      room.on(RoomEvent.Connected, onJoin);
+      room.on(RoomEvent.Connected, onConnected);
     }
     // Other participants joining/leaving after you're in.
     room.on(RoomEvent.ParticipantConnected, onJoin);
     room.on(RoomEvent.ParticipantDisconnected, onLeave);
     return () => {
-      room.off(RoomEvent.Connected, onJoin);
+      room.off(RoomEvent.Connected, onConnected);
       room.off(RoomEvent.ParticipantConnected, onJoin);
       room.off(RoomEvent.ParticipantDisconnected, onLeave);
+      for (const timer of timers) window.clearTimeout(timer);
     };
   }, [room]);
 
@@ -321,7 +389,6 @@ function useRoomOptions(extra?: Partial<RoomOptions>): RoomOptions {
       publishDefaults: {
         ...audioPublishDefaults,
         videoSimulcastLayers: [VideoPresets.h180, VideoPresets.h360, VideoPresets.h720],
-        screenShareEncoding: VideoPresets.h1080.encoding,
       },
       ...extra,
       // Route remote tracks through Web Audio GainNodes. Unlike media-element
@@ -762,6 +829,12 @@ function buildE2eeRoom(keyProvider: BaseKeyProvider): {
  * encrypted end-to-end under per-sender keys the SFU never sees, and presence
  * announced over the channel itself so relays and brokers stay blind.
  */
+interface ActiveHevcCapture {
+  stream: MediaStream;
+  identity: string;
+  audioTrack?: LocalTrack;
+}
+
 function ConcordVoiceRoom({
   ctx,
   onLeave,
@@ -784,16 +857,21 @@ function ConcordVoiceRoom({
   // hint stream (§5), and the input to our own heartbeat below. Resolved before
   // the token so a failed mint has somewhere to fall through to.
   const fold = useVoicePresence(community, channel);
+  // Followed live rather than snapshotted into `ctx`: a staff edit to the
+  // community's brokers reaches a mounted call, like a relay change does.
+  const communityBrokers = useCommunityAvBrokers(community);
 
-  // The §5 candidates behind `ctx.broker`. `resolveVoiceBroker` already probed
-  // one at join time, but a probe only proves the broker answered a moment ago —
-  // it can still fail to mint, and without these that is a dead end.
+  // The remaining candidates behind `ctx.broker`. `resolveVoiceBroker` already
+  // probed one at join time, but a probe only proves the broker answered a
+  // moment ago — it can still fail to mint, and without these that is a dead
+  // end. Same config-only set, so a fall-through can't leave the community's
+  // brokers either.
   const fallbackBrokers = useMemo(
     () =>
       channel.voice.room.pk
-        ? rendezvousCandidates(channel.voice.room.pk, fold, ownAvServers()).filter((o) => o !== broker)
-        : ownAvServers().filter((o) => o !== broker),
-    [channel.voice.room.pk, fold, broker],
+        ? rendezvousCandidates(channel.voice.room.pk, ownAvServers(), communityBrokers).filter((o) => o !== broker)
+        : (communityBrokers.length > 0 ? communityBrokers : ownAvServers()).filter((o) => o !== broker),
+    [channel.voice.room.pk, broker, communityBrokers],
   );
 
   const { data: tokenData, error, isLoading } = useAvToken(channel, broker, true, fallbackBrokers);
@@ -835,12 +913,14 @@ function ConcordVoiceRoom({
   // that actually minted the token, not the one the rendezvous nominated: after
   // a fall-through those differ, and advertising the unreachable origin would
   // steer everyone else at a broker that is not hosting this call.
-  const { sendReaction } = useVoiceHeartbeat(
+  const [hevcIdentities, setHevcIdentities] = useState<string[]>([]);
+  const { sendReaction, announceAdditionalIdentities } = useVoiceHeartbeat(
     community,
     channel,
     tokenData?.identity,
     tokenData?.origin,
     handRaised,
+    hevcIdentities,
   );
   // Live in-call emoji reactions from every member (own reactions echo back).
   const reactions = useVoiceReactions(community, channel);
@@ -858,19 +938,6 @@ function ConcordVoiceRoom({
     setRaisedHands(raisedHands);
   }, [raisedHands, setRaisedHands]);
   useEffect(() => () => setRaisedHands(new Set()), [setRaisedHands]);
-
-  // The raise-hand + reactions surface for the in-call controls and stage
-  // (portaled children of VoiceRoomShell, so this reaches them via the tree).
-  const signals = useMemo<CallSignals>(
-    () => ({
-      enabled: Boolean(tokenData),
-      myHandRaised: handRaised,
-      toggleHand: () => setHandRaised((h) => !h),
-      sendReaction,
-      reactions,
-    }),
-    [tokenData, handRaised, sendReaction, reactions],
-  );
 
   // Build the E2EE-enabled Room once (the component remounts per
   // room/epoch/broker). Concord media MUST be end-to-end encrypted — the
@@ -905,9 +972,13 @@ function ConcordVoiceRoom({
       for (const p of room.remoteParticipants.values()) identities.add(p.identity);
       // Pre-warm keys for identities presence already claims, so audio decodes
       // from the first frame after their tracks subscribe.
-      for (const p of fold.present) identities.add(p.identity);
+      for (const identity of fold.claims.keys()) identities.add(identity);
+      for (const identity of hevcIdentities) identities.add(identity);
       for (const identity of identities) {
-        const verified = identity === tokenData.identity || Boolean(verifiedAuthorOf(fold, identity));
+        const verified =
+          identity === tokenData.identity ||
+          hevcIdentities.includes(identity) ||
+          Boolean(verifiedAuthorOf(fold, identity));
         const want = verified ? "sender" : "blocked";
         if (applied.current.get(identity) === want) continue;
         applied.current.set(identity, want);
@@ -931,7 +1002,7 @@ function ConcordVoiceRoom({
     return () => {
       room.off(RoomEvent.ParticipantConnected, syncKeys);
     };
-  }, [e2ee, tokenData, fold, channel]);
+  }, [e2ee, tokenData, fold, channel, hevcIdentities]);
 
   // Enable E2EE once our own key is installed; terminate the worker on unmount.
   useEffect(() => {
@@ -955,40 +1026,461 @@ function ConcordVoiceRoom({
   }, [e2ee, tokenData]);
   useEffect(() => () => e2ee.worker?.terminate(), [e2ee]);
 
-  // Split healing (§5): if presence shows the call occupied on an origin that
-  // beats ours in the tie-break, migrate there (once per mount — the remount
-  // key includes the broker, so a migration builds a fresh room).
-  const migrated = useRef(false);
-  useEffect(() => {
-    if (!tokenData || migrated.current) return;
-    const roomHex = channel.voice.room.pk;
-    if (!roomHex) return;
-    const winner = rendezvousCandidates(roomHex, fold, [])[0];
-    const occupiedByOther = fold.present.some(
-      (p) => p.broker === winner && p.identity !== tokenData.identity,
-    );
-    // Compared against the origin we are actually connected through, not the
-    // one `ctx` nominated — after a mint fall-through those differ, and using
-    // `ctx.broker` would either migrate us to where we already are or hide a
-    // migration we genuinely need.
-    if (winner && winner !== tokenData.origin && occupiedByOther) {
-      migrated.current = true;
-      joinConcordCall({ ...ctx, broker: winner });
+  // Chromium does not expose H.265 encoding through WebRTC on Linux. The
+  // desktop shell's FFmpeg/VA-API path publishes a pre-encoded encrypted track
+  // as a second LiveKit identity. This controller keeps that identity bound to
+  // the real member, owns capture/audio cleanup, and rejects stale async starts.
+  const [hevcCapability, setHevcCapability] =
+    useState<DesktopHevcScreenShareCapability | null>(null);
+  const [hevcStatus, setHevcStatus] = useState<DesktopHevcScreenShareStatus>({
+    state: "idle",
+    active: false,
+  });
+  const [hevcPreview, setHevcPreview] = useState<{
+    track: MediaStreamTrack;
+    identity: string;
+  } | null>(null);
+  const hevcIdentitiesRef = useRef<string[]>([]);
+  hevcIdentitiesRef.current = hevcIdentities;
+  const activeHevc = useRef<ActiveHevcCapture | null>(null);
+  const pendingHevcCaptures = useRef(new Set<MediaStream>());
+  const hevcSessionGeneration = useRef(0);
+  const hevcStartGeneration = useRef(0);
+  const shellHevcSessions = useRef(new HevcScreenShareSessionTracker());
+
+  const stopHevc = useCallback(async (stopShell: boolean) => {
+    hevcStartGeneration.current += 1;
+    hevcSessionGeneration.current += 1;
+    const active = activeHevc.current;
+    activeHevc.current = null;
+    for (const pending of pendingHevcCaptures.current) stopHevcCapturedMedia(pending);
+    pendingHevcCaptures.current.clear();
+    shellHevcSessions.current.retire();
+    setHevcPreview(null);
+    const remainingIdentities = active
+      ? hevcIdentitiesRef.current.filter((identity) => identity !== active.identity)
+      : hevcIdentitiesRef.current;
+    if (active) {
+      // Retiring the session id above means the shell's own "stopped" event is
+      // refused from here on, so nothing else will clear this. Leaving it set
+      // keeps the whole UI — the active dropdown, the diagnostics panel, the
+      // quality path — acting on a share that has already ended, which is what
+      // stopping from the OS affordance does.
+      setHevcStatus({ state: "stopped", active: false });
+      hevcIdentitiesRef.current = remainingIdentities;
+      setHevcIdentities(remainingIdentities);
+      // End trusted capture immediately. Shell IPC and relay delivery are
+      // asynchronous and must never keep local screen/audio capture alive.
+      stopHevcCapturedMedia(active.stream);
     }
-  }, [fold, tokenData, channel, ctx, joinConcordCall]);
+    cancelDesktopHevcScreenShareFrames();
+
+    const shellCleanup = stopShell
+      ? stopDesktopHevcScreenShare()
+        .then((status) => shellHevcSessions.current.retire(status.sessionId))
+        .catch((error) => {
+          console.warn("failed to stop H.265 shell publisher", error);
+        })
+      : Promise.resolve();
+    const audioCleanup = (async () => {
+      if (!active?.audioTrack || !e2ee.room) return;
+      try {
+        await e2ee.room.localParticipant.unpublishTrack(active.audioTrack, true);
+      } catch (error) {
+        console.warn("failed to stop H.265 screen-share audio", error);
+      }
+    })();
+
+    // Shell and LiveKit audio cleanup are isolated: either one rejecting must
+    // not prevent the other. Presence withdrawal happens last and is only a
+    // best-effort state update after all local media has already ended.
+    await Promise.all([shellCleanup, audioCleanup]);
+    if (active) {
+      try {
+        await announceAdditionalIdentities(remainingIdentities);
+      } catch (error) {
+        console.warn("failed to withdraw H.265 screen-share identity", error);
+      }
+    }
+  }, [announceAdditionalIdentities, e2ee.room]);
+
+  // `stopHevc` is rebuilt whenever the Concord fold hands down a new channel
+  // object, so nothing whose *cleanup* stops the share may depend on it: React
+  // runs a cleanup on every dependency change, not only on unmount, and that
+  // would retire a live screen share with no user action and no error. Reach
+  // for the latest callback through a ref instead — the same idiom the
+  // heartbeat effect uses for the identical reason.
+  const stopHevcRef = useRef(stopHevc);
+  stopHevcRef.current = stopHevc;
+
+  useEffect(() => {
+    let cancelled = false;
+    void desktopHevcScreenShareCapability().then((capability) => {
+      if (!cancelled) setHevcCapability(capability);
+    });
+    const unsubscribe = subscribeDesktopHevcScreenShareStatus((status) => {
+      if (!shellHevcSessions.current.accept(status, Boolean(activeHevc.current))) return;
+      setHevcStatus(status);
+      if (status.state === "error" || status.state === "stopped") {
+        shellHevcSessions.current.retire(status.sessionId);
+        void stopHevcRef.current(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(
+    () => () => {
+      void stopHevcRef.current(true);
+    },
+    [],
+  );
+
+  const startHevc = useCallback(async (stream: MediaStream, quality: ScreenShareQuality) => {
+    const room = e2ee.room;
+    if (!tokenData || !room) {
+      stopHevcCapturedMedia(stream);
+      throw new Error("The Concord voice room is not connected.");
+    }
+    const video = stream.getVideoTracks()[0];
+    if (!video) {
+      stopHevcCapturedMedia(stream);
+      throw new Error("The selected source did not provide a video track.");
+    }
+
+    for (const pending of pendingHevcCaptures.current) stopHevcCapturedMedia(pending);
+    pendingHevcCaptures.current.clear();
+    pendingHevcCaptures.current.add(stream);
+    const stopCandidateCapture = () => {
+      pendingHevcCaptures.current.delete(stream);
+      stopHevcCapturedMedia(stream);
+    };
+
+    const startGeneration = ++hevcStartGeneration.current;
+    const initialSessionGeneration = ++hevcSessionGeneration.current;
+    const initialCurrent = () =>
+      startGeneration === hevcStartGeneration.current &&
+      initialSessionGeneration === hevcSessionGeneration.current;
+    const assertInitialCurrent = () => {
+      if (!initialCurrent()) throw new Error("The H.265 screen share was cancelled.");
+    };
+
+    // Everything below awaits at least a capability probe, an AV-broker mint
+    // and a relay round-trip, and DOM events are not buffered: a listener
+    // attached after those awaits never hears a capture the user cancelled
+    // during them, and the publisher then starts on a dead track. `stop()`
+    // does not fire this event, so a programmatic teardown cannot trip it.
+    let adopted: ActiveHevcCapture | null = null;
+    video.addEventListener(
+      "ended",
+      () => {
+        if (startGeneration !== hevcStartGeneration.current) return;
+        if (adopted) {
+          if (activeHevc.current === adopted) void stopHevcRef.current(true);
+          return;
+        }
+        // Cancel the start still in flight; its next generation check refuses
+        // and releases the capture down the ordinary failure path.
+        hevcStartGeneration.current += 1;
+      },
+      { once: true },
+    );
+
+    let capability: DesktopHevcScreenShareCapability;
+    try {
+      capability = hevcCapability ?? await desktopHevcScreenShareCapability();
+      assertInitialCurrent();
+    } catch (error) {
+      stopCandidateCapture();
+      throw error;
+    }
+    setHevcCapability(capability);
+    if (!capability.available) {
+      stopCandidateCapture();
+      throw new Error(capability.reason || "The Linux H.265 encoder is unavailable.");
+    }
+
+    const previous = activeHevc.current;
+    activeHevc.current = null;
+    shellHevcSessions.current.retire();
+    setHevcPreview(null);
+    const remainingIdentities = previous
+      ? hevcIdentitiesRef.current.filter((identity) => identity !== previous.identity)
+      : hevcIdentitiesRef.current;
+    if (previous) {
+      hevcIdentitiesRef.current = remainingIdentities;
+      setHevcIdentities(remainingIdentities);
+      stopHevcCapturedMedia(previous.stream);
+    }
+    cancelDesktopHevcScreenShareFrames();
+    const shellCleanup = stopDesktopHevcScreenShare();
+    const audioCleanup = (async () => {
+      if (!previous?.audioTrack) return;
+      await room.localParticipant.unpublishTrack(previous.audioTrack, true);
+    })();
+    const [shellResult, audioResult] = await Promise.allSettled([
+      shellCleanup,
+      audioCleanup,
+    ]);
+    if (shellResult.status === "fulfilled") {
+      shellHevcSessions.current.retire(shellResult.value.sessionId);
+    }
+    if (audioResult.status === "rejected") {
+      console.warn("failed to replace H.265 screen-share audio", audioResult.reason);
+    }
+    if (previous) {
+      try {
+        await announceAdditionalIdentities(remainingIdentities);
+      } catch (error) {
+        console.warn("failed to withdraw replaced H.265 screen-share identity", error);
+      }
+    }
+    if (shellResult.status === "rejected") {
+      stopCandidateCapture();
+      const detail = shellResult.reason instanceof Error
+        ? shellResult.reason.message
+        : String(shellResult.reason);
+      throw new Error(
+        previous
+          ? `The previous H.265 screen share stopped locally, but its publisher could not be retired before switching: ${detail}`
+          : `The previous H.265 publisher could not be retired: ${detail}`,
+      );
+    }
+    if (startGeneration !== hevcStartGeneration.current) {
+      stopCandidateCapture();
+      throw new Error(
+        previous
+          ? "The previous H.265 screen share stopped while switching, and the replacement was cancelled."
+          : "The H.265 screen share was cancelled.",
+      );
+    }
+
+    const sessionGeneration = ++hevcSessionGeneration.current;
+    const current = () =>
+      startGeneration === hevcStartGeneration.current &&
+      sessionGeneration === hevcSessionGeneration.current;
+    const assertCurrent = () => {
+      if (!current()) throw new Error("The H.265 screen share was cancelled.");
+    };
+
+    let publisherToken;
+    let keyMaterial: Uint8Array;
+    try {
+      publisherToken = await fetchAvToken(tokenData.origin, channel.voice.room);
+      assertCurrent();
+      keyMaterial = voiceSenderKey(channel.voice.mediaKey, publisherToken.identity);
+    } catch (error) {
+      stopCandidateCapture();
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        previous
+          ? `The previous H.265 screen share stopped while switching, and the replacement could not obtain access: ${detail}`
+          : detail,
+      );
+    }
+    const resolution = SCREEN_SHARE_RESOLUTIONS.find(
+      (option) => option.id === quality.resolution,
+    );
+    if (!resolution) {
+      stopCandidateCapture();
+      throw new Error(
+        previous
+          ? "The previous H.265 screen share stopped while switching, and the replacement resolution is invalid."
+          : "The selected H.265 resolution is invalid.",
+      );
+    }
+
+    const active: ActiveHevcCapture = { stream, identity: publisherToken.identity };
+    adopted = active;
+    pendingHevcCaptures.current.delete(stream);
+    activeHevc.current = active;
+    hevcIdentitiesRef.current = [publisherToken.identity];
+    setHevcIdentities([publisherToken.identity]);
+    setHevcStatus({
+      state: "starting",
+      active: true,
+      backend: capability.backend ?? undefined,
+      encoder: capability.encoder ?? undefined,
+      device: capability.device ?? undefined,
+      width: resolution.width,
+      height: resolution.height,
+      frameRate: quality.frameRate,
+      bitrate: quality.maxBitrate,
+      pipelineStage: "Waiting for first captured frame",
+    });
+
+    try {
+      // Publish signed role metadata before the auxiliary participant connects.
+      // This prevents a transient extra caller in remote rosters and ensures a
+      // named track alone can never make an ordinary participant disappear.
+      await announceAdditionalIdentities([publisherToken.identity]);
+      assertCurrent();
+      const status = await startDesktopHevcScreenShare(video, {
+        url: publisherToken.url,
+        token: publisherToken.token,
+        keyMaterial: bytesToBase64(keyMaterial),
+        width: resolution.width,
+        height: resolution.height,
+        frameRate: quality.frameRate,
+        bitrate: quality.maxBitrate,
+      });
+      assertCurrent();
+      if (!shellHevcSessions.current.bind(status.sessionId)) {
+        throw new Error("The H.265 publisher returned a retired or uncorrelated session.");
+      }
+      setHevcPreview({ track: video, identity: publisherToken.identity });
+
+      const audio = stream.getAudioTracks()[0];
+      if (audio) {
+        const publication = await room.localParticipant.publishTrack(audio, {
+          source: Track.Source.ScreenShareAudio,
+        });
+        if (!current()) {
+          if (publication.track) {
+            await room.localParticipant.unpublishTrack(publication.track, true);
+          }
+          throw new Error("The H.265 screen share was cancelled.");
+        }
+        if (publication.track) active.audioTrack = publication.track;
+      }
+      setHevcStatus(status);
+    } catch (error) {
+      if (current() && activeHevc.current === active) {
+        await stopHevc(true);
+        setHevcStatus({
+          state: "error",
+          active: false,
+          error: error instanceof Error ? error.message : "The H.265 publisher failed to start.",
+        });
+      }
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        previous
+          ? `The previous H.265 screen share stopped while switching, and the replacement could not start: ${detail}`
+          : detail,
+      );
+    }
+  }, [
+    announceAdditionalIdentities,
+    channel.voice,
+    e2ee.room,
+    hevcCapability,
+    stopHevc,
+    tokenData,
+  ]);
+
+  const hevcScreenShare = useMemo(
+    () => ({
+      capability: hevcCapability,
+      status: hevcStatus,
+      active: hevcStatus.active,
+      previewTrack: hevcPreview?.track ?? null,
+      publisherIdentity: hevcPreview?.identity ?? null,
+      start: startHevc,
+      stop: async () => {
+        await stopHevc(true);
+        setHevcStatus({ state: "stopped", active: false, reason: "requested" });
+      },
+    }),
+    [hevcCapability, hevcPreview, hevcStatus, startHevc, stopHevc],
+  );
+
+  // The raise-hand/reaction and custom media surface for portaled call UI.
+  const signals = useMemo<CallSignals>(
+    () => ({
+      enabled: Boolean(tokenData),
+      myHandRaised: handRaised,
+      toggleHand: () => setHandRaised((raised) => !raised),
+      sendReaction,
+      reactions,
+      hevcScreenShare,
+    }),
+    [tokenData, handRaised, sendReaction, reactions, hevcScreenShare],
+  );
+
+  // No split healing: §5's heal is a migration TO whichever broker presence
+  // says is winning, which is the same untrusted hint this client declines to
+  // route on — one member announcing a broker could otherwise pull a whole
+  // call off the community's list mid-flight, which is the migration working
+  // exactly as designed. Candidates come from config, so members converge
+  // before anyone joins instead of after; what's left is a member whose fold
+  // is stale or whose network reached a different candidate, and that is
+  // reported (`occupantsElsewhere`) rather than chased.
+  //
+  // Compared against `tokenData.origin`, the origin we ACTUALLY minted
+  // through: after a fall-through it differs from the one `ctx` nominated.
+  const strandedFrom = useMemo(
+    () => (tokenData ? occupantsElsewhere(fold, tokenData.origin) : []),
+    [fold, tokenData],
+  );
+  // Where most of them are, so the offer names one server rather than a set.
+  const elsewhereOrigin = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const p of strandedFrom) {
+      const origin = p.broker ? canonicalOrigin(p.broker) : null;
+      if (origin) counts.set(origin, (counts.get(origin) ?? 0) + 1);
+    }
+    let best: string | null = null;
+    let bestCount = 0;
+    for (const [origin, count] of counts) {
+      if (count > bestCount) [best, bestCount] = [origin, count];
+    }
+    return best;
+  }, [strandedFrom]);
+
+  // Offered, never taken automatically. Following the crowd is what turns an
+  // untrusted hint into routing; a member choosing to follow it, told plainly
+  // that the server is in nobody's settings, is a decision rather than a
+  // redirect — and the one case (a stale fold either side) where the crowd is
+  // simply right is the one where they'd want to.
+  const warnedSplit = useRef(false);
+  useEffect(() => {
+    if (warnedSplit.current || strandedFrom.length === 0 || !elsewhereOrigin) return;
+    warnedSplit.current = true;
+    const host = elsewhereOrigin.replace(/^https:\/\//, "");
+    toast({
+      title: `${strandedFrom.length} ${strandedFrom.length === 1 ? "member is" : "members are"} on another voice server`,
+      description: `They're on ${host}, ${communityBrokers.length > 0 ? "not one this community sets" : "not your voice server"}, so they're in a separate call you won't hear.`,
+      action: (
+        <ToastAction
+          altText={`Join the call on ${host}`}
+          onClick={() => joinConcordCall({ ...ctx, broker: elsewhereOrigin })}
+        >
+          Join them
+        </ToastAction>
+      ),
+    });
+  }, [strandedFrom, elsewhereOrigin, communityBrokers, ctx, joinConcordCall]);
 
   // Identity → member resolution for the call UI (§4): our own identity is
   // ourselves; anyone else's renders as a member only under a sole fresh
   // presence claim, and contested/unclaimed identities show as unverified.
   const resolveIdentity = useCallback<VoiceIdentityResolver>(
     (identity) => {
-      if (tokenData && identity === tokenData.identity && user) {
-        return { pubkey: user.pubkey, verified: true };
+      if (
+        tokenData &&
+        (identity === tokenData.identity || hevcIdentities.includes(identity)) &&
+        user
+      ) {
+        return {
+          pubkey: user.pubkey,
+          verified: true,
+          role: identity === tokenData.identity ? "member" : "screen-share",
+        };
       }
       const author = verifiedAuthorOf(fold, identity);
-      return author ? { pubkey: author, verified: true } : { pubkey: identity, verified: false };
+      return author
+        ? {
+            pubkey: author,
+            verified: true,
+            role: isVerifiedScreenShareIdentity(fold, identity) ? "screen-share" : "member",
+          }
+        : { pubkey: identity, verified: false, role: "member" };
     },
-    [fold, tokenData, user],
+    [fold, tokenData, user, hevcIdentities],
   );
 
   const handleDisconnected = useCallback(
@@ -1136,10 +1628,12 @@ function DmVoiceRoom({
   // silent tile, never impersonated audio or video.
   const resolveIdentity = useCallback<VoiceIdentityResolver>(
     (identity) => {
+      // A 1:1 room has no auxiliary publisher identities: the custom H.265
+      // sidecar is a Concord-only path, so both parties are ordinary members.
       if (tokenData && identity === tokenData.identity && user) {
-        return { pubkey: user.pubkey, verified: true };
+        return { pubkey: user.pubkey, verified: true, role: "member" };
       }
-      return { pubkey: ctx.peer, verified: true };
+      return { pubkey: ctx.peer, verified: true, role: "member" };
     },
     [tokenData, user, ctx.peer],
   );

@@ -134,7 +134,7 @@ export interface AppConfig {
    * community lives, nor the reverse. It is equally separate from the three
    * roles `STOCK_RELAYS` plays that are NOT preferences and must stay frozen —
    * the CORD-05 fragment codec (the set `FLAG_STOCK_SET` names, shared
-   * byte-for-byte with other clients), the kind-13302 vault rescue floor (whose
+   * byte-for-byte with other clients), the kind-33302 vault rescue floor (whose
    * job is to work when the user's relay config doesn't), and invite
    * bootstrap/delivery fallbacks (which are about reaching other people).
    */
@@ -367,6 +367,19 @@ export interface AppConfig {
    */
   discoverAllContent: boolean;
   /**
+   * Whether tracking parameters are stripped from links — both from what this
+   * client SENDS and from what it renders and fetches. ON by default.
+   *
+   * A share sheet's URL usually carries a per-share identifier (YouTube's
+   * `si=`), a click id (`fbclid`, `gclid`) or a campaign tag (`utm_*`), which
+   * on a message published to a relay is forwarded to every reader and to
+   * everything that follows the link on their behalf, the preview unfurler
+   * included. Only named parameters are removed, so the link still resolves to
+   * the same page — see `lib/trackingParams.ts`. Publishes nothing of its own;
+   * synced across devices.
+   */
+  stripTrackingParams: boolean;
+  /**
    * Bluetooth-mesh incognito mode. When on (the default), this device announces
    * a derived `anon<peerid>` nickname over the mesh rather than the user's
    * Armada display name — matching bitchat's anonymous-by-default behavior.
@@ -454,6 +467,7 @@ export const METADATA_CONFIG_KEYS = [
   "dmTypingIndicators",
   "showDmRequests",
   "discoverAllContent",
+  "stripTrackingParams",
   "defaultZapAmount",
   "defaultZapMethod",
   "zapsEnabled",
@@ -546,6 +560,7 @@ export const defaultConfig: AppConfig = {
   startedDms: [],
   showDmRequests: true,
   discoverAllContent: false,
+  stripTrackingParams: true,
   meshIncognito: true,
   meshEnabled: false,
   defaultZapAmount: 100,

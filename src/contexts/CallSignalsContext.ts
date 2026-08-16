@@ -1,6 +1,23 @@
 import { createContext, useContext } from "react";
 
 import type { VoiceReactionEntry } from "@/concord/lib/voice";
+import type {
+  DesktopHevcScreenShareCapability,
+  DesktopHevcScreenShareStatus,
+} from "@/lib/desktop";
+import type { ScreenShareQuality } from "@/lib/screenShareQuality";
+
+export interface HevcScreenShareController {
+  capability: DesktopHevcScreenShareCapability | null;
+  status: DesktopHevcScreenShareStatus;
+  active: boolean;
+  /** The trusted local capture used for the presenter's preview only. */
+  previewTrack: MediaStreamTrack | null;
+  /** The auxiliary LiveKit identity publishing the encoded HEVC track. */
+  publisherIdentity: string | null;
+  start: (stream: MediaStream, quality: ScreenShareQuality) => Promise<void>;
+  stop: () => Promise<void>;
+}
 
 /**
  * In-call "raise hand" + emoji reactions — an Armada client feature layered on
@@ -33,6 +50,8 @@ export interface CallSignals {
    * so an emoji floats up from its sender. Ages out on its own (~4s).
    */
   reactions: readonly VoiceReactionEntry[];
+  /** Custom Linux H.265 publishing; null outside an encrypted Concord call. */
+  hevcScreenShare: HevcScreenShareController | null;
 }
 
 const DISABLED: CallSignals = {
@@ -41,6 +60,7 @@ const DISABLED: CallSignals = {
   toggleHand: () => {},
   sendReaction: () => {},
   reactions: [],
+  hevcScreenShare: null,
 };
 
 export const CallSignalsContext = createContext<CallSignals>(DISABLED);

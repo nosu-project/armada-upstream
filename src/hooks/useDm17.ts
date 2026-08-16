@@ -1505,9 +1505,8 @@ export function useDm17Thread(
       // That is a PROBE, not the new floor: the wrap stream is global (see
       // pageOlderDmWraps), so `scanned` counts the whole inbox page and most
       // of it belongs to other correspondents. Persisting it would inflate
-      // every later poll by their history — trebled, since queryDm17Thread
-      // reads CONVERSATION_OVERFETCH times its limit — so the floor is clamped
-      // to what this conversation actually returned. Capture `window` before
+      // every later poll by their history, so the floor is clamped to what
+      // this conversation actually returned. Capture `window` before
       // the await so a late result from the previous conversation cannot grow
       // the next one's window.
       const probe = Math.max(window.limit, before.length) + scanned;

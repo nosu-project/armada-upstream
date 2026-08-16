@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   config: {} as AppConfig,
   publish: vi.fn(),
   updateConfig: vi.fn(),
+  docs: {} as Record<string, unknown>,
 }));
 
 vi.mock("@/hooks/useAppContext", () => ({
@@ -19,12 +20,17 @@ vi.mock("@/hooks/useCurrentUser", () => ({
 }));
 
 vi.mock("@/hooks/useSettingsDoc", () => ({
-  useSettingsDoc: () => ({
-    doc: { theme: "light" },
-    event: { id: "settings-v1", created_at: 1 },
-    update: h.publish,
-    hasNip44Support: true,
-  }),
+  // Name-aware so a `dms` test can present a different document than the
+  // `metadata` gate. The metadata stub is rebuilt on every call on purpose:
+  // the delivery tests rely on its per-render identity churn to re-run the
+  // publish effect. A test opts a document in by setting `h.docs[name]`.
+  useSettingsDoc: (name: string) =>
+    h.docs[name] ?? {
+      doc: { theme: "light" },
+      event: { id: "settings-v1", created_at: 1 },
+      update: h.publish,
+      hasNip44Support: true,
+    },
 }));
 
 describe("useConfigDocSync automatic delivery", () => {
@@ -33,6 +39,7 @@ describe("useConfigDocSync automatic delivery", () => {
     h.config = { ...defaultConfig, theme: "light" };
     h.publish.mockReset();
     h.updateConfig.mockReset();
+    h.docs = {};
   });
 
   afterEach(() => {
@@ -126,5 +133,34 @@ describe("useConfigDocSync automatic delivery", () => {
       theme: "dark",
       defaultZapAmount: 42,
     });
+  });
+
+  // Vector 1: two devices (e.g. Android + web) each publish the `dms` document
+  // as one last-writer-wins blob. A device that unpins/edits anything in it
+  // while holding a stale `closedDms` republishes its whole map, so a hide the
+  // OTHER device just made — but this doc predates — is dropped when the peer
+  // pulls it. The apply direction must therefore keep a locally-held hide that
+  // the incoming document omits, or the hide is wiped.
+  it("keeps a locally-held DM hide when an incoming dms doc omits it", () => {
+    const localMarker = { eventId: "msgA", createdAt: 100 };
+    const remoteMarker = { eventId: "msgB", createdAt: 200 };
+    h.config = { ...h.config, closedDms: { peerA: localMarker } };
+    h.docs.dms = {
+      doc: { closedDms: { peerB: remoteMarker } },
+      event: { id: "dms-v1", created_at: 2 },
+      update: h.publish,
+      hasNip44Support: true,
+    };
+
+    renderHook(() => useConfigDocSync("dms"));
+
+    // The apply effect folds the incoming document into config.
+    expect(h.updateConfig).toHaveBeenCalled();
+    const updater = h.updateConfig.mock.calls[0]![0] as (c: AppConfig) => AppConfig;
+    const next = updater(h.config);
+
+    // Both hides must survive: the local one (not on the incoming doc yet) and
+    // the remote one. Wholesale replace drops `peerA`; a per-peer merge keeps it.
+    expect(next.closedDms).toEqual({ peerA: localMarker, peerB: remoteMarker });
   });
 });
