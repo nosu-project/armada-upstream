@@ -231,29 +231,54 @@ object ServiceStore {
         streamSecrets(context, listOf(pk))[pk]
 
     /**
-     * The DM conversation's disappearing-message timer with [peer], in seconds
-     * (0 = off): the newest kind-1740 rumor in the thread wins, exactly as the
-     * WebView folds it (nip17/protocol.ts). Read from the stored thread — the
-     * two filters are the thread's own shape (received: authored by the peer;
-     * own copies: authored by self, `#p` the peer). A notice whose timer tag
-     * is malformed is skipped rather than read as "off".
+     * The conversation a decrypted rumor belongs to, as a `dmConvKey` string, or
+     * null when it names no room. The Java-facing door onto [Dm17.peersOf] —
+     * the service is Java and [Dm17] is `internal` Kotlin.
+     *
+     * This is the ONE derivation of a DM's identity the service makes. A NIP-17
+     * conversation is its participant SET, so the seal author alone names a
+     * conversation only when there are exactly two people in it.
      */
     @JvmStatic
-    fun dm17TimerSecs(context: Context, self: String, peer: String): Long = try {
-        val fromPeer = JSONObject()
+    fun dm17ConvKey(self: String, rumor: JSONObject): String? {
+        val parsed = Rumor.parse(rumor) ?: return null
+        val peers = Dm17.peersOf(parsed, self) ?: return null
+        return Dm17.convKey(peers)
+    }
+
+    /** The participants a conversation key names — [Dm17.convPeers] for Java. */
+    @JvmStatic
+    fun dm17ConvPeers(convKey: String): List<String> = Dm17.convPeers(convKey)
+
+    /**
+     * The conversation's disappearing-message timer, in seconds (0 = off): the
+     * newest kind-1740 rumor of that conversation wins, exactly as the WebView
+     * folds it (`queryDm17Timer`).
+     *
+     * Read through the `conv:` term, which is the same one filter the WebView
+     * uses and the reason `limit: 1` is exactly right: a participant SET cannot
+     * be expressed as an author/`#p` filter — the two-filter thread shape this
+     * replaced over-selected in both directions, so in a group the newest row
+     * it returned could belong to a neighbouring conversation and a reply would
+     * disappear (or fail to) on someone else's setting.
+     *
+     * A malformed or absent `timer` tag on that newest notice reads as "off",
+     * matching `queryDm17Timer` rather than skipping past it — the two writers
+     * agreeing matters more here than either rule does.
+     */
+    @JvmStatic
+    fun dm17TimerSecs(context: Context, self: String, convKey: String): Long = try {
+        val peers = Dm17.convPeers(convKey).filter { it != self }
+        val filter = JSONObject()
             .put("kinds", JSONArray().put(1740))
-            .put("authors", JSONArray().put(peer))
+            .put("search", Dm17.convTerm(if (peers.isEmpty()) listOf(self) else peers))
             .put("limit", 1)
-        val fromSelf = JSONObject()
-            .put("kinds", JSONArray().put(1740))
-            .put("authors", JSONArray().put(self))
-            .put("#p", JSONArray().put(peer))
-            .put("limit", 1)
-        ArmadaDb.get(context).query(Dm17.tenant(self), listOf(fromPeer, fromSelf))
-            .sortedByDescending { it.createdAt }
-            .firstNotNullOfOrNull { rumor ->
-                rumor.tagValue("timer")?.toLongOrNull()?.takeIf { it >= 0 }
-            } ?: 0L
+        ArmadaDb.get(context).query(Dm17.tenant(self), listOf(filter))
+            .firstOrNull()
+            ?.tagValue("timer")
+            ?.toLongOrNull()
+            ?.takeIf { it >= 0 }
+            ?: 0L
     } catch (error: Throwable) {
         Log.w(TAG, "dm timer read failed", error)
         0L

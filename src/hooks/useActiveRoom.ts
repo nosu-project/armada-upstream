@@ -14,7 +14,8 @@ import { ArmadaNotification } from "@/lib/nativeNotifications";
  * shapes `enqueueRoomMessage` uses on the Java side):
  *   - NIP-29 group: `h:<relayUrl>|<groupId>`
  *   - Concord:      `c2:<channelIdHex>`
- *   - DM:           `dm:<peerPubkey>`
+ *   - DM:           `dm:<conversationKey>` — the participant set (`dmConvKey`),
+ *                   which for a 1:1 is just the peer's pubkey
  *
  * Thread-level keys (`<roomKey>:t:<rootId>`) suppress notifications for a
  * specific open thread panel. Mentions still notify even on an active room.

@@ -5,7 +5,13 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "node_modules", "coverage", "android", "electron"] },
+  // `ios` holds no JavaScript of its own. What it does hold is a copy of the
+  // built web client (`ios/App/App/public`, written by `cap sync` and ignored by
+  // `ios/.gitignore` — which a flat config does not read), and SwiftPM `.build`
+  // directories that are root-owned when the Swift suites are run through a
+  // container. The second makes the walk itself FAIL rather than merely waste
+  // time on minified bundles.
+  { ignores: ["dist", "node_modules", "coverage", "android", "electron", "ios"] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ["**/*.{ts,tsx}"],

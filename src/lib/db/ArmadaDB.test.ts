@@ -240,6 +240,420 @@ describe.each(backends)("$name", ({ create }) => {
     });
   });
 
+  /**
+   * The derived term index: facts a policy computes from a rumor, queried as
+   * NIP-50 extension tokens. Nothing here is NIP-17-shaped — the engines never
+   * interpret a term — so the policy under test is a stand-in for any of them.
+   */
+  describe("derived terms", () => {
+    /** Files each rumor under the sorted set of its `p` tags. */
+    const peers = (rumor: NostrRumor): string[] => {
+      const set = [...new Set(rumor.tags.filter(([n]) => n === "p").map(([, v]) => v))].sort();
+      return set.length > 0 ? [`conv:${set.join("")}`] : [];
+    };
+
+    /** Every `p` tag as its own term, so one rumor carries several. */
+    const each = (rumor: NostrRumor): string[] =>
+      rumor.tags.filter(([n]) => n === "p").map(([, v]) => `with:${v}`);
+
+    it("selects exactly the rumors a policy filed under a term", async () => {
+      const store = db.tenant("t", { terms: peers });
+      const pair = rumor({ id: "pair", tags: [["p", "ana"], ["p", "ben"]] });
+      const ana = rumor({ id: "ana", tags: [["p", "ana"]] });
+      const ben = rumor({ id: "ben", tags: [["p", "ben"]] });
+      for (const r of [pair, ana, ben]) await store.event(r);
+
+      // The exact set, and neither of the 1:1s that share its members — which
+      // is the whole thing a tag filter cannot express.
+      expect(await store.query([{ search: "conv:anaben" }])).toEqual([pair]);
+      expect(await store.query([{ search: "conv:ana" }])).toEqual([ana]);
+      expect(await store.query([{ search: "conv:ben" }])).toEqual([ben]);
+    });
+
+    it("requires every term a filter names", async () => {
+      const store = db.tenant("t", { terms: each });
+      const both = rumor({ id: "both", created_at: 200, tags: [["p", "ana"], ["p", "ben"]] });
+      const one = rumor({ id: "one", created_at: 100, tags: [["p", "ana"]] });
+      for (const r of [both, one]) await store.event(r);
+
+      expect(await store.query([{ search: "with:ana" }])).toEqual([both, one]);
+      // Conditions within a filter AND, terms included.
+      expect(await store.query([{ search: "with:ana with:ben" }])).toEqual([both]);
+      expect(await store.query([{ search: "with:ana with:cy" }])).toEqual([]);
+    });
+
+    it("matches nothing for a term in a tenant that derives none", async () => {
+      const store = db.tenant("t");
+      await store.event(rumor({ tags: [["p", "ana"]] }));
+
+      // Fails closed, exactly like an unsupported NIP-50 extension: a narrowing
+      // query that can't be honored answers with nothing, never everything.
+      expect(await store.query([{ search: "conv:ana" }])).toEqual([]);
+      expect(await store.count([{ search: "conv:ana" }])).toEqual({ count: 0, approximate: false });
+    });
+
+    it("cannot be forged by a tag the sender wrote", async () => {
+      const store = db.tenant("t", { terms: peers });
+      const real = rumor({ id: "real", tags: [["p", "ana"]] });
+      // A sender spelling the index's own namespace, and claiming a term for a
+      // conversation they are not in.
+      const fake = rumor({ id: "fake", tags: [["~", "conv:ana"], ["conv", "ana"]] });
+      for (const r of [real, fake]) await store.event(r);
+
+      expect(await store.query([{ search: "conv:ana" }])).toEqual([real]);
+    });
+
+    it("narrows alongside the filter's other constraints", async () => {
+      const store = db.tenant("t", { terms: peers });
+      const kept = rumor({ id: "kept", kind: 14, pubkey: "ana", tags: [["p", "ana"]] });
+      for (const r of [
+        kept,
+        rumor({ id: "wrongkind", kind: 7, pubkey: "ana", tags: [["p", "ana"]] }),
+        rumor({ id: "wrongauthor", kind: 14, pubkey: "ben", tags: [["p", "ana"]] }),
+        rumor({ id: "wrongconv", kind: 14, pubkey: "ana", tags: [["p", "ben"]] }),
+      ]) await store.event(r);
+
+      expect(await store.query([{ search: "conv:ana", kinds: [14], authors: ["ana"] }]))
+        .toEqual([kept]);
+    });
+
+    it("applies the limit to the term's own rows", async () => {
+      const store = db.tenant("t", { terms: peers });
+      // Interleaved, so a limit applied before the term would come back short.
+      for (let i = 0; i < 6; i++) {
+        await store.event(rumor({ id: `ana-${i}`, created_at: 100 + i * 2, tags: [["p", "ana"]] }));
+        await store.event(rumor({ id: `ben-${i}`, created_at: 101 + i * 2, tags: [["p", "ben"]] }));
+      }
+
+      const got = await store.query([{ search: "conv:ana", limit: 3 }]);
+      expect(got.map((r) => r.id)).toEqual(["ana-5", "ana-4", "ana-3"]);
+    });
+
+    it("finds a match far below a term's newest rows", async () => {
+      const store = db.tenant("t", { terms: peers });
+      // One matching rumor, underneath a term's whole history. An adapter that
+      // narrows in memory has to read down to it — and one that pages while
+      // doing so must page until the range is EXHAUSTED, not until some budget
+      // is: a search budget dressed as a page limit turns a rumor that exists
+      // into one the store denies having.
+      await store.event(rumor({ id: "deep", created_at: 100, content: "needle", tags: [["p", "ana"]] }));
+      await Promise.all(Array.from({ length: 200 }, (_, i) =>
+        store.event(rumor({ id: `hay-${i}`, created_at: 200 + i, content: "hay", tags: [["p", "ana"]] }))));
+
+      const got = await store.query([{ search: "conv:ana needle", limit: 1 }]);
+      expect(got.map((r) => r.id)).toEqual(["deep"]);
+    });
+
+    it("finds a match among more rumors than a page, all at one timestamp", async () => {
+      const store = db.tenant("t", { terms: peers });
+      // Every rumor shares a `created_at`, so a pager walking a time bound can
+      // never advance past them — the whole second is one boundary. Reading a
+      // page and stepping below its oldest row would skip the rest of it.
+      await Promise.all(Array.from({ length: 200 }, (_, i) =>
+        store.event(rumor({ id: `tie-${i}`, created_at: 500, content: "hay", tags: [["p", "ana"]] }))));
+      await store.event(rumor({ id: "zz-buried", created_at: 500, content: "needle", tags: [["p", "ana"]] }));
+
+      const got = await store.query([{ search: "conv:ana needle", limit: 1 }]);
+      expect(got.map((r) => r.id)).toEqual(["zz-buried"]);
+    });
+
+    it("counts and removes by term", async () => {
+      const store = db.tenant("t", { terms: peers });
+      const ben = rumor({ id: "ben", tags: [["p", "ben"]] });
+      for (const r of [rumor({ id: "ana", tags: [["p", "ana"]] }), ben]) await store.event(r);
+
+      expect(await store.count([{ search: "conv:ana" }])).toEqual({ count: 1, approximate: false });
+      await store.remove([{ search: "conv:ana" }]);
+      expect(await store.query([{}])).toEqual([ben]);
+    });
+
+    it("indexes writes made through a handle that named no policy", async () => {
+      // The policy is bound to the TENANT, which is what covers a writer that
+      // doesn't know terms exist — on the native engines, the notification
+      // service writing while the app is dead.
+      db.tenant("t", { terms: peers });
+      const bare = db.tenant("t");
+      const written = rumor({ id: "written", tags: [["p", "ana"]] });
+      await bare.event(written);
+
+      expect(await db.tenant("t").query([{ search: "conv:ana" }])).toEqual([written]);
+    });
+
+    it("indexes rows that were already stored when the policy arrived", async () => {
+      const before = db.tenant("t");
+      const old = rumor({ id: "old", created_at: 100, tags: [["p", "ana"]] });
+      await before.event(old);
+
+      const store = db.tenant("t", { terms: peers });
+      const fresh = rumor({ id: "fresh", created_at: 200, tags: [["p", "ana"]] });
+      await store.event(fresh);
+
+      expect(await store.query([{ search: "conv:ana" }])).toEqual([fresh, old]);
+    });
+
+    it("forgets a term when its rumor is deleted", async () => {
+      const store = db.tenant("t", { terms: peers });
+      await store.event(rumor({ id: "gone", pubkey: "ana", tags: [["p", "ana"]] }));
+      await store.event(rumor({ kind: 5, pubkey: "ana", tags: [["e", "gone"]] }));
+
+      expect(await store.query([{ search: "conv:ana" }])).toEqual([]);
+    });
+
+    it("keeps a term inside its own tenant", async () => {
+      const mine = rumor({ id: "mine", tags: [["p", "ana"]] });
+      await db.tenant("a", { terms: peers }).event(mine);
+      await db.tenant("b", { terms: peers }).event(rumor({ id: "theirs", tags: [["p", "ana"]] }));
+
+      expect(await db.tenant("a").query([{ search: "conv:ana" }])).toEqual([mine]);
+    });
+
+    it("combines a term with a keyword", async () => {
+      const store = db.tenant("t", { terms: peers });
+      const hit = rumor({ id: "hit", content: "the quick brown fox", tags: [["p", "ana"]] });
+      for (const r of [
+        hit,
+        rumor({ id: "otherconv", content: "the quick brown fox", tags: [["p", "ben"]] }),
+        rumor({ id: "othertext", content: "nothing here", tags: [["p", "ana"]] }),
+      ]) await store.event(r);
+
+      expect(await store.query([{ search: "brown conv:ana" }])).toEqual([hit]);
+    });
+
+    it("re-derives every term when the generation changes", async () => {
+      // Written before any policy is installed, so the first install's backfill
+      // is a real pass and records the generation that made it. (A tenant with
+      // no rows yet has nothing to record the fact against, and is walked again
+      // next time — which is why this doesn't start from an empty one.)
+      const stored = rumor({ id: "stored", tags: [["p", "ana"]] });
+      await db.tenant("t").event(stored);
+
+      const store = db.tenant("t", { terms: peers, termsGeneration: 1 });
+      expect(await store.query([{ search: "conv:ana" }])).toEqual([stored]);
+
+      // The same rows, a different derivation. Both halves matter: the new term
+      // has to reach rows written before it, and the old one has to STOP
+      // matching — an index that only ever gains terms would keep answering a
+      // lookup no policy derives any more.
+      const renamed = db.tenant("t", { terms: each, termsGeneration: 2 });
+      expect(await renamed.query([{ search: "with:ana" }])).toEqual([stored]);
+      expect(await renamed.query([{ search: "conv:ana" }])).toEqual([]);
+    });
+
+    it("leaves the index alone when the generation is unchanged", async () => {
+      const stored = rumor({ id: "stored", created_at: 100, tags: [["p", "ana"]] });
+      await db.tenant("t").event(stored);
+      await db.tenant("t", { terms: peers, termsGeneration: 1 }).query([{ search: "conv:ana" }]);
+
+      // A different policy at the SAME generation: the marker says this tenant
+      // is done, so the pass doesn't run and the stored row keeps the terms it
+      // was written with. That is what makes the backfill once-per-file rather
+      // than once-per-boot — the generation is the only thing that reopens it.
+      const same = db.tenant("t", { terms: each, termsGeneration: 1 });
+      const later = rumor({ id: "later", created_at: 200, tags: [["p", "ana"]] });
+      await same.event(later);
+
+      expect(await same.query([{ search: "conv:ana" }])).toEqual([stored]);
+      expect(await same.query([{ search: "with:ana" }])).toEqual([later]);
+    });
+
+    it("pins the term generation to the other ports", async () => {
+      // One number, written into a file three engines share: two ports that
+      // disagree would each read the other's as stale and rebuild the index on
+      // every open. `TermPolicies.GENERATION` (Kotlin) and
+      // `TermPolicies.generation` (Swift) are this literal.
+      const { TERM_GENERATION } = await import("./termPolicies");
+      expect(TERM_GENERATION).toBe(2);
+    });
+  });
+
+  describe("derived terms: collapsing a read with distinct:", () => {
+    /**
+     * Files each rumor under the sorted set of its `p` tags, in two namespaces:
+     * `conv:` covers every kind and `msg:` only kind 1. That is the shape the DM
+     * list uses — a collapse can then name the newest MESSAGE of a conversation
+     * without any engine reading a rumor's kind.
+     */
+    const conv = (rumor: NostrRumor): string[] => {
+      const set = [...new Set(rumor.tags.filter(([n]) => n === "p").map(([, v]) => v))].sort();
+      if (set.length === 0) return [];
+      const key = set.join("");
+      return rumor.kind === 1 ? [`conv:${key}`, `msg:${key}`] : [`conv:${key}`];
+    };
+
+    const opened = () => db.tenant("t", { terms: conv, termsGeneration: 1 });
+
+    it("returns the newest rumor of every group", async () => {
+      const s = opened();
+      const anaOld = rumor({ id: "ana-old", created_at: 100, tags: [["p", "ana"]] });
+      const anaNew = rumor({ id: "ana-new", created_at: 300, tags: [["p", "ana"]] });
+      const ben = rumor({ id: "ben", created_at: 200, tags: [["p", "ben"]] });
+      const group = rumor({ id: "group", created_at: 150, tags: [["p", "ana"], ["p", "ben"]] });
+      for (const r of [anaOld, anaNew, ben, group]) await s.event(r);
+
+      // One row per participant SET, ordered by that row — not the newest rumors,
+      // which is what an ungrouped read with a limit would have given.
+      expect(await s.query([{ search: "distinct:conv" }])).toEqual([anaNew, ben, group]);
+    });
+
+    it("counts groups against the limit, not rows", async () => {
+      const s = opened();
+      // A busy conversation, and a quiet one older than every message in it.
+      for (let i = 0; i < 5; i++) {
+        await s.event(rumor({ id: `busy-${i}`, created_at: 200 + i, tags: [["p", "ana"]] }));
+      }
+      const quiet = rumor({ id: "quiet", created_at: 100, tags: [["p", "ben"]] });
+      await s.event(quiet);
+
+      // The old shape's bug in one assertion: the newest two ROWS are two
+      // messages of the busy thread and no sign of the quiet one.
+      const rows = await s.query([{ search: "distinct:conv", limit: 2 }]);
+      expect(rows.map((r) => r.id)).toEqual(["busy-4", "quiet"]);
+    });
+
+    it("excludes a rumor with no term in the namespace", async () => {
+      const s = opened();
+      const listed = rumor({ id: "listed", tags: [["p", "ana"]] });
+      await s.event(listed);
+      // In a conversation, but not in the `msg:` grouping.
+      await s.event(rumor({ id: "reaction", kind: 7, tags: [["p", "ana"]] }));
+      // In no conversation at all.
+      await s.event(rumor({ id: "orphan" }));
+
+      expect(await s.query([{ search: "distinct:msg" }])).toEqual([listed]);
+    });
+
+    it("names one namespace, whatever the delimiter", async () => {
+      const s = opened();
+      const ana = rumor({ id: "ana", tags: [["p", "ana"]] });
+      await s.event(ana);
+
+      // `conv` and `conv:` are the same namespace, and neither reaches `msg:`.
+      expect(await s.query([{ search: "distinct:conv" }])).toEqual([ana]);
+      expect(await s.query([{ search: "distinct:conv:" }])).toEqual([ana]);
+    });
+
+    it("applies the rest of the filter before collapsing", async () => {
+      const s = opened();
+      const mine = rumor({ id: "mine", pubkey: "me", created_at: 100, tags: [["p", "ana"]] });
+      const theirs = rumor({ id: "theirs", pubkey: "ana", created_at: 200, tags: [["p", "ana"]] });
+      for (const r of [mine, theirs]) await s.event(r);
+
+      // The newest rumor of the group is theirs; the newest MATCHING one is mine.
+      // Collapsing first and filtering after would answer with nothing.
+      expect(await s.query([{ search: "distinct:conv", authors: ["me"] }])).toEqual([mine]);
+      expect(await s.query([{ search: "distinct:conv", kinds: [7] }])).toEqual([]);
+    });
+
+    it("bounds the window before collapsing too", async () => {
+      const s = opened();
+      const early = rumor({ id: "early", created_at: 100, tags: [["p", "ana"]] });
+      const late = rumor({ id: "late", created_at: 300, tags: [["p", "ana"]] });
+      for (const r of [early, late]) await s.event(r);
+
+      expect(await s.query([{ search: "distinct:conv", until: 200 }])).toEqual([early]);
+      expect(await s.query([{ search: "distinct:conv", since: 200 }])).toEqual([late]);
+      expect(await s.query([{ search: "distinct:conv", since: 400 }])).toEqual([]);
+    });
+
+    it("combines a collapse with a term", async () => {
+      const s = opened();
+      const ana = rumor({ id: "ana", tags: [["p", "ana"]] });
+      const ben = rumor({ id: "ben", tags: [["p", "ben"]] });
+      for (const r of [ana, ben]) await s.event(r);
+
+      // The collapse says one row per conversation; the term says which one.
+      expect(await s.query([{ search: "distinct:conv conv:ana" }])).toEqual([ana]);
+    });
+
+    it("counts the groups", async () => {
+      const s = opened();
+      for (const r of [
+        rumor({ tags: [["p", "ana"]] }),
+        rumor({ tags: [["p", "ana"]] }),
+        rumor({ tags: [["p", "ben"]] }),
+      ]) await s.event(r);
+
+      expect(await s.count([{ search: "distinct:conv" }])).toEqual({
+        count: 2,
+        approximate: false,
+      });
+    });
+
+    it("counts groups when the filter narrows the rows too", async () => {
+      const s = opened();
+      for (const r of [
+        rumor({ tags: [["p", "ana"]] }),
+        rumor({ tags: [["p", "ana"]] }),
+        rumor({ tags: [["p", "ben"]] }),
+        rumor({ kind: 7, tags: [["p", "cat"]] }),
+      ]) await s.event(r);
+
+      // A row condition the index can't test inside the grouping (here `kinds`)
+      // makes the collapse happen while scanning instead — and a count that
+      // reads its answer out of the index would then count ROWS, reporting a
+      // conversation list as the number of messages in it. `count` and
+      // `query().length` are one number.
+      const filter = { search: "distinct:conv", kinds: [1] };
+      expect(await s.count([filter])).toEqual({ count: 2, approximate: false });
+      expect((await s.query([filter])).length).toBe(2);
+    });
+
+    it("collapses rows that were already stored when the policy arrived", async () => {
+      // The pass that indexes a tenant's existing rows is triggered by a read
+      // that reaches the term index — and a collapse reaches it while naming no
+      // term of its own. An engine that waits only on a filter's parsed TERMS
+      // therefore groups over an index nothing has built yet, which is the DM
+      // list of every install that upgrades into the feature.
+      const before = db.tenant("t");
+      const anaOld = rumor({ id: "ana-old", created_at: 100, tags: [["p", "ana"]] });
+      const anaNew = rumor({ id: "ana-new", created_at: 300, tags: [["p", "ana"]] });
+      const ben = rumor({ id: "ben", created_at: 200, tags: [["p", "ben"]] });
+      for (const r of [anaOld, anaNew, ben]) await before.event(r);
+
+      expect(await opened().query([{ search: "distinct:conv" }])).toEqual([anaNew, ben]);
+    });
+
+    it("refuses to remove by a collapse", async () => {
+      const s = opened();
+      const older = rumor({ id: "older", created_at: 100, tags: [["p", "ana"]] });
+      const newer = rumor({ id: "newer", created_at: 200, tags: [["p", "ana"]] });
+      for (const r of [older, newer]) await s.event(r);
+
+      // "Delete one rumor per conversation" is not a deletion anyone should be
+      // able to ask for, so it deletes nothing rather than the newest message of
+      // every thread.
+      await s.remove([{ search: "distinct:conv" }]);
+      expect(await s.query([{ search: "conv:ana" }])).toEqual([newer, older]);
+    });
+
+    it("matches nothing in a tenant that derives no terms", async () => {
+      const bare = db.tenant("bare");
+      await bare.event(rumor({ tags: [["p", "ana"]] }));
+
+      // Failing closed: there is no grouping to apply, and answering the read
+      // without the collapse would hand back the whole tenant.
+      expect(await bare.query([{ search: "distinct:conv" }])).toEqual([]);
+    });
+
+    it("refuses two collapses rather than picking one", async () => {
+      const s = opened();
+      await s.event(rumor({ tags: [["p", "ana"]] }));
+
+      // A term names one dimension, so grouping by a pair is not answerable.
+      expect(await s.query([{ search: "distinct:conv distinct:msg" }])).toEqual([]);
+    });
+
+    it("refuses a namespace that isn't one", async () => {
+      const s = opened();
+      await s.event(rumor({ tags: [["p", "ana"]] }));
+
+      // A whole term is not a namespace. Naming one group's key is `conv:ana` on
+      // its own, and reading it as a namespace would silently answer a different
+      // question.
+      expect(await s.query([{ search: "distinct:conv:ana" }])).toEqual([]);
+    });
+  });
+
   describe("replaceable rumors", () => {
     it("supersedes an older version at the same coordinate", async () => {
       const store = db.tenant("t");

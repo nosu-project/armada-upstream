@@ -29,6 +29,7 @@ import {
   dmTimerTags,
   KIND_DM_CHAT,
   KIND_DM_DELETE,
+  KIND_DM_FILE,
   KIND_DM_REACTION,
   KIND_DM_TIMER,
   type OpenedDm,
@@ -279,6 +280,31 @@ describe("dm17Store disappearing messages", () => {
     expect((await dm17Store(self).query([{ ids: [stale.rumorId] }])).length).toBe(0);
   });
 
+  it("keeps `mine` when the viewer's own newest message has expired", async () => {
+    // `convmine:` collapses to exactly ONE row per conversation — the viewer's
+    // newest own message — so when disappearing messages are on and that row has
+    // expired but not yet been swept, there is no older row to fall back to.
+    // Reading `mine` off the live rows only would drop a thread the viewer has
+    // written in: the DMs page files it under requests, and the push gateways
+    // read its sender as a stranger.
+    const dave = getPublicKey(generateSecretKey());
+    await forceStore(opened({
+      author: self,
+      peer: dave,
+      content: "mine, now expired",
+      tags: dmChatTags([dave], { expiresAt: now() - 1 }),
+    }));
+    // Dave answers, and his reply is live — so the conversation IS listed, and
+    // its newest row is one the viewer did not write.
+    await writeDm17Rumors(self, [
+      opened({ author: dave, peer: dave, content: "his live reply" }),
+    ]);
+
+    const row = (await queryDm17Conversations(self)).find((c) => c.key === dave);
+    expect(row?.latest.content).toBe("his live reply");
+    expect(row?.mine).toBe(true);
+  });
+
   it("reads back the newest timer change, whichever side set it", async () => {
     expect(await queryDm17Timer(self, [carol])).toBeUndefined();
 
@@ -490,8 +516,9 @@ describe("group conversations", () => {
 
   it("keeps a group thread separate from its members' 1:1s", async () => {
     // The three conversations that share people: Ana alone, Ben alone, and the
-    // room with both. The filters cannot distinguish them (see
-    // conversationFilters), so this is the client-side match under test.
+    // room with both. A NIP-01 filter cannot distinguish them at all, so what
+    // is under test is the derived term index the read seeks instead (see
+    // conversationFilters).
     const oneToOneAna = room(ana, [me], "just ana");
     const oneToOneBen = room(ben, [me], "just ben");
     const groupFromAna = room(ana, [me, ben], "ana to the group");
@@ -577,4 +604,85 @@ describe("group conversations", () => {
     expect((await queryDm17Thread(me, groupKey, { limit: 50 })).map((m) => m.rumorId))
       .not.toContain(target.rumorId);
   }, 30_000);
+});
+
+describe("the conversation list is a list, not a sample", () => {
+  const me = getPublicKey(generateSecretKey());
+  const chatty = getPublicKey(generateSecretKey());
+  const quiet = getPublicKey(generateSecretKey());
+
+  function said(author: string, peer: string, content: string): OpenedDm {
+    const createdAt = ++clock;
+    const tags = dmChatTags([author === me ? peer : me]);
+    const rumor = buildDmRumor({ kind: KIND_DM_CHAT, content, tags, pubkey: author, createdAt });
+    return {
+      rumorId: rumor.id,
+      author,
+      kind: KIND_DM_CHAT,
+      content,
+      tags,
+      createdAt,
+      peers: [peer],
+      wrapId: `wrap-${rumor.id.slice(0, 8)}`,
+    };
+  }
+
+  it("keeps an old conversation that a busy one has buried", async () => {
+    // The viewer wrote to `quiet` once, long ago, and then had a long
+    // conversation with `chatty`. The list used to read the newest 500 message
+    // rumors, so a busy enough thread pushed everything else out of it — the
+    // conversation vanished from the DMs page, and `mine` lost it too, which is
+    // what the push gateways read as "this sender is a stranger".
+    await writeDm17Rumors(me, [said(me, quiet, "long ago")]);
+    const flood: OpenedDm[] = [];
+    for (let i = 0; i < 40; i++) flood.push(said(chatty, chatty, `chatter ${i}`));
+    await writeDm17Rumors(me, flood);
+
+    const rows = await queryDm17Conversations(me);
+    expect(rows.map((row) => row.key)).toEqual([chatty, quiet]);
+    expect(rows.find((row) => row.key === quiet)?.mine).toBe(true);
+    expect(rows.find((row) => row.key === quiet)?.latest.content).toBe("long ago");
+  }, 30_000);
+
+  it("counts conversations against a limit, not messages", async () => {
+    // Two conversations exist, and the busiest one holds far more than two
+    // messages: a limit of 2 is two CONVERSATIONS.
+    const rows = await queryDm17Conversations(me, { limit: 2 });
+    expect(rows.map((row) => row.key)).toEqual([chatty, quiet]);
+  }, 30_000);
+
+  it("lists no conversation for a reaction alone", async () => {
+    // A reaction is in the conversation but is not a row the list can show, and
+    // `convmsg:` is what keeps it from becoming one.
+    const stranger = getPublicKey(generateSecretKey());
+    const createdAt = ++clock;
+    const tags = dmReactionTags([stranger], "some-id", KIND_DM_CHAT);
+    const rumor = buildDmRumor({
+      kind: KIND_DM_REACTION,
+      content: "+",
+      tags,
+      pubkey: stranger,
+      createdAt,
+    });
+    await writeDm17Rumors(me, [{
+      rumorId: rumor.id,
+      author: stranger,
+      kind: KIND_DM_REACTION,
+      content: "+",
+      tags,
+      createdAt,
+      peers: [stranger],
+      wrapId: `wrap-${rumor.id.slice(0, 8)}`,
+    }]);
+
+    const rows = await queryDm17Conversations(me);
+    expect(rows.map((row) => row.key)).not.toContain(stranger);
+  }, 30_000);
+
+  it("agrees with the wire kinds about what a message is", async () => {
+    // `conversation.ts` is dependency-free and so spells the numbers itself. A
+    // policy that disagreed with the reader would file rows nothing lists.
+    const { DM_MESSAGE_KINDS } = await import("@/lib/nip17/conversation");
+    expect([...DM_MESSAGE_KINDS].sort()).toEqual([KIND_DM_CHAT, KIND_DM_FILE].sort());
+  });
 });

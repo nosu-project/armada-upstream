@@ -10,6 +10,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { SqliteArmadaDB } from "./SqliteArmadaDB";
+import { ARMADA_DB_VERSION } from "./sqliteSchema";
 
 import type { SqliteArmadaDBOpts } from "./SqliteArmadaDB";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -265,6 +266,40 @@ describe("SqliteArmadaDB — query plans", () => {
     await db.tenant("t").query([{ limit: 10 }]);
 
     expect(driver.plans().some((detail) => detail.includes("rumors_tenant"))).toBe(true);
+  });
+
+  it("groups a collapse inside the term index, reading one body per group", async () => {
+    const { db, driver } = makeDb();
+    const terms = (r: NostrRumor): string[] =>
+      r.tags.filter(([n]) => n === "p").map(([, v]) => `conv:${v}`);
+    const store = db.tenant("t", { terms, termsGeneration: 1 });
+    for (const peer of ["ana", "ben"]) {
+      for (let i = 0; i < 3; i++) {
+        await store.event(rumor({ created_at: 100 + i, tags: [["p", peer]] }));
+      }
+    }
+
+    driver.selects.length = 0;
+    expect(await store.query([{ search: "distinct:conv" }])).toHaveLength(2);
+
+    // One statement, and the whole grouping happens in `rumor_terms`: its
+    // primary key already orders (tenant, term, seq), so SQLite streams the
+    // groups out of one ranged walk as a co-routine — no temp b-tree to build
+    // them, no message body read to decide which is newest — and `rumors` is
+    // then reached by rowid once per group rather than once per message.
+    expect(driver.selects).toHaveLength(1);
+    expect(driver.selects[0].sql).toContain("GROUP BY x.term");
+    const plans = driver.plans();
+    expect(plans.some((detail) => /SEARCH x USING PRIMARY KEY \(tenant=\? AND term>\? AND term<\?\)/.test(detail)))
+      .toBe(true);
+    expect(plans.some((detail) => detail.includes("CO-ROUTINE"))).toBe(true);
+    expect(plans.some((detail) => /SCAN r\b/.test(detail))).toBe(false);
+    expect(plans.some((detail) => detail.includes("SEARCH r USING INTEGER PRIMARY KEY"))).toBe(true);
+    // The one sort left orders the GROUPS by recency — as many rows as there are
+    // conversations, which is the whole point of grouping in the index first.
+    expect(plans.filter((detail) => detail.includes("TEMP B-TREE"))).toEqual([
+      "USE TEMP B-TREE FOR ORDER BY",
+    ]);
   });
 
   it("reads a single covered scan without a second key lookup", async () => {
@@ -862,7 +897,7 @@ describe("SqliteArmadaDB — v0 migration", () => {
     driver.run(`INSERT INTO rumor_tags_fts (rowid, tokens) VALUES (?, ?)`, [seq, tokens]);
   }
 
-  it("rebuilds a v0 file into the v1 layout, preserving everything", async () => {
+  it("rebuilds a v0 file into the current layout, preserving everything", async () => {
     const driver = new RecordingDriver();
     drivers.push(driver);
     for (const statement of V0_SCHEMA) driver.run(statement);
@@ -893,7 +928,7 @@ describe("SqliteArmadaDB — v0 migration", () => {
     const columns = rows(driver, `SELECT name FROM pragma_table_info('rumors')`)
       .map((row) => row.name);
     expect(columns).toEqual(["seq", "tenant", "id", "kind", "pubkey", "created_at", "tags", "content"]);
-    expect(Number(rows(driver, `PRAGMA user_version`)[0].user_version)).toBe(1);
+    expect(Number(rows(driver, `PRAGMA user_version`)[0].user_version)).toBe(ARMADA_DB_VERSION);
 
     // ...and nothing else did: bodies, the tag index, the search index, the
     // coordinate and the KV all survive, with their old rowids.
@@ -911,5 +946,37 @@ describe("SqliteArmadaDB — v0 migration", () => {
     const again = new SqliteArmadaDB(driver);
     await again.ready;
     expect((await again.tenant("main").query([{ ids: ["plain"] }])).map((r) => r.id)).toEqual(["plain"]);
+  });
+
+  it("drops a development term index whose marker has no generation column", async () => {
+    const driver = new RecordingDriver();
+    drivers.push(driver);
+    const terms = (r: NostrRumor): string[] =>
+      r.tags.filter(([n]) => n === "p").map(([, v]) => `conv:${v}`);
+
+    const first = new SqliteArmadaDB(driver);
+    await first.ready;
+    await first.tenant("t", { terms, termsGeneration: 1 })
+      .event(rumor({ id: "one", created_at: 100, tags: [["p", "ana"]] }));
+
+    // Rewind the marker to the shape a mid-development build wrote: it records
+    // THAT the tenant was indexed and not by which generation. The file already
+    // carries the current version, so nothing about its number betrays it.
+    driver.run(`DROP TABLE rumor_term_tenants`);
+    driver.run(`CREATE TABLE rumor_term_tenants (tenant INTEGER PRIMARY KEY) WITHOUT ROWID`);
+    driver.run(`INSERT INTO rumor_term_tenants (tenant) VALUES (1)`);
+    expect(Number(rows(driver, `PRAGMA user_version`)[0].user_version)).toBe(ARMADA_DB_VERSION);
+
+    // Reopening restores the generation column rather than leaving every read
+    // and write of it to throw for the life of the file...
+    const again = new SqliteArmadaDB(driver);
+    await again.ready;
+    expect(rows(driver, `SELECT name FROM pragma_table_info('rumor_term_tenants')`)
+      .map((row) => row.name)).toContain("generation");
+
+    // ...and the backfill refills the index it threw away, so the term still
+    // resolves and the rumor itself was never at stake.
+    const store = again.tenant("t", { terms, termsGeneration: 1 });
+    expect((await store.query([{ search: "conv:ana" }])).map((r) => r.id)).toEqual(["one"]);
   });
 });

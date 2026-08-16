@@ -37,9 +37,16 @@ import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
 import { getArmadaDB } from "@/lib/db/armadaDB";
 import { skipLegacyDrain } from "@/lib/db/legacyDatabases";
+import { tenantOptsFor } from "@/lib/db/termPolicies";
 import type { NRumorStore } from "@/lib/db/types";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import type { NostrRumor } from "@/lib/nostrRumor";
+import {
+  DM_MESSAGE_KINDS,
+  DM_MINE_TERM,
+  DM_MSG_TERM,
+  dmConvTerm,
+} from "@/lib/nip17/conversation";
 import {
   DM_RUMOR_KINDS,
   dmConvKey,
@@ -70,11 +77,19 @@ const LEGACY_DB_NAME = "armada-dm17-rumors";
 const PROVENANCE = new Set(["peer", "wrap"]);
 
 /**
- * The opened-DM store for one account. ArmadaDB's default tag policy indexes
- * the multi-letter `peer` these queries need.
+ * The opened-DM store for one account.
+ *
+ * Acquired WITH its derived-term policy, which is what files each rumor under
+ * the one conversation it belongs to — a fact `p` tags and `pubkey` imply
+ * together but neither states, and so a fact no NIP-01 filter can ask for. The
+ * policy is bound to the tenant rather than named at each write, so the writers
+ * that never reach this module (Android's notification service, iOS's
+ * notification extension) are covered by construction; those engines declare the
+ * same policy against the same tenant id, in their own languages.
  */
 export function dm17Store(self: string): NRumorStore {
-  return getArmadaDB().tenant(`dm17:${self}`);
+  const id = `dm17:${self}`;
+  return getArmadaDB().tenant(id, tenantOptsFor(id));
 }
 
 // ── Legacy drain ────────────────────────────────────────────────────────────
@@ -289,22 +304,20 @@ export async function writeDm17Rumors(self: string, opened: OpenedDm[]): Promise
 }
 
 /**
- * How much wider than the requested window the store is read.
- *
- * {@link conversationFilters} can only OVER-select (see its note), so the
- * conversation match is applied client-side and the raw page has to be deep
- * enough to still yield `limit` rows of the right conversation. Three screens'
- * worth is generous for the realistic case — a handful of groups sharing
- * members with a busy 1:1 — and a conversation whose window is genuinely
- * swamped by its neighbours pages the rest in through `loadOlder` rather than
- * silently showing a short thread.
- */
-const CONVERSATION_OVERFETCH = 3;
-
-/**
  * Read one conversation's cached rumors (messages, reactions, deletes),
  * newest-first up to `limit`. `before` (exclusive `created_at` upper bound)
  * pages older history out of the store.
+ *
+ * `limit` rows are asked for and `limit` rows come back: the filter selects the
+ * conversation exactly, so there is no over-fetch to pay and no page that comes
+ * back short because its neighbours crowded it out.
+ *
+ * The conversation is re-derived per row anyway. Not as narrowing — the index
+ * already did that — but because the index is derived state maintained by four
+ * engines in three languages, and this is where a disagreement between them
+ * surfaces. Checking makes such a bug a MISSING message; not checking would
+ * make it someone else's message in this thread, which is the worse of the two
+ * by a distance.
  */
 export async function queryDm17Thread(
   self: string,
@@ -314,16 +327,12 @@ export async function queryDm17Thread(
   await migrateLegacyDms(self).catch(() => undefined);
   const key = dmConvKey(peers);
   const events = await dm17Store(self).query(
-    conversationFilters(self, peers, {
-      limit: opts.limit * CONVERSATION_OVERFETCH,
-      before: opts.before,
-    }),
+    conversationFilters(self, peers, { limit: opts.limit, before: opts.before }),
     { signal: opts.signal },
   );
   return events
     .filter((ev) => !isExpired(ev.tags) && dmConvKeyOf(ev, self) === key)
-    .map((ev) => storedToDm17(ev, self))
-    .slice(0, opts.limit);
+    .map((ev) => storedToDm17(ev, self));
 }
 
 /**
@@ -355,52 +364,44 @@ export async function queryDm17Rumor(
 }
 
 /**
- * The filters selecting one conversation, from `self`'s side.
+ * The filter selecting one conversation, from `self`'s side.
  *
- * A conversation is two directions and they are indexed differently: what the
- * others sent names them as the AUTHOR, what we sent names them in `p` tags.
- * The two are OR'd, so each is an ordinary indexed lookup — the author scan on
- * `(tenant, pubkey)`, ours on the `p` tag tokens — and the store merges and
- * de-duplicates them.
+ * One filter, and an exact one: the conversation is a derived index TERM
+ * (`nip17/conversation.ts`), looked up as a NIP-50 extension, so the store
+ * returns this participant set's rumors and nobody else's.
  *
- * These filters are deliberately WIDER than the conversation. A Nostr filter is
- * an OR over tag values, so there is no way to ask for "exactly this
- * participant set": `authors: [alice, bob]` also matches everything Alice sent
- * in a different room, and `"#p": [alice, bob]` matches every message we sent
- * to either of them separately. Callers therefore re-derive each row's
- * conversation ({@link dmConvKeyOf}) and keep the exact matches — which is also
- * what finally files a foreign client's group message somewhere other than its
- * sender's 1:1 thread.
+ * It reads as a small thing and is not. A conversation is a participant SET,
+ * and a NIP-01 filter cannot ask for one — its tag values are alternatives, so
+ * `authors: [ana, ben]` also matches everything Ana sent in another room and
+ * `"#p": [ana, ben]` matches everything we sent to either of them separately.
+ * The two-filter form this replaces could therefore only OVER-select, in both
+ * directions at once (a subset query pulling in supersets, and a superset query
+ * pulling in its members' 1:1s), and every caller narrowed the result in
+ * JavaScript afterwards — which meant reading three screens for one
+ * (`CONVERSATION_OVERFETCH`), per filter, on every thread page, whether or not
+ * the viewer had a single group. The term index is what the filter language
+ * could not express, so the narrowing is an index seek instead.
  *
- * Each filter carries the full limit, so the union can be up to twice it; the
- * caller slices after the merge has put them in order.
- *
- * The conversation with YOURSELF (Note to Self) is the one case where those two
- * directions are the same direction, and the incoming half degenerates to a
- * filter that must not be run: `authors: [self]` with no `p` constraint is
- * every DM the viewer has ever sent to anyone, so the union would empty the
- * whole outbox into the notes. A self-addressed rumor names itself in `p` like
- * any other, so the outgoing filter alone already selects exactly it — and only
- * it, which is also why nothing another person wrote can appear there.
+ * Note to Self needs no special case any more. It used to: the incoming half
+ * degenerated to `authors: [self]` with no `p` constraint — every DM the viewer
+ * had ever sent to anyone — so the two-filter form had to be reduced to its
+ * outgoing half by hand. A term is just a term.
  */
 export function conversationFilters(
   self: string,
   peers: readonly string[],
   opts: { limit?: number; before?: number } = {},
 ): NostrFilter[] {
-  const bounds: { limit?: number; until?: number } = {};
-  if (opts.limit !== undefined) bounds.limit = opts.limit;
-  if (opts.before !== undefined) bounds.until = opts.before - 1;
-
+  // Canonicalized the way `dmPeersOf` does, so a caller that spelled the
+  // viewer into their own conversation still names the term the store filed.
   const others = peers.filter((peer) => peer !== self);
-  if (others.length === 0) {
-    return [{ kinds: DM_RUMOR_KINDS, authors: [self], "#p": [self], ...bounds }];
-  }
-
-  return [
-    { kinds: DM_RUMOR_KINDS, authors: others, ...bounds },
-    { kinds: DM_RUMOR_KINDS, authors: [self], "#p": others, ...bounds },
-  ];
+  const filter: NostrFilter = {
+    kinds: DM_RUMOR_KINDS,
+    search: dmConvTerm(others.length > 0 ? others : [self]),
+  };
+  if (opts.limit !== undefined) filter.limit = opts.limit;
+  if (opts.before !== undefined) filter.until = opts.before - 1;
+  return [filter];
 }
 
 /**
@@ -412,13 +413,13 @@ export function conversationFilters(
  * newest few hundred rumors. Timer rumors never expire, so the newest one is
  * always the live setting — whichever participant sent it.
  *
- * NOT `limit: 1`: the filters over-select (see {@link conversationFilters}), so
- * the newest matching row may not be the newest row returned — a `limit: 1`
- * page could hand back a timer belonging to a neighbouring conversation, which
- * would silently misreport whether this one disappears.
+ * `limit: 1` is exactly right now, and used not to be. While the filters could
+ * only over-select, the newest row returned might belong to a neighbouring
+ * conversation, so the read had to take a window of 32 and pick through it; a
+ * `limit: 1` page would have silently misreported whether this conversation
+ * disappears. The term index answers the question the filter is actually
+ * asking, so the newest matching row IS the newest row.
  */
-const TIMER_SCAN = 32;
-
 export async function queryDm17Timer(
   self: string,
   peers: readonly string[],
@@ -427,15 +428,13 @@ export async function queryDm17Timer(
   await migrateLegacyDms(self).catch(() => undefined);
   const key = dmConvKey(peers);
   const events = await dm17Store(self).query(
-    conversationFilters(self, peers, { limit: TIMER_SCAN }).map((f) => ({
+    conversationFilters(self, peers, { limit: 1 }).map((f) => ({
       ...f,
       kinds: [KIND_DM_TIMER],
     })),
     { signal: opts.signal },
   );
-  const newest = events
-    .filter((ev) => dmConvKeyOf(ev, self) === key)
-    .sort((a, b) => b.created_at - a.created_at || (a.id < b.id ? -1 : 1))[0];
+  const newest = events.filter((ev) => dmConvKeyOf(ev, self) === key)[0];
   const raw = newest?.tags.find((t) => t[0] === "timer")?.[1];
   if (raw === undefined) return undefined;
   const secs = Number(raw);
@@ -455,42 +454,108 @@ export interface Dm17ConversationRow {
 
 /**
  * The newest chat/file rumor per conversation — the NIP-17 side of the
- * conversation list. Reads the newest `limit` message rumors and groups
- * client-side by participant set (fine at DM scale; reactions/deletes never
- * surface a conversation of their own).
+ * conversation list.
  *
- * Grouping by the full set is what makes a group thread ONE row rather than one
- * per member: the same message reaches this loop once, and its key is the same
- * whether we sent it or received it.
+ * TWO collapsed reads, and no window at all. `distinct:convmsg` returns the
+ * newest message of every conversation, one row each, and `distinct:convmine`
+ * the newest the VIEWER sent — so the list is complete and `mine` is complete,
+ * for a cost per conversation rather than per message. What this replaces read
+ * the newest 500 message rumors and grouped them in memory, which was not a
+ * window on the list but a SAMPLE of it: one busy thread with 500 recent
+ * messages hid every other conversation, and a peer the viewer had written to a
+ * year ago fell out of `mine` — which the push gateways read as "stranger", so
+ * their next message arrived as a request (see `useNostrPush`).
  *
- * `mine` marks conversations the viewer has participated in (authored at least
- * one message to), so the list can keep a thread you started with someone you
- * don't follow.
+ * Grouping by the full participant set is what makes a group thread ONE row
+ * rather than one per member, and the key is the same whether we sent the
+ * message or received it. The key is still re-derived from every row rather than
+ * read off the term that fetched it: a divergence between the two should cost a
+ * missing message, never a message in the wrong thread.
+ *
+ * `mine` marks conversations the viewer has authored a message in, so the list
+ * can keep a thread you started with someone you don't follow.
  */
 export async function queryDm17Conversations(
   self: string,
   opts: { limit?: number; signal?: AbortSignal } = {},
 ): Promise<Dm17ConversationRow[]> {
   await migrateLegacyDms(self).catch(() => undefined);
-  const events = await dm17Store(self).query(
-    [{ kinds: [KIND_DM_CHAT, KIND_DM_FILE], limit: opts.limit ?? 500 }],
+  const collapse = (namespace: string): NostrFilter => {
+    const filter: NostrFilter = { search: `distinct:${namespace}` };
+    // Deliberately no `kinds`: the namespace already means chat-or-file, and a
+    // kind constraint would have to be tested INSIDE the grouping, which costs a
+    // row read per index entry. The loop below asserts the kinds instead.
+    if (opts.limit !== undefined) filter.limit = opts.limit;
+    return filter;
+  };
+  const store = dm17Store(self);
+  const events = await store.query(
+    [collapse(DM_MSG_TERM), collapse(DM_MINE_TERM)],
     { signal: opts.signal },
   );
+
   const byConversation = new Map<string, OpenedDm>();
   const mine = new Set<string>();
-  for (const ev of events) {
-    if (isExpired(ev.tags)) continue;
+  /** Conversations whose newest message is expired but not yet swept. */
+  const stale = new Map<string, OpenedDm>();
+
+  const fold = (ev: NostrRumor): void => {
     const opened = storedToDm17(ev, self);
-    if (opened.peers.length === 0) continue;
+    if (opened.peers.length === 0) return;
+    if (!DM_MESSAGE_KINDS.includes(ev.kind)) return;
     const key = dmConvKey(opened.peers);
+    // BEFORE the expiry check, and that ordering is the whole point: expiry
+    // decides what is DISPLAYED, not whether the viewer ever wrote here. The
+    // `convmine:` collapse returns exactly one row per conversation, so a
+    // viewer whose newest own message has expired unswept has no older row to
+    // fall back to — and dropping the flag moves a thread they have written in
+    // for a year into the request tier, and tells the push gateways its sender
+    // is a stranger (`useNostrPush`). It cannot mint a phantom row: the result
+    // is built from `byConversation`, which an expired rumor never reaches.
     if (opened.author === self) mine.add(key);
+    if (isExpired(ev.tags)) {
+      const worst = stale.get(key);
+      if (!worst || opened.createdAt > worst.createdAt) stale.set(key, opened);
+      return;
+    }
     const cur = byConversation.get(key);
     if (!cur || opened.createdAt > cur.createdAt) byConversation.set(key, opened);
+  };
+
+  for (const ev of events) fold(ev);
+
+  // A conversation whose collapsed row turned out to be expired has no row at
+  // all yet, though an older live message may still be in it — the collapse
+  // returns one rumor per group and cannot know which of them a sweep is about
+  // to remove. Those conversations are re-read once, by term, below the expired
+  // row: one filter each, all in one call, and only when disappearing messages
+  // are in play.
+  const missing = [...stale].filter(([key]) => !byConversation.has(key));
+  if (missing.length > 0) {
+    const retry = await store.query(
+      missing.map(([, latest]) => ({
+        kinds: [KIND_DM_CHAT, KIND_DM_FILE],
+        search: dmConvTerm(latest.peers),
+        until: latest.createdAt - 1,
+        limit: EXPIRED_RETRY,
+      })),
+      { signal: opts.signal },
+    );
+    for (const ev of retry) fold(ev);
   }
+
   return [...byConversation.entries()]
     .map(([key, latest]) => ({ key, peers: latest.peers, latest, mine: mine.has(key) }))
     .sort((a, b) => b.latest.createdAt - a.latest.createdAt);
 }
+
+/**
+ * How far back the conversation list looks for a live message when the newest
+ * one has expired. A handful, not a page: a thread whose last several messages
+ * have all expired unswept is a thread with nothing to show, and the sweep is
+ * what settles it.
+ */
+const EXPIRED_RETRY = 8;
 
 /**
  * Every locally-cached chat/file rumor whose decrypted content matches
