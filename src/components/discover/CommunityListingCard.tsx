@@ -226,6 +226,13 @@ export function CommunityListingCard({
   const channelCount = folded
     ? [...folded.channels.values()].filter((c) => !c.deleted).length
     : (controlPeek?.channelCount ?? bundleChannelCount);
+  const stats: string[] = [];
+  if (channelCount > 0) {
+    stats.push(`${channelCount} channel${channelCount === 1 ? "" : "s"}`);
+  }
+  if (lastActiveAt != null && lastActiveAt > 0) {
+    stats.push(`Active ${shortTimeAgo(lastActiveAt)}`);
+  }
   const publicChannelIdHexes = useMemo(() => {
     if (folded) {
       return [...folded.channels.values()]
@@ -355,17 +362,11 @@ export function CommunityListingCard({
             ) : (
               <p className="font-semibold truncate leading-tight">{name}</p>
             )}
-            {/* One inline text flow — channel count and last-active append as
-                their background peeks land, without reshaping the row. */}
+            {/* The shield alone carries "encrypted"; the stats append as their
+                background peeks land, without reshaping the row. */}
             <p className="text-[11px] leading-snug text-muted-foreground">
               <ShieldCheck className="mr-1 inline size-3 align-[-0.125em]" />
-              Encrypted community
-              {channelCount > 0
-                ? ` · ${channelCount} channel${channelCount === 1 ? "" : "s"}`
-                : null}
-              {lastActiveAt != null && lastActiveAt > 0
-                ? ` · Active ${shortTimeAgo(lastActiveAt)}`
-                : null}
+              {stats.join(" · ")}
             </p>
           </div>
         </div>
