@@ -103,18 +103,18 @@
  *      the tenant id was repeated in every row of the table and of its five
  *      indexes.
  *   1  the tenant-interned layout, without a term index.
- *   2  `rumor_terms` and `rumor_term_tenants`, the latter recording only THAT a
- *      tenant had been indexed.
- *   3  the current layout below: `rumor_term_tenants` also records WHICH
- *      generation of the policy indexed it (see {@link TenantOpts.termsGeneration}).
- *      The upgrade is {@link ARMADA_DB_REBUILD_V3} — it throws the term index
- *      away rather than migrating it, which it can afford to do because a term
- *      is a cache of a derivation and the per-tenant backfill rebuilds it. A
- *      term cannot be derived in SQL, so that pass is the only thing that can
- *      build this index at all, and it is gated on `rumor_term_tenants` — which
- *      makes it indifferent to the version the file arrived from.
+ *   2  the current layout below: adds `rumor_terms`, the derived term index,
+ *      and `rumor_term_tenants`, which records that a tenant has been indexed
+ *      and by WHICH generation of its policy (see
+ *      {@link TenantOpts.termsGeneration}).
+ *
+ * There is no upgrade step for the term index and there does not need to be:
+ * a term is a CACHE of a derivation, it cannot be computed in SQL, and the only
+ * thing that can build it is the per-tenant backfill — which is gated on
+ * `rumor_term_tenants` and so is indifferent to the version the file arrived
+ * from. Creating the two tables empty is the whole migration.
  */
-export const ARMADA_DB_VERSION = 3;
+export const ARMADA_DB_VERSION = 2;
 
 export const ARMADA_DB_SCHEMA: readonly string[] = [
   // `seq` is the rowid and encodes `created_at`, so the table is stored in
@@ -231,23 +231,29 @@ export const ARMADA_DB_SCHEMA: readonly string[] = [
 ];
 
 /**
- * The v2 → v3 upgrade: drop the term index and its marker so the
- * generation-aware table below replaces them.
+ * Drop the term index, for the one file layout that no version comparison can
+ * reach: a `rumor_term_tenants` with no `generation` column.
  *
- * Dropped rather than migrated, and this is the one schema step that can be:
- * a term is a CACHE of a derivation, so the whole index is reconstructible from
- * the rumors that are still there, and the per-tenant backfill is already the
- * thing that reconstructs it. Migrating instead would mean inventing a
- * generation for rows built by a policy revision nobody recorded — a number
- * that, if it happened to match the current one, would freeze a stale index in
- * place permanently.
+ * That layout was never released. The index and its marker arrived together in
+ * v2, and the marker has recorded a generation from the moment v2 existed
+ * publicly — but during this feature's development there was an intermediate
+ * form that recorded only THAT a tenant had been indexed, and a file that took
+ * it is already at the current version. The schema below would leave that older
+ * table in place, and every read and write of `generation` would then throw for
+ * the life of the file, leaving the term index permanently unbuilt and the
+ * conversation list silently empty.
  *
- * `IF EXISTS` on both, so this is also a no-op on a fresh file, where the
- * `CREATE IF NOT EXISTS` statements above simply create them. The trigger that
- * references `rumor_terms` survives the drop unfired — SQLite resolves a
- * trigger body when it fires, and the table is recreated in the same migration.
+ * So it is detected by LAYOUT rather than by version, exactly as v0 is. Dropping
+ * is both safe and sufficient: a term is a cache of a derivation, the
+ * `CREATE IF NOT EXISTS` statements above recreate both tables, and the
+ * per-tenant backfill refills them. The trigger that references `rumor_terms`
+ * survives the drop unfired — SQLite resolves a trigger body when it fires, and
+ * the table is recreated in the same migration.
+ *
+ * Nothing but a pre-release install can trigger this, so it can be deleted once
+ * none remain.
  */
-export const ARMADA_DB_REBUILD_V3: readonly string[] = [
+export const ARMADA_DB_DROP_TERM_INDEX: readonly string[] = [
   `DROP TABLE IF EXISTS rumor_terms`,
   `DROP TABLE IF EXISTS rumor_term_tenants`,
 ];

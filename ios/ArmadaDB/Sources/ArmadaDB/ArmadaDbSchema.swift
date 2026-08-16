@@ -37,16 +37,32 @@ enum ArmadaDbSchema {
     /// `CREATE IF NOT EXISTS` against an unknown layout silently succeeds and
     /// then misreads every row.
     ///
-    /// v1 → v2 added `rumor_terms` and `rumor_term_tenants`, the latter
-    /// recording only THAT a tenant had been indexed. v2 → v3 has it record
-    /// WHICH generation of the policy indexed it, and the upgrade is
-    /// `rebuildV3` — it throws the term index away rather than migrating it,
-    /// which it can afford to do because a term is a cache of a derivation and
-    /// the per-tenant backfill rebuilds it. A term cannot be derived in SQL, so
-    /// that pass is the only thing that can build this index at all, and it is
-    /// gated on `rumor_term_tenants` — which makes it indifferent to which
-    /// version the file arrived at it from.
-    static let version: Int64 = 3
+    /// v1 → v2 adds `rumor_terms`, the derived term index, and
+    /// `rumor_term_tenants`, which records that a tenant has been indexed and by
+    /// WHICH generation of its policy.
+    ///
+    /// There is no upgrade step for the term index and there does not need to
+    /// be: a term is a CACHE of a derivation, it cannot be computed in SQL, and
+    /// the only thing that can build it is the per-tenant backfill — which is
+    /// gated on `rumor_term_tenants` and so is indifferent to which version the
+    /// file arrived at it from. Creating the two tables empty is the whole
+    /// migration.
+    static let version: Int64 = 2
+
+    /// The development numbering of the CURRENT layout.
+    ///
+    /// The term index was built across two versions before release and
+    /// collapsed into one, so a file written by a development build carries 3
+    /// where a released one carries 2 — with byte-identical tables, since the
+    /// collapse renumbered and changed nothing else. Accepted rather than
+    /// refused as "a layout this build predates", and renumbered by the
+    /// `PRAGMA` at the end of `migrate`, because refusing it would take out a
+    /// database holding decrypted NIP-17 and Concord history that exists nowhere
+    /// else.
+    ///
+    /// No released build ever wrote it, so this can be deleted once no
+    /// development install remains.
+    static let preReleaseVersion: Int64 = 3
 
     /// The tables, indexes and triggers every ArmadaDB file has.
     static let base: [String] = [
@@ -175,22 +191,30 @@ enum ArmadaDbSchema {
         """,
     ]
 
-    /// The v2 → v3 upgrade: drop the term index and its marker so the
-    /// generation-aware table above replaces them.
+    /// Drop the term index, for the one file layout that no version comparison
+    /// can reach: a `rumor_term_tenants` with no `generation` column.
     ///
-    /// Dropped rather than migrated, and this is the one schema step that can
-    /// be: a term is a CACHE of a derivation, so the whole index is
-    /// reconstructible from the rumors that are still there, and the per-tenant
-    /// backfill is already the thing that reconstructs it. Migrating instead
-    /// would mean inventing a generation for rows built by a policy revision
-    /// nobody recorded — a number that, if it happened to match the current
-    /// one, would freeze a stale index in place permanently.
+    /// That layout was never released. The index and its marker arrived together
+    /// in v2, and the marker has recorded a generation from the moment v2
+    /// existed publicly — but midway through this feature's development there
+    /// was an intermediate form recording only THAT a tenant had been indexed,
+    /// and a file that took it claims a version this build considers current or
+    /// newer. The schema above would leave that older table in place, and every
+    /// read and write of `generation` would then throw for the life of the file,
+    /// leaving the term index permanently unbuilt and the conversation list
+    /// silently empty.
     ///
-    /// `IF EXISTS` on both, so this is also a no-op on a fresh file. The trigger
-    /// that references `rumor_terms` survives the drop unfired — SQLite resolves
-    /// a trigger body when it fires, and the table is recreated in the same
-    /// migration.
-    static let rebuildV3: [String] = [
+    /// So it is detected by LAYOUT rather than by version, exactly as v0 is.
+    /// Dropping is both safe and sufficient: a term is a cache of a derivation,
+    /// the `CREATE IF NOT EXISTS` statements above recreate both tables, and the
+    /// per-tenant backfill refills them — so unlike a refusal, this costs the
+    /// file nothing it cannot rebuild. The trigger that references `rumor_terms`
+    /// survives the drop unfired — SQLite resolves a trigger body when it fires,
+    /// and the table is recreated in the same migration.
+    ///
+    /// Nothing but a development install can trigger this, so it can be deleted
+    /// once none remain.
+    static let dropTermIndex: [String] = [
         "DROP TABLE IF EXISTS rumor_terms",
         "DROP TABLE IF EXISTS rumor_term_tenants",
     ]

@@ -150,7 +150,10 @@ public final class SqliteArmadaDb {
 
         let version = try db.query("PRAGMA user_version") { $0.int(0) }.first ?? 0
 
-        if version > ArmadaDbSchema.version {
+        // A development build of the current layout numbered it one higher; the
+        // tables are identical, so it is renumbered by the `PRAGMA` below rather
+        // than refused. See `ArmadaDbSchema.preReleaseVersion`.
+        if version > ArmadaDbSchema.version, version != ArmadaDbSchema.preReleaseVersion {
             throw ArmadaDbError.unusable(
                 "database is schema version \(version), which this build predates"
             )
@@ -173,12 +176,15 @@ public final class SqliteArmadaDb {
         let schema =
             search ? ArmadaDbSchema.base + ArmadaDbSchema.search : ArmadaDbSchema.base
 
-        // The term index is dropped before the schema recreates it, so a file
-        // that predates the generation column loses an index it can rebuild
-        // rather than keeping one whose provenance is unknown. Idempotent on a
-        // fresh file.
-        if version < 3 {
-            for statement in ArmadaDbSchema.rebuildV3 { try db.run(statement) }
+        // A development term index whose marker table has no `generation` column
+        // is dropped before the schema recreates it — by LAYOUT, since such a
+        // file already claims the current version or newer. See
+        // `ArmadaDbSchema.dropTermIndex`; no released file can match.
+        let marker = try db.query(
+            "SELECT name FROM pragma_table_info('rumor_term_tenants')"
+        ) { $0.text(0) }
+        if !marker.isEmpty, !marker.contains("generation") {
+            for statement in ArmadaDbSchema.dropTermIndex { try db.run(statement) }
         }
 
         for statement in schema { try db.run(statement.collapsedWhitespace) }

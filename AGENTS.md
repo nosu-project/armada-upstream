@@ -641,7 +641,7 @@ Things to know before touching it:
   the policy binds to the TENANT, not to a write, so the Android service and the
   iOS extension file rows correctly while knowing nothing about terms; and an
   unknown term FAILS CLOSED, matching nothing rather than dropping the
-  constraint. SQLite gets a b-tree (`rumor_terms`, schema v3) rather than more
+  constraint. SQLite gets a b-tree (`rumor_terms`, schema v2) rather than more
   FTS tokens because `(tenant, term, seq)` is already time-ordered, so a lookup
   is a bounded backwards walk — and because a b-tree can be GROUPED, which is
   what `distinct:` below is. Existing rows are indexed by a one-time per-tenant

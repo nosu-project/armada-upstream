@@ -80,9 +80,9 @@ import { utf8ToBytes } from "@noble/hashes/utils.js";
 import { ParsedFilter } from "./ParsedFilter";
 import { batch, memberOf, qs, where } from "./sql";
 import {
+  ARMADA_DB_DROP_TERM_INDEX,
   ARMADA_DB_FTS_SCHEMA,
   ARMADA_DB_REBUILD_V1,
-  ARMADA_DB_REBUILD_V3,
   ARMADA_DB_SCHEMA,
   ARMADA_DB_VERSION,
 } from "./sqliteSchema";
@@ -402,11 +402,14 @@ export class SqliteArmadaDB implements ArmadaDB {
       ? [...ARMADA_DB_SCHEMA, ...ARMADA_DB_FTS_SCHEMA]
       : ARMADA_DB_SCHEMA;
 
-    // The term index is dropped before the schema recreates it, so a file that
-    // predates the generation column loses an index it can rebuild rather than
-    // keeping one whose provenance is unknown. Idempotent on a fresh file.
-    if (Number(version?.user_version ?? 0) < 3) {
-      for (const statement of ARMADA_DB_REBUILD_V3) await this.run(statement);
+    // A development term index whose marker table has no `generation` column is
+    // dropped before the schema recreates it — by LAYOUT, since such a file
+    // already claims the current version or newer. See
+    // {@link ARMADA_DB_DROP_TERM_INDEX}; no released file can match.
+    const marker = (await this.all(`SELECT name FROM pragma_table_info('rumor_term_tenants')`))
+      .map((row) => String(row.name));
+    if (marker.length > 0 && !marker.includes("generation")) {
+      for (const statement of ARMADA_DB_DROP_TERM_INDEX) await this.run(statement);
     }
 
     for (const statement of schema) {

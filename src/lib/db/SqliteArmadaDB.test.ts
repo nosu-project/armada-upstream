@@ -947,4 +947,36 @@ describe("SqliteArmadaDB — v0 migration", () => {
     await again.ready;
     expect((await again.tenant("main").query([{ ids: ["plain"] }])).map((r) => r.id)).toEqual(["plain"]);
   });
+
+  it("drops a development term index whose marker has no generation column", async () => {
+    const driver = new RecordingDriver();
+    drivers.push(driver);
+    const terms = (r: NostrRumor): string[] =>
+      r.tags.filter(([n]) => n === "p").map(([, v]) => `conv:${v}`);
+
+    const first = new SqliteArmadaDB(driver);
+    await first.ready;
+    await first.tenant("t", { terms, termsGeneration: 1 })
+      .event(rumor({ id: "one", created_at: 100, tags: [["p", "ana"]] }));
+
+    // Rewind the marker to the shape a mid-development build wrote: it records
+    // THAT the tenant was indexed and not by which generation. The file already
+    // carries the current version, so nothing about its number betrays it.
+    driver.run(`DROP TABLE rumor_term_tenants`);
+    driver.run(`CREATE TABLE rumor_term_tenants (tenant INTEGER PRIMARY KEY) WITHOUT ROWID`);
+    driver.run(`INSERT INTO rumor_term_tenants (tenant) VALUES (1)`);
+    expect(Number(rows(driver, `PRAGMA user_version`)[0].user_version)).toBe(ARMADA_DB_VERSION);
+
+    // Reopening restores the generation column rather than leaving every read
+    // and write of it to throw for the life of the file...
+    const again = new SqliteArmadaDB(driver);
+    await again.ready;
+    expect(rows(driver, `SELECT name FROM pragma_table_info('rumor_term_tenants')`)
+      .map((row) => row.name)).toContain("generation");
+
+    // ...and the backfill refills the index it threw away, so the term still
+    // resolves and the rumor itself was never at stake.
+    const store = again.tenant("t", { terms, termsGeneration: 1 });
+    expect((await store.query([{ search: "conv:ana" }])).map((r) => r.id)).toEqual(["one"]);
+  });
 });

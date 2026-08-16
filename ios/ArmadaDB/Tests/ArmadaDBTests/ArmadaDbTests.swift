@@ -1357,6 +1357,66 @@ final class ArmadaDbTests: XCTestCase {
         )
     }
 
+    func testDropsADevelopmentTermIndexWithNoGenerationColumn() throws {
+        let recording = RecordingDriver(try SqliteDriver(path: ":memory:"))
+        driver = recording
+
+        let first = try SqliteArmadaDb(db: recording, termsOf: peersPolicy)
+        store = first
+        try first.event(tenant: "t", rumor: rumor(id: "one", createdAt: 100, tags: [["p", "ana"]]))
+
+        // Rewind the marker to the shape a mid-development build wrote: it
+        // records THAT the tenant was indexed and not by which generation. The
+        // file already carries the current version, so nothing about its number
+        // betrays it — and a build that left the old table alone would throw on
+        // every read and write of `generation` for the life of the file.
+        try recording.run("DROP TABLE rumor_term_tenants")
+        try recording.run("CREATE TABLE rumor_term_tenants (tenant INTEGER PRIMARY KEY) WITHOUT ROWID")
+        try recording.run("INSERT INTO rumor_term_tenants (tenant) VALUES (1)")
+        XCTAssertEqual(
+            try recording.query("PRAGMA user_version") { $0.int(0) }.first,
+            ArmadaDbSchema.version
+        )
+
+        let again = try SqliteArmadaDb(db: recording, termsOf: peersPolicy)
+        store = again
+        XCTAssertTrue(
+            try recording.query(
+                "SELECT name FROM pragma_table_info('rumor_term_tenants')"
+            ) { $0.text(0) }.contains("generation")
+        )
+
+        // The backfill refills the index that was thrown away, so the term still
+        // resolves and the rumor itself was never at stake.
+        XCTAssertEqual(
+            try again.query(tenant: "t", filters: filters(#"{"search":"conv:ana"}"#)).map(\.id),
+            ["one"]
+        )
+    }
+
+    /// A file written by the development numbering of the CURRENT layout is
+    /// renumbered rather than refused: the tables are identical, and refusing it
+    /// would take out decrypted history that exists nowhere else.
+    func testAcceptsThePreReleaseNumberingOfTheCurrentLayout() throws {
+        let recording = RecordingDriver(try SqliteDriver(path: ":memory:"))
+        driver = recording
+        let first = try SqliteArmadaDb(db: recording)
+        store = first
+        try first.event(tenant: "t", rumor: rumor(id: "kept", createdAt: 100))
+        try recording.run("PRAGMA user_version = \(ArmadaDbSchema.preReleaseVersion)")
+
+        let again = try SqliteArmadaDb(db: recording)
+        store = again
+        XCTAssertEqual(
+            try again.query(tenant: "t", filters: filters(#"{"ids":["kept"]}"#)).map(\.id),
+            ["kept"]
+        )
+        XCTAssertEqual(
+            try recording.query("PRAGMA user_version") { $0.int(0) }.first,
+            ArmadaDbSchema.version
+        )
+    }
+
     func testIndexesRowsAlreadyStoredWhenThePolicyArrived() throws {
         // The extension and the WebView open the same file, and a policy can be
         // added by an app update — so the rows already there have to be walked

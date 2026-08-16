@@ -150,12 +150,15 @@ class SqliteArmadaDb(
 
             val schema = if (search) ArmadaDbSchema.BASE + ArmadaDbSchema.SEARCH else ArmadaDbSchema.BASE
 
-            // The term index is dropped before the schema recreates it, so a
-            // file that predates the generation column loses an index it can
-            // rebuild rather than keeping one whose provenance is unknown.
-            // Idempotent on a fresh file.
-            if (version < 3L) {
-                for (statement in ArmadaDbSchema.REBUILD_V3) db.run(statement)
+            // A development term index whose marker table has no `generation`
+            // column is dropped before the schema recreates it — by LAYOUT,
+            // since such a file already claims the current version or newer. See
+            // [ArmadaDbSchema.DROP_TERM_INDEX]; no released file can match.
+            val marker = db.query(
+                "SELECT name FROM pragma_table_info('rumor_term_tenants')",
+            ) { it.text(0) }
+            if (marker.isNotEmpty() && "generation" !in marker) {
+                for (statement in ArmadaDbSchema.DROP_TERM_INDEX) db.run(statement)
             }
 
             for (statement in schema) db.run(statement.collapseWhitespace())

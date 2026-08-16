@@ -890,6 +890,39 @@ class ArmadaDbTest {
         assertEquals(listOf("prof2"), db.query("main", filters("{\"kinds\":[0]}")).map { it.id })
     }
 
+    @Test
+    fun `drops a development term index whose marker has no generation column`() {
+        val recording = RecordingDriver(BundledSqlDriver(":memory:"))
+        driver = recording
+
+        val first = SqliteArmadaDb(recording, termsOf = peersPolicy).also { store = it }
+        first.event("t", rumor(id = "one", createdAt = 100, tags = listOf(listOf("p", "ana"))))
+
+        // Rewind the marker to the shape a mid-development build wrote: it
+        // records THAT the tenant was indexed and not by which generation. The
+        // file already carries the current version, so nothing about its number
+        // betrays it.
+        recording.run("DROP TABLE rumor_term_tenants")
+        recording.run("CREATE TABLE rumor_term_tenants (tenant INTEGER PRIMARY KEY) WITHOUT ROWID")
+        recording.run("INSERT INTO rumor_term_tenants (tenant) VALUES (1)")
+        assertEquals(ArmadaDbSchema.VERSION, recording.query("PRAGMA user_version") { it.long(0) }.first())
+
+        // Reopening restores the generation column rather than leaving every
+        // read and write of it to throw for the life of the file...
+        val again = SqliteArmadaDb(recording, termsOf = peersPolicy).also { store = it }
+        val columns = recording.query(
+            "SELECT name FROM pragma_table_info('rumor_term_tenants')",
+        ) { it.text(0) }
+        assertTrue(columns.toString(), "generation" in columns)
+
+        // ...and the backfill refills the index it threw away, so the term still
+        // resolves and the rumor itself was never at stake.
+        assertEquals(
+            listOf("one"),
+            again.query("t", filters("{\"search\":\"conv:ana\"}")).map { it.id },
+        )
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private fun rowCount(table: String): Long =
