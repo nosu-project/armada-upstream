@@ -1,7 +1,7 @@
 // Wiring test for the rail's drag-to-reorder/fold gesture: mounts the real
 // ServerRail (data hooks mocked), fakes slot geometry (jsdom has no layout),
 // and drives the pointer-event flow to assert drops land in the layout.
-import { act, render } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { nip19 } from "nostr-tools";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,15 +35,38 @@ vi.mock("@/hooks/useAuthor", () => ({
 vi.mock("@/hooks/useMeshTransport", () => ({
   useMeshTransport: () => ({ mesh: { available: false } }),
 }));
-vi.mock("@/hooks/useRelayGroups", () => ({ useRelayGroups: () => ({ data: [] }) }));
+const relayGroups = vi.hoisted(
+  () => ({}) as Record<string, Array<{ id: string }>>,
+);
+vi.mock("@/hooks/useRelayGroups", () => ({
+  useRelayGroups: (url?: string) => ({ data: (url && relayGroups[url]) || [] }),
+}));
 vi.mock("@/hooks/useRelayInfo", () => ({ useRelayInfo: () => ({ data: undefined }) }));
 // Per-relay unread state, settable per test (drives badges + folder rollups).
 const relayUnread = vi.hoisted(
-  () => ({}) as Record<string, { anyUnread: boolean; anyMention: boolean }>,
+  () => ({}) as Record<string, {
+    byGroup?: Record<string, { latest: number; mention: boolean }>;
+    anyUnread: boolean;
+    anyMention: boolean;
+  }>,
 );
 vi.mock("@/hooks/useRelayUnread", () => ({
-  useRelayUnread: (url?: string) =>
-    (url && relayUnread[url]) || { anyUnread: false, anyMention: false },
+  useRelayUnread: (url?: string) => ({
+    byGroup: {},
+    anyUnread: false,
+    anyMention: false,
+    ...((url && relayUnread[url]) || {}),
+  }),
+}));
+const markRead = vi.hoisted(() => vi.fn());
+vi.mock("@/hooks/useReadState", () => ({
+  channelReadKey: (relayUrl: string, groupId: string) => `${relayUrl}::${groupId}`,
+  useReadState: () => ({
+    readState: {},
+    getLastRead: () => 0,
+    markRead,
+    hydrate: vi.fn(),
+  }),
 }));
 // The kind 10009 write the rail makes to keep relay order in sync. Hoisted so
 // a test can assert what did — and didn't — reach the user's server list.
@@ -411,6 +434,41 @@ describe("ServerRail active-route blade", () => {
     expect(bladeIsLit(`item:${RELAY_A}`)).toBe(true);
     expect(bladeIsLit(`item:${RELAY_B}`)).toBe(false);
     expect(bladeIsLit("folder:f")).toBe(false);
+  });
+});
+
+describe("ServerRail community context controls", () => {
+  let restoreGeometry: () => void;
+
+  beforeEach(() => {
+    extraServers = [];
+    config = { ...defaultConfig, railLayout: [], railOpenFolders: [] };
+    for (const key of Object.keys(relayGroups)) delete relayGroups[key];
+    for (const key of Object.keys(relayUnread)) delete relayUnread[key];
+    markRead.mockClear();
+    restoreGeometry = installGeometry();
+    return () => restoreGeometry();
+  });
+
+  it("marks every unread server channel read from the rail menu", async () => {
+    relayGroups[RELAY_A] = [{ id: "general" }, { id: "random" }];
+    relayUnread[RELAY_A] = {
+      byGroup: {
+        general: { latest: 41, mention: false },
+        random: { latest: 73, mention: true },
+      },
+      anyUnread: true,
+      anyMention: true,
+    };
+    renderRail();
+
+    fireEvent.contextMenu(document.querySelector(`[data-rail-anchor="item:${RELAY_A}"]`)!);
+    expect(await screen.findByText("Server notifications")).toBeTruthy();
+    fireEvent.click(screen.getByText("Mark as read"));
+
+    expect(markRead).toHaveBeenCalledTimes(2);
+    expect(markRead).toHaveBeenCalledWith(`${RELAY_A}::general`, 41);
+    expect(markRead).toHaveBeenCalledWith(`${RELAY_A}::random`, 73);
   });
 });
 

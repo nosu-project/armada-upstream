@@ -20,7 +20,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { NotifLevelMenu } from "@/components/NotifLevelMenu";
+import { NotifLevelIcon, NotifLevelMenu } from "@/components/NotifLevelMenu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -60,7 +60,8 @@ function ChannelLink({
   const { activeCall, speakingPubkeys, mutedPubkeys, voiceRoomPubkeys } = useCall();
   const { markRead } = useReadState();
   const { channelLevel, setLevel } = useNotifLevels();
-  const muted = channelLevel(group.relay, group.id) === "nothing";
+  const notificationLevel = channelLevel(group.relay, group.id);
+  const muted = notificationLevel === "nothing";
   // A Buzz DM channel's identity is its roster, so resolve the members
   // (kind 39002) for the title. Disabled (undefined relay) for normal rows.
   const { data: dmDetails } = useGroup(buzzDm ? group.relay : undefined, buzzDm ? group.id : undefined);
@@ -117,7 +118,10 @@ function ChannelLink({
             isActive && "clip-corner-lg bg-primary text-primary-foreground font-medium",
           )}
       >
-        <Icon className="size-4 shrink-0" />
+        <span className="relative shrink-0">
+          <Icon className="size-4" />
+          <NotifLevelIcon level={notificationLevel} />
+        </span>
         <span className="truncate flex-1">
           {buzzDm
             ? <BuzzDmName members={dmDetails?.members ?? []} selfPubkey={user?.pubkey} />
@@ -132,7 +136,6 @@ function ChannelLink({
           </Tooltip>
         )}
         {group.isPrivate && <Lock className="size-3 shrink-0 opacity-60" aria-label="Private" />}
-        {muted && <BellOff className="size-3 shrink-0 opacity-60" aria-label="Muted" />}
         {/* Mention indicator: an "@" pill. Plain unread is conveyed by the
             row's brighter + bold text (no dot). */}
         {hasMention ? (
@@ -166,7 +169,7 @@ function ChannelLink({
         </ContextMenuItem>
         <NotifLevelMenu
           label="Notifications"
-          level={channelLevel(group.relay, group.id)}
+          level={notificationLevel}
           onChange={(lvl) => setLevel(channelScopeKey(group.relay, group.id), lvl)}
         />
         <ContextMenuItem

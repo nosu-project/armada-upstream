@@ -111,7 +111,7 @@ import { useSyncTasks } from "@/hooks/useSyncActivity";
 import { useSyncTopicState } from "@/sync/useSyncTopic";
 import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
 import { useNotifLevels, concordChannelScopeKey } from "@/hooks/useNotifLevels";
-import { NotifLevelMenu } from "@/components/NotifLevelMenu";
+import { NotifLevelIcon, NotifLevelMenu } from "@/components/NotifLevelMenu";
 import { toast } from "@/hooks/useToast";
 import { CommunityNoAccess } from "@/concord/components/CommunityNoAccess";
 import { useCommunity, useCommunityList, useIsExcluded } from "@/concord/hooks/useCommunityList";
@@ -547,6 +547,9 @@ const ChannelRow = memo(function ChannelRow({
   const { voiceRoomPubkeys } = useCall();
   const { isConcordChannelMuted } = useMutes();
   const { concordChannelLevel, setLevel: setNotifLevel } = useNotifLevels();
+  const notificationLevel = community
+    ? concordChannelLevel("c2", community.idHex, channel.idHex)
+    : "all";
   const muted = community
     ? isConcordChannelMuted("c2", community.idHex, channel.idHex)
     : false;
@@ -598,10 +601,12 @@ const ChannelRow = memo(function ChannelRow({
                 active && "font-medium",
               )}
             >
-              <Icon className={cn("size-4 shrink-0", occupied && !active && "text-success")} />
+              <span className="relative shrink-0">
+                <Icon className={cn("size-4", occupied && !active && "text-success")} />
+                <NotifLevelIcon level={notificationLevel} />
+              </span>
               <span className="truncate flex-1 min-w-0">{channel.name}</span>
               {inCall && <Headphones className={cn("size-3.5 shrink-0", !active && "text-success")} />}
-              {muted && <BellOff className="size-3 shrink-0 opacity-60" aria-label="Muted" />}
               {/* Mention indicator: an "@" pill. Plain unread is conveyed by the row's
                   brighter + bold text (no dot). */}
               {hasMention ? (
@@ -660,7 +665,7 @@ const ChannelRow = memo(function ChannelRow({
         {community && (
           <NotifLevelMenu
             label="Channel notifications"
-            level={concordChannelLevel("c2", community.idHex, channel.idHex)}
+            level={notificationLevel}
             onChange={(lvl) =>
               setNotifLevel(concordChannelScopeKey("c2", community.idHex, channel.idHex), lvl)
             }
