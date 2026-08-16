@@ -235,18 +235,19 @@ export function FloatingCallStage({
 
   // Initial placement: clamp the persisted width, then restore the persisted
   // position (clamped to the current viewport, in case it shrank) or fall back
-  // to bottom-right. Runs after the panel mounts. The panel's final height isn't
-  // known yet here — the stage host (video + controls) is reparented in
-  // asynchronously — so this uses the width-derived estimate; the ResizeObserver
-  // below corrects it once the real height settles. `pos` stays null (panel held
-  // invisible) until this runs, so there's no top-left flash.
+  // to bottom-right. `pos` stays null (panel held invisible) until this runs, so
+  // there's no top-left flash.
+  //
+  // The height MUST come from the width-derived estimate, never from measuring
+  // the panel: `registerSlot` is a passive effect, so CallProvider reparents the
+  // stage host (video + controls) in a commit LATER than this one, and the panel
+  // is still header-only here. Clamping against that measurement opens it a full
+  // body-height too low.
   useLayoutEffect(() => {
     if (!isDesktop) return;
-    const el = panelRef.current;
-    if (!el) return;
     const w = clampWidth(loadWidth());
     setWidth(w);
-    const height = el.offsetHeight || estPanelHeight(w);
+    const height = estPanelHeight(w);
     const saved = loadPosition();
     setPos(clampToViewport(saved ?? defaultPosition(w, height), w, height));
   }, [isDesktop]);
@@ -261,13 +262,11 @@ export function FloatingCallStage({
     return () => clearTimeout(t);
   }, [pos, entered]);
 
-  // Re-clamp against the panel's ACTUAL rendered size whenever it changes. The
-  // panel is short on first paint (just the header) and grows when CallProvider
-  // reparents the stage + controls into it; without this the initial clamp uses
-  // the too-small height and the panel opens too low. The observer re-clamps the
-  // current top-left using the final height, so the complete panel is always
-  // visible — and it also covers later content-driven size changes. A saved
-  // position is re-clamped the same way, never trusted blindly.
+  // Re-clamp against the panel's ACTUAL rendered size whenever it changes, so
+  // the complete panel is always visible. This corrects genuine drift — chrome
+  // that doesn't match `estPanelHeight`, or a later content-driven size change —
+  // not the initial placement, which already uses the height the panel settles
+  // at. A saved position is re-clamped the same way, never trusted blindly.
   useEffect(() => {
     if (!isDesktop) return;
     const el = panelRef.current;
@@ -465,6 +464,14 @@ export function FloatingCallStage({
       className={cn(
         "fixed z-40 flex flex-col overflow-hidden select-none",
         "clip-corner-lg bg-chrome-deep shadow-2xl ring-1 ring-white/10",
+        // The panel's position is driven imperatively, so `left`/`top` must
+        // never tween. `duration-200` below is for the entry ANIMATION, but
+        // Tailwind emits it as `transition-duration` too and `transition-property`
+        // defaults to `all` — without this the first placement glides diagonally
+        // from the origin. Static, not gated on `entered`, so a future
+        // `duration-*` can't re-enable it; not inherited, so children still
+        // transition.
+        "transition-none",
         // Hold invisible for the single frame before the first layout pass
         // positions it, so it never flashes at the top-left origin.
         pos ? "opacity-100" : "opacity-0 pointer-events-none",

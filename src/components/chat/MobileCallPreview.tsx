@@ -446,6 +446,9 @@ export function MobileCallPreview({
       className={cn(
         "fixed z-40 flex flex-col overflow-hidden select-none touch-none",
         "clip-corner-lg bg-chrome-deep shadow-2xl ring-1 ring-white/10",
+        // `duration-200` below would otherwise tween `left`/`top` — see
+        // FloatingCallStage, which carries the same guard and the reason.
+        "transition-none",
         // Hold invisible for the single frame before the first layout pass
         // positions it, so it never flashes at the top-left origin.
         pos ? "opacity-100" : "opacity-0 pointer-events-none",
