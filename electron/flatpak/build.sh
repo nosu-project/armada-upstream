@@ -3,6 +3,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 electron_dir=$(dirname -- "$script_dir")
+repo_root=$(dirname -- "$electron_dir")
 release_dir="$electron_dir/release"
 manifest="$script_dir/buzz.armada.app.yml"
 staged_appimage="$release_dir/Armada.AppImage"
@@ -42,9 +43,24 @@ if [ -z "$appimage" ] || [ ! -f "$appimage" ]; then
 fi
 
 mkdir -p "$release_dir"
-if [ "$(realpath -- "$appimage")" != "$(realpath -m -- "$staged_appimage")" ]; then
+# Always refresh the manifest's fixed source path. A previous optimization
+# skipped this copy whenever the caller itself passed release/Armada.AppImage;
+# local update cycles then silently repackaged the prior web bundle even after
+# electron-builder had produced a new versioned AppImage beside it.
+if [ "$(realpath -- "$appimage")" = "$(realpath -m -- "$staged_appimage")" ]; then
+  echo "Refusing to build from the staging path itself: $staged_appimage" >&2
+  echo "Pass the versioned electron-builder output (or no argument) so stale payloads cannot be repackaged." >&2
+  exit 1
+else
   install -m755 "$appimage" "$staged_appimage"
 fi
+
+# flatpak-builder keys local file sources by their manifest path, not by a
+# release filename. Force the module rebuild when the staged AppImage changes;
+# otherwise a fast local build can restore a cached /app/armada from a previous
+# payload while still exporting a brand-new OSTree commit.
+appimage_sha=$(sha256sum "$staged_appimage" | cut -d ' ' -f1)
+printf '%s\n' "$appimage_sha" > "$release_dir/Armada.AppImage.sha256"
 
 set -- --force-clean --disable-rofiles-fuse --default-branch=stable --repo="$repo_dir"
 if [ -n "${FLATPAK_GPG_KEY:-}" ]; then
@@ -61,7 +77,7 @@ case "$builder" in
     flatpak build-bundle --repo-url="$ARMADA_FLATPAK_REPO_URL" "$repo_dir" "$bundle" buzz.armada.app stable
     ;;
   flatpak-user)
-    flatpak run --user --command=sh \
+    flatpak run --user --filesystem="$repo_root" --command=sh \
       --env=ARMADA_FLATPAK_BUILD_DIR="$build_dir" \
       --env=ARMADA_FLATPAK_MANIFEST="$manifest" \
       --env=ARMADA_FLATPAK_REPO_DIR="$repo_dir" \
@@ -82,7 +98,7 @@ case "$builder" in
       ' sh "$@"
     ;;
   flatpak-system)
-    flatpak run --system --command=sh \
+    flatpak run --system --filesystem="$repo_root" --command=sh \
       --env=ARMADA_FLATPAK_BUILD_DIR="$build_dir" \
       --env=ARMADA_FLATPAK_MANIFEST="$manifest" \
       --env=ARMADA_FLATPAK_REPO_DIR="$repo_dir" \

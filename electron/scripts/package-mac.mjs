@@ -28,6 +28,7 @@ import { fileURLToPath } from "node:url";
 
 import { packager } from "@electron/packager";
 import png2icons from "png2icons";
+import plist from "plist";
 import { load as loadYaml } from "js-yaml";
 
 const require = createRequire(import.meta.url);
@@ -107,6 +108,44 @@ for (const arch of arches) {
     ),
     { recursive: true },
   );
+  const nativeHook = path.join(
+    macApp,
+    "Contents",
+    "Resources",
+    "app.asar.unpacked",
+    "node_modules",
+    "uiohook-napi",
+    "prebuilds",
+    `darwin-${arch}`,
+    "uiohook-napi.node",
+  );
+  if (!fs.existsSync(nativeHook)) {
+    throw new Error(`no ${nativeHook} — the ${arch} global-shortcut prebuild is missing`);
+  }
+  const venmic = path.join(
+    macApp,
+    "Contents",
+    "Resources",
+    "app.asar.unpacked",
+    "node_modules",
+    "@vencord",
+    "venmic",
+  );
+  if (fs.existsSync(venmic)) {
+    throw new Error(`Linux-only venmic unexpectedly shipped in ${macApp}`);
+  }
+
+  const infoPath = path.join(macApp, "Contents", "Info.plist");
+  const info = plist.parse(fs.readFileSync(infoPath, "utf8"));
+  for (const key of [
+    "NSMicrophoneUsageDescription",
+    "NSCameraUsageDescription",
+    "NSAudioCaptureUsageDescription",
+  ]) {
+    if (typeof info[key] !== "string" || !info[key].trim()) {
+      throw new Error(`${infoPath} is missing ${key}`);
+    }
+  }
 
   // These Linux-cross-built archives are only ad-hoc signed in CI. They are
   // intentionally not an electron-updater target: safely replacing a macOS

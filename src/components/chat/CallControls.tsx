@@ -1,6 +1,7 @@
 import { DisconnectButton, useLocalParticipant, useRoomContext } from "@livekit/components-react";
 import {
   Hand,
+  Info,
   Loader2,
   Mic,
   MicOff,
@@ -8,11 +9,13 @@ import {
   MonitorUp,
   PhoneOff,
   RefreshCw,
+  Settings2,
   Smile,
   Video,
   VideoOff,
 } from "lucide-react";
-import { useState } from "react";
+import { Track } from "livekit-client";
+import { useEffect, useState } from "react";
 
 import {
   DropdownMenu,
@@ -24,10 +27,31 @@ import {
 import { useCallSignals } from "@/contexts/CallSignalsContext";
 import { useCall } from "@/hooks/useCall";
 import { toast } from "@/hooks/useToast";
+import { ToastAction } from "@/components/ui/toast";
 import { playLeaveSound, playMuteSound, playUnmuteSound } from "@/lib/callSounds";
 import { requestPushToTalkOverride, usePushToTalkRuntime } from "@/lib/pushToTalk";
-import { switchPublishedScreenShare } from "@/lib/screenShare";
+import {
+  applyPublishedScreenShareQuality,
+  installScreenShareCodecPreferences,
+  switchPublishedScreenShare,
+} from "@/lib/screenShare";
+import {
+  formatScreenShareQuality,
+  getScreenShareQuality,
+  normalizeScreenShareQuality,
+  rememberScreenShareQuality,
+  screenShareCaptureOptions,
+  screenShareDisplayMediaOptions,
+  screenSharePublishOptions,
+  type ScreenShareQuality,
+} from "@/lib/screenShareQuality";
 import { cn } from "@/lib/utils";
+import { ScreenShareQualityDialog } from "@/components/chat/ScreenShareQualityDialog";
+import { ScreenShareDiagnosticsDialog } from "@/components/chat/ScreenShareDiagnosticsDialog";
+import {
+  desktopScreenCaptureAccessStatus,
+  openDesktopScreenCaptureSettings,
+} from "@/lib/desktop";
 
 /**
  * Shared in-call control buttons — the single styled source for the media
@@ -145,94 +169,258 @@ export function CameraButton({ className }: { className?: string }) {
 
 export function ScreenShareButton({ className }: { className?: string }) {
   const { localParticipant, isScreenShareEnabled } = useLocalParticipant();
-  const [switching, setSwitching] = useState(false);
+  const { enabled: endToEndEncrypted, hevcScreenShare } = useCallSignals();
+  const [qualityOpen, setQualityOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [working, setWorking] = useState(false);
+  const customHevcAvailable = Boolean(hevcScreenShare?.capability?.available);
+  const customHevcActive = Boolean(hevcScreenShare?.active);
+  const shareActive = isScreenShareEnabled || customHevcActive;
+  const screenSharePublication = localParticipant.getTrackPublication(Track.Source.ScreenShare);
+  useEffect(
+    () => installScreenShareCodecPreferences(localParticipant, { endToEndEncrypted }),
+    [endToEndEncrypted, localParticipant],
+  );
   if (!supportsScreenShare) return null;
 
-  const startShare = () => {
-    void localParticipant
-      .setScreenShareEnabled(true, { audio: true })
-      .catch((err) => {
-        if (err instanceof Error && err.name === "NotAllowedError") return;
-        console.warn("failed to start screen share", err);
+  const handleCapturePermission = async (error: unknown): Promise<boolean> => {
+    if (!(error instanceof Error) || error.name !== "NotAllowedError") return false;
+    const status = await desktopScreenCaptureAccessStatus();
+    if (status === "denied" || status === "restricted") {
+      toast({
+        title: "Screen Recording permission required",
+        description: "Allow Armada in macOS Privacy & Security, then try sharing again.",
+        variant: "destructive",
+        action: (
+          <ToastAction
+            altText="Open Screen Recording settings"
+            onClick={() => void openDesktopScreenCaptureSettings()}
+          >
+            Settings
+          </ToastAction>
+        ),
       });
+    }
+    // A normal picker cancellation is also NotAllowedError and stays silent.
+    return true;
+  };
+
+  const acquireCustomHevc = async (quality: ScreenShareQuality): Promise<MediaStream> => {
+    if (!hevcScreenShare || !customHevcAvailable) {
+      throw new Error(
+        hevcScreenShare?.capability?.reason || "The Linux H.265 encoder is unavailable.",
+      );
+    }
+    // This goes through the same trusted desktop picker/audio wrapper as the
+    // regular LiveKit path; only encoding and publication diverge afterward.
+    return navigator.mediaDevices.getDisplayMedia(screenShareDisplayMediaOptions(quality));
+  };
+
+  const applyQuality = (value: ScreenShareQuality) => {
+    if (working) return;
+    setWorking(true);
+    const quality = normalizeScreenShareQuality({
+      ...value,
+      ...(value.codec === "h265" && customHevcAvailable ? { delivery: "full" as const } : {}),
+    });
+    void (async () => {
+      if (quality.codec === "h265" && customHevcAvailable) {
+        const stream = await acquireCustomHevc(quality);
+        // Bring up the replacement before retiring LiveKit's standard share.
+        // A failed normal→custom transition therefore leaves the old share
+        // running instead of stranding the presenter with a false success.
+        await hevcScreenShare!.start(stream, quality);
+        if (isScreenShareEnabled) {
+          try {
+            await localParticipant.setScreenShareEnabled(false, { audio: true });
+          } catch (error) {
+            try {
+              await hevcScreenShare!.stop();
+            } catch {
+              // The truthful transition error below is more useful; the shell
+              // also tears its publisher down when the capture stream ends.
+            }
+            throw new Error(
+              `The H.265 sender started, but the previous share could not be retired. The previous share remains active: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
+        return;
+      }
+      if (customHevcActive) {
+        await localParticipant.setScreenShareEnabled(
+          true,
+          screenShareCaptureOptions(quality),
+          screenSharePublishOptions(quality),
+        );
+        await hevcScreenShare?.stop();
+        return;
+      }
+      if (!isScreenShareEnabled) {
+        await localParticipant.setScreenShareEnabled(
+          true,
+          screenShareCaptureOptions(quality),
+          screenSharePublishOptions(quality),
+        );
+        return;
+      }
+      await applyPublishedScreenShareQuality(localParticipant, quality);
+    })()
+      .then(() => {
+        rememberScreenShareQuality(quality);
+        if (shareActive) {
+          toast({
+            title: "Screen share quality updated",
+            description: formatScreenShareQuality(quality),
+          });
+        }
+      })
+      .catch(async (error) => {
+        if (await handleCapturePermission(error)) return;
+        console.warn("failed to update screen share quality", error);
+        toast({
+          title: "Couldn't update screen share quality",
+          description:
+            error instanceof Error ? error.message : "The new quality could not be applied.",
+          variant: "destructive",
+        });
+      })
+      .finally(() => setWorking(false));
   };
   const stopShare = () => {
-    void localParticipant
-      .setScreenShareEnabled(false, { audio: true })
-      .catch((err) => console.warn("failed to stop screen share", err));
+    if (customHevcActive) {
+      void hevcScreenShare?.stop().catch((error) =>
+        console.warn("failed to stop H.265 screen share", error),
+      );
+    } else {
+      void localParticipant
+        .setScreenShareEnabled(false, { audio: true })
+        .catch((error) => console.warn("failed to stop screen share", error));
+    }
   };
   const switchShare = async () => {
-    if (switching) return;
-    setSwitching(true);
+    if (working) return;
+    setWorking(true);
     try {
-      await switchPublishedScreenShare(localParticipant);
-    } catch (err) {
-      if (err instanceof Error && err.name === "NotAllowedError") return;
-      console.warn("failed to switch screen share", err);
+      const quality = getScreenShareQuality();
+      if (customHevcActive && hevcScreenShare) {
+        const stream = await acquireCustomHevc(quality);
+        await hevcScreenShare.start(stream, quality);
+      } else {
+        await switchPublishedScreenShare(localParticipant, quality);
+      }
+    } catch (error) {
+      if (await handleCapturePermission(error)) return;
+      console.warn("failed to switch screen share", error);
       toast({
         title: "Couldn't switch the screen share",
-        description: "Your existing share is still active. Please try again.",
+        description: customHevcActive
+          ? error instanceof Error
+            ? error.message
+            : "The previous H.265 share stopped while the replacement was starting."
+          : "Your existing share is still active. Please try again.",
         variant: "destructive",
       });
     } finally {
-      setSwitching(false);
+      setWorking(false);
     }
   };
 
-  if (!isScreenShareEnabled) {
+  if (!shareActive) {
     return (
-      <button
-        type="button"
-        aria-label="Share screen"
-        title="Share screen"
-        onClick={startShare}
-        className={cn(
-          CTRL,
-          "bg-foreground/5 text-muted-foreground hover:bg-foreground/10",
-          className,
-        )}
-      >
-        <MonitorUp className="size-4" />
-      </button>
+      <>
+        <button
+          type="button"
+          aria-label="Share screen"
+          title="Share screen"
+          disabled={working}
+          onClick={() => setQualityOpen(true)}
+          className={cn(
+            CTRL,
+            "bg-foreground/5 text-muted-foreground hover:bg-foreground/10 disabled:opacity-60",
+            className,
+          )}
+        >
+          {working ? <Loader2 className="size-4 animate-spin" /> : <MonitorUp className="size-4" />}
+        </button>
+        <ScreenShareQualityDialog
+          open={qualityOpen}
+          active={false}
+          participant={localParticipant}
+          endToEndEncrypted={endToEndEncrypted}
+          customHevcAvailable={customHevcAvailable}
+          nativeHevcStatus={hevcScreenShare?.status}
+          onOpenChange={setQualityOpen}
+          onConfirm={applyQuality}
+        />
+      </>
     );
   }
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label="Screen share options"
-          title="Screen share options"
-          disabled={switching}
-          className={cn(
-            CTRL,
-            "bg-primary/20 text-primary hover:bg-primary/30 disabled:opacity-60",
-            className,
-          )}
-        >
-          {switching ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <MonitorUp className="size-4" />
-          )}
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuItem onSelect={() => void switchShare()}>
-          <RefreshCw className="size-4" />
-          Switch screen or audio
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          className="text-destructive focus:text-destructive"
-          onSelect={stopShare}
-        >
-          <MonitorOff className="size-4" />
-          Stop sharing
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label="Screen share options"
+            title="Screen share options"
+            disabled={working}
+            className={cn(
+              CTRL,
+              "bg-primary/20 text-primary hover:bg-primary/30 disabled:opacity-60",
+              className,
+            )}
+          >
+            {working ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <MonitorUp className="size-4" />
+            )}
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuItem onSelect={() => setQualityOpen(true)}>
+            <Settings2 className="size-4" />
+            Screen share quality
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setDetailsOpen(true)}>
+            <Info className="size-4" />
+            Stream details
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => void switchShare()}>
+            <RefreshCw className="size-4" />
+            Switch screen or audio
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            className="text-destructive focus:text-destructive"
+            onSelect={stopShare}
+          >
+            <MonitorOff className="size-4" />
+            Stop sharing
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <ScreenShareQualityDialog
+        open={qualityOpen}
+        active
+        participant={localParticipant}
+        endToEndEncrypted={endToEndEncrypted}
+        customHevcAvailable={customHevcAvailable}
+        nativeHevcStatus={hevcScreenShare?.status}
+        onOpenChange={setQualityOpen}
+        onConfirm={applyQuality}
+      />
+      <ScreenShareDiagnosticsDialog
+        open={detailsOpen}
+        track={screenSharePublication?.videoTrack}
+        encrypted={customHevcActive ? true : screenSharePublication?.isEncrypted}
+        participantName="you"
+        nativeHevcStatus={customHevcActive ? hevcScreenShare?.status : undefined}
+        onOpenChange={setDetailsOpen}
+      />
+    </>
   );
 }
 

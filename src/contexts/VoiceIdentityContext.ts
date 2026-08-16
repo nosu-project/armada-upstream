@@ -21,6 +21,8 @@ export interface VoiceIdentityInfo {
   pubkey: string;
   /** Whether the mapping is proven (identity-embedded, or a sole fresh presence claim). */
   verified: boolean;
+  /** Signed role for auxiliary media identities; ordinary callers are members. */
+  role: "member" | "screen-share";
 }
 
 export type VoiceIdentityResolver = (identity: string) => VoiceIdentityInfo;
@@ -28,6 +30,7 @@ export type VoiceIdentityResolver = (identity: string) => VoiceIdentityInfo;
 const defaultResolver: VoiceIdentityResolver = (identity) => ({
   pubkey: pubkeyFromLivekitIdentity(identity),
   verified: true,
+  role: "member",
 });
 
 export const VoiceIdentityContext = createContext<VoiceIdentityResolver>(defaultResolver);

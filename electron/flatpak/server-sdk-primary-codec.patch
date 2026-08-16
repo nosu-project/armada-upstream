@@ -1,0 +1,29 @@
+From: Armada Linux H.265 publisher
+Subject: [PATCH] Advertise the primary codec for single-layer tracks
+
+LiveKit's TrackPublishedResponse does not contain the top-level MIME type yet.
+The Go SDK consequently learns a publication's MIME type from SimulcastCodecs,
+but PublishTrack only fills that field when a backup codec is present. A normal
+single-layer H.265 track is therefore treated as an unknown primary codec when
+the server sends a subscribed-quality update.
+
+Populate the same primary codec descriptor for an ordinary video track. This
+does not add simulcast or a backup encoder; it preserves the codec metadata the
+SDK itself needs to classify the already-published track.
+
+--- a/vendor/github.com/livekit/server-sdk-go/v2/localparticipant.go
++++ b/vendor/github.com/livekit/server-sdk-go/v2/localparticipant.go
+@@ -145,4 +145,13 @@ func (p *LocalParticipant) prepareTrackPublication(track webrtc.TrackLocal, opt
+                 Height:  uint32(opts.VideoHeight),
+             },
+         }
++		if primaryCodec.MimeType != "" {
++			// TrackPublishedResponse does not carry TrackInfo.MimeType yet.
++			// Supplying the primary descriptor here makes the server echo it in
++			// TrackInfo.Codecs, which is how LocalTrackPublication.MimeType
++			// classifies subscribed-quality updates.
++			req.SimulcastCodecs = []*livekit.SimulcastCodec{
++				{Codec: primaryCodec.MimeType, Cid: track.ID()},
++			}
++		}
+     }

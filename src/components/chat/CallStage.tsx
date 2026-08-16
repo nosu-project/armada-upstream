@@ -12,7 +12,9 @@ import { Track } from "livekit-client";
 import {
   ChevronLeft,
   ChevronRight,
+  Fullscreen,
   Hand,
+  Info,
   Maximize2,
   Minimize2,
   MicOff,
@@ -40,6 +42,7 @@ import {
   ReactionsMenu,
   ScreenShareButton,
 } from "@/components/chat/CallControls";
+import { ScreenShareDiagnosticsDialog } from "@/components/chat/ScreenShareDiagnosticsDialog";
 import {
   VoiceUserContextMenu,
   VolumeSliderRow,
@@ -58,6 +61,8 @@ import {
   shapedAvatarSpeakingStyle,
 } from "@/lib/avatarShape";
 import { cn } from "@/lib/utils";
+import { isHevcScreenShareParticipant } from "@/lib/hevcScreenShare";
+import type { DesktopHevcScreenShareStatus } from "@/lib/desktop";
 
 // Back-compat re-export: the slot moved to its own (LiveKit-free) module so
 // pages can render it without pulling the voice stack into their chunks.
@@ -139,6 +144,31 @@ function trackTileKey(trackRef: TrackReference): string {
 }
 function participantTileKey(participant: Participant): string {
   return `${participant.identity}:avatar`;
+}
+
+const LOCAL_HEVC_SCREEN_SHARE_KEY = "local:hevc-screen-share";
+
+function participantIdentityKey(
+  identity: string,
+  resolve: ReturnType<typeof useVoiceIdentity>,
+): string | null {
+  if (!identity) return null;
+  const mapped = resolve(identity);
+  return mapped.verified ? `pubkey:${mapped.pubkey}` : `identity:${identity}`;
+}
+
+/** Count people, not the auxiliary HEVC publisher or duplicate user sessions. */
+function uniqueParticipantCount(
+  participants: readonly Participant[],
+  resolve: ReturnType<typeof useVoiceIdentity>,
+): number {
+  const identities = new Set<string>();
+  for (const participant of participants) {
+    if (isHevcScreenShareParticipant(participant, resolve)) continue;
+    const key = participantIdentityKey(participant.identity, resolve);
+    if (key) identities.add(key);
+  }
+  return identities.size;
 }
 
 /** The shared look of a tile's bottom-left name pill. */
@@ -528,6 +558,10 @@ function VideoTile({
   const { pubkey, displayName, verified, metadata } = useTileDisplayName(participant);
   const shape = getAvatarShape(metadata);
   const isScreenShare = trackRef.source === Track.Source.ScreenShare;
+  const { enabled: endToEndEncrypted } = useCallSignals();
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+  const tileRef = useRef<HTMLDivElement>(null);
   // Show the avatar (not a black frame) unless there's a LIVE video track:
   // a placeholder (track not subscribed yet) OR a muted publication — turning
   // the camera/screen off mutes the track before its publication clears, and
@@ -538,6 +572,38 @@ function VideoTile({
   useApplyPlaybackVolumes(participant, pubkey);
   const hasVolumeMenu = !isLocal;
   const volumeTarget: PlaybackVolumeTarget = isScreenShare ? "screenShare" : "user";
+
+  useEffect(() => {
+    if (!isScreenShare) return;
+    const update = () => setFullscreen(document.fullscreenElement === tileRef.current);
+    document.addEventListener("fullscreenchange", update);
+    return () => document.removeEventListener("fullscreenchange", update);
+  }, [isScreenShare]);
+
+  const toggleFullscreen = () => {
+    if (!tileRef.current) return;
+    if (document.fullscreenElement === tileRef.current) {
+      void document.exitFullscreen().catch((error) =>
+        console.warn("failed to exit screen-share fullscreen", error)
+      );
+      return;
+    }
+    void tileRef.current.requestFullscreen({ navigationUI: "hide" }).catch((error) =>
+      console.warn("failed to enter screen-share fullscreen", error)
+    );
+  };
+
+  const openDetails = () => {
+    // A dialog portaled to <body> is outside the browser's fullscreen subtree.
+    // Leave fullscreen first so its live measurements are actually visible.
+    if (document.fullscreenElement === tileRef.current) {
+      void document.exitFullscreen()
+        .then(() => setDetailsOpen(true))
+        .catch((error) => console.warn("failed to leave fullscreen for stream details", error));
+      return;
+    }
+    setDetailsOpen(true);
+  };
 
   const nameplate = (
     <>
@@ -556,8 +622,9 @@ function VideoTile({
 
   const tile = (
     <div
+      ref={tileRef}
       className={cn(
-        "group relative flex items-center justify-center bg-black rounded-lg overflow-hidden ring-1 ring-white/10 h-full w-full transition-shadow",
+        "group relative flex items-center justify-center bg-black rounded-lg overflow-hidden ring-1 ring-white/10 h-full w-full transition-shadow fullscreen:rounded-none fullscreen:ring-0",
         // Active-speaker highlight, matching the avatar-tile visual language.
         // Screenshare tiles never get the participant speaking ring.
         !isScreenShare &&
@@ -588,6 +655,28 @@ function VideoTile({
           </Avatar>
         </>
       )}
+      {isScreenShare && (
+        <>
+          <button
+            type="button"
+            aria-label="Show stream details"
+            title="Show stream details"
+            onClick={openDetails}
+            className="absolute top-1.5 right-[4.625rem] rounded-md bg-black/60 p-1 text-white/90 opacity-0 transition-opacity hover:bg-black/80 hover:text-white group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+          >
+            <Info className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            aria-label={fullscreen ? "Exit fullscreen" : "View stream fullscreen"}
+            title={fullscreen ? "Exit fullscreen" : "View stream fullscreen"}
+            onClick={toggleFullscreen}
+            className="absolute top-1.5 right-10 rounded-md bg-black/60 p-1 text-white/90 opacity-0 transition-opacity hover:bg-black/80 hover:text-white group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+          >
+            {fullscreen ? <Shrink className="size-3.5" /> : <Fullscreen className="size-3.5" />}
+          </button>
+        </>
+      )}
       <FocusButton focused={focused} onClick={onToggleFocus} />
       {!isScreenShare && <RaisedHandBadge pubkey={pubkey} />}
       {/* Remote nameplates open the matching mic or screen-share volume menu. */}
@@ -606,7 +695,7 @@ function VideoTile({
     </div>
   );
 
-  return hasVolumeMenu ? (
+  const decoratedTile = hasVolumeMenu ? (
     <VoiceUserContextMenu
       pubkey={pubkey}
       displayName={displayName}
@@ -617,6 +706,123 @@ function VideoTile({
     </VoiceUserContextMenu>
   ) : (
     tile
+  );
+
+  return (
+    <>
+      {decoratedTile}
+      {isScreenShare && (
+        <ScreenShareDiagnosticsDialog
+          open={detailsOpen}
+          track={trackRef.publication?.videoTrack}
+          encrypted={endToEndEncrypted}
+          participantName={displayName}
+          onOpenChange={setDetailsOpen}
+        />
+      )}
+    </>
+  );
+}
+
+/** Local trusted-capture preview for the auxiliary H.265 publisher. */
+function LocalHevcScreenShareTile({
+  track,
+  status,
+  encrypted,
+  focused,
+  onToggleFocus,
+}: {
+  track: MediaStreamTrack;
+  status: DesktopHevcScreenShareStatus;
+  encrypted: boolean;
+  focused: boolean;
+  onToggleFocus: () => void;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const tileRef = useRef<HTMLDivElement>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.srcObject = new MediaStream([track]);
+    void video.play().catch((error) =>
+      console.warn("failed to play local H.265 capture preview", error),
+    );
+    return () => {
+      video.srcObject = null;
+    };
+  }, [track]);
+
+  useEffect(() => {
+    const update = () => setFullscreen(document.fullscreenElement === tileRef.current);
+    document.addEventListener("fullscreenchange", update);
+    return () => document.removeEventListener("fullscreenchange", update);
+  }, []);
+
+  const openDetails = () => {
+    if (document.fullscreenElement === tileRef.current) {
+      void document.exitFullscreen()
+        .then(() => setDetailsOpen(true))
+        .catch((error) => console.warn("failed to leave fullscreen for stream details", error));
+      return;
+    }
+    setDetailsOpen(true);
+  };
+
+  const toggleFullscreen = () => {
+    if (!tileRef.current) return;
+    if (document.fullscreenElement === tileRef.current) {
+      void document.exitFullscreen().catch((error) =>
+        console.warn("failed to exit screen-share fullscreen", error),
+      );
+      return;
+    }
+    void tileRef.current.requestFullscreen({ navigationUI: "hide" }).catch((error) =>
+      console.warn("failed to enter screen-share fullscreen", error),
+    );
+  };
+
+  return (
+    <>
+      <div
+        ref={tileRef}
+        className="group relative flex h-full w-full items-center justify-center overflow-hidden rounded-lg bg-black ring-1 ring-white/10 fullscreen:rounded-none fullscreen:ring-0"
+      >
+        <video ref={videoRef} autoPlay muted playsInline className="h-full w-full object-contain" />
+        <button
+          type="button"
+          aria-label="Show stream details"
+          title="Show stream details"
+          onClick={openDetails}
+          className="absolute top-1.5 right-[4.625rem] rounded-md bg-black/60 p-1 text-white/90 opacity-0 transition-opacity hover:bg-black/80 hover:text-white group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+        >
+          <Info className="size-3.5" />
+        </button>
+        <button
+          type="button"
+          aria-label={fullscreen ? "Exit fullscreen" : "View stream fullscreen"}
+          title={fullscreen ? "Exit fullscreen" : "View stream fullscreen"}
+          onClick={toggleFullscreen}
+          className="absolute top-1.5 right-10 rounded-md bg-black/60 p-1 text-white/90 opacity-0 transition-opacity hover:bg-black/80 hover:text-white group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+        >
+          {fullscreen ? <Shrink className="size-3.5" /> : <Fullscreen className="size-3.5" />}
+        </button>
+        <FocusButton focused={focused} onClick={onToggleFocus} />
+        <div className={nameplateClass}>
+          <ScreenShare className="size-3 shrink-0" />
+          <span className="truncate">Your screen — H.265 (you)</span>
+        </div>
+      </div>
+      <ScreenShareDiagnosticsDialog
+        open={detailsOpen}
+        encrypted={encrypted}
+        participantName="your screen"
+        nativeHevcStatus={status}
+        onOpenChange={setDetailsOpen}
+      />
+    </>
   );
 }
 
@@ -890,7 +1096,10 @@ export function CallStage({
   open: boolean;
 }) {
   const { setStageOpen, stageFloating, floatingVariant } = useCall();
+  const { enabled: endToEndEncrypted, hevcScreenShare } = useCallSignals();
   const participants = useParticipants();
+  const resolveIdentity = useVoiceIdentity();
+  const participantCount = uniqueParticipantCount(participants, resolveIdentity);
   const speakingParticipants = useSpeakingParticipants();
   const speakingIds = useMemo(
     () => new Set(speakingParticipants.map((p) => p.identity)),
@@ -908,13 +1117,25 @@ export function CallStage({
 
   // Video tracks (camera + screenshare) we've subscribed to — each a full
   // TrackReference so `VideoTrack` has a real reference to render.
-  const videoTracks = useTracks(
+  const allVideoTracks = useTracks(
     [
       { source: Track.Source.Camera, withPlaceholder: false },
       { source: Track.Source.ScreenShare, withPlaceholder: false },
     ],
     { onlySubscribed: true },
   ).filter((t): t is TrackReference => Boolean(t.publication));
+  const localHevcPreview =
+    hevcScreenShare?.active && hevcScreenShare.previewTrack?.readyState === "live"
+      ? hevcScreenShare.previewTrack
+      : null;
+  const videoTracks = allVideoTracks.filter(
+    (track) =>
+      !(
+        localHevcPreview &&
+        track.source === Track.Source.ScreenShare &&
+        track.participant.identity === hevcScreenShare?.publisherIdentity
+      ),
+  );
 
   // Participants who already have a (camera) video tile shown; the rest get an
   // avatar tile so everyone is represented exactly once (screenshares are extra
@@ -922,15 +1143,40 @@ export function CallStage({
   const withCamera = new Set(
     videoTracks.filter((t) => t.source === Track.Source.Camera).map((t) => t.participant.identity),
   );
-  const avatarOnly = participants.filter((p) => !withCamera.has(p.identity));
+  const cameraPubkeys = new Set(
+    videoTracks
+      .filter((track) => track.source === Track.Source.Camera)
+      .map((track) => resolveIdentity(track.participant.identity))
+      .filter((identity) => identity.verified)
+      .map((identity) => identity.pubkey),
+  );
+  const avatarPubkeys = new Set<string>();
+  const avatarOnly = [...participants]
+    .sort((left, right) => Number(right.isLocal) - Number(left.isLocal))
+    .filter((participant) => {
+      if (
+        isHevcScreenShareParticipant(participant, resolveIdentity) ||
+        withCamera.has(participant.identity)
+      ) {
+        return false;
+      }
+      const identity = resolveIdentity(participant.identity);
+      if (!identity.verified) return true;
+      if (cameraPubkeys.has(identity.pubkey) || avatarPubkeys.has(identity.pubkey)) return false;
+      avatarPubkeys.add(identity.pubkey);
+      return true;
+    });
 
   // Auto-expand the stage when a screenshare *appears* and spotlight it (à la
   // Discord). We compare against the previous render's screenshare keys so this
   // fires only on a new share — not on every render, and not re-opening after
   // the user manually closes the stage while a share is still running.
-  const screenShareKeys = videoTracks
+  const remoteScreenShareKeys = videoTracks
     .filter((t) => t.source === Track.Source.ScreenShare)
     .map(trackTileKey);
+  const screenShareKeys = localHevcPreview
+    ? [...remoteScreenShareKeys, LOCAL_HEVC_SCREEN_SHARE_KEY]
+    : remoteScreenShareKeys;
   const prevScreenShareKeys = useRef<string[]>([]);
   useEffect(() => {
     const prev = prevScreenShareKeys.current;
@@ -953,7 +1199,7 @@ export function CallStage({
   // trigger whether or not it fell inside the join window.
   const mountedAt = useRef(Date.now());
   const sawVideo = useRef(false);
-  const hasVideoTracks = videoTracks.length > 0;
+  const hasVideoTracks = videoTracks.length > 0 || Boolean(localHevcPreview);
   useEffect(() => {
     if (!hasVideoTracks || sawVideo.current) return;
     sawVideo.current = true;
@@ -964,6 +1210,24 @@ export function CallStage({
   // spotlight + thumbnail strip in sync without duplicating tile markup.
   const tiles = useMemo(() => {
     const list: { key: string; render: (focused: boolean) => React.ReactNode }[] = [];
+    if (localHevcPreview && hevcScreenShare) {
+      list.push({
+        key: LOCAL_HEVC_SCREEN_SHARE_KEY,
+        render: (focused) => (
+          <LocalHevcScreenShareTile
+            track={localHevcPreview}
+            status={hevcScreenShare.status}
+            encrypted={endToEndEncrypted}
+            focused={focused}
+            onToggleFocus={() =>
+              setFocusKey((current) =>
+                current === LOCAL_HEVC_SCREEN_SHARE_KEY ? null : LOCAL_HEVC_SCREEN_SHARE_KEY,
+              )
+            }
+          />
+        ),
+      });
+    }
     for (const trackRef of videoTracks) {
       const key = trackTileKey(trackRef);
       list.push({
@@ -994,7 +1258,14 @@ export function CallStage({
     }
     return list;
     // `speakingIds`/identities change frequently; recompute is cheap.
-  }, [videoTracks, avatarOnly, speakingIds]);
+  }, [
+    videoTracks,
+    avatarOnly,
+    speakingIds,
+    localHevcPreview,
+    hevcScreenShare,
+    endToEndEncrypted,
+  ]);
 
   // If the focused tile goes away (e.g. its owner stopped sharing or left),
   // drop back to the grid so we don't spotlight nothing.
@@ -1014,12 +1285,9 @@ export function CallStage({
   // reorders on (re)subscribe). Keying the selection off this order keeps the
   // selected share from jumping when the array churns.
   const sortedShareKeys = useMemo(
-    () =>
-      videoTracks
-        .filter((t) => t.source === Track.Source.ScreenShare)
-        .map(trackTileKey)
-        .sort(),
-    [videoTracks],
+    () => [...screenShareKeys].sort(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [screenShareKeys.join("|")],
   );
   // The selected screen share (stable across track-array reordering). One share
   // auto-selects; with several, the current pick is kept while it's still live,
@@ -1190,7 +1458,7 @@ export function CallStage({
         </button>
       )}
       <span className="text-xs text-muted-foreground tabular-nums shrink-0">
-        {participants.length} in call
+        {participantCount} in call
       </span>
       <RaiseHandButton />
       <ReactionsMenu />

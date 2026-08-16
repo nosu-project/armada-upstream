@@ -17,8 +17,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     # 15 before the Swift suite; the vendored SQLite amalgamation is a ~9 MB C
-    # file compiled from scratch on a cold .build.
-    timeout-minutes: 20
+    # file compiled from scratch on a cold .build. The Linux H.265 publisher
+    # also vendors and tests its Go dependency graph here.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -26,10 +27,20 @@ jobs:
         with:
           node-version: 22
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: electron/hevc-publisher/go.mod
+          cache-dependency-path: electron/hevc-publisher/go.sum
+
       - run: npm ci
 
       # tsc + eslint + vitest + production build (see package.json "test").
       - run: npm run test
+
+      # Exercise the statically linked Linux H.265 publisher and the vendored
+      # LiveKit primary-codec patch on every PR, rather than discovering a Go
+      # or SDK drift only in the tag-triggered desktop release workflow.
+      - run: ./electron/scripts/build-hevc-publisher.sh --arch x64
 
       # The Swift ArmadaDB engine's conformance suite (ios/ArmadaDB), ported
       # from ArmadaDbTest.kt. The engine is a SwiftPM package with SQLite

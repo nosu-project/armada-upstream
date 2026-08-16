@@ -226,6 +226,14 @@ export interface VoicePresenceEntry {
   status: "joined" | "left";
   /** The broker-assigned SFU identity (joined only). */
   identity?: string;
+  /**
+   * All identities this member currently authenticates, primary first. Armada
+   * uses one additional identity for its custom H.265 screen-share publisher.
+   * Older clients safely ignore the repeated additive identity tag.
+   */
+  identities?: string[];
+  /** Auxiliary identities explicitly assigned the custom screen-share role. */
+  screenShareIdentities?: string[];
   /** The broker origin hint, canonicalized (joined only). */
   broker?: string;
   /**
@@ -252,10 +260,20 @@ export function presenceTags(
   status: "joined" | "left",
   identity?: string,
   broker?: string,
-  opts?: { hand?: boolean },
+  opts?: { hand?: boolean; additionalIdentities?: readonly string[] },
 ): string[][] {
   const tags: string[][] = [];
   if (status === "joined" && identity) tags.push(["identity", identity]);
+  if (status === "joined" && identity) {
+    const seen = new Set([identity]);
+    for (const additional of opts?.additionalIdentities ?? []) {
+      if (!additional || seen.has(additional)) continue;
+      seen.add(additional);
+      // The third value is signed durable role metadata. Older clients still
+      // read the first two values and safely treat this as a repeated identity.
+      tags.push(["identity", additional, "screen-share"]);
+    }
+  }
   if (status === "joined" && broker) tags.push(["broker", broker]);
   if (status === "joined" && opts?.hand) tags.push(["hand", "1"]);
   return tags;
@@ -320,21 +338,47 @@ export function parsePresence(opened: OpenedEvent): VoicePresenceEntry | null {
   if (opened.kind !== KIND_VOICE_PRESENCE) return null;
   if (opened.content !== "joined" && opened.content !== "left") return null;
   const status = opened.content;
-  const rawIdentity = opened.tags.find((t) => t[0] === "identity")?.[1];
+  const rawIdentities = opened.tags
+    .filter((tag) => tag[0] === "identity")
+    .map((tag) => tag[1])
+    .filter(
+      (identity): identity is string =>
+        typeof identity === "string" && identity.length > 0 && identity.length <= 128,
+    );
+  // A member needs only one auxiliary identity today. Keep a small explicit
+  // bound so hostile members cannot inflate the claims map with repeated tags.
+  const identities = [...new Set(rawIdentities)].slice(0, 4);
+  const allowedIdentities = new Set(identities);
+  const screenShareIdentities = [...new Set(
+    opened.tags
+      .filter((tag) => tag[0] === "identity" && tag[2] === "screen-share")
+      .map((tag) => tag[1])
+      .filter(
+        (identity): identity is string =>
+          typeof identity === "string" && allowedIdentities.has(identity),
+      ),
+  )].filter((candidate) => candidate !== identities[0]);
   const rawBroker = opened.tags.find((t) => t[0] === "broker")?.[1];
   // Identities are broker-assigned opaque strings; bound them so a hostile
   // member can't bloat presence state.
-  const identity =
-    status === "joined" && typeof rawIdentity === "string" && rawIdentity.length > 0 && rawIdentity.length <= 128
-      ? rawIdentity
-      : undefined;
+  const identity = status === "joined" ? identities[0] : undefined;
   if (status === "joined" && !identity) return null;
   const broker =
     status === "joined" && typeof rawBroker === "string" && rawBroker.length <= 512
       ? canonicalOrigin(rawBroker) ?? undefined
       : undefined;
   const hand = status === "joined" && opened.tags.some((t) => t[0] === "hand" && t[1] === "1");
-  return { author: opened.author, status, identity, broker, hand, ms: opened.ms, rumorId: opened.rumorId };
+  return {
+    author: opened.author,
+    status,
+    identity,
+    identities: status === "joined" ? identities : undefined,
+    screenShareIdentities: status === "joined" ? screenShareIdentities : undefined,
+    broker,
+    hand,
+    ms: opened.ms,
+    rumorId: opened.rumorId,
+  };
 }
 
 /** A verified-present participant: one fresh `joined` per author. */
@@ -342,6 +386,8 @@ export interface VoicePresent {
   author: string;
   identity: string;
   broker?: string;
+  /** Signed auxiliary identities owned by this member's screen-share publisher. */
+  screenShareIdentities: string[];
   /** Whether this member's latest presence has their hand raised (client ext). */
   hand: boolean;
   ms: number;
@@ -376,10 +422,19 @@ export function foldVoicePresence(entries: VoicePresenceEntry[], nowMs: number):
   for (const e of latest.values()) {
     if (e.status !== "joined" || !e.identity) continue;
     if (nowMs - e.ms > VOICE_STALE_MS) continue;
-    present.push({ author: e.author, identity: e.identity, broker: e.broker, hand: e.hand ?? false, ms: e.ms });
-    const list = claims.get(e.identity);
-    if (list) list.push(e.author);
-    else claims.set(e.identity, [e.author]);
+    present.push({
+      author: e.author,
+      identity: e.identity,
+      broker: e.broker,
+      screenShareIdentities: e.screenShareIdentities ?? [],
+      hand: e.hand ?? false,
+      ms: e.ms,
+    });
+    for (const identity of e.identities?.length ? e.identities : [e.identity]) {
+      const list = claims.get(identity);
+      if (list) list.push(e.author);
+      else claims.set(identity, [e.author]);
+    }
   }
   present.sort((a, b) => a.ms - b.ms || (a.author < b.author ? -1 : 1));
   return { present, claims };
@@ -393,6 +448,19 @@ export function foldVoicePresence(entries: VoicePresenceEntry[], nowMs: number):
 export function verifiedAuthorOf(fold: VoicePresenceFold, identity: string): string | undefined {
   const claimants = fold.claims.get(identity);
   return claimants && claimants.length === 1 ? claimants[0] : undefined;
+}
+
+/** Whether signed fresh presence assigns this verified identity to a screen-share sidecar. */
+export function isVerifiedScreenShareIdentity(
+  fold: VoicePresenceFold,
+  identity: string,
+): boolean {
+  const author = verifiedAuthorOf(fold, identity);
+  if (!author) return false;
+  return Boolean(
+    fold.present.find((present) => present.author === author)
+      ?.screenShareIdentities.includes(identity),
+  );
 }
 
 /**

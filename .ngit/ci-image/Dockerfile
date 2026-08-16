@@ -2,7 +2,7 @@
 #
 # The coordinator maps `ubuntu-latest` to this image via NGIT_CI_ACT_PLATFORMS.
 # Everything .ngit/act/workflows otherwise downloads on EVERY run is baked in
-# as layers: JDK 21 / Node 22 toolcaches (so the setup-* actions no-op), the
+# as layers: JDK 21 / Node 22 / Go toolcaches (so setup-* actions no-op), the
 # Android SDK, system ruby + fastlane (Google Play publish), the zsp binary
 # (Zapstore publish), wine (Windows electron-builder targets), Flatpak tooling,
 # and warm
@@ -19,7 +19,7 @@
 # /opt/hostedtoolcache, but jobs still saw the old volume and the
 # /usr/local/bin/fastlane symlink dangled ("fastlane: command not found").
 # Rules that follow from this:
-#   - ONLY things the setup-* actions look up (node, java) belong under
+#   - ONLY things the setup-* actions look up (node, java, go) belong under
 #     /opt/hostedtoolcache. They self-heal anyway: if the volume is stale,
 #     setup-node/setup-java download into it once and it stays warm.
 #   - Every tool a workflow invokes directly (fastlane, zsp, wine, sdkmanager)
@@ -39,7 +39,7 @@ FROM ghcr.io/catthehacker/ubuntu:act-latest
 
 SHELL ["/bin/bash", "-c"]
 
-# ── Toolcache entries (node, java — the only setup-* actions the workflows use)
+# ── Toolcache entries (node, java, go — setup-* action managed) ─────────────
 # Marker convention (verified on a live act job container):
 #   /opt/hostedtoolcache/<tool>/<version>/x64{,.complete}
 # These layers only matter as the SEED for the act-toolcache volume (see the
@@ -47,6 +47,7 @@ SHELL ["/bin/bash", "-c"]
 ARG NODE_VERSION=22.23.1
 ARG JAVA_DIR=21.0.11-10.0.LTS
 ARG JAVA_RELEASE=jdk-21.0.11%2B10
+ARG GO_VERSION=1.26.4
 
 RUN set -eux; \
     curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" | tar -xJ -C /tmp; \
@@ -62,11 +63,19 @@ RUN set -eux; \
     touch "/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/${JAVA_DIR}/x64.complete"; \
     rm /tmp/jdk.tar.gz
 
+RUN set -eux; \
+    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz; \
+    mkdir -p "/opt/hostedtoolcache/go/${GO_VERSION}"; \
+    tar -xzf /tmp/go.tar.gz -C /tmp; \
+    mv /tmp/go "/opt/hostedtoolcache/go/${GO_VERSION}/x64"; \
+    touch "/opt/hostedtoolcache/go/${GO_VERSION}/x64.complete"; \
+    rm /tmp/go.tar.gz
+
 # sdkmanager (below) and gradle (cache warm, bottom) both shell out to java;
 # the toolcache entry alone doesn't put it on PATH. setup-java re-exports the
 # same JAVA_HOME at job time, so this stays consistent.
 ENV JAVA_HOME="/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/${JAVA_DIR}/x64"
-ENV PATH="$JAVA_HOME/bin:$PATH"
+ENV PATH="/opt/hostedtoolcache/go/${GO_VERSION}/x64/bin:$JAVA_HOME/bin:$PATH"
 
 # ── Android SDK (replaces android-actions/setup-android) ─────────────────────
 # Same location setup-android uses ($HOME/.android/sdk), matching the SDK
@@ -205,6 +214,7 @@ RUN set -eux; \
     # index.html above does. Without it electron-builder aborts and NOTHING warms.
     printf '// cache-warm stub\n' > db.cjs; \
     npm ci --no-audit --no-fund; \
+    ./scripts/build-hevc-publisher.sh --arch x64; \
     npx electron-builder --linux --win --config electron-builder.yml --publish never; \
     cd /; \
     rm -rf /warm
@@ -212,6 +222,7 @@ RUN set -eux; \
 # Sanity: every baked tool the workflows call directly must be on PATH.
 RUN set -eux; \
     node --version; \
+    go version; \
     ruby --version; \
     fastlane --version; \
     zsp --version; \
