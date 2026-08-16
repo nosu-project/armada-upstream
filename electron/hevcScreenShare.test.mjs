@@ -512,6 +512,166 @@ describe("H.265 process controller", () => {
     });
   });
 
+  it("reports a broken config pipe instead of crashing the main process", async () => {
+    vi.useFakeTimers();
+    const { controller, helper, port } = controllerHarness();
+    await controller.start(validConfig, port, "session-config-pipe");
+
+    // An EventEmitter with no "error" listener throws out of emit(), which in
+    // the Electron main process is an uncaught exception that takes the whole
+    // app down mid-call.
+    expect(() => helper.stdio[3].emit("error", new Error("EPIPE"))).not.toThrow();
+
+    expect(controller.status()).toMatchObject({
+      state: "error",
+      active: false,
+      error: expect.stringContaining("EPIPE"),
+    });
+  });
+
+  it("reports a broken encoder output pipe instead of crashing", async () => {
+    vi.useFakeTimers();
+    const { controller, ffmpeg, port } = controllerHarness();
+    await controller.start(validConfig, port, "session-stdout-pipe");
+
+    // pipe() does not forward source errors to the destination.
+    expect(() => ffmpeg.stdout.emit("error", new Error("EIO"))).not.toThrow();
+
+    expect(controller.status()).toMatchObject({
+      state: "error",
+      error: expect.stringContaining("EIO"),
+    });
+  });
+
+  it("validates a replacement configuration before retiring the live session", async () => {
+    vi.useFakeTimers();
+    const { controller, helper, ffmpeg, port } = controllerHarness();
+    await controller.start(validConfig, port, "session-live");
+
+    await expect(
+      controller.start({ ...validConfig, width: 17 }, fakePort(), "session-rejected"),
+    ).rejects.toThrow();
+
+    expect(controller.status()).toMatchObject({
+      sessionId: "session-live",
+      active: true,
+    });
+    expect(helper.kill).not.toHaveBeenCalled();
+    expect(ffmpeg.kill).not.toHaveBeenCalled();
+    expect(port.close).not.toHaveBeenCalled();
+    controller.stop("test");
+  });
+
+  it("keeps an unavailable encoder from retiring the live session", async () => {
+    vi.useFakeTimers();
+    const helper = fakeChild();
+    const ffmpeg = fakeChild();
+    let available = true;
+    const controller = createHevcScreenShareController({
+      capability: () => (available ? capability : { available: false, reason: "driver went away" }),
+      spawnImpl: vi.fn().mockReturnValueOnce(helper).mockReturnValueOnce(ffmpeg),
+      env: {},
+    });
+    const port = fakePort();
+    await controller.start(validConfig, port, "session-live");
+
+    available = false;
+    await expect(
+      controller.start(validConfig, fakePort(), "session-rejected"),
+    ).rejects.toThrow("driver went away");
+
+    expect(controller.status()).toMatchObject({ sessionId: "session-live", active: true });
+    expect(helper.kill).not.toHaveBeenCalled();
+    controller.stop("test");
+  });
+
+  it("does not let publisher output relabel the controller's own state", async () => {
+    vi.useFakeTimers();
+    const { controller, helper, port } = controllerHarness();
+    await controller.start(validConfig, port, "session-authority");
+
+    // The detail object is JSON parsed straight off a subprocess's stderr. It
+    // describes the publisher, and must not be able to answer questions the
+    // controller answers -- notably the rule that keeps an empty signaled
+    // track in "starting" until real HEVC bytes exist.
+    helper.stderr.emit("data", Buffer.from(
+      '{"state":"published","detail":{"state":"published","sessionId":"forged"}}\n',
+    ));
+
+    expect(controller.status()).toMatchObject({
+      state: "starting",
+      sessionId: "session-authority",
+    });
+    controller.stop("test");
+  });
+
+  it("reports FFmpeg's own diagnostic rather than a bare exit code", async () => {
+    vi.useFakeTimers();
+    const { controller, ffmpeg, port } = controllerHarness();
+    await controller.start(validConfig, port, "session-diagnostic");
+
+    // "exit" fires while stderr may still have buffered data; only "close"
+    // guarantees the driver's complaint has been read.
+    ffmpeg.emit("exit", 1, null);
+    ffmpeg.stderr.emit("data", Buffer.from("Failed to upload frame: invalid parameter\n"));
+    ffmpeg.emit("close", 1, null);
+
+    expect(controller.status()).toMatchObject({
+      state: "error",
+      error: expect.stringContaining("invalid parameter"),
+    });
+  });
+
+  it("escalates to SIGKILL when a child ignores SIGTERM", async () => {
+    vi.useFakeTimers();
+    const { controller, helper, ffmpeg, port } = controllerHarness();
+    await controller.start(validConfig, port, "session-escalate");
+
+    controller.stop("test");
+    expect(ffmpeg.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(helper.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(ffmpeg.kill).not.toHaveBeenCalledWith("SIGKILL");
+
+    // FFmpeg blocked in a VA-API ioctl on a wedged GPU never processes the
+    // signal, and holds the render node until something stronger arrives.
+    vi.advanceTimersByTime(5_000);
+
+    expect(ffmpeg.kill).toHaveBeenCalledWith("SIGKILL");
+    expect(helper.kill).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("does not escalate against a child that already exited", async () => {
+    vi.useFakeTimers();
+    const { controller, helper, ffmpeg, port } = controllerHarness();
+    await controller.start(validConfig, port, "session-clean-exit");
+
+    controller.stop("test");
+    ffmpeg.emit("close", 0, null);
+    helper.emit("close", 0, null);
+    vi.advanceTimersByTime(5_000);
+
+    expect(ffmpeg.kill).not.toHaveBeenCalledWith("SIGKILL");
+    expect(helper.kill).not.toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("bounds an unterminated publisher status line", async () => {
+    vi.useFakeTimers();
+    const { controller, helper, port } = controllerHarness();
+    await controller.start(validConfig, port, "session-carry");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    for (let index = 0; index < 8; index += 1) {
+      helper.stderr.emit("data", Buffer.alloc(32 * 1024, 0x61));
+    }
+    helper.stderr.emit("data", Buffer.from("\n"));
+
+    // Every other buffer in this file is capped; an unterminated line must not
+    // be the one unbounded accumulator in the main process.
+    expect(warn.mock.calls.at(-1)?.[1].length).toBeLessThanOrEqual(64 * 1024);
+    warn.mockRestore();
+    controller.stop("test");
+  });
+
   it("cancels a start waiting on capability detection before spawning", async () => {
     let finishCapability;
     const capabilityPending = new Promise((resolve) => {

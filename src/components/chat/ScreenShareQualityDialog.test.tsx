@@ -100,6 +100,45 @@ describe("ScreenShareQualityDialog", () => {
     expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ codec: "vp8" }));
   });
 
+  it("keeps the user's edits when the H.265 capability probe resolves late", async () => {
+    vi.stubGlobal("RTCRtpSender", {
+      getCapabilities: () => ({
+        codecs: [{ mimeType: "video/VP8", clockRate: 90_000 }],
+        headerExtensions: [],
+      }),
+    });
+    const onConfirm = vi.fn();
+    // The desktop shell probes the encoder asynchronously, so this flag flips
+    // whenever that resolves — routinely while the dialog is already open.
+    const { rerender } = render(
+      <ScreenShareQualityDialog
+        open
+        active={false}
+        customHevcAvailable={false}
+        onOpenChange={vi.fn()}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText(/maximum bitrate/i), {
+      target: { value: "12" },
+    });
+    rerender(
+      <ScreenShareQualityDialog
+        open
+        active={false}
+        customHevcAvailable
+        onOpenChange={vi.fn()}
+        onConfirm={onConfirm}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /share screen/i }));
+
+    expect(onConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({ maxBitrate: 12_000_000 }),
+    );
+  });
+
   it("does not offer AV1 for an end-to-end encrypted Concord share", () => {
     vi.stubGlobal("RTCRtpSender", {
       getCapabilities: () => ({

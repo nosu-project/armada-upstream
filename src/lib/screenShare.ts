@@ -149,16 +149,19 @@ export function preferredE2eeH264Codecs(
   const e2eeCompatible = h264.filter(
     (codec) => codecParameter(codec, "packetization-mode") === "1",
   );
-
-  // Keep Chromium's original list on implementations that do not expose mode
-  // 1 instead of making H.264 impossible to negotiate.
-  if (e2eeCompatible.length === 0) return h264;
-
+  // setCodecPreferences() negotiates exactly what it is given, so the repair
+  // codecs have to survive both branches: a list without video/rtx negotiates
+  // the share with no NACK retransmission at all.
   const repair = codecs.filter((codec) =>
     ["video/rtx", "video/red", "video/ulpfec", "video/flexfec-03"].includes(
       codec.mimeType.toLowerCase(),
     )
   );
+
+  // Keep every H.264 profile on implementations that do not expose mode 1
+  // instead of making H.264 impossible to negotiate.
+  if (e2eeCompatible.length === 0) return [...h264, ...repair];
+
   return [...e2eeCompatible, ...repair];
 }
 
@@ -252,9 +255,14 @@ async function ensureHighLayerCeiling(
               ? encoding
               : best,
           ));
-    // Dynacast disables unused layers. Firefox represents that with a 10 bps
-    // sentinel instead of `active: false`; do not accidentally turn it on.
-    if (high.active === false || high.maxBitrate === 10) return;
+    // Firefox disables an unused layer by pinning it to a 10 bps sentinel
+    // rather than clearing `active`, so writing a ceiling there would turn the
+    // layer back on. Everywhere else the ceiling is recorded even while the
+    // layer is paused: dynacast re-enables a layer by setting `active` alone
+    // and never restores maxBitrate, so skipping the write would cap the layer
+    // at its old ceiling for the rest of the share. `active` is never written
+    // here — the subscription state stays dynacast's to decide.
+    if (high.maxBitrate === 10) return;
     high.maxBitrate = quality.maxBitrate;
     high.maxFramerate = quality.frameRate;
     high.priority = "medium";
@@ -266,6 +274,29 @@ async function ensureHighLayerCeiling(
     // that expose a different encoding count (notably non-simulcast Safari).
     console.warn("failed to confirm screen-share sender ceiling", error);
   }
+}
+
+/**
+ * Snapshot the capture constraints to restore if a quality change fails.
+ *
+ * getConstraints() reports only what applyConstraints() last set, so a capture
+ * straight out of getDisplayMedia() reports nothing at all. Replaying that
+ * would *lift* the caps rather than restore them, leaving a failed attempt at
+ * a lower quality uploading more than it did before. Fall back to pinning what
+ * the track is measurably producing.
+ */
+function captureConstraintSnapshot(track: MediaStreamTrack): MediaTrackConstraints {
+  const applied = track.getConstraints();
+  if (applied.width || applied.height || applied.frameRate) return applied;
+
+  const settings = track.getSettings();
+  const snapshot: MediaTrackConstraints = {};
+  if (settings.width) snapshot.width = { ideal: settings.width, max: settings.width };
+  if (settings.height) snapshot.height = { ideal: settings.height, max: settings.height };
+  if (settings.frameRate) {
+    snapshot.frameRate = { ideal: settings.frameRate, max: settings.frameRate };
+  }
+  return snapshot;
 }
 
 function effectiveVideoCodec(options: TrackPublishOptions | undefined): string {
@@ -411,7 +442,7 @@ export async function applyPublishedScreenShareQuality(
   if (!publication || !track) throw new Error("No active screen share to update.");
 
   const mediaTrack = track.mediaStreamTrack;
-  const previousConstraints = mediaTrack.getConstraints();
+  const previousConstraints = captureConstraintSnapshot(mediaTrack);
   const previousTrackOptions = track.publishOptions;
   const previousPublicationOptions = publication.options;
   const previousDimensions = track.lastEncodedDimensions;
@@ -466,6 +497,18 @@ export async function applyPublishedScreenShareQuality(
     }
     throw error;
   }
+}
+
+/**
+ * A source switch that failed only after the new video reached the sender.
+ *
+ * Everyone is already watching the new screen by then, so the caller must not
+ * offer the "your previous share is still active" reassurance that a cancelled
+ * or rolled-back swap deserves.
+ */
+export function isScreenShareSwitchPartialFailure(error: unknown): boolean {
+  return error instanceof Error &&
+    (error as Error & { videoAdopted?: boolean }).videoAdopted === true;
 }
 
 /**
@@ -541,8 +584,20 @@ export async function switchPublishedScreenShare(
       currentVideo.publishOptions = previousTrackOptions;
       publication.options = previousPublicationOptions;
       currentVideo.lastEncodedDimensions = previousDimensions;
+      throw error;
     }
-    throw error;
+    // The sender already carries the new capture and LiveKit has already let
+    // go of the old screen audio, so the previous share is gone no matter what
+    // happens next. Say so, rather than letting the caller reassure the user
+    // that nothing changed.
+    throw Object.assign(
+      new Error(
+        `Sharing the new source, but its audio could not follow: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      ),
+      { videoAdopted: true as const, cause: error },
+    );
   } finally {
     if (!videoAdopted) replacementVideo.stop();
     if (replacementAudio && !audioAdopted) replacementAudio.stop();

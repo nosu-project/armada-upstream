@@ -18,6 +18,8 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -138,7 +140,13 @@ func status(state string, detail any) {
 }
 
 func run(ctx context.Context, cfg config) error {
+	// The shell's validator accepts unpadded base64; StdEncoding requires the
+	// padding. Decoding both ways keeps a value that passed validation from
+	// failing here instead.
 	material, err := base64.StdEncoding.DecodeString(cfg.KeyMaterial)
+	if err != nil {
+		material, err = base64.RawStdEncoding.DecodeString(strings.TrimRight(cfg.KeyMaterial, "="))
+	}
 	if err != nil {
 		return fmt.Errorf("decode sender material: %w", err)
 	}
@@ -153,12 +161,18 @@ func run(ctx context.Context, cfg config) error {
 	}
 
 	writeComplete := make(chan struct{})
+	// The SDK owns when this callback runs; a second invocation on a bare
+	// close() is a panic whose traceback would reach the shell as unparseable
+	// status lines and a generic exit.
+	var writeCompleteOnce sync.Once
 	input := &countingReadCloser{ReadCloser: os.Stdin}
 	track, err := lksdk.NewLocalReaderTrack(
 		input,
 		webrtc.MimeTypeH265,
 		lksdk.ReaderTrackWithFrameDuration(time.Second/time.Duration(cfg.FrameRate)),
-		lksdk.ReaderTrackWithOnWriteComplete(func() { close(writeComplete) }),
+		lksdk.ReaderTrackWithOnWriteComplete(func() {
+			writeCompleteOnce.Do(func() { close(writeComplete) })
+		}),
 		lksdk.ReaderTrackWithSampleOptions(lksdk.WithFrameEncryptor(encryptor)),
 	)
 	if err != nil {

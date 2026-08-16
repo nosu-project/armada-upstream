@@ -141,18 +141,22 @@ export function supportedScreenShareCodecs({
   return supported;
 }
 
+/**
+ * Explain a codec that `supportedScreenShareCodecs` did not offer.
+ *
+ * There is deliberately no `customHevc` option: that flag only ever *adds*
+ * h265 to the supported set, so a caller can only reach here with the custom
+ * publisher absent — a branch keyed on it would assert the opposite of what
+ * got us here.
+ */
 export function screenShareCodecUnavailableReason(
   codec: ScreenShareCodec,
-  {
-    endToEndEncrypted = false,
-    customHevc = false,
-  }: { endToEndEncrypted?: boolean; customHevc?: boolean } = {},
+  { endToEndEncrypted = false }: { endToEndEncrypted?: boolean } = {},
 ): string {
   if (codec === "av1" && endToEndEncrypted) {
     return "LiveKit cannot frame-encrypt AV1 yet";
   }
   if (codec === "h265") {
-    if (customHevc) return "the Linux H.265 publisher is not ready";
     return "this WebRTC sender exposes no HEVC encoder (OBS uses a separate encoder stack)";
   }
   return "this WebRTC sender does not expose the codec";

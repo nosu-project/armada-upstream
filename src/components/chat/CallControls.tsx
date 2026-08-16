@@ -33,6 +33,7 @@ import { requestPushToTalkOverride, usePushToTalkRuntime } from "@/lib/pushToTal
 import {
   applyPublishedScreenShareQuality,
   installScreenShareCodecPreferences,
+  isScreenShareSwitchPartialFailure,
   switchPublishedScreenShare,
 } from "@/lib/screenShare";
 import {
@@ -185,6 +186,10 @@ export function ScreenShareButton({ className }: { className?: string }) {
 
   const handleCapturePermission = async (error: unknown): Promise<boolean> => {
     if (!(error instanceof Error) || error.name !== "NotAllowedError") return false;
+    // A cancelled picker and a platform denial are the same DOMException
+    // outside macOS, so this stays silent — but never unlogged, or a denied
+    // xdg-desktop-portal request leaves no trace anywhere.
+    console.warn("screen capture was not permitted", error);
     const status = await desktopScreenCaptureAccessStatus();
     if (status === "denied" || status === "restricted") {
       toast({
@@ -314,7 +319,9 @@ export function ScreenShareButton({ className }: { className?: string }) {
       console.warn("failed to switch screen share", error);
       toast({
         title: "Couldn't switch the screen share",
-        description: customHevcActive
+        // The new source is already published once the video swap lands, so
+        // only a swap that failed before that leaves the previous share up.
+        description: customHevcActive || isScreenShareSwitchPartialFailure(error)
           ? error instanceof Error
             ? error.message
             : "The previous H.265 share stopped while the replacement was starting."

@@ -207,14 +207,27 @@ export function desktop(): ArmadaDesktopBridge | undefined {
 /** True when running inside the Armada desktop app. */
 export const isDesktop = (): boolean => Boolean(desktop()?.isDesktop);
 
+// An IPC handler that throws rejects the renderer's promise, so — like every
+// other bridge wrapper here — an unreachable or failing shell reads as "no
+// answer" rather than propagating into whatever rendered the control.
 export async function getDesktopVideoEncoderState(): Promise<DesktopVideoEncoderState | null> {
-  return desktop()?.getVideoEncoderMode?.() ?? null;
+  try {
+    return (await desktop()?.getVideoEncoderMode?.()) ?? null;
+  } catch (error) {
+    console.warn("failed to read the desktop video encoder mode", error);
+    return null;
+  }
 }
 
 export async function setDesktopVideoEncoderMode(
   mode: DesktopVideoEncoderMode,
 ): Promise<DesktopVideoEncoderState | null> {
-  return desktop()?.setVideoEncoderMode?.(mode) ?? null;
+  try {
+    return (await desktop()?.setVideoEncoderMode?.(mode)) ?? null;
+  } catch (error) {
+    console.warn("failed to set the desktop video encoder mode", error);
+    return null;
+  }
 }
 
 /** Probe the custom Linux FFmpeg/VA-API H.265 path. */
@@ -649,19 +662,35 @@ export async function startDesktopHevcScreenShare(
       } catch (error) {
         if (!controller.signal.aborted) {
           console.warn("[screen-share] H.265 frame conversion stopped", error);
+          // postMessage on a closed or disentangled port is a silent no-op
+          // rather than a throw, so the shell is asked to stop unconditionally
+          // instead of only from a catch that would never run.
           try {
             port?.postMessage({
               type: "error",
               error: error instanceof Error ? error.message : String(error),
             });
           } catch {
-            void bridge.stopHevcScreenShare?.();
+            // The stop below is the recovery either way.
           }
+          void bridge.stopHevcScreenShare?.().catch((stopError) =>
+            console.warn("[screen-share] failed to stop the H.265 publisher", stopError),
+          );
         }
       } finally {
         disposeHevcPreview(video);
         if (hevcFrameAbort === controller) hevcFrameAbort = null;
-        if (hevcFramePort === port) hevcFramePort = null;
+        // The pump can end on its own (a conversion or acknowledgement
+        // timeout), and a later stop only closes the port it still knows
+        // about — so clearing the reference without closing strands it.
+        if (hevcFramePort === port) {
+          try {
+            port?.close();
+          } catch {
+            // already closed
+          }
+          hevcFramePort = null;
+        }
       }
     })();
 

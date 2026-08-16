@@ -97,11 +97,25 @@ export function ScreenShareQualityDialog({
 
   useEffect(() => {
     if (!open) return;
+    let cancelled = false;
     const stored = qualityForAvailableCodecs(getScreenShareQuality(), supportedCodecs);
     setQuality(stored);
     setBitrate(bitrateText(stored));
-    void getDesktopVideoEncoderState().then(setEncoderState);
-  }, [open, supportedCodecs]);
+    void getDesktopVideoEncoderState()
+      .then((state) => {
+        if (!cancelled) setEncoderState(state);
+      })
+      .catch((error) => console.warn("failed to read the desktop encoder mode", error));
+    return () => {
+      cancelled = true;
+    };
+    // Deliberately keyed on `open` alone. `supportedCodecs` changes when the
+    // desktop shell's asynchronous H.265 probe resolves, which is routinely
+    // while this dialog is open — re-running would throw away whatever the
+    // user has typed since. An unsupported stored codec is already coerced at
+    // derive time by `normalized` below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   useEffect(() => {
     if (!open || !active || !participant) {
@@ -144,9 +158,11 @@ export function ScreenShareQualityDialog({
     normalized.codec === "h264" && encoderState?.active === "hardware";
 
   const chooseEncoderMode = (mode: DesktopVideoEncoderMode) => {
-    void setDesktopVideoEncoderMode(mode).then((next) => {
-      if (next) setEncoderState(next);
-    });
+    void setDesktopVideoEncoderMode(mode)
+      .then((next) => {
+        if (next) setEncoderState(next);
+      })
+      .catch((error) => console.warn("failed to change the desktop encoder mode", error));
   };
 
   const reset = () => {
@@ -241,7 +257,6 @@ export function ScreenShareQualityDialog({
                       {!supportedCodecs.has(codec.id) &&
                         ` (unavailable: ${screenShareCodecUnavailableReason(codec.id, {
                           endToEndEncrypted,
-                          customHevc: customHevcAvailable,
                         })})`}
                     </SelectItem>
                   ))}

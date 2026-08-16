@@ -26,6 +26,10 @@ const HOST_FFMPEG_PATHS = [
 const MIN_BITRATE = 250_000;
 const MAX_BITRATE = 25_000_000;
 const MAX_CONFIG_BYTES = 64 * 1024;
+/** Cap on an unterminated publisher status line held between stderr chunks. */
+const MAX_STATUS_CARRY_BYTES = 64 * 1024;
+/** How long a child gets to act on SIGTERM before SIGKILL. */
+const KILL_ESCALATION_MS = 5_000;
 const MAX_RENDER_NODES = 4;
 // Some otherwise capable VA-API HEVC drivers reject 128px-wide inputs. Use a
 // small, conventional 16:9 frame that exercises the same upload/encode path
@@ -480,7 +484,7 @@ function helperConfig(config) {
   });
 }
 
-function parseStatusLines(chunk, carry, onLine) {
+function parseStatusLines(chunk, carry, onLine, maxCarry = MAX_STATUS_CARRY_BYTES) {
   const combined = carry + chunk.toString("utf8");
   const lines = combined.split(/\r?\n/);
   const nextCarry = lines.pop() || "";
@@ -488,7 +492,9 @@ function parseStatusLines(chunk, carry, onLine) {
     const trimmed = line.trim();
     if (trimmed) onLine(trimmed);
   }
-  return nextCarry;
+  // A subprocess that never writes a newline must not grow a buffer in the
+  // main process without limit; keep the tail, as the FFmpeg stderr ring does.
+  return nextCarry.length > maxCarry ? nextCarry.slice(-maxCarry) : nextCarry;
 }
 
 function createHevcScreenShareController({
@@ -501,16 +507,54 @@ function createHevcScreenShareController({
   let lastStatus = { state: "idle", active: false };
   let startGeneration = 0;
 
-  function emit(state, detail) {
+  /**
+   * `detail` reaches here parsed from the publisher's own stderr, so it must
+   * not be able to answer the questions this controller answers. Spreading it
+   * last let a subprocess relabel `state` — including past the rule that keeps
+   * an empty signaled track in "starting" until real HEVC bytes exist — and
+   * rename the session the renderer correlates against.
+   */
+  function emit(state, detail, sessionId = session?.sessionId) {
+    const { state: _state, sessionId: _sessionId, ...rest } =
+      detail && typeof detail === "object" ? detail : {};
     const status = {
+      ...rest,
       state,
-      ...(session?.sessionId ? { sessionId: session.sessionId } : {}),
-      ...(detail && typeof detail === "object" ? detail : {}),
+      ...(sessionId ? { sessionId } : {}),
     };
     lastStatus = status;
     sendStatus(status);
     if (session) session.status = status;
     return status;
+  }
+
+  /**
+   * SIGTERM, then SIGKILL for a child that never processed it. FFmpeg blocked
+   * in a VA-API ioctl on a wedged GPU is a first-class failure mode here, and
+   * it holds the render node until something stronger arrives.
+   */
+  function terminate(child) {
+    if (!child) return;
+    let exited = false;
+    let timer = null;
+    child.once?.("close", () => {
+      exited = true;
+      clearTimeout(timer);
+    });
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // process already exited
+    }
+    timer = setTimeout(() => {
+      if (exited) return;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // process already exited
+      }
+    }, KILL_ESCALATION_MS);
+    timer.unref?.();
   }
 
   function stopSession(reason = "stopped") {
@@ -535,9 +579,9 @@ function createHevcScreenShareController({
     } catch {
       // process already exited
     }
-    active.ffmpeg.kill("SIGTERM");
-    active.helper.kill("SIGTERM");
-    return emit("stopped", { active: false, reason, sessionId: active.sessionId });
+    terminate(active.ffmpeg);
+    terminate(active.helper);
+    return emit("stopped", { active: false, reason }, active.sessionId);
   }
 
   function stop(reason = "stopped") {
@@ -546,8 +590,15 @@ function createHevcScreenShareController({
   }
 
   async function start(rawConfig, port, sessionId) {
+    // Everything that can refuse this start runs before the live session is
+    // retired: a rejected configuration or an encoder that has gone away must
+    // cost the user an error message, not the share they are already giving.
+    const config = normalizeConfig(rawConfig);
+    const configJSON = helperConfig(config);
+    if (Buffer.byteLength(configJSON) > MAX_CONFIG_BYTES) {
+      throw new Error("The H.265 publisher configuration is too large.");
+    }
     const generation = ++startGeneration;
-    if (session) stopSession("replaced");
     const cap = await capability();
     if (generation !== startGeneration) {
       throw new Error("The H.265 publisher start was cancelled.");
@@ -556,11 +607,7 @@ function createHevcScreenShareController({
     if (!path.isAbsolute(cap.helperPath || "") || !path.isAbsolute(cap.ffmpegPath || "")) {
       throw new Error("The H.265 capability probe did not resolve its publisher and FFmpeg paths.");
     }
-    const config = normalizeConfig(rawConfig);
-    const configJSON = helperConfig(config);
-    if (Buffer.byteLength(configJSON) > MAX_CONFIG_BYTES) {
-      throw new Error("The H.265 publisher configuration is too large.");
-    }
+    if (session) stopSession("replaced");
 
     const helper = spawnImpl(cap.helperPath, [], {
       stdio: ["pipe", "ignore", "pipe", "pipe"],
@@ -600,9 +647,6 @@ function createHevcScreenShareController({
       pipelineStage: "Waiting for capture frames",
     });
 
-    helper.stdio[3].end(configJSON);
-    ffmpeg.stdout.pipe(helper.stdin);
-
     let ffmpegError = "";
     ffmpeg.stderr.on("data", (chunk) => {
       ffmpegError = (ffmpegError + chunk.toString("utf8")).slice(-8_192);
@@ -624,10 +668,23 @@ function createHevcScreenShareController({
       } catch {
         // already closed
       }
-      ffmpeg.kill("SIGTERM");
-      helper.kill("SIGTERM");
-      emit("error", { active: false, error: detail, sessionId: active.sessionId });
+      terminate(ffmpeg);
+      terminate(helper);
+      emit("error", { active: false, error: detail }, active.sessionId);
     };
+
+    // Every pipe this session holds needs an "error" listener before anything
+    // is written to it. A stream error with no listener is an uncaught
+    // exception, and in the main process that ends the app rather than the
+    // share — which is how a helper that dies before reading its config would
+    // otherwise be reported.
+    ffmpeg.stdin.on("error", (error) => failed("FFmpeg", null, error.message));
+    ffmpeg.stdout.on("error", (error) => failed("FFmpeg", null, error.message));
+    helper.stdin.on("error", (error) => failed("Publisher", null, error.message));
+    helper.stdio[3].on("error", (error) => failed("Publisher", null, error.message));
+
+    helper.stdio[3].end(configJSON);
+    ffmpeg.stdout.pipe(helper.stdin);
 
     let helperCarry = "";
     helper.stderr.on("data", (chunk) => {
@@ -723,10 +780,11 @@ function createHevcScreenShareController({
     };
     ffmpeg.once("error", (error) => failed("FFmpeg", null, error.message));
     helper.once("error", (error) => failed("Publisher", null, error.message));
-    ffmpeg.once("exit", (code, signal) => failed("FFmpeg", code, signal));
-    helper.once("exit", (code, signal) => failed("Publisher", code, signal));
-    ffmpeg.stdin.on("error", (error) => failed("FFmpeg", null, error.message));
-    helper.stdin.on("error", (error) => failed("Publisher", null, error.message));
+    // "close" rather than "exit": stderr is only guaranteed flushed by then,
+    // and the driver's own complaint is the most useful thing this feature can
+    // put in front of a user whose hevc_vaapi refused a profile.
+    ffmpeg.once("close", (code, signal) => failed("FFmpeg", code, signal));
+    helper.once("close", (code, signal) => failed("Publisher", code, signal));
 
     const acknowledge = (sequence) => {
       if (sequence === null || session !== active) return;

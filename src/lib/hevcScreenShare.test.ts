@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { Track, type Participant } from "livekit-client";
 import { describe, expect, it, vi } from "vitest";
 
@@ -9,6 +12,19 @@ import {
 } from "@/lib/hevcScreenShare";
 
 describe("custom H.265 screen-share participants", () => {
+  it("names the track the Go publisher actually publishes", () => {
+    // The only thing tying the sidecar to its presenter is this string, and it
+    // is written down once in TypeScript and once in Go. A rename on either
+    // side makes every roster show the presenter twice, with a join chime for
+    // their own screen share, and nothing else would notice.
+    const publisher = readFileSync(
+      resolve(process.cwd(), "electron/hevc-publisher/main.go"),
+      "utf8",
+    );
+
+    expect(publisher).toContain(`Name:        ${JSON.stringify(ARMADA_HEVC_SCREEN_SHARE_TRACK)}`);
+  });
+
   it("recognizes a sidecar only from its verified signed identity role", () => {
     const publication = { source: Track.Source.ScreenShare, kind: Track.Kind.Video };
     const participant = {

@@ -7,6 +7,7 @@ import {
   getPublishedScreenShareSenderStats,
   getRemoteScreenShareReceiverStats,
   installScreenShareCodecPreferences,
+  isScreenShareSwitchPartialFailure,
   preferredE2eeH264Codecs,
   switchPublishedScreenShare,
 } from "@/lib/screenShare";
@@ -43,6 +44,15 @@ function participantWith(videoTrack: object, audioTrack?: object) {
     publishTrack: vi.fn(async () => ({})),
     unpublishTrack: vi.fn(async () => ({})),
   } as unknown as LocalParticipant;
+}
+
+function senderWith(encodings: RTCRtpEncodingParameters[]) {
+  const parameters = { encodings } as RTCRtpSendParameters;
+  return {
+    encodings,
+    getParameters: vi.fn(() => parameters),
+    setParameters: vi.fn(async () => {}),
+  };
 }
 
 describe("switchPublishedScreenShare", () => {
@@ -216,6 +226,196 @@ describe("switchPublishedScreenShare", () => {
     );
     expect(currentVideo.replaceTrack).not.toHaveBeenCalled();
   });
+
+  it("reports that the source changed when only its audio could not follow", async () => {
+    const currentVideo = { replaceTrack: vi.fn(async () => {}) };
+    const currentAudio = {
+      replaceTrack: vi.fn(async () => {
+        throw new Error("audio sender closed");
+      }),
+    };
+    const participant = participantWith(currentVideo, currentAudio);
+    const video = mediaTrack("video");
+    const audio = mediaTrack("audio");
+
+    // The video swap already succeeded, so the caller must not be told the
+    // previous share survived — the new source is live and silent.
+    await expect(
+      switchPublishedScreenShare(
+        participant,
+        DEFAULT_SCREEN_SHARE_QUALITY,
+        async () => mediaStream(video, audio),
+      ),
+    ).rejects.toMatchObject({
+      videoAdopted: true,
+      message: expect.stringContaining("audio"),
+    });
+
+    expect(currentVideo.replaceTrack).toHaveBeenCalledWith(video, {
+      userProvidedTrack: false,
+    });
+    expect(video.stop).not.toHaveBeenCalled();
+  });
+
+  it("does not claim the previous share survived a failed source swap", async () => {
+    const currentVideo = { replaceTrack: vi.fn(async () => {}) };
+    const participant = participantWith(currentVideo);
+    const video = mediaTrack("video");
+    const audio = mediaTrack("audio");
+    (participant.publishTrack as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("audio publish refused"),
+    );
+
+    const error = await switchPublishedScreenShare(
+      participant,
+      DEFAULT_SCREEN_SHARE_QUALITY,
+      async () => mediaStream(video, audio),
+    ).catch((thrown: unknown) => thrown);
+
+    expect(isScreenShareSwitchPartialFailure(error)).toBe(true);
+  });
+});
+
+describe("ensureHighLayerCeiling", () => {
+  function trackWithSender(sender: ReturnType<typeof senderWith>) {
+    const media = {
+      applyConstraints: vi.fn(async () => {}),
+      getConstraints: vi.fn(() => ({})),
+      getSettings: vi.fn(() => ({ width: 1920, height: 1080, frameRate: 30 })),
+      contentHint: "",
+    } as unknown as MediaStreamTrack;
+    return {
+      mediaStreamTrack: media,
+      sender,
+      publishOptions: { videoCodec: "vp8", simulcast: false },
+      replaceTrack: vi.fn(async () => {}),
+    };
+  }
+
+  it("raises the ceiling of the full-resolution simulcast layer", async () => {
+    const sender = senderWith([
+      { rid: "h", maxBitrate: 1_000_000, scaleResolutionDownBy: 2 },
+      { rid: "f", maxBitrate: 3_000_000, scaleResolutionDownBy: 1 },
+    ]);
+    const currentVideo = trackWithSender(sender);
+    const participant = participantWith(currentVideo);
+
+    await applyPublishedScreenShareQuality(participant, {
+      ...DEFAULT_SCREEN_SHARE_QUALITY,
+      delivery: "full",
+      frameRate: 60,
+      maxBitrate: 12_000_000,
+    });
+
+    expect(sender.setParameters).toHaveBeenCalledOnce();
+    expect(sender.encodings[1]).toMatchObject({
+      maxBitrate: 12_000_000,
+      maxFramerate: 60,
+    });
+    expect(sender.encodings[0].maxBitrate).toBe(1_000_000);
+  });
+
+  it("still records the ceiling on a layer dynacast has paused", async () => {
+    // Dynacast turns unused layers off with `active: false` and turns them back
+    // on by setting `active` alone — it never restores maxBitrate. Skipping the
+    // write here would cap the layer at its old ceiling for the rest of the
+    // share, which is the common case for a presenter nobody has subscribed to
+    // at full resolution yet.
+    const sender = senderWith([{ rid: "f", active: false, maxBitrate: 3_000_000 }]);
+    const currentVideo = trackWithSender(sender);
+    const participant = participantWith(currentVideo);
+
+    await applyPublishedScreenShareQuality(participant, {
+      ...DEFAULT_SCREEN_SHARE_QUALITY,
+      delivery: "full",
+      maxBitrate: 12_000_000,
+    });
+
+    expect(sender.encodings[0]).toMatchObject({ active: false, maxBitrate: 12_000_000 });
+    expect(sender.setParameters).toHaveBeenCalledOnce();
+  });
+
+  it("leaves Firefox's 10 bps disabled-layer sentinel alone", async () => {
+    const sender = senderWith([{ rid: "f", maxBitrate: 10 }]);
+    const currentVideo = trackWithSender(sender);
+    const participant = participantWith(currentVideo);
+
+    await applyPublishedScreenShareQuality(participant, {
+      ...DEFAULT_SCREEN_SHARE_QUALITY,
+      delivery: "full",
+      maxBitrate: 12_000_000,
+    });
+
+    expect(sender.encodings[0].maxBitrate).toBe(10);
+    expect(sender.setParameters).not.toHaveBeenCalled();
+  });
+});
+
+describe("applyPublishedScreenShareQuality rollback", () => {
+  it("restores the capture the track was actually producing", async () => {
+    // getConstraints() reports only what applyConstraints() previously set, so
+    // a capture straight out of getDisplayMedia() reports nothing. Replaying
+    // that would lift the caps instead of restoring them.
+    const media = {
+      applyConstraints: vi.fn(async () => {}),
+      getConstraints: vi.fn(() => ({})),
+      getSettings: vi.fn(() => ({ width: 1920, height: 1080, frameRate: 30 })),
+      contentHint: "",
+    } as unknown as MediaStreamTrack;
+    const currentVideo = {
+      mediaStreamTrack: media,
+      publishOptions: { videoCodec: "vp8", simulcast: false },
+      lastEncodedDimensions: { width: 1920, height: 1080 },
+      replaceTrack: vi.fn(async () => {
+        throw new Error("sender closed");
+      }),
+    };
+    const participant = participantWith(currentVideo);
+
+    await expect(
+      applyPublishedScreenShareQuality(participant, {
+        ...DEFAULT_SCREEN_SHARE_QUALITY,
+        resolution: "1440p",
+        frameRate: 60,
+      }),
+    ).rejects.toThrow("sender closed");
+
+    expect(media.applyConstraints).toHaveBeenLastCalledWith({
+      width: { ideal: 1920, max: 1920 },
+      height: { ideal: 1080, max: 1080 },
+      frameRate: { ideal: 30, max: 30 },
+    });
+    expect(currentVideo.publishOptions).toEqual({ videoCodec: "vp8", simulcast: false });
+    expect(currentVideo.lastEncodedDimensions).toEqual({ width: 1920, height: 1080 });
+  });
+
+  it("replays the constraints a previous update applied", async () => {
+    const applied = {
+      width: { ideal: 2560, max: 2560 },
+      height: { ideal: 1440, max: 1440 },
+      frameRate: { ideal: 60, max: 60 },
+    };
+    const media = {
+      applyConstraints: vi.fn(async () => {}),
+      getConstraints: vi.fn(() => applied),
+      getSettings: vi.fn(() => ({ width: 2560, height: 1440, frameRate: 60 })),
+      contentHint: "",
+    } as unknown as MediaStreamTrack;
+    const currentVideo = {
+      mediaStreamTrack: media,
+      publishOptions: { videoCodec: "vp8", simulcast: false },
+      replaceTrack: vi.fn(async () => {
+        throw new Error("sender closed");
+      }),
+    };
+    const participant = participantWith(currentVideo);
+
+    await expect(
+      applyPublishedScreenShareQuality(participant, DEFAULT_SCREEN_SHARE_QUALITY),
+    ).rejects.toThrow("sender closed");
+
+    expect(media.applyConstraints).toHaveBeenLastCalledWith(applied);
+  });
 });
 
 describe("getPublishedScreenShareSenderStats", () => {
@@ -348,6 +548,26 @@ describe("preferredE2eeH264Codecs", () => {
 
     expect(preferredE2eeH264Codecs(codecs)).toEqual([
       codecs[0],
+      codecs[2],
+      codecs[3],
+    ]);
+  });
+
+  it("keeps retransmission and FEC when no sender exposes mode 1", () => {
+    // Dropping video/rtx from a setCodecPreferences() list negotiates the share
+    // without NACK retransmission, so the fallback would be worse on a lossy
+    // link than the path it is falling back from.
+    const codecs: RTCRtpCodec[] = [
+      { mimeType: "video/H264", clockRate: 90_000, sdpFmtpLine: "packetization-mode=0;profile-level-id=42e01f" },
+      { mimeType: "video/rtx", clockRate: 90_000 },
+      { mimeType: "video/red", clockRate: 90_000 },
+      { mimeType: "video/ulpfec", clockRate: 90_000 },
+      { mimeType: "video/VP8", clockRate: 90_000 },
+    ];
+
+    expect(preferredE2eeH264Codecs(codecs)).toEqual([
+      codecs[0],
+      codecs[1],
       codecs[2],
       codecs[3],
     ]);

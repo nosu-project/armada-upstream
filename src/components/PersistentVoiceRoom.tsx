@@ -1051,6 +1051,12 @@ function ConcordVoiceRoom({
       ? hevcIdentitiesRef.current.filter((identity) => identity !== active.identity)
       : hevcIdentitiesRef.current;
     if (active) {
+      // Retiring the session id above means the shell's own "stopped" event is
+      // refused from here on, so nothing else will clear this. Leaving it set
+      // keeps the whole UI — the active dropdown, the diagnostics panel, the
+      // quality path — acting on a share that has already ended, which is what
+      // stopping from the OS affordance does.
+      setHevcStatus({ state: "stopped", active: false });
       hevcIdentitiesRef.current = remainingIdentities;
       setHevcIdentities(remainingIdentities);
       // End trusted capture immediately. Shell IPC and relay delivery are
@@ -1088,6 +1094,15 @@ function ConcordVoiceRoom({
     }
   }, [announceAdditionalIdentities, e2ee.room]);
 
+  // `stopHevc` is rebuilt whenever the Concord fold hands down a new channel
+  // object, so nothing whose *cleanup* stops the share may depend on it: React
+  // runs a cleanup on every dependency change, not only on unmount, and that
+  // would retire a live screen share with no user action and no error. Reach
+  // for the latest callback through a ref instead — the same idiom the
+  // heartbeat effect uses for the identical reason.
+  const stopHevcRef = useRef(stopHevc);
+  stopHevcRef.current = stopHevc;
+
   useEffect(() => {
     let cancelled = false;
     void desktopHevcScreenShareCapability().then((capability) => {
@@ -1098,20 +1113,20 @@ function ConcordVoiceRoom({
       setHevcStatus(status);
       if (status.state === "error" || status.state === "stopped") {
         shellHevcSessions.current.retire(status.sessionId);
-        void stopHevc(false);
+        void stopHevcRef.current(false);
       }
     });
     return () => {
       cancelled = true;
       unsubscribe();
     };
-  }, [stopHevc]);
+  }, []);
 
   useEffect(
     () => () => {
-      void stopHevc(true);
+      void stopHevcRef.current(true);
     },
-    [stopHevc],
+    [],
   );
 
   const startHevc = useCallback(async (stream: MediaStream, quality: ScreenShareQuality) => {
@@ -1142,6 +1157,27 @@ function ConcordVoiceRoom({
     const assertInitialCurrent = () => {
       if (!initialCurrent()) throw new Error("The H.265 screen share was cancelled.");
     };
+
+    // Everything below awaits at least a capability probe, an AV-broker mint
+    // and a relay round-trip, and DOM events are not buffered: a listener
+    // attached after those awaits never hears a capture the user cancelled
+    // during them, and the publisher then starts on a dead track. `stop()`
+    // does not fire this event, so a programmatic teardown cannot trip it.
+    let adopted: ActiveHevcCapture | null = null;
+    video.addEventListener(
+      "ended",
+      () => {
+        if (startGeneration !== hevcStartGeneration.current) return;
+        if (adopted) {
+          if (activeHevc.current === adopted) void stopHevcRef.current(true);
+          return;
+        }
+        // Cancel the start still in flight; its next generation check refuses
+        // and releases the capture down the ordinary failure path.
+        hevcStartGeneration.current += 1;
+      },
+      { once: true },
+    );
 
     let capability: DesktopHevcScreenShareCapability;
     try {
@@ -1248,6 +1284,7 @@ function ConcordVoiceRoom({
     }
 
     const active: ActiveHevcCapture = { stream, identity: publisherToken.identity };
+    adopted = active;
     pendingHevcCaptures.current.delete(stream);
     activeHevc.current = active;
     hevcIdentitiesRef.current = [publisherToken.identity];
@@ -1271,13 +1308,6 @@ function ConcordVoiceRoom({
       // named track alone can never make an ordinary participant disappear.
       await announceAdditionalIdentities([publisherToken.identity]);
       assertCurrent();
-      video.addEventListener(
-        "ended",
-        () => {
-          if (current() && activeHevc.current === active) void stopHevc(true);
-        },
-        { once: true },
-      );
       const status = await startDesktopHevcScreenShare(video, {
         url: publisherToken.url,
         token: publisherToken.token,

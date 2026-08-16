@@ -1243,12 +1243,25 @@ const hevcScreenShare = createHevcScreenShareController({
 });
 
 function installHevcScreenShareIpc() {
-  ipcMain.handle("armada:hevc-screen-share-capability", () => detectCachedHevcCapability());
-  ipcMain.handle("armada:hevc-screen-share-status", () => hevcScreenShare.status());
-  ipcMain.handle("armada:hevc-screen-share-start", async (event, config) => {
+  // Every handler is gated, not just the one that spawns: the capability probe
+  // runs FFmpeg, and stop() can cancel a session another sender does not own.
+  // Only the main window has this preload, so the guard costs nothing today
+  // and stops being free to omit the day a second window exists.
+  const requireMainWindow = (event) => {
     if (!mainWindow || event.sender !== mainWindow.webContents) {
       throw new Error("H.265 publishing is available only to Armada's main window.");
     }
+  };
+  ipcMain.handle("armada:hevc-screen-share-capability", (event) => {
+    requireMainWindow(event);
+    return detectCachedHevcCapability();
+  });
+  ipcMain.handle("armada:hevc-screen-share-status", (event) => {
+    requireMainWindow(event);
+    return hevcScreenShare.status();
+  });
+  ipcMain.handle("armada:hevc-screen-share-start", async (event, config) => {
+    requireMainWindow(event);
     const { port1, port2 } = new MessageChannelMain();
     const sessionId = randomUUID();
     try {
@@ -1268,7 +1281,10 @@ function installHevcScreenShareIpc() {
       throw error;
     }
   });
-  ipcMain.handle("armada:hevc-screen-share-stop", () => hevcScreenShare.stop("requested"));
+  ipcMain.handle("armada:hevc-screen-share-stop", (event) => {
+    requireMainWindow(event);
+    return hevcScreenShare.stop("requested");
+  });
 }
 
 // ── Permissions (microphone/camera for voice) ───────────────────────────────
