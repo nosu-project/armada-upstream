@@ -1,13 +1,8 @@
 import type { LocalVideoTrack, RemoteVideoTrack } from "livekit-client";
 import { useEffect, useState } from "react";
+import { Activity } from "lucide-react";
 
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ChromeDialogContent, Dialog, DialogDescription } from "@/components/ui/dialog";
 import {
   getLocalScreenShareSenderStats,
   getRemoteScreenShareReceiverStats,
@@ -87,16 +82,24 @@ export function ScreenShareDiagnosticsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Stream details</DialogTitle>
-          <DialogDescription>
+      <ChromeDialogContent title="Stream details">
+        <div className="flex flex-col items-center gap-2 text-center">
+          <div className="flex size-12 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
+            <Activity className="size-6" />
+          </div>
+          <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
+            stream details
+          </h2>
+          {/* A DialogDescription rather than a bare <p>: it renders the same
+              element with the same classes, and also wires aria-describedby,
+              which ChromeDialogContent's sr-only title does not supply. */}
+          <DialogDescription className="text-sm text-muted-foreground">
             {local ? "What this client is capturing and sending" : "What this client is receiving and decoding"}
             {participantName ? ` for ${participantName}` : ""}. Values update once per second.
           </DialogDescription>
-        </DialogHeader>
+        </div>
 
-        <dl className="rounded-md border bg-muted/20 px-3 text-sm">
+        <dl className="mt-6 clip-corner-lg bg-background/40 px-3 text-sm">
           <Detail label="Direction" value={local ? "Sending" : "Receiving"} />
           <Detail label="Media security" value={encrypted ? "End-to-end encrypted" : "Transport encrypted"} />
           {local ? nativeHevc ? (
@@ -158,7 +161,7 @@ export function ScreenShareDiagnosticsDialog({
             </>
           )}
         </dl>
-      </DialogContent>
+      </ChromeDialogContent>
     </Dialog>
   );
 }

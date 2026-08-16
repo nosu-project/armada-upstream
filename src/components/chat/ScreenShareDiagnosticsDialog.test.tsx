@@ -4,6 +4,15 @@ import { describe, expect, it, vi } from "vitest";
 import { ScreenShareDiagnosticsDialog } from "@/components/chat/ScreenShareDiagnosticsDialog";
 
 describe("ScreenShareDiagnosticsDialog", () => {
+  it("renders in Armada's chrome dialog shell", () => {
+    render(<ScreenShareDiagnosticsDialog open onOpenChange={vi.fn()} />);
+
+    // ChromeDialogContent is the app's single dialog idiom; the bare shadcn
+    // card it replaces has no cut corners and no chrome vessel.
+    expect(document.querySelector(".chrome-dialog")).not.toBeNull();
+    expect(document.querySelector(".chrome-dialog-title")?.textContent).toBe("stream details");
+  });
+
   it("shows live custom HEVC pipeline details on demand", () => {
     render(
       <ScreenShareDiagnosticsDialog

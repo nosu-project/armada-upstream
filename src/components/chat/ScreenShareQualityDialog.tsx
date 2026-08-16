@@ -1,15 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import type { LocalParticipant } from "livekit-client";
+import { MonitorUp } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ChromeDialogContent, Dialog, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -172,17 +166,25 @@ export function ScreenShareQualityDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Screen share quality</DialogTitle>
-          <DialogDescription>
+      <ChromeDialogContent title="Screen share quality" className="sm:max-w-lg">
+        <div className="flex flex-col items-center gap-2 text-center">
+          <div className="flex size-12 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
+            <MonitorUp className="size-6" />
+          </div>
+          <h2 className="chrome-dialog-title font-mono font-bold lowercase tracking-tight text-foreground">
+            screen share quality
+          </h2>
+          {/* A DialogDescription rather than a bare <p>: it renders the same
+              element with the same classes, and also wires aria-describedby,
+              which ChromeDialogContent's sr-only title does not supply. */}
+          <DialogDescription className="text-sm text-muted-foreground">
             Choose capture and encoder limits. Full quality prevents viewers from being assigned a
             smaller spatial layer.
           </DialogDescription>
-        </DialogHeader>
+        </div>
 
         <form
-          className="space-y-4"
+          className="mt-6 space-y-5"
           onSubmit={(event) => {
             event.preventDefault();
             onOpenChange(false);
@@ -351,7 +353,7 @@ export function ScreenShareQualityDialog({
           </div>
 
           {active && senderStats && (
-            <div className="rounded-md border bg-muted/30 p-3 text-xs" aria-live="polite">
+            <div className="clip-corner-lg bg-background/40 p-3 text-xs">
               <p className="font-medium text-foreground">Active sender</p>
               <p className="mt-1 text-muted-foreground">
                 Capture {senderStats.captureWidth ?? "?"}×{senderStats.captureHeight ?? "?"}
@@ -383,7 +385,7 @@ export function ScreenShareQualityDialog({
           )}
 
           {active && nativeHevcStatus?.active && (
-            <div className="rounded-md border bg-muted/30 p-3 text-xs" aria-live="polite">
+            <div className="clip-corner-lg bg-background/40 p-3 text-xs">
               <p className="font-medium text-foreground">Active native sender</p>
               <p className="mt-1 text-muted-foreground">
                 {nativeHevcStatus.width ?? "?"}×{nativeHevcStatus.height ?? "?"}
@@ -406,19 +408,33 @@ export function ScreenShareQualityDialog({
             </p>
           )}
 
-          <DialogFooter>
-            <Button type="button" variant="ghost" onClick={reset}>
+          <div className="flex gap-2 pt-1">
+            <Button
+              type="button"
+              variant="ghost"
+              className="flex-1 clip-corner-lg"
+              onClick={reset}
+            >
               Reset defaults
             </Button>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            <Button
+              type="button"
+              variant="ghost"
+              className="flex-1 clip-corner-lg"
+              onClick={() => onOpenChange(false)}
+            >
               Cancel
             </Button>
-            <Button type="submit" disabled={h264BlockedByHardware}>
+            <Button
+              type="submit"
+              className="flex-1 clip-corner-lg"
+              disabled={h264BlockedByHardware}
+            >
               {active ? "Apply" : "Share screen"}
             </Button>
-          </DialogFooter>
+          </div>
         </form>
-      </DialogContent>
+      </ChromeDialogContent>
     </Dialog>
   );
 }

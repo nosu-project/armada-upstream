@@ -10,6 +10,22 @@ afterEach(() => {
 });
 
 describe("ScreenShareQualityDialog", () => {
+  it("renders in Armada's chrome dialog shell", () => {
+    render(
+      <ScreenShareQualityDialog
+        open
+        active={false}
+        onOpenChange={vi.fn()}
+        onConfirm={vi.fn()}
+      />,
+    );
+
+    // ChromeDialogContent is the app's single dialog idiom; the bare shadcn
+    // card it replaces has no cut corners and no chrome vessel.
+    expect(document.querySelector(".chrome-dialog")).not.toBeNull();
+    expect(document.querySelector(".chrome-dialog-title")?.textContent).toBe("screen share quality");
+  });
+
   it("submits a custom bitrate for an active share", () => {
     const onConfirm = vi.fn();
     render(
