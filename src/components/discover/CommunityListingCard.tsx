@@ -218,9 +218,14 @@ export function CommunityListingCard({
   // bundle's capped preview copy.
   const description = folded?.metadata?.description?.trim() || bundle?.description?.trim() || "";
   const initial = name.charAt(0).toUpperCase() || "·";
+  // The fold is authoritative, the peek is the non-member's version of it, and
+  // the bundle's vended channels are the floor both fall back to — a member
+  // waiting on their fold showed a count before this probe existed and must
+  // not now count down to zero while it loads.
+  const bundleChannelCount = Array.isArray(bundle?.channels) ? bundle.channels.length : 0;
   const channelCount = folded
     ? [...folded.channels.values()].filter((c) => !c.deleted).length
-    : (controlPeek?.channelCount ?? 0);
+    : (controlPeek?.channelCount ?? bundleChannelCount);
   const publicChannelIdHexes = useMemo(() => {
     if (folded) {
       return [...folded.channels.values()]

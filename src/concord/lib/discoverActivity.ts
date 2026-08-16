@@ -89,27 +89,82 @@ export function discoverStreamAuthors(
   return [...out];
 }
 
-/** One `limit: 1` filter per target — relays return newest first. */
-export function discoverActivityFilters(targets: DiscoverActivityTarget[]): NostrFilter[] {
+/**
+ * One `limit: 1` filter per target — relays return newest first.
+ *
+ * `until` is not decoration. A wrap's `created_at` is whatever its publisher
+ * typed, and a Discover invite hands every link-holder the guestbook stream's
+ * SECRET (its group key derives from the bundle's own `community_root`), so
+ * any passer-by can post a wrap dated 2038 and pin the listing at "Active
+ * now" forever. Bounding the REQ makes the relay skip past the forgery to the
+ * newest wrap that is actually in the past — the same bound `planeSync`'s
+ * pager applies, and for the same reason.
+ */
+export function discoverActivityFilters(
+  targets: DiscoverActivityTarget[],
+  now = nowSeconds(),
+): NostrFilter[] {
   return targets
     .filter((t) => t.authors.length > 0)
     .map((t) => ({
       kinds: [KIND_WRAP],
       authors: t.authors,
+      until: now,
       limit: 1,
     }));
 }
 
-/** De-duplicated, normalized relay URLs across every target. */
-export function discoverActivityRelays(targets: DiscoverActivityTarget[]): string[] {
-  const urls = new Set<string>();
+/**
+ * Relays commonly cap filters per REQ, and the cap is enforced by rejecting
+ * the whole subscription — so an over-wide REQ costs EVERY listing in it its
+ * timestamp, not just the ones past the limit.
+ */
+const MAX_FILTERS_PER_REQ = 20;
+
+/** One REQ: a relay set and the filters to ask it for. */
+export interface DiscoverActivityBatch {
+  relays: string[];
+  filters: NostrFilter[];
+}
+
+/**
+ * Split targets into REQs grouped by RELAY SET, then chunked.
+ *
+ * Sending every community's filters to the union of every community's relays
+ * would ask each relay about listings it hosts nothing for — N×M authors on
+ * the wire to answer N questions, and it tells each operator the whole set of
+ * communities this client is looking at. Grouping by relay set keeps a
+ * listing's authors on the relays that listing actually names.
+ */
+export function discoverActivityBatches(
+  targets: DiscoverActivityTarget[],
+  now = nowSeconds(),
+): DiscoverActivityBatch[] {
+  const byRelaySet = new Map<string, { relays: string[]; targets: DiscoverActivityTarget[] }>();
   for (const t of targets) {
-    for (const raw of t.relays) {
-      const n = normalizeRelayUrl(raw);
-      if (n) urls.add(n);
+    if (t.authors.length === 0) continue;
+    const relays = [
+      ...new Set(t.relays.map(normalizeRelayUrl).filter((u): u is string => !!u)),
+    ].sort();
+    if (relays.length === 0) continue;
+    const key = relays.join("\n");
+    const bucket = byRelaySet.get(key);
+    if (bucket) bucket.targets.push(t);
+    else byRelaySet.set(key, { relays, targets: [t] });
+  }
+
+  const out: DiscoverActivityBatch[] = [];
+  for (const { relays, targets: group } of byRelaySet.values()) {
+    for (let i = 0; i < group.length; i += MAX_FILTERS_PER_REQ) {
+      const slice = group.slice(i, i + MAX_FILTERS_PER_REQ);
+      out.push({ relays, filters: discoverActivityFilters(slice, now) });
     }
   }
-  return [...urls];
+  return out;
+}
+
+function nowSeconds(): number {
+  return Math.floor(Date.now() / 1000);
 }
 
 /**
@@ -120,6 +175,7 @@ export function discoverActivityRelays(targets: DiscoverActivityTarget[]): strin
 export function activityByLinkSigner(
   targets: DiscoverActivityTarget[],
   events: ReadonlyArray<{ pubkey: string; created_at: number }>,
+  now = nowSeconds(),
 ): Record<string, number> {
   const authorToSigners = new Map<string, string[]>();
   for (const t of targets) {
@@ -131,6 +187,11 @@ export function activityByLinkSigner(
   }
   const out: Record<string, number> = {};
   for (const ev of events) {
+    // The filter's `until` asked the relay for this, but the answer is not the
+    // filter: a relay is free to serve a future-dated wrap anyway, and one is
+    // enough to freeze the card at "Active now" (shortTimeAgo reads a negative
+    // age as "now"). Re-check rather than trust the REQ.
+    if (ev.created_at > now) continue;
     const signers = authorToSigners.get(ev.pubkey);
     if (!signers) continue;
     for (const linkSigner of signers) {

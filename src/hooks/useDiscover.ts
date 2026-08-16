@@ -12,8 +12,7 @@ import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { resolveBundle } from "@/concord/hooks/useCommunityActions";
 import {
   activityByLinkSigner,
-  discoverActivityFilters,
-  discoverActivityRelays,
+  discoverActivityBatches,
   type DiscoverActivityTarget,
 } from "@/concord/lib/discoverActivity";
 import { parseInviteLink } from "@/concord/lib/invite";
@@ -664,10 +663,10 @@ function keepLastGoodPage(
 const ACTIVITY_DEBOUNCE_MS = 1000;
 
 /**
- * Batched last-active probe for Discover community cards: one REQ with a
- * `limit: 1` filter per community (newest kind-1059 wrap across that
- * community's derivable stream authors). Cards paint first; this fills in
- * timestamps without blocking. No decrypt — only wrap metadata.
+ * Batched last-active probe for Discover community cards: a `limit: 1` filter
+ * per community (newest kind-1059 wrap across that community's derivable
+ * stream authors), grouped into one REQ per relay set. Cards paint first; this
+ * fills in timestamps without blocking. No decrypt — only wrap metadata.
  *
  * Target updates are debounced so a burst of Control-peek enrichments collapses
  * into a single REQ; `placeholderData` keeps the prior timestamps on screen
@@ -701,13 +700,17 @@ export function useDiscoverCommunityActivity(
     placeholderData: (prev) => prev,
     queryFn: async ({ signal }) => {
       const parsed = JSON.parse(debouncedTargetsKey) as DiscoverActivityTarget[];
-      const relays = discoverActivityRelays(parsed);
-      const filters = discoverActivityFilters(parsed);
-      if (relays.length === 0 || filters.length === 0) return {};
-      const events = await nostr
-        .group(relays)
-        .query(filters, { signal: AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) });
-      return activityByLinkSigner(parsed, events);
+      const now = Math.floor(Date.now() / 1000);
+      const batches = discoverActivityBatches(parsed, now);
+      if (batches.length === 0) return {};
+      const deadline = AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]);
+      // allSettled: one unreachable relay set must cost only its own listings
+      // their timestamp, not every listing in the grid.
+      const pages = await Promise.allSettled(
+        batches.map((b) => nostr.group(b.relays).query(b.filters, { signal: deadline })),
+      );
+      const events = pages.flatMap((p) => (p.status === "fulfilled" ? p.value : []));
+      return activityByLinkSigner(parsed, events, now);
     },
   });
 

@@ -23,7 +23,7 @@ import type { NostrEvent } from "nostr-tools";
 
 /** One page — matches the member Control sweep's page size. */
 const PEEK_PAGE = 500;
-/** Cap so a flooded plane can't pin Discover open forever. */
+/** Per-relay cap so a flooded plane can't pin Discover open forever. */
 const PEEK_MAX_WRAPS = 2_000;
 const PEEK_TIMEOUT_MS = 12_000;
 
@@ -68,7 +68,7 @@ export function writeCachedControlPeek(communityId: string, peek: DiscoverContro
 }
 
 type PeekNostr = {
-  group: (urls: string[]) => {
+  relay: (url: string) => {
     query: (filters: NostrFilter[], opts?: { signal?: AbortSignal }) => Promise<NostrEvent[]>;
   };
 };
@@ -129,9 +129,12 @@ export function _resetDiscoverControlPeekQueueForTests(): void {
 }
 
 /**
- * Fetch + decrypt + fold Control for one invite bundle. Best-effort: a miss
- * or truncated plane returns whatever channels the served editions contain
- * (may under-count on a flooded/uncompacted plane past {@link PEEK_MAX_WRAPS}).
+ * Fetch + decrypt + fold Control for one invite bundle. Best-effort: a miss or
+ * a truncated plane still returns whatever channels the served editions
+ * contain, so the card can paint something — but a read that did not reach the
+ * end of every relay (a dropped REQ, or a flood past {@link PEEK_MAX_WRAPS})
+ * is returned WITHOUT being cached, since an under-count that gets persisted
+ * outlives the condition that caused it.
  */
 export async function peekDiscoverControl(
   nostr: PeekNostr,
@@ -161,48 +164,109 @@ export async function peekDiscoverControl(
     [AbortSignal.timeout(PEEK_TIMEOUT_MS), ...(signal ? [signal] : [])],
   );
 
-  const wraps = await fetchControlWraps(nostr, relays, view.pk, timeout);
-  if (wraps.length === 0) {
+  const read = await fetchControlWraps(nostr, relays, view.pk, timeout);
+  if (read.wraps.length === 0) {
+    // An empty plane and a relay that never answered look identical from here,
+    // so report the empty shape but never persist it as this community's.
     return { channelCount: 0, publicChannelIdHexes: [] };
   }
 
-  const opened = await openPlaneWrapsChunked(wraps, [view]);
+  const opened = await openPlaneWrapsChunked(read.wraps, [view]);
   const editions = openControlEditions(opened);
   const folded = foldControlState(editions, communityId, bundle.owner);
   const peek = summarizeDiscoverChannels(folded.channels.values());
-  writeCachedControlPeek(bundle.community_id, peek);
+  // Only a COMPLETE read describes the community. A channel create lives in
+  // exactly one edition, so a truncated plane under-counts — and caching that
+  // would paint the wrong number from the warm seed in every later session,
+  // long after the relay that timed out came back.
+  if (read.complete) writeCachedControlPeek(bundle.community_id, peek);
   return peek;
 }
 
+interface ControlWrapRead {
+  wraps: NostrEvent[];
+  /** Every relay was paged to exhaustion — see {@link peekDiscoverControl}. */
+  complete: boolean;
+}
+
+/**
+ * Page each relay INDEPENDENTLY and merge by wrap id.
+ *
+ * One cursor across a merged group read loses editions: each relay applies the
+ * page limit on its own, so the group's oldest event comes from whichever relay
+ * reaches deepest, and advancing every relay to that floor skips the window a
+ * shallower relay has not been asked for yet. `channelSync` keeps a cursor per
+ * relay for the same reason.
+ */
 async function fetchControlWraps(
   nostr: PeekNostr,
   relays: string[],
   author: string,
   signal: AbortSignal,
-): Promise<NostrEvent[]> {
+): Promise<ControlWrapRead> {
+  const reads = await Promise.allSettled(
+    relays.map((url) => pageControlWraps(nostr, url, author, signal)),
+  );
   const byId = new Map<string, NostrEvent>();
+  let complete = true;
+  for (const r of reads) {
+    if (r.status !== "fulfilled") {
+      complete = false;
+      continue;
+    }
+    if (!r.value.complete) complete = false;
+    for (const ev of r.value.wraps) byId.set(ev.id, ev);
+  }
+  return { wraps: [...byId.values()], complete };
+}
+
+/** Walk one relay's copy of the plane, newest first. */
+async function pageControlWraps(
+  nostr: PeekNostr,
+  url: string,
+  author: string,
+  signal: AbortSignal,
+): Promise<ControlWrapRead> {
+  const wraps: NostrEvent[] = [];
+  const seen = new Set<string>();
   let until: number | undefined;
-  while (byId.size < PEEK_MAX_WRAPS) {
-    const filter: NostrFilter = {
-      kinds: [KIND_WRAP],
-      authors: [author],
-      limit: Math.min(PEEK_PAGE, PEEK_MAX_WRAPS - byId.size),
-    };
+
+  for (;;) {
+    if (wraps.length >= PEEK_MAX_WRAPS) return { wraps, complete: false };
+    const filter: NostrFilter = { kinds: [KIND_WRAP], authors: [author], limit: PEEK_PAGE };
     if (until !== undefined) filter.until = until;
+
     let page: NostrEvent[];
     try {
-      page = await nostr.group(relays).query([filter], { signal });
+      page = await nostr.relay(url).query([filter], { signal });
     } catch {
-      break;
+      return { wraps, complete: false };
     }
-    if (page.length === 0) break;
+
+    let fresh = 0;
     let oldest = Infinity;
     for (const ev of page) {
-      byId.set(ev.id, ev);
       if (ev.created_at < oldest) oldest = ev.created_at;
+      if (seen.has(ev.id)) continue;
+      seen.add(ev.id);
+      wraps.push(ev);
+      fresh += 1;
     }
-    if (page.length < PEEK_PAGE || oldest === Infinity || oldest <= 0) break;
-    until = oldest - 1;
+
+    // A short page is the end of this relay's plane.
+    if (page.length < PEEK_PAGE) return { wraps, complete: true };
+    if (oldest === Infinity || oldest <= 0) return { wraps, complete: true };
+
+    // `until` is INCLUSIVE, so consecutive pages overlap by one second on
+    // purpose: the overlap steps over a same-second burst instead of skipping
+    // it, and the id dedupe makes it free. Control editions arrive in bursts
+    // (founding a community writes metadata plus every channel in one second),
+    // which is exactly what an exclusive `oldest - 1` would drop.
+    //
+    // A page that is ALL duplicates means the burst is wider than one page and
+    // there is no cursor that advances without stepping over the rest of it.
+    // Stop and say so, rather than under-count in silence.
+    if (fresh === 0) return { wraps, complete: false };
+    until = oldest;
   }
-  return [...byId.values()];
 }
