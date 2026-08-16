@@ -280,6 +280,31 @@ describe("dm17Store disappearing messages", () => {
     expect((await dm17Store(self).query([{ ids: [stale.rumorId] }])).length).toBe(0);
   });
 
+  it("keeps `mine` when the viewer's own newest message has expired", async () => {
+    // `convmine:` collapses to exactly ONE row per conversation — the viewer's
+    // newest own message — so when disappearing messages are on and that row has
+    // expired but not yet been swept, there is no older row to fall back to.
+    // Reading `mine` off the live rows only would drop a thread the viewer has
+    // written in: the DMs page files it under requests, and the push gateways
+    // read its sender as a stranger.
+    const dave = getPublicKey(generateSecretKey());
+    await forceStore(opened({
+      author: self,
+      peer: dave,
+      content: "mine, now expired",
+      tags: dmChatTags([dave], { expiresAt: now() - 1 }),
+    }));
+    // Dave answers, and his reply is live — so the conversation IS listed, and
+    // its newest row is one the viewer did not write.
+    await writeDm17Rumors(self, [
+      opened({ author: dave, peer: dave, content: "his live reply" }),
+    ]);
+
+    const row = (await queryDm17Conversations(self)).find((c) => c.key === dave);
+    expect(row?.latest.content).toBe("his live reply");
+    expect(row?.mine).toBe(true);
+  });
+
   it("reads back the newest timer change, whichever side set it", async () => {
     expect(await queryDm17Timer(self, [carol])).toBeUndefined();
 

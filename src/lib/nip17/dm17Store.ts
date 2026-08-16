@@ -504,12 +504,20 @@ export async function queryDm17Conversations(
     if (opened.peers.length === 0) return;
     if (!DM_MESSAGE_KINDS.includes(ev.kind)) return;
     const key = dmConvKey(opened.peers);
+    // BEFORE the expiry check, and that ordering is the whole point: expiry
+    // decides what is DISPLAYED, not whether the viewer ever wrote here. The
+    // `convmine:` collapse returns exactly one row per conversation, so a
+    // viewer whose newest own message has expired unswept has no older row to
+    // fall back to — and dropping the flag moves a thread they have written in
+    // for a year into the request tier, and tells the push gateways its sender
+    // is a stranger (`useNostrPush`). It cannot mint a phantom row: the result
+    // is built from `byConversation`, which an expired rumor never reaches.
+    if (opened.author === self) mine.add(key);
     if (isExpired(ev.tags)) {
       const worst = stale.get(key);
       if (!worst || opened.createdAt > worst.createdAt) stale.set(key, opened);
       return;
     }
-    if (opened.author === self) mine.add(key);
     const cur = byConversation.get(key);
     if (!cur || opened.createdAt > cur.createdAt) byConversation.set(key, opened);
   };
