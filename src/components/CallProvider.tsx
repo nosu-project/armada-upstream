@@ -264,7 +264,17 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   }, [stageTarget, stageHost]);
   useEffect(() => () => stageHost.remove(), [stageHost]);
 
-  const toggleStage = useCallback(() => setStageOpen((o) => !o), []);
+  // Show/hide the stage the CURRENT ROUTE has. `stageOpen` governs the docked
+  // box only — the stage's floating branch renders regardless of it — so away
+  // from the call's channel the floating window is what there is to toggle.
+  //
+  // `stageOpen` is deliberately untouched on the floating path: it is the user's
+  // docked-stage preference for when they return, not a description of the
+  // floating window.
+  const toggleStage = useCallback(() => {
+    if (hasNormalSlot) setStageOpen((o) => !o);
+    else setFloatingHidden((h) => !h);
+  }, [hasNormalSlot]);
 
   // Equality-guarded so the room's frequent ActiveSpeakersChanged reports only
   // re-render context consumers when the speaker set actually changed.
@@ -303,6 +313,12 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const showFloating = Boolean(user && activeCall) && !hasNormalSlot && !floatingHidden && !exiting;
   const stageFloating = showFloating && floatingSlot !== null;
 
+  // What is actually on screen. `showFloating`, not `stageFloating`: the latter
+  // additionally waits on the host registration, which lands a commit later in a
+  // passive effect, so the bar's label would spend a painted frame contradicting
+  // a window the user just restored.
+  const stageVisible = hasNormalSlot ? stageOpen : showFloating;
+
   return (
     <CallContext.Provider
       value={{
@@ -316,6 +332,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
         stageOpen,
         toggleStage,
         setStageOpen,
+        stageVisible,
         stageFloating,
         floatingVariant,
         callBarHeight,

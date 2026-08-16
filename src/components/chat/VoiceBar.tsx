@@ -306,7 +306,10 @@ interface InCallViewProps {
  * a roster here would duplicate it right above.
  */
 export function InCallView({ label, onLabelClick, stacked, compact }: InCallViewProps) {
-  const { stageOpen, toggleStage } = useCall();
+  // `stageVisible`, not `stageOpen`: this control follows the user across
+  // routes, and away from the call's channel the stage on screen is the
+  // floating window, which `stageOpen` does not describe.
+  const { stageVisible, toggleStage } = useCall();
   const participants = useParticipants();
   const connectionState = useConnectionState();
 
@@ -353,13 +356,13 @@ export function InCallView({ label, onLabelClick, stacked, compact }: InCallView
       <button
         type="button"
         onClick={toggleStage}
-        aria-label={stageOpen ? "Hide call stage" : "Show call stage"}
-        aria-pressed={stageOpen}
+        aria-label={stageVisible ? "Hide call stage" : "Show call stage"}
+        aria-pressed={stageVisible}
         className="shrink-0 flex items-center gap-1.5 rounded-md bg-foreground/10 px-2 py-1 touch:px-3 touch:py-2 text-[11px] font-medium text-foreground hover:bg-foreground/20"
       >
         <Video className="size-3.5" />
         <span className="tabular-nums">{participants.length}</span>
-        <span>{stageOpen ? "Hide" : "Show"}</span>
+        <span>{stageVisible ? "Hide" : "Show"}</span>
       </button>
     </div>
   );
