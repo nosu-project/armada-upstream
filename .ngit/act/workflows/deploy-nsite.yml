@@ -31,6 +31,12 @@ name: Deploy nsite
 # skipping quietly: there is no other publisher for this site, so a skipped
 # run leaves the nsite silently pinned to an older build.
 
+# `nsyte validate` checks .nsite/config.json against nsyte's own schema, which
+# is narrower than NIP-5A in at least one place that matters here: `source`
+# must match ^https?://, so the repo is named by its gitworkshop.dev URL and
+# NOT by the nostr:// remote the NIP permits. Run it after editing the config —
+# an invalid file fails the deploy after the build, not before.
+
 on:
   push:
     branches: [main]
@@ -57,13 +63,9 @@ jobs:
         with:
           node-version: 22
 
-      - run: npm ci
-
-      # Build the SPA (npm build also copies dist/index.html -> dist/404.html,
-      # which is the path NIP-5A host servers fall back to).
-      - run: npm run build
-
-      - name: Publish to Blossom + relays
+      # Ahead of npm ci and the build, so a config nsyte won't accept costs
+      # seconds instead of failing at the end of a green-looking run.
+      - name: Install nsyte and validate the config
         env:
           NSYTE_BUNKER: ${{ secrets.NSYTE_BUNKER }}
         run: |
@@ -81,6 +83,20 @@ jobs:
           curl -sSL -o /usr/local/bin/nsyte \
             https://github.com/sandwichfarm/nsyte/releases/download/v0.27.2/nsyte-linux-0.27.2
           chmod +x /usr/local/bin/nsyte
+
+          nsyte validate
+
+      - run: npm ci
+
+      # Build the SPA (npm build also copies dist/index.html -> dist/404.html,
+      # which is the path NIP-5A host servers fall back to).
+      - run: npm run build
+
+      - name: Publish to Blossom + relays
+        env:
+          NSYTE_BUNKER: ${{ secrets.NSYTE_BUNKER }}
+        run: |
+          set -eu
 
           TAG=""
           case "${GITHUB_REF:-}" in

@@ -16,5 +16,5 @@
   "publishServerList": false,
   "title": "Armada",
   "description": "A sovereign harbor on the open relays — private communities, channels, and voice. Your keys, your fleet.",
-  "source": "nostr://soapbox@ditto.pub/relay.ngit.dev/armada"
+  "source": "https://gitworkshop.dev/soapbox.pub/relay.ngit.dev/armada"
 }
