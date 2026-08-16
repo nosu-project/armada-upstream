@@ -26,6 +26,7 @@ import { useTheme } from "@/hooks/useTheme";
 import { parseRelayList, KIND_RELAY_LIST } from "@/lib/nip65";
 import {
   KIND_APP_SPECIFIC,
+  KIND_COMMUNITY_LIST_FRAG,
   queryKeysForSelfEvent,
   SELF_SYNC_DTAGS,
   SELF_SYNC_REPLACEABLE_KINDS,
@@ -211,7 +212,13 @@ function NostrSyncInner() {
     };
 
     const onEvent = (event: NostrEvent) => {
-      const dTag = event.kind === KIND_APP_SPECIFIC ? dTagOf(event) : undefined;
+      // Addressable self-kinds dedup per coordinate: the Community List is one
+      // event per FRAGMENT, and keying the echo-guard by kind alone would drop
+      // fragment 1 as an "echo" of a newer fragment 0.
+      const dTag =
+        event.kind === KIND_APP_SPECIFIC || event.kind === KIND_COMMUNITY_LIST_FRAG
+          ? dTagOf(event)
+          : undefined;
       const topicTag = event.tags.find((tag) => tag[0] === "t")?.[1];
       const keys = queryKeysForSelfEvent(event.kind, dTag, topicTag);
       if (keys.length === 0) return; // cached, but no query watches it (e.g. 10063)

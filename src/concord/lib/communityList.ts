@@ -1,10 +1,12 @@
 /**
  * Concord Community List — CORD-02 §8.
  *
- * A member's memberships sync across devices (and clients) as one kind-13302
- * replaceable event, NIP-44-encrypted to self. Every Community they're in AND
- * every one they've left lives in the document — liveness is DERIVED, never
- * deletion, or merges would depend on gossip order.
+ * A member's memberships sync across devices (and clients) as kind-33302
+ * fragment events, NIP-44-encrypted to self (the wire layer lives in
+ * `listFrag.ts`; this module is the merge algebra over the unioned document,
+ * hex-internal throughout). Every Community they're in AND every one they've
+ * left lives in the document — liveness is DERIVED, never deletion, or merges
+ * would depend on gossip order.
  *
  * Per entry, two snapshots solve opposite problems: `seed` holds the EARLIEST
  * epoch ever held (the full-history backfill anchor, only ever moves backward
@@ -18,7 +20,6 @@ import { bytesToHex, controlSignerGroupKey, hex32, verifyCommunityId } from "@/c
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 import {
-  MAX_LIST_MEMBERSHIPS,
   capRelays,
   type Community,
   type HeldRoot,
@@ -171,11 +172,15 @@ export function canonicalJson(value: unknown): string {
 function sortKeys(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortKeys);
   if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-      out[key] = sortKeys((value as Record<string, unknown>)[key]);
-    }
-    return out;
+    // fromEntries defines own data properties, so a "__proto__" key from a
+    // foreign document stays an ordinary field (as serde treats it) instead of
+    // silently vanishing through the inherited accessor — which would fork the
+    // canonical bytes, and the tie-breaks that compare them, across clients.
+    return Object.fromEntries(
+      Object.keys(value as Record<string, unknown>)
+        .sort()
+        .map((key) => [key, sortKeys((value as Record<string, unknown>)[key])]),
+    );
   }
   return value;
 }
@@ -360,8 +365,12 @@ export function mergeCommunityLists(a: CommunityList, b: CommunityList): Communi
   return {
     ...a,
     ...b,
-    entries: [...entries.values()].sort((x, y) => x.community_id.localeCompare(y.community_id)),
-    tombstones: [...tombstones.values()].sort((x, y) => x.community_id.localeCompare(y.community_id)),
+    // Plain code-unit order, not localeCompare: this order feeds the fragment
+    // packer, whose layout must match the reference's BTreeMap byte order for
+    // identical state to produce identical fragments. For lowercase hex the
+    // two happen to agree, but only one of them is locale-proof.
+    entries: [...entries.values()].sort((x, y) => (x.community_id < y.community_id ? -1 : 1)),
+    tombstones: [...tombstones.values()].sort((x, y) => (x.community_id < y.community_id ? -1 : 1)),
   };
 }
 
@@ -544,17 +553,6 @@ export function setControlRoot(
     return { ...e, current: { ...e.current, control_root: controlRootHex } };
   });
   return { ...list, entries };
-}
-
-/**
- * Enforce the membership cap: the count bounds the common case, the NIP-44
- * byte cap is the law — the caller must ALSO verify the serialized list fits
- * before publishing (CORD-02 §8).
- */
-export function assertListBounds(list: CommunityList): void {
-  if (liveEntries(list).length > MAX_LIST_MEMBERSHIPS) {
-    throw new Error(`the Community List caps at ${MAX_LIST_MEMBERSHIPS} memberships`);
-  }
 }
 
 // ── Join material ⇄ runtime community ───────────────────────────────────────

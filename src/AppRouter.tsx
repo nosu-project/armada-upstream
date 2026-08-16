@@ -343,7 +343,7 @@ export function AppRouter() {
             <Route path="/s/:server/:groupId/t/:threadRoot" element={<GroupPage />} />
             <Route path="/s/:server/:groupId/t/:threadRoot/m/:messageId" element={<GroupPage />} />
             {/* Every Concord route is behind auth. Membership IS a key the
-                account holds (its kind-13302 vault), so there is no signed-out
+                account holds (its kind-33302 vault), so there is no signed-out
                 view of a community to render — and without this the page
                 mounted its whole hook chain, timeline snapshot prewarm
                 included, on a route id alone. `CommunityNoAccess` then handles

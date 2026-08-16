@@ -23,8 +23,6 @@ export const NAME_MAX_BYTES = 64;
 export const DESCRIPTION_MAX_BYTES = 10_000;
 /** Hostile-bundle bound: reject an invite carrying more channels than this (CORD-05 §1). */
 export const MAX_BUNDLE_CHANNELS = 256;
-/** The Community List caps at 50 memberships (CORD-02 §8). */
-export const MAX_LIST_MEMBERSHIPS = 50;
 /** Bound hostile channel metadata while retaining a useful attachment history. */
 export const MAX_CHANNEL_GIT_ATTACHMENTS = 128;
 /** Relay hints are hints, not an unbounded metadata transport. */
