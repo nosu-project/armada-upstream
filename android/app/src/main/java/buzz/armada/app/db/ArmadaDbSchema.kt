@@ -37,9 +37,18 @@ internal object ArmadaDbSchema {
      *      rumor — so the id, kind, pubkey and created_at columns were stored
      *      twice, and the tenant id was repeated in every row of the table and
      *      of its five indexes.
-     *   1  the current layout below.
+     *   1  the tenant-interned layout, without a term index.
+     *   2  the current layout below: adds `rumor_terms`, the derived term index,
+     *      and `rumor_term_tenants`, which records that a tenant has been
+     *      indexed and by WHICH generation of its policy.
+     *
+     * There is no upgrade step for the term index and there does not need to be:
+     * a term is a CACHE of a derivation, it cannot be computed in SQL, and the
+     * only thing that can build it is the per-tenant backfill — which is gated
+     * on `rumor_term_tenants` and so is indifferent to the version the file
+     * arrived from. Creating the two tables empty is the whole migration.
      */
-    const val VERSION = 1L
+    const val VERSION = 2L
 
     /** The tables, indexes and triggers every ArmadaDB file has. */
     val BASE: List<String> = listOf(
@@ -120,6 +129,62 @@ internal object ArmadaDbSchema {
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         ) WITHOUT ROWID""",
+        // The derived term index: facts a tenant's TermPolicy computes from a
+        // rumor, which no tag of its own states — a NIP-17 conversation being
+        // its participant SET. `seq` is the rumor's rowid and encodes time, so
+        // the primary key's third column orders each term's rumors newest-last;
+        // read backwards, a term lookup is one contiguous range walk that stops
+        // at the limit. WITHOUT ROWID because the key IS the whole row.
+        """CREATE TABLE IF NOT EXISTS rumor_terms (
+            tenant INTEGER NOT NULL,
+            term TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            PRIMARY KEY (tenant, term, seq)
+        ) WITHOUT ROWID""",
+        // The delete path goes the other way — by rumor, not by term — and has
+        // no term to seek with, so it needs an index of its own or every
+        // deletion scans the table.
+        "CREATE INDEX IF NOT EXISTS rumor_terms_seq ON rumor_terms (seq)",
+        """CREATE TRIGGER IF NOT EXISTS rumors_terms_delete AFTER DELETE ON rumors BEGIN
+            DELETE FROM rumor_terms WHERE seq = old.seq;
+        END""",
+        // Which tenants' pre-existing rows have been through their policy, and
+        // which generation of it. A row whose generation matches the policy
+        // being installed means the backfill is done and reads need not wait
+        // again; one that differs means the index was built by a derivation
+        // nothing looks up any more.
+        """CREATE TABLE IF NOT EXISTS rumor_term_tenants (
+            tenant INTEGER PRIMARY KEY,
+            generation INTEGER NOT NULL
+        ) WITHOUT ROWID""",
+    )
+
+    /**
+     * Drop the term index, for the one file layout that no version comparison
+     * can reach: a `rumor_term_tenants` with no `generation` column.
+     *
+     * That layout was never released. The index and its marker arrived together
+     * in v2, and the marker has recorded a generation from the moment v2 existed
+     * publicly — but during this feature's development there was an intermediate
+     * form that recorded only THAT a tenant had been indexed, and a file that
+     * took it is already at the current version. The schema above would leave
+     * that older table in place, and every read and write of `generation` would
+     * then throw for the life of the file, leaving the term index permanently
+     * unbuilt and the conversation list silently empty.
+     *
+     * So it is detected by LAYOUT rather than by version, exactly as v0 is.
+     * Dropping is both safe and sufficient: a term is a cache of a derivation,
+     * the `CREATE IF NOT EXISTS` statements above recreate both tables, and the
+     * per-tenant backfill refills them. The trigger that references
+     * `rumor_terms` survives the drop unfired — SQLite resolves a trigger body
+     * when it fires, and the table is recreated in the same migration.
+     *
+     * Nothing but a pre-release install can trigger this, so it can be deleted
+     * once none remain.
+     */
+    val DROP_TERM_INDEX: List<String> = listOf(
+        "DROP TABLE IF EXISTS rumor_terms",
+        "DROP TABLE IF EXISTS rumor_term_tenants",
     )
 
     /**

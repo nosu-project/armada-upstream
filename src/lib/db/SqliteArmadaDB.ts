@@ -78,14 +78,15 @@ import { NKinds } from "@nostrify/nostrify";
 import { utf8ToBytes } from "@noble/hashes/utils.js";
 
 import { ParsedFilter } from "./ParsedFilter";
-import { batch, memberOf, where } from "./sql";
+import { batch, memberOf, qs, where } from "./sql";
 import {
+  ARMADA_DB_DROP_TERM_INDEX,
   ARMADA_DB_FTS_SCHEMA,
   ARMADA_DB_REBUILD_V1,
   ARMADA_DB_SCHEMA,
   ARMADA_DB_VERSION,
 } from "./sqliteSchema";
-import { defaultIndexTags, matchesKvRange, resolveKvRange } from "./types";
+import { defaultIndexTags, matchesKvRange, resolveKvRange, termNamespaceRange } from "./types";
 
 import type { NostrFilter } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -98,6 +99,8 @@ import type {
   ArmadaKVListOptions,
   ArmadaKVSelector,
   NRumorStore,
+  TenantOpts,
+  TermPolicy,
 } from "./types";
 
 /** Bits of the rowid reserved for the per-second sequence number. */
@@ -157,6 +160,9 @@ const MAX_AUTHOR_TERMS = 16;
  */
 const MAX_PUSHDOWN = 100;
 
+/** How many rumors one page of the derived-term backfill re-derives. */
+const BACKFILL_PAGE = 500;
+
 /** The columns a stored rumor is reassembled from. */
 const RUMOR_COLUMNS = "id, kind, pubkey, created_at, tags, content";
 
@@ -192,6 +198,10 @@ export class SqliteArmadaDB implements ArmadaDB {
   private readonly stores = new Map<string, SqliteRumorStore>();
   /** Memoised {@link tenantOrd}s — one lookup per tenant, not per token. */
   private readonly ords = new Map<string, number>();
+  /** Installed {@link TermPolicy}s, by tenant id. */
+  private readonly termPolicies = new Map<string, TermPolicy>();
+  /** Each tenant's one-time term backfill, which term reads wait on. */
+  private readonly backfills = new Map<string, Promise<void>>();
 
   /** Rumors queued by `event()`, awaiting the next batched commit. */
   private pending: PendingWrite[] = [];
@@ -220,13 +230,137 @@ export class SqliteArmadaDB implements ArmadaDB {
     this.ready.catch(() => {});
   }
 
-  tenant(id: string): NRumorStore {
+  tenant(id: string, opts: TenantOpts = {}): NRumorStore {
     let store = this.stores.get(id);
     if (!store) {
       store = new SqliteRumorStore(this, id);
       this.stores.set(id, store);
     }
+    if (opts.terms) this.installTerms(id, opts.terms, opts.termsGeneration ?? 0);
     return store;
+  }
+
+  /**
+   * Bind a tenant's {@link TermPolicy} and make sure its existing rows are
+   * indexed by it.
+   *
+   * The policy lands on the TENANT, not on this handle, so a writer that asked
+   * for the store without naming one still writes the terms — which is the
+   * whole point of binding it here rather than at each write.
+   */
+  private installTerms(tenant: string, policy: TermPolicy, generation: number): void {
+    if (this.termPolicies.get(tenant) === policy) return;
+    this.termPolicies.set(tenant, policy);
+    // Rows written before this call carry none of the policy's terms, so the
+    // index is incomplete until they have been through it. Kept as a promise
+    // rather than awaited: acquiring a store is synchronous, and only a read
+    // that reaches the term index has to wait (see `awaitTerms`).
+    //
+    // Starting it HERE rather than at that read is this engine's optimization
+    // and not the contract — the native ports have no eager pass at all, since
+    // their engines are synchronous and there is no thread to run one on, so
+    // there the first such read is what triggers the walk. What all four must
+    // agree on is that a read which touches the index does not see a
+    // half-built one, and that a failed pass leaves the generation unrecorded
+    // so the next process retries. The swallow below is the other half of
+    // that: a pass that dies on one unreadable row must not fail the read,
+    // which is answerable from the index as it stands.
+    this.backfills.set(tenant, this.backfillTerms(tenant, generation).catch(() => {}));
+  }
+
+  /** A rumor's derived terms in `tenant`, or none when it has no policy. */
+  private termsOf(tenant: string, rumor: NostrRumor): string[] {
+    const policy = this.termPolicies.get(tenant);
+    return policy ? policy(rumor, tenant) : [];
+  }
+
+  /**
+   * Wait for `tenant`'s term backfill, if a read is about to depend on it.
+   *
+   * Only reads that reach the term index wait. Ordinary reads are unaffected by
+   * a half-built one, and making them queue behind it would put a full pass over
+   * the tenant in front of the first thing the UI asks for.
+   *
+   * The test is whether a filter carries a `search` AT ALL, and must stay that
+   * way in every port: `distinct:<namespace>` reads `rumor_terms` while parsing
+   * to no term of its own (it is a directive — see `ParsedFilter.distinct`), so
+   * a gate on `ParsedFilter.terms` lets the conversation list — the one read
+   * that is nothing BUT a collapse — group over an index nothing had built.
+   */
+  private async awaitTerms(tenant: string, filters: NostrFilter[]): Promise<void> {
+    const pending = this.backfills.get(tenant);
+    if (!pending) return;
+    if (!filters.some((filter) => typeof filter.search === "string")) return;
+    await pending;
+  }
+
+  /**
+   * Derive and store the terms of every rumor already in `tenant`, once per
+   * generation of its policy.
+   *
+   * A term can't be computed in SQL — the policy is JavaScript, and on the
+   * native engines it is Kotlin or Swift — so a schema migration can't build
+   * this index the way it can rebuild a column. It is filled by walking the
+   * tenant instead, newest-first in pages, and the generation that walked it is
+   * recorded in `rumor_term_tenants` so the pass happens once per file rather
+   * than once per boot.
+   *
+   * A RECORDED generation that differs from the one asked for means the index
+   * holds terms some earlier derivation produced. Those are dropped first: the
+   * walk only inserts, so a term the policy no longer derives would otherwise
+   * survive every rebuild and stay matchable forever.
+   *
+   * Writes made while it runs are not a hazard: they go through the same
+   * policy, and every insert here is `OR IGNORE`. A SECOND engine on the same
+   * file (Android's notification service) racing the same rebuild is likewise
+   * benign, if briefly untidy — both delete what both are about to re-derive,
+   * and the loser's inserts land anyway.
+   */
+  private async backfillTerms(tenant: string, generation: number): Promise<void> {
+    await this.ready;
+
+    // A tenant that has never been written to has nothing to index — and no
+    // ordinal to record the fact against. The next boot asks again, which
+    // costs one lookup.
+    const ord = await this.tenantOrd(tenant);
+    if (ord === undefined) return;
+
+    const [done] = await this.all(
+      `SELECT generation FROM rumor_term_tenants WHERE tenant = ?`,
+      [ord],
+    );
+    if (done && Number(done.generation) === generation) return;
+    if (done) {
+      await this.transaction(() => this.run(`DELETE FROM rumor_terms WHERE tenant = ?`, [ord]));
+    }
+
+    let before: number | undefined;
+
+    for (;;) {
+      const rows = await this.all(
+        `SELECT seq, ${RUMOR_COLUMNS} FROM rumors INDEXED BY rumors_tenant
+          WHERE tenant = ?${before === undefined ? "" : " AND seq < ?"}
+          ORDER BY seq DESC LIMIT ?`.replace(/\s+/g, " "),
+        before === undefined ? [ord, BACKFILL_PAGE] : [ord, before, BACKFILL_PAGE],
+      );
+      if (rows.length === 0) break;
+
+      await this.transaction(async () => {
+        for (const row of rows) {
+          await this.insertTerms(ord, Number(row.seq), this.termsOf(tenant, rowRumor(row)));
+        }
+      });
+
+      before = Number(rows[rows.length - 1].seq);
+      if (rows.length < BACKFILL_PAGE) break;
+    }
+
+    await this.transaction(() =>
+      this.run(
+        `INSERT OR REPLACE INTO rumor_term_tenants (tenant, generation) VALUES (?, ?)`,
+        [ord, generation],
+      )
+    );
   }
 
   /**
@@ -268,6 +402,16 @@ export class SqliteArmadaDB implements ArmadaDB {
       ? [...ARMADA_DB_SCHEMA, ...ARMADA_DB_FTS_SCHEMA]
       : ARMADA_DB_SCHEMA;
 
+    // A development term index whose marker table has no `generation` column is
+    // dropped before the schema recreates it — by LAYOUT, since such a file
+    // already claims the current version or newer. See
+    // {@link ARMADA_DB_DROP_TERM_INDEX}; no released file can match.
+    const marker = (await this.all(`SELECT name FROM pragma_table_info('rumor_term_tenants')`))
+      .map((row) => String(row.name));
+    if (marker.length > 0 && !marker.includes("generation")) {
+      for (const statement of ARMADA_DB_DROP_TERM_INDEX) await this.run(statement);
+    }
+
     for (const statement of schema) {
       await this.run(statement.trim().replace(/\s+/g, " "));
     }
@@ -287,6 +431,11 @@ export class SqliteArmadaDB implements ArmadaDB {
         await this.run(`INSERT INTO rumors_fts (rumors_fts) VALUES ('delete-all')`);
       }
       await this.run(`DELETE FROM rumor_coords`);
+      // Emptied explicitly rather than left to the trigger, for the same
+      // reason as `delete-all` above: a row orphaned by a crash outlives the
+      // rumor that would have taken it.
+      await this.run(`DELETE FROM rumor_terms`);
+      await this.run(`DELETE FROM rumor_term_tenants`);
       await this.run(`DELETE FROM tenants`);
       await this.run(`DELETE FROM kv`);
     });
@@ -294,6 +443,10 @@ export class SqliteArmadaDB implements ArmadaDB {
     // Interned ids are reallocated from scratch after this, so a remembered
     // one would name the wrong tenant.
     this.ords.clear();
+
+    // The tenants are gone, so nothing is backfilled any more — but the
+    // policies stay bound, and an empty tenant needs no pass to be complete.
+    this.backfills.clear();
   }
 
   /** Close the underlying connection, if the driver has one to close. */
@@ -346,9 +499,22 @@ export class SqliteArmadaDB implements ArmadaDB {
     try {
       await this.ready;
       await this.transaction(async () => {
+        const batched = new RumorBatch();
         for (const { tenant, rumor } of writes) {
-          await this.writeRumor(tenant, rumor);
+          // A rumor that has to READ what the batch has written so far — a
+          // replaceable one superseding its coordinate, a kind 5 deleting its
+          // targets — needs those rows in the table, not in an accumulator.
+          // Flushing first keeps every such rumor seeing exactly what it saw
+          // when each write was its own statement: everything before it in the
+          // batch, and nothing after.
+          if (needsOwnStatement(rumor)) {
+            await this.writeBatch(batched);
+            await this.writeRumor(tenant, rumor, batched);
+          } else {
+            await this.stageRumor(tenant, rumor, batched);
+          }
         }
+        await this.writeBatch(batched);
       });
     } catch (error) {
       for (const write of writes) write.reject(error);
@@ -359,10 +525,47 @@ export class SqliteArmadaDB implements ArmadaDB {
     for (const write of writes) write.resolve();
   }
 
+  /**
+   * Stage one ordinary rumor's rows into `batch`, to be written with the rest
+   * of its burst — see {@link RumorBatch}.
+   *
+   * Everything up to the INSERTs is what it always was, including the rowid
+   * lookup, and it happens in the same order. The only difference is where the
+   * rows go.
+   */
+  private async stageRumor(tenant: string, rumor: NostrRumor, batch: RumorBatch): Promise<void> {
+    const ord = await this.internTenant(tenant);
+    const seq = await this.reserveSeq(ord, rumor, batch);
+    if (seq === undefined) return;
+    batch.add(seq, ord, rumor, this.tagTokens(`t${ord}`, rumor), this.termsOf(tenant, rumor));
+  }
+
+  /**
+   * Write a staged batch: one multi-row INSERT per table, per chunk.
+   *
+   * This is the whole reason for staging. `rumors` carries an AFTER INSERT
+   * trigger maintaining the content index, and SQLite runs a trigger's
+   * sub-program per INSERT STATEMENT rather than folding it into the row loop —
+   * so a row per statement paid that setup 4000 times for 4000 rumors and cost
+   * 76µs a row, against 17µs for the same rows and the same trigger written in
+   * batches of 200. Half the cost of a NIP-17 write was this and nothing else.
+   *
+   * Rows are written in staging order, which is arrival order, and the three
+   * tables are written back to front: a `rumors` row is what makes a rumor
+   * VISIBLE, so its index rows exist by the time anything can find it — which
+   * matters to nothing inside this transaction, and to a reader on another
+   * connection it is the difference between a rumor with no tags and no rumor.
+   */
+  private async writeBatch(batch: RumorBatch): Promise<void> {
+    for (const [sql, params] of batch.statements()) await this.run(sql, params);
+    batch.clear();
+  }
+
   /** Apply a single rumor's writes. Runs inside the batch transaction. */
-  private async writeRumor(tenant: string, rumor: NostrRumor): Promise<void> {
+  private async writeRumor(tenant: string, rumor: NostrRumor, batch: RumorBatch): Promise<void> {
     const ord = await this.internTenant(tenant);
     const prefix = `t${ord}`;
+    const terms = this.termsOf(tenant, rumor);
     let seq: number | undefined;
 
     if (NKinds.replaceable(rumor.kind) || NKinds.addressable(rumor.kind)) {
@@ -381,7 +584,7 @@ export class SqliteArmadaDB implements ArmadaDB {
         await this.deleteRumors(ord, [Number(existing.seq)]);
       }
 
-      seq = await this.insertRumor(ord, prefix, rumor);
+      seq = await this.insertRumor(ord, prefix, rumor, terms, batch);
       if (seq === undefined) return;
 
       await this.run(
@@ -390,7 +593,7 @@ export class SqliteArmadaDB implements ArmadaDB {
         [ord, coord, rumor.id, seq, rumor.created_at],
       );
     } else {
-      seq = await this.insertRumor(ord, prefix, rumor);
+      seq = await this.insertRumor(ord, prefix, rumor, terms, batch);
       if (seq === undefined) return;
     }
 
@@ -402,19 +605,17 @@ export class SqliteArmadaDB implements ArmadaDB {
   }
 
   /**
-   * Write the rumor row and its token index row, and return the rowid taken —
-   * or `undefined` if the rumor was already stored, which makes a re-delivery
-   * a no-op.
+   * Write ONE rumor's row and index rows immediately, returning the rowid
+   * taken — or `undefined` if it was already stored.
    *
-   * Everything the write needs to know first — whether this rumor is already
-   * here, and which rowid is free at its timestamp — is one statement, since
-   * each is a scalar subquery over an index and neither depends on the other.
-   * The rowid is allocated by LOOKING rather than from a counter held in
-   * memory, so a second writer on the same file (the Android service) can't be
-   * handed the same one; the bucket spans tenants, since the rowid is global.
+   * The path for a rumor that can't be staged into its burst's batch (see
+   * {@link needsOwnStatement}), which is every replaceable, addressable or
+   * deletion rumor and nothing else. Those are a small minority of a sync and
+   * each has to see the rows before it, so they keep the row-per-statement
+   * shape every write used to have.
    *
-   * Folding that lookup into the INSERT with `RETURNING` would make this one
-   * statement rather than two, and measured 2.7× SLOWER: an INSERT that
+   * Folding the rowid lookup into the INSERT with `RETURNING` would make this
+   * one statement rather than two, and measured 2.7× SLOWER: an INSERT that
    * returns rows gives up SQLite's fast path and pays a result set per write,
    * which costs far more than the extra round trip saves.
    */
@@ -422,27 +623,11 @@ export class SqliteArmadaDB implements ArmadaDB {
     ord: number,
     prefix: string,
     rumor: NostrRumor,
+    terms: string[],
+    batch: RumorBatch,
   ): Promise<number | undefined> {
-    const base = bucket(rumor.created_at);
-
-    const [row] = await this.all(
-      `SELECT (SELECT seq FROM rumors WHERE tenant = ? AND id = ?) AS existing,
-        (SELECT MAX(seq) FROM rumors WHERE seq >= ? AND seq < ?) AS last`,
-      [ord, rumor.id, base, base + SEQ_SPACE],
-    );
-
-    // Already stored: a re-delivered rumor is a no-op.
-    if (row?.existing !== null && row?.existing !== undefined) return undefined;
-
-    const seq = row?.last === null || row?.last === undefined ? base : Number(row.last) + 1;
-
-    // One second may hold 2²⁰ rumors. Anything that manages more of them at
-    // the same timestamp has outgrown this encoding, and silently reordering
-    // them — or spilling into the next second's rowids — would be worse than
-    // saying so.
-    if (seq >= base + SEQ_SPACE) {
-      throw new Error(`ArmadaDB: too many rumors at created_at ${rumor.created_at}`);
-    }
+    const seq = await this.reserveSeq(ord, rumor, batch);
+    if (seq === undefined) return undefined;
 
     await this.run(
       `INSERT INTO rumors (seq, tenant, id, kind, pubkey, created_at, tags, content)
@@ -466,7 +651,90 @@ export class SqliteArmadaDB implements ArmadaDB {
       [seq, this.tagTokens(prefix, rumor)],
     );
 
+    await this.insertTerms(ord, seq, terms);
+
     return seq;
+  }
+
+  /**
+   * The rowid this rumor takes, or `undefined` if it is already stored — which
+   * makes a re-delivery a no-op.
+   *
+   * Everything the write needs to know first — whether this rumor is here, and
+   * which rowid is free at its timestamp — is one statement, since each is a
+   * scalar subquery over an index and neither depends on the other. The rowid
+   * is allocated by LOOKING rather than from a counter held across writes, so a
+   * second writer on the same file (the Android service) can't be handed the
+   * same one; the bucket spans tenants, since the rowid is global.
+   *
+   * `batch` is what keeps that true now that a burst's rows are written
+   * together: rowids reserved but not yet inserted are invisible to the
+   * lookup, so two rumors sharing a `created_at` in one burst would both be
+   * handed the same one. It is consulted for exactly as long as the
+   * transaction that reserved them, and the transaction is what excludes the
+   * other writer — `BEGIN IMMEDIATE` takes the write lock before the first of
+   * these reads, so nothing can land between reserving a rowid and using it.
+   */
+  private async reserveSeq(
+    ord: number,
+    rumor: NostrRumor,
+    batch: RumorBatch,
+  ): Promise<number | undefined> {
+    const base = bucket(rumor.created_at);
+
+    // The same id twice in one burst is one rumor, and the second copy would
+    // otherwise reserve a rowid and collide on the unique index.
+    if (batch.staged(ord, rumor.id)) return undefined;
+
+    const [row] = await this.all(
+      `SELECT (SELECT seq FROM rumors WHERE tenant = ? AND id = ?) AS existing,
+        (SELECT MAX(seq) FROM rumors WHERE seq >= ? AND seq < ?) AS last`,
+      [ord, rumor.id, base, base + SEQ_SPACE],
+    );
+
+    // Already stored: a re-delivered rumor is a no-op.
+    if (row?.existing !== null && row?.existing !== undefined) return undefined;
+
+    const stored = row?.last === null || row?.last === undefined ? undefined : Number(row.last);
+    const seq = Math.max(stored ?? base - 1, batch.lastSeq(base) ?? base - 1) + 1;
+
+    // One second may hold 2²⁰ rumors. Anything that manages more of them at
+    // the same timestamp has outgrown this encoding, and silently reordering
+    // them — or spilling into the next second's rowids — would be worse than
+    // saying so.
+    if (seq >= base + SEQ_SPACE) {
+      throw new Error(`ArmadaDB: too many rumors at created_at ${rumor.created_at}`);
+    }
+
+    batch.reserve(ord, rumor.id, base, seq);
+    return seq;
+  }
+
+  /**
+   * File a rumor's derived terms, in ONE statement however many there are.
+   *
+   * `OR IGNORE` because a policy may return the same term twice, and because
+   * the backfill runs over rows a live write may already have indexed.
+   *
+   * A row per statement was the obvious shape and the wrong one: a NIP-17
+   * message is filed under three terms, so the term index alone tripled the
+   * statements a write costs. The text varies with the count, which is exactly
+   * what a driver's statement cache is for — a policy emits the same handful of
+   * counts forever, so this is a few cached shapes, not one per write.
+   */
+  private async insertTerms(ord: number, seq: number, terms: string[]): Promise<void> {
+    const usable = terms.filter((term) => typeof term === "string" && term !== "");
+    if (usable.length === 0) return;
+
+    const params: SqlValue[] = [];
+    for (const term of usable) params.push(ord, term, seq);
+
+    await this.run(
+      `INSERT OR IGNORE INTO rumor_terms (tenant, term, seq) VALUES ${
+        usable.map(() => "(?, ?, ?)").join(", ")
+      }`,
+      params,
+    );
   }
 
   /**
@@ -632,6 +900,7 @@ export class SqliteArmadaDB implements ArmadaDB {
     opts?: { signal?: AbortSignal },
   ): Promise<NostrRumor[]> {
     await this.ready;
+    await this.awaitTerms(tenant, filters);
 
     // A tenant that was never written to holds nothing, whatever the filters.
     const ord = await this.tenantOrd(tenant);
@@ -644,7 +913,7 @@ export class SqliteArmadaDB implements ArmadaDB {
     // would buy nothing and could interleave badly.
     for (const filter of filters) {
       const parsed = new ParsedFilter(filter);
-      for (const rumor of await this.queryFilter(ord, prefix, parsed, opts?.signal)) {
+      for (const rumor of await this.queryFilter(ord, prefix, tenant, parsed, opts?.signal)) {
         byId.set(rumor.id, rumor);
       }
     }
@@ -656,6 +925,7 @@ export class SqliteArmadaDB implements ArmadaDB {
   private async queryFilter(
     ord: number,
     prefix: string,
+    tenant: string,
     filter: ParsedFilter,
     signal?: AbortSignal,
   ): Promise<NostrRumor[]> {
@@ -673,10 +943,17 @@ export class SqliteArmadaDB implements ArmadaDB {
       return await this.queryIds(ord, plan.ids, filter, limit);
     }
 
+    // A collapse the index couldn't group is applied here instead: the rows come
+    // back in order and the first of each group survives. It costs whatever the
+    // scan costs — the point of it is that `limit` still means groups, so a
+    // page that collapses to fewer rows is followed by another rather than
+    // silently answering short (see `distinct`).
+    const collapse = filter.distinct !== undefined && !plan.grouped;
+
     // A cursor yields only rows its conditions kept, and the limit is applied
     // after them, so a single complete plan IS the answer: run it once and
     // read the rumor bodies straight out of it.
-    if (plan.cursors.length === 1 && plan.sqlOnly) {
+    if (!collapse && plan.cursors.length === 1 && plan.sqlOnly) {
       const rows = await this.readPage(
         plan.cursors[0],
         undefined,
@@ -690,11 +967,15 @@ export class SqliteArmadaDB implements ArmadaDB {
 
     const collected: NostrRumor[] = [];
     const seen = new Set<string>();
+    /** Groups already represented, when collapsing. */
+    const groups = new Set<string>();
 
     // A complete plan yields only matches, so a page need be no larger than
     // what's still wanted; an incomplete one pages in chunks so a filter that
-    // matches little doesn't materialize the whole range.
-    let pageSize = plan.sqlOnly ? Math.min(limit, MAX_PAGE) : CHUNK_SIZE;
+    // matches little doesn't materialize the whole range. A collapsing one
+    // cannot size its page from the limit at all: how many rows a group costs
+    // isn't known until they are read.
+    let pageSize = plan.sqlOnly && !collapse ? Math.min(limit, MAX_PAGE) : CHUNK_SIZE;
 
     let before: number | undefined;
 
@@ -711,7 +992,17 @@ export class SqliteArmadaDB implements ArmadaDB {
         if (seen.has(rumor.id)) continue;
         seen.add(rumor.id);
 
-        if (plan.sqlOnly || filter.matches(rumor, plan.searched)) collected.push(rumor);
+        if (!(plan.sqlOnly || filter.matches(rumor, plan.searched))) continue;
+
+        if (collapse) {
+          // A rumor with no term in the namespace belongs to no group and is
+          // excluded — the same "no term, no match" a term lookup gives.
+          const key = filter.collapseKey(this.termsOf(tenant, rumor));
+          if (key === undefined || groups.has(key)) continue;
+          groups.add(key);
+        }
+
+        collected.push(rumor);
       }
 
       // A short page means the scan is exhausted.
@@ -831,17 +1122,22 @@ export class SqliteArmadaDB implements ArmadaDB {
     } else {
       const conditions = [...cursor.where];
       params.push(...cursor.params);
+      // A scan of the rumors table alone is ordered and paged by its own
+      // rowid; a scan driven by an index table beside it (`rumor_terms`) is
+      // ordered by the copy of that rowid in the driver, so the walk belongs
+      // to the index and not to a sort of what it found.
+      const key = cursor.key ?? "seq";
 
       if (before !== undefined) {
-        conditions.push("seq < ?");
+        conditions.push(`${key} < ?`);
         params.push(before);
       }
 
       // The key is only read when a later page has to resume from it; a scan
       // that answers the whole query in one go leaves the column out.
-      sql = `SELECT ${keys ? "seq, " : ""}${RUMOR_COLUMNS} FROM ${cursor.from}${
+      sql = `SELECT ${keys ? `${key} AS seq, ` : ""}${cursor.columns ?? RUMOR_COLUMNS} FROM ${cursor.from}${
         where(conditions)
-      } ORDER BY seq DESC${limit === undefined ? "" : " LIMIT ?"}`;
+      } ORDER BY ${key} DESC${limit === undefined ? "" : " LIMIT ?"}`;
     }
 
     if (limit !== undefined) params.push(limit);
@@ -913,18 +1209,35 @@ export class SqliteArmadaDB implements ArmadaDB {
    * so each is read newest-first, within one namespace, with no sorter.
    */
   private planScan(ord: number, prefix: string, filter: ParsedFilter): ScanPlan {
-    // 1. ids — the (tenant, id) unique index.
+    const { min, max, exact } = timeRange(filter);
+
+    // 0. a collapse — one rumor per term in a namespace. Grouped in the index
+    //    when nothing outside it has to be tested; otherwise the filter is
+    //    planned as usual and collapsed as the rows come back (see
+    //    `queryFilter`), which is the only shape that can honour a row
+    //    condition BEFORE the collapse.
+    if (filter.distinct !== undefined) {
+      const plan = this.planDistinct(ord, filter, min, max, exact);
+      if (plan) return plan;
+    }
+
+    // 1. derived terms — ahead of everything else, including ids, because
+    //    nothing else can apply them: they are not in the rumor, so a plan that
+    //    didn't resolve them in the index has no way to check them afterwards.
+    if (filter.terms.length > 0) {
+      return this.planTerms(ord, filter, min, max, exact);
+    }
+
+    // 2. ids — the (tenant, id) unique index.
     if (filter.ids) {
       return { ids: filter.ids, cursors: [], sqlOnly: false, searched: false };
     }
-
-    const { min, max, exact } = timeRange(filter);
 
     // Without the content index there is nothing to resolve keywords against,
     // so they fall through to the in-memory match instead.
     const search = this.search ? filter.searchQuery : undefined;
 
-    // 2. tags, or a NIP-50 search: the index drives.
+    // 3. tags, or a NIP-50 search: the index drives.
     if (filter.tags.length > 0 || search) {
       const plan = this.planFts(ord, prefix, filter, search, min, max, exact);
       if (plan) return plan;
@@ -955,7 +1268,7 @@ export class SqliteArmadaDB implements ArmadaDB {
     const searched = !filter.searchKeywords;
     const pushKinds = !filter.kinds || filter.kinds.length <= MAX_PUSHDOWN;
 
-    // 3. authors + kinds, from the composite index. The seeks land in an index
+    // 4. authors + kinds, from the composite index. The seeks land in an index
     //    whose entries are (tenant, pubkey, kind, time) in that order, so each
     //    walks straight to the newest rumors of a combination and stops.
     if (filter.authors && filter.kinds && pushKinds) {
@@ -975,7 +1288,7 @@ export class SqliteArmadaDB implements ArmadaDB {
       return { cursors, sqlOnly: searched, searched };
     }
 
-    // 4. authors alone, with kinds filtering the scan when there are few
+    // 5. authors alone, with kinds filtering the scan when there are few
     //    enough of them to be worth binding.
     if (filter.authors) {
       const cursors = [...batch(filter.authors, MAX_IN)].map((authors): ScanCursor => {
@@ -995,7 +1308,7 @@ export class SqliteArmadaDB implements ArmadaDB {
       return { cursors, sqlOnly: searched && pushKinds, searched };
     }
 
-    // 5. kinds.
+    // 6. kinds.
     if (filter.kinds) {
       const cursors = [...batch(filter.kinds, MAX_IN)].map((kinds): ScanCursor => {
         const conditions = ["tenant = ?", memberOf("kind", kinds)];
@@ -1009,7 +1322,7 @@ export class SqliteArmadaDB implements ArmadaDB {
       return { cursors, sqlOnly: searched, searched };
     }
 
-    // 6. fallback — the whole tenant, newest-first. `(tenant)` is `(tenant,
+    // 7. fallback — the whole tenant, newest-first. `(tenant)` is `(tenant,
     //    seq)`, so this is a backwards walk of one contiguous index range.
     const conditions = ["tenant = ?"];
     const params: SqlValue[] = [ord];
@@ -1122,6 +1435,220 @@ export class SqliteArmadaDB implements ArmadaDB {
     return { cursors, sqlOnly: complete && searched, searched };
   }
 
+  /**
+   * Plan a `distinct:<namespace>` collapse in the INDEX: one row per term in
+   * the namespace, each the newest under it.
+   *
+   * This is the plan the conversation list exists for. `rumor_terms` is keyed
+   * `(tenant, term, seq)`, so a namespace is one contiguous range and
+   * `GROUP BY term` is an ordered walk of it — no temp b-tree to group, and
+   * `MAX(seq)` is the last row of each block. What comes out is at most one
+   * `seq` per group, so the sorter that orders them by recency sorts
+   * CONVERSATIONS rather than messages, and the join reads exactly one rumor
+   * body per row returned. Bodies are what the old shape spent its budget on:
+   * it read the newest 500 rumors and grouped them in memory, so a busy thread
+   * hid every other conversation.
+   *
+   * Returns `undefined` — leaving the caller to plan the filter as usual and
+   * collapse the rows afterwards — when anything outside the term index has to
+   * be tested. Row conditions apply BEFORE the collapse, and testing `kind` or
+   * `pubkey` inside the grouping would mean a rowid lookup and a full row read
+   * per index row, which is precisely the cost this plan exists to avoid. Extra
+   * TERMS are the exception: they live in the same table, so they stay index-only
+   * as an `EXISTS`.
+   *
+   * The `CROSS JOIN` fixes the join order as it does in {@link planTerms}: the
+   * grouped subquery must drive and `rumors` must be seeked by rowid.
+   */
+  private planDistinct(
+    ord: number,
+    filter: ParsedFilter,
+    min: number | undefined,
+    max: number | undefined,
+    exact: boolean,
+  ): ScanPlan | undefined {
+    const range = termNamespaceRange(filter.distinct!);
+    if (!range) return undefined;
+
+    // Anything a row carries has to narrow the candidates, not the survivors,
+    // so it cannot be applied after the grouping — and applying it inside means
+    // reading the rows. A time bound the rowid encoding had to clamp counts as
+    // one of those, since only `created_at` can settle it.
+    if (
+      filter.ids || filter.kinds || filter.authors || filter.tags.length > 0 ||
+      filter.searchKeywords || (!exact && (filter.since !== undefined || filter.until !== undefined))
+    ) {
+      return undefined;
+    }
+
+    const conditions = ["x.tenant = ?", "x.term >= ?"];
+    const params: SqlValue[] = [ord, range.lower];
+
+    if (range.upper !== undefined) {
+      conditions.push("x.term < ?");
+      params.push(range.upper);
+    }
+    if (min !== undefined) {
+      conditions.push("x.seq >= ?");
+      params.push(min);
+    }
+    if (max !== undefined) {
+      conditions.push("x.seq <= ?");
+      params.push(max);
+    }
+    for (const term of filter.terms) {
+      conditions.push(
+        "EXISTS (SELECT 1 FROM rumor_terms y WHERE y.tenant = x.tenant AND y.term = ? AND y.seq = x.seq)",
+      );
+      params.push(term);
+    }
+
+    const grouped = `(SELECT MAX(x.seq) AS seq FROM rumor_terms x${
+      where(conditions)
+    } GROUP BY x.term)`;
+
+    return {
+      cursors: [{
+        from: `${grouped} g CROSS JOIN rumors r ON r.seq = g.seq`,
+        key: "g.seq",
+        columns: R_RUMOR_COLUMNS,
+        where: [],
+        params,
+      }],
+      grouped: true,
+      sqlOnly: true,
+      searched: true,
+    };
+  }
+
+  /**
+   * Plan a filter that names derived terms: `rumor_terms` drives, and
+   * everything else is tested on the rows it finds.
+   *
+   * One term is a seek to `(tenant, term)` and a backwards walk of the `seq`
+   * range under it — already time-ordered, so the walk stops at the limit with
+   * no sorter and no bodies read past it. Further terms are `EXISTS` against
+   * the same table, which is a point lookup per candidate rather than a second
+   * scan to intersect.
+   *
+   * The `CROSS JOIN` fixes the join order for the reason it does in
+   * {@link readPage}: the rumors table must be the INNER side, seeked by
+   * rowid, or a condition on one of its columns is enough to make the planner
+   * drive from there and sort the result afterwards.
+   */
+  private planTerms(
+    ord: number,
+    filter: ParsedFilter,
+    min: number | undefined,
+    max: number | undefined,
+    exact: boolean,
+  ): ScanPlan {
+    const [driving, ...rest] = filter.terms;
+    const conditions = ["x.tenant = ?", "x.term = ?"];
+    const params: SqlValue[] = [ord, driving];
+
+    if (min !== undefined) {
+      conditions.push("x.seq >= ?");
+      params.push(min);
+    }
+    if (max !== undefined) {
+      conditions.push("x.seq <= ?");
+      params.push(max);
+    }
+
+    for (const term of rest) {
+      conditions.push(
+        "EXISTS (SELECT 1 FROM rumor_terms y WHERE y.tenant = x.tenant AND y.term = ? AND y.seq = x.seq)",
+      );
+      params.push(term);
+    }
+
+    let complete = true;
+
+    // ids are pushed down here rather than taking the ids plan: that plan
+    // can't apply a term, and this one can apply an id.
+    if (filter.ids) {
+      if (filter.ids.length <= MAX_PUSHDOWN) {
+        conditions.push(memberOf("r.id", filter.ids));
+        params.push(...filter.ids);
+      } else {
+        complete = false;
+      }
+    }
+
+    if (filter.kinds) {
+      if (filter.kinds.length <= MAX_PUSHDOWN) {
+        conditions.push(memberOf("r.kind", filter.kinds));
+        params.push(...filter.kinds);
+      } else {
+        complete = false;
+      }
+    }
+
+    if (filter.authors) {
+      if (filter.authors.length <= MAX_PUSHDOWN) {
+        conditions.push(memberOf("r.pubkey", filter.authors));
+        params.push(...filter.authors);
+      } else {
+        complete = false;
+      }
+    }
+
+    // Timestamps the rowid encoding had to clamp are re-checked exactly.
+    if (!exact && filter.since !== undefined) {
+      conditions.push("r.created_at >= ?");
+      params.push(filter.since);
+    }
+    if (!exact && filter.until !== undefined) {
+      conditions.push("r.created_at <= ?");
+      params.push(filter.until);
+    }
+
+    // Tags and keywords are each a full-text index, and the term index is a
+    // third — so rather than intersect indexes (which SQLite cannot do across
+    // tables) each is resolved to a rowid set the term's walk tests against.
+    // The term drives because it is the selective one: a conversation is a
+    // handful of rows where `#p` is everything ever sent to a person.
+    if (filter.tags.length > 0) {
+      // A value list long enough to need splitting has no split to be given
+      // here — there is one statement, not one cursor per chunk — so it goes
+      // to the in-memory matcher instead, which reads the tags off rows the
+      // term has already narrowed to.
+      if (filter.tags.some((tag) => tag.values.length > MAX_OR)) {
+        complete = false;
+      } else {
+        conditions.push(
+          "x.seq IN (SELECT rowid FROM rumor_tags_fts WHERE rumor_tags_fts MATCH ?)",
+        );
+        params.push(
+          matchExpr(
+            filter.tags.map((tag) => tag.values.map((value) => tagToken(`t${ord}`, tag.name, value))),
+          ),
+        );
+      }
+    }
+
+    const search = this.search ? filter.searchQuery : undefined;
+    const searched = !filter.searchKeywords || !!search;
+
+    if (search) {
+      conditions.push("x.seq IN (SELECT rowid FROM rumors_fts WHERE rumors_fts MATCH ?)");
+      params.push(search);
+    }
+
+    return {
+      cursors: [{
+        from: "rumor_terms x CROSS JOIN rumors r ON r.seq = x.seq",
+        key: "x.seq",
+        columns: R_RUMOR_COLUMNS,
+        where: conditions,
+        params,
+      }],
+      sqlOnly: complete && searched,
+      searched,
+    };
+  }
+
   /** How many rumors in `tenant` match. */
   async countTenant(
     tenant: string,
@@ -1129,6 +1656,7 @@ export class SqliteArmadaDB implements ArmadaDB {
     opts?: { signal?: AbortSignal },
   ): Promise<{ count: number; approximate: boolean }> {
     await this.ready;
+    await this.awaitTerms(tenant, filters);
 
     // A single complete plan is counted inside the index: no rows returned, no
     // rumor bodies read. One rumor is one row of the token index however many
@@ -1144,7 +1672,17 @@ export class SqliteArmadaDB implements ArmadaDB {
 
         const plan = this.planScan(ord, `t${ord}`, filter);
 
-        if (plan.sqlOnly && !plan.ids && plan.cursors.length === 1) {
+        // A collapse the index could not GROUP is applied while scanning the
+        // rows (see `queryTenant`), so the index counts rows where the caller
+        // asked for groups. `planDistinct` bails on anything it can't test
+        // inside the grouping — `kinds`, `authors`, a tag, a keyword, an
+        // inexact bound — and the filter then falls through to the ordinary
+        // cascade, where `COUNT(*)` would answer a conversation list with the
+        // number of messages in it. Counted from the rows instead, which is
+        // what `IndexedDBArmadaDB` does for the same case.
+        const collapsed = filter.distinct !== undefined && !plan.grouped;
+
+        if (!collapsed && plan.sqlOnly && !plan.ids && plan.cursors.length === 1) {
           const [cursor] = plan.cursors;
           let sql: string;
           const params: SqlValue[] = [];
@@ -1186,7 +1724,15 @@ export class SqliteArmadaDB implements ArmadaDB {
     filters: NostrFilter[],
     opts?: { signal?: AbortSignal },
   ): Promise<void> {
-    const rumors = await this.queryTenant(tenant, filters, opts);
+    // A `distinct:` collapse names one rumor per group, which is not something a
+    // deletion can coherently be asked for — and answering it as written would
+    // delete the newest message of every conversation. Dropped, so the filter
+    // removes nothing, which is the same direction every other unhonourable
+    // narrowing takes (see `ParsedFilter.neverMatch`).
+    const deletable = filters.filter((filter) => new ParsedFilter(filter).distinct === undefined);
+    if (deletable.length === 0) return;
+
+    const rumors = await this.queryTenant(tenant, deletable, opts);
     if (rumors.length === 0) return;
 
     // Non-empty results mean the tenant has been written to, so it has an
@@ -1482,6 +2028,134 @@ function phrase(token: string): string {
   return `"${token.replace(/"/g, '""')}"`;
 }
 
+/**
+ * Whether a rumor has to be written by a statement of its own rather than
+ * staged into its burst's batch.
+ *
+ * Only the ones that READ the rows around them: a replaceable or addressable
+ * rumor resolves its coordinate and deletes what it supersedes, and a deletion
+ * request removes the rumors it names. Both must see the batch so far and must
+ * not see the rest of it — which is what a staged row can't offer, and what
+ * flushing before one of these restores.
+ */
+function needsOwnStatement(rumor: NostrRumor): boolean {
+  return rumor.kind === 5 || NKinds.replaceable(rumor.kind) || NKinds.addressable(rumor.kind);
+}
+
+/**
+ * Parameters one staged INSERT will carry.
+ *
+ * SQLite's `SQLITE_MAX_VARIABLE_NUMBER` is 32766 in every build this schema
+ * requires, but was 999 for a decade before 3.32 and is a compile-time option
+ * any packager may still set — and a native transport (Android's, iOS's) is
+ * somebody else's build. A budget below the old default costs nothing
+ * measurable, since the trigger overhead this batching exists to amortize is
+ * already gone by ~100 rows a statement, and it cannot be the thing that breaks
+ * on a platform nobody tested.
+ */
+const BATCH_PARAMS = 900;
+
+/**
+ * One burst's rows, staged for a multi-row INSERT per table.
+ *
+ * It is also the burst's rowid ledger — see
+ * {@link SqliteArmadaDB.reserveSeq} — because a rowid reserved for a staged
+ * row isn't in the table yet and so is invisible to the lookup that reserves
+ * the next one.
+ *
+ * Lives exactly as long as one transaction. Nothing here outlives a commit,
+ * which is what keeps the ledger from becoming a cache of what another writer
+ * may since have changed.
+ */
+class RumorBatch {
+  /** 8 parameters per row, in `rumors` column order. */
+  private rumors: SqlValue[] = [];
+  /** 2 per row: rowid and its tag tokens. */
+  private tags: SqlValue[] = [];
+  /** 3 per row: tenant, term, rowid. */
+  private terms: SqlValue[] = [];
+  /** `<ord>:<id>` of every rumor reserved in this transaction. */
+  private ids = new Set<string>();
+  /** The highest rowid handed out per `created_at` bucket. */
+  private seqs = new Map<number, number>();
+
+  /** Whether this transaction already reserved a rowid for `(ord, id)`. */
+  staged(ord: number, id: string): boolean {
+    return this.ids.has(`${ord}:${id}`);
+  }
+
+  /** The highest rowid handed out in `base`'s bucket, if any. */
+  lastSeq(base: number): number | undefined {
+    return this.seqs.get(base);
+  }
+
+  /** Record a rowid as taken, before the row it belongs to exists. */
+  reserve(ord: number, id: string, base: number, seq: number): void {
+    this.ids.add(`${ord}:${id}`);
+    this.seqs.set(base, seq);
+  }
+
+  add(seq: number, ord: number, rumor: NostrRumor, tokens: string, terms: string[]): void {
+    this.rumors.push(
+      seq,
+      ord,
+      rumor.id,
+      rumor.kind,
+      rumor.pubkey,
+      rumor.created_at,
+      JSON.stringify(rumor.tags),
+      rumor.content,
+    );
+    this.tags.push(seq, tokens);
+    for (const term of terms) {
+      if (typeof term === "string" && term !== "") this.terms.push(ord, term, seq);
+    }
+  }
+
+  /** The staged INSERTs, in the order they must run. */
+  *statements(): Generator<[sql: string, params: SqlValue[]]> {
+    // Index rows first, so a rumor is never findable before the index that
+    // finds it — see `SqliteArmadaDB.writeBatch`.
+    yield* rows(
+      this.tags,
+      2,
+      (values) => `INSERT INTO rumor_tags_fts (rowid, tokens) VALUES ${values}`,
+    );
+    yield* rows(
+      this.terms,
+      3,
+      (values) => `INSERT OR IGNORE INTO rumor_terms (tenant, term, seq) VALUES ${values}`,
+    );
+    yield* rows(
+      this.rumors,
+      8,
+      (values) =>
+        `INSERT INTO rumors (seq, tenant, id, kind, pubkey, created_at, tags, content) VALUES ${values}`,
+    );
+  }
+
+  /** Drop the staged rows, keeping the ledger for the rest of the transaction. */
+  clear(): void {
+    this.rumors = [];
+    this.tags = [];
+    this.terms = [];
+  }
+}
+
+/** Chunk flat parameters into multi-row INSERTs of at most {@link BATCH_PARAMS}. */
+function* rows(
+  params: SqlValue[],
+  width: number,
+  sql: (values: string) => string,
+): Generator<[sql: string, params: SqlValue[]]> {
+  const perStatement = Math.max(1, Math.floor(BATCH_PARAMS / width)) * width;
+  for (let i = 0; i < params.length; i += perStatement) {
+    const chunk = params.slice(i, i + perStatement);
+    const values = new Array(chunk.length / width).fill(`(${qs(width)})`).join(", ");
+    yield [sql(values), chunk];
+  }
+}
+
 /** A rumor queued for the next batched commit, with its caller's settlers. */
 interface PendingWrite {
   tenant: string;
@@ -1520,11 +2194,24 @@ interface FtsCursor {
   params?: SqlValue[];
 }
 
-/** A scan of the rumors table with a forced index. */
+/**
+ * A b-tree scan: the rumors table with a forced index, or an index table
+ * joined to it (the derived-term index).
+ */
 interface TableCursor {
   from: string;
   where: string[];
   params: SqlValue[];
+  /**
+   * The expression the scan is ordered and paged by, defaulting to `seq`.
+   *
+   * A join names it on the DRIVING table (`x.seq`), which is what keeps the
+   * walk inside that table's index instead of sorting whatever the join
+   * produced.
+   */
+  key?: string;
+  /** The rumor columns, when they need an alias ({@link R_RUMOR_COLUMNS}). */
+  columns?: string;
 }
 
 /** A planned scan: how to fetch a single filter's rumors. */
@@ -1541,4 +2228,11 @@ interface ScanPlan {
   sqlOnly: boolean;
   /** Whether the plan applies the filter's NIP-50 keywords itself. */
   searched: boolean;
+  /**
+   * Whether the cursor already yields one row per `distinct:` group. When it
+   * doesn't, a collapsed filter is collapsed row by row as its pages come back,
+   * and `limit` counts groups rather than rows — so no limit may be pushed into
+   * the SQL.
+   */
+  grouped?: boolean;
 }

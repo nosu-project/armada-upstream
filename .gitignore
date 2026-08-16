@@ -23,9 +23,12 @@ electron/db.cjs
 # writes an installed Armada's armada.db).
 electron/.dev-profile/
 
-# SwiftPM build output for the iOS ArmadaDB package (the vendored SQLite
-# amalgamation under Sources/ IS committed; this is only what building it makes).
+# SwiftPM build output for the iOS packages (the vendored SQLite and libsecp256k1
+# sources under Sources/ ARE committed; this is only what building them makes).
+# Root-owned when the suites are run through a Swift container, which is why git
+# warns rather than ignoring quietly if only one of them is listed.
 ios/ArmadaDB/.build/
+ios/ArmadaNotify/.build/
 
 # Local diagnostic scratch (may hold invite secrets) — never commit.
 scratch/

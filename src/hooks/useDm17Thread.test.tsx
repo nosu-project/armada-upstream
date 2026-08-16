@@ -220,9 +220,8 @@ describe("useDm17Thread history window", () => {
     // The gift-wrap stream is global (a wrap's author is ephemeral, so there
     // is no per-peer filter): one backfill page pulls older history for EVERY
     // correspondent at once. A busy account therefore scans hundreds of wraps
-    // to find a handful for the open thread — and since queryDm17Thread reads
-    // CONVERSATION_OVERFETCH times its limit, charging the floor for the whole
-    // page makes every later poll re-read other people's archives.
+    // to find a handful for the open thread, so charging the floor for the
+    // whole page makes every later poll re-read other people's archives.
     h.rows = Array.from({ length: 300 }, (_, index) => row(index + 1_000, 1_700_000_000 + index));
 
     const client = new QueryClient({

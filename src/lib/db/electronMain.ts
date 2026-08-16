@@ -27,6 +27,7 @@
  * lets `tsc` and the linter cover it as ordinary `src/` code.
  */
 import { SqliteArmadaDB } from "./SqliteArmadaDB";
+import { tenantOptsFor } from "./termPolicies";
 import { NodeSqlDriver } from "./nodeSqlDriver";
 
 import type { NostrFilter } from "@nostrify/nostrify";
@@ -71,6 +72,19 @@ export interface ArmadaDbServer {
 export function openArmadaDbServer(file: string): ArmadaDbServer {
   const driver = new NodeSqlDriver(file);
   const db = new SqliteArmadaDB(driver);
+
+  /**
+   * The store for a tenant named over the bridge, with its derived-term policy.
+   *
+   * The renderer names the tenant but cannot send the policy — a function does
+   * not cross IPC — so this process looks it up in the same table
+   * (`termPolicies.ts`), exactly as Android's and iOS's engines do in theirs.
+   * Reads that name a term are answered here, so a store acquired without it
+   * would answer them with nothing.
+   */
+  function storeFor(id: string) {
+    return db.tenant(id, tenantOptsFor(id));
+  }
 
   /**
    * Every tenant the file has ever held, read from the interning table the
@@ -141,14 +155,14 @@ export function openArmadaDbServer(file: string): ArmadaDbServer {
 
   const handlers: Record<string, (payload: Record<string, unknown>) => Promise<unknown>> = {
     async query({ tenant, filters }) {
-      const rumors = await db.tenant(String(tenant)).query(
+      const rumors = await storeFor(String(tenant)).query(
         JSON.parse(String(filters)) as NostrFilter[],
       );
       return { rumors: JSON.stringify(rumors) };
     },
 
     async event({ tenant, rumors }) {
-      const store = db.tenant(String(tenant));
+      const store = storeFor(String(tenant));
       const batch = JSON.parse(String(rumors)) as NostrRumor[];
       // Issued without awaiting between them so the whole batch lands in the
       // store's own microtask window, i.e. one transaction — the same reason
@@ -157,11 +171,11 @@ export function openArmadaDbServer(file: string): ArmadaDbServer {
     },
 
     async count({ tenant, filters }) {
-      return await db.tenant(String(tenant)).count(JSON.parse(String(filters)) as NostrFilter[]);
+      return await storeFor(String(tenant)).count(JSON.parse(String(filters)) as NostrFilter[]);
     },
 
     async remove({ tenant, filters }) {
-      await db.tenant(String(tenant)).remove(JSON.parse(String(filters)) as NostrFilter[]);
+      await storeFor(String(tenant)).remove(JSON.parse(String(filters)) as NostrFilter[]);
     },
 
     async tenants() {

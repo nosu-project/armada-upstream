@@ -149,12 +149,114 @@ export interface ArmadaKVListOptions {
   reverse?: boolean;
 }
 
+/**
+ * A tenant's DERIVED index terms: facts about a rumor that are re-derivable
+ * from it at any time, but that no tag of its own states.
+ *
+ * A NIP-01 filter can only ask about what a rumor literally says. Some of what
+ * a reader needs to select on isn't said anywhere: a NIP-17 conversation is the
+ * SET of its participants, which lives half in `pubkey` and half in the `p`
+ * tags, and no filter can express "exactly this set" (a tag filter is an OR
+ * over values, so it can only over-select and be narrowed in memory
+ * afterwards).
+ *
+ * A term closes that gap without putting anything beside the rumor that a
+ * reader could mistake for the rumor. The policy is a pure function of the
+ * stored row, so a term is a CACHE of a derivation and never a fact of its own:
+ * it can be thrown away and rebuilt, it can't be forged by a sender spelling a
+ * tag, and nothing reads it back out — it exists only to be looked up. That is
+ * what distinguishes it from injecting a tag into the stored rumor, which
+ * AGENTS.md forbids and which this is not.
+ *
+ * Terms are queried as NIP-50 extension tokens — `{ search: "conv:<key>" }` —
+ * and matched WHOLE and exactly against the strings the policy returned. The
+ * engines never interpret a term, so nothing NIP-17-shaped is inside them; the
+ * layer that spells the tenant id is the layer that decides what its rows mean
+ * (see `termPolicy.ts`).
+ *
+ * A term is therefore `<namespace>:<body>`, with the namespace everything up to
+ * the FIRST colon. That is not a new restriction — a token is the only way to
+ * name a term in a filter, and it is reassembled as `key:value`, so a term
+ * without a colon has never been queryable — but it is relied on by
+ * {@link TERM_NAMESPACES_RESERVED} and by `distinct:<namespace>`, which reduces
+ * a read to one rumor per term within one namespace. Two rules come with that:
+ *
+ *  - A policy must derive AT MOST ONE term per namespace per rumor. A rumor that
+ *    is the newest of two groups can only be returned once (a read de-duplicates
+ *    by id), so the second group would silently lose its representative.
+ *  - A namespace in {@link TERM_NAMESPACES_RESERVED} is a directive, not a term,
+ *    and a term under one could never be looked up.
+ *
+ * The policy is bound to the TENANT rather than passed at each write, because
+ * two of the writers aren't in JavaScript: Android's notification service and
+ * iOS's notification extension write into `dm17:<self>` while the app is dead,
+ * through their own engines. A per-write option is one every writer has to
+ * remember, and a writer that forgets it stores a row that a term read then
+ * cannot see — which is exactly the message-received-while-closed case. Bound
+ * to the tenant, a writer is covered whether or not it knows terms exist; the
+ * native engines declare the same policy for the same tenant ids
+ * (`TermPolicy.kt`, `TermPolicy.swift`).
+ */
+export type TermPolicy = (rumor: NostrRumor, tenantId: string) => string[];
+
+/** Separates a term's namespace from its body. See {@link TermPolicy}. */
+export const TERM_NAMESPACE_SEP = ":";
+
+/**
+ * Extension-token keys that are DIRECTIVES to the store rather than terms, and
+ * so are not available as term namespaces.
+ *
+ * Currently one: `distinct:<namespace>` collapses a read to the newest rumor per
+ * term in that namespace (ditto-relay spells the same operation `distinct:author`
+ * over a field). A policy deriving `distinct:…` would be deriving a term no
+ * filter could ever name, since the filter parser reads it as the directive.
+ */
+export const TERM_NAMESPACES_RESERVED: readonly string[] = ["distinct"];
+
+export interface TenantOpts {
+  /**
+   * The tenant's {@link TermPolicy}, installed on the store and applied to
+   * every write — including ones made through a handle acquired without it,
+   * since a tenant is one store however many times it is asked for.
+   *
+   * Declare it at the single site that spells the tenant id. A second
+   * acquisition may repeat it (it replaces the installed one, which is a no-op
+   * when they agree), but two sites that DISAGREE are a bug the store can't
+   * detect: rows already written keep the terms of the policy in force at the
+   * time.
+   *
+   * Installing a policy on a tenant whose rows predate it schedules a one-time
+   * backfill of that tenant's index; reads that name a term wait for it.
+   */
+  terms?: TermPolicy;
+  /**
+   * Which revision of {@link terms} the index was built by — bumped whenever a
+   * policy changes what it derives, so the rows written under the old one are
+   * re-indexed instead of being left with terms nothing looks up.
+   *
+   * The backfill records this alongside the tenant, and a recorded generation
+   * that differs from the one asked for makes the tenant's terms be dropped and
+   * derived again. Without it a policy edit is silent and permanent: existing
+   * rows keep the terms they were written with, a term read returns only the
+   * rows written since, and nothing anywhere reports a problem.
+   *
+   * It is ONE number for every policy, and the same number in every port
+   * (`TERM_GENERATION` here, `TermPolicies.GENERATION` in Kotlin,
+   * `TermPolicies.generation` in Swift) — because it is written into a file that
+   * three engines share. Two ports that disagree would each read the other's
+   * generation as stale and rebuild the index on every open, forever. A
+   * per-policy number would be three tables to keep in step rather than one
+   * constant, and buys only that an unrelated tenant is not re-walked.
+   */
+  termsGeneration?: number;
+}
+
 export interface ArmadaDB {
   /**
    * The event store for `id`, created on first use. Repeated calls with the
    * same id return the same store, so writes batch together.
    */
-  tenant(id: string): NRumorStore;
+  tenant(id: string, opts?: TenantOpts): NRumorStore;
   kv: ArmadaKV;
 }
 
@@ -167,8 +269,21 @@ export interface ArmadaDBOpts {
 }
 
 /**
+ * The tag name an engine may use to file a {@link TermPolicy}'s terms in its
+ * ORDINARY tag index, rather than in an index of their own — which is what the
+ * IndexedDB adapter does, `NIndexedDB`'s `indexTags` hook being the only place
+ * it can add an index term at all.
+ *
+ * Reserved: {@link defaultIndexTags} refuses it, so nothing a sender writes can
+ * reach the namespace, and a term is only ever a string a policy returned.
+ * (Adapters verify the derivation anyway — see `matchesTerms` — so this is the
+ * second lock on the same door.)
+ */
+export const TERM_TAG = "~";
+
+/**
  * Default tag index policy: index every tag with a short name and a non-empty
- * value under 200 chars.
+ * value under 200 chars, except the reserved {@link TERM_TAG}.
  *
  * Unlike relay/`NPostgres` policy this is NOT limited to single-letter tags —
  * Armada's local planes query on multi-letter names (`#channel`, `#stream`,
@@ -178,7 +293,8 @@ export interface ArmadaDBOpts {
  */
 export function defaultIndexTags(rumor: NostrRumor): string[][] {
   return rumor.tags.filter(
-    ([name, value]) => !!name && name.length <= 20 && !!value && value.length < 200,
+    ([name, value]) =>
+      !!name && name !== TERM_TAG && name.length <= 20 && !!value && value.length < 200,
   );
 }
 
@@ -198,6 +314,30 @@ export function prefixUpperBound(prefix: string): string | undefined {
   const last = prefix.charCodeAt(prefix.length - 1);
   if (last === 0xffff) return undefined;
   return prefix.slice(0, -1) + String.fromCharCode(last + 1);
+}
+
+/**
+ * The half-open term range a namespace covers: every term of the form
+ * `<namespace>:<anything>`.
+ *
+ * The engines compute this rather than being handed a prefix, so that a prefix
+ * SPANNING namespaces cannot be spelled. `distinct:conv` collapsing groups from
+ * `conv:`, `convmsg:` and `convmine:` at once would be a silently wrong answer —
+ * every conversation returned up to three times, each with a different newest
+ * row — and a missing trailing delimiter would be enough to ask for it.
+ *
+ * Splitting a term on its first colon is the only interpreting of a term any
+ * engine does, and it is the delimiter the read path already required (see
+ * {@link TermPolicy}). A trailing delimiter on the namespace is tolerated, so
+ * `distinct:conv` and `distinct:conv:` name the same range.
+ */
+export function termNamespaceRange(
+  namespace: string,
+): { lower: string; upper: string | undefined } | undefined {
+  const name = namespace.endsWith(TERM_NAMESPACE_SEP) ? namespace.slice(0, -1) : namespace;
+  if (!name || name.includes(TERM_NAMESPACE_SEP)) return undefined;
+  const lower = name + TERM_NAMESPACE_SEP;
+  return { lower, upper: prefixUpperBound(lower) };
 }
 
 /**

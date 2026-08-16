@@ -2441,7 +2441,9 @@ export function DMsPage() {
   // Tell the native notification service this DM thread is on screen, so it
   // suppresses redundant tray entries (the live timeline already paints each
   // message). Cleared on unmount/background. The roomKey shape must match the
-  // service's `enqueueRoomMessage` key: `dm:<peerPubkey>`.
+  // service's `enqueueRoomMessage` key: `dm:<conversationKey>`, the participant
+  // set rather than a sender — which is why a group thread on screen suppresses
+  // the group's own notifications and nothing else's.
   useActiveRoom(activePeer ? `dm:${activePeer}` : undefined);
 
   // The peer whose thread is mounted. It lags behind `activePeer` so the thread

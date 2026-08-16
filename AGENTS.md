@@ -529,6 +529,36 @@ Things to know before touching it:
   user-controlled string containing one; and a KV prefix upper bound that lands
   on an unpaired surrogate is reported as NO bound, because Swift strings can't
   hold one — the scan widens and the range check does the filtering.
+- **A burst is one statement per table, not one per rumor** — and on SQLite
+  that is most of what a write costs. `rumors` carries an AFTER INSERT trigger
+  maintaining the content index, and SQLite runs a trigger's sub-program per
+  INSERT STATEMENT rather than folding it into the row loop, so a row per
+  statement paid that setup once per rumor: 76µs a row against 17µs for the
+  same rows, the same trigger and the same transaction written in batches of
+  200. `flushWrites` therefore STAGES a burst (`RumorBatch`) and emits one
+  multi-row INSERT per table per chunk — measured 287µs → 61µs per NIP-17
+  rumor, and 4.0 → 1.0 statements. Two things it must keep doing, and the
+  Kotlin and Swift ports with it: a rumor that READS the rows around it (a
+  replaceable one superseding its coordinate, a kind 5 deleting its targets)
+  flushes the batch and writes alone, so it still sees everything before it and
+  nothing after; and the rowid ledger lives in the batch, because a rowid
+  reserved for a staged row is invisible to the `MAX(seq)` that reserves the
+  next one. Both are in `ArmadaDB.test.ts`, so a port that skips either fails
+  the conformance suite rather than the field. The per-rumor `INSERT OR IGNORE`
+  into `rumor_terms` went the same way — a NIP-17 message is filed under three
+  terms, which alone tripled a write's statements.
+- **A term read that names anything else is planned by COUNTING, on
+  IndexedDB.** A derived term lives in the index and nowhere else, so the
+  moment a filter names a term plus anything, `NIndexedDB` has to be asked for
+  a superset and narrowed here (`runChecked`) — and which superset is smaller
+  is a property of the data. A thread page is the term, since every kind in the
+  filter is in the thread; the same thread's TIMER is the kind, one row per
+  conversation against every message ever sent in one. One index-only `count`
+  each decides it, and the limit is PAGED rather than dropped — reading the
+  range whole made a 50-row page of a 300-message thread deserialize the whole
+  thread. The paging must stay exhaustive: it is a walk to the end of the
+  range, not a search budget, or a timer set a year ago is reported as no timer
+  at all.
 - **SQLite is bundled, not borrowed.** The schema needs FTS5 with
   `contentless_delete` (3.43+) and JSON1; Android's platform SQLite is 3.9 on
   minSdk 24 and has neither. `androidx.sqlite:sqlite-bundled` ships 3.50.1 per
@@ -579,9 +609,10 @@ Things to know before touching it:
   either.** Its tags are the bytes its id commits to, so bookkeeping written
   into them makes the row something the sender never signed, and makes whatever
   reads that tag forgeable by anyone who spells it. Derive instead: a DM's
-  partner comes from `pubkey` and the `p` tags NIP-17 requires (`dmPeerOf`), and
-  a thread is two ordinary indexed filters — `authors: [peer]` and
-  `authors: [self], "#p": [peer]`. A Concord plane is its KINDS
+  conversation comes from `pubkey` and the `p` tags NIP-17 requires
+  (`dmPeersOf`), and where the derivation is more than a filter can express it
+  becomes a derived TERM rather than a tag (see below). A Concord plane is its
+  KINDS
   (`PLANE_RULES`/`queryPlane`), and a rekey round names its own scope and epoch
   in the tags `parseRekey` reads — so neither the stream address, the carrier
   wrap id nor the seal kind is stored at all. They are checked ONCE, at ingest
@@ -594,6 +625,60 @@ Things to know before touching it:
   genuinely not in the rumor. It lives in KV as a set of rumor ids per control
   stream address (`c2snap:<community>:<pk>`, `readControlSnapshot`) — the fact
   itself, not an event-shaped row impersonating one.
+- **Where the derivation is real but unfilterable, index a TERM.** A NIP-01
+  filter can only ask about what a rumor literally says, and a NIP-17
+  conversation is the SET of its participants — half in `pubkey`, half in the
+  `p` tags, and a tag filter is an OR over values, so `authors: [ana, ben]` also
+  matches everything Ana sent in another room. Every such read could therefore
+  only OVER-select and be narrowed in JavaScript afterwards, at a fixed 3×
+  over-fetch per filter. A tenant may instead declare a `TermPolicy` (`db/types.ts`):
+  a pure function of the stored rumor returning opaque strings, indexed beside it
+  and looked up as a NIP-50 extension token (`{ search: "conv:<key>" }`). Not a
+  tag on the rumor and not a row impersonating one — a CACHE of a derivation,
+  discardable and rebuildable, unforgeable by a sender spelling anything, and
+  read by nothing but the index. Three rules make it safe: the ENGINES never
+  interpret a tenant id or a term (`db/termPolicies.ts` is the only table that
+  does, and `TermPolicies.kt` / `TermPolicies.swift` must agree with it exactly);
+  the policy binds to the TENANT, not to a write, so the Android service and the
+  iOS extension file rows correctly while knowing nothing about terms; and an
+  unknown term FAILS CLOSED, matching nothing rather than dropping the
+  constraint. SQLite gets a b-tree (`rumor_terms`, schema v2) rather than more
+  FTS tokens because `(tenant, term, seq)` is already time-ordered, so a lookup
+  is a bounded backwards walk — and because a b-tree can be GROUPED, which is
+  what `distinct:` below is. Existing rows are indexed by a one-time per-tenant
+  backfill, since a term cannot be derived in SQL; only reads that TOUCH the
+  index wait for it — which is every read carrying a `search`, and must be
+  tested that way rather than on the terms the filter parsed to, because
+  `distinct:` reaches the index while naming no term of its own. (Gating on the
+  parsed terms is what left the Kotlin and Swift engines answering the
+  conversation list from an index nothing had built.) The GENERATION that walked
+  the tenant is recorded beside it — one number, identical in all three ports,
+  because a policy edit without it leaves earlier rows carrying terms nothing
+  looks up, and two ports that disagree rebuild the index against each other on
+  every open. A pass runs at most once per tenant per process whatever the
+  outcome, and a failed one is swallowed with its generation unrecorded: the
+  read that triggered it is answerable from the index as it stands, and the next
+  launch walks the tenant again.
+- **`distinct:<namespace>` collapses a read to one rumor per group.** A term is
+  namespaced (`<namespace>:<body>`, which the read path always required since a
+  term is named as a `key:value` token), and this reserved token returns the
+  NEWEST rumor per term in one namespace — so `limit` counts conversations while
+  still counting rows. ditto-relay spells the same operation `distinct:author`
+  over a field, and for the same reason: collapsing has to happen INSIDE the read,
+  because de-duplicating the answer afterwards can only shrink an already
+  truncated page. That was the NIP-17 conversation list, which sampled the newest
+  500 message rumors and grouped them in memory — one busy thread hid every other
+  conversation, and a peer written to a year ago fell out of the `mine` set the
+  push gateways read as "not a stranger". Two plans, which must answer
+  identically: `GROUP BY term` over the namespace's range (index-only, one body
+  read per group) when nothing outside the term index has to be tested, and a
+  collapse-as-you-scan otherwise — row conditions apply BEFORE the collapse, so
+  `kinds` would have to be tested inside the grouping, which is why the policy
+  files a message-only namespace (`convmsg:`) instead. It is a DIRECTIVE, not a
+  term: query-only (a `remove()` naming it deletes nothing, since "one rumor per
+  conversation" is not a deletion anyone should be able to ask for), never
+  matched row-wise, and refused outright rather than approximated — two of them,
+  or a namespace that isn't one, fail closed.
 - **A drain converts to the CURRENT shape; it does not copy rows across.** The
   pre-ArmadaDB store folded `stream`/`wrap`/`sealkind`/`seal` into the stored
   event's tags and told the planes apart by the `stream` tag at read time, so

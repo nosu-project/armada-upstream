@@ -40,11 +40,38 @@ internal class ParsedFilter(filter: JSONObject) {
 
     /**
      * The NIP-50 keywords parsed out of `search`. Extension tokens
-     * (`key:value`) are parsed and removed — none are supported, and per NIP-50
-     * unsupported extensions are ignored. Null when the filter has no `search`,
+     * (`key:value`) are [terms] instead. Null when the filter has no `search`,
      * or when it parses to no keywords (in which case it imposes no constraint).
      */
     val searchKeywords: SearchKeywords?
+
+    /**
+     * The NIP-50 extension tokens (`key:value`) named by `search`, spelled back
+     * exactly as written. Every one of them must be among the rumor's derived
+     * index terms, which the store resolves against `rumor_terms` rather than
+     * against anything the rumor says.
+     *
+     * A term no policy in this tenant emits therefore matches nothing, which is
+     * how an unsupported extension (`domain:example.com`) still FAILS CLOSED:
+     * it narrows to an empty index lookup rather than being dropped and
+     * answering a narrowing query with the whole tenant.
+     */
+    val terms: List<String>
+
+    /**
+     * The term NAMESPACE this filter is collapsed by, from a
+     * `distinct:<namespace>` token: the result holds at most one rumor per term
+     * in that namespace — the newest, since a read is newest-first — and `limit`
+     * therefore counts groups without ceasing to count rows.
+     *
+     * The port of `ParsedFilter.distinct` in TypeScript; every rule about it is
+     * written down there. The two that shape this file: it is NOT a term (no
+     * policy derives `distinct:…`, so a term lookup would match nothing), and a
+     * collapse the store cannot honour EXACTLY fails closed rather than being
+     * dropped — answering without it would return every row of a read that asked
+     * for one row per group.
+     */
+    val distinct: String?
 
     /**
      * The same keywords as an FTS5 `MATCH` expression, or null when they can't
@@ -143,13 +170,33 @@ internal class ParsedFilter(filter: JSONObject) {
 
         var keywords: SearchKeywords? = null
         var query: String? = null
+        val terms = ArrayList<String>()
+        var collapse: String? = null
+        var collapseTokens = 0
 
         if (search != null) {
             val required = ArrayList<String>()
             val negated = ArrayList<String>()
 
             for (token in Nip50.parseInput(search)) {
-                if (token !is String) continue // extension token: removed
+                if (token !is String) {
+                    val extension = token as Nip50.Extension
+                    // A reserved key is a DIRECTIVE to the store, not a term. It
+                    // is read here and nowhere else, so an engine resolving terms
+                    // in its index never sees it as one to look up.
+                    if (extension.key == DISTINCT) {
+                        collapseTokens++
+                        collapse = extension.value
+                        continue
+                    }
+                    if (extension.key in RESERVED_NAMESPACES) continue
+                    // An extension token is a lookup in the derived term index.
+                    // NOT lowercased: a term is an opaque string a policy
+                    // returned, and folding its case would make two distinct
+                    // ones the same lookup.
+                    terms.add("${extension.key}:${extension.value}")
+                    continue
+                }
                 val keyword = token.lowercase()
                 if (keyword.startsWith("-")) {
                     if (keyword.length > 1) negated.add(keyword.substring(1))
@@ -161,7 +208,7 @@ internal class ParsedFilter(filter: JSONObject) {
             if (required.isNotEmpty() || negated.isNotEmpty()) {
                 keywords = SearchKeywords(required, negated)
                 query = toFtsQuery(required, negated)
-            } else if (search.isNotBlank()) {
+            } else if (terms.isEmpty() && collapse == null && search.isNotBlank()) {
                 // The caller asked for something, and every part of it was
                 // consumed by the parse: an extension nobody implements
                 // (`domain:example.com`), or punctuation that tokenizes to
@@ -179,7 +226,29 @@ internal class ParsedFilter(filter: JSONObject) {
 
         this.searchKeywords = keywords
         this.searchQuery = query
+        this.terms = terms
+
+        // A collapse the store cannot honour exactly is refused, never
+        // approximated: two dimensions it cannot group by at once, or a namespace
+        // that isn't one (empty, or itself containing the delimiter).
+        var namespace: String? = null
+        if (collapse != null) {
+            val range = TermRange.of(collapse)
+            if (collapseTokens > 1 || range == null) never = true else namespace = range.namespace
+        }
+        this.distinct = namespace
         this.neverMatch = never
+    }
+
+    /**
+     * Which group a rumor with these derived terms collapses into — its one term
+     * in the [distinct] namespace — or null when it has none and so is excluded
+     * from a collapsed read.
+     */
+    fun collapseKey(derived: List<String>): String? {
+        val namespace = distinct ?: return null
+        val prefix = "$namespace:"
+        return derived.firstOrNull { it.startsWith(prefix) }
     }
 
     /**
@@ -278,12 +347,76 @@ internal class ParsedFilter(filter: JSONObject) {
     }
 }
 
+/**
+ * The extension-token key that is a DIRECTIVE to the store rather than a term:
+ * `distinct:<namespace>` collapses a read to one rumor per term in that
+ * namespace. A policy must never derive a term under it — see `TermPolicy` in
+ * `src/lib/db/types.ts`.
+ */
+internal const val DISTINCT = "distinct"
+
+/**
+ * Every such key, the counterpart of `TERM_NAMESPACES_RESERVED` in
+ * `src/lib/db/types.ts` — one today, and a set rather than a comparison so that
+ * a second one is a line in each port rather than a silent disagreement about
+ * what an unrecognized directive means. A reserved key is CONSUMED here: filing
+ * it as a term instead would fail closed (nothing matches) where the TypeScript
+ * side drops it, so the two would narrow in opposite directions.
+ */
+internal val RESERVED_NAMESPACES = setOf(DISTINCT)
+
+/**
+ * The half-open term range a namespace covers: every term of the form
+ * `<namespace>:<anything>`. The port of `termNamespaceRange`.
+ *
+ * Derived from the namespace rather than taken as a prefix, so a prefix SPANNING
+ * namespaces cannot be spelled — `distinct:conv` collapsing groups from `conv:`,
+ * `convmsg:` and `convmine:` at once would be a silently wrong answer, and a
+ * missing delimiter would be enough to ask for it. A trailing delimiter is
+ * tolerated, so `conv` and `conv:` name the same range.
+ *
+ * Splitting a term on its first colon is the only interpreting of a term this
+ * engine does, and it is the delimiter the read path already required: a term is
+ * named in a filter as a NIP-50 token, which is reassembled as `key:value`.
+ */
+internal class TermRange private constructor(
+    /** The namespace, with no trailing delimiter. */
+    val namespace: String,
+    /** Inclusive lower bound: `<namespace>:`. */
+    val lower: String,
+    /** Exclusive upper bound, or null when the prefix has none. */
+    val upper: String?,
+) {
+    companion object {
+        fun of(namespace: String): TermRange? {
+            val name = namespace.removeSuffix(":")
+            if (name.isEmpty() || name.contains(":")) return null
+            val lower = "$name:"
+            return TermRange(name, lower, upperBound(lower))
+        }
+
+        /**
+         * The exclusive upper bound of the keys starting with [prefix], or null
+         * when there isn't one — a prefix ending in the maximal UTF-16 code unit
+         * is open-ended.
+         */
+        private fun upperBound(prefix: String): String? {
+            val last = prefix.last()
+            if (last.code == 0xFFFF) return null
+            return prefix.dropLast(1) + (last + 1)
+        }
+    }
+}
+
 /** [NIP-50](https://github.com/nostr-protocol/nips/blob/master/50.md) input parsing. */
 internal object Nip50 {
 
     private val TOKEN = Regex("""(\B-\w+:[^\s"]+)|(\b\w+:[^\s"]+)|(".*?")|(\S+)""")
 
-    /** An extension token: `key:value`, none of which Armada supports. */
+    /**
+     * An extension token: `key:value`. Armada resolves these against the
+     * tenant's derived term index — see [ParsedFilter.terms].
+     */
     class Extension(val key: String, val value: String)
 
     /** Keywords (as [String]) and extension tokens (as [Extension]), in order. */
