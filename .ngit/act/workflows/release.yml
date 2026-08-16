@@ -36,18 +36,17 @@ name: Android release
 #   ZAPSTORE_BUNKER_URL      bunker:// URL of the NIP-46 signer for Zapstore
 #   ZAPSTORE_CLIENT_KEY      persistent zsp NIP-46 client key (hex) for it
 #   DEPLOY_SSH_KEY_BASE64    (optional) base64 (one line) of the deploy user's
-#                            private key, shared with deploy-web.yml and
-#                            desktop.yml. Publishes the APK to
-#                            armada.buzz/downloads/. Empty (unprovisioned)
-#                            skips only that publish; the run artifacts and the
-#                            store publishes are unaffected.
+#                            private key, shared with desktop.yml. Publishes
+#                            the APK to armada.buzz/downloads/. Empty
+#                            (unprovisioned) skips only that publish; the run
+#                            artifacts and the store publishes are unaffected.
 #   DEPLOY_SSH_CONFIG_BASE64 (optional) base64 of an ssh_config -> ~/.ssh/config
 #   DEPLOY_TARGET            (optional) rsync destination; defaults to "web"
 #   GOOGLE_PLAY_SERVICE_ACCOUNT_JSON  (optional) base64 of the Play Console
 #                            service-account JSON key with release permission on
 #                            buzz.armada.app. Empty (unprovisioned) skips the
 #                            Google Play publish instead of failing — same
-#                            pattern as deploy-web.yml's SSH key.
+#                            pattern as DEPLOY_SSH_KEY_BASE64 above.
 
 on:
   push:
@@ -151,14 +150,15 @@ jobs:
           set -eu
           # Analytics is structurally EXCLUDED from the APK. Baking armada.buzz
           # telemetry into every self-hoster's install would betray "your keys,
-          # your fleet", so — unlike deploy-web.yml — this build never wires the
-          # VITE_PLAUSIBLE_* secrets into its env. Not merely "off by default":
-          # the operator HAS provisioned those secrets for this repo's alias (for
-          # the web deploy), so passing them through here would silently ship a
-          # tracking APK. We also unset them defensively, so reintroducing them at
-          # job/global scope can't leak the tracker into the bundle. If you ever
-          # want a branded APK WITH analytics, add the env back on this step
-          # deliberately — don't rely on the secret being unprovisioned.
+          # your fleet", so this build never wires the VITE_PLAUSIBLE_* secrets
+          # into its env. Not merely "off by default": those secrets remain
+          # provisioned for this repo's alias (they were the hosted web deploy's,
+          # and no workflow consumes them since it was removed), so passing them
+          # through here would silently ship a tracking APK. We also unset them
+          # defensively, so reintroducing them at job/global scope can't leak the
+          # tracker into the bundle. If you ever want a branded APK WITH
+          # analytics, add the env back on this step deliberately — don't rely on
+          # the secret being unprovisioned.
           unset VITE_PLAUSIBLE_DOMAIN VITE_PLAUSIBLE_ENDPOINT
           npm ci
           npx vite build

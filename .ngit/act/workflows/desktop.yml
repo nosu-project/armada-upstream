@@ -369,15 +369,14 @@ jobs:
           path: ${{ steps.collect.outputs.feed }}
           if-no-files-found: error
 
-      # Publish to https://armada.buzz/downloads/ over the SAME rrsync-jailed
-      # deploy user the web build uses (deploy-web.yml). Pushing the staged
-      # `downloads` DIRECTORY (no trailing slash) into the jail root ":/" is
-      # what creates/updates the directory there, mirroring how the web job
-      # pushes `dist/`. Note the web deploy runs without `--delete`, which is
-      # what lets downloads/ survive every subsequent site deploy — don't add
-      # one there without excluding /downloads.
+      # Publish to https://armada.buzz/downloads/ over the rrsync-jailed deploy
+      # user. Pushing the staged `downloads` DIRECTORY (no trailing slash) into
+      # the jail root ":/" is what creates/updates the directory there. This
+      # rsync runs without `--delete`, as release.yml's does — the two publish
+      # into one jail root and would otherwise delete each other's installers,
+      # so don't add one without excluding the other's files.
       #
-      # Secrets are the web deploy's (operator-provisioned, maintainer-gated):
+      # Secrets (operator-provisioned, maintainer-gated), shared with release.yml:
       # DEPLOY_SSH_KEY_BASE64, DEPLOY_SSH_CONFIG_BASE64, DEPLOY_TARGET. With no
       # key provisioned the installers are still built and uploaded as run
       # artifacts; only the publish is skipped.

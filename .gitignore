@@ -30,6 +30,5 @@ ios/ArmadaDB/.build/
 # Local diagnostic scratch (may hold invite secrets) — never commit.
 scratch/
 
-# Local deploy script (personal hosts/paths); CI deploys via
-# .ngit/act/workflows/deploy-web.yml.
+# Local deploy script (personal hosts/paths).
 deploy.sh

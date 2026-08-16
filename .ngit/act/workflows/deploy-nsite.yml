@@ -27,9 +27,9 @@ name: Deploy nsite
 #   VITE_NOSTR_PUSH_PUBKEY    public hex/npub identity of the NIP-PUSH gateway
 #   VITE_NOSTR_PUSH_RELAYS    comma-separated rendezvous relays for its RPC
 #   VITE_BRIDGE_PORTAL_URL    (optional) Discord bridge portal origin
-# Unlike deploy-web.yml, an empty NSYTE_BUNKER FAILS the job rather than
-# skipping quietly: there is no other publisher for this site, so a skipped
-# run leaves the nsite silently pinned to an older build.
+# An empty NSYTE_BUNKER FAILS the job rather than skipping quietly: this is
+# the only workflow that publishes the client anywhere, so a skipped run
+# leaves the nsite silently pinned to an older build.
 
 # `nsyte validate` checks .nsite/config.json against nsyte's own schema, which
 # is narrower than NIP-5A in at least one place that matters here: `source`

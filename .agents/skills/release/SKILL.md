@@ -227,6 +227,10 @@ per job. Results/artifacts publish to Nostr and show on gitworkshop.dev.
 2. **desktop.yml → linux** — Electron AppImage + deb.
 3. **desktop.yml → windows** — Electron NSIS Setup + portable `.exe`, cross-built
    from Linux (installs wine in-job).
+4. **deploy-nsite.yml → deploy** — publishes the web client to Blossom + relays
+   as the nsite `armada`, plus an immutable kind-5128 manifest snapshot titled
+   with the tag, so the release stays addressable after the named site moves
+   on. Also runs on every push to `main`; the snapshot is the tag-only half.
 
 macOS is not built on ngit-ci (act runs Linux containers only).
 
@@ -271,13 +275,21 @@ Optional (Google Play publish on tags, ngit-ci `release.yml`):
 |----------|------|
 | `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | base64 (one line) of the Play Console service-account JSON key with release permission on `buzz.armada.app`. Unprovisioned → the Play publish is skipped, not failed. |
 
-Optional (web deploy on push to `main`, ngit-ci `deploy-web.yml`):
+Optional (publishing installers to `armada.buzz/downloads/` on tags, ngit-ci
+`release.yml` + `desktop.yml`):
 
 | Variable | What |
 |----------|------|
-| `DEPLOY_SSH_KEY_BASE64` | base64 (one line) of the rrsync-jailed deploy user's private key |
+| `DEPLOY_SSH_KEY_BASE64` | base64 (one line) of the rrsync-jailed deploy user's private key. Unprovisioned → the installers are still built and uploaded as run artifacts; only the publish to the host is skipped. |
 | `DEPLOY_SSH_CONFIG_BASE64` | (optional) base64 of an ssh_config written to `~/.ssh/config` |
 | `DEPLOY_TARGET` | (optional) rsync destination; defaults to `web` |
+
+Required (nsite deploy on push to `main` and on tags, ngit-ci
+`deploy-nsite.yml`):
+
+| Variable | What |
+|----------|------|
+| `NSYTE_BUNKER` | `nbunksec1...` NIP-46 session for nsyte. The signing pubkey **is** the site address. Unprovisioned → the job fails rather than skipping, since nothing else publishes the client. |
 
 Optional (GitLab mirror / macOS):
 

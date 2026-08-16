@@ -67,7 +67,6 @@ commit/PR.
 | Workflow | Trigger | What |
 |----------|---------|------|
 | `test.yml` | push (any branch) + PR | `npm run test` (tsc + eslint + vitest + build), both Swift suites (`swift test --package-path ios/{ArmadaDB,ArmadaNotify}`), and `npm audit --audit-level=high` |
-| `deploy-web.yml` | push to `main` | build + rsync-over-SSH deploy of the hosted client (armada.buzz); skips deploy if the SSH secret isn't provisioned |
 | `release.yml` | tag `v*` | signed Android APK + AAB, published as run artifacts and the APK to `armada.buzz/downloads/`, then Zapstore publish, then Google Play publish (draft release while the app is unpublished in Play Console; skips Play if the service-account secret isn't provisioned) |
 | `desktop.yml` | tag `v*` | Electron Linux (AppImage + deb), Windows (NSIS + portable) and macOS (ad-hoc signed .app zips, cross-built); published as run artifacts and rsynced to `armada.buzz/downloads/` |
 | `deploy-nsite.yml` | push to `main` + tag `v*` | build + `nsyte deploy` of the client as the named nsite `armada` (NIP-5A kind 35128) onto relays + Blossom; a tag additionally publishes an immutable kind-5128 manifest snapshot titled with the tag |
@@ -167,7 +166,9 @@ in production on the next tag.
 **armada.buzz is served by Caddy, not by this repo's `nginx.conf`.** The hosted
 config lives on the venus VPS at `/etc/caddy/sites-available/armada.buzz` and is
 not in version control; `nginx.conf` covers only the Dockerfile self-host path,
-where the rules differ enough to be worth stating separately. Traps:
+where the rules differ enough to be worth stating separately. CI does not
+deploy the SPA there — only the installers, rsynced by `desktop.yml` and
+`release.yml`. Traps:
 
 - **A missing installer must 404, and by default it does not.** Caddy's
   catch-all ends in `try_files {path} /index.html`, so a pruned, misspelled or
@@ -184,9 +185,10 @@ where the rules differ enough to be worth stating separately. Traps:
   Caddy's `try_files` skips directories, so `/downloads` renders the SPA either
   way. nginx's `try_files $uri $uri/ /index.html` matches `$uri/` against the
   real directory and stops — with no index and autoindex off, a **403** on
-  reload or a shared link. `deploy-web.yml` uploads `dist/index.html` as
-  `downloads/index.html`, which fixes nginx and also gives Caddy's
-  `handle /downloads/*` something to serve for a bare `/downloads/`.
+  reload or a shared link. `nginx.conf` answers that with an exact-match
+  `location = /downloads/` falling back to `/index.html`, so a self-host needs
+  no `downloads/index.html` at all. armada.buzz has one, which is what Caddy's
+  `handle /downloads/*` serves for a bare `/downloads/`.
 - **`.AppImage` content type differs by server.** Caddy knows it
   (`application/vnd.appimage`); nginx's `mime.types` does not, so it inherits
   `default_type` — `text/plain` by default, i.e. a browser rendering a 100 MB
@@ -200,9 +202,9 @@ where the rules differ enough to be worth stating separately. Traps:
   carry only a version label and file sizes; the page treats them as decoration
   so a failed fetch never costs a working button.
 
-The rsyncs are additive (**no `--delete`**, on any of the three workflows) —
-that is what lets installers, the page's index, and the site build coexist in
-one jail root. Don't add one without excluding `/downloads`.
+The rsyncs are additive (**no `--delete`**, on both workflows) — that is what
+lets the two platforms' installers, the page's index and the site build coexist
+in one jail root. Don't add one.
 
 ## How the client reaches backends (no build-time coupling)
 
