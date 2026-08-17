@@ -156,8 +156,9 @@ export function Lightbox({ media, currentIndex, onClose, onNext, onPrev }: Light
 
   const onTouchStart = (e: React.TouchEvent) => {
     if (animating.current) return;
-    // A touch that lands on a video belongs to its controls, not to the strip.
-    if ((e.target as HTMLElement).closest("video")) {
+    // A touch that lands on the video player belongs to its controls (scrubber,
+    // volume, the ⋯ menu), not to the strip or the swipe-to-dismiss.
+    if ((e.target as HTMLElement).closest("video, [data-video-player]")) {
       dragX.current = null;
       dragY.current = null;
       return;
@@ -564,6 +565,9 @@ function LightboxVideo({ video, isActive }: { video: LightboxItem; isActive: boo
         blurhash={video.blurhash}
         encryption={video.encryption}
         fallbacks={video.fallbacks}
+        // The lightbox top bar already carries Download and Share, so the
+        // in-player ⋯ menu would only duplicate them here.
+        hideActionsMenu
         // The player's inline chrome (framed black card, capped at max-w-md)
         // is wrong at full screen: let it fill the slot and drop the frame, so
         // any letterboxing is just the backdrop showing through.

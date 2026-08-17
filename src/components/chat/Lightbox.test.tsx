@@ -26,10 +26,15 @@ const VIDEO: LightboxItem = {
 const IMAGE: LightboxItem = { url: "https://example.com/pic.png", mime: "image/png" };
 
 // jsdom has no media stack, so pause() is "not implemented" — stub it out and
-// use the stub to observe the slot's own pause-when-inactive behavior.
+// use the stub to observe the slot's own pause-when-inactive behavior. load()
+// is stubbed for the same reason: the player's off-screen thumbnail grab calls
+// it on teardown, which otherwise logs an unimplemented-API error.
 const pause = vi.fn();
 beforeAll(() => {
   HTMLMediaElement.prototype.pause = pause;
+  HTMLMediaElement.prototype.load = vi.fn();
+  // The player calls play() programmatically on the tap-to-start click.
+  HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
 });
 beforeEach(() => pause.mockClear());
 
@@ -54,7 +59,11 @@ describe("Lightbox", () => {
     const video = document.querySelector("video");
     expect(video).not.toBeNull();
     expect(video).toHaveAttribute("src", VIDEO.url);
-    expect(document.querySelector("img")).toBeNull();
+    // The player may paint a poster <img> overlay (its own thumbnail), but the
+    // clip itself is never rendered as a zoomable image slot.
+    expect(document.querySelector("[data-video-player]")).not.toBeNull();
+    const imgs = Array.from(document.querySelectorAll("img"));
+    expect(imgs.some((i) => i.getAttribute("src") === VIDEO.url)).toBe(false);
   });
 
   it("loops the video, so a short clip keeps playing", () => {

@@ -46,15 +46,21 @@ if (typeof window !== 'undefined') {
   });
 }
 
-// Mock IntersectionObserver
-global.IntersectionObserver = vi.fn().mockImplementation((_callback) => ({
-  observe: vi.fn(),
-  unobserve: vi.fn(),
-  disconnect: vi.fn(),
-  root: null,
-  rootMargin: '',
-  thresholds: [],
-}));
+// Mock IntersectionObserver. Like ResizeObserver below it has to be a real
+// constructor, not a `vi.fn` returning a plain object: components observe with
+// `new IntersectionObserver(...)` (the video player's scroll-to-pause, deferred
+// rows), which throws "is not a constructor" against a mock that can't be
+// `new`'d. Tests that need to drive intersection callbacks stub their own.
+global.IntersectionObserver = class {
+  observe = vi.fn();
+  unobserve = vi.fn();
+  disconnect = vi.fn();
+  takeRecords = vi.fn(() => []);
+  root = null;
+  rootMargin = '';
+  thresholds = [];
+  constructor(_callback: IntersectionObserverCallback) {}
+} as unknown as typeof IntersectionObserver;
 
 // Mock ResizeObserver. It has to be a real constructor, not an arrow
 // function: Radix measures with `new ResizeObserver(...)` (`useSize`), so any
