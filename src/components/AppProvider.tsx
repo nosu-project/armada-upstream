@@ -154,9 +154,18 @@ export function AppProvider({ storageKey, children }: AppProviderProps) {
     document.documentElement.dataset.themeReady = "true";
   }, []);
 
-  return (
-    <AppContext.Provider value={{ config, updateConfig: setConfig }}>
-      {children}
-    </AppContext.Provider>
+  // Memoized because this context is read by 67 files, and an object literal
+  // here re-renders every one of them on any AppProvider render — including
+  // renders where `config` did not move at all. `setConfig` is reference-stable
+  // (see `useLocalStorage`), so this changes only when the config does.
+  //
+  // It matters beyond this subtree: `NostrProvider` consumes this context, so
+  // an invalidation here re-rendered it too, and its own value then reached the
+  // ~96 files that call `useNostr()`.
+  const value = useMemo(
+    () => ({ config, updateConfig: setConfig }),
+    [config, setConfig],
   );
+
+  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

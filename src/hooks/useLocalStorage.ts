@@ -1,7 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 /**
- * Generic hook for managing localStorage state
+ * Generic hook for managing localStorage state.
+ *
+ * The returned setter is REFERENCE-STABLE for the life of the hook (as long as
+ * `key` doesn't change). That is load-bearing rather than cosmetic: this hook
+ * backs `AppProvider`'s config, whose setter is handed to 67 files as
+ * `updateConfig` and appears in ~15 `useEffect`/`useCallback` dependency
+ * arrays. A setter recreated per render put a fresh identity in every one of
+ * those, so effects that read as "run when the relay list changes" re-ran on
+ * every render of their component instead.
  */
 export function useLocalStorage<T>(
   key: string,
@@ -24,28 +32,32 @@ export function useLocalStorage<T>(
     }
   });
 
-  const setValue = (value: T | ((prev: T) => T)) => {
-    try {
-      if (value instanceof Function) {
-        // Use React's functional setState so the updater always receives the
-        // latest state, even when multiple setValue calls are batched before a
-        // re-render (fixes stale-closure resets on the first click).
-        setState((prev) => {
-          const next = value(prev);
-          // Skip if the updater returned the same reference (nothing changed)
-          if (next === prev) return prev;
-          localStorage.setItem(key, serialize(next));
-          return next;
-        });
-      } else {
-        if (value === state) return;
-        setState(value);
-        localStorage.setItem(key, serialize(value));
+  // The serializer, read by the stable `setValue` below without becoming a
+  // dependency of it — callers commonly pass a fresh `{ serialize, deserialize }`
+  // literal per render, which would otherwise make the setter unstable again.
+  const serializeRef = useRef(serialize);
+  serializeRef.current = serialize;
+
+  const setValue = useCallback((value: T | ((prev: T) => T)) => {
+    // Still React's functional setState, for the reason it always was: the
+    // updater receives the latest state even when several `setValue` calls are
+    // batched before a re-render, and even when the state was last moved by
+    // something other than this setter (the key-change re-read and the
+    // cross-tab `storage` listener below both call `setState` directly).
+    // Reading a ref here instead would miss those.
+    setState((prev) => {
+      const next = value instanceof Function ? value(prev) : value;
+      // Nothing changed — an updater that returned its input, or a direct
+      // write of the value already held.
+      if (next === prev) return prev;
+      try {
+        localStorage.setItem(key, serializeRef.current(next));
+      } catch (error) {
+        console.warn(`Failed to save ${key} to localStorage:`, error);
       }
-    } catch (error) {
-      console.warn(`Failed to save ${key} to localStorage:`, error);
-    }
-  };
+      return next;
+    });
+  }, [key]);
 
   // Re-read from localStorage when the key changes (e.g. user-scoped keys
   // switching to a different user). The useState initializer only runs once,

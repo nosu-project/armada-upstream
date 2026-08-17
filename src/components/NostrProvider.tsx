@@ -719,8 +719,23 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   // nip46Transport.ts. The pool no longer carries any bunker traffic, so
   // there is nothing to recycle here on resume.)
 
+  // The wrapped pool is a ref and never changes identity, so the only thing
+  // that moved here was the literal — but `useNostr()` is the most-read context
+  // in the app (~96 files, and `useCurrentUser` reaches it transitively), so
+  // that literal alone re-rendered nearly everything whenever this provider
+  // rendered. It renders whenever `useAppContext()` above it invalidates.
+  const nostrValue = useMemo(
+    () => ({ nostr: (batcher.current ?? pool.current) as unknown as NPool }),
+    // Empty deps are safe because both refs are lazily initialized in the
+    // RENDER BODY above (`pool` at the `if (!pool.current)` block, `batcher`
+    // just after it), so both are populated before this memo first runs, and
+    // neither is ever reassigned afterwards — the assignments are guarded on
+    // the ref being unset.
+    [],
+  );
+
   return (
-    <NostrContext.Provider value={{ nostr: (batcher.current ?? pool.current) as unknown as NPool }}>
+    <NostrContext.Provider value={nostrValue}>
       <EventStoreContext.Provider value={eventStore.current}>
         {children}
       </EventStoreContext.Provider>
