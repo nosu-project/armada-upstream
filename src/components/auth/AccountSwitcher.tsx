@@ -1,7 +1,7 @@
 // NOTE: This file is stable and usually should not be modified.
 // It is important that all functionality in this file is preserved, and should only be modified if explicitly requested.
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronDown, IdCard, LogOut, Smile, UserIcon, UserPen, UserPlus, Wallet } from 'lucide-react';
 import {
@@ -73,6 +73,10 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
   const [serverIdentityOpen, setServerIdentityOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const navigate = useNavigate();
+  // The finger press currently on the trigger: where it landed and whether the
+  // menu was already open. Null for mouse/pen, which keep Radix's own
+  // press-to-open. See the trigger's handlers below.
+  const touchPress = useRef<{ x: number; y: number; wasOpen: boolean } | null>(null);
 
   if (!currentUser) return null;
 
@@ -112,7 +116,36 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
     <>
     <DropdownMenu modal={false} open={isOpen} onOpenChange={setIsOpen}>
       <DropdownMenuTrigger asChild>
-        <button className='flex items-center gap-3 p-2 clip-corner-lg bg-accent/50 hover:bg-accent transition-all w-full text-foreground'>
+        <button
+          onPointerDown={(e) => {
+            // Radix opens this menu on POINTERDOWN. The pill sits at the foot
+            // of the channel list, which on mobile is SwipeReveal's underlay —
+            // the surface carrying the leftward swipe that brings the chat back
+            // over it. So a swipe that merely BEGAN here opened the account
+            // menu, and being portalled above the chat pane it then floated
+            // over wherever the swipe navigated to. A finger opens it on the
+            // TAP instead: preventDefault makes Radix skip its own handler
+            // (composeEventHandlers bails on a default-prevented event) while
+            // the click still fires, and a press that becomes a claimed drag
+            // produces no click at all. Mouse and pen keep press-to-open.
+            if (e.pointerType !== 'touch') return;
+            touchPress.current = { x: e.clientX, y: e.clientY, wasOpen: isOpen };
+            e.preventDefault();
+          }}
+          onClick={(e) => {
+            const press = touchPress.current;
+            if (!press) return;
+            touchPress.current = null;
+            // Belt and braces, if the platform synthesizes a click for a
+            // gesture anyway: a release far from the press was not a tap.
+            if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > 16) return;
+            // Toggle against the state at PRESS time. A tap on an open menu is
+            // an outside press that Radix has already dismissed by now, so
+            // toggling the current value would reopen it.
+            setIsOpen(!press.wasOpen);
+          }}
+          className='flex items-center gap-3 p-2 clip-corner-lg bg-accent/50 hover:bg-accent transition-all w-full text-foreground'
+        >
           {isLoading ? (
             <Skeleton className='w-8 h-8 rounded-full shrink-0' />
           ) : (

@@ -7,19 +7,38 @@ import { LONG_PRESS_MS, useLongPress } from "@/hooks/useLongPress";
 function pointer(
   x: number,
   y: number,
-  { pointerType = "touch", target, timeStamp = 0 }: { pointerType?: string; target?: unknown; timeStamp?: number } = {},
+  { pointerType = "touch", target, timeStamp = 0, pointerId }: { pointerType?: string; target?: unknown; timeStamp?: number; pointerId?: number } = {},
 ) {
   return {
     pointerType,
     clientX: x,
     clientY: y,
     timeStamp,
+    pointerId,
     target: target ?? { closest: () => null },
   } as unknown as React.PointerEvent;
 }
 
 /** A press target that reports itself as inside an interactive element. */
 const interactiveTarget = { closest: (sel: string) => (sel.includes("button") ? {} : null) };
+
+/**
+ * Dispatch a real pointer event on the window — the path the hook watches once
+ * a hold is armed, and the only one left when an ancestor takes pointer
+ * capture. jsdom has no PointerEvent, so the fields the hook reads are pinned
+ * onto a plain Event.
+ */
+function dispatchWindowPointer(
+  type: "pointermove" | "pointerup" | "pointercancel",
+  x: number,
+  y: number,
+  { pointerId = 1, timeStamp }: { pointerId?: number; timeStamp?: number } = {},
+) {
+  const e = new Event(type);
+  Object.assign(e, { clientX: x, clientY: y, pointerId });
+  if (timeStamp !== undefined) Object.defineProperty(e, "timeStamp", { value: timeStamp });
+  window.dispatchEvent(e);
+}
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
@@ -185,6 +204,47 @@ describe("useLongPress", () => {
     const next = { preventDefault: vi.fn(), stopPropagation: vi.fn() } as unknown as React.MouseEvent;
     act(() => result.current.onClick?.(next));
     expect(next.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("disarms when an ancestor captures the pointer and drags the gesture away", () => {
+    // The pane's swipe recognizer claims the reveal 10px in — under this
+    // hook's own slop — and takes pointer capture, after which the row's
+    // handlers see nothing more of the touch. Watching the window instead
+    // keeps the sheet from opening on a message the thumb was only resting on.
+    const onLongPress = vi.fn();
+    const { result } = renderHook(() => useLongPress(onLongPress));
+
+    act(() => result.current.onPointerDown?.(pointer(100, 100, { pointerId: 7 })));
+    // No further element-level events: the stream now belongs to the pane.
+    act(() => dispatchWindowPointer("pointermove", 180, 104, { pointerId: 7 }));
+    act(() => void vi.advanceTimersByTime(LONG_PRESS_MS * 2));
+
+    expect(onLongPress).not.toHaveBeenCalled();
+  });
+
+  it("ignores a second finger's stream while a hold is armed", () => {
+    const onLongPress = vi.fn();
+    const { result } = renderHook(() => useLongPress(onLongPress));
+
+    act(() => result.current.onPointerDown?.(pointer(100, 100, { pointerId: 7 })));
+    act(() => dispatchWindowPointer("pointermove", 300, 300, { pointerId: 8 }));
+    act(() => dispatchWindowPointer("pointerup", 300, 300, { pointerId: 8 }));
+    act(() => void vi.advanceTimersByTime(LONG_PRESS_MS));
+
+    expect(onLongPress).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops watching the window once the press is over", () => {
+    const onLongPress = vi.fn();
+    const { result } = renderHook(() => useLongPress(onLongPress));
+
+    act(() => result.current.onPointerDown?.(pointer(100, 100, { pointerId: 7, timeStamp: 1000 })));
+    act(() => result.current.onPointerUp?.(pointer(100, 100, { pointerId: 7, timeStamp: 1100 })));
+    // A stray move from an unrelated gesture must not reach the disarmed hold.
+    act(() => dispatchWindowPointer("pointermove", 400, 400, { pointerId: 7 }));
+    act(() => void vi.advanceTimersByTime(LONG_PRESS_MS * 2));
+
+    expect(onLongPress).not.toHaveBeenCalled();
   });
 
   it("does nothing at all without a callback", () => {
