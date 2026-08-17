@@ -230,7 +230,13 @@ export async function ingestWireEvents(
   // Concord: decrypt with the owning channel's stream keys → the owning community's
   // rumor-store tenant.
   for (const [channel, wraps] of wrapsByChannel) {
-    const opened = await openChatBatch(wraps, channel);
+    // Skip wraps already stored, via the same persisted memo the control path
+    // below uses. Rotated rounds replay recent wraps and `chat.ts`'s decode memo
+    // is session-scoped, so every reload re-paid two NIP-44 decrypts and a
+    // Schnorr verify for history already on disk.
+    const unseen = await unseenPlaneWraps(wraps);
+    if (unseen.length === 0) continue;
+    const opened = await openChatBatch(unseen, channel);
     if (opened.length === 0) continue;
     // A channel only reaches `concordByPk` via the same spec input that registered
     // its community, so a miss means the spec was rebuilt underneath us. Skip
@@ -240,7 +246,15 @@ export async function ingestWireEvents(
     // community's messages under another.
     const communityIdHex = spec?.concordCommunityByChannel.get(channel.idHex);
     if (!communityIdHex) continue;
-    writeRumors(communityIdHex, opened);
+    // Only the wraps that OPENED, and only once their rumors commit: a chat wrap
+    // that failed is usually an epoch key we don't hold YET, so memoising it
+    // would permanently skip one a later key could read. Chained rather than
+    // awaited, so the scope ring stays as prompt as it was.
+    void writeRumors(communityIdHex, opened).then((stored) => {
+      // `wrapId` is optional only for a rumor read back OUT of the store; these
+      // came straight off wraps.
+      if (stored) notePlaneWrapsSeen(opened.flatMap((o) => o.wrapId ?? []));
+    });
     scopes.add(`c2:${channel.idHex}`);
     // A banned member's message is still stored (the timeline folds it away on
     // read, like every other render surface) but must never raise a

@@ -31,6 +31,7 @@ import {
   signStreamAuths,
   signStreamAuthsChunked,
   streamPubkeysForRelay,
+  unackedStreamPubkeys,
 } from "@/concord/lib/streamAuth";
 
 interface NostrProviderProps {
@@ -709,8 +710,13 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
     return onStreamAuthStale((url) => {
       const entry = openRelaysRef.current.get(url);
       if (!entry?.challenge) return;
-      logSync("auth", `stream auth went stale for ${url} — re-sending AUTH frames`);
-      void sendStreamAuths(entry, url);
+      // Only what this socket hasn't acked: the wave repeats every
+      // AUTH_STALE_MS while any key stays unacked, so re-signing the full scoped
+      // set here cost a few hundred signatures per wave, forever.
+      const pks = unackedStreamPubkeys(url);
+      if (pks.length === 0) return;
+      logSync("auth", `stream auth went stale for ${url} — re-sending ${pks.length} AUTH frame(s)`);
+      void sendStreamAuths(entry, url, pks);
     });
     // Reads only refs; stable for the provider's lifetime.
   }, []);

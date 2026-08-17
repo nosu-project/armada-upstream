@@ -149,6 +149,25 @@ export function streamPubkeysForRelay(relayUrl: string): string[] {
 }
 
 /**
+ * The keys a re-auth of `relayUrl` has to send: scoped to it, holding a secret,
+ * and not yet acked on the live socket.
+ *
+ * The self-heal below fires while ANY key is unacked, so re-signing the whole
+ * scoped set to reach it priced one lost `OK` at a few hundred signatures every
+ * {@link AUTH_STALE_MS} for the socket's life. An acked key is already in the
+ * relay's per-connection authenticated set; re-proving it proves nothing.
+ * A key whose AUTH never left the socket is unacked too, hence included.
+ */
+export function unackedStreamPubkeys(relayUrl: string): string[] {
+  const state = relayAuth.get(normalizeRelayUrl(relayUrl) ?? relayUrl);
+  return streamPubkeysForRelay(relayUrl).filter((pk) => {
+    // Address-only (no secret): unsendable rather than pending.
+    if (registry.get(pk)?.sk === undefined) return false;
+    return !state?.acked.has(pk);
+  });
+}
+
+/**
  * Subscribe to registry growth. The listener fires with the newly-added (or
  * scope-widened) pubkeys whenever {@link registerStreamKeys} admits any.
  * Returns an unsubscribe.
@@ -322,6 +341,11 @@ export function noteAuthResult(url: string, eventId: string, ok: boolean): void 
  * fire a re-auth so the relay can actually recover on the LIVE socket. The
  * challenge window is re-armed so a single stale detection triggers one re-auth
  * wave, not a storm.
+ *
+ * The wave RECURS while the key stays unacked (a permanently lost OK looks like
+ * a slow one), which is why the listener re-signs only
+ * {@link unackedStreamPubkeys}: the recurrence is deliberate, the per-wave cost
+ * was not.
  */
 export function streamAuthsSettled(url: string, pubkeys: Iterable<string>): boolean {
   const state = relayAuth.get(normalizeRelayUrl(url) ?? url);

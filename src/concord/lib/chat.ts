@@ -47,6 +47,12 @@ export function forgetChatSkips(): void {
   skippedNoKey.clear();
 }
 
+/** Test seam: empty the decode memo, i.e. what a reload does to it. */
+export function _resetChatMemoForTests(): void {
+  decodeMemo.clear();
+  skippedNoKey.clear();
+}
+
 function openOne(wrap: NostrRumor, channel: Channel): OpenedChat | null {
   const memoKey = `${wrap.id}|${channel.idHex}`;
   const cached = decodeMemo.get(memoKey);

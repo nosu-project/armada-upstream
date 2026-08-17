@@ -69,17 +69,49 @@ function replacer(_key: string, value: unknown): unknown {
   return value;
 }
 
-function reviver(_key: string, value: unknown): unknown {
-  if (value && typeof value === "object" && "__t" in (value as Record<string, unknown>)) {
-    const tagged = value as { __t: string; v: unknown };
-    switch (tagged.__t) {
-      case "bigint": return BigInt(tagged.v as string);
-      case "u8": return fromHex(tagged.v as string);
-      case "map": return new Map(tagged.v as [unknown, unknown][]);
-      case "set": return new Set(tagged.v as unknown[]);
+/**
+ * Rebuild the tagged wrappers bottom-up, in place, over a plain parse result.
+ *
+ * A `JSON.parse` reviver is called for EVERY node — every string and number in
+ * a multi-megabyte fold, almost none of which carry a tag. Walking only the
+ * objects measured 5.2x faster on identical bytes (9.1 MB fold: 160ms → 31ms);
+ * see foldedCache.perf.test.ts.
+ *
+ * In-place assignment is safe because the input is always a fresh `JSON.parse`
+ * result and every key assigned was just enumerated on it: a `"__proto__"` key
+ * is therefore an OWN data property (which is what `JSON.parse` creates, unlike
+ * an object literal), shadowing `Object.prototype`'s accessor.
+ */
+function revive(node: unknown): unknown {
+  if (node === null || typeof node !== "object") return node;
+
+  if (Array.isArray(node)) {
+    const array = node as unknown[];
+    for (let i = 0; i < array.length; i++) {
+      const child = array[i];
+      if (child !== null && typeof child === "object") array[i] = revive(child);
+    }
+    return array;
+  }
+
+  const object = node as Record<string, unknown>;
+  for (const key of Object.keys(object)) {
+    const child = object[key];
+    if (child !== null && typeof child === "object") object[key] = revive(child);
+  }
+
+  // Children first, so a Map's entries and a Set's values are already live
+  // shapes when the wrapper is unwrapped — the order a reviver imposes.
+  const tag = object.__t;
+  if (tag !== undefined) {
+    switch (tag) {
+      case "bigint": return BigInt(object.v as string);
+      case "u8": return fromHex(object.v as string);
+      case "map": return new Map(object.v as [unknown, unknown][]);
+      case "set": return new Set(object.v as unknown[]);
     }
   }
-  return value;
+  return object;
 }
 
 /** Serialize a folded value (with bigint/Uint8Array/Map/Set) to a string. */
@@ -87,10 +119,14 @@ export function encode(value: unknown): string {
   return JSON.stringify(value, replacer);
 }
 
-/** Deserialize a string produced by {@link encode}, or undefined on failure. */
+/**
+ * Deserialize a string produced by {@link encode}, or undefined on failure.
+ * The walk starts at the parse result itself: the ROOT may be a tagged value
+ * (`rekey.ts` persists a bare `Uint8Array`).
+ */
 export function decode<T>(json: string): T | undefined {
   try {
-    return JSON.parse(json, reviver) as T;
+    return revive(JSON.parse(json)) as T;
   } catch {
     return undefined;
   }

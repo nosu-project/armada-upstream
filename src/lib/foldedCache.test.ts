@@ -89,6 +89,45 @@ describe("readFolded / writeFolded", () => {
     });
   });
 
+  it("revives a tagged value at the ROOT, and tags nested inside Map/Set", async () => {
+    // rekey.ts persists a bare Uint8Array, so the root IS the tagged object.
+    await writeFolded("fold:root-u8", new Uint8Array([7, 8, 9]));
+    expect(await readFolded("fold:root-u8")).toEqual(new Uint8Array([7, 8, 9]));
+    await writeFolded("fold:root-epoch", 9n);
+    expect(await readFolded("fold:root-epoch")).toBe(9n);
+
+    // Children revive before their wrapper, so keys, values and members may
+    // themselves be tagged, to any depth.
+    await writeFolded("fold:nested", {
+      byKey: new Map([[new Uint8Array([1, 2]), { epoch: 5n, seen: new Set([3n]) }]]),
+      deep: [new Map([["a", new Map([["b", new Uint8Array([255])]])]])],
+    });
+    expect(await readFolded("fold:nested")).toEqual({
+      byKey: new Map([[new Uint8Array([1, 2]), { epoch: 5n, seen: new Set([3n]) }]]),
+      deep: [new Map([["a", new Map([["b", new Uint8Array([255])]])]])],
+    });
+  });
+
+  it("an unknown tag decodes to the plain object, and __proto__ stays inert", async () => {
+    const { getArmadaDB } = await import("@/lib/db/armadaDB");
+
+    // A newer build's snapshot reads as data rather than throwing.
+    await getArmadaDB().kv.set("folded:fold:unknown-tag", '{"a":{"__t":"quantity","v":"1"},"b":2}');
+    expect(await readFolded("fold:unknown-tag")).toEqual({ a: { __t: "quantity", v: "1" }, b: 2 });
+
+    // The fold keeps metadata extensions verbatim, so a `__proto__` KEY can reach
+    // the snapshot. Reviving in place must not let it re-point a prototype.
+    await getArmadaDB().kv.set(
+      "folded:fold:proto",
+      '{"meta":{"__proto__":{"polluted":true},"name":"ok"},"epoch":{"__t":"bigint","v":"1"}}',
+    );
+    const decoded = await readFolded<{ meta: { name: string }; epoch: bigint }>("fold:proto");
+    expect(decoded?.meta.name).toBe("ok");
+    expect(decoded?.epoch).toBe(1n);
+    expect(Object.getPrototypeOf(decoded?.meta)).toBe(Object.prototype);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
   it("keeps null distinct from a miss, and undefined indistinguishable from one", async () => {
     // `useCommunityImageDescriptors` writes `icon ?? null` and relies on null
     // coming back as null rather than as "not cached".

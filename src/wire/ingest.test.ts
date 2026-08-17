@@ -8,8 +8,12 @@
 
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
 import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
-import { afterEach, describe, expect, it } from "vitest";
+import { schnorr } from "@noble/curves/secp256k1.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { _resetChatMemoForTests } from "@/concord/lib/chat";
+import { unseenPlaneWraps } from "@/concord/lib/planeSync";
+import { _resetVerifyCacheForTests } from "@/lib/verifyCache";
 import { bytesToHex, channelGroupKey, controlGroupKey, voiceGroupKey, voiceMediaKey } from "@/concord/lib/derive";
 import { KIND_CONTROL, KIND_MESSAGE, KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord/lib/kinds";
 import { peekPendingWraps, queryPlane, queryChannelRumors } from "@/concord/lib/rumorStore";
@@ -195,6 +199,70 @@ describe("ingestWireEvents", () => {
     expect(scopes.has(`c2:${idHex}`)).toBe(true);
     const rumors = await queryChannelRumors(communityIdHex, idHex, { limit: 10 });
     expect(rumors.some((r) => r.content === "sealed hello")).toBe(true);
+  });
+
+  it("does not re-decrypt a chat wrap it has already stored, even in a later session", async () => {
+    // Rotated rounds replay recent wraps continuously, and chat.ts's decode memo
+    // is session-scoped — so every reload re-paid two NIP-44 decrypts and a
+    // Schnorr verify per replayed wrap (profiled: 1918ms on one reload).
+    const { channel, idHex } = makeChannel();
+    const communityIdHex = "d".repeat(64);
+    const alice = signer();
+    const wraps = await Promise.all([
+      wrapChat(channel, alice, "replayed one"),
+      wrapChat(channel, alice, "replayed two"),
+    ]);
+    const { sinks } = makeSinks({
+      concordByPk: new Map(wraps.map((w) => [w.pubkey, channel])),
+      concordCommunityByChannel: new Map([[idHex, communityIdHex]]),
+    });
+
+    let verifies = 0;
+    const realVerify = schnorr.verify.bind(schnorr);
+    const spy = vi.spyOn(schnorr, "verify").mockImplementation(((...args: Parameters<typeof schnorr.verify>) => {
+      verifies++;
+      return realVerify(...args);
+    }) as typeof schnorr.verify);
+    try {
+      await collectScopes(() => ingestWireEvents(sinks, wraps));
+      expect(verifies).toBe(2); // one seal verify per wrap
+      const stored = await queryChannelRumors(communityIdHex, idHex, { limit: 10 });
+      expect(stored.map((r) => r.content).sort()).toEqual(["replayed one", "replayed two"]);
+
+      // Replayed after a RELOAD. Both session memos have to go: either would
+      // absorb the replay alone. Without the fix this pass verifies 2 again.
+      _resetChatMemoForTests();
+      _resetVerifyCacheForTests();
+      verifies = 0;
+      await collectScopes(() => ingestWireEvents(sinks, wraps));
+      expect(verifies).toBe(0);
+
+      // Still exactly the two rumors — skipping the re-open lost nothing.
+      const after = await queryChannelRumors(communityIdHex, idHex, { limit: 10 });
+      expect(after).toHaveLength(stored.length);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("retries a chat wrap that did NOT open (a key we may hold later), rather than memoising it", async () => {
+    // A failed open is usually an epoch key we don't hold YET, not junk, so only
+    // OPENED wraps enter the memo.
+    const { channel, idHex } = makeChannel();
+    const other = makeChannel();
+    const alice = signer();
+    // Sealed under another channel's key but addressed as this one: routed
+    // here, fails to decrypt.
+    const foreign = await wrapChat(other.channel, alice, "not readable yet");
+    const spliced = { ...foreign, pubkey: channel.current.group.pk } as NostrEvent;
+    const { sinks } = makeSinks({
+      concordByPk: new Map([[spliced.pubkey, channel]]),
+      concordCommunityByChannel: new Map([[idHex, "e".repeat(64)]]),
+    });
+
+    await collectScopes(() => ingestWireEvents(sinks, [spliced]));
+    // Not memoised, so a later delivery is attempted again.
+    await expect(unseenPlaneWraps([spliced])).resolves.toHaveLength(1);
   });
 
   it("decrypts Concord control wraps into the opened-event store and rings the c2ctl fold-wake", async () => {
