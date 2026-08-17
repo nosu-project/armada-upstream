@@ -1,17 +1,15 @@
 import { Loader2, MessageSquare } from "lucide-react";
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { JoinButton } from "@/components/auth/JoinButton";
 import { ServerRail } from "@/components/layout/ServerRail";
+import { ProfileDialog } from "@/components/profile/ProfileDialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { useAcceptedDms } from "@/hooks/useAcceptedDms";
 import { useAuthor } from "@/hooks/useAuthor";
-import { useClosedDms } from "@/hooks/useClosedDms";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNip05Resolve } from "@/hooks/useNip05Resolve";
-import { useStartedDms } from "@/hooks/useStartedDms";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { parseNip05Address } from "@/lib/nip05Address";
 import { resolvePubkey } from "@/lib/resolvePubkey";
@@ -19,10 +17,16 @@ import { tryNpubEncode } from "@/lib/safeNip19";
 import { NotFound } from "@/pages/NotFound";
 
 /**
- * A person's public chat link — `/<npub>`, `/<name@domain>`, or `/<domain>`
- * (the NIP-05 root user, `_@domain`). Share it with someone who isn't on
- * Armada and it says who they'd be talking to and offers them an account;
- * open it signed in and it's just a shortcut to the DM thread.
+ * A person, at `/<npub>`, `/<nprofile>`, `/<name@domain>` or `/<domain>` (the
+ * NIP-05 root user, `_@domain`). The bare NIP-19 path is the convention the
+ * Nostr ecosystem already links to and that other clients already route, so
+ * this deliberately has no prefix segment of its own to make it Armada's.
+ *
+ * What it shows depends on who's looking, because the same link serves two
+ * purposes. Signed out it's a share link — it says who you'd be talking to and
+ * offers you an account. Signed in it's the person's profile, opened as a
+ * dialog over the app so closing it puts you back where you were rather than
+ * anywhere this had to pick.
  *
  * This is the only single-segment dynamic route in the app, so it sits in
  * front of the `*` 404 for every unclaimed one-segment path. That's why an
@@ -35,9 +39,6 @@ export function UserPage() {
   const { user: identifier = "" } = useParams<{ user: string }>();
   const { user } = useCurrentUser();
   const navigate = useNavigate();
-  const { accept } = useAcceptedDms();
-  const { reopen } = useClosedDms();
-  const { start } = useStartedDms();
 
   const direct = useMemo(() => resolvePubkey(identifier), [identifier]);
   // Only reached for a segment that didn't decode, so a valid npub never costs
@@ -59,36 +60,16 @@ export function UserPage() {
   const displayName =
     metadata?.name || metadata?.display_name || address?.display || shortNpub;
 
-  // Signed in, so there's nothing to invite anyone to — open the conversation.
-  // Runs on the transition into a signed-in state too, which is how joining
-  // from the button below lands in the thread: the login dialog belongs to
-  // this page and never navigates, so this effect is still mounted when
-  // `user` appears.
-  const opened = useRef(false);
-  useEffect(() => {
-    if (!user || !pubkey || opened.current) return;
-    // Someone opening their own link has no conversation to open.
-    if (pubkey === user.pubkey) {
-      opened.current = true;
-      navigate("/dm", { replace: true });
-      return;
-    }
-    if (!npub) return;
-    opened.current = true;
-    // Following a chat link is the same commitment as picking someone in the
-    // compose pane — out of the request tier, out of the closed pile — plus
-    // one thing that flow doesn't do: keep the row after we navigate away, so
-    // the person who sent the link is still in the list tomorrow.
-    reopen(pubkey);
-    accept(pubkey);
-    start(pubkey);
-    navigate(`/dm/${npub}`, { replace: true });
-  }, [user, pubkey, npub, navigate, reopen, accept, start]);
-
   // Not a person's identifier at all: this is an ordinary unrouted path.
   if (!direct && !address) {
     return <NotFound />;
   }
+
+  // Closing the profile is a step back, not a destination — the dialog is
+  // always opened from somewhere. A cold load has nowhere to go back TO, so
+  // that one lands home.
+  const closeProfile = () =>
+    window.history.length > 1 ? navigate(-1) : navigate("/");
 
   return (
     <>
@@ -113,10 +94,8 @@ export function UserPage() {
             </Button>
           </>
         ) : user ? (
-          <>
-            <Loader2 className="size-6 animate-spin text-muted-foreground" />
-            <p className="text-muted-foreground">Opening your conversation…</p>
-          </>
+          // The profile below covers this. Nothing to say behind it.
+          null
         ) : (
           <>
             <Avatar shape={getAvatarShape(metadata)} className="size-24 border-[3px] border-background">
@@ -136,6 +115,7 @@ export function UserPage() {
           </>
         )}
       </main>
+      {user && pubkey && <ProfileDialog pubkey={pubkey} onClose={closeProfile} />}
     </>
   );
 }

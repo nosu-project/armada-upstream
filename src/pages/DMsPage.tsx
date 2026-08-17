@@ -98,6 +98,7 @@ import { forwardableTags } from "@/lib/forwardMessage";
 import { chatRoute, parseChatRoute } from "@/lib/routes";
 import { stashShare } from "@/lib/shareTarget";
 import { dittoProfileUrl } from "@/lib/dittoUrl";
+import { tryNpubEncode } from "@/lib/safeNip19";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { DISAPPEARING_PRESETS, disappearingNotice, formatDisappearingDuration } from "@/lib/nip17/disappearing";
 import { dmConvKey, dmConvPeers, expirationOf, KIND_DM_CHAT, KIND_DM_FILE } from "@/lib/nip17/protocol";
@@ -1129,7 +1130,7 @@ function Conversation({
                 social view on ditto.pub. Neither exists for a group — there is
                 no single person to show. */}
             {!group && (
-              <DropdownMenuItem className="px-3 py-2" onClick={() => navigate(`/u/${peer}`)}>
+              <DropdownMenuItem className="px-3 py-2" onClick={() => navigate(`/${tryNpubEncode(peer) ?? peer}`)}>
                 <User className="size-4" />
                 View profile
               </DropdownMenuItem>

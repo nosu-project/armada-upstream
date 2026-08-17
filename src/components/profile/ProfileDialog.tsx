@@ -1,5 +1,4 @@
 import {
-  ArrowLeft,
   AtSign,
   Award,
   Check,
@@ -15,20 +14,20 @@ import {
   UserPlus,
   UserX,
   Users,
+  X,
   Zap,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { DittoIcon } from "@/components/brand/DittoIcon";
 import { BotPill } from "@/components/BotPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
 import { ProfileSettings } from "@/components/ProfileSettings";
-import { ServerRail } from "@/components/layout/ServerRail";
 import { ProfileThemeEditor } from "@/components/profile/ProfileThemeEditor";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
+import { ChromeDialogContent, Dialog, DialogClose } from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -39,7 +38,9 @@ import { useCommunity } from "@/concord/hooks/useCommunityList";
 import { useControlFold } from "@/concord/hooks/useControlPlane";
 import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import { useSharedCommunities, type SharedCommunity } from "@/concord/hooks/useSharedCommunities";
+import { useAcceptedDms } from "@/hooks/useAcceptedDms";
 import { useAuthor } from "@/hooks/useAuthor";
+import { useClosedDms } from "@/hooks/useClosedDms";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useFollowList } from "@/hooks/useFollowList";
 import { useFollowerCount, useFollowingOf, useSharedFollowers } from "@/hooks/useFollowStats";
@@ -48,46 +49,66 @@ import { useMuteToggle } from "@/hooks/useMuteList";
 import { useNsite } from "@/hooks/useNsite";
 import { useProfileBadges, type ProfileBadge } from "@/hooks/useProfileBadges";
 import { useProfileTheme } from "@/hooks/useProfileTheme";
+import { useStartedDms } from "@/hooks/useStartedDms";
 import { isStatusExpired, useUserStatus } from "@/hooks/useUserStatus";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { dittoNip19Url, dittoProfileUrl } from "@/lib/dittoUrl";
 import { faviconUrl } from "@/lib/faviconUrl";
 import { loadThemeFont } from "@/lib/fontLoader";
 import { getDisplayName } from "@/lib/getDisplayName";
-import { resolvePubkey } from "@/lib/resolvePubkey";
 import { tryNaddrEncode, tryNpubEncode } from "@/lib/safeNip19";
 import { isLocalNetworkUrl, sanitizeUrl } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 import { writeClipboardText } from "@/lib/clipboard";
-import { NotFound } from "@/pages/NotFound";
 import { buildThemeVarStyle } from "@/themes";
 
 import type { CSSProperties } from "react";
 import type { ThemeBackground } from "@/lib/themeEvent";
 
 /**
- * A person's full profile — `/u/<npub|nprofile>`. The Discord-style view of
- * everything they publish about themselves: kind-0 metadata (bio, custom
+ * Fill the screen bar a margin: the same 1rem inset `DialogContent` already
+ * uses for its width and its max-height, restated as an exact height so the
+ * vessel doesn't shrink-wrap a sparse profile into a short box. The safe-area
+ * insets are in it for the reason they're in the max-height — a full-height
+ * dialog centred on the raw viewport runs under the Android status bar.
+ */
+const FILL_HEIGHT =
+  "h-[calc(100dvh-2rem-var(--safe-area-inset-top,env(safe-area-inset-top,0px))-var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))]";
+
+/**
+ * A person's full profile, over whatever the viewer was doing —
+ * `/<npub|nprofile|name@domain>`, opened by `UserPage`. The Discord-style view
+ * of everything they publish about themselves: kind-0 metadata (bio, custom
  * fields, website, lightning address), NIP-38 status, follow counts, NIP-58
  * badges, and — for the viewer — shared communities and shared followers. No
  * content feed; that stays on Ditto.
  *
- * The whole page wears the owner's Ditto profile theme (kind 16767): colors as
- * scoped CSS vars, body/title fonts, and the background image — the same
- * takeover Ditto's ProfilePage does globally, but scoped to this page's
- * container so the rail keeps the app theme and nothing needs restoring on
- * unmount. Public data, so the page renders signed-out too.
+ * A dialog, but a ROUTED one: it keeps a real URL (the bare NIP-19 path every
+ * Nostr client shares), while closing is a step back through history rather
+ * than a destination this has to guess at. That's what the close button is —
+ * `onClose` is the caller's history step — and why there's no Back button of
+ * its own.
+ *
+ * It wears the owner's Ditto profile theme (kind 16767): colors as scoped CSS
+ * vars, body/title fonts, and the background image — the same takeover Ditto's
+ * profile does globally, but scoped to this container, so the app around it
+ * keeps its own theme and nothing needs restoring on unmount.
  */
-export function ProfilePage() {
-  const { id: identifier = "" } = useParams<{ id: string }>();
-  const pubkey = useMemo(() => resolvePubkey(identifier), [identifier]);
-
-  if (!pubkey) return <NotFound />;
+export function ProfileDialog({ pubkey, onClose }: { pubkey: string; onClose: () => void }) {
   return (
-    <>
-      <ServerRail />
-      <ProfileView pubkey={pubkey} />
-    </>
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <ChromeDialogContent
+        title="Profile"
+        // The close button is rendered inside the view instead, where it can
+        // sit on a scrim — the banner and a themed background are both images,
+        // and a bare glyph on top of either is a coin toss.
+        hideClose
+        className={cn("sm:max-w-5xl", FILL_HEIGHT)}
+        contentClassName="h-full p-0 sm:p-0 overflow-hidden"
+      >
+        <ProfileView pubkey={pubkey} />
+      </ChromeDialogContent>
+    </Dialog>
   );
 }
 
@@ -142,6 +163,9 @@ function ProfileView({ pubkey }: { pubkey: string }) {
   const dittoHref = dittoProfileUrl(pubkey);
   const mute = useMuteToggle(pubkey);
   const { isFollowing, isPending: followPending, toggle: toggleFollow } = useFollowToggle(pubkey);
+  const { accept } = useAcceptedDms();
+  const { reopen } = useClosedDms();
+  const { start } = useStartedDms();
 
   // Counts: following from their own kind 3, followers from the NIP-85 stats
   // provider (the same source Ditto reads).
@@ -180,6 +204,20 @@ function ProfileView({ pubkey }: { pubkey: string }) {
     ? "bg-card/85 supports-[backdrop-filter]:bg-card/70 backdrop-blur-md"
     : "bg-card";
 
+  // Opening the conversation from here is the same commitment picking someone
+  // in the compose pane is — out of the request tier, out of the closed pile —
+  // plus keeping the row afterwards, so a person messaged from their profile
+  // is still in the DM list tomorrow. This is where the public chat link used
+  // to make that commitment, back when `/<npub>` redirected signed-in viewers
+  // straight into the thread.
+  const openDm = () => {
+    if (!npub) return;
+    reopen(pubkey);
+    accept(pubkey);
+    start(pubkey);
+    navigate(`/dm/${npub}`);
+  };
+
   const copyNpub = () => {
     if (!npub) return;
     writeClipboardText(npub).then(() => {
@@ -189,27 +227,29 @@ function ProfileView({ pubkey }: { pubkey: string }) {
   };
 
   return (
-    <main
-      className="relative flex-1 min-w-0 overflow-hidden bg-background text-foreground"
+    <div
+      className="relative h-full overflow-hidden bg-background text-foreground"
       style={pageStyle}
     >
       {background && (
         <div aria-hidden className="absolute inset-0" style={backgroundStyle(background)} />
       )}
 
+      {/* Closing IS the back step — outside the scroller so it stays put, and
+          on its own scrim so it reads over the banner it floats on. */}
+      <DialogClose asChild>
+        <Button
+          size="icon"
+          variant="ghost"
+          aria-label="Close profile"
+          className="absolute right-3 top-3 z-10 size-9 touch:size-11 rounded-full bg-background/60 backdrop-blur-sm hover:bg-background/80"
+        >
+          <X className="size-5" />
+        </Button>
+      </DialogClose>
+
       <div className="relative h-full overflow-y-auto">
         <div className="mx-auto w-full max-w-4xl px-3 py-3 md:px-6 md:py-6">
-          {/* Back — profiles are always reached from somewhere. */}
-          <Button
-            size="sm"
-            variant="ghost"
-            className={cn("mb-2 h-9 touch:h-11 gap-1.5", background && "bg-background/50 hover:bg-background/70")}
-            onClick={() => (window.history.length > 1 ? navigate(-1) : navigate("/"))}
-          >
-            <ArrowLeft className="size-4" />
-            Back
-          </Button>
-
           {/* Header card: banner, avatar, identity, actions. */}
           <section className={cn("clip-corner-lg overflow-hidden border border-border", card)}>
             <div className="h-32 md:h-44 bg-secondary relative">
@@ -255,7 +295,7 @@ function ProfileView({ pubkey }: { pubkey: string }) {
                   ) : (
                     <>
                       {user && npub && (
-                        <Button size="sm" className="clip-corner-lg h-9 touch:h-11" onClick={() => navigate(`/dm/${npub}`)}>
+                        <Button size="sm" className="clip-corner-lg h-9 touch:h-11" onClick={openDm}>
                           <MessageSquare className="size-4 mr-1.5" />
                           Message
                         </Button>
@@ -516,7 +556,7 @@ function ProfileView({ pubkey }: { pubkey: string }) {
           </Dialog>
         </>
       )}
-    </main>
+    </div>
   );
 }
 
@@ -685,7 +725,7 @@ function PersonRow({ pubkey }: { pubkey: string }) {
   return (
     <li>
       <Link
-        to={`/u/${npub ?? pubkey}`}
+        to={`/${npub ?? pubkey}`}
         className="flex items-center gap-2 rounded-md px-2 py-1.5 touch:py-2.5 hover:bg-secondary transition-colors min-w-0"
       >
         <Avatar shape={getAvatarShape(metadata)} className="size-7 shrink-0">
@@ -729,4 +769,4 @@ function SharedCommunityRow({ entry }: { entry: SharedCommunity }) {
   );
 }
 
-export default ProfilePage;
+export default ProfileDialog;

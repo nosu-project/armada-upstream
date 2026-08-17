@@ -99,7 +99,7 @@ function ProfilePreviewBody({
 
   const viewProfile = () => {
     onAction?.();
-    navigate(`/u/${npub ?? pubkey}`);
+    navigate(`/${npub ?? pubkey}`);
   };
 
   return (
