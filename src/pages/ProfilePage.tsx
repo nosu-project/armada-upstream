@@ -1,17 +1,18 @@
 import {
   ArrowLeft,
   AtSign,
+  Award,
   Check,
   Copy,
   Globe,
-  Link as LinkIcon,
+  Mail,
   MessageSquare,
   MoreHorizontal,
   Music,
   Palette,
   Pencil,
   UserCheck,
-  UserMinus,
+  UserPlus,
   UserX,
   Users,
   Zap,
@@ -22,33 +23,40 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { DittoIcon } from "@/components/brand/DittoIcon";
 import { BotPill } from "@/components/BotPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
-import { FollowButton } from "@/components/FollowButton";
+import { ProfileSettings } from "@/components/ProfileSettings";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { ProfileThemeEditor } from "@/components/profile/ProfileThemeEditor";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useSharedCommunities } from "@/concord/hooks/useSharedCommunities";
+import { useCommunity } from "@/concord/hooks/useCommunityList";
+import { useControlFold } from "@/concord/hooks/useControlPlane";
+import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
+import { useSharedCommunities, type SharedCommunity } from "@/concord/hooks/useSharedCommunities";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useFollowList } from "@/hooks/useFollowList";
+import { useFollowerCount, useFollowingOf, useSharedFollowers } from "@/hooks/useFollowStats";
 import { useFollowToggle } from "@/hooks/useFollowToggle";
 import { useMuteToggle } from "@/hooks/useMuteList";
 import { useNsite } from "@/hooks/useNsite";
-import { useProfileBadges } from "@/hooks/useProfileBadges";
+import { useProfileBadges, type ProfileBadge } from "@/hooks/useProfileBadges";
 import { useProfileTheme } from "@/hooks/useProfileTheme";
 import { isStatusExpired, useUserStatus } from "@/hooks/useUserStatus";
 import { getAvatarShape } from "@/lib/avatarShape";
-import { dittoProfileUrl } from "@/lib/dittoUrl";
+import { dittoNip19Url, dittoProfileUrl } from "@/lib/dittoUrl";
+import { faviconUrl } from "@/lib/faviconUrl";
 import { loadThemeFont } from "@/lib/fontLoader";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { resolvePubkey } from "@/lib/resolvePubkey";
-import { tryNpubEncode } from "@/lib/safeNip19";
-import { sanitizeUrl } from "@/lib/sanitizeUrl";
+import { tryNaddrEncode, tryNpubEncode } from "@/lib/safeNip19";
+import { isLocalNetworkUrl, sanitizeUrl } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 import { writeClipboardText } from "@/lib/clipboard";
 import { NotFound } from "@/pages/NotFound";
@@ -60,8 +68,9 @@ import type { ThemeBackground } from "@/lib/themeEvent";
 /**
  * A person's full profile — `/u/<npub|nprofile>`. The Discord-style view of
  * everything they publish about themselves: kind-0 metadata (bio, custom
- * fields, website, lightning address), NIP-38 status, NIP-58 badges, and the
- * communities shared with the viewer. No content feed — that stays on Ditto.
+ * fields, website, lightning address), NIP-38 status, follow counts, NIP-58
+ * badges, and — for the viewer — shared communities and shared followers. No
+ * content feed; that stays on Ditto.
  *
  * The whole page wears the owner's Ditto profile theme (kind 16767): colors as
  * scoped CSS vars, body/title fonts, and the background image — the same
@@ -108,13 +117,14 @@ function backgroundStyle(bg: ThemeBackground): CSSProperties {
       };
 }
 
+const compactFormat = new Intl.NumberFormat(undefined, { notation: "compact" });
+
 function ProfileView({ pubkey }: { pubkey: string }) {
   const navigate = useNavigate();
   const { user } = useCurrentUser();
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
-  const themeResult = useProfileTheme(pubkey).data;
-  const theme = themeResult?.theme;
+  const theme = useProfileTheme(pubkey).data?.theme;
   const nsite = useNsite(pubkey).data;
   const badges = useProfileBadges(pubkey).data ?? [];
   const shared = useSharedCommunities(pubkey).data ?? [];
@@ -133,8 +143,21 @@ function ProfileView({ pubkey }: { pubkey: string }) {
   const mute = useMuteToggle(pubkey);
   const { isFollowing, isPending: followPending, toggle: toggleFollow } = useFollowToggle(pubkey);
 
+  // Counts: following from their own kind 3, followers from the NIP-85 stats
+  // provider (the same source Ditto reads).
+  const followingData = useFollowingOf(pubkey).data;
+  const followerCount = useFollowerCount(pubkey).data;
+
+  // "Followed by people you follow" — viewer-relative, so never for self.
+  const { data: viewerFollows } = useFollowList();
+  const sharedFollowers = useSharedFollowers(
+    user && !isSelf ? pubkey : undefined,
+    viewerFollows?.pubkeys,
+  ).data;
+
   const [copied, setCopied] = useState(false);
   const [themeEditorOpen, setThemeEditorOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
 
   // The owner's theme, scoped to this container: color vars + fonts. The
   // fonts load by URL (fontLoader) and apply as plain inline CSS, so
@@ -196,7 +219,7 @@ function ProfileView({ pubkey }: { pubkey: string }) {
             </div>
 
             <div className="px-4 pb-4 md:px-6 md:pb-6">
-              <div className="flex items-end justify-between gap-2">
+              <div className="flex items-end justify-between gap-2 flex-wrap">
                 <div className="-mt-10 md:-mt-12">
                   <Avatar shape={getAvatarShape(metadata)} className="size-20 md:size-24 border-4 border-background">
                     <AvatarImage src={metadata?.picture} alt={displayName} />
@@ -219,11 +242,14 @@ function ProfileView({ pubkey }: { pubkey: string }) {
                         <Palette className="size-4 mr-1.5" />
                         Edit theme
                       </Button>
-                      <Button size="sm" variant="secondary" className="clip-corner-lg h-9 touch:h-11" asChild>
-                        <Link to="/settings">
-                          <Pencil className="size-4 mr-1.5" />
-                          Edit profile
-                        </Link>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        className="clip-corner-lg h-9 touch:h-11"
+                        onClick={() => setEditOpen(true)}
+                      >
+                        <Pencil className="size-4 mr-1.5" />
+                        Edit profile
                       </Button>
                     </>
                   ) : (
@@ -234,8 +260,23 @@ function ProfileView({ pubkey }: { pubkey: string }) {
                           Message
                         </Button>
                       )}
-                      <FollowButton pubkey={pubkey} className="h-9 touch:h-11" />
-                      {user && (isFollowing || mute.canMute) && (
+                      {/* Follow toggles in place (Ditto-style): Follow when
+                          not following, Following (click to unfollow) when
+                          already there. */}
+                      {user && (
+                        <Button
+                          size="sm"
+                          variant={isFollowing ? "secondary" : "default"}
+                          className="clip-corner-lg h-9 touch:h-11"
+                          disabled={followPending}
+                          onClick={() => void toggleFollow()}
+                        >
+                          {isFollowing
+                            ? <><UserCheck className="size-4 mr-1.5" />Following</>
+                            : <><UserPlus className="size-4 mr-1.5" />Follow</>}
+                        </Button>
+                      )}
+                      {user && mute.canMute && (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button
@@ -248,24 +289,16 @@ function ProfileView({ pubkey }: { pubkey: string }) {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-44">
-                            {isFollowing && (
-                              <DropdownMenuItem disabled={followPending} onSelect={() => void toggleFollow()}>
-                                <UserMinus className="mr-2 size-4" />
-                                Unfollow
-                              </DropdownMenuItem>
-                            )}
-                            {mute.canMute && (
-                              <DropdownMenuItem
-                                disabled={mute.pending}
-                                className={!mute.muted ? "text-destructive focus:text-destructive" : undefined}
-                                onSelect={() => void mute.toggle()}
-                              >
-                                {mute.muted
-                                  ? <UserCheck className="mr-2 size-4" />
-                                  : <UserX className="mr-2 size-4" />}
-                                {mute.label}
-                              </DropdownMenuItem>
-                            )}
+                            <DropdownMenuItem
+                              disabled={mute.pending}
+                              className={!mute.muted ? "text-destructive focus:text-destructive" : undefined}
+                              onSelect={() => void mute.toggle()}
+                            >
+                              {mute.muted
+                                ? <UserCheck className="mr-2 size-4" />
+                                : <UserX className="mr-2 size-4" />}
+                              {mute.label}
+                            </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       )}
@@ -338,6 +371,25 @@ function ProfileView({ pubkey }: { pubkey: string }) {
                 </button>
               )}
 
+              {/* Follow counts. The lists themselves live on Ditto's profile
+                  (its followers/following views), so both link out there. */}
+              {(followingData || followerCount != null) && dittoHref && (
+                <div className="mt-2 flex items-center gap-4 text-sm">
+                  {followingData && (
+                    <a href={dittoHref} target="_blank" rel="noopener noreferrer" className="hover:underline">
+                      <span className="font-bold tabular-nums">{compactFormat.format(followingData.count)}</span>{" "}
+                      <span className="text-muted-foreground">Following</span>
+                    </a>
+                  )}
+                  {followerCount != null && followerCount > 0 && (
+                    <a href={dittoHref} target="_blank" rel="noopener noreferrer" className="hover:underline">
+                      <span className="font-bold tabular-nums">{compactFormat.format(followerCount)}</span>{" "}
+                      <span className="text-muted-foreground">Followers</span>
+                    </a>
+                  )}
+                </div>
+              )}
+
               {/* NIP-38 status + now playing. */}
               {status?.content && (
                 <div className="mt-2 text-sm text-muted-foreground" title={status.content}>
@@ -377,41 +429,32 @@ function ProfileView({ pubkey }: { pubkey: string }) {
             <div className="space-y-3 md:space-y-4 min-w-0">
               {(fields.length > 0 || website || metadata?.lud16) && (
                 <section className={cn("clip-corner-lg border border-border p-4 md:p-5", card)}>
-                  <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-2">
+                  <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-3">
                     About
                   </h2>
-                  <dl className="space-y-2">
-                    {website && (
-                      <ProfileFieldRow label="Website">
-                        <a href={website} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-all">
-                          <LinkIcon className="inline size-3.5 mr-1 align-[-2px]" />
-                          {website.replace(/^https?:\/\//, "").replace(/\/$/, "")}
-                        </a>
-                      </ProfileFieldRow>
-                    )}
+                  <div className="space-y-4">
                     {metadata?.lud16 && (
-                      <ProfileFieldRow label="Lightning">
-                        <span className="break-all">
-                          <Zap className="inline size-3.5 mr-1 align-[-2px] text-primary" />
-                          {metadata.lud16}
-                        </span>
-                      </ProfileFieldRow>
+                      <div>
+                        <div className="text-sm font-semibold">Lightning</div>
+                        <div className="mt-0.5 flex items-center gap-1.5 text-sm">
+                          <Zap className="size-4 shrink-0 text-primary" />
+                          <span className="break-all">{metadata.lud16}</span>
+                        </div>
+                      </div>
                     )}
-                    {fields.map(([label, value], i) => {
-                      const href = sanitizeUrl(value);
-                      return (
-                        <ProfileFieldRow key={`${label}-${i}`} label={label}>
-                          {href ? (
-                            <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-all">
-                              {value}
-                            </a>
-                          ) : (
-                            <span className="break-words">{value}</span>
-                          )}
-                        </ProfileFieldRow>
-                      );
-                    })}
-                  </dl>
+                    {website && (
+                      <div>
+                        <div className="text-sm font-semibold">Website</div>
+                        <FieldValue value={website} />
+                      </div>
+                    )}
+                    {fields.map(([label, value], i) => (
+                      <div key={`${label}-${i}`}>
+                        {label && <div className="text-sm font-semibold break-words">{label}</div>}
+                        <FieldValue value={value} />
+                      </div>
+                    ))}
+                  </div>
                 </section>
               )}
             </div>
@@ -419,54 +462,30 @@ function ProfileView({ pubkey }: { pubkey: string }) {
             <div className="space-y-3 md:space-y-4 min-w-0">
               {badges.length > 0 && (
                 <section className={cn("clip-corner-lg border border-border p-4", card)}>
-                  <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-2">
+                  <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-3">
                     Badges
                   </h2>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="grid grid-cols-3 gap-3">
                     {badges.map((badge) => (
-                      <div
-                        key={badge.addr}
-                        className="flex items-center gap-1.5 rounded-full bg-secondary pl-1 pr-2.5 py-1"
-                        title={badge.description ? `${badge.name} — ${badge.description}` : badge.name}
-                      >
-                        {(badge.thumb || badge.image) ? (
-                          <img
-                            src={badge.thumb || badge.image}
-                            alt=""
-                            className="size-6 rounded-full object-cover"
-                            loading="lazy"
-                          />
-                        ) : (
-                          <span className="flex size-6 items-center justify-center rounded-full bg-primary/20 text-primary text-[10px] font-bold">
-                            {badge.name[0]?.toUpperCase()}
-                          </span>
-                        )}
-                        <span className="text-xs font-medium truncate max-w-32">{badge.name}</span>
-                      </div>
+                      <BadgeTile key={badge.addr} badge={badge} />
                     ))}
                   </div>
                 </section>
+              )}
+
+              {!isSelf && sharedFollowers && sharedFollowers.count > 0 && (
+                <SharedFollowersCard shared={sharedFollowers.pubkeys} dittoHref={dittoHref} cardClass={card} />
               )}
 
               {!isSelf && shared.length > 0 && (
                 <section className={cn("clip-corner-lg border border-border p-4", card)}>
                   <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-2 flex items-center gap-1.5">
                     <Users className="size-3.5" />
-                    Shared communities
+                    {shared.length} shared {shared.length === 1 ? "community" : "communities"}
                   </h2>
                   <ul className="space-y-1">
                     {shared.map((c) => (
-                      <li key={c.idHex}>
-                        <Link
-                          to={`/c/${c.idHex}`}
-                          className="flex items-center gap-2 rounded-md px-2 py-1.5 touch:py-2.5 hover:bg-secondary transition-colors min-w-0"
-                        >
-                          <span className="flex size-7 shrink-0 items-center justify-center clip-corner-lg bg-primary/15 text-primary text-xs font-bold">
-                            {c.name[0]?.toUpperCase() ?? "#"}
-                          </span>
-                          <span className="text-sm truncate">{c.name}</span>
-                        </Link>
-                      </li>
+                      <SharedCommunityRow key={c.idHex} entry={c} />
                     ))}
                   </ul>
                 </section>
@@ -477,22 +496,236 @@ function ProfileView({ pubkey }: { pubkey: string }) {
       </div>
 
       {isSelf && (
-        <ProfileThemeEditor
-          open={themeEditorOpen}
-          onOpenChange={setThemeEditorOpen}
-          current={theme}
-        />
+        <>
+          <ProfileThemeEditor
+            open={themeEditorOpen}
+            onOpenChange={setThemeEditorOpen}
+            current={theme}
+          />
+          {/* Edit the profile right here — the same WYSIWYG editor Settings
+              hosts, in a dialog, so nothing navigates away from the page it
+              is editing. */}
+          <Dialog open={editOpen} onOpenChange={setEditOpen}>
+            <ChromeDialogContent
+              title="Edit profile"
+              className="sm:max-w-xl"
+              contentClassName="max-h-[85dvh] overflow-y-auto"
+            >
+              {editOpen && <ProfileSettings onSaved={() => setEditOpen(false)} />}
+            </ChromeDialogContent>
+          </Dialog>
+        </>
       )}
     </main>
   );
 }
 
-function ProfileFieldRow({ label, children }: { label: string; children: React.ReactNode }) {
+// ── Custom field rendering ───────────────────────────────────────────────────
+
+const IMAGE_EXT = /\.(gif|png|jpe?g|webp|avif)(\?|#|$)/i;
+const AUDIO_EXT = /\.(mp3|ogg|oga|wav|m4a|opus|flac|aac)(\?|#|$)/i;
+const VIDEO_EXT = /\.(mp4|webm|mov|m4v)(\?|#|$)/i;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * A custom field's value, rendered by what it IS (Ditto's profile-fields
+ * treatment): images/gifs inline, audio as a player, video as a player,
+ * emails as mailto, URLs as favicon links, anything else as text. Media only
+ * embeds from public http(s) origins — a local-network URL in event data must
+ * never become an <img>/<audio> fetch (see isLocalNetworkUrl).
+ */
+function FieldValue({ value }: { value: string }) {
+  const url = sanitizeUrl(value);
+  const embeddable = url && !isLocalNetworkUrl(url) ? url : undefined;
+
+  if (embeddable && IMAGE_EXT.test(embeddable)) {
+    return (
+      <a href={embeddable} target="_blank" rel="noopener noreferrer" className="block mt-1.5">
+        <img src={embeddable} alt="" className="w-full rounded-lg object-cover" loading="lazy" />
+      </a>
+    );
+  }
+  if (embeddable && AUDIO_EXT.test(embeddable)) {
+    return <audio controls preload="none" src={embeddable} className="mt-1.5 w-full h-10" />;
+  }
+  if (embeddable && VIDEO_EXT.test(embeddable)) {
+    return (
+      <video controls preload="metadata" src={embeddable} className="mt-1.5 w-full rounded-lg" />
+    );
+  }
+  if (!url && EMAIL_RE.test(value.trim())) {
+    return (
+      <a
+        href={`mailto:${value.trim()}`}
+        className="mt-0.5 flex items-center gap-1.5 text-sm text-primary hover:underline min-w-0"
+      >
+        <Mail className="size-4 shrink-0 text-muted-foreground" />
+        <span className="truncate">{value.trim()}</span>
+      </a>
+    );
+  }
+  if (url) {
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="mt-0.5 flex items-center gap-1.5 text-sm text-primary hover:underline min-w-0"
+      >
+        <Favicon url={url} />
+        <span className="truncate">{url.replace(/^https?:\/\//, "").replace(/\/$/, "")}</span>
+      </a>
+    );
+  }
+  return <p className="mt-0.5 text-sm break-words">{value}</p>;
+}
+
+/** The site's favicon beside a link, vanishing (not breaking) on error. */
+function Favicon({ url }: { url: string }) {
+  const [failed, setFailed] = useState(false);
+  const src = faviconUrl(url);
+  if (!src || failed) return <Globe className="size-4 shrink-0 text-muted-foreground" />;
   return (
-    <div className="grid grid-cols-[7rem_1fr] gap-2 text-sm items-baseline">
-      <dt className="text-muted-foreground truncate" title={label}>{label}</dt>
-      <dd className="min-w-0">{children}</dd>
-    </div>
+    <img
+      src={src}
+      alt=""
+      className="size-4 shrink-0 rounded-sm"
+      loading="lazy"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+// ── Sidebar pieces ───────────────────────────────────────────────────────────
+
+/**
+ * One badge, Ditto-showcase style: the artwork as a rounded square with the
+ * name beneath, linking out to the badge's page on ditto.pub.
+ */
+function BadgeTile({ badge }: { badge: ProfileBadge }) {
+  const naddr = tryNaddrEncode({ kind: 30009, pubkey: badge.issuer, identifier: badge.identifier });
+  const href = naddr ? dittoNip19Url(naddr) : undefined;
+  const img = badge.thumb || badge.image;
+  const inner = (
+    <>
+      {img ? (
+        <img src={img} alt={badge.name} className="size-14 rounded-lg object-cover mx-auto" loading="lazy" />
+      ) : (
+        <div className="size-14 mx-auto rounded-lg border border-border bg-gradient-to-br from-primary/10 via-primary/5 to-transparent flex items-center justify-center">
+          <Award className="size-7 text-primary/30" />
+        </div>
+      )}
+      <div className="mt-1 text-xs text-center truncate">{badge.name}</div>
+    </>
+  );
+  const title = badge.description ? `${badge.name} — ${badge.description}` : badge.name;
+  return href ? (
+    <a href={href} target="_blank" rel="noopener noreferrer" title={title} className="block min-w-0 hover:opacity-80 transition-opacity">
+      {inner}
+    </a>
+  ) : (
+    <div title={title} className="min-w-0">{inner}</div>
+  );
+}
+
+/**
+ * Shared followers ("followed by people you follow"), best-ranked first per
+ * the NIP-85 stats provider. Shows the top few; View all expands in place.
+ */
+function SharedFollowersCard({
+  shared,
+  dittoHref,
+  cardClass,
+}: {
+  shared: string[];
+  dittoHref?: string;
+  cardClass: string;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const visible = showAll ? shared : shared.slice(0, 5);
+  return (
+    <section className={cn("clip-corner-lg border border-border p-4", cardClass)}>
+      <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-2 flex items-center gap-1.5">
+        <UserCheck className="size-3.5" />
+        {shared.length} shared {shared.length === 1 ? "follower" : "followers"}
+      </h2>
+      <ul className="space-y-1">
+        {visible.map((pk) => (
+          <PersonRow key={pk} pubkey={pk} />
+        ))}
+      </ul>
+      {!showAll && shared.length > 5 ? (
+        <button
+          type="button"
+          onClick={() => setShowAll(true)}
+          className="mt-1.5 text-xs text-primary hover:underline"
+        >
+          View all {shared.length}
+        </button>
+      ) : dittoHref ? (
+        <a
+          href={dittoHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-1.5 inline-block text-xs text-primary hover:underline"
+        >
+          View more on Ditto
+        </a>
+      ) : null}
+    </section>
+  );
+}
+
+/** A compact person row linking to their profile view. */
+function PersonRow({ pubkey }: { pubkey: string }) {
+  const author = useAuthor(pubkey);
+  const metadata = author.data?.metadata;
+  const name = getDisplayName(metadata, pubkey);
+  const npub = tryNpubEncode(pubkey);
+  return (
+    <li>
+      <Link
+        to={`/u/${npub ?? pubkey}`}
+        className="flex items-center gap-2 rounded-md px-2 py-1.5 touch:py-2.5 hover:bg-secondary transition-colors min-w-0"
+      >
+        <Avatar shape={getAvatarShape(metadata)} className="size-7 shrink-0">
+          <AvatarImage src={metadata?.picture} alt="" />
+          <AvatarFallback className="bg-primary/20 text-primary text-xs">
+            {name[0]?.toUpperCase()}
+          </AvatarFallback>
+        </Avatar>
+        <span className="text-sm truncate">{name}</span>
+      </Link>
+    </li>
+  );
+}
+
+/**
+ * One shared community, wearing its real icon: the encrypted metadata icon
+ * from the community's control fold (the same source the rail's icons use),
+ * with the folded name preferred over the join-time preview name.
+ */
+function SharedCommunityRow({ entry }: { entry: SharedCommunity }) {
+  const community = useCommunity(entry.idHex);
+  const { data: folded } = useControlFold(community, false);
+  const iconUrl = useDecryptedImage(folded?.metadata?.icon);
+  const name = folded?.metadata?.name || entry.name;
+  return (
+    <li>
+      <Link
+        to={`/c/${entry.idHex}`}
+        className="flex items-center gap-2 rounded-md px-2 py-1.5 touch:py-2.5 hover:bg-secondary transition-colors min-w-0"
+      >
+        <span className="flex size-7 shrink-0 items-center justify-center overflow-hidden clip-corner-lg bg-primary/15 text-primary text-xs font-bold">
+          {iconUrl ? (
+            <img src={iconUrl} alt="" className="size-full object-cover" />
+          ) : (
+            name.trim()[0]?.toUpperCase() ?? "#"
+          )}
+        </span>
+        <span className="text-sm truncate">{name}</span>
+      </Link>
+    </li>
   );
 }
 

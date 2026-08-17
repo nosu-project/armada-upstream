@@ -17,6 +17,8 @@ export interface ProfileBadge {
   addr: string;
   /** Issuer pubkey (from the coordinate). */
   issuer: string;
+  /** The definition's `d` identifier (for naddr links). */
+  identifier: string;
   name: string;
   description?: string;
   /** Full-size image URL. */
@@ -124,6 +126,7 @@ export function useProfileBadges(pubkey: string | undefined) {
         out.push({
           addr: p.addr,
           issuer: p.coord!.pubkey,
+          identifier: p.coord!.identifier,
           name,
           description: def.tags.find(([n]) => n === "description")?.[1],
           image: sanitizeUrl(def.tags.find(([n]) => n === "image")?.[1]),
