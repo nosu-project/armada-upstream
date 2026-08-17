@@ -226,6 +226,28 @@ export function verifyPlaintextHash(plaintext: Uint8Array, ox: string | undefine
 }
 
 /**
+ * The already-resolved object URL for an attachment, or `undefined` if it has
+ * never been decrypted, is still in flight, or has since been evicted.
+ *
+ * Exists so a remount can paint on its FIRST frame. {@link decryptAttachmentToObjectURL}
+ * returns a cached promise on a hit, but a promise — even an already-resolved
+ * one — can only deliver its value in a microtask, so a component driven by it
+ * alone renders a placeholder, commits, and only then mounts the `<img>`. That
+ * is a wasted commit and a height change per attachment on every channel
+ * switch, for bytes that were in memory the whole time.
+ *
+ * Counts as a use for LRU purposes: a blob that is being rendered is live
+ * whether or not the caller went through the async path to get it.
+ */
+export function peekAttachmentObjectURL(url: string, enc: ImetaEncryption): string | undefined {
+  const k = cacheKey(url, enc);
+  const entry = cache.get(k);
+  if (!entry?.url) return undefined;
+  touch(k, entry);
+  return entry.url;
+}
+
+/**
  * Fetch + AES-GCM-decrypt an encrypted attachment into an object URL suitable
  * for an `<img src>` / `<video src>`. `mime` is used as the resulting Blob's
  * type (display only).

@@ -6,7 +6,7 @@ import {
   resolveBuzzMediaObjectURL,
   subscribeBuzzMediaHosts,
 } from "@/buzz/media";
-import { decryptAttachmentToObjectURL, FileTooLargeError } from "@/lib/encryptedMedia";
+import { decryptAttachmentToObjectURL, FileTooLargeError, peekAttachmentObjectURL } from "@/lib/encryptedMedia";
 import { isSupportedEncryption } from "@/lib/imeta";
 
 import type { ImetaEncryption } from "@/lib/imeta";
@@ -34,6 +34,17 @@ type State =
   /** Past the inline decrypt cap — retryable with a bigger budget, unlike "error". */
   | { status: "oversized"; byteSize: number }
   | { status: "error" };
+
+/**
+ * Settle on a `src`, keeping the previous state object when it already names
+ * it. A fresh `{ status: "ready", src }` is never `Object.is`-equal to the last
+ * one, so setting it unconditionally commits a render per resolve that changes
+ * nothing — including the one the synchronous cache seed exists to avoid, since
+ * the first effect after a warm mount resolves to the src already on screen.
+ */
+function ready(src: string) {
+  return (prev: State): State => (prev.status === "ready" && prev.src === src ? prev : { status: "ready", src });
+}
 
 /**
  * Resolve a media URL to a displayable `src`. For plain URLs this is the URL
@@ -80,8 +91,17 @@ export function useResolvedMediaSrc(ref: EncryptedRef | string, opts: { maxBytes
   // the non-encrypted case.
   const needsBuzzAuth = !encrypted && isBuzzMediaUrl(url);
 
+  // Seed from the decrypted-attachment cache SYNCHRONOUSLY when it holds these
+  // bytes. `decryptAttachmentToObjectURL` returns a cached promise on a hit,
+  // but a promise can only deliver in a microtask, so waiting on it costs a
+  // placeholder commit and a post-load height change per attachment — on every
+  // channel switch, for blobs that never left memory.
   const [state, setState] = useState<State>(() => {
-    if (encrypted) return decryptable ? { status: "loading" } : { status: "error" };
+    if (encrypted) {
+      if (!decryptable) return { status: "error" };
+      const cached = peekAttachmentObjectURL(url, encryption!);
+      return cached ? { status: "ready", src: cached } : { status: "loading" };
+    }
     return needsBuzzAuth ? { status: "loading" } : { status: "ready", src: url };
   });
 
@@ -94,7 +114,7 @@ export function useResolvedMediaSrc(ref: EncryptedRef | string, opts: { maxBytes
     }
     if (!encrypted) {
       if (!needsBuzzAuth) {
-        setState({ status: "ready", src: url });
+        setState(ready(url));
         return;
       }
       let cancelled = false;
@@ -102,29 +122,33 @@ export function useResolvedMediaSrc(ref: EncryptedRef | string, opts: { maxBytes
       setState({ status: "loading" });
       resolveBuzzMediaObjectURL(url, controller.signal)
         .then((src) => {
-          if (!cancelled) setState({ status: "ready", src });
+          if (!cancelled) setState(ready(src));
         })
         .catch(() => {
           // Fall back to the plain URL (it will 401, but that's no worse than
           // before, and lets a public/unauth'd host still render).
-          if (!cancelled) setState({ status: "ready", src: url });
+          if (!cancelled) setState(ready(url));
         });
       return () => {
         cancelled = true;
         controller.abort();
       };
     }
+    const enc = { algorithm: encAlgo!, key: encKey!, nonce: encNonce!, ox: encOx };
+    // Same cache check as the initializer, for the re-runs it can't cover (the
+    // url or its crypto params changed). Announcing `loading` before looking
+    // would undo the synchronous seed on the first effect after mount.
+    const cached = peekAttachmentObjectURL(url, enc);
+    if (cached) {
+      setState(ready(cached));
+      return;
+    }
     let cancelled = false;
     const controller = new AbortController();
     setState({ status: "loading" });
-    decryptAttachmentToObjectURL(
-      url,
-      { algorithm: encAlgo!, key: encKey!, nonce: encNonce!, ox: encOx },
-      mime,
-      { signal: controller.signal, maxBytes },
-    )
+    decryptAttachmentToObjectURL(url, enc, mime, { signal: controller.signal, maxBytes })
       .then((src) => {
-        if (!cancelled) setState({ status: "ready", src });
+        if (!cancelled) setState(ready(src));
       })
       .catch((e: unknown) => {
         if (cancelled) return;

@@ -1,12 +1,14 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  decryptAttachmentToObjectURL,
   decryptBytes,
   encryptBytes,
   encryptFileWithParams,
   FileTooLargeError,
+  peekAttachmentObjectURL,
   readCapped,
   verifyPlaintextHash,
 } from "./encryptedMedia";
@@ -178,5 +180,82 @@ describe("verifyPlaintextHash", () => {
   it("skips verification when the sender published no `ox`", () => {
     // A forward may not carry one; refusing those would break real messages.
     expect(() => verifyPlaintextHash(bytes, undefined)).not.toThrow();
+  });
+});
+
+/**
+ * The synchronous half of the attachment cache, which is what lets a remount
+ * paint on its first frame. Without it a channel switch spends a placeholder
+ * commit plus a post-load height change on every attachment whose bytes never
+ * left memory — the async API can only ever deliver in a microtask, however
+ * warm the cache is.
+ */
+describe("peekAttachmentObjectURL", () => {
+  const key = "a".repeat(64);
+  const nonce = "b".repeat(32);
+  let created = 0;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /**
+   * Answer every fetch with ciphertext, and mint distinguishable object URLs.
+   *
+   * jsdom implements neither `createObjectURL` nor `revokeObjectURL`, so they
+   * have to be supplied rather than spied on — as a SUBCLASS, which shadows the
+   * two statics while leaving `new URL()` and the rest of them intact. (An
+   * object literal spread from `URL` inherits none of them: its statics are
+   * non-enumerable.)
+   */
+  async function serve(): Promise<void> {
+    const ciphertext = await encryptBytes(new TextEncoder().encode("frame bytes"), key, nonce);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(ciphertext)));
+    class StubURL extends URL {
+      static override createObjectURL = () => `blob:stub-${++created}`;
+      static override revokeObjectURL = () => {};
+    }
+    vi.stubGlobal("URL", StubURL);
+  }
+
+  it("misses before the attachment has ever been decrypted", async () => {
+    await serve();
+    expect(peekAttachmentObjectURL("https://blossom.example/a", { algorithm: "aes-gcm", key, nonce }))
+      .toBeUndefined();
+  });
+
+  it("returns the same object URL the async path resolved to", async () => {
+    const url = "https://blossom.example/b";
+    await serve();
+    const enc = { algorithm: "aes-gcm", key, nonce };
+
+    const resolved = await decryptAttachmentToObjectURL(url, enc, "image/jpeg");
+
+    // The whole point: no await, no microtask — a caller rendering this frame
+    // can put it straight into an `<img src>`.
+    expect(peekAttachmentObjectURL(url, enc)).toBe(resolved);
+  });
+
+  it("misses while the decrypt is still in flight", async () => {
+    const url = "https://blossom.example/c";
+    await serve();
+    const enc = { algorithm: "aes-gcm", key, nonce };
+
+    const pending = decryptAttachmentToObjectURL(url, enc, "image/jpeg");
+    // An entry exists, but it holds only a promise — reporting a URL here would
+    // hand the caller an empty src.
+    expect(peekAttachmentObjectURL(url, enc)).toBeUndefined();
+    await pending;
+    expect(peekAttachmentObjectURL(url, enc)).toBeDefined();
+  });
+
+  it("keys on the crypto params, not the url alone", async () => {
+    const url = "https://blossom.example/d";
+    await serve();
+    await decryptAttachmentToObjectURL(url, { algorithm: "aes-gcm", key, nonce }, "image/jpeg");
+
+    // Same blob, different nonce: a different plaintext, so it must not hit.
+    expect(peekAttachmentObjectURL(url, { algorithm: "aes-gcm", key, nonce: "c".repeat(32) }))
+      .toBeUndefined();
   });
 });

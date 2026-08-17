@@ -131,8 +131,13 @@ export function VideoPlayer({
 
   // No supplied poster → generate one from the first frame (mainly for Android
   // WebView, which won't paint one on its own). Pointless before the source
-  // resolves, and skipped entirely in GIF mode.
-  const generatedPoster = useVideoThumbnail(gif ? "" : mediaSrc, posterSrc);
+  // resolves, and skipped entirely in GIF mode. Cached under the pre-resolution
+  // `src`, since `mediaSrc` is a per-decrypt object URL for encrypted media.
+  const generatedPoster = useVideoThumbnail({
+    src: gif ? "" : mediaSrc,
+    identity: src,
+    poster: posterSrc,
+  });
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);

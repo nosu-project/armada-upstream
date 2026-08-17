@@ -1529,6 +1529,7 @@ function InlineImage({ image, onOpen }: { image: ImageRef; onOpen: () => void })
               box ? "w-full h-full object-cover" : "max-w-full max-h-80 h-auto",
             )}
             loading="lazy"
+            decoding="async"
             onLoad={() => setLoaded(true)}
             onError={onError}
           />
@@ -1599,6 +1600,7 @@ function GridImage({
               // See InlineImage: native drag/callout would eat the long-press.
               draggable={false}
               loading="lazy"
+              decoding="async"
               onLoad={() => setLoaded(true)}
               onError={onError}
               className="absolute inset-0 w-full h-full object-cover hover:opacity-90 transition-opacity [-webkit-user-drag:none]"
