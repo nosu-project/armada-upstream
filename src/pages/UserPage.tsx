@@ -74,7 +74,9 @@ export function UserPage() {
   return (
     <>
       <ServerRail />
-      <main className="flex-1 min-w-0 flex flex-col items-center justify-center gap-4 p-8 text-center">
+      {/* `relative` is what scopes the profile overlay to this pane: it fills
+          main and stops at the rail, which stays lit and clickable beside it. */}
+      <main className="relative flex-1 min-w-0 flex flex-col items-center justify-center gap-4 p-8 text-center">
         {!pubkey && nip05.isPending ? (
           <>
             <Loader2 className="size-6 animate-spin text-muted-foreground" />
@@ -114,8 +116,8 @@ export function UserPage() {
             <JoinButton size="lg" className="h-12 w-full max-w-xs clip-corner-lg text-base font-medium" />
           </>
         )}
+        {user && pubkey && <ProfileDialog pubkey={pubkey} onClose={closeProfile} />}
       </main>
-      {user && pubkey && <ProfileDialog pubkey={pubkey} onClose={closeProfile} />}
     </>
   );
 }

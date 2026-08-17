@@ -17,7 +17,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { DittoIcon } from "@/components/brand/DittoIcon";
@@ -27,7 +27,7 @@ import { ProfileSettings } from "@/components/ProfileSettings";
 import { ProfileThemeEditor } from "@/components/profile/ProfileThemeEditor";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { ChromeDialogContent, Dialog, DialogClose } from "@/components/ui/dialog";
+import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -66,49 +66,67 @@ import type { CSSProperties } from "react";
 import type { ThemeBackground } from "@/lib/themeEvent";
 
 /**
- * Fill the screen bar a margin: the same 1rem inset `DialogContent` already
- * uses for its width and its max-height, restated as an exact height so the
- * vessel doesn't shrink-wrap a sparse profile into a short box. The safe-area
- * insets are in it for the reason they're in the max-height — a full-height
- * dialog centred on the raw viewport runs under the Android status bar.
- */
-const FILL_HEIGHT =
-  "h-[calc(100dvh-2rem-var(--safe-area-inset-top,env(safe-area-inset-top,0px))-var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))]";
-
-/**
- * A person's full profile, over whatever the viewer was doing —
- * `/<npub|nprofile|name@domain>`, opened by `UserPage`. The Discord-style view
- * of everything they publish about themselves: kind-0 metadata (bio, custom
- * fields, website, lightning address), NIP-38 status, follow counts, NIP-58
- * badges, and — for the viewer — shared communities and shared followers. No
- * content feed; that stays on Ditto.
+ * A person's full profile — `/<npub|nprofile|name@domain>`, opened by
+ * `UserPage`. The Discord-style view of everything they publish about
+ * themselves: kind-0 metadata (bio, custom fields, website, lightning
+ * address), NIP-38 status, follow counts, NIP-58 badges, and — for the viewer
+ * — shared communities and shared followers. No content feed; that stays on
+ * Ditto.
  *
- * A dialog, but a ROUTED one: it keeps a real URL (the bare NIP-19 path every
- * Nostr client shares), while closing is a step back through history rather
- * than a destination this has to guess at. That's what the close button is —
- * `onClose` is the caller's history step — and why there's no Back button of
- * its own.
+ * Presented as a dialog, but a ROUTED one: it keeps a real URL (the bare
+ * NIP-19 path every Nostr client shares), while closing is a step back through
+ * history rather than a destination this has to guess at. That's what the
+ * close button is — `onClose` is the caller's history step — and why there's
+ * no Back button of its own.
  *
- * It wears the owner's Ditto profile theme (kind 16767): colors as scoped CSS
- * vars, body/title fonts, and the background image — the same takeover Ditto's
- * profile does globally, but scoped to this container, so the app around it
- * keeps its own theme and nothing needs restoring on unmount.
+ * Deliberately NOT a Radix `Dialog`, though it reads as one. A Radix dialog
+ * portals to `document.body` and, in modal mode, drops pointer events on
+ * everything else — which would put this over the community rail and kill it,
+ * when the rail is exactly what should stay live: it is how you leave. So this
+ * is an overlay INSIDE the main pane, filling it bar a margin, positioned
+ * against the `relative` `<main>` that renders it. What Radix would have given
+ * for free and is hand-wired below: Escape to close, and the backdrop as a
+ * dismiss target. Focus is deliberately not trapped — nothing outside is
+ * inert, so there is nothing to trap it from.
+ *
+ * The view inside wears the owner's Ditto profile theme (kind 16767): colors
+ * as scoped CSS vars, body/title fonts, and the background image — the same
+ * takeover Ditto's profile does globally, but scoped to this container, so the
+ * app around it keeps its own theme and nothing needs restoring on unmount.
  */
 export function ProfileDialog({ pubkey, onClose }: { pubkey: string; onClose: () => void }) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      // Anything stacked ON this owns Escape first — the self-profile's Edit
+      // profile / Edit theme dialogs, and the moderation dropdown. They portal
+      // to the body, so they're outside this subtree and would otherwise be
+      // dismissed alongside the profile they were opened from.
+      if (document.querySelector("[data-radix-dialog-overlay], [data-radix-menu-content]")) return;
+      onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <ChromeDialogContent
-        title="Profile"
-        // The close button is rendered inside the view instead, where it can
-        // sit on a scrim — the banner and a themed background are both images,
-        // and a bare glyph on top of either is a coin toss.
-        hideClose
-        className={cn("sm:max-w-5xl", FILL_HEIGHT)}
-        contentClassName="h-full p-0 sm:p-0 overflow-hidden"
+    <>
+      {/* The backdrop reaches the edges of the pane and no further, so the
+          rail beside it stays lit and clickable. */}
+      <div
+        aria-hidden
+        className="absolute inset-0 z-20 bg-black/50 backdrop-blur-sm animate-in fade-in-0"
+        onClick={onClose}
+      />
+      <div
+        role="dialog"
+        aria-modal="false"
+        aria-label="Profile"
+        className="absolute inset-2 md:inset-4 z-30 clip-corner-lg overflow-hidden border border-border bg-chrome shadow-lg animate-in fade-in-0 zoom-in-95"
       >
-        <ProfileView pubkey={pubkey} />
-      </ChromeDialogContent>
-    </Dialog>
+        <ProfileView pubkey={pubkey} onClose={onClose} />
+      </div>
+    </>
   );
 }
 
@@ -140,7 +158,7 @@ function backgroundStyle(bg: ThemeBackground): CSSProperties {
 
 const compactFormat = new Intl.NumberFormat(undefined, { notation: "compact" });
 
-function ProfileView({ pubkey }: { pubkey: string }) {
+function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void }) {
   const navigate = useNavigate();
   const { user } = useCurrentUser();
   const author = useAuthor(pubkey);
@@ -237,19 +255,22 @@ function ProfileView({ pubkey }: { pubkey: string }) {
 
       {/* Closing IS the back step — outside the scroller so it stays put, and
           on its own scrim so it reads over the banner it floats on. */}
-      <DialogClose asChild>
-        <Button
-          size="icon"
-          variant="ghost"
-          aria-label="Close profile"
-          className="absolute right-3 top-3 z-10 size-9 touch:size-11 rounded-full bg-background/60 backdrop-blur-sm hover:bg-background/80"
-        >
-          <X className="size-5" />
-        </Button>
-      </DialogClose>
+      <Button
+        size="icon"
+        variant="ghost"
+        aria-label="Close profile"
+        className="absolute right-3 top-3 z-10 size-9 touch:size-11 rounded-full bg-background/60 backdrop-blur-sm hover:bg-background/80"
+        onClick={onClose}
+      >
+        <X className="size-5" />
+      </Button>
 
       <div className="relative h-full overflow-y-auto">
-        <div className="mx-auto w-full max-w-4xl px-3 py-3 md:px-6 md:py-6">
+        {/* No column cap: the vessel is the width the viewer gave it, and a
+            profile capped at `max-w-4xl` inside a full-width dialog reads as
+            the dialog having failed to stretch. The sidebar grid below is
+            what absorbs the extra width. */}
+        <div className="w-full px-3 py-3 md:px-6 md:py-6">
           {/* Header card: banner, avatar, identity, actions. */}
           <section className={cn("clip-corner-lg overflow-hidden border border-border", card)}>
             <div className="h-32 md:h-44 bg-secondary relative">
