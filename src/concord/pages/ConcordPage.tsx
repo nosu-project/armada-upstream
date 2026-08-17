@@ -111,7 +111,7 @@ import { useSyncTasks } from "@/hooks/useSyncActivity";
 import { useSyncTopicState } from "@/sync/useSyncTopic";
 import { concordChannelMuteKey, useMutes } from "@/hooks/useMutes";
 import { useNotifLevels, concordChannelScopeKey } from "@/hooks/useNotifLevels";
-import { NotifLevelIcon, NotifLevelMenu } from "@/components/NotifLevelMenu";
+import { NotifLevelMenu } from "@/components/NotifLevelMenu";
 import { toast } from "@/hooks/useToast";
 import { CommunityNoAccess } from "@/concord/components/CommunityNoAccess";
 import { useCommunity, useCommunityList, useIsExcluded } from "@/concord/hooks/useCommunityList";
@@ -604,10 +604,7 @@ const ChannelRow = memo(function ChannelRow({
                 active && "font-medium",
               )}
             >
-              <span className="relative shrink-0">
-                <Icon className={cn("size-4", occupied && !active && "text-success")} />
-                <NotifLevelIcon level={notificationLevel} />
-              </span>
+              <Icon className={cn("size-4 shrink-0", occupied && !active && "text-success")} />
               <span className="truncate flex-1 min-w-0">{channel.name}</span>
               {inCall && <Headphones className={cn("size-3.5 shrink-0", !active && "text-success")} />}
               {/* Mention indicator: an "@" pill. Plain unread is conveyed by the row's

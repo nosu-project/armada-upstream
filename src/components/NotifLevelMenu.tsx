@@ -70,28 +70,6 @@ export function NotifLevelMenu(props: {
 }
 
 /**
- * Notification-level indicator, pinned to the corner of a channel's leading
- * icon (the SyncStatusIndicator pattern) so a muted / mentions-only channel
- * reads at a glance without adding a competing glyph to the row. Renders
- * nothing for the default `all`; the caller wraps the channel icon in a
- * `relative` box.
- */
-export function NotifLevelIcon({ level }: { level: NotifLevel }) {
-  if (level === "all") return null;
-
-  const label = level === "nothing" ? "Notifications muted" : "Only mentions notify";
-  const Icon = level === "nothing" ? BellOff : AtSign;
-  return (
-    <span
-      className="absolute -bottom-1 -right-1 z-10 flex items-center justify-center rounded-full bg-chrome p-0.5 text-muted-foreground"
-      aria-label={label}
-    >
-      <Icon className="size-2.5 shrink-0" aria-hidden />
-    </span>
-  );
-}
-
-/**
  * Standalone dropdown-button variant of the level picker for surfaces that
  * aren't context menus (e.g. a conversation header). Renders its own bell
  * trigger reflecting the current level.

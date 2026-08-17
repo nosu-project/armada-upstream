@@ -20,7 +20,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { NotifLevelIcon, NotifLevelMenu } from "@/components/NotifLevelMenu";
+import { NotifLevelMenu } from "@/components/NotifLevelMenu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -118,10 +118,7 @@ function ChannelLink({
             isActive && "clip-corner-lg bg-primary text-primary-foreground font-medium",
           )}
       >
-        <span className="relative shrink-0">
-          <Icon className="size-4" />
-          <NotifLevelIcon level={notificationLevel} />
-        </span>
+        <Icon className="size-4 shrink-0" />
         <span className="truncate flex-1">
           {buzzDm
             ? <BuzzDmName members={dmDetails?.members ?? []} selfPubkey={user?.pubkey} />
