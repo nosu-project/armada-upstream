@@ -266,11 +266,11 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
       </Button>
 
       <div className="relative h-full overflow-y-auto">
-        {/* No column cap: the vessel is the width the viewer gave it, and a
-            profile capped at `max-w-4xl` inside a full-width dialog reads as
-            the dialog having failed to stretch. The sidebar grid below is
-            what absorbs the extra width. */}
-        <div className="w-full px-3 py-3 md:px-6 md:py-6">
+        {/* The panel fills the pane, the content doesn't: a bio and an About
+            card stretched across a wide monitor is a line length nobody
+            reads. Capped and centred, so the width the panel gained becomes
+            margin rather than measure. */}
+        <div className="mx-auto w-full max-w-4xl px-3 py-3 md:px-6 md:py-6">
           {/* Header card: banner, avatar, identity, actions. */}
           <section className={cn("clip-corner-lg overflow-hidden border border-border", card)}>
             <div className="h-32 md:h-44 bg-secondary relative">
