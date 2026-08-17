@@ -1,4 +1,4 @@
-import { AtSign, Check, Copy, Flag, MessageSquare, MoreHorizontal, Music, UserCheck, UserMinus, UserX } from "lucide-react";
+import { AtSign, Check, Copy, Flag, Globe, MessageSquare, MoreHorizontal, Music, UserCheck, UserMinus, UserX } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -19,6 +19,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useAuthor } from "@/hooks/useAuthor";
 import { useChatScope } from "@/hooks/useChatScope";
 import { useMuteToggle } from "@/hooks/useMuteList";
+import { useNsite } from "@/hooks/useNsite";
 import { useMemberRoles } from "@/hooks/useMemberRoles";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useFollowToggle } from "@/hooks/useFollowToggle";
@@ -94,6 +95,12 @@ function ProfilePreviewBody({
 
   const shortNpub = npub ? `${npub.slice(0, 12)}…${npub.slice(-6)}` : "";
   const dittoProfileHref = dittoProfileUrl(pubkey);
+  const nsite = useNsite(pubkey).data;
+
+  const viewProfile = () => {
+    onAction?.();
+    navigate(`/u/${npub ?? pubkey}`);
+  };
 
   return (
     <>
@@ -307,25 +314,42 @@ function ProfilePreviewBody({
             overflow menu), and styled like the Mention button. */}
         <FollowButton pubkey={pubkey} className="mt-2 w-full h-8" />
 
-        {/* View this person on ditto.pub — the fuller social view. */}
-        {dittoProfileHref && (
-          <Button
-            size="sm"
-            className="mt-2 w-full clip-corner-lg h-8"
-            asChild
-          >
-            <a
-              href={dittoProfileHref}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={() => onAction?.()}
-              title="View on Ditto"
-            >
-              <DittoIcon className="size-3.5 mr-1.5" />
-              View on Ditto
-            </a>
+        {/* The full profile view, with the two off-ramps beside it: this
+            person on ditto.pub (the fuller social view) and their nsite,
+            when they've published one. */}
+        <div className="mt-2 flex items-center gap-2">
+          <Button size="sm" className="flex-1 clip-corner-lg h-8" onClick={viewProfile}>
+            View profile
           </Button>
-        )}
+          {dittoProfileHref && (
+            <Button size="icon" variant="secondary" className="size-8 clip-corner-lg shrink-0" asChild>
+              <a
+                href={dittoProfileHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => onAction?.()}
+                title="View on Ditto"
+                aria-label="View on Ditto"
+              >
+                <DittoIcon className="size-3.5" />
+              </a>
+            </Button>
+          )}
+          {nsite && (
+            <Button size="icon" variant="secondary" className="size-8 clip-corner-lg shrink-0" asChild>
+              <a
+                href={nsite.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => onAction?.()}
+                title={nsite.title ?? "View website"}
+                aria-label="View website"
+              >
+                <Globe className="size-3.5" />
+              </a>
+            </Button>
+          )}
+        </div>
       </div>
     </>
   );

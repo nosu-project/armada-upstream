@@ -1,4 +1,4 @@
-import { AtSign, Bell, BellOff, CheckCheck, ChevronLeft, ChevronRight, Flag, Headphones, Inbox, Loader2, Lock, MessageSquare, MoreVertical, PanelLeft, PanelLeftDashed, PenSquare, Phone, Pin, PinOff, Plus, Search, ShieldCheck, Sparkles, Timer, UserCheck, Users, UserX, X } from "lucide-react";
+import { AtSign, Bell, BellOff, CheckCheck, ChevronLeft, ChevronRight, Flag, Headphones, Inbox, Loader2, Lock, MessageSquare, MoreVertical, PanelLeft, PanelLeftDashed, PenSquare, Phone, Pin, PinOff, Plus, Search, ShieldCheck, Sparkles, Timer, User, UserCheck, Users, UserX, X } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type UIEvent } from "react";
 import { useLocation, useNavigate, useParams, Navigate } from "react-router-dom";
@@ -1124,6 +1124,15 @@ function Conversation({
                   </DropdownMenuRadioGroup>
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
+            )}
+            {/* Both profile views of the peer: the in-app one, and the fuller
+                social view on ditto.pub. Neither exists for a group — there is
+                no single person to show. */}
+            {!group && (
+              <DropdownMenuItem className="px-3 py-2" onClick={() => navigate(`/u/${peer}`)}>
+                <User className="size-4" />
+                View profile
+              </DropdownMenuItem>
             )}
             {dittoProfileHref && (
               <DropdownMenuItem className="px-3 py-2" asChild>

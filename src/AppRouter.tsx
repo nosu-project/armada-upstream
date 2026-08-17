@@ -53,6 +53,7 @@ const MeshPage = lazy(lazyWithReload(() => import("@/pages/MeshPage")));
 const ChangelogPage = lazy(lazyWithReload(() => import("@/pages/ChangelogPage").then((m) => ({ default: m.ChangelogPage }))));
 const NotFound = lazy(lazyWithReload(() => import("@/pages/NotFound").then((m) => ({ default: m.NotFound }))));
 const PrivacyPolicyPage = lazy(lazyWithReload(() => import("@/pages/PrivacyPolicyPage").then((m) => ({ default: m.PrivacyPolicyPage }))));
+const ProfilePage = lazy(lazyWithReload(() => import("@/pages/ProfilePage").then((m) => ({ default: m.ProfilePage }))));
 const ProjectsPage = lazy(lazyWithReload(() => import("@/pages/ProjectsPage").then((m) => ({ default: m.ProjectsPage }))));
 const RemoteLoginSuccessPage = lazy(lazyWithReload(() => import("@/pages/RemoteLoginSuccessPage").then((m) => ({ default: m.RemoteLoginSuccessPage }))));
 const ServerPage = lazy(lazyWithReload(() => import("@/pages/ServerPage").then((m) => ({ default: m.ServerPage }))));
@@ -398,6 +399,10 @@ export function AppRouter() {
             <Route path="/dms" element={<LegacyDmRedirect />} />
             <Route path="/dms/:peer" element={<LegacyDmRedirect />} />
             <Route path="/settings" element={<RequireAuth><SettingsPage /></RequireAuth>} />
+            {/* A person's full profile view. Distinct from `/:user` below,
+                which is the public DM landing/redirect; the static `/u`
+                segment outranks that dynamic route. Public data — no auth. */}
+            <Route path="/u/:id" element={<ProfilePage />} />
             {/* A person's public chat link: `/<npub>`, `/<name@domain>` or
                 `/<domain>`. Declared last for readability only — React Router
                 ranks every static segment above a dynamic one regardless of
