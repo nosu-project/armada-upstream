@@ -4,6 +4,22 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.53.1] - 2026-08-17
+
+Videos in chat get a real player — custom controls, a download button, and a save/share menu — and cached images and video thumbnails now appear instantly instead of flashing a placeholder for a frame. Links you send and links in the messages you read are cleaned of tracking parameters. A channel with muted or mentions-only notifications now reads as a dimmed row rather than a corner badge, and long-press on touch no longer misfires the action menu while you swipe to reveal a pane.
+
+### Added
+- A full video player in chat, with custom controls, a download button, and a save/share menu
+- Tracking parameters (utm_*, fbclid, and the like) are stripped from links you send and from links in the messages you view
+
+### Changed
+- A channel with muted or mentions-only notifications now shows as a dimmed row instead of a corner badge
+
+### Fixed
+- Cached images and video thumbnails paint on the first frame instead of briefly showing a placeholder
+- Long-press no longer opens the message action menu mid-swipe when you drag to reveal a pane on touch
+- Per-peer direct-message settings from different devices now merge instead of one device overwriting the other's
+
 ## [0.53.0] - 2026-08-16
 
 Armada gains screen sharing you can tune — pick the resolution, frame rate, bitrate, and codec, watch live sender and viewer diagnostics, and go true fullscreen. Voice now belongs to the community: a community can host its own voice servers, chosen when you create it or later in its settings, and everyone's calls resolve to the same place. Incoming direct-message calls ring with a full-screen overlay, and on Android you can answer or decline from the notification even with the app closed. Discover shows how active each community is, communities gain a right-click "Mark as read", and pressing Up in an empty composer edits your last message.
