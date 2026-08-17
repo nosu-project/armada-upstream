@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
+import { useVoiceActivity } from "@/hooks/useVoiceActivity";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useFollowList } from "@/hooks/useFollowList";
@@ -77,7 +78,8 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
   const { config } = useAppContext();
   const { relays: publishedRelays } = useDmRelayList();
   const { data: followData } = useFollowList();
-  const { activeCall, joinDmCall, leaveCall, voiceRoomPubkeys } = useCall();
+  const { activeCall, joinDmCall, leaveCall } = useCall();
+  const { voiceRoomPubkeys } = useVoiceActivity();
   const { toast } = useToast();
   const location = useLocation();
   const navigate = useNavigate();

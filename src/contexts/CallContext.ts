@@ -162,45 +162,17 @@ export interface CallContextType {
    * has resolved its name yet, which the notification renders generically.
    */
   registerCallSummary: (summary: CallSummary | null) => void;
-  /**
-   * Pubkeys currently speaking in the ACTIVE call (resolved from LiveKit
-   * identities; unverified Concord identities are excluded). Lets UI outside
-   * the LiveKit room — e.g. the sidebar's nested voice roster — show live
-   * voice activity. Empty when not in a call.
-   */
-  speakingPubkeys: ReadonlySet<string>;
+  // The live speaker / muted / raised-hand / roster VALUES are deliberately
+  // NOT here — they moved to `VoiceActivityContext` (read with
+  // `useVoiceActivity()`), because they change several times a second during a
+  // call and this context's other ~22 fields do not. Only the setters remain,
+  // so the connected room can REPORT without subscribing to its own reports.
   /** Internal: the connected room reports its live speaker set here. */
   setSpeakingPubkeys: (pubkeys: Set<string>) => void;
-  /**
-   * Pubkeys currently muted (microphone disabled) in the ACTIVE call (resolved
-   * from LiveKit identities; unverified Concord identities are excluded). Lets
-   * UI outside the LiveKit room — e.g. the sidebar's nested voice roster — show
-   * who is muted. Empty when not in a call.
-   */
-  mutedPubkeys: ReadonlySet<string>;
   /** Internal: the connected room reports its live muted set here. */
   setMutedPubkeys: (pubkeys: Set<string>) => void;
-  /**
-   * Pubkeys with a raised hand in the ACTIVE call (an Armada client feature,
-   * Concord calls only — see CallSignalsContext). Surfaced here too, alongside
-   * muted/speaking, so UI outside the LiveKit room — the sidebar's nested voice
-   * roster — can show who has their hand up. Empty when not in a Concord call.
-   */
-  raisedHands: ReadonlySet<string>;
   /** Internal: the connected Concord room reports its raised-hand set here. */
   setRaisedHands: (pubkeys: Set<string>) => void;
-  /**
-   * The ACTIVE call's live roster: every participant currently in the
-   * connected LiveKit room (local + remote), resolved to pubkeys (deduped
-   * across multiple sessions; unverified Concord identities excluded). Null
-   * while not connected to a call (or before the first report).
-   *
-   * While connected, this is the AUTHORITATIVE occupancy for the active room —
-   * prefer it over relay presence events (kind 39004) or presence heartbeats,
-   * which lag and desync (missed webhooks, dropped subscriptions, relay
-   * restarts). The SFU's own participant list can't drift: it IS the call.
-   */
-  voiceRoomPubkeys: readonly string[] | null;
   /** Internal: the connected room reports its live participant roster here. */
   setVoiceRoomPubkeys: (pubkeys: readonly string[] | null) => void;
 }

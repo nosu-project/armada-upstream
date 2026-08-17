@@ -93,6 +93,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { usePerfMilestone } from "@/hooks/usePerfMilestone";
 import { useActiveRoom } from "@/hooks/useActiveRoom";
 import { useCall } from "@/hooks/useCall";
+import { useVoiceActivity } from "@/hooks/useVoiceActivity";
 import { useChannelNavValue } from "@/hooks/useChannelNav";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useIsTouch } from "@/hooks/useIsMobile";
@@ -547,7 +548,7 @@ const ChannelRow = memo(function ChannelRow({
   // broker is resolved ahead of the click so joining a call is instant.
   const fold = useVoicePresence(community, channel);
   const { data: broker } = useVoiceBroker(channel, avBrokers);
-  const { voiceRoomPubkeys } = useCall();
+  const { voiceRoomPubkeys } = useVoiceActivity();
   const { isConcordChannelMuted } = useMutes();
   const { concordChannelLevel, setLevel: setNotifLevel } = useNotifLevels();
   const notificationLevel = community
@@ -1826,7 +1827,8 @@ export function ConcordPage() {
   // the join button. No presence subscription here — the broker is resolved
   // from config alone, and the channel row that renders the call's roster
   // subscribes for itself.
-  const { joinConcordCall, activeCall, speakingPubkeys, mutedPubkeys } = useCall();
+  const { joinConcordCall, activeCall } = useCall();
+  const { speakingPubkeys, mutedPubkeys } = useVoiceActivity();
   // The community's own brokers (CORD-02 §6), read off the fold this page
   // already holds rather than subscribed to again in every channel row.
   const avBrokers = useMemo(() => communityAvBrokers(folded?.metadata), [folded?.metadata]);

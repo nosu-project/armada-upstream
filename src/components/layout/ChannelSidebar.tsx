@@ -25,6 +25,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCall } from "@/hooks/useCall";
+import { useVoiceActivity } from "@/hooks/useVoiceActivity";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { useGroup } from "@/hooks/useGroup";
 import { useLivekitParticipants, useRelayLivekitSupport } from "@/hooks/useLivekit";
@@ -57,7 +58,8 @@ function ChannelLink({
   dimmed?: boolean;
 }) {
   const { user } = useCurrentUser();
-  const { activeCall, speakingPubkeys, mutedPubkeys, voiceRoomPubkeys } = useCall();
+  const { activeCall } = useCall();
+  const { speakingPubkeys, mutedPubkeys, voiceRoomPubkeys } = useVoiceActivity();
   const { markRead } = useReadState();
   const { channelLevel, setLevel } = useNotifLevels();
   const notificationLevel = channelLevel(group.relay, group.id);

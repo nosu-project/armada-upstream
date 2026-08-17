@@ -11,6 +11,7 @@ import {
   type ConcordVoiceContext,
   type DmVoiceContext,
 } from "@/contexts/CallContext";
+import { VoiceActivityContext } from "@/contexts/VoiceActivityContext";
 import { cn } from "@/lib/utils";
 
 /**
@@ -303,38 +304,71 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
   const showFloating = Boolean(user && activeCall) && !hasNormalSlot && !floatingHidden && !exiting;
   const stageFloating = showFloating && floatingSlot !== null;
 
+  // Memoized: an object literal here re-rendered every `useCall()` consumer on
+  // any CallProvider render, and this provider holds the fastest-moving state
+  // in the app. The four live sets are no longer part of it (see
+  // `VoiceActivityContext`), so what remains changes at human speed.
+  const callValue = useMemo(
+    () => ({
+      activeCall,
+      joinCall,
+      joinDmCall,
+      joinConcordCall,
+      leaveCall,
+      registerCallBarSlot,
+      registerCallStageSlot,
+      stageOpen,
+      toggleStage,
+      setStageOpen,
+      stageFloating,
+      floatingVariant,
+      callBarHeight,
+      setCallBarHeight,
+      floatingHidden,
+      setFloatingHidden,
+      focusActiveCall,
+      registerFocusActiveCall,
+      registerCallSummary,
+      setSpeakingPubkeys,
+      setMutedPubkeys,
+      setRaisedHands,
+      setVoiceRoomPubkeys,
+    }),
+    [
+      activeCall,
+      joinCall,
+      joinDmCall,
+      joinConcordCall,
+      leaveCall,
+      registerCallBarSlot,
+      registerCallStageSlot,
+      stageOpen,
+      toggleStage,
+      stageFloating,
+      floatingVariant,
+      callBarHeight,
+      setCallBarHeight,
+      floatingHidden,
+      focusActiveCall,
+      registerFocusActiveCall,
+      registerCallSummary,
+      setSpeakingPubkeys,
+      setMutedPubkeys,
+      setRaisedHands,
+      setVoiceRoomPubkeys,
+    ],
+  );
+
+  // The per-frame half. Changes on every ActiveSpeakersChanged / track event,
+  // and reaches only the components that actually render live voice activity.
+  const voiceActivityValue = useMemo(
+    () => ({ speakingPubkeys, mutedPubkeys, raisedHands, voiceRoomPubkeys }),
+    [speakingPubkeys, mutedPubkeys, raisedHands, voiceRoomPubkeys],
+  );
+
   return (
-    <CallContext.Provider
-      value={{
-        activeCall,
-        joinCall,
-        joinDmCall,
-        joinConcordCall,
-        leaveCall,
-        registerCallBarSlot,
-        registerCallStageSlot,
-        stageOpen,
-        toggleStage,
-        setStageOpen,
-        stageFloating,
-        floatingVariant,
-        callBarHeight,
-        setCallBarHeight,
-        floatingHidden,
-        setFloatingHidden,
-        focusActiveCall,
-        registerFocusActiveCall,
-        registerCallSummary,
-        speakingPubkeys,
-        setSpeakingPubkeys,
-        mutedPubkeys,
-        setMutedPubkeys,
-        raisedHands,
-        setRaisedHands,
-        voiceRoomPubkeys,
-        setVoiceRoomPubkeys,
-      }}
-    >
+    <CallContext.Provider value={callValue}>
+      <VoiceActivityContext.Provider value={voiceActivityValue}>
       <div
         ref={shellRef}
         className={cn(
@@ -397,6 +431,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
           </>
         )}
       </div>
+      </VoiceActivityContext.Provider>
     </CallContext.Provider>
   );
 }

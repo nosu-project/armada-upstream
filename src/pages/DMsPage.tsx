@@ -62,6 +62,7 @@ import {
 import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
+import { useVoiceActivity } from "@/hooks/useVoiceActivity";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMuteToggle, useMuteUser } from "@/hooks/useMuteList";
 import { useActiveRoom } from "@/hooks/useActiveRoom";
@@ -652,7 +653,8 @@ function Conversation({
   const { markRead } = useReadState();
   const { dmLevel, setLevel: setNotifLevel } = useNotifLevels();
   const { toast } = useToast();
-  const { activeCall, voiceRoomPubkeys } = useCall();
+  const { activeCall } = useCall();
+  const { voiceRoomPubkeys } = useVoiceActivity();
   const muteUser = useMuteUser();
   const mute = useMuteToggle(peer);
   // Legacy NIP-04 has no group form at all, so the encryption choice — and the

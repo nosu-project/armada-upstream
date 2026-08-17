@@ -50,6 +50,7 @@ import {
 } from "@/components/VoiceUserContextMenu";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
+import { useVoiceActivity } from "@/hooks/useVoiceActivity";
 import { useScreenShareVolume, useUserVolume } from "@/hooks/useUserVolume";
 import { useCallSignals } from "@/contexts/CallSignalsContext";
 import type { VoiceReactionEntry } from "@/concord/lib/voice";
@@ -386,7 +387,7 @@ function BlurredAvatarBackdrop({ picture }: { picture?: string }) {
  * raised-hand set is surfaced on the app-level call context by the Concord room.
  */
 function RaisedHandBadge({ pubkey }: { pubkey: string }) {
-  const { raisedHands } = useCall();
+  const { raisedHands } = useVoiceActivity();
   if (!raisedHands.has(pubkey)) return null;
   return (
     <div
