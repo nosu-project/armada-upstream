@@ -46,7 +46,6 @@ needs no Armada-specific server at all: any NIP-29 relay serves it.
 | `electron/`  | Electron desktop shell (loads the bundled web build; Linux/Windows/macOS installers built in CI) |
 | `docs/`      | Design notes too long for this file — currently `settings-documents.md` (the NIP-78 settings split) |
 | `scripts/`   | Repo tooling, incl. two Concord-aware moderation-UX harnesses that mirror the same CORD-01/02/05 derivations: `scripts/spambot.mjs` (WRITES — chat spam with flood-fold evasion, plus kind-3313 direct-invite spam via `--invite-spam`) and `scripts/dump-community.mjs` (READS — resolves an invite and pages the decrypted Chat Plane out of the relays in `OpenedChat` shape, for feeding `floodCluster.ts`); see each file's header comment |
-| `Dockerfile` + `nginx.conf` | nginx-served static build for web hosting        |
 
 ## Build / test
 
@@ -54,157 +53,6 @@ needs no Armada-specific server at all: any NIP-29 relay serves it.
 run this before committing changes.
 
 `npm run dev` serves at http://localhost:8080.
-
-## CI: ngit-ci (primary) and GitLab (mirror)
-
-The repository is a Nostr Git repo; CI runs on **ngit-ci** — a self-hosted,
-Nostr-native coordinator that watches the repo announcement and executes
-workflows in `.ngit/act/workflows/` with [`act`](https://github.com/nektos/act)
-(GitHub Actions-compatible syntax, one Linux container per job). Results and
-build artifacts are published to Nostr and shown on gitworkshop.dev against the
-commit/PR.
-
-| Workflow | Trigger | What |
-|----------|---------|------|
-| `test.yml` | push (any branch) + PR | `npm run test` (tsc + eslint + vitest + build), both Swift suites (`swift test --package-path ios/{ArmadaDB,ArmadaNotify}`), and `npm audit --audit-level=high` |
-| `release.yml` | tag `v*` | signed Android APK + AAB, published as run artifacts and the APK to `armada.buzz/downloads/`, then Zapstore publish, then Google Play publish (draft release while the app is unpublished in Play Console; skips Play if the service-account secret isn't provisioned) |
-| `desktop.yml` | tag `v*` | Electron Linux (AppImage + deb), Windows (NSIS + portable) and macOS (ad-hoc signed .app zips, cross-built); published as run artifacts and rsynced to `armada.buzz/downloads/` |
-| `deploy-nsite.yml` | push to `main` + tag `v*` | build + `nsyte deploy` of the client as the named nsite `armada` (NIP-5A kind 35128) onto relays + Blossom; a tag additionally publishes an immutable kind-5128 manifest snapshot titled with the tag |
-
-Notes specific to ngit-ci (vs the old GitLab pipeline):
-
-- **No pipeline counter.** Android `versionCode` is derived from the semver tag
-  as `major*1_000_000 + minor*1_000 + patch` (e.g. `v0.31.1` → `31001`).
-  GitLab used `$CI_PIPELINE_IID` (last GitLab release v0.30.1 was code 402); the
-  first ngit-ci releases used `10000 + git rev-list --count HEAD`, but ngit-ci's
-  runner shallow-fetches only the tagged commit so the count was always 1 —
-  every release got the same code and Zapstore silently dropped duplicates. The
-  tag-derived scheme is deterministic, monotonic with semver, and independent of
-  checkout depth. `versionName` is still the tag minus `v`.
-- **The APK and the AAB are built by two separate gradle invocations, and only
-  the APK is ABI-trimmed.** `release.yml` runs `bundleRelease` first, then
-  `assembleRelease -PapkAbis=armeabi-v7a,arm64-v8a`. The AAB keeps all four
-  ABIs because Play splits per device; the APK is universal, so its user
-  downloads every ABI it contains — and `libsecp256k1-jni.so` +
-  `libsqliteJni.so` are ~2.5 MB per ABI, which is what took the download from
-  7 MB (v0.17, before either library) to 18.6 MB (v0.50). Dropping the x86 pair
-  from the download cost 5 MB of nothing: they are emulators and a few
-  Chromebooks, neither of which sideloads. Release builds are also **minified**
-  (R8, `minifyEnabled true`) — 5.6 MB of dex to 1.3 MB. `proguard-rules.pro`
-  documents what the reflective entry points need to survive that; the thing to
-  re-check after adding a dependency or a plugin is that they still do, because
-  R8 breakage is a runtime failure in the release build ONLY, which no debug
-  install and no unit test will show you. `shrinkResources` stays off (~10 KB
-  on a WebView app, against real risk).
-- **Secrets are operator-provisioned and maintainer-gated.** `${{ secrets.* }}`
-  is populated only for secrets the ngit-ci operator has provisioned for this
-  repo's `#ALIAS`, and only on maintainer-authored triggers (a maintainer's
-  push, or a maintainer's PR). Third-party PRs run with empty secrets. There is
-  no `GITHUB_TOKEN`. Required secrets: `ANDROID_KEYSTORE_BASE64`,
-  `KEYSTORE_PASSWORD`, `KEY_PASSWORD`, `ZAPSTORE_BUNKER_URL`,
-  `ZAPSTORE_CLIENT_KEY`, and for web deploy `DEPLOY_SSH_KEY_BASE64`
-  (+ optional `DEPLOY_SSH_CONFIG_BASE64`, `DEPLOY_TARGET`).
-  Optional: `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` (base64 of the Play Console
-  service-account JSON for `buzz.armada.app`; unprovisioned skips the Play
-  publish); `KLIPY_API_KEY` (switches GIF search from the keyless GIFverse
-  default to KLIPY; unprovisioned keeps GIFverse).
-- **No macOS runner, which is not the same as no macOS build.** act runs Linux
-  containers only, and ngit-ci leaves a workflow unclaimed if its `runs-on`
-  label isn't one the coordinator serves — so nothing here ever executes on a
-  Mac. The desktop app is shipped for macOS anyway, cross-built:
-  `electron/scripts/package-mac.mjs` assembles the `.app` from the prebuilt
-  darwin Electron plus the asar electron-builder already staged, and
-  `rcodesign` ad-hoc signs it so an arm64 Mac will exec it at all. What genuinely
-  needs Apple is a Developer ID signature + notarization (so a first launch
-  still needs the user's Open Anyway), and `.dmg` packaging — hence `.zip`.
-  Reach for this shape before assuming a target is out of reach: the blocker is
-  usually Apple's *signing* tooling, not the bundle format.
-- **act images are minimal.** They are not full GitHub-hosted runners: use setup
-  actions (`actions/setup-node`, `setup-java`, `android-actions/setup-android`)
-  and install anything else explicitly (e.g. `rsync`, `wine`).
-- **`ubuntu-latest` runs in a pre-baked `armada-ci` image.** The coordinator
-  maps the label to it via `NGIT_CI_ACT_PLATFORMS`; the Dockerfile lives in
-  `.ngit/ci-image/` and pre-installs the JDK/node toolcaches (setup-* actions
-  no-op),   the Android SDK, system ruby+fastlane, the zsp binary, wine, the Swift
-  toolchain (for `ios/ArmadaDB`'s suite), and
-  warm `~/.gradle` (incl. build cache) / `~/.npm` /
-  `~/.cache/electron{,-builder}` caches for this repo. Cold runs on the stock
-  act image re-downloaded ~700 MB of toolchain+deps and blew the coordinator's
-  30-min default job timeout (`NGIT_CI_JOB_TIMEOUT_SECS`, raised to 3600
-  server-side). Rebuild with `.ngit/ci-image/build.sh` on the coordinator host
-  when `package-lock.json`, `electron/package-lock.json`, the android/gradle
-  deps, or the Swift pin change; the setup-* actions self-heal version drift in
-  between — but there is NO setup-swift step, so `swift test` fails outright on
-  an image that predates it.
-- **act mounts the persistent `act-toolcache` volume over
-  `/opt/hostedtoolcache`** in every job container, seeded from the image only
-  while empty. Toolcache content added by an image rebuild is invisible to
-  jobs until the volume is removed (`build.sh` does this) — and anything a
-  workflow invokes directly must live OUTSIDE `/opt/hostedtoolcache` (this is
-  how `fastlane: command not found` broke two releases; fastlane is now the
-  system-ruby gem with binstubs in `/usr/local/bin`).
-- **Workflow runs are parallel; jobs within one workflow are not.** The
-  coordinator runs up to `NGIT_CI_MAX_CONCURRENT_JOBS` (currently 2) workflow
-  runs at once, each in its own `/data/work/<run_id>/repo` checkout — but all
-  jobs of ONE workflow share that single bind-mounted checkout, so
-  multi-job workflows race on the working tree (why desktop.yml is one job
-  building all three platforms). Job containers are capped by
-  `NGIT_CI_ACT_CONTAINER_OPTIONS` (currently `--cpus=8 --memory=10g`).
-
-## The `/downloads` page and what CI publishes under it
-
-`src/pages/DownloadsPage.tsx` links **stable, unversioned filenames**
-(`Armada.AppImage`, `Armada-Setup.exe`, `Armada.apk`, …) that `desktop.yml` and
-`release.yml` re-copy beside the versioned archive on every tag. That split is
-the point: the page is a compile-time constant with no version to discover, and
-old releases still keep their own `Armada-vX.Y.Z.*` URLs. `src/lib/downloads.ts`
-is the one table of those names, and its test READS THE TWO WORKFLOW FILES and
-asserts every filename and manifest key it links is published by one of them —
-so renaming a file in CI without the client fails the suite rather than 404ing
-in production on the next tag.
-
-**armada.buzz is served by Caddy, not by this repo's `nginx.conf`.** The hosted
-config lives on the venus VPS at `/etc/caddy/sites-available/armada.buzz` and is
-not in version control; `nginx.conf` covers only the Dockerfile self-host path,
-where the rules differ enough to be worth stating separately. CI does not
-deploy the SPA there — only the installers, rsynced by `desktop.yml` and
-`release.yml`. Traps:
-
-- **A missing installer must 404, and by default it does not.** Caddy's
-  catch-all ends in `try_files {path} /index.html`, so a pruned, misspelled or
-  not-yet-published file under `/downloads/` answered **200 with the 12 KB SPA
-  shell** — a browser saving `Armada.AppImage` that is HTML. The site config
-  now has a `handle /downloads/*` with a bare `file_server` ahead of the
-  catch-all so those paths 404 properly. `handle` blocks are mutually
-  exclusive, which is the sharp edge: the catch-all's `Cache-Control: no-cache`
-  does NOT reach inside, and had to be restated there or the SPA shell at
-  `downloads/index.html` would be heuristically cached, pinning chunk hashes a
-  later deploy no longer has. Versioned archives get `immutable` instead, being
-  content-addressed by filename.
-- **The directory does NOT shadow the route on Caddy, but it does on nginx.**
-  Caddy's `try_files` skips directories, so `/downloads` renders the SPA either
-  way. nginx's `try_files $uri $uri/ /index.html` matches `$uri/` against the
-  real directory and stops — with no index and autoindex off, a **403** on
-  reload or a shared link. `nginx.conf` answers that with an exact-match
-  `location = /downloads/` falling back to `/index.html`, so a self-host needs
-  no `downloads/index.html` at all. armada.buzz has one, which is what Caddy's
-  `handle /downloads/*` serves for a bare `/downloads/`.
-- **`.AppImage` content type differs by server.** Caddy knows it
-  (`application/vnd.appimage`); nginx's `mime.types` does not, so it inherits
-  `default_type` — `text/plain` by default, i.e. a browser rendering a 100 MB
-  binary as text. `nginx.conf`'s `location /downloads/` sets
-  `application/octet-stream`, and the page's anchors carry `download` as the
-  same-origin belt-and-braces.
-- **Each workflow writes its OWN manifest** (`latest-desktop.json`,
-  `latest-android.json`). Both fire on the same tag and run concurrently, so one
-  shared `latest.json` would be a lost update — and worse, whichever wrote last
-  would claim its version for a platform whose build had failed. The manifests
-  carry only a version label and file sizes; the page treats them as decoration
-  so a failed fetch never costs a working button.
-
-The rsyncs are additive (**no `--delete`**, on both workflows) — that is what
-lets the two platforms' installers, the page's index and the site build coexist
-in one jail root. Don't add one.
 
 ## How the client reaches backends (no build-time coupling)
 
@@ -251,8 +99,7 @@ there is **no CocoaPods** — a Mac with Xcode and Node is the whole toolchain.
 `Package.resolved` is committed to pin `capacitor-swift-pm` and transitive
 plugin deps.
 
-Build (on a Mac; there is no iOS CI — act runs Linux containers only, same
-reason the macOS `.dmg` stays on the GitLab mirror):
+Build (on a Mac; iOS is built manually — there is no automated build for it):
 
 ```sh
 npm ci && npm run build && npx cap sync ios
@@ -468,8 +315,9 @@ Android intent filter does). No app code is involved: `AppDelegate` already
 proxies `continue userActivity` to Capacitor, and `deepLinkUrl.ts` /
 `coldLaunchDeepLink.ts` are platform-agnostic. Two things this can break on —
 the AASA must be served with `Content-Type: application/json` and **no
-redirect** (it is extensionless, so nginx needs the explicit `location =`
-block in `nginx.conf`), and its `appIDs` must be `<TEAMID>.buzz.armada.app`.
+redirect** (it is extensionless, so servers that key content type off the
+extension need an explicit rule for it), and its `appIDs` must be
+`<TEAMID>.buzz.armada.app`.
 There is still no `CFBundleURLTypes` entry, so the `armada://open<path>` scheme
 does not resolve — deliberately: per `deepLinkUrl.ts` that scheme is emitted
 ONLY by the Android notification service's PendingIntents, and iOS push taps
@@ -782,8 +630,8 @@ Things to know before touching it:
 - Always commit after finishing a set of changes (don't wait to be asked); do
   not push unless asked. Verify the client builds (`npm run test`) before
   committing.
-- **Never push to the `gitlab` remote.** When pushing (or releasing), push only
-  to `origin`. The `gitlab` mirror is maintainer-managed manually.
+- **Push only to `origin`**, and only when asked. Any other remote configured
+  locally is maintainer-managed; never push or release to one.
 - Touch ergonomics: interactive elements target ≥44px on touch devices via the
   `touch:` Tailwind variant (`@media (hover: none) and (pointer: coarse)`) —
   e.g. `size-9 touch:size-11`. Use `touch:` (real touch), not width
