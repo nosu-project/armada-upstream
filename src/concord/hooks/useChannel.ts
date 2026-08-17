@@ -106,10 +106,26 @@ export function upsertOpenedChat(old: OpenedChat[] | undefined, incoming: Opened
 /** Local shorthand. */
 const upsert = upsertOpenedChat;
 
-/** The moderation context resolved from the community's control fold. */
-export function useChatModeration(community: Community | undefined): ChatModeration {
-  const { data: folded } = useControlFold(community);
-  const { data: dissolvedAtMs } = useDissolved(community);
+/**
+ * The moderation context resolved from the community's control fold.
+ *
+ * `active` is the same network gate `useControlFold`/`useDissolved` take, and
+ * it must be threaded rather than left at the default by any AMBIENT caller —
+ * a rail button, a badge counter — that resolves moderation for a community
+ * the reader has not opened. The fold serves `banned` from its persisted
+ * snapshot either way; `active` only decides whether this mount ALSO issues
+ * the on-open control sweep (one REQ per relay) and activates `useDissolved`'s
+ * 5-minute probe. A single `active` observer lights the shared query key for
+ * every passive one, so one ambient caller defaults the whole rail back into a
+ * per-community fan-out on page load (see the regression test in
+ * `useConcordUnread.network.test.tsx`).
+ */
+export function useChatModeration(
+  community: Community | undefined,
+  active = true,
+): ChatModeration {
+  const { data: folded } = useControlFold(community, active);
+  const { data: dissolvedAtMs } = useDissolved(community, active);
   return useMemo(
     () => ({
       banned: folded?.banned ?? new Set<string>(),

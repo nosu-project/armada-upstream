@@ -1103,7 +1103,10 @@ export function ConcordPage() {
     () => [...gitAttachmentsByChannel.values()].some((list) => list.some((attachment) => attachment.detachedAt === undefined)),
     [gitAttachmentsByChannel],
   );
-  const { byChannel: unreadByChannel, markRead: markChannelRead } = useConcordUnread(community, channels, communityGitActivity.byChannel);
+  // `active` — this is the OPEN community, the one mount that should resolve
+  // moderation over the network. Every other caller of this hook is an ambient
+  // rail/badge surface and leaves it passive.
+  const { byChannel: unreadByChannel, markRead: markChannelRead } = useConcordUnread(community, channels, communityGitActivity.byChannel, true);
 
   // "Mark all as read": stamp every unread channel to its newest unread
   // message (monotonic stamps, so already-read channels no-op).

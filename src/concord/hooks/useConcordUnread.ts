@@ -43,6 +43,7 @@ export function useConcordUnread(
   community: Community | undefined,
   channels: Channel[],
   gitByChannel: ReadonlyMap<string, readonly GitTimelineActivity[]> = new Map(),
+  active = false,
 ): {
   byChannel: Record<string, ConcordUnread>;
   markRead: (channelIdHex: string, timestamp: number) => void;
@@ -55,7 +56,19 @@ export function useConcordUnread(
   // This scan reads the raw store, so the Banlist has to be applied here as
   // well as in the fold — otherwise a banned author keeps lighting channel
   // badges the timeline has nothing in it to clear (CORD-04 §4).
-  const { banned } = useChatModeration(community);
+  //
+  // Passive by DEFAULT, unlike the fold hooks below it. Every caller but the
+  // open community's page is ambient — the rail's buttons, its folder mini
+  // icons, its unread probes, the desktop badge counter — and each is mounted
+  // once per joined community on every page of the app. Resolving moderation
+  // actively there issues a control sweep per relay plus a 5-minute dissolved
+  // probe for every community the reader has not opened, which is exactly the
+  // fan-out the rail's own `useControlFold(community, false)` calls exist to
+  // avoid. `banned` comes off the fold's persisted snapshot regardless, so the
+  // Banlist drop is unaffected. The default is false so that a NEW ambient
+  // caller cannot reintroduce the fan-out by forgetting to pass the flag; the
+  // page opts in explicitly instead.
+  const { banned } = useChatModeration(community, active);
   const {
     readState,
     getLastRead: sharedGetLastRead,
