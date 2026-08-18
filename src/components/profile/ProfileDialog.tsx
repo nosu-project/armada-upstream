@@ -17,14 +17,12 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { DittoIcon } from "@/components/brand/DittoIcon";
 import { BotPill } from "@/components/BotPill";
 import { EmojifiedText } from "@/components/chat/CustomEmoji";
-import { ProfileSettings } from "@/components/ProfileSettings";
-import { ProfileThemeEditor } from "@/components/profile/ProfileThemeEditor";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
@@ -62,10 +60,31 @@ import { tryNaddrEncode, tryNpubEncode } from "@/lib/safeNip19";
 import { isLocalNetworkUrl, sanitizeUrl } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 import { writeClipboardText } from "@/lib/clipboard";
+import { lazyWithReload } from "@/lib/chunkReload";
 import { buildThemeVarStyle } from "@/themes";
 
 import type { CSSProperties } from "react";
 import type { ThemeBackground } from "@/lib/themeEvent";
+
+/**
+ * Both editors are reachable from exactly one profile in the world — the
+ * viewer's own — and only behind a click. Imported statically they rode along
+ * with every profile anyone opened: the whole WYSIWYG profile editor and the
+ * theme builder's Blossom upload path, fetched and parsed before the first
+ * paint of a screen that is usually somebody else's.
+ */
+const ProfileSettings = lazy(
+  lazyWithReload(() =>
+    import("@/components/ProfileSettings").then((m) => ({ default: m.ProfileSettings })),
+  ),
+);
+const ProfileThemeEditor = lazy(
+  lazyWithReload(() =>
+    import("@/components/profile/ProfileThemeEditor").then((m) => ({
+      default: m.ProfileThemeEditor,
+    })),
+  ),
+);
 
 /**
  * A person's full profile — `/<npub|nprofile|name@domain>`, opened by
@@ -160,6 +179,28 @@ function backgroundStyle(bg: ThemeBackground): CSSProperties {
 
 const compactFormat = new Intl.NumberFormat(undefined, { notation: "compact" });
 
+/**
+ * False for the first render, true from the frame after it paints.
+ *
+ * A commit is all-or-nothing, so the panel can't appear until React has
+ * rendered everything in it. This splits that in two: the identity everyone
+ * came to see (avatar, name, theme) commits on its own, and the rest — which
+ * is mostly empty boxes waiting on relays anyway — arrives a frame later.
+ *
+ * The QUERIES deliberately don't move with it. They're declared at the top of
+ * `ProfileView` and stay there, because gating a hook is gating the fetch it
+ * starts, and delaying those by a frame would trade a faster paint for slower
+ * data — the opposite of the problem.
+ */
+function useAfterPaint(): boolean {
+  const [painted, setPainted] = useState(false);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setPainted(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  return painted;
+}
+
 function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void }) {
   const navigate = useNavigate();
   const { user } = useCurrentUser();
@@ -217,6 +258,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
   const sidebarEmpty =
     badges.length === 0 && shared.length === 0 && !sharedFollowers?.count;
 
+  const painted = useAfterPaint();
   const [copied, setCopied] = useState(false);
   const [themeEditorOpen, setThemeEditorOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -513,7 +555,12 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
             </div>
           </section>
 
-          {/* Below the header: fields on the left, badges/communities beside. */}
+          {/* Below the header: fields on the left, badges/communities beside.
+              Held back one frame so the identity above commits — and paints —
+              without waiting for any of this to render. It is all below the
+              fold on a phone and mostly empty until the relays answer, so a
+              frame costs nothing here and buys the panel its first paint. */}
+          {painted && (
           <div className="mt-3 md:mt-4 grid gap-3 md:gap-4 lg:grid-cols-[1fr_18rem] items-start">
             <div className="space-y-3 md:space-y-4 min-w-0">
               {(fields.length > 0 || website || metadata?.lud16) && (
@@ -596,29 +643,37 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
               )}
             </div>
           </div>
+          )}
         </div>
       </div>
 
+      {/* Both editors are mounted only once opened, and both are lazy. They
+          are reachable from ONE profile in the world — the viewer's own,
+          behind a click — but statically imported they rode along with every
+          profile anyone opened, which put the entire WYSIWYG profile editor
+          and the theme builder's upload path in front of the first paint. */}
+      {isSelf && themeEditorOpen && (
+        <Suspense fallback={null}>
+          <ProfileThemeEditor open onOpenChange={setThemeEditorOpen} current={theme} />
+        </Suspense>
+      )}
       {isSelf && (
-        <>
-          <ProfileThemeEditor
-            open={themeEditorOpen}
-            onOpenChange={setThemeEditorOpen}
-            current={theme}
-          />
-          {/* Edit the profile right here — the same WYSIWYG editor Settings
-              hosts, in a dialog, so nothing navigates away from the page it
-              is editing. */}
-          <Dialog open={editOpen} onOpenChange={setEditOpen}>
-            <ChromeDialogContent
-              title="Edit profile"
-              className="sm:max-w-xl"
-              contentClassName="max-h-[85dvh] overflow-y-auto"
-            >
-              {editOpen && <ProfileSettings onSaved={() => setEditOpen(false)} />}
-            </ChromeDialogContent>
-          </Dialog>
-        </>
+        /* Edit the profile right here — the same WYSIWYG editor Settings
+           hosts, in a dialog, so nothing navigates away from the page it
+           is editing. */
+        <Dialog open={editOpen} onOpenChange={setEditOpen}>
+          <ChromeDialogContent
+            title="Edit profile"
+            className="sm:max-w-xl"
+            contentClassName="max-h-[85dvh] overflow-y-auto"
+          >
+            {editOpen && (
+              <Suspense fallback={<Skeleton className="h-64 w-full" />}>
+                <ProfileSettings onSaved={() => setEditOpen(false)} />
+              </Suspense>
+            )}
+          </ChromeDialogContent>
+        </Dialog>
       )}
     </div>
   );
