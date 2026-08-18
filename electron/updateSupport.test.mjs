@@ -4,9 +4,8 @@ import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
 const {
-  autoInstallAllowed,
+  configureAutoUpdater,
   hasDeveloperIdUpdateSignature,
-  hasTrustedWindowsSignature,
   supportsSelfUpdate,
 } = require("./updateSupport.js");
 
@@ -19,7 +18,7 @@ const supported = (overrides) =>
   });
 
 describe("desktop self-update ownership", () => {
-  it("enables installed Windows builds", () => {
+  it("assigns installed Windows NSIS builds an update owner", () => {
     expect(supported({ platform: "win32" })).toBe(true);
   });
 
@@ -70,33 +69,16 @@ describe("desktop self-update ownership", () => {
     expect(hasDeveloperIdUpdateSignature("Signature=adhoc\nTeamIdentifier=not set")).toBe(false);
     expect(hasDeveloperIdUpdateSignature("")).toBe(false);
   });
-
-  it("reads a Windows Authenticode verdict", () => {
-    expect(hasTrustedWindowsSignature("Valid")).toBe(true);
-    expect(hasTrustedWindowsSignature("  Valid \r\n")).toBe(true);
-    expect(hasTrustedWindowsSignature("NotSigned")).toBe(false);
-    expect(hasTrustedWindowsSignature("UnknownError")).toBe(false);
-    expect(hasTrustedWindowsSignature("HashMismatch")).toBe(false);
-    // "Valid" must be the whole verdict, not a substring of another status.
-    expect(hasTrustedWindowsSignature("NotValid")).toBe(false);
-    expect(hasTrustedWindowsSignature("")).toBe(false);
-  });
 });
 
-describe("unattended update installation", () => {
-  // An unsigned NSIS build makes electron-updater's publisherName check a
-  // no-op, so an auto-downloading, auto-installing client would be trusting
-  // nothing but TLS to the update host. Notify instead of installing.
-  it("requires a signature before arming Windows auto-install", () => {
-    expect(autoInstallAllowed({ platform: "win32", signed: true })).toBe(true);
-    expect(autoInstallAllowed({ platform: "win32", signed: false })).toBe(false);
-    expect(autoInstallAllowed({ platform: "win32" })).toBe(false);
-  });
-
-  it("leaves platforms that gate on their own signature alone", () => {
-    // macOS self-update is already refused outright unless the bundle carries
-    // a Developer ID signature, and an AppImage verifies its own sha512.
-    expect(autoInstallAllowed({ platform: "darwin", signed: false })).toBe(true);
-    expect(autoInstallAllowed({ platform: "linux", signed: false })).toBe(true);
+describe("automatic update policy", () => {
+  it("downloads and installs supported packages without a signing prerequisite", () => {
+    const updater = {};
+    configureAutoUpdater(updater);
+    expect(updater).toEqual({
+      autoDownload: true,
+      autoInstallOnAppQuit: true,
+      allowDowngrade: false,
+    });
   });
 });
