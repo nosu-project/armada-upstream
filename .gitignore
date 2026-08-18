@@ -44,3 +44,4 @@ electron/hevc-publisher/hevc-publisher
 # wasm build output
 crates/webxdc-rt/pkg*/
 crates/webxdc-rt/target/
+src/wasm/

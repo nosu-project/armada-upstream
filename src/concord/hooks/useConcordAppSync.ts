@@ -15,10 +15,20 @@ import {
   sealRumor,
   wrapSeal,
 } from "@/concord/lib/stream";
-import { queryWebxdcRumors, writeRumors } from "@/concord/lib/rumorStore";
+import { queryWebxdcPeerSignals, queryWebxdcRumors, writeRumors } from "@/concord/lib/rumorStore";
 import type { OpenedChat } from "@/concord/lib/chat";
 import type { Channel, Community } from "@/concord/lib/types";
 import { useWireScopes } from "@/wire/useWireScopes";
+
+import { realtimeTransport, type RealtimeTransport } from "@/lib/realtimeTransport";
+import {
+  base32Decode,
+  foldPeerSignals,
+  frame,
+  isTopicId,
+  peerSignalContent,
+  unframe,
+} from "@/lib/webxdcRealtime";
 
 import type { AppStateMeta, AppStateUpdate, AppSync } from "@/hooks/useWebxdcApi";
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -97,10 +107,25 @@ export function useConcordAppSync(
     },
   });
 
+  // Peer signals live on the same plane but carry no session tag, so they need
+  // their own read; the topic inside the content separates the games.
+  const peerKey = useMemo(() => ["concord", "webxdc-peers", channelIdHex] as const, [channelIdHex]);
+  const { data: peerRows } = useQuery<OpenedChat[]>({
+    queryKey: peerKey,
+    enabled: enabled && isTopicId(uuid),
+    refetchInterval: 60_000,
+    queryFn: async ({ signal }) => queryWebxdcPeerSignals(community!.idHex, channelIdHex!, { signal }),
+  });
+  const peerSignals = useMemo(
+    () => (peerRows ?? []).map((r) => ({ author: r.author, content: r.content, ms: r.ms })),
+    [peerRows],
+  );
+
   // Re-read when the wire announces new durable rumors for this channel.
   useWireScopes((scopes) => {
     if (channelIdHex && scopes.has(`c2:${channelIdHex}`)) {
       void queryClient.invalidateQueries({ queryKey });
+      void queryClient.invalidateQueries({ queryKey: peerKey });
     }
   });
 
@@ -189,8 +214,26 @@ export function useConcordAppSync(
     [uuid, publish, queryClient, queryKey],
   );
 
+  // The gossip session for this app, when the transport is available and the
+  // attachment carried a topic. Held in a ref because the send path must not
+  // re-render the app to learn the mesh came up.
+  const gossip = useRef<{ node: RealtimeTransport; topic: Uint8Array; key: Uint8Array } | undefined>(undefined);
+  const seq = useRef(0);
+
   const sendRealtime = useCallback(
     (data: Uint8Array) => {
+      const g = gossip.current;
+      if (g) {
+        seq.current += 1;
+        // Vector's frame, so its receivers can strip it and drop their own
+        // echoes exactly as they do for another Vector.
+        void g.node.send(g.topic, frame(data, seq.current, g.key)).catch(() => {
+          // A dead mesh must not silently swallow moves; the relay plane still
+          // reaches anyone who never joined gossip.
+          void publish(bytesToBase64(data), [["i", uuid], ["rt", "1"], ["alt", "Webxdc realtime"]], true);
+        });
+        return;
+      }
       void publish(bytesToBase64(data), [["i", uuid], ["rt", "1"], ["alt", "Webxdc realtime"]], true);
     },
     [uuid, publish],
@@ -230,6 +273,78 @@ export function useConcordAppSync(
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, nostr, community?.idHex, channelIdHex, currentPk, uuid, selfPubkey]);
+
+  // ── Gossip session (CORD-04 peer signals + iroh transport) ─────────────────
+
+  /**
+   * Bring up the mesh for this app, if the attachment named a topic and the
+   * transport is available.
+   *
+   * The order matters and is Vector's: join first, then advertise. Advertising
+   * an address before the topic is subscribed invites a dial that arrives for
+   * a topic gossip has not registered, and the frames it carries are dropped.
+   *
+   * The advertisement is a DURABLE 3310 on the channel plane, which is what
+   * lets someone opening the game later backfill a recent one instead of
+   * waiting for the next re-advertise.
+   */
+  useEffect(() => {
+    if (!enabled || !isTopicId(uuid) || !community || !channel || !selfPubkey) return;
+    const topic = base32Decode(uuid);
+    if (!topic || topic.length !== 32) return;
+
+    let cancelled = false;
+    let node: RealtimeTransport | undefined;
+    const dialled = new Set<string>();
+
+    void (async () => {
+      node = await realtimeTransport();
+      if (!node || cancelled) return;
+
+      const key = Uint8Array.from(node.publicKeyHex().match(/../g)!.map((h) => parseInt(h, 16)));
+      await node.join(topic, [], (bytes) => {
+        const got = unframe(bytes);
+        // Gossip echoes our own broadcasts back; the trailer is how we know.
+        if (!got || got.sender === node!.publicKeyHex()) return;
+        for (const cb of listenersRef.current) cb(got.payload);
+      });
+      if (cancelled) return;
+      gossip.current = { node, topic, key };
+      void publish(peerSignalContent(uuid, node.nodeAddrJson()), [], false);
+    })();
+
+    return () => {
+      cancelled = true;
+      const g = gossip.current;
+      gossip.current = undefined;
+      if (!g) return;
+      // Tell the room before dropping the mesh, or everyone keeps dialling a
+      // node that has gone and counts a player who left.
+      void publish(peerSignalContent(uuid), [], false);
+      g.node.leave(g.topic);
+      dialled.clear();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, uuid, community?.idHex, channel?.idHex, selfPubkey]);
+
+  /**
+   * Dial the peers the channel has advertised. Vector re-advertises, so this
+   * re-runs as signals land; `dialled` keeps a peer from being dialled twice
+   * for one session.
+   */
+  const dialledRef = useRef(new Set<string>());
+  useEffect(() => {
+    const g = gossip.current;
+    if (!g || !isTopicId(uuid)) return;
+    const peers = foldPeerSignals(peerSignals, uuid, selfPubkey);
+    for (const peer of peers) {
+      if (dialledRef.current.has(peer.addr)) continue;
+      dialledRef.current.add(peer.addr);
+      const json = new TextDecoder().decode(base32Decode(peer.addr) ?? new Uint8Array());
+      if (!json) continue;
+      void g.node.addPeer(g.topic, json).catch(() => dialledRef.current.delete(peer.addr));
+    }
+  }, [peerSignals, uuid, selfPubkey]);
 
   const onRealtime = useCallback((cb: (data: Uint8Array) => void) => {
     listenersRef.current.add(cb);

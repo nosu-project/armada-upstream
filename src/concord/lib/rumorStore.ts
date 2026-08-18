@@ -439,6 +439,27 @@ export async function queryRumorsByIds(
  * `i` are index-backed, so this is a cheap indexed read. Durable state only —
  * realtime frames ride ephemeral 21059 wraps and are never stored.
  */
+/**
+ * Every webxdc peer signal on a channel.
+ *
+ * Deliberately not filtered by app session: Vector publishes these with no
+ * session tag at all (`send_webxdc_signal` passes no extra tags), so the
+ * `#i` filter the state plane uses would never match one. The topic inside
+ * the content is what separates one game from another.
+ */
+export async function queryWebxdcPeerSignals(
+  communityIdHex: string,
+  channelIdHex: string,
+  opts?: { signal?: AbortSignal },
+): Promise<OpenedChat[]> {
+  if (!channelIdHex) return [];
+  const events = await rumorStore(communityIdHex).query(
+    [{ kinds: [KIND_WEBXDC], "#channel": [channelIdHex], limit: 500 }],
+    { signal: opts?.signal },
+  );
+  return notExpired(events).map((ev) => storedToOpenedChat(ev, channelIdHex));
+}
+
 export async function queryWebxdcRumors(
   communityIdHex: string,
   channelIdHex: string,
