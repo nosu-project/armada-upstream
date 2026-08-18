@@ -4,6 +4,12 @@ import { useEffect, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLinkPreview } from "@/hooks/useLinkPreview";
 import { extractSpotifyEmbed, extractYouTubeId } from "@/lib/linkEmbed";
+import {
+  hasNativeYouTubePlayer,
+  needsNativeYouTubePlayer,
+  openNativeYouTubeVideo,
+  openYouTubeWatchPage,
+} from "@/lib/nativeYouTube";
 import { cn } from "@/lib/utils";
 
 interface LinkEmbedProps {
@@ -206,10 +212,36 @@ function findThumbnail(videoId: string): Promise<string | null> {
 export function YouTubeEmbed({ videoId, className }: { videoId: string; className?: string }) {
   const [activated, setActivated] = useState(false);
   const [resolvedThumb, setResolvedThumb] = useState<string | null>(null);
+  const [nativeOpenFailed, setNativeOpenFailed] = useState(false);
+  const nativeIos = needsNativeYouTubePlayer();
+
+  const play = () => {
+    if (!nativeIos) {
+      setActivated(true);
+      return;
+    }
+    if (nativeOpenFailed) {
+      openYouTubeWatchPage(videoId);
+      return;
+    }
+
+    // WKWebView cannot attach an HTTP Referer to this nested iframe when the
+    // parent is capacitor://localhost. Use the native referrer-bearing player;
+    // an older binary without that plugin falls back to the ordinary watch
+    // page instead of knowingly rendering YouTube error 153.
+    if (!hasNativeYouTubePlayer()) {
+      openYouTubeWatchPage(videoId);
+      return;
+    }
+    void openNativeYouTubeVideo(videoId).then((opened) => {
+      setNativeOpenFailed(!opened);
+    });
+  };
 
   useEffect(() => {
     let cancelled = false;
     setResolvedThumb(null);
+    setNativeOpenFailed(false);
 
     findThumbnail(videoId).then((url) => {
       if (!cancelled) setResolvedThumb(url);
@@ -230,6 +262,11 @@ export function YouTubeEmbed({ videoId, className }: { videoId: string; classNam
           <iframe
             src={`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1`}
             title="YouTube video"
+            // YouTube requires an HTTP Referer (or equivalent app identity).
+            // Let the browser send this deployment's own origin so a
+            // self-hosted client never inherits a hard-coded public host or
+            // packaged app id from the web bundle.
+            referrerPolicy="strict-origin-when-cross-origin"
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
             allowFullScreen
             className="absolute inset-0 w-full h-full"
@@ -238,24 +275,30 @@ export function YouTubeEmbed({ videoId, className }: { videoId: string; classNam
           <button
             type="button"
             className="absolute inset-0 w-full h-full cursor-pointer bg-black group"
-            onClick={() => setActivated(true)}
-            aria-label="Play video"
+            onClick={play}
+            aria-label={nativeOpenFailed ? "Open video on YouTube" : "Play video"}
           >
             {resolvedThumb && (
               <img src={resolvedThumb} alt="" className="absolute inset-0 w-full h-full object-cover" />
             )}
             <div className="absolute inset-0 flex items-center justify-center">
-              <div
-                className={cn(
-                  "flex items-center justify-center",
-                  "w-[68px] h-[48px] rounded-xl",
-                  "bg-[#212121]/80 group-hover:bg-[#ff0000] transition-colors duration-200",
-                )}
-              >
-                <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6 text-white ml-0.5">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
-              </div>
+              {nativeOpenFailed ? (
+                <span className="rounded-full bg-black/85 px-4 py-2 text-sm font-medium text-white">
+                  Open on YouTube
+                </span>
+              ) : (
+                <div
+                  className={cn(
+                    "flex items-center justify-center",
+                    "w-[68px] h-[48px] rounded-xl",
+                    "bg-[#212121]/80 group-hover:bg-[#ff0000] transition-colors duration-200",
+                  )}
+                >
+                  <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6 text-white ml-0.5">
+                    <path d="M8 5v14l11-7z" />
+                  </svg>
+                </div>
+              )}
             </div>
           </button>
         )}

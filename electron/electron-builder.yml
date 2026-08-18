@@ -49,6 +49,7 @@ files:
   - linuxAudioSources.js
   - linuxVideoAcceleration.js
   - displayMediaPolicy.js
+  - youtubeEmbedIdentity.js
   - hevcScreenShare.js
   - linuxGlobalShortcuts.js
   - linuxStatusNotifier.js
