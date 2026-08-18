@@ -21,6 +21,7 @@ import { useChatScope } from "@/hooks/useChatScope";
 import { useMuteToggle } from "@/hooks/useMuteList";
 import { useNsite } from "@/hooks/useNsite";
 import { useOpenProfile } from "@/hooks/useOpenProfile";
+import { usePrefetchProfile } from "@/hooks/usePrefetchProfile";
 import { useMemberRoles } from "@/hooks/useMemberRoles";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useFollowToggle } from "@/hooks/useFollowToggle";
@@ -57,6 +58,7 @@ function ProfilePreviewBody({
   const author = useAuthor(pubkey);
   const navigate = useNavigate();
   const openProfile = useOpenProfile();
+  const prefetchProfile = usePrefetchProfile();
   const { user } = useCurrentUser();
   const metadata = author.data?.metadata;
   const roles = useMemberRoles(pubkey);
@@ -320,7 +322,16 @@ function ProfilePreviewBody({
             person on ditto.pub (the fuller social view) and their nsite,
             when they've published one. */}
         <div className="mt-2 flex items-center gap-2">
-          <Button size="sm" className="flex-1 clip-corner-lg h-8" onClick={viewProfile}>
+          <Button
+            size="sm"
+            className="flex-1 clip-corner-lg h-8"
+            onClick={viewProfile}
+            // Badges and follow counts are the profile's slowest queries and
+            // the only ones this card hasn't already resolved. Hovering the
+            // button is the earliest honest signal that they'll be needed.
+            onPointerEnter={() => prefetchProfile(pubkey)}
+            onFocus={() => prefetchProfile(pubkey)}
+          >
             View profile
           </Button>
           {dittoProfileHref && (

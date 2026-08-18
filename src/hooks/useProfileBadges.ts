@@ -6,6 +6,10 @@ import { parseAddr } from "@/lib/parseAddr";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
+import type { useEventStore as useEventStoreType } from "@/hooks/useEventStore";
+
+type EventStore = ReturnType<typeof useEventStoreType>;
+type Nostr = ReturnType<typeof useNostr>["nostr"];
 
 /** NIP-58 kinds: award (8), profile badges list (30008), badge definition (30009). */
 const KIND_BADGE_AWARD = 8;
@@ -36,32 +40,60 @@ export interface ProfileBadge {
  * this person in a `p` tag. Anything less lets anyone wear any badge by
  * spelling its coordinate.
  */
-export function useProfileBadges(pubkey: string | undefined) {
-  const { nostr } = useNostr();
-  const eventStore = useEventStore();
+export function profileBadgesQueryKey(pubkey: string): [string, string] {
+  return ["profile-badges", pubkey];
+}
 
-  return useQuery<ProfileBadge[]>({
-    queryKey: ["profile-badges", pubkey ?? ""],
+/**
+ * Shared so {@link useProfileBadges} and the prefetch in `usePrefetchProfile`
+ * fill the same cache entry rather than racing two copies of this work.
+ */
+export function profileBadgesQueryOptions(
+  nostr: Nostr,
+  eventStore: EventStore,
+  pubkey: string | undefined,
+) {
+  return {
+    queryKey: profileBadgesQueryKey(pubkey ?? ""),
     enabled: !!pubkey,
     staleTime: 10 * 60_000,
     gcTime: 30 * 60_000,
     refetchOnWindowFocus: false,
     retry: 1,
-    queryFn: async ({ signal }) => {
+    queryFn: async ({ signal }: { signal: AbortSignal }): Promise<ProfileBadge[]> => {
       if (!pubkey) return [];
       const store = await eventStore;
 
-      const [fromNet] = await nostr.query(
-        [{ kinds: [KIND_PROFILE_BADGES], authors: [pubkey], "#d": ["profile_badges"], limit: 1 }],
-        { signal },
-      );
-      let list: NostrRumor | undefined = fromNet;
-      if (fromNet) {
-        void store.event(fromNet);
+      // STORE-FIRST, and this one is worth spelling out: resolving badges is
+      // two dependent rounds — the list names the coordinates, and only then
+      // can the definitions and awards be asked for. Reading the list from the
+      // network first made every open pay a full relay round trip BEFORE the
+      // second round could even start, which is the slowest thing on the
+      // profile. The list is replaceable and changes about never, so a stored
+      // copy starts round two immediately and the network refresh rides along
+      // behind it for the next open.
+      const [cached] = await store.query([
+        { kinds: [KIND_PROFILE_BADGES], authors: [pubkey], "#d": ["profile_badges"] },
+      ]);
+      let list: NostrRumor | undefined = cached;
+      if (cached) {
+        void Promise.resolve(
+          nostr.query(
+            [{ kinds: [KIND_PROFILE_BADGES], authors: [pubkey], "#d": ["profile_badges"], limit: 1 }],
+            { signal },
+          ),
+        )
+          .then(([fresh]) => {
+            if (fresh && fresh.created_at > cached.created_at) void store.event(fresh);
+          })
+          .catch(() => undefined);
       } else {
-        [list] = await store.query([
-          { kinds: [KIND_PROFILE_BADGES], authors: [pubkey], "#d": ["profile_badges"] },
-        ]);
+        const [fromNet] = await nostr.query(
+          [{ kinds: [KIND_PROFILE_BADGES], authors: [pubkey], "#d": ["profile_badges"], limit: 1 }],
+          { signal },
+        );
+        list = fromNet;
+        if (fromNet) void store.event(fromNet);
       }
       if (!list) return [];
 
@@ -135,5 +167,11 @@ export function useProfileBadges(pubkey: string | undefined) {
       }
       return out;
     },
-  });
+  };
+}
+
+export function useProfileBadges(pubkey: string | undefined) {
+  const { nostr } = useNostr();
+  const eventStore = useEventStore();
+  return useQuery<ProfileBadge[]>(profileBadgesQueryOptions(nostr, eventStore, pubkey));
 }

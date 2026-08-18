@@ -28,6 +28,7 @@ import { ProfileThemeEditor } from "@/components/profile/ProfileThemeEditor";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { ChromeDialogContent, Dialog } from "@/components/ui/dialog";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -166,8 +167,10 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
   const metadata = author.data?.metadata;
   const theme = useProfileTheme(pubkey).data?.theme;
   const nsite = useNsite(pubkey).data;
-  const badges = useProfileBadges(pubkey).data ?? [];
-  const shared = useSharedCommunities(pubkey).data ?? [];
+  const badgesQuery = useProfileBadges(pubkey);
+  const sharedQuery = useSharedCommunities(pubkey);
+  const badges = badgesQuery.data ?? [];
+  const shared = sharedQuery.data ?? [];
 
   const status = useUserStatus(pubkey).data?.status;
   const rawMusicStatus = useUserStatus(pubkey, "music").data?.status;
@@ -188,15 +191,31 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
 
   // Counts: following from their own kind 3, followers from the NIP-85 stats
   // provider (the same source Ditto reads).
-  const followingData = useFollowingOf(pubkey).data;
-  const followerCount = useFollowerCount(pubkey).data;
+  const followingQuery = useFollowingOf(pubkey);
+  const followerQuery = useFollowerCount(pubkey);
+  const followingData = followingQuery.data;
+  const followerCount = followerQuery.data;
 
   // "Followed by people you follow" — viewer-relative, so never for self.
   const { data: viewerFollows } = useFollowList();
-  const sharedFollowers = useSharedFollowers(
+  const sharedFollowersQuery = useSharedFollowers(
     user && !isSelf ? pubkey : undefined,
     viewerFollows?.pubkeys,
-  ).data;
+  );
+  const sharedFollowers = sharedFollowersQuery.data;
+
+  // `isLoading`, not `isPending`: a disabled query is forever "pending" (it has
+  // no data and never will), which would leave a skeleton on screen for a
+  // section that is switched off — self has no shared anything.
+  const countsLoading = followingQuery.isLoading || followerQuery.isLoading;
+  // One skeleton for the whole sidebar rather than three. Each of these
+  // sections is legitimately empty for most people, so a per-section skeleton
+  // is mostly a placeholder for something that will never arrive — it would
+  // draw three cards and then take them away again.
+  const sidebarLoading =
+    badgesQuery.isLoading || sharedQuery.isLoading || sharedFollowersQuery.isLoading;
+  const sidebarEmpty =
+    badges.length === 0 && shared.length === 0 && !sharedFollowers?.count;
 
   const [copied, setCopied] = useState(false);
   const [themeEditorOpen, setThemeEditorOpen] = useState(false);
@@ -434,7 +453,15 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
               )}
 
               {/* Follow counts. The lists themselves live on Ditto's profile
-                  (its followers/following views), so both link out there. */}
+                  (its followers/following views), so both link out there.
+                  Nearly everyone has these, so unlike the sidebar they're
+                  worth holding space for while they resolve. */}
+              {countsLoading && !followingData && followerCount == null && (
+                <div className="mt-2 flex items-center gap-4">
+                  <Skeleton className="h-4 w-24" />
+                  <Skeleton className="h-4 w-24" />
+                </div>
+              )}
               {(followingData || followerCount != null) && dittoHref && (
                 <div className="mt-2 flex items-center gap-4 text-sm">
                   {followingData && (
@@ -522,6 +549,21 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
             </div>
 
             <div className="space-y-3 md:space-y-4 min-w-0">
+              {/* One card standing in for whichever of badges, shared
+                  followers and shared communities turn out to exist — drawn
+                  only while nothing has arrived yet, so it gives way to real
+                  content rather than stacking above it. */}
+              {sidebarLoading && sidebarEmpty && (
+                <section className={cn("clip-corner-lg border border-border p-4", card)}>
+                  <Skeleton className="h-3 w-28" />
+                  <div className="mt-3 space-y-2">
+                    <Skeleton className="h-7 w-full" />
+                    <Skeleton className="h-7 w-full" />
+                    <Skeleton className="h-7 w-2/3" />
+                  </div>
+                </section>
+              )}
+
               {badges.length > 0 && (
                 <section className={cn("clip-corner-lg border border-border p-4", card)}>
                   <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-3">

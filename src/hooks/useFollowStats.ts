@@ -3,6 +3,9 @@ import { useQuery } from "@tanstack/react-query";
 
 import { useEventStore } from "@/hooks/useEventStore";
 
+type EventStore = ReturnType<typeof useEventStore>;
+type Nostr = ReturnType<typeof useNostr>["nostr"];
+
 /**
  * The NIP-85 user-stats provider (kind 30382, one event per subject pubkey in
  * the `d` tag). Follower counts can't be computed client-side — that's a scan
@@ -13,53 +16,104 @@ const NIP85_STATS_PUBKEY: string =
   import.meta.env.VITE_NIP85_STATS_PUBKEY ??
   "5f68e85ee174102ca8978eef302129f081f03456c884185d5ec1c1224ab633ea";
 
-/** A pubkey's follower count per the NIP-85 stats provider, or null. */
-export function useFollowerCount(pubkey: string | undefined) {
-  const { nostr } = useNostr();
+const followerCount = (event: { tags: string[][] } | undefined): number | null => {
+  const raw = event?.tags.find(([n]) => n === "followers")?.[1];
+  const count = raw ? parseInt(raw, 10) : NaN;
+  return Number.isFinite(count) ? count : null;
+};
 
-  return useQuery<number | null>({
-    queryKey: ["nip85-followers", pubkey ?? "", NIP85_STATS_PUBKEY],
+export function followerCountQueryKey(pubkey: string): [string, string, string] {
+  return ["nip85-followers", pubkey, NIP85_STATS_PUBKEY];
+}
+
+/**
+ * A pubkey's follower count per the NIP-85 stats provider, or null.
+ *
+ * Store-first: a count is a hint, and last open's hint on screen now beats the
+ * right one a relay round trip later — so a stored 30382 answers immediately
+ * and the network refreshes it in place. The provider's events are persisted
+ * for that purpose; nothing else writes them.
+ */
+export function followerCountQueryOptions(
+  nostr: Nostr,
+  eventStore: EventStore,
+  pubkey: string | undefined,
+) {
+  return {
+    queryKey: followerCountQueryKey(pubkey ?? ""),
     enabled: !!pubkey && !!NIP85_STATS_PUBKEY,
     staleTime: 5 * 60_000,
     refetchOnWindowFocus: false,
     retry: false,
-    queryFn: async ({ signal }) => {
-      const [event] = await nostr.query(
-        [{ kinds: [30382], authors: [NIP85_STATS_PUBKEY], "#d": [pubkey!], limit: 1 }],
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(4000)]) },
+    queryFn: async ({ signal }: { signal: AbortSignal }): Promise<number | null> => {
+      const store = await eventStore;
+      const filter = { kinds: [30382], authors: [NIP85_STATS_PUBKEY], "#d": [pubkey!] };
+      const [cached] = await store.query([filter]);
+      const fetching = Promise.resolve(
+        nostr.query([{ ...filter, limit: 1 }], {
+          signal: AbortSignal.any([signal, AbortSignal.timeout(4000)]),
+        }),
       );
-      const raw = event?.tags.find(([n]) => n === "followers")?.[1];
-      const count = raw ? parseInt(raw, 10) : NaN;
-      return Number.isFinite(count) ? count : null;
+      if (cached) {
+        void fetching
+          .then(([fresh]) => {
+            if (fresh && fresh.created_at > cached.created_at) void store.event(fresh);
+          })
+          .catch(() => undefined);
+        return followerCount(cached);
+      }
+      const [event] = await fetching;
+      if (event) void store.event(event);
+      return followerCount(event);
     },
-  });
+  };
+}
+
+export function useFollowerCount(pubkey: string | undefined) {
+  const { nostr } = useNostr();
+  const eventStore = useEventStore();
+  return useQuery<number | null>(followerCountQueryOptions(nostr, eventStore, pubkey));
 }
 
 /**
  * How many people a pubkey follows — the `p` tags of their kind 3. Also
  * returns the list itself for consumers that need it (shared followers).
  */
-export function useFollowingOf(pubkey: string | undefined) {
-  const { nostr } = useNostr();
-  const eventStore = useEventStore();
+export function followingOfQueryKey(pubkey: string): [string, string] {
+  return ["following-of", pubkey];
+}
 
-  return useQuery<{ count: number; pubkeys: string[] } | null>({
-    queryKey: ["following-of", pubkey ?? ""],
+export function followingOfQueryOptions(
+  nostr: Nostr,
+  eventStore: EventStore,
+  pubkey: string | undefined,
+) {
+  return {
+    queryKey: followingOfQueryKey(pubkey ?? ""),
     enabled: !!pubkey,
     staleTime: 5 * 60_000,
     refetchOnWindowFocus: false,
     retry: 1,
-    queryFn: async ({ signal }) => {
+    queryFn: async ({ signal }: { signal: AbortSignal }) => {
       const store = await eventStore;
-      const [fromNet] = await nostr.query(
-        [{ kinds: [3], authors: [pubkey!], limit: 1 }],
-        { signal },
-      );
-      let event = fromNet as { tags: string[][]; created_at: number } | undefined;
-      if (fromNet) {
-        void store.event(fromNet);
+      // Store-first for the same reason as the badge list: a kind 3 is
+      // replaceable and often large, and the count it yields is a hint. The
+      // network copy refreshes the store behind the answer.
+      const [cached] = await store.query([{ kinds: [3], authors: [pubkey!] }]);
+      let event = cached as { tags: string[][]; created_at: number } | undefined;
+      if (cached) {
+        void Promise.resolve(nostr.query([{ kinds: [3], authors: [pubkey!], limit: 1 }], { signal }))
+          .then(([fresh]) => {
+            if (fresh && fresh.created_at > cached.created_at) void store.event(fresh);
+          })
+          .catch(() => undefined);
       } else {
-        [event] = await store.query([{ kinds: [3], authors: [pubkey!] }]);
+        const [fromNet] = await nostr.query(
+          [{ kinds: [3], authors: [pubkey!], limit: 1 }],
+          { signal },
+        );
+        event = fromNet;
+        if (fromNet) void store.event(fromNet);
       }
       if (!event) return null;
       const pubkeys = [
@@ -71,7 +125,15 @@ export function useFollowingOf(pubkey: string | undefined) {
       ];
       return { count: pubkeys.length, pubkeys };
     },
-  });
+  };
+}
+
+export function useFollowingOf(pubkey: string | undefined) {
+  const { nostr } = useNostr();
+  const eventStore = useEventStore();
+  return useQuery<{ count: number; pubkeys: string[] } | null>(
+    followingOfQueryOptions(nostr, eventStore, pubkey),
+  );
 }
 
 export interface SharedFollowers {
