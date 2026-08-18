@@ -20,8 +20,8 @@ export const TOPIC_ID_CHARS = 52;
 /** `seq[4 LE] || sender_pubkey[32]` appended to every realtime frame. */
 export const TRAILER_LEN = 36;
 
-/** Vector caps a gossip message here; a larger frame is dropped, not rejected. */
-export const MAX_MESSAGE_SIZE = 128 * 1024;
+/** Vector's cap on a peer-advertised address; anything longer is not an address. */
+export const MAX_NODE_ADDR_CHARS = 2048;
 
 export function base32Encode(bytes: Uint8Array): string {
   let out = "";
@@ -106,6 +106,12 @@ export function deriveTopicId(app: string, chatId: string, messageId: string): s
  * The topic for a Mini App shared as a bare URL, byte-identical to Vector's
  * `derive_url_topic_id`.
  *
+ * The URL is truncated at `.xdc` first, because that is the string Vector
+ * hashes: its link regex ends in a LOOKAHEAD for `?`/`#`, so the match stops
+ * there and a query string never reaches the hash. Feeding it one produces a
+ * different topic and puts the two clients in separate rooms, each seeing a
+ * single player, with nothing to report.
+ *
  * A pasted `.xdc` link has no file event to carry a minted topic, so every
  * recipient derives the same one from what the message already gives them.
  * The message id, not the bytes: a server can rebuild an identical app into
@@ -114,7 +120,15 @@ export function deriveTopicId(app: string, chatId: string, messageId: string): s
  * game rather than a surprise seat at the old one.
  */
 export function deriveUrlTopicId(url: string, messageId: string): string {
+  url = urlTopicSource(url);
   return base32Encode(sha256(new TextEncoder().encode(`webxdc-url-realtime-v1:${url}:${messageId}`)));
+}
+
+/** The part of a `.xdc` link that identifies the app: everything up to and
+ * including the extension, which is exactly what Vector's regex matches. */
+export function urlTopicSource(url: string): string {
+  const at = url.toLowerCase().indexOf(".xdc");
+  return at === -1 ? url : url.slice(0, at + 4);
 }
 
 /** Append Vector's trailer: the payload, then `seq[4 LE] || sender[32]`. */
@@ -177,6 +191,10 @@ export function parsePeerSignal(content: string): PeerSignal | undefined {
   if (typeof o.topic !== "string" || !isTopicId(o.topic)) return undefined;
   if (o.op === "left") return { op: "left", topic: o.topic };
   if (o.op === "ad" && typeof o.addr === "string" && o.addr.length > 0) {
+    // Bounded exactly as Vector bounds it. Any member can publish one of
+    // these, and an unbounded value would be base32-decoded on the main
+    // thread, through an intermediate array, once per re-advertisement.
+    if (o.addr.length > MAX_NODE_ADDR_CHARS) return undefined;
     return { op: "ad", topic: o.topic, addr: o.addr };
   }
   return undefined;
@@ -217,8 +235,17 @@ export function foldPeerSignals(
   /** Our own pubkey, so we never dial ourselves. */
   selfPubkey?: string,
 ): RealtimePeer[] {
+  // The timestamp is the sender's own claim and the fold resolves on it, so an
+  // advertisement dated years ahead would outrank its author's every later
+  // departure. Vector CLAMPS, which works there because it clamps once at
+  // ingest and stores that value; a clamp here would be recomputed against
+  // `now` on every fold, so the forged entry would keep winning forever.
+  // Folding live, the honest answer is to refuse a signal from the future:
+  // a clock skewed past this is not one whose ordering claims are usable.
+  const ceiling = Date.now() + 5 * 60_000;
   const latest = new Map<string, { signal: PeerSignal; ms: number }>();
   for (const ev of events) {
+    if (ev.ms > ceiling) continue;
     const signal = parsePeerSignal(ev.content);
     if (!signal || signal.topic !== topic) continue;
     if (selfPubkey && ev.author === selfPubkey) continue;

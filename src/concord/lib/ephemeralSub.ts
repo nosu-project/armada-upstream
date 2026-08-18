@@ -1,8 +1,8 @@
 /**
  * One standing kind-21059 REQ per relay, merged across channels.
  *
- * Four hooks tail the ephemeral wraps of a channel's current stream address —
- * voice presence, voice reactions, typing, webxdc realtime — and the sidebar
+ * Three hooks tail the ephemeral wraps of a channel's current stream address —
+ * voice presence, voice reactions, and typing — and the sidebar
  * mounts the presence hook for EVERY channel row, so the per-hook `req()` loop
  * opened one socket REQ per (channel, relay): a measured boot paid 36 REQs of
  * `kinds[21059] authors×1` back to back. Every channel's stream address is a

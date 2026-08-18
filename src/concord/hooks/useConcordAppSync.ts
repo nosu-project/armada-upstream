@@ -42,6 +42,9 @@ import type {
   AppSync,
 } from "@/hooks/useWebxdcApi";
 
+/** How many advertised peers one session will dial. */
+const MAX_DIAL_PEERS = 16;
+
 function tagValue(tags: string[][], name: string): string | undefined {
   return tags.find(([n]) => n === name)?.[1];
 }
@@ -220,8 +223,15 @@ export function useConcordAppSync(
   // The join effect outlives a rekey (it is keyed on the channel, not the
   // epoch), so its departure signal must seal under whatever the current key
   // is rather than the one captured when the game opened.
-  const publishRef = useRef(publish);
-  publishRef.current = publish;
+  //
+  // Stamped with its scope, because React runs a dep-change cleanup during the
+  // commit of the render that changed the deps — by which point this ref
+  // already points at the publisher for the channel we switched TO. Publishing
+  // through that would seal the departure into the new channel: the room we
+  // actually left never hears it and keeps dialling a node that has gone.
+  const publishScope = `${community?.idHex ?? ""}:${channelIdHex ?? ""}`;
+  const publishRef = useRef({ scope: publishScope, publish });
+  publishRef.current = { scope: publishScope, publish };
 
   const sendState = useCallback(
     (payload: unknown, opts?: AppStateMeta) => {
@@ -288,6 +298,7 @@ export function useConcordAppSync(
 
     let cancelled = false;
     let node: RealtimeTransport | undefined;
+    const scope = publishScope;
     // Captured here rather than read in the cleanup: the ref itself is stable,
     // and the lint rule cannot know that.
     const dialled = dialledRef.current;
@@ -308,23 +319,42 @@ export function useConcordAppSync(
         if (!got || got.sender === node!.publicKeyHex()) return;
         for (const cb of listenersRef.current) cb(got.payload);
       });
-      if (cancelled) return;
+      if (cancelled) {
+        // The join SUCCEEDED and nobody owns it: without this the topic stays
+        // subscribed, and the next join would adopt it while our callback —
+        // belonging to an unmounted hook — keeps receiving the frames.
+        node.leave(topic);
+        return;
+      }
       gossip.current = { node, topic, key };
-      void publishRef.current(peerSignalContent(uuid, encodeNodeAddr(node.nodeAddrJson())), []);
+      void publishRef.current.publish(peerSignalContent(uuid, encodeNodeAddr(node.nodeAddrJson())), []);
       // Announce readiness so the dial pass runs: the mesh comes up seconds
       // after this effect does, and by then the peers already advertising have
       // long since loaded and will not change again to retrigger it.
       setMeshReady((n) => n + 1);
     })();
 
+    // A closed tab runs no React cleanup, and these signals are durable, so
+    // the departure would never be published and the address would haunt the
+    // channel forever. `pagehide` is the one that fires on mobile.
+    const sayGoodbye = () => {
+      if (!gossip.current) return;
+      void publishRef.current.publish(peerSignalContent(uuid), []);
+    };
+    window.addEventListener("pagehide", sayGoodbye);
+
     return () => {
       cancelled = true;
+      window.removeEventListener("pagehide", sayGoodbye);
       const g = gossip.current;
       gossip.current = undefined;
       if (!g) return;
       // Tell the room before dropping the mesh, or everyone keeps dialling a
-      // node that has gone and counts a player who left.
-      void publishRef.current(peerSignalContent(uuid), []);
+      // node that has gone and counts a player who left. Through the publisher
+      // for the channel this session belonged to, never the one we moved to.
+      if (publishRef.current.scope === scope) {
+        void publishRef.current.publish(peerSignalContent(uuid), []);
+      }
       g.node.leave(g.topic);
       // Addresses are per-node, so a fresh session must be free to dial a peer
       // this one already reached.
@@ -341,7 +371,11 @@ export function useConcordAppSync(
   useEffect(() => {
     const g = gossip.current;
     if (!g || !isTopicId(uuid)) return;
-    const peers = foldPeerSignals(peerSignals, uuid, selfPubkey);
+    // Capped, newest first (the fold already sorts). Every member who ever
+    // opened this game and closed the tab leaves a durable advertisement
+    // behind, so an old channel's fold is mostly ghosts, and each one costs a
+    // QUIC dial that hangs to its timeout.
+    const peers = foldPeerSignals(peerSignals, uuid, selfPubkey).slice(0, MAX_DIAL_PEERS);
     for (const peer of peers) {
       if (dialledRef.current.has(peer.addr)) continue;
       dialledRef.current.add(peer.addr);

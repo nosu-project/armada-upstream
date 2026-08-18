@@ -916,7 +916,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
    * `.xdc` is a public URL (not re-uploaded / not encrypted).
    */
   const registerGame = useCallback(async (app: WebxdcApp) => {
-    const topic = await mintTopicId(app.url, user?.pubkey ?? "");
+    const topic = mintTopicId(app.url, user?.pubkey ?? "");
     const tags: string[][] = [
       ["url", app.url],
       ["m", WEBXDC_MIME],
@@ -1095,7 +1095,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         const mTag = tags.find((t) => t[0] === "m");
         if (mTag) mTag[1] = WEBXDC_MIME;
         else tags.push(["m", WEBXDC_MIME]);
-        const topic = await mintTopicId(file.name, user?.pubkey ?? "");
+        const topic = mintTopicId(file.name, user?.pubkey ?? "");
         tags.push(["webxdc-topic", topic], ["webxdc", topic]);
         try {
           const meta = await extractWebxdcMeta(file);

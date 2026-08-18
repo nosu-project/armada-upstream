@@ -83,8 +83,3 @@ async function load(): Promise<RealtimeTransport | undefined> {
     return undefined;
   }
 }
-
-/** Test seam: forget the cached node so the next call rebuilds it. */
-export function resetRealtimeTransport(): void {
-  pending = undefined;
-}

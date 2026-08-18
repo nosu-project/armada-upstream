@@ -19,6 +19,7 @@ import {
   parsePeerSignal,
   peerSignalContent,
   unframe,
+  urlTopicSource,
 } from "@/lib/webxdcRealtime";
 
 /**
@@ -312,5 +313,58 @@ describe("the URL-shared topic", () => {
     // Different domain separators: a URL card and a file attachment in the
     // same channel must not collide.
     expect(deriveUrlTopicId("u", "m")).not.toBe(deriveTopicId("u", "", "m"));
+  });
+});
+
+describe("bounds on sender-controlled fields", () => {
+  const T = "OE4PCJOZJEGHXO3XRI3VFSHXVZDQ562TQIJITJUZTU3G6FQP4GXA";
+
+  it("refuses an address longer than Vector accepts", () => {
+    // Any member can publish one. Unbounded, it would be base32-decoded on the
+    // main thread through an intermediate array, once per re-advertisement.
+    expect(parsePeerSignal(peerSignalContent(T, "a".repeat(2048)))).toBeDefined();
+    expect(parsePeerSignal(peerSignalContent(T, "a".repeat(2049)))).toBeUndefined();
+    expect(parsePeerSignal(peerSignalContent(T, "a".repeat(500_000)))).toBeUndefined();
+  });
+
+  it("refuses a signal from the future, so a departure can still win", () => {
+    // Durable signals resolve by the sender's own clock. Accept one dated
+    // years ahead and it outranks its author's every later `left` forever,
+    // and every client dials a dead address on every join.
+    const far = Date.now() + 5 * 365 * 24 * 3600_000;
+    const peers = foldPeerSignals(
+      [
+        { author: "mallory", ms: far, content: peerSignalContent(T, "ghost") },
+        { author: "mallory", ms: Date.now(), content: peerSignalContent(T) },
+      ],
+      T,
+    );
+    expect(peers).toEqual([]);
+  });
+
+  it("still accepts a mildly skewed clock", () => {
+    // A couple of minutes fast is an ordinary machine, not an attack.
+    const peers = foldPeerSignals(
+      [{ author: "alice", ms: Date.now() + 60_000, content: peerSignalContent(T, "a") }],
+      T,
+    );
+    expect(peers.map((p) => p.pubkey)).toEqual(["alice"]);
+  });
+});
+
+describe("the URL a link-shared topic is derived from", () => {
+  it("stops at .xdc, which is where Vector's regex stops", () => {
+    // Vector's link regex ends in a lookahead for `?`/`#`, so the query string
+    // never reaches its hash. Including it here would split the room silently.
+    expect(urlTopicSource("https://h/app.xdc?v=2")).toBe("https://h/app.xdc");
+    expect(urlTopicSource("https://h/app.xdc#frag")).toBe("https://h/app.xdc");
+    expect(urlTopicSource("https://h/app.xdc")).toBe("https://h/app.xdc");
+    expect(urlTopicSource("https://h/APP.XDC?x=1")).toBe("https://h/APP.XDC");
+  });
+
+  it("gives one topic whether or not the link carried a query", () => {
+    const bare = deriveUrlTopicId("https://h/app.xdc", "m1");
+    expect(deriveUrlTopicId("https://h/app.xdc?v=2", "m1")).toBe(bare);
+    expect(deriveUrlTopicId("https://h/app.xdc#top", "m1")).toBe(bare);
   });
 });

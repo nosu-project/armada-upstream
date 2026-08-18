@@ -12,7 +12,6 @@
 //! boundary.
 
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Mutex;
 
 use futures_util::StreamExt;
@@ -31,16 +30,18 @@ fn err(e: impl std::fmt::Display) -> JsError {
     JsError::new(&e.to_string())
 }
 
-/// One joined topic: the send half, kept so `send`/`leave` can reach it.
+/// One joined topic: the send half, plus the handle that stops its receive
+/// loop. Both are needed to leave — see `leave`.
 struct Joined {
     sender: GossipSender,
+    abort: futures_util::future::AbortHandle,
 }
 
 #[wasm_bindgen]
 pub struct RealtimeNode {
     endpoint: Endpoint,
     gossip: Gossip,
-    joined: Rc<Mutex<HashMap<[u8; 32], Joined>>>,
+    joined: Mutex<HashMap<[u8; 32], Joined>>,
 }
 
 #[wasm_bindgen]
@@ -92,7 +93,14 @@ impl RealtimeNode {
         // Wait for a relay ADDRESS, not merely for `online`: an advertisement
         // published without one names a node nobody can reach, and in a browser
         // there is no direct path to fall back on. Vector polls the same way.
-        endpoint.online().await;
+        // Bounded: an unreachable relay makes `online()` hang forever, and a
+        // pending promise is not a rejection — the loader would cache it and
+        // every later caller would await it for the life of the page.
+        futures_util::future::select(
+            std::pin::pin!(endpoint.online()),
+            std::pin::pin!(wasm_sleep(5_000)),
+        )
+        .await;
         for _ in 0..20 {
             if endpoint
                 .addr()
@@ -131,7 +139,7 @@ impl RealtimeNode {
         Ok(RealtimeNode {
             endpoint,
             gossip,
-            joined: Rc::new(Mutex::new(HashMap::new())),
+            joined: Mutex::new(HashMap::new()),
         })
     }
 
@@ -161,9 +169,12 @@ impl RealtimeNode {
         on_event: Option<js_sys::Function>,
     ) -> Result<(), JsError> {
         let topic = topic_of(topic_bytes)?;
-        if self.joined.lock().unwrap().contains_key(&topic.as_bytes().to_owned()) {
-            return Ok(());
-        }
+        // Replace rather than skip. A previous join whose caller went away
+        // (a closed app, a cancelled mount) leaves an entry behind, and
+        // returning early there would hand this caller a live sender whose
+        // receive loop still feeds the OLD callback: a game that sends fine
+        // and never receives, with nothing reporting a fault.
+        self.drop_topic(topic.as_bytes());
 
         let peers: Vec<EndpointAddr> = peer_addrs_json
             .iter()
@@ -198,12 +209,16 @@ impl RealtimeNode {
         }
 
         let (sender, mut receiver) = gossip_topic.split();
-        self.joined
-            .lock()
-            .unwrap()
-            .insert(*topic.as_bytes(), Joined { sender: sender.clone() });
+        let (abort, reg) = futures_util::future::AbortHandle::new_pair();
+        // Anything that arrived during the await above is stale by definition.
+        self.drop_topic(topic.as_bytes());
+        self.joined.lock().unwrap().insert(
+            *topic.as_bytes(),
+            Joined { sender: sender.clone(), abort },
+        );
 
         wasm_bindgen_futures::spawn_local(async move {
+            let _ = futures_util::future::Abortable::new(async move {
             while let Some(event) = receiver.next().await {
                 match event {
                     Ok(Event::Received(msg)) => {
@@ -226,6 +241,8 @@ impl RealtimeNode {
                     }
                 }
             }
+            }, reg)
+            .await;
         });
         Ok(())
     }
@@ -269,13 +286,23 @@ impl RealtimeNode {
         sender.join_peers(vec![id]).await.map_err(err)
     }
 
-    /// Leave a topic. Dropping every sender and receiver half is what actually
-    /// frees it: gossip only cleans up when the last one goes, and a survivor
-    /// makes the next subscribe to the same topic a broken duplicate.
+    /// Leave a topic.
+    ///
+    /// Dropping the map entry is only half of it: the receive loop holds a
+    /// second sender clone (for `join_peers`) and the receiver itself, and
+    /// gossip frees a topic only when the last half goes. Aborting the loop is
+    /// what drops those, so this must do both or a "left" topic keeps
+    /// receiving and keeps us a member of the mesh.
     pub fn leave(&self, topic_bytes: &[u8]) -> Result<(), JsError> {
         let topic = topic_of(topic_bytes)?;
-        self.joined.lock().unwrap().remove(topic.as_bytes());
+        self.drop_topic(topic.as_bytes());
         Ok(())
+    }
+
+    fn drop_topic(&self, topic: &[u8; 32]) {
+        if let Some(prev) = self.joined.lock().unwrap().remove(topic) {
+            prev.abort.abort();
+        }
     }
 }
 
@@ -307,9 +334,36 @@ fn short(s: &str) -> String {
     s.chars().take(16).collect()
 }
 
+/// The pure half, so the refusal is testable off-wasm: constructing a
+/// `JsError` calls an imported function and panics on a native target.
+fn parse_topic(bytes: &[u8]) -> Option<TopicId> {
+    let arr: [u8; 32] = bytes.try_into().ok()?;
+    Some(TopicId::from_bytes(arr))
+}
+
 fn topic_of(bytes: &[u8]) -> Result<TopicId, JsError> {
-    let arr: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| JsError::new("topic id must be 32 bytes"))?;
-    Ok(TopicId::from_bytes(arr))
+    parse_topic(bytes).ok_or_else(|| JsError::new("topic id must be 32 bytes"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A topic id is fixed-width by construction. Everything upstream produces
+    /// 32 bytes from a SHA-256, so a different length means a caller decoded
+    /// something that was never a topic — reject rather than pad or truncate
+    /// into a neighbouring room.
+    #[test]
+    fn a_topic_id_must_be_exactly_32_bytes() {
+        assert!(parse_topic(&[0u8; 32]).is_some());
+        for n in [0usize, 1, 31, 33, 64] {
+            assert!(parse_topic(&vec![0u8; n]).is_none(), "{n} bytes must be refused");
+        }
+    }
+
+    #[test]
+    fn the_topic_survives_the_round_trip_unchanged() {
+        let bytes: [u8; 32] = std::array::from_fn(|i| i as u8);
+        assert_eq!(parse_topic(&bytes).unwrap().as_bytes(), &bytes);
+    }
 }
