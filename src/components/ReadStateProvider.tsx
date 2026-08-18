@@ -8,6 +8,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEncryptedSettings } from "@/hooks/useEncryptedSettings";
 import { useSettingsDoc } from "@/hooks/useSettingsDoc";
+import { dismissReadNotifications } from "@/lib/webPushDismiss";
 
 const EMPTY: ReadStateMap = {};
 
@@ -156,6 +157,10 @@ export function ReadStateProvider({ children }: { children: React.ReactNode }) {
         scheduleSync(next);
         return next;
       });
+      // Withdraw any tray notification the service worker already showed for
+      // this conversation — a read here closes it, without showing anything
+      // (so it never touches Apple's silent-push allowance).
+      void dismissReadNotifications({ [key]: timestamp });
     },
     [pubkey, scheduleSync],
   );
@@ -186,6 +191,9 @@ export function ReadStateProvider({ children }: { children: React.ReactNode }) {
         pendingSync.current = mergeReadState(pendingSync.current, incoming);
       }
       hydrate(incoming);
+      // A read made on another device just synced in: close any notification
+      // this device's worker is still showing for a conversation it covers.
+      void dismissReadNotifications(incoming);
     };
     if (doc?.readState) absorb(doc.readState);
     if (metadata?.readState) absorb(metadata.readState);
