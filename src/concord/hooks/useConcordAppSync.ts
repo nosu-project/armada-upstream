@@ -1,6 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useControlFold } from "@/concord/hooks/useControlPlane";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -201,6 +201,12 @@ export function useConcordAppSync(
     [nostr, community, channel, user, timerSecs],
   );
 
+  // The join effect outlives a rekey (it is keyed on the channel, not the
+  // epoch), so its departure signal must seal under whatever the current key
+  // is rather than the one captured when the game opened.
+  const publishRef = useRef(publish);
+  publishRef.current = publish;
+
   const sendState = useCallback(
     (payload: unknown, opts?: AppStateMeta) => {
       const extraTags: string[][] = [["i", uuid], ["alt", "Webxdc update"]];
@@ -219,6 +225,8 @@ export function useConcordAppSync(
   // re-render the app to learn the mesh came up.
   const gossip = useRef<{ node: RealtimeTransport; topic: Uint8Array; key: Uint8Array } | undefined>(undefined);
   const seq = useRef(0);
+  const dialledRef = useRef(new Set<string>());
+  const [meshReady, setMeshReady] = useState(0);
 
   const sendRealtime = useCallback(
     (data: Uint8Array) => {
@@ -295,7 +303,9 @@ export function useConcordAppSync(
 
     let cancelled = false;
     let node: RealtimeTransport | undefined;
-    const dialled = new Set<string>();
+    // Captured here rather than read in the cleanup: the ref itself is stable,
+    // and the lint rule cannot know that.
+    const dialled = dialledRef.current;
 
     void (async () => {
       node = await realtimeTransport();
@@ -310,7 +320,11 @@ export function useConcordAppSync(
       });
       if (cancelled) return;
       gossip.current = { node, topic, key };
-      void publish(peerSignalContent(uuid, node.nodeAddrJson()), [], false);
+      void publishRef.current(peerSignalContent(uuid, node.nodeAddrJson()), [], false);
+      // Announce readiness so the dial pass runs: the mesh comes up seconds
+      // after this effect does, and by then the peers already advertising have
+      // long since loaded and will not change again to retrigger it.
+      setMeshReady((n) => n + 1);
     })();
 
     return () => {
@@ -320,19 +334,20 @@ export function useConcordAppSync(
       if (!g) return;
       // Tell the room before dropping the mesh, or everyone keeps dialling a
       // node that has gone and counts a player who left.
-      void publish(peerSignalContent(uuid), [], false);
+      void publishRef.current(peerSignalContent(uuid), [], false);
       g.node.leave(g.topic);
+      // Addresses are per-node, so a fresh session must be free to dial a peer
+      // this one already reached.
       dialled.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, uuid, community?.idHex, channel?.idHex, selfPubkey]);
 
   /**
-   * Dial the peers the channel has advertised. Vector re-advertises, so this
-   * re-runs as signals land; `dialled` keeps a peer from being dialled twice
-   * for one session.
+   * Dial the peers the channel has advertised, whenever the signals change or
+   * the mesh finishes coming up. `dialledRef` keeps one peer from being dialled
+   * twice in a session; a failed dial is forgotten so a later signal retries.
    */
-  const dialledRef = useRef(new Set<string>());
   useEffect(() => {
     const g = gossip.current;
     if (!g || !isTopicId(uuid)) return;
@@ -344,7 +359,7 @@ export function useConcordAppSync(
       if (!json) continue;
       void g.node.addPeer(g.topic, json).catch(() => dialledRef.current.delete(peer.addr));
     }
-  }, [peerSignals, uuid, selfPubkey]);
+  }, [peerSignals, uuid, selfPubkey, meshReady]);
 
   const onRealtime = useCallback((cb: (data: Uint8Array) => void) => {
     listenersRef.current.add(cb);

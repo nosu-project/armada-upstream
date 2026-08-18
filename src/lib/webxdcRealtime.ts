@@ -232,3 +232,47 @@ export function foldPeerSignals(
   }
   return out.sort((a, b) => b.ms - a.ms);
 }
+
+/** Vector's DM peer-signal rumor kind (NIP-78 application-specific data). */
+export const KIND_DM_PEER_SIGNAL = 30078;
+
+/** The `d` tag Vector scopes its DM peer signals under. */
+export const DM_PEER_SIGNAL_D = "vector-webxdc-peer";
+
+/**
+ * The tags of a DM peer signal, as Vector builds them.
+ *
+ * Armada has no Mini App surface in DMs today, so nothing calls this yet. It
+ * lives here because the shape is a contract with another client and belongs
+ * beside the Concord one, tested, rather than being rediscovered from Vector's
+ * source the day a DM surface exists.
+ */
+export function dmPeerSignalTags(topic: string, nodeAddr?: string): string[][] {
+  const tags = [
+    ["d", DM_PEER_SIGNAL_D],
+    ["webxdc-topic", topic],
+  ];
+  if (nodeAddr !== undefined) tags.push(["webxdc-node-addr", nodeAddr]);
+  return tags;
+}
+
+/** The content of a DM peer signal: the operation is the body, not a field. */
+export function dmPeerSignalContent(nodeAddr?: string): string {
+  return nodeAddr === undefined ? "peer-left" : "peer-advertisement";
+}
+
+/**
+ * Read a DM peer signal. Vector requires both tags on an advertisement and
+ * drops the rumor otherwise, so this does too.
+ */
+export function parseDmPeerSignal(content: string, tags: string[][]): PeerSignal | undefined {
+  const get = (name: string) => tags.find(([n]) => n === name)?.[1];
+  const topic = get("webxdc-topic");
+  if (!topic || !isTopicId(topic)) return undefined;
+  if (content === "peer-left") return { op: "left", topic };
+  if (content === "peer-advertisement") {
+    const addr = get("webxdc-node-addr");
+    if (addr) return { op: "ad", topic, addr };
+  }
+  return undefined;
+}

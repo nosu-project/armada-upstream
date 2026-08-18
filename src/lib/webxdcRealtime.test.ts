@@ -6,10 +6,13 @@ import {
   base32Decode,
   base32Encode,
   deriveTopicId,
+  dmPeerSignalContent,
+  dmPeerSignalTags,
   foldPeerSignals,
   frame,
   isTopicId,
   mintTopicId,
+  parseDmPeerSignal,
   parsePeerSignal,
   peerSignalContent,
   unframe,
@@ -215,5 +218,39 @@ describe("folding peer signals into who is playing", () => {
       { author: "carol", ms: 120, content: '{"op":"ad","topic":"nope","addr":"x"}' },
     ];
     expect(foldPeerSignals(noise, T1)).toEqual([]);
+  });
+});
+
+describe("the DM peer signal (Vector's NIP-17 shape)", () => {
+  const T = "OE4PCJOZJEGHXO3XRI3VFSHXVZDQ562TQIJITJUZTU3G6FQP4GXA";
+
+  it("builds the tags Vector builds", () => {
+    expect(dmPeerSignalTags(T, "addr")).toEqual([
+      ["d", "vector-webxdc-peer"],
+      ["webxdc-topic", T],
+      ["webxdc-node-addr", "addr"],
+    ]);
+    // A departure carries no address: there is nothing to reach.
+    expect(dmPeerSignalTags(T)).toEqual([["d", "vector-webxdc-peer"], ["webxdc-topic", T]]);
+  });
+
+  it("puts the operation in the content, unlike the Concord form", () => {
+    expect(dmPeerSignalContent("addr")).toBe("peer-advertisement");
+    expect(dmPeerSignalContent()).toBe("peer-left");
+  });
+
+  it("round-trips both operations", () => {
+    expect(parseDmPeerSignal(dmPeerSignalContent("a"), dmPeerSignalTags(T, "a"))).toEqual({
+      op: "ad", topic: T, addr: "a",
+    });
+    expect(parseDmPeerSignal(dmPeerSignalContent(), dmPeerSignalTags(T))).toEqual({ op: "left", topic: T });
+  });
+
+  it("drops an advertisement missing either half", () => {
+    // Vector requires both tags and drops the rumor otherwise.
+    expect(parseDmPeerSignal("peer-advertisement", [["webxdc-topic", T]])).toBeUndefined();
+    expect(parseDmPeerSignal("peer-advertisement", [["webxdc-node-addr", "a"]])).toBeUndefined();
+    expect(parseDmPeerSignal("peer-advertisement", dmPeerSignalTags(crypto.randomUUID(), "a"))).toBeUndefined();
+    expect(parseDmPeerSignal("something-else", dmPeerSignalTags(T, "a"))).toBeUndefined();
   });
 });
