@@ -44,13 +44,20 @@ export function ProfileShareDialog({ open, onOpenChange }: ProfileShareDialogPro
     // Read the theme's colors when the dialog opens (not at module load), so a
     // theme switch behind the dialog is reflected the next time it's shown.
     const { dark, light } = getThemedQRColors();
-    QRCode.toDataURL(url, {
+    // Render to an SVG rather than a canvas data URL: canvas-fingerprint
+    // blockers (Brave, Tor Browser, resistFingerprinting) poison or refuse the
+    // toDataURL/getImageData readback, which left this QR blank. SVG never
+    // touches a canvas, so it is immune to any canvas policy. It's carried to
+    // the <img> as a data URL (not innerHTML), so the browser script-sandboxes
+    // it — and the QR content lives in path modules, never as markup anyway.
+    QRCode.toString(url, {
+      type: "svg",
       width: 400,
       margin: 2,
       color: { dark, light },
       errorCorrectionLevel: "M",
     })
-      .then(setQrDataUrl)
+      .then((svg) => setQrDataUrl(`data:image/svg+xml;utf8,${encodeURIComponent(svg)}`))
       .catch(() => setQrDataUrl(""));
   }, [url, open]);
 
@@ -112,7 +119,6 @@ export function ProfileShareDialog({ open, onOpenChange }: ProfileShareDialogPro
                   src={qrDataUrl}
                   alt="Profile QR code"
                   className="mx-auto w-64 clip-corner-lg"
-                  style={{ imageRendering: "pixelated" }}
                   decoding="async"
                 />
               ) : (
