@@ -3,7 +3,7 @@
 
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronDown, IdCard, LogOut, Smile, UserIcon, UserPen, UserPlus, Wallet } from 'lucide-react';
+import { ChevronDown, IdCard, LogOut, QrCode, Smile, UserIcon, UserPen, UserPlus, Wallet } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,6 +18,7 @@ import { Skeleton } from '@/components/ui/skeleton.tsx';
 import { useLoggedInAccounts, type Account } from '@/hooks/useLoggedInAccounts';
 import { useSwitchAccount } from '@/hooks/useSwitchAccount';
 import { useServerScope } from '@/contexts/ServerScopeContext';
+import { ProfileShareDialog } from '@/components/dialogs/ProfileShareDialog';
 import { ServerProfileDialog } from '@/components/dialogs/ServerProfileDialog';
 import { StatusDialog } from '@/components/dialogs/StatusDialog';
 import { WalletDialog } from '@/components/dialogs/WalletDialog';
@@ -72,6 +73,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
   const serverScope = useServerScope();
   const [serverIdentityOpen, setServerIdentityOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
+  const [shareProfileOpen, setShareProfileOpen] = useState(false);
   const navigate = useNavigate();
   // The finger press currently on the trigger: where it landed and whether the
   // menu was already open. Null for mouse/pen, which keep Radix's own
@@ -195,6 +197,13 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
           <Smile className='w-4 h-4' />
           <span>Set status</span>
         </DropdownMenuItem>
+        <DropdownMenuItem
+          onClick={() => { setIsOpen(false); setShareProfileOpen(true); }}
+          className='flex items-center gap-2 cursor-pointer p-2 clip-corner-lg'
+        >
+          <QrCode className='w-4 h-4' />
+          <span>Share your profile</span>
+        </DropdownMenuItem>
         {serverScope && (
           <DropdownMenuItem
             onClick={() => setServerIdentityOpen(true)}
@@ -261,6 +270,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
       />
     )}
     <StatusDialog open={statusOpen} onOpenChange={setStatusOpen} />
+    <ProfileShareDialog open={shareProfileOpen} onOpenChange={setShareProfileOpen} />
     <WalletDialog open={walletOpen} onOpenChange={setWalletOpen} />
     </>
   );
