@@ -16,6 +16,7 @@ use std::rc::Rc;
 use std::sync::Mutex;
 
 use futures_util::StreamExt;
+use iroh::endpoint::{QuicTransportConfig, VarInt};
 use iroh::{Endpoint, EndpointAddr, RelayMode};
 use iroh_gossip::api::{Event, GossipSender, JoinOptions};
 use iroh_gossip::net::{Gossip, GOSSIP_ALPN};
@@ -52,15 +53,57 @@ impl RealtimeNode {
     /// the path migration Vector's comments warn about.
     #[wasm_bindgen(constructor)]
     pub async fn new() -> Result<RealtimeNode, JsError> {
+        // Vector's QUIC tuning, matched (src-tauri/src/miniapps/realtime.rs).
+        // Its comment calls these hard-won, and a browser needs them at least as
+        // much: a backgrounded tab has its timers throttled, so the default idle
+        // timeout can retire a session the player believes is still open.
+        //
+        // Not matched: BBR3. Vector pins a `noq` git rev because the published
+        // BBR3 underflows its inflight estimate when loss exceeds the threshold,
+        // and pulling a forked QUIC stack into a browser bundle for a congestion
+        // controller is a separate decision with a size cost attached.
+        let transport_config = QuicTransportConfig::builder()
+            .keep_alive_interval(std::time::Duration::from_secs(15))
+            .max_idle_timeout(Some(
+                std::time::Duration::from_secs(120)
+                    .try_into()
+                    .map_err(|_| JsError::new("idle timeout out of range"))?,
+            ))
+            .stream_receive_window(VarInt::from_u32(512 * 1024))
+            .receive_window(VarInt::from_u32(2 * 1024 * 1024))
+            .send_window(1_572_864)
+            .max_concurrent_bidi_streams(VarInt::from_u32(256))
+            .max_concurrent_uni_streams(VarInt::from_u32(256))
+            .initial_rtt(std::time::Duration::from_millis(100))
+            // Observed-address reports teach QUIC direct paths it then tries to
+            // migrate to. A browser has none, so this is belt and braces here,
+            // but it keeps both ends of the connection saying the same thing.
+            .send_observed_address_reports(false)
+            .receive_observed_address_reports(false)
+            .build();
+
         let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
             .relay_mode(RelayMode::Default)
             .alpns(vec![GOSSIP_ALPN.to_vec()])
+            .transport_config(transport_config)
             .bind()
             .await
             .map_err(err)?;
-        // Wait for a relay before anyone asks for our address: an address
-        // advertised without one names a node nobody can reach.
+        // Wait for a relay ADDRESS, not merely for `online`: an advertisement
+        // published without one names a node nobody can reach, and in a browser
+        // there is no direct path to fall back on. Vector polls the same way.
         endpoint.online().await;
+        for _ in 0..20 {
+            if endpoint
+                .addr()
+                .addrs
+                .iter()
+                .any(|a| matches!(a, iroh::TransportAddr::Relay(_)))
+            {
+                break;
+            }
+            wasm_sleep(100).await;
+        }
         let gossip = Gossip::builder()
             .max_message_size(MAX_MESSAGE_SIZE)
             .spawn(endpoint.clone());
@@ -234,6 +277,24 @@ impl RealtimeNode {
         self.joined.lock().unwrap().remove(topic.as_bytes());
         Ok(())
     }
+}
+
+/// `setTimeout` as a future. There is no tokio timer in a browser.
+async fn wasm_sleep(ms: i32) {
+    let (tx, rx) = futures_channel::oneshot::channel::<()>();
+    let cb = Closure::once_into_js(move || {
+        let _ = tx.send(());
+    });
+    if web_sys_set_timeout(&cb, ms).is_err() {
+        return;
+    }
+    let _ = rx.await;
+}
+
+#[wasm_bindgen(inline_js = "export function web_sys_set_timeout(cb, ms) { setTimeout(cb, ms); }")]
+extern "C" {
+    #[wasm_bindgen(catch, js_name = web_sys_set_timeout)]
+    fn web_sys_set_timeout(cb: &JsValue, ms: i32) -> Result<(), JsValue>;
 }
 
 fn report(cb: &Option<js_sys::Function>, msg: &str) {

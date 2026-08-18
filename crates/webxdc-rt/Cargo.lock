@@ -3511,6 +3511,7 @@ dependencies = [
 name = "webxdc-rt"
 version = "0.1.0"
 dependencies = [
+ "futures-channel",
  "futures-util",
  "getrandom 0.3.4",
  "iroh",
