@@ -1,0 +1,181 @@
+/**
+ * The wire contracts a webxdc realtime channel is made of, shared by both
+ * transports (DM and Concord) and by both clients.
+ *
+ * These are interop surfaces with Vector, so every constant here is a promise
+ * to another codebase. A near-match is worse than a mismatch: the two clients
+ * join different gossip rooms, each sees one player, and neither reports an
+ * error. Vector's implementations live in `crates/vector-core/src/webxdc.rs`
+ * and `src-tauri/src/miniapps/realtime.rs`.
+ */
+
+/** RFC 4648 base32, no padding — the alphabet Vector encodes topic ids with. */
+const B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+/** A topic id is 32 bytes, so its base32 form is always this long. */
+export const TOPIC_ID_CHARS = 52;
+
+/** `seq[4 LE] || sender_pubkey[32]` appended to every realtime frame. */
+export const TRAILER_LEN = 36;
+
+/** Vector caps a gossip message here; a larger frame is dropped, not rejected. */
+export const MAX_MESSAGE_SIZE = 128 * 1024;
+
+export function base32Encode(bytes: Uint8Array): string {
+  let out = "";
+  let buf = 0;
+  let bits = 0;
+  for (const b of bytes) {
+    buf = (buf << 8) | b;
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      out += B32[(buf >>> bits) & 0x1f];
+    }
+  }
+  if (bits > 0) out += B32[(buf << (5 - bits)) & 0x1f];
+  return out;
+}
+
+export function base32Decode(encoded: string): Uint8Array | undefined {
+  const out: number[] = [];
+  let buf = 0;
+  let bits = 0;
+  for (const ch of encoded) {
+    const v = B32.indexOf(ch.toUpperCase());
+    if (v < 0) return undefined;
+    buf = (buf << 5) | v;
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      out.push((buf >>> bits) & 0xff);
+    }
+  }
+  return new Uint8Array(out);
+}
+
+/**
+ * Vector's receive-side check, matched exactly: 52 characters, uppercase
+ * base32 only. A value failing this is dropped rather than propagated, so a
+ * UUID in this slot goes silently nowhere.
+ */
+export function isTopicId(value: string | undefined | null): value is string {
+  if (!value || value.length !== TOPIC_ID_CHARS) return false;
+  for (const c of value) {
+    if (!((c >= "A" && c <= "Z") || (c >= "2" && c <= "7"))) return false;
+  }
+  return true;
+}
+
+/**
+ * Mint the topic for an outbound `.xdc`. The sender mints ONCE and puts it on
+ * the file event; every participant reads it from there rather than deriving
+ * one, because a derived topic is asymmetric in a DM (each side's chat id is
+ * the other party's npub) and silently splits the players.
+ *
+ * Only the output shape is an interop contract, never the recipe, so this
+ * differs from Vector's deliberately in one place: Vector mixes a nanosecond
+ * clock plus a process counter, the counter being there because its clock
+ * reports nanos without resolving them and two sends in a tick minted the same
+ * "fresh" topic. `Date.now()` is coarser still, so the entropy here is real
+ * random bytes and the collision cannot happen.
+ */
+export async function mintTopicId(fileHash: string, senderHex: string): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const enc = new TextEncoder();
+  const parts = [
+    enc.encode("webxdc-realtime-v1:"),
+    enc.encode(fileHash),
+    enc.encode(":"),
+    enc.encode(senderHex),
+    enc.encode(":"),
+    salt,
+  ];
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const buf = new Uint8Array(total);
+  let at = 0;
+  for (const p of parts) {
+    buf.set(p, at);
+    at += p.length;
+  }
+  const digest = await crypto.subtle.digest("SHA-256", buf);
+  return base32Encode(new Uint8Array(digest));
+}
+
+/**
+ * The fallback for a file event carrying no topic tag, byte-identical to
+ * Vector's `derive_topic_id`. Note the first input is the manifest NAME: the
+ * Rust parameter is called `file_hash`, but both of its call sites pass the
+ * name, and the call sites are what the wire sees.
+ */
+export async function deriveTopicId(app: string, chatId: string, messageId: string): Promise<string> {
+  const enc = new TextEncoder();
+  const s = `webxdc-realtime-v1:${app}:${chatId}:${messageId}`;
+  const digest = await crypto.subtle.digest("SHA-256", enc.encode(s));
+  return base32Encode(new Uint8Array(digest));
+}
+
+/** Append Vector's trailer: the payload, then `seq[4 LE] || sender[32]`. */
+export function frame(payload: Uint8Array, seq: number, senderKey: Uint8Array): Uint8Array {
+  if (senderKey.length !== 32) throw new Error("sender key must be 32 bytes");
+  const out = new Uint8Array(payload.length + TRAILER_LEN);
+  out.set(payload, 0);
+  new DataView(out.buffer).setUint32(payload.length, seq >>> 0, true);
+  out.set(senderKey, payload.length + 4);
+  return out;
+}
+
+export interface Unframed {
+  payload: Uint8Array;
+  seq: number;
+  /** The 32-byte sender key the frame claims, lowercase hex. */
+  sender: string;
+}
+
+/**
+ * Strip the trailer. Anything shorter than the trailer itself is malformed and
+ * dropped, exactly as Vector drops it — the frame carries no length prefix, so
+ * a short read cannot be told from a truncated one.
+ */
+export function unframe(content: Uint8Array): Unframed | undefined {
+  if (content.length < TRAILER_LEN) return undefined;
+  const cut = content.length - TRAILER_LEN;
+  const view = new DataView(content.buffer, content.byteOffset, content.byteLength);
+  let sender = "";
+  for (let i = cut + 4; i < content.length; i++) sender += content[i].toString(16).padStart(2, "0");
+  return { payload: content.slice(0, cut), seq: view.getUint32(cut, true), sender };
+}
+
+/** A peer signal as it rides a Concord channel (kind 3310, sealed). */
+export type PeerSignal =
+  | { op: "ad"; topic: string; addr: string }
+  | { op: "left"; topic: string };
+
+/** Vector's `peer_signal_content`: the JSON body of a Concord peer signal. */
+export function peerSignalContent(topic: string, nodeAddr?: string): string {
+  return nodeAddr === undefined
+    ? JSON.stringify({ op: "left", topic })
+    : JSON.stringify({ op: "ad", topic, addr: nodeAddr });
+}
+
+/**
+ * Read a peer signal off the 3310 plane. Untrusted wire data from any channel
+ * member, so a malformed body is dropped rather than thrown on: one bad signal
+ * must not take down the ingest loop for everyone else's.
+ */
+export function parsePeerSignal(content: string): PeerSignal | undefined {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(content);
+  } catch {
+    return undefined;
+  }
+  if (!raw || typeof raw !== "object") return undefined;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.topic !== "string" || !isTopicId(o.topic)) return undefined;
+  if (o.op === "left") return { op: "left", topic: o.topic };
+  if (o.op === "ad" && typeof o.addr === "string" && o.addr.length > 0) {
+    return { op: "ad", topic: o.topic, addr: o.addr };
+  }
+  return undefined;
+}
