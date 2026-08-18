@@ -135,10 +135,19 @@ export function useNostrPush(): UsePushNotificationsReturn {
   // nameless for the session, so it needed timed re-seals to catch profiles
   // that landed late, and it could only ever name a pre-listed peer.
   useEffect(() => {
-    if (!supported || !user || !enabled) {
+    // Clear only in states that MEAN no session should hold a key: logged out,
+    // unsupported runtime, or the user's push intent turned off. `enabled` is
+    // false during every session's PREPARATION (and stays false when the
+    // gateway RPC fails), so clearing on it deleted the worker's decrypt
+    // config at each app start — a session that died before preparing left
+    // every later push degraded to the generic wake-up until a fully
+    // successful load happened to rewrite it.
+    if (!supported || !user || !loadPushIntent()) {
       void clearSwPushConfig();
       return;
     }
+    // Still preparing: leave the existing config for the worker to use.
+    if (!enabled) return;
     // Wait for the follow list: sealing a config while it loads would freeze
     // an empty known set on disk, reclassifying every known conversation as a
     // request until the next rewrite.
