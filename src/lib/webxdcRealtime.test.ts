@@ -37,9 +37,9 @@ describe("base32, as Vector spells it", () => {
     for (let n = 0; n <= 40; n++) {
       const src = crypto.getRandomValues(new Uint8Array(n));
       const back = base32Decode(base32Encode(src))!;
-      // Encoding pads the final group with zero bits, so the decode can carry
-      // one extra byte; the payload prefix is what must survive.
-      expect(back.slice(0, n), `length ${n}`).toEqual(src);
+      // Exact, not prefix-exact: a trailing zero byte here would append NUL to
+      // a decoded node address and break the JSON parse on the other side.
+      expect(back, `length ${n}`).toEqual(src);
     }
   });
 
