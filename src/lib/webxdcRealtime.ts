@@ -240,9 +240,15 @@ export function foldPeerSignals(
   // departure. Vector CLAMPS, which works there because it clamps once at
   // ingest and stores that value; a clamp here would be recomputed against
   // `now` on every fold, so the forged entry would keep winning forever.
-  // Folding live, the honest answer is to refuse a signal from the future:
-  // a clock skewed past this is not one whose ordering claims are usable.
-  const ceiling = Date.now() + 5 * 60_000;
+  // Folding live, the answer is to refuse a signal from the future instead.
+  //
+  // The window is an hour rather than Vector's five minutes because dropping
+  // is harsher than clamping and the error is symmetric: a peer whose clock
+  // runs fast goes unseen, and a peer whose OWN clock runs slow sees nobody at
+  // all, since every honest signal then looks future-dated. An hour tolerates
+  // the machines this actually happens on while still bounding a forged
+  // advertisement to an hour instead of forever.
+  const ceiling = Date.now() + 60 * 60_000;
   const latest = new Map<string, { signal: PeerSignal; ms: number }>();
   for (const ev of events) {
     if (ev.ms > ceiling) continue;

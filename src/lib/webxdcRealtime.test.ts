@@ -342,13 +342,17 @@ describe("bounds on sender-controlled fields", () => {
     expect(peers).toEqual([]);
   });
 
-  it("still accepts a mildly skewed clock", () => {
-    // A couple of minutes fast is an ordinary machine, not an attack.
-    const peers = foldPeerSignals(
-      [{ author: "alice", ms: Date.now() + 60_000, content: peerSignalContent(T, "a") }],
-      T,
-    );
-    expect(peers.map((p) => p.pubkey)).toEqual(["alice"]);
+  it("still accepts a skewed clock, in either direction", () => {
+    // Dropping is harsher than clamping and the error is symmetric: a peer
+    // whose clock runs fast goes unseen, and a peer whose own clock runs slow
+    // sees nobody, because every honest signal looks future-dated to them.
+    for (const skew of [60_000, 30 * 60_000, 59 * 60_000]) {
+      const peers = foldPeerSignals(
+        [{ author: "alice", ms: Date.now() + skew, content: peerSignalContent(T, "a") }],
+        T,
+      );
+      expect(peers.map((p) => p.pubkey), `${skew / 60_000} minutes`).toEqual(["alice"]);
+    }
   });
 });
 
