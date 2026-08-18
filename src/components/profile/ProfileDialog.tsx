@@ -276,7 +276,7 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
           <section className={cn("clip-corner-lg overflow-hidden border border-border", card)}>
             <div className="h-32 md:h-44 bg-secondary relative">
               {metadata?.banner && (
-                <img src={metadata.banner} alt="" className="w-full h-full object-cover" loading="lazy" />
+                <img src={metadata.banner} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />
               )}
             </div>
 
@@ -603,7 +603,7 @@ function FieldValue({ value }: { value: string }) {
   if (embeddable && IMAGE_EXT.test(embeddable)) {
     return (
       <a href={embeddable} target="_blank" rel="noopener noreferrer" className="block mt-1.5">
-        <img src={embeddable} alt="" className="w-full rounded-lg object-cover" loading="lazy" />
+        <img src={embeddable} alt="" className="w-full rounded-lg object-cover" loading="lazy" decoding="async" />
       </a>
     );
   }
@@ -653,6 +653,7 @@ function Favicon({ url }: { url: string }) {
       alt=""
       className="size-4 shrink-0 rounded-sm"
       loading="lazy"
+      decoding="async"
       onError={() => setFailed(true)}
     />
   );
@@ -671,7 +672,7 @@ function BadgeTile({ badge }: { badge: ProfileBadge }) {
   const inner = (
     <>
       {img ? (
-        <img src={img} alt={badge.name} className="size-14 rounded-lg object-cover mx-auto" loading="lazy" />
+        <img src={img} alt={badge.name} className="size-14 rounded-lg object-cover mx-auto" loading="lazy" decoding="async" />
       ) : (
         <div className="size-14 mx-auto rounded-lg border border-border bg-gradient-to-br from-primary/10 via-primary/5 to-transparent flex items-center justify-center">
           <Award className="size-7 text-primary/30" />
@@ -784,7 +785,7 @@ function SharedCommunityRow({ entry }: { entry: SharedCommunity }) {
       >
         <span className="flex size-7 shrink-0 items-center justify-center overflow-hidden clip-corner-lg bg-primary/15 text-primary text-xs font-bold">
           {iconUrl ? (
-            <img src={iconUrl} alt="" className="size-full object-cover" />
+            <img src={iconUrl} alt="" className="size-full object-cover" decoding="async" />
           ) : (
             name.trim()[0]?.toUpperCase() ?? "#"
           )}

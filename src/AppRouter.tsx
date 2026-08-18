@@ -321,12 +321,24 @@ function AppRoutes() {
   const location = useLocation();
   const background = (location.state as ProfileBackgroundState | null)?.backgroundLocation;
   const overlayPubkey = background ? profileOverlayPubkey(location.pathname) : undefined;
-  return (
-    <ProfileOverlayContext.Provider value={overlayPubkey}>
-      {/* Lazy route chunks paint the branded splash while they load, never a
-          blank frame. */}
-      <Suspense fallback={<RouteFallback />}>
-        <Routes location={background ?? location}>
+  // The location the APP is showing, as opposed to the one in the address bar.
+  // While a profile is open these differ, and this is the one that matters.
+  const target = background ?? location;
+
+  // Memoized on that location, which is load-bearing rather than tidiness.
+  // `<Routes>` re-derives its route tree from these children on every render,
+  // so a render here hands the matched page a fresh element and re-renders the
+  // whole routed tree — every message in the open channel included. Opening a
+  // profile changes the address bar but NOT `target` (that's the point of the
+  // background), so reusing the identical element lets React skip the routed
+  // tree entirely and the chat behind the overlay does nothing at all. It
+  // still re-renders on a real navigation, when `target` genuinely changes.
+  //
+  // The overlay itself is unaffected: it's driven by context, and a context
+  // update reaches its consumer (MainLayout) through a bailed-out subtree.
+  const routes = useMemo(
+    () => (
+        <Routes location={target}>
           <Route element={<MainLayout />}>
             <Route path="/" element={<HomeRedirect />} />
             <Route path="/welcome" element={<WelcomePage />} />
@@ -414,7 +426,15 @@ function AppRoutes() {
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>
-      </Suspense>
+    ),
+    [target],
+  );
+
+  return (
+    <ProfileOverlayContext.Provider value={overlayPubkey}>
+      {/* Lazy route chunks paint the branded splash while they load, never a
+          blank frame. */}
+      <Suspense fallback={<RouteFallback />}>{routes}</Suspense>
     </ProfileOverlayContext.Provider>
   );
 }
