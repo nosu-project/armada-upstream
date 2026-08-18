@@ -36,8 +36,19 @@ interface LoginScreenProps {
   onSignupClick?: () => void;
 }
 
+// bech32's own charset, excluding the letters it never emits (b, i, o, 1 and
+// uppercase), so a mistyped/truncated key is rejected here rather than at decode.
 const validateNsec = (nsec: string) => {
-  return /^nsec1[a-zA-Z0-9]{58}$/.test(nsec);
+  return /^nsec1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{58}$/.test(nsec);
+};
+
+// Pick the most specific reason an nsec-shaped input was rejected. An input that
+// already starts with nsec1 is almost always a truncated/partial paste, so say
+// that rather than the generic "starts with nsec1" hint, which reads as wrong.
+const nsecRejectionMessage = (input: string) => {
+  return input.startsWith('nsec1')
+    ? "That doesn't look like a complete secret key. Check you copied the whole nsec."
+    : 'Enter a secret key starting with nsec1, or a bunker:// URI.';
 };
 
 const validateBunkerUri = (uri: string) => {
@@ -295,7 +306,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
     }
 
     if (!validateNsec(input)) {
-      setLoginError('Enter a secret key starting with nsec1, or a bunker:// URI.');
+      setLoginError(nsecRejectionMessage(input));
       return;
     }
     executeLogin(input);
