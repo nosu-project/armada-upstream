@@ -33,6 +33,7 @@
 import { decode as nip19Decode } from "nostr-tools/nip19";
 
 import { ALL_MEDIA_EXTS } from "@/lib/mediaUrls";
+import { isWebxdcMime } from "@/lib/webxdcMime";
 
 /** NIP-17 file message — its content is a URL, not prose. */
 const KIND_DM_FILE = 15;
@@ -138,7 +139,7 @@ function labelForMime(mime: string | undefined): string | undefined {
   if (m.startsWith("image/")) return "an image";
   if (m.startsWith("video/")) return "a video";
   if (m.startsWith("audio/")) return "a voice message";
-  if (m === "application/x-webxdc") return "a game";
+  if (isWebxdcMime(m)) return "a game";
   return undefined;
 }
 
