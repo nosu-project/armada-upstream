@@ -706,6 +706,54 @@ public class NotificationRelayService extends Service {
         return null;
     }
 
+    /**
+     * Whether {@code event} is the user's read-state settings document. Matched
+     * by the {@code d}-tag suffix rather than a compiled-in constant: the tag is
+     * structurally {@code ${APP_ID}/read-state}, so a fork that renames
+     * {@code VITE_APP_ID} is covered without threading another config value
+     * through the plugin. Caller has already checked the kind is 30078.
+     */
+    private static boolean isReadStateDoc(JSONObject event) {
+        String d = tagValue(event, "d");
+        return d != null && d.endsWith("/read-state");
+    }
+
+    /**
+     * Decrypt the self-encrypted read-state blob (NIP-44 to the user's own key)
+     * and dismiss every conversation whose newest notified message is now at or
+     * older than the last-read stamp it carries — the reverse of a tray tap,
+     * driven by read state that advanced elsewhere and synced in over the
+     * standing kind-30078 subscription.
+     *
+     * <p>Best-effort on every axis: no signer, an unopenable payload, or a
+     * malformed document just leaves the tray as it is (the WebView still
+     * dismisses on next resume). The decrypted map's keys are already the
+     * {@code dm:<pk>} / {@code c2:<id>} / {@code <relayUrl>::<gid>} shape
+     * {@link #applyDismissRead} consumes; {@code c2m:}/{@code c2t:} sub-keys
+     * match no posted room and fall through harmlessly.
+     */
+    private void applyReadStateDismiss(JSONObject event) {
+        NativeSigner signer = nativeSigner;
+        if (signer == null || userPubkey == null) return;
+        signer.decrypt44(userPubkey, event.optString("content"), (plain, unavailable) -> {
+            if (plain == null) return;
+            try {
+                JSONObject readState = new JSONObject(plain).optJSONObject("readState");
+                if (readState == null) return;
+                java.util.HashMap<String, Long> map = new java.util.HashMap<>();
+                for (java.util.Iterator<String> it = readState.keys(); it.hasNext(); ) {
+                    String key = it.next();
+                    long ts = readState.optLong(key, 0);
+                    if (ts > 0) map.put(key, ts);
+                }
+                // Hops to the handler thread, where roomNotifs is confined.
+                dismissRead(map);
+            } catch (JSONException e) {
+                if (BuildConfig.DEBUG) Log.d(TAG, "read-state parse failed: " + e.getMessage());
+            }
+        });
+    }
+
     private void deliverAuth(String relayUrl, String eventJson) {
         for (RelayConnection rc : connections) {
             if (rc.relayUrl.equals(relayUrl)) {
@@ -3103,6 +3151,15 @@ public class NotificationRelayService extends Service {
             // authorizing against another either stores documents we never
             // asked for or discards ones we did.
             if (userPubkey != null) ServiceStore.cacheSelfState(this, event, userPubkey, selfDTags);
+            // The one self-document the service acts on rather than merely
+            // filing: a read advanced on another device dismisses the matching
+            // tray notification while the app is dead — the background half of
+            // NativeReadDismiss, which otherwise runs only on the next WebView
+            // resume. Everything else here stays verbatim ciphertext for the
+            // WebView to open.
+            if (kind == SelfState.KIND_APP_SPECIFIC && isReadStateDoc(event)) {
+                applyReadStateDismiss(event);
+            }
             return;
         }
 

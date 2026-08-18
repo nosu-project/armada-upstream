@@ -17,10 +17,16 @@ package buzz.armada.app.db
  * `main` tenant the WebView reads. Opening the app then finds the current list
  * already on disk, with no relay round-trip in the critical path.
  *
- * Nothing here decrypts. A 10009's private items and the 30078 settings blob
- * are NIP-44-encrypted to the user, and the service has no reason to open them:
+ * Nothing here decrypts, and this object stays pure/Context-free. A 10009's
+ * private items and the 30078 settings blobs are NIP-44-encrypted to the user;
  * storing the raw event verbatim is the whole job, and the WebView decrypts on
  * read exactly as it does for an event it fetched itself.
+ *
+ * The one document the service opens for itself — in [NotificationRelayService],
+ * not here — is `armada/read-state`: a read advanced on another device has to
+ * dismiss the matching tray notification while the app is dead, and the stamps
+ * to do it live inside that encrypted blob. The decryption is the service's,
+ * so this catalogue remains a pure set of rules with no crypto of its own.
  *
  * Pure and Context-free so the rules can be tested on the JVM without an
  * emulator, matching [Dm17] and [Concord].
