@@ -31,6 +31,20 @@ interface WasmModule {
 /** Where `npm run build:wasm` puts the package. */
 const MODULE_PATH = "/src/wasm/webxdc-rt/webxdc_rt.js";
 
+/**
+ * Resolved through `import.meta.glob` rather than a bare dynamic import, which
+ * is what makes the same code work in dev and in a production bundle while
+ * still tolerating the package being absent.
+ *
+ * Vite reads the pattern at build time: when the crate has been built it emits
+ * a lazy chunk and rewrites the wasm URL to a hashed asset; when it has not,
+ * the map is simply empty and the app builds and runs without it. A plain
+ * `import(path)` cannot do both — Vite either fails to resolve it at build
+ * time, or (with `@vite-ignore`) emits a raw runtime URL that 404s once the
+ * app is served from `dist`.
+ */
+const CANDIDATES = import.meta.glob("/src/wasm/webxdc-rt/webxdc_rt.js");
+
 let pending: Promise<RealtimeTransport | undefined> | undefined;
 
 /**
@@ -47,8 +61,13 @@ export function realtimeTransport(): Promise<RealtimeTransport | undefined> {
 }
 
 async function load(): Promise<RealtimeTransport | undefined> {
+  const loader = CANDIDATES[MODULE_PATH];
+  if (!loader) {
+    console.info("[webxdc] realtime transport not built; using the relay path (npm run build:wasm)");
+    return undefined;
+  }
   try {
-    const mod = (await import(/* @vite-ignore */ MODULE_PATH)) as WasmModule;
+    const mod = (await loader()) as WasmModule;
     await mod.default();
     return await new mod.RealtimeNode();
   } catch (e) {
