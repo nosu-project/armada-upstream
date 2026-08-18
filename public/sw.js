@@ -80,9 +80,12 @@ self.addEventListener("activate", (event) => {
 // ~3800 bytes), a scope whose keys this worker doesn't hold, or a build with no
 // bundle. That fallback then keeps the old behavior: show the static wake-up
 // immediately — synchronously, so the userVisibleOnly contract is never broken,
-// since iOS revokes the subscription after a few silent pushes — and for
-// plaintext group messages replace it in place with the message preview fetched
-// from a relay, using the same `tag`.
+// since iOS revokes the subscription after a few silent pushes — then fetch the
+// event from a relay by id and finish the job late: a plaintext group message
+// replaces the wake-up in place with its preview, and an encrypted DM/Concord
+// wrap goes through the same open/store/compose as the inline path, replacing
+// the wake-up with the real notification or WITHDRAWING it when the decrypted
+// event turns out to be the user's own self-copy.
 
 const PLAINTEXT_SCOPES = new Set(["group", "group-mention"]);
 const PUSH_STATE_CACHE = "armada-push-state-v1";
@@ -394,9 +397,14 @@ async function readSealedConfig() {
  * request policy) is the quietest we can be — one collapsing entry, no sound,
  * no re-alert — never true silence.
  */
-async function showInlineNotification(base, data, silent) {
+async function showInlineNotification(base, data, silent, opts) {
   const runtime = self.ArmadaDmCrypto;
   if (!data.event || !runtime || typeof runtime.preparePush !== "function") return false;
+
+  // Set when the event was FETCHED after the static wake-up was already
+  // shown (the gateway didn't inline it): the tag that wake-up is under, so a
+  // "drop" withdraws it and a real notification replaces it.
+  const staticTag = opts && opts.staticTag;
 
   let prepared;
   try {
@@ -410,10 +418,16 @@ async function showInlineNotification(base, data, silent) {
   // The bundle opened it and says it shouldn't be seen at all — the user's own
   // message sent from another device, or a reaction to someone else's. Only
   // the decrypted rumor could have told us that, so the decision arrives here
-  // rather than in suppressPush. Treated exactly like any other suppressed
-  // push: nothing shown, but the Apple keep-alive still ticks.
+  // rather than in suppressPush. On the inline path nothing has been shown, so
+  // the Apple keep-alive still ticks; on the fetched path the static wake-up
+  // is already on screen — the userVisibleOnly promise is kept — so it is
+  // withdrawn instead.
   if (prepared.drop) {
-    await quietSync(base, data);
+    if (staticTag) {
+      await withdrawNotifications(staticTag);
+    } else {
+      await quietSync(base, data);
+    }
     return "dropped";
   }
 
@@ -427,6 +441,11 @@ async function showInlineNotification(base, data, silent) {
     ? await appendRoomLine(prepared.tag, prepared.line)
     : [prepared.line];
   const quiet = silent || prepared.quiet === true;
+
+  // Replacing a fetched push's static wake-up: it collapses under the
+  // subscription-level tag, the real notification under its room tag, so the
+  // wake-up must be withdrawn explicitly (same tag replaces in place).
+  if (staticTag && staticTag !== prepared.tag) await withdrawNotifications(staticTag);
 
   await self.registration.showNotification(prepared.title, {
     ...base,
@@ -443,6 +462,17 @@ async function showInlineNotification(base, data, silent) {
     data: { ...routeData, url: prepared.url, lines: prepared.accumulate ? lines : undefined },
   });
   return "shown";
+}
+
+/** Close every notification currently shown under `tag`. Best-effort. */
+async function withdrawNotifications(tag) {
+  try {
+    if (typeof self.registration.getNotifications !== "function") return;
+    const shown = await self.registration.getNotifications({ tag });
+    for (const n of shown) n.close();
+  } catch {
+    // No introspection — the notification stays until tapped.
+  }
 }
 
 /**
@@ -629,10 +659,18 @@ self.addEventListener("push", (event) => {
       });
       await Promise.all([incrementAppBadge(), resetQuietBudget()]);
 
-      // 2. Best-effort enrichment for plaintext events (nostr-push scopes).
-      if (!data.event_id || !PLAINTEXT_SCOPES.has(data.scope)) return;
+      // 2. Best-effort enrichment when the gateway didn't inline the event.
+      // Plaintext groups replace the wake-up with the message text; encrypted
+      // scopes (DM / Concord) fetch the wrap and run it through the SAME
+      // open/store/compose the inline path uses — which is also the only way
+      // a non-inlined self-copy can be recognized and withdrawn at all.
+      if (!data.event_id) return;
       const relays = Array.isArray(data.relays) ? data.relays : [];
       if (relays.length === 0) return;
+      const canOpenEncrypted = (data.scope === "dm" || data.scope === "c2")
+        && self.ArmadaDmCrypto
+        && typeof self.ArmadaDmCrypto.preparePush === "function";
+      if (!PLAINTEXT_SCOPES.has(data.scope) && !canOpenEncrypted) return;
 
       let ev;
       try {
@@ -641,6 +679,15 @@ self.addEventListener("push", (event) => {
         return; // leave the static notification in place
       }
       if (!ev) return;
+
+      if (canOpenEncrypted) {
+        // The wake-up above is already on screen, so the userVisibleOnly
+        // promise is kept whatever happens here: a decrypted message replaces
+        // it, the user's own self-copy withdraws it, and an unopenable wrap
+        // leaves it as it is.
+        await showInlineNotification(base, { ...data, event: ev }, silent, { staticTag: tag });
+        return;
+      }
 
       const h = tagValue(ev, "h");
       await self.registration.showNotification(title, {

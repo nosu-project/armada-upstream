@@ -35,7 +35,13 @@ function loadWorker(options: {
   pushConfig?: Record<string, unknown>;
   pushEndpoint?: string;
   pushDisabled?: boolean;
-  priorNotifications?: Array<{ tag: string; data: Record<string, unknown> }>;
+  priorNotifications?: Array<{ tag: string; data: Record<string, unknown>; close?: () => void }>;
+  /**
+   * The event a relay answers the worker's by-id REQ with (the fetch path for
+   * pushes the gateway didn't inline). Its `id` must match the push's
+   * `event_id` for the worker to accept it.
+   */
+  relayEvent?: Record<string, unknown>;
 } = {}) {
   const handlers = new Map<string, (event: unknown) => unknown>();
   const showNotification = vi.fn(async () => undefined);
@@ -114,6 +120,30 @@ function loadWorker(options: {
     keys: vi.fn(async () => []),
   };
 
+  // A relay socket that answers the worker's by-id REQ with `relayEvent` (if
+  // any) followed by EOSE — the fetch path for pushes without an inlined event.
+  class FakeWebSocket {
+    url: string;
+    onopen?: () => void;
+    onmessage?: (msg: { data: string }) => void;
+    onerror?: () => void;
+    constructor(url: string) {
+      this.url = url;
+      setTimeout(() => this.onopen?.(), 0);
+    }
+    send(raw: string) {
+      const frame = JSON.parse(raw) as [string, string];
+      if (frame[0] !== "REQ") return;
+      setTimeout(() => {
+        if (options.relayEvent) {
+          this.onmessage?.({ data: JSON.stringify(["EVENT", frame[1], options.relayEvent]) });
+        }
+        this.onmessage?.({ data: JSON.stringify(["EOSE", frame[1]]) });
+      }, 0);
+    }
+    close() {}
+  }
+
   runInNewContext(workerSource, {
     self,
     caches,
@@ -123,6 +153,7 @@ function loadWorker(options: {
     console,
     setTimeout,
     clearTimeout,
+    WebSocket: FakeWebSocket,
   });
 
   async function push(data: Record<string, unknown>): Promise<void> {
@@ -579,5 +610,102 @@ describe("Web Push kill switch", () => {
     const worker = loadWorker();
     await worker.pushSubscriptionChange();
     expect(worker.subscribe).toHaveBeenCalled();
+  });
+});
+
+describe("Fetched (non-inlined) encrypted pushes", () => {
+  // The gateway inlines the matched event best-effort; past its payload budget
+  // the static wake-up arrives with only an `event_id`. The worker then shows
+  // the wake-up immediately (userVisibleOnly) and fetches the event by id to
+  // finish the job late, through the same preparePush the inline path uses.
+  const prepared = {
+    tag: "dm-alice",
+    url: "/dm/alice",
+    title: "Alice",
+    line: "hi there",
+    icon: "/favicon.png",
+    badge: "/badge-96.png",
+    timestamp: 1_000_000,
+    accumulate: true,
+  };
+
+  it("fetches the wrap, decrypts it, and replaces the static wake-up", async () => {
+    const preparePush = vi.fn(async () => prepared);
+    const staticEntry = { tag: "sub-1", data: {}, close: vi.fn() };
+    const worker = loadWorker({
+      runtime: { preparePush },
+      pushConfig: { self: "me" },
+      relayEvent: { id: "wrap-1", kind: 1059, tags: [], content: "x" },
+      priorNotifications: [staticEntry],
+    });
+
+    await worker.push({
+      scope: "dm",
+      tag: "sub-1",
+      event_id: "wrap-1",
+      relays: ["wss://relay.example"],
+      url: "/dm",
+    });
+
+    // Static wake-up first, then the decrypted replacement under its room tag.
+    expect(worker.showNotification).toHaveBeenCalledTimes(2);
+    const [title, opts] = worker.showNotification.mock.calls[1] as unknown as [
+      string,
+      { tag: string; body: string },
+    ];
+    expect(title).toBe("Alice");
+    expect(opts.tag).toBe("dm-alice");
+    // preparePush received the fetched event as if the gateway had inlined it.
+    const [dataArg] = preparePush.mock.calls[0] as unknown as [{ event?: { id?: string } }];
+    expect(dataArg.event?.id).toBe("wrap-1");
+    // The wake-up's subscription-tag entry was withdrawn.
+    expect(staticEntry.close).toHaveBeenCalled();
+  });
+
+  it("withdraws the static wake-up when the fetched wrap is the user's own", async () => {
+    const staticEntry = { tag: "sub-1", data: {}, close: vi.fn() };
+    const worker = loadWorker({
+      runtime: { preparePush: vi.fn(async () => ({ ...prepared, drop: true })) },
+      pushConfig: { self: "me" },
+      relayEvent: { id: "wrap-own", kind: 1059, tags: [], content: "x" },
+      priorNotifications: [staticEntry],
+      // Apple endpoint: the drop must NOT spend a "Messages synced" keep-alive
+      // — the static wake-up already satisfied userVisibleOnly for this push.
+      pushEndpoint: "https://web.push.apple.com/QKw71NdV3vO",
+    });
+
+    await worker.push({
+      scope: "dm",
+      tag: "sub-1",
+      event_id: "wrap-own",
+      relays: ["wss://relay.example"],
+      url: "/dm",
+    });
+
+    // Only the static wake-up was shown, and it was withdrawn afterwards.
+    expect(worker.showNotification).toHaveBeenCalledTimes(1);
+    expect(staticEntry.close).toHaveBeenCalled();
+  });
+
+  it("leaves the static wake-up when the wrap cannot be opened", async () => {
+    const staticEntry = { tag: "sub-1", data: {}, close: vi.fn() };
+    const worker = loadWorker({
+      // No decrypt key for this login: preparePush declines.
+      runtime: { preparePush: vi.fn(async () => undefined) },
+      pushConfig: { self: "me" },
+      relayEvent: { id: "wrap-2", kind: 1059, tags: [], content: "x" },
+      priorNotifications: [staticEntry],
+    });
+
+    await worker.push({
+      scope: "dm",
+      tag: "sub-1",
+      event_id: "wrap-2",
+      relays: ["wss://relay.example"],
+      url: "/dm",
+    });
+
+    expect(worker.showNotification).toHaveBeenCalledTimes(1);
+    expect(staticEntry.close).not.toHaveBeenCalled();
   });
 });
