@@ -295,6 +295,19 @@ function usableMime(m: string | undefined): string | undefined {
 }
 
 /**
+ * Whether a MIME type names a webxdc Mini App. Armada writes
+ * `application/x-webxdc`; Vector writes `application/vnd.webxdc+zip`. We keep
+ * writing `x-webxdc` (so no existing message changes meaning) but accept either
+ * on READ, so a Mini App sent from Vector renders as a launch card rather than a
+ * generic file. The `.xdc` extension is a separate, complementary signal — a
+ * Blossom blob's server-assigned extension isn't decidable, so the MIME is the
+ * reliable one for the encrypted (Vector) case.
+ */
+function isWebxdcMime(m: string | undefined): boolean {
+  return m === "application/x-webxdc" || m === "application/vnd.webxdc+zip";
+}
+
+/**
  * Rich message content renderer. Tokenizes the event content and renders:
  * URLs (inline images/galleries, video and audio players, link preview
  * cards), nostr: URIs (mentions, embedded note/naddr cards), hashtags,
@@ -529,7 +542,11 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           // encrypted (Concord/Vector) blobs decrypt before playback.
           const imetaMime = inlineImetaMime ?? imetaMimeByUrl.get(url);
           const isImetaMedia = imetaMime?.startsWith("audio/") || imetaMime?.startsWith("video/");
-          if (EMBED_MEDIA_URL_REGEX.test(url) || isImetaMedia) {
+          // A webxdc app inline: Armada's own URL ends `.xdc` (matched by
+          // EMBED_MEDIA_URL_REGEX), but a Vector one is an extension-less
+          // Blossom URL, recognizable only by its imeta MIME or `webxdc` uuid.
+          const isInlineWebxdc = isWebxdcMime(imetaMime) || Boolean(inlineImeta?.webxdc);
+          if (EMBED_MEDIA_URL_REGEX.test(url) || isImetaMedia || isInlineWebxdc) {
             if (out.length > 0) {
               const prev = out[out.length - 1];
               if (prev.type === "text") {
@@ -540,7 +557,9 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
               type: "media-embed",
               url,
               encryption: inlineImeta?.encryption,
-              mime: imetaMime,
+              // Normalize a webxdc MIME so the render-side isXdc check fires even
+              // when the only signal was the uuid on an extension-less URL.
+              mime: isInlineWebxdc && !isWebxdcMime(imetaMime) ? "application/x-webxdc" : imetaMime,
               fallbacks: inlineImeta?.fallbacks,
             });
             lastIndex = index + fullMatch.length;
@@ -553,7 +572,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           // generic file attachment (PDF, zip, doc): render a download-only
           // card. Gated on `inlineImeta` so ordinary pasted links stay link
           // cards; webxdc is excluded (it has its own inline handling).
-          if (inlineImeta && !inlineImeta.webxdc && imetaMime !== "application/x-webxdc") {
+          if (inlineImeta && !inlineImeta.webxdc && !isWebxdcMime(imetaMime)) {
             if (out.length > 0) {
               const prev = out[out.length - 1];
               if (prev.type === "text") {
@@ -726,10 +745,24 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         } else if (mime?.startsWith("audio/") || mime?.startsWith("video/")) {
           result.push({ type: "media-embed", url, encryption: entry.encryption, mime, fallbacks: entry.fallbacks });
           renderedUrls.add(url);
-        } else if (!entry.webxdc && mime !== "application/x-webxdc") {
+        } else if (isWebxdcMime(mime) || entry.webxdc) {
+          // A webxdc Mini App declared only in imeta — the Vector case, where
+          // the Blossom URL never appears inline, so the `.xdc`-extension path
+          // that catches Armada's own can't reach it. Emit a media-embed; the
+          // render pass turns it into an XdcAttachment launch card via isXdc.
+          // Normalize the MIME to a webxdc spelling so that check fires even
+          // when the signal was only the `webxdc` uuid on an extension-less URL.
+          result.push({
+            type: "media-embed",
+            url,
+            encryption: entry.encryption,
+            mime: isWebxdcMime(mime) ? mime : "application/x-webxdc",
+            fallbacks: entry.fallbacks,
+          });
+          renderedUrls.add(url);
+        } else {
           // Any other imeta attachment (PDF, zip, arbitrary document) is a
-          // generic file — render a download-only card. webxdc is excluded
-          // (handled inline as its own attachment type).
+          // generic file — render a download-only card.
           result.push({
             type: "file-embed",
             url,
@@ -1059,7 +1092,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         // imeta entry for tokens created by pure extension match.
         const encryption = token.encryption ?? imeta?.encryption;
         const fallbacks = token.fallbacks ?? imeta?.fallbacks;
-        const isXdc = mime === "application/x-webxdc"
+        const isXdc = isWebxdcMime(mime)
           || /\.xdc(\?[^\s]*)?$/i.test(token.url);
         if (isXdc) {
           return <XdcAttachment key={key} url={token.url} imeta={imeta} />;
