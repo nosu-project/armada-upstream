@@ -1084,7 +1084,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         const isXdc = isWebxdcMime(mime)
           || /\.xdc(\?[^\s]*)?$/i.test(token.url);
         if (isXdc) {
-          return <XdcAttachment key={key} url={token.url} imeta={imeta} />;
+          return <XdcAttachment key={key} url={token.url} imeta={imeta} messageId={event.id} />;
         }
         const isAudio = mime.startsWith("audio/") || AUDIO_EXT_URL_REGEX.test(token.url);
         if (isAudio) {

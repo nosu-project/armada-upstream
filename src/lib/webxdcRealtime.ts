@@ -9,6 +9,8 @@
  * and `src-tauri/src/miniapps/realtime.rs`.
  */
 
+import { sha256 } from "@noble/hashes/sha2.js";
+
 /** RFC 4648 base32, no padding — the alphabet Vector encodes topic ids with. */
 const B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
@@ -80,26 +82,14 @@ export function isTopicId(value: string | undefined | null): value is string {
  * "fresh" topic. `Date.now()` is coarser still, so the entropy here is real
  * random bytes and the collision cannot happen.
  */
-export async function mintTopicId(fileHash: string, senderHex: string): Promise<string> {
+export function mintTopicId(fileHash: string, senderHex: string): string {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const enc = new TextEncoder();
-  const parts = [
-    enc.encode("webxdc-realtime-v1:"),
-    enc.encode(fileHash),
-    enc.encode(":"),
-    enc.encode(senderHex),
-    enc.encode(":"),
-    salt,
-  ];
-  const total = parts.reduce((n, p) => n + p.length, 0);
-  const buf = new Uint8Array(total);
-  let at = 0;
-  for (const p of parts) {
-    buf.set(p, at);
-    at += p.length;
-  }
-  const digest = await crypto.subtle.digest("SHA-256", buf);
-  return base32Encode(new Uint8Array(digest));
+  const head = enc.encode(`webxdc-realtime-v1:${fileHash}:${senderHex}:`);
+  const buf = new Uint8Array(head.length + salt.length);
+  buf.set(head, 0);
+  buf.set(salt, head.length);
+  return base32Encode(sha256(buf));
 }
 
 /**
@@ -108,11 +98,23 @@ export async function mintTopicId(fileHash: string, senderHex: string): Promise<
  * Rust parameter is called `file_hash`, but both of its call sites pass the
  * name, and the call sites are what the wire sees.
  */
-export async function deriveTopicId(app: string, chatId: string, messageId: string): Promise<string> {
-  const enc = new TextEncoder();
-  const s = `webxdc-realtime-v1:${app}:${chatId}:${messageId}`;
-  const digest = await crypto.subtle.digest("SHA-256", enc.encode(s));
-  return base32Encode(new Uint8Array(digest));
+export function deriveTopicId(app: string, chatId: string, messageId: string): string {
+  return base32Encode(sha256(new TextEncoder().encode(`webxdc-realtime-v1:${app}:${chatId}:${messageId}`)));
+}
+
+/**
+ * The topic for a Mini App shared as a bare URL, byte-identical to Vector's
+ * `derive_url_topic_id`.
+ *
+ * A pasted `.xdc` link has no file event to carry a minted topic, so every
+ * recipient derives the same one from what the message already gives them.
+ * The message id, not the bytes: a server can rebuild an identical app into
+ * new bytes, and two people who tapped the same card hours apart still belong
+ * in one session. Re-sharing the same link is a new message, so it is a new
+ * game rather than a surprise seat at the old one.
+ */
+export function deriveUrlTopicId(url: string, messageId: string): string {
+  return base32Encode(sha256(new TextEncoder().encode(`webxdc-url-realtime-v1:${url}:${messageId}`)));
 }
 
 /** Append Vector's trailer: the payload, then `seq[4 LE] || sender[32]`. */
