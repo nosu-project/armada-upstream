@@ -90,6 +90,7 @@ const {
   detectCachedHevcCapability,
 } = require("./hevcScreenShare");
 const { displayMediaGrant, displayMediaHandlerOptions } = require("./displayMediaPolicy");
+const { installYouTubeEmbedIdentity } = require("./youtubeEmbedIdentity");
 
 // Encoder selection is process-wide in Chromium and must be installed before
 // app readiness (and therefore before the GPU process starts). Software is the
@@ -1582,6 +1583,14 @@ if (!gotLock) {
     // the bundle chosen here.
     selectActiveBundle();
     registerAppProtocol();
+    // YouTube rejects embedded players whose client identity is a custom
+    // scheme (error 153). Packaged app:// builds identify themselves by the
+    // Electron app id; normal web/dev origins keep their own HTTP Referer.
+    // Install this before createWindow() so the first embed cannot race it.
+    installYouTubeEmbedIdentity({
+      webRequest: session.defaultSession.webRequest,
+      isPackaged: app.isPackaged,
+    });
     installPermissionHandlers();
     installIpc();
     // After whenReady: on Linux safeStorage has no key until the app is ready.

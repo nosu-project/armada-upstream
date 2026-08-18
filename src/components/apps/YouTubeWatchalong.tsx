@@ -11,6 +11,12 @@ import { useWebxdcApi, type AppSync } from "@/hooks/useWebxdcApi";
 import { useYouTubeTitle } from "@/hooks/useYouTubeTitle";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { parseYouTubeTarget } from "@/lib/linkEmbed";
+import {
+  hasNativeYouTubePlayer,
+  needsNativeYouTubePlayer,
+  openNativeYouTube,
+  openYouTubeTargetPage,
+} from "@/lib/nativeYouTube";
 import { loadYouTubeApi, YT_STATE, type YTPlayer } from "@/lib/youtubeApi";
 import { cn } from "@/lib/utils";
 
@@ -85,6 +91,8 @@ export function YouTubeWatchalong({ sync }: { sync: AppSync }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YTPlayer | null>(null);
   const applyingRemote = useRef(false);
+  const nativeIosPlayer = needsNativeYouTubePlayer();
+  const [nativePlayerErrorFor, setNativePlayerErrorFor] = useState("");
 
   const current = snap.current >= 0 ? snap.queue[snap.current] : undefined;
   const currentKey = current ? current.id : "";
@@ -136,7 +144,7 @@ export function YouTubeWatchalong({ sync }: { sync: AppSync }) {
 
   // ── (Re)build the player when the now-playing entry changes ──────────────
   useEffect(() => {
-    if (!current || !containerRef.current) return;
+    if (nativeIosPlayer || !current || !containerRef.current) return;
     let destroyed = false;
     let player: YTPlayer | null = null;
     const entry = current;
@@ -183,7 +191,7 @@ export function YouTubeWatchalong({ sync }: { sync: AppSync }) {
     };
     // Rebuild only when the now-playing *entry* changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentKey]);
+  }, [currentKey, nativeIosPlayer]);
 
   // When the snapshot's play/time changes (entry unchanged), nudge the player.
   useEffect(() => {
@@ -258,6 +266,29 @@ export function YouTubeWatchalong({ sync }: { sync: AppSync }) {
   const canPrev = snap.current > 0;
   const canNext = snap.current >= 0 && snap.current < snap.queue.length - 1;
 
+  const openIosPlayer = useCallback(() => {
+    const s = snapRef.current;
+    const entry = s.current >= 0 ? s.queue[s.current] : undefined;
+    if (!entry) return;
+
+    const startSeconds = s.playing ? s.time + Math.max(0, (Date.now() - s.at) / 1000) : s.time;
+    const target = {
+      videoId: entry.videoId,
+      playlistId: entry.playlistId,
+      startSeconds,
+      autoplay: s.playing,
+    };
+    setNativePlayerErrorFor("");
+
+    if (!hasNativeYouTubePlayer()) {
+      openYouTubeTargetPage(target);
+      return;
+    }
+    void openNativeYouTube(target).then((opened) => {
+      setNativePlayerErrorFor(opened ? "" : entry.id);
+    });
+  }, []);
+
   return (
     <div className="flex flex-col gap-3">
       {/* Add-to-queue bar — link only (no in-app search). */}
@@ -292,8 +323,31 @@ export function YouTubeWatchalong({ sync }: { sync: AppSync }) {
           isn't scrollable; an unbounded 16:9 box would push the queue off). */}
       {current ? (
         <div className="mx-auto w-full max-h-[45vh] aspect-video overflow-hidden clip-corner-lg bg-black relative">
-          <div ref={containerRef} className="absolute inset-0 w-full h-full" />
-          {!ready && (
+          {nativeIosPlayer ? (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#100b15] px-6 text-center text-white">
+              <MonitorPlay className="size-10 text-[#ff0000]" />
+              <div>
+                <p className="text-sm font-semibold">YouTube opens in Armada's video player</p>
+                <p className="mt-1 text-xs text-white/60">It starts at the shared watch position.</p>
+              </div>
+              <Button type="button" onClick={openIosPlayer}>
+                <Play className="size-4 fill-current" />
+                Open player
+              </Button>
+              {nativePlayerErrorFor === currentKey && (
+                <button
+                  type="button"
+                  className="text-xs text-white/70 underline underline-offset-2"
+                  onClick={() => openYouTubeTargetPage(current)}
+                >
+                  Open on YouTube instead
+                </button>
+              )}
+            </div>
+          ) : (
+            <div ref={containerRef} className="absolute inset-0 h-full w-full" />
+          )}
+          {!nativeIosPlayer && !ready && (
             <div className="absolute inset-0 flex items-center justify-center text-sm text-white/70">
               Loading player…
             </div>

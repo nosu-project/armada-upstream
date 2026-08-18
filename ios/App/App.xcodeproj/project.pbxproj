@@ -23,6 +23,7 @@
 		50B271D11FEDC1A000F3C39B /* public in Resources */ = {isa = PBXBuildFile; fileRef = 50B271D01FEDC1A000F3C39B /* public */; };
 		A2D8B0012C0100000000A102 /* ArmadaDbPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2D8B0012C0100000000A101 /* ArmadaDbPlugin.swift */; };
 		A2D8B0012C0100000000A10B /* ArmadaPushPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2D8B0012C0100000000A10A /* ArmadaPushPlugin.swift */; };
+		A2D8B0012C0100000000A10D /* ArmadaYouTubePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2D8B0012C0100000000A10C /* ArmadaYouTubePlugin.swift */; };
 		A2D8B0012C0100000000A104 /* ViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2D8B0012C0100000000A103 /* ViewController.swift */; };
 		A2D8B0012C0100000000A106 /* ArmadaDB in Frameworks */ = {isa = PBXBuildFile; productRef = A2D8B0012C0100000000A105 /* ArmadaDB */; };
 		A2D8B0012C0100000000A109 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A2D8B0012C0100000000A108 /* PrivacyInfo.xcprivacy */; };
@@ -48,6 +49,7 @@
 		A17E4C1B2B0100000000A001 /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
 		A2D8B0012C0100000000A101 /* ArmadaDbPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArmadaDbPlugin.swift; sourceTree = "<group>"; };
 		A2D8B0012C0100000000A10A /* ArmadaPushPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArmadaPushPlugin.swift; sourceTree = "<group>"; };
+		A2D8B0012C0100000000A10C /* ArmadaYouTubePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArmadaYouTubePlugin.swift; sourceTree = "<group>"; };
 		A2D8B0012C0100000000A103 /* ViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewController.swift; sourceTree = "<group>"; };
 		A2D8B0012C0100000000A108 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -127,6 +129,7 @@
 				A2D8B0012C0100000000A103 /* ViewController.swift */,
 				A2D8B0012C0100000000A101 /* ArmadaDbPlugin.swift */,
 				A2D8B0012C0100000000A10A /* ArmadaPushPlugin.swift */,
+				A2D8B0012C0100000000A10C /* ArmadaYouTubePlugin.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
@@ -283,6 +286,7 @@
 				A2D8B0012C0100000000A104 /* ViewController.swift in Sources */,
 				A2D8B0012C0100000000A102 /* ArmadaDbPlugin.swift in Sources */,
 				A2D8B0012C0100000000A10B /* ArmadaPushPlugin.swift in Sources */,
+				A2D8B0012C0100000000A10D /* ArmadaYouTubePlugin.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
