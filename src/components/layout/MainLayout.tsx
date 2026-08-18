@@ -1,3 +1,4 @@
+import { Loader2 } from "lucide-react";
 import { lazy, Suspense, useContext } from "react";
 import { Outlet, useNavigate } from "react-router-dom";
 
@@ -19,6 +20,28 @@ const ProfileDialog = lazy(
     import("@/components/profile/ProfileDialog").then((m) => ({ default: m.ProfileDialog })),
   ),
 );
+
+/**
+ * What stands in for the profile between the click and the panel: the
+ * overlay's own backdrop with a spinner in it, in the same pane and at the
+ * same z as the real thing, so the panel lands ON this rather than after a
+ * flash of un-dimmed chat.
+ *
+ * There IS a gap to fill even though the chunk is warmed at idle
+ * (`useWarmRouteChunks`) — the warm can lose to a click made early in the
+ * session, and a cold cache after a deploy has to fetch it. Dismissible,
+ * because a spinner you can't back out of is worse than the wait.
+ */
+function ProfileOverlayFallback({ onDismiss }: { onDismiss: () => void }) {
+  return (
+    <div
+      className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in-0"
+      onClick={onDismiss}
+    >
+      <Loader2 className="size-8 animate-spin text-muted-foreground" />
+    </div>
+  );
+}
 
 /**
  * Application frame. Desktop renders the multi-pane Discord layout (server
@@ -69,7 +92,7 @@ export function MainLayout() {
         <div className="relative flex min-w-0 flex-1">
           <Outlet />
           {overlayPubkey && (
-            <Suspense fallback={null}>
+            <Suspense fallback={<ProfileOverlayFallback onDismiss={() => navigate(-1)} />}>
               <ProfileDialog
                 pubkey={overlayPubkey}
                 // Closing is a history step, and the page underneath is the

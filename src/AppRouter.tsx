@@ -275,6 +275,11 @@ function useWarmRouteChunks() {
         // first — its first paint shouldn't stack a chunk fetch on top of the
         // directory queries.
         () => import("@/pages/DiscoverPage"),
+        // Not a route at all: the profile overlay, which opens OVER one of the
+        // pages above. It's the one lazy chunk fetched from inside a session
+        // rather than on the way to a page, so nothing else would ever warm it
+        // and every first profile of a session paid for it under a spinner.
+        () => import("@/components/profile/ProfileDialog"),
       ]) {
         void load().catch(() => undefined);
       }
