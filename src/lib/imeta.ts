@@ -11,7 +11,12 @@ export interface ImetaEntry {
   mime?: string;
   /** Summary text (used as webxdc app name for webxdc attachments). */
   summary?: string;
-  /** Webxdc session UUID — present when the attachment is a stateful webxdc app. */
+  /**
+   * The realtime session this Mini App belongs to. Read from `webxdc-topic`
+   * (Vector's field, and what Armada now writes) or the legacy `webxdc` field,
+   * which carried a UUID before the two clients converged. Opaque here: the
+   * app stage and the coordination plane only ever compare it.
+   */
   webxdc?: string;
   /** Pixel dimensions from NIP-94 `dim` tag, e.g. "1280x720". */
   dim?: string;
@@ -110,7 +115,9 @@ export function parseImetaMap(tags: string[][]): Map<string, ImetaEntry> {
         thumbnail: entry.thumb ?? entry.image,
         mime: entry.m,
         summary: entry.summary,
-        webxdc: entry.webxdc,
+        // `webxdc-topic` is the interop field, so it wins; `webxdc` is what
+        // Armada wrote before and still keeps older sessions alive.
+        webxdc: entry["webxdc-topic"] ?? entry.webxdc,
         dim: entry.dim,
         blurhash: entry.blurhash,
         name: entry.name,

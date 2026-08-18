@@ -179,3 +179,56 @@ export function parsePeerSignal(content: string): PeerSignal | undefined {
   }
   return undefined;
 }
+
+/** A peer we have seen advertise on a realtime topic. */
+export interface RealtimePeer {
+  /** The advertiser's pubkey, hex. */
+  pubkey: string;
+  /** Their iroh endpoint address, opaque to us and passed to the transport. */
+  addr: string;
+  /** When they last advertised, ms. */
+  ms: number;
+}
+
+/** One peer signal as it came off a channel, before it is folded. */
+export interface PeerSignalEvent {
+  author: string;
+  content: string;
+  ms: number;
+}
+
+/**
+ * Fold a channel's peer signals into who is currently playing a topic.
+ *
+ * The signals are durable on purpose (Vector's choice, so a reopening peer
+ * backfills a recent ad), which means the fold sees the whole history at once
+ * and has to resolve it rather than react to it: last writer per author wins,
+ * and a `left` that is newer than that author's last ad removes them. Ordering
+ * by `ms` rather than arrival matters, because a backfill delivers an old ad
+ * after a newer departure.
+ *
+ * Signals for other topics are ignored, so one channel can carry several games.
+ */
+export function foldPeerSignals(
+  events: readonly PeerSignalEvent[],
+  topic: string,
+  /** Our own pubkey, so we never dial ourselves. */
+  selfPubkey?: string,
+): RealtimePeer[] {
+  const latest = new Map<string, { signal: PeerSignal; ms: number }>();
+  for (const ev of events) {
+    const signal = parsePeerSignal(ev.content);
+    if (!signal || signal.topic !== topic) continue;
+    if (selfPubkey && ev.author === selfPubkey) continue;
+    const prev = latest.get(ev.author);
+    // Ties go to the departure: a client that advertises and leaves inside one
+    // millisecond has left, and dialling it would hang until timeout.
+    if (prev && (prev.ms > ev.ms || (prev.ms === ev.ms && signal.op === "ad"))) continue;
+    latest.set(ev.author, { signal, ms: ev.ms });
+  }
+  const out: RealtimePeer[] = [];
+  for (const [pubkey, { signal, ms }] of latest) {
+    if (signal.op === "ad") out.push({ pubkey, addr: signal.addr, ms });
+  }
+  return out.sort((a, b) => b.ms - a.ms);
+}

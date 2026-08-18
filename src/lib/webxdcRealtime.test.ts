@@ -6,6 +6,7 @@ import {
   base32Decode,
   base32Encode,
   deriveTopicId,
+  foldPeerSignals,
   frame,
   isTopicId,
   mintTopicId,
@@ -156,5 +157,63 @@ describe("the Concord peer signal", () => {
       expect(() => parsePeerSignal(bad)).not.toThrow();
       expect(parsePeerSignal(bad), bad.slice(0, 40)).toBeUndefined();
     }
+  });
+});
+
+describe("folding peer signals into who is playing", () => {
+  const T1 = "OE4PCJOZJEGHXO3XRI3VFSHXVZDQ562TQIJITJUZTU3G6FQP4GXA";
+  const T2 = "AAAQEAYEAUDAOCAJBIFQYDIOB4IBCEQTCQKRMFYYDENBWHA5DYPQ";
+  const ad = (author: string, ms: number, topic = T1, addr = `addr-${author}`) => ({
+    author,
+    ms,
+    content: peerSignalContent(topic, addr),
+  });
+  const left = (author: string, ms: number, topic = T1) => ({ author, ms, content: peerSignalContent(topic) });
+
+  it("lists everyone currently advertising, newest first", () => {
+    const peers = foldPeerSignals([ad("alice", 100), ad("bob", 200)], T1);
+    expect(peers.map((p) => p.pubkey)).toEqual(["bob", "alice"]);
+    expect(peers[0].addr).toBe("addr-bob");
+  });
+
+  it("removes a peer who left", () => {
+    expect(foldPeerSignals([ad("alice", 100), left("alice", 200)], T1)).toEqual([]);
+  });
+
+  it("keeps a peer who left and came back", () => {
+    const peers = foldPeerSignals([ad("alice", 100), left("alice", 200), ad("alice", 300)], T1);
+    expect(peers).toHaveLength(1);
+  });
+
+  it("resolves by timestamp, not arrival order", () => {
+    // The signals are durable, so a backfill hands us an old ad AFTER a newer
+    // departure. Reacting to arrival order would resurrect a peer who is gone.
+    expect(foldPeerSignals([left("alice", 200), ad("alice", 100)], T1)).toEqual([]);
+  });
+
+  it("treats a same-millisecond ad and departure as departed", () => {
+    // Dialling a peer that is already gone hangs until the timeout, so the
+    // tie goes to the answer that costs nothing.
+    expect(foldPeerSignals([ad("alice", 100), left("alice", 100)], T1)).toEqual([]);
+    expect(foldPeerSignals([left("alice", 100), ad("alice", 100)], T1)).toEqual([]);
+  });
+
+  it("keeps games on one channel apart", () => {
+    const peers = foldPeerSignals([ad("alice", 100, T1), ad("bob", 200, T2)], T1);
+    expect(peers.map((p) => p.pubkey)).toEqual(["alice"]);
+  });
+
+  it("never lists ourselves", () => {
+    expect(foldPeerSignals([ad("me", 100), ad("alice", 90)], T1, "me").map((p) => p.pubkey)).toEqual(["alice"]);
+  });
+
+  it("ignores anything that is not a peer signal", () => {
+    // The 3310 plane also carries app state updates, which are base64 blobs.
+    const noise = [
+      { author: "alice", ms: 100, content: "eyJmb28iOiJiYXIifQ==" },
+      { author: "bob", ms: 110, content: "" },
+      { author: "carol", ms: 120, content: '{"op":"ad","topic":"nope","addr":"x"}' },
+    ];
+    expect(foldPeerSignals(noise, T1)).toEqual([]);
   });
 });

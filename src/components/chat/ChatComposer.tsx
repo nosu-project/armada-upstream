@@ -86,6 +86,7 @@ import type { ProcessedVideo } from "@/lib/video/types";
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import { WEBXDC_MIME, isWebxdcMime } from "@/lib/webxdcMime";
+import { mintTopicId } from "@/lib/webxdcRealtime";
 
 /** Lazy-loaded EmojiPicker — keeps emoji-mart + its data out of the main bundle. */
 const LazyEmojiPicker = lazy(() => import("@/components/chat/EmojiPicker").then((m) => ({ default: m.EmojiPicker })));
@@ -910,15 +911,21 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
 
   /**
    * Register a discovered webxdc game (a kind-1063 event) as an attachment. A
-   * fresh `webxdc` uuid makes THIS message's copy its own shared session, so
+   * freshly minted topic makes THIS message's copy its own shared session, so
    * everyone who launches it from this message converges on one game state. The
    * `.xdc` is a public URL (not re-uploaded / not encrypted).
    */
-  const registerGame = useCallback((app: WebxdcApp) => {
+  const registerGame = useCallback(async (app: WebxdcApp) => {
+    const topic = await mintTopicId(app.url, user?.pubkey ?? "");
     const tags: string[][] = [
       ["url", app.url],
       ["m", WEBXDC_MIME],
-      ["webxdc", crypto.randomUUID()],
+      // Written twice on purpose. `webxdc-topic` is the field Vector reads and
+      // validates; `webxdc` is where Armada has always looked, and it carries
+      // the same value so a client that only knows the old field still lands in
+      // the same session rather than alone in a new one.
+      ["webxdc-topic", topic],
+      ["webxdc", topic],
       ["summary", app.name],
       // A filename, not a title: a receiver names the saved file from this tag
       // and only falls back to the MIME when it carries no extension. `summary`
@@ -929,7 +936,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     setUploadedFileGroups((prev) => new Map(prev).set(app.url, tags));
     setPickerOpen(false);
     requestAnimationFrame(() => textareaRef.current?.focus());
-  }, []);
+  }, [user?.pubkey]);
 
   const resetComposeState = useCallback(() => {
     setContent("");
@@ -1088,7 +1095,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
         const mTag = tags.find((t) => t[0] === "m");
         if (mTag) mTag[1] = WEBXDC_MIME;
         else tags.push(["m", WEBXDC_MIME]);
-        tags.push(["webxdc", crypto.randomUUID()]);
+        const topic = await mintTopicId(file.name, user?.pubkey ?? "");
+        tags.push(["webxdc-topic", topic], ["webxdc", topic]);
         try {
           const meta = await extractWebxdcMeta(file);
           if (meta.name) tags.push(["summary", meta.name]);
@@ -1111,7 +1119,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
     } finally {
       setPendingUploads((prev) => prev.filter((p) => p.id !== pendingId));
     }
-  }, [uploadFile, toast, encryptAttachments]);
+  }, [uploadFile, toast, encryptAttachments, user?.pubkey]);
 
   // Consume a shared payload routed to THIS conversation (Android share
   // target / the /share destination picker): shared text is appended to the

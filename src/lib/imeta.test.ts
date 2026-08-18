@@ -219,3 +219,29 @@ describe("parseFileMessageTags (NIP-17 kind-15 top-level tags)", () => {
     expect(parseFileMessageTags(url, [["image", "https://t/2"]])?.thumbnail).toBe("https://t/2");
   });
 });
+
+describe("the webxdc realtime session field", () => {
+  const imeta = (...fields: string[]): string[][] => [["imeta", "url https://x.example/a.xdc", ...fields]];
+  const TOPIC = "OE4PCJOZJEGHXO3XRI3VFSHXVZDQ562TQIJITJUZTU3G6FQP4GXA";
+  const read = (tags: string[][]) => parseImetaMap(tags).get("https://x.example/a.xdc")?.webxdc;
+
+  it("reads Vector's `webxdc-topic`, which is what makes a game shared across clients", () => {
+    expect(read(imeta(`webxdc-topic ${TOPIC}`))).toBe(TOPIC);
+  });
+
+  it("still reads the legacy `webxdc` field, so old Armada sessions keep working", () => {
+    const uuid = "8f1c0c2e-4b3a-4a6d-9c1f-2f2b1a0d5e77";
+    expect(read(imeta(`webxdc ${uuid}`))).toBe(uuid);
+  });
+
+  it("prefers the interop field when a sender writes both", () => {
+    // Armada writes both: the same value in each, so this only decides which
+    // wins if they ever disagree. The field Vector validates should.
+    expect(read(imeta(`webxdc legacy-value`, `webxdc-topic ${TOPIC}`))).toBe(TOPIC);
+    expect(read(imeta(`webxdc-topic ${TOPIC}`, `webxdc legacy-value`))).toBe(TOPIC);
+  });
+
+  it("leaves a plain attachment without a session", () => {
+    expect(read(imeta("m image/png"))).toBeUndefined();
+  });
+});
