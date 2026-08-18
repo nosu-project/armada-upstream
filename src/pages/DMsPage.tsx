@@ -88,6 +88,7 @@ import { useRailDms } from "@/hooks/useRailDms";
 import { useAcceptedDms } from "@/hooks/useAcceptedDms";
 import { useClosedDms } from "@/hooks/useClosedDms";
 import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
+import { useOpenProfile } from "@/hooks/useOpenProfile";
 import { useStartedDms } from "@/hooks/useStartedDms";
 import { useSharedCommunities } from "@/hooks/useSharedCommunities";
 import { useToast } from "@/hooks/useToast";
@@ -610,6 +611,7 @@ function Conversation({
   const { user } = useCurrentUser();
   const location = useLocation();
   const navigate = useNavigate();
+  const openProfile = useOpenProfile();
   const group = peers.length > 1;
   // A group has no single counterparty, so anything derived from ONE profile
   // is 1:1-only below. `peer` is that counterparty where it exists, and is the
@@ -1130,7 +1132,7 @@ function Conversation({
                 social view on ditto.pub. Neither exists for a group — there is
                 no single person to show. */}
             {!group && (
-              <DropdownMenuItem className="px-3 py-2" onClick={() => navigate(`/${tryNpubEncode(peer) ?? peer}`)}>
+              <DropdownMenuItem className="px-3 py-2" onClick={() => openProfile(tryNpubEncode(peer) ?? peer)}>
                 <User className="size-4" />
                 View profile
               </DropdownMenuItem>

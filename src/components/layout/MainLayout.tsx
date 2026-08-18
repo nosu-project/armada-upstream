@@ -1,4 +1,5 @@
-import { Outlet } from "react-router-dom";
+import { lazy, Suspense, useContext } from "react";
+import { Outlet, useNavigate } from "react-router-dom";
 
 import { AppsProvider } from "@/components/AppsProvider";
 import { CallProvider } from "@/components/CallProvider";
@@ -8,6 +9,16 @@ import { QuickSwitcher } from "@/components/QuickSwitcher";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { useRegisterAllStreamKeys } from "@/concord/hooks/useStreamAuth";
 import { useShareShortcuts } from "@/hooks/useShareShortcuts";
+import { ProfileOverlayContext } from "@/lib/profileOverlay";
+import { lazyWithReload } from "@/lib/chunkReload";
+
+// Loaded on first use like a route chunk: most sessions never open a profile,
+// and this pulls in the theme/badge/shared-community machinery behind it.
+const ProfileDialog = lazy(
+  lazyWithReload(() =>
+    import("@/components/profile/ProfileDialog").then((m) => ({ default: m.ProfileDialog })),
+  ),
+);
 
 /**
  * Application frame. Desktop renders the multi-pane Discord layout (server
@@ -27,6 +38,10 @@ export function MainLayout() {
   // Android: keep the Direct Share suggestions (share-sheet conversation
   // shortcuts) in step with the user's pinned + recent DMs. No-op elsewhere.
   useShareShortcuts();
+  const navigate = useNavigate();
+  // Set only while a profile is drawing over a page that is still mounted; a
+  // `/<npub>` reached cold routes to UserPage instead and draws its own.
+  const overlayPubkey = useContext(ProfileOverlayContext);
   return (
     <CallProvider>
       {/* DM call signaling (ring in/out, offer/answer rumors) sits inside
@@ -44,7 +59,26 @@ export function MainLayout() {
             whose DOM each page's `<ServerRail />` slot adopts inside its
             SwipeReveal underlay — see the note above `getRailPortalNode`. */}
         <ServerRail variant="shell" />
-        <Outlet />
+        {/* The main pane: everything beside the rail, as ONE positioned box.
+            It exists so the profile overlay has something to fill that stops
+            at the rail — the rail stays lit and clickable, because it is how
+            you leave. Desktop puts the rail outside this box; touch portals
+            the rail INTO the page, where a full-pane overlay is what's wanted
+            anyway. Always rendered, overlay or not, so opening one doesn't
+            reflow the page beneath it. */}
+        <div className="relative flex min-w-0 flex-1">
+          <Outlet />
+          {overlayPubkey && (
+            <Suspense fallback={null}>
+              <ProfileDialog
+                pubkey={overlayPubkey}
+                // Closing is a history step, and the page underneath is the
+                // entry it steps back to — it never unmounted.
+                onClose={() => navigate(-1)}
+              />
+            </Suspense>
+          )}
+        </div>
         <DirectInviteNotifier />
         <QuickSwitcher />
       </AppsProvider>

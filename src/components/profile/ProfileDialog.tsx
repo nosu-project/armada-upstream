@@ -47,6 +47,7 @@ import { useFollowerCount, useFollowingOf, useSharedFollowers } from "@/hooks/us
 import { useFollowToggle } from "@/hooks/useFollowToggle";
 import { useMuteToggle } from "@/hooks/useMuteList";
 import { useNsite } from "@/hooks/useNsite";
+import { useOpenProfile } from "@/hooks/useOpenProfile";
 import { useProfileBadges, type ProfileBadge } from "@/hooks/useProfileBadges";
 import { useProfileTheme } from "@/hooks/useProfileTheme";
 import { useStartedDms } from "@/hooks/useStartedDms";
@@ -743,11 +744,15 @@ function PersonRow({ pubkey }: { pubkey: string }) {
   const metadata = author.data?.metadata;
   const name = getDisplayName(metadata, pubkey);
   const npub = tryNpubEncode(pubkey);
+  const openProfile = useOpenProfile();
   return (
     <li>
-      <Link
-        to={`/${npub ?? pubkey}`}
-        className="flex items-center gap-2 rounded-md px-2 py-1.5 touch:py-2.5 hover:bg-secondary transition-colors min-w-0"
+      {/* A button rather than a <Link>: opening this keeps the page behind the
+          profile mounted, which is a navigation STATE the href can't carry. */}
+      <button
+        type="button"
+        onClick={() => openProfile(npub ?? pubkey)}
+        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 touch:py-2.5 hover:bg-secondary transition-colors min-w-0 text-left"
       >
         <Avatar shape={getAvatarShape(metadata)} className="size-7 shrink-0">
           <AvatarImage src={metadata?.picture} alt="" />
@@ -756,7 +761,7 @@ function PersonRow({ pubkey }: { pubkey: string }) {
           </AvatarFallback>
         </Avatar>
         <span className="text-sm truncate">{name}</span>
-      </Link>
+      </button>
     </li>
   );
 }

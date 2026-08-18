@@ -20,6 +20,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useChatScope } from "@/hooks/useChatScope";
 import { useMuteToggle } from "@/hooks/useMuteList";
 import { useNsite } from "@/hooks/useNsite";
+import { useOpenProfile } from "@/hooks/useOpenProfile";
 import { useMemberRoles } from "@/hooks/useMemberRoles";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useFollowToggle } from "@/hooks/useFollowToggle";
@@ -55,6 +56,7 @@ function ProfilePreviewBody({
 }) {
   const author = useAuthor(pubkey);
   const navigate = useNavigate();
+  const openProfile = useOpenProfile();
   const { user } = useCurrentUser();
   const metadata = author.data?.metadata;
   const roles = useMemberRoles(pubkey);
@@ -99,7 +101,7 @@ function ProfilePreviewBody({
 
   const viewProfile = () => {
     onAction?.();
-    navigate(`/${npub ?? pubkey}`);
+    openProfile(npub ?? pubkey);
   };
 
   return (

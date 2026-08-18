@@ -28,6 +28,11 @@ import { flattenLayout, mergeLayout, railKeyToRoute } from "@/lib/railLayout";
 import { parseJoinLink, setPendingJoin } from "@/lib/joinLink";
 import { CONCORD2_PANES } from "@/lib/routes";
 import { lazyWithReload } from "@/lib/chunkReload";
+import {
+  ProfileOverlayContext,
+  profileOverlayPubkey,
+  type ProfileBackgroundState,
+} from "@/lib/profileOverlay";
 
 // Route-level code splitting: each page loads as its own chunk on first visit,
 // so the boot bundle carries only the shell + the landing route's code. This is
@@ -299,30 +304,29 @@ function ForegroundNotifications() {
   return null;
 }
 
-export function AppRouter() {
-  useWarmRouteChunks();
-  // Data too, not just code: pre-resolve the Discover directory at idle so the
-  // page's first open paints real cards instead of a skeleton waterfall.
-  useWarmDiscover();
-  // No `future` prop on the router: `v7_startTransition` and
-  // `v7_relativeSplatPath` were opt-ins under v6 and are the only behavior v7
-  // has.
+/**
+ * The routed app. Split out of `AppRouter` purely so it sits INSIDE
+ * <BrowserRouter> and can read the location.
+ *
+ * That read is what makes the profile a real overlay: a `/<npub>` opened from
+ * somewhere carries a `backgroundLocation`, and the routes are then matched
+ * against THAT — so the chat behind the profile keeps rendering instead of
+ * unmounting and being rebuilt on close (see `lib/profileOverlay.ts`). The
+ * profile itself is drawn by `MainLayout`, which owns the pane it covers; all
+ * that reaches it from here is the pubkey, since `location=` rewrites
+ * `useLocation()` for everything below and this is the last place the real
+ * location is visible.
+ */
+function AppRoutes() {
+  const location = useLocation();
+  const background = (location.state as ProfileBackgroundState | null)?.backgroundLocation;
+  const overlayPubkey = background ? profileOverlayPubkey(location.pathname) : undefined;
   return (
-      <BrowserRouter>
-        <NotificationNavigation />
-        <ForegroundNotifications />
-        <VersionCheck />
-        {/* MUST render inside <BrowserRouter>: toasts can carry router <Link>
-            actions (e.g. VersionCheck's "What's new" → /changelog). With the
-            Toaster outside the router, rendering such a toast throws useHref()
-            and unmounts the whole tree to the error screen — which is exactly
-            once per release, since VersionCheck stamps the version before
-            toasting. */}
-        <Toaster />
-        {/* Lazy route chunks paint the branded splash while they load, never a
-            blank frame. */}
+    <ProfileOverlayContext.Provider value={overlayPubkey}>
+      {/* Lazy route chunks paint the branded splash while they load, never a
+          blank frame. */}
       <Suspense fallback={<RouteFallback />}>
-        <Routes>
+        <Routes location={background ?? location}>
           <Route element={<MainLayout />}>
             <Route path="/" element={<HomeRedirect />} />
             <Route path="/welcome" element={<WelcomePage />} />
@@ -411,6 +415,31 @@ export function AppRouter() {
           <Route path="*" element={<NotFound />} />
         </Routes>
       </Suspense>
+    </ProfileOverlayContext.Provider>
+  );
+}
+
+export function AppRouter() {
+  useWarmRouteChunks();
+  // Data too, not just code: pre-resolve the Discover directory at idle so the
+  // page's first open paints real cards instead of a skeleton waterfall.
+  useWarmDiscover();
+  // No `future` prop on the router: `v7_startTransition` and
+  // `v7_relativeSplatPath` were opt-ins under v6 and are the only behavior v7
+  // has.
+  return (
+    <BrowserRouter>
+      <NotificationNavigation />
+      <ForegroundNotifications />
+      <VersionCheck />
+      {/* MUST render inside <BrowserRouter>: toasts can carry router <Link>
+          actions (e.g. VersionCheck's "What's new" → /changelog). With the
+          Toaster outside the router, rendering such a toast throws useHref()
+          and unmounts the whole tree to the error screen — which is exactly
+          once per release, since VersionCheck stamps the version before
+          toasting. */}
+      <Toaster />
+      <AppRoutes />
     </BrowserRouter>
   );
 }
