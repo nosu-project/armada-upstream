@@ -42,6 +42,7 @@ import {
 } from '@/components/ui/collapsible';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { isValidAvatarShape } from '@/lib/avatarShape';
+import { isAnimatedImage, METADATA_SCAN_BYTES } from '@/lib/imageMetadata';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -582,11 +583,31 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
     pickInputRef.current?.click();
   };
 
-  const handleFileChosen = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const uploadImage = async (file: File, field: 'picture' | 'banner') => {
+    try {
+      const [[, url]] = await uploadFile(file);
+      form.setValue(field, url, { shouldDirty: true });
+      toast({ title: 'Uploaded', description: `${field === 'picture' ? 'Profile picture' : 'Banner'} updated` });
+    } catch {
+      toast({ title: 'Upload failed', description: 'Please try again.', variant: 'destructive' });
+    }
+  };
+
+  const handleFileChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
     const field = pendingField.current;
+
+    // Animated images (GIF, APNG, animated WebP) can't survive the crop
+    // dialog's canvas round-trip, which flattens them to a single frame. Upload
+    // them byte-for-byte instead of silently killing the animation.
+    const head = new Uint8Array(await file.slice(0, METADATA_SCAN_BYTES).arrayBuffer());
+    if (isAnimatedImage(file.type, head)) {
+      await uploadImage(file, field);
+      return;
+    }
+
     setCropState({
       imageSrc: URL.createObjectURL(file),
       aspect: field === 'picture' ? 1 : 3,
@@ -600,14 +621,8 @@ export function ProfileSettings({ onSaved, saveLabel, centerSave, showNip05 = tr
     const { field, imageSrc } = cropState;
     URL.revokeObjectURL(imageSrc);
     setCropState(null);
-    try {
-      const file = new File([blob], `${field}.jpg`, { type: 'image/jpeg' });
-      const [[, url]] = await uploadFile(file);
-      form.setValue(field, url, { shouldDirty: true });
-      toast({ title: 'Uploaded', description: `${field === 'picture' ? 'Profile picture' : 'Banner'} updated` });
-    } catch {
-      toast({ title: 'Upload failed', description: 'Please try again.', variant: 'destructive' });
-    }
+    const file = new File([blob], `${field}.jpg`, { type: 'image/jpeg' });
+    await uploadImage(file, field);
   };
 
   const handleCropCancel = () => {
