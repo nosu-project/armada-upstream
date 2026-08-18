@@ -13,7 +13,7 @@ bundle="$release_dir/Armada-flatpak-$(uname -m).flatpak"
 # A sideloaded bundle otherwise creates a disabled origin with no URL, leaving
 # Flatpak nowhere to check for Armada updates. Embedding the hosted OSTree
 # repository makes the normal `flatpak update` path own future releases.
-ARMADA_FLATPAK_REPO_URL=${ARMADA_FLATPAK_REPO_URL:-https://armada.buzz/flatpak/}
+ARMADA_FLATPAK_REPO_URL=${ARMADA_FLATPAK_REPO_URL:-https://armada.buzz/downloads/flatpak/}
 
 builder=system
 if command -v flatpak-builder >/dev/null 2>&1; then

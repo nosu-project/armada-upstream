@@ -12,8 +12,10 @@ name: Desktop release
 # on gitworkshop.dev against the tag) and by rsync into the web deploy's
 # downloads/ directory, so https://armada.buzz/downloads/Armada-vX.Y.Z.AppImage
 # is a stable public URL. The same deploy also publishes the exact Windows and
-# AppImage updater payloads under /desktop and the Flatpak OSTree repository
-# under /flatpak. The artifact channel is best-effort — the coordinator
+# AppImage updater payloads under /downloads/desktop and the Flatpak OSTree
+# repository under /downloads/flatpak. Keeping both under the filesystem-backed
+# downloads namespace prevents the nsite SPA fallback from intercepting machine
+# metadata. The artifact channel is best-effort — the coordinator
 # skips any file over NGIT_CI_BLOSSOM_MAX_ARTIFACT_BYTES (64 MB by default,
 # which an Electron installer exceeds) with a warning rather than a failure —
 # so the rsync is the channel users actually download from.
@@ -106,9 +108,10 @@ jobs:
       - name: Build Linux + Windows installers
         env:
           TAG: ${{ github.ref_name }}
-          # Optional Authenticode identity. An unprovisioned coordinator still
-          # produces a testable installer, but production Windows updates
-          # should keep one stable certificate across releases.
+          # Optional Authenticode identity. Unsigned installed NSIS builds still
+          # self-update through the validated feed, like AppImage; production
+          # releases should nevertheless keep one stable certificate for an
+          # independent publisher identity and SmartScreen reputation.
           CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
         run: |
@@ -240,7 +243,8 @@ jobs:
       # Each file is then copied to an unversioned alias — that pair, versioned
       # archive plus stable URL, is what /downloads links.
       #
-      # Machine update feeds are staged separately under desktop/ and flatpak/.
+      # Machine update feeds are staged separately under desktop/ and flatpak/,
+      # then published beneath the filesystem-backed /downloads namespace.
       # Updater payloads retain electron-builder's exact basename because each
       # latest*.yml refers to that name; the friendly /downloads names may be
       # stable without breaking those references.
@@ -449,11 +453,49 @@ jobs:
           # server's user can't read is a 403, which looks like a build that
           # didn't publish.
           rsync -av --chmod=D755,F644 -e ssh "$DEPLOY_ROOT/downloads" "${TARGET}:/"
-          rsync -av --chmod=D755,F644 -e ssh "$DEPLOY_ROOT/flatpak" "${TARGET}:/"
+
+          # Flatpak's summary is the mutable pointer into its content-addressed
+          # object store. Publish every object before summary (and summary.sig,
+          # once release signing is provisioned) so a client never sees a
+          # commit that is still in flight. Keep the legacy physical tree
+          # current as well: already-installed remotes retain /flatpak forever,
+          # and production Caddy can expose it as a compatibility carve-out.
+          rsync -av --chmod=D755,F644 -e ssh --exclude='summary*' \
+            "$DEPLOY_ROOT/flatpak/" "${TARGET}:/downloads/flatpak/"
+          rsync -av --chmod=D755,F644 -e ssh --exclude='summary*' \
+            "$DEPLOY_ROOT/flatpak/" "${TARGET}:/flatpak/"
 
           # Publish immutable updater payloads before the mutable latest*.yml
           # pointers. A client can therefore never observe metadata naming a
-          # file that has not reached the server yet.
-          rsync -av --chmod=D755,F644 -e ssh --exclude='latest*.yml' "$DEPLOY_ROOT/desktop" "${TARGET}:/"
+          # file that has not reached the server yet. The legacy copy makes a
+          # /desktop Caddy carve-out sufficient to migrate existing clients.
+          rsync -av --chmod=D755,F644 -e ssh --exclude='latest*.yml' \
+            "$DEPLOY_ROOT/desktop/" "${TARGET}:/downloads/desktop/"
+          rsync -av --chmod=D755,F644 -e ssh --exclude='latest*.yml' \
+            "$DEPLOY_ROOT/desktop/" "${TARGET}:/desktop/"
+
+          rsync -av --chmod=D755,F644 -e ssh --include='summary*' --exclude='*' \
+            "$DEPLOY_ROOT/flatpak/" "${TARGET}:/downloads/flatpak/"
+          rsync -av --chmod=D755,F644 -e ssh --include='summary*' --exclude='*' \
+            "$DEPLOY_ROOT/flatpak/" "${TARGET}:/flatpak/"
+          rsync -av --chmod=D755,F644 -e ssh --include='latest*.yml' --exclude='*' \
+            "$DEPLOY_ROOT/desktop/" "${TARGET}:/downloads/desktop/"
           rsync -av --chmod=D755,F644 -e ssh --include='latest*.yml' --exclude='*' \
             "$DEPLOY_ROOT/desktop/" "${TARGET}:/desktop/"
+
+          # The public site is an nsite behind Caddy. Verify the filesystem
+          # carve-out itself, not merely that rsync accepted the bytes: a route
+          # regression can otherwise return the SPA shell with 200 (Flatpak) or
+          # a synthetic 404 (electron-updater) while the release job stays green.
+          smoke="$RUNNER_TEMP/armada-update-smoke"
+          mkdir -p "$smoke"
+          for name in latest.yml latest-linux.yml; do
+            curl -fsS --retry 5 --retry-all-errors \
+              "https://armada.buzz/downloads/desktop/$name" -o "$smoke/$name"
+            cmp "$DEPLOY_ROOT/desktop/$name" "$smoke/$name"
+          done
+          for name in summary config; do
+            curl -fsS --retry 5 --retry-all-errors \
+              "https://armada.buzz/downloads/flatpak/$name" -o "$smoke/flatpak-$name"
+            cmp "$DEPLOY_ROOT/flatpak/$name" "$smoke/flatpak-$name"
+          done

@@ -59,9 +59,8 @@ const {
 const { autoUpdater } = require("electron-updater");
 const { isArmadaAppUrl, isExternallyOpenableUrl } = require("./appOrigin");
 const {
-  autoInstallAllowed,
+  configureAutoUpdater,
   hasDeveloperIdUpdateSignature,
-  hasTrustedWindowsSignature,
   supportsSelfUpdate,
 } = require("./updateSupport");
 const { integrateAppImage } = require("./desktopIntegration");
@@ -210,9 +209,6 @@ const DEV_URL = (() => {
 const DEV_ORIGIN = DEV_URL ? new URL(DEV_URL).origin : "";
 const START_URL = DEV_URL || APP_START_URL;
 
-// Where an unsigned build sends the user to fetch an update by hand.
-const DOWNLOADS_URL = "https://armada.buzz/downloads/";
-
 /**
  * Hand a URL to the OS default handler, but only for schemes meant for a
  * browser or mail client. The renderer embeds untrusted third-party frames and
@@ -278,7 +274,6 @@ let isQuitting = false;
 let manualUpdateCheck = false;
 let updateCheckInFlight = false;
 let macSelfUpdateEligible;
-let windowsSelfUpdateEligible;
 let updateCheckTimer = null;
 const pushToTalk = new PushToTalkController({
   platform: process.platform,
@@ -828,64 +823,16 @@ async function checkForDesktopUpdates(manual = false) {
   }
 }
 
-/**
- * Whether this Windows build carries a trusted Authenticode signature. Read
- * once, lazily, the same way the macOS Developer ID check is: the answer is a
- * property of the installed binary and cannot change while it runs.
- */
-function windowsUpdateSignatureTrusted() {
-  if (process.platform !== "win32") return true;
-  if (windowsSelfUpdateEligible === undefined) {
-    const result = spawnSync(
-      "powershell.exe",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        "(Get-AuthenticodeSignature -LiteralPath $env:ARMADA_EXE).Status",
-      ],
-      { encoding: "utf8", env: { ...process.env, ARMADA_EXE: process.execPath } },
-    );
-    windowsSelfUpdateEligible =
-      result.status === 0 && hasTrustedWindowsSignature(result.stdout);
-  }
-  return windowsSelfUpdateEligible;
-}
-
 function installAutoUpdater() {
   if (!autoUpdatesSupported()) return;
 
-  // An unsigned Windows installer cannot be verified once downloaded, so it is
-  // offered rather than installed. Every other supported format either checks
-  // a Developer ID signature or the feed's sha512 before replacing itself.
-  const unattended = autoInstallAllowed({
-    platform: process.platform,
-    signed: windowsUpdateSignatureTrusted(),
-  });
-
-  autoUpdater.autoDownload = unattended;
-  autoUpdater.autoInstallOnAppQuit = unattended;
-  autoUpdater.allowDowngrade = false;
+  // Reaching here means this package has a single writable update owner: an
+  // installed Windows NSIS build, a Developer ID-signed macOS build, or an
+  // AppImage. Windows signing improves publisher verification and reputation,
+  // but is not required: a user who installed Armada's unsigned NSIS build has
+  // opted into the same HTTPS + feed-SHA-512 trust model the AppImage uses.
+  configureAutoUpdater(autoUpdater);
   autoUpdater.logger = console;
-
-  if (!unattended) {
-    autoUpdater.on("update-available", async (info) => {
-      manualUpdateCheck = false;
-      const { response } = await showUpdateMessage({
-        type: "info",
-        title: "Armada update available",
-        message: `Armada ${info.version} is available.`,
-        detail:
-          "This build is not code signed, so Armada will not install it for you. "
-          + "Download the new installer and run it yourself.",
-        buttons: ["Open download page", "Later"],
-        defaultId: 0,
-        cancelId: 1,
-        noLink: true,
-      });
-      if (response === 0) await openExternalUrl(DOWNLOADS_URL);
-    });
-  }
 
   autoUpdater.on("update-not-available", async () => {
     const wasManual = manualUpdateCheck;

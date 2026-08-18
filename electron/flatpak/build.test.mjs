@@ -11,7 +11,7 @@ const buildScript = fs.readFileSync(
 describe("Flatpak bundle update origin", () => {
   it("defaults to Armada's published OSTree repository", () => {
     expect(buildScript).toContain(
-      "ARMADA_FLATPAK_REPO_URL=${ARMADA_FLATPAK_REPO_URL:-https://armada.buzz/flatpak/}",
+      "ARMADA_FLATPAK_REPO_URL=${ARMADA_FLATPAK_REPO_URL:-https://armada.buzz/downloads/flatpak/}",
     );
   });
 

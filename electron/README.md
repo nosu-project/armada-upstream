@@ -213,26 +213,41 @@ Every edition has exactly one update owner:
 
 | Edition | Update mechanism |
 | --- | --- |
-| Windows NSIS installer | Armada downloads and installs from `/desktop` |
+| Windows NSIS installer | Armada downloads and installs from `/downloads/desktop` |
 | Windows portable / Store | Replace manually / Microsoft Store |
 | Developer ID–signed macOS build | Armada consumes the signed zip feed |
 | CI cross-built ad-hoc macOS zip | Replace manually; marked no-self-update |
-| Linux AppImage | Armada replaces the running AppImage from `/desktop` |
-| Linux deb | apt/dpkg repository; in-app updater disabled |
+| Linux AppImage | Armada replaces the running AppImage from `/downloads/desktop` |
+| Linux deb | Download and install the newer deb; in-app updater disabled |
 | Linux Flatpak | embedded Armada Flatpak remote; in-app updater disabled |
 
 `electron-builder.yml` points `electron-updater` at
-`https://armada.buzz/desktop`. Tagged CI releases deploy the exact NSIS and
-AppImage basenames referenced by `latest.yml` and `latest-linux.yml`, plus
-their blockmaps, before deploying the mutable metadata. CI validates every
-metadata reference first.
+`https://armada.buzz/downloads/desktop`. Tagged CI releases deploy the exact
+NSIS and AppImage basenames referenced by `latest.yml` and `latest-linux.yml`,
+plus their blockmaps, before deploying the mutable metadata. CI validates every
+metadata reference first and then verifies the public metadata endpoints.
 
-Production Windows releases should provision `WINDOWS_CSC_LINK` and
-`WINDOWS_CSC_KEY_PASSWORD` so the installer and subsequent updates retain one
-publisher identity. macOS self-update requires a native macOS build signed with
-a Developer ID Application certificate and a consistently signed updater zip;
-the Linux cross-build is only ad-hoc signed and carries
-`armada-no-self-update` for that reason.
+Releases through v0.53.1 embedded the legacy
+`https://armada.buzz/desktop` feed. Those installed NSIS/AppImage builds need
+the server's legacy path mapped to `/downloads/desktop`, or one manual upgrade
+to the first release carrying the new feed URL. Keeping that compatibility
+mapping is the only way to migrate an already-running updater before new code
+can reach it.
+
+Windows signing remains recommended: provisioning `WINDOWS_CSC_LINK` and
+`WINDOWS_CSC_KEY_PASSWORD` gives the installer and subsequent updates one
+publisher identity and improves SmartScreen reputation. It is not required for
+self-update. An installed unsigned NSIS build uses the same trust boundary as
+the AppImage: HTTPS protects delivery, and electron-updater checks the
+downloaded file against the SHA-512 declared by the release feed after CI
+validates it against the staged artifact. Because the feed and payload share
+one deployment host, that checksum detects corruption but is not an independent
+signature against a compromised host.
+
+macOS self-update does require a native macOS build signed with a Developer ID
+Application certificate and a consistently signed updater zip; the Linux
+cross-build is only ad-hoc signed and carries `armada-no-self-update` for that
+reason.
 
 ## Flatpak
 
@@ -272,10 +287,16 @@ For an end-user installation directly from Armada's hosted repository:
 
 ```sh
 flatpak remote-add --user --if-not-exists --no-gpg-verify \
-  armada https://armada.buzz/flatpak/
+  armada https://armada.buzz/downloads/flatpak/
+flatpak remote-modify --user --enable \
+  --url=https://armada.buzz/downloads/flatpak/ armada
 flatpak install --user armada buzz.armada.app
 flatpak run buzz.armada.app
 ```
+
+The `remote-modify` line also migrates an `armada` remote created from the
+older `/flatpak/` instructions; `remote-add --if-not-exists` alone would retain
+its previous URL.
 
 Armada itself comes from that remote, not Flathub. Its Freedesktop and Electron
 runtimes still need a configured Flathub remote; most Flatpak installations
@@ -308,11 +329,20 @@ flatpak update --user buzz.armada.app
 ```
 
 Tagged releases publish that OSTree repository at
-`https://armada.buzz/flatpak/`. Release bundles embed that URL, so bundle
-installs also configure Armada's repository as the app's origin. Installs
-made from an older bundle with a blank origin must either repair that remote or
-remove the old app (without `--delete-data`) before installing a corrected
-bundle; installing over the existing deployment can retain its blank origin.
+`https://armada.buzz/downloads/flatpak/`. Release bundles embed that URL, so
+bundle installs also configure Armada's repository as the app's origin.
+Installs made from an older bundle with a blank origin or the legacy
+`https://armada.buzz/flatpak/` origin must either
+repair that remote or remove the old app (without `--delete-data`) before
+installing a corrected bundle; installing over the existing deployment can
+retain its prior origin. To repair the user installation in place:
+
+```sh
+flatpak remote-modify --user \
+  --enable \
+  --url=https://armada.buzz/downloads/flatpak/ \
+  "$(flatpak info --user --show-origin buzz.armada.app)"
+```
 
 Current repository exports are unsigned, so their update trust boundary is
 HTTPS and the deployment host. `FLATPAK_GPG_KEY` signs the repository, but a
@@ -327,8 +357,8 @@ AppImage and deb retain the lockfile-pinned 7.x build.
 `.ngit/act/workflows/desktop.yml`, on version tags (`vX.Y.Z`). One job builds
 the web bundle and desktop DB bridge, then every published platform from a
 single Linux container. Human installers are copied to `/downloads`; updater
-payloads retain their electron-builder names under `/desktop`; the Flatpak
-OSTree repository is published under `/flatpak`.
+payloads retain their electron-builder names under `/downloads/desktop`; the
+Flatpak OSTree repository is published under `/downloads/flatpak`.
 
 | File | Built by |
 |------|----------|

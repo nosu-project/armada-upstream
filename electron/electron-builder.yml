@@ -82,7 +82,10 @@ asarUnpack:
 # deb/Flatpak installs disable the in-app updater in main.js.
 publish:
   provider: generic
-  url: https://armada.buzz/desktop
+  # Keep machine payloads under the same filesystem-backed namespace as the
+  # human installers. armada.buzz serves /downloads directly even while the SPA
+  # itself comes from nsite, so this path cannot fall through to its HTML shell.
+  url: https://armada.buzz/downloads/desktop
 
 # ── Linux ─────────────────────────────────────────────────────────────────────
 linux:
