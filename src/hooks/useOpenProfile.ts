@@ -1,7 +1,8 @@
-import { useCallback } from "react";
+import { useCallback, useContext } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { ProfileOverlayContext } from "@/lib/profileOverlay";
 
 import type { ProfileBackgroundState } from "@/lib/profileOverlay";
 
@@ -22,6 +23,7 @@ export function useOpenProfile() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useCurrentUser();
+  const { begin } = useContext(ProfileOverlayContext);
 
   return useCallback(
     (id: string) => {
@@ -29,12 +31,18 @@ export function useOpenProfile() {
         navigate(`/${id}`);
         return;
       }
+      // Order matters. `navigate` runs inside `startTransition`, so everything
+      // it causes — the profile AND any spinner rendered from it — is held
+      // until React can commit the finished result. This is an ordinary urgent
+      // update, so it paints in a pass of its own first, which is the only
+      // reason the click has any immediate effect at all.
+      begin();
       // Thread the ORIGINAL background through a profile opened from inside a
       // profile, so the page underneath stays the chat rather than becoming
       // the profile we're leaving.
       const current = (location.state as ProfileBackgroundState | null)?.backgroundLocation;
       navigate(`/${id}`, { state: { backgroundLocation: current ?? location } });
     },
-    [navigate, location, user],
+    [navigate, location, user, begin],
   );
 }

@@ -32,6 +32,7 @@ import {
   ProfileOverlayContext,
   profileOverlayPubkey,
   type ProfileBackgroundState,
+  type ProfileOverlay,
 } from "@/lib/profileOverlay";
 
 // Route-level code splitting: each page loads as its own chunk on first visit,
@@ -325,7 +326,18 @@ function ForegroundNotifications() {
 function AppRoutes() {
   const location = useLocation();
   const background = (location.state as ProfileBackgroundState | null)?.backgroundLocation;
-  const overlayPubkey = background ? profileOverlayPubkey(location.pathname) : undefined;
+  const routedPubkey = background ? profileOverlayPubkey(location.pathname) : undefined;
+
+  // Set by the click, cleared by the navigation it started. Any completed
+  // navigation ends it — the one that opens the profile, and equally one that
+  // goes somewhere else entirely, so a click that never becomes a profile
+  // can't strand the spinner.
+  const [opening, setOpening] = useState(false);
+  useEffect(() => setOpening(false), [location]);
+  const overlay = useMemo<ProfileOverlay>(
+    () => ({ pubkey: routedPubkey, opening, begin: () => setOpening(true) }),
+    [routedPubkey, opening],
+  );
   // The location the APP is showing, as opposed to the one in the address bar.
   // While a profile is open these differ, and this is the one that matters.
   const target = background ?? location;
@@ -436,7 +448,7 @@ function AppRoutes() {
   );
 
   return (
-    <ProfileOverlayContext.Provider value={overlayPubkey}>
+    <ProfileOverlayContext.Provider value={overlay}>
       {/* Lazy route chunks paint the branded splash while they load, never a
           blank frame. */}
       <Suspense fallback={<RouteFallback />}>{routes}</Suspense>

@@ -33,13 +33,36 @@ export interface ProfileBackgroundState {
   backgroundLocation?: Location;
 }
 
+export interface ProfileOverlay {
+  /** The profile the ROUTE names — set once the navigation has committed. */
+  pubkey?: string;
+  /**
+   * A profile has been asked for and the navigation hasn't landed yet.
+   *
+   * This exists because `navigate()` runs inside `startTransition` (React
+   * Router v7's only behavior), which makes the ENTIRE consequence of the
+   * click low-priority work that React holds until it can commit the finished
+   * result. A spinner rendered from the navigation is therefore held with
+   * everything it was meant to cover, and appears when it is no longer needed.
+   * So the click sets this FIRST, as an ordinary urgent update: React commits
+   * and paints it in a pass of its own, and only then renders the transition
+   * that mounts the profile.
+   */
+  opening: boolean;
+  /** Call synchronously from the click, BEFORE navigating. */
+  begin: () => void;
+}
+
 /**
- * The pubkey whose profile is drawing over the app, or `undefined`. Provided by
- * `AppRouter` — which is the only place that can see the REAL location, since
- * `<Routes location={background}>` rewrites `useLocation()` for everything
- * below it — and consumed by `MainLayout`, which owns the pane it draws in.
+ * The profile drawing over the app. Provided by `AppRouter` — the only place
+ * that can see the REAL location, since `<Routes location={background}>`
+ * rewrites `useLocation()` for everything below it — and consumed by
+ * `MainLayout`, which owns the pane it draws in.
  */
-export const ProfileOverlayContext = createContext<string | undefined>(undefined);
+export const ProfileOverlayContext = createContext<ProfileOverlay>({
+  opening: false,
+  begin: () => {},
+});
 
 /**
  * The pubkey a path names, if it is a bare single-segment NIP-19 profile path.

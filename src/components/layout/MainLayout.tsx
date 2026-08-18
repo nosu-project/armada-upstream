@@ -27,12 +27,14 @@ const ProfileDialog = lazy(
  * same z as the real thing, so the panel lands ON this rather than after a
  * flash of un-dimmed chat.
  *
- * There IS a gap to fill even though the chunk is warmed at idle
- * (`useWarmRouteChunks`) — the warm can lose to a click made early in the
- * session, and a cold cache after a deploy has to fetch it. Dismissible,
- * because a spinner you can't back out of is worse than the wait.
+ * It covers two different waits, which is why it isn't the lazy chunk's
+ * Suspense fallback alone. First the navigation, which is a transition and so
+ * commits only once the profile is ready to be shown — that stretch is the
+ * whole reason `opening` is set urgently from the click. Then, behind it, the
+ * chunk fetch, for a click that beat the idle warm or a cold cache after a
+ * deploy.
  */
-function ProfileOverlayFallback({ onDismiss }: { onDismiss: () => void }) {
+function ProfileOverlayFallback({ onDismiss }: { onDismiss?: () => void }) {
   return (
     <div
       className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in-0"
@@ -62,9 +64,10 @@ export function MainLayout() {
   // shortcuts) in step with the user's pinned + recent DMs. No-op elsewhere.
   useShareShortcuts();
   const navigate = useNavigate();
-  // Set only while a profile is drawing over a page that is still mounted; a
-  // `/<npub>` reached cold routes to UserPage instead and draws its own.
-  const overlayPubkey = useContext(ProfileOverlayContext);
+  // `pubkey` is set only while a profile draws over a page that is still
+  // mounted; a `/<npub>` reached cold routes to UserPage instead and draws its
+  // own. `opening` is the click that hasn't become that navigation yet.
+  const { pubkey: overlayPubkey, opening } = useContext(ProfileOverlayContext);
   return (
     <CallProvider>
       {/* DM call signaling (ring in/out, offer/answer rumors) sits inside
@@ -91,6 +94,9 @@ export function MainLayout() {
             reflow the page beneath it. */}
         <div className="relative flex min-w-0 flex-1">
           <Outlet />
+          {/* Nothing to go back to yet — the navigation this is waiting on is
+              the one that would make a history step meaningful. */}
+          {opening && !overlayPubkey && <ProfileOverlayFallback />}
           {overlayPubkey && (
             <Suspense fallback={<ProfileOverlayFallback onDismiss={() => navigate(-1)} />}>
               <ProfileDialog
