@@ -4,6 +4,22 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.54.0] - 2026-08-18
+
+Tapping a name now opens a full profile view — avatar, bio, follower and following counts, a follow toggle, badges, and the person's own profile theme — and you can share your own profile as a QR code or link from the account switcher. Vector Mini Apps render inline in chat, animated GIF avatars stay animated when you upload them, and login gives a clearer message when an nsec is truncated. YouTube embeds play again in the packaged desktop and mobile apps, desktop auto-updates are back, and an Android notification clears from the tray once you've read the message on another device.
+
+### Added
+- A full profile view — avatar, bio, follower and following counts, a follow toggle, badges, and the person's own customizable profile theme — opened by tapping a name
+- Share your own profile as a QR code or link from the account switcher
+- Vector Mini Apps render inline in chat
+
+### Fixed
+- YouTube embeds play again in the packaged desktop and mobile apps
+- Uploading an animated GIF avatar keeps it animated instead of flattening it
+- Login shows a clearer message when a pasted nsec is truncated
+- Android tray notifications clear once the message is read on another device
+- Desktop automatic updates are delivered again
+
 ## [0.53.1] - 2026-08-17
 
 Videos in chat get a real player — custom controls, a download button, and a save/share menu — and cached images and video thumbnails now appear instantly instead of flashing a placeholder for a frame. Links you send and links in the messages you read are cleaned of tracking parameters. A channel with muted or mentions-only notifications now reads as a dimmed row rather than a corner badge, and long-press on touch no longer misfires the action menu while you swipe to reveal a pane.
