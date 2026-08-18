@@ -1082,7 +1082,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         const encryption = token.encryption ?? imeta?.encryption;
         const fallbacks = token.fallbacks ?? imeta?.fallbacks;
         const isXdc = isWebxdcMime(mime)
-          || /\.xdc(\?[^\s]*)?$/i.test(token.url);
+          || /\.xdc([?#][^\s]*)?$/i.test(token.url);
         if (isXdc) {
           return <XdcAttachment key={key} url={token.url} imeta={imeta} messageId={event.id} />;
         }

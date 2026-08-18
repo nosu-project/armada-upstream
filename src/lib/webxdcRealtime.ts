@@ -127,8 +127,17 @@ export function deriveUrlTopicId(url: string, messageId: string): string {
 /** The part of a `.xdc` link that identifies the app: everything up to and
  * including the extension, which is exactly what Vector's regex matches. */
 export function urlTopicSource(url: string): string {
-  const at = url.toLowerCase().indexOf(".xdc");
-  return at === -1 ? url : url.slice(0, at + 4);
+  const lower = url.toLowerCase();
+  // Vector's `[^\s"'<>]+` is greedy, so its match runs to the LAST `.xdc`
+  // followed by a delimiter. Taking the first would split a room on any host
+  // that happens to contain the extension — `https://cdn.xdc.io/game.xdc`.
+  for (let at = lower.lastIndexOf(".xdc"); at > 0; at = lower.lastIndexOf(".xdc", at - 1)) {
+    const next = url[at + 4];
+    if (next === undefined || next === "?" || next === "#" || /\s/.test(next)) {
+      return url.slice(0, at + 4);
+    }
+  }
+  return url;
 }
 
 /** Append Vector's trailer: the payload, then `seq[4 LE] || sender[32]`. */
@@ -247,7 +256,9 @@ export function foldPeerSignals(
   // runs fast goes unseen, and a peer whose OWN clock runs slow sees nobody at
   // all, since every honest signal then looks future-dated. An hour tolerates
   // the machines this actually happens on while still bounding a forged
-  // advertisement to an hour instead of forever.
+  // advertisement's ability to outrank its OWN author's later departures to an
+  // hour instead of forever. The signal itself does not expire: the ceiling is
+  // recomputed per fold, so one dated 59 minutes ahead simply stays valid.
   const ceiling = Date.now() + 60 * 60_000;
   const latest = new Map<string, { signal: PeerSignal; ms: number }>();
   for (const ev of events) {

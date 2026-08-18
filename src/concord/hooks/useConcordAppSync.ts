@@ -42,7 +42,10 @@ import type {
   AppSync,
 } from "@/hooks/useWebxdcApi";
 
-/** How many advertised peers one session will dial. */
+/** Least time between peer-signal re-reads driven by chat traffic. */
+const PEER_READ_THROTTLE_MS = 5_000;
+
+/** How many dials one session keeps in flight at once. */
 const MAX_DIAL_PEERS = 16;
 
 function tagValue(tags: string[][], name: string): string | undefined {
@@ -136,11 +139,19 @@ export function useConcordAppSync(
   );
 
   // Re-read when the wire announces new durable rumors for this channel.
+  //
+  // The peer read is throttled apart from the state read: the wire rings on
+  // every chat message, and peer signals are a 2000-row scan with a JSON.parse
+  // per row. Joining is not urgent to the second — the incumbent dials the
+  // newcomer from their advertisement either way.
+  const peerReadAt = useRef(0);
   useWireScopes((scopes) => {
-    if (channelIdHex && scopes.has(`c2:${channelIdHex}`)) {
-      void queryClient.invalidateQueries({ queryKey });
-      void queryClient.invalidateQueries({ queryKey: peerKey });
-    }
+    if (!channelIdHex || !scopes.has(`c2:${channelIdHex}`)) return;
+    void queryClient.invalidateQueries({ queryKey });
+    const now = Date.now();
+    if (now - peerReadAt.current < PEER_READ_THROTTLE_MS) return;
+    peerReadAt.current = now;
+    void queryClient.invalidateQueries({ queryKey: peerKey });
   });
 
   const stateUpdates = useMemo((): AppStateUpdate[] => {
@@ -257,6 +268,8 @@ export function useConcordAppSync(
   >(undefined);
   const seq = useRef(0);
   const dialledRef = useRef(new Set<string>());
+  const sessionClaim = useRef(0);
+  const inFlightDials = useRef(0);
   const [meshReady, setMeshReady] = useState(0);
 
   const sendRealtime = useCallback((data: Uint8Array) => {
@@ -299,6 +312,10 @@ export function useConcordAppSync(
     let cancelled = false;
     let node: RealtimeTransport | undefined;
     const scope = publishScope;
+    // This run's claim on the topic. A join that lands after its effect was
+    // torn down must not leave a successor's live session, and a successor
+    // must not be torn down by it.
+    const claim = ++sessionClaim.current;
     // Captured here rather than read in the cleanup: the ref itself is stable,
     // and the lint rule cannot know that.
     const dialled = dialledRef.current;
@@ -313,17 +330,26 @@ export function useConcordAppSync(
           .match(/../g)!
           .map((h) => parseInt(h, 16)),
       );
-      await node.join(topic, [], (bytes) => {
-        const got = unframe(bytes);
-        // Gossip echoes our own broadcasts back; the trailer is how we know.
-        if (!got || got.sender === node!.publicKeyHex()) return;
-        for (const cb of listenersRef.current) cb(got.payload);
-      });
+      await node.join(
+        topic,
+        [],
+        (bytes) => {
+          const got = unframe(bytes);
+          // Gossip echoes our own broadcasts back; the trailer is how we know.
+          if (!got || got.sender === node!.publicKeyHex()) return;
+          for (const cb of listenersRef.current) cb(got.payload);
+        },
+        // A mesh that never formed and one where nobody spoke are the same
+        // silence, and only these tell them apart.
+        (msg) => console.debug("[webxdc] gossip:", msg),
+      );
       if (cancelled) {
         // The join SUCCEEDED and nobody owns it: without this the topic stays
         // subscribed, and the next join would adopt it while our callback —
-        // belonging to an unmounted hook — keeps receiving the frames.
-        node.leave(topic);
+        // belonging to an unmounted hook — keeps receiving the frames. Only
+        // when no later run has claimed the topic in the meantime, or this
+        // teardown would take the live session with it.
+        if (sessionClaim.current === claim) node.leave(topic);
         return;
       }
       gossip.current = { node, topic, key };
@@ -334,18 +360,8 @@ export function useConcordAppSync(
       setMeshReady((n) => n + 1);
     })();
 
-    // A closed tab runs no React cleanup, and these signals are durable, so
-    // the departure would never be published and the address would haunt the
-    // channel forever. `pagehide` is the one that fires on mobile.
-    const sayGoodbye = () => {
-      if (!gossip.current) return;
-      void publishRef.current.publish(peerSignalContent(uuid), []);
-    };
-    window.addEventListener("pagehide", sayGoodbye);
-
     return () => {
       cancelled = true;
-      window.removeEventListener("pagehide", sayGoodbye);
       const g = gossip.current;
       gossip.current = undefined;
       if (!g) return;
@@ -366,24 +382,36 @@ export function useConcordAppSync(
   /**
    * Dial the peers the channel has advertised, whenever the signals change or
    * the mesh finishes coming up. `dialledRef` keeps one peer from being dialled
-   * twice in a session; a failed dial is forgotten so a later signal retries.
+   * twice in a session.
+   *
+   * Note this is one attempt per address, not a retry loop: the transport
+   * dials in a detached task and only the topic bookkeeping is awaited, so a
+   * connect that fails never rejects here. Vector retries with backoff; we
+   * lean on the peer dialling us back instead, since both sides advertise.
    */
   useEffect(() => {
     const g = gossip.current;
     if (!g || !isTopicId(uuid)) return;
-    // Capped, newest first (the fold already sorts). Every member who ever
-    // opened this game and closed the tab leaves a durable advertisement
-    // behind, so an old channel's fold is mostly ghosts, and each one costs a
-    // QUIC dial that hangs to its timeout.
-    const peers = foldPeerSignals(peerSignals, uuid, selfPubkey).slice(0, MAX_DIAL_PEERS);
+    // Newest first (the fold already sorts). Every member who ever opened this
+    // game and closed the tab leaves a durable advertisement behind, so an old
+    // channel's fold is mostly ghosts and each one costs a QUIC dial that hangs
+    // to its timeout. Bound how many are IN FLIGHT rather than how many are
+    // considered: capping candidates would leave a peer still playing forever
+    // unreachable behind sixteen ghosts that advertised a minute later.
+    const peers = foldPeerSignals(peerSignals, uuid, selfPubkey);
     for (const peer of peers) {
+      if (inFlightDials.current >= MAX_DIAL_PEERS) break;
       if (dialledRef.current.has(peer.addr)) continue;
       dialledRef.current.add(peer.addr);
+      inFlightDials.current += 1;
       const json = decodeNodeAddr(peer.addr);
       if (!json) continue;
       void g.node
         .addPeer(g.topic, json)
-        .catch(() => dialledRef.current.delete(peer.addr));
+        .catch(() => dialledRef.current.delete(peer.addr))
+        .finally(() => {
+          inFlightDials.current -= 1;
+        });
     }
   }, [peerSignals, uuid, selfPubkey, meshReady]);
 

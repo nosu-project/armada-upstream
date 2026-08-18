@@ -372,3 +372,17 @@ describe("the URL a link-shared topic is derived from", () => {
     expect(deriveUrlTopicId("https://h/app.xdc#top", "m1")).toBe(bare);
   });
 });
+
+describe("a URL whose host contains the extension", () => {
+  it("truncates at the LAST .xdc, as Vector's greedy match does", () => {
+    // `[^\s"'<>]+` is greedy, so Vector hashes the whole string here. Taking
+    // the first `.xdc` would hash `https://cdn.xdc` and split the room.
+    expect(urlTopicSource("https://cdn.xdc.io/game.xdc")).toBe("https://cdn.xdc.io/game.xdc");
+    expect(urlTopicSource("https://cdn.xdc.io/game.xdc?v=2")).toBe("https://cdn.xdc.io/game.xdc");
+    expect(urlTopicSource("https://cdn.xdc.io/a.xdc/b.xdc")).toBe("https://cdn.xdc.io/a.xdc/b.xdc");
+  });
+
+  it("leaves a URL with no delimited .xdc alone", () => {
+    expect(urlTopicSource("https://cdn.xdc.io/game.zip")).toBe("https://cdn.xdc.io/game.zip");
+  });
+});

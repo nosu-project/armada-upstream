@@ -175,6 +175,13 @@ impl RealtimeNode {
         // receive loop still feeds the OLD callback: a game that sends fine
         // and never receives, with nothing reporting a fault.
         self.drop_topic(topic.as_bytes());
+        // `abort()` only flags and wakes; the sender clone and receiver the
+        // loop owns drop when the executor next polls it. Yield so that has
+        // happened before we re-subscribe — gossip frees a topic only when the
+        // last half goes, and a survivor makes the next subscription a broken
+        // duplicate. In practice the subscribe below awaits the gossip actor
+        // anyway, but nothing enforces that ordering.
+        wasm_sleep(0).await;
 
         let peers: Vec<EndpointAddr> = peer_addrs_json
             .iter()

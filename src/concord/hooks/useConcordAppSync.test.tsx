@@ -42,12 +42,19 @@ vi.mock("@/lib/realtimeTransport", () => ({
 // which channel it was bound to.
 let currentChannelHex = "";
 vi.mock("@/concord/lib/stream", () => ({
-  buildRumor: ({ content, tags }: { content: string; tags: string[][] }) => ({
+  buildRumor: ({ content, tags }: { content: string; tags: string[][] }) => (
+    h.published.push({
+      content,
+      tags,
+      channel: tags.find(([n]) => n === "channel")?.[1] ?? "",
+    }),
+    {
     id: "r".repeat(64),
     content,
     tags,
     created_at: 1,
-  }),
+  }
+  ),
   channelBindingTags: () => [["channel", currentChannelHex]],
   checkChannelBinding: () => undefined,
   openWrap: () => undefined,
@@ -135,5 +142,49 @@ describe("the gossip session lifecycle", () => {
     // tab, and the recent advertisement is likelier to still answer.
     // The transport is handed decoded JSON, so the newest peer's id is in it.
     expect(t.addPeer.mock.calls[0][1]).toContain("peer39");
+  });
+});
+
+describe("the departure signal", () => {
+  const A = "a".repeat(64);
+  const B = "b".repeat(64);
+  const left = () => h.published.filter((p) => p.content.includes('"op":"left"'));
+
+  beforeEach(() => {
+    h.published = [];
+  });
+
+  it("is published, bound to the channel the session belonged to", async () => {
+    h.transport = fakeTransport();
+    const t = h.transport as ReturnType<typeof fakeTransport>;
+    currentChannelHex = A;
+    const { unmount } = renderHook(() => useConcordAppSync(community, chan(A), TOPIC), { wrapper });
+    await waitFor(() => expect(t.join).toHaveBeenCalled());
+    h.published = [];
+    unmount();
+    await waitFor(() => expect(left()).toHaveLength(1));
+    expect(left()[0].channel).toBe(A);
+    expect(left()[0].content).toContain(TOPIC);
+  });
+
+  it("is skipped rather than sealed into the channel you switched TO", async () => {
+    // React runs a dep-change cleanup during the commit of the render that
+    // changed the deps, when the publisher already points at the new channel.
+    // Publishing there would tell the wrong room, and leave the room actually
+    // left dialling a node that has gone.
+    h.transport = fakeTransport();
+    const t = h.transport as ReturnType<typeof fakeTransport>;
+    currentChannelHex = A;
+    const { rerender } = renderHook(({ c }: { c: string }) => useConcordAppSync(community, chan(c), TOPIC), {
+      wrapper,
+      initialProps: { c: A },
+    });
+    await waitFor(() => expect(t.join).toHaveBeenCalled());
+    h.published = [];
+    currentChannelHex = B;
+    rerender({ c: B });
+    await waitFor(() => expect(t.leave).toHaveBeenCalled());
+    // Nothing was addressed to B on the way out of A.
+    expect(left().filter((p) => p.channel === B)).toHaveLength(0);
   });
 });
