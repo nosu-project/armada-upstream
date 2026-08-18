@@ -3,10 +3,10 @@
  *
  * Runs before `dev` and `build`, and is deliberately never fatal. The crate
  * needs a Rust toolchain, `wasm-pack`, and a real LLVM clang, none of which CI
- * or a frontend-only contributor has. Without it the app still runs: Mini App
- * realtime falls back to the Nostr relay plane, and everything else is
- * untouched. A hard failure here would make a Rust toolchain a requirement for
- * working on the chat UI.
+ * or a frontend-only contributor has. Without it the app still runs and Mini
+ * Apps still open and sync their state; only their multiplayer is off. A hard
+ * failure here would make a Rust toolchain a requirement for working on the
+ * chat UI.
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, statSync, readdirSync } from "node:fs";
@@ -22,7 +22,7 @@ const has = (cmd) => spawnSync(cmd, ["--version"], { stdio: "ignore" }).status =
 
 if (!has("cargo") || !has("wasm-pack")) {
   note("cargo or wasm-pack not found — skipping.");
-  note("Mini App realtime will use the relay fallback. To enable it:");
+  note("Mini App multiplayer will be off. To enable it:");
   note("  rustup target add wasm32-unknown-unknown && cargo install wasm-pack");
   process.exit(0);
 }
@@ -52,6 +52,6 @@ try {
   });
   note("built.");
 } catch {
-  note("build failed — continuing with the relay fallback.");
+  note("build failed — Mini App multiplayer will be off.");
 }
 process.exit(0);

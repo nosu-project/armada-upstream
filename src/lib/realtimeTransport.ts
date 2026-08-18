@@ -5,7 +5,13 @@
  * opens a Mini App should pay for, so it is imported on first use and never
  * from module scope. And it is built by a Rust toolchain that CI does not
  * have, so its absence has to be an ordinary answer rather than a build
- * failure: callers get `undefined` and fall back to the Nostr plane.
+ * failure.
+ *
+ * When it is missing there is no realtime, by design. Mini Apps still open and
+ * their durable state still syncs over the channel; only `joinRealtimeChannel`
+ * goes quiet. A Nostr-carried substitute would be worse than nothing: it
+ * reaches Armada members and no Vector member, so one game becomes two, each
+ * side watching a player who appears to have stopped moving.
  */
 
 /** The slice of the wasm class this app uses. */
@@ -63,7 +69,7 @@ export function realtimeTransport(): Promise<RealtimeTransport | undefined> {
 async function load(): Promise<RealtimeTransport | undefined> {
   const loader = CANDIDATES[MODULE_PATH];
   if (!loader) {
-    console.info("[webxdc] realtime transport not built; using the relay path (npm run build:wasm)");
+    console.info("[webxdc] realtime transport not built — Mini App multiplayer is off (npm run build:wasm)");
     return undefined;
   }
   try {
@@ -71,9 +77,9 @@ async function load(): Promise<RealtimeTransport | undefined> {
     await mod.default();
     return await new mod.RealtimeNode();
   } catch (e) {
-    // Not built, or the browser refused it. Realtime degrades to the Nostr
-    // plane; everything else about the Mini App is unaffected.
-    console.warn("[webxdc] realtime transport unavailable, using the relay path", e);
+    // Built but unusable here — an old browser, or a blocked relay. Mini Apps
+    // still open and still sync their durable state; multiplayer does not.
+    console.warn("[webxdc] realtime transport unavailable — Mini App multiplayer is off", e);
     return undefined;
   }
 }
