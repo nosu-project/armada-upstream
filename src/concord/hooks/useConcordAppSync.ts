@@ -27,6 +27,8 @@ import {
 } from "@/lib/realtimeTransport";
 import {
   base32Decode,
+  decodeNodeAddr,
+  encodeNodeAddr,
   foldPeerSignals,
   frame,
   isTopicId,
@@ -308,7 +310,7 @@ export function useConcordAppSync(
       });
       if (cancelled) return;
       gossip.current = { node, topic, key };
-      void publishRef.current(peerSignalContent(uuid, node.nodeAddrJson()), []);
+      void publishRef.current(peerSignalContent(uuid, encodeNodeAddr(node.nodeAddrJson())), []);
       // Announce readiness so the dial pass runs: the mesh comes up seconds
       // after this effect does, and by then the peers already advertising have
       // long since loaded and will not change again to retrigger it.
@@ -343,9 +345,7 @@ export function useConcordAppSync(
     for (const peer of peers) {
       if (dialledRef.current.has(peer.addr)) continue;
       dialledRef.current.add(peer.addr);
-      const json = new TextDecoder().decode(
-        base32Decode(peer.addr) ?? new Uint8Array(),
-      );
+      const json = decodeNodeAddr(peer.addr);
       if (!json) continue;
       void g.node
         .addPeer(g.topic, json)

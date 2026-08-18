@@ -5,9 +5,11 @@ import {
   TRAILER_LEN,
   base32Decode,
   base32Encode,
+  decodeNodeAddr,
   deriveTopicId,
   dmPeerSignalContent,
   dmPeerSignalTags,
+  encodeNodeAddr,
   foldPeerSignals,
   frame,
   isTopicId,
@@ -252,5 +254,37 @@ describe("the DM peer signal (Vector's NIP-17 shape)", () => {
     expect(parseDmPeerSignal("peer-advertisement", [["webxdc-node-addr", "a"]])).toBeUndefined();
     expect(parseDmPeerSignal("peer-advertisement", dmPeerSignalTags(crypto.randomUUID(), "a"))).toBeUndefined();
     expect(parseDmPeerSignal("something-else", dmPeerSignalTags(T, "a"))).toBeUndefined();
+  });
+});
+
+describe("the node address on the wire", () => {
+  const ADDR = JSON.stringify({
+    id: "ef6a0bd56fdc55509db2678bd533ae5bd9baf5e6b48b48d1db2d010c98e90897",
+    addrs: [{ Relay: "https://euc1-1.relay.n0.iroh.link./" }],
+  });
+
+  it("travels as base32, never as raw JSON", () => {
+    // The regression this exists for: Armada published the JSON unencoded
+    // while decoding base32 on receipt. Vector's decoder base32-decodes first,
+    // so it hit `{`, `"` and `:`, failed, and dropped the advertisement BEFORE
+    // recording it — the peer never appeared in its lobby, while the game
+    // played fine because whoever could read an address dialled first.
+    const wire = encodeNodeAddr(ADDR);
+    expect(wire).not.toBe(ADDR);
+    expect(wire).toMatch(/^[A-Z2-7]+$/);
+  });
+
+  it("round-trips", () => {
+    expect(decodeNodeAddr(encodeNodeAddr(ADDR))).toBe(ADDR);
+  });
+
+  it("refuses raw JSON handed to the decoder", () => {
+    expect(decodeNodeAddr(ADDR)).toBeUndefined();
+  });
+
+  it("refuses base32 that is not JSON, rather than passing junk to the transport", () => {
+    expect(decodeNodeAddr(base32Encode(new TextEncoder().encode("not json")))).toBeUndefined();
+    expect(decodeNodeAddr("!!!!")).toBeUndefined();
+    expect(decodeNodeAddr("")).toBeUndefined();
   });
 });

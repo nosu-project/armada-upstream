@@ -276,3 +276,30 @@ export function parseDmPeerSignal(content: string, tags: string[][]): PeerSignal
   }
   return undefined;
 }
+
+/**
+ * A node address as it travels: base32 of the JSON, matching Vector's
+ * `encode_node_addr`.
+ *
+ * The pair exists so the two directions cannot drift apart. Publishing the raw
+ * JSON while decoding base32 on receipt fails in a way nothing reports: the
+ * far side's decoder rejects the address and drops the advertisement before it
+ * is ever recorded, so the peer stays invisible in the lobby while the game
+ * itself plays fine, because whoever could read an address dialled first.
+ */
+export function encodeNodeAddr(addrJson: string): string {
+  return base32Encode(new TextEncoder().encode(addrJson));
+}
+
+/** Undo {@link encodeNodeAddr}; undefined if it is not base32 of valid JSON. */
+export function decodeNodeAddr(encoded: string): string | undefined {
+  const bytes = base32Decode(encoded);
+  if (!bytes) return undefined;
+  try {
+    const json = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    JSON.parse(json);
+    return json;
+  } catch {
+    return undefined;
+  }
+}
