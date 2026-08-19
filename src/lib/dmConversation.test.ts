@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   dmConversationName,
+  dmConversationSearchText,
   dmParticipantNames,
   dmRouteParam,
   parseDmRouteParam,
@@ -86,5 +87,20 @@ describe("dm conversation names", () => {
     ));
     expect(composed.startsWith("Derek Ross, ")).toBe(true);
     expect(composed.length).toBeGreaterThan("Derek Ross, ".length);
+  });
+
+  it("indexes every participant alias, handle and pubkey spelling", () => {
+    const profiles = new Map([
+      [alice, { name: "alice", display_name: "Alice Cooper", nip05: "alice@example.com" }],
+      [bob, { name: "bobby", display_name: "Robert" }],
+    ]);
+    const text = dmConversationSearchText([alice, bob], (peer) => profiles.get(peer));
+
+    expect(text).toContain("alice");
+    expect(text).toContain("Alice Cooper");
+    expect(text).toContain("alice@example.com");
+    expect(text).toContain("Robert");
+    expect(text).toContain(alice);
+    expect(text).toContain(nip19.npubEncode(bob));
   });
 });

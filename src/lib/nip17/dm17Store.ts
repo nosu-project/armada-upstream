@@ -566,7 +566,13 @@ const EXPIRED_RETRY = 8;
 export async function searchDm17Rumors(
   self: string,
   query: string,
-  opts: { limit?: number; scan?: number; signal?: AbortSignal } = {},
+  opts: {
+    limit?: number;
+    scan?: number;
+    signal?: AbortSignal;
+    /** Restrict matches to these canonical participant-set keys before limiting. */
+    allowedConversationKeys?: ReadonlySet<string>;
+  } = {},
 ): Promise<OpenedDm[]> {
   const needle = query.trim().toLowerCase();
   if (!needle) return [];
@@ -578,7 +584,13 @@ export async function searchDm17Rumors(
   const matches = events
     .filter((ev) => !isExpired(ev.tags))
     .map((ev) => storedToDm17(ev, self))
-    .filter((o) => o.peers.length > 0 && o.content.toLowerCase().includes(needle))
+    .filter(
+      (o) =>
+        o.peers.length > 0 &&
+        (!opts.allowedConversationKeys ||
+          opts.allowedConversationKeys.has(dmConvKey(o.peers))) &&
+        o.content.toLowerCase().includes(needle),
+    )
     .sort((a, b) => b.createdAt - a.createdAt);
   return matches.slice(0, opts.limit ?? 200);
 }

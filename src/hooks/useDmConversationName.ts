@@ -21,7 +21,11 @@ import { useEffect, useMemo } from "react";
 import { authorQueryOptions, type AuthorResult } from "@/hooks/useAuthor";
 import { useEventStore } from "@/hooks/useEventStore";
 import { NOTE_TO_SELF_NAME } from "@/components/NoteToSelfAvatar";
-import { dmConversationName, dmParticipantNames } from "@/lib/dmConversation";
+import {
+  dmConversationName,
+  dmConversationSearchText,
+  dmParticipantNames,
+} from "@/lib/dmConversation";
 import { demandProfiles } from "@/sync/profileSync";
 
 import type { NostrMetadata } from "@nostrify/nostrify";
@@ -29,6 +33,8 @@ import type { NostrMetadata } from "@nostrify/nostrify";
 export interface DmConversationName {
   /** "Derek Ross, Mary Kate Fain" — or one name, or "Note to Self". */
   name: string;
+  /** Every participant's name/display-name/NIP-05/pubkey alias for launchers. */
+  searchText: string;
   /** Each participant's name, in the conversation's own (sorted) order. */
   names: string[];
   /** The single participant's profile, for a 1:1 only. */
@@ -90,6 +96,7 @@ export function useDmConversationName(
     if (targets.length === 1 && targets[0] === selfPubkey) {
       return {
         name: NOTE_TO_SELF_NAME,
+        searchText: `${NOTE_TO_SELF_NAME} ${dmConversationSearchText(targets, (peer) => metadataByPeer.get(peer))}`,
         names: [NOTE_TO_SELF_NAME],
         metadata: undefined,
         emojiTags: undefined,
@@ -99,6 +106,7 @@ export function useDmConversationName(
     const single = targets.length === 1 ? targets[0] : undefined;
     return {
       name: dmConversationName(names),
+      searchText: dmConversationSearchText(targets, (peer) => metadataByPeer.get(peer)),
       names,
       metadata: single ? metadataByPeer.get(single) : undefined,
       emojiTags: single ? eventTagsByPeer.get(single) : undefined,
