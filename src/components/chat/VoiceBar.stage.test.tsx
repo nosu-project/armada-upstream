@@ -16,7 +16,18 @@ vi.mock("@livekit/components-react", () => ({
   useConnectionState: () => "connected",
   useParticipants: () => [{ identity: "one" }, { identity: "two" }],
   useLocalParticipant: () => ({
-    localParticipant: { setMicrophoneEnabled: vi.fn(), setCameraEnabled: vi.fn() },
+    // ScreenShareButton (rendered by InCallView) reads the screen-share
+    // publication at render and subscribes to LocalSenderCreated in an effect
+    // (installScreenShareCodecPreferences), so the participant needs
+    // getTrackPublication plus on/off — even though supportsScreenShare is
+    // false in jsdom and the button itself renders nothing.
+    localParticipant: {
+      setMicrophoneEnabled: vi.fn(),
+      setCameraEnabled: vi.fn(),
+      getTrackPublication: vi.fn(),
+      on: vi.fn(),
+      off: vi.fn(),
+    },
     isMicrophoneEnabled: true,
     isCameraEnabled: false,
     isScreenShareEnabled: false,
