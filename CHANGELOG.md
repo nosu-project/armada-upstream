@@ -4,6 +4,14 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.55.1] - 2026-08-19
+
+Two fixes on the security- and money-sensitive paths. A Bitcoin send to a silent-payment address now derives the output from every coin it spends, so a payment from a wallet holding more than one coin reaches the recipient instead of confirming into an address nobody is watching. And remote-signer login over a QR code now only accepts the signer you scanned, closing a window where a relay could slip in as your signer while you were still approving the code.
+
+### Fixed
+- A Bitcoin payment to a silent-payment address is now sent correctly when the wallet holds more than one coin, instead of confirming to an address the recipient never sees
+- Remote-signer login by QR code accepts only the signer you scanned, so a relay can't insert itself as your signer during approval
+
 ## [0.55.0] - 2026-08-19
 
 The quick switcher now finds your direct-message conversations too — search people, groups, and Note to Self by name and jump straight in, reopening a closed thread on the way. The invite screen is rebuilt around a full community preview: the decrypted banner and icon, a members list with the followed people you already know, the relays, and a badge when someone you follow sent the invite. Settings gains a "Pull latest setup" button that reads your saved relay and voice-server records back from your relays, alongside the existing publish. Plus fixes to the in-call bar and floating call preview.
