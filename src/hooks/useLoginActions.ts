@@ -182,7 +182,16 @@ export function useLoginActions() {
           } catch {
             continue; // Not addressed to us / undecryptable noise.
           }
-          if (response?.result !== params.secret && response?.result !== "ack") continue;
+          // ONLY the generated secret is accepted. The subscription filter
+          // (`#p: [clientPubkey]`) hands the ephemeral client pubkey to every
+          // relay that sees the REQ, so any of them can encrypt a payload to
+          // it — and a bare `{"result":"ack"}` would win the race trivially
+          // while the real signer waits for a human to approve a QR code.
+          // Proving possession of the secret is the whole reason the secret
+          // exists in this flow; `bunker://` is different (the counterparty is
+          // pinned by the URI before `connect()` runs), which is why "ack" is
+          // legitimate there and not here.
+          if (response?.result !== params.secret) continue;
 
           onStatus?.("getting-public-key");
           logSync("nip46", `nostrconnect ack from signer ${event.pubkey.slice(0, 8)} — fetching user pubkey`);
