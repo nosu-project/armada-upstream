@@ -103,10 +103,24 @@ export interface CallContextType {
   registerCallStageSlot: (el: HTMLElement) => () => void;
   /** Whether the call stage box is currently expanded. */
   stageOpen: boolean;
-  /** Toggle the call stage open/closed (the corner call panel calls this). */
+  /**
+   * Show/hide whichever stage the current route has (the corner call panel calls
+   * this): the docked box on the call's channel, the floating window away from
+   * it. Deliberately leaves `stageOpen` alone on the floating path — dismissing
+   * or restoring the floating window must not rewrite how the docked stage will
+   * appear when the user returns to the call's channel.
+   */
   toggleStage: () => void;
   /** Explicitly set the call stage open state (the stage's close button uses this). */
   setStageOpen: (open: boolean) => void;
+  /**
+   * Whether a call stage is actually on screen right now, whichever destination
+   * it is docked into. `stageOpen` alone can't answer this: it drives only the
+   * DOCKED box, and the stage's floating branch ignores it entirely — so off the
+   * call's channel `stageOpen` is a deferred preference (how the docked box will
+   * look on return), not a description of anything visible.
+   */
+  stageVisible: boolean;
   /**
    * Whether the call stage is currently docked inside the compact floating
    * window (desktop-only). True only when no normal call-stage slot is
