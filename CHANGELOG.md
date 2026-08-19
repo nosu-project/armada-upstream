@@ -4,6 +4,22 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.55.0] - 2026-08-19
+
+The quick switcher now finds your direct-message conversations too — search people, groups, and Note to Self by name and jump straight in, reopening a closed thread on the way. The invite screen is rebuilt around a full community preview: the decrypted banner and icon, a members list with the followed people you already know, the relays, and a badge when someone you follow sent the invite. Settings gains a "Pull latest setup" button that reads your saved relay and voice-server records back from your relays, alongside the existing publish. Plus fixes to the in-call bar and floating call preview.
+
+### Added
+- Direct-message conversations appear in the quick switcher — search people, groups, and Note to Self, and reopen a closed thread by selecting it
+- A "Pull latest setup" button in Settings reads your saved relay and voice-server records back from your relays
+
+### Changed
+- The invite screen is rebuilt around a full community preview: banner and icon, a members list highlighting people you follow, the relays, and a badge when the inviter is someone you follow
+
+### Fixed
+- The call bar title returns you to an in-progress Concord call
+- The floating call preview is positioned correctly
+- Toggling the call stage respects the current route
+
 ## [0.54.1] - 2026-08-18
 
 Web push notifications for direct messages and community chats now show the real sender and message text even when the notification arrives without it, instead of a generic "New message", and a copy of something you sent from another device no longer leaves a stray alert behind. QR codes — the shared profile code and every other one in the app — render in browsers that block canvas fingerprinting, where they previously came out blank.
