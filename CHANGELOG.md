@@ -4,6 +4,16 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.54.1] - 2026-08-18
+
+Web push notifications for direct messages and community chats now show the real sender and message text even when the notification arrives without it, instead of a generic "New message", and a copy of something you sent from another device no longer leaves a stray alert behind. QR codes — the shared profile code and every other one in the app — render in browsers that block canvas fingerprinting, where they previously came out blank.
+
+### Fixed
+- Direct-message and community push notifications show the sender and message text even when the alert arrives without them, rather than a generic "New message"
+- A push for a message you sent from another device no longer leaves a stray notification on screen
+- Push notifications no longer drop back to the generic wake-up text after a session that didn't finish starting up
+- QR codes render in browsers that block canvas fingerprinting (Brave, Tor Browser) instead of appearing blank
+
 ## [0.54.0] - 2026-08-18
 
 Tapping a name now opens a full profile view — avatar, bio, follower and following counts, a follow toggle, badges, and the person's own profile theme — and you can share your own profile as a QR code or link from the account switcher. Vector Mini Apps render inline in chat, animated GIF avatars stay animated when you upload them, and login gives a clearer message when an nsec is truncated. YouTube embeds play again in the packaged desktop and mobile apps, desktop auto-updates are back, and an Android notification clears from the tray once you've read the message on another device.
