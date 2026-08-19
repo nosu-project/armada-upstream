@@ -4,11 +4,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { selfStateRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useEventStore } from "@/hooks/useEventStore";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { normalizeBlossomServerUrl, parseBlossomServerList } from "@/lib/blossom";
-import { queryExplicitRelays } from "@/lib/nip65";
+import {
+  newestCanonicalSelfList,
+  readStoredCanonicalSelfLists,
+} from "@/lib/canonicalSelfList";
+import { queryExplicitRelays, queryExplicitRelaysWithStatus } from "@/lib/nip65";
 
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
  * BUD-03 Blossom server list kind. A user publishes the media servers they
@@ -18,7 +23,7 @@ import type { NostrEvent } from "@nostrify/nostrify";
 export const KIND_BLOSSOM_SERVERS = 10063;
 
 export interface BlossomServerListQuery {
-  event: NostrEvent | null;
+  event: NostrRumor | null;
   servers: string[];
 }
 
@@ -32,6 +37,7 @@ export function useBlossomServerList() {
   const { user } = useCurrentUser();
   const { config } = useAppContext();
   const { mutateAsync: publishEvent } = useNostrPublish();
+  const eventStore = useEventStore();
   const queryClient = useQueryClient();
 
   const queryKey = ["blossom-server-list", user?.pubkey];
@@ -40,15 +46,31 @@ export function useBlossomServerList() {
     queryKey,
     enabled: !!user?.pubkey,
     queryFn: async ({ signal }) => {
-      const events = await queryExplicitRelays(
-        nostr,
-        selfStateRelays(config, user!.pubkey),
-        [{ kinds: [KIND_BLOSSOM_SERVERS], authors: [user!.pubkey], limit: 1 }],
-        AbortSignal.any([signal, AbortSignal.timeout(6000)]),
-      );
-      const event = events.sort(
-        (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
-      )[0] ?? null;
+      const deadline = AbortSignal.any([signal, AbortSignal.timeout(6000)]);
+      const [wireEvents, stored] = await Promise.all([
+        queryExplicitRelays(
+          nostr,
+          selfStateRelays(config, user!.pubkey),
+          [{ kinds: [KIND_BLOSSOM_SERVERS], authors: [user!.pubkey], limit: 1 }],
+          deadline,
+        ),
+        readStoredCanonicalSelfLists(
+          eventStore,
+          user!.pubkey,
+          [KIND_BLOSSOM_SERVERS],
+          deadline,
+        ),
+      ]);
+      const cached = queryClient.getQueryData<BlossomServerListQuery>(queryKey);
+      const event = newestCanonicalSelfList(
+        [
+          ...wireEvents,
+          ...stored.events,
+          ...(cached?.event ? [cached.event] : []),
+        ],
+        user!.pubkey,
+        KIND_BLOSSOM_SERVERS,
+      ) ?? null;
       return { event, servers: event ? parseBlossomServerList(event) : [] };
     },
     staleTime: 60_000,
@@ -60,19 +82,37 @@ export function useBlossomServerList() {
       const urls = servers
         .map((url) => normalizeBlossomServerUrl(url))
         .filter((url): url is string => !!url);
-      const events = await queryExplicitRelays(
-        nostr,
-        selfStateRelays(config, user.pubkey),
-        [{ kinds: [KIND_BLOSSOM_SERVERS], authors: [user.pubkey], limit: 1 }],
-        AbortSignal.timeout(8_000),
-      );
-      const prev = events.sort(
-        (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
-      )[0] ?? null;
-      const cached = queryClient.getQueryData<BlossomServerListQuery>(queryKey);
-      if (!prev && cached?.event) {
-        throw new Error("Could not refresh your existing media-server list; no changes were published");
+      const relays = selfStateRelays(config, user.pubkey);
+      const deadline = AbortSignal.timeout(8_000);
+      const [response, stored] = await Promise.all([
+        queryExplicitRelaysWithStatus(
+          nostr,
+          relays,
+          [{ kinds: [KIND_BLOSSOM_SERVERS], authors: [user.pubkey], limit: 1 }],
+          deadline,
+        ),
+        readStoredCanonicalSelfLists(
+          eventStore,
+          user.pubkey,
+          [KIND_BLOSSOM_SERVERS],
+          deadline,
+        ),
+      ]);
+      if (response.answered.length === 0) {
+        throw new Error(
+          "Could not confirm your current media-server list; no changes were published",
+        );
       }
+      const cached = queryClient.getQueryData<BlossomServerListQuery>(queryKey);
+      const prev = newestCanonicalSelfList(
+        [
+          ...response.events,
+          ...stored.events,
+          ...(cached?.event ? [cached.event] : []),
+        ],
+        user.pubkey,
+        KIND_BLOSSOM_SERVERS,
+      ) ?? null;
       const tags = [
         ...(prev?.tags.filter(([name]) => name !== "server" && name !== "client") ?? []),
         ...urls.map((url) => ["server", url]),
@@ -87,7 +127,8 @@ export function useBlossomServerList() {
         tags,
         created_at: createdAt,
         prev: prev ?? undefined,
-        relays: selfStateRelays(config, user.pubkey),
+        relays: response.answered,
+        inheritPendingTargets: false,
         onSigned: (event) => {
           queryClient.setQueryData<BlossomServerListQuery>(queryKey, {
             event,

@@ -12,6 +12,7 @@ import {
   mergeDmEvents,
   mergeDmThread,
   nextDirectionCursor,
+  queryRelaysDmPage,
   isEmptyThreadAwaitingPull,
   type DecryptedDM,
   type RelayCursors,
@@ -413,6 +414,45 @@ describe("hasMoreCursor", () => {
 
   it("false for no relays", () => {
     expect(hasMoreCursor({})).toBe(false);
+  });
+});
+
+describe("queryRelaysDmPage", () => {
+  it("rejects an all-relays failure instead of blessing a false-empty first sync", async () => {
+    const nostr = {
+      relay: () => ({ query: vi.fn().mockRejectedValue(new Error("offline")) }),
+    };
+
+    await expect(queryRelaysDmPage(
+      nostr as never,
+      ["wss://one.example", "wss://two.example"],
+      SELF,
+      {},
+      [PEER1],
+      AbortSignal.timeout(1_000),
+    )).rejects.toThrow(/Every DM relay query failed/);
+  });
+
+  it("keeps a failed relay retryable when another relay answers", async () => {
+    const reply = dmEvent({ id: "ok", from: PEER1, to: SELF });
+    const nostr = {
+      relay: (url: string) => ({
+        query: url.includes("one")
+          ? vi.fn().mockRejectedValue(new Error("offline"))
+          : vi.fn().mockResolvedValue([reply]),
+      }),
+    };
+
+    const result = await queryRelaysDmPage(
+      nostr as never,
+      ["wss://one.example", "wss://two.example"],
+      SELF,
+      {},
+      [PEER1],
+      AbortSignal.timeout(1_000),
+    );
+    expect(result.events).toEqual([reply]);
+    expect(result.cursors["wss://one.example"]).toEqual({ sent: undefined, received: undefined });
   });
 });
 

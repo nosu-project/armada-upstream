@@ -9,7 +9,7 @@ kind 30078, NIP-44-encrypted to self, named `${APP_ID}/<name>`.
 | `armada/rail` | `railLayout` | every rail drag | wholesale |
 | `armada/read-state` | `readState` | every channel view (4 s debounce) | max per key |
 | `armada/notifications` | `notifLevels`, `mutedCommunities`, `mutedChannels`, account-global notification categories | a notification preference changes | wholesale |
-| `armada/dms` | `dmProtocol`, `pinnedDms`, `closedDms`, `acceptedDms`, `startedDms` | a DM is pinned, closed, accepted, opened | wholesale |
+| `armada/dms` | `dmProtocol`, `pinnedDms`, `closedDms`, `acceptedDms`, `startedDms` | a DM is pinned, closed, accepted, opened | additive peer maps; `dmProtocol` wholesale |
 | `armada/reactions` | `frequentReactions` | every reaction (10 s debounce) | max count / most recent |
 
 The catalogue is `src/lib/settingsDocs.ts`; the schemas are in
@@ -20,11 +20,21 @@ The catalogue is `src/lib/settingsDocs.ts`; the schemas are in
 ## Establishing and maintaining sync
 
 The first **Start sync** / **Sync now** action is deliberately explicit. It
-refreshes the user's existing replaceable records, copies their signed server,
-search, DM and Blossom lists byte-for-byte, and creates or refreshes the six
-encrypted documents on every NIP-65 write relay. This explicit initialization
-is what makes it safe to create a missing document: an empty relay read is not
-otherwise distinguishable from a failed one.
+refreshes the user's existing replaceable records; copies their signed NIP-29,
+search, DM-relay and Blossom lists; mirrors the complete encrypted Concord
+community vault (kind 33302), creator invite authority (kind 13303), and dynamic
+topic shards; and creates or refreshes the six encrypted documents on every
+NIP-65 write relay. A relay-set change performs the same state seeding before
+publishing the new kind-10002 pointer. This ordering prevents a new device from
+following the pointer to an empty account relay.
+
+These copies keep their signed ciphertext where possible. Concord is never
+reduced to community IDs: the vault also carries private channel/control keys,
+old epochs, relay hints, tombstones and invite references needed for recovery.
+Invite records likewise contain the creator secrets needed to revoke a link.
+An empty relay read is not otherwise distinguishable from a failed one, so a
+write proceeds only from a confirmed, decryptable merge base. Partial delivery
+stays in the exact-relay outbox and is reported rather than counted as complete.
 
 After a metadata document exists, AppConfig edits publish automatically (800 ms
 debounce, with retry after a failed delivery). Hot-path documents keep their own
@@ -36,8 +46,8 @@ the cold-boot sync performs the same discovery before the UI opens.
 Each installation has a device-local **Automatic settings sync** switch. Turning
 it off stops that client from publishing or applying encrypted settings
 automatically, including read-state and frequent-reaction updates, and skips the
-settings fetch during cold boot. Encrypted GIF-favorite shards follow the same
-switch. It does not travel in NIP-78 — otherwise one
+settings fetch during cold boot. Encrypted GIF-favorite and DM-conversation
+index shards follow the same switch. It does not travel in NIP-78 — otherwise one
 client could turn every other client back on or off. **Sync now** remains an
 explicit one-shot publish while the switch is off. Standard signed Nostr lists
 still change when the user explicitly edits or saves those lists.
@@ -181,6 +191,12 @@ supplies.
   WebView, which doesn't send the field, gets.
 - The REQ builder and `SelfState.storable` must use the **same** set, or the
   service subscribes to documents it then refuses to store.
+- Dynamic documents are admitted by the same bounded topic catalogue as the
+  WebView (`armada-gif-favorites` and `armada-dm-conversations`); their opaque
+  coordinates are not copied into preferences one by one.
+- The background subscription runs only on the account's self-state relays.
+  Joined NIP-29 servers carry conversation traffic and must never become a
+  fallback destination for private settings or topic shards.
 - `settingsDocs.test.ts` reads `SelfState.kt` and asserts the default set
   matches `SETTINGS_DOC_NAMES`. Drift is otherwise silent, and shows up only as
   "that one setting doesn't travel between my devices".
@@ -208,6 +224,16 @@ Nothing native decrypts these; storing the raw event verbatim is the whole job.
   per-installation shard at `armada/gif-favorites/<deviceId>`, discovered by the
   `t` tag `armada-gif-favorites` rather than by `d`. Merging shards gives
   add/remove convergence without one upgrading device replacing another's list.
+- **DM conversation discovery**, which uses eight bounded, encrypted kind-30078
+  buckets per installation at
+  `${APP_ID}/dm-conversations/<opaqueDeviceId>/<bucket>`, discovered only by the
+  public `t` tag `armada-dm-conversations`. The encrypted payload contains the
+  canonical participant-set key, a latest-activity marker and whether this
+  account has participated. It deliberately contains no message text, preview,
+  read state, request state, ciphertext or gift-wrap id. Shards merge additively
+  across installations; they restore placeholder rows quickly while the real
+  NIP-04/NIP-17 history catches up. Existing trust, mute, closed-DM and request
+  rules still decide whether a restored row is visible.
 - **`themes`** — a per-mode override of the builtin light/dark palettes that
   this client only ever read and never wrote. Removed. The schema is loose, so a
   copy left in an older device's document passes through untouched.

@@ -6,10 +6,13 @@ import {
   discoverRelayList,
   KIND_RELAY_LIST,
   MAX_RELAY_LIST_RELAYS,
+  newerRelayListUpdate,
   newestRelayList,
   parseRelayList,
   publishRelayListEvent,
   queryExplicitRelays,
+  relayListIsNewerThanMetadata,
+  relayListVersionIsNewer,
 } from "@/lib/nip65";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
@@ -63,6 +66,45 @@ describe("NIP-65 relay lists", () => {
     const older = relayList([["r", "wss://old.example"]], 1_999);
     const expected = [a, b].sort((left, right) => left.id.localeCompare(right.id))[0];
     expect(newestRelayList([older, a, b])?.id).toBe(expected.id);
+    expect(relayListVersionIsNewer(expected, older)).toBe(true);
+    expect(relayListVersionIsNewer(expected, expected === a ? b : a)).toBe(true);
+    expect(relayListVersionIsNewer(older, expected)).toBe(false);
+    expect(relayListVersionIsNewer(expected, expected)).toBe(false);
+  });
+
+  it("persists the equal-second winning id while allowing one legacy upgrade", () => {
+    const lower = { created_at: 2_000, id: "0".repeat(64) };
+    const higher = { created_at: 2_000, id: "f".repeat(64) };
+
+    expect(relayListIsNewerThanMetadata(higher, { updatedAt: 2_000 })).toBe(true);
+    expect(relayListIsNewerThanMetadata(lower, {
+      updatedAt: 2_000,
+      eventId: higher.id,
+    })).toBe(true);
+    expect(relayListIsNewerThanMetadata(higher, {
+      updatedAt: 2_000,
+      eventId: lower.id,
+    })).toBe(false);
+    expect(relayListIsNewerThanMetadata(lower, {
+      updatedAt: 2_000,
+      eventId: lower.id,
+    })).toBe(false);
+  });
+
+  it("admits only signed, nonempty and newer live pointer updates", () => {
+    const current = relayList([["r", "wss://current.example"]], 2_500);
+    const newer = relayList([["r", "wss://new.example"]], 2_501);
+    const empty = relayList([], 2_502);
+    // JSON round-trip deliberately drops nostr-tools' cached Symbol(verified),
+    // which `finalizeEvent` attaches and object spread would preserve.
+    const invalid = { ...(JSON.parse(JSON.stringify(newer)) as NostrEvent), id: "0".repeat(64) };
+
+    expect(newerRelayListUpdate(newer, current)?.relays).toEqual([
+      { url: "wss://new.example", read: true, write: true },
+    ]);
+    expect(newerRelayListUpdate(current, newer)).toBeUndefined();
+    expect(newerRelayListUpdate(empty, current)).toBeUndefined();
+    expect(newerRelayListUpdate(invalid, current)).toBeUndefined();
   });
 
   it("discovers the newest valid list even when another indexer fails", async () => {

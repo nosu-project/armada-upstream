@@ -3,6 +3,25 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 
 import { accountDataRelays, type AppConfig } from "@/contexts/AppContext";
+import {
+  listQueryKey,
+  type FragSet,
+  type ListData,
+  type PersistedList,
+} from "@/concord/hooks/useCommunityList";
+import {
+  decodeInviteListEvents,
+  inviteListFoldKey,
+  inviteListKey,
+  readPersistedInviteList,
+  type PersistedInviteList,
+} from "@/concord/hooks/useInvites";
+import {
+  communityListFoldKey,
+  mergeCommunityLists,
+} from "@/concord/lib/communityList";
+import { KIND_INVITE_LIST } from "@/concord/lib/kinds";
+import { mergeInviteLists, type InviteList } from "@/concord/lib/invite";
 import { useAppContext } from "@/hooks/useAppContext";
 import {
   KIND_BLOSSOM_SERVERS,
@@ -18,18 +37,38 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useNip65RelaySetup } from "@/hooks/useNip65RelaySetup";
 import {
+  fetchPortableWireState,
+  newestPortableAddressableEvents,
+} from "@/hooks/usePublishPortableSetup";
+import {
+  decodeDmConversationIndexEvents,
+  dmConversationIndexSyncQueryKey,
+  type DecodedDmConversationIndex,
+} from "@/hooks/useDmConversationIndexSync";
+import { hydrateDmConversationIndexShards } from "@/hooks/useDmConversationIndex";
+import {
+  decodeFavoriteGifEvents,
+  favoriteGifsSyncQueryKey,
+} from "@/hooks/useFavoriteGifsSync";
+import {
+  FAVORITE_GIFS_D_PREFIX,
+  FAVORITE_GIFS_EVENT_TAG,
+  hydrateFavoriteGifShards,
+} from "@/hooks/useFavoriteGifs";
+import {
   settingsDocFilter,
   settingsDocQueryKey,
 } from "@/hooks/useSettingsDoc";
 import {
-  readGroupListEvent,
-  type ReadGroupListResult,
+  resolveGroupListRead,
+  type UserGroupListQuery,
 } from "@/hooks/useUserGroupList";
 import { parseBlossomServerList } from "@/lib/blossom";
-import { writeFolded } from "@/lib/foldedCache";
+import { readFolded, writeFolded } from "@/lib/foldedCache";
 import { KIND_USER_GROUPS } from "@/lib/nip29";
 import { groupListFoldKey, type PersistedGroupList } from "@/lib/nip29ServerCache";
 import {
+  parseRelayList,
   queryExplicitRelays,
   uniqueRelayUrls,
 } from "@/lib/nip65";
@@ -40,12 +79,16 @@ import {
 import {
   SETTINGS_DOC_NAMES,
   SETTINGS_DOC_SCHEMAS,
-  SETTINGS_DTAGS,
   SETTINGS_KIND,
   settingsDTag,
   type SettingsDocName,
 } from "@/lib/settingsDocs";
 import { docToConfigPatch, CONFIG_KEYS_BY_DOC, type ConfigDocName } from "@/lib/syncedConfig";
+import {
+  DM_CONVERSATIONS_EVENT_TAG,
+  newestDmConversationIndexEvents,
+} from "@/lib/dmConversationIndex";
+import { SELF_SYNC_TOPIC_TAGS } from "@/lib/selfSyncKinds";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 import type { SearchRelayListQuery } from "@/hooks/useSearchRelayList";
@@ -83,6 +126,15 @@ function newest(
   return events
     .filter((event) => event.pubkey === pubkey && event.kind === kind)
     .sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id))[0];
+}
+
+export function nip01VersionIsNewer(
+  candidate: Pick<NostrEvent, "created_at" | "id">,
+  current: Pick<NostrEvent, "created_at" | "id"> | undefined,
+): boolean {
+  return !current
+    || candidate.created_at > current.created_at
+    || (candidate.created_at === current.created_at && candidate.id < current.id);
 }
 
 function knownWriteRelays(config: AppConfig, pubkey: string): string[] {
@@ -133,8 +185,37 @@ export function usePullPortableSetup() {
 
     setIsPending(true);
     try {
+      const store = await eventStore;
+      let localCanonical: NostrEvent[] = [];
+      try {
+        localCanonical = (await store.query([{
+          kinds: [10002, KIND_SEARCH_RELAYS, KIND_DM_RELAYS, KIND_BLOSSOM_SERVERS],
+          authors: [user.pubkey],
+        }])) as NostrEvent[];
+      } catch {
+        // The explicit pull still works from wire-only state when ArmadaDB is
+        // temporarily unavailable.
+      }
       const currentWriteRelays = knownWriteRelays(config, user.pubkey);
-      const discovery = await discover(currentWriteRelays);
+      const localRelayEvent = newest(localCanonical, user.pubkey, 10002);
+      const localRelayWriteRelays = localRelayEvent
+        ? parseRelayList(localRelayEvent)
+            .filter((relay) => relay.write)
+            .map((relay) => relay.url)
+        : [];
+      const discovered = await discover([...currentWriteRelays, ...localRelayWriteRelays]);
+      const pointerEvent = newest(
+        [
+          ...localCanonical.filter((event) => event.kind === 10002),
+          ...(discovered ? [discovered.event] : []),
+        ],
+        user.pubkey,
+        10002,
+      );
+      const pointerRelays = pointerEvent ? parseRelayList(pointerEvent) : [];
+      const discovery = pointerEvent && pointerRelays.length > 0
+        ? { event: pointerEvent, relays: pointerRelays }
+        : discovered;
       const discoveredWriteRelays = discovery?.relays
         .filter((relay) => relay.write)
         .map((relay) => relay.url) ?? [];
@@ -147,40 +228,107 @@ export function usePullPortableSetup() {
         throw new Error("No NIP-65 write relays are available to pull from");
       }
 
-      const filters: NostrFilter[] = [
-        {
-          kinds: [KIND_SEARCH_RELAYS, KIND_USER_GROUPS, KIND_DM_RELAYS, KIND_BLOSSOM_SERVERS],
-          authors: [user.pubkey],
-        },
-      ];
+      let communityEvents: NostrEvent[] = [];
+      let communitySet: FragSet | null = null;
+      let events: NostrEvent[];
       if (canDecrypt) {
-        // All six documents in one filter, and deliberately NO `limit`: it
-        // caps the whole filter rather than each `d`, so five of the six could
-        // come back missing purely because the sixth answered first.
-        filters.push({
-          kinds: [SETTINGS_KIND],
+        const wire = await fetchPortableWireState(
+          nostr,
+          user,
+          sources,
+          AbortSignal.timeout(PULL_TIMEOUT_MS),
+        );
+        events = wire.events;
+        communityEvents = wire.communityEvents;
+        communitySet = wire.communitySet;
+      } else {
+        const filters: NostrFilter[] = [{
+          kinds: [KIND_DM_RELAYS, KIND_BLOSSOM_SERVERS],
           authors: [user.pubkey],
-          "#d": SETTINGS_DTAGS,
-        });
+        }];
+        events = await queryExplicitRelays(
+          nostr,
+          sources,
+          filters,
+          AbortSignal.timeout(PULL_TIMEOUT_MS),
+        );
       }
 
-      const events = await queryExplicitRelays(
-        nostr,
-        sources,
-        filters,
-        AbortSignal.timeout(PULL_TIMEOUT_MS),
-      );
-
+      const canonicalCandidates = [...events, ...localCanonical];
       const groupEvent = canDecrypt ? newest(events, user.pubkey, KIND_USER_GROUPS) : undefined;
-      const searchEvent = canDecrypt ? newest(events, user.pubkey, KIND_SEARCH_RELAYS) : undefined;
-      const dmEvent = newest(events, user.pubkey, KIND_DM_RELAYS);
-      const blossomEvent = newest(events, user.pubkey, KIND_BLOSSOM_SERVERS);
+      const searchEvent = canDecrypt
+        ? newest(canonicalCandidates, user.pubkey, KIND_SEARCH_RELAYS)
+        : undefined;
+      const dmEvent = newest(canonicalCandidates, user.pubkey, KIND_DM_RELAYS);
+      const blossomEvent = newest(canonicalCandidates, user.pubkey, KIND_BLOSSOM_SERVERS);
+
+      const inviteEvents = canDecrypt
+        ? events.filter((event) => event.kind === KIND_INVITE_LIST && event.pubkey === user.pubkey)
+        : [];
+      const inviteRead = inviteEvents.length > 0
+        ? await decodeInviteListEvents(inviteEvents, user)
+        : undefined;
+      const persistedInvites = canDecrypt
+        ? await readPersistedInviteList(user.pubkey)
+        : undefined;
+      if (inviteRead?.unreadable) {
+        throw new Error("Your creator invite records could not be decrypted; nothing was restored");
+      }
+
+      const topicEditions = canDecrypt
+        ? events.filter((event) => event.tags.some(
+            ([name, value]) => name === "t" && SELF_SYNC_TOPIC_TAGS.includes(value),
+          ))
+        : [];
+      const topicHeads = newestPortableAddressableEvents(topicEditions, SETTINGS_KIND);
+      const dmIndexEvents = topicEditions.filter((event) => event.tags.some(
+        ([name, value]) => name === "t" && value === DM_CONVERSATIONS_EVENT_TAG,
+      ));
+      let decodedDmIndex: DecodedDmConversationIndex | undefined;
+      if (dmIndexEvents.length > 0) {
+        decodedDmIndex = await decodeDmConversationIndexEvents(
+          dmIndexEvents,
+          signer,
+          user.pubkey,
+        );
+        if (decodedDmIndex.heads.size !== newestDmConversationIndexEvents(dmIndexEvents, user.pubkey).length) {
+          throw new Error("Your DM conversation index could not be decrypted completely; nothing was restored");
+        }
+      }
+      const favoriteGifEvents = topicEditions.filter((event) => event.tags.some(
+        ([name, value]) => name === "t" && value === FAVORITE_GIFS_EVENT_TAG,
+      ));
+      const decodedFavoriteGifs = favoriteGifEvents.length > 0
+        ? await decodeFavoriteGifEvents(
+            user.pubkey,
+            (pubkey, content) => signer.nip44!.decrypt(pubkey, content),
+            favoriteGifEvents,
+          )
+        : undefined;
+      const expectedFavoriteCoordinates = new Set(
+        favoriteGifEvents
+          .map((event) => event.tags.find(([name]) => name === "d")?.[1])
+          .filter((d): d is string => Boolean(d?.startsWith(FAVORITE_GIFS_D_PREFIX))),
+      ).size;
+      if (decodedFavoriteGifs && decodedFavoriteGifs.ownEvents.size !== expectedFavoriteCoordinates) {
+        throw new Error("Your GIF favorites could not be decrypted completely; nothing was restored");
+      }
 
       // Decode every private record before changing any cache. A failed signer
       // request must not leave the client with a half-applied setup.
-      let groupList: ReadGroupListResult | undefined;
+      let groupList: UserGroupListQuery | undefined;
       if (groupEvent) {
-        groupList = await readGroupListEvent(groupEvent, signer);
+        const previous = queryClient.getQueryData<UserGroupListQuery>([
+          "nip29", "user-groups", user.pubkey,
+        ]);
+        const persisted = await readFolded<PersistedGroupList>(groupListFoldKey(user.pubkey));
+        groupList = await resolveGroupListRead(
+          events.filter((event) =>
+            event.kind === KIND_USER_GROUPS && event.pubkey === user.pubkey),
+          signer,
+          previous,
+          persisted,
+        );
         if (groupList.decryptFailed) {
           throw new Error("Your server list could not be decrypted; nothing was restored");
         }
@@ -198,13 +346,15 @@ export function usePullPortableSetup() {
       // is already on disk is dropped rather than applied — the store would
       // refuse the write anyway, and seeding the query cache with it would
       // regress a version this device has already applied.
-      const store = await eventStore;
-      const storedAt = new Map<SettingsDocName, number>();
+      const storedVersions = new Map<SettingsDocName, Pick<NostrEvent, "created_at" | "id">>();
       if (canDecrypt) {
         for (const name of SETTINGS_DOC_NAMES) {
           try {
             for (const rumor of await store.query([settingsDocFilter(user.pubkey, name)])) {
-              storedAt.set(name, Math.max(storedAt.get(name) ?? 0, rumor.created_at));
+              const held = storedVersions.get(name);
+              if (nip01VersionIsNewer(rumor, held)) {
+                storedVersions.set(name, rumor);
+              }
             }
           } catch {
             // Store unavailable; treat as "nothing on disk".
@@ -231,7 +381,7 @@ export function usePullPortableSetup() {
         const event = newestByDTag.get(settingsDTag(name));
         if (!event) continue;
         settingsFound += 1;
-        if (event.created_at <= (storedAt.get(name) ?? 0)) continue;
+        if (!nip01VersionIsNewer(event, storedVersions.get(name))) continue;
 
         // Deliberately not `decodeSettingsDoc`: it answers `null` both for a
         // signer that refused and for a document this build cannot parse, and
@@ -258,11 +408,42 @@ export function usePullPortableSetup() {
         settingsDocs.push({ name, event, doc: parsed.data as Record<string, unknown> });
       }
 
+      let pulledCommunity: ListData | undefined;
+      if (communitySet) {
+        const cached = queryClient.getQueryData<ListData>(listQueryKey(user.pubkey));
+        const persisted = await readFolded<PersistedList>(communityListFoldKey(user.pubkey));
+        const local = cached?.list ?? persisted?.list;
+        pulledCommunity = {
+          event: communitySet.newestEvent,
+          list: local
+            ? mergeCommunityLists(local, communitySet.list)
+            : communitySet.list,
+          decryptFailed: false,
+        };
+      }
+
+      let pulledInvites: InviteList | undefined;
+      let pulledInviteCreatedAt = 0;
+      if (inviteRead) {
+        const cached = queryClient.getQueryData<InviteList>(inviteListKey(user.pubkey));
+        pulledInvites = persistedInvites
+          ? mergeInviteLists(inviteRead.list, persistedInvites.list)
+          : inviteRead.list;
+        if (cached) pulledInvites = mergeInviteLists(pulledInvites, cached);
+        pulledInviteCreatedAt = Math.max(
+          inviteRead.newestCreatedAt,
+          persistedInvites?.newestCreatedAt ?? 0,
+        );
+      }
+
       const recordCount = Number(Boolean(discovery))
         + Number(Boolean(groupEvent))
         + Number(Boolean(searchEvent))
         + Number(Boolean(dmEvent))
         + Number(Boolean(blossomEvent))
+        + communityEvents.length
+        + Number(Boolean(inviteRead?.newestEvent))
+        + topicHeads.length
         + settingsFound;
       if (recordCount === 0) {
         throw new Error("No portable setup was found on your account relays");
@@ -278,15 +459,15 @@ export function usePullPortableSetup() {
         await nextMacrotask();
       }
 
-      if (groupEvent && groupList) {
+      if (groupList?.event) {
         queryClient.setQueryData(["nip29", "user-groups", user.pubkey], {
-          event: groupEvent,
+          event: groupList.event,
           groups: groupList.groups,
           servers: groupList.servers,
           decryptFailed: false,
         });
         await writeFolded(groupListFoldKey(user.pubkey), {
-          event: groupEvent,
+          event: groupList.event,
           groups: groupList.groups,
           servers: groupList.servers,
         } satisfies PersistedGroupList).catch(() => undefined);
@@ -308,6 +489,38 @@ export function usePullPortableSetup() {
           ["blossom-server-list", user.pubkey],
           { event: blossomEvent, servers: parseBlossomServerList(blossomEvent) },
         );
+      }
+
+      // Persist every exact private wire record before exposing its decrypted
+      // fold. This includes all Community List coordinates, the creator's
+      // Invite List, and per-installation topic shards.
+      for (const event of [...communityEvents, ...inviteEvents, ...topicEditions]) {
+        await store.event(event).catch(() => undefined);
+      }
+      if (pulledCommunity) {
+        await writeFolded(communityListFoldKey(user.pubkey), {
+          event: pulledCommunity.event,
+          list: pulledCommunity.list,
+        } satisfies PersistedList).catch(() => undefined);
+        queryClient.setQueryData(listQueryKey(user.pubkey), pulledCommunity);
+      }
+      if (pulledInvites) {
+        await writeFolded(inviteListFoldKey(user.pubkey), {
+          list: pulledInvites,
+          newestCreatedAt: pulledInviteCreatedAt,
+        } satisfies PersistedInviteList);
+        queryClient.setQueryData(inviteListKey(user.pubkey), pulledInvites);
+      }
+      if (decodedDmIndex) {
+        await hydrateDmConversationIndexShards(user.pubkey, decodedDmIndex.shards);
+        queryClient.setQueryData(
+          [...dmConversationIndexSyncQueryKey, user.pubkey, sources.slice().sort().join("\u0000")],
+          decodedDmIndex,
+        );
+      }
+      if (decodedFavoriteGifs) {
+        hydrateFavoriteGifShards(user.pubkey, decodedFavoriteGifs.shards);
+        queryClient.setQueryData([...favoriteGifsSyncQueryKey, user.pubkey], decodedFavoriteGifs);
       }
 
       // Durable first, then visible — the same order every other settings
@@ -332,12 +545,16 @@ export function usePullPortableSetup() {
         let next: AppConfig = current;
         if (searchList) next = { ...next, searchRelays: searchList.relays };
         if (dmEvent) next = { ...next, dmRelays: parseDmRelays(dmEvent) };
-        if (blossomEvent && blossomEvent.created_at > current.blossomServerMetadata.updatedAt) {
+        if (blossomEvent && nip01VersionIsNewer(blossomEvent, {
+          created_at: current.blossomServerMetadata.updatedAt,
+          id: current.blossomServerMetadata.eventId ?? "\uffff",
+        })) {
           next = {
             ...next,
             blossomServerMetadata: {
               servers: parseBlossomServerList(blossomEvent),
               updatedAt: blossomEvent.created_at,
+              eventId: blossomEvent.id,
             },
           };
         }

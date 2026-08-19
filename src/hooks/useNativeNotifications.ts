@@ -6,11 +6,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { useQuery } from "@tanstack/react-query";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useAcceptedDms } from "@/hooks/useAcceptedDms";
 import { useAppContext } from "@/hooks/useAppContext";
-import { useFollowList } from "@/hooks/useFollowList";
+import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
 import { useNotifLevels } from "@/hooks/useNotifLevels";
-import { usePinnedDms } from "@/hooks/usePinnedDms";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import {
   savePushPrefs,
@@ -156,9 +154,12 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   const { user } = useCurrentUser();
   const { config, updateConfig } = useAppContext();
   const { data: groupList } = useUserGroupList();
-  const { data: followData } = useFollowList();
-  const { accepted } = useAcceptedDms();
-  const { pinned } = usePinnedDms();
+  const {
+    knownPeers: dmKnownPeers,
+    knownConversationKeys: dmKnownConversations,
+    mutedPeers: dmMutedPeers,
+    isLoading: dmPeersLoading,
+  } = useKnownDmPeers();
   const { channelLevel, concordChannelLevel } = useNotifLevels();
 
   // Start dormant; the launch check below flips this on when the OS permission
@@ -269,25 +270,11 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     return [...set].sort();
   }, [config, publishedDmRelays]);
 
-  // People the user follows (kind 3). The kind-4 DM subscription is scoped to
-  // `authors:[...dmFollows]` so the service only fires DM notifications from
-  // friends — matching the client's permanent friends-only DM view. Sorted so a
-  // follow-list refetch that merely reorders doesn't churn the native config.
-  const dmFollows = useMemo(
-    () => [...new Set(followData?.pubkeys ?? [])].sort(),
-    [followData?.pubkeys],
-  );
-
-  // The "known" DM peers — follows ∪ accepted ∪ pinned — mirroring the
-  // WebView's `useKnownDmPeers`. A NIP-17 gift wrap can come from anyone (its
-  // subscription is the broad `#p` inbox, not author-scoped like kind 4), so
-  // the service uses this to tell a friend's DM from a stranger's once it has
-  // decrypted the wrap, and gates unknown senders by `dmRequests`. Sorted so a
-  // list refetch that merely reorders doesn't churn the native config.
-  const dmKnownPeers = useMemo(
-    () => [...new Set([...(followData?.pubkeys ?? []), ...accepted, ...pinned])].sort(),
-    [followData?.pubkeys, accepted, pinned],
-  );
+  // `dmFollows` is the historical native payload name. It now carries every
+  // established legacy-DM author, including peers recovered from the encrypted
+  // conversation index. NIP-17 uses it alongside exact group keys after
+  // decrypting a broad inbox wrap.
+  const dmFollows = dmKnownPeers;
 
   // The signer credential shared with the service (Keystore-sealed natively,
   // wiped with the config on disable/logout) so it can open ANY inbox gift
@@ -427,6 +414,11 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     let payload: Parameters<typeof ArmadaNotification.configure>[0];
     if (turnedOff || loggedOut) {
       payload = { enabled: false };
+    } else if (dmPeersLoading) {
+      // Keep the existing native configuration while local/follow state warms.
+      // Writing a partial set here would reclassify restored conversations as
+      // requests until another unrelated configuration change happened.
+      return;
     } else if (nothingToWatch) {
       // Still loading the user's groups/communities — keep whatever's running.
       return;
@@ -443,6 +435,8 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
         dmRelays,
         dmFollows,
         dmKnownPeers,
+        dmKnownConversations,
+        dmMutedPeers,
         dmRequests: prefs.dmRequests,
         selfRelays,
         selfDTags: SETTINGS_DTAGS,
@@ -459,7 +453,7 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     ArmadaNotification.configure(payload).catch((err) => {
       console.warn("[native-notif] configure failed:", err);
     });
-  }, [supported, enabled, user, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, dmRelays, dmFollows, dmKnownPeers, prefs.dmRequests, selfRelays, signerCfg, gitSubs]);
+  }, [supported, enabled, user, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, dmRelays, dmFollows, dmKnownPeers, dmKnownConversations, dmMutedPeers, dmPeersLoading, prefs.dmRequests, selfRelays, signerCfg, gitSubs]);
 
   // Auto-enable on launch (opt-out, like Ditto): if the user hasn't turned it
   // off AND the OS permission is already granted, start the background service

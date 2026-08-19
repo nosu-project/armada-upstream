@@ -120,6 +120,21 @@ final class ProtocolTests: XCTestCase {
         XCTAssertNil(Dm17.peerOf(unattributable, self: alicePk))
     }
 
+    func testPeersOfUsesTheCanonicalGroupParticipantSet() {
+        let carolPk = String(repeating: "c", count: 64)
+        let received = NostrEvent(
+            id: nil, pubkey: bobPk, createdAt: 0, kind: 14,
+            tags: [["p", alicePk], ["p", carolPk]], content: "", sig: nil
+        )
+        XCTAssertEqual(Dm17.peersOf(received, self: alicePk), [bobPk, carolPk].sorted())
+
+        let ownCopy = NostrEvent(
+            id: nil, pubkey: alicePk, createdAt: 0, kind: 14,
+            tags: [["p", bobPk], ["p", carolPk]], content: "", sig: nil
+        )
+        XCTAssertEqual(Dm17.peersOf(ownCopy, self: alicePk), [bobPk, carolPk].sorted())
+    }
+
     // MARK: - Concord
 
     private var concordVector: [String: Any] { vectorObject("concord") }

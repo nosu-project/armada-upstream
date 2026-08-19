@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { accountDataRelays, selfStateRelays } from "@/contexts/AppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useAppContext } from "@/hooks/useAppContext";
+import { useEventStore } from "@/hooks/useEventStore";
 import {
   KIND_DM_RELAYS,
   parseDmRelays,
@@ -21,9 +22,14 @@ import { warmupCommunities } from "@/concord/lib/loginWarmup";
 import {
   KIND_GROUP_CHAT,
   KIND_USER_GROUPS,
-  parseGroupListTags,
   type GroupRef,
 } from "@/lib/nip29";
+import {
+  resolveGroupListRead,
+  type UserGroupListQuery,
+} from "@/hooks/useUserGroupList";
+import { readFolded, writeFolded } from "@/lib/foldedCache";
+import { groupListFoldKey, type PersistedGroupList } from "@/lib/nip29ServerCache";
 import { MetadataDocSchema } from "@/lib/schemas";
 import {
   SETTINGS_DTAGS,
@@ -32,6 +38,12 @@ import {
   settingsDocForDTag,
 } from "@/lib/settingsDocs";
 import { parseBlossomServerList } from "@/lib/blossom";
+import {
+  newestCanonicalSelfList,
+  readStoredCanonicalSelfLists,
+  replaceableVersionIsNewer,
+  replaceableIsNewerThanMetadata,
+} from "@/lib/canonicalSelfList";
 import {
   KIND_SEARCH_RELAYS,
   readSearchRelayList,
@@ -43,14 +55,20 @@ import {
   settingsDocQueryKey,
   type StoredSettingsDoc,
 } from "@/hooks/useSettingsDoc";
+import { decodeAndHydrateDmConversationIndex } from "@/hooks/useDmConversationIndexSync";
+import { dmConversationIndexFilter } from "@/lib/dmConversationIndex";
 import {
   discoverRelayList,
+  KIND_RELAY_LIST,
+  parseRelayList,
   queryExplicitRelays,
+  relayListIsNewerThanMetadata,
   uniqueRelayUrls,
 } from "@/lib/nip65";
 import { RELAY_LIST_DISCOVERY_RELAYS } from "@/lib/platform";
 
 import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** NIP-88 poll kind — polls render inline in the group timeline. */
 const KIND_POLL = 1068;
@@ -142,6 +160,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const { config, updateConfig } = useAppContext();
+  const eventStore = useEventStore();
   const queryClient = useQueryClient();
   const { logins } = useNostrLogin();
 
@@ -265,23 +284,47 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       const rId = begin("relays");
       let accountRelays = accountDataRelays(configRef.current, pubkey);
       try {
-        const discovery = await discoverRelayList(
-          nostr,
+        const pointerSignal = stepSignal();
+        const [remoteDiscovery, storedPointers] = await Promise.all([
+          discoverRelayList(
+            nostr,
+            pubkey,
+            uniqueRelayUrls([
+              ...accountRelays,
+              ...configRef.current.appRelays,
+              ...RELAY_LIST_DISCOVERY_RELAYS,
+            ]),
+            pointerSignal,
+          ),
+          readStoredCanonicalSelfLists(
+            eventStore,
+            pubkey,
+            [KIND_RELAY_LIST],
+            pointerSignal,
+          ),
+        ]);
+        // Android's background service can verify and persist a newer pointer
+        // while the WebView is stopped. Treat that local rumor as a first-class
+        // canonical source; otherwise one stale reachable discovery relay can
+        // switch this boot away from the relays that hold the newer state.
+        const storedPointer = newestCanonicalSelfList(
+          storedPointers.events.filter((event) => parseRelayList(event).length > 0),
           pubkey,
-          uniqueRelayUrls([
-            ...accountRelays,
-            ...configRef.current.appRelays,
-            ...RELAY_LIST_DISCOVERY_RELAYS,
-          ]),
-          stepSignal(),
+          KIND_RELAY_LIST,
         );
+        const discovery = storedPointer && (
+          !remoteDiscovery
+          || replaceableVersionIsNewer(storedPointer, remoteDiscovery.event)
+        )
+          ? { event: storedPointer, relays: parseRelayList(storedPointer) }
+          : remoteDiscovery;
         if (discovery) {
           const current = configRef.current;
           // A first discovery is the user's own signed declaration, so adopt
           // it automatically. Preserve a deliberate later toggle-off.
           const sameOwner = current.relayMetadata.pubkey === pubkey;
           const metadataIsNewer = !sameOwner
-            || discovery.event.created_at > current.relayMetadata.updatedAt;
+            || relayListIsNewerThanMetadata(discovery.event, current.relayMetadata);
           if (metadataIsNewer) {
             const next = {
               ...current,
@@ -293,6 +336,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
                 ? {
                     relays: discovery.relays,
                     updatedAt: discovery.event.created_at,
+                    eventId: discovery.event.id,
                     pubkey,
                   }
                 : current.relayMetadata,
@@ -301,7 +345,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
             updateConfigRef.current((live) => {
               const sameLiveOwner = live.relayMetadata.pubkey === pubkey;
               const liveMetadataIsNewer = !sameLiveOwner
-                || discovery.event.created_at > live.relayMetadata.updatedAt;
+                || relayListIsNewerThanMetadata(discovery.event, live.relayMetadata);
               if (!liveMetadataIsNewer) return live;
               return {
                 ...live,
@@ -334,20 +378,41 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       // read against app defaults before NIP-65 discovery completed.
       let canonicalSearch: SearchRelayListQuery | undefined;
       let canonicalDm: DmRelayListQuery | undefined;
-      let canonicalBlossom: (BlossomServerListQuery & { event: NostrEvent }) | undefined;
+      let canonicalBlossom: (BlossomServerListQuery & { event: NostrRumor }) | undefined;
       try {
-        const events = await queryExplicitRelays(
-          nostr,
-          accountRelays,
-          [{
-            kinds: [KIND_SEARCH_RELAYS, KIND_DM_RELAYS, KIND_BLOSSOM_SERVERS],
-            authors: [pubkey],
-          }],
-          stepSignal(),
+        const deadline = stepSignal();
+        const [wireEvents, stored] = await Promise.all([
+          queryExplicitRelays(
+            nostr,
+            accountRelays,
+            [{
+              kinds: [KIND_SEARCH_RELAYS, KIND_DM_RELAYS, KIND_BLOSSOM_SERVERS],
+              authors: [pubkey],
+            }],
+            deadline,
+          ),
+          readStoredCanonicalSelfLists(
+            eventStore,
+            pubkey,
+            [KIND_SEARCH_RELAYS, KIND_DM_RELAYS, KIND_BLOSSOM_SERVERS],
+            deadline,
+          ),
+        ]);
+        const cachedSearch = queryClient.getQueryData<SearchRelayListQuery>(
+          ["search-relay-list", pubkey],
         );
-        const newest = (kind: number) => events
-          .filter((event) => event.kind === kind)
-          .sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id))[0];
+        const cachedDm = queryClient.getQueryData<DmRelayListQuery>(["dm-relay-list", pubkey]);
+        const cachedBlossom = queryClient.getQueryData<BlossomServerListQuery>(
+          ["blossom-server-list", pubkey],
+        );
+        const candidates: NostrRumor[] = [
+          ...wireEvents,
+          ...stored.events,
+          ...(cachedSearch?.event ? [cachedSearch.event] : []),
+          ...(cachedDm?.event ? [cachedDm.event] : []),
+          ...(cachedBlossom?.event ? [cachedBlossom.event] : []),
+        ];
+        const newest = (kind: number) => newestCanonicalSelfList(candidates, pubkey, kind);
 
         const searchEvent = newest(KIND_SEARCH_RELAYS);
         if (searchEvent) {
@@ -384,11 +449,15 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
             ...(search ? { searchRelays: search } : {}),
             ...(canonicalDm ? { dmRelays: canonicalDm.relays } : {}),
             ...(canonicalBlossom
-              && canonicalBlossom.event.created_at > current.blossomServerMetadata.updatedAt
+              && replaceableIsNewerThanMetadata(
+                canonicalBlossom.event,
+                current.blossomServerMetadata,
+              )
               ? {
                   blossomServerMetadata: {
                     servers: canonicalBlossom.servers,
                     updatedAt: canonicalBlossom.event.created_at,
+                    eventId: canonicalBlossom.event.id,
                   },
                 }
               : {}),
@@ -407,12 +476,31 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
           // All six documents in one filter. No `limit`: it would cap the
           // whole filter rather than each `d`, so five of the six could come
           // back missing purely because the sixth answered first.
+          const settingsFilter = {
+            kinds: [SETTINGS_KIND],
+            authors: [pubkey],
+            "#d": SETTINGS_DTAGS,
+          };
           const events = await queryExplicitRelays(
             nostr,
             accountRelays,
-            [{ kinds: [SETTINGS_KIND], authors: [pubkey], "#d": SETTINGS_DTAGS }],
+            [
+              settingsFilter,
+              // Unlike ordinary settings reads, the DM index must never widen
+              // to queryExplicitRelays' general-pool fallback. With no explicit
+              // self-state destination, leave it local and retry after relay
+              // discovery rather than leaking the topic query to the pool.
+              ...(accountRelays.length > 0 ? [dmConversationIndexFilter(pubkey)] : []),
+            ],
             stepSignal(),
           );
+
+          // Hydrate before SyncGate opens so a fresh device can draw restored
+          // rows immediately. The helper caches successful decryptions, so the
+          // standing owner will not prompt again for unchanged shard events.
+          if (accountRelays.length > 0) {
+            await decodeAndHydrateDmConversationIndex(events, user.signer, pubkey);
+          }
 
           // Seed every split document straight into its own query cache. Their
           // events are already in ArmadaDB — `queryExplicitRelays` reads
@@ -423,7 +511,11 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
             const dTag = candidate.tags.find(([name]) => name === "d")?.[1];
             if (dTag === undefined) continue;
             const held = newestByDTag.get(dTag);
-            if (!held || candidate.created_at > held.created_at) {
+            if (
+              !held
+              || candidate.created_at > held.created_at
+              || (candidate.created_at === held.created_at && candidate.id < held.id)
+            ) {
               newestByDTag.set(dTag, candidate);
             }
           }
@@ -455,6 +547,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
                       blossomServerMetadata: {
                         servers: canonicalBlossom.servers,
                         updatedAt: canonicalBlossom.event.created_at,
+                        eventId: canonicalBlossom.event.id,
                       },
                     }
                   : {}),
@@ -511,34 +604,39 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
       const gId = begin("groups");
       let groups: GroupRef[] = [];
       try {
-        const events = await queryExplicitRelays(
-          nostr,
-          accountRelays,
-          [{ kinds: [KIND_USER_GROUPS], authors: [pubkey], limit: 1 }],
-          stepSignal(),
+        const groupSignal = stepSignal();
+        const [wireEvents, storedGroups] = await Promise.all([
+          queryExplicitRelays(
+            nostr,
+            accountRelays,
+            [{ kinds: [KIND_USER_GROUPS], authors: [pubkey], limit: 1 }],
+            groupSignal,
+          ),
+          readStoredCanonicalSelfLists(
+            eventStore,
+            pubkey,
+            [KIND_USER_GROUPS],
+            groupSignal,
+          ),
+        ]);
+        const queryKey = ["nip29", "user-groups", pubkey];
+        const previous = queryClient.getQueryData<UserGroupListQuery>(queryKey);
+        const persisted = await readFolded<PersistedGroupList>(groupListFoldKey(pubkey));
+        const list = await resolveGroupListRead(
+          [...wireEvents, ...storedGroups.events].filter((event) => event.pubkey === pubkey),
+          user.signer,
+          previous,
+          persisted,
         );
-        const latest = events.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
-        if (latest) {
-          const tags = [...latest.tags];
-          if (latest.content && user.signer.nip44) {
-            try {
-              const decrypted = await user.signer.nip44.decrypt(pubkey, latest.content);
-              const privateTags = JSON.parse(decrypted);
-              if (Array.isArray(privateTags)) {
-                for (const t of privateTags) if (Array.isArray(t)) tags.push(t as string[]);
-              }
-            } catch {
-              // Public-only fallback.
-            }
-          }
-          const list = parseGroupListTags(tags);
-          groups = list.groups;
-          if (!cancelled) {
-            queryClient.setQueryData(["nip29", "user-groups", pubkey], {
-              event: latest,
+        groups = list.groups;
+        if (!cancelled && (list.event || previous || persisted)) {
+          queryClient.setQueryData(queryKey, list);
+          if (list.event && !list.decryptFailed) {
+            void writeFolded(groupListFoldKey(pubkey), {
+              event: list.event,
               groups: list.groups,
               servers: list.servers,
-            });
+            } satisfies PersistedGroupList);
           }
         }
       } catch {
@@ -658,7 +756,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
     return () => {
       cancelled = true;
     };
-  }, [pubkey, user, nostr, queryClient]);
+  }, [pubkey, user, nostr, queryClient, eventStore]);
 
   return state;
 }

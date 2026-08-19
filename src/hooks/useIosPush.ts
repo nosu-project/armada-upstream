@@ -123,8 +123,17 @@ export function useIosPush(): UsePushNotificationsReturn {
   const [prefs, setPrefsState] = useState<PushPrefs>(loadPushPrefs);
   const [nonce, setNonce] = useState(0);
 
-  const { specs, concord, dmKnownPeers, dmSk, dmBunker, followsLoading, watchSetLoading }
-    = usePushWatchSet(prefs);
+  const {
+    specs,
+    concord,
+    dmKnownPeers,
+    dmKnownConversationKeys,
+    dmMutedPeers,
+    dmSk,
+    dmBunker,
+    dmPeersLoading,
+    watchSetLoading,
+  } = usePushWatchSet(prefs);
 
   // Keep the extension's config current: the DM policy and known set for every
   // enabled session, the decrypt key for nsec logins, and the per-channel
@@ -135,10 +144,10 @@ export function useIosPush(): UsePushNotificationsReturn {
       void clearIosPushConfig();
       return;
     }
-    // Wait for the follow list: writing a config while it loads would freeze an
+    // Wait for the full established-peer roster: writing while it loads would freeze an
     // empty known set on disk, reclassifying every known conversation as a
     // request until the next rewrite.
-    if (followsLoading) return;
+    if (dmPeersLoading) return;
     let cancelled = false;
     (async () => {
       // Mirror useKnownDmPeers' `mine` dimension: a conversation the viewer has
@@ -152,23 +161,32 @@ export function useIosPush(): UsePushNotificationsReturn {
       // extension's config from being written at all. That failure mode is
       // invisible from the device: every push just quietly falls back to the
       // gateway's static text, with nothing to say why.
-      let minePeers: string[] = [];
+      let mineConversationKeys: string[] = [];
       try {
         const rows = await Promise.race([
           queryDm17Conversations(user.pubkey),
           new Promise<null>((resolve) => setTimeout(() => resolve(null), MINE_PEERS_TIMEOUT_MS)),
         ]);
-        // Every participant of a conversation the viewer has written in — see
-        // useForegroundNotifications for why a group contributes all of them.
-        if (rows) minePeers = rows.filter((row) => row.mine).flatMap((row) => row.peers);
+        // Preserve exact group identity. A participant in an authored group is
+        // not thereby a trusted sender in an unrelated 1:1 conversation.
+        if (rows) {
+          const muted = new Set(dmMutedPeers);
+          mineConversationKeys = rows
+            .filter((row) => row.mine && row.peers.every((peer) => !muted.has(peer)))
+            .map((row) => row.key);
+        }
       } catch {
-        // Store unavailable — follows ∪ accepted ∪ pinned still apply.
+        // Store unavailable — the durable synced/pinned roster still applies.
       }
       if (cancelled) return;
       await writeIosPushConfig({
         policy: prefs.dmRequests,
         self: user.pubkey,
-        knownPeers: [...new Set([...dmKnownPeers, ...minePeers])].sort(),
+        knownPeers: dmKnownPeers,
+        knownConversations: [
+          ...new Set([...dmKnownConversationKeys, ...mineConversationKeys]),
+        ].sort(),
+        mutedPeers: dmMutedPeers,
         // One entry per watched channel's CURRENT epoch. The conversation key
         // reads that channel at that epoch and nothing else — the wrap-signing
         // secret stays in the page — and the set goes stale by itself at the
@@ -210,9 +228,11 @@ export function useIosPush(): UsePushNotificationsReturn {
     supported,
     user,
     enabled,
-    followsLoading,
+    dmPeersLoading,
     prefs.dmRequests,
     dmKnownPeers,
+    dmKnownConversationKeys,
+    dmMutedPeers,
     dmSk,
     dmBunker,
     concord,

@@ -79,7 +79,9 @@ vi.mock("@/components/DisplayName", () => ({
 vi.mock("@/components/BotPill", () => ({ BotPill: () => null }));
 
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { ConversationList } from "@/pages/DMsPage";
+import { ConversationList, dmListRowLatestMarker } from "@/pages/DMsPage";
+
+type DmListRow = Parameters<typeof ConversationList>[0]["rows"][number];
 
 // Controllable IntersectionObserver: nothing intersects until a test says so.
 const observers: MockIO[] = [];
@@ -149,7 +151,7 @@ function placeholderCount(container: HTMLElement): number {
   ).length;
 }
 
-function list(rows: ReturnType<typeof conversations>, extra?: Record<string, unknown>): ReactNode {
+function list(rows: DmListRow[], extra?: Record<string, unknown>): ReactNode {
   return (
     <TooltipProvider>
     <ConversationList
@@ -219,5 +221,65 @@ describe("ConversationList viewport gating", () => {
 
     expect(rowCount(container)).toBe(12);
     expect(placeholderCount(container)).toBe(18);
+  });
+
+  it("renders an index-only row without fabricating a preview or unread marker", () => {
+    const peer = getPublicKey(generateSecretKey());
+    const indexed = [{
+      conversation: peer,
+      peers: [peer],
+      indexedLatest: { createdAt: 1_700_000_000, id: "a".repeat(64) },
+      mine: true,
+    }];
+    const view = render(list(indexed));
+
+    expect(view.queryByLabelText("Unread messages")).toBeNull();
+    expect(view.queryByText("Encrypted message")).toBeNull();
+    expect(rowCount(view.container)).toBe(1);
+  });
+
+  it("paints a synchronized index row while message history is still loading", () => {
+    const peer = getPublicKey(generateSecretKey());
+    const indexed: DmListRow[] = [{
+      conversation: peer,
+      peers: [peer],
+      indexedLatest: { createdAt: 1_700_000_000, id: "a".repeat(64) },
+      mine: true,
+    }];
+    const view = render(list(indexed, { isLoading: true }));
+
+    expect(rowCount(view.container)).toBe(1);
+  });
+
+  it("keeps an unsynchronized partial history behind the cold-start skeleton", () => {
+    const partial = conversations(1);
+    const view = render(list(partial, { isLoading: true }));
+
+    expect(rowCount(view.container)).toBe(0);
+  });
+});
+
+describe("DM list latest marker", () => {
+  const actual = {
+    id: "a".repeat(64),
+    pubkey: "b".repeat(64),
+    created_at: 100,
+    kind: 14,
+    content: "message",
+    tags: [],
+  } as NostrRumor;
+
+  it("uses a newer synchronized index marker when local history is partial", () => {
+    expect(dmListRowLatestMarker({
+      latest: actual,
+      indexedLatest: { createdAt: 101, id: "c".repeat(64) },
+    })).toEqual({ created_at: 101, id: "c".repeat(64) });
+  });
+
+  it("keeps the actual event authoritative when timestamps tie", () => {
+    expect(dmListRowLatestMarker({
+      latest: actual,
+      indexedLatest: { createdAt: 100, id: "c".repeat(64) },
+    })).toBe(actual);
   });
 });

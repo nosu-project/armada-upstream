@@ -40,6 +40,11 @@ import { STOCK_RELAYS } from "@/concord/lib/invite";
 import { KIND_COMMUNITY_LIST_FRAG, KIND_COMMUNITY_LIST_RETIRED } from "@/concord/lib/kinds";
 import type { Community } from "@/concord/lib/types";
 import { logSync } from "@/lib/syncLog";
+import { publishSignedEventToRelays, uniqueRelayUrls } from "@/lib/nip65";
+import {
+  queueSignedEvent,
+  recordQueuedPublishAttempt,
+} from "@/lib/publishOutbox";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";
@@ -76,7 +81,13 @@ import type { NostrRumor } from "@/lib/nostrRumor";
  * per-fragment `created_at`.
  */
 
-export type ListData = { event: NostrRumor | null; list: CommunityList; decryptFailed?: boolean };
+export type ListData = {
+  event: NostrRumor | null;
+  list: CommunityList;
+  decryptFailed?: boolean;
+  /** An explicit self-state relay missed the last safe read; poll until it can be repaired. */
+  repairPending?: boolean;
+};
 export type PersistedList = PersistedCommunityList;
 
 export const listQueryKey = (pubkey: string | undefined) => ["concord", "list", pubkey] as const;
@@ -84,6 +95,8 @@ const foldKeyOf = communityListFoldKey;
 
 /** Latch: this account has written the fragmented list at least once. */
 const seedKeyOf = (pubkey: string) => `concord2-list-seeded:${pubkey}`;
+/** Legacy STOCK rescue is retried independently of whether 33302 was seeded. */
+const retiredRescueKeyOf = (pubkey: string) => `concord2-retired-list-rescued:${pubkey}`;
 
 /**
  * Junk ceiling on a wire-declared `frags`: 4096 fragments is roughly 230MB of
@@ -91,6 +104,11 @@ const seedKeyOf = (pubkey: string) => `concord2-list-seeded:${pubkey}`;
  * fragment drive an unbounded completeness scan on every sync.
  */
 const MAX_DECLARED_FRAGS = 4096;
+/** Per-coordinate relay divergence bound; four stock relays plus user relays stay far below it. */
+const MAX_DIVERGENT_EDITIONS = 32;
+const FRAGMENT_QUERY_CHUNK = 64;
+const LIST_IO_TIMEOUT_MS = 8_000;
+const LIST_REPAIR_REFETCH_MS = 60_000;
 
 /** Shared by the mutation and the reconcile's am-I-racing-a-mutation check. */
 const LIST_MUTATION_KEY = ["concord-list"] as const;
@@ -130,7 +148,7 @@ function dTagOf(event: NostrRumor): string | undefined {
 }
 
 /** The fragment index off the `d` tag — a bare decimal, or the event is not a fragment. */
-function fragIndexOf(event: NostrRumor): number | undefined {
+export function fragIndexOf(event: NostrRumor): number | undefined {
   const d = dTagOf(event);
   if (d === undefined || !/^\+?[0-9]+$/.test(d)) return undefined;
   const index = Number(d);
@@ -166,7 +184,7 @@ async function decryptFragment(
  */
 export interface FragSet {
   list: CommunityList;
-  /** Per read index, the winning fragment's created_at. */
+  /** Per index, the newest known wire or authenticated local created_at floor. */
   createdAt: Map<number, number>;
   /** `frags` as declared by the newest fragment seen (age tie → larger). */
   declared: number;
@@ -175,96 +193,330 @@ export interface FragSet {
    * so a rewrite can skip publishing byte-identical fragments.
    */
   readFrags: Map<number, FragList>;
-  /** The newest winning fragment event (for cache identity / logging). */
+  /** The signed relay-read winner for each coordinate, used for exact mirroring. */
+  winningEvents: Map<number, NostrRumor>;
+  /** The newest known wire or authenticated local event (for cache identity / logging). */
   newestEvent: NostrRumor | null;
   /** Coverage, not agreement: an index at every slot below `declared`. */
   complete: boolean;
+  /** The wire declared more fragments than this client will ever scan. */
+  declaredOverflow: boolean;
 }
 
-/**
- * Fetch the account's 33302 fragments and union them. Reads the pool AND the
- * stock CORD relays: the publish below falls back to the stock set when the
- * user's own relays refuse the kind, so part of the set may live only there.
- * Returns `null` when no fragment events exist anywhere reachable, and
- * `{ set: undefined }`-like "no news" (all-unreadable) via `unreadable`.
- */
-async function fetchFragments(
-  nostr: NostrLike,
+/** The explicit rescue/write set for the encrypted Concord vault. */
+export function communityListRelays(selfRelays: Iterable<string>): string[] {
+  return uniqueRelayUrls([...selfRelays, ...STOCK_RELAYS]);
+}
+
+function newestEventFirst(a: NostrRumor, b: NostrRumor): number {
+  return b.created_at - a.created_at || a.id.localeCompare(b.id);
+}
+
+/** Decode and resolve a set of fragment events without doing network I/O. */
+export async function decodeCommunityListFragments(
+  sourceEvents: Iterable<NostrRumor>,
   user: NUser,
-  signal?: AbortSignal,
 ): Promise<{ set: FragSet | null; unreadable: boolean }> {
-  const listFilter: NostrFilter[] = [
-    { kinds: [KIND_COMMUNITY_LIST_FRAG], authors: [user.pubkey], limit: 64 },
-  ];
-  const timeout = () => AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(8000)]);
-  // NPool.query CANNOT signal failure: on abort it "returns partial results
-  // instead of throwing", so a dead network and an empty account read the
-  // same. Writers must therefore never take an empty fetch at face value —
-  // the mutation cross-checks it against local evidence of prior fragments,
-  // and seeding independently confirms emptiness per relay.
-  const [poolEvents, stockEvents] = await Promise.all([
-    nostr.query(listFilter, { signal: timeout() }),
-    nostr.group
-      ? nostr.group([...STOCK_RELAYS]).query(listFilter, { signal: timeout() }).catch(() => [] as NostrRumor[])
-      : Promise.resolve([] as NostrRumor[]),
-  ]);
   const events = new Map<string, NostrRumor>();
-  for (const e of [...poolEvents, ...stockEvents]) events.set(e.id, e);
+  for (const event of sourceEvents) events.set(event.id, event);
   if (events.size === 0) return { set: null, unreadable: false };
 
-  // Newest wins PER INDEX — each fragment is its own addressable coordinate,
-  // so they age independently. Mirror relay resolution (CORD-02 §8): newest
-  // created_at holds the coordinate, an age tie falls to the LOWEST event id.
-  const newest = new Map<number, { at: number; id: string; frag: FragList; event: NostrRumor }>();
+  // Resolve each addressable coordinate BEFORE decrypting it. Falling back to
+  // an older readable copy when the NIP-01 head is unreadable would base a new
+  // write on stale plaintext and permanently shadow the head's unknown facts.
+  const editions = new Map<number, NostrRumor[]>();
   for (const event of events.values()) {
     const index = fragIndexOf(event);
-    if (index === undefined) continue; // not a fragment: no/junk `d`
-    const frag = await decryptFragment(event, user.signer, user.pubkey);
-    if (!frag) continue;
-    const prev = newest.get(index);
-    const wins = !prev || event.created_at > prev.at || (event.created_at === prev.at && event.id < prev.id);
-    if (wins) newest.set(index, { at: event.created_at, id: event.id, frag, event });
+    if (index === undefined) continue;
+    const held = editions.get(index) ?? [];
+    held.push(event);
+    editions.set(index, held);
   }
-  if (newest.size === 0) {
-    // Events exist but none yielded a fragment (undecryptable, unparseable, or
-    // junk-tagged). "No news", never "empty": an empty verdict here would let
-    // a bad signer state clobber the vault — and it must not seed either.
+  const newest = new Map<number, { at: number; id: string; frag: FragList; event: NostrRumor }>();
+  let unreadable = false;
+  let list = EMPTY_COMMUNITY_LIST;
+  let readableEditions = 0;
+  for (const index of [...editions.keys()].sort((a, b) => a - b)) {
+    const candidates = editions.get(index)!
+      .sort(newestEventFirst)
+      .slice(0, MAX_DIVERGENT_EDITIONS);
+    const head = candidates[0]!;
+    const headFrag = await decryptFragment(head, user.signer, user.pubkey);
+    if (!headFrag) {
+      unreadable = true;
+    } else {
+      newest.set(index, {
+        at: head.created_at,
+        id: head.id,
+        frag: headFrag,
+        event: head,
+      });
+    }
+
+    // A replaceable head controls coordinate ordering, but older divergent
+    // relay editions are CRDT inputs rather than fallbacks. Fold every bounded
+    // readable edition oldest -> newest so a recovered membership/tombstone or
+    // key held only by a lagging relay survives the next rewrite. An unreadable
+    // head still blocks writes above; readable losers are used for recovery
+    // only and never masquerade as that coordinate's authoritative edition.
+    for (const event of [...candidates].reverse()) {
+      const frag = event.id === head.id
+        ? headFrag
+        : await decryptFragment(event, user.signer, user.pubkey);
+      if (!frag) continue;
+      readableEditions += 1;
+      list = mergeCommunityLists(list, defragment([frag]));
+    }
+  }
+  if (readableEditions === 0) {
     logSync("list2", `${events.size} fragment event(s) fetched, none readable — treating as no news`);
-    return { set: null, unreadable: true };
+    return { set: null, unreadable: editions.size > 0 };
   }
 
-  // The newest fragment governs `frags`; an age tie resolves to the LARGER
-  // count — too large reads an index that turns out empty, too small sends
-  // live fragments out of range and dormant. Capped: `frags` is wire-declared
-  // and only integer-checked, so an insane count (4096 fragments ≈ 230MB of
-  // list) is junk — clamping keeps the completeness check O(cap) instead of
-  // letting one corrupt fragment allocate its way to a crash on every sync,
-  // and a clamped read is simply INCOMPLETE, i.e. read-only, same as the
-  // reference's lazy range leaves it.
-  let declared = 1;
+  let wireDeclared = 1;
   let best: { at: number; frags: number } | undefined;
   for (const { at, frag } of newest.values()) {
     if (!best || at > best.at || (at === best.at && frag.frags > best.frags)) {
       best = { at, frags: frag.frags };
     }
   }
-  if (best) declared = Math.min(Math.max(best.frags, 1), MAX_DECLARED_FRAGS);
+  if (best) wireDeclared = Math.max(best.frags, 1);
+  const declaredOverflow = wireDeclared > MAX_DECLARED_FRAGS;
+  const declared = Math.min(wireDeclared, MAX_DECLARED_FRAGS);
 
   const indices = [...newest.keys()].sort((a, b) => a - b);
   const readFrags = new Map<number, FragList>(indices.map((i) => [i, newest.get(i)!.frag]));
+  const winningEvents = new Map<number, NostrRumor>(indices.map((i) => [i, newest.get(i)!.event]));
   const createdAt = new Map<number, number>(indices.map((i) => [i, newest.get(i)!.at]));
-  let complete = (best?.frags ?? 1) <= MAX_DECLARED_FRAGS;
+  let complete = !declaredOverflow;
   for (let i = 0; complete && i < declared; i++) complete = createdAt.has(i);
-  const newestEvent = [...newest.values()].reduce<NostrRumor | null>(
-    (a, b) => (a && a.created_at >= b.event.created_at ? a : b.event),
-    null,
-  );
+  const newestEvent = [...winningEvents.values()].sort(newestEventFirst)[0] ?? null;
   if (!complete) {
     logSync("list2", `INCOMPLETE: hold ${createdAt.size} of ${declared} fragment(s) — reading, refusing to write`);
   }
   return {
-    set: { list: defragment(indices.map((i) => readFrags.get(i)!)), createdAt, declared, readFrags, newestEvent, complete },
-    unreadable: false,
+    set: {
+      list,
+      createdAt,
+      declared,
+      readFrags,
+      winningEvents,
+      newestEvent,
+      complete,
+      declaredOverflow,
+    },
+    unreadable,
+  };
+}
+
+async function queryCommunityRelays(
+  nostr: NostrLike,
+  relayUrls: string[],
+  filters: NostrFilter[],
+  signal?: AbortSignal,
+): Promise<{
+  events: NostrRumor[];
+  /** Events retain their source so an aggregate winner cannot hide a stale relay. */
+  eventsByRelay: Map<string, NostrRumor[]>;
+  answered: string[];
+  failed: string[];
+}> {
+  const timeout = () => AbortSignal.any([
+    ...(signal ? [signal] : []),
+    AbortSignal.timeout(LIST_IO_TIMEOUT_MS),
+  ]);
+  if (relayUrls.length === 0 || !nostr.relay) {
+    if (typeof nostr.query !== "function") {
+      return { events: [], eventsByRelay: new Map(), answered: [], failed: relayUrls };
+    }
+    try {
+      const events = await nostr.query(filters, { signal: timeout() });
+      // A pool-wide result cannot prove that any one requested relay reached
+      // EOSE. It remains useful to read, but it is never writable evidence.
+      return { events, eventsByRelay: new Map(), answered: [], failed: relayUrls };
+    } catch {
+      return { events: [], eventsByRelay: new Map(), answered: [], failed: relayUrls };
+    }
+  }
+  const settled = await Promise.allSettled(
+    relayUrls.map((url) => nostr.relay!(url).query(filters, { signal: timeout() })),
+  );
+  const byId = new Map<string, NostrRumor>();
+  const eventsByRelay = new Map<string, NostrRumor[]>();
+  const answered: string[] = [];
+  const failed: string[] = [];
+  for (let index = 0; index < settled.length; index++) {
+    const result = settled[index]!;
+    const url = relayUrls[index]!;
+    if (result.status !== "fulfilled") {
+      failed.push(url);
+      continue;
+    }
+    answered.push(url);
+    eventsByRelay.set(url, result.value);
+    for (const event of result.value) byId.set(event.id, event);
+  }
+  return { events: [...byId.values()], eventsByRelay, answered, failed };
+}
+
+export interface CommunityListFetchResult {
+  set: FragSet | null;
+  unreadable: boolean;
+  /** Relay-local authoritative fragment heads, only for fully answered relays. */
+  readFragsByRelay: Map<string, Map<number, FragList>>;
+  /** Explicit destinations that completed every query needed for this read. */
+  answered: string[];
+  failed: string[];
+  targets: string[];
+}
+
+/**
+ * Fetch the account's 33302 fragments and union them. Reads each explicit
+ * self-state/NIP-65 relay AND the stock CORD rescue set independently, because
+ * part of a lattice may live only on either side after a partial publish.
+ * Returns `null` when no fragment events exist anywhere reachable, and
+ * `{ set: undefined }`-like "no news" (all-unreadable) via `unreadable`.
+ */
+export async function fetchCommunityListFragments(
+  nostr: NostrLike,
+  user: NUser,
+  selfRelays: Iterable<string>,
+  signal?: AbortSignal,
+  localEvents: Iterable<NostrRumor> = [],
+  wireSeedEvents: Iterable<NostrRumor> = [],
+): Promise<CommunityListFetchResult> {
+  const targets = communityListRelays(selfRelays);
+  const listFilter: NostrFilter[] = [{
+    kinds: [KIND_COMMUNITY_LIST_FRAG],
+    authors: [user.pubkey],
+    limit: MAX_DECLARED_FRAGS,
+  }];
+  // NPool.query CANNOT signal failure: on abort it "returns partial results
+  // instead of throwing", so a dead network and an empty account read the
+  // same. Writers must therefore never take an empty fetch at face value —
+  // the mutation cross-checks it against local evidence of prior fragments,
+  // and seeding independently confirms emptiness per relay.
+  // Keep locally-filed editions separate from relay editions. Local rumors
+  // are authenticated CRDT input and a created_at floor, but they are not
+  // evidence of what any relay currently holds. In particular, letting a
+  // newer ArmadaDB snapshot become `readFrags` makes the reconcile compare
+  // the desired list with that local snapshot, decide the wire is already
+  // current, and skip the very repair Setup Sync was asked to perform.
+  const localById = new Map<string, NostrRumor>();
+  for (const event of localEvents) {
+    if (event.kind === KIND_COMMUNITY_LIST_FRAG && event.pubkey === user.pubkey) {
+      localById.set(event.id, event);
+    }
+  }
+  const wireById = new Map<string, NostrRumor>();
+  // A caller may already have fetched these signed events from the same relay
+  // cohort as part of a wider portable-state query. Preserve their wire
+  // provenance instead of misclassifying that read as a local ArmadaDB seed.
+  for (const event of wireSeedEvents) {
+    if (event.kind === KIND_COMMUNITY_LIST_FRAG && event.pubkey === user.pubkey) {
+      wireById.set(event.id, event);
+    }
+  }
+  const wireByRelay = new Map<string, Map<string, NostrRumor>>();
+  const rememberRelayEvents = (byRelay: Map<string, NostrRumor[]>) => {
+    for (const [url, events] of byRelay) {
+      const held = wireByRelay.get(url) ?? new Map<string, NostrRumor>();
+      for (const event of events) held.set(event.id, event);
+      wireByRelay.set(url, held);
+    }
+  };
+  const combinedEvents = () => new Map([
+    ...wireById,
+    ...localById,
+  ]).values();
+  const initial = await queryCommunityRelays(nostr, targets, listFilter, signal);
+  const answered = new Set(initial.answered);
+  const failed = new Set(initial.failed);
+  rememberRelayEvents(initial.eventsByRelay);
+  for (const event of initial.events) wireById.set(event.id, event);
+  let decoded = await decodeCommunityListFragments(combinedEvents(), user);
+  let wireDecoded = await decodeCommunityListFragments(wireById.values(), user);
+
+  // Some relays cap every response at 64 even when the requested limit is
+  // higher. Once any readable fragment tells us the lattice width, explicitly
+  // address the missing coordinates in bounded chunks. This turns the old
+  // silent 64-fragment short read into either a complete vault or an honest,
+  // read-only incomplete result.
+  // A local edition can fill a coordinate that the bounded relay response
+  // omitted. Still query that coordinate explicitly before writing: the
+  // relay may hold a divergent CRDT fact that must join the union first.
+  if (decoded.set && !decoded.set.declaredOverflow) {
+    const missing = new Set<string>();
+    for (let i = 0; i < decoded.set.declared; i++) {
+      if (!wireDecoded.set?.createdAt.has(i)) missing.add(String(i));
+    }
+    // Aggregate coverage is not per-relay coverage: relay A can satisfy every
+    // coordinate while relay B's capped response omits its upper half. Query
+    // every missing relay-local coordinate before B becomes a write target.
+    // A wholly-empty answered relay needs no follow-up — the broad EOSE already
+    // proved that every coordinate is absent there.
+    for (const url of answered) {
+      const events = wireByRelay.get(url);
+      if (!events || events.size === 0) continue;
+      const indices = new Set(
+        [...events.values()]
+          .map(fragIndexOf)
+          .filter((index): index is number => index !== undefined),
+      );
+      for (let i = 0; i < decoded.set.declared; i++) {
+        if (!indices.has(i)) missing.add(String(i));
+      }
+    }
+    const missingIndices = [...missing];
+    for (let offset = 0; offset < missingIndices.length; offset += FRAGMENT_QUERY_CHUNK) {
+      const chunk = missingIndices.slice(offset, offset + FRAGMENT_QUERY_CHUNK);
+      const recovery = await queryCommunityRelays(nostr, targets, [{
+        kinds: [KIND_COMMUNITY_LIST_FRAG],
+        authors: [user.pubkey],
+        "#d": chunk,
+        limit: chunk.length,
+      }], signal);
+      for (const url of recovery.failed) {
+        failed.add(url);
+        answered.delete(url);
+      }
+      rememberRelayEvents(recovery.eventsByRelay);
+      for (const event of recovery.events) wireById.set(event.id, event);
+    }
+    decoded = await decodeCommunityListFragments(combinedEvents(), user);
+    wireDecoded = await decodeCommunityListFragments(wireById.values(), user);
+  }
+
+  // `list`, `createdAt`, completeness and newestEvent include authenticated
+  // local editions so a repair neither loses facts nor signs below a queued
+  // local coordinate. The skip/mirror fields stay relay-only: they describe
+  // what the completed reads actually proved is on the wire.
+  const set = decoded.set
+    ? {
+      ...decoded.set,
+      readFrags: wireDecoded.set?.readFrags ?? new Map<number, FragList>(),
+      winningEvents: wireDecoded.set?.winningEvents ?? new Map<number, NostrRumor>(),
+    }
+    : null;
+  const readFragsByRelay = new Map<string, Map<number, FragList>>();
+  for (const url of answered) {
+    const relayDecoded = await decodeCommunityListFragments(
+      wireByRelay.get(url)?.values() ?? [],
+      user,
+    );
+    // `unreadable` is already reflected by the aggregate decode above. Keep
+    // the relay map absent unless its head set is readable; publish targeting
+    // treats an absent map as unproven and will never write to it.
+    if (relayDecoded.unreadable) continue;
+    readFragsByRelay.set(url, relayDecoded.set?.readFrags ?? new Map());
+  }
+  return {
+    set,
+    unreadable: decoded.unreadable || wireDecoded.unreadable,
+    readFragsByRelay,
+    answered: [...answered],
+    failed: [...failed],
+    targets,
   };
 }
 
@@ -283,13 +535,36 @@ async function publishFragments(
   list: CommunityList,
   prevCreatedAt: Map<number, number>,
   readFrags: Map<number, FragList>,
+  targetRelays: Iterable<string>,
+  readFragsByRelay?: ReadonlyMap<string, ReadonlyMap<number, FragList>>,
 ): Promise<NostrRumor | null> {
   if (!user.signer.nip44) throw new Error("NIP-44 encryption not supported by this signer");
+  // Exact read cohort only. An unanswered relay may hold a newer CRDT fact;
+  // queueing this rewrite there for later would overwrite that unseen fact.
+  const targets = uniqueRelayUrls(targetRelays);
+  if (targets.length === 0 || !nostr.relay) {
+    throw new Error("No relay is available for your community list update");
+  }
+  const publishNostr = { relay: nostr.relay };
   const frags = fragment(list);
   const now = Math.floor(Date.now() / 1000);
   const unchanged = (index: number, frag: FragList): boolean => {
     const old = readFrags.get(index);
     return old !== undefined && serializeFragList(old) === serializeFragList(frag);
+  };
+  const targetsNeeding = (index: number, frag: FragList): string[] => {
+    if (!readFragsByRelay) return unchanged(index, frag) ? [] : targets;
+    const serialized = serializeFragList(frag);
+    return targets.filter((target) => {
+      const relayRead = readFragsByRelay.get(target);
+      // No completed, decryptable relay-local read means no authority to write
+      // there. In normal fetch results every `answered` target has a map;
+      // keeping this guard fail-closed prevents a future caller from widening
+      // a safe cohort accidentally.
+      if (!relayRead) return false;
+      const old = relayRead.get(index);
+      return old === undefined || serializeFragList(old) !== serialized;
+    });
   };
   // Persisted, not level-gated: a List write that silently never lands is the
   // failure mode this whole format exists to end, and it is only ever
@@ -301,7 +576,7 @@ async function publishFragments(
 
   let skipped = 0;
   let newest: NostrRumor | null = null;
-  const publishOne = async (frag: FragList, index: number) => {
+  const publishOne = async (frag: FragList, index: number, fragmentTargets: string[]) => {
     const createdAt = Math.max(now, (prevCreatedAt.get(index) ?? 0) + 1);
     const plaintext = serializeFragList(frag);
     const content = await user.signer.nip44!.encrypt(user.pubkey, plaintext);
@@ -311,21 +586,32 @@ async function publishFragments(
       tags: [["d", String(index)]],
       created_at: createdAt,
     });
-    try {
-      await nostr.event!(event, { signal: AbortSignal.timeout(8000) });
-    } catch {
-      // The pool publish needs only ONE configured relay to accept, but a
-      // user whose relays all refuse kind 33302 (kind whitelists, auth
-      // gates, outages) would strand every create/join here. The list is the
-      // vault, so fall back to the stock CORD relays, which are write-open
-      // for Concord kinds.
-      const results = await Promise.allSettled(
-        STOCK_RELAYS.map((url) => nostr.relay!(url).event(event, { signal: AbortSignal.timeout(8000) })),
+    // Queue the exact signed bytes BEFORE touching the network. Every target
+    // remains explicit in the retry entry; a generic pool acknowledgement is
+    // not proof that the NIP-65/stock rescue set holds the vault.
+    // If this durable enqueue fails, do not touch the network: a partial
+    // fan-out would otherwise have no exact-byte retry record.
+    await queueSignedEvent(event, undefined, fragmentTargets, { inheritPendingTargets: false });
+    const result = await publishSignedEventToRelays(
+      publishNostr,
+      event,
+      fragmentTargets,
+      LIST_IO_TIMEOUT_MS,
+    );
+    await recordQueuedPublishAttempt(event.id, fragmentTargets, result.rejected).catch(() => undefined);
+    if (result.accepted.length === 0) {
+      // The exact signed bytes and cohort are already durable. Treat this as
+      // a pending delivery rather than rolling the semantic mutation back:
+      // the folded list below is what keeps a just-joined community visible
+      // after reload, and the outbox will retry these same bytes. Continue so
+      // every changed fragment in a multi-fragment vault is queued too.
+      logSync("list2", `fragment ${index} accepted by no relay — durably queued for retry`);
+    }
+    if (result.rejected.length > 0) {
+      logSync(
+        "list2",
+        `fragment ${index} accepted by ${result.accepted.length} relay(s); ${result.rejected.length} queued for retry`,
       );
-      if (!results.some((r) => r.status === "fulfilled")) {
-        logSync("list2", `fragment ${index} publish FAILED — no relay accepted it`);
-        throw new Error("No relay accepted your community list update.");
-      }
     }
     if (!newest || event.created_at >= newest.created_at) newest = event;
   };
@@ -339,11 +625,12 @@ async function publishFragments(
   // (declaring N+1) lands alongside the old fragment 0 (still declaring N), or
   // nothing changed — both leave a complete, retryable wire.
   for (let index = frags.length - 1; index >= 0; index--) {
-    if (unchanged(index, frags[index])) {
+    const fragmentTargets = targetsNeeding(index, frags[index]);
+    if (fragmentTargets.length === 0) {
       skipped++;
       continue;
     }
-    await publishOne(frags[index], index);
+    await publishOne(frags[index], index, fragmentTargets);
   }
   // A shrunk set empties every READ index at or above the new count — the
   // actual keys, not a count-bounded range: a sparse read set (relays evicted
@@ -352,11 +639,12 @@ async function publishFragments(
   for (const index of [...prevCreatedAt.keys()].sort((a, b) => a - b)) {
     if (index < frags.length) continue;
     const empty = emptyFragList(frags.length);
-    if (unchanged(index, empty)) {
+    const fragmentTargets = targetsNeeding(index, empty);
+    if (fragmentTargets.length === 0) {
       skipped++;
       continue;
     }
-    await publishOne(empty, index);
+    await publishOne(empty, index, fragmentTargets);
   }
   if (skipped > 0) {
     logSync("list2", `${skipped} fragment(s) skipped — byte-identical to the relay copy`);
@@ -383,24 +671,87 @@ function wireDiffers(frags: FragList[], read: Map<number, FragList>): boolean {
   return false;
 }
 
+/** Whether any safely answered relay is stale or missing at least one coordinate. */
+function relayWireDiffers(
+  frags: FragList[],
+  reads: ReadonlyMap<string, Map<number, FragList>>,
+  relays: Iterable<string>,
+): boolean {
+  for (const relay of relays) {
+    const read = reads.get(relay);
+    // Missing provenance is not an empty relay read. Fail closed: only a map
+    // established by that relay's completed/decryptable query can authorize a
+    // targeted repair.
+    if (read && wireDiffers(frags, read)) return true;
+  }
+  return false;
+}
+
+/** Whether a complete wire fragment set already represents this merged list. */
+export function communityListWireDiffers(list: CommunityList, set: FragSet): boolean {
+  return wireDiffers(fragment(list), set.readFrags);
+}
+
+/**
+ * Sign a complete, consolidated vault snapshot without publishing it. Relay
+ * rotation uses this when divergent editions (including one found only on a
+ * proposed relay) must be collapsed before that relay can become
+ * authoritative. Every live and retired coordinate is rewritten so the
+ * caller has one exact signed head per d-tag to fan out and verify.
+ */
+export async function signCommunityListSnapshot(
+  user: NUser,
+  list: CommunityList,
+  previous: FragSet | null,
+): Promise<NostrEvent[]> {
+  if (!user.signer.nip44) throw new Error("NIP-44 encryption not supported by this signer");
+  const frags = fragment(list);
+  const indices = new Set<number>([
+    ...frags.map((_, index) => index),
+    ...(previous ? previous.createdAt.keys() : []),
+  ]);
+  const now = Math.floor(Date.now() / 1000);
+  const events: NostrEvent[] = [];
+  for (const index of [...indices].sort((a, b) => b - a)) {
+    const frag = frags[index] ?? emptyFragList(frags.length);
+    const event = await user.signer.signEvent({
+      kind: KIND_COMMUNITY_LIST_FRAG,
+      content: await user.signer.nip44.encrypt(user.pubkey, serializeFragList(frag)),
+      tags: [["d", String(index)]],
+      created_at: Math.max(now, (previous?.createdAt.get(index) ?? 0) + 1),
+    });
+    if (event.pubkey !== user.pubkey) throw new Error("The signer returned a different account");
+    events.push(event);
+  }
+  return events;
+}
+
 /**
  * Every relay answered EOSE with zero fragments — the only reading of "empty"
  * strong enough to seed over. The aggregate fetch that precedes this cannot
  * distinguish "no fragments" from "the relay holding them never answered";
  * asked one at a time, an error is a FAILED read and a failed read never seeds.
  */
-async function confirmedNoFragments(nostr: NostrLike, pubkey: string, relays: string[]): Promise<boolean> {
-  if (relays.length === 0 || !nostr.relay) return false;
+async function confirmedEmptyFragmentRelays(
+  nostr: NostrLike,
+  pubkey: string,
+  relays: string[],
+): Promise<{ answered: string[]; sawFragments: boolean }> {
+  if (relays.length === 0 || !nostr.relay) return { answered: [], sawFragments: false };
   const filter: NostrFilter[] = [{ kinds: [KIND_COMMUNITY_LIST_FRAG], authors: [pubkey], limit: 1 }];
+  const answered: string[] = [];
+  let sawFragments = false;
   for (const url of relays) {
     try {
       const events = await nostr.relay(url).query(filter, { signal: AbortSignal.timeout(8000) });
-      if (events.length > 0) return false;
+      answered.push(url);
+      if (events.length > 0) sawFragments = true;
     } catch {
-      return false;
+      // Unanswered relays are excluded from this write cohort. They may hold a
+      // richer edition, so no newly based fragment is queued to them.
     }
   }
-  return true;
+  return { answered, sawFragments };
 }
 
 /**
@@ -419,7 +770,7 @@ async function seedCommunityList(
   queryClient: QueryClient,
   selfRelays: string[],
 ): Promise<void> {
-  if (await readFolded<boolean>(seedKeyOf(user.pubkey))) return;
+  const alreadySeeded = await readFolded<boolean>(seedKeyOf(user.pubkey));
   const cached = queryClient.getQueryData<ListData>(listQueryKey(user.pubkey));
   const local = cached?.list ?? (await readFolded<PersistedList>(foldKeyOf(user.pubkey)))?.list;
 
@@ -431,20 +782,37 @@ async function seedCommunityList(
   // decrypt again. A rescue failure DEFERS the seed rather than seeding
   // partial state and latching away the only retry.
   let rescued: CommunityList | undefined;
-  try {
-    rescued = await fetchRetiredList(nostr, user);
-  } catch (err) {
-    logSync(
-      "list2",
-      `seed DEFERRED — the retired-list rescue read failed (${err instanceof Error ? err.message : String(err)}); retrying on a later sync`,
-    );
-    return;
+  if (!(await readFolded<boolean>(retiredRescueKeyOf(user.pubkey)))) {
+    try {
+      const rescue = await fetchRetiredList(nostr, user, selfRelays);
+      rescued = rescue.list;
+      if (rescue.complete) await writeFolded(retiredRescueKeyOf(user.pubkey), true);
+    } catch (err) {
+      logSync(
+        "list2",
+        `retired-list rescue failed (${err instanceof Error ? err.message : String(err)}); retrying on a later sync`,
+      );
+    }
   }
   const source = local && rescued ? mergeCommunityLists(local, rescued) : (local ?? rescued);
   if (!source || (source.entries.length === 0 && source.tombstones.length === 0)) return;
+  if (alreadySeeded) {
+    // A previous 33302 seed may still be propagating. Keep any newly-recovered
+    // retired facts durable; once a fragment is visible, the ordinary
+    // reconcile below republishes their union over a confirmed base.
+    if (rescued) {
+      const event = cached?.event ?? null;
+      await writeFolded(foldKeyOf(user.pubkey), { event, list: source } satisfies PersistedList);
+      queryClient.setQueryData<ListData>(listQueryKey(user.pubkey), { event, list: source });
+    }
+    return;
+  }
 
-  const confirm = [...new Set([...(selfRelays.length > 0 ? selfRelays : []), ...STOCK_RELAYS])];
-  if (!(await confirmedNoFragments(nostr, user.pubkey, confirm))) {
+  const confirm = communityListRelays(selfRelays);
+  const empty = await confirmedEmptyFragmentRelays(nostr, user.pubkey, confirm);
+  const canonical = uniqueRelayUrls(selfRelays);
+  const requiredFloor = canonical.length > 0 ? canonical : uniqueRelayUrls(STOCK_RELAYS);
+  if (empty.sawFragments || !empty.answered.some((url) => requiredFloor.includes(url))) {
     logSync("list2", "seed DEFERRED — the empty read is unconfirmed; retrying on a later sync");
     return;
   }
@@ -453,7 +821,7 @@ async function seedCommunityList(
     `no fragments held anywhere (confirmed per relay) — seeding from ${rescued ? "local state + the retired 13302" : "local state"}`,
   );
   try {
-    const newest = await publishFragments(nostr, user, source, new Map(), new Map());
+    const newest = await publishFragments(nostr, user, source, new Map(), new Map(), empty.answered);
     await writeFolded(seedKeyOf(user.pubkey), true);
     void writeFolded(foldKeyOf(user.pubkey), { event: newest, list: source } satisfies PersistedList);
     if (newest) {
@@ -465,31 +833,39 @@ async function seedCommunityList(
 }
 
 /**
- * The one read of the retired kind-13302 single-event list — the seed's
- * rescue source. Returns undefined when no event exists; THROWS when an event
- * exists but cannot be decrypted or parsed (an unreadable vault must defer
- * the seed, not be silently skipped past).
+ * Best-effort read of the retired kind-13302 single-event list. `complete`
+ * means every historical STOCK rescue source has answered at least once; a
+ * current NIP-65 relay cannot prove that an offline STOCK copy is absent.
+ * Until complete, the caller keeps retrying even after 33302 has been seeded.
  */
-async function fetchRetiredList(nostr: NostrLike, user: NUser): Promise<CommunityList | undefined> {
-  if (!user.signer.nip44) return undefined;
+async function fetchRetiredList(
+  nostr: NostrLike,
+  user: NUser,
+  selfRelays: Iterable<string>,
+): Promise<{ list?: CommunityList; complete: boolean }> {
+  if (!user.signer.nip44) return { complete: false };
   const filter: NostrFilter[] = [
     { kinds: [KIND_COMMUNITY_LIST_RETIRED], authors: [user.pubkey], limit: 1 },
   ];
-  const [poolEvents, stockEvents] = await Promise.all([
-    nostr.query(filter, { signal: AbortSignal.timeout(8000) }),
-    nostr.group
-      ? nostr.group([...STOCK_RELAYS]).query(filter, { signal: AbortSignal.timeout(8000) }).catch(() => [] as NostrRumor[])
-      : Promise.resolve([] as NostrRumor[]),
-  ]);
-  const latest = [...poolEvents, ...stockEvents].sort((a, b) => b.created_at - a.created_at)[0];
-  if (!latest?.content) return undefined;
-  const plaintext = await user.signer.nip44.decrypt(user.pubkey, latest.content);
+  const latest = (await queryCommunityRelays(
+    nostr,
+    communityListRelays(selfRelays),
+    filter,
+  ));
+  const answered = new Set(latest.answered);
+  const complete = uniqueRelayUrls(STOCK_RELAYS).every((url) => answered.has(url));
+  const event = latest.events.sort(newestEventFirst)[0];
+  if (!event?.content) return { complete };
+  const plaintext = await user.signer.nip44.decrypt(user.pubkey, event.content);
   const parsed = JSON.parse(plaintext) as Partial<CommunityList>;
   return {
-    ...parsed,
-    entries: Array.isArray(parsed.entries) ? parsed.entries : [],
-    tombstones: Array.isArray(parsed.tombstones) ? parsed.tombstones : [],
-  } as CommunityList;
+    complete,
+    list: {
+      ...parsed,
+      entries: Array.isArray(parsed.entries) ? parsed.entries : [],
+      tombstones: Array.isArray(parsed.tombstones) ? parsed.tombstones : [],
+    } as CommunityList,
+  };
 }
 
 /**
@@ -505,22 +881,41 @@ export async function syncCommunityList(
   queryClient: QueryClient,
   signal?: AbortSignal,
   selfRelays?: string[],
+  seedEvents: Iterable<NostrRumor> = [],
 ): Promise<ListData> {
   const queryKey = listQueryKey(user.pubkey);
   const prev = queryClient.getQueryData<ListData>(queryKey);
-  const { set, unreadable } = await fetchFragments(nostr, user, signal);
+  const read = await fetchCommunityListFragments(
+    nostr,
+    user,
+    selfRelays ?? [],
+    signal,
+    seedEvents,
+  );
+  const { set, unreadable } = read;
+  const explicit = uniqueRelayUrls(selfRelays ?? []);
+  const repairFloor = explicit.length > 0 ? explicit : uniqueRelayUrls(STOCK_RELAYS);
+  const repairPending = selfRelays !== undefined && (
+    unreadable
+    || Boolean(set && !set.complete)
+    || read.failed.some((url) => repairFloor.includes(url))
+  );
 
   if (!set) {
     if (unreadable) {
       // Never let an undecryptable read clobber a populated list (the keys
       // live here; a wrongful empty would vanish the rooms).
-      return prev ?? { event: null, list: EMPTY_COMMUNITY_LIST, decryptFailed: true };
+      return {
+        ...(prev ?? { event: null, list: EMPTY_COMMUNITY_LIST, decryptFailed: true }),
+        repairPending,
+      };
     }
     logSync("list2", "relay fetch: no fragments");
     if (selfRelays) await seedCommunityList(nostr, user, queryClient, selfRelays);
-    return (
+    const next = (
       queryClient.getQueryData<ListData>(queryKey) ?? prev ?? { event: null, list: EMPTY_COMMUNITY_LIST }
     );
+    return { ...next, repairPending };
   }
 
   logSync(
@@ -535,8 +930,27 @@ export async function syncCommunityList(
   // retired single-event list, which only exist locally.
   const local =
     prev?.list ?? (await readFolded<PersistedList>(foldKeyOf(user.pubkey)))?.list;
-  const merged = local ? mergeCommunityLists(local, set.list) : set.list;
-  const next: ListData = { event: set.newestEvent, list: merged, decryptFailed: false };
+  let retired: CommunityList | undefined;
+  if (!(await readFolded<boolean>(retiredRescueKeyOf(user.pubkey)))) {
+    try {
+      const rescue = await fetchRetiredList(nostr, user, selfRelays ?? []);
+      retired = rescue.list;
+      if (rescue.complete) await writeFolded(retiredRescueKeyOf(user.pubkey), true);
+    } catch (error) {
+      logSync(
+        "list2",
+        `retired-list rescue failed (${error instanceof Error ? error.message : String(error)}); retrying on a later sync`,
+      );
+    }
+  }
+  const liveAndLocal = local ? mergeCommunityLists(local, set.list) : set.list;
+  const merged = retired ? mergeCommunityLists(liveAndLocal, retired) : liveAndLocal;
+  const next: ListData = {
+    event: set.newestEvent,
+    list: merged,
+    decryptFailed: false,
+    repairPending,
+  };
   void writeFolded(foldKeyOf(user.pubkey), { event: set.newestEvent, list: merged } satisfies PersistedList);
 
   // Reconcile — the migration write. Seeding only covers an account whose
@@ -553,18 +967,34 @@ export async function syncCommunityList(
   // own per-index created_at map, and a reconcile publish racing it hands the
   // relay a same-second lowest-id coin-flip the mutation can lose. The next
   // sync re-arms the reconcile with fresh state, so skipping costs nothing.
-  if (selfRelays && set.complete && user.signer.nip44 && queryClient.isMutating({ mutationKey: LIST_MUTATION_KEY }) === 0) {
+  const canonical = uniqueRelayUrls(selfRelays ?? []);
+  const requiredFloor = canonical.length > 0 ? canonical : uniqueRelayUrls(STOCK_RELAYS);
+  const hasCanonicalAnswer = read.answered.some((url) => requiredFloor.includes(url));
+  if (selfRelays && set.complete && !unreadable && hasCanonicalAnswer && user.signer.nip44
+    && queryClient.isMutating({ mutationKey: LIST_MUTATION_KEY }) === 0) {
     try {
       const rebuilt = fragment(merged);
-      if (wireDiffers(rebuilt, set.readFrags)) {
-        logSync("list2", "reconcile: the union knows more than the wire — publishing it");
-        const newest = await publishFragments(nostr, user, merged, set.createdAt, set.readFrags);
+      if (relayWireDiffers(rebuilt, read.readFragsByRelay, read.answered)) {
+        // Keep one confirming poll armed. EVENT acceptance is not proof that
+        // an addressable head is query-visible yet (or retained as winner).
+        next.repairPending = true;
+        logSync("list2", "reconcile: the union or a relay-local copy is stale — publishing it");
+        const newest = await publishFragments(
+          nostr,
+          user,
+          merged,
+          set.createdAt,
+          set.readFrags,
+          read.answered,
+          read.readFragsByRelay,
+        );
         void writeFolded(seedKeyOf(user.pubkey), true);
         if (newest) next.event = newest;
       }
     } catch (err) {
       // Non-fatal: the read side of this sync already succeeded, and the
       // reconcile re-arms on every later sync until it lands.
+      next.repairPending = true;
       logSync(
         "list2",
         `reconcile publish failed (${err instanceof Error ? err.message : String(err)}) — retrying on a later sync`,
@@ -641,8 +1071,33 @@ export function useCommunityList() {
     queryKey,
     enabled: Boolean(user?.signer.nip44),
     staleTime: 30_000,
-    queryFn: ({ signal }) =>
-      syncCommunityList(nostr, user!, queryClient, signal, selfStateRelays(config, user!.pubkey)),
+    // A semantic edit never writes to a relay that missed its source read.
+    // Keep retrying the safe read while such a relay is outstanding; once it
+    // answers, the per-relay reconcile above backfills only its stale/missing
+    // coordinates. The standing subscription cannot detect an EMPTY returning
+    // relay because it has no event to emit.
+    refetchInterval: (query) => query.state.data?.repairPending
+      ? LIST_REPAIR_REFETCH_MS
+      : false,
+    queryFn: async ({ signal }) => {
+      let cached: NostrRumor[] = [];
+      try {
+        cached = await (await eventStore).query([{
+          kinds: [KIND_COMMUNITY_LIST_FRAG],
+          authors: [user!.pubkey],
+        }]);
+      } catch {
+        // Wire + folded plaintext remain available when ArmadaDB is not.
+      }
+      return syncCommunityList(
+        nostr,
+        user!,
+        queryClient,
+        signal,
+        selfStateRelays(config, user!.pubkey),
+        cached,
+      );
+    },
   });
 }
 
@@ -687,9 +1142,92 @@ function applyAction(list: CommunityList, action: CommunityListAction): Communit
   }
 }
 
+/**
+ * The serialized read/modify/write core. Exported so the all-sources-failed
+ * guard can be regression-tested without mounting the UI hook.
+ */
+export async function updateCommunityList(
+  nostr: NostrLike,
+  user: NUser,
+  queryClient: QueryClient,
+  relays: string[],
+  action: CommunityListAction,
+  seedEvents: Iterable<NostrRumor> = [],
+): Promise<CommunityList> {
+  const read = await fetchCommunityListFragments(
+    nostr,
+    user,
+    relays,
+    undefined,
+    seedEvents,
+  );
+  const { set, unreadable } = read;
+  if (unreadable) {
+    throw new Error(
+      "Couldn't read your existing communities (decryption failed); not saving to avoid losing room keys.",
+    );
+  }
+  // Require a canonical account-state answer. Stock is the fallback only for
+  // a legacy account with no canonical relay yet. Unanswered rescue relays are
+  // deliberately omitted from the write cohort rather than blocking forever.
+  const canonical = uniqueRelayUrls(relays);
+  const requiredFloor = canonical.length > 0 ? canonical : uniqueRelayUrls(STOCK_RELAYS);
+  if (!read.answered.some((url) => requiredFloor.includes(url))) {
+    throw new Error(
+      "Couldn't confirm your community list on an account-state relay; not saving to avoid overwriting it.",
+    );
+  }
+  if (set && !set.complete) {
+    throw new Error(
+      `Holding ${set.createdAt.size} of ${set.declared} community-list fragments; try again once the missing ones sync.`,
+    );
+  }
+  if (!set) {
+    // The status-bearing read above makes this a confirmed empty wire, but a
+    // local record proves this account previously had fragments. Preserve the
+    // older conservative refusal: relay data loss is not authority to mint a
+    // new fragment 0 over whatever an unconfigured source may still retain.
+    const persisted = await readFolded<PersistedList>(foldKeyOf(user.pubkey));
+    const seeded = await readFolded<boolean>(seedKeyOf(user.pubkey));
+    if (persisted?.event || seeded) {
+      throw new Error(
+        "Couldn't reach your community list on any relay; not saving to avoid overwriting it.",
+      );
+    }
+  }
+  const relayList = set?.list ?? EMPTY_COMMUNITY_LIST;
+
+  // Fold in the local optimistic cache (addressable propagation lags).
+  const cached = queryClient.getQueryData<ListData>(listQueryKey(user.pubkey));
+  const current = cached ? mergeCommunityLists(cached.list, relayList) : relayList;
+  const next = applyAction(current, action);
+
+  const newest = await publishFragments(
+    nostr,
+    user,
+    next,
+    set?.createdAt ?? new Map(),
+    set?.readFrags ?? new Map(),
+    read.answered,
+    read.readFragsByRelay,
+  );
+
+  const event = newest ?? set?.newestEvent ?? cached?.event ?? null;
+  queryClient.setQueryData<ListData>(listQueryKey(user.pubkey), {
+    event,
+    list: next,
+    repairPending: read.failed.some((url) => requiredFloor.includes(url)),
+  });
+  void writeFolded(foldKeyOf(user.pubkey), { event, list: next } satisfies PersistedList);
+  void writeFolded(seedKeyOf(user.pubkey), true);
+  return next;
+}
+
 export function useUpdateCommunityList() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
+  const eventStore = useEventStore();
   const queryClient = useQueryClient();
   const removeRailKey = useRemoveRailKey();
 
@@ -703,61 +1241,20 @@ export function useUpdateCommunityList() {
       if (!user) throw new Error("User is not logged in");
       if (!user.signer.nip44) throw new Error("NIP-44 encryption not supported by this signer");
 
-      // Read-modify-write against fresh relay state (pool + the stock CORD
-      // relays, where the publish fallback may have put the newest copy).
-      const { set, unreadable } = await fetchFragments(nostr, user);
-      if (unreadable) {
-        throw new Error(
-          "Couldn't read your existing communities (decryption failed); not saving to avoid losing room keys.",
-        );
+      // Read-modify-write against the explicit self-state/NIP-65 set plus the
+      // stock CORD rescue relays, where a pending partial fan-out may have put
+      // the newest copy.
+      const relays = selfStateRelays(config, user.pubkey);
+      let cached: NostrRumor[] = [];
+      try {
+        cached = await (await eventStore).query([{
+          kinds: [KIND_COMMUNITY_LIST_FRAG],
+          authors: [user.pubkey],
+        }]);
+      } catch {
+        // A wire-confirmed RMW can still proceed when local storage is down.
       }
-      if (set && !set.complete) {
-        // Rewriting a set we haven't fully read would drop the memberships in
-        // the fragments we're missing — CORD-02 §8's one write refusal.
-        throw new Error(
-          `Holding ${set.createdAt.size} of ${set.declared} community-list fragments; try again once the missing ones sync.`,
-        );
-      }
-      if (!set) {
-        // An empty fetch is only trustworthy for an account that has never
-        // had fragments: the pool returns partial results instead of throwing
-        // on abort, so a total outage reads exactly like a fresh account. If
-        // this device has EVER seen a fragment (or seeded), an empty read is
-        // a failed read — publishing from local alone would shadow whatever
-        // the relays actually hold at a fresh created_at.
-        const persisted = await readFolded<PersistedList>(foldKeyOf(user.pubkey));
-        const seeded = await readFolded<boolean>(seedKeyOf(user.pubkey));
-        if (persisted?.event || seeded) {
-          throw new Error(
-            "Couldn't reach your community list on any relay; not saving to avoid overwriting it.",
-          );
-        }
-      }
-      const relayList = set?.list ?? EMPTY_COMMUNITY_LIST;
-
-      // Fold in the local optimistic cache (addressable propagation lags).
-      const cached = queryClient.getQueryData<ListData>(listQueryKey(user.pubkey));
-      const current = cached ? mergeCommunityLists(cached.list, relayList) : relayList;
-      const next = applyAction(current, action);
-
-      // No whole-list cap and no plaintext gate: fragmentation is what keeps
-      // each event publishable (CORD-02 §8), and a strictly-shrinking write
-      // must never be blocked — leaving is what restores compliance.
-      const newest = await publishFragments(
-        nostr,
-        user,
-        next,
-        set?.createdAt ?? new Map(),
-        set?.readFrags ?? new Map(),
-      );
-
-      const event = newest ?? set?.newestEvent ?? cached?.event ?? null;
-      queryClient.setQueryData<ListData>(listQueryKey(user.pubkey), { event, list: next });
-      void writeFolded(foldKeyOf(user.pubkey), { event, list: next } satisfies PersistedList);
-      // A successful write IS the proof the account speaks §8 — latch the
-      // seed so a later empty boot-read can't republish over siblings.
-      void writeFolded(seedKeyOf(user.pubkey), true);
-      return next;
+      return updateCommunityList(nostr, user, queryClient, relays, action, cached);
     },
     onSuccess: (_next, action) => {
       // Leaving purges the rail-arrangement key too, so a later rejoin doesn't

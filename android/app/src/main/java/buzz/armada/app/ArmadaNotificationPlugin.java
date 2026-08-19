@@ -484,6 +484,8 @@ public class ArmadaNotificationPlugin extends Plugin {
         String dmRelaysRaw = arrayToString(call.getArray("dmRelays"));
         String dmFollowsRaw = arrayToString(call.getArray("dmFollows"));
         String dmKnownPeersRaw = arrayToString(call.getArray("dmKnownPeers"));
+        String dmKnownConversationsRaw = arrayToString(call.getArray("dmKnownConversations"));
+        String dmMutedPeersRaw = arrayToString(call.getArray("dmMutedPeers"));
         String dmRequestsRaw = call.getString("dmRequests");
         String selfRelaysRaw = arrayToString(call.getArray("selfRelays"));
         String selfDTagsRaw = arrayToString(call.getArray("selfDTags"));
@@ -534,6 +536,10 @@ public class ArmadaNotificationPlugin extends Plugin {
             else editor.remove("dmFollows");
             if (dmKnownPeersRaw != null) editor.putString("dmKnownPeers", dmKnownPeersRaw);
             else editor.remove("dmKnownPeers");
+            if (dmKnownConversationsRaw != null) editor.putString("dmKnownConversations", dmKnownConversationsRaw);
+            else editor.remove("dmKnownConversations");
+            if (dmMutedPeersRaw != null) editor.putString("dmMutedPeers", dmMutedPeersRaw);
+            else editor.remove("dmMutedPeers");
             if (dmRequestsRaw != null) editor.putString("dmRequests", dmRequestsRaw);
             else editor.remove("dmRequests");
             if (selfRelaysRaw != null) editor.putString("selfRelays", selfRelaysRaw);

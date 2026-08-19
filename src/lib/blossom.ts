@@ -1,4 +1,4 @@
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
  * App default Blossom media servers (mirrors Ditto's APP_BLOSSOM_SERVERS).
@@ -34,10 +34,12 @@ export interface BlossomServerMetadata {
   servers: string[];
   /** Unix timestamp of the last update (from kind 10063 created_at). */
   updatedAt: number;
+  /** Winning kind-10063 id, for NIP-01's lower-id same-second tiebreak. */
+  eventId?: string;
 }
 
 /** Parse a kind 10063 Blossom server list event into validated server URLs. */
-export function parseBlossomServerList(event: NostrEvent): string[] {
+export function parseBlossomServerList(event: Pick<NostrRumor, "tags">): string[] {
   return event.tags
     .filter(([name]) => name === "server")
     .map(([, url]) => url)

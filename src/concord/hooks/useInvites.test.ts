@@ -21,10 +21,18 @@ import { encrypt as nip44Encrypt } from "nostr-tools/nip44";
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
 import type { NostrEvent } from "nostr-tools/pure";
 import { createElement, type ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { fetchInviteList, useInviteList } from "@/concord/hooks/useInvites";
+import {
+  fetchInviteList,
+  inviteListRelays,
+  publishInviteListEvent,
+  readPersistedInviteList,
+  updateInviteList,
+  useInviteList,
+} from "@/concord/hooks/useInvites";
 import type { InviteList } from "@/concord/lib/invite";
+import { STOCK_RELAYS } from "@/concord/lib/invite";
 import { KIND_INVITE_LIST } from "@/concord/lib/kinds";
 
 import type { NUser } from "@nostrify/react/login";
@@ -33,16 +41,38 @@ import type { NUser } from "@nostrify/react/login";
 const mocks = vi.hoisted(() => ({
   nostr: { query: async () => [] } as { query: () => Promise<unknown[]> },
   user: undefined as unknown,
+  folded: new Map<string, unknown>(),
 }));
 
 vi.mock("@nostrify/react", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@nostrify/react")>()),
-  useNostr: () => ({ nostr: mocks.nostr }),
+  useNostr: () => ({
+    nostr: {
+      ...mocks.nostr,
+      relay: (mocks.nostr as { relay?: unknown }).relay ?? (() => ({
+        query: (...args: unknown[]) => (mocks.nostr.query as (...args: unknown[]) => Promise<unknown[]>)(...args),
+      })),
+    },
+  }),
 }));
 
 vi.mock("@/hooks/useCurrentUser", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/useCurrentUser")>()),
   useCurrentUser: () => ({ user: mocks.user }),
+}));
+vi.mock("@/hooks/useAppContext", () => ({
+  useAppContext: () => ({
+    config: {
+      useAppRelays: false,
+      appRelays: [],
+      useUserRelays: false,
+      relayMetadata: { relays: [], updatedAt: 0 },
+    },
+  }),
+}));
+vi.mock("@/lib/foldedCache", () => ({
+  readFolded: async (key: string) => mocks.folded.get(key),
+  writeFolded: async (key: string, value: unknown) => { mocks.folded.set(key, value); },
 }));
 
 
@@ -88,6 +118,10 @@ const entry = (token: string, communityId: string) => ({
 function poolReturning(events: NostrEvent[]) {
   return { query: async () => events } as unknown as Parameters<typeof fetchInviteList>[0];
 }
+
+beforeEach(() => {
+  mocks.folded.clear();
+});
 
 describe("fetchInviteList (CORD-05 §4 merge on read)", () => {
   const cid = "cd".repeat(32);
@@ -137,6 +171,166 @@ describe("fetchInviteList (CORD-05 §4 merge on read)", () => {
   });
 });
 
+describe("creator invite list relay routing", () => {
+  it("uses the self-state set plus every fixed CORD rescue relay", () => {
+    const targets = inviteListRelays(["wss://self.example"]);
+    expect(targets).toContain("wss://self.example");
+    for (const relay of STOCK_RELAYS) expect(targets).toContain(relay);
+  });
+
+  it("fans exact bytes independently and reports a partial miss for durable retry", async () => {
+    const { sk } = fakeUser();
+    const wire = listCopy(sk, { entries: [], tombstones: [] }, 1000);
+    const calls: Array<{ url: string; event: NostrEvent }> = [];
+    const nostr = {
+      relay: (url: string) => ({
+        event: async (event: NostrEvent) => {
+          calls.push({ url, event });
+          if (url === "wss://two.example") throw new Error("offline");
+        },
+      }),
+    };
+
+    const result = await publishInviteListEvent(
+      nostr as never,
+      wire,
+      ["wss://one.example", "wss://two.example"],
+    );
+
+    expect(result.accepted).toEqual(["wss://one.example"]);
+    expect(result.rejected).toEqual(["wss://two.example"]);
+    expect(calls).toEqual([
+      { url: "wss://one.example", event: wire },
+      { url: "wss://two.example", event: wire },
+    ]);
+  });
+
+  it("queues a merged rewrite only for relays that completed its base read", async () => {
+    const { sk, user } = fakeUser();
+    user.signer.signEvent = async (template) => finalizeEvent(template, sk);
+    const unavailable = STOCK_RELAYS[0]!;
+    const delivered: string[] = [];
+    const nostr = {
+      relay: (url: string) => ({
+        query: async () => {
+          if (url === unavailable) throw new Error("offline");
+          return [];
+        },
+        event: async () => { delivered.push(url); },
+      }),
+    };
+    const queryClient = new QueryClient();
+    const patch: InviteList = {
+      entries: [entry("0a".repeat(16), "cd".repeat(32))],
+      tombstones: [],
+    };
+
+    await updateInviteList(
+      nostr as never,
+      user,
+      queryClient,
+      ["wss://self.example"],
+      patch,
+    );
+
+    expect(delivered).toContain("wss://self.example");
+    expect(delivered).not.toContain(unavailable);
+  });
+
+  it("durably keeps a minted signer secret when every source read is offline", async () => {
+    const { user } = fakeUser();
+    const patch: InviteList = {
+      entries: [entry("0c".repeat(16), "ce".repeat(32))],
+      tombstones: [],
+    };
+    const nostr = {
+      relay: () => ({
+        query: async () => { throw new Error("offline"); },
+        event: vi.fn(),
+      }),
+    };
+
+    await expect(updateInviteList(
+      nostr as never,
+      user,
+      new QueryClient(),
+      ["wss://self.example"],
+      patch,
+    )).rejects.toThrow(/account-state relay/i);
+
+    // Simulate a fresh query cache after reload: the folded record alone still
+    // carries the link-signing secret needed to revoke/refresh the URL.
+    const reloaded = await readPersistedInviteList(user.pubkey);
+    expect(reloaded?.list.entries[0]).toMatchObject({
+      token: "0c".repeat(16),
+      signer_sk: "aa".repeat(32),
+    });
+  });
+
+  it("refuses RMW when the newest visible 13303 is unreadable", async () => {
+    const { sk, user } = fakeUser();
+    const older = listCopy(sk, {
+      entries: [entry("0a".repeat(16), "cf".repeat(32))],
+      tombstones: [],
+    }, 100);
+    const unreadableHead = finalizeEvent({
+      kind: KIND_INVITE_LIST,
+      content: "not-our-ciphertext",
+      tags: [],
+      created_at: 101,
+    }, sk);
+    const relayEvent = vi.fn();
+    const nostr = {
+      relay: () => ({
+        query: async () => [older, unreadableHead],
+        event: relayEvent,
+      }),
+    };
+
+    await expect(updateInviteList(
+      nostr as never,
+      user,
+      new QueryClient(),
+      ["wss://self.example"],
+      { entries: [], tombstones: [] },
+    )).rejects.toThrow(/current creator invite list/i);
+    expect(relayEvent).not.toHaveBeenCalled();
+  });
+
+  it("does not let an unreadable older loser permanently block a readable head", async () => {
+    const { sk, user } = fakeUser();
+    user.signer.signEvent = async (template) => finalizeEvent(template, sk);
+    const unreadableOlder = finalizeEvent({
+      kind: KIND_INVITE_LIST,
+      content: "not-our-ciphertext",
+      tags: [],
+      created_at: 100,
+    }, sk);
+    const readableHead = listCopy(sk, {
+      entries: [entry("0a".repeat(16), "cf".repeat(32))],
+      tombstones: [],
+    }, 101);
+    const relayEvent = vi.fn(async () => undefined);
+    const nostr = {
+      relay: () => ({
+        query: async () => [unreadableOlder, readableHead],
+        event: relayEvent,
+      }),
+    };
+
+    await expect(updateInviteList(
+      nostr as never,
+      user,
+      new QueryClient(),
+      ["wss://self.example"],
+      { entries: [], tombstones: [] },
+    )).resolves.toMatchObject({
+      entries: [expect.objectContaining({ token: "0a".repeat(16) })],
+    });
+    expect(relayEvent).toHaveBeenCalled();
+  });
+});
+
 describe("useInviteList (a network read may only widen the local list)", () => {
   const cid = "ce".repeat(32);
   const token = "0a".repeat(16);
@@ -149,6 +343,41 @@ describe("useInviteList (a network read may only widen the local list)", () => {
       createElement(QueryClientProvider, { client: queryClient }, children);
     return { queryClient, wrapper };
   }
+
+  it("automatically publishes a durable offline invite patch after a later successful read", async () => {
+    const { sk, user } = fakeUser();
+    user.signer.signEvent = async (template) => finalizeEvent(template, sk);
+    mocks.user = user;
+    const local: InviteList = {
+      entries: [entry(token, cid)],
+      tombstones: [],
+    };
+    mocks.folded.set(`concord2-invite-list:${user.pubkey}`, {
+      list: local,
+      newestCreatedAt: 100,
+      needsPublish: true,
+    });
+    const remote = listCopy(sk, { entries: [], tombstones: [] }, 101);
+    const published: NostrEvent[] = [];
+    mocks.nostr = {
+      query: async () => [remote],
+      relay: () => ({
+        query: async () => [remote],
+        event: async (wireEvent: NostrEvent) => { published.push(wireEvent); },
+      }),
+    } as never;
+
+    const { wrapper } = harness();
+    const { result } = renderHook(() => useInviteList(), { wrapper });
+
+    await waitFor(() => expect(result.current.data?.entries).toHaveLength(1));
+    await waitFor(() => expect(published.length).toBeGreaterThan(0));
+    expect(await readPersistedInviteList(user.pubkey)).toMatchObject({
+      list: local,
+      newestCreatedAt: expect.any(Number),
+    });
+    expect((await readPersistedInviteList(user.pubkey))?.needsPublish).toBeUndefined();
+  });
 
   it("keeps a locally tombstoned entry when the pool still answers from the pre-revocation copy", async () => {
     const { sk, user } = fakeUser();

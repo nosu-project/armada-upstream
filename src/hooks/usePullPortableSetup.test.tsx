@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
 import { settingsDTag } from "@/lib/settingsDocs";
+import { fragment, serializeFragList } from "@/concord/lib/listFrag";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
 import { usePullPortableSetup } from "./usePullPortableSetup";
@@ -36,9 +37,9 @@ class FakeStore {
 
   async query([filter]: NostrFilter[]): Promise<NostrRumor[]> {
     return this.rumors.filter((rumor) =>
-      filter!.kinds!.includes(rumor.kind)
-      && filter!.authors!.includes(rumor.pubkey)
-      && filter!["#d"]!.includes(dTagOf(rumor) ?? ""));
+      (filter!.kinds?.includes(rumor.kind) ?? true)
+      && (filter!.authors?.includes(rumor.pubkey) ?? true)
+      && (!filter!["#d"] || filter!["#d"]!.includes(dTagOf(rumor) ?? "")));
   }
 
   async count() {
@@ -55,10 +56,10 @@ function dTagOf(rumor: { tags: string[][] }): string | undefined {
 /** NIP-44 stand-in: reversible, and obviously not a real ciphertext. */
 const nip44 = {
   encrypt: async (_pubkey: string, plaintext: string) => `sealed:${plaintext}`,
-  decrypt: async (_pubkey: string, ciphertext: string) => {
+  decrypt: vi.fn(async (_pubkey: string, ciphertext: string) => {
     if (!ciphertext.startsWith("sealed:")) throw new Error("not for this key");
     return ciphertext.slice("sealed:".length);
-  },
+  }),
 };
 
 let store: FakeStore;
@@ -70,6 +71,7 @@ const h = vi.hoisted(() => ({
   updateConfig: vi.fn(),
   discoverRelayList: vi.fn(),
   queryExplicitRelays: vi.fn(),
+  readFolded: vi.fn(),
   writeFolded: vi.fn(),
   hasNip44: true,
 }));
@@ -96,6 +98,7 @@ vi.mock("@/hooks/useEventStore", () => ({
 }));
 
 vi.mock("@/lib/foldedCache", () => ({
+  readFolded: (...args: unknown[]) => h.readFolded(...args),
   writeFolded: (...args: unknown[]) => h.writeFolded(...args),
 }));
 
@@ -105,6 +108,11 @@ vi.mock("@/lib/nip65", async (importOriginal) => {
     ...actual,
     discoverRelayList: (...args: unknown[]) => h.discoverRelayList(...args),
     queryExplicitRelays: (...args: unknown[]) => h.queryExplicitRelays(...args),
+    queryExplicitRelaysWithStatus: async (...args: unknown[]) => ({
+      events: await h.queryExplicitRelays(...args),
+      answered: args[1] as string[],
+      failed: [],
+    }),
   };
 });
 
@@ -210,6 +218,8 @@ beforeEach(() => {
   });
   h.queryExplicitRelays.mockReset().mockResolvedValue(fullSetup());
   h.writeFolded.mockReset().mockResolvedValue(undefined);
+  h.readFolded.mockReset().mockResolvedValue(undefined);
+  nip44.decrypt.mockClear();
 });
 
 describe("usePullPortableSetup", () => {
@@ -273,6 +283,187 @@ describe("usePullPortableSetup", () => {
     });
 
     expect(result).toEqual({ records: 8, sources: 2, voiceServer: true, publicOnly: false });
+  });
+
+  it("restores exact 33302 vault fragments and the encrypted 13303 creator list", async () => {
+    const [frag] = fragment({
+      entries: [],
+      tombstones: [{ community_id: "b".repeat(64), removed_at: 123 }],
+    });
+    const communityEvent = event(
+      33302,
+      "community-frag",
+      [["d", "0"]],
+      `sealed:${serializeFragList(frag)}`,
+      40,
+    );
+    const inviteEvent = event(
+      13303,
+      "invite-list",
+      [],
+      `sealed:${JSON.stringify({
+        entries: [{
+          token: "01".repeat(16),
+          signer_sk: "02".repeat(32),
+          community_id: "c".repeat(64),
+          url: "https://armada.buzz/invite/example#secret",
+          created_at: 40,
+        }],
+        tombstones: [],
+      })}`,
+      40,
+    );
+    h.queryExplicitRelays.mockResolvedValue([...fullSetup(), communityEvent, inviteEvent]);
+    const { view, client } = render();
+
+    await act(async () => {
+      await view.result.current.pull();
+    });
+
+    expect(client.getQueryData(["concord", "list", PUBKEY])).toMatchObject({
+      list: { tombstones: [{ community_id: "b".repeat(64), removed_at: 123 }] },
+    });
+    expect(client.getQueryData(["concord", "invite-list", PUBKEY])).toMatchObject({
+      entries: [{ token: "01".repeat(16), signer_sk: "02".repeat(32) }],
+    });
+    expect(store.rumors.some((rumor) => rumor.id === communityEvent.id && rumor.kind === 33302)).toBe(true);
+    expect(store.rumors.some((rumor) => rumor.id === inviteEvent.id && rumor.kind === 13303)).toBe(true);
+  });
+
+  it("merges stale pulled invites with the durable signer-secret fold", async () => {
+    const remoteToken = "01".repeat(16);
+    const localToken = "03".repeat(16);
+    const communityId = "c".repeat(64);
+    const inviteEvent = event(
+      13303,
+      "stale-invite-list",
+      [],
+      `sealed:${JSON.stringify({
+        entries: [{
+          token: remoteToken,
+          signer_sk: "02".repeat(32),
+          community_id: communityId,
+          url: "https://armada.buzz/invite/remote#secret",
+          created_at: 20,
+        }],
+        tombstones: [],
+      })}`,
+      20,
+    );
+    h.queryExplicitRelays.mockResolvedValue([...fullSetup(), inviteEvent]);
+    h.readFolded.mockImplementation(async (key: string) => key.startsWith("concord2-invite-list:")
+      ? {
+          newestCreatedAt: 30,
+          list: {
+            entries: [{
+              token: localToken,
+              signer_sk: "04".repeat(32),
+              community_id: communityId,
+              url: "https://armada.buzz/invite/local#secret",
+              created_at: 30,
+            }],
+            tombstones: [{ token: remoteToken, community_id: communityId }],
+          },
+        }
+      : undefined);
+    const { view, client } = render();
+
+    await act(async () => {
+      await view.result.current.pull();
+    });
+
+    expect(client.getQueryData(["concord", "invite-list", PUBKEY])).toMatchObject({
+      entries: [{ token: localToken, signer_sk: "04".repeat(32) }],
+      tombstones: [{ token: remoteToken, community_id: communityId }],
+    });
+  });
+
+  it("does not let a stale pulled 10009 replace the folded last-good server list", async () => {
+    const held = event(
+      10009,
+      "held-groups",
+      [["group", "kept", "wss://kept.example"], ["r", "wss://kept.example"]],
+      "",
+      40,
+    );
+    h.readFolded.mockImplementation(async (key: string) => key.startsWith("nip29-grouplist:")
+      ? {
+          event: held,
+          groups: [{ id: "kept", relay: "wss://kept.example" }],
+          servers: ["wss://kept.example"],
+        }
+      : undefined);
+    const { view, client } = render();
+
+    await act(async () => {
+      await view.result.current.pull();
+    });
+
+    expect(client.getQueryData(["nip29", "user-groups", PUBKEY])).toMatchObject({
+      event: held,
+      groups: [{ id: "kept", relay: "wss://kept.example" }],
+      servers: ["wss://kept.example"],
+      decryptFailed: false,
+    });
+  });
+
+  it("chooses the NIP-01 winner across ArmadaDB and stale wire singletons", async () => {
+    await store.event(event(10002, "local-pointer", [["r", "wss://local-home.example"]], "", 50));
+    await store.event(event(10007, "local-search", [["relay", "wss://local-search.example"]], "", 50));
+    await store.event(event(10050, "local-dm", [["relay", "wss://local-dm.example"]], "", 50));
+    await store.event(event(10063, "local-media", [["server", "https://local-media.example/"]], "", 50));
+    const { view, client } = render();
+
+    await act(async () => {
+      await view.result.current.pull();
+    });
+
+    expect(client.getQueryData(["search-relay-list", PUBKEY])).toMatchObject({
+      event: { id: "local-search" },
+      relays: ["wss://local-search.example"],
+    });
+    expect(client.getQueryData(["dm-relay-list", PUBKEY])).toMatchObject({
+      event: { id: "local-dm" },
+      relays: ["wss://local-dm.example"],
+    });
+    expect(client.getQueryData(["blossom-server-list", PUBKEY])).toMatchObject({
+      event: { id: "local-media" },
+      servers: ["https://local-media.example/"],
+    });
+    expect(appliedConfig()).toMatchObject({
+      relayMetadata: {
+        eventId: "local-pointer",
+        relays: [{ url: "wss://local-home.example", read: true, write: true }],
+      },
+      searchRelays: ["wss://local-search.example"],
+      dmRelays: ["wss://local-dm.example"],
+      blossomServerMetadata: { servers: ["https://local-media.example/"], updatedAt: 50 },
+    });
+  });
+
+  it("decrypts each topic shard only once before hydrating the decoded result", async () => {
+    const gifCiphertext = `sealed:${JSON.stringify({
+      version: 1,
+      deviceId: "remote-device",
+      records: [],
+    })}`;
+    h.queryExplicitRelays.mockResolvedValue([
+      ...fullSetup(),
+      event(
+        30078,
+        "gif-shard",
+        [["d", "armada/gif-favorites/remote-device"], ["t", "armada-gif-favorites"]],
+        gifCiphertext,
+        40,
+      ),
+    ]);
+    const { view } = render();
+
+    await act(async () => {
+      await view.result.current.pull();
+    });
+
+    expect(nip44.decrypt.mock.calls.filter(([, content]) => content === gifCiphertext)).toHaveLength(1);
   });
 
   /**
@@ -369,5 +560,33 @@ describe("usePullPortableSetup", () => {
     // Still counted: the relay has the document, it is simply behind.
     expect(result?.records).toBe(8);
     expect(result?.voiceServer).toBe(false);
+  });
+
+  it("applies an equal-second lower-id settings winner over the stored loser", async () => {
+    const local = {
+      ...settingsEvent("metadata", { theme: "light" }, 300),
+      id: "f".repeat(64),
+    };
+    const remote = {
+      ...settingsEvent("metadata", { theme: "dark" }, 300),
+      id: "0".repeat(64),
+    };
+    await store.event(local);
+    h.queryExplicitRelays.mockResolvedValue([
+      ...fullSetup().filter((candidate) =>
+        candidate.tags.find(([name]) => name === "d")?.[1] !== settingsDTag("metadata")),
+      remote,
+    ]);
+    const { view, client } = render();
+
+    await act(async () => {
+      await view.result.current.pull();
+    });
+
+    expect(client.getQueryData(["settings-doc", "metadata", PUBKEY])).toMatchObject({
+      event: { id: remote.id },
+      doc: { theme: "dark" },
+    });
+    expect(appliedConfig().theme).toBe("dark");
   });
 });

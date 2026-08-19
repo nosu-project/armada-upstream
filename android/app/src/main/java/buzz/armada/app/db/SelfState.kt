@@ -6,8 +6,8 @@ package buzz.armada.app.db
  *
  * These are the events that describe who you are and what you've joined: follow
  * and mute lists, the NIP-29 server/channel list, the Concord membership
- * vault, DM/Blossom/emoji relay lists, and Armada's own NIP-78 settings
- * document (which carries the community rail's arrangement).
+ * vault, DM/Blossom/emoji relay lists, Armada's NIP-78 settings documents, and
+ * its installation-sharded private app data.
  *
  * The WebView keeps them fresh with a standing REQ while it is alive. It isn't,
  * most of the time — so a change made on another device landed nowhere until
@@ -38,12 +38,13 @@ object SelfState {
 
     /**
      * The bare replaceable kinds, synced with a plain `{authors:[me], kinds:[…]}`
-     * filter: follow (3), mute (10000), NIP-29 servers/channels (10009), DM
-     * relays (10050), Blossom servers (10063), custom emoji (10030), and the
-     * Concord community (13302) and invite (13303) lists.
+     * filter: follow (3), mute (10000), the NIP-65 pointer (10002), search
+     * relays (10007), NIP-29 servers/channels (10009), DM relays (10050),
+     * Blossom servers (10063), custom emoji (10030), the fragmented Concord
+     * community vault (33302), and the invite list (13303).
      */
     @JvmField
-    val KINDS: Set<Int> = setOf(3, 10000, 10009, 10050, 10063, 10030, 13302, 13303)
+    val KINDS: Set<Int> = setOf(3, 10000, 10002, 10007, 10009, 10050, 10063, 10030, 33302, 13303)
 
     /**
      * The `d` values of the addressable kind-30078 documents Armada owns, for
@@ -76,6 +77,15 @@ object SelfState {
 
     /** Tag shared by the per-installation encrypted GIF-favorite shards. */
     const val TOPIC_GIF_FAVORITES = "armada-gif-favorites"
+    /** Tag shared by the per-installation encrypted DM-conversation shards. */
+    const val TOPIC_DM_CONVERSATIONS = "armada-dm-conversations"
+
+    /**
+     * Topic-scoped kind-30078 documents with dynamic `d` tags. The service's
+     * REQ and its storage admission both use this exact set.
+     */
+    @JvmField
+    val TOPICS: Set<String> = setOf(TOPIC_GIF_FAVORITES, TOPIC_DM_CONVERSATIONS)
 
     /** Whether this kind could be part of the catalogue (a cheap pre-filter). */
     @JvmStatic
@@ -105,6 +115,8 @@ object SelfState {
         if (rumor.kind != KIND_APP_SPECIFIC) return false
         // Addressable: keep only Armada's own documents.
         if (rumor.tagValue("d") in dTags) return true
-        return rumor.tagValue("t") == TOPIC_GIF_FAVORITES
+        return rumor.tags.any { tag ->
+            tag.size >= 2 && tag[0] == "t" && tag[1]?.let { it in TOPICS } == true
+        }
     }
 }

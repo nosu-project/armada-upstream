@@ -267,6 +267,37 @@ describe("preparePush — DM request gating", () => {
     expect(p?.accumulate).toBe(true);
   });
 
+  it("routes an authored group by its exact conversation without trusting its members 1:1", async () => {
+    const otherPeer = getPublicKey(generateSecretKey());
+    const conversation = [senderPk, otherPeer].sort().join(",");
+    const group = dmWrap({ tags: [["p", recipientPk], ["p", otherPeer]] });
+    const config = cfg({ knownConversations: [conversation] });
+
+    const p = await push(group, config);
+    expect(p?.line).toContain("meet at 8");
+    expect(p?.tag).toBe(`dm-${conversation}`);
+    expect(p?.url).toBe(`/dm/${conversation}`);
+
+    // Exact group participation must not promote the group's author into the
+    // global sender allow-list for an unrelated pairwise message.
+    const oneToOne = await push(dmWrap(), config);
+    expect(oneToOne?.title).toBe("Message requests");
+  });
+
+  it("suppresses a trusted group when any participant is muted", async () => {
+    const otherPeer = getPublicKey(generateSecretKey());
+    const conversation = [senderPk, otherPeer].sort().join(",");
+    const p = await push(
+      dmWrap({ tags: [["p", recipientPk], ["p", otherPeer]] }),
+      cfg({
+        policy: "full",
+        knownConversations: [conversation],
+        mutedPeers: [otherPeer],
+      }),
+    );
+    expect(p?.drop).toBe(true);
+  });
+
   it("shows a content-blind request for an unknown sender under `generic`", async () => {
     const p = await push(dmWrap({ content: "vile slur from a random" }), cfg());
     expect(p?.title).toBe("Message requests");

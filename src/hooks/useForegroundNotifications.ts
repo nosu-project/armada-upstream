@@ -18,6 +18,7 @@ import { isRoomActive } from "@/lib/activeRooms";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
+import { dmConvPeers } from "@/lib/nip17/protocol";
 import {
   attributedLine,
   mentionPubkeys,
@@ -102,7 +103,11 @@ export function useForegroundNotifications(): void {
 
   const { readState } = useReadState();
   const { channelLevel, concordChannelLevel, dmLevel } = useNotifLevels();
-  const { isKnown } = useKnownDmPeers();
+  const { isKnown, knownConversationKeys } = useKnownDmPeers();
+  const knownConversationSet = useMemo(
+    () => new Set(knownConversationKeys),
+    [knownConversationKeys],
+  );
   const { data: groupList } = useUserGroupList();
   const { mutedPubkeys } = useMutedPubkeys();
 
@@ -137,6 +142,7 @@ export function useForegroundNotifications(): void {
     concordChannelLevel,
     dmLevel,
     isKnown,
+    knownConversationSet,
     relayByGroup,
     navigate,
     queryClient,
@@ -148,6 +154,7 @@ export function useForegroundNotifications(): void {
     concordChannelLevel,
     dmLevel,
     isKnown,
+    knownConversationSet,
     relayByGroup,
     navigate,
     queryClient,
@@ -166,15 +173,11 @@ export function useForegroundNotifications(): void {
   const alertTimes = useRef(new Map<string, number[]>());
   const roomLines = useRef(new Map<string, string[]>());
 
-  // `useKnownDmPeers` decides on follows ∪ accepted ∪ pinned ∪ `mine`, and only
-  // the caller can supply `mine` — "the viewer has written in this thread".
-  // The sink has no conversation rows, so it keeps the peer set here, read from
-  // the same store `useNostrPush` seals into the worker's DM config. Passing a
-  // hardcoded `false` instead made every thread with an unfollowed peer a
-  // content-blind "Message request", however long the two had been talking —
-  // and on desktop, where this is the ONLY notifier (Electron has no push and
-  // no service worker presenting), that is every DM.
-  const minePeers = useRef(new Set<string>());
+  // `useKnownDmPeers` supplies durable exact authored/pinned rooms. The sink
+  // also refreshes local conversation rows so a just-authored room is known
+  // before the index catches up. Keeping room keys (rather than flattening
+  // participants) is load-bearing for group privacy.
+  const mineConversationKeys = useRef(new Set<string>());
   const mineLoading = useRef(false);
 
   useEffect(() => {
@@ -305,23 +308,24 @@ export function useForegroundNotifications(): void {
       return lines;
     };
 
-    // Reload the peers the viewer has authored a message to. Called once on
-    // mount and again whenever a DM arrives from a peer the current sets don't
+    // Reload the conversations the viewer has authored a message in. Called
+    // once on mount and again whenever a DM arrives that the current sets don't
     // know: the viewer may have replied since (replying is accepting, but the
     // persisted `acceptedDms` is only written from the compose pane), so one
     // message may present generically before the set catches up — which beats
     // an interval poll, and beats deferring the decision past the point where
     // the `off` policy has to stay silent.
-    const refreshMinePeers = () => {
+    const refreshMineConversationKeys = () => {
       if (mineLoading.current) return;
       mineLoading.current = true;
       void (async () => {
         try {
           const rows = await queryDm17Conversations(user.pubkey);
-          // Every participant of a conversation the viewer has written in — a
-          // group makes all of its members people they've talked to, not just
-          // the one whose name the row happens to sort under.
-          minePeers.current = new Set(rows.filter((row) => row.mine).flatMap((row) => row.peers));
+          // A written group makes that exact conversation known. It does not
+          // make each member a trusted author in an unrelated 1:1.
+          mineConversationKeys.current = new Set(
+            rows.filter((row) => row.mine).map((row) => row.key),
+          );
         } catch {
           // Store unavailable — follows ∪ accepted ∪ pinned still apply.
         } finally {
@@ -329,7 +333,7 @@ export function useForegroundNotifications(): void {
         }
       })();
     };
-    refreshMinePeers();
+    refreshMineConversationKeys();
 
     const unregister = registerNotifySink((candidates) => {
       const canShowOsNotification = isForegroundNotifyReady();
@@ -376,14 +380,24 @@ export function useForegroundNotifications(): void {
           });
           level = c.channelLevel(relay, cand.groupId);
         } else if (cand.plane === "dm") {
+          // Match the DM list: a group containing any muted participant is
+          // absent as a whole, even when this particular author is unmuted.
+          if (cand.peer && dmConvPeers(cand.peer).some((peer) => mutedRef.current.has(peer))) {
+            continue;
+          }
           level = cand.peer ? c.dmLevel(cand.peer) : "all";
           // Unknown sender (not followed / accepted / pinned): a stranger picks
           // the message text, their display name and their avatar. Apply the
           // message-request policy before any of it is surfaced — "off" stays
           // silent, "generic" cues without content, "full" notifies as normal.
-          if (cand.peer && !c.isKnown(cand.peer, minePeers.current.has(cand.peer))) {
+          const conversationKnown = cand.peer
+            ? c.knownConversationSet.has(cand.peer)
+              || mineConversationKeys.current.has(cand.peer)
+              || dmConvPeers(cand.peer).every((peer) => c.isKnown(peer, false))
+            : true;
+          if (cand.peer && !conversationKnown) {
             // The viewer may have written to them since the set was loaded.
-            refreshMinePeers();
+            refreshMineConversationKeys();
             const policy = loadPushPrefs().dmRequests;
             if (policy === "off") continue;
             if (policy !== "full") dmGeneric = true;

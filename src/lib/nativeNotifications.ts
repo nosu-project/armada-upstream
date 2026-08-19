@@ -177,22 +177,30 @@ export interface ArmadaNotificationPlugin {
     /** Relays to read DMs (kind 4) from — the app/DM relays, not group relays. */
     dmRelays?: string[];
     /**
-     * People the user follows (kind 3 pubkeys, hex). The kind-4 DM subscription
-     * is scoped to `authors:[...dmFollows]` so only DMs from friends notify
-     * (permanent friends-only). Empty ⇒ no DM subscription at all.
+     * Established legacy-DM authors (hex). The kind-4 subscription is scoped
+     * to `authors:[...dmFollows]`; empty ⇒ no kind-4 subscription at all.
      */
     dmFollows?: string[];
     /**
-     * The "known" DM peers (hex): follows ∪ accepted ∪ pinned — the WebView's
-     * `useKnownDmPeers` set. A NIP-17 wrap can come from anyone, so this is what
-     * lets the service tell a friend's DM from a stranger's AFTER decrypting it
-     * (the kind-4 sub is already follows-scoped at the relay; kind-1059 can't
-     * be). A peer NOT in this set is a request, gated by `dmRequests`. Older
-     * native binaries ignore this field and notify every DM in full.
+     * Individually established DM peers (hex): follows, accepts, 1:1 pins and
+     * authored 1:1 index rows. A NIP-17 wrap can come from anyone, so this is
+     * one input to its post-decrypt request boundary; groups use the exact keys
+     * below. Older native binaries ignore this field and notify every DM in full.
      */
     dmKnownPeers?: string[];
     /**
-     * How to notify for a DM from an unknown sender (not in `dmKnownPeers`):
+     * Exact canonical NIP-17 conversation keys the viewer pinned or authored.
+     * A group key trusts only that participant set, never its members' unrelated
+     * 1:1 conversations. Older native binaries safely ignore this field.
+     */
+    dmKnownConversations?: string[];
+    /**
+     * Muted pubkeys. A NIP-17 notification is suppressed when any participant
+     * is present here, matching the WebView's whole-conversation mute rule.
+     */
+    dmMutedPeers?: string[];
+    /**
+     * How to notify for an unknown DM conversation:
      * `"off"` (silent), `"generic"` (a content-blind request ping), or `"full"`
      * (name + avatar + preview, as for a known sender). Absent/unknown ⇒ the
      * service treats it as `"generic"`, the safe default.

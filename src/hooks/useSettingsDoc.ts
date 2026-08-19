@@ -10,6 +10,12 @@ import type { ArmadaEventStore } from "@/contexts/EventStoreContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
+import { publishSignedEventToRelays } from "@/lib/nip65";
+import {
+  PublishQueuedError,
+  queueSignedEvent,
+  recordQueuedPublishAttempt,
+} from "@/lib/publishOutbox";
 import type { NostrRumor } from "@/lib/nostrRumor";
 import { APP_NAME } from "@/lib/platform";
 import {
@@ -203,6 +209,10 @@ export function useSettingsDoc<N extends SettingsDocName>(name: N): UseSettingsD
   const mutation = useMutation({
     mutationFn: (patch: Partial<SettingsDocOf<N>>) => serializeSettingsWrite(name, async () => {
       if (!user?.signer.nip44) throw new Error("NIP-44 encryption not supported by signer");
+      const relays = selfStateRelays(config, user.pubkey);
+      if (relays.length === 0) {
+        throw new Error("Add an account write relay before synchronizing private settings");
+      }
       const store = await eventStore;
 
       // Read, then write — from the store, not from this query's cache. The
@@ -230,6 +240,17 @@ export function useSettingsDoc<N extends SettingsDocName>(name: N): UseSettingsD
 
       // Durable first, then visible, then published. An edit survives a kill
       // between the signature and the relay round-trip.
+      // Keep the signature and the exact destination set before any network
+      // work. A partial fanout must retry only the account relays still
+      // missing this version, never the generic pool.
+      let durablyQueued = false;
+      try {
+        await queueSignedEvent(event, undefined, relays);
+        durablyQueued = true;
+      } catch {
+        // Immediate delivery may still succeed. A later transport failure is
+        // only called queued when the exact signed obligation was read back.
+      }
       await store.event(event);
       // A refetch already in flight (a relay echo of the PREVIOUS version
       // invalidates this key) read the store before this event existed;
@@ -238,18 +259,24 @@ export function useSettingsDoc<N extends SettingsDocName>(name: N): UseSettingsD
       // just did. Cancel it — the store now supersedes anything it could carry.
       await queryClient.cancelQueries({ queryKey });
       queryClient.setQueryData<StoredSettingsDoc<N>>(queryKey, { event, doc: next });
-      const relays = selfStateRelays(config, user.pubkey);
-      const publisher = relays.length > 0 ? nostr.group(relays) : nostr;
-      try {
-        await publisher.event(event, { signal: AbortSignal.timeout(8000) });
-      } catch (err) {
-        console.warn(`Failed to publish ${name} settings:`, err);
+      const result = await publishSignedEventToRelays(nostr, event, relays, 8000);
+      // Settle only this attempt's current destinations. A newer replaceable
+      // can inherit a still-missing OLD NIP-65 relay from the superseded event;
+      // that relay must remain queued even when every current relay accepts.
+      await recordQueuedPublishAttempt(event.id, relays, result.rejected).catch(() => undefined);
+      if (result.rejected.length > 0) {
+        const cause = new Error(
+          result.accepted.length > 0
+            ? `${result.rejected.length} account relay delivery${result.rejected.length === 1 ? "" : "ies"} remain`
+            : "No account relay accepted the settings update",
+        );
+        console.warn(`Failed to publish ${name} settings:`, cause);
         // The version is already durable locally. Surface the transport
         // failure so the automatic config sync can retry the exact snapshot;
         // a later manual "Sync now" also republishes it.
-        throw err;
+        if (durablyQueued) throw new PublishQueuedError(event, cause);
+        throw cause;
       }
-
       return next;
     }),
   });

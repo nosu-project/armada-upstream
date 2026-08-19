@@ -1,11 +1,13 @@
 import { useNostr } from "@nostrify/react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
 import { useControlFold, citationFor, invalidateControl, publishEdition } from "@/concord/hooks/useControlPlane";
 import { useCommunity } from "@/concord/hooks/useCommunityList";
 import { resolveBundle } from "@/concord/hooks/useCommunityActions";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useAppContext } from "@/hooks/useAppContext";
+import { selfStateRelays } from "@/contexts/AppContext";
 import { buildRegistryEdition } from "@/concord/lib/control";
 import { vendableChannels, type VendAudience } from "@/concord/lib/channelAccess";
 import { isAuthorized, Permissions } from "@/concord/lib/roles";
@@ -28,6 +30,7 @@ import {
   mintToken,
   parseInviteLink,
   shareableInviteUrl,
+  STOCK_RELAYS,
   type InviteBundle,
   type InviteList,
 } from "@/concord/lib/invite";
@@ -38,6 +41,17 @@ import { publishToAnyRelay } from "@/concord/lib/relayPublish";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { toast } from "@/hooks/useToast";
 import { shareOrigin } from "@/lib/shareOrigin";
+import {
+  publishSignedEventToRelays,
+  queryExplicitRelaysWithStatus,
+  uniqueRelayUrls,
+} from "@/lib/nip65";
+import {
+  queueSignedEvent,
+  recordQueuedPublishAttempt,
+} from "@/lib/publishOutbox";
+import { readFolded, writeFolded } from "@/lib/foldedCache";
+import { isSigned, type NostrRumor } from "@/lib/nostrRumor";
 import type { Community } from "@/concord/lib/types";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -48,10 +62,46 @@ import type { NUser } from "@nostrify/react/login";
  * minted links — the unlock token AND the link-signer secret live here, synced
  * across the creator's devices, NIP-44-encrypted to self.
  */
-const inviteListKey = (pubkey: string | undefined) => ["concord", "invite-list", pubkey] as const;
+export const inviteListKey = (pubkey: string | undefined) => ["concord", "invite-list", pubkey] as const;
+export const inviteListFoldKey = (pubkey: string) => `concord2-invite-list:${pubkey}`;
 
-async function readInviteList(
-  event: NostrEvent | null,
+export interface PersistedInviteList {
+  list: InviteList;
+  newestCreatedAt: number;
+  /** A merge-only local patch still needs a signed relay reconciliation. */
+  needsPublish?: boolean;
+}
+
+export function readPersistedInviteList(pubkey: string): Promise<PersistedInviteList | undefined> {
+  return readFolded<PersistedInviteList>(inviteListFoldKey(pubkey));
+}
+
+/** Explicit NIP-65/account destinations plus the fixed CORD rescue floor. */
+export function inviteListRelays(selfRelays: Iterable<string>): string[] {
+  return uniqueRelayUrls([...selfRelays, ...STOCK_RELAYS]);
+}
+
+/** Queue exact signed bytes, fan every target independently, retain misses. */
+export async function publishInviteListEvent(
+  nostr: Pick<ReturnType<typeof useNostr>["nostr"], "relay">,
+  event: NostrEvent,
+  relayUrls: Iterable<string>,
+): Promise<{ accepted: string[]; rejected: string[] }> {
+  const targets = uniqueRelayUrls(relayUrls);
+  if (targets.length === 0) throw new Error("No relay is available for creator invite recovery");
+  // A creator-list update changes revocation authority. Never start a partial
+  // fan-out unless the exact signed event and every target are durable first.
+  await queueSignedEvent(event, undefined, targets, { inheritPendingTargets: false });
+  const result = await publishSignedEventToRelays(nostr, event, targets, 8_000);
+  await recordQueuedPublishAttempt(event.id, targets, result.rejected).catch(() => undefined);
+  if (result.accepted.length === 0) {
+    throw new Error("No relay accepted your creator invite list update");
+  }
+  return result;
+}
+
+export async function readInviteList(
+  event: NostrRumor | null,
   signer: NUser["signer"],
   selfPubkey: string,
 ): Promise<InviteList | null> {
@@ -67,6 +117,50 @@ async function readInviteList(
   } catch {
     return null;
   }
+}
+
+export interface DecodedInviteLists {
+  list: InviteList;
+  newestCreatedAt: number;
+  newestEvent: NostrRumor | null;
+  /** The NIP-01 head could not be decrypted/parsed; writes must fail closed. */
+  unreadable: boolean;
+  /** The newest exact wire event already contains the full semantic union. */
+  exactEvent: NostrEvent | null;
+}
+
+/** Fold all currently visible relay copies while retaining an exact mirror when safe. */
+export async function decodeInviteListEvents(
+  sourceEvents: Iterable<NostrRumor>,
+  user: NUser,
+): Promise<DecodedInviteLists> {
+  const events = [...new Map([...sourceEvents].map((event) => [event.id, event])).values()]
+    .filter((event) => event.kind === KIND_INVITE_LIST && event.pubkey === user.pubkey)
+    // Oldest first; on a timestamp tie the NIP-01 winner (lowest id) is last.
+    .sort((a, b) => a.created_at - b.created_at || b.id.localeCompare(a.id));
+  let list = EMPTY_INVITE_LIST;
+  const decoded = new Map<string, InviteList>();
+  for (const event of events) {
+    const copy = await readInviteList(event, user.signer, user.pubkey);
+    if (!copy) continue;
+    decoded.set(event.id, copy);
+    list = mergeInviteLists(list, copy);
+  }
+  const newestEvent = [...events]
+    .sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id))[0] ?? null;
+  const newestCopy = newestEvent ? decoded.get(newestEvent.id) : undefined;
+  const unreadable = Boolean(newestEvent && !newestCopy);
+  const exactEvent = newestEvent && isSigned(newestEvent)
+    && newestCopy && JSON.stringify(newestCopy) === JSON.stringify(list)
+    ? newestEvent
+    : null;
+  return {
+    list,
+    newestCreatedAt: newestEvent?.created_at ?? 0,
+    newestEvent,
+    unreadable,
+    exactEvent,
+  };
 }
 
 /**
@@ -87,37 +181,55 @@ export async function fetchInviteList(
   nostr: ReturnType<typeof useNostr>["nostr"],
   user: NUser,
   signal?: AbortSignal,
-): Promise<{ list: InviteList; newestCreatedAt: number }> {
-  const events = await nostr.query(
-    [{ kinds: [KIND_INVITE_LIST], authors: [user.pubkey], limit: 1 }],
-    { signal: signal ?? AbortSignal.timeout(8000) },
-  );
-  let list = EMPTY_INVITE_LIST;
-  let newestCreatedAt = 0;
-  // Oldest → newest, so the newest copy's unknown top-level fields win the merge.
-  for (const event of events.sort((a, b) => a.created_at - b.created_at)) {
-    // Monotonicity counts EVERY copy, even an undecryptable one: a relay keeps
-    // only the newest replaceable per author, so a rewrite must outbid
-    // whatever sits there, readable or not.
-    newestCreatedAt = Math.max(newestCreatedAt, event.created_at);
-    const copy = await readInviteList(event, user.signer, user.pubkey);
-    if (!copy) continue;
-    list = mergeInviteLists(list, copy);
-  }
-  return { list, newestCreatedAt };
+  relayUrls?: Iterable<string>,
+): Promise<{
+  list: InviteList;
+  newestCreatedAt: number;
+  unreadable: boolean;
+  answered: string[];
+  failed: string[];
+  targets: string[];
+}> {
+  const filter = [{ kinds: [KIND_INVITE_LIST], authors: [user.pubkey], limit: 1 }];
+  const deadline = signal ?? AbortSignal.timeout(8000);
+  const targets = relayUrls ? uniqueRelayUrls(relayUrls) : [];
+  const response = relayUrls
+    ? await queryExplicitRelaysWithStatus(nostr, targets, filter, deadline)
+    : {
+        events: await nostr.query(filter, { signal: deadline }),
+        answered: [] as string[],
+        failed: [] as string[],
+      };
+  const events = response.events;
+  const decoded = await decodeInviteListEvents(events, user);
+  return {
+    list: decoded.list,
+    newestCreatedAt: decoded.newestCreatedAt,
+    unreadable: decoded.unreadable,
+    answered: response.answered,
+    failed: response.failed,
+    targets,
+  };
 }
 
 export function useInviteList() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
+  const { config } = useAppContext();
 
   return useQuery<InviteList>({
     queryKey: inviteListKey(user?.pubkey),
     enabled: Boolean(user?.signer.nip44),
     staleTime: 60_000,
     queryFn: async ({ signal }) => {
-      const { list } = await fetchInviteList(nostr, user!, AbortSignal.any([signal, AbortSignal.timeout(8000)]));
+      const persisted = await readPersistedInviteList(user!.pubkey);
+      const { list, newestCreatedAt, unreadable, answered } = await fetchInviteList(
+        nostr,
+        user!,
+        AbortSignal.any([signal, AbortSignal.timeout(8000)]),
+        inviteListRelays(selfStateRelays(config, user!.pubkey)),
+      );
       // A network read may only WIDEN this device's list, never narrow it.
       // Publishing the 13303 echoes it back on NostrSync's standing self-sync
       // sub, which invalidates this query — so a revoke's refetch races the
@@ -129,7 +241,71 @@ export function useInviteList() {
       // tombstones are terminal (CORD-05 §4), so folding the cache forward can
       // only preserve facts, never invent or resurrect one.
       const cached = queryClient.getQueryData<InviteList>(inviteListKey(user!.pubkey));
-      return cached ? mergeInviteLists(cached, list) : list;
+      const local = cached && persisted
+        ? mergeInviteLists(persisted.list, cached)
+        : (cached ?? persisted?.list);
+      const merged = local ? mergeInviteLists(local, list) : list;
+      const foldKey = inviteListFoldKey(user!.pubkey);
+      const newestFoldAt = Math.max(newestCreatedAt, persisted?.newestCreatedAt ?? 0);
+      await writeFolded(foldKey, {
+        list: merged,
+        newestCreatedAt: newestFoldAt,
+        ...(persisted?.needsPublish ? { needsPublish: true } : {}),
+      } satisfies PersistedInviteList);
+
+      // A mint/revoke is folded before its network read, so an offline attempt
+      // leaves `needsPublish` behind. The next successful full read merges that
+      // durable patch with every visible relay copy and reconciles it to only
+      // the answered cohort. This is what turns local survival into eventual
+      // cross-device recovery rather than waiting for another invite edit.
+      if (persisted?.needsPublish) {
+        const wireAlreadyContainsFold = JSON.stringify(merged) === JSON.stringify(list);
+        if (wireAlreadyContainsFold) {
+          await writeFolded(foldKey, {
+            list: merged,
+            newestCreatedAt: newestFoldAt,
+          } satisfies PersistedInviteList);
+        } else {
+          const canonical = uniqueRelayUrls(selfStateRelays(config, user!.pubkey));
+          const requiredFloor = canonical.length > 0 ? canonical : uniqueRelayUrls(STOCK_RELAYS);
+          const canReconcile = !unreadable
+            && answered.some((url) => requiredFloor.includes(url));
+          if (canReconcile) {
+            const createdAt = Math.max(
+              Math.floor(Date.now() / 1000),
+              newestCreatedAt + 1,
+              (persisted.newestCreatedAt ?? 0) + 1,
+            );
+            try {
+              const content = await user!.signer.nip44!.encrypt(
+                user!.pubkey,
+                JSON.stringify(merged),
+              );
+              const event = await user!.signer.signEvent({
+                kind: KIND_INVITE_LIST,
+                content,
+                tags: [],
+                created_at: createdAt,
+              });
+              await writeFolded(foldKey, {
+                list: merged,
+                newestCreatedAt: createdAt,
+                needsPublish: true,
+              } satisfies PersistedInviteList);
+              await publishInviteListEvent(nostr, event, answered);
+              await writeFolded(foldKey, {
+                list: merged,
+                newestCreatedAt: createdAt,
+              } satisfies PersistedInviteList);
+            } catch (error) {
+              // Keep the durable dirty marker. A later refetch retries, while
+              // an event that made it into the outbox retries exact bytes too.
+              console.warn("Failed to reconcile creator invite recovery state:", error);
+            }
+          }
+        }
+      }
+      return merged;
     },
   });
 }
@@ -173,10 +349,83 @@ export function useMyLinkEpochs(community: Community | undefined) {
 }
 
 /** Read-merge-write the Invite List (serialized on one scope). */
+export async function updateInviteList(
+  nostr: ReturnType<typeof useNostr>["nostr"],
+  user: NUser,
+  queryClient: QueryClient,
+  canonicalRelays: string[],
+  patch: InviteList,
+): Promise<InviteList> {
+  if (!user.signer.nip44) throw new Error("NIP-44 unsupported.");
+  const canonical = uniqueRelayUrls(canonicalRelays);
+  const relays = inviteListRelays(canonical);
+  const persisted = await readPersistedInviteList(user.pubkey);
+  const cached = queryClient.getQueryData<InviteList>(inviteListKey(user.pubkey)) ?? EMPTY_INVITE_LIST;
+  const durable = persisted?.list ?? EMPTY_INVITE_LIST;
+  const optimistic = mergeInviteLists(mergeInviteLists(durable, cached), patch);
+
+  // A mint patch contains the only copy of signer_sk. Make that merge durable
+  // and verify the read-back before the first network await, so an offline
+  // source read or process kill cannot make an already-shared link irrevocable.
+  await writeFolded(inviteListFoldKey(user.pubkey), {
+    list: optimistic,
+    newestCreatedAt: persisted?.newestCreatedAt ?? 0,
+    needsPublish: true,
+  } satisfies PersistedInviteList);
+  const verified = await readPersistedInviteList(user.pubkey);
+  if (!verified || JSON.stringify(verified.list) !== JSON.stringify(optimistic)) {
+    throw new Error("Creator invite recovery state could not be saved locally");
+  }
+  queryClient.setQueryData(inviteListKey(user.pubkey), optimistic);
+
+  const read = await fetchInviteList(nostr, user, undefined, relays);
+  if (read.unreadable) {
+    throw new Error(
+      "Couldn't decrypt the current creator invite list; not saving to avoid losing revocation secrets.",
+    );
+  }
+  const requiredFloor = canonical.length > 0 ? canonical : uniqueRelayUrls(STOCK_RELAYS);
+  if (!read.answered.some((url) => requiredFloor.includes(url))) {
+    throw new Error(
+      "Couldn't confirm your creator invite list on an account-state relay; not saving to avoid overwriting it.",
+    );
+  }
+  const next = mergeInviteLists(
+    mergeInviteLists(read.list, optimistic),
+    patch,
+  );
+
+  const createdAt = Math.max(
+    Math.floor(Date.now() / 1000),
+    read.newestCreatedAt + 1,
+    (persisted?.newestCreatedAt ?? 0) + 1,
+  );
+  const content = await user.signer.nip44.encrypt(user.pubkey, JSON.stringify(next));
+  const event = await user.signer.signEvent({
+    kind: KIND_INVITE_LIST,
+    content,
+    tags: [],
+    created_at: createdAt,
+  });
+  queryClient.setQueryData(inviteListKey(user.pubkey), next);
+  await writeFolded(inviteListFoldKey(user.pubkey), {
+    list: next,
+    newestCreatedAt: createdAt,
+    needsPublish: true,
+  } satisfies PersistedInviteList);
+  await publishInviteListEvent(nostr, event, read.answered);
+  await writeFolded(inviteListFoldKey(user.pubkey), {
+    list: next,
+    newestCreatedAt: createdAt,
+  } satisfies PersistedInviteList);
+  return next;
+}
+
 function useUpdateInviteList() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
+  const { config } = useAppContext();
 
   return useMutation({
     scope: { id: "concord-invite-list" },
@@ -188,23 +437,13 @@ function useUpdateInviteList() {
       // what keeps a just-shared link revocable from this device when the
       // read-merge below can't reach the relays. Merge is idempotent by token,
       // so re-merging the patch into `next` is harmless.
-      queryClient.setQueryData(
-        inviteListKey(user.pubkey),
-        mergeInviteLists(
-          queryClient.getQueryData<InviteList>(inviteListKey(user.pubkey)) ?? EMPTY_INVITE_LIST,
-          patch,
-        ),
+      return updateInviteList(
+        nostr,
+        user,
+        queryClient,
+        selfStateRelays(config, user.pubkey),
+        patch,
       );
-      const { list: remote, newestCreatedAt } = await fetchInviteList(nostr, user);
-      const cached = queryClient.getQueryData<InviteList>(inviteListKey(user.pubkey)) ?? EMPTY_INVITE_LIST;
-      const next = mergeInviteLists(mergeInviteLists(remote, cached), patch);
-
-      const createdAt = Math.max(Math.floor(Date.now() / 1000), newestCreatedAt + 1);
-      const content = await user.signer.nip44.encrypt(user.pubkey, JSON.stringify(next));
-      const event = await user.signer.signEvent({ kind: KIND_INVITE_LIST, content, tags: [], created_at: createdAt });
-      queryClient.setQueryData(inviteListKey(user.pubkey), next);
-      await nostr.event(event, { signal: AbortSignal.timeout(8000) });
-      return next;
     },
   });
 }

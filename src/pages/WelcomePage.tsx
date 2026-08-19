@@ -279,6 +279,7 @@ export function WelcomePage() {
         configSeed.relayMetadata = {
           relays: homeRelays.map((url) => ({ url, read: true, write: true })),
           updatedAt: event.created_at,
+          eventId: event.id,
           pubkey: identity.pubkey,
         };
       } catch {

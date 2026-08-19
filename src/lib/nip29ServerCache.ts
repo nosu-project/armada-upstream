@@ -1,7 +1,7 @@
 import { readFolded } from "@/lib/foldedCache";
 
 import type { GroupRef } from "@/lib/nip29";
-import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
  * The offline cache of the user's kind 10009 list: the DECRYPTED list plus the
@@ -18,7 +18,7 @@ import type { NostrEvent } from "@nostrify/nostrify";
  * provides the very context that hook depends on — can still read it.
  */
 export interface PersistedGroupList {
-  event: NostrEvent;
+  event: NostrRumor;
   groups: GroupRef[];
   servers: string[];
 }

@@ -500,7 +500,7 @@ export function SettingsPage() {
                 <p className="text-sm text-destructive leading-snug">
                   App relays are off and you have no personal relays (NIP-65).
                   Your profile, follow lists, and emoji packs won't load or sync
-                  unless your joined servers can carry them.
+                  until you configure an app or personal account-data relay.
                 </p>
               </SettingsRow>
             )}
@@ -509,7 +509,7 @@ export function SettingsPage() {
                 relays={config.appRelays}
                 onChange={setAppRelays}
                 onReset={() => setAppRelays([...APP_RELAYS])}
-                emptyText="No app relays yet. Your account data lives on your joined servers only."
+                emptyText="No app relays yet. Configure personal NIP-65 relays to keep account data available."
               />
             </SettingsRow>
             <SettingsRow>
@@ -547,7 +547,7 @@ export function SettingsPage() {
             {user && (
               <SettingsRow
                 label="Automatic settings sync"
-                description="Automatically send private Armada setting changes and apply changes from your other clients. This switch affects only this device; Sync now still works when it is off."
+                description="Automatically send private Armada setting changes and the encrypted DM discovery index, and apply changes from your other clients. This switch affects only this device; Sync now still works when it is off."
               >
                 <Switch
                   checked={config.automaticSettingsSync !== false}
@@ -562,14 +562,14 @@ export function SettingsPage() {
                   <>
                     {portableSetup.isConfigured
                       ? portableSetup.isAutomatic
-                        ? "Changes sync automatically to every NIP-65 write relay. Sync now also refreshes the signed server, search, DM, and media lists immediately."
-                        : "Automatic sync is off on this device. Sync now still sends its current encrypted settings and refreshes its signed lists."
+                        ? "Community and server lists stay synchronized, and private settings plus the DM roster sync automatically. Sync now also repairs every NIP-65 write relay immediately."
+                        : "Private settings and DM-roster auto-sync are off on this device; community and server lists still synchronize when changed. Sync now repairs all portable state immediately."
                       : config.automaticSettingsSync !== false
-                        ? "Press once to copy your signed lists and encrypted settings to every NIP-65 write relay. Later private setting changes will sync automatically."
-                        : "Press once to copy your signed lists and encrypted settings. Future private Armada setting changes remain on this device until you press Sync now or enable automatic sync."}
+                        ? "Press once to copy your signed lists, encrypted settings, community recovery state, invite authority, and DM roster to every NIP-65 write relay. Later private setting changes will sync automatically."
+                        : "Press once to copy your signed lists and encrypted recovery state. Future private Armada setting changes remain on this device until you press Sync now or enable automatic sync."}
                     <span className="mt-2 block">
-                      Pull latest setup reads those records back from your NIP-65 relays
-                      without publishing anything.
+                      Pull latest setup reads those records—including communities and DM
+                      conversations—back from your NIP-65 relays without publishing anything.
                     </span>
                     <span className="mt-2 block">
                       Device hardware, audio processing, notification permission, Bluetooth, and
@@ -607,14 +607,24 @@ export function SettingsPage() {
                     disabled={portableSetup.isPending || portableSetup.isStatusLoading || portablePull.isPending}
                     onClick={() => {
                       portableSetup.publish().then((result) => {
+                        const skipped = result.unrefreshed.length;
+                        const partial = result.rejectedDeliveries > 0 || skipped > 0;
+                        const details = [
+                          result.rejectedDeliveries > 0
+                            ? `${result.rejectedDeliveries} ${result.rejectedDeliveries === 1 ? "delivery was" : "deliveries were"} rejected`
+                            : undefined,
+                          skipped > 0
+                            ? `${skipped} locally known settings ${skipped === 1 ? "document was" : "documents were"} left unchanged because no relay returned a safe base`
+                            : undefined,
+                        ].filter((detail): detail is string => Boolean(detail));
                         toast({
-                          title: result.rejectedDeliveries > 0
+                          title: partial
                             ? "Setup partially synchronized"
                             : "Setup synchronized",
-                          description: result.rejectedDeliveries > 0
-                            ? `${result.records} signed records were sent to ${result.destinations} account relays, but ${result.rejectedDeliveries} deliveries were rejected.`
+                          description: partial
+                            ? `${result.records} signed records were sent to ${result.destinations} account relays; ${details.join("; ")}. Retry once every account relay is reachable.`
                             : `${result.records} signed records are available on ${result.destinations} account relays.`,
-                          variant: result.rejectedDeliveries > 0 ? "destructive" : undefined,
+                          variant: partial ? "destructive" : undefined,
                         });
                       }).catch((err) => {
                         toast({

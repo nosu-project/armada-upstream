@@ -113,6 +113,10 @@ export interface IosPushConfig {
   policy: string;
   self: string;
   knownPeers: string[];
+  /** Exact authored/pinned NIP-17 conversation keys (groups stay exact). */
+  knownConversations?: string[];
+  /** Peers whose presence suppresses their whole DM conversation. */
+  mutedPeers?: string[];
   sk?: string;
   nip46?: { clientSk: string; bunkerPubkey: string; relays: string[] };
   concord?: Array<{

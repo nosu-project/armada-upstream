@@ -76,6 +76,10 @@ export interface SwPushConfig {
   self: string;
   /** follows ∪ accepted ∪ pinned (hex) — the "known" senders. */
   knownPeers: string[];
+  /** Exact authored/pinned NIP-17 conversation keys (groups stay exact). */
+  knownConversations?: string[];
+  /** Peers whose presence suppresses their whole DM conversation. */
+  mutedPeers?: string[];
   /** Decrypt key (hex). Present for nsec logins only. */
   sk?: string;
   /**

@@ -6,7 +6,6 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDm17Conversations } from "@/hooks/useDm17";
 import { useEventStore } from "@/hooks/useEventStore";
-import { useFollowList } from "@/hooks/useFollowList";
 import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useDmRelaysFor } from "@/hooks/useDmRelayList";
@@ -112,22 +111,23 @@ export function hasMoreCursor(cursors: RelayCursors): boolean {
  * Build the self-scoped kind-4 filters for one relay given its cursor.
  * Relays only serve the viewer's own DMs, so we query `authors:[self]` (sent)
  * and `#p:[self]` (received). The received direction is additionally scoped to
- * `authors:[...follows]` so DMs from strangers are never fetched — only people
- * the viewer follows (kind 3) can reach them. A direction whose cursor is
- * `null` (exhausted) is omitted. `undefined` means no `until` (first page).
+ * `authors:[...knownPeers]` so DMs from strangers are never fetched — only
+ * people established through follows, accepts, 1:1 pins or an authored synced
+ * conversation can reach them. A direction whose cursor is `null` (exhausted)
+ * is omitted. `undefined` means no `until` (first page).
  *
- * When `follows` is empty, the received filter is omitted entirely (an empty
- * `authors` would match nobody anyway, and some relays reject an empty array).
+ * When `knownPeers` is empty, the received filter is omitted entirely (an
+ * empty `authors` would match nobody anyway, and some relays reject it).
  */
-export function buildDmFilters(self: string, cursor: RelayCursor | undefined, follows: string[]) {
+export function buildDmFilters(self: string, cursor: RelayCursor | undefined, knownPeers: string[]) {
   const filters: { kinds: number[]; authors?: string[]; "#p"?: string[]; limit: number; until?: number }[] = [];
   const sent = cursor?.sent;
   const received = cursor?.received;
   if (sent !== null) {
     filters.push({ kinds: [KIND_DM], authors: [self], limit: DM_PAGE_SIZE, ...(typeof sent === "number" ? { until: sent } : {}) });
   }
-  if (received !== null && follows.length > 0) {
-    filters.push({ kinds: [KIND_DM], authors: follows, "#p": [self], limit: DM_PAGE_SIZE, ...(typeof received === "number" ? { until: received } : {}) });
+  if (received !== null && knownPeers.length > 0) {
+    filters.push({ kinds: [KIND_DM], authors: knownPeers, "#p": [self], limit: DM_PAGE_SIZE, ...(typeof received === "number" ? { until: received } : {}) });
   }
   return filters;
 }
@@ -383,10 +383,10 @@ async function queryRelayDmPage(
   url: string,
   self: string,
   cursor: RelayCursor | undefined,
-  follows: string[],
+  knownPeers: string[],
   signal: AbortSignal,
 ): Promise<{ url: string; events: NostrRumor[]; cursor: RelayCursor }> {
-  const filters = buildDmFilters(self, cursor, follows);
+  const filters = buildDmFilters(self, cursor, knownPeers);
   if (filters.length === 0) {
     return { url, events: [], cursor: { sent: null, received: null } };
   }
@@ -414,25 +414,27 @@ async function queryRelayDmPage(
  * separately lets a dense relay keep paging while a sparse one is already
  * exhausted. A failed relay is left with its previous cursor (retryable).
  */
-async function queryRelaysDmPage(
+export async function queryRelaysDmPage(
   nostr: NostrPool,
   relays: string[],
   self: string,
   cursors: RelayCursors,
-  follows: string[],
+  knownPeers: string[],
   signal: AbortSignal,
 ): Promise<{ events: NostrRumor[]; cursors: RelayCursors }> {
   const byId = new Map<string, NostrRumor>();
   const nextCursors: RelayCursors = {};
 
   const results = await Promise.allSettled(
-    relays.map((url) => queryRelayDmPage(nostr, url, self, cursors[url], follows, signal)),
+    relays.map((url) => queryRelayDmPage(nostr, url, self, cursors[url], knownPeers, signal)),
   );
+  let successfulRelays = 0;
 
   results.forEach((result, i) => {
     const url = relays[i];
     if (!url) return;
     if (result.status === "fulfilled") {
+      successfulRelays += 1;
       for (const e of result.value.events) byId.set(e.id, e);
       nextCursors[url] = result.value.cursor;
     } else {
@@ -441,6 +443,13 @@ async function queryRelaysDmPage(
       nextCursors[url] = cursors[url] ?? { sent: undefined, received: undefined };
     }
   });
+
+  // An all-relays failure is not an empty page. In particular, the first-sync
+  // caller uses successful completion as its durable watermark; blessing this
+  // as empty would keep a fresh device's DM list blank on every later launch.
+  if (relays.length > 0 && successfulRelays === 0) {
+    throw new Error("Every DM relay query failed");
+  }
 
   return { events: [...byId.values()], cursors: nextCursors };
 }
@@ -492,28 +501,28 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
   const queryClient = useQueryClient();
   const eventStore = useEventStore();
   const { mutedPubkeys, ready: muteReady } = useMutedPubkeys();
-  const { data: followData } = useFollowList();
+  const { knownPeers, isLoading: knownPeersLoading } = useKnownDmPeers();
   const { consent } = useDecryptConsent();
   const relays = effectiveDmRelays(config);
   const relayKey = relays.join(",");
 
-  // People the viewer follows (kind 3). All received-DM queries are scoped to
-  // these authors so DMs from strangers are never fetched — friends-only is a
-  // permanent, relay-level constraint, not a client-side view filter. Sorted +
-  // joined into a stable key so effects/queries don't churn on set reordering.
-  const follows = useMemo(() => [...(followData?.pubkeys ?? [])].sort(), [followData?.pubkeys]);
-  const followsKey = follows.join(",");
+  // Established peers: follows, explicit accepts/1:1 pins, plus participants
+  // recovered from a synced conversation in which this account wrote. Relay
+  // queries remain author-scoped, so a passive index row cannot promote a
+  // stranger request; the roster only lets a fresh device rediscover known
+  // legacy conversations that are no longer represented by the follow graph.
+  const knownPeerKey = knownPeers.join(",");
   // Read inside the queryFn (and the un-awaited background pull) so both always
-  // see the current set without `follows` being a queryFn dependency.
-  const followsRef = useRef(follows);
-  followsRef.current = follows;
+  // see the current set without making the array a queryFn dependency.
+  const knownPeersRef = useRef(knownPeers);
+  knownPeersRef.current = knownPeers;
 
-  // NOTE: `followsKey` is deliberately NOT part of the query key. The follow
-  // list resolves asynchronously, so on every cold load it goes empty → real,
+  // NOTE: `knownPeerKey` is deliberately NOT part of the query key. Its local
+  // sources resolve asynchronously, so on every cold load it goes empty → real,
   // and keying on it made that transition swap TanStack to a fresh cache entry
   // with no placeholder — dropping the merged event set back to the 30-item
   // `initialData` snapshot and visibly collapsing/re-sorting the conversation
-  // list a beat after it painted. Follows are read from a ref instead, and a
+  // list a beat after it painted. The roster is read from a ref instead, and a
   // change re-runs THIS entry's queryFn (below), so the wider author set merges
   // on top of what's already rendered.
   const queryKey = ["dm", "conversations", user?.pubkey, relayKey];
@@ -527,45 +536,45 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const loadingMoreRef = useRef(false);
   const lastPullRef = useRef(0);
-  // Tracks the follow set the cache was last fetched with. `undefined` means
+  // Tracks the established-peer set the cache was last fetched with. `undefined` means
   // "this hook instance hasn't observed one yet" — the mount pass must not
   // invalidate, since the query is already fetching with the current set.
-  const fetchedFollowsRef = useRef<string | undefined>(undefined);
+  const fetchedKnownPeersRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     cursorsRef.current = {};
     lastPullRef.current = 0;
     setHasMore(true);
-    // Follows aren't in the query key, so a follow-list change has to re-run
-    // the queryFn explicitly: the received-DM filters widen to the new authors
+    // Known peers aren't in the query key, so a roster change has to re-run the
+    // queryFn explicitly: the received-DM filters widen to the new authors
     // and the results merge (append-only) into the rendered list.
-    const prevFollows = fetchedFollowsRef.current;
-    fetchedFollowsRef.current = followsKey;
-    if (prevFollows !== undefined && prevFollows !== followsKey && user?.pubkey) {
+    const previous = fetchedKnownPeersRef.current;
+    fetchedKnownPeersRef.current = knownPeerKey;
+    if (previous !== undefined && previous !== knownPeerKey && user?.pubkey) {
       void queryClient.invalidateQueries({ queryKey });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.pubkey, relayKey, followsKey, queryClient]);
+  }, [user?.pubkey, relayKey, knownPeerKey, queryClient]);
 
   const query = useQuery<NostrRumor[]>({
     queryKey,
-    enabled: !!user?.pubkey,
+    enabled: !!user?.pubkey && !knownPeersLoading,
     queryFn: async ({ signal }) => {
       const pubkey = user!.pubkey;
       const firstSync = !isDmSynced("nip04", pubkey);
       const store = await eventStore;
-      // Newest known follow set at execution time (not fetch-scheduling time).
-      const scopedFollows = followsRef.current;
+      // Newest established-peer set at execution time (not fetch scheduling).
+      const scopedKnownPeers = knownPeersRef.current;
 
       // 1. LOCAL-FIRST: the wire funnels every kind-4 into IndexedDB (and
       //    NostrBatcher mirrors pull results), so the conversation list paints
       //    from the store — the query stays pending until this read resolves,
       //    so the list's first paint is already correctly ordered. Received DMs
-      //    are scoped to followed authors (friends-only), matching the relay
+      //    are scoped to established authors, matching the relay
       //    queries below.
       const cachedEvents = await store.query([
         { kinds: [KIND_DM], authors: [pubkey], limit: DM_PAGE_SIZE },
-        ...(scopedFollows.length > 0
-          ? [{ kinds: [KIND_DM], authors: scopedFollows, "#p": [pubkey], limit: DM_PAGE_SIZE }]
+        ...(scopedKnownPeers.length > 0
+          ? [{ kinds: [KIND_DM], authors: scopedKnownPeers, "#p": [pubkey], limit: DM_PAGE_SIZE }]
           : []),
       ]);
       const prev = queryClient.getQueryData<NostrRumor[]>(queryKey) ?? [];
@@ -586,7 +595,7 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
             relays,
             pubkey,
             {}, // first page per relay (no `until`)
-            scopedFollows,
+            scopedKnownPeers,
             AbortSignal.any([signal, AbortSignal.timeout(8000)]),
           );
           if (signal.aborted) return;
@@ -651,7 +660,7 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
         relays,
         user.pubkey,
         cursorsRef.current,
-        follows,
+        knownPeers,
         AbortSignal.timeout(8000),
       );
       cursorsRef.current = cursors;
@@ -672,7 +681,7 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
       setIsLoadingMore(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nostr, user?.pubkey, relayKey, followsKey, hasMore, queryClient]);
+  }, [nostr, user?.pubkey, relayKey, knownPeerKey, hasMore, queryClient]);
 
   // The wire holds the standing DM subscription and funnels every kind-4 into
   // the shared store; re-read when it announces a change. (The queryFn's relay
@@ -765,7 +774,7 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
     events: query.data ?? [],
     // Loading until the events query AND the mute set are both settled, so the
     // list shows a spinner rather than an unfiltered flash on cold start.
-    isLoading: query.isLoading || !muteReady,
+    isLoading: query.isLoading || knownPeersLoading || !muteReady,
     error: query.error,
     /** Fetch an older page of conversations (per-relay cursor pagination). */
     loadMore,
@@ -781,7 +790,7 @@ export function useDMConversations(options?: { decryptPreviews?: boolean }) {
  * last-read stamp. Drives the unread dot on the DMs button in the server rail.
  *
  * NIP-17 conversations are additionally narrowed to KNOWN peers (see
- * `useKnownDmPeers`), matching the kind-4 plane's relay-level friends-only
+ * `useKnownDmPeers`), matching the kind-4 plane's relay-level established-peer
  * scoping — an unsolicited stranger's gift wrap must not light a dot for a
  * conversation the main list would never show. This is what keeps the request
  * tier from being an attention channel: a request is discovered by opening

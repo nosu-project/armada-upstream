@@ -16,7 +16,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useUpdateUserGroupList } from "@/hooks/useUserGroupList";
+import {
+  resolveGroupListRead,
+  useUpdateUserGroupList,
+  type UserGroupListQuery,
+} from "@/hooks/useUserGroupList";
 import { buildGroupListTags, type GroupRef } from "@/lib/nip29";
 import { normalizeRelayUrl } from "@/lib/platform";
 
@@ -35,12 +39,18 @@ const h = vi.hoisted(() => ({
   publish: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   readFolded: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   writeFolded: vi.fn<(...args: unknown[]) => Promise<void>>(),
+  storeQuery: vi.fn<(...args: unknown[]) => Promise<NostrEvent[]>>(),
   removeRailKey: vi.fn<(key: string) => void>(),
   user: undefined as unknown,
 }));
 
 vi.mock("@nostrify/react", () => ({
-  useNostr: () => ({ nostr: { query: h.query } }),
+  useNostr: () => ({
+    nostr: {
+      query: h.query,
+      relay: () => ({ query: h.query }),
+    },
+  }),
 }));
 vi.mock("@/hooks/useCurrentUser", () => ({
   useCurrentUser: () => ({ user: h.user }),
@@ -48,8 +58,8 @@ vi.mock("@/hooks/useCurrentUser", () => ({
 vi.mock("@/hooks/useAppContext", () => ({
   useAppContext: () => ({
     config: {
-      useAppRelays: false,
-      appRelays: [],
+      useAppRelays: true,
+      appRelays: [S1],
       useUserRelays: false,
       relayMetadata: { relays: [], updatedAt: 0 },
     },
@@ -58,6 +68,24 @@ vi.mock("@/hooks/useAppContext", () => ({
 vi.mock("@/hooks/useNostrPublish", () => ({
   useNostrPublish: () => ({ mutateAsync: h.publish }),
 }));
+vi.mock("@/lib/nip65", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/nip65")>();
+  return {
+    ...actual,
+    queryExplicitRelaysWithStatus: async (
+      _nostr: unknown,
+      relays: Iterable<string>,
+      ...args: unknown[]
+    ) => {
+      const urls = [...relays];
+      try {
+        return { events: await h.query(...args), answered: urls, failed: [] };
+      } catch {
+        return { events: [], answered: [], failed: urls };
+      }
+    },
+  };
+});
 vi.mock("@/lib/foldedCache", () => ({
   readFolded: (...args: unknown[]) => h.readFolded(...args),
   writeFolded: (...args: unknown[]) => h.writeFolded(...args),
@@ -65,9 +93,8 @@ vi.mock("@/lib/foldedCache", () => ({
 vi.mock("@/hooks/useRemoveRailKey", () => ({
   useRemoveRailKey: () => h.removeRailKey,
 }));
-// Only the read hook touches the event store; keep the module graph light.
 vi.mock("@/hooks/useEventStore", () => ({
-  useEventStore: () => new Promise(() => undefined),
+  useEventStore: () => Promise.resolve({ query: h.storeQuery }),
 }));
 
 /** Reversible fake NIP-44: ciphertext is `enc:` + plaintext. */
@@ -120,6 +147,7 @@ beforeEach(() => {
   h.publish.mockReset();
   h.readFolded.mockReset().mockResolvedValue(undefined);
   h.writeFolded.mockReset().mockResolvedValue(undefined);
+  h.storeQuery.mockReset().mockResolvedValue([]);
   h.removeRailKey.mockReset();
   h.user = { pubkey: SELF, signer: { nip44 } };
   h.publish.mockImplementation(async (t) => ({
@@ -131,7 +159,59 @@ beforeEach(() => {
   }));
 });
 
+describe("kind 10009 refresh last-good guards", () => {
+  function good(event: NostrEvent, servers = [S1]): UserGroupListQuery {
+    return { event, groups: [], servers, decryptFailed: false };
+  }
+
+  it("keeps the last decrypted list across an empty or stale relay read", async () => {
+    const heldEvent = listEvent({ createdAt: 200, content: encContent({ groups: [], servers: [S1, S2] }) });
+    const held = good(heldEvent, [S1, S2]);
+    const stale = listEvent({ createdAt: 100, content: encContent({ groups: [], servers: [S3] }) });
+
+    expect(await resolveGroupListRead([], { nip44 } as never, held)).toBe(held);
+    expect(await resolveGroupListRead([stale], { nip44 } as never, held)).toBe(held);
+  });
+
+  it("uses the NIP-01 lowest-id tiebreak and accepts an intentional newer clear", async () => {
+    const heldEvent = { ...listEvent({ createdAt: 200 }), id: "f".repeat(64) };
+    const held = good(heldEvent, [S1]);
+    const tiedWinner = {
+      ...listEvent({ createdAt: 200, content: encContent({ groups: [], servers: [S2] }) }),
+      id: "0".repeat(64),
+    };
+    expect((await resolveGroupListRead([tiedWinner], { nip44 } as never, held)).servers).toEqual([S2]);
+
+    const clear = listEvent({
+      createdAt: 201,
+      content: encContent({ groups: [], servers: [] }),
+    });
+    expect((await resolveGroupListRead([clear], { nip44 } as never, held)).servers).toEqual([]);
+  });
+
+  it("does not let a newer undecryptable event blank the last-good list", async () => {
+    const heldEvent = listEvent({ createdAt: 200 });
+    const held = good(heldEvent, [S1, S2]);
+    const unreadable = listEvent({ createdAt: 201, content: "not-our-ciphertext" });
+
+    expect(await resolveGroupListRead([unreadable], { nip44 } as never, held)).toBe(held);
+  });
+});
+
 describe("useUpdateUserGroupList (kind 10009 read-modify-write)", () => {
+  it("does not sign a fresh empty-base list when the account relay read fails", async () => {
+    h.query.mockRejectedValue(new Error("offline"));
+    h.readFolded.mockResolvedValue(undefined);
+
+    const result = renderUpdate();
+    await act(async () => {
+      await expect(
+        result.current.mutateAsync({ type: "add-server", url: S2 }),
+      ).rejects.toThrow(/an account-state relay/i);
+    });
+    expect(h.publish).not.toHaveBeenCalled();
+  });
+
   it("REFUSES to build on an empty network read when a persisted list exists (the wipe)", async () => {
     h.query.mockResolvedValue([]);
     h.readFolded.mockResolvedValue({
@@ -187,6 +267,26 @@ describe("useUpdateUserGroupList (kind 10009 read-modify-write)", () => {
     expect(items).toContainEqual(["r", S1]);
     expect(items).toContainEqual(["r", S2]);
     expect(items).toContainEqual(["r", S3]);
+  });
+
+  it("bases the edit on a newer ArmadaDB copy cached while the WebView was stopped", async () => {
+    h.query.mockResolvedValue([
+      listEvent({ createdAt: 100, content: encContent({ groups: [], servers: [S1] }) }),
+    ]);
+    h.storeQuery.mockResolvedValue([
+      listEvent({ createdAt: 200, content: encContent({ groups: [], servers: [S1, S2] }) }),
+    ]);
+
+    const result = renderUpdate();
+    await act(async () => {
+      await result.current.mutateAsync({ type: "add-server", url: S3 });
+    });
+
+    expect(decodePublished()).toEqual(expect.arrayContaining([
+      ["r", S1],
+      ["r", S2],
+      ["r", S3],
+    ]));
   });
 
   it("keeps a public-tag list public (Flotilla interop) and needs no NIP-44 signer for it", async () => {

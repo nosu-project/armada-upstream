@@ -6,6 +6,7 @@ import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 import { settingsDTag, type SettingsDocName } from "@/lib/settingsDocs";
+import * as publishOutbox from "@/lib/publishOutbox";
 
 import { readSettingsDoc, useSettingsDoc } from "./useSettingsDoc";
 
@@ -72,7 +73,7 @@ const signer = {
 
 const h = vi.hoisted(() => ({
   nostrEvent: vi.fn(),
-  group: vi.fn(),
+  relay: vi.fn(),
   config: {
     useAppRelays: true,
     appRelays: ["wss://app.example"],
@@ -88,8 +89,7 @@ const h = vi.hoisted(() => ({
 vi.mock("@nostrify/react", () => ({
   useNostr: () => ({
     nostr: {
-      event: h.nostrEvent,
-      group: h.group,
+      relay: h.relay,
     },
   }),
 }));
@@ -143,11 +143,19 @@ beforeEach(() => {
   store = new FakeStore();
   published = [];
   signed = 0;
+  h.config.useAppRelays = true;
+  h.config.appRelays = ["wss://app.example"];
+  h.config.useUserRelays = false;
+  h.config.relayMetadata = {
+    pubkey: PUBKEY,
+    updatedAt: 1,
+    relays: [{ url: "wss://home.example", read: true, write: true }],
+  };
   h.nostrEvent.mockReset().mockImplementation((event: NostrEvent) => {
-    published.push(event);
+    if (!published.some((held) => held.id === event.id)) published.push(event);
     return Promise.resolve();
   });
-  h.group.mockReset().mockImplementation(() => ({ event: h.nostrEvent }));
+  h.relay.mockReset().mockImplementation(() => ({ event: h.nostrEvent }));
 });
 
 describe("readSettingsDoc", () => {
@@ -238,10 +246,8 @@ describe("useSettingsDoc", () => {
       await result.current.update({ theme: "dark" });
     });
 
-    expect(h.group).toHaveBeenCalledWith([
-      "wss://app.example",
-      "wss://home.example",
-    ]);
+    expect(h.relay).toHaveBeenCalledWith("wss://app.example");
+    expect(h.relay).toHaveBeenCalledWith("wss://home.example");
   });
 
   it("publishes a version the store will accept over the one it merged over", async () => {
@@ -268,7 +274,7 @@ describe("useSettingsDoc", () => {
       // Whatever a relay does with it, it is already durable here.
       const onDisk = await readSettingsDoc(store as never, signer as never, PUBKEY, "metadata");
       expect(onDisk?.event.id).toBe(event.id);
-      published.push(event);
+      if (!published.some((held) => held.id === event.id)) published.push(event);
       throw new Error("relay unreachable");
     });
 
@@ -276,10 +282,38 @@ describe("useSettingsDoc", () => {
     await waitFor(() => expect(result.current.doc).toEqual({ theme: "light" }));
 
     await act(async () => {
-      await expect(result.current.update({ theme: "dark" })).rejects.toThrow("relay unreachable");
+      await expect(result.current.update({ theme: "dark" })).rejects.toThrow(/queued for retry/i);
     });
 
     expect(published).toHaveLength(1);
+  });
+
+  it("does not claim a failed delivery was queued when durable storage failed", async () => {
+    await seedStore("metadata", { theme: "light" }, 100);
+    const queue = vi.spyOn(publishOutbox, "queueSignedEvent")
+      .mockRejectedValue(new Error("outbox unavailable"));
+    h.nostrEvent.mockRejectedValue(new Error("relay unreachable"));
+
+    const { result } = render("metadata");
+    await waitFor(() => expect(result.current.doc).toEqual({ theme: "light" }));
+
+    await act(async () => {
+      await expect(result.current.update({ theme: "dark" }))
+        .rejects.toThrow(/No account relay accepted/);
+    });
+    queue.mockRestore();
+  });
+
+  it("refuses to spill private settings into generic routing with no account relay", async () => {
+    h.config.useAppRelays = false;
+    h.config.relayMetadata = { pubkey: PUBKEY, updatedAt: 1, relays: [] };
+    const { result } = render("metadata");
+    await waitFor(() => expect(result.current.isFetched).toBe(true));
+
+    await act(async () => {
+      await expect(result.current.update({ theme: "dark" })).rejects.toThrow(/account write relay/);
+    });
+    expect(h.nostrEvent).not.toHaveBeenCalled();
   });
 
   it("merges over nothing when the store is empty — callers must gate on that", async () => {

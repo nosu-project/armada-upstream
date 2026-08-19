@@ -5,18 +5,25 @@ import { useMemo } from "react";
 import { accountDataRelays, effectiveDmRelays, selfStateRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useEventStore } from "@/hooks/useEventStore";
 import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
+import {
+  newestCanonicalSelfList,
+  readStoredCanonicalSelfLists,
+} from "@/lib/canonicalSelfList";
 import { normalizeRelayUrl } from "@/lib/platform";
 import {
   KIND_RELAY_LIST,
   newestRelayList,
   parseRelayList,
   queryExplicitRelays,
+  queryExplicitRelaysWithStatus,
   uniqueRelayUrls,
 } from "@/lib/nip65";
 
 import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /**
  * NIP-17 DM relay list kind. A user publishes the relays where they want to
@@ -42,7 +49,7 @@ export function parseDmRelays(event: { tags: string[][] } | undefined): string[]
 }
 
 export interface DmRelayListQuery {
-  event: NostrEvent | null;
+  event: NostrRumor | null;
   relays: string[];
 }
 
@@ -127,6 +134,7 @@ export function useDmRelayList() {
   const { user } = useCurrentUser();
   const { config } = useAppContext();
   const { mutateAsync: publishEvent } = useNostrPublish();
+  const eventStore = useEventStore();
   const queryClient = useQueryClient();
 
   const queryKey = ["dm-relay-list", user?.pubkey];
@@ -135,15 +143,31 @@ export function useDmRelayList() {
     queryKey,
     enabled: !!user?.pubkey,
     queryFn: async ({ signal }) => {
-      const events = await queryExplicitRelays(
-        nostr,
-        selfStateRelays(config, user!.pubkey),
-        [{ kinds: [KIND_DM_RELAYS], authors: [user!.pubkey], limit: 1 }],
-        AbortSignal.any([signal, AbortSignal.timeout(6000)]),
-      );
-      const event = events.sort(
-        (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
-      )[0] ?? null;
+      const deadline = AbortSignal.any([signal, AbortSignal.timeout(6000)]);
+      const [wireEvents, stored] = await Promise.all([
+        queryExplicitRelays(
+          nostr,
+          selfStateRelays(config, user!.pubkey),
+          [{ kinds: [KIND_DM_RELAYS], authors: [user!.pubkey], limit: 1 }],
+          deadline,
+        ),
+        readStoredCanonicalSelfLists(
+          eventStore,
+          user!.pubkey,
+          [KIND_DM_RELAYS],
+          deadline,
+        ),
+      ]);
+      const cached = queryClient.getQueryData<DmRelayListQuery>(queryKey);
+      const event = newestCanonicalSelfList(
+        [
+          ...wireEvents,
+          ...stored.events,
+          ...(cached?.event ? [cached.event] : []),
+        ],
+        user!.pubkey,
+        KIND_DM_RELAYS,
+      ) ?? null;
       return { event, relays: parseDmRelays(event ?? undefined) };
     },
     staleTime: 60_000,
@@ -155,19 +179,37 @@ export function useDmRelayList() {
       const urls = relays
         .map((r) => normalizeRelayUrl(r))
         .filter((r): r is string => !!r);
-      const events = await queryExplicitRelays(
-        nostr,
-        selfStateRelays(config, user.pubkey),
-        [{ kinds: [KIND_DM_RELAYS], authors: [user.pubkey], limit: 1 }],
-        AbortSignal.timeout(8_000),
-      );
-      const prev = events.sort(
-        (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
-      )[0] ?? null;
-      const cached = queryClient.getQueryData<DmRelayListQuery>(queryKey);
-      if (!prev && cached?.event) {
-        throw new Error("Could not refresh your existing DM relay list; no changes were published");
+      const targets = selfStateRelays(config, user.pubkey);
+      const deadline = AbortSignal.timeout(8_000);
+      const [response, stored] = await Promise.all([
+        queryExplicitRelaysWithStatus(
+          nostr,
+          targets,
+          [{ kinds: [KIND_DM_RELAYS], authors: [user.pubkey], limit: 1 }],
+          deadline,
+        ),
+        readStoredCanonicalSelfLists(
+          eventStore,
+          user.pubkey,
+          [KIND_DM_RELAYS],
+          deadline,
+        ),
+      ]);
+      if (response.answered.length === 0) {
+        throw new Error(
+          "Could not confirm your current DM relay list; no changes were published",
+        );
       }
+      const cached = queryClient.getQueryData<DmRelayListQuery>(queryKey);
+      const prev = newestCanonicalSelfList(
+        [
+          ...response.events,
+          ...stored.events,
+          ...(cached?.event ? [cached.event] : []),
+        ],
+        user.pubkey,
+        KIND_DM_RELAYS,
+      ) ?? null;
       const tags = [
         ...(prev?.tags.filter(([name]) => name !== "relay" && name !== "client") ?? []),
         ...urls.map((url) => ["relay", url]),
@@ -182,7 +224,8 @@ export function useDmRelayList() {
         tags,
         created_at: createdAt,
         prev: prev ?? undefined,
-        relays: selfStateRelays(config, user.pubkey),
+        relays: response.answered,
+        inheritPendingTargets: false,
         onSigned: (event) => {
           queryClient.setQueryData<DmRelayListQuery>(queryKey, { event, relays: urls });
         },

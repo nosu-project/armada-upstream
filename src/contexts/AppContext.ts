@@ -29,6 +29,8 @@ export interface ClosedDmMarker {
 export interface RelayMetadata {
   relays: { url: string; read: boolean; write: boolean }[];
   updatedAt: number;
+  /** Winning kind-10002 id, for NIP-01's lower-id same-second tiebreak. */
+  eventId?: string;
   /** Owner of this replaceable list; absent only on pre-migration local data. */
   pubkey?: string;
 }
