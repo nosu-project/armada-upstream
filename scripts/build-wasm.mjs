@@ -13,6 +13,13 @@ import { existsSync, statSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
+/**
+ * Set `WEBXDC_RT_REQUIRED=1` where the transport is not optional — a deploy
+ * that silently shipped without it would turn Mini App multiplayer off for
+ * everyone, and nothing downstream would report a fault.
+ */
+const required = process.env.WEBXDC_RT_REQUIRED === "1";
+
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const crate = join(root, "crates/webxdc-rt");
 const out = join(root, "src/wasm/webxdc-rt");
@@ -21,6 +28,10 @@ const note = (m) => console.log(`[wasm] ${m}`);
 const has = (cmd) => spawnSync(cmd, ["--version"], { stdio: "ignore" }).status === 0;
 
 if (!has("cargo") || !has("wasm-pack")) {
+  if (required) {
+    note("cargo or wasm-pack not found, and WEBXDC_RT_REQUIRED=1.");
+    process.exit(1);
+  }
   note("cargo or wasm-pack not found — skipping.");
   note("Mini App multiplayer will be off. To enable it:");
   note("  rustup target add wasm32-unknown-unknown && cargo install wasm-pack");
@@ -61,6 +72,10 @@ try {
   });
   note("built.");
 } catch {
+  if (required) {
+    note("build failed, and WEBXDC_RT_REQUIRED=1.");
+    process.exit(1);
+  }
   // The previous output is still on disk and the app WILL load it, so saying
   // "off" would be a lie — and the dangerous kind, because a wire-format edit
   // would appear to have shipped when the running code predates it.

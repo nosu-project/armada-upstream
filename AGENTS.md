@@ -39,6 +39,7 @@ needs no Armada-specific server at all: any NIP-29 relay serves it.
 | `src/concord/` | The Concord protocol implementation (CORD-01..07): stream, control, chat, invites, rekey, voice, crypto derivations |
 | `src/lib/db/` | ArmadaDB — the one local storage interface (tenants of rumors + a KV), its IndexedDB adapter, the Android bridge adapter, and the migrations |
 | `android/`   | Capacitor Android project (signed APK/AAB built in CI)          |
+| `crates/webxdc-rt/` | Rust: the iroh-gossip transport for Mini App multiplayer, compiled to wasm. The only Rust in the repo |
 | `android/…/app/db/` | ArmadaDB in Kotlin: the SQLite engine the Android build actually runs, shared by the WebView and the notification service |
 | `ios/`       | Capacitor iOS project (SwiftPM, no CocoaPods; built manually on a Mac — no CI) |
 | `ios/ArmadaDB/` | ArmadaDB in Swift: the SQLite engine the iOS build runs, with SQLite vendored. A SwiftPM package so it builds on **Linux**, where its conformance suite runs without a Mac |
@@ -53,6 +54,35 @@ needs no Armada-specific server at all: any NIP-29 relay serves it.
 run this before committing changes.
 
 `npm run dev` serves at http://localhost:8080.
+
+### The one Rust dependency
+
+Mini App multiplayer (`joinRealtimeChannel`) rides iroh-gossip, which lives in
+`crates/webxdc-rt/` and compiles to wasm. `npm run dev` and `npm run build`
+compile it through a prebuild hook, rebuilding only when a source file,
+`Cargo.toml` or `Cargo.lock` is newer than the output.
+
+**It is optional locally and required in the deploy.** Without a Rust
+toolchain the hook prints what to install and exits 0: the app builds and runs,
+Mini Apps still open and sync their state, and only multiplayer is off. Nobody
+needs Rust to work on the chat UI. The deploy workflow sets
+`WEBXDC_RT_REQUIRED=1`, which turns a missing toolchain or a failed compile
+into a failed deploy rather than a published build with multiplayer silently
+switched off.
+
+To enable it locally:
+
+```
+rustup target add wasm32-unknown-unknown
+cargo install wasm-pack
+```
+
+macOS also needs a real LLVM clang (`brew install llvm`) — Apple Clang cannot
+target wasm32, which surfaces as a `ring` build failure.
+
+The wire formats the two clients share live in `src/lib/webxdcRealtime.ts`, not
+in the crate, and are tested against Vector's Rust. The crate moves opaque
+bytes; keep it that way, or the interop surface straddles a language boundary.
 
 ## How the client reaches backends (no build-time coupling)
 
