@@ -824,6 +824,33 @@ function buildE2eeRoom(keyProvider: BaseKeyProvider): {
 }
 
 /**
+ * The Concord call bar's title. A button — like the NIP-29 and DM titles — so
+ * clicking the call's name returns to its voice channel, running the same
+ * handler the room registers as `focusActiveCall`. Exported so the regression
+ * test can render it without standing up a LiveKit room.
+ */
+export function ConcordCallLabel({
+  community,
+  channel,
+  onFocus,
+}: {
+  community: string;
+  channel: string;
+  onFocus: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onFocus}
+      className="flex items-center gap-1 min-w-0 hover:underline text-left"
+    >
+      <span className="text-muted-foreground/70 truncate">{community}</span>
+      <span className="shrink-0">#{channel}</span>
+    </button>
+  );
+}
+
+/**
  * Concord (CORD-07, serverless, E2E) voice room: token from a blind broker
  * (authorized by channel-key-possession proof, not membership), media
  * encrypted end-to-end under per-sender keys the SFU never sees, and presence
@@ -889,15 +916,19 @@ function ConcordVoiceRoom({
   // removal, or channel deletion.
   useCallSync(ctx, onLeave);
 
+  // Navigate back to this Concord voice channel. The route params are the
+  // community + channel idHex (matching /c/:communityId/:channelId).
+  const goToChannel = useCallback(() => {
+    navigate(`/c/${encodeURIComponent(community.idHex)}/${encodeURIComponent(channel.idHex)}`);
+  }, [navigate, community.idHex, channel.idHex]);
+
   // Register the navigate-to-call handler so the floating video window's
-  // "return to call" action lands on this Concord voice channel. The route
-  // params are the community + channel idHex (matching /c/:communityId/:channelId).
+  // "return to call" action lands on this Concord voice channel; the call bar's
+  // title (ConcordCallLabel) runs the same handler.
   useEffect(() => {
-    const go = () =>
-      navigate(`/c/${encodeURIComponent(community.idHex)}/${encodeURIComponent(channel.idHex)}`);
-    registerFocusActiveCall(go);
+    registerFocusActiveCall(goToChannel);
     return () => registerFocusActiveCall(null);
-  }, [registerFocusActiveCall, navigate, community.idHex, channel.idHex]);
+  }, [registerFocusActiveCall, goToChannel]);
 
   // How the call reads in the Android ongoing-call notification. The names are
   // the decrypted Concord ones — they never leave the device, and the
@@ -1508,10 +1539,7 @@ function ConcordVoiceRoom({
   }
 
   const label = (
-    <span className="flex items-center gap-1 min-w-0">
-      <span className="text-muted-foreground/70 truncate">{community.name}</span>
-      <span className="shrink-0">#{channel.name}</span>
-    </span>
+    <ConcordCallLabel community={community.name} channel={channel.name} onFocus={goToChannel} />
   );
 
   return (
