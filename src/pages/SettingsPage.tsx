@@ -52,6 +52,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useInstallPrompt } from "@/hooks/useInstallPrompt";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
+import { usePullPortableSetup } from "@/hooks/usePullPortableSetup";
 import { usePublishPortableSetup } from "@/hooks/usePublishPortableSetup";
 import { useSearchRelayList } from "@/hooks/useSearchRelayList";
 import { toast } from "@/hooks/useToast";
@@ -149,6 +150,7 @@ export function SettingsPage() {
   const dmRelayList = useDmRelayList();
   const blossomServerList = useBlossomServerList();
   const searchRelayList = useSearchRelayList();
+  const portablePull = usePullPortableSetup();
   const portableSetup = usePublishPortableSetup();
 
   // Voice mic-processing prefs are device-local (stored in localStorage, not
@@ -566,42 +568,70 @@ export function SettingsPage() {
                         ? "Press once to copy your signed lists and encrypted settings to every NIP-65 write relay. Later private setting changes will sync automatically."
                         : "Press once to copy your signed lists and encrypted settings. Future private Armada setting changes remain on this device until you press Sync now or enable automatic sync."}
                     <span className="mt-2 block">
+                      Pull latest setup reads those records back from your NIP-65 relays
+                      without publishing anything.
+                    </span>
+                    <span className="mt-2 block">
                       Device hardware, audio processing, notification permission, Bluetooth, and
                       wallet secrets stay on this device.
                     </span>
                   </>
                 )}
               >
-                <Button
-                  type="button"
-                  className="h-11 clip-corner-lg touch:h-12"
-                  disabled={portableSetup.isPending || portableSetup.isStatusLoading}
-                  onClick={() => {
-                    portableSetup.publish().then((result) => {
-                      toast({
-                        title: result.rejectedDeliveries > 0
-                          ? "Setup partially synchronized"
-                          : "Setup synchronized",
-                        description: result.rejectedDeliveries > 0
-                          ? `${result.records} signed records were sent to ${result.destinations} account relays, but ${result.rejectedDeliveries} deliveries were rejected.`
-                          : `${result.records} signed records are available on ${result.destinations} account relays.`,
-                        variant: result.rejectedDeliveries > 0 ? "destructive" : undefined,
+                <div className="grid w-full gap-2 sm:grid-cols-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-11 clip-corner-lg touch:h-12"
+                    disabled={portablePull.isPending || portableSetup.isPending}
+                    onClick={() => {
+                      portablePull.pull().then((result) => {
+                        toast({
+                          title: "Setup refreshed",
+                          description: `${result.records} signed ${result.records === 1 ? "record was" : "records were"} read from ${result.sources} account ${result.sources === 1 ? "relay" : "relays"}${result.voiceServer ? ", including your voice server" : ""}.`,
+                        });
+                      }).catch((err) => {
+                        toast({
+                          title: "Setup could not be refreshed",
+                          description: err instanceof Error ? err.message : "Please try again.",
+                          variant: "destructive",
+                        });
                       });
-                    }).catch((err) => {
-                      toast({
-                        title: "Setup was not fully synchronized",
-                        description: err instanceof Error ? err.message : "Please try again.",
-                        variant: "destructive",
+                    }}
+                  >
+                    {portablePull.isPending ? "Pulling…" : "Pull latest setup"}
+                  </Button>
+                  <Button
+                    type="button"
+                    className="h-11 clip-corner-lg touch:h-12"
+                    disabled={portableSetup.isPending || portableSetup.isStatusLoading || portablePull.isPending}
+                    onClick={() => {
+                      portableSetup.publish().then((result) => {
+                        toast({
+                          title: result.rejectedDeliveries > 0
+                            ? "Setup partially synchronized"
+                            : "Setup synchronized",
+                          description: result.rejectedDeliveries > 0
+                            ? `${result.records} signed records were sent to ${result.destinations} account relays, but ${result.rejectedDeliveries} deliveries were rejected.`
+                            : `${result.records} signed records are available on ${result.destinations} account relays.`,
+                          variant: result.rejectedDeliveries > 0 ? "destructive" : undefined,
+                        });
+                      }).catch((err) => {
+                        toast({
+                          title: "Setup was not fully synchronized",
+                          description: err instanceof Error ? err.message : "Please try again.",
+                          variant: "destructive",
+                        });
                       });
-                    });
-                  }}
-                >
-                  {portableSetup.isPending
-                    ? "Synchronizing…"
-                    : portableSetup.isConfigured
-                      ? "Sync now"
-                      : "Start sync"}
-                </Button>
+                    }}
+                  >
+                    {portableSetup.isPending
+                      ? "Synchronizing…"
+                      : portableSetup.isConfigured
+                        ? "Sync now"
+                        : "Start sync"}
+                  </Button>
+                </div>
               </SettingsRow>
             )}
           </>
