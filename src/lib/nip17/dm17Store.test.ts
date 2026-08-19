@@ -13,6 +13,7 @@ import {
   queryDm17Thread,
   queryDm17Timer,
   readDm17Cursor,
+  searchDm17Rumors,
   storedToDm17,
   sweepExpiredDm17Rumors,
   updateDm17Cursor,
@@ -94,6 +95,44 @@ describe("dm17Store", () => {
       wrapId: "",
     });
     expect(await queryDm17Rumor(self, [bob], fromAlice.rumorId)).toBeUndefined();
+  });
+
+  it("filters conversation search before applying its result limit", async () => {
+    const viewer = getPublicKey(generateSecretKey());
+    const friend = getPublicKey(generateSecretKey());
+    const requester = getPublicKey(generateSecretKey());
+    const said = (author: string, peer: string, content: string): OpenedDm => {
+      const createdAt = ++clock;
+      const rumor = buildDmRumor({
+        kind: KIND_DM_CHAT,
+        content,
+        tags: dmChatTags([author === viewer ? peer : viewer]),
+        pubkey: author,
+        createdAt,
+      });
+      return {
+        rumorId: rumor.id,
+        author,
+        kind: KIND_DM_CHAT,
+        content,
+        tags: rumor.tags,
+        createdAt,
+        peers: [peer],
+        wrapId: `wrap-${rumor.id.slice(0, 8)}`,
+      };
+    };
+
+    const wanted = said(friend, friend, "launcher needle from a friend");
+    const requestSpam = Array.from({ length: 45 }, (_, i) =>
+      said(requester, requester, `launcher needle request ${i}`),
+    );
+    await writeDm17Rumors(viewer, [wanted, ...requestSpam]);
+
+    const matches = await searchDm17Rumors(viewer, "launcher needle", {
+      limit: 1,
+      allowedConversationKeys: new Set([friend]),
+    });
+    expect(matches.map((match) => match.rumorId)).toEqual([wanted.rumorId]);
   });
 
   it("rings the inbox and each affected thread after a durable write", async () => {

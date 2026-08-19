@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { DisplayName } from "@/components/DisplayName";
+import { DeferredRow } from "@/components/DeferredRow";
+import { DmAvatar } from "@/components/DmAvatar";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   CommandDialog,
@@ -17,17 +19,24 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useClosedDms } from "@/hooks/useClosedDms";
+import { useDm17Conversations } from "@/hooks/useDm17";
+import { useDmConversationName } from "@/hooks/useDmConversationName";
+import { useDMConversations } from "@/hooks/useDirectMessages";
 import { useEventStore } from "@/hooks/useEventStore";
+import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
 import { useLiveCommunities } from "@/concord/hooks/useCommunityList";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { flattenLayout, mergeLayout } from "@/lib/railLayout";
 import {
+  buildDmSwitcherEntries,
   buildSwitcherEntries,
   nextChannelRoute,
   searchSwitcherMessages,
   switcherLiveKeys,
+  type DmSwitcherEntry,
   type MessageEntry,
   type MessageScope,
   type SwitcherContext,
@@ -35,6 +44,9 @@ import {
 } from "@/lib/switcher";
 
 const EMPTY_ENTRIES: SwitcherEntries = { spaces: [], channels: [] };
+/** Keep a blank launcher cheap; searching mounts every row so every name can match. */
+const EAGER_DM_RESULTS = 12;
+const DM_RESULT_HEIGHT = 52;
 
 /**
  * Which result categories the palette shows. `all` shows everything; the rest
@@ -87,15 +99,56 @@ function MessageResult({ message, onSelect }: { message: MessageEntry; onSelect:
         <span className="truncate text-xs text-muted-foreground">
           <DisplayName pubkey={message.authorPubkey} name={name} />
           {" · "}
-          {message.peerPubkey ? (
+          {message.dmPeers ? (
             <>
-              Direct message · <DisplayName pubkey={message.peerPubkey} />
+              Direct message · <DmMessageSource peers={message.dmPeers} />
             </>
           ) : (
             message.source
           )}
           {" · "}
           {shortTimeAgo(message.createdAt)}
+        </span>
+      </div>
+    </CommandItem>
+  );
+}
+
+/** The canonical 1:1/group title under a DM message-search hit. */
+function DmMessageSource({ peers }: { peers: readonly string[] }) {
+  const { user } = useCurrentUser();
+  const { name } = useDmConversationName(peers, user?.pubkey);
+  return <>{name}</>;
+}
+
+/** One existing DM conversation, searchable by every participant alias. */
+function DmResult({
+  conversation,
+  self,
+  onSelect,
+}: {
+  conversation: DmSwitcherEntry;
+  self: string | undefined;
+  onSelect: () => void;
+}) {
+  const { name, searchText } = useDmConversationName(conversation.peers, self);
+  return (
+    <CommandItem
+      value={`${name} ${searchText} ${conversation.key}`}
+      onSelect={onSelect}
+    >
+      <DmAvatar
+        peers={conversation.peers}
+        selfPubkey={self}
+        sizePx={28}
+        className="mr-2 size-7"
+      />
+      <div className="flex min-w-0 flex-col">
+        <span className="truncate">{name}</span>
+        <span className="truncate text-xs text-muted-foreground">
+          {conversation.peers.length > 1
+            ? `${conversation.peers.length} people`
+            : "Direct message"}
         </span>
       </div>
     </CommandItem>
@@ -123,6 +176,34 @@ export function QuickSwitcher() {
 
   const liveServers = useNip29Servers();
   const communities = useLiveCommunities();
+  // The launcher is globally mounted, so NIP-17 stays non-interactive here:
+  // opening Ctrl+K must never summon a signer/decrypt-consent prompt. These
+  // query keys are already kept warm by the persistent rail/share shortcuts.
+  const { conversations: legacyDms, isLoading: legacyDmsLoading } = useDMConversations();
+  const { conversations: dm17Dms, isLoading: dm17DmsLoading } = useDm17Conversations();
+  const { isKnown, isLoading: dmTrustLoading } = useKnownDmPeers();
+  const { reopen: reopenDm } = useClosedDms();
+  const dmEntriesLoading =
+    Boolean(user) && (legacyDmsLoading || dm17DmsLoading || dmTrustLoading);
+
+  const dmEntries = useMemo(() => {
+    if (!user || dmEntriesLoading) return [];
+    return buildDmSwitcherEntries(legacyDms, dm17Dms, {
+      self: user.pubkey,
+      pinned: config.pinnedDms,
+      started: config.startedDms,
+      isKnown,
+    });
+  }, [
+    user,
+    legacyDms,
+    dm17Dms,
+    config.pinnedDms,
+    config.startedDms,
+    dmEntriesLoading,
+    isKnown,
+  ]);
+  const allowedDmKeys = useMemo(() => new Set(dmEntries.map((entry) => entry.key)), [dmEntries]);
 
   // Rail-ordered keys across both transports: the same construction the
   // ServerRail uses (NIP-29 relay URLs + `c2:<id>` community keys, arranged by
@@ -190,20 +271,24 @@ export function QuickSwitcher() {
     setSearching(true);
     let live = true;
     const handle = setTimeout(() => {
-      void searchSwitcherMessages(needle, entries.channels, ctx, { scope: searchScope }).then(
-        (m) => {
-          if (live) {
-            setMessages(m);
-            setSearching(false);
-          }
-        },
-      );
+      void searchSwitcherMessages(needle, entries.channels, ctx, {
+        scope: searchScope,
+        // Raw DM history also contains request-tier conversations. Filter them
+        // inside the search layer before its per-corpus and merged result caps,
+        // so scanned request hits cannot crowd a legitimate hit out of them.
+        allowedDmConversationKeys: allowedDmKeys,
+      }).then((m) => {
+        if (live) {
+          setMessages(m);
+          setSearching(false);
+        }
+      });
     }, 150);
     return () => {
       live = false;
       clearTimeout(handle);
     };
-  }, [open, query, scope, entries.channels, ctx]);
+  }, [open, query, scope, entries.channels, ctx, allowedDmKeys]);
 
   const go = (to: string) => {
     setOpen(false);
@@ -262,12 +347,46 @@ export function QuickSwitcher() {
       <CommandList>
         {/* While a message search is in flight, hold the empty state back (an
             in-flight search isn't "no results") and show a spinner instead. */}
-        {!searching && <CommandEmpty>No results found.</CommandEmpty>}
+        {!searching && !(dmEntriesLoading && (scope === "all" || scope === "dms")) && (
+          <CommandEmpty>No results found.</CommandEmpty>
+        )}
+        {dmEntriesLoading && (scope === "all" || scope === "dms") && (
+          <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" />
+            Loading direct messages…
+          </div>
+        )}
         {searching && messages.length === 0 && (
           <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
             Searching messages…
           </div>
+        )}
+        {(scope === "all" || scope === "dms") && dmEntries.length > 0 && (
+          <CommandGroup heading="Direct messages">
+            {dmEntries.map((conversation, index) => (
+              <DeferredRow
+                // A search intentionally mounts every name resolver. Reset the
+                // latch when it clears so the blank launcher returns to its
+                // cheap viewport-sized window instead of loading every avatar.
+                key={`${conversation.key}:${query.trim() ? "search" : "idle"}`}
+                active={!query.trim() && index >= EAGER_DM_RESULTS}
+                minHeight={DM_RESULT_HEIGHT}
+              >
+                <DmResult
+                  conversation={conversation}
+                  self={user?.pubkey}
+                  onSelect={() => {
+                    // Choosing a previously closed conversation is an explicit
+                    // reopen; otherwise it would vanish again after navigating
+                    // away from the focused thread.
+                    reopenDm(conversation.key);
+                    go(conversation.route);
+                  }}
+                />
+              </DeferredRow>
+            ))}
+          </CommandGroup>
         )}
         {(scope === "all" || scope === "channels") && entries.channels.length > 0 && (
           <CommandGroup heading="Channels">
@@ -285,9 +404,16 @@ export function QuickSwitcher() {
           </CommandGroup>
         )}
         {messages.length > 0 && (
-          <CommandGroup heading={scope === "dms" ? "Direct messages" : "Messages"}>
+          <CommandGroup heading={scope === "dms" ? "DM messages" : "Messages"}>
             {messages.map((m) => (
-              <MessageResult key={m.key} message={m} onSelect={() => go(m.route)} />
+              <MessageResult
+                key={m.key}
+                message={m}
+                onSelect={() => {
+                  if (m.dmConversationKey) reopenDm(m.dmConversationKey);
+                  go(m.route);
+                }}
+              />
             ))}
           </CommandGroup>
         )}

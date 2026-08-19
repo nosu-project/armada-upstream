@@ -22,7 +22,7 @@ import { readControlFold } from "@/concord/lib/control";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { dmRouteParam } from "@/lib/dmConversation";
 import { searchDm17Rumors } from "@/lib/nip17/dm17Store";
-import { dmConvKey } from "@/lib/nip17/protocol";
+import { dmConvKey, dmConvPeers } from "@/lib/nip17/protocol";
 import { relayToRouteParam, routeParamToRelay } from "@/lib/platform";
 import { chatRoute, parseChatRoute } from "@/lib/routes";
 
@@ -67,6 +67,35 @@ export interface ChannelEntry {
 export interface SwitcherEntries {
   spaces: SpaceEntry[];
   channels: ChannelEntry[];
+}
+
+/** One existing DM conversation exposed as a launcher destination. */
+export interface DmSwitcherEntry {
+  /** Canonical participant-set key (`<peer>` for a 1:1, comma-joined for a group). */
+  key: string;
+  /** Everyone in the conversation except the viewer (`[self]` for Note to Self). */
+  peers: string[];
+  /** Canonical `/dm/<npub>[,<npub>...]` route. */
+  route: string;
+  /** Newest message time, or zero for a deliberately seeded empty conversation. */
+  createdAt: number;
+  /** Whether the viewer has authored a message in either DM transport. */
+  mine: boolean;
+}
+
+/** The legacy kind-4 shape consumed by {@link buildDmSwitcherEntries}. */
+export interface LegacyDmSwitcherSource {
+  peer: string;
+  latest: { id?: string; created_at: number };
+  mine: boolean;
+}
+
+/** The NIP-17 shape consumed by {@link buildDmSwitcherEntries}. */
+export interface Dm17SwitcherSource {
+  key: string;
+  peers: string[];
+  latest: { rumorId: string; createdAt: number };
+  mine: boolean;
 }
 
 /** Ambient reads a transport needs; both come straight from hooks in the view. */
@@ -237,6 +266,114 @@ export async function buildSwitcherEntries(
 }
 
 /**
+ * Merge the two DM transports into the conversation destinations shown by the
+ * launcher.
+ *
+ * This mirrors the DMs page's identity rules: a legacy kind-4 row and a
+ * NIP-17 1:1 with the same person are ONE conversation, `mine` is sticky
+ * across transports, and the newest message decides its recency. NIP-17 group
+ * keys remain participant sets and therefore never collapse into a 1:1.
+ *
+ * `isKnown` keeps request-tier strangers out of a global launcher. A missing
+ * started conversation and Note to Self are retained without a message,
+ * because they are deliberate destinations rather than requests. Pins only
+ * order rows that still exist: synthesizing one from stale synced settings
+ * would resurrect a muted or long-removed conversation.
+ */
+export function buildDmSwitcherEntries(
+  legacy: readonly LegacyDmSwitcherSource[],
+  nip17: readonly Dm17SwitcherSource[],
+  opts: {
+    self?: string;
+    pinned?: readonly string[];
+    started?: readonly string[];
+    isKnown?: (peer: string, mine: boolean) => boolean;
+  } = {},
+): DmSwitcherEntry[] {
+  type Pending = Omit<DmSwitcherEntry, "route">;
+  const byKey = new Map<string, Pending>();
+
+  for (const row of legacy) {
+    const current = byKey.get(row.peer);
+    if (!current) {
+      byKey.set(row.peer, {
+        key: row.peer,
+        peers: [row.peer],
+        createdAt: row.latest.created_at,
+        mine: row.mine,
+      });
+      continue;
+    }
+    current.mine ||= row.mine;
+    if (row.latest.created_at > current.createdAt) {
+      current.createdAt = row.latest.created_at;
+      current.peers = [row.peer];
+    }
+  }
+
+  for (const row of nip17) {
+    const current = byKey.get(row.key);
+    if (!current) {
+      byKey.set(row.key, {
+        key: row.key,
+        peers: row.peers.slice(),
+        createdAt: row.latest.createdAt,
+        mine: row.mine,
+      });
+      continue;
+    }
+    current.mine ||= row.mine;
+    // Legacy wins a timestamp tie, matching the DMs page's merge. The id is
+    // irrelevant to a conversation destination; only its newest time orders it.
+    if (row.latest.createdAt > current.createdAt) {
+      current.createdAt = row.latest.createdAt;
+      current.peers = row.peers.slice();
+    }
+  }
+
+  const pinned = new Set(opts.pinned ?? []);
+  const destinations = new Set(opts.started ?? []);
+  if (opts.self) destinations.add(opts.self);
+  const synthesized = new Set<string>();
+  for (const key of destinations) {
+    if (byKey.has(key)) continue;
+    const peers = dmConvPeers(key);
+    if (peers.length === 0) continue;
+    byKey.set(key, { key, peers, createdAt: 0, mine: key === opts.self });
+    synthesized.add(key);
+  }
+
+  const out: DmSwitcherEntry[] = [];
+  for (const entry of byKey.values()) {
+    // A started marker bypasses Requests only when it is the SOLE source of
+    // the row. If real message history exists, DMsPage deliberately trust-
+    // splits that conversation as usual; an old marker must not promote it.
+    const deliberate = entry.key === opts.self || synthesized.has(entry.key);
+    if (
+      !deliberate &&
+      opts.isKnown &&
+      !entry.peers.every((peer) => opts.isKnown!(peer, entry.mine))
+    ) {
+      continue;
+    }
+    try {
+      out.push({
+        ...entry,
+        route: chatRoute({ kind: "dm", peer: dmRouteParam(entry.key) }),
+      });
+    } catch {
+      // Synced settings are user-controlled strings. A malformed stale key
+      // should cost one launcher row, never make Ctrl+K fail to open.
+    }
+  }
+
+  return out.sort((a, b) => {
+    const pinOrder = Number(pinned.has(b.key)) - Number(pinned.has(a.key));
+    return pinOrder || b.createdAt - a.createdAt || a.key.localeCompare(b.key);
+  });
+}
+
+/**
  * The route for the previous/next channel (`dir` = -1/+1, wrapping) within the
  * space of the current `pathname`, or null when the path isn't a channel view
  * or the space has no loaded channels. Shared by Alt+↑/↓.
@@ -277,7 +414,7 @@ export async function nextChannelRoute(
 /**
  * A message that matched the palette's search, resolved to its channel/DM.
  *
- * Author + DM-partner identities are carried as PUBKEYS, not resolved names:
+ * Author + DM-conversation identities are carried as PUBKEYS, not resolved names:
  * the view renders them through the shared {@link DisplayName}/`useAuthor`
  * components, so message rows get the same cached, emoji-aware, per-server
  * nicknamed identity (and network fallback) as everywhere else — no bespoke
@@ -296,12 +433,14 @@ export interface MessageEntry {
   createdAt: number;
   /**
    * Where the match lives. Channel hits carry a ready `#channel · Space` label;
-   * DM hits leave it unset and set {@link peerPubkey} so the view renders the
-   * partner's live name.
+   * DM hits leave it unset and set {@link dmPeers} so the view renders the
+   * conversation's live name.
    */
   source?: string;
-  /** DM partner pubkey (hex), when the hit is a direct message. */
-  peerPubkey?: string;
+  /** Canonical DM participant-set key, when the hit is a direct message. */
+  dmConversationKey?: string;
+  /** DM participants (hex pubkeys), when the hit is a direct message. */
+  dmPeers?: string[];
 }
 
 /**
@@ -436,22 +575,28 @@ async function searchDmMessages(
   self: string,
   query: string,
   signal?: AbortSignal,
+  allowedConversationKeys?: ReadonlySet<string>,
 ): Promise<MessageEntry[]> {
-  const hits = await searchDm17Rumors(self, query, { limit: PER_CORPUS_LIMIT, signal });
-  return hits.map((h) => ({
-    key: `msg:${h.rumorId}`,
-    content: snippet(h.content),
-    authorPubkey: h.author,
-    // The first participant stands in for the conversation's name here. A group
-    // hit is therefore labelled with one of its members rather than all of
-    // them; the route below still opens the right thread.
-    peerPubkey: h.peers[0],
-    route: focusMessageRoute(
-      chatRoute({ kind: "dm", peer: dmRouteParam(dmConvKey(h.peers)) }),
-      h.rumorId,
-    ),
-    createdAt: h.createdAt,
-  }));
+  const hits = await searchDm17Rumors(self, query, {
+    limit: PER_CORPUS_LIMIT,
+    signal,
+    allowedConversationKeys,
+  });
+  return hits.map((h) => {
+    const conversationKey = dmConvKey(h.peers);
+    return {
+      key: `msg:${h.rumorId}`,
+      content: snippet(h.content),
+      authorPubkey: h.author,
+      dmConversationKey: conversationKey,
+      dmPeers: h.peers,
+      route: focusMessageRoute(
+        chatRoute({ kind: "dm", peer: dmRouteParam(conversationKey) }),
+        h.rumorId,
+      ),
+      createdAt: h.createdAt,
+    };
+  });
 }
 
 /**
@@ -477,7 +622,13 @@ export async function searchSwitcherMessages(
   query: string,
   channels: ChannelEntry[],
   ctx: SwitcherContext,
-  opts: { limit?: number; scope?: MessageScope; signal?: AbortSignal } = {},
+  opts: {
+    limit?: number;
+    scope?: MessageScope;
+    signal?: AbortSignal;
+    /** Inbox-visible DM keys; request/muted hits are discarded before limiting. */
+    allowedDmConversationKeys?: ReadonlySet<string>;
+  } = {},
 ): Promise<MessageEntry[]> {
   const needle = query.trim().toLowerCase();
   if (!needle) return [];
@@ -495,13 +646,27 @@ export async function searchSwitcherMessages(
     else if (c.route.startsWith("/s/")) nip29ById.set(c.id, c);
   }
 
-  const groups = await Promise.all([
-    wantChannels ? searchConcordMessages(needle, concordById, opts.signal) : [],
-    wantChannels ? searchNip29Messages(needle, nip29ById, ctx.eventStore, opts.signal) : [],
-    wantDms && ctx.self ? searchDmMessages(ctx.self, query, opts.signal) : [],
-  ]);
+  const searches: [Promise<MessageEntry[]>, Promise<MessageEntry[]>, Promise<MessageEntry[]>] = [
+    wantChannels
+      ? searchConcordMessages(needle, concordById, opts.signal)
+      : Promise.resolve([]),
+    wantChannels
+      ? searchNip29Messages(needle, nip29ById, ctx.eventStore, opts.signal)
+      : Promise.resolve([]),
+    wantDms && ctx.self
+      ? searchDmMessages(ctx.self, query, opts.signal, opts.allowedDmConversationKeys)
+      : Promise.resolve([]),
+  ];
+  const [concord, nip29, dms] = await Promise.all(searches);
+  const visibleDms = opts.allowedDmConversationKeys
+    ? dms.filter(
+        (message) =>
+          !message.dmConversationKey ||
+          opts.allowedDmConversationKeys!.has(message.dmConversationKey),
+      )
+    : dms;
 
-  return groups
+  return [concord, nip29, visibleDms]
     .flat()
     .sort((a, b) => b.createdAt - a.createdAt)
     .slice(0, limit);
