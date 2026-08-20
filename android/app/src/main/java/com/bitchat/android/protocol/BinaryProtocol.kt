@@ -435,13 +435,34 @@ object BinaryProtocol {
                 val compressedPayload = ByteArray(compressedSize)
                 buffer.get(compressedPayload)
 
-                // Security check: Compression bomb protection
+                // Security check: compression bomb protection.
+                //
+                // This runs on packets from any unauthenticated radio in range,
+                // before the Noise handshake, so `originalSize` is simply an
+                // attacker-chosen Int and it is about to become
+                // `ByteArray(originalSize)` inside decompress().
+                //
+                // The absolute bound has to come first and unconditionally. The
+                // ratio check alone was skipped entirely when compressedSize was
+                // 0, which is reachable — version 2 with payloadLength == 4
+                // leaves compressedSize = 4 - 4 = 0 — so a ~27-byte packet
+                // declaring originalSize = 0x7FFFFFFF asked for a 2 GB
+                // allocation. The MAX_PAYLOAD_LENGTH check at decode() entry
+                // does not catch it either: 4 is not > 10 MiB.
+                if (originalSize < 0 || originalSize > com.bitchat.android.util.AppConstants.Protocol.MAX_PAYLOAD_LENGTH) {
+                    Log.w("BinaryProtocol", "🚫 Declared decompressed size out of range: $originalSize")
+                    return null
+                }
                 if (compressedSize > 0) {
                     val ratio = originalSize.toDouble() / compressedSize.toDouble()
                     if (ratio > 50_000.0) {
                         Log.w("BinaryProtocol", "🚫 Suspicious compression ratio: ${ratio}:1")
                         return null
                     }
+                } else if (originalSize > 0) {
+                    // Nothing to decompress from, so any claimed output is a lie.
+                    Log.w("BinaryProtocol", "🚫 Empty compressed payload claiming $originalSize bytes")
+                    return null
                 }
 
                 // Decompress
