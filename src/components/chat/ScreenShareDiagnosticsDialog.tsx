@@ -15,6 +15,7 @@ type ScreenShareVideoTrack = LocalVideoTrack | RemoteVideoTrack;
 
 interface ScreenShareDiagnosticsDialogProps {
   open: boolean;
+  portalContainer?: HTMLElement;
   track?: ScreenShareVideoTrack;
   encrypted?: boolean;
   participantName?: string;
@@ -42,6 +43,7 @@ function Detail({ label, value }: { label: string; value: React.ReactNode }) {
 /** Live WebRTC measurements available to both the presenter and every viewer. */
 export function ScreenShareDiagnosticsDialog({
   open,
+  portalContainer,
   track,
   encrypted,
   participantName,
@@ -82,7 +84,7 @@ export function ScreenShareDiagnosticsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChromeDialogContent title="Stream details">
+      <ChromeDialogContent title="Stream details" portalContainer={portalContainer}>
         <div className="flex flex-col items-center gap-2 text-center">
           <div className="flex size-12 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
             <Activity className="size-6" />

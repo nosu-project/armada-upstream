@@ -7,6 +7,7 @@ import {
 } from "@livekit/components-react";
 import type { TrackReference } from "@livekit/components-react";
 import type { NostrMetadata } from "@nostrify/nostrify";
+import { Capacitor } from "@capacitor/core";
 import type { Participant, RemoteParticipant } from "livekit-client";
 import { Track } from "livekit-client";
 import {
@@ -64,6 +65,7 @@ import {
 import { cn } from "@/lib/utils";
 import { isHevcScreenShareParticipant } from "@/lib/hevcScreenShare";
 import type { DesktopHevcScreenShareStatus } from "@/lib/desktop";
+import { PortalContainerProvider, usePortalContainer } from "@/hooks/usePortalContainer";
 
 // Back-compat re-export: the slot moved to its own (LiveKit-free) module so
 // pages can render it without pulling the voice stack into their chunks.
@@ -148,6 +150,114 @@ function participantTileKey(participant: Participant): string {
 }
 
 const LOCAL_HEVC_SCREEN_SHARE_KEY = "local:hevc-screen-share";
+
+/** Fullscreen controls disappear after this much input inactivity. */
+const FULLSCREEN_CONTROLS_IDLE_MS = 3_000;
+
+/**
+ * Android WebView advertises parts of the Fullscreen API without supporting a
+ * reliable arbitrary-element fullscreen experience. Its native call surface
+ * already owns fullscreen, so don't expose a button that can strand the UI.
+ */
+function supportsElementFullscreen(): boolean {
+  if (typeof document === "undefined" || typeof HTMLElement === "undefined") return false;
+  if (Capacitor.getPlatform() === "android") return false;
+  return document.fullscreenEnabled !== false &&
+    typeof HTMLElement.prototype.requestFullscreen === "function";
+}
+
+/**
+ * Reveal fullscreen chrome on input, then hide it after a quiet interval.
+ * Pointer interaction, a hovered toolbar, a keyboard-visible focus ring, and
+ * any open surface portaled into the fullscreen tile keep it visible. Checking
+ * the DOM at timeout time is important: a mouse click may leave focus on a
+ * button, but unlike keyboard `:focus-visible` that must not pin the bar.
+ */
+function useFullscreenControlsAutoHide(
+  tile: HTMLElement | null,
+  active: boolean,
+  setVisible: React.Dispatch<React.SetStateAction<boolean>>,
+) {
+  useEffect(() => {
+    if (!active || !tile) {
+      setVisible(false);
+      return;
+    }
+
+    let timer: number | null = null;
+    let pointerInteracting = false;
+    const controlsSelector = "[data-fullscreen-controls]";
+    const openSurfaceSelector = [
+      '[role="dialog"][data-state="open"]',
+      '[role="menu"][data-state="open"]',
+      '[role="listbox"][data-state="open"]',
+    ].join(",");
+
+    const clearTimer = () => {
+      if (timer === null) return;
+      window.clearTimeout(timer);
+      timer = null;
+    };
+    const shouldRemainVisible = () => {
+      const controls = tile.querySelector<HTMLElement>(controlsSelector);
+      return pointerInteracting ||
+        Boolean(controls?.matches(":hover")) ||
+        Boolean(controls?.querySelector(":focus-visible")) ||
+        Boolean(tile.querySelector(openSurfaceSelector));
+    };
+    const scheduleHide = () => {
+      clearTimer();
+      timer = window.setTimeout(() => {
+        timer = null;
+        if (shouldRemainVisible()) {
+          scheduleHide();
+        } else {
+          setVisible(false);
+        }
+      }, FULLSCREEN_CONTROLS_IDLE_MS);
+    };
+    const reveal = () => {
+      setVisible(true);
+      scheduleHide();
+    };
+    const beginPointerInteraction = () => {
+      pointerInteracting = true;
+      reveal();
+    };
+    const endPointerInteraction = () => {
+      if (!pointerInteracting) return;
+      pointerInteracting = false;
+      reveal();
+    };
+
+    // The controls mount hidden so this post-mount update also gives their
+    // opacity/translate transition a real visible entrance.
+    reveal();
+    tile.addEventListener("pointermove", reveal, { passive: true });
+    tile.addEventListener("pointerdown", beginPointerInteraction, { passive: true });
+    tile.addEventListener("touchstart", beginPointerInteraction, { passive: true });
+    tile.addEventListener("focusin", reveal);
+    tile.addEventListener("focusout", reveal);
+    document.addEventListener("keydown", reveal);
+    document.addEventListener("pointerup", endPointerInteraction, { passive: true });
+    document.addEventListener("pointercancel", endPointerInteraction, { passive: true });
+    document.addEventListener("touchend", endPointerInteraction, { passive: true });
+    document.addEventListener("touchcancel", endPointerInteraction, { passive: true });
+    return () => {
+      clearTimer();
+      tile.removeEventListener("pointermove", reveal);
+      tile.removeEventListener("pointerdown", beginPointerInteraction);
+      tile.removeEventListener("touchstart", beginPointerInteraction);
+      tile.removeEventListener("focusin", reveal);
+      tile.removeEventListener("focusout", reveal);
+      document.removeEventListener("keydown", reveal);
+      document.removeEventListener("pointerup", endPointerInteraction);
+      document.removeEventListener("pointercancel", endPointerInteraction);
+      document.removeEventListener("touchend", endPointerInteraction);
+      document.removeEventListener("touchcancel", endPointerInteraction);
+    };
+  }, [active, setVisible, tile]);
+}
 
 function participantIdentityKey(
   identity: string,
@@ -313,6 +423,7 @@ function VolumeMenu({
   displayName,
   verified,
   target = "user",
+  nameplateClassName,
   children,
 }: {
   pubkey: string;
@@ -320,6 +431,7 @@ function VolumeMenu({
   /** Whether `pubkey` is a verified claim — see {@link VoiceUserContextMenu}. */
   verified: boolean;
   target?: PlaybackVolumeTarget;
+  nameplateClassName?: string;
   children: React.ReactNode;
 }) {
   const [userVolume, setUserVolume] = useUserVolume(pubkey);
@@ -335,7 +447,11 @@ function VolumeMenu({
           aria-label={target === "screenShare"
             ? `Screen share volume for ${displayName}`
             : `Volume for ${displayName}`}
-          className={cn(nameplateClass, "cursor-pointer hover:bg-black/80")}
+          className={cn(
+            nameplateClass,
+            "cursor-pointer transition-[bottom] hover:bg-black/80",
+            nameplateClassName,
+          )}
         >
           {children}
         </button>
@@ -562,7 +678,17 @@ function VideoTile({
   const { enabled: endToEndEncrypted } = useCallSignals();
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(false);
   const tileRef = useRef<HTMLDivElement>(null);
+  const inheritedPortalContainer = usePortalContainer();
+  const fullscreenAvailable = isScreenShare && supportsElementFullscreen();
+  useFullscreenControlsAutoHide(tileRef.current, fullscreen, setFullscreenControlsVisible);
+  const portalContainer = fullscreen
+    ? tileRef.current ?? inheritedPortalContainer
+    : inheritedPortalContainer;
+  const fullscreenNameplateClass = fullscreen && fullscreenControlsVisible
+    ? "bottom-[calc(4rem+var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))]"
+    : undefined;
   // Show the avatar (not a black frame) unless there's a LIVE video track:
   // a placeholder (track not subscribed yet) OR a muted publication — turning
   // the camera/screen off mutes the track before its publication clears, and
@@ -582,7 +708,7 @@ function VideoTile({
   }, [isScreenShare]);
 
   const toggleFullscreen = () => {
-    if (!tileRef.current) return;
+    if (!tileRef.current || !fullscreenAvailable) return;
     if (document.fullscreenElement === tileRef.current) {
       void document.exitFullscreen().catch((error) =>
         console.warn("failed to exit screen-share fullscreen", error)
@@ -595,14 +721,6 @@ function VideoTile({
   };
 
   const openDetails = () => {
-    // A dialog portaled to <body> is outside the browser's fullscreen subtree.
-    // Leave fullscreen first so its live measurements are actually visible.
-    if (document.fullscreenElement === tileRef.current) {
-      void document.exitFullscreen()
-        .then(() => setDetailsOpen(true))
-        .catch((error) => console.warn("failed to leave fullscreen for stream details", error));
-      return;
-    }
     setDetailsOpen(true);
   };
 
@@ -667,15 +785,17 @@ function VideoTile({
           >
             <Info className="size-3.5" />
           </button>
-          <button
-            type="button"
-            aria-label={fullscreen ? "Exit fullscreen" : "View stream fullscreen"}
-            title={fullscreen ? "Exit fullscreen" : "View stream fullscreen"}
-            onClick={toggleFullscreen}
-            className="absolute top-1.5 right-10 rounded-md bg-black/60 p-1 text-white/90 opacity-0 transition-opacity hover:bg-black/80 hover:text-white group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
-          >
-            {fullscreen ? <Shrink className="size-3.5" /> : <Fullscreen className="size-3.5" />}
-          </button>
+          {fullscreenAvailable && (
+            <button
+              type="button"
+              aria-label={fullscreen ? "Exit fullscreen" : "View stream fullscreen"}
+              title={fullscreen ? "Exit fullscreen" : "View stream fullscreen"}
+              onClick={toggleFullscreen}
+              className="absolute top-1.5 right-10 rounded-md bg-black/60 p-1 text-white/90 opacity-0 transition-opacity hover:bg-black/80 hover:text-white group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+            >
+              {fullscreen ? <Shrink className="size-3.5" /> : <Fullscreen className="size-3.5" />}
+            </button>
+          )}
         </>
       )}
       <FocusButton focused={focused} onClick={onToggleFocus} />
@@ -687,11 +807,36 @@ function VideoTile({
           displayName={displayName}
           verified={verified}
           target={volumeTarget}
+          nameplateClassName={fullscreenNameplateClass}
         >
           {nameplate}
         </VolumeMenu>
       ) : (
-        <div className={nameplateClass}>{nameplate}</div>
+        <div
+          className={cn(
+            nameplateClass,
+            "transition-[bottom]",
+            fullscreenNameplateClass,
+          )}
+        >
+          {nameplate}
+        </div>
+      )}
+      {fullscreen && (
+        <div
+          data-fullscreen-controls=""
+          className={cn(
+            "absolute inset-x-0 bottom-0 z-40 transition-[opacity,transform] duration-200",
+            fullscreenControlsVisible
+              ? "translate-y-0 opacity-100"
+              : "pointer-events-none translate-y-2 opacity-0",
+          )}
+        >
+          <StageControls
+            portalContainer={portalContainer}
+            className="bg-background/90 pb-[max(0.375rem,var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))] text-foreground shadow-[0_-8px_24px_rgba(0,0,0,0.35)] backdrop-blur-md"
+          />
+        </div>
       )}
     </div>
   );
@@ -710,18 +855,19 @@ function VideoTile({
   );
 
   return (
-    <>
+    <PortalContainerProvider value={portalContainer}>
       {decoratedTile}
       {isScreenShare && (
         <ScreenShareDiagnosticsDialog
           open={detailsOpen}
+          portalContainer={portalContainer}
           track={trackRef.publication?.videoTrack}
           encrypted={endToEndEncrypted}
           participantName={displayName}
           onOpenChange={setDetailsOpen}
         />
       )}
-    </>
+    </PortalContainerProvider>
   );
 }
 
@@ -743,6 +889,16 @@ function LocalHevcScreenShareTile({
   const tileRef = useRef<HTMLDivElement>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(false);
+  const inheritedPortalContainer = usePortalContainer();
+  const fullscreenAvailable = supportsElementFullscreen();
+  useFullscreenControlsAutoHide(tileRef.current, fullscreen, setFullscreenControlsVisible);
+  const portalContainer = fullscreen
+    ? tileRef.current ?? inheritedPortalContainer
+    : inheritedPortalContainer;
+  const fullscreenNameplateClass = fullscreen && fullscreenControlsVisible
+    ? "bottom-[calc(4rem+var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))]"
+    : undefined;
 
   useEffect(() => {
     const video = videoRef.current;
@@ -763,17 +919,11 @@ function LocalHevcScreenShareTile({
   }, []);
 
   const openDetails = () => {
-    if (document.fullscreenElement === tileRef.current) {
-      void document.exitFullscreen()
-        .then(() => setDetailsOpen(true))
-        .catch((error) => console.warn("failed to leave fullscreen for stream details", error));
-      return;
-    }
     setDetailsOpen(true);
   };
 
   const toggleFullscreen = () => {
-    if (!tileRef.current) return;
+    if (!tileRef.current || !fullscreenAvailable) return;
     if (document.fullscreenElement === tileRef.current) {
       void document.exitFullscreen().catch((error) =>
         console.warn("failed to exit screen-share fullscreen", error),
@@ -786,7 +936,7 @@ function LocalHevcScreenShareTile({
   };
 
   return (
-    <>
+    <PortalContainerProvider value={portalContainer}>
       <div
         ref={tileRef}
         className="group relative flex h-full w-full items-center justify-center overflow-hidden rounded-lg bg-black ring-1 ring-white/10 fullscreen:rounded-none fullscreen:ring-0"
@@ -801,29 +951,54 @@ function LocalHevcScreenShareTile({
         >
           <Info className="size-3.5" />
         </button>
-        <button
-          type="button"
-          aria-label={fullscreen ? "Exit fullscreen" : "View stream fullscreen"}
-          title={fullscreen ? "Exit fullscreen" : "View stream fullscreen"}
-          onClick={toggleFullscreen}
-          className="absolute top-1.5 right-10 rounded-md bg-black/60 p-1 text-white/90 opacity-0 transition-opacity hover:bg-black/80 hover:text-white group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
-        >
-          {fullscreen ? <Shrink className="size-3.5" /> : <Fullscreen className="size-3.5" />}
-        </button>
+        {fullscreenAvailable && (
+          <button
+            type="button"
+            aria-label={fullscreen ? "Exit fullscreen" : "View stream fullscreen"}
+            title={fullscreen ? "Exit fullscreen" : "View stream fullscreen"}
+            onClick={toggleFullscreen}
+            className="absolute top-1.5 right-10 rounded-md bg-black/60 p-1 text-white/90 opacity-0 transition-opacity hover:bg-black/80 hover:text-white group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+          >
+            {fullscreen ? <Shrink className="size-3.5" /> : <Fullscreen className="size-3.5" />}
+          </button>
+        )}
         <FocusButton focused={focused} onClick={onToggleFocus} />
-        <div className={nameplateClass}>
+        <div
+          className={cn(
+            nameplateClass,
+            "transition-[bottom]",
+            fullscreenNameplateClass,
+          )}
+        >
           <ScreenShare className="size-3 shrink-0" />
           <span className="truncate">Your screen — H.265 (you)</span>
         </div>
+        {fullscreen && (
+          <div
+            data-fullscreen-controls=""
+            className={cn(
+              "absolute inset-x-0 bottom-0 z-40 transition-[opacity,transform] duration-200",
+              fullscreenControlsVisible
+                ? "translate-y-0 opacity-100"
+                : "pointer-events-none translate-y-2 opacity-0",
+            )}
+          >
+            <StageControls
+              portalContainer={portalContainer}
+              className="bg-background/90 pb-[max(0.375rem,var(--safe-area-inset-bottom,env(safe-area-inset-bottom,0px)))] text-foreground shadow-[0_-8px_24px_rgba(0,0,0,0.35)] backdrop-blur-md"
+            />
+          </div>
+        )}
       </div>
       <ScreenShareDiagnosticsDialog
         open={detailsOpen}
+        portalContainer={portalContainer}
         encrypted={encrypted}
         participantName="your screen"
         nativeHevcStatus={status}
         onOpenChange={setDetailsOpen}
       />
-    </>
+    </PortalContainerProvider>
   );
 }
 
@@ -1030,14 +1205,24 @@ function useShareSharerLabel(participant: Participant | null): {
  * (sounds, screen-share picker/cancellation + error handling) so the two stay
  * consistent.
  */
-function StageControls({ className }: { className?: string }) {
+function StageControls({
+  className,
+  portalContainer,
+}: {
+  className?: string;
+  portalContainer?: HTMLElement;
+}) {
   return (
     <div className={cn("flex items-center justify-center gap-1.5 px-2 py-1.5 shrink-0 border-t border-white/10", className)}>
       <MicButton />
       <CameraButton />
-      <ScreenShareButton />
+      <ScreenShareButton
+        portalContainer={portalContainer}
+      />
       <RaiseHandButton />
-      <ReactionsMenu />
+      <ReactionsMenu
+        portalContainer={portalContainer}
+      />
       <LeaveButton />
     </div>
   );

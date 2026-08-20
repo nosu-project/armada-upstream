@@ -26,6 +26,27 @@ describe("ScreenShareQualityDialog", () => {
     expect(document.querySelector(".chrome-dialog-title")?.textContent).toBe("screen share quality");
   });
 
+  it("keeps its dialog and select list inside a supplied portal container", () => {
+    const portalContainer = document.createElement("div");
+    document.body.appendChild(portalContainer);
+    const { unmount } = render(
+      <ScreenShareQualityDialog
+        open
+        portalContainer={portalContainer}
+        active={false}
+        onOpenChange={vi.fn()}
+        onConfirm={vi.fn()}
+      />,
+    );
+
+    expect(portalContainer).toContainElement(screen.getByRole("dialog"));
+    fireEvent.click(screen.getByRole("combobox", { name: "Resolution" }));
+    expect(portalContainer).toContainElement(screen.getByRole("listbox"));
+
+    unmount();
+    portalContainer.remove();
+  });
+
   it("submits a custom bitrate for an active share", () => {
     const onConfirm = vi.fn();
     render(
