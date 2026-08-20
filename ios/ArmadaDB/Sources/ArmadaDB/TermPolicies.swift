@@ -37,7 +37,11 @@ public enum TermPolicies {
     ///      `convmine:<peers>` (the same, authored by the viewer), which is what
     ///      makes the conversation list a collapse over an index rather than a
     ///      sample of the newest rumors.
-    public static let generation: Int64 = 2
+    ///   3  a `p` value that is not a 64-char lowercase-hex pubkey no longer
+    ///      names a participant, so the fixed width the terms are concatenated
+    ///      on holds. Rows filed under a term derived from one are re-derived
+    ///      by the rebuild.
+    public static let generation: Int64 = 3
 
     /// The derived terms of a rumor stored in `tenantId`, or empty when that
     /// tenant derives none — which is most of them, and means a term read
@@ -81,19 +85,54 @@ public enum Dm17Conversation {
         return rest.isEmpty ? nil : rest
     }
 
+    /// Whether a string is a bare 32-byte pubkey in lowercase hex — the port of
+    /// `isPubkey` in `src/lib/nip17/conversation.ts`.
+    ///
+    /// A `p` VALUE is whatever the sender typed, and everything downstream of a
+    /// participant set assumes a pubkey: `term(_:namespace:)` joins
+    /// participants with NOTHING (fixed width is what makes that unambiguous),
+    /// a conversation key joins them with a separator a value could otherwise
+    /// contain, and the key becomes a URL path. So a value that is not a pubkey
+    /// is not a participant, and is dropped where the set is built rather than
+    /// checked again by each thing that consumes it.
+    ///
+    /// Compared over UTF-8 bytes rather than Characters: a `p` value is
+    /// arbitrary text, and Swift's `Character` is a grapheme cluster, so a
+    /// combining mark could otherwise make a 64-element string of something
+    /// that is not 64 hex digits.
+    public static func isPubkey(_ value: String) -> Bool {
+        let bytes = value.utf8
+        guard bytes.count == 64 else { return false }
+        for b in bytes {
+            let hex = (b >= 0x30 && b <= 0x39) || (b >= 0x61 && b <= 0x66)
+            if !hex { return false }
+        }
+        return true
+    }
+
     /// The participants of a rumor's conversation, from `selfPubkey`'s
     /// perspective: everyone involved except the viewer, sorted. `[self]` for
     /// Note to Self. Nil when unattributable — an own copy with no `p` tag names
     /// no room, and callers drop it rather than guess.
+    ///
+    /// A `p` value that is not a pubkey is ignored (see `isPubkey`); a rumor
+    /// left with no participants by that is unattributable like any other.
     public static func peers(of rumor: Rumor, self selfPubkey: String) -> [String]? {
         var recipients: Set<String> = []
         for tag in rumor.tags where tag.count >= 2 {
-            if tag[0] == "p", let value = tag[1], !value.isEmpty { recipients.insert(value) }
+            if tag[0] == "p", let value = tag[1], !value.isEmpty, isPubkey(value) {
+                recipients.insert(value)
+            }
         }
 
         if rumor.pubkey != selfPubkey {
             // Received: the sender is a participant whether or not they p-tagged
-            // themselves, and we are not one of our own peers.
+            // themselves, and we are not one of our own peers. The author is
+            // held to the same shape as a `p` value, so EVERY element of the
+            // result is a pubkey — the property the term, the key and the route
+            // all rest on. In practice it always is: a rumor reaches the store
+            // only from a seal whose signature was verified.
+            guard isPubkey(rumor.pubkey) else { return nil }
             var others = recipients
             others.insert(rumor.pubkey)
             others.remove(selfPubkey)

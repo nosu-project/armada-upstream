@@ -39,8 +39,12 @@ internal object TermPolicies {
      *      `convmine:<peers>` (the same, authored by the viewer), which is what
      *      makes the conversation list a collapse over an index rather than a
      *      sample of the newest rumors.
+     *   3  a `p` value that is not a 64-char lowercase-hex pubkey no longer
+     *      names a participant, so the fixed width the terms are concatenated
+     *      on holds. Rows filed under a term derived from one are re-derived
+     *      by the rebuild.
      */
-    const val GENERATION = 2L
+    const val GENERATION = 3L
 
     /**
      * The derived terms of a rumor stored in [tenantId], or empty when that

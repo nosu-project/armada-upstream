@@ -501,6 +501,41 @@ describe("group conversations", () => {
     expect(dmPeersOf({ pubkey: self, tags: [["e", "x"]] }, self)).toBeUndefined();
   });
 
+  // A `p` value is whatever the sender typed. Everything downstream assumes a
+  // pubkey: the terms concatenate participants with nothing, the key joins them
+  // with `,`, and the key becomes a URL path — on Android the deep link a
+  // notification tap follows, where a `?` in a participant hands the router a
+  // query string of the sender's choosing.
+  it("ignores a `p` value that is not a pubkey", () => {
+    const evil = "z?call=" + "f".repeat(57);
+    expect(evil).toHaveLength(64); // right length, wrong alphabet
+    expect(dmPeersOf({ pubkey: alice, tags: [["p", self], ["p", evil]] }, self)).toEqual([alice]);
+    // Uppercase hex is a different spelling of the same key and would fork the
+    // conversation in two; the wire form is lowercase.
+    expect(dmPeersOf({ pubkey: alice, tags: [["p", bob.toUpperCase()]] }, self)).toEqual([alice]);
+    // Too short, too long, and an npub.
+    for (const bad of ["ab", "a".repeat(63), "a".repeat(65), `npub1${"q".repeat(58)}`]) {
+      expect(dmPeersOf({ pubkey: alice, tags: [["p", self], ["p", bad]] }, self)).toEqual([alice]);
+    }
+  });
+
+  it("cannot be made to name a room whose key is not a list of pubkeys", () => {
+    const evil = "z?call=" + "f".repeat(57);
+    const peers = dmPeersOf({ pubkey: alice, tags: [["p", self], ["p", evil]] }, self)!;
+    const key = dmConvKey(peers);
+    expect(key).toBe(alice);
+    expect(dmConvPeers(key).every((p) => /^[0-9a-f]{64}$/.test(p))).toBe(true);
+    // A crafted value sorts after every real pubkey (`z` > `f`), so unfiltered
+    // it would sit LAST and leave a genuine pubkey where a route's first
+    // segment is read — the injection is invisible to anything checking only
+    // the leading participant.
+    expect(key).not.toContain("?");
+  });
+
+  it("drops an own copy whose only `p` values are malformed", () => {
+    expect(dmPeersOf({ pubkey: self, tags: [["p", "nonsense"]] }, self)).toBeUndefined();
+  });
+
   it("round-trips a key through its participants", () => {
     const key = dmConvKey([alice, bob]);
     expect(dmConvPeers(key)).toEqual([alice, bob]);

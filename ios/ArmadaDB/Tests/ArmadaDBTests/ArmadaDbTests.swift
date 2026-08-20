@@ -1762,7 +1762,7 @@ final class ArmadaDbTests: XCTestCase {
         // disagree would each read the other's as stale and rebuild the index on
         // every open. `TERM_GENERATION` in `src/lib/db/termPolicies.ts` and
         // `TermPolicies.GENERATION` in Kotlin are this literal.
-        XCTAssertEqual(TermPolicies.generation, 2)
+        XCTAssertEqual(TermPolicies.generation, 3)
     }
 
     // MARK: - NIP-17 conversation terms
@@ -1772,26 +1772,36 @@ final class ArmadaDbTests: XCTestCase {
     // under, and the WebView looks it up by deriving it independently — so a
     // divergence is a message received while the app was closed that the thread
     // never shows.
+    //
+    // The participants are real-shaped pubkeys rather than readable names,
+    // because their SHAPE is contract: a `p` value that is not 64-char
+    // lowercase hex names no participant, so a fixture spelled `"alice"` would
+    // exercise the rejection path in every test rather than the rule it was
+    // written for.
+
+    private var dmSelf: String { String(repeating: "5", count: 64) }
+    private var dmAlice: String { String(repeating: "a", count: 64) }
+    private var dmBob: String { String(repeating: "b", count: 64) }
 
     func testAGroupIsTheParticipantSetFromEitherDirection() throws {
-        let me = "self"
+        let me = dmSelf
         // Received: the sender joins the room whether or not they p-tagged
         // themselves, and the viewer is never their own peer.
-        let received = try rumor(id: "r", pubkey: "alice", tags: [["p", me], ["p", "bob"]])
-        XCTAssertEqual(Dm17Conversation.peers(of: received, self: me), ["alice", "bob"])
+        let received = try rumor(id: "r", pubkey: dmAlice, tags: [["p", me], ["p", dmBob]])
+        XCTAssertEqual(Dm17Conversation.peers(of: received, self: me), [dmAlice, dmBob])
 
         // Our own copy of the same room reduces to the same set, which is what
         // makes both halves of one conversation one conversation.
-        let mine = try rumor(id: "m", pubkey: me, tags: [["p", "alice"], ["p", "bob"]])
-        XCTAssertEqual(Dm17Conversation.peers(of: mine, self: me), ["alice", "bob"])
+        let mine = try rumor(id: "m", pubkey: me, tags: [["p", dmAlice], ["p", dmBob]])
+        XCTAssertEqual(Dm17Conversation.peers(of: mine, self: me), [dmAlice, dmBob])
         XCTAssertEqual(
-            Dm17Conversation.term(["alice", "bob"]),
-            Dm17Conversation.term(["bob", "alice"])
+            Dm17Conversation.term([dmAlice, dmBob]),
+            Dm17Conversation.term([dmBob, dmAlice])
         )
     }
 
     func testNoteToSelfIsItsOwnConversation() throws {
-        let me = "self"
+        let me = dmSelf
         let note = try rumor(id: "n", pubkey: me, tags: [["p", me]])
         XCTAssertEqual(Dm17Conversation.peers(of: note, self: me), [me])
     }
@@ -1799,48 +1809,87 @@ final class ArmadaDbTests: XCTestCase {
     func testAOneToOneTermIsThePeerAloneUnseparated() {
         // Pubkeys are fixed-width hex, so a set is joined with nothing — a term
         // crosses a NIP-50 search string, whose parse ends a token at
-        // whitespace.
-        XCTAssertEqual(Dm17Conversation.term(["alice"]), "conv:alice")
-        XCTAssertEqual(Dm17Conversation.term(["bob", "alice"]), "conv:alicebob")
+        // whitespace. That width is why a `p` value is checked at all.
+        XCTAssertEqual(Dm17Conversation.term([dmAlice]), "conv:\(dmAlice)")
+        XCTAssertEqual(Dm17Conversation.term([dmBob, dmAlice]), "conv:\(dmAlice)\(dmBob)")
+    }
+
+    // A `p` value is whatever the sender typed, and the shape of a participant
+    // is what every consumer of a set assumes: the term joins them with
+    // NOTHING, a conversation key joins them with `,`, and the key becomes the
+    // `/dm/` deep link a notification tap follows.
+
+    func testAPValueThatIsNotAPubkeyNamesNoParticipant() throws {
+        let me = dmSelf
+        let evil = "z?call=" + String(repeating: "f", count: 57)
+        XCTAssertEqual(evil.count, 64) // right length, wrong alphabet
+        let crafted = try rumor(id: "c", pubkey: dmAlice, tags: [["p", me], ["p", evil]])
+        XCTAssertEqual(Dm17Conversation.peers(of: crafted, self: me), [dmAlice])
+
+        // Uppercase hex is a different spelling of the same key and would fork
+        // one conversation in two; the wire form is lowercase.
+        let upper = try rumor(id: "u", pubkey: dmAlice, tags: [["p", dmBob.uppercased()]])
+        XCTAssertEqual(Dm17Conversation.peers(of: upper, self: me), [dmAlice])
+
+        for bad in ["ab", String(repeating: "a", count: 63), String(repeating: "a", count: 65)] {
+            let r = try rumor(id: "b-\(bad.count)", pubkey: dmAlice, tags: [["p", bad]])
+            XCTAssertEqual(Dm17Conversation.peers(of: r, self: me), [dmAlice])
+        }
+    }
+
+    func testIsPubkeyCountsUTF8BytesRatherThanCharacters() {
+        // A Character is a grapheme cluster, so a combining mark could make a
+        // 64-Character string of something that is not 64 hex digits.
+        XCTAssertTrue(Dm17Conversation.isPubkey(dmAlice))
+        XCTAssertFalse(Dm17Conversation.isPubkey("e\u{0301}" + String(repeating: "a", count: 63)))
+        XCTAssertFalse(Dm17Conversation.isPubkey(""))
+    }
+
+    func testAnOwnCopyWhoseOnlyPValuesAreMalformedNamesNoRoom() throws {
+        let me = dmSelf
+        let orphan = try rumor(id: "o2", pubkey: me, tags: [["p", "nonsense"]])
+        XCTAssertNil(Dm17Conversation.peers(of: orphan, self: me))
     }
 
     func testFilesARumorUnderTheConversationItsTenantNames() throws {
-        let me = "self"
+        let me = dmSelf
         let received = try rumor(
-            id: "r", pubkey: "alice", kind: 14, tags: [["p", me], ["p", "bob"]]
+            id: "r", pubkey: dmAlice, kind: 14, tags: [["p", me], ["p", dmBob]]
         )
         // Every rumor of the conversation, plus the message-only namespace the
         // conversation list collapses over.
         XCTAssertEqual(
             TermPolicies.terms(of: received, tenantId: "dm17:\(me)"),
-            ["conv:alicebob", "convmsg:alicebob"]
+            ["conv:\(dmAlice)\(dmBob)", "convmsg:\(dmAlice)\(dmBob)"]
         )
         // A tenant that derives no terms says so, rather than guessing.
         XCTAssertEqual(TermPolicies.terms(of: received, tenantId: "main"), [])
     }
 
     func testFilesTheViewersOwnMessageUnderTheMineNamespaceToo() throws {
-        let me = "self"
-        let sent = try rumor(id: "s", pubkey: me, kind: 14, tags: [["p", "alice"]])
+        let me = dmSelf
+        let sent = try rumor(id: "s", pubkey: me, kind: 14, tags: [["p", dmAlice]])
         // `convmine:` is what "conversations I have written in" is a collapse
         // over — the set that keeps a thread with someone the viewer doesn't
         // follow, and that tells the notification path they are not a stranger.
         XCTAssertEqual(
             TermPolicies.terms(of: sent, tenantId: "dm17:\(me)"),
-            ["conv:alice", "convmsg:alice", "convmine:alice"]
+            ["conv:\(dmAlice)", "convmsg:\(dmAlice)", "convmine:\(dmAlice)"]
         )
     }
 
     func testKeepsAReactionOutOfTheMessageNamespaces() throws {
-        let me = "self"
+        let me = dmSelf
         // A reaction belongs to the conversation but is not a row the list can
         // show, and `distinct:convmsg` is how it never becomes one.
-        let reaction = try rumor(id: "x", pubkey: me, kind: 7, tags: [["p", "alice"]])
-        XCTAssertEqual(TermPolicies.terms(of: reaction, tenantId: "dm17:\(me)"), ["conv:alice"])
+        let reaction = try rumor(id: "x", pubkey: me, kind: 7, tags: [["p", dmAlice]])
+        XCTAssertEqual(
+            TermPolicies.terms(of: reaction, tenantId: "dm17:\(me)"), ["conv:\(dmAlice)"]
+        )
     }
 
     func testAnUnattributableRumorIsFiledUnderNothing() throws {
-        let me = "self"
+        let me = dmSelf
         let orphan = try rumor(id: "o", pubkey: me)
         XCTAssertNil(Dm17Conversation.peers(of: orphan, self: me))
         XCTAssertEqual(TermPolicies.terms(of: orphan, tenantId: "dm17:\(me)"), [])

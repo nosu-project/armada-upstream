@@ -2588,8 +2588,18 @@ public class NotificationRelayService extends Service {
                         // A received rumor always names a room (its sender is a
                         // participant); the fallback only ensures that a
                         // derivation that somehow failed costs no notification.
+                        // ...and CHECKED rather than assumed, for the same
+                        // reason isDmConvKey already gates the reply action.
+                        // The key is built out of `p` values the sender chose,
+                        // and it decides the room key, the read marker and the
+                        // path a tap navigates to — an unchecked one splices
+                        // whatever it likes, `?` included, into "/dm/" + room,
+                        // and the router hands everything after it to
+                        // location.search. The seal author is 64-hex by
+                        // construction (its signature was verified above), so
+                        // the fallback is always a well-formed key.
                         final String convKey = ServiceStore.dm17ConvKey(userPubkey, rumor);
-                        final String room = convKey != null ? convKey : peer;
+                        final String room = convKey != null && isDmConvKey(convKey) ? convKey : peer;
                         final List<String> convPeers = ServiceStore.dm17ConvPeers(room);
                         final boolean group = convPeers.size() > 1;
                         final String preview =
@@ -2611,7 +2621,7 @@ public class NotificationRelayService extends Service {
                             // decrypt, so enqueueRoomMessage's active-room gate
                             // does it here rather than a synchronous pre-check).
                             enqueueRoomMessage(/*community=*/null, "dm:" + room, title,
-                                    appendMessageSegment("/dm/" + room, rumor.optString("id", "")),
+                                    appendMessageSegment(dmRoute(room), rumor.optString("id", "")),
                                     peer, name, picture, line, fTs, /*mention=*/false);
                         });
                     } catch (Exception ignored) {
@@ -2775,7 +2785,7 @@ public class NotificationRelayService extends Service {
             // encoded: an unescaped "&" in one would otherwise let the sender
             // append parameters of their own to the route (their own broker,
             // say) rather than only filling the one field they were given.
-            Intent answer = deepLinkIntent("/dm/" + peer + "?call=" + uriEncode(callId)
+            Intent answer = deepLinkIntent(dmRoute(peer) + "?call=" + uriEncode(callId)
                     + "&csecret=" + uriEncode(secret) + "&cbroker=" + uriEncode(broker));
             answer.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             PendingIntent answerPi = PendingIntent.getActivity(
@@ -2842,7 +2852,7 @@ public class NotificationRelayService extends Service {
         resolveAuthor(peer, relayUrl, profile -> {
             String name = displayName(profile);
             String picture = profile != null ? profile.picture : null;
-            enqueueRoomMessage(/*community=*/null, "dm:" + peer, name, "/dm/" + peer,
+            enqueueRoomMessage(/*community=*/null, "dm:" + peer, name, dmRoute(peer),
                     peer, name, picture, "Missed call", tsMs, /*mention=*/true);
         });
     }
@@ -3457,7 +3467,7 @@ public class NotificationRelayService extends Service {
                 case 4:
                     // kind-4 DMs are NIP-04 encrypted; the service has no key.
                     line = "Sent you a direct message";
-                    url = appendMessageSegment("/dm/" + author, id);
+                    url = appendMessageSegment(dmRoute(author), id);
                     break;
                 default:
                     return;
@@ -5650,6 +5660,29 @@ public class NotificationRelayService extends Service {
         if (s == null) return "";
         s = s.trim();
         return s.length() <= CONTENT_CAP ? s : s.substring(0, CONTENT_CAP) + "…";
+    }
+
+    /**
+     * The `/dm/<key>` route for a conversation key — the mirror of the `dm`
+     * case of the web client's `chatRoute` (`src/lib/routes.ts`).
+     *
+     * Each participant is encoded ON ITS OWN so the separator survives as a
+     * literal: `,` is a legal sub-delim in a path segment, and `/dm/<a>,<b>`
+     * reads as what it is rather than as `%2C`. Encoding matters because the
+     * key is derived from `p` tag values the sender chose — {@link
+     * #isDmConvKey} is what should keep a malformed one from reaching a route
+     * at all, and this is the second line: every other route builder here
+     * encodes its variable segment, and a base handed to {@link
+     * #appendFocusSegment} is not encoded by it.
+     */
+    private static String dmRoute(String convKey) {
+        StringBuilder sb = new StringBuilder("/dm/");
+        List<String> peers = ServiceStore.dm17ConvPeers(convKey);
+        for (int i = 0; i < peers.size(); i++) {
+            if (i > 0) sb.append(',');
+            sb.append(uriEncode(peers.get(i)));
+        }
+        return sb.toString();
     }
 
     /**

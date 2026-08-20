@@ -38,10 +38,28 @@ import type { NostrRumor } from "@/lib/nostrRumor";
 export const DM_PEER_SEP = ",";
 
 /**
+ * Whether a string is a bare 32-byte pubkey in lowercase hex.
+ *
+ * A `p` VALUE is whatever the sender typed, and everything downstream of a
+ * participant set assumes a pubkey: {@link dmConvTerm} joins participants with
+ * NOTHING (fixed width is what makes that unambiguous), {@link dmConvKey}
+ * joins them with a separator a value could otherwise contain, and the key
+ * becomes a URL path on every platform. So a value that is not a pubkey is not
+ * a participant, and is dropped where the set is built rather than checked
+ * again by each thing that consumes it.
+ */
+function isPubkey(value: string): boolean {
+  return /^[0-9a-f]{64}$/.test(value);
+}
+
+/**
  * The participants of a rumor's conversation, from `self`'s perspective:
  * everyone involved except the viewer, sorted. `[self]` for Note to Self.
  * Undefined when unattributable — an own copy with no `p` tag names no room,
  * exactly as before, and callers drop it rather than guess.
+ *
+ * A `p` value that is not a pubkey is ignored (see {@link isPubkey}); a rumor
+ * left with no participants by that is unattributable like any other.
  */
 export function dmPeersOf(
   rumor: { pubkey: string; tags: string[][] },
@@ -49,12 +67,17 @@ export function dmPeersOf(
 ): string[] | undefined {
   const recipients = new Set<string>();
   for (const [name, value] of rumor.tags) {
-    if (name === "p" && value) recipients.add(value);
+    if (name === "p" && value && isPubkey(value)) recipients.add(value);
   }
 
   if (rumor.pubkey !== self) {
     // Received: the sender is a participant whether or not they p-tagged
-    // themselves, and we are not one of our own peers.
+    // themselves, and we are not one of our own peers. The author is held to
+    // the same shape as a `p` value, so that EVERY element of the result is a
+    // pubkey — which is the property the term, the key and the route all rest
+    // on. In practice it always is: a rumor reaches here only from a seal
+    // whose signature was verified.
+    if (!isPubkey(rumor.pubkey)) return undefined;
     const others = new Set(recipients);
     others.add(rumor.pubkey);
     others.delete(self);

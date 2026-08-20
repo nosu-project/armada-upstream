@@ -15,21 +15,29 @@ import org.junit.Test
  * applies is a conversation the two disagree about — and two of them
  * (expiration, provenance) are the difference between a disappearing message
  * disappearing and a forged tag filing a message in someone else's thread.
+ *
+ * The participants here are real-shaped pubkeys rather than readable names,
+ * because their SHAPE is contract: a `p` value that is not 64-char lowercase
+ * hex names no participant, so a fixture spelled `"alice"` would exercise the
+ * rejection path in every test rather than the rule it was written for.
  */
 class Dm17Test {
 
-    private val self = "self-pubkey"
+    private val self = "5".repeat(64)
+    private val alice = "a".repeat(64)
+    private val bob = "b".repeat(64)
+    private val mallory = "d".repeat(64)
     private val now = 1_000_000L
 
     @Test
     fun `stores a chat rumor from a peer`() {
-        assertTrue(Dm17.storable(self, rumor(kind = 14, pubkey = "alice"), now))
+        assertTrue(Dm17.storable(self, rumor(kind = 14, pubkey = alice), now))
     }
 
     @Test
     fun `keeps every DM-plane kind`() {
         for (kind in listOf(5, 7, 14, 15, 1740)) {
-            assertTrue(Dm17.storable(self, rumor(kind = kind, pubkey = "alice"), now))
+            assertTrue(Dm17.storable(self, rumor(kind = kind, pubkey = alice), now))
         }
     }
 
@@ -37,37 +45,37 @@ class Dm17Test {
     fun `refuses a typing signal and other foreign kinds`() {
         // A typing indicator exists for seconds and must never be stored; a
         // Concord invite arrives in a DM wrap but belongs to another plane.
-        assertFalse(Dm17.storable(self, rumor(kind = 23311, pubkey = "alice"), now))
-        assertFalse(Dm17.storable(self, rumor(kind = 1059, pubkey = "alice"), now))
+        assertFalse(Dm17.storable(self, rumor(kind = 23311, pubkey = alice), now))
+        assertFalse(Dm17.storable(self, rumor(kind = 1059, pubkey = alice), now))
     }
 
     @Test
     fun `refuses a rumor whose deadline has passed`() {
-        val expired = rumor(kind = 14, pubkey = "alice", tags = listOf(listOf("expiration", "${now - 1}")))
+        val expired = rumor(kind = 14, pubkey = alice, tags = listOf(listOf("expiration", "${now - 1}")))
         assertFalse(Dm17.storable(self, expired, now))
 
-        val live = rumor(kind = 14, pubkey = "alice", tags = listOf(listOf("expiration", "${now + 1}")))
+        val live = rumor(kind = 14, pubkey = alice, tags = listOf(listOf("expiration", "${now + 1}")))
         assertTrue(Dm17.storable(self, live, now))
     }
 
     @Test
     fun `treats the deadline as reached at the deadline`() {
-        val due = rumor(kind = 14, pubkey = "alice", tags = listOf(listOf("expiration", "$now")))
+        val due = rumor(kind = 14, pubkey = alice, tags = listOf(listOf("expiration", "$now")))
         assertFalse(Dm17.storable(self, due, now))
     }
 
     @Test
     fun `ignores an unparseable expiration rather than dropping the rumor`() {
-        val nonsense = rumor(kind = 14, pubkey = "alice", tags = listOf(listOf("expiration", "soon")))
+        val nonsense = rumor(kind = 14, pubkey = alice, tags = listOf(listOf("expiration", "soon")))
         assertTrue(Dm17.storable(self, nonsense, now))
     }
 
     @Test
     fun `attributes a received rumor to its author and our own copy to its recipient`() {
-        assertEquals(listOf("alice"), Dm17.peersOf(rumor(kind = 14, pubkey = "alice"), self))
+        assertEquals(listOf(alice), Dm17.peersOf(rumor(kind = 14, pubkey = alice), self))
 
-        val mine = rumor(kind = 14, pubkey = self, tags = listOf(listOf("p", "bob")))
-        assertEquals(listOf("bob"), Dm17.peersOf(mine, self))
+        val mine = rumor(kind = 14, pubkey = self, tags = listOf(listOf("p", bob)))
+        assertEquals(listOf(bob), Dm17.peersOf(mine, self))
         assertTrue(Dm17.storable(self, mine, now))
     }
 
@@ -81,8 +89,8 @@ class Dm17Test {
     fun `a peer tag on the rumor cannot move it into another conversation`() {
         // Nothing is injected and nothing reads a `peer` tag, so spelling one
         // out is inert — the conversation comes from the author and `p` tags.
-        val forged = rumor(kind = 14, pubkey = "mallory", tags = listOf(listOf("peer", "bob")))
-        assertEquals(listOf("mallory"), Dm17.peersOf(forged, self))
+        val forged = rumor(kind = 14, pubkey = mallory, tags = listOf(listOf("peer", bob)))
+        assertEquals(listOf(mallory), Dm17.peersOf(forged, self))
     }
 
     @Test
@@ -105,20 +113,20 @@ class Dm17Test {
         // themselves, and the viewer is never their own peer.
         val received = rumor(
             kind = 14,
-            pubkey = "alice",
-            tags = listOf(listOf("p", self), listOf("p", "bob")),
+            pubkey = alice,
+            tags = listOf(listOf("p", self), listOf("p", bob)),
         )
-        assertEquals(listOf("alice", "bob"), Dm17.peersOf(received, self))
+        assertEquals(listOf(alice, bob), Dm17.peersOf(received, self))
 
         // Our own copy of the same room reduces to the same set, which is what
         // makes both halves of one conversation one conversation.
         val mine = rumor(
             kind = 14,
             pubkey = self,
-            tags = listOf(listOf("p", "alice"), listOf("p", "bob")),
+            tags = listOf(listOf("p", alice), listOf("p", bob)),
         )
-        assertEquals(listOf("alice", "bob"), Dm17.peersOf(mine, self))
-        assertEquals(Dm17.convTerm(listOf("alice", "bob")), Dm17.convTerm(listOf("bob", "alice")))
+        assertEquals(listOf(alice, bob), Dm17.peersOf(mine, self))
+        assertEquals(Dm17.convTerm(listOf(alice, bob)), Dm17.convTerm(listOf(bob, alice)))
     }
 
     @Test
@@ -128,13 +136,64 @@ class Dm17Test {
         assertTrue(Dm17.storable(self, note, now))
     }
 
+    // A `p` value is whatever the sender typed, and the shape of a participant
+    // is what every consumer of a set assumes: the term joins them with
+    // NOTHING, the key joins them with `,`, and the key becomes the `/dm/`
+    // deep link a notification tap follows.
+
+    @Test
+    fun `a p value that is not a pubkey names no participant`() {
+        val evil = "z?call=" + "f".repeat(57) // right length, wrong alphabet
+        assertEquals(64, evil.length)
+        val crafted = rumor(
+            kind = 14,
+            pubkey = alice,
+            tags = listOf(listOf("p", self), listOf("p", evil)),
+        )
+        assertEquals(listOf(alice), Dm17.peersOf(crafted, self))
+
+        // Uppercase hex is a different spelling of the same key and would fork
+        // one conversation in two; the wire form is lowercase.
+        val upper = rumor(kind = 14, pubkey = alice, tags = listOf(listOf("p", bob.uppercase())))
+        assertEquals(listOf(alice), Dm17.peersOf(upper, self))
+
+        for (bad in listOf("ab", "a".repeat(63), "a".repeat(65), "npub1" + "q".repeat(58))) {
+            val r = rumor(kind = 14, pubkey = alice, tags = listOf(listOf("p", bad)))
+            assertEquals(listOf(alice), Dm17.peersOf(r, self))
+        }
+    }
+
+    @Test
+    fun `a crafted p value cannot reach the conversation key a route is built from`() {
+        // The crafted value sorts after every real pubkey (`z` > `f`), so
+        // unfiltered it would sit LAST — leaving a genuine pubkey where the
+        // route's first segment is read, and splicing a query string into
+        // "/dm/" + key where nothing encodes it.
+        val evil = "z?call=" + "f".repeat(57)
+        val crafted = rumor(
+            kind = 14,
+            pubkey = alice,
+            tags = listOf(listOf("p", self), listOf("p", evil)),
+        )
+        val key = Dm17.convKey(Dm17.peersOf(crafted, self)!!)
+        assertEquals(alice, key)
+        assertFalse(key.contains("?"))
+        for (peer in Dm17.convPeers(key)) assertTrue(Dm17.isPubkey(peer))
+    }
+
+    @Test
+    fun `an own copy whose only p values are malformed names no room`() {
+        val orphan = rumor(kind = 14, pubkey = self, tags = listOf(listOf("p", "nonsense")))
+        assertNull(Dm17.peersOf(orphan, self))
+    }
+
     @Test
     fun `a one-to-one term is the peer alone, unseparated`() {
         // Pubkeys are fixed-width hex, so a set is joined with nothing — a term
         // crosses a NIP-50 search string, whose parse ends a token at
-        // whitespace.
-        assertEquals("conv:alice", Dm17.convTerm(listOf("alice")))
-        assertEquals("conv:alicebob", Dm17.convTerm(listOf("bob", "alice")))
+        // whitespace. That width is why a `p` value is checked at all.
+        assertEquals("conv:$alice", Dm17.convTerm(listOf(alice)))
+        assertEquals("conv:$alice$bob", Dm17.convTerm(listOf(bob, alice)))
     }
 
     @Test
@@ -143,8 +202,8 @@ class Dm17Test {
         // read marker and its `/dm/<key>` deep link are byte-identical to the
         // single-pubkey spelling that predates group DMs, so making the service
         // conversation-keyed re-files no existing thread.
-        assertEquals("alice", Dm17.convKey(listOf("alice")))
-        assertEquals(listOf("alice"), Dm17.convPeers("alice"))
+        assertEquals(alice, Dm17.convKey(listOf(alice)))
+        assertEquals(listOf(alice), Dm17.convPeers(alice))
         // Note to Self is `[self]`, and so is a key like any other.
         assertEquals(self, Dm17.convKey(listOf(self)))
     }
@@ -154,11 +213,11 @@ class Dm17Test {
         // Sorted, so the two directions of one conversation name one key —
         // and separated, unlike a term, because a key is read back apart to
         // become the `p` tags of a reply.
-        assertEquals("alice,bob", Dm17.convKey(listOf("bob", "alice")))
-        assertEquals(listOf("alice", "bob"), Dm17.convPeers("alice,bob"))
+        assertEquals("$alice,$bob", Dm17.convKey(listOf(bob, alice)))
+        assertEquals(listOf(alice, bob), Dm17.convPeers("$alice,$bob"))
         assertEquals(
-            Dm17.convKey(listOf("alice", "bob")),
-            Dm17.convKey(listOf("bob", "alice")),
+            Dm17.convKey(listOf(alice, bob)),
+            Dm17.convKey(listOf(bob, alice)),
         )
     }
 
@@ -176,23 +235,23 @@ class Dm17Test {
         // group message would land in the 1:1 thread with whoever spoke.
         val received = rumor(
             kind = 14,
-            pubkey = "alice",
-            tags = listOf(listOf("p", self), listOf("p", "bob")),
+            pubkey = alice,
+            tags = listOf(listOf("p", self), listOf("p", bob)),
         )
-        assertEquals("alice,bob", Dm17.convKey(Dm17.peersOf(received, self)!!))
+        assertEquals("$alice,$bob", Dm17.convKey(Dm17.peersOf(received, self)!!))
     }
 
     @Test
     fun `files a rumor under the conversation its tenant names`() {
         val received = rumor(
             kind = 14,
-            pubkey = "alice",
-            tags = listOf(listOf("p", self), listOf("p", "bob")),
+            pubkey = alice,
+            tags = listOf(listOf("p", self), listOf("p", bob)),
         )
         // Every rumor of the conversation, plus the message-only namespace the
         // conversation list collapses over.
         assertEquals(
-            listOf("conv:alicebob", "convmsg:alicebob"),
+            listOf("conv:$alice$bob", "convmsg:$alice$bob"),
             TermPolicies.termsOf(received, Dm17.tenant(self)),
         )
         // A tenant that derives no terms says so, rather than guessing.
@@ -201,12 +260,12 @@ class Dm17Test {
 
     @Test
     fun `files the viewer's own message under the mine namespace too`() {
-        val sent = rumor(kind = 14, pubkey = self, tags = listOf(listOf("p", "alice")))
+        val sent = rumor(kind = 14, pubkey = self, tags = listOf(listOf("p", alice)))
         // `convmine:` is what "conversations I have written in" is a collapse
         // over — the set that keeps a thread with someone the viewer doesn't
         // follow, and that tells the notification path they are not a stranger.
         assertEquals(
-            listOf("conv:alice", "convmsg:alice", "convmine:alice"),
+            listOf("conv:$alice", "convmsg:$alice", "convmine:$alice"),
             TermPolicies.termsOf(sent, Dm17.tenant(self)),
         )
     }
@@ -215,8 +274,8 @@ class Dm17Test {
     fun `keeps a reaction out of the message namespaces`() {
         // A reaction belongs to the conversation but is not a row the list can
         // show, and `distinct:convmsg` is how it never becomes one.
-        val reaction = rumor(kind = 7, pubkey = self, tags = listOf(listOf("p", "alice")))
-        assertEquals(listOf("conv:alice"), TermPolicies.termsOf(reaction, Dm17.tenant(self)))
+        val reaction = rumor(kind = 7, pubkey = self, tags = listOf(listOf("p", alice)))
+        assertEquals(listOf("conv:$alice"), TermPolicies.termsOf(reaction, Dm17.tenant(self)))
     }
 
     @Test

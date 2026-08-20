@@ -53,8 +53,11 @@ const POLICIES: ReadonlyArray<readonly [prefix: string, policy: TermPolicy]> = [
  *      `convmine:<peers>` (the same, authored by the viewer), which is what
  *      makes the conversation list a collapse over an index rather than a
  *      sample of the newest rumors.
+ *   3  a `p` value that is not a 64-char lowercase-hex pubkey no longer names
+ *      a participant, so the fixed width the terms are concatenated on holds.
+ *      Rows filed under a term derived from one are re-derived by the rebuild.
  */
-export const TERM_GENERATION = 2;
+export const TERM_GENERATION = 3;
 
 /**
  * The policy governing `tenantId`, or `undefined` when it derives no terms —

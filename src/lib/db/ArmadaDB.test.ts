@@ -462,7 +462,7 @@ describe.each(backends)("$name", ({ create }) => {
       // every open. `TermPolicies.GENERATION` (Kotlin) and
       // `TermPolicies.generation` (Swift) are this literal.
       const { TERM_GENERATION } = await import("./termPolicies");
-      expect(TERM_GENERATION).toBe(2);
+      expect(TERM_GENERATION).toBe(3);
     });
   });
 

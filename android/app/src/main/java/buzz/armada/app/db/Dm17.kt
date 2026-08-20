@@ -52,6 +52,27 @@ internal object Dm17 {
     }
 
     /**
+     * Whether a string is a bare 32-byte pubkey in lowercase hex — the port of
+     * `isPubkey` in `src/lib/nip17/conversation.ts`.
+     *
+     * A `p` VALUE is whatever the sender typed, and everything downstream of a
+     * participant set assumes a pubkey: [convTerm] joins participants with
+     * NOTHING (fixed width is what makes that unambiguous), [convKey] joins
+     * them with a separator a value could otherwise contain, and the key
+     * becomes the `/dm/` deep link a notification tap follows. So a value that
+     * is not a pubkey is not a participant, and is dropped where the set is
+     * built rather than checked again by each thing that consumes it.
+     */
+    fun isPubkey(value: String): Boolean {
+        if (value.length != 64) return false
+        for (c in value) {
+            val hex = (c in '0'..'9') || (c in 'a'..'f')
+            if (!hex) return false
+        }
+        return true
+    }
+
+    /**
      * The participants of a rumor's conversation, from `self`'s perspective:
      * everyone involved except the viewer, sorted. `[self]` for Note to Self.
      * Null when unattributable — an own copy with no `p` tag names no room, and
@@ -74,12 +95,19 @@ internal object Dm17 {
         val recipients = LinkedHashSet<String>()
         for (tag in rumor.tags) {
             val value = tag.getOrNull(1)
-            if (tag.getOrNull(0) == "p" && !value.isNullOrEmpty()) recipients.add(value)
+            if (tag.getOrNull(0) == "p" && !value.isNullOrEmpty() && isPubkey(value)) {
+                recipients.add(value)
+            }
         }
 
         if (rumor.pubkey != self) {
             // Received: the sender is a participant whether or not they p-tagged
-            // themselves, and we are not one of our own peers.
+            // themselves, and we are not one of our own peers. The author is
+            // held to the same shape as a `p` value, so EVERY element of the
+            // result is a pubkey — the property the term, the key and the route
+            // all rest on. In practice it always is: the service only gets here
+            // from a seal whose signature it verified.
+            if (!isPubkey(rumor.pubkey)) return null
             val others = LinkedHashSet(recipients)
             others.add(rumor.pubkey)
             others.remove(self)

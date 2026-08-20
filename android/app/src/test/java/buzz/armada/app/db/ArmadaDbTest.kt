@@ -1439,7 +1439,7 @@ class ArmadaDbTest {
         // disagree would each read the other's as stale and rebuild the index on
         // every open. `TERM_GENERATION` in `src/lib/db/termPolicies.ts` and
         // `TermPolicies.generation` in Swift are this literal.
-        assertEquals(2L, TermPolicies.GENERATION)
+        assertEquals(3L, TermPolicies.GENERATION)
     }
 
     private fun filters(vararg json: String): List<JSONObject> = json.map { JSONObject(it) }
