@@ -62,6 +62,7 @@ import {
   shapedAvatarSpeakingStyle,
 } from "@/lib/avatarShape";
 import { cn } from "@/lib/utils";
+import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { isHevcScreenShareParticipant } from "@/lib/hevcScreenShare";
 import type { DesktopHevcScreenShareStatus } from "@/lib/desktop";
 
@@ -365,11 +366,13 @@ function VolumeMenu({
  * When there's no picture we fall back to the plain black canvas.
  */
 function BlurredAvatarBackdrop({ picture }: { picture?: string }) {
-  if (!picture) return null;
+  // kind-0, so the same check the avatar itself gets.
+  const src = sanitizeImageSrc(picture);
+  if (!src) return null;
   return (
     <div className="absolute inset-0 overflow-hidden" aria-hidden>
       <img
-        src={picture}
+        src={src}
         alt=""
         // Scale up so the blur's soft edges never reveal the tile background,
         // then blur heavily and dim so the foreground avatar/nameplate stay legible.

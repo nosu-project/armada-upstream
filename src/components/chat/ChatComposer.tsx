@@ -76,6 +76,7 @@ import { processVideo } from "@/lib/video/processVideo";
 import { invocationTags, parseInvocation, usageLine, validateInvocation, type BotCommandEntry } from "@/lib/botCommands";
 import { executeSlashCommand, parseSlashCommand, resolveNpubArg, type SlashAction, type SlashCapability, type SlashCommand } from "@/lib/slashCommands";
 import { buildPollTags, KIND_POLL } from "@/lib/polls";
+import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 import { useAddrEvent, useEvent } from "@/hooks/useEvent";
 
@@ -1945,8 +1946,8 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                 </button>
               ) : att.isWebxdc ? (
                 <div className="size-full flex flex-col items-center justify-center gap-1 text-muted-foreground p-1">
-                  {att.icon ? (
-                    <img src={att.icon} alt="" className="size-7 rounded object-cover" />
+                  {sanitizeImageSrc(att.icon) ? (
+                    <img src={sanitizeImageSrc(att.icon)} alt="" className="size-7 rounded object-cover" />
                   ) : (
                     <Blocks className="size-5 text-primary" />
                   )}

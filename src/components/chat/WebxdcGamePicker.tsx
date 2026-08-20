@@ -5,11 +5,14 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useFollowList } from "@/hooks/useFollowList";
 import { useWebxdcApps, type WebxdcApp } from "@/hooks/useWebxdcApps";
+import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 
 /** One game row: icon + name, clickable to attach. */
 function GameRow({ app, onSelect }: { app: WebxdcApp; onSelect: (app: WebxdcApp) => void }) {
   const [iconError, setIconError] = useState(false);
+  // A published game's icon URL is chosen by whoever published it.
+  const icon = sanitizeImageSrc(app.icon);
   return (
     <button
       type="button"
@@ -17,8 +20,8 @@ function GameRow({ app, onSelect }: { app: WebxdcApp; onSelect: (app: WebxdcApp)
       className="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg text-left hover:bg-secondary/60 transition-colors"
     >
       <div className="size-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 overflow-hidden">
-        {app.icon && !iconError ? (
-          <img src={app.icon} alt="" className="size-full object-cover" onError={() => setIconError(true)} />
+        {icon && !iconError ? (
+          <img src={icon} alt="" className="size-full object-cover" onError={() => setIconError(true)} />
         ) : (
           <Blocks className="size-5 text-primary" />
         )}

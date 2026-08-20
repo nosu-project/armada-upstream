@@ -350,6 +350,19 @@ final class ArmadaPushBridge: NSObject, UNUserNotificationCenterDelegate {
         return path
     }
 
+    /// Whether a string is a router path and only a router path.
+    ///
+    /// A leading `//` (or `/\`, which URL parsers fold to the same thing) is a
+    /// PROTOCOL-RELATIVE URL rather than a path — resolved against the WebView
+    /// it names another origin. The `url` field is chosen by the push gateway,
+    /// which is content-blind but not trusted to pick where a tap lands, so the
+    /// check is here as well as in `deepLinkUrl.ts`.
+    private static func isRouterPath(_ path: String) -> Bool {
+        guard path.hasPrefix("/") else { return false }
+        let second = path.dropFirst().first
+        return second != "/" && second != "\\"
+    }
+
     /// Where a tapped notification should land in the app.
     ///
     /// The APNs transport hoists the subscription's `notification.data` keys to
@@ -359,7 +372,7 @@ final class ArmadaPushBridge: NSObject, UNUserNotificationCenterDelegate {
     /// (the gateway is content-blind and the event is not opened here), so
     /// those taps just bring the app forward.
     private static func path(from userInfo: [AnyHashable: Any]) -> String? {
-        if let url = userInfo["url"] as? String, url.hasPrefix("/") {
+        if let url = userInfo["url"] as? String, isRouterPath(url) {
             return url
         }
         if let scope = userInfo["scope"] as? String, scope == "dm" {

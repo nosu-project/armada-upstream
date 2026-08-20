@@ -28,6 +28,7 @@ import {
   type ImportPlanView,
   type ImportStatus,
 } from "@/lib/bridgeApi";
+import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 
 const STEPS = ["connect", "server", "review", "import", "done"] as const;
@@ -114,7 +115,15 @@ export function DiscordImportWizard({ onClose }: { onClose: () => void }) {
     try {
       const res = await previewImport(gid);
       if (!res.present) {
-        setInstallUrl(res.installUrl);
+        // The bot-install link is chosen by the bridge portal, not by us, so it
+        // gets the same scheme check as any other URL we did not author before
+        // it reaches an href.
+        const url = sanitizeUrl(res.installUrl);
+        if (!url) {
+          setError("The bridge returned an invalid bot-install link.");
+          return;
+        }
+        setInstallUrl(url);
         return;
       }
       setImportId(res.importId);

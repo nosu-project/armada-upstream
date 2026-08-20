@@ -55,6 +55,7 @@ import { useDragPointerDown, usePressDrag } from "@/hooks/usePressDrag";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { relayToRouteParam } from "@/lib/platform";
+import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import {
   applyDrop,
   dissolveFolder,
@@ -178,10 +179,12 @@ function ServerMiniIcon({ url }: { url: string }) {
   const { anyUnread, anyMention } = useRelayUnread(user ? url : undefined, groupIds);
   const name = info?.name || relayHost(url);
   const initial = name.trim().charAt(0).toUpperCase() || "?";
+  // A relay's NIP-11 icon is whatever that relay says it is.
+  const icon = sanitizeImageSrc(info?.icon);
   return (
     <span className="relative flex items-center justify-center overflow-hidden rounded-sm bg-secondary">
-      {info?.icon ? (
-        <img src={info.icon} alt="" draggable={false} className="size-full object-cover" />
+      {icon ? (
+        <img src={icon} alt="" draggable={false} className="size-full object-cover" />
       ) : (
         <span className="text-[9px] font-semibold leading-none text-secondary-foreground">{initial}</span>
       )}

@@ -2771,8 +2771,12 @@ public class NotificationRelayService extends Service {
             // WebView can never re-fetch it. The parameters stay inside this
             // app (an explicit, immutable PendingIntent to our own activity);
             // DmCallProvider re-verifies the secret→room binding and joins.
-            Intent answer = deepLinkIntent("/dm/" + peer + "?call=" + callId
-                    + "&csecret=" + secret + "&cbroker=" + uriEncode(broker));
+            // Every value here comes out of the peer's rumor, so each is
+            // encoded: an unescaped "&" in one would otherwise let the sender
+            // append parameters of their own to the route (their own broker,
+            // say) rather than only filling the one field they were given.
+            Intent answer = deepLinkIntent("/dm/" + peer + "?call=" + uriEncode(callId)
+                    + "&csecret=" + uriEncode(secret) + "&cbroker=" + uriEncode(broker));
             answer.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             PendingIntent answerPi = PendingIntent.getActivity(
                     this, INCOMING_CALL_NOTIF_ID, answer,

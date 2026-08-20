@@ -2,6 +2,7 @@ import * as React from "react"
 
 import { useBuzzMediaSrc } from "@/buzz/useBuzzMediaSrc"
 import { cn } from "@/lib/utils"
+import { sanitizeImageSrc } from "@/lib/sanitizeUrl"
 import { type AvatarShape, isEmoji, getAvatarMaskUrl, isValidAvatarShape } from "@/lib/avatarShape"
 
 /**
@@ -100,10 +101,16 @@ const AvatarImage = React.forwardRef<
 >(({ className, onError, src: rawSrc, ...props }, ref) => {
   const [hasError, setHasError] = React.useState(false)
   const hasSrcRef = React.useContext(AvatarHasSrcContext)
+  // Avatars are untrusted event data (a kind-0 `picture`, a relay icon, a
+  // community's decrypted blob URL), and this is the one place all of them
+  // pass through — so the scheme and local-network checks live here rather
+  // than at each of the ~20 call sites. Checked BEFORE useBuzzMediaSrc, whose
+  // own object URL is ours and must not be re-judged.
+  const src0 = sanitizeImageSrc(typeof rawSrc === "string" ? rawSrc : undefined)
   // Buzz-hosted avatars require a signed BUD-11 GET header a plain `<img src>`
   // can't send; useBuzzMediaSrc fetches them into an object URL and passes any
   // other URL straight through unchanged.
-  const { src: resolvedSrc } = useBuzzMediaSrc(typeof rawSrc === "string" ? rawSrc : undefined)
+  const { src: resolvedSrc } = useBuzzMediaSrc(src0)
   const src = upgradeToHttps(resolvedSrc)
 
   // Reset error state when src changes

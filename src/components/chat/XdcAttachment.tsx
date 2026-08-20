@@ -5,6 +5,7 @@ import { useApps } from "@/hooks/useApps";
 import { useChatScope } from "@/hooks/useChatScope";
 import { appScopeKey } from "@/contexts/AppsContext";
 import type { ImetaEntry } from "@/lib/imeta";
+import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 
 /**
  * A `.xdc` (webxdc app) attachment rendered in a chat message. Shows a launch
@@ -20,7 +21,7 @@ export function XdcAttachment({ url, imeta }: { url: string; imeta?: ImetaEntry 
   const sessionId = imeta?.webxdc;
   // A published game's icon is a plaintext URL; an encrypted attachment's thumb
   // is ciphertext (would render broken), so only show it when unencrypted.
-  const icon = imeta?.encryption ? undefined : imeta?.thumbnail;
+  const icon = imeta?.encryption ? undefined : sanitizeImageSrc(imeta?.thumbnail);
 
   const openHere = Boolean(
     activeApp &&

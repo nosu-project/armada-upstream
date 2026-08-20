@@ -22,6 +22,7 @@ import { useRelayGroups } from "@/hooks/useRelayGroups";
 import { useServerActions } from "@/hooks/useServerActions";
 import { useIsBuzzRelay } from "@/buzz/detect";
 import { relayToRouteParam, routeParamToRelay } from "@/lib/platform";
+import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { activateScope, nip29Scope } from "@/wire/activation";
 
 /**
@@ -78,7 +79,7 @@ export function ServerPage() {
           <div className="flex items-start gap-4">
             <div className="flex size-16 items-center justify-center clip-corner-lg bg-primary/10 shrink-0 overflow-hidden">
               <img
-                src={relayInfo?.icon || "/logo.svg"}
+                src={sanitizeImageSrc(relayInfo?.icon) || "/logo.svg"}
                 alt={relayInfo?.name || "Armada"}
                 className="size-16 object-cover"
               />

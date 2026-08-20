@@ -57,7 +57,7 @@ import { faviconUrl } from "@/lib/faviconUrl";
 import { loadThemeFont } from "@/lib/fontLoader";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { tryNaddrEncode, tryNpubEncode } from "@/lib/safeNip19";
-import { isLocalNetworkUrl, sanitizeUrl } from "@/lib/sanitizeUrl";
+import { isLocalNetworkUrl, sanitizeImageSrc, sanitizeUrl } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 import { writeClipboardText } from "@/lib/clipboard";
 import { lazyWithReload } from "@/lib/chunkReload";
@@ -206,6 +206,8 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
   const { user } = useCurrentUser();
   const author = useAuthor(pubkey);
   const metadata = author.data?.metadata;
+  // kind-0 is whatever its author typed.
+  const banner = sanitizeImageSrc(metadata?.banner);
   const theme = useProfileTheme(pubkey).data?.theme;
   const nsite = useNsite(pubkey).data;
   const badgesQuery = useProfileBadges(pubkey);
@@ -336,8 +338,8 @@ function ProfileView({ pubkey, onClose }: { pubkey: string; onClose: () => void 
           {/* Header card: banner, avatar, identity, actions. */}
           <section className={cn("clip-corner-lg overflow-hidden border border-border", card)}>
             <div className="h-32 md:h-44 bg-secondary relative">
-              {metadata?.banner && (
-                <img src={metadata.banner} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />
+              {banner && (
+                <img src={banner} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />
               )}
             </div>
 

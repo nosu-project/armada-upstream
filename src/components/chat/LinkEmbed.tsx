@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLinkPreview } from "@/hooks/useLinkPreview";
 import { extractSpotifyEmbed, extractYouTubeId } from "@/lib/linkEmbed";
+import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import {
   hasNativeYouTubePlayer,
   needsNativeYouTubePlayer,
@@ -133,10 +134,10 @@ function LinkPreview({ url, className }: { url: string; className?: string }) {
       )}
       onClick={(e) => e.stopPropagation()}
     >
-      {data.thumbnail_url && (
+      {sanitizeImageSrc(data.thumbnail_url) && (
         <div className="w-full overflow-hidden">
           <img
-            src={data.thumbnail_url}
+            src={sanitizeImageSrc(data.thumbnail_url)}
             alt=""
             className="w-full max-h-[180px] object-cover"
             loading="lazy"

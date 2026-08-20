@@ -1,5 +1,7 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 
+import { isRouterPath } from "@/lib/deepLinkUrl";
+
 /**
  * Native bridge to `ArmadaPushPlugin.swift` — the iOS app's APNs registration.
  *
@@ -185,7 +187,7 @@ export function hasIosPush(): boolean {
 export async function takePendingPushOpen(): Promise<string | null> {
   if (!hasIosPush()) return null;
   const { path } = await ArmadaPush.takePendingOpen();
-  return path && path.startsWith("/") ? path : null;
+  return path && isRouterPath(path) ? path : null;
 }
 
 /** Per-install id, so two devices don't take turns owning one gateway record. */

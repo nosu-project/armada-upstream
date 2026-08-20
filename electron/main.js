@@ -425,23 +425,6 @@ function createWindow({ show = !startHidden || !closeToTraySupported } = {}) {
     },
   });
 
-  // External links (anything not on our own origin, packaged or dev) open in
-  // the system browser; in-app navigation stays in the window. isAppOrigin
-  // compares scheme+host rather than `URL.origin`, which reports "null" for a
-  // custom scheme and so would classify the app's OWN pages as external — see
-  // appOrigin.js.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (isAppOrigin(url)) return { action: "allow" };
-    void openExternalUrl(url);
-    return { action: "deny" };
-  });
-  mainWindow.webContents.on("will-navigate", (event, url) => {
-    if (!isAppOrigin(url)) {
-      event.preventDefault();
-      void openExternalUrl(url);
-    }
-  });
-
   // Close → hide only when the tray is known to be visible. On Linux we
   // re-check at the moment of closing because a shell extension or tray host
   // can disappear during the session; without one, normal close quits and
@@ -1277,6 +1260,48 @@ function isAppOrigin(url) {
   }
 }
 
+/**
+ * Keep every renderer on our own origin, and hand everything else to the OS.
+ *
+ * Bound through `web-contents-created` rather than to the main window, because
+ * a window opened by the allow branch below is a SEPARATE webContents that
+ * would otherwise carry none of this. That window is reachable from untrusted
+ * content — the WebXDC sandbox runs with `allow-popups-to-escape-sandbox` and
+ * link embeds load foreign origins — and its opener may navigate it afterwards,
+ * so without a handler of its own it is a chromeless, CSP-less window wearing
+ * the app's title. (It gets no preload: Electron does not inherit one into a
+ * child window, so the bridge was never exposed. The exposure is the frame.)
+ *
+ * Only main-frame navigation is policed. Subframes are left alone on purpose:
+ * the app embeds foreign origins by design (YouTube, Spotify, the WebXDC
+ * sandbox), and which ones is CSP `frame-src`'s job — a native origin check
+ * there would refuse the embeds instead of hardening them.
+ *
+ * isAppOrigin compares scheme+host rather than `URL.origin`, which reports
+ * "null" for a custom scheme and so would classify the app's OWN pages as
+ * external — see appOrigin.js.
+ */
+function installNavigationHandlers() {
+  app.on("web-contents-created", (_event, contents) => {
+    contents.setWindowOpenHandler(({ url }) => {
+      if (isAppOrigin(url)) return { action: "allow" };
+      void openExternalUrl(url);
+      return { action: "deny" };
+    });
+    contents.on("will-navigate", (event, url) => {
+      if (!isAppOrigin(url)) {
+        event.preventDefault();
+        void openExternalUrl(url);
+      }
+    });
+    contents.on("will-attach-webview", (event) => {
+      // `webviewTag` is off, so this cannot fire. Refuse anyway rather than
+      // leave the outcome to a webPreferences default.
+      event.preventDefault();
+    });
+  });
+}
+
 function installPermissionHandlers() {
   session.defaultSession.setPermissionRequestHandler(
     (webContents, permission, callback, details) => {
@@ -1591,6 +1616,9 @@ if (!gotLock) {
       webRequest: session.defaultSession.webRequest,
       isPackaged: app.isPackaged,
     });
+    // Before createWindow(): these bind through `web-contents-created`, so
+    // they have to be listening before the first webContents exists.
+    installNavigationHandlers();
     installPermissionHandlers();
     installIpc();
     // After whenReady: on Linux safeStorage has no key until the app is ready.

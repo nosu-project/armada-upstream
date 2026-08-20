@@ -52,4 +52,23 @@ describe("pathFromDeepLinkUrl", () => {
     expect(pathFromDeepLinkUrl("bitcoin:bc1qxyz")).toBeNull();
     expect(pathFromDeepLinkUrl("not a url")).toBeNull();
   });
+
+  it("rejects https URLs on a foreign host", () => {
+    // The OS matched the manifest filter, but another app can fire an explicit
+    // intent at the same activity carrying any host it likes.
+    expect(pathFromDeepLinkUrl("https://evil.example/invite/naddr1qq")).toBeNull();
+    expect(pathFromDeepLinkUrl("https://armada.buzz.evil.example/invite")).toBeNull();
+    expect(pathFromDeepLinkUrl("https://user@evil.example/invite")).toBeNull();
+  });
+
+  it("rejects protocol-relative paths", () => {
+    // "//evil.com" is not a path: resolved against the app it names another
+    // origin. Both entry points must refuse it.
+    expect(pathFromDeepLinkUrl("https://armada.buzz//evil.example")).toBeNull();
+    expect(pathFromDeepLinkUrl("https://armada.buzz//evil.example/x?a=1#b")).toBeNull();
+    expect(pathFromDeepLinkUrl("armada://open//evil.example")).toBeNull();
+    // A backslash after the first slash reaches the same origin, because the
+    // URL parser folds "\" to "/".
+    expect(pathFromDeepLinkUrl("armada://open/\\evil.example")).toBeNull();
+  });
 });

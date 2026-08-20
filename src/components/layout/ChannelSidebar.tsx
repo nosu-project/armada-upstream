@@ -36,6 +36,7 @@ import { useRelayInbox } from "@/hooks/useRelayInbox";
 import { useRelayUnread, type GroupUnread } from "@/hooks/useRelayUnread";
 import { useServerActions } from "@/hooks/useServerActions";
 import { relayToRouteParam } from "@/lib/platform";
+import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 import { writeClipboardText } from "@/lib/clipboard";
 import { shareOrigin } from "@/lib/shareOrigin";
@@ -283,6 +284,10 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
   }, [registerCallBarSlot]);
 
   const serverName = relayInfo?.name || relayUrl.replace(/^wss?:\/\//, "");
+  // NIP-11 document fields: the relay chooses them, so they get the same
+  // scheme/local-network check as any other URL we did not author.
+  const relayIcon = sanitizeImageSrc(relayInfo?.icon);
+  const relayBanner = sanitizeImageSrc(relayInfo?.banner);
 
   return (
     <ChannelSidebarView
@@ -295,8 +300,8 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
           aria-label="Server menu"
           aria-expanded={serverMenuOpen}
         >
-          {relayInfo?.icon && (
-            <img src={relayInfo.icon} alt="" className="size-6 rounded object-cover shrink-0" />
+          {relayIcon && (
+            <img src={relayIcon} alt="" className="size-6 rounded object-cover shrink-0" />
           )}
           <span className="flex-1 truncate">{serverName}</span>
           <ChevronDown
@@ -385,9 +390,9 @@ export function ChannelSidebar({ relayUrl, onNavigate, className }: ChannelSideb
         </Collapsible>
       }
       banner={
-        relayInfo?.banner ? (
+        relayBanner ? (
           <div className="size-full overflow-hidden">
-            <img src={relayInfo.banner} alt="" className="size-full object-cover" />
+            <img src={relayBanner} alt="" className="size-full object-cover" />
           </div>
         ) : undefined
       }

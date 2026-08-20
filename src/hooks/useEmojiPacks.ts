@@ -14,6 +14,7 @@ import { useEventStore } from "@/hooks/useEventStore";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { hasDurableEmojis } from "@/lib/emojiPalette";
 import { parseAddr } from "@/lib/parseAddr";
+import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { KIND_USER_EMOJIS } from "@/lib/selfSyncKinds";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -415,9 +416,14 @@ export function emojiPackAbout(event: NostrRumor): string | undefined {
   return event.tags.find((t) => t[0] === "about")?.[1] || undefined;
 }
 
-/** The pack's cover image (`image` or `picture` tag), if any. */
+/**
+ * The pack's cover image (`image` or `picture` tag), if any.
+ *
+ * Checked here rather than at the three places that render it, so a pack from
+ * a stranger's relay cannot point every viewer's browser at a private address.
+ */
 export function emojiPackPicture(event: NostrRumor): string | undefined {
-  return (
+  return sanitizeImageSrc(
     event.tags.find((t) => t[0] === "image")?.[1] ||
     event.tags.find((t) => t[0] === "picture")?.[1] ||
     undefined

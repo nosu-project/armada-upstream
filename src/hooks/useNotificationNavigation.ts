@@ -5,7 +5,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { onLateColdLaunchDeepLink } from "@/lib/coldLaunchDeepLink";
 import { markDeepLinkNavigation } from "@/lib/deepLinkNav";
-import { pathFromDeepLinkUrl } from "@/lib/deepLinkUrl";
+import { isRouterPath, pathFromDeepLinkUrl } from "@/lib/deepLinkUrl";
 import { ArmadaPush, hasIosPush } from "@/lib/nativePush";
 import { signalDeepLinkNavigated } from "@/lib/webReady";
 
@@ -127,7 +127,10 @@ export function useNotificationNavigation(): void {
     let pushHandle: { remove: () => void } | undefined;
     if (hasIosPush()) {
       ArmadaPush.addListener("pushOpened", ({ path }) => {
-        if (!cancelled && path) applyDeepLink(path);
+        // The gateway chooses this field, so it is re-checked here as it is on
+        // the cold path (nativePush.ts) and natively — a protocol-relative
+        // "path" names another origin rather than a route.
+        if (!cancelled && path && isRouterPath(path)) applyDeepLink(path);
       })
         .then((h) => {
           if (cancelled) h.remove();

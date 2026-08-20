@@ -68,3 +68,29 @@ export function isLocalNetworkUrl(raw: string | undefined | null): boolean {
   if (/^fe[89ab][0-9a-f]*:/.test(h)) return true; // IPv6 link-local fe80::/10
   return false;
 }
+
+/**
+ * Validate a URL that is about to become an `<img>`/`<video>` source.
+ *
+ * The two checks above, in the one combination every image site wants, so the
+ * pair does not have to be remembered separately at each of them. Returns the
+ * normalised URL, or `undefined` when it must not be loaded.
+ *
+ * This is not an XSS control — `javascript:` does not execute in `src`, and
+ * CSP's `img-src`/`media-src` refuse the exotic schemes anyway. It exists for
+ * {@link isLocalNetworkUrl}: an avatar or icon is untrusted event data that
+ * every viewer of a room renders unprompted, so one kind-0 naming
+ * `http://192.168.1.1/…` is a Local Network Access prompt for all of them.
+ *
+ * `blob:` and `data:` pass through unchanged. A blob URL is minted by this
+ * origin (`URL.createObjectURL`, e.g. a decrypted Concord icon) and resolves to
+ * nothing if a stranger spells one; a data URL carries its own bytes, and
+ * neither executes script in an `<img>`.
+ */
+export function sanitizeImageSrc(raw: string | undefined | null): string | undefined {
+  if (!raw) return undefined;
+  if (/^(?:blob|data):/i.test(raw)) return raw;
+  const url = sanitizeUrl(raw);
+  if (!url || isLocalNetworkUrl(url)) return undefined;
+  return url;
+}

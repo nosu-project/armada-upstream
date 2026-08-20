@@ -34,6 +34,7 @@ import { dittoProfileUrl } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { reportDestination } from "@/lib/report";
 import { tryNpubEncode } from "@/lib/safeNip19";
+import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 import { writeClipboardText } from "@/lib/clipboard";
 import { buildThemeVarStyle } from "@/themes";
@@ -61,6 +62,8 @@ function ProfilePreviewBody({
   const prefetchProfile = usePrefetchProfile();
   const { user } = useCurrentUser();
   const metadata = author.data?.metadata;
+  // kind-0 is whatever its author typed.
+  const banner = sanitizeImageSrc(metadata?.banner);
   const roles = useMemberRoles(pubkey);
   const status = useUserStatus(pubkey).data?.status;
   const rawMusicStatus = useUserStatus(pubkey, "music").data?.status;
@@ -110,8 +113,8 @@ function ProfilePreviewBody({
     <>
       {/* Mini banner */}
       <div className="h-16 bg-secondary relative">
-        {metadata?.banner && (
-          <img src={metadata.banner} alt="" className="w-full h-full object-cover" loading="lazy" />
+        {banner && (
+          <img src={banner} alt="" className="w-full h-full object-cover" loading="lazy" />
         )}
 
         {/* Overflow menu, floated top-right over the banner. Holds the negative,
