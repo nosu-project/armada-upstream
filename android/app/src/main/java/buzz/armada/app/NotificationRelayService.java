@@ -2770,23 +2770,27 @@ public class NotificationRelayService extends Service {
                                   String relayUrl, long tsMs) {
         ringingCallId = callId;
         ringingPeer = peer;
+        // Everything the WebView needs to join, recorded where only this app
+        // can read it. It is NOT put in the Answer action's URL: a URL is a
+        // hint that a call was answered, never the proof, because every surface
+        // the router is reachable on can produce one. The vetting that makes
+        // this an authorization already happened above — fresh, followed, with
+        // a well-formed secret and an https broker.
+        ArmadaNotificationPlugin.setCallAnswer(this, callId, peer, secret, broker);
         resolveAuthor(peer, relayUrl, profile -> {
             // Cancelled (or replaced) while the profile resolved.
             if (!callId.equals(ringingCallId)) return;
             String name = displayName(profile);
             Person caller = new Person.Builder().setKey(peer).setName(name).build();
 
-            // Answer: deep-link into the conversation carrying the whole call
-            // context — the offer rode an ephemeral wrap, so a cold-started
-            // WebView can never re-fetch it. The parameters stay inside this
-            // app (an explicit, immutable PendingIntent to our own activity);
-            // DmCallProvider re-verifies the secret→room binding and joins.
-            // Every value here comes out of the peer's rumor, so each is
-            // encoded: an unescaped "&" in one would otherwise let the sender
-            // append parameters of their own to the route (their own broker,
-            // say) rather than only filling the one field they were given.
-            Intent answer = deepLinkIntent(dmRoute(peer) + "?call=" + uriEncode(callId)
-                    + "&csecret=" + uriEncode(secret) + "&cbroker=" + uriEncode(broker));
+            // Answer: deep-link into the conversation naming the call, and
+            // NOTHING ELSE. The offer rode an ephemeral wrap, so a cold-started
+            // WebView can never re-fetch it — but the secret and broker travel
+            // through ArmadaNotificationPlugin#consumeCallAnswer, which only
+            // this app can read, rather than in the URL. A tap is then a
+            // request to answer a specific call; whether that call is one the
+            // service actually rang is answered by the ticket, not by the link.
+            Intent answer = deepLinkIntent(dmRoute(peer) + "?call=" + uriEncode(callId));
             answer.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             PendingIntent answerPi = PendingIntent.getActivity(
                     this, INCOMING_CALL_NOTIF_ID, answer,
@@ -2839,6 +2843,9 @@ public class NotificationRelayService extends Service {
         String peer = ringingPeer;
         ringingCallId = null;
         ringingPeer = null;
+        // A call that is no longer ringing is not one an Answer tap may still
+        // join — the ticket goes with the ring.
+        ArmadaNotificationPlugin.clearCallAnswer(this, callId);
         NotificationManager m = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (m != null) m.cancel(INCOMING_CALL_NOTIF_ID);
         if (missed && peer != null) notifyMissedCall(peer, null, System.currentTimeMillis());

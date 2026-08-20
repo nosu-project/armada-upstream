@@ -82,6 +82,28 @@ export interface ArmadaNotificationPlugin {
     markers: Array<{ room: string; ts: number }>;
   }>;
   /**
+   * Exchange the call id an Answer tap named for the parameters of the ring
+   * the service posted for it, or `{}` when there is no such ring.
+   *
+   * This is the AUTHORIZATION to join a DM call from a notification tap. The
+   * parameters used to ride the deep link, which made a URL enough to join a
+   * call the client had never been offered, over a broker the sender chose —
+   * the only check being that the secret derived the room, which whoever minted
+   * the secret controls. A URL can be produced by anything that reaches the
+   * router (a link, another app's intent), so it names the call and proves
+   * nothing; the service only records a call it decided to RING, which means it
+   * was fresh, from a followed peer, and carried a well-formed secret and an
+   * https broker.
+   *
+   * Consumed once, so a second tap or a revisited history entry cannot
+   * re-answer a call that has already ended.
+   */
+  consumeCallAnswer(options: { callId: string }): Promise<{
+    peer?: string;
+    secret?: string;
+    broker?: string;
+  }>;
+  /**
    * The service's rolling per-room cache of raw outer wire events (newest
    * last). Unlike {@link drainEvents} — a one-shot global buffer of what
    * arrived while the WebView was down — this retains the last screenful PER
@@ -312,6 +334,36 @@ export async function isIgnoringBatteryOptimizations(): Promise<boolean> {
     return ignoring;
   } catch {
     return true;
+  }
+}
+
+/** The parameters of a ring the background service posted, for an Answer tap. */
+export interface NativeCallAnswer {
+  /** The peer the SERVICE verified the offer came from — not the URL's. */
+  peer: string;
+  secretHex: string;
+  broker: string;
+}
+
+/**
+ * Claim the call parameters for `callId`, or null when the service is holding
+ * none — which is every case except an Answer tap on a ring it posted itself.
+ *
+ * Gated on Android specifically rather than `isNativePlatform()`: this plugin
+ * exists nowhere else, and on iOS the gate is what keeps the call from
+ * reaching a `registerPlugin` proxy with nothing behind it. `isPluginAvailable`
+ * covers an APK that predates the method, where the answer is simply "no
+ * ticket" — the same answer a URL from anywhere else gets.
+ */
+export async function consumeNativeCallAnswer(callId: string): Promise<NativeCallAnswer | null> {
+  if (Capacitor.getPlatform() !== "android") return null;
+  if (!Capacitor.isPluginAvailable("ArmadaNotification")) return null;
+  try {
+    const { peer, secret, broker } = await ArmadaNotification.consumeCallAnswer({ callId });
+    if (!peer || !secret || !broker) return null;
+    return { peer, secretHex: secret, broker };
+  } catch {
+    return null;
   }
 }
 

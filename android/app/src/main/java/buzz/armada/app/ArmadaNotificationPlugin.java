@@ -139,6 +139,78 @@ public class ArmadaNotificationPlugin extends Plugin {
     }
 
     /**
+     * The call parameters of the ring currently in the tray, for the Answer
+     * action to hand to the WebView — the ONE way those parameters travel.
+     *
+     * They used to ride the Answer action's deep-link URL. That made the URL
+     * itself the authorization to join a call: `?call=&csecret=&cbroker=` in a
+     * link anyone could send answered a call the client had never been offered,
+     * over a broker the sender chose, because the only test on the far side was
+     * that the secret derived the room — which the sender minted. A URL is a
+     * hint that a call was answered; it cannot be the proof, because every
+     * surface the router is reachable on can produce one.
+     *
+     * So the parameters go through a channel only this app can write: the
+     * service records them here when it posts a ring it has ALREADY vetted
+     * (fresh, from a followed peer, with a well-formed secret and an https
+     * broker — see NotificationRelayService#handleDmCallRumor), and the WebView
+     * exchanges the call id for them exactly once.
+     *
+     * App-private storage rather than a field, so an Answer tap still works if
+     * the process was replaced while the phone rang. The secret is per-call and
+     * ephemeral, it is removed the moment it is consumed or the ring is
+     * cancelled, and this file sits beside a database of decrypted messages —
+     * so nothing here is newly at risk if the sandbox is.
+     */
+    static final String CALL_ANSWER_PREFS = "armada_call_answer";
+    private static final String CALL_ANSWER_KEY = "answer";
+    /** Guards the single-slot ticket (service ⇄ bridge). */
+    private static final Object CALL_ANSWER_LOCK = new Object();
+
+    /**
+     * Record the parameters of a ring being posted, replacing any previous one
+     * — the service rings one call at a time.
+     */
+    static void setCallAnswer(Context ctx, String callId, String peer, String secret, String broker) {
+        if (ctx == null || callId == null || peer == null || secret == null || broker == null) return;
+        synchronized (CALL_ANSWER_LOCK) {
+            try {
+                JSONObject entry = new JSONObject();
+                entry.put("callId", callId);
+                entry.put("peer", peer);
+                entry.put("secret", secret);
+                entry.put("broker", broker);
+                ctx.getSharedPreferences(CALL_ANSWER_PREFS, Context.MODE_PRIVATE)
+                        .edit().putString(CALL_ANSWER_KEY, entry.toString()).apply();
+            } catch (Exception e) {
+                Log.w(TAG, "setCallAnswer failed", e);
+            }
+        }
+    }
+
+    /**
+     * Drop the recorded parameters when the ring ends for any reason — a call
+     * that is no longer ringing is not one an Answer tap may still join.
+     * `callId` null clears whatever is there (logout / disable).
+     */
+    static void clearCallAnswer(Context ctx, String callId) {
+        if (ctx == null) return;
+        synchronized (CALL_ANSWER_LOCK) {
+            SharedPreferences sp = ctx.getSharedPreferences(CALL_ANSWER_PREFS, Context.MODE_PRIVATE);
+            if (callId != null) {
+                String raw = sp.getString(CALL_ANSWER_KEY, null);
+                if (raw == null) return;
+                try {
+                    if (!callId.equals(new JSONObject(raw).optString("callId"))) return;
+                } catch (Exception ignored) {
+                    // Unparseable — drop it either way.
+                }
+            }
+            sp.edit().remove(CALL_ANSWER_KEY).apply();
+        }
+    }
+
+    /**
      * Rolling per-room cache of raw outer events, keyed by room
      * ("h:<groupId>" / "c2:<channelId>" / "dm"), newest last.
      * Unlike {@link #eventBuffer} (a one-shot drain of what arrived while the
@@ -306,6 +378,47 @@ public class ArmadaNotificationPlugin extends Plugin {
         }
         JSObject ret = new JSObject();
         ret.put("markers", markers);
+        call.resolve(ret);
+    }
+
+    /**
+     * Exchange a call id for the parameters of the ring the service posted for
+     * it, or resolve empty when there is no such ring.
+     *
+     * This is the authorization to join a DM call from a notification tap: the
+     * service only records a call it decided to RING, which means it was fresh,
+     * from a peer the user follows, and carried a well-formed secret and an
+     * https broker. A URL naming any other call id gets nothing back.
+     *
+     * Consumed once — a second tap, or a revisit of the same history entry,
+     * must not re-answer a call that has already been answered or has ended.
+     */
+    @PluginMethod
+    public void consumeCallAnswer(PluginCall call) {
+        String callId = call.getString("callId");
+        JSObject ret = new JSObject();
+        if (callId == null || callId.isEmpty()) {
+            call.resolve(ret);
+            return;
+        }
+        synchronized (CALL_ANSWER_LOCK) {
+            SharedPreferences sp = getContext()
+                    .getSharedPreferences(CALL_ANSWER_PREFS, Context.MODE_PRIVATE);
+            String raw = sp.getString(CALL_ANSWER_KEY, null);
+            if (raw != null) {
+                try {
+                    JSONObject entry = new JSONObject(raw);
+                    if (callId.equals(entry.optString("callId"))) {
+                        ret.put("peer", entry.optString("peer"));
+                        ret.put("secret", entry.optString("secret"));
+                        ret.put("broker", entry.optString("broker"));
+                        sp.edit().remove(CALL_ANSWER_KEY).apply();
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "consumeCallAnswer parse failed", e);
+                }
+            }
+        }
         call.resolve(ret);
     }
 
@@ -570,6 +683,9 @@ public class ArmadaNotificationPlugin extends Plugin {
             // Drop any un-drained read markers too, so they can't apply to a
             // different account after a logout/switch.
             clearReadMarkers(getContext());
+            // And any ring's parameters, which name a peer of the account that
+            // just went away.
+            clearCallAnswer(getContext(), null);
             Log.d(TAG, "Config cleared (disabled or logged out)");
         }
 

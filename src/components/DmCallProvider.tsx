@@ -18,7 +18,8 @@ import { effectiveDmRelays } from "@/contexts/AppContext";
 import { DmCallContext, type DmCallState } from "@/contexts/DmCallContext";
 import { recipientInboxRelays } from "@/concord/lib/inviteRelays";
 import { ownAvServers } from "@/concord/hooks/useVoice";
-import { probeAvBroker } from "@/concord/lib/voice";
+import { canonicalOrigin, probeAvBroker } from "@/concord/lib/voice";
+import { consumeNativeCallAnswer } from "@/lib/nativeNotifications";
 import {
   startIncomingRing,
   startRingback,
@@ -70,7 +71,9 @@ import type { NostrEvent } from "@nostrify/nostrify";
  *
  * Mounted inside CallProvider (it drives joinDmCall/leaveCall) and inside the
  * router (the Android incoming-call notification's Answer action deep-links
- * `/dm/<peer>?call=<id>`, which auto-accepts the matching offer on arrival).
+ * `/dm/<peer>?call=<id>`, which accepts the matching offer — one already in
+ * hand, or the one the service vetted before it rang). The URL names a call
+ * and authorizes nothing; see the deep-link effect below.
  */
 export function DmCallProvider({ children }: { children: React.ReactNode }) {
   const { nostr } = useNostr();
@@ -91,6 +94,8 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
   const incomingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** An Answer deep link (`?call=<id>`) waiting for its offer to arrive. */
   const pendingAcceptRef = useRef<{ callId: string; at: number } | null>(null);
+  /** The call an Answer tap is currently redeeming its ticket for. */
+  const answeringRef = useRef<string | null>(null);
 
   // Live refs so the signal listener (one subscription for the provider's
   // lifetime) always reads current state without re-subscribing.
@@ -408,42 +413,81 @@ export function DmCallProvider({ children }: { children: React.ReactNode }) {
   }, [activeCall, sendSignal, clearOutgoing]);
 
   // Android's incoming-call notification Answer action deep-links
-  // `/dm/<peer>?call=<id>&csecret=<hex>&cbroker=<origin>`. The offer rode an
-  // EPHEMERAL wrap, so a cold-started WebView can never re-fetch it — the
-  // service passes the call parameters through the app-internal intent
-  // instead (PendingIntent to our own activity; nothing leaves the process).
-  // With all three present the call is joined directly; with only `call`
-  // (a warm app whose provider already holds — or is about to receive — the
-  // offer) the matching in-hand offer is accepted.
+  // `/dm/<peer>?call=<id>`. The URL NAMES a call; it never authorizes one.
+  //
+  // It used to carry `csecret` and `cbroker` too, and joining on that was the
+  // whole authorization — with the only test being that the secret derived the
+  // claimed room, which whoever minted the secret satisfies by construction.
+  // Everything that reaches the router can produce a URL (a link the user taps,
+  // an explicit intent from another app to our exported activity, a crafted
+  // notification route), so that was a link away from: dialing an attacker's
+  // broker with a bearer grant, decoding
+  // their media, showing a call bar naming a pubkey they picked, and publishing
+  // a signed NIP-17 "answer" as the user. None of the four gates the ring path
+  // applies — freshness, busy, duplicate, followed — ran on it.
+  //
+  // The offer rode an EPHEMERAL wrap, so a cold-started WebView genuinely
+  // cannot re-fetch it. What supplies the parameters instead is the service
+  // that posted the ring, through a channel only this app can read
+  // (`consumeCallAnswer`) — and it only holds a call it decided to RING, which
+  // means fresh, followed, with a well-formed secret and an https broker. So
+  // the peer joined is the one the SERVICE verified, not the one the path
+  // spells.
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const wanted = params.get("call");
     if (!wanted || !/^[0-9a-f]{64}$/.test(wanted)) return;
-    const secret = params.get("csecret");
-    const broker = params.get("cbroker");
-    // Strip the params first so a later navigation to the same URL (history,
+    // Strip the param first so a later navigation to the same URL (history,
     // a second tap) can't re-answer a call that has already ended.
     navigate(location.pathname, { replace: true });
-    const peerParam = /^\/dm\/([0-9a-f]{64})(?:[/,]|$)/.exec(location.pathname)?.[1];
-    if (secret && broker && peerParam && /^[0-9a-f]{64}$/.test(secret)) {
-      try {
-        // The same binding check parseDmCall makes: the secret must derive
-        // the claimed room, or the parameters are garbage.
-        if (dmCallKeys(secret).room.pk !== wanted) return;
-      } catch {
-        return;
-      }
-      clearIncoming();
-      void sendSignal("answer", peerParam, wanted).catch(() => undefined);
-      joinDmCall({ peer: peerParam, callId: wanted, secretHex: secret, broker });
-      return;
-    }
+
+    // A warm app that already holds the offer needs nothing native: accepting
+    // it goes through the same path the on-screen Accept button uses.
     const ringing = incomingRef.current;
     if (ringing && ringing.callId === wanted) {
       acceptRef.current();
-    } else {
-      pendingAcceptRef.current = { callId: wanted, at: Date.now() };
+      return;
     }
+
+    // Deduped by call id rather than torn down on cleanup: stripping the query
+    // above re-runs this effect, and cancelling the in-flight exchange there
+    // would drop the very ticket the tap came to collect.
+    if (answeringRef.current === wanted) return;
+    answeringRef.current = wanted;
+
+    void consumeNativeCallAnswer(wanted).then((ticket) => {
+      if (!ticket) return;
+      // Busy is checked here as well as on the ring path: a tap can arrive
+      // while another call is up, and joining would drop it.
+      if (activeCallRef.current) return;
+      // Shapes re-checked on this side of the bridge: the peer becomes a `p`
+      // tag on an event we are about to seal and publish, and the identity the
+      // call bar names.
+      if (!/^[0-9a-f]{64}$/.test(ticket.peer)) return;
+      if (!/^[0-9a-f]{64}$/.test(ticket.secretHex)) return;
+      try {
+        // The binding check parseDmCall makes. Kept as an INTEGRITY check on
+        // parameters that have already been authorized — never as the
+        // authorization itself, which is what having the ticket at all is.
+        if (dmCallKeys(ticket.secretHex).room.pk !== wanted) return;
+      } catch {
+        return;
+      }
+      // Canonicalized here as `dmCall.ts` already does for an offer's broker:
+      // a broker is a bearer-credential endpoint, so plaintext http, userinfo
+      // and a path are refused rather than passed through.
+      const origin = canonicalOrigin(ticket.broker);
+      if (!origin) return;
+      clearIncoming();
+      pendingAcceptRef.current = null;
+      void sendSignal("answer", ticket.peer, wanted).catch(() => undefined);
+      joinDmCall({ peer: ticket.peer, callId: wanted, secretHex: ticket.secretHex, broker: origin });
+    });
+
+    // No ticket yet: the offer may still be in flight (a tap that raced the
+    // relay read), so park it for the signal fold to accept on arrival —
+    // which applies the follow gate like any other offer.
+    pendingAcceptRef.current = { callId: wanted, at: Date.now() };
   }, [location.search, location.pathname, navigate, clearIncoming, sendSignal, joinDmCall]);
 
   // Teardown: never leave a loop running past logout/unmount.
