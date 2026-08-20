@@ -4,6 +4,22 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.55.2] - 2026-08-19
+
+A security-hardening release. Sharing into Armada from another app now accepts only genuine shared content, closing a path by which another app could have had Armada read its own private files, including your decrypted message history. Community push notifications check who really wrote a message before putting a name and face on your lock screen, images and links from other people are checked before they load, and the Bluetooth mesh bounds what a nearby device can make it allocate.
+
+### Security
+- Sharing into Armada from another app accepts only real shared content, so an app on the device can no longer use the share sheet to make Armada read its own private files — including your decrypted message history — and stage them into a conversation with the sender (Android)
+- A community push notification verifies who actually wrote the message before showing a sender's name and picture, so an alert can't be dressed up as one of your contacts
+- Images and avatars supplied by other people — profile banners, relay icons, emoji-pack covers, link previews, the call backdrop — are checked before they are loaded
+- The link on someone's status is restricted to ordinary web addresses instead of reaching the page unchecked
+- Invite and notification links only open destinations on Armada's own site
+- A packet from a device in radio range can no longer claim an unbounded size and exhaust memory over the opt-in Bluetooth mesh
+- The app carries a content security policy on every platform, including the mobile and desktop builds
+
+### Removed
+- An unused charting component and its dependencies, which also shrinks the app download
+
 ## [0.55.1] - 2026-08-19
 
 Two fixes on the security- and money-sensitive paths. A Bitcoin send to a silent-payment address now derives the output from every coin it spends, so a payment from a wallet holding more than one coin reaches the recipient instead of confirming into an address nobody is watching. And remote-signer login over a QR code now only accepts the signer you scanned, closing a window where a relay could slip in as your signer while you were still approving the code.
