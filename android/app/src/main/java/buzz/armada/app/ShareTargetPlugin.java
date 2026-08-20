@@ -2,6 +2,7 @@ package buzz.armada.app;
 
 import android.content.ContentResolver;
 import android.content.Intent;
+import android.content.pm.ProviderInfo;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -291,17 +292,69 @@ public class ShareTargetPlugin extends Plugin {
         List<Uri> uris = new ArrayList<>();
         if (Intent.ACTION_SEND.equals(intent.getAction())) {
             Parcelable p = intent.getParcelableExtra(Intent.EXTRA_STREAM);
-            if (p instanceof Uri) uris.add((Uri) p);
+            if (p instanceof Uri && isAcceptableSharedUri((Uri) p)) uris.add((Uri) p);
         } else if (Intent.ACTION_SEND_MULTIPLE.equals(intent.getAction())) {
             List<Parcelable> list = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
             if (list != null) {
                 for (Parcelable p : list) {
-                    if (p instanceof Uri) uris.add((Uri) p);
+                    if (p instanceof Uri && isAcceptableSharedUri((Uri) p)) uris.add((Uri) p);
                     if (uris.size() >= MAX_FILES) break;
                 }
             }
         }
         return uris;
+    }
+
+    /**
+     * Whether a URI handed to us in EXTRA_STREAM may be opened.
+     *
+     * The share filter is exported and accepts any MIME type from any app with
+     * no permission, so this URI is fully attacker-controlled — and
+     * {@link ContentResolver#openInputStream} runs as US. Two refusals:
+     *
+     * <ul>
+     *   <li><b>Anything but {@code content://}.</b> {@code openInputStream}
+     *       accepts {@code file://} and resolves it as a plain FileInputStream
+     *       under our own UID, so a sender who cannot read a file can name it
+     *       and have Armada read it for them. Pointed at
+     *       {@code /data/data/buzz.armada.app/databases/armada-db.sqlite} that
+     *       is the decrypted NIP-17 and Concord history plus the Concord stream
+     *       secrets — the entire corpus this app exists to protect. The rest of
+     *       the intent completes the loop: EXTRA_SHORTCUT_ID picks the DM the
+     *       file is staged into, so the attacker addresses it to themselves.
+     *   <li><b>A provider we own.</b> Our own FileProvider can hand out our
+     *       private files to us for the same reason, so authority alone is not
+     *       a safe substitute for the scheme check — both are needed.
+     * </ul>
+     *
+     * A sender's own {@code content://} URI is fine: it arrives with a grant,
+     * and the sender could read it anyway. The display name is separately
+     * distrusted by {@link #sanitizeName}.
+     */
+    private boolean isAcceptableSharedUri(Uri uri) {
+        if (uri == null) return false;
+        if (!ContentResolver.SCHEME_CONTENT.equals(uri.getScheme())) {
+            if (BuildConfig.DEBUG) Log.w(TAG, "refusing shared URI with non-content scheme");
+            return false;
+        }
+        String authority = uri.getAuthority();
+        if (authority == null || authority.isEmpty()) return false;
+        try {
+            // A null result is left to pass. Package-visibility filtering can
+            // hide another app's provider from us, and our OWN provider is
+            // never hidden from us — so an unresolvable authority cannot be
+            // the case this check is for, and refusing it would only break
+            // ordinary shares.
+            ProviderInfo info = getContext().getPackageManager().resolveContentProvider(authority, 0);
+            if (info != null && getContext().getPackageName().equals(info.packageName)) {
+                if (BuildConfig.DEBUG) Log.w(TAG, "refusing shared URI backed by our own provider");
+                return false;
+            }
+        } catch (Exception e) {
+            if (BuildConfig.DEBUG) Log.w(TAG, "refusing unresolvable shared URI authority", e);
+            return false;
+        }
+        return true;
     }
 
     /**
