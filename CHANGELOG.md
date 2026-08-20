@@ -4,6 +4,15 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.55.3] - 2026-08-20
+
+A security-hardening release covering three paths where something outside the app chose a value the app then trusted. Answering a ringing call from a notification now joins the call the app itself verified rather than whatever the tap's link spelled out, the accounts listed on an incoming message have to be real accounts before they name a conversation, and saving or sharing media derives its filename safely instead of letting the media address pick where the file lands.
+
+### Security
+- Answering a direct-message call from a notification joins the call the app already verified, so a crafted link can no longer drop you into a call with someone who never rang you (Android)
+- The accounts listed on an incoming message must be real accounts before they name a conversation, so a crafted message can't steer where a notification tap takes you
+- Saving or sharing an image, video or file derives its filename safely, so a media address can no longer decide where on the device the file is written
+
 ## [0.55.2] - 2026-08-19
 
 A security-hardening release. Sharing into Armada from another app now accepts only genuine shared content, closing a path by which another app could have had Armada read its own private files, including your decrypted message history. Community push notifications check who really wrote a message before putting a name and face on your lock screen, images and links from other people are checked before they load, and the Bluetooth mesh bounds what a nearby device can make it allocate.
