@@ -21,3 +21,43 @@ let vectors: [String: Any] = {
 
 func vectorString(_ key: String) -> String { vectors[key] as! String }
 func vectorObject(_ key: String) -> [String: Any] { vectors[key] as! [String: Any] }
+
+/// A properly signed event, in the shape the gateway inlines into a push
+/// payload.
+///
+/// NIP-29 group messages are the one plane that arrives in the CLEAR, so
+/// nothing about opening them establishes who wrote them and `prepareGroup`
+/// checks the signature itself. That makes an unsigned fixture indistinguishable
+/// from a forgery — correctly — so group tests have to sign, which is what this
+/// is for. `id` is computed rather than supplied so it always agrees with the
+/// body; pass `forgedPubkey` to keep a valid signature while claiming to be
+/// somebody else, which is the attack the check exists to refuse.
+func signedEvent(
+    secretKeyHex: String,
+    kind: Int,
+    tags: [[String]],
+    content: String,
+    createdAt: Int = 1_700_000_000,
+    forgedPubkey: String? = nil
+) -> [String: Any] {
+    guard let sk = Hex.decode(secretKeyHex),
+          let pubkey = Secp256k1.xonlyPublicKey(secretKey: sk)
+    else { fatalError("test secret key is not a valid key") }
+
+    var event: [String: Any] = [
+        "pubkey": forgedPubkey ?? pubkey,
+        "created_at": createdAt,
+        "kind": kind,
+        "tags": tags,
+        "content": content,
+    ]
+    guard let parsed = NostrEvent.parse(event) else { fatalError("test event does not parse") }
+    let id = parsed.computedId
+    guard let digest = Hex.decode(id),
+          let sig = Secp256k1.schnorrSign(message: digest, secretKey: sk)
+    else { fatalError("test event could not be signed") }
+
+    event["id"] = id
+    event["sig"] = sig
+    return event
+}

@@ -216,11 +216,10 @@ final class StorelessTests: XCTestCase {
         )
         let processor = PushProcessor(store: nil, config: config, now: 1_700_000_000)
 
-        let event: [String: Any] = [
-            "id": String(repeating: "e", count: 64),
-            "pubkey": peer, "created_at": 1_700_000_000, "kind": 9,
-            "tags": [["h", "general"]], "content": "shipped it",
-        ]
+        let event = signedEvent(
+            secretKeyHex: vectorString("bobSk"), kind: 9,
+            tags: [["h", "general"]], content: "shipped it"
+        )
         let prepared = processor.prepare(userInfo: [
             "scope": "group", "relays": ["wss://relay.example"], "event": event,
         ])
@@ -231,19 +230,58 @@ final class StorelessTests: XCTestCase {
         XCTAssertFalse(prepared?.drop ?? true)
     }
 
-    func testStillDropsTheViewersOwnMessageWithNoStore() {
-        // Degrading must not lose the decisions either — an own message is
-        // still not news.
+    /// A NIP-29 message arrives in the clear, so its signature is the only
+    /// thing binding it to an author. Without this check the `pubkey` is just a
+    /// string the sender picked — and it is used to look up the VIEWER'S stored
+    /// kind-0, so naming a real contact borrows that contact's name and avatar
+    /// for a communication notification on a message they never sent.
+    func testRefusesANip29MessageWhoseSignatureDoesNotMatchItsAuthor() {
         let config = PushConfig(
             policy: .generic, selfPubkey: self_, knownPeers: [], secretKey: nil,
             nip46: nil, concord: []
         )
         let processor = PushProcessor(store: nil, config: config, now: 1_700_000_000)
-        let event: [String: Any] = [
-            "id": String(repeating: "e", count: 64),
-            "pubkey": self_, "created_at": 1_700_000_000, "kind": 9,
-            "tags": [["h", "general"]], "content": "mine",
-        ]
+
+        // Signed by Bob, claiming to be Alice.
+        let forged = signedEvent(
+            secretKeyHex: vectorString("bobSk"), kind: 9,
+            tags: [["h", "general"]], content: "shipped it",
+            forgedPubkey: vectorString("alicePk")
+        )
+        XCTAssertNil(processor.prepare(userInfo: ["scope": "group", "event": forged]))
+
+        // And an event whose body was edited after signing, so its id no longer
+        // hashes to the content the signature covers.
+        var tampered = signedEvent(
+            secretKeyHex: vectorString("bobSk"), kind: 9,
+            tags: [["h", "general"]], content: "shipped it"
+        )
+        tampered["content"] = "shipped nothing"
+        XCTAssertNil(processor.prepare(userInfo: ["scope": "group", "event": tampered]))
+
+        // An unsigned one is refused too — there is nothing else to go on.
+        var unsigned = signedEvent(
+            secretKeyHex: vectorString("bobSk"), kind: 9,
+            tags: [["h", "general"]], content: "shipped it"
+        )
+        unsigned.removeValue(forKey: "sig")
+        XCTAssertNil(processor.prepare(userInfo: ["scope": "group", "event": unsigned]))
+    }
+
+    func testStillDropsTheViewersOwnMessageWithNoStore() {
+        // Degrading must not lose the decisions either — an own message is
+        // still not news.
+        // The viewer is Alice here, so the message can actually be signed as
+        // hers — the drop decision is made after the signature check.
+        let config = PushConfig(
+            policy: .generic, selfPubkey: vectorString("alicePk"), knownPeers: [],
+            secretKey: nil, nip46: nil, concord: []
+        )
+        let processor = PushProcessor(store: nil, config: config, now: 1_700_000_000)
+        let event = signedEvent(
+            secretKeyHex: vectorString("aliceSk"), kind: 9,
+            tags: [["h", "general"]], content: "mine"
+        )
         let prepared = processor.prepare(userInfo: ["scope": "group", "event": event])
         XCTAssertEqual(prepared?.drop, true)
     }
@@ -340,14 +378,14 @@ final class SenderIdentityTests: XCTestCase {
 
     func testANip29MessageNamesItsSender() {
         let processor = PushProcessor(store: nil, config: config(), now: 1_700_000_000)
-        let event: [String: Any] = [
-            "id": String(repeating: "e", count: 64),
-            "pubkey": peer, "created_at": 1_700_000_000, "kind": 9,
-            "tags": [["h", "general"]], "content": "shipped it",
-        ]
+        let bob = vectorString("bobPk")
+        let event = signedEvent(
+            secretKeyHex: vectorString("bobSk"), kind: 9,
+            tags: [["h", "general"]], content: "shipped it"
+        )
         let prepared = processor.prepare(userInfo: ["scope": "group", "event": event])
 
-        XCTAssertEqual(prepared?.sender?.id, peer, "the pubkey is the conversation's identity")
+        XCTAssertEqual(prepared?.sender?.id, bob, "the pubkey is the conversation's identity")
         XCTAssertEqual(prepared?.sender?.name, "Anonymous")
         // No store, so no kind-0 and no picture — the notification falls back to
         // the monogram, which is still the person.

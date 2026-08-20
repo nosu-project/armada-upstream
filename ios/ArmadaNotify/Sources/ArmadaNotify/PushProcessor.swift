@@ -315,13 +315,18 @@ struct PushProcessor {
         let presented = NotificationPreview.present(message)
         // A reaction points at the message it reacted to — the thing the reader
         // is being told about, and the only one of the two a timeline can show.
+        //
+        // Percent-escaped like the NIP-29 path below, because an `e` tag is an
+        // arbitrary string chosen by any holder of the channel's stream key —
+        // so an unescaped one ("../../../invite/…") sends the tap to a route of
+        // the sender's choosing rather than to their message.
         let target = opened.uniqueETag ?? opened.rumorId
         return PreparedPush(
             drop: false,
             title: presented.title,
             body: presented.body,
             threadId: "c2:\(stream.channelId)",
-            path: "/c/\(stream.communityId)/\(stream.channelId)/m/\(target)",
+            path: "/c/\(escape(stream.communityId))/\(escape(stream.channelId))/m/\(escape(target))",
             quiet: false,
             sender: PreparedPush.Sender(
                 id: opened.author,
@@ -347,6 +352,35 @@ struct PushProcessor {
             trace("grp-no-h")
             return nil
         }
+
+        // This event arrives in the CLEAR, so unlike the NIP-17 and Concord
+        // paths there is no decryption that already proves who wrote it: the
+        // signature is the only thing that does. Without this check the
+        // `pubkey` field is simply a string the sender chose — and it is used
+        // below to look up the VIEWER'S OWN stored kind-0, so an attacker names
+        // a real contact and the victim's database supplies that contact's real
+        // display name and real avatar for a Communication Notification. That is
+        // the lock-screen treatment reserved for trusted people, on a message
+        // they never sent.
+        //
+        // A well-behaved relay verifies signatures, so reaching this needs a
+        // malicious gateway or a hostile relay — which is exactly the party the
+        // rest of this pipeline is built not to trust. Failing here degrades to
+        // the gateway's static text, the same fallback as an unopenable event.
+        guard let eventId = event.id, eventId == event.computedId else {
+            trace("grp-bad-id")
+            return nil
+        }
+        guard let sig = event.sig,
+              let signedDigest = Hex.decode(eventId),
+              Secp256k1.schnorrVerify(
+                  message: signedDigest, pubkeyHex: event.pubkey, signatureHex: sig
+              )
+        else {
+            trace("grp-bad-sig")
+            return nil
+        }
+
         if event.pubkey == config.selfPubkey { return .dropped }
 
         // Ask each candidate relay's tenant and accept a name only if exactly
@@ -381,10 +415,7 @@ struct PushProcessor {
 
         let presented = NotificationPreview.present(message)
         let relay = only?.relay ?? relays.first
-        let path = relay.flatMap { url -> String? in
-            guard let eventId = event.id else { return nil }
-            return groupPath(relayUrl: url, groupId: groupId, eventId: eventId)
-        }
+        let path = relay.map { groupPath(relayUrl: $0, groupId: groupId, eventId: eventId) }
         return PreparedPush(
             drop: false,
             title: presented.title,
