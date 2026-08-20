@@ -2,6 +2,24 @@
 <html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
+    <!-- Content Security Policy, delivered as a meta tag so it applies on every
+         platform. The hosted web build also gets it as a response header from
+         nginx.conf; the two INTERSECT per directive, so a directive loosened
+         here alone still has no effect there. Native has no header at all —
+         Capacitor serves the bundle from https://localhost (Android) and
+         capacitor://localhost (iOS), and Electron from app://armada — so this
+         tag is the whole policy in those builds.
+         Notes on individual directives:
+         - 'unsafe-inline' in style-src is required, not incidental: the boot
+           splash below is built out of style= attributes, and fontLoader.ts
+           injects a <style> element for theme @font-face rules at runtime.
+         - https://www.youtube.com in script-src is the iframe player API
+           (src/lib/youtubeApi.ts); the embed itself is a frame-src entry.
+         - blob: in worker-src/media-src carries bundled web workers and
+           decrypted attachment playback respectively.
+         - frame-ancestors is ignored in a meta-delivered policy, so the
+           clickjacking defense lives in nginx.conf only. -->
+    <meta http-equiv="content-security-policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' https://www.youtube.com; worker-src 'self' blob:; child-src 'self' blob:; style-src 'self' 'unsafe-inline'; frame-src 'self' https://www.youtube-nocookie.com https://open.spotify.com https://*.iframe.diy; object-src 'none'; font-src 'self' https: data:; base-uri 'self'; manifest-src 'self'; connect-src 'self' blob: https: wss:; img-src 'self' data: blob: https:; media-src 'self' blob: https:" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="256x256" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -50,13 +68,10 @@
     <meta name="twitter:description" content="A sovereign harbor on the open relays. Your keys, your fleet." />
     <meta name="twitter:image" content="__PUBLIC_ORIGIN__/og.png" />
 
-    <script>
-      // Mark home-screen (standalone PWA) launches on <html> before first
-      // paint so CSS can scroll-lock the shell (see index.css).
-      if (window.matchMedia("(display-mode: standalone), (display-mode: fullscreen)").matches || window.navigator.standalone === true) {
-        document.documentElement.classList.add("standalone");
-      }
-    </script>
+    <!-- Marks home-screen (standalone PWA) launches on <html> before first
+         paint so CSS can scroll-lock the shell (see index.css). External
+         because the policy above permits no inline script. -->
+    <script src="/standalone.js"></script>
     <script src="/theme.js"></script>
   </head>
   <body>
@@ -99,28 +114,10 @@
         </svg>
       </div>
     </div>
-    <script>
-      // Show the mark only when this launch ISN'T headed for /welcome, which
-      // draws its own crest on arrival — starting the draw here as well meant
-      // a signed-out load animated, got cut off on mount, and jumped to a
-      // second draw. A signed-out load goes to /welcome (see HomeRedirect),
-      // and on the web the session is a localStorage entry we can read before
-      // the bundle parses. Native keeps it in the OS keystore, unreadable
-      // here, so `window.Capacitor` (injected by the bridge before our
-      // scripts) means "assume signed in" — its cold start is the case the
-      // inline splash exists for.
-      (function () {
-        var mark = document.getElementById("boot-mark");
-        var signedIn = true;
-        try {
-          if (!window.Capacitor) {
-            var login = localStorage.getItem("armada:login");
-            signedIn = !!login && login !== "[]";
-          }
-        } catch (e) { /* storage blocked — treat as signed in, i.e. show it */ }
-        if (mark && signedIn && location.pathname !== "/welcome") mark.style.display = "";
-      })();
-    </script>
+    <!-- Reveals the mark above unless this launch is headed for /welcome (see
+         the file for why). Must stay HERE, after the splash markup it reads.
+         External because the policy above permits no inline script. -->
+    <script src="/boot-splash.js"></script>
     <style>
       /* Keep in sync with ArmadaCrestKeyframes in src/components/brand/ArmadaCrest.tsx.
          Every element's base style is its final resting state and the keyframes
