@@ -7,6 +7,7 @@ import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useEventStore } from '@/hooks/useEventStore';
 import { useNostrPublish } from '@/hooks/useNostrPublish';
 import type { NostrRumor } from "@/lib/nostrRumor";
+import { sanitizeUrl } from "@/lib/sanitizeUrl";
 
 /** NIP-38 user status. kind 30315, addressable by the `d` tag (status type). */
 export const USER_STATUS_KIND = 30315;
@@ -17,7 +18,13 @@ export type UserStatusType = 'general' | 'music';
 export interface UserStatus {
   /** The status message (kind-30315 content). Empty string = cleared. */
   content: string;
-  /** Optional link the status points at (NIP-38 `r` tag). */
+  /**
+   * Optional link the status points at (NIP-38 `r` tag), already restricted to
+   * `http(s)` by {@link sanitizeUrl}. Anyone can publish a kind 30315, and this
+   * ends up in an `href` on hover over their profile, so it is sanitized HERE
+   * rather than at each of the four render sites — one of which will otherwise
+   * eventually be added without the check.
+   */
   link?: string;
   /** Unix seconds the status expires at, if the event carried an `expiration`. */
   expiration?: number;
@@ -48,7 +55,7 @@ export function isStatusExpired(status: UserStatus | undefined, now = Date.now()
  */
 export function parseUserStatusEvent(event: NostrRumor): UserStatusResult {
   const content = event.content.trim();
-  const link = event.tags.find(([name]) => name === 'r')?.[1];
+  const link = sanitizeUrl(event.tags.find(([name]) => name === 'r')?.[1]);
   const expirationTag = event.tags.find(([name]) => name === 'expiration')?.[1];
   const expiration = expirationTag ? Number(expirationTag) : undefined;
 
