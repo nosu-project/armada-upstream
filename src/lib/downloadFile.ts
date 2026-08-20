@@ -1,22 +1,31 @@
 import { Capacitor } from "@capacitor/core";
 
-import { bytesToBase64, filenameFromUrl } from "@/lib/fileBytes";
+import { bytesToBase64, filenameFromUrl, safeFilename } from "@/lib/fileBytes";
 import { openUrl } from "@/lib/share";
 
 /**
  * Save raw bytes to the user's device.
  *
  * Web uses the classic `<a download>` blob trick. On native the anchor pattern
- * silently fails in the WebView, so the bytes are base64-written to the app's
- * Documents directory (visible in the iOS Files app and Android's app-scoped
- * documents) — no storage permission required.
+ * silently fails in the WebView, so the bytes are base64-written to the
+ * Documents directory — the iOS Files app on iOS, and on Android the SHARED
+ * external documents directory (`DIRECTORY_DOCUMENTS`), not an app-scoped one.
+ * No storage permission required either way.
+ *
+ * `filename` is reduced to a bare name here as well as where it is derived.
+ * Neither native plugin normalizes or containment-checks the path it is given
+ * — both join it to the base directory and let the kernel resolve any `..` —
+ * so the containment has to be the app's, and it belongs at the write itself
+ * where no future caller can route around it. Sanitized rather than rejected
+ * on purpose: {@link downloadUrl} answers a throw by falling back to opening
+ * the URL, which would turn a hostile name into a navigation.
  */
 export async function downloadBinaryFile(filename: string, bytes: Uint8Array): Promise<void> {
   if (Capacitor.isNativePlatform()) {
     const { Filesystem, Directory } = await import("@capacitor/filesystem");
     // No `encoding` → Capacitor treats `data` as base64.
     await Filesystem.writeFile({
-      path: filename,
+      path: safeFilename(filename),
       data: bytesToBase64(bytes),
       directory: Directory.Documents,
     });

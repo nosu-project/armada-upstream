@@ -10,7 +10,7 @@
 import { Capacitor } from "@capacitor/core";
 import { Share } from "@capacitor/share";
 
-import { bytesToBase64, filenameFromUrl, sniffImageMime } from "@/lib/fileBytes";
+import { bytesToBase64, filenameFromUrl, safeFilename, sniffImageMime } from "@/lib/fileBytes";
 
 const native = Capacitor.isNativePlatform();
 
@@ -122,8 +122,13 @@ export async function shareFile(
       const { Filesystem, Directory } = await import("@capacitor/filesystem");
       // Cache, not Documents: this copy exists only to feed the share sheet and
       // the OS may reclaim it. Keeping a copy is what the download button does.
+      //
+      // The name is reduced to a bare filename at the write as well as where it
+      // is derived: the plugin resolves whatever path it is handed against the
+      // base directory without a containment check, and the cache directory's
+      // siblings are the databases and preferences.
       ({ uri } = await Filesystem.writeFile({
-        path: filename,
+        path: safeFilename(filename),
         data: bytesToBase64(bytes),
         directory: Directory.Cache,
       }));

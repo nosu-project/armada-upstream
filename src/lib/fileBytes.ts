@@ -87,18 +87,48 @@ export function sniffImageMime(bytes: Uint8Array): string | undefined {
 }
 
 /**
+ * Reduce an untrusted string to a bare filename — never a path.
+ *
+ * Every name that reaches a `Filesystem.writeFile` here is attacker-controlled
+ * (a sender's `imeta` `name`, or a URL segment they chose), and neither native
+ * filesystem plugin normalizes or containment-checks the path it is handed:
+ * both join it onto the base directory and let `open(2)` resolve any `..`. So
+ * separators, control characters and leading dots are removed HERE, where the
+ * name is derived, rather than trusted to a layer below. Length is capped so a
+ * name cannot fail the write by exceeding the filesystem's limit. Returns a
+ * safe fallback when nothing usable remains.
+ */
+export function safeFilename(name: string | undefined): string {
+  if (!name) return "download";
+  const cleaned = name
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/[/\\]/g, "_")
+    .replace(/^\.+/, "")
+    .trim()
+    .slice(0, 200);
+  return cleaned || "download";
+}
+
+/**
  * Derive a sensible filename from a URL (and optional MIME hint).
  *
  * Uses the last non-empty path segment (query string stripped). `blob:` and
  * hash-only URLs have no usable name, so fall back to a generic one and, when
  * the segment carries no extension, append one inferred from the MIME.
+ *
+ * The segment is run through {@link safeFilename}, because percent-decoding
+ * RE-INTRODUCES separators the URL parser had left encoded: WHATWG parsing pops
+ * only literal `..` segments, so `%2e%2e%2f` survives in `pathname` byte for
+ * byte and `decodeURIComponent` turns it back into `../`. For media this
+ * URL-derived name is the only name there is.
  */
 export function filenameFromUrl(url: string, mime?: string): string {
   let base = "download";
   try {
     const { pathname } = new URL(url);
     const segment = pathname.split("/").filter(Boolean).pop();
-    if (segment) base = decodeURIComponent(segment);
+    if (segment) base = safeFilename(decodeURIComponent(segment));
   } catch {
     // fall through to the generic name
   }

@@ -10,7 +10,7 @@ import {
   MAX_EXPLICIT_DECRYPT_BYTES,
   verifyPlaintextHash,
 } from "@/lib/encryptedMedia";
-import { formatBytes } from "@/lib/fileBytes";
+import { formatBytes, safeFilename } from "@/lib/fileBytes";
 import { cn } from "@/lib/utils";
 
 import type { ImetaEncryption } from "@/lib/imeta";
@@ -26,24 +26,6 @@ interface FileAttachmentProps {
   /** AES-GCM decryption params for client-encrypted (Concord/Vector) blobs. */
   encryption?: ImetaEncryption;
   className?: string;
-}
-
-/**
- * Sanitize a sender-supplied filename for display and for the `download`
- * attribute. The `name` field is attacker-controlled, so strip path separators
- * (no directory traversal), control chars, and leading dots; cap the length.
- * Returns a safe fallback when nothing usable remains.
- */
-function safeFilename(name: string | undefined): string {
-  if (!name) return "download";
-  const cleaned = name
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\u0000-\u001f\u007f]/g, "")
-    .replace(/[/\\]/g, "_")
-    .replace(/^\.+/, "")
-    .trim()
-    .slice(0, 200);
-  return cleaned || "download";
 }
 
 /** Pick a coarse icon from the MIME family. Cosmetic only. */
