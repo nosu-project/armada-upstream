@@ -115,13 +115,68 @@ describe("parseInline", () => {
   });
 });
 
-describe("splitMarkdownBlocks (document mode)", () => {
-  it("keeps chat mode free of document blocks", () => {
-    expect(splitMarkdownBlocks("## Heading\n- item")).toEqual([
-      { type: "text", text: "## Heading\n- item" },
+describe("splitMarkdownBlocks (chat headings and lists)", () => {
+  it("extracts Discord-style headings up to level 3", () => {
+    expect(splitMarkdownBlocks("# Title\n## Subtitle\n### Section\nbody")).toEqual([
+      { type: "heading", level: 1, text: "Title" },
+      { type: "heading", level: 2, text: "Subtitle" },
+      { type: "heading", level: 3, text: "Section" },
+      { type: "text", text: "body" },
     ]);
   });
 
+  it("keeps level 4+ headings literal in chat (document mode takes all six)", () => {
+    expect(splitMarkdownBlocks("#### deep")).toEqual([{ type: "text", text: "#### deep" }]);
+    expect(splitMarkdownBlocks("#### deep", true)).toEqual([{ type: "heading", level: 4, text: "deep" }]);
+  });
+
+  it("leaves hashtags and bare hashes literal", () => {
+    expect(splitMarkdownBlocks("#nostr is neat\n# \nnot a heading")).toEqual([
+      { type: "text", text: "#nostr is neat\n# \nnot a heading" },
+    ]);
+  });
+
+  it("extracts list runs", () => {
+    expect(splitMarkdownBlocks("todo:\n- one\n- two\n1. first\n2. second\ndone")).toEqual([
+      { type: "text", text: "todo:" },
+      { type: "list", ordered: false, start: 1, items: ["one", "two"] },
+      { type: "list", ordered: true, start: 1, items: ["first", "second"] },
+      { type: "text", text: "done" },
+    ]);
+  });
+
+  it("keeps emphasis markers that aren't list items literal", () => {
+    expect(splitMarkdownBlocks("*italic* and -dash and 1.5 litres")).toEqual([
+      { type: "text", text: "*italic* and -dash and 1.5 litres" },
+    ]);
+  });
+
+  it("passes a chunk without headings or lists through untouched", () => {
+    expect(splitMarkdownBlocks("before\n```js\nx\n```\nafter")).toEqual([
+      { type: "text", text: "before\n" },
+      { type: "code", lang: "js", code: "x" },
+      { type: "text", text: "\nafter" },
+    ]);
+  });
+
+  it("folds the blank line next to an extracted heading into its margin", () => {
+    expect(splitMarkdownBlocks("hello\n\n# Title\n\nbody")).toEqual([
+      { type: "text", text: "hello" },
+      { type: "heading", level: 1, text: "Title" },
+      { type: "text", text: "body" },
+    ]);
+  });
+
+  it("splits headings alongside quotes and fences", () => {
+    expect(splitMarkdownBlocks("> quoted\n## After quote\n```\ncode\n```")).toEqual([
+      { type: "quote", text: "quoted" },
+      { type: "heading", level: 2, text: "After quote" },
+      { type: "code", lang: undefined, code: "code" },
+    ]);
+  });
+});
+
+describe("splitMarkdownBlocks (document mode)", () => {
   it("extracts ATX headings with their level", () => {
     expect(splitMarkdownBlocks("## Feature Request\nbody text", true)).toEqual([
       { type: "heading", level: 2, text: "Feature Request" },

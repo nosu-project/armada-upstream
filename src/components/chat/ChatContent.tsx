@@ -77,9 +77,9 @@ interface ChatContentProps {
    *  ellipsis (used by quoted/embedded cards). Ignored when the content
    *  contains block media (images/embeds), which a line clamp would break. */
   clampLines?: number;
-  /** When true, long-form document markdown also renders: ATX headings, flat
-   *  lists and `[text](url)` links. Used for git issues/PRs/comments; chat
-   *  keeps its Discord-flavored subset. */
+  /** When true, long-form document markdown also renders: heading levels 4–6
+   *  and `[text](url)` links. Used for git issues/PRs/comments; chat keeps its
+   *  Discord-flavored subset (headings to level 3, lists, fences, quotes). */
   documentMarkdown?: boolean;
 }
 
@@ -671,8 +671,8 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
       return out;
     };
 
-    // Markdown block pass first (fenced ``` code, > quotes, and in document
-    // mode headings/lists), then tokenize each non-code run. Quote blocks
+    // Markdown block pass first (fenced ``` code, > quotes, headings and
+    // lists), then tokenize each non-code run. Quote blocks
     // carry their own token list and render inside a <blockquote> (media
     // inside quotes demotes to plain links).
     const result: ContentToken[] = [];

@@ -248,6 +248,11 @@ export default defineConfig({
             if (/[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)[\\/]/.test(id)) {
               return "vendor-react";
             }
+            // Code-block grammars: only ever reached through the dynamic import
+            // in src/lib/codeHighlight.ts, so this chunk loads on demand.
+            if (id.includes("node_modules/highlight.js") || id.includes("node_modules/lowlight")) {
+              return "vendor-highlight";
+            }
             if (id.includes("node_modules/@nostrify") || id.includes("node_modules/nostr-tools") || id.includes("node_modules/@noble") || id.includes("node_modules/@scure")) {
               return "vendor-nostr";
             }
