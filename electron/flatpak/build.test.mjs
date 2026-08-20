@@ -30,11 +30,41 @@ function makeSigningFixture() {
   fs.writeFileSync(commandLog, "");
 
   const fakeFlatpak = `#!${process.execPath}
+const crypto = require("node:crypto");
 const fs = require("node:fs");
+const path = require("node:path");
 const args = process.argv.slice(2);
+// The capability probe is a question about this flatpak, not an operation on
+// the repository, so it stays out of the command log the ordering assertions
+// read. MOCK_NO_SUMMARY_INDEX is a flatpak too old to generate one.
+if (args.includes("--help")) {
+  process.stdout.write("Usage:\\n  flatpak " + args[0] + " [OPTION...]\\n");
+  if (process.env.MOCK_NO_SUMMARY_INDEX !== "1") {
+    process.stdout.write("  --no-summary-index  Don't generate a summary index\\n");
+  }
+  process.exit(0);
+}
 fs.appendFileSync(process.env.MOCK_COMMAND_LOG, JSON.stringify(args) + "\\n");
 if (args[0] === process.env.MOCK_FLATPAK_FAIL) {
   process.exit(23);
+}
+if (args[0] === "build-update-repo") {
+  // Real build-update-repo writes the summary, its signature, the summary
+  // index and the index's immutable signature shard, which sign.sh now
+  // requires before it will publish anything.
+  const repo = args.at(-1);
+  fs.writeFileSync(path.join(repo, "summary"), "summary");
+  fs.writeFileSync(path.join(repo, "summary.sig"), "summary signature");
+  fs.writeFileSync(path.join(repo, "summary.idx"), "summary index");
+  fs.writeFileSync(path.join(repo, "summary.idx.sig"), "summary index signature");
+  fs.mkdirSync(path.join(repo, "summaries"), { recursive: true });
+  if (process.env.MOCK_NO_INDEX_SIG !== "1") {
+    const sha = crypto
+      .createHash("sha256")
+      .update(fs.readFileSync(path.join(repo, "summary.idx")))
+      .digest("hex");
+    fs.writeFileSync(path.join(repo, "summaries", sha + ".idx.sig"), "shard");
+  }
 }
 if (args[0] === "build-bundle") {
   fs.writeFileSync(args.at(-3), "signed bundle");
@@ -463,6 +493,73 @@ describe("Flatpak post-build signing", () => {
       expect(readCommandLog(fixture).map(([command]) => command)).toEqual([
         "build-sign",
         "refs",
+      ]);
+    } finally {
+      fs.rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("refuses a flatpak that cannot generate a summary index, before signing", () => {
+    const fixture = makeSigningFixture();
+    try {
+      const fingerprint = "0123456789ABCDEF0123456789ABCDEF01234567";
+      const publicKey = path.join(fixture.root, "armada-flatpak.gpg");
+      fs.writeFileSync(publicKey, "public key");
+      fs.writeFileSync(fixture.bundle, "unsigned bundle");
+
+      const result = runSigningScript(fixture, {
+        FLATPAK_GPG_KEY: fingerprint,
+        FLATPAK_GPG_PUBLIC_KEY: publicKey,
+        MOCK_NO_SUMMARY_INDEX: "1",
+        MOCK_PUBLIC_FINGERPRINTS: fingerprint,
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("Flatpak 1.13 or newer");
+      expect(fs.readFileSync(fixture.bundle, "utf8")).toBe("unsigned bundle");
+      expect(readCommandLog(fixture)).toEqual([]);
+    } finally {
+      fs.rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("refuses a summary index with no signature shard", () => {
+    const fixture = makeSigningFixture();
+    try {
+      const fingerprint = "0123456789ABCDEF0123456789ABCDEF01234567";
+      const publicKey = path.join(fixture.root, "armada-flatpak.gpg");
+      const repoDir = path.join(
+        fixture.root,
+        "electron",
+        "release",
+        "flatpak-repo",
+      );
+      fs.writeFileSync(publicKey, "public key");
+      fs.writeFileSync(fixture.bundle, "unsigned bundle");
+
+      const result = runSigningScript(fixture, {
+        FLATPAK_GPG_KEY: fingerprint,
+        FLATPAK_GPG_PUBLIC_KEY: publicKey,
+        MOCK_NO_INDEX_SIG: "1",
+        MOCK_PUBLIC_FINGERPRINTS: fingerprint,
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("no signature shard");
+      // The bundle is never rebuilt and the publisher identity never appears,
+      // so the previous release keeps serving until a signed one exists.
+      expect(fs.readFileSync(fixture.bundle, "utf8")).toBe("unsigned bundle");
+      expect(fs.existsSync(path.join(repoDir, "armada-flatpak.gpg"))).toBe(
+        false,
+      );
+      expect(readCommandLog(fixture).map(([command]) => command)).toEqual([
+        "build-sign",
+        "refs",
+        "rev-parse",
+        "gpg-sign",
+        "rev-parse",
+        "gpg-sign",
+        "build-update-repo",
       ]);
     } finally {
       fs.rmSync(fixture.root, { force: true, recursive: true });

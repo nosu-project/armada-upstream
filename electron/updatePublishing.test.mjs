@@ -200,9 +200,12 @@ describe("desktop update publication", () => {
     expect(flatpakSigningStep?.run).toContain(
       "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
     );
+    // cat-file rather than show: a writable checkout also controls
+    // .gitattributes, and show is the read path that honours textconv.
     expect(flatpakSigningStep?.run).toContain(
-      'git show "${GITHUB_SHA}:electron/flatpak/sign.sh" > "$trusted_sign_script"',
+      'git cat-file blob "${GITHUB_SHA}:electron/flatpak/sign.sh" > "$trusted_sign_script"',
     );
+    expect(flatpakSigningStep?.run).not.toContain("git show ");
     expect(flatpakSigningStep?.run).toContain(
       "export GIT_NO_REPLACE_OBJECTS=1",
     );
@@ -425,12 +428,32 @@ describe("desktop update publication", () => {
     expect(toolingScript).toContain(
       "command -v flatpak >/dev/null 2>&1 || packages+=(flatpak)",
     );
+    // Whatever the signing step refuses to run without, the fallback has to be
+    // able to install — including git, which it uses to read the committed
+    // signer out of the object database rather than the working tree.
+    const requiredCommands = signingScript
+      .match(/for required_command in ([^;]+); do/)?.[1]
+      .trim()
+      .split(/\s+/);
+    expect(requiredCommands).toContain("git");
+    for (const command of requiredCommands) {
+      expect(toolingScript).toContain(`command -v ${command} >/dev/null 2>&1`);
+    }
     expect(
       namedStep(
         "Install publishing tooling (fallback for stock runner images)",
       )?.if,
     ).toBeUndefined();
     expect(toolingScript).toContain("refs/tags/v*)");
+
+    // Signing and its verification run before the installers are staged, so a
+    // failed release tag would otherwise upload nothing at all to inspect.
+    const failureUpload = publishSteps.find(
+      (step) => step.uses === "actions/upload-artifact@v4" && step.if,
+    );
+    expect(failureUpload?.if).toBe("failure()");
+    expect(failureUpload?.with?.["if-no-files-found"]).toBe("warn");
+    expect(failureUpload?.with?.path).toContain("electron/release/");
   });
 
   it("keeps legacy clients current and publishes mutable pointers last", () => {
@@ -475,12 +498,27 @@ describe("desktop update publication", () => {
         "flatpak update --user --appstream --noninteractive -y armada-public-flatpak",
       ),
     );
-    const downloadsPublish = deployCommands.findIndex((command) =>
-      command.includes('"$DEPLOY_ROOT/downloads" "${TARGET}:/"'),
-    );
     expect(publicFlatpakRefresh).toBeGreaterThan(
       Math.max(...flatpakPointers),
     );
-    expect(downloadsPublish).toBeGreaterThan(publicFlatpakRefresh);
+
+    // The installers that have nothing to do with the OSTree repository are
+    // published FIRST and unconditionally; only the .flatpak bundle waits for
+    // the origin it configures to be readable and verified. A Flatpak-side
+    // failure must not withhold the Windows, macOS, deb or AppImage builds.
+    const otherInstallersPublish = deployCommands.findIndex((command) =>
+      command.includes(
+        "--exclude='*.flatpak' \"$DEPLOY_ROOT/downloads\" \"${TARGET}:/\"",
+      ),
+    );
+    const bundlePublish = deployCommands.findIndex((command) =>
+      command.includes(
+        "--include='downloads/' --include='*.flatpak' --exclude='*' \"$DEPLOY_ROOT/downloads\" \"${TARGET}:/\"",
+      ),
+    );
+    expect(otherInstallersPublish).toBeGreaterThan(-1);
+    expect(bundlePublish).toBeGreaterThan(-1);
+    expect(otherInstallersPublish).toBeLessThan(Math.min(...flatpakPayloads));
+    expect(bundlePublish).toBeGreaterThan(publicFlatpakRefresh);
   });
 });

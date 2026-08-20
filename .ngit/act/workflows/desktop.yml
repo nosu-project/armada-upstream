@@ -266,6 +266,10 @@ jobs:
               command -v flatpak >/dev/null 2>&1 || packages+=(flatpak)
               command -v gpg >/dev/null 2>&1 || packages+=(gnupg)
               command -v ostree >/dev/null 2>&1 || packages+=(ostree)
+              # The signing step reads the committed signer out of the object
+              # database rather than the working tree, so git is as required
+              # here as the Flatpak tooling is.
+              command -v git >/dev/null 2>&1 || packages+=(git)
               ;;
           esac
           if [ "${#packages[@]}" -gt 0 ]; then
@@ -314,7 +318,7 @@ jobs:
           FLATPAK_GPG_EXPECTED_FINGERPRINT: ${{ secrets.FLATPAK_GPG_EXPECTED_FINGERPRINT }}
           # Parsed into the workflow plan before the application build runs.
           # Keep this literal synchronized with electron/flatpak/sign.sh.
-          TRUSTED_SIGN_SCRIPT_SHA256: b47da844ccd5dc99ad1cdd929e5d915d490b3733ce2a08f0a84d219c8e437cb3
+          TRUSTED_SIGN_SCRIPT_SHA256: 05cccef4bcd0404300b1d382812bab26af8d1617f97a2e2f7731954e74f7d3eb
         run: |
           set -euo pipefail
           export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -344,15 +348,21 @@ jobs:
             }
           done
 
-          # The build job was allowed to modify its checkout, including loose
-          # Git objects and replacement refs. Materialize the triggering
-          # commit's signer with replacements disabled, then verify its bytes
-          # against the digest embedded in the already-parsed workflow before
-          # importing the private key. Git does not rehash a loose object when
-          # reading it, so both defenses are required.
+          # What this protects is the long-lived SIGNING KEY, not the release
+          # contents: the repository being signed was produced by the build job
+          # out of the same checkout, and this step faithfully signs whatever
+          # bytes that job left behind. A bad build is one revocable release; an
+          # exfiltrated key is permanent. So the one program that runs in the
+          # same process as the key is materialized from the object database
+          # with replacements disabled and checked against a digest that was
+          # parsed into the workflow plan before the build job started. Git does
+          # not rehash a loose object when reading it, so both halves are
+          # needed. `cat-file blob` rather than `git show`: a writable checkout
+          # also controls .gitattributes and .git/config, and `show` is the path
+          # that consults textconv and other attribute-driven filters.
           export GIT_NO_REPLACE_OBJECTS=1
           trusted_sign_script=$(mktemp "$RUNNER_TEMP/armada-flatpak-sign.XXXXXX")
-          git show "${GITHUB_SHA}:electron/flatpak/sign.sh" > "$trusted_sign_script"
+          git cat-file blob "${GITHUB_SHA}:electron/flatpak/sign.sh" > "$trusted_sign_script"
           printf '%s  %s\n' "$TRUSTED_SIGN_SCRIPT_SHA256" "$trusted_sign_script" | \
             sha256sum -c -
           chmod 0700 "$trusted_sign_script"
@@ -721,6 +731,26 @@ jobs:
           path: ${{ steps.collect.outputs.feed }}
           if-no-files-found: error
 
+      # Signing and its verification now run BEFORE the installers are staged,
+      # so a tag that fails there would otherwise upload nothing at all and
+      # leave the maintainer with only a log. Publish the raw build output
+      # instead: the installers are the same bytes the build job produced, and
+      # the unsigned Flatpak bundle is what the signing step was working on.
+      # `warn`, not `error`: this runs after failures anywhere in the job,
+      # including ones that happen before an installer exists.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: armada-desktop-failed-${{ github.ref_name }}
+          path: |
+            electron/release/*.AppImage
+            electron/release/*.deb
+            electron/release/*.exe
+            electron/release/*.flatpak
+            electron/release/latest*.yml
+            electron/release/mac/*.zip
+          if-no-files-found: warn
+
   # A third fresh container is the SSH credential boundary. No executable from
   # the shared workspace runs here: tooling installation and deployment are
   # workflow-owned inline shell using a fixed system PATH. The publish job may
@@ -918,6 +948,52 @@ jobs:
           TARGET="$deploy_target"
           unset deploy_target
 
+          # The public site is an nsite behind Caddy. Verify the filesystem
+          # carve-out itself, not merely that rsync accepted the bytes: a route
+          # regression can otherwise return the SPA shell with 200 (Flatpak) or
+          # a synthetic 404 (electron-updater) while the release job stays green.
+          smoke=$(mktemp -d "$RUNNER_TEMP/armada-update-smoke.XXXXXX")
+
+          # Publish everything whose trust boundary Flatpak signing does not
+          # touch FIRST, and independently of it. The Windows installer, the
+          # macOS zips, the deb and the AppImage have nothing to do with the
+          # OSTree repository, so a Caddy route regression under
+          # /downloads/flatpak/, or a Flatpak client failure in the verification
+          # below, must not withhold them. Only the .flatpak bundle waits, and
+          # only because its automatically configured origin has to be complete
+          # before an install can use it.
+          # Additive: past releases stay downloadable at their own URLs.
+          # --chmod: the served mode is stated here rather than inherited from
+          # whatever umask the staging step ran under. An installer the web
+          # server's user can't read is a 403, which looks like a build that
+          # didn't publish.
+          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
+            --exclude='*.flatpak' \
+            "$DEPLOY_ROOT/downloads" "${TARGET}:/"
+
+          # Publish immutable updater payloads before the mutable latest*.yml
+          # pointers. A client can therefore never observe metadata naming a
+          # file that has not reached the server yet. The legacy copy makes a
+          # /desktop Caddy carve-out sufficient to migrate existing clients.
+          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
+            --exclude='latest*.yml' \
+            "$DEPLOY_ROOT/desktop/" "${TARGET}:/downloads/desktop/"
+          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
+            --exclude='latest*.yml' \
+            "$DEPLOY_ROOT/desktop/" "${TARGET}:/desktop/"
+          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
+            --include='latest*.yml' --exclude='*' \
+            "$DEPLOY_ROOT/desktop/" "${TARGET}:/downloads/desktop/"
+          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
+            --include='latest*.yml' --exclude='*' \
+            "$DEPLOY_ROOT/desktop/" "${TARGET}:/desktop/"
+
+          for name in latest.yml latest-linux.yml; do
+            curl -fsS --retry 5 --retry-all-errors \
+              "https://armada.buzz/downloads/desktop/$name" -o "$smoke/$name"
+            cmp "$DEPLOY_ROOT/desktop/$name" "$smoke/$name"
+          done
+
           # Flatpak's signed summary is the mutable pointer into its
           # content-addressed object store. Publish every object, the immutable
           # summaries/ index shards, and the public identity before the root
@@ -946,11 +1022,6 @@ jobs:
             --include='/summary' --include='/summary.sig' \
             --include='/summary.idx' --include='/summary.idx.sig' --exclude='*' \
             "$DEPLOY_ROOT/flatpak/" "${TARGET}:/flatpak/"
-          # The public site is an nsite behind Caddy. Verify the filesystem
-          # carve-out itself, not merely that rsync accepted the bytes: a route
-          # regression can otherwise return the SPA shell with 200 (Flatpak) or
-          # a synthetic 404 (electron-updater) while the release job stays green.
-          smoke=$(mktemp -d "$RUNNER_TEMP/armada-update-smoke.XXXXXX")
           for name in summary summary.sig summary.idx summary.idx.sig config armada-flatpak.gpg armada-flatpak.fingerprint; do
             curl -fsS --retry 5 --retry-all-errors \
               "https://armada.buzz/downloads/flatpak/$name" -o "$smoke/flatpak-$name"
@@ -1001,37 +1072,18 @@ jobs:
               armada-public-flatpak
           )
 
-          # Publish the keyed installer only after its signed origin has been
-          # read back and verified. If repository publication fails midway, the
-          # stable Armada.flatpak URL therefore continues serving the previous
-          # bundle instead of one whose configured origin is not ready yet.
-          # Additive: past releases remain available at their versioned URLs.
-          # --chmod states served permissions rather than inheriting the build
-          # umask; an unreadable installer otherwise becomes a misleading 403.
+          # The bundle is the ONE artifact held back until here, because it is
+          # the one that carries an update origin: installing it configures a
+          # GPG-verified remote, so publishing it before that remote is readable
+          # and verified would hand a user an app whose first update attempt
+          # fails. If repository publication fails midway, the stable
+          # Armada.flatpak URL therefore keeps serving the previous bundle,
+          # while every other installer above is already published.
+          # `downloads/` is included as a directory so rsync descends into it;
+          # `--exclude='*'` would otherwise prune the transfer at its root.
           rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
+            --include='downloads/' --include='*.flatpak' --exclude='*' \
             "$DEPLOY_ROOT/downloads" "${TARGET}:/"
 
-          # Publish immutable updater payloads before the mutable latest*.yml
-          # pointers. A client can therefore never observe metadata naming a
-          # file that has not reached the server yet. The legacy copy makes a
-          # /desktop Caddy carve-out sufficient to migrate existing clients.
-          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
-            --exclude='latest*.yml' \
-            "$DEPLOY_ROOT/desktop/" "${TARGET}:/downloads/desktop/"
-          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
-            --exclude='latest*.yml' \
-            "$DEPLOY_ROOT/desktop/" "${TARGET}:/desktop/"
-          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
-            --include='latest*.yml' --exclude='*' \
-            "$DEPLOY_ROOT/desktop/" "${TARGET}:/downloads/desktop/"
-          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
-            --include='latest*.yml' --exclude='*' \
-            "$DEPLOY_ROOT/desktop/" "${TARGET}:/desktop/"
-
-          for name in latest.yml latest-linux.yml; do
-            curl -fsS --retry 5 --retry-all-errors \
-              "https://armada.buzz/downloads/desktop/$name" -o "$smoke/$name"
-            cmp "$DEPLOY_ROOT/desktop/$name" "$smoke/$name"
-          done
           cleanup_deploy_ssh
           trap - EXIT HUP INT TERM

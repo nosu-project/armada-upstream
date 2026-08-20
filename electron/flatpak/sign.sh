@@ -45,6 +45,18 @@ for required_command in flatpak gpg ostree; do
   fi
 done
 
+# A published release must carry a summary INDEX (summary.idx and its immutable
+# summaries/<sha256>.idx.sig shard), because modern clients read it instead of
+# the legacy summary and CI refuses to deploy a repository without one. Flatpak
+# only generates it from 1.13, so ask this flatpak whether it can rather than
+# parsing a version string: on an older one the whole release tag would
+# otherwise fail several minutes later, at a `test -s` that cannot say why.
+if ! flatpak build-update-repo --help 2>&1 | grep -q -- '--no-summary-index'; then
+  echo "This flatpak cannot generate a repository summary index." >&2
+  echo "Flatpak 1.13 or newer is required to sign a release repository." >&2
+  exit 1
+fi
+
 FLATPAK_GPG_PUBLIC_KEY=$(realpath -- "$FLATPAK_GPG_PUBLIC_KEY")
 
 # Never embed a public key merely because it came from the expected secret.
@@ -154,6 +166,22 @@ done
 
 flatpak build-update-repo --no-update-appstream "$@" \
   --gpg-import="$staged_public_key" "$repo_dir"
+
+# Assert the signed metadata here, where the cause is still in scope, rather
+# than leaving it to the CI step that can only report a missing file. The index
+# shard is named by the digest of summary.idx, so an index left over from an
+# earlier pass is caught alongside one that was never generated.
+for signed_metadata in summary summary.sig summary.idx summary.idx.sig; do
+  if [ ! -s "$repo_dir/$signed_metadata" ]; then
+    echo "build-update-repo produced no $signed_metadata; refusing to publish." >&2
+    exit 1
+  fi
+done
+summary_index_sha=$(sha256sum "$repo_dir/summary.idx" | cut -d ' ' -f1)
+if [ ! -s "$repo_dir/summaries/$summary_index_sha.idx.sig" ]; then
+  echo "Summary index has no signature shard summaries/$summary_index_sha.idx.sig." >&2
+  exit 1
+fi
 
 # Build beside the published filename and replace it only after Flatpak has
 # produced a complete signed bundle. A failed signing pass leaves the existing

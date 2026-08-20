@@ -411,7 +411,9 @@ sudo flatpak update --system buzz.armada.app
 
 Never perform either trust flip before the signed release is available. New
 signed bundles already embed the key and enable GPG verification, so they do
-not need this one-time procedure.
+not need this one-time procedure. The migration is opt-in: an existing
+`no-gpg-verify` origin ignores the signatures the repository now carries and
+keeps updating unchanged, so signing breaks no current installation.
 
 For a local package-manager update cycle:
 
@@ -461,7 +463,9 @@ not enable verification for a bundle's automatically configured origin.
 Operators must announce the full fingerprint over a separately authenticated
 channel before asking existing installations to import it. Changing the
 expected-fingerprint secret is an explicit key rotation, not routine release
-maintenance.
+maintenance: once installs verify against a key, a lost or expired one stops
+their updates with no in-band recovery, and every affected user has to import
+the replacement by hand. Create the signing key without an expiry date.
 
 The manifest swaps only venmic's native prebuild to its
 Freedesktop-25.08-compatible 6.1 build; AppImage and deb retain the
