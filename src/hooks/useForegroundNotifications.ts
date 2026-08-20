@@ -435,7 +435,7 @@ export function useForegroundNotifications(): void {
 
         // These page-owned cues work without Notification permission. A batch
         // can contain multiple accepted events, but should produce one sound,
-        // not a stack of overlapping clips. The title marker itself is
+        // not a stack of overlapping clips. The favicon badge itself is
         // idempotent and only appears while the tab is hidden or unfocused.
         markTabAttention();
         if (soundSettings.enabled && !playedSound && !silent) {
