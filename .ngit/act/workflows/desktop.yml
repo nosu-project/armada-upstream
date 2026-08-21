@@ -72,6 +72,15 @@ jobs:
         run: |
           set -eu
           npm ci
+          # Mini App multiplayer rides a Rust crate compiled to wasm
+          # (crates/webxdc-rt). `npx vite build` below does NOT fire the
+          # prebuild hook that `npm run build` would, so build the transport
+          # explicitly. WEBXDC_RT_REQUIRED=1 makes a missing toolchain or a
+          # failed compile fail the release rather than silently ship the
+          # desktop app with multiplayer off. The Rust toolchain and the warm
+          # iroh dependency tree are baked into the armada-ci runner image
+          # (.ngit/ci-image/Dockerfile).
+          WEBXDC_RT_REQUIRED=1 npm run build:wasm
           # No `-l error`: act's log capture drops suppressed output, so a
           # failing/empty build looked like a silent success and only surfaced
           # later as "cp: cannot stat 'dist/index.html'". Keep vite's own output.

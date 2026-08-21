@@ -161,6 +161,15 @@ jobs:
           # the secret being unprovisioned.
           unset VITE_PLAUSIBLE_DOMAIN VITE_PLAUSIBLE_ENDPOINT
           npm ci
+          # Mini App multiplayer rides a Rust crate compiled to wasm
+          # (crates/webxdc-rt). `npx vite build` below does NOT fire the
+          # prebuild hook that `npm run build` would, so build the transport
+          # explicitly. WEBXDC_RT_REQUIRED=1 makes a missing toolchain or a
+          # failed compile fail the release rather than silently ship the APK
+          # with multiplayer off. The Rust toolchain and the warm iroh
+          # dependency tree are baked into the armada-ci runner image
+          # (.ngit/ci-image/Dockerfile).
+          WEBXDC_RT_REQUIRED=1 npm run build:wasm
           npx vite build
           test -f dist/index.html || { echo "vite build produced no dist/index.html" >&2; ls -la dist || true; exit 1; }
           cp dist/index.html dist/404.html

@@ -29,7 +29,7 @@ ctx="$(mktemp -d /tmp/armada-ci-context.XXXXXX)"
 trap 'rm -rf "$ctx"' EXIT
 
 # Context = tracked files only, from the requested ref.
-git archive "$ref" android electron package.json package-lock.json \
+git archive "$ref" android electron crates package.json package-lock.json \
   capacitor.config.ts .ngit/ci-image | tar -x -C "$ctx"
 cp "$ctx/.ngit/ci-image/Dockerfile" "$ctx/Dockerfile"
 

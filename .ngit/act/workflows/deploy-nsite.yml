@@ -88,22 +88,15 @@ jobs:
 
       - run: npm ci
 
-      # Mini App multiplayer rides a Rust crate compiled to wasm
-      # (crates/webxdc-rt). `npm run build` compiles it via a prebuild hook,
-      # which is deliberately non-fatal for frontend-only contributors — so
-      # here, where it is NOT optional, WEBXDC_RT_REQUIRED makes a missing
-      # toolchain or a failed compile fail the deploy instead of quietly
-      # publishing a build with multiplayer switched off.
-      - name: Rust toolchain for the Mini App transport
-        run: |
-          set -eu
-          rustup target add wasm32-unknown-unknown
-          curl -fsSL https://github.com/rustwasm/wasm-pack/releases/download/v0.13.1/wasm-pack-v0.13.1-x86_64-unknown-linux-musl.tar.gz \
-            | tar -xz --strip-components=1 -C /usr/local/bin --wildcards '*/wasm-pack'
-          wasm-pack --version
-
-      # Build the SPA (npm build also copies dist/index.html -> dist/404.html,
-      # which is the path NIP-5A host servers fall back to).
+      # Build the SPA. `npm run build` compiles the Mini App realtime transport
+      # (crates/webxdc-rt, iroh-gossip -> wasm) through a prebuild hook that is
+      # deliberately non-fatal for frontend-only contributors — so here, where
+      # it is NOT optional, WEBXDC_RT_REQUIRED makes a missing toolchain or a
+      # failed compile fail the deploy instead of quietly publishing a build
+      # with multiplayer switched off. The Rust toolchain and the warm iroh
+      # dependency tree are baked into the armada-ci runner image
+      # (.ngit/ci-image/Dockerfile). (npm build also copies dist/index.html ->
+      # dist/404.html, the path NIP-5A host servers fall back to.)
       - run: npm run build
         env:
           WEBXDC_RT_REQUIRED: "1"
