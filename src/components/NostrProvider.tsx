@@ -12,7 +12,7 @@ import { useCachedNip29Servers } from "@/hooks/useCachedNip29Servers";
 import { poolReqTargets } from "@/lib/poolRouting";
 import { verifyEventOnce } from "@/lib/verifyCache";
 import { appEventStore } from "@/lib/db/mainEventStore";
-import { NostrBatcher } from "@/lib/NostrBatcher";
+import { detachableClient, NostrBatcher } from "@/lib/NostrBatcher";
 import { AndroidNativeSigner } from "@/lib/androidNativeSigner";
 import { Nip46Signer } from "@/lib/nip46Signer";
 import { getNip46Transport } from "@/lib/nip46Transport";
@@ -730,8 +730,18 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   // in the app (~96 files, and `useCurrentUser` reaches it transitively), so
   // that literal alone re-rendered nearly everything whenever this provider
   // rendered. It renders whenever `useAppContext()` above it invalidates.
+  //
+  // What is handed out is a plain object of BOUND functions rather than the
+  // batcher itself: `nostr` is consumed structurally everywhere (minimal
+  // `NostrLike` interfaces, object-literal test doubles), so a consumer lifting
+  // a method off it is a natural thing to write and silently loses `this` on a
+  // class instance. See `detachableClient` — this provider is the one place a
+  // client escapes into the app, so it is the one place to make that guarantee.
   const nostrValue = useMemo(
-    () => ({ nostr: (batcher.current ?? pool.current) as unknown as NPool }),
+    () => {
+      const client = (batcher.current ?? pool.current) as unknown as NPool;
+      return { nostr: detachableClient(client) };
+    },
     // Empty deps are safe because both refs are lazily initialized in the
     // RENDER BODY above (`pool` at the `if (!pool.current)` block, `batcher`
     // just after it), so both are populated before this memo first runs, and

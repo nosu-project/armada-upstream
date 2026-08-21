@@ -2,7 +2,7 @@ import type { NostrEvent, NostrFilter } from "@nostrify/types";
 import type { NPool } from "@nostrify/nostrify";
 import { describe, expect, it, vi } from "vitest";
 
-import { NostrBatcher } from "@/lib/NostrBatcher";
+import { detachableClient, NostrBatcher } from "@/lib/NostrBatcher";
 
 function statusEvent(pubkey: string, content: string, d = "general"): NostrEvent {
   return {
@@ -423,6 +423,51 @@ describe("NostrBatcher — gift wraps are never cached", () => {
     // Only the non-wrap event was cached.
     expect(cached.map((e) => e.kind)).toEqual([1]);
     expect(cached.some((e) => e.kind === 1059 || e.kind === 21059)).toBe(false);
+  });
+});
+
+describe("detachableClient — the shared client survives being taken apart", () => {
+  /** A pool stub covering the whole client surface, recording what it reaches. */
+  function makeFullPool() {
+    const seen: string[] = [];
+    const handle = { query: vi.fn(async () => []), event: vi.fn(async () => undefined) };
+    const pool = {
+      query: vi.fn(async () => { seen.push("query"); return []; }),
+      event: vi.fn(async () => { seen.push("event"); }),
+      req: vi.fn(() => { seen.push("req"); return (async function* () {})(); }),
+      relay: vi.fn(() => { seen.push("relay"); return handle; }),
+      group: vi.fn(() => { seen.push("group"); return handle; }),
+      close: vi.fn(async () => { seen.push("close"); }),
+    } as unknown as NPool;
+    return { pool, seen };
+  }
+
+  const note: NostrEvent = { id: "e1", pubkey: "p", kind: 1, created_at: 1, content: "", tags: [], sig: "s" };
+
+  it("keeps every method working when it is lifted off the client", async () => {
+    const { pool, seen } = makeFullPool();
+    const client = detachableClient(new NostrBatcher(pool));
+
+    // Exactly how the app treats `nostr`: a bag of functions. That is what
+    // `{ relay: nostr.relay }` assumed in useCommunityList, and what every
+    // object-literal double in the repo makes look safe.
+    const { query, event, req, relay, group, close } = client;
+    await query([{ kinds: [1] }]);
+    await event(note);
+    req([{ kinds: [1] }]);
+    relay("wss://r1");
+    group(["wss://r1"]);
+    await close();
+
+    expect(seen).toEqual(["query", "event", "req", "relay", "group", "close"]);
+  });
+
+  it("supplies a guarantee the bare instance does not", () => {
+    const { pool } = makeFullPool();
+    // The hazard itself: a method off the instance arrives with the wrong
+    // receiver and cannot reach `this.pool`. Nothing in the types says so.
+    const { relay } = new NostrBatcher(pool);
+    expect(() => relay("wss://r1")).toThrow();
   });
 });
 

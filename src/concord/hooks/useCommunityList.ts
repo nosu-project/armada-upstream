@@ -123,6 +123,21 @@ type NostrLike = {
   event?(event: NostrEvent, opts?: { signal?: AbortSignal }): Promise<unknown>;
 };
 
+/** A client proven able to reach a named relay. */
+type PublishingNostr = NostrLike & { relay: NonNullable<NostrLike["relay"]> };
+
+/**
+ * Narrow a client to one that can publish — the client ITSELF, never a
+ * `{ relay: nostr.relay }` rebuilt from its parts. `relay` is a method, and the
+ * object a lifted method lands in becomes its receiver: the real client is a
+ * `NostrBatcher` whose `relay()` reads `this.pool`, so the copy throws on every
+ * call while looking, to the type checker and to every object-literal double in
+ * the tests, exactly like the original.
+ */
+function canPublish(client: NostrLike): client is PublishingNostr {
+  return typeof client.relay === "function";
+}
+
 /**
  * Decode-once memo for fragment decrypts, keyed by event id. Capped: every
  * publish mints new event ids that get memoized on the next fetch, so a
@@ -542,15 +557,10 @@ async function publishFragments(
   // Exact read cohort only. An unanswered relay may hold a newer CRDT fact;
   // queueing this rewrite there for later would overwrite that unseen fact.
   const targets = uniqueRelayUrls(targetRelays);
-  // BIND, don't copy: the real client is a NostrBatcher instance and `relay` is
-  // a method that reads `this.pool`. Lifting the bare function reference into
-  // an object literal detaches the receiver, so the call lands with `this` set
-  // to that literal and fails on `this.pool` being undefined.
-  const relay = nostr.relay?.bind(nostr);
-  if (targets.length === 0 || !relay) {
+  if (targets.length === 0 || !canPublish(nostr)) {
     throw new Error("No relay is available for your community list update");
   }
-  const publishNostr = { relay };
+  const publishNostr: PublishingNostr = nostr;
   const frags = fragment(list);
   const now = Math.floor(Date.now() / 1000);
   const unchanged = (index: number, frag: FragList): boolean => {

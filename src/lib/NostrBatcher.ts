@@ -1390,3 +1390,44 @@ export class NostrBatcher {
     return results;
   }
 }
+
+/**
+ * The client surface the app actually reaches for. Written down rather than
+ * derived by walking the prototype: this is the CONTRACT (`NRelay` plus the
+ * pool's two scoped handles), and a prototype walk would also bind whatever
+ * internals a future implementation happens to expose.
+ */
+const CLIENT_METHODS = ['query', 'event', 'req', 'relay', 'group', 'close'] as const;
+
+/**
+ * Re-present a client as a plain object of receiver-bound functions.
+ *
+ * Everything downstream consumes `nostr` STRUCTURALLY — a dozen modules declare
+ * their own minimal `{ query, relay, group }` interfaces, and every test double
+ * in the repo is an object literal of standalone functions. Under that contract
+ * a caller copying a method off the client (`{ relay: nostr.relay }`, a
+ * destructure, a method handed to `map`) is an ordinary thing to write, and it
+ * reads as safe.
+ *
+ * It is not, because the real client is a CLASS INSTANCE: `NostrBatcher.relay()`
+ * reads `this.pool`, and `NPool`'s methods likewise read their own fields. A
+ * lifted method arrives with the wrong receiver and throws — at the call site,
+ * at runtime, on whichever path happened to do it, with nothing in the types or
+ * the tests to catch it first (`useCommunityList` shipped exactly this, which
+ * took out Concord community creation).
+ *
+ * Binding once, here, makes the structural contract TRUE of the object every
+ * consumer holds: a bag of functions that work wherever they are called from.
+ * That is why this is applied at the provider (the single place a client
+ * escapes into the app) rather than at the call sites that must not misuse it.
+ */
+export function detachableClient<T extends object>(client: T): T {
+  const source = client as unknown as Record<string, unknown>;
+  const bound: Record<string, unknown> = {};
+  for (const name of CLIENT_METHODS) {
+    const method = source[name];
+    if (typeof method !== 'function') continue;
+    bound[name] = (method as (...args: unknown[]) => unknown).bind(client);
+  }
+  return bound as T;
+}
