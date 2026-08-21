@@ -14,8 +14,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { _resetChatMemoForTests } from "@/concord/lib/chat";
 import { unseenPlaneWraps } from "@/concord/lib/planeSync";
 import { _resetVerifyCacheForTests } from "@/lib/verifyCache";
-import { bytesToHex, channelGroupKey, controlGroupKey, voiceGroupKey, voiceMediaKey } from "@/concord/lib/derive";
-import { KIND_CONTROL, KIND_MESSAGE, KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord/lib/kinds";
+import { bytesToHex, channelGroupKey, controlGroupKey, guestbookGroupKey, voiceGroupKey, voiceMediaKey } from "@/concord/lib/derive";
+import { KIND_CONTROL, KIND_KICK, KIND_MESSAGE, KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord/lib/kinds";
 import { peekPendingWraps, queryPlane, queryChannelRumors } from "@/concord/lib/rumorStore";
 import { drainLiveDmWraps, resetLiveDmWraps } from "@/lib/nip17/dm17Store";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal } from "@/concord/lib/stream";
@@ -89,6 +89,7 @@ function makeSinks(spec: Partial<WireSpec>, store = new FakeStore()) {
     concordCommunityByChannel: new Map(),
     concordBannedByCommunity: new Map(),
     concordCtlByPk: new Map(),
+    concordGbByPk: new Map(),
     gitByRepository: new Map(),
     gitRootById: new Map(),
     gitRootAuthorById: new Map(),
@@ -288,6 +289,35 @@ describe("ingestWireEvents", () => {
     expect(scopes.has(`c2ctl:${idHex}`)).toBe(true);
     const opened = await queryPlane(idHex, "control");
     expect(opened.some((o) => o.content === "edition")).toBe(true);
+  });
+
+  it("decrypts a Concord Kick into the opened-event store and rings the c2gb membership wake", async () => {
+    // The live path for a kick. It rotates no key and publishes no control
+    // edition, so it rings nothing on `c2ctl` and — before this subscription —
+    // reached the kicked member only on the guestbook query's 60s tick.
+    const communityId = new Uint8Array(32).fill(201);
+    const idHex = bytesToHex(communityId);
+    const guestbook = guestbookGroupKey(root, communityId, 0);
+    const admin = signer();
+    const target = signer();
+    const rumor = buildRumor({
+      kind: KIND_KICK,
+      content: "",
+      tags: [["p", target.pubkey]],
+      pubkey: admin.pubkey,
+      ms: Date.now(),
+    });
+    const wrap = wrapSeal(await sealRumor(rumor, KIND_SEAL_ENCRYPTED, guestbook, admin), guestbook) as NostrEvent;
+    const { store, sinks } = makeSinks({
+      concordGbByPk: new Map([[wrap.pubkey, { idHex, groups: [guestbook] }]]),
+    });
+
+    const scopes = await collectScopes(() => ingestWireEvents(sinks, [wrap]));
+
+    expect(store.events).toHaveLength(0); // wraps never land in armada-events
+    expect(scopes.has(`c2gb:${idHex}`)).toBe(true);
+    const opened = await queryPlane(idHex, "guestbook");
+    expect(opened.some((o) => o.kind === KIND_KICK && o.tags.some((t) => t[1] === target.pubkey))).toBe(true);
   });
 
   it("parks Concord wraps for streams we hold no key for and rings the park doorbell", async () => {

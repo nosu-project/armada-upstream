@@ -177,10 +177,12 @@ export async function ingestWireEvents(
   const candidates: NotifyCandidate[] = [];
 
   // Split wraps from plaintext; group decryptable wraps per channel so the
-  // (chunked, memoized) decode runs one batch per channel. Control-plane wraps
-  // (a separate author set) are collected per community for a fold wake.
+  // (chunked, memoized) decode runs one batch per channel. Control- and
+  // guestbook-plane wraps (each its own author set) are collected per community
+  // for a fold wake and a memberlist wake respectively.
   const wrapsByChannel = new Map<Channel, NostrEvent[]>();
   const ctlWraps: NostrEvent[] = [];
+  const gbWraps: NostrEvent[] = [];
   const toPark: NostrEvent[] = [];
   const plain: NostrEvent[] = [];
   const dmWraps: NostrEvent[] = [];
@@ -194,6 +196,8 @@ export async function ingestWireEvents(
         else wrapsByChannel.set(channel, [ev]);
       } else if (spec?.concordCtlByPk.has(ev.pubkey)) {
         ctlWraps.push(ev);
+      } else if (spec?.concordGbByPk.has(ev.pubkey)) {
+        gbWraps.push(ev);
       } else if (self && ev.kind === KIND_DM_WRAP && ev.tags.some(([n, v]) => n === "p" && v === self)) {
         // A NIP-17 gift wrap addressed to the viewer (kind-1059, `#p` = self —
         // the wire's DM filter). The wire can't decrypt it (that needs the
@@ -309,6 +313,41 @@ export async function ingestWireEvents(
       if (stored) notePlaneWrapsSeen(unseen.map((w) => w.id));
     }
   }
+  // Concord GUESTBOOK: decrypt with the community's guestbook-stream keys →
+  // opened-event store, then ring `c2gb:<idHex>`. `useGuestbook` listens on
+  // that scope to re-seed from the store and re-coalesce.
+  //
+  // This is the live path for a KICK, which is a guestbook directive and
+  // nothing else — it publishes no control edition and rolls no epoch, so
+  // NOTHING on the control plane's `c2ctl` sub ever announces one. Without
+  // this the earliest a kicked member could learn of it was the plane's own
+  // 60s poll (or the 5-minute background sweep, whichever came first).
+  if (gbWraps.length > 0 && spec) {
+    const byCommunity = new Map<string, { groups: StreamKeyView[]; wraps: NostrEvent[] }>();
+    for (const ev of gbWraps) {
+      const entry = spec.concordGbByPk.get(ev.pubkey);
+      if (!entry) continue;
+      const bucket = byCommunity.get(entry.idHex);
+      if (bucket) bucket.wraps.push(ev);
+      else byCommunity.set(entry.idHex, { groups: entry.groups, wraps: [ev] });
+    }
+    for (const [idHex, { groups, wraps }] of byCommunity) {
+      const unseen = await unseenPlaneWraps(wraps);
+      if (unseen.length === 0) continue;
+      const opened = await openPlaneWrapsChunked(unseen, groups);
+      let stored = true;
+      if (opened.length > 0) {
+        stored = await writeOpened(idHex, opened, "guestbook");
+        scopes.add(`c2gb:${idHex}`);
+      }
+      const openedIds = new Set(opened.map((e) => e.wrapId));
+      notePlaneWrapsJunk(unseen.filter((w) => !openedIds.has(w.id)).map((w) => w.id));
+      // Not memoised over a failed write, for the same reason as control: the
+      // memo is what stops these wraps ever being decrypted again.
+      if (stored) notePlaneWrapsSeen(unseen.map((w) => w.id));
+    }
+  }
+
   // Wraps for streams we hold no key for (control plane, invites, or a
   // just-joined channel whose spec hasn't refreshed): park for the plane
   // hooks that do hold the keys. Peek+ack semantics keep this loss-proof.

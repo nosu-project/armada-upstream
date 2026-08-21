@@ -123,7 +123,31 @@ describe("buildWireSpec", () => {
     expect(spec.concordCtlByPk.get("ctlA2")?.idHex).toBe("a".repeat(64));
   });
 
-  it("keeps chat-wrap and control-wrap filters separate on the same relay", () => {
+  it("subscribes to Concord guestbook authors and maps guestbook pk → community", () => {
+    // A Kick lands nowhere else: it publishes no control edition and rolls no
+    // epoch, so without this author set the plane is only ever polled.
+    const spec = buildWireSpec({
+      pubkey: PUBKEY,
+      groups: [],
+      dmRelays: [],
+      dmFollows: [],
+      concord: [],
+      concordGuestbook: [
+        {
+          relays: ["wss://c.relay"],
+          idHex: "a".repeat(64),
+          groups: [{ pk: "gbA1" } as unknown as GroupKey, { pk: "gbA2" } as unknown as GroupKey],
+        },
+      ],
+    });
+
+    expect(spec.subs).toHaveLength(1);
+    expect(spec.subs[0].filters).toEqual([{ kinds: [1059], authors: ["gbA1", "gbA2"] }]);
+    expect(spec.concordGbByPk.get("gbA1")?.idHex).toBe("a".repeat(64));
+    expect(spec.concordGbByPk.get("gbA2")?.idHex).toBe("a".repeat(64));
+  });
+
+  it("keeps chat-, control- and guestbook-wrap filters separate on the same relay", () => {
     const chanA = concordChannel(1, ["pkA1"]);
     const spec = buildWireSpec({
       pubkey: PUBKEY,
@@ -139,12 +163,22 @@ describe("buildWireSpec", () => {
           refounded: false,
         },
       ],
+      concordGuestbook: [
+        {
+          relays: ["wss://c.relay"],
+          idHex: "a".repeat(64),
+          groups: [{ pk: "gbA1" } as unknown as GroupKey],
+        },
+      ],
     });
 
     expect(spec.subs).toHaveLength(1);
+    // Three author sets, three filters — the planes decode with different keys
+    // and wake different readers, so they must not be merged into one.
     expect(spec.subs[0].filters).toEqual([
       { kinds: [1059], authors: ["pkA1"] },
       { kinds: [1059], authors: ["ctlA1"] },
+      { kinds: [1059], authors: ["gbA1"] },
     ]);
   });
 

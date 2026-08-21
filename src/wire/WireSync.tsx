@@ -14,6 +14,7 @@ import { readControlFold } from "@/concord/lib/control";
 import { channelGitRepositoryAttachments } from "@/concord/lib/types";
 import { heldChannelKeys, liveEntries, rehydrateCommunity, type CommunityListEntry } from "@/concord/lib/communityList";
 import { controlGroups } from "@/concord/lib/control";
+import { guestbookGroups } from "@/concord/lib/guestbook";
 import { KIND_MESSAGE } from "@/concord/lib/kinds";
 import { warmupCommunities } from "@/concord/lib/loginWarmup";
 import { openPlaneWrapsChunked } from "@/concord/lib/planeSync";
@@ -674,6 +675,42 @@ function useWireConcordControl(): Array<{
 }
 
 /**
+ * The Concord GUESTBOOK-plane subscription targets for EVERY live community:
+ * per community, its guestbook-stream GroupKeys (across held epochs) and
+ * relays. Like the control set, this needs no fold — the guestbook keys derive
+ * straight from the rehydrated bundle's held roots.
+ *
+ * A standing subscription here is what makes a KICK land promptly. A kick is a
+ * guestbook directive and nothing else: it rotates no key and publishes no
+ * control edition, so it rings nothing on the `c2ctl` sub and the plane was
+ * reached only by `useGuestbook`'s 60s poll and the 5-minute background sweep.
+ * Every guestbook stream key is registered for NIP-42 so the wire's kind-1059
+ * guestbook REQs pass auth-gating relays.
+ */
+function useWireConcordGuestbook(): Array<{
+  relays: string[];
+  idHex: string;
+  groups: StreamKeyView[];
+}> {
+  const { data } = useCommunityList();
+  const entries = useMemo(() => (data ? liveEntries(data.list) : []), [data]);
+
+  return useMemo(() => {
+    const out: Array<{ relays: string[]; idHex: string; groups: StreamKeyView[] }> = [];
+    for (const entry of entries) {
+      const community = rehydrateCommunity(entry);
+      if (!community || community.relays.length === 0) continue;
+      const groups = guestbookGroups(community);
+      if (groups.length === 0) continue;
+      out.push({ relays: community.relays, idHex: community.idHex, groups });
+      // Scoped per community, exactly as the control keys are (see streamAuth.ts).
+      registerStreamKeys(groups, community.relays);
+    }
+    return out;
+  }, [entries]);
+}
+
+/**
  * THE funnel. One component owns all standing ingestion:
  *
  *   - builds the wire spec (minimal relays + filters — the same information
@@ -710,6 +747,7 @@ function WireSyncInner() {
   const { relays: publishedDmRelays } = useDmRelayList();
   const concord = useWireConcordChannels();
   const concordControl = useWireConcordControl();
+  const concordGuestbook = useWireConcordGuestbook();
   const nip29Groups = useWireNip29Groups();
   const gitRepositories = useMemo(() => wireGitRepositories(concord), [concord]);
   const gitTicketRoots = useWireGitTicketRoots(gitRepositories);
@@ -760,10 +798,11 @@ function WireSyncInner() {
         dmFollows: dmKnownPeers,
         concord,
         concordControl,
+        concordGuestbook,
         gitRepositories,
         gitTicketRoots,
       }),
-    [user?.pubkey, groups, dmRelays, dmKnownPeers, concord, concordControl, gitRepositories, gitTicketRoots],
+    [user?.pubkey, groups, dmRelays, dmKnownPeers, concord, concordControl, concordGuestbook, gitRepositories, gitTicketRoots],
   );
 
   // The ingest path reads the spec lazily so long-lived subscriptions always
@@ -1101,13 +1140,14 @@ function WireSyncInner() {
   }, []);
 
   // ── Parked-wrap drain: decrypt what the service left us, as keys appear ──
-  // Covers BOTH chat wraps (→ rumor store, `c2:` scope) and control-plane wraps
-  // (→ opened-event store, `c2ctl:` scope). The native service parks any wrap it
-  // can't open; the wire holds the keys, so it drains them here whenever the
-  // spec (hence the held key set) changes. useControlEvents no longer polls to
-  // drain parked control wraps — this is the single drain for both planes.
+  // Covers chat wraps (→ rumor store, `c2:` scope), control-plane wraps
+  // (→ opened-event store, `c2ctl:` scope) and guestbook-plane wraps (→ the same
+  // store, `c2gb:` scope). The native service parks any wrap it can't open; the
+  // wire holds the keys, so it drains them here whenever the spec (hence the
+  // held key set) changes. useControlEvents no longer polls to drain parked
+  // control wraps — this is the single drain for all three planes.
   useEffect(() => {
-    if (spec.concordByPk.size === 0 && spec.concordCtlByPk.size === 0) return;
+    if (spec.concordByPk.size === 0 && spec.concordCtlByPk.size === 0 && spec.concordGbByPk.size === 0) return;
     let cancelled = false;
     // Debounce: spec.sig fires 4-6 times during startup as queries resolve
     // (groupList, followData, concordData, concord, concordControl). Without
@@ -1117,7 +1157,11 @@ function WireSyncInner() {
       void (async () => {
         const drainStart = performance.now();
         try {
-          const parked = await peekPendingWraps([...spec.concordByPk.keys(), ...spec.concordCtlByPk.keys()]);
+          const parked = await peekPendingWraps([
+            ...spec.concordByPk.keys(),
+            ...spec.concordCtlByPk.keys(),
+            ...spec.concordGbByPk.keys(),
+          ]);
           if (parked.length === 0 || cancelled) return;
           // WALL CLOCK for the whole drain, against `crypto.openChatBatch`'s
           // CPU-only total. The gap between the two is the slicing overhead:
@@ -1135,6 +1179,8 @@ function WireSyncInner() {
             string,
             { groups: StreamKeyView[]; refounded: boolean; wraps: NostrRumor[] }
           >();
+          // Guestbook wraps → opened-event store, grouped per owning community.
+          const gbByCommunity = new Map<string, { groups: StreamKeyView[]; wraps: NostrRumor[] }>();
           for (const wrap of parked) {
             const channel = spec.concordByPk.get(wrap.pubkey);
             if (channel) {
@@ -1154,6 +1200,13 @@ function WireSyncInner() {
                   wraps: [wrap],
                 });
               }
+              continue;
+            }
+            const gb = spec.concordGbByPk.get(wrap.pubkey);
+            if (gb) {
+              const bucket = gbByCommunity.get(gb.idHex);
+              if (bucket) bucket.wraps.push(wrap);
+              else gbByCommunity.set(gb.idHex, { groups: gb.groups, wraps: [wrap] });
             }
           }
 
@@ -1179,6 +1232,15 @@ function WireSyncInner() {
             if (opened.length === 0) continue;
             if (!(await writeOpened(idHex, opened, "control", { refounded }))) continue;
             scopes.add(`c2ctl:${idHex}`);
+            const openedWrapIds = new Set(opened.map((o) => o.wrapId));
+            acked.push(...wraps.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
+          }
+
+          for (const [idHex, { groups, wraps }] of gbByCommunity) {
+            const opened = await openPlaneWrapsChunked(wraps, groups);
+            if (opened.length === 0) continue;
+            if (!(await writeOpened(idHex, opened, "guestbook"))) continue;
+            scopes.add(`c2gb:${idHex}`);
             const openedWrapIds = new Set(opened.map((o) => o.wrapId));
             acked.push(...wraps.filter((w) => openedWrapIds.has(w.id)).map((w) => w.id));
           }

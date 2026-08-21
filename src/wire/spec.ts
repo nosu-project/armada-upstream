@@ -163,6 +163,21 @@ export interface WireInputs {
     /** Whether the community has ever rotated its root (see `noteControlSnapshot`). */
     refounded: boolean;
   }>;
+  /**
+   * Concord GUESTBOOK planes (each carries its guestbook-stream GroupKeys).
+   *
+   * Here for one reason the control plane's entry doesn't share: a KICK is a
+   * guestbook directive and nothing else — it rotates no key, so it publishes
+   * no control edition and moves no epoch. Without a standing subscription the
+   * only things that ever fetch this plane are `useGuestbook`'s 60s poll and
+   * the 5-minute background sweep, which is why a kicked member kept reading
+   * and writing for up to a minute after being removed.
+   */
+  concordGuestbook?: Array<{
+    relays: string[];
+    idHex: string;
+    groups: StreamKeyView[];
+  }>;
   /** Repository activity planes attached through folded Concord channel metadata. */
   gitRepositories?: GitRepositoryWireInput[];
   /** Cache/history-discovered NIP-34 issue and PR roots for dynamic child filters. */
@@ -195,6 +210,8 @@ export interface WireSpec {
   concordBannedByCommunity: Map<string, Set<string>>;
   /** Concord CONTROL stream address (wrap author) → its community, for decrypt + fold wake. */
   concordCtlByPk: Map<string, { idHex: string; groups: StreamKeyView[]; refounded: boolean }>;
+  /** Concord GUESTBOOK stream address (wrap author) → its community, for decrypt + membership wake. */
+  concordGbByPk: Map<string, { idHex: string; groups: StreamKeyView[] }>;
   /** Repository address → channels/intervals that reference it. */
   gitByRepository: Map<string, Array<{ channelId: string; communityId?: string; attachment: GitRepositoryAttachment }>>;
   /** Known ticket root id → repository address, for validating child activity. */
@@ -316,6 +333,29 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     add(relay, { kinds: [KIND_WRAP], authors: [...pks].sort() });
   }
 
+  // ── Concord GUESTBOOK: merged guestbook-author filter per community relay ──
+  // A third author set for the same reason control is a second one: these wraps
+  // decode with the guestbook-stream keys and wake the memberlist rather than a
+  // timeline or the fold. Every HELD epoch is subscribed, as the control plane
+  // does — the sweep already reads all of them, so a live sub adds no address a
+  // retired keyholder couldn't already write to, and a Kick published moments
+  // before an epoch roll must still land.
+  const concordGbByPk = new Map<string, { idHex: string; groups: StreamKeyView[] }>();
+  const gbPksByRelay = new Map<string, Set<string>>();
+  for (const { relays, idHex, groups } of inputs.concordGuestbook ?? []) {
+    for (const g of groups) concordGbByPk.set(g.pk, { idHex, groups });
+    for (const url of relays) {
+      const relay = normalizeRelayUrl(url);
+      if (!relay) continue;
+      let set = gbPksByRelay.get(relay);
+      if (!set) gbPksByRelay.set(relay, (set = new Set()));
+      for (const g of groups) set.add(g.pk);
+    }
+  }
+  for (const [relay, pks] of gbPksByRelay) {
+    add(relay, { kinds: [KIND_WRAP], authors: [...pks].sort() });
+  }
+
   // ── NIP-34 roots: one #a filter per repository activity relay ─────────────
   // Detached intervals remain in gitByRepository for store/history filtering,
   // but never keep a standing socket subscription alive.
@@ -400,5 +440,5 @@ export function buildWireSpec(inputs: WireInputs): WireSpec {
     .map(([relay, filters]) => ({ relay, filters }))
     .sort((a, b) => (a.relay < b.relay ? -1 : 1));
 
-  return { subs, concordByPk, concordCommunityByChannel, concordBannedByCommunity, concordCtlByPk, gitByRepository, gitRootById, gitRootAuthorById, sig: JSON.stringify(subs) };
+  return { subs, concordByPk, concordCommunityByChannel, concordBannedByCommunity, concordCtlByPk, concordGbByPk, gitByRepository, gitRootById, gitRootAuthorById, sig: JSON.stringify(subs) };
 }

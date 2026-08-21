@@ -1,6 +1,6 @@
 import { useNostr } from "@nostrify/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 
 import { useControlFold, useDissolved } from "@/concord/hooks/useControlPlane";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -22,14 +22,24 @@ import type { OpenedEvent } from "@/concord/lib/stream";
 import { citationSatisfied } from "@/concord/lib/control";
 import { canActOnMember, Permissions } from "@/concord/lib/roles";
 import type { Community } from "@/concord/lib/types";
+import { onWireScopes } from "@/wire/bus";
 
 /**
  * The Guestbook Plane (CORD-02 §5): membership motion, coalesced flat.
  * Off-consensus, so it polls lazily. Fetch/decrypt/cursor via
  * {@link sweepGuestbook}; wraps decrypted once into the opened-event cache.
+ *
+ * The poll is the FLOOR, not the delivery path. Live guestbook wraps arrive
+ * through the wire's standing `c2gb` subscription (wire/spec.ts +
+ * wire/ingest.ts), which decrypts them into the opened-event store and rings
+ * `c2gb:<idHex>`; the effect below re-reads on that bus. That matters most for
+ * a KICK, which rotates no key and publishes no control edition — so before the
+ * live sub existed, the earliest a kicked member could learn of their own
+ * removal was this query's 60s tick.
  */
 export function useGuestbook(community: Community | undefined) {
   const { nostr } = useNostr();
+  const queryClient = useQueryClient();
   const { data: folded } = useControlFold(community);
   const { data: dissolvedAtMs } = useDissolved(community);
 
@@ -44,6 +54,20 @@ export function useGuestbook(community: Community | undefined) {
       return mergeOpened(stored, fresh);
     },
   });
+
+  // The wire wrote fresh guestbook rumors into the store — re-read. Several
+  // components mount this hook for one community, but they share the one query
+  // key, so react-query collapses their invalidations into a single refetch.
+  const idHex = community?.idHex;
+  useEffect(() => {
+    if (!idHex) return;
+    const scope = `c2gb:${idHex}`;
+    return onWireScopes((scopes) => {
+      if (scopes.has(scope)) {
+        void queryClient.invalidateQueries({ queryKey: ["concord", "guestbook", idHex] });
+      }
+    });
+  }, [idHex, queryClient]);
 
   const coalesced = useMemo(() => {
     if (!community || !query.data) return new Map<string, CoalescedMember>();
