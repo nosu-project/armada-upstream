@@ -402,10 +402,17 @@ export function useConcordAppSync(
     for (const peer of peers) {
       if (inFlightDials.current >= MAX_DIAL_PEERS) break;
       if (dialledRef.current.has(peer.addr)) continue;
+      // Decode BEFORE reserving an in-flight slot. `addr` is sender-controlled
+      // and only bounded (not validated) by `parsePeerSignal`, so an undecodable
+      // one reaches here; reserving the slot first and bailing on `!json` would
+      // leak the counter — sixteen such addresses wedge the dialer for the
+      // session, and a channel switch re-encounters them and leaks again.
+      // Mark it dialled either way (a bad address never becomes good, so it must
+      // not be reconsidered), but only a real dial takes — and releases — a slot.
       dialledRef.current.add(peer.addr);
-      inFlightDials.current += 1;
       const json = decodeNodeAddr(peer.addr);
       if (!json) continue;
+      inFlightDials.current += 1;
       void g.node
         .addPeer(g.topic, json)
         .catch(() => dialledRef.current.delete(peer.addr))
