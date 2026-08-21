@@ -15,6 +15,15 @@ bundle="$release_dir/Armada-flatpak-$(uname -m).flatpak"
 # repository makes the normal `flatpak update` path own future releases.
 ARMADA_FLATPAK_REPO_URL=${ARMADA_FLATPAK_REPO_URL:-https://armada.buzz/downloads/flatpak/}
 
+# Signing is deliberately a separate, post-build phase. Never let release-key
+# material enter flatpak-builder: the manifest executes the packaged AppImage
+# while assembling /app. sign.sh signs only the already-exported commit.
+if [ -n "${FLATPAK_GPG_KEY:-}" ] || [ -n "${FLATPAK_GPG_PUBLIC_KEY:-}" ]; then
+  echo "Do not pass FLATPAK_GPG_KEY or FLATPAK_GPG_PUBLIC_KEY to build.sh." >&2
+  echo "Build unsigned first, then run ./flatpak/sign.sh with both variables set." >&2
+  exit 1
+fi
+
 builder=system
 if command -v flatpak-builder >/dev/null 2>&1; then
   builder=system
@@ -63,17 +72,10 @@ appimage_sha=$(sha256sum "$staged_appimage" | cut -d ' ' -f1)
 printf '%s\n' "$appimage_sha" > "$release_dir/Armada.AppImage.sha256"
 
 set -- --force-clean --disable-rofiles-fuse --default-branch=stable --repo="$repo_dir"
-if [ -n "${FLATPAK_GPG_KEY:-}" ]; then
-  set -- "$@" --gpg-sign="$FLATPAK_GPG_KEY"
-fi
 case "$builder" in
   system)
     flatpak-builder "$@" "$build_dir" "$manifest"
-    if [ -n "${FLATPAK_GPG_KEY:-}" ]; then
-      flatpak build-update-repo --gpg-sign="$FLATPAK_GPG_KEY" "$repo_dir"
-    else
-      flatpak build-update-repo "$repo_dir"
-    fi
+    flatpak build-update-repo "$repo_dir"
     flatpak build-bundle --repo-url="$ARMADA_FLATPAK_REPO_URL" "$repo_dir" "$bundle" buzz.armada.app stable
     ;;
   flatpak-user)
@@ -83,17 +85,12 @@ case "$builder" in
       --env=ARMADA_FLATPAK_REPO_DIR="$repo_dir" \
       --env=ARMADA_FLATPAK_BUNDLE="$bundle" \
       --env=ARMADA_FLATPAK_REPO_URL="$ARMADA_FLATPAK_REPO_URL" \
-      --env=FLATPAK_GPG_KEY="${FLATPAK_GPG_KEY:-}" \
       org.flatpak.Builder -c '
         set -eu
         export XDG_DATA_HOME="$HOME/.local/share"
         flatpak-builder "$@" "$ARMADA_FLATPAK_BUILD_DIR" "$ARMADA_FLATPAK_MANIFEST" &
         wait "$!"
-        if [ -n "$FLATPAK_GPG_KEY" ]; then
-          flatpak build-update-repo --gpg-sign="$FLATPAK_GPG_KEY" "$ARMADA_FLATPAK_REPO_DIR"
-        else
-          flatpak build-update-repo "$ARMADA_FLATPAK_REPO_DIR"
-        fi
+        flatpak build-update-repo "$ARMADA_FLATPAK_REPO_DIR"
         flatpak build-bundle --repo-url="$ARMADA_FLATPAK_REPO_URL" "$ARMADA_FLATPAK_REPO_DIR" "$ARMADA_FLATPAK_BUNDLE" buzz.armada.app stable
       ' sh "$@"
     ;;
@@ -104,17 +101,12 @@ case "$builder" in
       --env=ARMADA_FLATPAK_REPO_DIR="$repo_dir" \
       --env=ARMADA_FLATPAK_BUNDLE="$bundle" \
       --env=ARMADA_FLATPAK_REPO_URL="$ARMADA_FLATPAK_REPO_URL" \
-      --env=FLATPAK_GPG_KEY="${FLATPAK_GPG_KEY:-}" \
       org.flatpak.Builder -c '
         set -eu
         export XDG_DATA_HOME="$HOME/.local/share"
         flatpak-builder "$@" "$ARMADA_FLATPAK_BUILD_DIR" "$ARMADA_FLATPAK_MANIFEST" &
         wait "$!"
-        if [ -n "$FLATPAK_GPG_KEY" ]; then
-          flatpak build-update-repo --gpg-sign="$FLATPAK_GPG_KEY" "$ARMADA_FLATPAK_REPO_DIR"
-        else
-          flatpak build-update-repo "$ARMADA_FLATPAK_REPO_DIR"
-        fi
+        flatpak build-update-repo "$ARMADA_FLATPAK_REPO_DIR"
         flatpak build-bundle --repo-url="$ARMADA_FLATPAK_REPO_URL" "$ARMADA_FLATPAK_REPO_DIR" "$ARMADA_FLATPAK_BUNDLE" buzz.armada.app stable
       ' sh "$@"
     ;;

@@ -1,5 +1,7 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 
 import { describe, expect, it } from "vitest";
 
@@ -7,6 +9,111 @@ const buildScript = fs.readFileSync(
   path.resolve(process.cwd(), "electron/flatpak/build.sh"),
   "utf8",
 );
+const signScript = fs.readFileSync(
+  path.resolve(process.cwd(), "electron/flatpak/sign.sh"),
+  "utf8",
+);
+
+function makeSigningFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "armada-flatpak-sign-"));
+  const flatpakDir = path.join(root, "electron", "flatpak");
+  const releaseDir = path.join(root, "electron", "release");
+  const repoDir = path.join(releaseDir, "flatpak-repo");
+  const script = path.join(flatpakDir, "sign.sh");
+  const commandLog = path.join(root, "flatpak-commands.jsonl");
+  const fakeBin = path.join(root, "bin");
+
+  fs.mkdirSync(flatpakDir, { recursive: true });
+  fs.mkdirSync(repoDir, { recursive: true });
+  fs.mkdirSync(fakeBin);
+  fs.writeFileSync(script, signScript, { mode: 0o755 });
+  fs.writeFileSync(commandLog, "");
+
+  const fakeFlatpak = `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.MOCK_COMMAND_LOG, JSON.stringify(args) + "\\n");
+if (args[0] === process.env.MOCK_FLATPAK_FAIL) {
+  process.exit(23);
+}
+if (args[0] === "build-bundle") {
+  fs.writeFileSync(args.at(-3), "signed bundle");
+}
+`;
+  fs.writeFileSync(path.join(fakeBin, "flatpak"), fakeFlatpak, {
+    mode: 0o755,
+  });
+  const fakeGpg = `#!${process.execPath}
+const fingerprints = (process.env.MOCK_PUBLIC_FINGERPRINTS || "").split(",").filter(Boolean);
+for (const fingerprint of fingerprints) {
+  process.stdout.write("pub:-:4096:1:0000000000000000:0:0:::::::\\n");
+  process.stdout.write("fpr:::::::::" + fingerprint + ":\\n");
+  process.stdout.write("sub:-:4096:1:1111111111111111:0:0:::::::\\n");
+  process.stdout.write("fpr:::::::::FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF:\\n");
+}
+`;
+  fs.writeFileSync(path.join(fakeBin, "gpg"), fakeGpg, { mode: 0o755 });
+  const fakeOstree = `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.MOCK_COMMAND_LOG, JSON.stringify(args) + "\\n");
+if (args[0] === "refs") {
+  if (process.env.MOCK_NO_APPSTREAM !== "1") {
+    process.stdout.write("app/buzz.armada.app/x86_64/stable\\n");
+    process.stdout.write("appstream/x86_64\\n");
+    process.stdout.write("appstream2/x86_64\\n");
+    process.stdout.write("appstream/x86_64/ignored\\n");
+  }
+} else if (args[0] === "rev-parse") {
+  const ref = args.at(-1);
+  process.stdout.write((ref.startsWith("appstream2/") ? "B" : "A").repeat(64) + "\\n");
+}
+`;
+  fs.writeFileSync(path.join(fakeBin, "ostree"), fakeOstree, {
+    mode: 0o755,
+  });
+
+  return {
+    bundle: path.join(
+      releaseDir,
+      `Armada-flatpak-${os.machine()}.flatpak`,
+    ),
+    commandLog,
+    fakeBin,
+    root,
+    script,
+  };
+}
+
+function runSigningScript(fixture, overrides) {
+  const env = {
+    ...process.env,
+    PATH: `${fixture.fakeBin}:${process.env.PATH}`,
+    MOCK_COMMAND_LOG: fixture.commandLog,
+    ...overrides,
+  };
+  for (const name of [
+    "ARMADA_FLATPAK_RELEASE_DIR",
+    "FLATPAK_GPG_KEY",
+    "FLATPAK_GPG_PUBLIC_KEY",
+    "GNUPGHOME",
+  ]) {
+    if (env[name] === undefined) delete env[name];
+  }
+  return spawnSync("/bin/sh", [fixture.script], {
+    encoding: "utf8",
+    env,
+  });
+}
+
+function readCommandLog(fixture) {
+  return fs
+    .readFileSync(fixture.commandLog, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
 
 describe("Flatpak bundle update origin", () => {
   it("defaults to Armada's published OSTree repository", () => {
@@ -32,5 +139,333 @@ describe("Flatpak bundle update origin", () => {
       /--env=ARMADA_FLATPAK_REPO_URL="\$ARMADA_FLATPAK_REPO_URL"/g,
     );
     expect(forwardedOrigins).toHaveLength(2);
+  });
+
+  it("keeps signing credentials out of every build path", () => {
+    expect(buildScript).not.toContain("--gpg-sign");
+    expect(buildScript).not.toContain("--gpg-keys");
+    expect(buildScript.indexOf("Do not pass FLATPAK_GPG_KEY")).toBeLessThan(
+      buildScript.indexOf("builder=system"),
+    );
+  });
+});
+
+describe("Flatpak post-build signing", () => {
+  it("can sign an absolute prebuilt release directory from a trusted copied script", () => {
+    const fixture = makeSigningFixture();
+    try {
+      const fingerprint = "0123456789ABCDEF0123456789ABCDEF01234567";
+      const publicKey = path.join(fixture.root, "armada-flatpak.gpg");
+      const releaseDir = path.join(fixture.root, "prebuilt release");
+      const repoDir = path.join(releaseDir, "flatpak-repo");
+      const bundle = path.join(
+        releaseDir,
+        `Armada-flatpak-${os.machine()}.flatpak`,
+      );
+      fs.mkdirSync(repoDir, { recursive: true });
+      fs.writeFileSync(publicKey, "public key");
+      fs.writeFileSync(bundle, "unsigned bundle");
+
+      const result = runSigningScript(fixture, {
+        ARMADA_FLATPAK_RELEASE_DIR: releaseDir,
+        FLATPAK_GPG_KEY: fingerprint,
+        FLATPAK_GPG_PUBLIC_KEY: publicKey,
+        MOCK_PUBLIC_FINGERPRINTS: fingerprint,
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(fs.readFileSync(bundle, "utf8")).toBe("signed bundle");
+      expect(
+        fs.readFileSync(path.join(repoDir, "armada-flatpak.gpg"), "utf8"),
+      ).toBe("public key");
+      expect(readCommandLog(fixture)[0]).toEqual([
+        "build-sign",
+        `--gpg-sign=${fingerprint}`,
+        repoDir,
+        "buzz.armada.app",
+        "stable",
+      ]);
+    } finally {
+      fs.rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects a relative or missing release-directory override", () => {
+    const fixture = makeSigningFixture();
+    try {
+      const attempts = [
+        {
+          value: "relative/release",
+          message: "must be an absolute directory",
+        },
+        {
+          value: path.join(fixture.root, "missing-release"),
+          message: "does not exist",
+        },
+      ];
+      for (const attempt of attempts) {
+        const result = runSigningScript(fixture, {
+          ARMADA_FLATPAK_RELEASE_DIR: attempt.value,
+        });
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(attempt.message);
+      }
+      expect(readCommandLog(fixture)).toEqual([]);
+    } finally {
+      fs.rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("signs the exported commit and summary before atomically replacing the keyed bundle", () => {
+    const fixture = makeSigningFixture();
+    try {
+      const fingerprint = "0123456789ABCDEF0123456789ABCDEF01234567";
+      const keyDir = path.join(fixture.root, "release keys");
+      const publicKey = path.join(keyDir, "armada-flatpak.gpg");
+      const gpgHome = path.join(fixture.root, "gnupg home");
+      fs.mkdirSync(keyDir);
+      fs.mkdirSync(gpgHome);
+      fs.writeFileSync(publicKey, "public key");
+      fs.writeFileSync(fixture.bundle, "unsigned bundle");
+
+      const result = runSigningScript(fixture, {
+        ARMADA_FLATPAK_REPO_URL: "https://updates.example.test/flatpak/",
+        FLATPAK_GPG_KEY: "0123 4567 89ab cdef 0123 4567 89ab cdef 0123 4567",
+        FLATPAK_GPG_PUBLIC_KEY: publicKey,
+        GNUPGHOME: gpgHome,
+        MOCK_PUBLIC_FINGERPRINTS: fingerprint,
+      });
+
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      expect(fs.readFileSync(fixture.bundle, "utf8")).toBe("signed bundle");
+
+      const commands = readCommandLog(fixture);
+      const repoDir = path.join(
+        fixture.root,
+        "electron",
+        "release",
+        "flatpak-repo",
+      );
+      const publishedPublicKey = path.join(repoDir, "armada-flatpak.gpg");
+      const signingOptions = [
+        `--gpg-sign=${fingerprint}`,
+        `--gpg-homedir=${fs.realpathSync(gpgHome)}`,
+      ];
+      expect(fs.readFileSync(publishedPublicKey, "utf8")).toBe("public key");
+      expect(
+        fs.readFileSync(
+          path.join(repoDir, "armada-flatpak.fingerprint"),
+          "utf8",
+        ),
+      ).toBe(`${fingerprint}\n`);
+      expect(commands).toHaveLength(8);
+      const stagedPublicKey = commands[6]
+        .find((argument) => argument.startsWith("--gpg-import="))
+        ?.slice("--gpg-import=".length);
+      expect(stagedPublicKey).toContain("/.flatpak-key.");
+      expect(stagedPublicKey).toMatch(/\/armada-flatpak[.]gpg$/);
+      expect(commands[0]).toEqual([
+        "build-sign",
+        ...signingOptions,
+        repoDir,
+        "buzz.armada.app",
+        "stable",
+      ]);
+      expect(commands[1]).toEqual([
+        "refs",
+        `--repo=${repoDir}`,
+      ]);
+      expect(commands[2]).toEqual([
+        "rev-parse",
+        `--repo=${repoDir}`,
+        "appstream/x86_64",
+      ]);
+      expect(commands[3]).toEqual([
+        "gpg-sign",
+        `--repo=${repoDir}`,
+        `--gpg-homedir=${fs.realpathSync(gpgHome)}`,
+        "A".repeat(64),
+        fingerprint,
+      ]);
+      expect(commands[4]).toEqual([
+        "rev-parse",
+        `--repo=${repoDir}`,
+        "appstream2/x86_64",
+      ]);
+      expect(commands[5]).toEqual([
+        "gpg-sign",
+        `--repo=${repoDir}`,
+        `--gpg-homedir=${fs.realpathSync(gpgHome)}`,
+        "B".repeat(64),
+        fingerprint,
+      ]);
+      expect(commands[6]).toEqual([
+        "build-update-repo",
+        "--no-update-appstream",
+        ...signingOptions,
+        `--gpg-import=${stagedPublicKey}`,
+        repoDir,
+      ]);
+      expect(commands[7]).toEqual([
+        "build-bundle",
+        "--repo-url=https://updates.example.test/flatpak/",
+        `--gpg-keys=${stagedPublicKey}`,
+        repoDir,
+        expect.stringContaining("/.flatpak-sign."),
+        "buzz.armada.app",
+        "stable",
+      ]);
+      expect(commands[7].at(-3)).not.toBe(fixture.bundle);
+    } finally {
+      fs.rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects partial or unreadable key configuration before invoking Flatpak", () => {
+    const fixture = makeSigningFixture();
+    try {
+      const publicKey = path.join(fixture.root, "armada-flatpak.gpg");
+      fs.writeFileSync(publicKey, "public key");
+
+      const attempts = [
+        {
+          FLATPAK_GPG_KEY: "0123456789ABCDEF0123456789ABCDEF01234567",
+        },
+        { FLATPAK_GPG_PUBLIC_KEY: publicKey },
+        {
+          FLATPAK_GPG_KEY: "0123456789ABCDEF0123456789ABCDEF01234567",
+          FLATPAK_GPG_PUBLIC_KEY: path.join(fixture.root, "missing.gpg"),
+        },
+      ];
+      for (const attempt of attempts) {
+        const result = runSigningScript(fixture, attempt);
+        expect(result.status).not.toBe(0);
+      }
+
+      expect(readCommandLog(fixture)).toEqual([]);
+    } finally {
+      fs.rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects a mismatched or multi-primary public export before signing", () => {
+    const fixture = makeSigningFixture();
+    try {
+      const publicKey = path.join(fixture.root, "armada-flatpak.gpg");
+      fs.writeFileSync(publicKey, "public key");
+      const signingFingerprint =
+        "0123456789ABCDEF0123456789ABCDEF01234567";
+      const otherFingerprint =
+        "89ABCDEF0123456789ABCDEF0123456789ABCDEF";
+
+      const mismatched = runSigningScript(fixture, {
+        FLATPAK_GPG_KEY: signingFingerprint,
+        FLATPAK_GPG_PUBLIC_KEY: publicKey,
+        MOCK_PUBLIC_FINGERPRINTS: otherFingerprint,
+      });
+      expect(mismatched.status).not.toBe(0);
+      expect(mismatched.stderr).toContain(
+        "does not match the primary key",
+      );
+
+      const multiple = runSigningScript(fixture, {
+        FLATPAK_GPG_KEY: signingFingerprint,
+        FLATPAK_GPG_PUBLIC_KEY: publicKey,
+        MOCK_PUBLIC_FINGERPRINTS: `${signingFingerprint},${otherFingerprint}`,
+      });
+      expect(multiple.status).not.toBe(0);
+      expect(multiple.stderr).toContain("exactly one primary public key");
+
+      expect(readCommandLog(fixture)).toEqual([]);
+    } finally {
+      fs.rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("does not publish identity files or replace the bundle when signing fails", () => {
+    const fixture = makeSigningFixture();
+    try {
+      const fingerprint = "0123456789ABCDEF0123456789ABCDEF01234567";
+      const publicKey = path.join(fixture.root, "armada-flatpak.gpg");
+      const repoDir = path.join(
+        fixture.root,
+        "electron",
+        "release",
+        "flatpak-repo",
+      );
+      fs.writeFileSync(publicKey, "public key");
+      fs.writeFileSync(fixture.bundle, "unsigned bundle");
+
+      const result = runSigningScript(fixture, {
+        FLATPAK_GPG_KEY: fingerprint,
+        FLATPAK_GPG_PUBLIC_KEY: publicKey,
+        MOCK_FLATPAK_FAIL: "build-bundle",
+        MOCK_PUBLIC_FINGERPRINTS: fingerprint,
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(fs.readFileSync(fixture.bundle, "utf8")).toBe("unsigned bundle");
+      expect(fs.existsSync(path.join(repoDir, "armada-flatpak.gpg"))).toBe(
+        false,
+      );
+      expect(
+        fs.existsSync(path.join(repoDir, "armada-flatpak.fingerprint")),
+      ).toBe(false);
+      expect(
+        fs
+          .readdirSync(repoDir)
+          .some((name) => name.startsWith(".flatpak-key.")),
+      ).toBe(false);
+      expect(readCommandLog(fixture).map(([command]) => command)).toEqual([
+        "build-sign",
+        "refs",
+        "rev-parse",
+        "gpg-sign",
+        "rev-parse",
+        "gpg-sign",
+        "build-update-repo",
+        "build-bundle",
+      ]);
+    } finally {
+      fs.rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("refuses to publish a summary when no exact appstream refs exist", () => {
+    const fixture = makeSigningFixture();
+    try {
+      const fingerprint = "0123456789ABCDEF0123456789ABCDEF01234567";
+      const publicKey = path.join(fixture.root, "armada-flatpak.gpg");
+      const repoDir = path.join(
+        fixture.root,
+        "electron",
+        "release",
+        "flatpak-repo",
+      );
+      fs.writeFileSync(publicKey, "public key");
+      fs.writeFileSync(fixture.bundle, "unsigned bundle");
+
+      const result = runSigningScript(fixture, {
+        FLATPAK_GPG_KEY: fingerprint,
+        FLATPAK_GPG_PUBLIC_KEY: publicKey,
+        MOCK_NO_APPSTREAM: "1",
+        MOCK_PUBLIC_FINGERPRINTS: fingerprint,
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("no appstream/<arch>");
+      expect(fs.readFileSync(fixture.bundle, "utf8")).toBe("unsigned bundle");
+      expect(fs.existsSync(path.join(repoDir, "armada-flatpak.gpg"))).toBe(
+        false,
+      );
+      expect(readCommandLog(fixture).map(([command]) => command)).toEqual([
+        "build-sign",
+        "refs",
+      ]);
+    } finally {
+      fs.rmSync(fixture.root, { force: true, recursive: true });
+    }
   });
 });

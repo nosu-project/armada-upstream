@@ -283,28 +283,10 @@ npm run dist:flatpak
 flatpak install --user ./release/Armada-flatpak-x86_64.flatpak
 ```
 
-For an end-user installation directly from Armada's hosted repository:
-
-```sh
-flatpak remote-add --user --if-not-exists --no-gpg-verify \
-  armada https://armada.buzz/downloads/flatpak/
-flatpak remote-modify --user --enable \
-  --url=https://armada.buzz/downloads/flatpak/ armada
-flatpak install --user armada buzz.armada.app
-flatpak run buzz.armada.app
-```
-
-The `remote-modify` line also migrates an `armada` remote created from the
-older `/flatpak/` instructions; `remote-add --if-not-exists` alone would retain
-its previous URL.
-
-Armada itself comes from that remote, not Flathub. Its Freedesktop and Electron
-runtimes still need a configured Flathub remote; most Flatpak installations
-already have one. If needed, add it first with the `flathub` command in the
-builder setup above.
-
-Alternatively, install the stable standalone bundle. It records the same
-Armada repository as its origin during installation:
+After the first signed Flatpak release is live, most users should install the
+stable standalone bundle. A signed release bundle embeds both the Armada
+repository URL and its public key, so installing it automatically creates a
+GPG-verified origin; do not add an unsigned remote first:
 
 ```sh
 curl --fail --location --output Armada.flatpak \
@@ -319,6 +301,118 @@ Future releases use Flatpak's normal package-manager update path either way:
 flatpak update --user buzz.armada.app
 ```
 
+Armada itself comes from that origin, not Flathub. Its Freedesktop and Electron
+runtimes still need a configured Flathub remote; most Flatpak installations
+already have one. If needed, add it first with the `flathub` command in the
+builder setup above.
+
+To install directly from the hosted repository instead, wait until that signed
+release is live, then download its public key and the machine-readable copy of
+its full primary-key fingerprint:
+
+```sh
+curl --fail --location --output armada-flatpak.gpg \
+  https://armada.buzz/downloads/flatpak/armada-flatpak.gpg
+curl --fail --location --output armada-flatpak.fingerprint \
+  https://armada.buzz/downloads/flatpak/armada-flatpak.fingerprint
+gpg --show-keys --with-fingerprint ./armada-flatpak.gpg
+cat ./armada-flatpak.fingerprint
+```
+
+The first fingerprint printed for the `pub` key must be the same full
+fingerprint in `armada-flatpak.fingerprint` **and** the fingerprint announced
+through an independently authenticated Armada channel, such as the signed
+Nostr release announcement. The two files above share one HTTPS host, so
+comparing only those files does not authenticate the key. Do not substitute a
+short key ID or a fingerprint copied from this README. Once verified, add the
+remote and import that key:
+
+```sh
+flatpak remote-add --user --if-not-exists \
+  --gpg-import=./armada-flatpak.gpg \
+  armada https://armada.buzz/downloads/flatpak/
+flatpak remote-modify --user --enable --gpg-verify \
+  --gpg-import=./armada-flatpak.gpg \
+  --url=https://armada.buzz/downloads/flatpak/ armada
+flatpak install --user armada buzz.armada.app
+flatpak run buzz.armada.app
+```
+
+The `remote-modify` line also repairs an `armada` remote created from the
+older `/flatpak/` instructions; `remote-add --if-not-exists` alone would retain
+its previous URL and trust settings.
+
+### Migrating an existing unsigned installation
+
+Releases before repository signing created a `no-gpg-verify` origin, commonly
+named `app-origin`. A non-root process cannot pull unverified content into the
+system-wide Flatpak installation, which produces `Can't pull from untrusted
+non-gpg verified remote` in graphical updaters and system upgrade tools. Until
+the first signed release is live, update only Armada from a terminal with:
+
+```sh
+sudo flatpak update --system buzz.armada.app
+```
+
+That is a temporary workaround, not signature verification: the unsigned
+release is still trusted through HTTPS and the deployment host. In particular,
+do **not** turn on `--gpg-verify` yet. An unsigned summary cannot satisfy it and
+would leave the origin unable to update.
+
+The recommended long-term layout is a per-user Armada installation. It avoids
+the privileged system helper and matches the commands on the downloads page.
+Close Armada, download and verify the user installation, then remove the old
+system deployment:
+
+```sh
+curl --fail --location --output Armada.flatpak \
+  https://armada.buzz/downloads/Armada.flatpak
+flatpak install --user ./Armada.flatpak
+flatpak info --user buzz.armada.app
+armada_system_origin="$(flatpak info --system --show-origin buzz.armada.app)"
+sudo flatpak uninstall --system buzz.armada.app
+```
+
+Optionally launch it with `flatpak run --user buzz.armada.app` and close it
+again before the uninstall. This brief overlap leaves the known-working system
+deployment in place if downloading or installing the bundle fails.
+
+Do not add `--delete-data` to the uninstall: leaving it out preserves the
+profile under `~/.var/app/buzz.armada.app`. If the now-unused unsigned system
+remote remains listed, remove only that captured origin:
+
+```sh
+sudo flatpak remote-delete --system "$armada_system_origin"
+```
+
+After the first signed release and its public key are both live, existing
+bundle installs need a one-time trust migration. Verify
+`armada-flatpak.gpg` against the independently announced full fingerprint as
+shown above, then upgrade the app's actual origin in place:
+
+```sh
+armada_origin="$(flatpak info --user --show-origin buzz.armada.app)"
+flatpak remote-modify --user --enable --gpg-verify \
+  --gpg-import=./armada-flatpak.gpg \
+  --url=https://armada.buzz/downloads/flatpak/ "$armada_origin"
+flatpak update --user buzz.armada.app
+```
+
+For an installation deliberately kept system-wide, perform the same migration
+in the system installation:
+
+```sh
+armada_origin="$(flatpak info --system --show-origin buzz.armada.app)"
+sudo flatpak remote-modify --system --enable --gpg-verify \
+  --gpg-import=./armada-flatpak.gpg \
+  --url=https://armada.buzz/downloads/flatpak/ "$armada_origin"
+sudo flatpak update --system buzz.armada.app
+```
+
+Never perform either trust flip before the signed release is available. New
+signed bundles already embed the key and enable GPG verification, so they do
+not need this one-time procedure.
+
 For a local package-manager update cycle:
 
 ```sh
@@ -330,27 +424,48 @@ flatpak update --user buzz.armada.app
 
 Tagged releases publish that OSTree repository at
 `https://armada.buzz/downloads/flatpak/`. Release bundles embed that URL, so
-bundle installs also configure Armada's repository as the app's origin.
+bundle installs also configure Armada's repository as the app's origin. Signed
+release bundles additionally embed `armada-flatpak.gpg`, which makes that
+automatically configured origin GPG-verified.
+
 Installs made from an older bundle with a blank origin or the legacy
-`https://armada.buzz/flatpak/` origin must either
-repair that remote or remove the old app (without `--delete-data`) before
-installing a corrected bundle; installing over the existing deployment can
-retain its prior origin. To repair the user installation in place:
+`https://armada.buzz/flatpak/` origin must use the one-time trust migration
+above or remove the old app (without `--delete-data`) before installing a
+corrected bundle; installing over the existing deployment can retain its prior
+origin.
 
-```sh
-flatpak remote-modify --user \
-  --enable \
-  --url=https://armada.buzz/downloads/flatpak/ \
-  "$(flatpak info --user --show-origin buzz.armada.app)"
-```
+Production release signing is provisioned with
+`FLATPAK_GPG_PRIVATE_KEY_BASE64`, a base64-encoded export of exactly one
+long-lived Flatpak signing key, and
+`FLATPAK_GPG_EXPECTED_FINGERPRINT`, that key's full primary fingerprint. CI
+normalizes the expected value to uppercase without whitespace, imports the key
+into a temporary GnuPG home, derives exactly one full primary fingerprint, and
+requires an exact match before signing. The secret key must be usable by CI
+without an interactive passphrase; a noninteractive signing probe checks that
+before the release proceeds.
 
-Current repository exports are unsigned, so their update trust boundary is
-HTTPS and the deployment host. `FLATPAK_GPG_KEY` signs the repository, but a
-signed production bundle must also embed the exported public key with
-`flatpak build-bundle --gpg-keys`; signing the repository alone does not enable
-verification for its automatically configured origin. The manifest swaps only
-venmic's native prebuild to its Freedesktop-25.08-compatible 6.1 build;
-AppImage and deb retain the lockfile-pinned 7.x build.
+The package build and signing are deliberately separate. `flatpak/build.sh`
+runs without credentials and rejects `FLATPAK_GPG_KEY` or
+`FLATPAK_GPG_PUBLIC_KEY`. CI then starts a fresh dependent container, verifies
+the committed `flatpak/sign.sh` against the digest pinned in the already-loaded
+workflow, and only then imports the release key. That signer signs the app,
+AppStream commits, and repository summary, then replaces the bundle with one
+carrying the public key. CI publishes that
+binary OpenPGP public-key export as
+`/downloads/flatpak/armada-flatpak.gpg` alongside
+`armada-flatpak.fingerprint`. A deployable release fails closed when the secret
+or expected fingerprint is absent, when the export does not contain exactly
+one primary key, or when the fingerprints differ. The same public-key file is
+passed to `flatpak build-bundle --gpg-keys`; signing the repository alone would
+not enable verification for a bundle's automatically configured origin.
+Operators must announce the full fingerprint over a separately authenticated
+channel before asking existing installations to import it. Changing the
+expected-fingerprint secret is an explicit key rotation, not routine release
+maintenance.
+
+The manifest swaps only venmic's native prebuild to its
+Freedesktop-25.08-compatible 6.1 build; AppImage and deb retain the
+lockfile-pinned 7.x build.
 
 ## CI
 
