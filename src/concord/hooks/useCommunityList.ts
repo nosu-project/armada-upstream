@@ -542,10 +542,15 @@ async function publishFragments(
   // Exact read cohort only. An unanswered relay may hold a newer CRDT fact;
   // queueing this rewrite there for later would overwrite that unseen fact.
   const targets = uniqueRelayUrls(targetRelays);
-  if (targets.length === 0 || !nostr.relay) {
+  // BIND, don't copy: the real client is a NostrBatcher instance and `relay` is
+  // a method that reads `this.pool`. Lifting the bare function reference into
+  // an object literal detaches the receiver, so the call lands with `this` set
+  // to that literal and fails on `this.pool` being undefined.
+  const relay = nostr.relay?.bind(nostr);
+  if (targets.length === 0 || !relay) {
     throw new Error("No relay is available for your community list update");
   }
-  const publishNostr = { relay: nostr.relay };
+  const publishNostr = { relay };
   const frags = fragment(list);
   const now = Math.floor(Date.now() / 1000);
   const unchanged = (index: number, frag: FragList): boolean => {

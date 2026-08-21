@@ -251,6 +251,37 @@ describe("syncCommunityList — reconcile", () => {
     for (const relay of STOCK_RELAYS.slice(1)) expect(delivered).toContain(relay);
   });
 
+  it("publishes through a client whose relay() needs its own receiver", async () => {
+    const { updateCommunityList } = await import("./useCommunityList");
+    const delivered: string[] = [];
+    // The real client is a NostrBatcher INSTANCE, where `relay` is a method
+    // reading `this.pool`. Every other double in this file is an object literal
+    // of standalone functions, which cannot catch a lost receiver — so this one
+    // is a class, and its `relay` fails the same way the batcher's does when
+    // the method is copied off the instance.
+    class MethodClient {
+      private pool = {
+        relay: (url: string) => ({
+          query: async () => [] as NostrRumor[],
+          event: async () => { delivered.push(url); },
+        }),
+      };
+      async query() { return [] as NostrRumor[]; }
+      relay(url: string) { return this.pool.relay(url); }
+    }
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    await updateCommunityList(
+      new MethodClient(),
+      user,
+      queryClient,
+      ["wss://self.example.com"],
+      { type: "add", entry: entry("aa", "Receiver-bound join") },
+    );
+
+    expect(delivered).toContain("wss://self.example.com");
+  });
+
   it("keeps a joined community folded and visible when every delivery is queued", async () => {
     const { updateCommunityList } = await import("./useCommunityList");
     const nostr = {
