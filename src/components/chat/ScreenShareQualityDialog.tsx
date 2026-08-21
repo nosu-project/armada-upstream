@@ -46,6 +46,7 @@ import {
 
 interface ScreenShareQualityDialogProps {
   open: boolean;
+  portalContainer?: HTMLElement;
   active: boolean;
   participant?: LocalParticipant;
   endToEndEncrypted?: boolean;
@@ -72,6 +73,7 @@ function qualityForAvailableCodecs(
 /** Quality controls shared by browser and Electron screen capture. */
 export function ScreenShareQualityDialog({
   open,
+  portalContainer,
   active,
   participant,
   endToEndEncrypted = false,
@@ -166,7 +168,11 @@ export function ScreenShareQualityDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <ChromeDialogContent title="Screen share quality" className="sm:max-w-lg">
+      <ChromeDialogContent
+        title="Screen share quality"
+        className="sm:max-w-lg"
+        portalContainer={portalContainer}
+      >
         <div className="flex flex-col items-center gap-2 text-center">
           <div className="flex size-12 items-center justify-center clip-corner-lg bg-primary/15 text-primary">
             <MonitorUp className="size-6" />
@@ -203,7 +209,7 @@ export function ScreenShareQualityDialog({
                 <SelectTrigger id="screen-share-resolution">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent portalContainer={portalContainer}>
                   {SCREEN_SHARE_RESOLUTIONS.map((option) => (
                     <SelectItem key={option.id} value={option.id}>
                       {option.label} ({option.width}×{option.height})
@@ -227,7 +233,7 @@ export function ScreenShareQualityDialog({
                 <SelectTrigger id="screen-share-frame-rate">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent portalContainer={portalContainer}>
                   {SCREEN_SHARE_FRAME_RATES.map((frameRate) => (
                     <SelectItem key={frameRate} value={String(frameRate)}>
                       {frameRate} FPS
@@ -248,7 +254,7 @@ export function ScreenShareQualityDialog({
                 <SelectTrigger id="screen-share-codec">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent portalContainer={portalContainer}>
                   {SCREEN_SHARE_CODECS.map((codec) => (
                     <SelectItem
                       key={codec.id}
@@ -291,7 +297,7 @@ export function ScreenShareQualityDialog({
                 <SelectTrigger id="screen-share-delivery">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent portalContainer={portalContainer}>
                   {SCREEN_SHARE_DELIVERY_MODES.map((mode) => (
                     <SelectItem key={mode.id} value={mode.id}>
                       {mode.label} — {mode.description}
@@ -312,7 +318,7 @@ export function ScreenShareQualityDialog({
                 <SelectTrigger id="screen-share-encoder-mode">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent portalContainer={portalContainer}>
                   <SelectItem value="compatibility">
                     Software compatibility — reliable encrypted H.264
                   </SelectItem>

@@ -24,6 +24,11 @@ import {
   type ScreenSource,
 } from "@/lib/desktop";
 
+function activeFullscreenContainer(): HTMLElement | undefined {
+  const element = document.fullscreenElement;
+  return element instanceof HTMLElement ? element : undefined;
+}
+
 /**
  * Screen-share source picker for the desktop app.
  *
@@ -43,14 +48,24 @@ export function ScreenSharePicker() {
   const [audioChoice, setAudioChoice] = useState("system");
   const [audioError, setAudioError] = useState<string | null>(null);
   const [choosing, setChoosing] = useState(false);
+  const [portalContainer, setPortalContainer] = useState<HTMLElement | undefined>(
+    activeFullscreenContainer,
+  );
   // The resolver for the in-flight pick; called with the chosen id or null.
   const resolveRef = useRef<((id: string | null) => void) | null>(null);
+
+  useEffect(() => {
+    const updatePortalContainer = () => setPortalContainer(activeFullscreenContainer());
+    document.addEventListener("fullscreenchange", updatePortalContainer);
+    return () => document.removeEventListener("fullscreenchange", updatePortalContainer);
+  }, []);
 
   useEffect(() => {
     const bridge = desktop();
     if (!bridge) return;
 
     bridge.onPickScreenSource(async () => {
+      setPortalContainer(activeFullscreenContainer());
       try {
         const [screenSources, audioSources] = await Promise.all([
           bridge.getScreenSources(),
@@ -134,7 +149,7 @@ export function ScreenSharePicker() {
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && cancel()}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl" portalContainer={portalContainer}>
         <DialogHeader>
           <DialogTitle>Share your screen</DialogTitle>
           <DialogDescription>
@@ -188,7 +203,7 @@ export function ScreenSharePicker() {
                 <SelectTrigger id="screen-share-audio">
                   <SelectValue placeholder="Choose audio" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent portalContainer={portalContainer}>
                   <SelectItem value="system">Entire system</SelectItem>
                   {audio.sources.map((source) => (
                     <SelectItem key={source.id} value={`app:${source.id}`}>

@@ -13,6 +13,24 @@ describe("ScreenShareDiagnosticsDialog", () => {
     expect(document.querySelector(".chrome-dialog-title")?.textContent).toBe("stream details");
   });
 
+  it("renders its overlay and dialog inside a supplied portal container", () => {
+    const portalContainer = document.createElement("div");
+    document.body.appendChild(portalContainer);
+    const { unmount } = render(
+      <ScreenShareDiagnosticsDialog
+        open
+        portalContainer={portalContainer}
+        onOpenChange={vi.fn()}
+      />,
+    );
+
+    expect(portalContainer.querySelector("[data-radix-dialog-overlay]")).not.toBeNull();
+    expect(portalContainer).toContainElement(screen.getByRole("dialog"));
+
+    unmount();
+    portalContainer.remove();
+  });
+
   it("shows live custom HEVC pipeline details on demand", () => {
     render(
       <ScreenShareDiagnosticsDialog

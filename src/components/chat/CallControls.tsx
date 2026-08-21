@@ -168,7 +168,13 @@ export function CameraButton({ className }: { className?: string }) {
   );
 }
 
-export function ScreenShareButton({ className }: { className?: string }) {
+export function ScreenShareButton({
+  className,
+  portalContainer,
+}: {
+  className?: string;
+  portalContainer?: HTMLElement;
+}) {
   const { localParticipant, isScreenShareEnabled } = useLocalParticipant();
   const { enabled: endToEndEncrypted, hevcScreenShare } = useCallSignals();
   const [qualityOpen, setQualityOpen] = useState(false);
@@ -352,6 +358,7 @@ export function ScreenShareButton({ className }: { className?: string }) {
         </button>
         <ScreenShareQualityDialog
           open={qualityOpen}
+          portalContainer={portalContainer}
           active={false}
           participant={localParticipant}
           endToEndEncrypted={endToEndEncrypted}
@@ -386,7 +393,11 @@ export function ScreenShareButton({ className }: { className?: string }) {
             )}
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuContent
+          align="end"
+          className="w-56"
+          portalContainer={portalContainer}
+        >
           <DropdownMenuItem onSelect={() => setQualityOpen(true)}>
             <Settings2 className="size-4" />
             Screen share quality
@@ -411,6 +422,7 @@ export function ScreenShareButton({ className }: { className?: string }) {
       </DropdownMenu>
       <ScreenShareQualityDialog
         open={qualityOpen}
+        portalContainer={portalContainer}
         active
         participant={localParticipant}
         endToEndEncrypted={endToEndEncrypted}
@@ -421,6 +433,7 @@ export function ScreenShareButton({ className }: { className?: string }) {
       />
       <ScreenShareDiagnosticsDialog
         open={detailsOpen}
+        portalContainer={portalContainer}
         track={screenSharePublication?.videoTrack}
         encrypted={customHevcActive ? true : screenSharePublication?.isEncrypted}
         participantName="you"
@@ -491,7 +504,13 @@ const QUICK_EMOJI = ["👍", "❤️", "😂", "🎉", "😮", "😢", "🙏", "
  * The emoji-reaction tray button (Concord calls only). Renders nothing where
  * the feature is unavailable. Pairs with {@link RaiseHandButton}.
  */
-export function ReactionsMenu({ className }: { className?: string }) {
+export function ReactionsMenu({
+  className,
+  portalContainer,
+}: {
+  className?: string;
+  portalContainer?: HTMLElement;
+}) {
   const { enabled, sendReaction } = useCallSignals();
   const [open, setOpen] = useState(false);
   if (!enabled) return null;
@@ -507,7 +526,11 @@ export function ReactionsMenu({ className }: { className?: string }) {
           <Smile className="size-4" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-auto p-2">
+      <DropdownMenuContent
+        align="end"
+        className="w-auto p-2"
+        portalContainer={portalContainer}
+      >
         <div className="grid grid-cols-4 gap-1">
           {QUICK_EMOJI.map((emoji) => (
             <button

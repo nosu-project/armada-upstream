@@ -2,8 +2,9 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { setPushToTalkRuntime } from "@/lib/pushToTalk";
+import { PortalContainerProvider } from "@/hooks/usePortalContainer";
 
-import { MicButton } from "./CallControls";
+import { MicButton, ReactionsMenu } from "./CallControls";
 
 const setMicrophoneEnabled = vi.fn(async () => {});
 let micEnabled = true;
@@ -31,14 +32,46 @@ vi.mock("@/lib/callSounds", () => ({
 }));
 
 const overridden = vi.fn();
+const callSignals = vi.hoisted(() => ({
+  enabled: false,
+  sendReaction: vi.fn(),
+}));
 vi.mock("@/hooks/useCall", () => ({ useCall: () => ({}) }));
-vi.mock("@/contexts/CallSignalsContext", () => ({ useCallSignals: () => ({}) }));
+vi.mock("@/contexts/CallSignalsContext", () => ({ useCallSignals: () => callSignals }));
 
 afterEach(() => {
   setPushToTalkRuntime({ ready: false, pressed: false, bindingLabel: null });
   micEnabled = true;
   canPlaybackAudio = true;
+  callSignals.enabled = false;
   vi.clearAllMocks();
+});
+
+describe("ReactionsMenu portal placement", () => {
+  it("keeps its tray in the nearest portal container", async () => {
+    callSignals.enabled = true;
+    const host = document.createElement("div");
+    document.body.append(host);
+    const view = render(
+      <PortalContainerProvider value={host}>
+        <ReactionsMenu />
+      </PortalContainerProvider>,
+    );
+
+    fireEvent(
+      screen.getByRole("button", { name: "Reactions" }),
+      new MouseEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        ctrlKey: false,
+      }),
+    );
+    const reaction = await screen.findByRole("button", { name: "React 👍" });
+    expect(host).toContainElement(reaction);
+
+    view.unmount();
+    host.remove();
+  });
 });
 
 describe("MicButton with push to talk active", () => {
