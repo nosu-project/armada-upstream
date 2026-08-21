@@ -437,8 +437,41 @@ export async function queryRumorsByIds(
  * durable in-chat-app state updates are stored (the wire decrypts every inner
  * kind) but never surface in the timeline. Both `channel` and the single-letter
  * `i` are index-backed, so this is a cheap indexed read. Durable state only —
- * realtime frames ride ephemeral 21059 wraps and are never stored.
+ * realtime frames ride iroh gossip and are never stored.
  */
+
+/**
+ * How many recent 3310 rows a peer-signal read scans.
+ *
+ * Deliberately generous: durable app state is the SAME kind on the same
+ * channel, differing only by a session tag Vector's signals do not carry, so
+ * the two share this window and a chatty app's updates crowd the signals out.
+ * A peer whose advertisement falls off the end is undiscoverable to anyone
+ * joining after them.
+ */
+const PEER_SIGNAL_SCAN = 2000;
+
+/**
+ * Every webxdc peer signal on a channel.
+ *
+ * Deliberately not filtered by app session: Vector publishes these with no
+ * session tag at all (`send_webxdc_signal` passes no extra tags), so the
+ * `#i` filter the state plane uses would never match one. The topic inside
+ * the content is what separates one game from another.
+ */
+export async function queryWebxdcPeerSignals(
+  communityIdHex: string,
+  channelIdHex: string,
+  opts?: { signal?: AbortSignal },
+): Promise<OpenedChat[]> {
+  if (!channelIdHex) return [];
+  const events = await rumorStore(communityIdHex).query(
+    [{ kinds: [KIND_WEBXDC], "#channel": [channelIdHex], limit: PEER_SIGNAL_SCAN }],
+    { signal: opts?.signal },
+  );
+  return notExpired(events).map((ev) => storedToOpenedChat(ev, channelIdHex));
+}
+
 export async function queryWebxdcRumors(
   communityIdHex: string,
   channelIdHex: string,

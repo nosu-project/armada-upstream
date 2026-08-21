@@ -3,6 +3,7 @@ import { Blocks } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useApps } from "@/hooks/useApps";
 import { useChatScope } from "@/hooks/useChatScope";
+import { deriveUrlTopicId } from "@/lib/webxdcRealtime";
 import { appScopeKey } from "@/contexts/AppsContext";
 import type { ImetaEntry } from "@/lib/imeta";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
@@ -14,11 +15,24 @@ import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
  * everyone who launches the same attachment shares state). Falls back to a
  * plain download link when there's no chat scope to launch into.
  */
-export function XdcAttachment({ url, imeta }: { url: string; imeta?: ImetaEntry }) {
+export function XdcAttachment({
+  url,
+  imeta,
+  messageId,
+}: {
+  url: string;
+  imeta?: ImetaEntry;
+  /** The rumor id of the message carrying this app, hex. */
+  messageId?: string;
+}) {
   const scope = useChatScope();
   const { activeApp, launchApp } = useApps();
   const name = imeta?.summary || "Webxdc app";
-  const sessionId = imeta?.webxdc;
+  // An uploaded app carries a minted topic; a pasted link has no file event to
+  // carry one, so every client derives the same topic from the URL and the
+  // message id. Without this a link opens into a session only this client is
+  // in — which looks like working multiplayer with nobody else ever arriving.
+  const sessionId = imeta?.webxdc ?? (messageId ? deriveUrlTopicId(url, messageId) : undefined);
   // A published game's icon is a plaintext URL; an encrypted attachment's thumb
   // is ciphertext (would render broken), so only show it when unencrypted.
   const icon = imeta?.encryption ? undefined : sanitizeImageSrc(imeta?.thumbnail);

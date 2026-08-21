@@ -1,4 +1,5 @@
 /** Image extensions rendered inline. */
+import { WEBXDC_MIME } from "@/lib/webxdcMime";
 export const IMAGE_EXTS = 'jpg|jpeg|png|gif|webp|svg|avif';
 
 /** Video extensions rendered as players. */
@@ -108,7 +109,7 @@ export function mimeFromExt(ext: string): string {
     case 'aac':  return 'audio/aac';
     case 'opus': return 'audio/opus';
     case 'weba': return 'audio/webm';
-    case 'xdc':  return 'application/x-webxdc';
+    case 'xdc':  return WEBXDC_MIME;
     default:     return 'application/octet-stream';
   }
 }

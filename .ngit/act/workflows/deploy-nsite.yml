@@ -88,9 +88,18 @@ jobs:
 
       - run: npm ci
 
-      # Build the SPA (npm build also copies dist/index.html -> dist/404.html,
-      # which is the path NIP-5A host servers fall back to).
+      # Build the SPA. `npm run build` compiles the Mini App realtime transport
+      # (crates/webxdc-rt, iroh-gossip -> wasm) through a prebuild hook that is
+      # deliberately non-fatal for frontend-only contributors — so here, where
+      # it is NOT optional, WEBXDC_RT_REQUIRED makes a missing toolchain or a
+      # failed compile fail the deploy instead of quietly publishing a build
+      # with multiplayer switched off. The Rust toolchain and the warm iroh
+      # dependency tree are baked into the armada-ci runner image
+      # (.ngit/ci-image/Dockerfile). (npm build also copies dist/index.html ->
+      # dist/404.html, the path NIP-5A host servers fall back to.)
       - run: npm run build
+        env:
+          WEBXDC_RT_REQUIRED: "1"
 
       # This deploy IS the Flatpak signing key's out-of-band channel: the
       # manifest published below is signed by the nsite key and commits every

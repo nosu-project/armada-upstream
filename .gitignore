@@ -40,3 +40,8 @@ deploy.sh
 # Left by a manual `go build` in the publisher package; the packaged binary
 # is written to electron/generated/hevc/ by scripts/build-hevc-publisher.sh.
 electron/hevc-publisher/hevc-publisher
+
+# wasm build output
+crates/webxdc-rt/pkg*/
+crates/webxdc-rt/target/
+src/wasm/

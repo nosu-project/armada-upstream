@@ -169,6 +169,58 @@ RUN set -eux; \
     swift --version; \
     command -v swift | grep -qv hostedtoolcache
 
+# ── Rust wasm toolchain (Mini App realtime transport: crates/webxdc-rt) ──────
+# The transport (iroh-gossip compiled to wasm) is built by
+# scripts/build-wasm.mjs, which deploy-nsite/desktop/release invoke with
+# WEBXDC_RT_REQUIRED=1 — turning a missing toolchain into a failed deploy
+# rather than a build that silently ships multiplayer off. Baked here so those
+# workflows stop installing it per-run, and (with the warm section below) the
+# large iroh dependency tree is fetched once instead of on every version tag.
+#
+# rustup/cargo live in /root/.cargo, the toolchain + wasm32 std in /root/.rustup
+# — all OUTSIDE /opt/hostedtoolcache, so the act-toolcache volume can't shadow
+# them (same reasoning as the Android SDK and Swift). The cargo/rustc shims and
+# the standalone wasm-pack are linked into /usr/local/bin, which act's step PATH
+# always includes; RUSTUP_HOME/CARGO_HOME are exported so the shims resolve the
+# toolchain at job time. There is no setup-rust in the workflows, so a stale
+# image does NOT self-heal — rebuild when these pins change.
+#
+# CARGO_TARGET_DIR is a FIXED absolute path so the warm build below and the
+# job builds share one target dir: cargo fingerprints registry deps by content
+# (path-independent), so iroh's whole tree stays FRESH and is reused rather
+# than recompiled per version tag — only the webxdc-rt crate itself, whose
+# source the job checks out at a different path, recompiles (cheap).
+#
+# clang is a hard dependency, not tidiness: iroh's tls-ring feature pulls in
+# `ring`, whose build script compiles C/asm and probes for `clang` to target
+# wasm32 — with none present it aborts with "failed to find tool clang", which
+# is the same failure AGENTS.md warns about on macOS (Apple Clang can't target
+# wasm32). The base image ships no clang, so install it here.
+ENV RUSTUP_HOME=/root/.rustup \
+    CARGO_HOME=/root/.cargo \
+    CARGO_TARGET_DIR=/root/.cargo-target
+ARG RUST_VERSION=stable
+ARG WASM_PACK_VERSION=0.13.1
+RUN set -eux; \
+    apt-get update -qq; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends clang; \
+    rm -rf /var/lib/apt/lists/*; \
+    curl -fsSL https://sh.rustup.rs | \
+      sh -s -- -y --no-modify-path --profile minimal \
+        --default-toolchain "${RUST_VERSION}" \
+        --target wasm32-unknown-unknown; \
+    ln -sf "$CARGO_HOME/bin/cargo" /usr/local/bin/cargo; \
+    ln -sf "$CARGO_HOME/bin/rustc" /usr/local/bin/rustc; \
+    ln -sf "$CARGO_HOME/bin/rustup" /usr/local/bin/rustup; \
+    curl -fsSL "https://github.com/rustwasm/wasm-pack/releases/download/v${WASM_PACK_VERSION}/wasm-pack-v${WASM_PACK_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+      | tar -xz -C /usr/local/bin --strip-components=1 \
+          "wasm-pack-v${WASM_PACK_VERSION}-x86_64-unknown-linux-musl/wasm-pack"; \
+    cargo --version; \
+    rustc --version; \
+    wasm-pack --version; \
+    command -v cargo | grep -qv hostedtoolcache; \
+    command -v wasm-pack | grep -qv hostedtoolcache
+
 # ── Warm dependency caches for this repo ─────────────────────────────────────
 # Mirrors release.yml's build path (npm ci + cap sync + gradle release build)
 # and desktop.yml's (electron npm ci + electron-builder --linux --win) so
@@ -182,6 +234,7 @@ RUN set -eux; \
 COPY package.json package-lock.json capacitor.config.ts /warm/app/
 COPY android /warm/app/android
 COPY electron /warm/app/electron
+COPY crates /warm/app/crates
 RUN set -eux; \
     cd /warm/app; \
     mkdir -p dist; \
@@ -216,6 +269,16 @@ RUN set -eux; \
     npm ci --no-audit --no-fund; \
     ./scripts/build-hevc-publisher.sh --arch x64; \
     npx electron-builder --linux --win --config electron-builder.yml --publish never; \
+    # Mini App transport: a REAL release wasm-pack build so iroh's dependency
+    # tree is both fetched AND compiled into CARGO_TARGET_DIR once here. Job
+    # builds reuse the compiled deps (same target dir, same rustc); the crate's
+    # own recompile is all that is left. The wasm output is thrown away — only
+    # the registry download and the target-dir cache matter, exactly like the
+    # gradle/electron warm builds above.
+    cd /warm/app; \
+    wasm-pack build --release --target web \
+      --out-dir /tmp/warm-wasm crates/webxdc-rt; \
+    rm -rf /tmp/warm-wasm; \
     cd /; \
     rm -rf /warm
 
@@ -229,4 +292,6 @@ RUN set -eux; \
     wine --version; \
     swift --version; \
     flatpak-builder --version; \
-    sdkmanager --version
+    sdkmanager --version; \
+    cargo --version; \
+    wasm-pack --version

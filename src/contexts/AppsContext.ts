@@ -82,6 +82,19 @@ export interface AppsContextType {
   /** Close the open app. */
   closeApp: () => void;
   /**
+   * Hand the running app a fresher view of the chat it lives in.
+   *
+   * `scope` carries live objects — a Concord `Channel` holds the group key and
+   * epoch its messages are sealed under — and it is captured when the app
+   * launches. A rotation replaces those without changing the scope KEY, so
+   * nothing remounts and the app keeps sealing under an epoch the channel has
+   * retired. Receivers refuse that (`concord/lib/chat.ts`, by design, so an
+   * ejected member cannot keep writing), and the sender sees nothing wrong
+   * because it renders its own writes locally. The chat surface owns the live
+   * objects, so it pushes them here; a scope for a different chat is ignored.
+   */
+  refreshScope: (scope: AppScope) => void;
+  /**
    * Register the top-of-chat DOM node into which the running app's stage should
    * portal. Only the chat surface matching the active app's scope should
    * register. Returns an unregister function.

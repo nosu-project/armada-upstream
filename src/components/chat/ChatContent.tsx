@@ -40,6 +40,7 @@ import { AUDIO_EXTS, EMBED_MEDIA_URL_REGEX, IMAGE_URL_REGEX, isGifLikeUrl, mimeF
 import { relayToRouteParam } from "@/lib/platform";
 import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { stripTrackingParams } from "@/lib/trackingParams";
+import { WEBXDC_MIME, isWebxdcMime } from "@/lib/webxdcMime";
 import { cn } from "@/lib/utils";
 import { downloadUrl } from "@/lib/downloadFile";
 import { canShareFiles, shareFile } from "@/lib/share";
@@ -294,18 +295,6 @@ function usableMime(m: string | undefined): string | undefined {
   return m;
 }
 
-/**
- * Whether a MIME type names a webxdc Mini App. Armada writes
- * `application/x-webxdc`; Vector writes `application/vnd.webxdc+zip`. We keep
- * writing `x-webxdc` (so no existing message changes meaning) but accept either
- * on READ, so a Mini App sent from Vector renders as a launch card rather than a
- * generic file. The `.xdc` extension is a separate, complementary signal — a
- * Blossom blob's server-assigned extension isn't decidable, so the MIME is the
- * reliable one for the encrypted (Vector) case.
- */
-function isWebxdcMime(m: string | undefined): boolean {
-  return m === "application/x-webxdc" || m === "application/vnd.webxdc+zip";
-}
 
 /**
  * Rich message content renderer. Tokenizes the event content and renders:
@@ -559,7 +548,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
               encryption: inlineImeta?.encryption,
               // Normalize a webxdc MIME so the render-side isXdc check fires even
               // when the only signal was the uuid on an extension-less URL.
-              mime: isInlineWebxdc && !isWebxdcMime(imetaMime) ? "application/x-webxdc" : imetaMime,
+              mime: isInlineWebxdc && !isWebxdcMime(imetaMime) ? WEBXDC_MIME : imetaMime,
               fallbacks: inlineImeta?.fallbacks,
             });
             lastIndex = index + fullMatch.length;
@@ -756,7 +745,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             type: "media-embed",
             url,
             encryption: entry.encryption,
-            mime: isWebxdcMime(mime) ? mime : "application/x-webxdc",
+            mime: isWebxdcMime(mime) ? mime : WEBXDC_MIME,
             fallbacks: entry.fallbacks,
           });
           renderedUrls.add(url);
@@ -1093,9 +1082,9 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
         const encryption = token.encryption ?? imeta?.encryption;
         const fallbacks = token.fallbacks ?? imeta?.fallbacks;
         const isXdc = isWebxdcMime(mime)
-          || /\.xdc(\?[^\s]*)?$/i.test(token.url);
+          || /\.xdc([?#][^\s]*)?$/i.test(token.url);
         if (isXdc) {
-          return <XdcAttachment key={key} url={token.url} imeta={imeta} />;
+          return <XdcAttachment key={key} url={token.url} imeta={imeta} messageId={event.id} />;
         }
         const isAudio = mime.startsWith("audio/") || AUDIO_EXT_URL_REGEX.test(token.url);
         if (isAudio) {

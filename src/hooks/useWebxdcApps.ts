@@ -3,9 +3,11 @@ import { useQuery } from "@tanstack/react-query";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 
+import { WEBXDC_MIMES, isWebxdcMime } from "@/lib/webxdcMime";
+
 /** NIP-94 file-metadata kind — how webxdc apps are published as discoverable events. */
 const KIND_FILE_METADATA = 1063;
-const WEBXDC_MIME = "application/x-webxdc";
+
 
 /** A webxdc app discovered from a published kind-1063 event. */
 export interface WebxdcApp {
@@ -41,7 +43,7 @@ function deriveName(ev: NostrEvent, url: string): string {
 
 /**
  * Discover webxdc apps/games published as NIP-94 kind-1063 file-metadata events
- * (`m application/x-webxdc`). Queries the default read pool plus any extra
+ * (`m application/vnd.webxdc+zip`, and the legacy `application/x-webxdc`). Queries the default read pool plus any extra
  * `relays` (e.g. a community's own relays, where it may host apps no public
  * indexer sees). Results are deduped by `.xdc` URL, newest-first.
  */
@@ -52,7 +54,9 @@ export function useWebxdcApps(relays?: string[]) {
     queryKey: ["webxdc-apps", [...extra].sort().join(",")],
     staleTime: 5 * 60_000,
     queryFn: async ({ signal }) => {
-      const filter = { kinds: [KIND_FILE_METADATA], "#m": [WEBXDC_MIME], limit: 200 };
+      // Both spellings: the library must keep listing apps published under
+      // either, or every app predating the MIME change disappears from it.
+      const filter = { kinds: [KIND_FILE_METADATA], "#m": [...WEBXDC_MIMES], limit: 200 };
       const timeout = AbortSignal.any([signal, AbortSignal.timeout(8000)]);
       const results = await Promise.all([
         nostr.query([filter], { signal: timeout }).catch(() => [] as NostrEvent[]),
@@ -64,7 +68,7 @@ export function useWebxdcApps(relays?: string[]) {
       const byUrl = new Map<string, WebxdcApp>();
       for (const ev of events) {
         const url = tag(ev, "url");
-        if (!url || tag(ev, "m") !== WEBXDC_MIME || byUrl.has(url)) continue;
+        if (!url || !isWebxdcMime(tag(ev, "m")) || byUrl.has(url)) continue;
         byUrl.set(url, {
           id: ev.id,
           url,

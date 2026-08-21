@@ -164,6 +164,15 @@ export function AppsProvider({ children }: { children: React.ReactNode }) {
     setActiveApp(null);
   }, []);
 
+  const refreshScope = useCallback((scope: AppScope) => {
+    setActiveApp((prev) => {
+      if (!prev || appScopeKey(prev.scope) !== appScopeKey(scope)) return prev;
+      // Identity matters: a new object every render would remount the app and
+      // reset the game. Only replace when something actually changed.
+      return prev.scope === scope ? prev : { ...prev, scope };
+    });
+  }, []);
+
   const registerAppStageSlot = useCallback((el: HTMLElement) => {
     setSlots((prev) => (prev.includes(el) ? prev : [...prev, el]));
     return () => setSlots((prev) => prev.filter((s) => s !== el));
@@ -176,12 +185,13 @@ export function AppsProvider({ children }: { children: React.ReactNode }) {
       activeApp,
       launchApp,
       closeApp,
+      refreshScope,
       registerAppStageSlot,
       stageOpen,
       toggleStage,
       setStageOpen,
     }),
-    [activeApp, launchApp, closeApp, registerAppStageSlot, stageOpen, toggleStage],
+    [activeApp, launchApp, closeApp, refreshScope, registerAppStageSlot, stageOpen, toggleStage],
   );
 
   return (

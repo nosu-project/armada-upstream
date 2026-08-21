@@ -160,6 +160,7 @@ import { matchGitTicketRepository, parseGitRepositoryAddress, sortAndDedupeGitTi
 import { cn, pickDefaultChannel } from "@/lib/utils";
 import { chatRoute, parseChatRoute, type ChatRoute, type Concord2Pane } from "@/lib/routes";
 import { useLegacyFocusParams } from "@/hooks/useLegacyFocusParams";
+import { useApps } from "@/hooks/useApps";
 import { getAvatarShape } from "@/lib/avatarShape";
 import { shortTimeAgo } from "@/lib/formatTime";
 
@@ -1368,6 +1369,15 @@ export function ConcordPage() {
     () => (community && channel ? { kind: "concord", community, channel } : undefined),
     [community, channel],
   );
+
+  // A running Mini App captured this scope when it launched, and a rotation
+  // replaces the channel's keys without changing its id — so hand the live one
+  // back, or the app keeps sealing under an epoch the channel has retired and
+  // every other member silently drops what it publishes.
+  const { refreshScope } = useApps();
+  useEffect(() => {
+    if (appScope) refreshScope(appScope);
+  }, [appScope, refreshScope]);
 
   // Individual mute states for the ⋮ menu. Like GroupPage, the side-by-side
   // "Mute channel" / "Mute community" items each reflect only their own scope
