@@ -319,13 +319,41 @@ gpg --show-keys --with-fingerprint ./armada-flatpak.gpg
 cat ./armada-flatpak.fingerprint
 ```
 
-The first fingerprint printed for the `pub` key must be the same full
-fingerprint in `armada-flatpak.fingerprint` **and** the fingerprint announced
-through an independently authenticated Armada channel, such as the signed
-Nostr release announcement. The two files above share one HTTPS host, so
-comparing only those files does not authenticate the key. Do not substitute a
-short key ID or a fingerprint copied from this README. Once verified, add the
-remote and import that key:
+Both of those files come from one HTTPS host, so comparing only those files
+does not authenticate the key — it proves that whoever serves armada.buzz
+agrees with themselves. The independent channel is the **nsite manifest**: the
+same fingerprint ships in the static build at
+`/.well-known/armada-flatpak.fingerprint`, and every path in that build is
+committed by sha256 in a Nostr event signed by Armada's publishing key. Check
+the downloaded key against that instead, with
+[`nak`](https://github.com/fiatjaf/nak) and `jq`:
+
+```sh
+armada_npub=npub10qdp2fc9ta6vraczxrcs8prqnv69fru2k6s2dj48gqjcylulmtjsg9arpj
+curl --fail --location --output armada-flatpak.announced \
+  https://armada.buzz/.well-known/armada-flatpak.fingerprint
+
+# The newest site manifest signed by that key, verified, then the sha256 it
+# commits the announcement file to.
+nak req -k 35128 -a "$armada_npub" -d armada \
+  wss://relay.ditto.pub wss://relay.dreamith.to wss://relay.primal.net |
+  jq -s 'max_by(.created_at)' > armada-nsite.json
+nak verify < armada-nsite.json
+jq -r '.tags[] | select(.[0] == "path")
+       | select(.[1] == "/.well-known/armada-flatpak.fingerprint") | .[2]' \
+  < armada-nsite.json
+sha256sum ./armada-flatpak.announced
+```
+
+`nak verify` must exit 0, the two hashes must match, and
+`armada-flatpak.announced` must then equal both `armada-flatpak.fingerprint`
+and the first fingerprint `gpg --show-keys` printed for the `pub` key. Do not
+substitute a short key ID or a fingerprint copied from this README. The
+manifest is addressed by the coordinate
+`35128:781a1527055f74c1f70230f10384609b34548f8ab6a0a6caa74025827f9fdae5:armada`,
+which is the same identity that signs this repository — so the check is
+independent of the web server, not of Armada. Once verified, add the remote and
+import that key:
 
 ```sh
 flatpak remote-add --user --if-not-exists \
@@ -387,7 +415,7 @@ sudo flatpak remote-delete --system "$armada_system_origin"
 
 After the first signed release and its public key are both live, existing
 bundle installs need a one-time trust migration. Verify
-`armada-flatpak.gpg` against the independently announced full fingerprint as
+`armada-flatpak.gpg` against the fingerprint the nsite manifest attests, as
 shown above, then upgrade the app's actual origin in place:
 
 ```sh
@@ -460,12 +488,24 @@ or expected fingerprint is absent, when the export does not contain exactly
 one primary key, or when the fingerprints differ. The same public-key file is
 passed to `flatpak build-bundle --gpg-keys`; signing the repository alone would
 not enable verification for a bundle's automatically configured origin.
-Operators must announce the full fingerprint over a separately authenticated
-channel before asking existing installations to import it. Changing the
-expected-fingerprint secret is an explicit key rotation, not routine release
-maintenance: once installs verify against a key, a lost or expired one stops
-their updates with no in-band recovery, and every affected user has to import
-the replacement by hand. Create the signing key without an expiry date.
+The announcement is not prose an operator has to remember to write. The full
+fingerprint is COMMITTED at `public/.well-known/armada-flatpak.fingerprint`,
+ships in the static build like `assetlinks.json`, and is therefore named by
+sha256 in the nsite manifest `deploy-nsite.yml` signs — so the channel that
+vouches for the key is a Nostr key rather than the same web server that serves
+it. Two gates keep the two halves in step: the signing step compares that
+committed file, read out of the object database, against the fingerprint of
+the key it actually imported and fails the tag if they differ; and the nsite
+deploy refuses to publish a manifest whose copy is missing, malformed, or not
+byte-identical to the committed one. A rotation is therefore one commit plus
+one secret change, and forgetting either half fails a release rather than
+shipping a key nothing independent names.
+
+Changing the expected-fingerprint secret is an explicit key rotation, not
+routine release maintenance: once installs verify against a key, a lost or
+expired one stops their updates with no in-band recovery, and every affected
+user has to import the replacement by hand. Create the signing key without an
+expiry date.
 
 The manifest swaps only venmic's native prebuild to its
 Freedesktop-25.08-compatible 6.1 build; AppImage and deb retain the

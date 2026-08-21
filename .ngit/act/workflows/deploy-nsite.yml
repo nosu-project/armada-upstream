@@ -92,6 +92,41 @@ jobs:
       # which is the path NIP-5A host servers fall back to).
       - run: npm run build
 
+      # This deploy IS the Flatpak signing key's out-of-band channel: the
+      # manifest published below is signed by the nsite key and commits every
+      # path to a sha256, so the fingerprint it attests is vouched for by a
+      # Nostr key rather than by armada.buzz's TLS. The README tells users to
+      # check the key against it, so a build that quietly dropped the file
+      # would leave those instructions pointing at a 404 while this job stayed
+      # green — and the released repository would then be signed by a key no
+      # independent channel names. Refuse to deploy instead.
+      - name: Verify the published Flatpak key fingerprint
+        run: |
+          set -eu
+          committed=public/.well-known/armada-flatpak.fingerprint
+          published=dist/.well-known/armada-flatpak.fingerprint
+          for file in "$committed" "$published"; do
+            if [ ! -s "$file" ]; then
+              echo "Flatpak signing fingerprint is missing from $file; refusing to deploy." >&2
+              exit 1
+            fi
+          done
+          # Byte-identical, not merely equal after normalization: the manifest
+          # commits to the bytes served, and this is what users will `cat`.
+          cmp "$committed" "$published"
+          value=$(cat "$published")
+          case "$value" in
+            *[!0-9A-F]*|"")
+              echo "Published Flatpak fingerprint is not an uppercase hexadecimal fingerprint." >&2
+              exit 1
+              ;;
+          esac
+          if [ "${#value}" -ne 40 ]; then
+            echo "Published Flatpak fingerprint must be a full 40-character primary fingerprint." >&2
+            exit 1
+          fi
+          echo "Announcing Flatpak signing key $value."
+
       - name: Publish to Blossom + relays
         env:
           NSYTE_BUNKER: ${{ secrets.NSYTE_BUNKER }}

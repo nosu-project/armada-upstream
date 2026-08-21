@@ -343,6 +343,83 @@ describe("desktop update publication", () => {
     expect(firstRsync).toBeGreaterThan(stagedVerification);
   });
 
+  // The published key cannot vouch for itself: everything under
+  // /downloads/flatpak/ comes from one HTTPS host. The out-of-band channel is
+  // the committed announcement, which ships in the static build and is named
+  // by sha256 in the nsite manifest. These two gates are what keep the halves
+  // from drifting — a rotated secret whose announcement was never committed
+  // must fail the tag rather than ship a key nothing independent names.
+  it("refuses to sign a key the committed announcement does not name", () => {
+    const signingScript = String(flatpakSigningStep?.run || "");
+    // The announcement is read out of the object database, like sign.sh, and
+    // for the same reason: the build job was allowed to write to this
+    // checkout, so the working-tree copy is not evidence of anything. Asserted
+    // as two fragments rather than one wrapped line — the YAML block scalar
+    // decides where the continuation lands, and that is formatting, not
+    // behaviour.
+    expect(signingScript).toContain("git cat-file blob");
+    expect(signingScript).toContain(
+      '"${GITHUB_SHA}:public/.well-known/armada-flatpak.fingerprint"',
+    );
+    expect(signingScript).toContain(
+      'if [ "$announced_fingerprint" != "$fingerprint" ]; then',
+    );
+    expect(signingScript).toContain(
+      "public/.well-known/armada-flatpak.fingerprint does not announce the signing key.",
+    );
+    // Before the key is used for anything: the tag fails at the check, not
+    // after a repository has already been signed with an unannounced key.
+    expect(signingScript.indexOf("$announced_fingerprint")).toBeLessThan(
+      signingScript.indexOf("--detach-sign"),
+    );
+    // The committed file is the one CI compares against, so it has to be a
+    // full primary fingerprint rather than a short id or a stray note.
+    const announced = fs.readFileSync(
+      path.resolve(root, "public/.well-known/armada-flatpak.fingerprint"),
+      "utf8",
+    );
+    expect(announced).toMatch(/^[0-9A-F]{40}\n$/);
+  });
+
+  it("refuses to deploy an nsite whose fingerprint announcement is missing", () => {
+    const nsite = loadYaml(
+      fs.readFileSync(
+        path.resolve(root, ".ngit/act/workflows/deploy-nsite.yml"),
+        "utf8",
+      ),
+    );
+    const steps = nsite.jobs.deploy.steps;
+    const announceStep = steps.find(
+      (step) => step.name === "Verify the published Flatpak key fingerprint",
+    );
+    const publishStep = steps.find(
+      (step) => step.name === "Publish to Blossom + relays",
+    );
+    expect(announceStep).toBeDefined();
+    // After the build (the file only exists in dist afterwards) and before the
+    // manifest is signed — a deploy that dropped it must not reach the relays.
+    const buildIndex = steps.findIndex((step) => step.run === "npm run build");
+    expect(buildIndex).toBeGreaterThan(-1);
+    expect(steps.indexOf(announceStep)).toBeGreaterThan(buildIndex);
+    expect(steps.indexOf(publishStep)).toBeGreaterThan(
+      steps.indexOf(announceStep),
+    );
+    const announceScript = String(announceStep?.run || "");
+    expect(announceScript).toContain(
+      "committed=public/.well-known/armada-flatpak.fingerprint",
+    );
+    expect(announceScript).toContain(
+      "published=dist/.well-known/armada-flatpak.fingerprint",
+    );
+    // The manifest commits to the bytes served, so equal-after-normalization
+    // is not enough.
+    expect(announceScript).toContain('cmp "$committed" "$published"');
+    expect(announceScript).toContain('if [ "${#value}" -ne 40 ]; then');
+    expect(announceScript).toContain(
+      "refusing to deploy",
+    );
+  });
+
   it("stages and verifies the pinned public Flatpak identity", () => {
     const signingScript = String(flatpakSigningStep?.run || "");
     expect(signingScript).toContain(

@@ -406,6 +406,28 @@ jobs:
             exit 1
           fi
 
+          # Publishing the key is not the same as ANNOUNCING it: everything
+          # under /downloads/flatpak/ comes from one HTTPS host, so it cannot
+          # attest itself. The announcement is the committed copy at
+          # public/.well-known/armada-flatpak.fingerprint, which ships in the
+          # static build and is therefore named, by sha256, in the nsite
+          # manifest deploy-nsite.yml signs — a Nostr identity rather than a
+          # web server. Tie it to the key HERE, where the real fingerprint is
+          # in hand: a rotated secret whose announcement was not committed
+          # fails the tag instead of shipping a key nothing vouches for.
+          # Read from the object database for the same reason sign.sh is:
+          # the build job was allowed to write to this checkout.
+          announced_fingerprint=$(
+            git cat-file blob \
+              "${GITHUB_SHA}:public/.well-known/armada-flatpak.fingerprint" |
+              tr -d '[:space:]' | tr '[:lower:]' '[:upper:]'
+          )
+          if [ "$announced_fingerprint" != "$fingerprint" ]; then
+            echo "public/.well-known/armada-flatpak.fingerprint does not announce the signing key." >&2
+            echo "Commit the full fingerprint of the release key before tagging." >&2
+            exit 1
+          fi
+
           # An actual non-interactive signature rejects a public-only export,
           # an encryption-only key, a secret-key stub, or a passphrase-locked
           # key before any release metadata is touched.
