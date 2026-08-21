@@ -64,7 +64,7 @@ import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
 import { useVoiceActivity } from "@/hooks/useVoiceActivity";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useMuteToggle, useMuteUser } from "@/hooks/useMuteList";
+import { useMuteToggle, useMuteUser, useMutedPubkeys } from "@/hooks/useMuteList";
 import { useActiveRoom } from "@/hooks/useActiveRoom";
 import {
   useDMConversations,
@@ -74,6 +74,11 @@ import {
 import { useBotManifests } from "@/hooks/useBotManifests";
 import { useAdoptDmInbox, useDm17Backfill, useDm17Conversations, useDm17Support } from "@/hooks/useDm17";
 import { useDmConversationName } from "@/hooks/useDmConversationName";
+import {
+  recordDmConversationIndex,
+  useDmConversationIndex,
+  useDmConversationIndexReady,
+} from "@/hooks/useDmConversationIndex";
 import { useDmMessageSearch } from "@/hooks/useDmMessageSearch";
 import { useDmProtocolPref } from "@/hooks/useDmProtocolPref";
 import { LegacyFallbackRequired, useDmTransport } from "@/hooks/useDmTransport";
@@ -86,7 +91,7 @@ import { useNotifLevels, dmScopeKey, type NotifLevel } from "@/hooks/useNotifLev
 import { usePinnedDms } from "@/hooks/usePinnedDms";
 import { useRailDms } from "@/hooks/useRailDms";
 import { useAcceptedDms } from "@/hooks/useAcceptedDms";
-import { useClosedDms } from "@/hooks/useClosedDms";
+import { useClosedDms, type DmLatestMarker } from "@/hooks/useClosedDms";
 import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
 import { useOpenProfile } from "@/hooks/useOpenProfile";
 import { usePrefetchProfile } from "@/hooks/usePrefetchProfile";
@@ -112,6 +117,7 @@ import { sanitizeUrl } from "@/lib/sanitizeUrl";
 import { cn } from "@/lib/utils";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
+import type { DmConversationLatest } from "@/lib/dmConversationIndex";
 
 /**
  * Highlight every case-insensitive occurrence of `query` within `text`, with
@@ -1938,17 +1944,42 @@ type DmListView = "inbox" | "requests";
 
 /**
  * One conversation-list row. `latest` is absent (as `undefined`, widened by the
- * builders) for a thread with no messages yet — a freshly-opened peer, a
- * started chat link, or Note to Self before its first note.
+ * builders) for a thread with no local message yet — a freshly-opened peer, a
+ * started chat link, Note to Self before its first note, or a restored index
+ * placeholder. `indexedLatest` is deliberately kept out of `latest`.
  */
 interface DmListRow {
   /** The conversation key — see `dmConvKey`. */
   conversation: string;
   /** Its participants: one for a 1:1, several for a group. */
   peers: string[];
-  latest: NostrRumor;
+  latest?: NostrRumor;
+  /** Synced ordering/close marker only; never a preview or unread source. */
+  indexedLatest?: DmConversationLatest;
   plaintext?: string;
   mine: boolean;
+}
+
+// Exported so close/reopen marker precedence has a direct regression test.
+// eslint-disable-next-line react-refresh/only-export-components
+export function dmListRowLatestMarker(
+  row: Pick<DmListRow, "latest" | "indexedLatest">,
+): DmLatestMarker | undefined {
+  if (!row.latest) {
+    return row.indexedLatest
+      ? { id: row.indexedLatest.id, created_at: row.indexedLatest.createdAt }
+      : undefined;
+  }
+
+  if (!row.indexedLatest || row.latest.created_at >= row.indexedLatest.createdAt) {
+    return row.latest;
+  }
+
+  return { id: row.indexedLatest.id, created_at: row.indexedLatest.createdAt };
+}
+
+function dmListRowCreatedAt(row: DmListRow): number {
+  return Math.max(row.latest?.created_at ?? 0, row.indexedLatest?.createdAt ?? 0);
 }
 
 /**
@@ -2018,7 +2049,7 @@ export function ConversationList({
   onMarkAllRead: () => void;
   onCompose: () => void;
   openPeer: (conversation: string) => void;
-  closePeer: (conversation: string, latest: NostrRumor | undefined) => void;
+  closePeer: (conversation: string, latest: DmLatestMarker | undefined) => void;
   loadMore: () => Promise<number>;
   hasMore: boolean;
   isLoadingMore: boolean;
@@ -2123,6 +2154,11 @@ export function ConversationList({
 
   // Nothing but Note to Self — i.e. what used to be an empty list.
   const onlyNoteToSelf = rows.length === 1 && rows[0]?.conversation === user?.pubkey;
+  // A synchronized roster is already stable enough to paint while the heavier
+  // message-history queries catch up. Its rows carry their final ordering
+  // markers and have passed the parent's live trust/mute/close filters;
+  // profiles and previews can therefore fill in without hiding the roster.
+  const hasSyncedRoster = rows.some((row) => row.indexedLatest !== undefined);
 
   const renderRow = (c: DmListRow, index: number, request = false) => (
     <DeferredRow key={c.conversation} active={gateRows && index >= EAGER_ROWS} minHeight={ROW_MIN_H}>
@@ -2133,7 +2169,7 @@ export function ConversationList({
       query={search}
       messageMatch={messageMatches.get(c.conversation)?.text}
       unread={
-        Boolean(c.latest) &&
+        c.latest !== undefined &&
         c.latest.pubkey !== user?.pubkey &&
         c.latest.created_at > getLastRead(dmReadKey(c.conversation)) &&
         c.conversation !== activePeer
@@ -2150,7 +2186,9 @@ export function ConversationList({
       onToggleRail={() => toggleRail(c.conversation)}
       // Note to Self is always in the list (see withNoteToSelf), so there is
       // nothing a close could achieve — the row is re-added on the next render.
-      onClose={c.conversation === user?.pubkey ? undefined : () => closePeer(c.conversation, c.latest)}
+      onClose={c.conversation === user?.pubkey
+        ? undefined
+        : () => closePeer(c.conversation, dmListRowLatestMarker(c))}
       // Blocking a group request would have to name one of several senders, so
       // it is offered on 1:1 requests only (ConversationRow hides the item).
       onBlock={c.peers.length === 1 ? () => void blockPeer(c.peers[0]) : undefined}
@@ -2353,7 +2391,7 @@ export function ConversationList({
               )}
             </div>
           </>
-        ) : isLoading ? (
+        ) : isLoading && !hasSyncedRoster ? (
           <ConversationRowSkeletons />
         ) : (
           <>
@@ -2445,7 +2483,10 @@ export function DMsPage() {
   // (local config only — NEVER publishes; a 10050 list is only ever written by
   // an explicit save in Settings).
   useAdoptDmInbox();
+  const indexedConversations = useDmConversationIndex();
+  const indexReady = useDmConversationIndexReady();
   const { isKnown, isLoading: followsLoading } = useKnownDmPeers();
+  const { mutedPubkeys, ready: muteReady } = useMutedPubkeys();
   const { accept } = useAcceptedDms();
   const { started: startedPeers } = useStartedDms();
   const { close: closeDm, reopen: reopenDm, reopenForNewMessages, isClosed: isDmClosed } = useClosedDms();
@@ -2457,9 +2498,10 @@ export function DMsPage() {
   // peers, and an unresolved follow set hides every row the viewer didn't send
   // the last message in — so a partially-loaded `rows` is a deterministically
   // wrong list that re-sorts a beat later. While this holds we show the
-  // restored snapshot (or skeletons) instead of that partial view.
+  // restored snapshot, synchronized roster, or skeletons instead of that
+  // partial view.
   // (`kind4Loading` also covers the mute set, which gates upstream.)
-  const isLoading = kind4Loading || dm17Loading || followsLoading;
+  const isLoading = kind4Loading || dm17Loading || followsLoading || !muteReady || !indexReady;
 
   // The route param is one npub for a 1:1 and several for a group; either way
   // it parses to a canonical conversation key (re-sorted, so a hand-ordered
@@ -2514,8 +2556,9 @@ export function DMsPage() {
   // is already plaintext, so it carries its own preview text), then split into
   // the inbox and the request tier by the shared `isKnown` predicate.
   //
-  // The split is the ONLY thing separating the two lists, so neither can gain
-  // or lose a row the other doesn't correspondingly lose or gain.
+  // Real message rows split exhaustively between the two lists. Index-only
+  // discovery hints are admitted to the inbox only after the trust gate and
+  // never materialize as requests.
   const [rows, requestRows] = useMemo(() => {
     // Keyed by CONVERSATION, which for every kind-4 row is just the peer — the
     // legacy plane is pairwise, so its rows merge with the NIP-17 1:1 of the
@@ -2534,7 +2577,7 @@ export function DMsPage() {
       // Participation is sticky across planes: either plane having a
       // viewer-authored message keeps the row visible below.
       const mine = (existing?.mine ?? false) || c.mine;
-      if (existing && existing.latest.created_at >= c.latest.createdAt) {
+      if (existing?.latest && existing.latest.created_at >= c.latest.createdAt) {
         existing.mine = mine;
         continue;
       }
@@ -2553,8 +2596,29 @@ export function DMsPage() {
         mine,
       });
     }
+
+    // The encrypted index is a discovery hint, never a trust or message
+    // source. Re-run every peer through the live known/mute predicates. A row
+    // that fails stays absent — it must not materialize as a message request.
+    for (const indexed of indexedConversations) {
+      const peers = dmConvPeers(indexed.key);
+      if (peers.length === 0 || peers.some((peer) => mutedPubkeys.has(peer))) continue;
+      const existing = byConversation.get(indexed.key);
+      if (existing) {
+        existing.mine ||= indexed.mine;
+        existing.indexedLatest = indexed.latest;
+        continue;
+      }
+      if (!peers.every((peer) => isKnown(peer, indexed.mine))) continue;
+      byConversation.set(indexed.key, {
+        conversation: indexed.key,
+        peers,
+        indexedLatest: indexed.latest,
+        mine: indexed.mine,
+      });
+    }
     const sorted = [...byConversation.values()].sort(
-      (a, b) => b.latest.created_at - a.latest.created_at,
+      (a, b) => dmListRowCreatedAt(b) - dmListRowCreatedAt(a),
     );
     const known: DmListRow[] = [];
     const requests: DmListRow[] = [];
@@ -2562,7 +2626,10 @@ export function DMsPage() {
     // stranger in the room makes it a request, exactly as a message from that
     // stranger alone would.
     for (const c of sorted) {
-      (c.peers.every((peer) => isKnown(peer, c.mine)) ? known : requests).push(c);
+      if (c.peers.every((peer) => isKnown(peer, c.mine))) known.push(c);
+      // Index-only rows never enter requests: a self-authored but malformed or
+      // stale document must not become a stranger-controlled inbox surface.
+      else if (c.latest) requests.push(c);
     }
     // Threads seeded by following someone's chat link (`/<npub>`): message-less
     // like the active peer below, but kept after we navigate away — the whole
@@ -2575,7 +2642,6 @@ export function DMsPage() {
       known.unshift({
         conversation: peer,
         peers: [peer],
-        latest: undefined as unknown as NostrRumor,
         mine: false,
       });
     }
@@ -2589,18 +2655,45 @@ export function DMsPage() {
       known.unshift({
         conversation: activePeer,
         peers: dmConvPeers(activePeer),
-        latest: undefined as unknown as NostrRumor,
         mine: false,
       });
     }
     return [known, requests];
-  }, [conversations, dm17Conversations, activePeer, isKnown, startedPeers, self]);
+  }, [
+    conversations,
+    dm17Conversations,
+    indexedConversations,
+    mutedPubkeys,
+    activePeer,
+    isKnown,
+    startedPeers,
+    self,
+  ]);
+
+  // Persist only settled MAIN-INBOX rows with a real backing event. Request
+  // rows and index-only placeholders are excluded by construction. This local
+  // write is cheap; the sync owner separately coalesces relay publication for
+  // a full minute so message traffic cannot become a signer-prompt stream.
+  useEffect(() => {
+    if (isLoading || !self) return;
+    const records = rows.flatMap((row) => row.latest ? [{
+      key: row.conversation,
+      latest: { createdAt: row.latest.created_at, id: row.latest.id },
+      mine: row.mine,
+    }] : []);
+    if (records.length === 0) return;
+    const timer = setTimeout(() => void recordDmConversationIndex(self, records), 800);
+    return () => clearTimeout(timer);
+  }, [isLoading, rows, self]);
 
   // A closed row is only a dismissal of the current latest message. As soon as
   // either participant sends another message, it becomes visible immediately;
   // then remove the obsolete marker from synced settings.
   useEffect(() => {
-    reopenForNewMessages(rows.map((r) => ({ peer: r.conversation, latest: r.latest })));
+    reopenForNewMessages(rows.map((r) => ({
+      peer: r.conversation,
+      latest: dmListRowLatestMarker(r),
+    })));
   }, [rows, reopenForNewMessages]);
 
   // Note to Self is exempt: it is shown at all times, so a close marker could
@@ -2608,7 +2701,8 @@ export function DMsPage() {
   // message-less) rather than hide it. Markers from before it became a fixture
   // of the list are the case this actually covers.
   const isHidden = useCallback(
-    (row: DmListRow) => row.conversation !== self && isDmClosed(row.conversation, row.latest),
+    (row: DmListRow) => row.conversation !== self
+      && isDmClosed(row.conversation, dmListRowLatestMarker(row)),
     [self, isDmClosed],
   );
 
@@ -2681,7 +2775,6 @@ export function DMsPage() {
         {
           conversation: self,
           peers: [self],
-          latest: undefined as unknown as NostrRumor,
           mine: true,
         },
       ];
@@ -2690,7 +2783,8 @@ export function DMsPage() {
   );
 
   // Skeletons are for a genuine cold start only: with a snapshot we show the
-  // restored list instead, which is real content in the right order.
+  // restored list instead, which is real content in the right order. With no
+  // snapshot ConversationList can still reveal index-backed rows immediately.
   const showSkeletons = isLoading && visibleRestoredRows.length === 0;
   const displayRows = useMemo(() => {
     if (!isLoading || visibleRestoredRows.length === 0) return withNoteToSelf(visibleRows);
@@ -2702,7 +2796,6 @@ export function DMsPage() {
       {
         conversation: activePeer,
         peers: dmConvPeers(activePeer),
-        latest: undefined as unknown as NostrRumor,
         mine: false,
       },
       ...visibleRestoredRows,
@@ -2721,9 +2814,7 @@ export function DMsPage() {
     const timer = setTimeout(() => {
       writeDmListSnapshot(
         self,
-        visibleRows
-          .filter((c) => c.latest)
-          .map((c) => ({
+        visibleRows.flatMap((c) => c.latest ? [{
             peer: c.conversation,
             eventId: c.latest.id,
             createdAt: c.latest.created_at,
@@ -2734,7 +2825,7 @@ export function DMsPage() {
             // dropped once its deadline passes (see readDmListSnapshot).
             expiresAt: expirationOf(c.latest.tags),
             mine: c.mine,
-          })),
+          }] : []),
       );
     }, 800);
     return () => clearTimeout(timer);
@@ -2779,7 +2870,7 @@ export function DMsPage() {
   );
 
   const closePeer = useCallback(
-    (conversation: string, latest: NostrRumor | undefined) => {
+    (conversation: string, latest: DmLatestMarker | undefined) => {
       closeDm(conversation, latest);
       if (activePeer === conversation) {
         setRenderedPeer(undefined);

@@ -120,7 +120,15 @@ export function useNostrPush(): UsePushNotificationsReturn {
 
   // The watch set — the same one the Android background service uses, and the
   // one the APNs controller registers (`usePushWatchSet`).
-  const { specs, concord, dmKnownPeers, dmSk, followsLoading } = usePushWatchSet(prefs);
+  const {
+    specs,
+    concord,
+    dmKnownPeers,
+    dmKnownConversationKeys,
+    dmMutedPeers,
+    dmSk,
+    dmPeersLoading,
+  } = usePushWatchSet(prefs);
 
   // Keep the service worker's push config current — the DM policy + known set
   // for every enabled web-push session, the decrypt key for nsec logins, and
@@ -148,30 +156,38 @@ export function useNostrPush(): UsePushNotificationsReturn {
     }
     // Still preparing: leave the existing config for the worker to use.
     if (!enabled) return;
-    // Wait for the follow list: sealing a config while it loads would freeze
+    // Wait for the full established-peer roster: sealing while it loads would freeze
     // an empty known set on disk, reclassifying every known conversation as a
     // request until the next rewrite.
-    if (followsLoading) return;
+    if (dmPeersLoading) return;
     let cancelled = false;
     (async () => {
       // Mirror useKnownDmPeers' `mine` dimension: a conversation the viewer
       // has authored a message in is known even where `acceptedDms` can't say
       // so (it is device-local, so a fresh install starts it empty while the
       // synced history still shows the viewer's own messages).
-      let minePeers: string[] = [];
+      let mineConversationKeys: string[] = [];
       try {
         const rows = await queryDm17Conversations(user.pubkey);
-        // Every participant of a conversation the viewer has written in — see
-        // useForegroundNotifications for why a group contributes all of them.
-        minePeers = rows.filter((row) => row.mine).flatMap((row) => row.peers);
+        // Preserve exact group identity. Flattening this to participants would
+        // make a person trusted in unrelated 1:1 DMs merely because the viewer
+        // once wrote in a group they shared.
+        const muted = new Set(dmMutedPeers);
+        mineConversationKeys = rows
+          .filter((row) => row.mine && row.peers.every((peer) => !muted.has(peer)))
+          .map((row) => row.key);
       } catch {
-        // Store unavailable — follows ∪ accepted ∪ pinned still apply.
+        // Store unavailable — the durable synced/pinned roster still applies.
       }
       if (cancelled) return;
       await writeSwPushConfig({
         policy: prefs.dmRequests,
         self: user.pubkey,
-        knownPeers: [...new Set([...dmKnownPeers, ...minePeers])].sort(),
+        knownPeers: dmKnownPeers,
+        knownConversations: [
+          ...new Set([...dmKnownConversationKeys, ...mineConversationKeys]),
+        ].sort(),
+        mutedPeers: dmMutedPeers,
         // One entry per watched channel's CURRENT epoch. The conversation key
         // reads that channel at that epoch and nothing else — the wrap-signing
         // secret stays in the page (see concordNotifications.ts) — and the set
@@ -197,9 +213,11 @@ export function useNostrPush(): UsePushNotificationsReturn {
     supported,
     user,
     enabled,
-    followsLoading,
+    dmPeersLoading,
     prefs.dmRequests,
     dmKnownPeers,
+    dmKnownConversationKeys,
+    dmMutedPeers,
     dmSk,
     concord,
   ]);

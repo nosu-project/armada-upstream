@@ -20,6 +20,7 @@
  * reload there. Delivery still works; only the retry-after-restart does not.
  */
 import { getArmadaDB } from "@/lib/db/armadaDB";
+import { uniqueRelayUrls } from "@/lib/nip65";
 import { isSigned } from "@/lib/nostrRumor";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -35,6 +36,14 @@ export interface QueuedPublish {
   id: string;
   event: NostrEvent;
   relay?: string;
+  /**
+   * Exact account-state destinations still awaiting this signed event.
+   * Kept separate from `relay`, which is the single host of group-scoped
+   * traffic. A retry must not fall back to the generic pool: doing so can get
+   * one unrelated acknowledgement while the missing NIP-65 relay remains
+   * empty.
+   */
+  relays?: string[];
   enqueuedAt: number;
   attempts: number;
   nextAttemptAt?: number;
@@ -53,11 +62,44 @@ export class PublishQueuedError extends Error {
   }
 }
 
+/** A lossy addressable rewrite must stop and rebuild from a fresh source read. */
+export class PublishOutboxConflictError extends Error {
+  constructor() {
+    super("A newer queued edition requires a fresh source read");
+    this.name = "PublishOutboxConflictError";
+  }
+}
+
+/**
+ * Serialize outbox edits. Different event ids can still name one replaceable
+ * coordinate, so an id-scoped lock is insufficient: two same-coordinate
+ * writes could both inspect the old queue, then independently delete/replace
+ * it and lose a destination. The queue is tiny and mutations are local KV I/O,
+ * making one short global chain the honest atomic boundary.
+ */
+let mutationChain: Promise<void> = Promise.resolve();
+
+async function mutateOutbox(change: () => Promise<void>): Promise<void> {
+  const current = mutationChain.then(change, change);
+  mutationChain = current.catch(() => undefined);
+  await current;
+}
+
 export function isPublishQueuedError(error: unknown): error is PublishQueuedError {
   return error instanceof PublishQueuedError || (
     typeof error === "object" &&
     error !== null &&
     (error as { name?: string }).name === "PublishQueuedError"
+  );
+}
+
+export function isPublishOutboxConflictError(
+  error: unknown,
+): error is PublishOutboxConflictError {
+  return error instanceof PublishOutboxConflictError || (
+    typeof error === "object"
+    && error !== null
+    && (error as { name?: string }).name === "PublishOutboxConflictError"
   );
 }
 
@@ -80,13 +122,22 @@ function isQueuedPublish(value: unknown): value is QueuedPublish {
     // never be delivered, so it is not a valid entry.
     typeof item.event.sig === "string" &&
     item.event.sig.length > 0 &&
-    Array.isArray(item.event.tags)
+    Array.isArray(item.event.tags) &&
+    !(item.relay && item.relays) &&
+    (item.relays === undefined || (
+      Array.isArray(item.relays)
+      && item.relays.length > 0
+      && item.relays.every((relay) => typeof relay === "string")
+    ))
   );
 }
 
-function replaceableKey(event: NostrEvent, relay?: string): string | null {
+function replaceableKey(event: NostrEvent, relay?: string, relays?: string[]): string | null {
   const kind = event.kind;
-  const relayPart = relay ?? "*";
+  // All explicit relay-set deliveries share one logical coordinate. When the
+  // NIP-65 set changes, a newer replaceable inherits every still-pending old
+  // target instead of leaving an older event queued for the previous set.
+  const relayPart = relay ?? (relays ? "@explicit" : "*");
   if (kind === 0 || kind === 3 || (kind >= 10000 && kind < 20000)) {
     return `${relayPart}:${kind}:${event.pubkey}`;
   }
@@ -110,34 +161,165 @@ export async function getQueuedPublishes(): Promise<QueuedPublish[]> {
 }
 
 /** Queue a signed event for delivery. A repeat of the same id is a no-op. */
-export async function queueSignedEvent(event: NostrEvent, relay?: string): Promise<void> {
+export async function queueSignedEvent(
+  event: NostrEvent,
+  relay?: string,
+  relays?: string[],
+  options: { inheritPendingTargets?: boolean } = {},
+): Promise<void> {
   const { kv } = getArmadaDB();
   await migrateLegacyOutbox();
+  if (!isSigned(event)) return;
 
-  if (await kv.get(itemKey(event.id))) return;
-
-  // A replaceable coordinate only ever needs its newest edition delivered, so a
-  // fresh one supersedes whatever is queued (and an older one is dropped).
-  // Concurrent queues of the SAME coordinate can still both survive this
-  // read-modify-write; that is self-healing — the flush delivers both and the
-  // relay keeps the newer — unlike the lost writes the old shared array had.
-  const coord = replaceableKey(event, relay);
-  if (coord) {
-    const conflicting = (await getQueuedPublishes()).filter(
-      (item) => replaceableKey(item.event, item.relay) === coord,
-    );
-    const newest = conflicting.sort((a, b) => b.event.created_at - a.event.created_at)[0];
-    if (newest && newest.event.created_at > event.created_at) return;
-    await Promise.all(conflicting.map((item) => kv.delete(itemKey(item.id))));
+  if (relay && relays) throw new Error("Specify either one relay or an explicit relay set");
+  const exactRelays = relays ? uniqueRelayUrls(relays) : undefined;
+  if (relays && exactRelays?.length === 0) {
+    throw new Error("Cannot queue an explicit publish without a relay destination");
   }
 
-  await kv.set(itemKey(event.id), {
-    id: event.id,
-    event,
-    relay,
-    enqueuedAt: Date.now(),
-    attempts: 0,
-  } satisfies QueuedPublish);
+  await mutateOutbox(async () => {
+    const verify = async (
+      id: string,
+      requiredRelay?: string,
+      requiredRelays?: readonly string[],
+    ): Promise<QueuedPublish> => {
+      const stored = await kv.get<QueuedPublish>(itemKey(id));
+      const targets = new Set(stored?.relays ?? []);
+      if (
+        !isQueuedPublish(stored)
+        || (requiredRelay !== undefined && stored.relay !== requiredRelay)
+        || (requiredRelays !== undefined
+          && requiredRelays.some((target) => !targets.has(target)))
+      ) {
+        // IndexedDB's degraded adapter deliberately resolves a write as a
+        // no-op. Only a read-back makes "queued" a durable claim.
+        throw new Error("Publish outbox write could not be verified");
+      }
+      return stored;
+    };
+
+    const same = await kv.get<QueuedPublish>(itemKey(event.id));
+    if (isQueuedPublish(same)) {
+      if (exactRelays) {
+        const mergedRelays = uniqueRelayUrls([...(same.relays ?? []), ...exactRelays]);
+        await kv.set(itemKey(event.id), {
+          ...same,
+          relay: undefined,
+          relays: mergedRelays,
+        });
+        await verify(event.id, undefined, mergedRelays);
+      } else {
+        await verify(event.id, relay);
+      }
+      return;
+    }
+
+    // A replaceable coordinate only ever needs its newest edition delivered.
+    // Explicit multi-relay state also INHERITS targets from the superseded
+    // event, so rotating NIP-65 relays cannot strand an old version for an old
+    // destination while only the new set receives the replacement.
+    const coord = replaceableKey(event, relay, exactRelays);
+    const conflicting = coord
+      ? (await getQueuedPublishes()).filter(
+          (item) => replaceableKey(item.event, item.relay, item.relays) === coord,
+        )
+      : [];
+    const existingWinner = conflicting.sort(
+      (a, b) => b.event.created_at - a.event.created_at || a.event.id.localeCompare(b.event.id),
+    )[0];
+    const existingWins = existingWinner && (
+      existingWinner.event.created_at > event.created_at
+      || (existingWinner.event.created_at === event.created_at && existingWinner.event.id < event.id)
+    );
+    const inheritPendingTargets = options.inheritPendingTargets !== false;
+    if (existingWins) {
+      if (!inheritPendingTargets) {
+        // Even a subset cohort is unsafe: `event` is an older signed mutation,
+        // and sending it would regress any relay that does not yet hold the
+        // newer queued winner. Force the caller back through read/merge/sign.
+        throw new PublishOutboxConflictError();
+      }
+      if (exactRelays) {
+        const mergedRelays = uniqueRelayUrls([
+          ...(existingWinner.relays ?? []),
+          ...exactRelays,
+        ]);
+        await kv.set(itemKey(existingWinner.id), {
+          ...existingWinner,
+          relay: undefined,
+          relays: mergedRelays,
+        });
+        await verify(existingWinner.id, undefined, mergedRelays);
+      } else {
+        await verify(existingWinner.id, relay);
+      }
+      return;
+    }
+
+    const inheritedRelays = exactRelays
+      ? uniqueRelayUrls([
+          ...exactRelays,
+          ...(inheritPendingTargets
+            ? conflicting.flatMap((item) => item.relays ?? [])
+            : []),
+        ])
+      : undefined;
+    const entry = {
+      id: event.id,
+      event,
+      relay,
+      relays: inheritedRelays,
+      enqueuedAt: Date.now(),
+      attempts: 0,
+    } satisfies QueuedPublish;
+    // Establish and verify the replacement before removing its predecessor.
+    // If this write fails, the old signed obligation remains recoverable.
+    await kv.set(itemKey(event.id), entry);
+    await verify(event.id, relay, inheritedRelays);
+    // With inheritance disabled, preserve predecessor obligations for every
+    // target that did NOT participate in this document's source read. They can
+    // coexist by event id until a later complete merge supersedes them.
+    const replacementTargets = new Set(exactRelays ?? []);
+    const cleanup = conflicting.map(async (item) => {
+      if (!inheritPendingTargets && item.relays) {
+        const remaining = item.relays.filter((target) => !replacementTargets.has(target));
+        if (remaining.length > 0) {
+          await kv.set(itemKey(item.id), { ...item, relays: remaining });
+          return;
+        }
+      }
+      await kv.delete(itemKey(item.id));
+    });
+    // A failed cleanup can only leave a redundant older retry. The verified
+    // winner carries every destination it is allowed to receive; relays reject
+    // an older addressable edition after accepting this one.
+    await Promise.all(cleanup)
+      .catch(() => undefined);
+  });
+}
+
+/**
+ * Apply one exact-relay delivery attempt. Relays added after the attempt began
+ * remain queued; only attempted destinations that accepted are removed.
+ */
+export async function recordQueuedPublishAttempt(
+  id: string,
+  attemptedRelays: string[],
+  rejectedRelays: string[],
+): Promise<void> {
+  const { kv } = getArmadaDB();
+  const attempted = new Set(uniqueRelayUrls(attemptedRelays));
+  const rejected = new Set(uniqueRelayUrls(rejectedRelays));
+  await mutateOutbox(async () => {
+    const item = await kv.get<QueuedPublish>(itemKey(id));
+    if (!isQueuedPublish(item) || !item.relays) return;
+    const remaining = item.relays.filter((relay) => !attempted.has(relay) || rejected.has(relay));
+    if (remaining.length === 0) {
+      await kv.delete(itemKey(id));
+      return;
+    }
+    await kv.set(itemKey(id), { ...item, relay: undefined, relays: uniqueRelayUrls(remaining) });
+  });
 }
 
 /**
@@ -159,29 +341,33 @@ export async function withSignature(rumor: NostrRumor): Promise<NostrEvent> {
 }
 
 export async function removeQueuedPublish(id: string): Promise<void> {
-  await getArmadaDB().kv.delete(itemKey(id));
+  await mutateOutbox(() => getArmadaDB().kv.delete(itemKey(id)));
 }
 
 /** Record a failed attempt and back the next one off (capped at 5 minutes). */
 export async function markQueuedPublishFailure(id: string, error: unknown): Promise<void> {
-  const { kv } = getArmadaDB();
-  const item = await kv.get<QueuedPublish>(itemKey(id));
-  if (!isQueuedPublish(item)) return;
+  await mutateOutbox(async () => {
+    const { kv } = getArmadaDB();
+    const item = await kv.get<QueuedPublish>(itemKey(id));
+    if (!isQueuedPublish(item)) return;
 
-  const attempts = item.attempts + 1;
-  const backoff = Math.min(5 * 60_000, 2 ** Math.min(attempts, 8) * 1000);
-  await kv.set(itemKey(id), {
-    ...item,
-    attempts,
-    lastError: error instanceof Error ? error.message : String(error),
-    nextAttemptAt: Date.now() + backoff,
+    const attempts = item.attempts + 1;
+    const backoff = Math.min(5 * 60_000, 2 ** Math.min(attempts, 8) * 1000);
+    await kv.set(itemKey(id), {
+      ...item,
+      attempts,
+      lastError: error instanceof Error ? error.message : String(error),
+      nextAttemptAt: Date.now() + backoff,
+    });
   });
 }
 
 export async function clearPublishOutbox(): Promise<void> {
-  const { kv } = getArmadaDB();
-  const entries = await kv.list({ prefix: KEY_PREFIX });
-  await Promise.all(entries.map(({ key }) => kv.delete(key)));
+  await mutateOutbox(async () => {
+    const { kv } = getArmadaDB();
+    const entries = await kv.list({ prefix: KEY_PREFIX });
+    await Promise.all(entries.map(({ key }) => kv.delete(key)));
+  });
 }
 
 // ── migration ─────────────────────────────────────────────────────────────────
@@ -231,4 +417,5 @@ async function drainLegacyOutbox(): Promise<void> {
 /** Test seam: forget the memoised drain so the next access runs it again. */
 export function __resetOutboxForTests(): void {
   drain = undefined;
+  mutationChain = Promise.resolve();
 }

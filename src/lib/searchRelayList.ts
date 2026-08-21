@@ -1,6 +1,7 @@
 import { normalizeRelayUrl } from "@/lib/platform";
 
-import type { NostrEvent, NostrSigner } from "@nostrify/nostrify";
+import type { NostrSigner } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 /** NIP-51 search-relay list kind. */
 export const KIND_SEARCH_RELAYS = 10007;
@@ -27,7 +28,7 @@ function relayTags(tags: string[][]): string[] {
 
 /** Read public and NIP-44-private `relay` items without changing their visibility. */
 export async function readSearchRelayList(
-  event: NostrEvent | null | undefined,
+  event: NostrRumor | null | undefined,
   signer: NostrSigner,
 ): Promise<SearchRelayList> {
   if (!event) {

@@ -141,6 +141,28 @@ struct PushProcessor {
 
     // MARK: - DM
 
+    static func dmConversationKey(peers: [String]) -> String {
+        peers.joined(separator: ",")
+    }
+
+    static func isKnownDm(peers: [String], config: PushConfig) -> Bool {
+        let key = dmConversationKey(peers: peers)
+        return config.knownConversations.contains(key)
+            || peers.allSatisfy { config.knownPeers.contains($0) }
+    }
+
+    static func isMutedDm(peers: [String], config: PushConfig) -> Bool {
+        peers.contains(where: { config.mutedPeers.contains($0) })
+    }
+
+    static func dmPath(peers: [String]) -> String {
+        "/dm/\(dmConversationKey(peers: peers))"
+    }
+
+    static func dmThreadId(peers: [String]) -> String {
+        "dm-\(dmConversationKey(peers: peers))"
+    }
+
     private func prepareDm(wrap: NostrEvent) -> PreparedPush? {
         guard let decryptor = dmDecryptor() else {
             // Neither an on-device key nor a usable bunker: this login cannot
@@ -164,12 +186,18 @@ struct PushProcessor {
         // Our own sent copy is addressed to us too, and is not news.
         if opened.author == config.selfPubkey { return .dropped }
 
+        // Match the DM list: a group containing any muted participant is
+        // hidden as a whole, even if this message's author is unmuted.
+        if Self.isMutedDm(peers: opened.peers, config: config) {
+            return .dropped
+        }
+
         // Reactions, deletes and timer changes are not messages.
         guard opened.kind == Dm17.kindChat || opened.kind == Dm17.kindFile else {
             return requestPing(quiet: true)
         }
 
-        let known = config.knownPeers.contains(opened.author)
+        let known = Self.isKnownDm(peers: opened.peers, config: config)
         if !known && config.policy != .full {
             // A stranger picks the text, the name AND the avatar alike — gate
             // all of it before any reaches the screen.
@@ -195,8 +223,8 @@ struct PushProcessor {
             drop: false,
             title: presented.title,
             body: presented.body,
-            threadId: "dm-\(opened.author)",
-            path: "/dm/\(opened.author)",
+            threadId: Self.dmThreadId(peers: opened.peers),
+            path: Self.dmPath(peers: opened.peers),
             quiet: false,
             sender: PreparedPush.Sender(
                 id: opened.author,

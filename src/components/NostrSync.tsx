@@ -18,22 +18,36 @@ import {
   subscribeFrequentReactions,
 } from "@/hooks/useFrequentReactions";
 import { useFavoriteGifsSync } from "@/hooks/useFavoriteGifsSync";
+import {
+  useDmConversationIndexSync,
+  useRecordDmConversationIndex,
+} from "@/hooks/useDmConversationIndexSync";
 import { useResumeEpoch } from "@/hooks/useResumeEpoch";
 import { useBlossomServerList } from "@/hooks/useBlossomServerList";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useSearchRelayList } from "@/hooks/useSearchRelayList";
 import { useTheme } from "@/hooks/useTheme";
-import { parseRelayList, KIND_RELAY_LIST } from "@/lib/nip65";
+import { replaceableIsNewerThanMetadata } from "@/lib/canonicalSelfList";
 import {
+  KIND_RELAY_LIST,
+  newerRelayListUpdate,
+  relayListIsNewerThanMetadata,
+} from "@/lib/nip65";
+import {
+  admitSelfSyncEvent,
   KIND_APP_SPECIFIC,
   KIND_COMMUNITY_LIST_FRAG,
   queryKeysForSelfEvent,
+  selfSyncTopicOf,
   SELF_SYNC_DTAGS,
+  SELF_SYNC_OWNER_QUERY_KEYS,
   SELF_SYNC_REPLACEABLE_KINDS,
-  T_ARMADA_GIF_FAVORITES,
+  SELF_SYNC_TOPIC_TAGS,
+  type SelfSyncEventVersion,
 } from "@/lib/selfSyncKinds";
 import { ACTIVE_THEME_KIND, parseDittoTheme } from "@/lib/themeEvent";
 import { savePushPrefs } from "@/lib/pushPrefs";
+import { verifyEventOnce } from "@/lib/verifyCache";
 import { setPreferredVoiceServer } from "@/lib/voiceDevices";
 
 import type { NostrEvent, NostrFilter } from "@nostrify/nostrify";
@@ -73,8 +87,9 @@ function dTagOf(event: NostrEvent): string | undefined {
  * A. Transport / freshness (the standing subscription). A single long-lived REQ
  *    `{ authors:[me], kinds:[…] }` (plus scoped filters for Armada's
  *    addressable kind-30078 documents) streams every new version of the user's
- *    own lists: follow, mute, NIP-29 servers/channels (10009), Concord
- *    vaults, DM/Blossom relay lists, and Armada's NIP-78 settings. Events land
+ *    own lists: follow, mute, the NIP-65 pointer (10002), NIP-29
+ *    servers/channels (10009), Concord vaults, DM/Blossom relay lists, and
+ *    Armada's NIP-78 settings. Events land
  *    in the `armada-events` cache first (the NostrBatcher mirrors `.req()`
  *    output), then the owning hook's query key is invalidated so it re-reads and
  *    reconciles through its OWN merge / decrypt-failed guards. This is what makes
@@ -92,6 +107,8 @@ function dTagOf(event: NostrEvent): string | undefined {
  *        Read-state hydration is likewise gone from here — it moved into
  *        ReadStateProvider, which owns the local map.)
  *    1c. Blossom media server list (10063) → config.
+ *    1e. NIP-65 relay-list changes (10002) → config and a restarted self-state
+ *        stream on the newly declared write relays.
  *    2. Interop: adopt the user's Ditto active profile theme (16767) if they've
  *       never picked a theme in Armada.
  *
@@ -131,6 +148,8 @@ function NostrSyncInner() {
   const queryClient = useQueryClient();
   const selfRelayKey = selfStateRelays(config, user?.pubkey).sort().join("\u0000");
   useFavoriteGifsSync();
+  useDmConversationIndexSync();
+  useRecordDmConversationIndex();
 
   // Bumped when the app returns from a real backgrounding (not an alt-tab),
   // rebuilding the standing subscription below.
@@ -140,9 +159,11 @@ function NostrSyncInner() {
   const blossomAppliedEvent = useRef<string | undefined>(undefined);
   const dmRelaysAppliedEvent = useRef<string | undefined>(undefined);
   const searchRelaysAppliedEvent = useRef<string | undefined>(undefined);
-  const relayListAppliedPubkey = useRef<string | undefined>(undefined);
-  // Newest created_at handled per (kind + optional d tag), across resubscribes.
-  const seenSelfVersions = useRef<Map<string, number>>(new Map());
+  // Newest valid kind-10002 applied in this session. Unlike the ordinary echo
+  // guard, NIP-01 says the LOWER id wins when two replaceables share a second.
+  const relayListSeenVersion = useRef<NostrEvent | undefined>(undefined);
+  // NIP-01 winner handled per (kind + optional d tag), across resubscribes.
+  const seenSelfVersions = useRef<Map<string, SelfSyncEventVersion>>(new Map());
   // Whether the reactions document has been read from the store, readable
   // from a debounced callback without making every change tear down and
   // rebuild that subscription.
@@ -163,9 +184,22 @@ function NostrSyncInner() {
     blossomAppliedEvent.current = undefined;
     dmRelaysAppliedEvent.current = undefined;
     searchRelaysAppliedEvent.current = undefined;
-    relayListAppliedPubkey.current = undefined;
+    relayListSeenVersion.current = undefined;
     seenSelfVersions.current = new Map();
   }, [user?.pubkey]);
+
+  // A changed account-state destination set is the handoff point: React has
+  // committed the new map, the standing effect below will rebuild on it, and
+  // every owner gets a fresh read from those relays. Invalid/older 10002 events
+  // never change this key and therefore cannot trigger a refetch storm.
+  const previousSelfRelayKey = useRef(selfRelayKey);
+  useEffect(() => {
+    if (previousSelfRelayKey.current === selfRelayKey) return;
+    previousSelfRelayKey.current = selfRelayKey;
+    for (const queryKey of SELF_SYNC_OWNER_QUERY_KEYS) {
+      queryClient.invalidateQueries({ queryKey: [...queryKey] });
+    }
+  }, [queryClient, selfRelayKey]);
 
   // ─── A. Standing self-state subscription (transport / freshness) ──────
   // One long-lived REQ for the user's own replaceable/addressable events. Each
@@ -186,11 +220,21 @@ function NostrSyncInner() {
     const pubkey = user?.pubkey;
     if (!pubkey) return;
 
+    // Self-state has an explicit ownership boundary. Falling back to the
+    // general pool when this set is empty is not harmless: the combined batch
+    // contains kind-10009, which makes pool routing fan the WHOLE request out
+    // to joined NIP-29 servers, including encrypted settings, Concord vault
+    // coordinates, and the DM/GIF topic markers. With no account-data relay
+    // configured there is nowhere appropriate to maintain a standing copy, so
+    // stay idle until app or NIP-65 self-state relays become available.
+    const relayUrls = selfRelayKey ? selfRelayKey.split("\u0000") : [];
+    if (relayUrls.length === 0) return;
+
     const controller = new AbortController();
 
-    // Newest created_at seen per (kind + optional d tag). Held across
+    // NIP-01 winner seen per (kind + optional d tag). Held across
     // resubscribes (reset only on account change) so rebuilding the sub on
-    // resume re-reads the same replaceables without invalidating all eight
+    // resume re-reads the same replaceables without invalidating all owning
     // query keys for versions we already handled.
     const seen = seenSelfVersions.current;
 
@@ -212,6 +256,55 @@ function NostrSyncInner() {
     };
 
     const onEvent = (event: NostrEvent) => {
+      // A relay can violate our author filter. Never let another account's
+      // higher timestamp poison this account's per-coordinate echo guard.
+      if (event.pubkey !== pubkey || !verifyEventOnce(event)) return;
+      if (event.kind === KIND_RELAY_LIST) {
+        const previous = relayListSeenVersion.current;
+        // A relay can violate our filter. This verifies the signature/kind,
+        // rejects an empty map, and applies NIP-01's timestamp/lower-id order.
+        const update = newerRelayListUpdate(
+          event,
+          previous?.pubkey === pubkey ? previous : undefined,
+        );
+        if (!update) return;
+        const { event: candidate, relays } = update;
+
+        // Compare against the persisted winning id too. Legacy metadata has
+        // only a timestamp, so it accepts one equal-second winner and stamps
+        // the id; subsequent sessions retain NIP-01's lower-id result.
+        const sameOwner = config.relayMetadata.pubkey === pubkey;
+        if (sameOwner && !relayListIsNewerThanMetadata(
+          candidate,
+          config.relayMetadata,
+        )) return;
+        relayListSeenVersion.current = candidate;
+
+        void eventStore.then((store) => store.event(candidate)).catch(() => undefined);
+        updateConfig((current) => {
+          const ownsCurrent = current.relayMetadata.pubkey === pubkey;
+          if (ownsCurrent && !relayListIsNewerThanMetadata(
+            candidate,
+            current.relayMetadata,
+          )) return current;
+          const next = {
+            ...current,
+            relayMetadata: {
+              relays,
+              updatedAt: candidate.created_at,
+              eventId: candidate.id,
+              pubkey,
+            },
+          };
+          // Sync-driven pointer hydration must not flip `useUserRelays` or
+          // republish an encrypted config document.
+          markConfigSynced(next);
+          return next;
+        });
+
+        return;
+      }
+
       // Addressable self-kinds dedup per coordinate: the Community List is one
       // event per FRAGMENT, and keying the echo-guard by kind alone would drop
       // fragment 1 as an "echo" of a newer fragment 0.
@@ -219,14 +312,11 @@ function NostrSyncInner() {
         event.kind === KIND_APP_SPECIFIC || event.kind === KIND_COMMUNITY_LIST_FRAG
           ? dTagOf(event)
           : undefined;
-      const topicTag = event.tags.find((tag) => tag[0] === "t")?.[1];
+      const topicTag = selfSyncTopicOf(event.tags);
       const keys = queryKeysForSelfEvent(event.kind, dTag, topicTag);
       if (keys.length === 0) return; // cached, but no query watches it (e.g. 10063)
 
-      const seenKey = dTag !== undefined ? `${event.kind}:${dTag}` : String(event.kind);
-      const prev = seen.get(seenKey) ?? 0;
-      if (event.created_at <= prev) return; // echo of a version already handled
-      seen.set(seenKey, event.created_at);
+      if (!admitSelfSyncEvent(seen, event, dTag)) return;
 
       // Write it to ArmadaDB, and only THEN tell the readers. The batcher
       // mirrors everything out of `.req()` on its own, but as a fire-and-forget
@@ -251,7 +341,7 @@ function NostrSyncInner() {
             {
               authors: [pubkey],
               kinds: [KIND_APP_SPECIFIC],
-              "#t": [T_ARMADA_GIF_FAVORITES],
+              "#t": SELF_SYNC_TOPIC_TAGS,
             },
           ]
         : []),
@@ -259,8 +349,7 @@ function NostrSyncInner() {
 
     void (async () => {
       try {
-        const relayUrls = selfRelayKey ? selfRelayKey.split("\u0000") : [];
-        const source = relayUrls.length > 0 ? nostr.group(relayUrls) : nostr;
+        const source = nostr.group(relayUrls);
         for await (const msg of source.req(filters, { signal: controller.signal })) {
           if (msg[0] === "EVENT") onEvent(msg[2] as NostrEvent);
         }
@@ -291,6 +380,8 @@ function NostrSyncInner() {
     resumeEpoch,
     selfRelayKey,
     automaticSettingsSync,
+    config.relayMetadata,
+    updateConfig,
   ]);
 
   // The portable voice-server preference is synchronized in AppConfig, while
@@ -385,12 +476,13 @@ function NostrSyncInner() {
     if (!user?.pubkey || !event || blossomAppliedEvent.current === event.id) return;
     blossomAppliedEvent.current = event.id;
     updateConfig((current) => {
-      if (event.created_at <= current.blossomServerMetadata.updatedAt) return current;
+      if (!replaceableIsNewerThanMetadata(event, current.blossomServerMetadata)) return current;
       const next = {
         ...current,
         blossomServerMetadata: {
           servers: blossomServerList.servers,
           updatedAt: event.created_at,
+          eventId: event.id,
         },
       };
       markConfigSynced(next);
@@ -404,14 +496,23 @@ function NostrSyncInner() {
   // and ignore the latter without ever treating a failed read as an empty list.
   useEffect(() => {
     const event = searchRelayList.event;
-    if (!user?.pubkey || !event || searchRelaysAppliedEvent.current === event.id) return;
+    if (!user?.pubkey
+      || !event
+      || searchRelayList.decryptFailed
+      || searchRelaysAppliedEvent.current === event.id) return;
     searchRelaysAppliedEvent.current = event.id;
     updateConfig((current) => {
       const next = { ...current, searchRelays: searchRelayList.relays };
       markConfigSynced(next);
       return next;
     });
-  }, [user?.pubkey, searchRelayList.event, searchRelayList.relays, updateConfig]);
+  }, [
+    user?.pubkey,
+    searchRelayList.event,
+    searchRelayList.relays,
+    searchRelayList.decryptFailed,
+    updateConfig,
+  ]);
 
   useEffect(() => {
     const event = dmRelayList.event;
@@ -423,52 +524,6 @@ function NostrSyncInner() {
       return next;
     });
   }, [user?.pubkey, dmRelayList.event, dmRelayList.relays, updateConfig]);
-
-  // ─── 1e. NIP-65 relay list (kind 10002 `r` tags) → config ─────────────
-  // The user's own relay list is mirrored here; publishing is available only
-  // through explicit controls in Settings.
-  // Apply only when the event is newer than what we hold and non-empty, so a
-  // transient empty/failed read never wipes a good local mirror. Exactly the
-  // shape of the 10063 block above; runs once per account.
-  useEffect(() => {
-    if (!user?.pubkey) return;
-    if (relayListAppliedPubkey.current === user.pubkey) return;
-    relayListAppliedPubkey.current = user.pubkey;
-
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const events = await nostr.query(
-          [{ kinds: [KIND_RELAY_LIST], authors: [user.pubkey], limit: 1 }],
-          { signal: AbortSignal.timeout(6000) },
-        );
-        const event = events.sort((a, b) => b.created_at - a.created_at)[0];
-        if (!event || cancelled) return;
-        const relays = parseRelayList(event);
-        if (relays.length === 0) return;
-        updateConfig((current) => {
-          const sameOwner = current.relayMetadata.pubkey === user.pubkey;
-          if (sameOwner && event.created_at <= current.relayMetadata.updatedAt) return current;
-          const next = {
-            ...current,
-            relayMetadata: { relays, updatedAt: event.created_at, pubkey: user.pubkey },
-          };
-          // Sync-driven (hydrating the user's own 10002 list), not a user edit.
-          // NIP-65 is a separate canonical list and must never refill an
-          // intentionally empty synchronized `appRelays` preference.
-          markConfigSynced(next);
-          return next;
-        });
-      } catch {
-        // Relay error — keep the local cache.
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [user?.pubkey, nostr, updateConfig]);
 
   // ─── 2. Ditto active profile theme fallback (first-time Armada users) ─
   useEffect(() => {

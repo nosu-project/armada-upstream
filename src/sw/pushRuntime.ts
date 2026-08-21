@@ -53,7 +53,7 @@ import { presetIndexedDBArmadaDB } from "@/lib/db/armadaDB";
 import { appEventStore } from "@/lib/db/mainEventStore";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { writeDm17Rumors } from "@/lib/nip17/dm17Store";
-import { KIND_DM_CHAT, KIND_DM_FILE, openDmWrap } from "@/lib/nip17/protocol";
+import { dmConvKey, KIND_DM_CHAT, KIND_DM_FILE, openDmWrap } from "@/lib/nip17/protocol";
 import {
   attributedLine,
   firstImetaMime,
@@ -385,11 +385,18 @@ async function prepareDm(
   // Our own sent copy is addressed to us too, and is not news.
   if (opened.author === cfg.self) return DROP;
 
+  // Match the DM list's existing semantics: a group containing any muted
+  // participant is hidden as a whole, even when this message's author is not
+  // the muted member. This wins even under the `full` request policy.
+  if (opened.peers.some((peer) => cfg.mutedPeers?.includes(peer))) return DROP;
+
   // Reactions/deletes/timer changes aren't messages, but the push must still
   // show something on iOS — the content-blind request ping.
   if (opened.kind !== KIND_DM_CHAT && opened.kind !== KIND_DM_FILE) return requestPing(true);
 
-  const known = cfg.knownPeers.includes(opened.author);
+  const conversation = dmConvKey(opened.peers);
+  const known = cfg.knownConversations?.includes(conversation)
+    || opened.peers.every((peer) => cfg.knownPeers.includes(peer));
   if (!known && cfg.policy !== "full") {
     // A stranger picks the text, the name and the avatar alike — gate all three
     // BEFORE any of it reaches the screen.
@@ -407,8 +414,8 @@ async function prepareDm(
     opened.author,
     {},
     {
-      tag: `dm-${opened.author}`,
-      url: `/dm/${opened.author}`,
+      tag: `dm-${conversation}`,
+      url: `/dm/${conversation}`,
       timestamp: opened.createdAt * 1000,
     },
   );

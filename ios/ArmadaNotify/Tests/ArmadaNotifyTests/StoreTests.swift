@@ -38,7 +38,7 @@ final class StoreTests: XCTestCase {
     private func dm(kind: Int = 14, tags: [[String]] = [], content: String = "hi") -> OpenedDm {
         OpenedDm(
             rumorId: String(repeating: "1", count: 64), author: peer, kind: kind,
-            content: content, tags: tags, createdAt: now, peer: peer
+            content: content, tags: tags, createdAt: now, peers: [peer]
         )
     }
 
@@ -369,11 +369,49 @@ final class SenderIdentityTests: XCTestCase {
     private let self_ = String(repeating: "a", count: 64)
     private let peer = String(repeating: "b", count: 64)
 
-    private func config(knownPeers: Set<String> = [], policy: DmRequestLevel = .generic) -> PushConfig {
+    private func config(
+        knownPeers: Set<String> = [],
+        policy: DmRequestLevel = .generic,
+        knownConversations: Set<String> = [],
+        mutedPeers: Set<String> = []
+    ) -> PushConfig {
         PushConfig(
             policy: policy, selfPubkey: self_, knownPeers: knownPeers,
+            knownConversations: knownConversations, mutedPeers: mutedPeers,
             secretKey: nil, nip46: nil, concord: []
         )
+    }
+
+    func testGroupTrustAndTapStayScopedToTheExactConversation() {
+        let other = String(repeating: "c", count: 64)
+        let peers = [peer, other].sorted()
+        let key = peers.joined(separator: ",")
+        let groupConfig = config(knownConversations: [key])
+
+        XCTAssertTrue(PushProcessor.isKnownDm(peers: peers, config: groupConfig))
+        XCTAssertFalse(
+            PushProcessor.isKnownDm(peers: [peer], config: groupConfig),
+            "group participation must not trust the author in an unrelated 1:1"
+        )
+        XCTAssertEqual(PushProcessor.dmThreadId(peers: peers), "dm-\(key)")
+        XCTAssertEqual(PushProcessor.dmPath(peers: peers), "/dm/\(key)")
+        XCTAssertTrue(
+            PushProcessor.isMutedDm(
+                peers: peers,
+                config: config(knownConversations: [key], mutedPeers: [other])
+            ),
+            "one muted participant hides the whole group, matching the DM list"
+        )
+    }
+
+    func testPushConfigCarriesMutedAuthorsSeparatelyFromKnownRooms() {
+        let key = [peer, String(repeating: "c", count: 64)].sorted().joined(separator: ",")
+        let parsed = PushConfig.parse(json: """
+        {"policy":"full","self":"\(self_)","knownPeers":[],
+         "knownConversations":["\(key)"],"mutedPeers":["\(peer)"]}
+        """)
+        XCTAssertEqual(parsed?.knownConversations, Set([key]))
+        XCTAssertEqual(parsed?.mutedPeers, Set([peer]))
     }
 
     func testANip29MessageNamesItsSender() {

@@ -27,7 +27,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMutes } from "@/hooks/useMutes";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useEventStore } from "@/hooks/useEventStore";
-import { useFollowList } from "@/hooks/useFollowList";
+import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
 import { useWireGitTicketRoots } from "@/hooks/useWireGitTicketRoots";
 import { hasNativeNotificationService } from "@/hooks/useNativeNotifications";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
@@ -707,7 +707,7 @@ function WireSyncInner() {
   const { config } = useAppContext();
   const eventStore = useEventStore();
   const { data: groupList } = useUserGroupList();
-  const { data: followData } = useFollowList();
+  const { knownPeers: dmKnownPeers } = useKnownDmPeers();
   const { relays: publishedDmRelays } = useDmRelayList();
   const concord = useWireConcordChannels();
   const concordControl = useWireConcordControl();
@@ -755,13 +755,16 @@ function WireSyncInner() {
         pubkey: user?.pubkey,
         groups,
         dmRelays,
-        dmFollows: followData?.pubkeys ?? [],
+        // The wire field keeps its historical name for native/config
+        // compatibility; it now carries every established legacy-DM author,
+        // including peers recovered from the encrypted conversation index.
+        dmFollows: dmKnownPeers,
         concord,
         concordControl,
         gitRepositories,
         gitTicketRoots,
       }),
-    [user?.pubkey, groups, dmRelays, followData?.pubkeys, concord, concordControl, gitRepositories, gitTicketRoots],
+    [user?.pubkey, groups, dmRelays, dmKnownPeers, concord, concordControl, gitRepositories, gitTicketRoots],
   );
 
   // The ingest path reads the spec lazily so long-lived subscriptions always

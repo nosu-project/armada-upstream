@@ -4,8 +4,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { selfStateRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useEventStore } from "@/hooks/useEventStore";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
-import { queryExplicitRelays } from "@/lib/nip65";
+import {
+  newestCanonicalSelfList,
+  readStoredCanonicalSelfLists,
+} from "@/lib/canonicalSelfList";
+import { queryExplicitRelays, queryExplicitRelaysWithStatus } from "@/lib/nip65";
 import { normalizeRelayUrl } from "@/lib/platform";
 import {
   KIND_SEARCH_RELAYS,
@@ -14,9 +19,10 @@ import {
 } from "@/lib/searchRelayList";
 
 import type { NostrEvent } from "@nostrify/nostrify";
+import type { NostrRumor } from "@/lib/nostrRumor";
 
 export interface SearchRelayListQuery extends SearchRelayList {
-  event: NostrEvent | null;
+  event: NostrRumor | null;
 }
 /** Read and explicitly edit the user's canonical NIP-51 search-relay list. */
 export function useSearchRelayList() {
@@ -24,6 +30,7 @@ export function useSearchRelayList() {
   const { user } = useCurrentUser();
   const { config } = useAppContext();
   const { mutateAsync: publishEvent } = useNostrPublish();
+  const eventStore = useEventStore();
   const queryClient = useQueryClient();
   const queryKey = ["search-relay-list", user?.pubkey];
 
@@ -31,16 +38,36 @@ export function useSearchRelayList() {
     queryKey,
     enabled: Boolean(user),
     queryFn: async ({ signal }) => {
-      const events = await queryExplicitRelays(
-        nostr,
-        selfStateRelays(config, user!.pubkey),
-        [{ kinds: [KIND_SEARCH_RELAYS], authors: [user!.pubkey], limit: 1 }],
-        AbortSignal.any([signal, AbortSignal.timeout(6_000)]),
-      );
-      const event = events.sort(
-        (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
-      )[0] ?? null;
-      return { event, ...(await readSearchRelayList(event, user!.signer)) };
+      const deadline = AbortSignal.any([signal, AbortSignal.timeout(6_000)]);
+      const [wireEvents, stored] = await Promise.all([
+        queryExplicitRelays(
+          nostr,
+          selfStateRelays(config, user!.pubkey),
+          [{ kinds: [KIND_SEARCH_RELAYS], authors: [user!.pubkey], limit: 1 }],
+          deadline,
+        ),
+        readStoredCanonicalSelfLists(
+          eventStore,
+          user!.pubkey,
+          [KIND_SEARCH_RELAYS],
+          deadline,
+        ),
+      ]);
+      const cached = queryClient.getQueryData<SearchRelayListQuery>(queryKey);
+      const event = newestCanonicalSelfList(
+        [
+          ...wireEvents,
+          ...stored.events,
+          ...(cached?.event ? [cached.event] : []),
+        ],
+        user!.pubkey,
+        KIND_SEARCH_RELAYS,
+      ) ?? null;
+      const decoded = await readSearchRelayList(event, user!.signer);
+      // A transient signer refusal is not an intentional empty replacement.
+      // Keep the last decryptable copy visible and let the invalidation retry.
+      if (decoded.decryptFailed && cached && !cached.decryptFailed) return cached;
+      return { event, ...decoded };
     },
     staleTime: 60_000,
   });
@@ -52,19 +79,37 @@ export function useSearchRelayList() {
         .map((relay) => normalizeRelayUrl(relay))
         .filter((relay): relay is string => Boolean(relay)))];
 
-      const events = await queryExplicitRelays(
-        nostr,
-        selfStateRelays(config, user.pubkey),
-        [{ kinds: [KIND_SEARCH_RELAYS], authors: [user.pubkey], limit: 1 }],
-        AbortSignal.timeout(8_000),
-      );
-      const prev = events.sort(
-        (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id),
-      )[0] ?? null;
-      const cached = queryClient.getQueryData<SearchRelayListQuery>(queryKey);
-      if (!prev && cached?.event) {
-        throw new Error("Could not refresh your existing search-relay list; no changes were published");
+      const relays = selfStateRelays(config, user.pubkey);
+      const deadline = AbortSignal.timeout(8_000);
+      const [response, stored] = await Promise.all([
+        queryExplicitRelaysWithStatus(
+          nostr,
+          relays,
+          [{ kinds: [KIND_SEARCH_RELAYS], authors: [user.pubkey], limit: 1 }],
+          deadline,
+        ),
+        readStoredCanonicalSelfLists(
+          eventStore,
+          user.pubkey,
+          [KIND_SEARCH_RELAYS],
+          deadline,
+        ),
+      ]);
+      if (response.answered.length === 0) {
+        throw new Error(
+          "Could not confirm your current search-relay list; no changes were published",
+        );
       }
+      const cached = queryClient.getQueryData<SearchRelayListQuery>(queryKey);
+      const prev = newestCanonicalSelfList(
+        [
+          ...response.events,
+          ...stored.events,
+          ...(cached?.event ? [cached.event] : []),
+        ],
+        user.pubkey,
+        KIND_SEARCH_RELAYS,
+      ) ?? null;
 
       const current = await readSearchRelayList(prev, user.signer);
       if (current.decryptFailed) {
@@ -104,7 +149,8 @@ export function useSearchRelayList() {
         tags,
         created_at: createdAt,
         prev: prev ?? undefined,
-        relays: selfStateRelays(config, user.pubkey),
+        relays: response.answered,
+        inheritPendingTargets: false,
         onSigned: (event) => {
           signed = event;
           queryClient.setQueryData<SearchRelayListQuery>(queryKey, {
@@ -124,6 +170,7 @@ export function useSearchRelayList() {
   return {
     relays: query.data?.relays ?? [],
     event: query.data?.event ?? null,
+    decryptFailed: query.data?.decryptFailed ?? false,
     isLoading: query.isLoading,
     refetch: query.refetch,
     publish: publish.mutateAsync,

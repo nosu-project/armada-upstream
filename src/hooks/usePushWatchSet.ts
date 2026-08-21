@@ -3,13 +3,11 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { nip19 } from "nostr-tools";
 import { useMemo } from "react";
 
-import { useAcceptedDms } from "@/hooks/useAcceptedDms";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
-import { useFollowList } from "@/hooks/useFollowList";
+import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
 import { useNotifLevels } from "@/hooks/useNotifLevels";
-import { usePinnedDms } from "@/hooks/usePinnedDms";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { effectiveDmRelays } from "@/contexts/AppContext";
 import { useConcordSubs } from "@/concord/hooks/useConcordSubs";
@@ -48,8 +46,12 @@ export interface PushWatchSet {
    * content-blind and can't, so it wakes on every message either way.
    */
   concord: Array<ConcordSub & { mentionOnly: boolean }>;
-  /** Peers whose DMs are not "requests": follows ∪ accepted ∪ pinned. */
+  /** Peers whose DMs are not requests, including authored synced conversations. */
   dmKnownPeers: string[];
+  /** Exact pinned/authored NIP-17 rooms, without promoting group members to 1:1 trust. */
+  dmKnownConversationKeys: string[];
+  /** Peers whose presence suppresses their whole DM conversation. */
+  dmMutedPeers: string[];
   /**
    * The account's secret key, for nsec logins ONLY. Bunker (NIP-46) and
    * extension (NIP-07) keys stay off-device, so those logins yield nothing
@@ -69,11 +71,11 @@ export interface PushWatchSet {
    */
   dmBunker?: { clientSk: string; bunkerPubkey: string; relays: string[] };
   /**
-   * Whether the follow list is still loading. Callers that persist anything
+   * Whether the established-peer roster is still loading. Callers that persist anything
    * derived from `dmKnownPeers` must wait: writing it mid-load freezes an empty
    * known set on disk, reclassifying every known conversation as a request.
    */
-  followsLoading: boolean;
+  dmPeersLoading: boolean;
   /**
    * Whether the watch set is still filling in.
    *
@@ -93,9 +95,12 @@ export function usePushWatchSet(prefs: PushPrefs): PushWatchSet {
   const { user } = useCurrentUser();
   const { config } = useAppContext();
   const { data: groupList } = useUserGroupList();
-  const { data: followData, isLoading: followsLoading } = useFollowList();
-  const { accepted } = useAcceptedDms();
-  const { pinned } = usePinnedDms();
+  const {
+    knownPeers: dmKnownPeers,
+    knownConversationKeys: dmKnownConversationKeys,
+    mutedPeers: dmMutedPeers,
+    isLoading: dmPeersLoading,
+  } = useKnownDmPeers();
   const { logins } = useNostrLogin();
   const { channelLevel, concordChannelLevel } = useNotifLevels();
   const { relays: publishedDmRelays } = useDmRelayList();
@@ -147,19 +152,10 @@ export function usePushWatchSet(prefs: PushPrefs): PushWatchSet {
     return [...set].sort();
   }, [config, publishedDmRelays]);
 
-  const dmFollows = useMemo(
-    () => [...new Set(followData?.pubkeys ?? [])].sort(),
-    [followData?.pubkeys],
-  );
-
-  // Mirrors useKnownDmPeers: a sender is "known" if followed, replied to, or
-  // pinned. The web worker gates DM push on this from the wrap the gateway
-  // inlines; without a way to open the wrap it is unused, but the derivation
-  // stays here so both paths agree on what "known" means.
-  const dmKnownPeers = useMemo(
-    () => [...new Set([...(followData?.pubkeys ?? []), ...accepted, ...pinned])].sort(),
-    [followData?.pubkeys, accepted, pinned],
-  );
+  // `dmFollows` is the historical push-spec field name. The author filter now
+  // carries the full established-peer roster so a fresh device can receive a
+  // legacy DM from an accepted/indexed peer who is no longer followed.
+  const dmFollows = dmKnownPeers;
 
   const dmSk = useMemo(() => {
     const login = logins[0];
@@ -233,19 +229,21 @@ export function usePushWatchSet(prefs: PushPrefs): PushWatchSet {
     concord,
   ]);
 
-  // `groupList === undefined` and a still-loading follow list both mean the
+  // `groupList === undefined` and a still-loading DM roster both mean the
   // set can still grow. Concord has no loading flag of its own: its subs
   // derive from folds that are themselves read behind these, so the two
   // above are the honest proxy for "not settled yet".
-  const watchSetLoading = followsLoading || groupList === undefined;
+  const watchSetLoading = dmPeersLoading || groupList === undefined;
 
   return {
     specs,
     concord,
     dmKnownPeers,
+    dmKnownConversationKeys,
+    dmMutedPeers,
     dmSk,
     dmBunker,
-    followsLoading,
+    dmPeersLoading,
     watchSetLoading,
   };
 }

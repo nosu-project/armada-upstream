@@ -1,8 +1,9 @@
 import { Loader2 } from "lucide-react";
 import { lazy, Suspense, useContext } from "react";
-import { Outlet, useNavigate } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { AppsProvider } from "@/components/AppsProvider";
+import { BlankSplash } from "@/components/brand/BootSplash";
 import { CallProvider } from "@/components/CallProvider";
 import { DmCallProvider } from "@/components/DmCallProvider";
 import { DirectInviteNotifier } from "@/concord/components/DirectInviteNotifier";
@@ -39,6 +40,34 @@ function ProfileOverlayFallback({ onDismiss }: { onDismiss?: () => void }) {
     <div
       className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in-0"
       onClick={onDismiss}
+    >
+      <Loader2 className="size-8 animate-spin text-muted-foreground" />
+    </div>
+  );
+}
+
+/**
+ * Keep an in-session route chunk wait inside the main pane. The route-level
+ * Suspense boundary used to sit above the whole route tree, so the first visit
+ * to a lazy page replaced MainLayout — including the persistent server rail and
+ * call/app providers — with the full-screen boot splash. That looked exactly
+ * like a page reload. This fallback occupies only the Outlet's box while the
+ * shell stays mounted around it.
+ */
+function RoutePaneFallback() {
+  const { pathname } = useLocation();
+
+  // Welcome draws its own animated crest as soon as its chunk lands. Preserve
+  // the blank, full-screen handoff it had under the outer route boundary so a
+  // signed-out cold start does not briefly expose the application shell or
+  // start a second crest animation that immediately gets interrupted.
+  if (pathname === "/welcome") return <BlankSplash />;
+
+  return (
+    <div
+      className="absolute inset-0 flex items-center justify-center bg-background"
+      role="status"
+      aria-label="Loading page"
     >
       <Loader2 className="size-8 animate-spin text-muted-foreground" />
     </div>
@@ -93,7 +122,9 @@ export function MainLayout() {
             anyway. Always rendered, overlay or not, so opening one doesn't
             reflow the page beneath it. */}
         <div className="relative flex min-w-0 flex-1">
-          <Outlet />
+          <Suspense fallback={<RoutePaneFallback />}>
+            <Outlet />
+          </Suspense>
           {/* Nothing to go back to yet — the navigation this is waiting on is
               the one that would make a history step meaningful. */}
           {opening && !overlayPubkey && <ProfileOverlayFallback />}

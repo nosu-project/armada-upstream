@@ -18,9 +18,8 @@ import {
 import { normalizeRelayUrl } from "@/lib/platform";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import { groupListFoldKey, type PersistedGroupList } from "@/lib/nip29ServerCache";
-import { queryExplicitRelays } from "@/lib/nip65";
+import { queryExplicitRelays, queryExplicitRelaysWithStatus } from "@/lib/nip65";
 
-import type { NostrEvent } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";
 import type { NostrRumor } from "@/lib/nostrRumor";
 
@@ -36,6 +35,57 @@ export interface ReadGroupListResult extends UserGroupList {
    * empty `servers`/`groups` as authoritative when this is set.
    */
   decryptFailed: boolean;
+}
+
+export interface UserGroupListQuery extends ReadGroupListResult {
+  event: NostrRumor | null;
+}
+
+function eventWins(candidate: NostrRumor, held: NostrRumor): boolean {
+  return candidate.created_at > held.created_at
+    || (candidate.created_at === held.created_at && candidate.id < held.id);
+}
+
+/** NIP-01 replaceable winner: newest timestamp, then lexicographically lowest id. */
+export function newestGroupListEvent(events: NostrRumor[]): NostrRumor | null {
+  return events
+    .filter((event) => event.kind === KIND_USER_GROUPS)
+    .sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id))[0] ?? null;
+}
+
+/**
+ * Resolve a relay refresh without regressing a previously decrypted list.
+ * Empty/stale reads and an undecryptable candidate are "no news", not an
+ * authoritative empty list. A genuinely newer, successfully decoded empty
+ * event still wins, so an intentional clear propagates normally.
+ */
+export async function resolveGroupListRead(
+  events: NostrRumor[],
+  signer: NUser["signer"] | undefined,
+  previous?: UserGroupListQuery,
+  persisted?: PersistedGroupList,
+): Promise<UserGroupListQuery> {
+  let lastGood: UserGroupListQuery | undefined =
+    previous?.event && !previous.decryptFailed ? previous : undefined;
+  if (persisted?.event && (!lastGood?.event || eventWins(persisted.event, lastGood.event))) {
+    lastGood = {
+      event: persisted.event,
+      groups: persisted.groups,
+      servers: persisted.servers,
+      decryptFailed: false,
+    };
+  }
+
+  const latest = newestGroupListEvent(events);
+  if (!latest) return lastGood ?? { event: null, ...EMPTY_LIST, decryptFailed: false };
+  if (lastGood?.event && latest.id !== lastGood.event.id && !eventWins(latest, lastGood.event)) {
+    return lastGood;
+  }
+  if (lastGood?.event?.id === latest.id) return lastGood;
+
+  const decoded = await readGroupListEvent(latest, signer);
+  if (decoded.decryptFailed && lastGood) return lastGood;
+  return { event: latest, ...decoded };
 }
 
 /**
@@ -133,19 +183,21 @@ export function useUserGroupList() {
 
       // 2. First run / no plaintext yet: decrypt the cached blob once, persist it.
       const store = await eventStore;
-      const [cached] = await store.query([{ kinds: [KIND_USER_GROUPS], authors: [user.pubkey] }]);
+      const cached = newestGroupListEvent(
+        await store.query([{ kinds: [KIND_USER_GROUPS], authors: [user.pubkey] }]),
+      );
       if (cancelled || !cached) return;
       const list = await readGroupListEvent(cached, user.signer);
       if (cancelled || queryClient.getQueryData(queryKey)) return;
       queryClient.setQueryData(queryKey, {
-        event: cached as NostrEvent | null,
+        event: cached,
         groups: list.groups,
         servers: list.servers,
         decryptFailed: list.decryptFailed,
       });
       if (!list.decryptFailed) {
         void writeFolded(foldKey, {
-          event: cached as NostrEvent,
+          event: cached,
           groups: list.groups,
           servers: list.servers,
         } satisfies PersistedGroupList);
@@ -160,35 +212,37 @@ export function useUserGroupList() {
   return useQuery({
     queryKey,
     queryFn: async ({ signal }) => {
-      const events = await queryExplicitRelays(
-        nostr,
-        selfStateRelays(config, user!.pubkey),
-        [{ kinds: [KIND_USER_GROUPS], authors: [user!.pubkey], limit: 1 }],
-        AbortSignal.any([signal, AbortSignal.timeout(8000)]),
+      const deadline = AbortSignal.any([signal, AbortSignal.timeout(8000)]);
+      const [wireEvents, storedEvents] = await Promise.all([
+        queryExplicitRelays(
+          nostr,
+          selfStateRelays(config, user!.pubkey),
+          [{ kinds: [KIND_USER_GROUPS], authors: [user!.pubkey], limit: 1 }],
+          deadline,
+        ),
+        eventStore
+          .then((store) => store.query(
+            [{ kinds: [KIND_USER_GROUPS], authors: [user!.pubkey] }],
+            { signal: deadline },
+          ))
+          .catch(() => [] as NostrRumor[]),
+      ]);
+      const prev = queryClient.getQueryData<UserGroupListQuery>(queryKey);
+      const persisted = foldKey
+        ? await readFolded<PersistedGroupList>(foldKey)
+        : undefined;
+      const result = await resolveGroupListRead(
+        [...wireEvents, ...storedEvents].filter((event) => event.pubkey === user!.pubkey),
+        user!.signer,
+        prev,
+        persisted,
       );
-      const latest = events.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
-
-      const prev = queryClient.getQueryData<{ event: NostrEvent | null; groups: GroupRef[]; servers: string[]; decryptFailed: boolean }>(queryKey);
-
-      // Skip the signer decrypt entirely when the network event is the same one
-      // we already decrypted (matched by id) — the common case on every refresh.
-      if (latest && prev?.event?.id === latest.id && !prev.decryptFailed) {
-        return prev;
-      }
-
-      const list = await readGroupListEvent(latest, user!.signer);
-      const result = {
-        event: latest as NostrEvent | null,
-        groups: list.groups,
-        servers: list.servers,
-        decryptFailed: list.decryptFailed,
-      };
       // Persist the decrypted result so the NEXT boot reads plaintext (no signer).
-      if (foldKey && latest && !list.decryptFailed) {
+      if (foldKey && result.event && !result.decryptFailed) {
         void writeFolded(foldKey, {
-          event: latest,
-          groups: list.groups,
-          servers: list.servers,
+          event: result.event,
+          groups: result.groups,
+          servers: result.servers,
         } satisfies PersistedGroupList);
       }
       return result;
@@ -301,7 +355,7 @@ function serializeGroupListWrite<T>(write: () => Promise<T>): Promise<T> {
  * resolve arbitrarily and the later edit can lose to the earlier one. Force
  * strict monotonicity instead of trusting the wall clock.
  */
-function nextCreatedAt(prev: NostrEvent | null): number {
+function nextCreatedAt(prev: NostrRumor | null): number {
   const now = Math.floor(Date.now() / 1000);
   return prev ? Math.max(now, prev.created_at + 1) : now;
 }
@@ -319,6 +373,7 @@ export function useUpdateUserGroupList() {
   const { config } = useAppContext();
   const { mutateAsync: publishEvent } = useNostrPublish();
   const queryClient = useQueryClient();
+  const eventStore = useEventStore();
   const removeRailKey = useRemoveRailKey();
 
   return useMutation({
@@ -327,12 +382,31 @@ export function useUpdateUserGroupList() {
 
       // Read-modify-write against fresh relay state, never the query cache.
       const relays = selfStateRelays(config, user.pubkey);
-      const source = relays.length > 0 ? nostr.group(relays) : nostr;
-      const events = await source.query(
-        [{ kinds: [KIND_USER_GROUPS], authors: [user.pubkey], limit: 1 }],
-        { signal: AbortSignal.timeout(8000) },
-      );
-      const fetched = events.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
+      if (relays.length === 0) {
+        throw new Error("No account-state relay is available for your server list");
+      }
+      const deadline = AbortSignal.timeout(8000);
+      const [response, storedEvents] = await Promise.all([
+        queryExplicitRelaysWithStatus(
+          nostr,
+          relays,
+          [{ kinds: [KIND_USER_GROUPS], authors: [user.pubkey], limit: 1 }],
+          deadline,
+        ),
+        eventStore
+          .then((store) => store.query(
+            [{ kinds: [KIND_USER_GROUPS], authors: [user.pubkey] }],
+            { signal: deadline },
+          ))
+          .catch(() => [] as NostrRumor[]),
+      ]);
+      if (response.answered.length === 0) {
+        throw new Error(
+          "Couldn't confirm your current server list on an account-state relay; not saving to avoid wiping it.",
+        );
+      }
+      const events = [...response.events, ...storedEvents];
+      const fetched = newestGroupListEvent(events);
 
       // The locally-persisted DECRYPTED list is the safety net for two relay
       // failure modes that a bare network read can't distinguish from "the
@@ -352,14 +426,15 @@ export function useUpdateUserGroupList() {
         throw new Error("Couldn't load your current server list from the network; not saving to avoid wiping it.");
       }
 
-      let prev: NostrEvent | null = fetched;
+      let prev: NostrRumor | null = fetched;
       let current: UserGroupList;
-      // `>=`, not `>`: on a tie the persisted copy is this device's own most
-      // recent write, and the network copy is at best the same event and at
-      // worst a same-second predecessor the relay hasn't replaced yet. The
-      // serialized write immediately before this one may not have propagated,
-      // so preferring the network on a tie would undo it.
-      if (persisted?.event && fetched && persisted.event.created_at >= fetched.created_at) {
+      // Pick the actual NIP-01 replaceable winner. Strictly-increasing local
+      // writes make the serialized predecessor newer by timestamp; a genuine
+      // equal-second collision must use the protocol's lowest-id tiebreak or
+      // the edit can be based on a version no conforming relay will retain.
+      if (persisted?.event && fetched && (
+        persisted.event.id === fetched.id || eventWins(persisted.event, fetched)
+      )) {
         prev = persisted.event;
         current = { groups: persisted.groups, servers: persisted.servers };
       } else {
@@ -409,7 +484,8 @@ export function useUpdateUserGroupList() {
         tags,
         created_at: nextCreatedAt(prev),
         prev: prev ?? undefined,
-        relays,
+        relays: response.answered,
+        inheritPendingTargets: false,
       });
       // Persist the decrypted result (we have `next` in the clear here) so the
       // next boot reads plaintext without a signer decrypt. AWAITED, not fired

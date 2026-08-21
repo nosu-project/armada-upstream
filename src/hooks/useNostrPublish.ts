@@ -2,7 +2,15 @@ import { useNostr } from "@nostrify/react";
 import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 
 import { APP_NAME } from "@/lib/platform";
-import { PublishQueuedError, isPublishQueuedError, queueSignedEvent, removeQueuedPublish } from "@/lib/publishOutbox";
+import { publishSignedEventToRelays, uniqueRelayUrls } from "@/lib/nip65";
+import {
+  PublishQueuedError,
+  isPublishOutboxConflictError,
+  isPublishQueuedError,
+  queueSignedEvent,
+  recordQueuedPublishAttempt,
+  removeQueuedPublish,
+} from "@/lib/publishOutbox";
 import { publishTimeoutMs } from "@/lib/publishTimeout";
 import { markOwnWebPushEvent } from "@/lib/webPushState";
 import { useCurrentUser } from "./useCurrentUser";
@@ -33,6 +41,12 @@ export type EventTemplate = Omit<NostrEvent, "id" | "pubkey" | "sig" | "created_
    */
   relays?: string[];
   /**
+   * Whether a newer explicit-relay replaceable should inherit destinations
+   * still pending on its predecessor. Disable only when the new document was
+   * merged from a partial source read and is unsafe for unanswered relays.
+   */
+  inheritPendingTargets?: boolean;
+  /**
    * Called with the fully-signed event immediately before it is sent to the
    * network. Lets callers optimistically insert the event into a local cache
    * (and learn its final id) before the relay round-trip completes.
@@ -57,8 +71,19 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
         throw new Error("User is not logged in");
       }
 
-      const { prev, relay, relays, onSigned, ...template } = t;
+      const {
+        prev,
+        relay,
+        relays,
+        inheritPendingTargets,
+        onSigned,
+        ...template
+      } = t;
       if (relay && relays) throw new Error("Specify either relay or relays, not both");
+      const exactRelays = relays ? uniqueRelayUrls(relays) : undefined;
+      if (relays && exactRelays?.length === 0) {
+        throw new Error("Add at least one relay before publishing this account state");
+      }
       // NIP-89 client tag: always stamp this build. Replaceable RMW (mute list,
       // etc.) often copies prior public tags wholesale, including another app's
       // `client` — "add if missing" would then misattribute the new version.
@@ -116,7 +141,17 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
       // Lockdown Mode). Letting that throw here would abort a publish that was
       // about to succeed — losing the send outright to protect its backup, and
       // without even rendering it optimistically, since `onSigned` is below.
-      await queueSignedEvent(event, relay).catch(() => undefined);
+      let durablyQueued = false;
+      try {
+        await queueSignedEvent(event, relay, exactRelays, {
+          inheritPendingTargets,
+        });
+        durablyQueued = true;
+      } catch (error) {
+        if (isPublishOutboxConflictError(error)) throw error;
+        // A successful immediate delivery needs no backup. If delivery fails,
+        // however, the catch below must not claim this event was queued.
+      }
 
       // Let callers optimistically render the event before the network call.
       onSigned?.(event);
@@ -128,19 +163,32 @@ export function useNostrPublish(): UseMutationResult<NostrEvent, Error, EventTem
         const timeout = publishTimeoutMs(user.method);
         if (relay) {
           await nostr.relay(relay).event(event, { signal: AbortSignal.timeout(timeout) });
-        } else if (relays && relays.length > 0) {
-          await nostr.group(relays).event(event, { signal: AbortSignal.timeout(timeout) });
+        } else if (exactRelays) {
+          const result = await publishSignedEventToRelays(nostr, event, exactRelays, timeout);
+          // Always settle only the destinations THIS attempt addressed. The
+          // queued replacement may have inherited an old NIP-65 target from a
+          // superseded event; clearing the whole entry after the new targets
+          // accept would silently abandon that migration delivery.
+          await recordQueuedPublishAttempt(event.id, exactRelays, result.rejected).catch(() => undefined);
+          if (result.rejected.length > 0) {
+            throw new Error(
+              result.accepted.length > 0
+                ? `Queued for ${result.rejected.length} relay${result.rejected.length === 1 ? "" : "s"} that did not accept it`
+                : "No requested relay accepted the event",
+            );
+          }
         } else {
           await nostr.event(event, { signal: AbortSignal.timeout(timeout) });
         }
       } catch (error) {
-        throw new PublishQueuedError(event, error);
+        if (durablyQueued) throw new PublishQueuedError(event, error);
+        throw error;
       }
 
       // Outside the try: the relay has accepted the event by now, so a failure
       // to clear its queue entry must not be reported as a queued publish. The
       // worst case is one redundant re-delivery, which relays dedup by id.
-      await removeQueuedPublish(event.id).catch(() => undefined);
+      if (!exactRelays) await removeQueuedPublish(event.id).catch(() => undefined);
 
       return event;
     },

@@ -246,9 +246,10 @@ function LegacyDmRedirect() {
 }
 
 /**
- * The Suspense fallback for lazy route chunks: the branded splash, except on
- * the way to /welcome, which paints its own crest and so would otherwise show
- * a draw that gets cut off the moment the chunk lands.
+ * The outer Suspense fallback for lazy routes that render without MainLayout:
+ * the branded splash, except on the way to /welcome, which paints its own
+ * crest and so would otherwise show a draw that gets cut off the moment the
+ * chunk lands. MainLayout catches its child route chunks inside the page pane.
  */
 function RouteFallback() {
   const { pathname } = useLocation();
@@ -449,8 +450,8 @@ function AppRoutes() {
 
   return (
     <ProfileOverlayContext.Provider value={overlay}>
-      {/* Lazy route chunks paint the branded splash while they load, never a
-          blank frame. */}
+      {/* Shell-less lazy routes still paint the branded splash. MainLayout
+          keeps waits for its child chunks inside the routed page pane. */}
       <Suspense fallback={<RouteFallback />}>{routes}</Suspense>
     </ProfileOverlayContext.Provider>
   );

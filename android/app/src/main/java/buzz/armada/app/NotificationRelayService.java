@@ -267,17 +267,22 @@ public class NotificationRelayService extends Service {
     // suppression happens per event in wantsNotification.
     private final Set<String> mentionOnlyGroupKeys = new LinkedHashSet<>();
     private final Set<String> dmRelays = new LinkedHashSet<>();
-    // People the user follows (kind 3 `p` tags, hex). DM (kind 4) subscriptions
-    // are scoped to `authors:[...dmFollows]` so notifications only fire for DMs
-    // from friends — matching the client's permanent friends-only DM view.
+    // Established DM peers (hex): follows, explicit accepts/1:1 pins and peers
+    // recovered from authored encrypted-index rows. The historical config key
+    // is `dmFollows`; kind-4 subscriptions use it as an author allow-list.
     private final Set<String> dmFollows = new LinkedHashSet<>();
-    // The "known" DM peers (hex): follows ∪ accepted ∪ pinned, the WebView's
-    // `useKnownDmPeers` set. A NIP-17 wrap's author is ephemeral, so its inbox
-    // subscription can't be author-scoped like kind 4 — the friend-vs-stranger
-    // test happens here, after the wrap is opened. A peer NOT in this set is a
-    // request, notified per `dmRequests`.
+    // Individually established DM peers (hex). A NIP-17 wrap's author is
+    // ephemeral, so its inbox cannot be author-scoped like kind 4; the request
+    // decision happens after opening it and also considers the exact group set.
     private final Set<String> dmKnownPeers = new LinkedHashSet<>();
-    // How to notify for a DM from a peer NOT in dmKnownPeers: "off" (silent),
+    // Canonical NIP-17 conversation keys the viewer pinned or authored. A
+    // group entry trusts only that exact participant set; its members are not
+    // copied into dmKnownPeers and therefore gain no unrelated 1:1 trust.
+    private final Set<String> dmKnownConversations = new LinkedHashSet<>();
+    // A muted participant suppresses their entire NIP-17 conversation, matching
+    // the WebView's list semantics (including when another group member spoke).
+    private final Set<String> dmMutedPeers = new LinkedHashSet<>();
+    // How to notify for an unknown DM conversation: "off" (silent),
     // "generic" (a content-blind request ping) or "full" (name/avatar/preview).
     // A stranger controls the message text, their display name and their avatar,
     // so the default keeps all three off the lock screen. Empty/unknown value ⇒
@@ -996,6 +1001,10 @@ public class NotificationRelayService extends Service {
         dmFollows.addAll(parseStringArray(sp.getString("dmFollows", null)));
         dmKnownPeers.clear();
         dmKnownPeers.addAll(parseStringArray(sp.getString("dmKnownPeers", null)));
+        dmKnownConversations.clear();
+        dmKnownConversations.addAll(parseStringArray(sp.getString("dmKnownConversations", null)));
+        dmMutedPeers.clear();
+        dmMutedPeers.addAll(parseStringArray(sp.getString("dmMutedPeers", null)));
         dmRequests = sp.getString("dmRequests", "generic");
         selfRelays.clear();
         selfRelays.addAll(parseStringArray(sp.getString("selfRelays", null)));
@@ -1465,8 +1474,8 @@ public class NotificationRelayService extends Service {
                 }
                 // Direct messages (kind 4) addressed to me, on the DM/app relays
                 // (NOT the NIP-29 group relays — DMs don't live there). Scoped to
-                // `authors:[...dmFollows]` so only DMs from people I follow notify
-                // (permanent friends-only). No follows ⇒ no DM subscription.
+                // `authors:[...dmFollows]` so only DMs from established peers notify.
+                // No established peers ⇒ no DM subscription.
                 if (dmRelays.contains(relayUrl) && !dmFollows.isEmpty()) {
                     JSONObject f4 = new JSONObject();
                     f4.put("kinds", new JSONArray().put(4));
@@ -1539,14 +1548,14 @@ public class NotificationRelayService extends Service {
                 }
                 // The user's OWN replaceable documents (SelfState): follow and
                 // mute lists, the NIP-29 server/channel list, the Concord
-                // vaults, DM/Blossom/emoji lists, and the NIP-78 settings
-                // document that carries the community rail's arrangement.
+                // vaults, DM/Blossom/emoji lists, the NIP-78 settings documents,
+                // and installation-sharded private app state.
                 //
-                // Watched on the general relays and on the NIP-29 servers,
-                // because that is where the client publishes them (its event
-                // router fans a write out to the app relays, the user's servers
-                // and their NIP-65 write set) — so this is the set on which
-                // another device's change can actually be found.
+                // Watched only on the account's self-state relays. Joined
+                // NIP-29 servers carry conversation traffic, not private
+                // account documents; asking them for encrypted settings/topic
+                // shards leaks feature usage and can hydrate stale copies from
+                // a destination current writers do not maintain.
                 //
                 // Deliberately NO `since`, unlike every other filter here. All
                 // of these are replaceable, so a relay stores exactly one
@@ -1556,7 +1565,7 @@ public class NotificationRelayService extends Service {
                 // failure this subscription exists to fix. It also makes every
                 // reconnect a full catch-up for free.
                 if (userPubkey != null && !userPubkey.isEmpty()
-                        && (selfRelays.contains(relayUrl) || relayUrls.contains(relayUrl))) {
+                        && shouldSyncSelfStateFromRelay(relayUrl, selfRelays)) {
                     JSONArray me = new JSONArray().put(userPubkey);
 
                     JSONArray selfKinds = new JSONArray();
@@ -1575,13 +1584,16 @@ public class NotificationRelayService extends Service {
                     documents.put("authors", me);
                     documents.put("#d", dTags);
 
-                    // The GIF-favorite shards are named by topic, not by `d`.
-                    JSONObject shards = new JSONObject();
-                    shards.put("kinds", new JSONArray().put(SelfState.KIND_APP_SPECIFIC));
-                    shards.put("authors", me);
-                    shards.put("#t", new JSONArray().put(SelfState.TOPIC_GIF_FAVORITES));
+                    // Installation-sharded private documents are named by topic,
+                    // not by `d` (GIF favorites and the DM conversation index).
+                    JSONArray topics = new JSONArray();
+                    for (String topic : SelfState.TOPICS) topics.put(topic);
+                    JSONObject topicDocuments = new JSONObject();
+                    topicDocuments.put("kinds", new JSONArray().put(SelfState.KIND_APP_SPECIFIC));
+                    topicDocuments.put("authors", me);
+                    topicDocuments.put("#t", topics);
 
-                    webSocket.send(reqMessage(subSelf, bare, documents, shards));
+                    webSocket.send(reqMessage(subSelf, bare, documents, topicDocuments));
                 }
             } catch (JSONException e) {
                 Log.w(TAG, "Failed to build REQ", e);
@@ -2561,14 +2573,38 @@ public class NotificationRelayService extends Service {
                         // silent, matching the WebView's DM rumor kinds.
                         final int rumorKind = rumor.optInt("kind", -1);
                         if (rumorKind != 14 && rumorKind != 15) return;
-                        // Unknown sender — not followed, accepted, or pinned. A
-                        // NIP-17 wrap can come from anyone, and a stranger picks
-                        // the message text, the display name AND the avatar that a
-                        // full DM notification would put on the lock screen.
-                        // `dmRequests` decides how much of that reaches it; the
-                        // rumor is already stored, so a request is still there
-                        // in-app (the DM requests tier) on open regardless.
-                        if (!dmKnownPeers.contains(peer)) {
+                        // A NIP-17 conversation is its PARTICIPANT SET, not its
+                        // sender (nip17/conversation.ts). Derive that identity
+                        // before the trust/request boundary: an authored group
+                        // trusts that exact group without making each member a
+                        // trusted sender in unrelated 1:1 conversations.
+                        //
+                        // The key is built out of `p` values the sender chose,
+                        // and it decides the room key, the read marker and the
+                        // path a tap navigates to — an unchecked one splices
+                        // whatever it likes, `?` included, into "/dm/" + room,
+                        // and the router hands everything after it to
+                        // location.search. So it is CHECKED rather than assumed,
+                        // the same way isDmConvKey already gates the reply
+                        // action. The seal author is 64-hex by construction (its
+                        // signature was verified above), so the `peer` fallback
+                        // is always a well-formed key.
+                        final String convKey = ServiceStore.dm17ConvKey(userPubkey, rumor);
+                        final String room = convKey != null && isDmConvKey(convKey) ? convKey : peer;
+                        final List<String> convPeers = ServiceStore.dm17ConvPeers(room);
+                        // Existing DM semantics hide a whole group if ANY
+                        // participant is muted. Checking only the current author
+                        // would let a different member notify for a hidden room.
+                        if (dmConversationMuted(convPeers, dmMutedPeers)) return;
+
+                        // Unknown conversation — neither this exact participant
+                        // set nor every one of its peers is established. A
+                        // stranger picks the message text, display name and avatar
+                        // that a full notification would put on the lock screen.
+                        // `dmRequests` decides how much reaches it; the rumor is
+                        // already stored, so the request remains in-app on open.
+                        if (!dmConversationKnown(room, convPeers,
+                                dmKnownPeers, dmKnownConversations)) {
                             if ("off".equals(dmRequests)) return;
                             if (!"full".equals(dmRequests)) { // "generic" / unset
                                 long reqTs = rumor.optLong("created_at", 0);
@@ -2578,29 +2614,6 @@ public class NotificationRelayService extends Service {
                             }
                             // "full" falls through and notifies like a friend.
                         }
-                        // A NIP-17 conversation is its PARTICIPANT SET, not its
-                        // sender (nip17/conversation.ts) — so the room this
-                        // belongs to is derived exactly as the WebView derives
-                        // it, and for a 1:1 the key is still bare `<peer>`.
-                        // Keyed by the sender instead, a group message landed in
-                        // the 1:1 thread with whoever happened to speak, put its
-                        // read marker there, and sent the quick reply there too.
-                        // A received rumor always names a room (its sender is a
-                        // participant); the fallback only ensures that a
-                        // derivation that somehow failed costs no notification.
-                        // ...and CHECKED rather than assumed, for the same
-                        // reason isDmConvKey already gates the reply action.
-                        // The key is built out of `p` values the sender chose,
-                        // and it decides the room key, the read marker and the
-                        // path a tap navigates to — an unchecked one splices
-                        // whatever it likes, `?` included, into "/dm/" + room,
-                        // and the router hands everything after it to
-                        // location.search. The seal author is 64-hex by
-                        // construction (its signature was verified above), so
-                        // the fallback is always a well-formed key.
-                        final String convKey = ServiceStore.dm17ConvKey(userPubkey, rumor);
-                        final String room = convKey != null && isDmConvKey(convKey) ? convKey : peer;
-                        final List<String> convPeers = ServiceStore.dm17ConvPeers(room);
                         final boolean group = convPeers.size() > 1;
                         final String preview =
                                 rumorKind == 15 ? "Sent a file" : messagePreview(rumor);
@@ -2732,7 +2745,7 @@ public class NotificationRelayService extends Service {
      * ringtone — but only when it is FRESH (its real created_at inside
      * {@link #CALL_RING_WINDOW_MS}; an ephemeral event only ever arrives
      * moments after send, so anything outside the window is clock skew or
-     * forgery) and its author is someone the user FOLLOWS: the caller
+     * forgery) and its author is an established DM peer: the caller
      * controls the name a ring would put on the lock screen, so a stranger
      * must not be able to make the phone ring on demand. A fresh offer for a
      * thread the WebView is showing is left to the in-app ring.
@@ -3672,6 +3685,34 @@ public class NotificationRelayService extends Service {
     }
 
     /**
+     * Whether a NIP-17 conversation belongs to the established inbox.
+     *
+     * An exact roster entry is sufficient for a group, but deliberately does
+     * not widen {@code knownPeers}: the same member's unrelated 1:1 message is
+     * still a request. A conversation whose every participant is independently
+     * established is also known, preserving the pre-group peer policy.
+     */
+    static boolean dmConversationKnown(String convKey, List<String> peers,
+                                       Set<String> knownPeers,
+                                       Set<String> knownConversations) {
+        if (convKey != null && knownConversations.contains(convKey)) return true;
+        if (peers == null || peers.isEmpty()) return false;
+        for (String peer : peers) {
+            if (!knownPeers.contains(peer)) return false;
+        }
+        return true;
+    }
+
+    /** Whole-conversation mute rule shared with the WebView DM list. */
+    static boolean dmConversationMuted(List<String> peers, Set<String> mutedPeers) {
+        if (peers == null || peers.isEmpty() || mutedPeers.isEmpty()) return false;
+        for (String peer : peers) {
+            if (mutedPeers.contains(peer)) return true;
+        }
+        return false;
+    }
+
+    /**
      * Whether a room key names a DM conversation with more than one other
      * participant. Derived from the KEY rather than remembered on the
      * {@link RoomNotif}, so a room rebuilt from nothing after a cold start (see
@@ -3774,10 +3815,15 @@ public class NotificationRelayService extends Service {
                 if (SelfState.isSelfKind(kind)
                         && userPubkey != null
                         && userPubkey.equals(event.optString("pubkey"))) {
-                    return selfRelays.contains(relayUrl) || relayUrls.contains(relayUrl);
+                    return shouldSyncSelfStateFromRelay(relayUrl, selfRelays);
                 }
                 return false;
         }
+    }
+
+    /** Account documents never use joined conversation relays as a fallback. */
+    static boolean shouldSyncSelfStateFromRelay(String relayUrl, Set<String> selfRelays) {
+        return selfRelays.contains(relayUrl);
     }
 
     /**
@@ -3854,15 +3900,19 @@ public class NotificationRelayService extends Service {
         // Past the room's alert budget the notification is still posted and
         // still accumulates — it just stops making noise. See ALERT_BURST_MAX.
         //
-        // A message from someone the user FOLLOWS is never throttled to silence,
+        // A message from an established DM peer is never throttled to silence,
         // and never draws on the budget. The ceiling defends against untrusted
         // floods — a public Concord channel is writable by anyone holding the
-        // invite (CORD-04 §1) — whereas a follow is the reader's own statement of
-        // trust, the same seed the render-layer flood fold treats as a trust
-        // root (computeTrusted). `dmFollows` is the kind-3 follow set the config
-        // already carries; an empty set or an unknown sender just falls through
-        // to the ceiling, so the hint only ever relaxes it, never tightens.
+        // invite (CORD-04 §1) — whereas this roster comes from the reader's own
+        // follow/accept/pin/send actions. `dmFollows` is the historical config
+        // key for the established peer set; an empty set or an unknown sender
+        // just falls through to the ceiling, so the hint only ever relaxes it.
         boolean trusted = senderPubkey != null && dmFollows.contains(senderPubkey);
+        if (!trusted && roomKey != null && roomKey.startsWith("dm:")) {
+            // A rostered group is trusted only as this exact room. Do not add
+            // its current author to the global peer set to relax unrelated 1:1s.
+            trusted = dmKnownConversations.contains(roomKey.substring(3));
+        }
         boolean alert = trusted || alertAllowed(roomKey, mention);
         // Post immediately without the avatar, then re-post with it once loaded
         // so image I/O never delays the notification.

@@ -102,6 +102,10 @@ struct PushConfig {
     let selfPubkey: String
     /// follows ∪ accepted ∪ pinned (hex) — the "known" senders.
     let knownPeers: Set<String>
+    /// Exact authored/pinned NIP-17 rooms; group members stay scoped to it.
+    let knownConversations: Set<String>
+    /// Peers whose presence suppresses their whole DM conversation.
+    let mutedPeers: Set<String>
     /// Decrypt key bytes. Present for nsec logins only.
     let secretKey: [UInt8]?
     /// The bunker to ask instead, for NIP-46 logins.
@@ -109,6 +113,26 @@ struct PushConfig {
     /// The CURRENT epoch's stream for every watched channel. Only the current
     /// one: a retired epoch is read-cutoff history and must not notify.
     let concord: [ConcordStream]
+
+    init(
+        policy: DmRequestLevel,
+        selfPubkey: String,
+        knownPeers: Set<String>,
+        knownConversations: Set<String> = [],
+        mutedPeers: Set<String> = [],
+        secretKey: [UInt8]?,
+        nip46: Nip46Config?,
+        concord: [ConcordStream]
+    ) {
+        self.policy = policy
+        self.selfPubkey = selfPubkey
+        self.knownPeers = knownPeers
+        self.knownConversations = knownConversations
+        self.mutedPeers = mutedPeers
+        self.secretKey = secretKey
+        self.nip46 = nip46
+        self.concord = concord
+    }
 
     static func parse(json: String) -> PushConfig? {
         guard let decoded = try? JSONSerialization.jsonObject(with: Data(json.utf8)),
@@ -118,6 +142,8 @@ struct PushConfig {
 
         let policy = DmRequestLevel(rawValue: object["policy"] as? String ?? "") ?? .generic
         let knownPeers = Set((object["knownPeers"] as? [String]) ?? [])
+        let knownConversations = Set((object["knownConversations"] as? [String]) ?? [])
+        let mutedPeers = Set((object["mutedPeers"] as? [String]) ?? [])
 
         var secretKey: [UInt8]?
         if let hex = object["sk"] as? String, let bytes = Hex.decode(hex), bytes.count == 32 {
@@ -159,6 +185,8 @@ struct PushConfig {
             policy: policy,
             selfPubkey: selfPubkey,
             knownPeers: knownPeers,
+            knownConversations: knownConversations,
+            mutedPeers: mutedPeers,
             secretKey: secretKey,
             nip46: nip46,
             concord: streams

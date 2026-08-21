@@ -38,6 +38,13 @@ interface RelayQueryClient {
   ): Promise<NostrEvent[]>;
 }
 
+export interface ExplicitRelayQueryResult {
+  events: NostrEvent[];
+  /** Explicit relay URLs whose query reached EOSE successfully. */
+  answered: string[];
+  failed: string[];
+}
+
 interface RelayPublishClient {
   relay(url: string): {
     event(event: NostrEvent, opts: { signal: AbortSignal }): Promise<unknown>;
@@ -52,6 +59,36 @@ export interface RelayListPublishResult {
 export interface RelayListDiscovery {
   event: NostrEvent;
   relays: RelayPreference[];
+}
+
+export interface RelayListDiscoveryRead extends ExplicitRelayQueryResult {
+  discovery?: RelayListDiscovery;
+}
+
+/** NIP-01 ordering for a live replaceable-event stream. */
+export function relayListVersionIsNewer(
+  candidate: Pick<NostrEvent, "created_at" | "id">,
+  current: Pick<NostrEvent, "created_at" | "id"> | undefined,
+): boolean {
+  return !current
+    || candidate.created_at > current.created_at
+    || (candidate.created_at === current.created_at && candidate.id < current.id);
+}
+
+/**
+ * Compare a kind-10002 candidate with its persisted metadata mirror. Legacy
+ * mirrors have only a timestamp; at an equal second they accept the first
+ * aggregate-discovered winner once, stamp its id, and are deterministic from
+ * then on.
+ */
+export function relayListIsNewerThanMetadata(
+  candidate: Pick<NostrEvent, "created_at" | "id">,
+  current: { updatedAt: number; eventId?: string },
+): boolean {
+  if (candidate.created_at !== current.updatedAt) {
+    return candidate.created_at > current.updatedAt;
+  }
+  return current.eventId === undefined || candidate.id < current.eventId;
 }
 
 /**
@@ -113,6 +150,21 @@ export function newestRelayList(events: NostrEvent[]): NostrEvent | undefined {
     .sort((a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id))[0];
 }
 
+/** Validate and order one candidate from a standing kind-10002 stream. */
+export function newerRelayListUpdate(
+  candidate: NostrEvent,
+  current: NostrEvent | undefined,
+): RelayListDiscovery | undefined {
+  const event = newestRelayList([candidate]);
+  if (!event) return undefined;
+  if (
+    current?.pubkey === event.pubkey
+    && !relayListVersionIsNewer(event, current)
+  ) return undefined;
+  const relays = parseRelayList(event);
+  return relays.length > 0 ? { event, relays } : undefined;
+}
+
 /** Normalize and dedupe relay URLs while preserving their first-seen order. */
 export function uniqueRelayUrls(relays: Iterable<string>): string[] {
   const out: string[] = [];
@@ -136,18 +188,28 @@ export async function queryExplicitRelays(
   filters: NostrFilter[],
   signal: AbortSignal,
 ): Promise<NostrEvent[]> {
+  return (await queryExplicitRelaysWithStatus(nostr, relayUrls, filters, signal)).events;
+}
+
+/** The status-bearing form used when an empty successful read matters. */
+export async function queryExplicitRelaysWithStatus(
+  nostr: RelayQueryClient,
+  relayUrls: Iterable<string>,
+  filters: NostrFilter[],
+  signal: AbortSignal,
+): Promise<ExplicitRelayQueryResult> {
   const urls = uniqueRelayUrls(relayUrls);
   // No explicit relays to scope to — e.g. the app relays are switched off and
   // no NIP-65 write relays have been adopted. Reading nothing would silently
   // drop account-data singletons that the general pool can still reach, so fall
   // back to a pool-wide read (the pre-scoping behavior) rather than return [].
   if (urls.length === 0) {
-    if (!nostr.query) return [];
+    if (!nostr.query) return { events: [], answered: [], failed: [] };
     try {
       const events = await nostr.query(filters, { signal });
-      return events.filter((event) => verifyEvent(event));
+      return { events: events.filter((event) => verifyEvent(event)), answered: [], failed: [] };
     } catch {
-      return [];
+      return { events: [], answered: [], failed: [] };
     }
   }
   const settled = await Promise.allSettled(
@@ -160,7 +222,11 @@ export async function queryExplicitRelays(
       if (verifyEvent(event)) byId.set(event.id, event);
     }
   }
-  return [...byId.values()];
+  return {
+    events: [...byId.values()],
+    answered: urls.filter((_, index) => settled[index]?.status === "fulfilled"),
+    failed: urls.filter((_, index) => settled[index]?.status === "rejected"),
+  };
 }
 
 /** Find a user's newest signed NIP-65 list on a bounded discovery set. */
@@ -170,17 +236,34 @@ export async function discoverRelayList(
   relayUrls: Iterable<string>,
   signal: AbortSignal,
 ): Promise<RelayListDiscovery | undefined> {
-  const events = await queryExplicitRelays(
+  return (await discoverRelayListWithStatus(
+    nostr,
+    pubkey,
+    relayUrls,
+    signal,
+  )).discovery;
+}
+
+/** Discovery plus EOSE status, for writes that must distinguish empty from offline. */
+export async function discoverRelayListWithStatus(
+  nostr: RelayQueryClient,
+  pubkey: string,
+  relayUrls: Iterable<string>,
+  signal: AbortSignal,
+): Promise<RelayListDiscoveryRead> {
+  const result = await queryExplicitRelaysWithStatus(
     nostr,
     relayUrls,
     [{ kinds: [KIND_RELAY_LIST], authors: [pubkey], limit: 1 }],
     signal,
   );
-  const event = newestRelayList(events.filter((candidate) => candidate.pubkey === pubkey));
-  if (!event) return undefined;
+  const event = newestRelayList(
+    result.events.filter((candidate) => candidate.pubkey === pubkey),
+  );
+  if (!event) return result;
   const relays = parseRelayList(event);
-  if (relays.length === 0) return undefined;
-  return { event, relays };
+  if (relays.length === 0) return result;
+  return { ...result, discovery: { event, relays } };
 }
 
 /** Fan one already-signed event to every explicit destination. */

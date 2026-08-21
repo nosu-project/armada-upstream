@@ -24,6 +24,7 @@ export const ThemeConfigSchema = z.object({
 export const BlossomServerMetadataSchema = z.object({
   servers: z.array(z.string()),
   updatedAt: z.number(),
+  eventId: z.string().optional(),
 });
 
 /** The user's NIP-65 relay list + kind 10002 sync timestamp. */
@@ -32,6 +33,7 @@ export const RelayMetadataSchema = z.object({
     z.object({ url: z.string(), read: z.boolean(), write: z.boolean() }),
   ),
   updatedAt: z.number(),
+  eventId: z.string().optional(),
   pubkey: z.string().optional(),
 });
 

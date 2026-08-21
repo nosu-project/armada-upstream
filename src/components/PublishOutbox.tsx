@@ -5,8 +5,10 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
   getQueuedPublishes,
   markQueuedPublishFailure,
+  recordQueuedPublishAttempt,
   removeQueuedPublish,
 } from "@/lib/publishOutbox";
+import { publishSignedEventToRelays } from "@/lib/nip65";
 import { publishTimeoutMs } from "@/lib/publishTimeout";
 
 function isOffline(): boolean {
@@ -35,10 +37,29 @@ export function PublishOutbox() {
         try {
           if (item.relay) {
             await nostr.relay(item.relay).event(item.event, { signal: AbortSignal.timeout(timeoutRef.current) });
+          } else if (item.relays?.length) {
+            const result = await publishSignedEventToRelays(
+              nostr,
+              item.event,
+              item.relays,
+              timeoutRef.current,
+            );
+            // Settle exactly the snapshot attempted above, even on full
+            // success. Another writer may have appended a relay while the
+            // network call was in flight; recordQueuedPublishAttempt preserves
+            // that unattempted target instead of deleting the whole entry.
+            await recordQueuedPublishAttempt(item.id, item.relays, result.rejected);
+            if (result.rejected.length > 0) {
+              throw new Error(
+                result.accepted.length > 0
+                  ? `${result.rejected.length} relay deliveries remain`
+                  : "No requested relay accepted the event",
+              );
+            }
           } else {
             await nostr.event(item.event, { signal: AbortSignal.timeout(timeoutRef.current) });
           }
-          await removeQueuedPublish(item.id);
+          if (!item.relays?.length) await removeQueuedPublish(item.id);
         } catch (error) {
           await markQueuedPublishFailure(item.id, error);
         }

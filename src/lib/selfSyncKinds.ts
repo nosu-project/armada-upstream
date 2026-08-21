@@ -30,7 +30,9 @@
  * know the exact suffix (relayKey, etc.) a given mounted hook used.
  */
 
+import { KIND_RELAY_LIST } from "@/lib/nip65";
 import { SETTINGS_DTAGS, SETTINGS_KIND, settingsDocForDTag } from "@/lib/settingsDocs";
+import { DM_CONVERSATIONS_EVENT_TAG } from "@/lib/dmConversationIndex";
 
 /** NIP-02 contact/follow list. */
 export const KIND_FOLLOW_LIST = 3;
@@ -59,17 +61,69 @@ export const KIND_APP_SPECIFIC = SETTINGS_KIND;
 
 /** Tag shared by per-installation encrypted GIF-favorite shards. */
 export const T_ARMADA_GIF_FAVORITES = "armada-gif-favorites";
+/** Tag shared by per-installation encrypted DM-conversation index shards. */
+export const T_ARMADA_DM_CONVERSATIONS = DM_CONVERSATIONS_EVENT_TAG;
+
+/**
+ * Topic-scoped kind-30078 documents Armada keeps in the standing self-state
+ * subscription. Unlike the fixed settings documents, these have dynamic `d`
+ * tags (one coordinate per installation), so their public `t` marker is the
+ * bounded subscription/admission boundary.
+ */
+export const SELF_SYNC_TOPIC_TAGS: string[] = [
+  T_ARMADA_GIF_FAVORITES,
+  T_ARMADA_DM_CONVERSATIONS,
+];
+
+/** The first recognized self-state topic, wherever it appears in the tag set. */
+export function selfSyncTopicOf(tags: readonly (readonly string[])[]): string | undefined {
+  for (const [name, value] of tags) {
+    if (name === "t" && value !== undefined && SELF_SYNC_TOPIC_TAGS.includes(value)) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+/** The NIP-01 version retained for one replaceable self-state coordinate. */
+export interface SelfSyncEventVersion {
+  created_at: number;
+  id: string;
+}
+
+/**
+ * Admit a replaceable event into a standing self-state stream's echo guard.
+ * NIP-01 resolves an equal-second collision by retaining the lexicographically
+ * LOWER event id; timestamp-only guards can therefore freeze on the wrong
+ * device's copy until a later edit happens.
+ */
+export function admitSelfSyncEvent(
+  seen: Map<string, SelfSyncEventVersion>,
+  event: SelfSyncEventVersion & { kind: number },
+  dTag?: string,
+): boolean {
+  const coordinate = dTag !== undefined ? `${event.kind}:${dTag}` : String(event.kind);
+  const previous = seen.get(coordinate);
+  const isNewer = previous === undefined
+    || event.created_at > previous.created_at
+    || (event.created_at === previous.created_at && event.id < previous.id);
+  if (!isNewer) return false;
+  seen.set(coordinate, { created_at: event.created_at, id: event.id });
+  return true;
+}
 
 /**
  * The kinds synced with a simple `{ authors:[me], kinds:[…] }` filter — the
  * bare replaceables (10000–19999 band + kind 3) plus the addressable Community
  * List fragments (33302, where EVERY `d` belongs to the account and all of
- * them are wanted). Addressable kind 30078 is handled separately with a `#d`
- * filter (see {@link SELF_SYNC_DTAGS}).
+ * them are wanted). Addressable kind 30078 is handled separately by fixed `#d`
+ * filters ({@link SELF_SYNC_DTAGS}) and dynamic `#t` filters
+ * ({@link SELF_SYNC_TOPIC_TAGS}).
  */
 export const SELF_SYNC_REPLACEABLE_KINDS: number[] = [
   KIND_FOLLOW_LIST,
   KIND_MUTE_LIST,
+  KIND_RELAY_LIST,
   KIND_SEARCH_RELAYS,
   KIND_USER_GROUPS,
   KIND_DM_RELAYS,
@@ -122,9 +176,26 @@ export function queryKeysForSelfEvent(
       const doc = dTag !== undefined ? settingsDocForDTag(dTag) : undefined;
       if (doc) return [["settings-doc", doc]];
       if (topicTag === T_ARMADA_GIF_FAVORITES) return [["favorite-gifs-sync"]];
+      if (topicTag === T_ARMADA_DM_CONVERSATIONS) return [["dm-conversations-sync"]];
       return [];
     }
     default:
       return [];
   }
 }
+
+/**
+ * Every query owner that must re-read when the NIP-65 pointer moves to a new
+ * relay set. Derived from the same routing table as live event invalidation so
+ * adding a self-state kind/document cannot silently miss relay migration.
+ */
+export const SELF_SYNC_OWNER_QUERY_KEYS: readonly (readonly string[])[] = (() => {
+  const keys = [
+    ...SELF_SYNC_REPLACEABLE_KINDS.flatMap((kind) => queryKeysForSelfEvent(kind, undefined)),
+    ...SELF_SYNC_DTAGS.flatMap((dTag) => queryKeysForSelfEvent(KIND_APP_SPECIFIC, dTag)),
+    ...SELF_SYNC_TOPIC_TAGS.flatMap((topic) =>
+      queryKeysForSelfEvent(KIND_APP_SPECIFIC, undefined, topic)),
+  ];
+  const unique = new Map(keys.map((key) => [key.join("\u0000"), key] as const));
+  return [...unique.values()];
+})();

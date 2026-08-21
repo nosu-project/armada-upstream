@@ -54,6 +54,11 @@ function warmFavoriteGifStores(): Promise<void> {
   return warmDrop;
 }
 
+/** Resolve persisted shards before a relay migration makes a loss decision. */
+export function readyFavoriteGifShards(): Promise<void> {
+  return warmFavoriteGifStores();
+}
+
 /** Whether both stores have loaded, i.e. whether a miss means "nothing". */
 function storesWarm(): boolean {
   return shardStore.warmed && mergedStore.warmed;
@@ -165,6 +170,13 @@ function mergeRecords(...sets: readonly FavoriteGifRecord[][]): FavoriteGifRecor
     }
   }
   return [...merged.values()].sort((a, b) => b.updatedAt - a.updatedAt || b.operationId.localeCompare(a.operationId));
+}
+
+/** Canonical CRDT union, exported for explicit relay-migration consolidation. */
+export function mergeFavoriteGifRecords(
+  ...sets: readonly FavoriteGifRecord[][]
+): FavoriteGifRecord[] {
+  return mergeRecords(...sets);
 }
 
 function ownShardId(pubkey: string): string {

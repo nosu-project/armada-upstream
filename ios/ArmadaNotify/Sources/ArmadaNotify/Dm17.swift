@@ -9,8 +9,10 @@ struct OpenedDm {
     let content: String
     let tags: [[String]]
     let createdAt: Int
-    /// The conversation partner from the viewer's perspective.
-    let peer: String
+    /// Everyone in the conversation except the viewer, sorted.
+    let peers: [String]
+    /// Backward-compatible shorthand for a 1:1's sole peer.
+    var peer: String { peers[0] }
 }
 
 /// NIP-17 gift-wrap opening: `wrap(1059) → seal(13) → rumor`.
@@ -72,7 +74,7 @@ enum Dm17 {
         let computedId = rumor.computedId
         if let claimed = rumor.id, claimed != computedId { return nil }
 
-        guard let peer = peerOf(rumor, self: selfPubkey) else { return nil }
+        guard let peers = peersOf(rumor, self: selfPubkey) else { return nil }
 
         return OpenedDm(
             rumorId: computedId,
@@ -81,18 +83,31 @@ enum Dm17 {
             content: rumor.content,
             tags: rumor.tags,
             createdAt: rumor.createdAt,
-            peer: peer
+            peers: peers
         )
     }
 
-    /// The conversation partner of a rumor from `self`'s perspective: the
-    /// sender for received rumors, the first `p` tag for our own copies. Nil
-    /// when unattributable (an own copy with no `p` tag).
-    static func peerOf(_ rumor: NostrEvent, self selfPubkey: String) -> String? {
-        if rumor.pubkey != selfPubkey { return rumor.pubkey }
+    /// Everyone involved except `self`, sorted. Matches `dmPeersOf` in the web
+    /// client so both notification readers derive the same group room key.
+    static func peersOf(_ rumor: NostrEvent, self selfPubkey: String) -> [String]? {
+        var recipients = Set<String>()
         for tag in rumor.tags where tag.first == "p" && tag.count > 1 && !tag[1].isEmpty {
-            return tag[1]
+            recipients.insert(tag[1])
         }
-        return nil
+
+        if rumor.pubkey != selfPubkey {
+            recipients.insert(rumor.pubkey)
+            recipients.remove(selfPubkey)
+            return recipients.isEmpty ? nil : recipients.sorted()
+        }
+
+        guard !recipients.isEmpty else { return nil }
+        recipients.remove(selfPubkey)
+        return recipients.isEmpty ? [selfPubkey] : recipients.sorted()
+    }
+
+    /// Backward-compatible shorthand used by the existing 1:1 vectors.
+    static func peerOf(_ rumor: NostrEvent, self selfPubkey: String) -> String? {
+        peersOf(rumor, self: selfPubkey)?.first
     }
 }

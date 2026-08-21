@@ -20,9 +20,9 @@ class SelfStateTest {
 
     @Test
     fun `keeps every bare replaceable kind in the catalogue`() {
-        // Follow, mute, NIP-29 servers/channels, DM relays, Blossom, emoji,
-        // and the Concord community + invite lists.
-        for (kind in listOf(3, 10000, 10009, 10050, 10063, 10030, 13302, 13303)) {
+        // Follow, mute, NIP-65 pointer, search relays, NIP-29 servers/channels,
+        // DM relays, Blossom, emoji, and current Concord community + invites.
+        for (kind in listOf(3, 10000, 10002, 10007, 10009, 10050, 10063, 10030, 33302, 13303)) {
             assertTrue("kind $kind", SelfState.storable(self, rumor(kind = kind)))
         }
     }
@@ -32,7 +32,10 @@ class SelfStateTest {
         // Drift here is silent: the service would stop mirroring a list the app
         // still syncs, and only ever show up as "that one setting doesn't
         // travel between my devices".
-        assertEquals(setOf(3, 10000, 10009, 10050, 10063, 10030, 13302, 13303), SelfState.KINDS)
+        assertEquals(
+            setOf(3, 10000, 10002, 10007, 10009, 10050, 10063, 10030, 33302, 13303),
+            SelfState.KINDS,
+        )
         assertEquals(
             setOf(
                 "armada/metadata",
@@ -43,6 +46,10 @@ class SelfStateTest {
                 "armada/reactions",
             ),
             SelfState.DEFAULT_D_TAGS,
+        )
+        assertEquals(
+            setOf("armada-gif-favorites", "armada-dm-conversations"),
+            SelfState.TOPICS,
         )
     }
 
@@ -83,10 +90,36 @@ class SelfStateTest {
     }
 
     @Test
+    fun `keeps the DM-conversation shards, which are named by topic not by d`() {
+        val shard = rumor(
+            kind = 30078,
+            tags = listOf(
+                listOf("d", "armada/dm-conversations/device-abc123"),
+                listOf("t", "armada-dm-conversations"),
+            ),
+        )
+        assertTrue(SelfState.storable(self, shard))
+    }
+
+    @Test
+    fun `admits a known topic even when it is not the first topic tag`() {
+        val shard = rumor(
+            kind = 30078,
+            tags = listOf(
+                listOf("t", "unrelated"),
+                listOf("t", "armada-dm-conversations"),
+                listOf("d", "armada/dm-conversations/device-abc123"),
+            ),
+        )
+        assertTrue(SelfState.storable(self, shard))
+    }
+
+    @Test
     fun `refuses another client's NIP-78 document`() {
         // Kind 30078 is shared with every other app on this identity; storing
         // the lot would be someone else's data at our expense.
         assertFalse(SelfState.storable(self, rumor(kind = 30078, tags = listOf(listOf("d", "snort/settings")))))
+        assertFalse(SelfState.storable(self, rumor(kind = 30078, tags = listOf(listOf("t", "other-app")))))
         assertFalse(SelfState.storable(self, rumor(kind = 30078)))
     }
 
@@ -122,10 +155,10 @@ class SelfStateTest {
 
     @Test
     fun `pre-filter admits exactly the catalogue's kinds`() {
-        for (kind in listOf(3, 10000, 10009, 10050, 10063, 10030, 13302, 13303, 30078)) {
+        for (kind in listOf(3, 10000, 10002, 10007, 10009, 10050, 10063, 10030, 33302, 13303, 30078)) {
             assertTrue("kind $kind", SelfState.isSelfKind(kind))
         }
-        for (kind in listOf(0, 1, 9, 1059, 10002, 39000)) {
+        for (kind in listOf(0, 1, 9, 1059, 13302, 39000)) {
             assertFalse("kind $kind", SelfState.isSelfKind(kind))
         }
     }
