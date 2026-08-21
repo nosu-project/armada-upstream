@@ -29,6 +29,7 @@ const h = vi.hoisted(() => ({
   community: undefined as Community | undefined,
   entry: undefined as CommunityListEntry | undefined,
   folded: undefined as FoldedControl | undefined,
+  coalesced: new Map<string, { state: string; ms: number }>(),
 }));
 
 vi.mock("@/hooks/useCall", () => ({
@@ -39,6 +40,9 @@ vi.mock("@/hooks/useCurrentUser", () => ({
 }));
 vi.mock("@/concord/hooks/useControlPlane", () => ({
   useControlFold: () => ({ data: h.folded }),
+}));
+vi.mock("@/concord/hooks/useGuestbook", () => ({
+  useGuestbook: () => ({ coalesced: h.coalesced }),
 }));
 vi.mock("@/concord/hooks/useCommunityList", () => ({
   useCommunityList: () => ({ data: h.listData }),
@@ -87,6 +91,7 @@ function setup(community: Community, channel: Channel, folded: FoldedControl) {
   h.community = community;
   h.entry = { community_id: community.idHex, added_at: Date.now() } as unknown as CommunityListEntry;
   h.folded = folded;
+  h.coalesced = new Map();
   const ctx: ConcordVoiceContext = { community, channel, broker: BROKER };
   const onLeave = vi.fn();
   const view = renderHook(() => useCallSync(ctx, onLeave));
@@ -144,6 +149,32 @@ describe("useCallSync", () => {
     view.rerender();
 
     expect(onLeave).toHaveBeenCalledTimes(1);
+    expect(h.join).not.toHaveBeenCalled();
+  });
+
+  it("hangs up when the coalesced Guestbook kicks this membership", () => {
+    const { community, channel, folded } = fixture();
+    const { onLeave, view } = setup(community, channel, folded);
+
+    // A kick rolls no epoch and no room key, so nothing else in this watcher
+    // would ever notice it — the compliance IS the removal.
+    h.coalesced = new Map([[ME, { state: "kick", ms: Date.now() + 60_000 }]]);
+    view.rerender();
+
+    expect(onLeave).toHaveBeenCalledTimes(1);
+    expect(h.join).not.toHaveBeenCalled();
+  });
+
+  it("ignores a kick that predates re-admission", () => {
+    const { community, channel, folded } = fixture();
+    const { onLeave, view } = setup(community, channel, folded);
+
+    // The Guestbook still carries the kick that preceded this rejoin; the
+    // fresh Join hasn't swept back around yet.
+    h.coalesced = new Map([[ME, { state: "kick", ms: 1 }]]);
+    view.rerender();
+
+    expect(onLeave).not.toHaveBeenCalled();
     expect(h.join).not.toHaveBeenCalled();
   });
 

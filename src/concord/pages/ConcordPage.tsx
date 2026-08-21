@@ -50,7 +50,7 @@ import {
 } from "@/concord/lib/moderationPanes";
 import { reportInboxSecret } from "@/concord/lib/report";
 import { SuspiciousActivityBanner } from "@/concord/components/SuspiciousActivityBanner";
-import { useBanSelfRemove } from "@/concord/hooks/useBanSelfRemove";
+import { useSelfRemove } from "@/concord/hooks/useSelfRemove";
 import { useLinkAuthorityWatch, useLinkFreshnessWatch } from "@/concord/hooks/useInvites";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
 import { ServerRail } from "@/components/layout/ServerRail";
@@ -1875,9 +1875,10 @@ export function ConcordPage() {
     [community, user, activeCall, joinConcordCall, avBrokers],
   );
 
-  // Compliant self-removal: if the folded Banlist names ME, silently tear
-  // down the local copy and route home (CORD-04 §4).
-  useBanSelfRemove(baseCommunity, useCallback(() => navigateTo("/"), [navigateTo]));
+  // Compliant self-removal: if the folded Banlist or the coalesced Guestbook
+  // names ME as removed, silently tear down the local copy and route home
+  // (CORD-04 §4/§6).
+  useSelfRemove(baseCommunity, useCallback(() => navigateTo("/"), [navigateTo]));
   const [creatingChannel, setCreatingChannel] = useState(false);
 
   // Close the create-channel wizard when switching communities — the user's

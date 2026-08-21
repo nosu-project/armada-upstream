@@ -90,6 +90,7 @@ describe("decideCallSync", () => {
       folded,
       channels: [channel],
       selfBanned: false,
+      selfKicked: false,
     });
     expect(decision).toEqual<CallSyncDecision>({ action: "stay" });
   });
@@ -115,6 +116,7 @@ describe("decideCallSync", () => {
       folded,
       channels: liveChannels,
       selfBanned: false,
+      selfKicked: false,
     });
 
     expect(decision.action).toBe("rejoin");
@@ -138,6 +140,7 @@ describe("decideCallSync", () => {
       folded,
       channels: [channel],
       selfBanned: true,
+      selfKicked: false,
     });
     expect(decision).toEqual<CallSyncDecision>({ action: "leave", reason: "banned" });
   });
@@ -151,6 +154,7 @@ describe("decideCallSync", () => {
       folded: undefined,
       channels: [],
       selfBanned: false,
+      selfKicked: false,
     });
     expect(decision).toEqual<CallSyncDecision>({ action: "leave", reason: "removed" });
   });
@@ -168,6 +172,7 @@ describe("decideCallSync", () => {
       folded,
       channels: channelsView(community, folded), // empty (deleted dropped)
       selfBanned: false,
+      selfKicked: false,
     });
     expect(decision).toEqual<CallSyncDecision>({ action: "leave", reason: "channel-gone" });
   });
@@ -183,6 +188,7 @@ describe("decideCallSync", () => {
         folded: undefined,
         channels: [],
         selfBanned: false,
+        selfKicked: false,
       }),
     ).toEqual<CallSyncDecision>({ action: "stay" });
     // Community present but fold not yet folded.
@@ -194,7 +200,45 @@ describe("decideCallSync", () => {
         folded: undefined,
         channels: [],
         selfBanned: false,
+        selfKicked: false,
       }),
     ).toEqual<CallSyncDecision>({ action: "stay" });
+  });
+
+  it("hangs up when a Guestbook kick names this membership", () => {
+    const { community, channel } = fixture();
+    const folded = foldedWith([
+      { channelIdHex: channel.idHex, name: "general", isPrivate: false, deleted: false, metadata: { name: "general", private: false } },
+    ]);
+    // A kick rotates NOTHING: the epoch, the room and the media key are all
+    // unchanged, so the member's client would happily stay connected. This
+    // hang-up is the entire effect a kick has on a live call.
+    const decision = decideCallSync({
+      snapshot: snapOf(channel),
+      listLoaded: true,
+      community,
+      folded,
+      channels: [channel],
+      selfBanned: false,
+      selfKicked: true,
+    });
+    expect(decision).toEqual<CallSyncDecision>({ action: "leave", reason: "kicked" });
+  });
+
+  it("reports a ban rather than a kick when both name me", () => {
+    const { community, channel } = fixture();
+    const folded = foldedWith([
+      { channelIdHex: channel.idHex, name: "general", isPrivate: false, deleted: false, metadata: { name: "general", private: false } },
+    ]);
+    const decision = decideCallSync({
+      snapshot: snapOf(channel),
+      listLoaded: true,
+      community,
+      folded,
+      channels: [channel],
+      selfBanned: true,
+      selfKicked: true,
+    });
+    expect(decision).toEqual<CallSyncDecision>({ action: "leave", reason: "banned" });
   });
 });
