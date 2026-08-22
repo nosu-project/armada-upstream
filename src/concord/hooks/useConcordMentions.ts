@@ -20,6 +20,15 @@ import { concordMentionReadKey, useReadState } from "@/hooks/useReadState";
 const MENTION_LIMIT = 200;
 
 /**
+ * Stable empty result. A community with no channels disables the query (and
+ * every community's is undefined until its first read lands), so a fresh `[]`
+ * default here would hand a new reference to every consumer on each render —
+ * which drove the Notification Center's per-community reporter into an
+ * unbounded setState loop that froze the tab.
+ */
+const NO_MENTIONS: ChatMsg[] = [];
+
+/**
  * The current user's mentions across a Concord community — every cached
  * kind-9 message (and kind-1111 thread reply) that p-tags them, from ANY of
  * the community's channels, newest-first. Purely local: served from the
@@ -65,7 +74,7 @@ export function useConcordMentions(channels: Channel[], communityIdHex: string |
 
   const { mutedPubkeys } = useMutedPubkeys();
 
-  const { data: allMentions = [], isLoading } = useQuery<ChatMsg[]>({
+  const { data: allMentions = NO_MENTIONS, isLoading } = useQuery<ChatMsg[]>({
     ...STORE_READ,
     queryKey: ["concord-mentions", communityIdHex ?? null, pubkey, channelSig],
     queryFn: async ({ signal }) => {
