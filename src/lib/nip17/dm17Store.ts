@@ -336,6 +336,33 @@ export async function queryDm17Thread(
 }
 
 /**
+ * Count incoming chat/file rumors in one conversation after its read stamp.
+ *
+ * This stays a count-only indexed read: the conversation term selects the
+ * exact participant set, `authors` excludes the viewer's own messages, and
+ * `since` applies the same strict `created_at > lastRead` rule as the DM list.
+ * Note to Self has no incoming author and therefore no unread count.
+ */
+export async function countUnreadDm17Messages(
+  self: string,
+  peers: readonly string[],
+  lastRead: number,
+  opts: { signal?: AbortSignal } = {},
+): Promise<number> {
+  const incomingAuthors = peers.filter((peer) => peer !== self);
+  if (incomingAuthors.length === 0) return 0;
+  await migrateLegacyDms(self).catch(() => undefined);
+  const filters = conversationFilters(self, peers).map((filter) => ({
+    ...filter,
+    kinds: [...DM_MESSAGE_KINDS],
+    authors: incomingAuthors,
+    since: Math.max(0, Math.floor(lastRead) + 1),
+  }));
+  const { count } = await dm17Store(self).count(filters, opts);
+  return count;
+}
+
+/**
  * Read one exact rumor from a conversation, independently of the thread's
  * newest-first window.
  *

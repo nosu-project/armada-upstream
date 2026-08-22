@@ -81,6 +81,7 @@ const InvitesPage = lazy(lazyWithReload(() => import("@/concord/pages/InvitesPag
 const BuzzInvitePage = lazy(lazyWithReload(() => import("@/buzz/BuzzInvitePage")));
 const MeshPage = lazy(lazyWithReload(() => import("@/pages/MeshPage")));
 const ChangelogPage = lazy(lazyWithReload(() => import("@/pages/ChangelogPage").then((m) => ({ default: m.ChangelogPage }))));
+const NotificationsPage = lazy(lazyWithReload(() => import("@/pages/NotificationsPage").then((m) => ({ default: m.NotificationsPage }))));
 const NotFound = lazy(lazyWithReload(() => import("@/pages/NotFound").then((m) => ({ default: m.NotFound }))));
 const PrivacyPolicyPage = lazy(lazyWithReload(() => import("@/pages/PrivacyPolicyPage").then((m) => ({ default: m.PrivacyPolicyPage }))));
 const ProjectsPage = lazy(lazyWithReload(() => import("@/pages/ProjectsPage").then((m) => ({ default: m.ProjectsPage }))));
@@ -308,6 +309,7 @@ function useWarmRouteChunks() {
         () => import("@/pages/GroupPage"),
         () => import("@/concord/pages/ConcordPage"),
         () => import("@/pages/DMsPage"),
+        () => import("@/pages/NotificationsPage"),
         () => import("@/pages/ServerPage"),
         // Not a notification target, but the landing surface a new user hits
         // first — its first paint shouldn't stack a chunk fetch on top of the
@@ -477,6 +479,7 @@ function AppRoutes() {
             {/* The received direct-invite inbox (account-level, CORD-05 §6).
                 Distinct from a community's own `/c/:id/invites` link-admin pane. */}
             <Route path="/invites" element={<RequireAuth><InvitesPage /></RequireAuth>} />
+            <Route path="/notifications" element={<RequireAuth><NotificationsPage /></RequireAuth>} />
             <Route path="/dm" element={<RequireAuth><DMsPage /></RequireAuth>} />
             <Route path="/dm/:peer" element={<RequireAuth><DMsPage /></RequireAuth>} />
             {/* DMs have no thread panel, so no `/t/` shape here. */}

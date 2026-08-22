@@ -490,10 +490,9 @@ async function queryRelaysMerged(
 export function useDMConversations(options?: { decryptPreviews?: boolean }) {
   // Previews decrypt each conversation's latest message, which is a signer
   // round-trip (and the first thing that could open the decrypt-consent
-  // prompt). The DMs list is the ONLY consumer that needs them, so previews are
-  // opt-in: the always-mounted unread-dot consumer (useHasUnreadDMs) leaves
-  // them off, so nothing pokes the signer — or the prompt — until the user
-  // actually opens DMs.
+  // prompt). Only the explicitly-opened DMs list needs them, so previews are
+  // opt-in: always-mounted unread/activity consumers leave them off, and
+  // nothing pokes the signer — or the prompt — until the user opens DMs.
   const decryptPreviews = options?.decryptPreviews ?? false;
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
