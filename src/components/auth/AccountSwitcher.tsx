@@ -103,7 +103,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
       clearRenderedPlaintext();
       if (isLastAccount) {
         removeLogin(currentUser.id);
-        void purgeClientStorage().finally(() => window.location.assign('/welcome'));
+        void purgeClientStorage().finally(() => window.location.assign('/'));
       } else {
         // Another account is about to become active, which is an account
         // SWITCH — so it takes the switch path, reload included, rather than

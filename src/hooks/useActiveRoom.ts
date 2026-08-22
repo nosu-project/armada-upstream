@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-import { hasNativeNotificationService } from "@/hooks/useNativeNotifications";
+import { hasNativeNotificationService } from "@/lib/platform";
 import { setActiveRooms as setWebActiveRooms } from "@/lib/activeRooms";
 import { ArmadaNotification } from "@/lib/nativeNotifications";
 

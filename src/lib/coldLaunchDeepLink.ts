@@ -1,6 +1,6 @@
 import { App as CapacitorApp } from "@capacitor/app";
 
-import { isNativeRuntime } from "@/hooks/useNativeNotifications";
+import { isNativeRuntime } from "@/lib/platform";
 import { markDeepLinkNavigation } from "@/lib/deepLinkNav";
 import { pathFromDeepLinkUrl } from "@/lib/deepLinkUrl";
 import { takePendingPushOpen } from "@/lib/nativePush";

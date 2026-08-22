@@ -9,7 +9,37 @@
  * - `VITE_APP_ID` — fork identifier namespacing the app's own NIP-78 `d` tags.
  */
 
+import { Capacitor } from "@capacitor/core";
 import { nip19 } from "nostr-tools";
+
+/**
+ * True only inside the Capacitor native runtime (the APK or the iOS app), not
+ * web/PWA.
+ *
+ * Lives HERE, beside `isIOS`/`isStandalonePwa`, rather than in
+ * `hooks/useNativeNotifications` where it used to. It is a one-line platform
+ * predicate with no dependencies, but that module is a hook module that reaches
+ * the whole Concord subscription stack (`useConcordSubs` → `control.ts`,
+ * `useCommunityList`, `gitActivity`) — so importing the predicate from
+ * `lib/coldLaunchDeepLink`, which `main.tsx` reaches before anything else,
+ * pulled all of it into the entry chunk. A leaf predicate belongs in a leaf.
+ */
+export function isNativeRuntime(): boolean {
+  return Capacitor.isNativePlatform();
+}
+
+/**
+ * True only where the `ArmadaNotification` background service actually exists.
+ *
+ * That plugin is Android-only (ArmadaNotificationPlugin.java): the persistent
+ * relay service, the native SQLite mirror and the drain bridge all live there.
+ * The iOS app is also `isNativeRuntime()`, but every one of those calls rejects
+ * with `UNIMPLEMENTED` — so callers that need the service must ask for this,
+ * not for "native", or iOS ends up offering notification UI that can't work.
+ */
+export function hasNativeNotificationService(): boolean {
+  return Capacitor.getPlatform() === "android";
+}
 
 /** Normalize a relay URL: require ws/wss scheme, strip trailing slash. */
 export function normalizeRelayUrl(url: string): string | undefined {

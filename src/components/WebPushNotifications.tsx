@@ -7,7 +7,7 @@ import {
   notificationsApiAvailable,
 } from "@/hooks/useForegroundNotificationSettings";
 import { useIosPush } from "@/hooks/useIosPush";
-import { isNativeRuntime } from "@/hooks/useNativeNotifications";
+import { isNativeRuntime } from "@/lib/platform";
 import { useNostrPush } from "@/hooks/useNostrPush";
 import { useOnboardingActive } from "@/hooks/useOnboarding";
 import { hasIosPush } from "@/lib/nativePush";

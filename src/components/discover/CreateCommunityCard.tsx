@@ -27,7 +27,7 @@ export function CreateCommunityCard({ className }: { className?: string }) {
 
   const onCreate = () => {
     if (user) setOpen(true);
-    else navigate("/welcome");
+    else navigate("/");
   };
 
   return (

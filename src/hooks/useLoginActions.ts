@@ -264,7 +264,7 @@ export function useLoginActions() {
       if (logins.length <= 1) {
         if (login) removeLogin(login.id);
         await purgeClientStorage();
-        window.location.assign("/welcome");
+        window.location.assign("/");
         return;
       }
       // Otherwise another account is about to become active, which is an

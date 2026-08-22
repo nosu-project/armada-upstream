@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { usePushWatchSet } from "@/hooks/usePushWatchSet";
 import { clearSwPushConfig, writeSwPushConfig } from "@/lib/swPushConfig";
 import { clearPushDisabledFlag, writePushDisabledFlag } from "@/lib/swPushDisabled";
@@ -21,6 +20,7 @@ import { scopePushSubscriptionId } from "@/lib/pushSubscriptions";
 import {
   NOSTR_PUSH_PUBKEY,
   NOSTR_PUSH_RELAYS,
+  isNativeRuntime,
   nostrPushConfigured,
 } from "@/lib/platform";
 import {

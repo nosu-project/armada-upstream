@@ -17,9 +17,9 @@ import {
 } from "@/lib/relayRecoveryPrompt";
 import {
   enableNativeNotifications,
-  hasNativeNotificationService,
   nativeNotificationIntent,
 } from "@/hooks/useNativeNotifications";
+import { hasNativeNotificationService } from "@/lib/platform";
 import {
   registerConsentPromptOpener,
   resolveConsentPrompt,

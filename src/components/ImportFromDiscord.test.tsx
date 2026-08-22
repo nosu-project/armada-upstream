@@ -103,21 +103,21 @@ describe('ImportFromDiscordButton', () => {
 
   // Signing founding events needs a key, so a signed-out visitor gets sent to
   // make one first rather than into a wizard that can't finish.
-  it('sends a signed-out visitor to the welcome page', async () => {
+  it('sends a signed-out visitor to the landing page', async () => {
     signedIn.value = false;
     const { ImportFromDiscordButton } = await load('https://bridge.example.com');
     render(
       <MemoryRouter initialEntries={['/discover']}>
         <Routes>
           <Route path="/discover" element={<ImportFromDiscordButton />} />
-          <Route path="/welcome" element={<div>welcome page</div>} />
+          <Route path="/" element={<div>landing page</div>} />
           <Route path="/import/discord" element={<div>wizard route</div>} />
         </Routes>
       </MemoryRouter>,
     );
 
     fireEvent.click(screen.getByRole('button', { name: /import a discord server/i }));
-    expect(screen.getByText('welcome page')).toBeInTheDocument();
+    expect(screen.getByText('landing page')).toBeInTheDocument();
   });
 });
 

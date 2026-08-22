@@ -3,7 +3,6 @@ import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "re
 
 import { useNotificationNavigation } from "@/hooks/useNotificationNavigation";
 import { useShareTargetNavigation } from "@/hooks/useShareTargetNavigation";
-import { useForegroundNotifications } from "@/hooks/useForegroundNotifications";
 import {
   coldLaunchPending,
   consumeColdLaunchDeepLink,
@@ -15,19 +14,24 @@ import {
   onColdShareResolved,
 } from "@/lib/shareTarget";
 import { BlankSplash, BootSplash } from "@/components/brand/BootSplash";
-import { MainLayout } from "@/components/layout/MainLayout";
 import { VersionCheck } from "@/components/VersionCheck";
 import { Toaster } from "@/components/ui/toaster";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useOnboardingActive } from "@/hooks/useOnboarding";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
-import { useWarmDiscover } from "@/hooks/useDiscover";
 import { flattenLayout, mergeLayout, railKeyToRoute } from "@/lib/railLayout";
 import { parseJoinLink, setPendingJoin } from "@/lib/joinLink";
 import { CONCORD2_PANES } from "@/lib/routes";
 import { lazyWithReload } from "@/lib/chunkReload";
+import { likelySignedIn } from "@/lib/likelySignedIn";
+// NOT lazy, and that is the point: the signed-out landing is the one screen a
+// visitor at `/` came for, so it rides in the entry chunk and paints on the
+// same tick React mounts rather than after a second round trip. Everything it
+// can open (login dialog, signup wizard) is lazy from inside it.
+import { WelcomePage } from "@/pages/WelcomePage";
 import {
   ProfileOverlayContext,
   profileOverlayPubkey,
@@ -36,13 +40,33 @@ import {
 } from "@/lib/profileOverlay";
 
 // Route-level code splitting: each page loads as its own chunk on first visit,
-// so the boot bundle carries only the shell + the landing route's code. This is
-// a large cut on a mid-range Android WebView, where parsing the previously
-// monolithic bundle was a visible slice of every cold start.
+// so the boot bundle carries only the shell + the landing, which is imported
+// statically above precisely because it is the one screen a signed-out visitor
+// came for. This is a large cut on a mid-range Android WebView, where parsing
+// the previously monolithic bundle was a visible slice of every cold start.
 //
 // Each import is wrapped with lazyWithReload so a stale-chunk fetch after a
 // deploy (an open tab referencing pruned hashes) triggers a one-time reload to
 // a consistent build instead of surfacing as a crash.
+
+// The application frame, and with it the server rail, the call providers, the
+// Mini App host (and its fflate) and the quick switcher — none of which a
+// signed-out visitor can use. Lazy so the entry chunk is the shell plus the
+// landing and nothing else.
+const MainLayout = lazy(lazyWithReload(() => import("@/components/layout/MainLayout").then((m) => ({ default: m.MainLayout }))));
+
+// Start the frame's chunk downloading immediately on a signed-in launch, in
+// parallel with the entry chunk's own parse, rather than when the router first
+// renders a route inside it. Without this, making MainLayout lazy would trade
+// a faster signed-out boot for a slower signed-in one.
+if (likelySignedIn()) {
+  void import("@/components/layout/MainLayout").catch(() => undefined);
+}
+
+const LazySignedInRouterServices = lazy(() =>
+  import("@/components/SignedInServices").then((m) => ({ default: m.SignedInRouterServices })),
+);
+
 const ConcordPage = lazy(lazyWithReload(() => import("@/concord/pages/ConcordPage").then((m) => ({ default: m.ConcordPage }))));
 const CreateCommunityPage = lazy(lazyWithReload(() => import("@/pages/CreateCommunityPage").then((m) => ({ default: m.CreateCommunityPage }))));
 const DiscordImportPage = lazy(lazyWithReload(() => import("@/pages/DiscordImportPage").then((m) => ({ default: m.DiscordImportPage }))));
@@ -66,7 +90,6 @@ const SettingsPage = lazy(lazyWithReload(() => import("@/pages/SettingsPage").th
 const SharePage = lazy(lazyWithReload(() => import("@/pages/SharePage").then((m) => ({ default: m.SharePage }))));
 const TermsPage = lazy(lazyWithReload(() => import("@/pages/TermsPage").then((m) => ({ default: m.TermsPage }))));
 const UserPage = lazy(lazyWithReload(() => import("@/pages/UserPage").then((m) => ({ default: m.UserPage }))));
-const WelcomePage = lazy(lazyWithReload(() => import("@/pages/WelcomePage").then((m) => ({ default: m.WelcomePage }))));
 
 /**
  * Dispatch `/invite/<segment>` to the right landing page. A Concord invite's
@@ -92,28 +115,38 @@ function JoinRoute() {
   const { search } = useLocation();
   const join = useMemo(() => parseJoinLink(search), [search]);
   if (!user && join) setPendingJoin(join);
-  return <Navigate to={!user && join ? "/welcome" : "/"} replace />;
+  // Both destinations are `/` now — the landing lives there — but the stashed
+  // link is what makes the two arrivals differ once it does.
+  return <Navigate to="/" replace />;
 }
 
 /**
  * Land the user somewhere sensible.
  *
- * A logged-out user always gets the welcome/onboarding screen first — dropping
- * a signed-out user straight into a relay's channel list (which may be slow or
- * AUTH-gated) leaves them staring at a skeleton with no explanation of what
- * Armada is or how to sign in.
+ * A logged-out user gets the landing/onboarding screen — RENDERED HERE, not
+ * redirected to. `/` is the landing's own address, so a signed-out visit is a
+ * paint rather than a paint, a redirect and a second paint. Dropping a
+ * signed-out user straight into a relay's channel list (which may be slow or
+ * AUTH-gated) would leave them staring at a skeleton with no explanation of
+ * what Armada is or how to sign in.
  *
  * Once signed in: a hosted deployment has pinned platform relays and goes
  * straight to the first one; a standalone (rogue) client ships with NO pinned
  * relay, so fall back to the user's first added server, read from their synced
  * kind-10009 list (via its folded offline snapshot) — or, if they have none
- * yet, the welcome screen (to add one).
+ * yet, DMs.
  */
 function HomeRedirect() {
   const { config } = useAppContext();
   const { user } = useCurrentUser();
   const { mesh } = useMeshTransport();
   const online = useOnlineStatus();
+  // The signup wizard logs the user in at its key-save step and keeps going
+  // into profile setup. Without this, that login would be indistinguishable
+  // from any other and the redirects below would yank the user out of the
+  // wizard mid-flight. Set synchronously before `login.*`, so it is already
+  // true on the commit that first exposes the user.
+  const onboarding = useOnboardingActive();
 
   // Cold launch from a notification tap or an incoming share: the launch
   // intent resolves async (see coldLaunchDeepLink / shareTarget). Hold the
@@ -174,15 +207,18 @@ function HomeRedirect() {
     // would lose the race against the deep link, so hold the redirect. Show
     // the branded splash rather than a blank frame (this wait can reach the
     // 1.5s bridge-guard timeout on a slow cold start) — unless we're signed
-    // out, in which case this lands on /welcome, which draws the crest itself.
+    // out, in which case the landing below draws the crest itself.
     return user ? <BootSplash /> : <BlankSplash />;
   }
   if (state.deepLink) {
     return <Navigate to={state.deepLink} replace />;
   }
 
-  if (!user) {
-    return <Navigate to="/welcome" replace />;
+  // The landing itself, and the wizard that grows out of it. `onboarding`
+  // keeps this branch selected across the wizard's own login so the component
+  // — and the step it is on — survives it.
+  if (!user || onboarding) {
+    return <WelcomePage />;
   }
 
   // Offline: the mesh is the only transport that still works — but only where
@@ -202,7 +238,7 @@ function HomeRedirect() {
   if (!firstRoute) {
     // Signed in but no community yet. The mesh is the home where it exists
     // (Android); otherwise land on DMs — a real, usable screen. We deliberately
-    // do NOT force /welcome here: the create/join onboarding takeover is only
+    // do NOT force the landing here: the create/join onboarding takeover is only
     // for account creation (the signup wizard drives it in-session). Re-forcing
     // it on every page load / relaunch for an already-signed-in, community-less
     // user was the bug — refresh or reopen the app and you'd be dumped back on
@@ -218,14 +254,14 @@ function HomeRedirect() {
 
 /**
  * Gate a route behind being signed in. Public chat (servers, groups, Concord
- * communities), the invite landing, and the welcome screen render for
+ * communities), the invite landing, and the landing page itself render for
  * logged-out users; everything else (DMs, settings) bounces a signed-out user
- * to the landing page rather than showing them an empty, account-scoped shell.
+ * to `/` rather than showing them an empty, account-scoped shell.
  */
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user } = useCurrentUser();
   if (!user) {
-    return <Navigate to="/welcome" replace />;
+    return <Navigate to="/" replace />;
   }
   return <>{children}</>;
 }
@@ -246,14 +282,14 @@ function LegacyDmRedirect() {
 }
 
 /**
- * The outer Suspense fallback for lazy routes that render without MainLayout:
- * the branded splash, except on the way to /welcome, which paints its own
- * crest and so would otherwise show a draw that gets cut off the moment the
- * chunk lands. MainLayout catches its child route chunks inside the page pane.
+ * The outer Suspense fallback — now mostly MainLayout's own chunk, since the
+ * frame is lazy. Always the branded splash: the one route that painted its own
+ * crest and so wanted a blank handoff (the landing) is in the entry chunk now
+ * and never suspends here at all. MainLayout catches its child route chunks
+ * inside the page pane.
  */
 function RouteFallback() {
-  const { pathname } = useLocation();
-  return pathname === "/welcome" ? <BlankSplash /> : <BootSplash />;
+  return <BootSplash />;
 }
 
 /**
@@ -302,13 +338,21 @@ function NotificationNavigation() {
 }
 
 /**
- * Runs the foreground (in-page) notifier: selected sounds and inactive-tab
- * markers plus OS notifications for incoming messages/mentions/DMs. Must be
- * inside the router (it navigates on notification click). Inert on native.
+ * The in-router signed-in services (foreground notifier, Discover warm), on
+ * the same lazy chunk and the same `user` gate as the rest — see
+ * `SignedInServices`. Both reach deep dependency trees (`useForegroundNotifications`
+ * the whole notification stack, `useWarmDiscover` → `useCommunityActions` →
+ * Concord's control plane and voice), and neither does anything for a
+ * signed-out visitor.
  */
-function ForegroundNotifications() {
-  useForegroundNotifications();
-  return null;
+function SignedInRouterServicesGate() {
+  const { user } = useCurrentUser();
+  if (!user) return null;
+  return (
+    <Suspense fallback={null}>
+      <LazySignedInRouterServices />
+    </Suspense>
+  );
 }
 
 /**
@@ -357,10 +401,21 @@ function AppRoutes() {
   const routes = useMemo(
     () => (
         <Routes location={target}>
+          {/* Outside <MainLayout>, and only these three. `/` is the landing —
+              the application frame has nothing to offer a signed-out visitor
+              and holding the landing behind its chunk would defeat the point
+              of the landing being in the entry chunk at all. The other two
+              render no UI whatsoever, only a <Navigate>, so routing them
+              through the shell would fetch the frame just to leave it. Every
+              real page — /privacy, /terms, /changelog, /downloads included —
+              stays inside the shell. */}
+          <Route path="/" element={<HomeRedirect />} />
+          {/* The landing's old address. Kept because it is spelled OUTSIDE
+              this build and cannot be rewritten by shipping it: bookmarks, and
+              the `window.location.assign` that older builds' logout used. */}
+          <Route path="/welcome" element={<Navigate to="/" replace />} />
+          <Route path="/join" element={<JoinRoute />} />
           <Route element={<MainLayout />}>
-            <Route path="/" element={<HomeRedirect />} />
-            <Route path="/welcome" element={<WelcomePage />} />
-            <Route path="/join" element={<JoinRoute />} />
             <Route path="/s/:server" element={<ServerPage />} />
             {/* Static segments outrank the `:groupId` param, so the Projects
                 and Inbox views resolve here, not as a channel. */}
@@ -459,16 +514,13 @@ function AppRoutes() {
 
 export function AppRouter() {
   useWarmRouteChunks();
-  // Data too, not just code: pre-resolve the Discover directory at idle so the
-  // page's first open paints real cards instead of a skeleton waterfall.
-  useWarmDiscover();
   // No `future` prop on the router: `v7_startTransition` and
   // `v7_relativeSplatPath` were opt-ins under v6 and are the only behavior v7
   // has.
   return (
     <BrowserRouter>
       <NotificationNavigation />
-      <ForegroundNotifications />
+      <SignedInRouterServicesGate />
       <VersionCheck />
       {/* MUST render inside <BrowserRouter>: toasts can carry router <Link>
           actions (e.g. VersionCheck's "What's new" → /changelog). With the

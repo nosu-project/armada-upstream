@@ -1,4 +1,3 @@
-import { Capacitor } from "@capacitor/core";
 import { useNostrLogin } from "@nostrify/react/login";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { nip19 } from "nostr-tools";
@@ -20,7 +19,11 @@ import { useConcordSubs } from "@/concord/hooks/useConcordSubs";
 import { signStreamAuthsChunked } from "@/concord/lib/streamAuth";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { effectiveDmRelays, selfStateRelays } from "@/contexts/AppContext";
-import { isGitAnnouncementDiscoveryRelay, normalizeRelayUrl } from "@/lib/platform";
+import {
+  hasNativeNotificationService,
+  isGitAnnouncementDiscoveryRelay,
+  normalizeRelayUrl,
+} from "@/lib/platform";
 import { useWireGitTicketRoots } from "@/hooks/useWireGitTicketRoots";
 import type { GitRepositoryWireInput } from "@/wire/spec";
 import { useEventStore } from "@/hooks/useEventStore";
@@ -28,24 +31,6 @@ import { GIT_REPOSITORY_ANNOUNCEMENT_KIND, parseGitRepositoryAnnouncement } from
 
 /** localStorage key for the native background-notification intent (toggle). */
 const NATIVE_INTENT_KEY = "armada:native-notif-intent";
-
-/** True only inside the Capacitor native runtime (the APK or the iOS app), not web/PWA. */
-export function isNativeRuntime(): boolean {
-  return Capacitor.isNativePlatform();
-}
-
-/**
- * True only where the `ArmadaNotification` background service actually exists.
- *
- * That plugin is Android-only (ArmadaNotificationPlugin.java): the persistent
- * relay service, the native SQLite mirror and the drain bridge all live there.
- * The iOS app is also `isNativeRuntime()`, but every one of those calls rejects
- * with `UNIMPLEMENTED` — so callers that need the service must ask for this,
- * not for "native", or iOS ends up offering notification UI that can't work.
- */
-export function hasNativeNotificationService(): boolean {
-  return Capacitor.getPlatform() === "android";
-}
 
 function loadIntent(): boolean {
   try {

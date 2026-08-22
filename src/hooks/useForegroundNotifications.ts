@@ -16,7 +16,6 @@ import { isForegroundNotifyReady } from "@/hooks/useForegroundNotificationSettin
 import { resolveDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import { isRoomActive } from "@/lib/activeRooms";
 import { getDisplayName } from "@/lib/getDisplayName";
-import { isNativeRuntime } from "@/hooks/useNativeNotifications";
 import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
 import { dmConvPeers } from "@/lib/nip17/protocol";
 import {
@@ -33,7 +32,7 @@ import {
   loadNotificationSoundSettings,
   playNotificationSound,
 } from "@/lib/notificationSounds";
-import { normalizeRelayUrl } from "@/lib/platform";
+import { isNativeRuntime, normalizeRelayUrl } from "@/lib/platform";
 import { chatRoute, parseChatRoute } from "@/lib/routes";
 import {
   installTabAttentionClearHandlers,

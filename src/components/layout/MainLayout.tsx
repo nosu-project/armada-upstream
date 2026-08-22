@@ -1,9 +1,8 @@
 import { Loader2 } from "lucide-react";
 import { lazy, Suspense, useContext } from "react";
-import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Outlet, useNavigate } from "react-router-dom";
 
 import { AppsProvider } from "@/components/AppsProvider";
-import { BlankSplash } from "@/components/brand/BootSplash";
 import { CallProvider } from "@/components/CallProvider";
 import { DmCallProvider } from "@/components/DmCallProvider";
 import { DirectInviteNotifier } from "@/concord/components/DirectInviteNotifier";
@@ -55,14 +54,6 @@ function ProfileOverlayFallback({ onDismiss }: { onDismiss?: () => void }) {
  * shell stays mounted around it.
  */
 function RoutePaneFallback() {
-  const { pathname } = useLocation();
-
-  // Welcome draws its own animated crest as soon as its chunk lands. Preserve
-  // the blank, full-screen handoff it had under the outer route boundary so a
-  // signed-out cold start does not briefly expose the application shell or
-  // start a second crest animation that immediately gets interrupted.
-  if (pathname === "/welcome") return <BlankSplash />;
-
   return (
     <div
       className="absolute inset-0 flex items-center justify-center bg-background"

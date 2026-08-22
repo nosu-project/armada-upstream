@@ -1278,11 +1278,12 @@ export function ServerRail({ variant = "page", ...props }: ServerRailProps) {
     // Drill-down: host the ONE persistent rail; page slots adopt its DOM.
     // No `user` gate here — the drill-down rail belongs to pages that manage
     // their own logged-out state (it always rendered for them), and with no
-    // slot mounted (e.g. /welcome) the container simply stays detached.
+    // slot mounted (e.g. a page that renders none) the container simply stays
+    // detached.
     if (!sideBySide) return createPortal(<ServerRailInner {...props} />, getRailPortalNode());
     // The persistent shell rail is part of the logged-in app frame; a logged-out
-    // visitor sitting on /welcome (nested under MainLayout) has no communities and
-    // must not see the rail's +/Discover/Settings chrome.
+    // visitor on one of the public in-shell pages (/discover, /invite/…) has no
+    // communities and must not see the rail's +/Discover/Settings chrome.
     if (!user) return null;
     return <ServerRailInner {...props} />;
   }

@@ -2,7 +2,7 @@ import { App as CapacitorApp } from "@capacitor/app";
 import { useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
-import { isNativeRuntime } from "@/hooks/useNativeNotifications";
+import { isNativeRuntime } from "@/lib/platform";
 import { onLateColdLaunchDeepLink } from "@/lib/coldLaunchDeepLink";
 import { markDeepLinkNavigation } from "@/lib/deepLinkNav";
 import { isRouterPath, pathFromDeepLinkUrl } from "@/lib/deepLinkUrl";

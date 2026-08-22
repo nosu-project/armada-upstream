@@ -3,7 +3,7 @@ import { AlertTriangle, Play } from "lucide-react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useForegroundNotificationSettings } from "@/hooks/useForegroundNotificationSettings";
-import { isNativeRuntime, useNativeNotifications } from "@/hooks/useNativeNotifications";
+import { useNativeNotifications } from "@/hooks/useNativeNotifications";
 import { useWebPushNotifications } from "@/contexts/WebPushContext";
 import {
   loadNotificationSoundSettings,
@@ -21,7 +21,7 @@ import {
   isIgnoringBatteryOptimizations,
   requestIgnoreBatteryOptimizations,
 } from "@/lib/nativeNotifications";
-import { isIOS, isStandalonePwa } from "@/lib/platform";
+import { isIOS, isNativeRuntime, isStandalonePwa } from "@/lib/platform";
 
 import { Button } from "@/components/ui/button";
 import {

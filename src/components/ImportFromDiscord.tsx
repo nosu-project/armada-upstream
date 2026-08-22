@@ -72,7 +72,7 @@ export function ImportFromDiscordButton({
         // Navigation is the whole mechanism: it unmounts any dialog this button
         // sits in (so no second close button), and the wizard is owned by the
         // route, so nothing unmounting here can take it down with it.
-        navigate(user ? "/import/discord" : "/welcome");
+        navigate(user ? "/import/discord" : "/");
         onOpen?.();
       }}
     >

@@ -45,8 +45,14 @@ vi.mock("@/hooks/useEncryptedSettings", () => ({ useEncryptedSettings: () => h.s
 vi.mock("@/hooks/useNip29Servers", () => ({ useNip29Servers: () => h.servers }));
 vi.mock("@/hooks/useNativeNotifications", () => ({
   enableNativeNotifications: vi.fn(),
-  hasNativeNotificationService: () => h.nativeNotificationService,
   nativeNotificationIntent: () => false,
+}));
+// `hasNativeNotificationService` moved to the platform leaf so that importing
+// it doesn't drag the notification hook's whole dependency tree; the rest of
+// `@/lib/platform` is plain constants and is left real.
+vi.mock("@/lib/platform", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/platform")>()),
+  hasNativeNotificationService: () => h.nativeNotificationService,
 }));
 vi.mock("@/lib/decryptConsent", () => ({
   registerConsentPromptOpener: () => () => undefined,

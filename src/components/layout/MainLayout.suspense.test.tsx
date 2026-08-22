@@ -79,23 +79,11 @@ describe("MainLayout route Suspense", () => {
     expect(railLifecycle).toEqual({ mounts: 1, unmounts: 0 });
   });
 
-  it("preserves the blank full-screen wait for the welcome chunk", () => {
-    const DelayedWelcome = lazy(() => new Promise<{ default: () => ReactNode }>(() => undefined));
-
-    render(
-      <MemoryRouter initialEntries={["/welcome"]}>
-        <Suspense fallback={<div>Outer fallback</div>}>
-          <Routes>
-            <Route element={<MainLayout />}>
-              <Route path="/welcome" element={<DelayedWelcome />} />
-            </Route>
-          </Routes>
-        </Suspense>
-      </MemoryRouter>,
-    );
-
-    expect(screen.getByRole("status", { name: "Loading" })).toHaveClass("fixed", "inset-0");
-    expect(screen.queryByRole("status", { name: "Loading page" })).not.toBeInTheDocument();
-    expect(screen.queryByText("Outer fallback")).not.toBeInTheDocument();
-  });
+  // The landing used to be a lazy route UNDER MainLayout, which meant a
+  // signed-out cold start could briefly expose the application shell around a
+  // half-drawn crest — so the pane fallback special-cased `/welcome` into a
+  // blank full-screen wait. That case is gone structurally rather than by
+  // special case: the landing lives at `/`, OUTSIDE this layout, and is in the
+  // entry chunk, so it neither suspends here nor renders the shell at all.
+  // What replaces the assertion is `WelcomePage.eager.test.tsx`.
 });
