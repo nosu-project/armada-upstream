@@ -4,6 +4,16 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.56.3] - 2026-08-22
+
+The Android app is published to Google Play again. Since 0.51.2 every upload was
+accepted and then discarded at the last step, so the Play listing stayed on that
+version while the app shipped everywhere else. Nothing else about the app has
+changed in this release.
+
+### Fixed
+- The Android app reaches Google Play again, so the Play listing tracks the current version
+
 ## [0.56.2] - 2026-08-22
 
 The desktop installers, the signed Flatpak bundle and the downloads page listing are published. In 0.56.1 a rejected app-store upload stopped the rest of the release before any of them went out, so the desktop downloads never appeared.
