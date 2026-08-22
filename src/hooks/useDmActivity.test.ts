@@ -47,6 +47,7 @@ describe("buildDmActivityItems", () => {
         self: SELF,
         isKnown: (peer) => peer !== STRANGER,
         getLastRead: (key) => key === `dm:${ALICE},${BOB}` ? 35 : 0,
+        unreadCounts: { [`${ALICE},${BOB}`]: 4 },
       },
     );
 
@@ -55,12 +56,14 @@ describe("buildDmActivityItems", () => {
       eventId: "group",
       author: BOB,
       content: "group update",
+      unreadCount: 4,
       unread: true,
     });
     expect(items[1]).toMatchObject({
       eventId: "modern-alice",
       author: SELF,
       content: "sent",
+      unreadCount: 0,
       unread: false,
     });
   });
@@ -79,13 +82,21 @@ describe("buildDmActivityItems", () => {
         mine: true,
       }],
       { [ALICE]: "legacy preview" },
-      { self: SELF, isKnown: () => true, getLastRead: () => 10 },
+      {
+        self: SELF,
+        isKnown: () => true,
+        getLastRead: () => 10,
+        // A stale asynchronous count must never resurrect a head whose shared
+        // read stamp already reached its latest message.
+        unreadCounts: { [ALICE]: 8 },
+      },
     );
 
     expect(item).toMatchObject({
       eventId: "legacy",
       author: ALICE,
       content: "legacy preview",
+      unreadCount: 0,
       unread: false,
     });
   });

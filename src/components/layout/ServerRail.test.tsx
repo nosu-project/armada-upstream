@@ -32,6 +32,7 @@ const recentDmActivity = vi.hoisted(() => ({ items: [] as Array<{
   createdAt: number;
   eventId: string;
   author: string;
+  unreadCount: number;
   unread: boolean;
 }> }));
 vi.mock("@/hooks/useDmActivity", () => ({
@@ -597,10 +598,10 @@ describe("ServerRail DMs", () => {
   it("badges unread messages, and drops the badge while the thread is open", () => {
     dmUnread[PEER] = true;
     const { unmount } = renderRail();
-    expect(dmBtn().querySelector('[aria-label="Unread messages"]')).toBeTruthy();
+    expect(dmBtn().querySelector('[aria-label="1 unread message"]')?.textContent).toBe("1");
     unmount();
     renderRail([dmHref]);
-    expect(dmBtn().querySelector('[aria-label="Unread messages"]')).toBeNull();
+    expect(dmBtn().querySelector('[aria-label="1 unread message"]')).toBeNull();
   });
 
   it("folders with a community like any other item", async () => {
@@ -634,23 +635,25 @@ describe("ServerRail recent DMs", () => {
     return () => restoreGeometry();
   });
 
-  it("shows only the three newest conversations above the account/community separator", () => {
-    recentDmActivity.items = ["a", "b", "c", "d"].map((key, index) => ({
+  it("shows the three newest unread conversations with counts and drops read ones", () => {
+    recentDmActivity.items = ["a", "b", "c", "d", "e"].map((key, index) => ({
       key,
       peers: [key.repeat(64)],
       route: `/dm/${key}`,
       createdAt: 40 - index,
       eventId: `event-${key}`,
       author: key.repeat(64),
-      unread: key === "a",
+      unreadCount: key === "a" ? 12 : key === "b" ? 0 : 1,
+      unread: key !== "b",
     }));
 
     renderRail();
 
     const recent = Array.from(document.querySelectorAll<HTMLElement>("[data-recent-dm]"));
-    expect(recent.map((item) => item.dataset.recentDm)).toEqual(["a", "b", "c"]);
-    expect(recent.map((item) => item.getAttribute("href"))).toEqual(["/dm/a", "/dm/b", "/dm/c"]);
-    expect(recent[0].querySelector('[aria-label="Unread messages"]')).toBeTruthy();
+    expect(recent.map((item) => item.dataset.recentDm)).toEqual(["a", "c", "d"]);
+    expect(recent.map((item) => item.getAttribute("href"))).toEqual(["/dm/a", "/dm/c", "/dm/d"]);
+    expect(recent[0].querySelector('[aria-label="12 unread messages"]')?.textContent).toBe("12");
+    expect(document.querySelector('[data-recent-dm="b"]')).toBeNull();
     const separator = document.querySelector("[data-rail-account-separator]");
     expect(separator).toBeTruthy();
     expect(separator!.compareDocumentPosition(document.querySelector(`[data-rail-anchor="item:${RELAY_A}"]`)!))

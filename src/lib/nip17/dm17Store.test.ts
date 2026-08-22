@@ -4,6 +4,7 @@ import { getPublicKey, generateSecretKey } from "nostr-tools/pure";
 import { describe, expect, it } from "vitest";
 
 import {
+  countUnreadDm17Messages,
   DM17_DRAIN_PAGE,
   dm17Store,
   dm17ToStored,
@@ -95,6 +96,42 @@ describe("dm17Store", () => {
       wrapId: "",
     });
     expect(await queryDm17Rumor(self, [bob], fromAlice.rumorId)).toBeUndefined();
+  });
+
+  it("counts only incoming messages newer than a conversation's read stamp", async () => {
+    const viewer = getPublicKey(generateSecretKey());
+    const friend = getPublicKey(generateSecretKey());
+    const first = opened({
+      author: friend,
+      peer: friend,
+      content: "first unread",
+      tags: dmChatTags([viewer]),
+    });
+    const outgoing = opened({
+      author: viewer,
+      peer: friend,
+      content: "my reply",
+      tags: dmChatTags([friend]),
+    });
+    const reaction = opened({
+      author: friend,
+      peer: friend,
+      kind: KIND_DM_REACTION,
+      content: "+",
+      tags: dmReactionTags([viewer], first.rumorId, KIND_DM_CHAT),
+    });
+    const second = opened({
+      author: friend,
+      peer: friend,
+      content: "second unread",
+      tags: dmChatTags([viewer]),
+    });
+    await writeDm17Rumors(viewer, [first, outgoing, reaction, second]);
+
+    expect(await countUnreadDm17Messages(viewer, [friend], 0)).toBe(2);
+    expect(await countUnreadDm17Messages(viewer, [friend], first.createdAt)).toBe(1);
+    expect(await countUnreadDm17Messages(viewer, [friend], second.createdAt)).toBe(0);
+    expect(await countUnreadDm17Messages(viewer, [viewer], 0)).toBe(0);
   });
 
   it("filters conversation search before applying its result limit", async () => {

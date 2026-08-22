@@ -897,6 +897,7 @@ const Concord2Button = memo(function Concord2Button({
  */
 const DmButton = memo(function DmButton({
   pubkey,
+  unreadCount,
   onNavigate,
   inCall,
   draggable,
@@ -910,6 +911,7 @@ const DmButton = memo(function DmButton({
   onPressed,
 }: {
   pubkey: string;
+  unreadCount?: number;
   onNavigate?: () => void;
   /** Whether the active voice call is this DM. */
   inCall?: boolean;
@@ -925,6 +927,7 @@ const DmButton = memo(function DmButton({
   const noteToSelf = pubkey === user?.pubkey;
   const name = noteToSelf ? NOTE_TO_SELF_NAME : getDisplayName(metadata, pubkey);
   const unread = useDmPeerUnread(pubkey);
+  const displayedUnreadCount = unreadCount ?? (unread ? 1 : 0);
   const { dmLevel, setLevel: setNotifLevel } = useNotifLevels();
   const { removeFromRail } = useRailDms();
 
@@ -1001,12 +1004,14 @@ const DmButton = memo(function DmButton({
                           <Headphones className="size-2.5" />
                         </span>
                       )}
-                      {/* Unread indicator (hidden while active — you're reading it). */}
-                      {!isActive && unread ? (
+                      {/* Unread count (hidden while active — you're reading it). */}
+                      {!isActive && displayedUnreadCount > 0 ? (
                         <span
-                          className="absolute -top-0.5 -right-0.5 z-10 size-3 rounded-full bg-foreground ring-2 ring-background"
-                          aria-label="Unread messages"
-                        />
+                          className="absolute -top-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground ring-2 ring-background"
+                          aria-label={`${displayedUnreadCount} unread ${displayedUnreadCount === 1 ? "message" : "messages"}`}
+                        >
+                          {displayedUnreadCount > 99 ? "99+" : displayedUnreadCount}
+                        </span>
                       ) : null}
                     </span>
                   </>
@@ -1105,11 +1110,13 @@ const RecentDmButton = memo(function RecentDmButton({
                           <Headphones className="size-2.5" />
                         </span>
                       )}
-                      {!isActive && item.unread && (
+                      {!isActive && item.unreadCount > 0 && (
                         <span
-                          className="absolute -top-0.5 -right-0.5 z-10 size-3 rounded-full bg-foreground ring-2 ring-background"
-                          aria-label="Unread messages"
-                        />
+                          className="absolute -top-1 -right-1 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground ring-2 ring-background"
+                          aria-label={`${item.unreadCount} unread ${item.unreadCount === 1 ? "message" : "messages"}`}
+                        >
+                          {item.unreadCount > 99 ? "99+" : item.unreadCount}
+                        </span>
                       )}
                     </span>
                   </>
@@ -1509,9 +1516,15 @@ function ServerRailInner({
     () => railDmPubkeys(config.railLayout),
     [config.railLayout],
   );
+  const dmActivityByKey = useMemo(
+    () => new Map(dmActivity.map((item) => [item.key, item])),
+    [dmActivity],
+  );
   const recentDms = useMemo(() => {
     const manuallyArranged = new Set(railDms);
-    return dmActivity.filter((item) => !manuallyArranged.has(item.key)).slice(0, 3);
+    return dmActivity
+      .filter((item) => item.unreadCount > 0 && !manuallyArranged.has(item.key))
+      .slice(0, 3);
   }, [dmActivity, railDms]);
 
   // Every live rail item (NIP-29 servers, Concord communities and pinned
@@ -1785,6 +1798,7 @@ function ServerRailInner({
         <DmButton
           key={item.key}
           pubkey={item.pubkey}
+          unreadCount={dmActivityByKey.get(item.pubkey)?.unreadCount}
           onNavigate={onNavigate}
           inCall={activeCall?.dmPeer === item.pubkey}
           {...common}
@@ -2080,9 +2094,10 @@ function ServerRailInner({
           </Tooltip>
         )}
 
-        {/* Three newest known conversations, automatic and recency-ordered.
-            Manually arranged 1:1 pins are omitted here to avoid showing the
-            same person twice; their saved rail/folder position remains below. */}
+        {/* Three newest unread conversations, automatic and recency-ordered.
+            Reading one advances its shared read stamp and removes it from this
+            transient strip. Manually arranged 1:1 pins remain only at their
+            saved rail/folder position below, where they carry the same count. */}
         {user && recentDms.map((item) => (
           <RecentDmButton
             key={`recent:${item.key}`}

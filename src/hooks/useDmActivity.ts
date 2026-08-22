@@ -1,10 +1,13 @@
+import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDm17Conversations } from "@/hooks/useDm17";
-import { useDMConversations } from "@/hooks/useDirectMessages";
+import { KIND_DM, useDMConversations } from "@/hooks/useDirectMessages";
+import { useEventStore } from "@/hooks/useEventStore";
 import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
 import { dmReadKey, useReadState } from "@/hooks/useReadState";
+import { countUnreadDm17Messages } from "@/lib/nip17/dm17Store";
 import {
   buildDmSwitcherEntries,
   type Dm17SwitcherSource,
@@ -22,6 +25,8 @@ export interface DmActivityItem {
   eventId: string;
   author: string;
   content?: string;
+  /** Exact incoming-message count when loaded (one-message floor meanwhile). */
+  unreadCount: number;
   unread: boolean;
 }
 
@@ -49,6 +54,7 @@ export function buildDmActivityItems(
     self: string;
     isKnown: (peer: string, mine: boolean) => boolean;
     getLastRead: (key: string) => number;
+    unreadCounts?: Readonly<Record<string, number>>;
   },
 ): DmActivityItem[] {
   const entries = buildDmSwitcherEntries(legacy, nip17, {
@@ -67,6 +73,13 @@ export function buildDmActivityItems(
     const eventId = modernWins ? modern!.latest.rumorId : old?.latest.id;
     const author = modernWins ? modern!.latest.author : old?.latest.pubkey;
     if (!createdAt || !eventId || !author) return [];
+    const latestUnread =
+      author !== opts.self && createdAt > opts.getLastRead(dmReadKey(entry.key));
+    // The latest incoming head proves at least one unread message even while
+    // the indexed count is loading (or if a store count transiently fails).
+    const unreadCount = latestUnread
+      ? Math.max(1, opts.unreadCounts?.[entry.key] ?? 1)
+      : 0;
 
     return [{
       key: entry.key,
@@ -76,8 +89,8 @@ export function buildDmActivityItems(
       eventId,
       author,
       content: modernWins ? modern!.latest.content : previews[entry.key],
-      unread:
-        author !== opts.self && createdAt > opts.getLastRead(dmReadKey(entry.key)),
+      unreadCount,
+      unread: unreadCount > 0,
     }];
   });
 }
@@ -97,11 +110,12 @@ export function useDmActivity(opts: { interactive?: boolean } = {}): {
   const interactive = opts.interactive ?? false;
   const { user } = useCurrentUser();
   const { getLastRead } = useReadState();
+  const eventStore = useEventStore();
   const { isKnown, isLoading: trustLoading } = useKnownDmPeers();
   const legacy = useDMConversations({ decryptPreviews: interactive });
   const modern = useDm17Conversations({ interactive });
 
-  const items = useMemo(() => {
+  const heads = useMemo(() => {
     if (!user || trustLoading) return [];
     return buildDmActivityItems(
       legacy.conversations,
@@ -118,6 +132,52 @@ export function useDmActivity(opts: { interactive?: boolean } = {}): {
     isKnown,
     getLastRead,
   ]);
+
+  // Exact badge counts are count-only indexed reads. Key them by each unread
+  // head and its current read stamp: a new message or a read immediately swaps
+  // cache entries, while ordinary re-renders do no database work.
+  const unreadSignature = heads
+    .filter((item) => item.unread)
+    .map((item) => `${item.key}:${item.eventId}:${getLastRead(dmReadKey(item.key))}`)
+    .join("|");
+  const counts = useQuery<Record<string, number>>({
+    queryKey: ["dm", "activity-unread-counts", user?.pubkey, unreadSignature],
+    enabled: Boolean(user && unreadSignature),
+    staleTime: 10_000,
+    queryFn: async ({ signal }) => {
+      const self = user!.pubkey;
+      const legacyStore = await eventStore;
+      const rows = await Promise.all(heads.filter((item) => item.unread).map(async (item) => {
+        const lastRead = getLastRead(dmReadKey(item.key));
+        const legacyCount = item.peers.length === 1 && item.peers[0] !== self
+          ? legacyStore.count([{
+              kinds: [KIND_DM],
+              authors: [item.peers[0]],
+              "#p": [self],
+              since: Math.max(0, Math.floor(lastRead) + 1),
+            }], { signal }).then((result) => result.count).catch(() => 0)
+          : Promise.resolve(0);
+        const modernCount = countUnreadDm17Messages(
+          self,
+          item.peers,
+          lastRead,
+          { signal },
+        ).catch(() => 0);
+        const [oldCount, newCount] = await Promise.all([legacyCount, modernCount]);
+        return [item.key, oldCount + newCount] as const;
+      }));
+      return Object.fromEntries(rows);
+    },
+  });
+
+  const items = useMemo(() => {
+    if (!counts.data) return heads;
+    return heads.map((item) => {
+      if (!item.unread) return item;
+      const unreadCount = Math.max(1, counts.data[item.key] ?? 1);
+      return { ...item, unreadCount, unread: unreadCount > 0 };
+    });
+  }, [heads, counts.data]);
 
   return {
     items,
