@@ -37,7 +37,7 @@
  *                       `secret=` has been consumed is useless without the
  *                       client key the bunker authorized.
  *   BLOSSOM_SERVERS     Comma-separated. Default https://blossom.ditto.pub
- *   RELAY_URLS          Comma-separated. Default: the repo's relays + readers.
+ *   RELAY_URLS          Comma-separated. Default: the relays /downloads reads.
  */
 
 import { createHash } from 'node:crypto';
@@ -45,7 +45,7 @@ import { execFileSync } from 'node:child_process';
 import { createReadStream, readFileSync, statSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { argv, env, exit, stderr, stdout } from 'node:process';
+import process, { argv, env, exit, stderr, stdout } from 'node:process';
 
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import { SimplePool } from 'nostr-tools/pool';
@@ -59,15 +59,24 @@ const RELEASE_KIND = 30622;
 const BLOSSOM_AUTH_KIND = 24242;
 /** Attempts per blob per server, before the release is refused. */
 const UPLOAD_ATTEMPTS = 3;
+/** How long one relay gets to acknowledge the release event. */
+const PUBLISH_TIMEOUT_MS = 30_000;
 
 const DEFAULT_BLOSSOM = 'https://blossom.ditto.pub';
 /**
- * The repo's own relays (from its kind-30617 `relays` tag) plus the general
- * ones the web client reads. NIP-34 says repo events belong on the former; the
- * downloads page needs the latter.
+ * Where the release is broadcast. Must match `RELEASE_RELAYS` in
+ * `src/lib/releases.ts` — a relay that is written but not read publishes into
+ * the void, and one that is read but not written is a page with no downloads.
+ *
+ * `wss://relay.ngit.dev`, the repo's own relay, is deliberately absent. It
+ * restricts writes to events that reference an accepted repository, and a
+ * release names its repo through the derivable `D` tag rather than an `a` tag
+ * (docs/releases.md), so it answered every release event with
+ * `restricted: Event event must reference an accepted repository or accepted
+ * event`. Adding the `a` tag back to satisfy one relay would reintroduce the
+ * ambiguity `D` exists to remove; the release simply lives elsewhere.
  */
 const DEFAULT_RELAYS = [
-  'wss://relay.ngit.dev',
   'wss://relay.ditto.pub',
   'wss://relay.dreamith.to',
   'wss://relay.primal.net',
@@ -338,6 +347,25 @@ async function connectSigner() {
   };
 }
 
+/**
+ * Bound one relay's acknowledgement.
+ *
+ * `pool.publish` returns a promise per relay that settles on that relay's OK,
+ * and nothing else ever settles it — a relay which accepts the socket, takes
+ * the EVENT and then stays silent leaves it pending forever, so awaiting them
+ * all has no upper bound. That is how a release whose event had already been
+ * accepted by three relays sat for forty minutes until the CI coordinator's
+ * run-level timeout, which then discarded every job's result. Missing one
+ * relay's OK costs a copy of the event; waiting for it costs the whole run.
+ */
+function withDeadline(promise, ms, label) {
+  let timer;
+  const deadline = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`no response within ${ms / 1000}s`)), ms);
+  });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
+}
+
 /** Signs locally, for --dry-run, so an unsigned template is never printed. */
 function ephemeralSigner() {
   const sk = hexToBytes('11'.repeat(32));
@@ -404,7 +432,9 @@ async function main() {
     }
 
     const pool = new SimplePool();
-    const results = await Promise.allSettled(pool.publish(relays, event));
+    const results = await Promise.allSettled(
+      pool.publish(relays, event).map((p, i) => withDeadline(p, PUBLISH_TIMEOUT_MS, relays[i])),
+    );
     pool.close(relays);
 
     const ok = results.filter((r) => r.status === 'fulfilled').length;
@@ -419,7 +449,26 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  stderr.write(`error: ${err.message}\n`);
-  exit(1);
-});
+/**
+ * Leave, whether or not the relay pool let go of its sockets.
+ *
+ * `pool.close()` does not reliably drain everything it opened, so the event
+ * loop can stay alive with the work long since finished — and a release that
+ * has been published but never returns is, to CI, indistinguishable from one
+ * that failed. Set the exit code, then arm an UNREF'd timer: a process with
+ * nothing left holding it exits immediately, on its own, with pending output
+ * flushed the normal way, and only one that is genuinely being held waits out
+ * the grace period and is then cut off.
+ */
+function finish(code) {
+  process.exitCode = code;
+  setTimeout(() => exit(code), 2_000).unref();
+}
+
+main().then(
+  () => finish(0),
+  (err) => {
+    stderr.write(`error: ${err.message}\n`);
+    finish(1);
+  },
+);

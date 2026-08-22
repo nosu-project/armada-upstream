@@ -81,6 +81,18 @@ but refers to the root scope — `E` is an event id like `e`, `A` an address lik
 coordinate, but the kind is fixed at 30617 by this spec and the author is our
 own pubkey, so `A` would restate what is already known.
 
+The cost of deriving rather than asserting is real and worth stating. A relay
+whose write policy is "the event must reference a repository I accept" cannot
+see a reference that is derived: `relay.ngit.dev`, this repository's own relay,
+refuses every release with `restricted: Event event must reference an accepted
+repository or accepted event`. Releases are therefore published to, and read
+from, the general relays instead — `DEFAULT_RELAYS` in
+`scripts/publish-release.mjs` and `RELEASE_RELAYS` in `src/lib/releases.ts`,
+which have to name the same set. Adding `a` back to satisfy such a policy would
+restate what `d` and `D` already say and reopen the question of which is
+authoritative; a relay wanting to gate on the repository can build
+`30617:<author>:<D>` itself, with no parsing at all.
+
 Note this makes a release *per maintainer*. Four maintainers can each publish
 `30622:<their-pk>:armada@v0.55.3` and all four coexist. Resolve it the way
 NIP-34 resolves Status events — "the most recent … from either the issue/patch

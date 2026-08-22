@@ -23,12 +23,20 @@ export const RELEASE_KIND = 30622;
  * never added to the pool, never subscribed to — and not the build-time relay
  * pin the client deliberately doesn't have, which would dial on boot.
  *
- * The defaults are the repository's own relays (its kind-30617 `relays` tag)
- * plus the general ones the release is broadcast to.
+ * The defaults are the relays the release is broadcast to, and must match
+ * `DEFAULT_RELAYS` in `scripts/publish-release.mjs`: a relay read here but not
+ * written there contributes nothing, and one written but not read publishes
+ * into the void.
+ *
+ * The repository's own relay, `wss://relay.ngit.dev`, is NOT among them. It
+ * restricts writes to events referencing an accepted repository, and a release
+ * names its repo through the derivable `D` tag rather than an `a` tag, so it
+ * refuses the release event outright — reading it would only ever add latency
+ * to a query that must answer before the page can offer a download.
  */
 export const RELEASE_RELAYS: string[] = (
   import.meta.env.VITE_RELEASE_RELAYS ??
-  "wss://relay.ngit.dev,wss://relay.ditto.pub,wss://relay.dreamith.to,wss://relay.primal.net"
+  "wss://relay.ditto.pub,wss://relay.dreamith.to,wss://relay.primal.net"
 )
   .split(",")
   .map((url: string) => normalizeRelayUrl(url))
