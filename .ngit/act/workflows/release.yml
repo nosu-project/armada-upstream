@@ -189,6 +189,12 @@ jobs:
           # in the wrong place.
           npx vite build -c vite.config.electron.ts
           test -f electron/db.cjs || { echo "no electron/db.cjs" >&2; exit 1; }
+          # The updater's release feed (electron/updateFeed.cjs), built from
+          # src/lib/desktopUpdate.ts and read through nostrUpdateProvider.js.
+          # A missing bundle is not a build failure — it is a shipped app whose
+          # every update check fails, which nothing downstream would notice.
+          npx vite build -c vite.config.electron-update.ts
+          test -f electron/updateFeed.cjs || { echo "no electron/updateFeed.cjs" >&2; exit 1; }
 
       # electron-builder needs wine for the Windows targets. wine is baked into
       # the armada-ci runner image; this fallback only runs on a stock act

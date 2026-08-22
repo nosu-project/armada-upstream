@@ -159,6 +159,16 @@ key-value payload instead of a positional one.
 it is what survives mirroring to a server that does not hash-name its paths, and
 because it lets a client verify bytes rather than trust an origin.
 
+`x` is also the only digest, and deliberately so. The desktop app self-updates
+from this event, and electron-updater's own default is sha512 — but sha256 is
+the same SHA-2 family, its 128-bit collision resistance is far past what a
+content address for an installer needs, and on any CPU with SHA-NI or the ARMv8
+crypto extensions it is roughly twice as *fast*. The library's sha512 default is
+a software-speed call from 2016 that modern hardware has inverted, and the
+`sha2` field it reads a sha256 from is marked deprecated only because it once
+cross-checked a Bintray response header. None of that is a reason to publish a
+second hash of every artifact. Don't add one.
+
 ### Platform tokens (`f`)
 
 The observed vocabulary is thin and inconsistent — ngit-ci emits
@@ -182,6 +192,22 @@ a later vocabulary change costs a grouping hint rather than a download button.
 The author set comes from the 30617: its `pubkey` plus its `maintainers` tag.
 Ignoring it and querying `#D` alone would accept a release of "armada" from
 anybody.
+
+Two readers, one event. `/downloads` renders the whole set
+(`src/lib/releases.ts`, `useReleases.ts`); the Electron app resolves it to the
+single installer the running machine can replace itself with
+(`src/lib/desktopUpdate.ts`, bundled into `electron/updateFeed.cjs` and wrapped
+as an electron-updater provider by `electron/nostrUpdateProvider.js`). The
+parsing is shared rather than reimplemented, which is the point — a second
+parser would be a second contract.
+
+The updater applies three checks the download page does not need, because it is
+the reader that *executes* what it fetches and its transport is an untrusted
+relay socket: the signature must verify, the author must be one of the
+build-pinned `RELEASE_AUTHORS`, and `D` must be this repository. `RELEASE_AUTHORS`
+being a build-time constant rather than the live `maintainers` tag matters most
+here — anyone who ever landed in that tag could otherwise publish a binary the
+desktop app would install.
 
 ## Publishing
 

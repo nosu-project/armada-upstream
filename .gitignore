@@ -20,6 +20,9 @@ electron/release/
 electron/generated/hevc/
 # Built from src/lib/db by vite.config.electron.ts (npm run build:electron-db).
 electron/db.cjs
+# Built from src/lib/desktopUpdate.ts by vite.config.electron-update.ts
+# (npm run build:electron-update).
+electron/updateFeed.cjs
 # Chromium profile for `npm run electron:dev` (its own, so a dev build never
 # writes an installed Armada's armada.db).
 electron/.dev-profile/

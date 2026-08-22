@@ -88,7 +88,7 @@ store — is per-origin, so you log in again here).
 npm ci
 cd electron
 npm ci
-npm start            # builds web + electron/db.cjs, stages, then launches
+npm start            # builds web + db.cjs + updateFeed.cjs, stages, then launches
 
 # Package installers (output in release/):
 npm run dist:linux   # AppImage + deb
@@ -99,10 +99,12 @@ npm run dist:mac     # .dmg (must run on macOS)
 node scripts/package-mac.mjs
 ```
 
-The Electron lifecycle scripts always rebuild and stage both the web client and
-the desktop ArmadaDB bridge (`main.js` requires `db.cjs` at startup and it is
-gitignored). This prevents a current shell from being paired with a stale
-renderer or silently falling back to a different storage engine.
+The Electron lifecycle scripts always rebuild and stage the web client and both
+`src/`-derived main-process bundles — the ArmadaDB bridge (`db.cjs`, required at
+startup) and the updater's release feed (`updateFeed.cjs`). Both are gitignored
+build artifacts. This prevents a current shell from being paired with a stale
+renderer, silently falling back to a different storage engine, or checking for
+updates through a stale copy of the release-event parser.
 
 The app icon lives at `build/icon.png` (1024×1024, committed); electron-builder
 derives `.ico`/`.icns` from it. Linux uses `build/linux-icon.png` instead — the
@@ -213,36 +215,72 @@ Every edition has exactly one update owner:
 
 | Edition | Update mechanism |
 | --- | --- |
-| Windows NSIS installer | Armada downloads and installs from `/downloads/desktop` |
+| Windows NSIS installer | Armada downloads and installs from the release event |
 | Windows portable / Store | Replace manually / Microsoft Store |
-| Developer ID–signed macOS build | Armada consumes the signed zip feed |
+| Developer ID–signed macOS build | Armada consumes the signed zip from the release event |
 | CI cross-built ad-hoc macOS zip | Replace manually; marked no-self-update |
-| Linux AppImage | Armada replaces the running AppImage from `/downloads/desktop` |
+| Linux AppImage | Armada replaces the running AppImage from the release event |
 | Linux deb | Download and install the newer deb; in-app updater disabled |
 | Linux Flatpak | embedded Armada Flatpak remote; in-app updater disabled |
 
-`electron-builder.yml` points `electron-updater` at
-`https://armada.buzz/downloads/desktop`. Tagged CI releases deploy the exact
-NSIS and AppImage basenames referenced by `latest.yml` and `latest-linux.yml`,
-plus their blockmaps, before deploying the mutable metadata. CI validates every
-metadata reference first and then verifies the public metadata endpoints.
+### The feed is the release event
 
-Releases through v0.53.1 embedded the legacy
-`https://armada.buzz/desktop` feed. Those installed NSIS/AppImage builds need
-the server's legacy path mapped to `/downloads/desktop`, or one manual upgrade
-to the first release carrying the new feed URL. Keeping that compatibility
-mapping is the only way to migrate an already-running updater before new code
-can reach it.
+The updater reads the same NIP-34 kind-30622 release event `/downloads` renders
+— see `docs/releases.md` — not a `latest*.yml` on a web server. The pieces:
+
+| File | Role |
+| --- | --- |
+| `src/lib/desktopUpdate.ts` | queries the relays, verifies, picks this platform's artifact |
+| `electron/updateFeed.cjs` | that file bundled for the main process (gitignored build artifact) |
+| `electron/nostrUpdateProvider.js` | wraps it as an electron-updater `custom` provider |
+| `electron/main.js` | `setFeedURL({ provider: "custom", updateProvider: … })` |
+
+Nothing here reimplements downloading or installation — `NsisUpdater`,
+`AppImageUpdater` and `MacUpdater` still do all of that. The provider answers
+only "what is the latest version" and "where are its bytes".
+
+Two consequences worth knowing before changing any of it:
+
+- **The download URL deliberately drops the Blossom extension.**
+  electron-updater names the cached file after the URL's basename when the URL
+  ends in the expected extension, and otherwise after `UpdateFileInfo.url`,
+  where the provider puts the real filename. A Blossom basename is a hash, and
+  on Linux the cache name becomes the *installed* name — so with the extension
+  left on, updating would rename the user's AppImage to `3f9ac2….AppImage`.
+- **Differential download is off.** A blockmap is different bytes, so a
+  different hash, at a URL the event does not name. Leaving it on would cost a
+  guaranteed-404 request per check before full-downloading anyway.
+
+This is a stronger trust boundary than the static feed it replaced. The artifact
+is content-addressed and named by an event signed by a build-pinned maintainer
+key (`RELEASE_AUTHORS`), so a compromised web host can no longer serve a
+different binary — the previous arrangement's weakest point, and it was the half
+that executes what it downloads. Signature, author and repository are all
+checked before a URL is used; a relay is untrusted transport.
+
+### The static feed is still deployed, for old installs only
+
+`electron-builder.yml` still declares `publish: { provider: generic, url:
+https://armada.buzz/downloads/desktop }`, and CI still deploys `latest.yml`,
+`latest-linux.yml` and their payloads there. New builds ignore all of it —
+`setFeedURL` overrides the baked-in `app-update.yml` at runtime.
+
+It exists because a build installed *before* this change has the generic feed
+URL compiled into it and knows nothing about the release event. That static feed
+is the only route by which such an install can ever reach a version that does.
+**Do not remove it in the same release that introduces the event feed**, and
+expect to keep it for as long as those installs are worth reaching; the audience
+only shrinks. Releases through v0.53.1 embedded a still older
+`https://armada.buzz/desktop` path, which the server maps to the same directory
+for the same reason.
 
 Windows signing remains recommended: provisioning `WINDOWS_CSC_LINK` and
 `WINDOWS_CSC_KEY_PASSWORD` gives the installer and subsequent updates one
 publisher identity and improves SmartScreen reputation. It is not required for
 self-update. An installed unsigned NSIS build uses the same trust boundary as
 the AppImage: HTTPS protects delivery, and electron-updater checks the
-downloaded file against the SHA-512 declared by the release feed after CI
-validates it against the staged artifact. Because the feed and payload share
-one deployment host, that checksum detects corruption but is not an independent
-signature against a compromised host.
+downloaded file against the `x` sha256 the release event declares, which is also
+the artifact's Blossom content address.
 
 macOS self-update does require a native macOS build signed with a Developer ID
 Application certificate and a consistently signed updater zip; the Linux
@@ -556,8 +594,12 @@ Two Apple-only pieces are handled honestly rather than faked:
   `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`,
   `APPLE_TEAM_ID`) or rcodesign with a `.p12` plus an App Store Connect key.
 - **Updates.** The ad-hoc archive is explicitly marked manual-update. A native,
-  Developer ID–signed electron-builder release omits that marker and can use a
-  signed `latest-mac.yml` + zip feed when those files are deployed.
+  Developer ID–signed electron-builder release omits that marker and self-updates
+  from the per-arch zip in the release event. This is the one platform the switch
+  to the event newly enabled rather than merely moved: `latest-mac.yml` was never
+  among the files CI deployed, so the static feed had nothing for macOS at all,
+  while the `-mac-x64.zip` / `-mac-arm64.zip` artifacts have been in the event
+  since it existed.
 - **`.zip`, not `.dmg`.** A disk image needs HFS+ tooling that isn't in the
   container (Firefox cross-builds `.dmg` on Linux with `libdmg-hfsplus`, if
   that's ever wanted). Zip is a first-class macOS distribution format — it's

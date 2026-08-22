@@ -12,7 +12,7 @@
   "license": "AGPL-3.0-only",
   "main": "main.js",
   "scripts": {
-    "stage:web": "npm --prefix .. run build && npm --prefix .. run build:electron-db && node scripts/stage-web.mjs",
+    "stage:web": "npm --prefix .. run build && npm --prefix .. run build:electron && node scripts/stage-web.mjs",
     "build:hevc-publisher": "./scripts/build-hevc-publisher.sh --arch x64",
     "prestart": "npm run stage:web",
     "start": "electron .",

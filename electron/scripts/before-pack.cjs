@@ -3,7 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-const REQUIRED_INPUTS = ["db.cjs", path.join("dist", "index.html")];
+const REQUIRED_INPUTS = ["db.cjs", "updateFeed.cjs", path.join("dist", "index.html")];
 const BUILDER_ARCH_NAMES = ["ia32", "x64", "armv7l", "arm64", "universal"];
 
 function normalizeArch(value) {

@@ -46,6 +46,13 @@ files:
   - appOrigin.js
   - desktopIntegration.js
   - updateSupport.js
+  # The updater's release feed: the electron-updater Provider and the bundled
+  # build of src/lib/desktopUpdate.ts it reads the release event through.
+  # Unlisted, the app still boots (the provider requires the bundle lazily) and
+  # every update check fails instead — a shipped app that can never update
+  # itself again, which is the harder failure to notice.
+  - nostrUpdateProvider.js
+  - updateFeed.cjs
   - linuxAudioSources.js
   - linuxVideoAcceleration.js
   - displayMediaPolicy.js

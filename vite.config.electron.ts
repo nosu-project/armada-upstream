@@ -10,6 +10,15 @@
  * CommonJS because `electron/main.js` is CommonJS and `require`s it. `node:*`
  * stays external: the driver's `node:sqlite` is a builtin of the Node that
  * Electron embeds (43 → Node 24), not something to bundle.
+ *
+ * The shell's other `src/`-derived bundle, the release-event update feed, has
+ * its OWN config (`vite.config.electron-update.ts`) rather than being a second
+ * entry here. A multi-entry lib build hoists what the two share into a chunk
+ * with a content-hashed name, and a file whose name changes with the dependency
+ * tree cannot be listed in `electron-builder.yml`'s `files:` — an unlisted
+ * chunk is absent from the asar and the `require` fails at startup. Two
+ * self-contained bundles cost a little duplicated dependency code and are
+ * shipped by name.
  */
 import path from "node:path";
 

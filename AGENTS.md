@@ -469,6 +469,21 @@ Things to know before touching it:
   `app.getPath("userData")/armada.db`, and `preload.js` answers
   `armada:db-available` SYNCHRONOUSLY because the renderer picks its adapter
   before anything reads.
+- **The desktop updater reads the release event, by the same arrangement.**
+  `src/lib/desktopUpdate.ts` → `electron/updateFeed.cjs`
+  (`vite.config.electron-update.ts`, `npm run build:electron-update`), wrapped
+  as an electron-updater `custom` provider by `electron/nostrUpdateProvider.js`
+  and armed with `setFeedURL` in `main.js`. It resolves the SAME kind-30622
+  event `/downloads` renders (`docs/releases.md`) down to the one installer this
+  machine can replace itself with, so `parseRelease()` is not reimplemented in
+  `electron/` — a second parser is a second contract. Its OWN vite config rather
+  than a second entry beside `db.cjs`: a multi-entry lib build hoists shared code
+  into a content-hashed chunk, and a filename that changes with the dependency
+  tree cannot be listed in `electron-builder.yml`'s `files:`. The static
+  `latest*.yml` feed under `armada.buzz/downloads/desktop` is still deployed and
+  is now MIGRATION ONLY — an install predating the switch has that URL baked into
+  its `app-update.yml` and can reach a version that knows better no other way.
+  Don't remove it because nothing current reads it.
 - **The adapter is chosen before anything reads.** The legacy drains in
   `migrations.ts` write through `getArmadaDB()`, so on Android and desktop they
   land in the native store directly — there is no IndexedDB ArmadaDB to move

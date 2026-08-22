@@ -57,6 +57,16 @@ function configureAutoUpdater(autoUpdater) {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.allowDowngrade = false;
+  // Differential download needs a .blockmap fetched from a path derived from
+  // the payload's URL — `<url>.blockmap` for NSIS, a byte range of the payload
+  // itself for AppImage. Neither exists for a content-addressed artifact: a
+  // blockmap is different bytes and so a different hash, at an unrelated URL
+  // the release event doesn't name. Leaving it on would spend a failed request
+  // per check and then full-download anyway.
+  autoUpdater.disableDifferentialDownload = true;
+  // There is no NSIS web installer in this build, and saying so is what stops
+  // electron-updater warning about it on every Windows download.
+  autoUpdater.disableWebInstaller = true;
 }
 
 module.exports = {
