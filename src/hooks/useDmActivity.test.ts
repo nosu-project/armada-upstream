@@ -26,23 +26,22 @@ describe("buildDmActivityItems", () => {
         {
           key: ALICE,
           peers: [ALICE],
-          latest: { rumorId: "modern-alice", createdAt: 30, author: SELF, content: "sent" },
+          latest: { rumorId: "modern-alice", createdAt: 30, author: SELF },
           mine: true,
         },
         {
           key: `${ALICE},${BOB}`,
           peers: [ALICE, BOB],
-          latest: { rumorId: "group", createdAt: 40, author: BOB, content: "group update" },
+          latest: { rumorId: "group", createdAt: 40, author: BOB },
           mine: true,
         },
         {
           key: `${ALICE},${STRANGER}`,
           peers: [ALICE, STRANGER],
-          latest: { rumorId: "group-request", createdAt: 60, author: STRANGER, content: "nope" },
+          latest: { rumorId: "group-request", createdAt: 60, author: STRANGER },
           mine: false,
         },
       ],
-      { [ALICE]: "old preview" },
       {
         self: SELF,
         isKnown: (peer) => peer !== STRANGER,
@@ -55,20 +54,18 @@ describe("buildDmActivityItems", () => {
     expect(items[0]).toMatchObject({
       eventId: "group",
       author: BOB,
-      content: "group update",
       unreadCount: 4,
       unread: true,
     });
     expect(items[1]).toMatchObject({
       eventId: "modern-alice",
       author: SELF,
-      content: "sent",
       unreadCount: 0,
       unread: false,
     });
   });
 
-  it("lets legacy win an exact timestamp tie and uses its decrypted preview", () => {
+  it("lets legacy win an exact timestamp tie", () => {
     const [item] = buildDmActivityItems(
       [{
         peer: ALICE,
@@ -78,10 +75,9 @@ describe("buildDmActivityItems", () => {
       [{
         key: ALICE,
         peers: [ALICE],
-        latest: { rumorId: "modern", createdAt: 10, author: SELF, content: "modern" },
+        latest: { rumorId: "modern", createdAt: 10, author: SELF },
         mine: true,
       }],
-      { [ALICE]: "legacy preview" },
       {
         self: SELF,
         isKnown: () => true,
@@ -95,7 +91,6 @@ describe("buildDmActivityItems", () => {
     expect(item).toMatchObject({
       eventId: "legacy",
       author: ALICE,
-      content: "legacy preview",
       unreadCount: 0,
       unread: false,
     });

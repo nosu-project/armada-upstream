@@ -24,7 +24,6 @@ export interface DmActivityItem {
   createdAt: number;
   eventId: string;
   author: string;
-  content?: string;
   /** Exact incoming-message count when loaded (one-message floor meanwhile). */
   unreadCount: number;
   unread: boolean;
@@ -35,7 +34,7 @@ export interface DmActivityLegacySource extends LegacyDmSwitcherSource {
 }
 
 export interface DmActivityNip17Source extends Dm17SwitcherSource {
-  latest: Dm17SwitcherSource["latest"] & { author: string; content: string };
+  latest: Dm17SwitcherSource["latest"] & { author: string };
 }
 
 /**
@@ -43,13 +42,12 @@ export interface DmActivityNip17Source extends Dm17SwitcherSource {
  *
  * Identity/order deliberately comes from `buildDmSwitcherEntries`, the same
  * reducer used by the quick switcher. This layer only attaches the winning
- * message's author/content and the shared per-conversation read stamp. Legacy
- * wins an exact timestamp tie, matching the DMs page and switcher.
+ * message's author and the shared per-conversation read stamp. Legacy wins an
+ * exact timestamp tie, matching the DMs page and switcher.
  */
 export function buildDmActivityItems(
   legacy: readonly DmActivityLegacySource[],
   nip17: readonly DmActivityNip17Source[],
-  previews: Readonly<Record<string, string>>,
   opts: {
     self: string;
     isKnown: (peer: string, mine: boolean) => boolean;
@@ -88,7 +86,6 @@ export function buildDmActivityItems(
       createdAt,
       eventId,
       author,
-      content: modernWins ? modern!.latest.content : previews[entry.key],
       unreadCount,
       unread: unreadCount > 0,
     }];
@@ -96,38 +93,32 @@ export function buildDmActivityItems(
 }
 
 /**
- * Known, real-message DM conversations for recent/activity surfaces.
- *
- * `interactive` is reserved for a surface the user explicitly opened (the
- * Notification Center): it may decrypt legacy preview text and run the normal
- * NIP-17 consent flow. The always-mounted rail keeps it false, so it never
- * prompts a signer merely to show avatars and unread dots.
+ * Known, real-message DM conversations for the always-mounted recent rail.
+ * This never decrypts preview text or opens the NIP-17 consent flow: avatars,
+ * recency and indexed unread counts need no signer interaction.
  */
-export function useDmActivity(opts: { interactive?: boolean } = {}): {
+export function useDmActivity(): {
   items: DmActivityItem[];
   isLoading: boolean;
 } {
-  const interactive = opts.interactive ?? false;
   const { user } = useCurrentUser();
   const { getLastRead } = useReadState();
   const eventStore = useEventStore();
   const { isKnown, isLoading: trustLoading } = useKnownDmPeers();
-  const legacy = useDMConversations({ decryptPreviews: interactive });
-  const modern = useDm17Conversations({ interactive });
+  const legacy = useDMConversations();
+  const modern = useDm17Conversations();
 
   const heads = useMemo(() => {
     if (!user || trustLoading) return [];
     return buildDmActivityItems(
       legacy.conversations,
       modern.conversations,
-      legacy.previews,
       { self: user.pubkey, isKnown, getLastRead },
     );
   }, [
     user,
     trustLoading,
     legacy.conversations,
-    legacy.previews,
     modern.conversations,
     isKnown,
     getLastRead,

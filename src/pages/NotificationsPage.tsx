@@ -1,4 +1,4 @@
-import { AtSign, Bell, CheckCheck, Loader2, MailPlus, MessageSquare } from "lucide-react";
+import { AtSign, Bell, CheckCheck, MailPlus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -8,21 +8,16 @@ import { useConcordMentions } from "@/concord/hooks/useConcordMentions";
 import { useInviteInbox } from "@/concord/hooks/useDirectInvites";
 import type { CommunityListEntry } from "@/concord/lib/communityList";
 import { DisplayName } from "@/components/DisplayName";
-import { DmAvatar } from "@/components/DmAvatar";
 import { ServerRail } from "@/components/layout/ServerRail";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { PillTabs, type PillTab } from "@/components/ui/pill-tabs";
 import { useAuthor } from "@/hooks/useAuthor";
-import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { useDmActivity, type DmActivityItem } from "@/hooks/useDmActivity";
-import { useDmConversationName } from "@/hooks/useDmConversationName";
 import { useNip29Servers } from "@/hooks/useNip29Servers";
 import {
   channelReadKey,
   concordInviteReadKey,
   concordMentionReadKey,
-  dmReadKey,
   useReadState,
 } from "@/hooks/useReadState";
 import { useRelayGroups } from "@/hooks/useRelayGroups";
@@ -34,17 +29,6 @@ import { chatRoute } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 type CenterItem =
-  | {
-      kind: "dm";
-      id: string;
-      createdAt: number;
-      unread: boolean;
-      readKey: string;
-      route: string;
-      author: string;
-      body: string;
-      peers: string[];
-    }
   | {
       kind: "mention";
       id: string;
@@ -186,15 +170,11 @@ function ConcordNotificationSource({
 }
 
 function NotificationRow({ item, onOpen }: { item: CenterItem; onOpen: (item: CenterItem) => void }) {
-  const { user } = useCurrentUser();
   const author = useAuthor(item.author);
   const metadata = author.data?.metadata;
-  const dm = item.kind === "dm";
-  const peers = dm ? item.peers : [];
-  const conversation = useDmConversationName(peers, user?.pubkey);
   const authorName = metadata?.display_name || metadata?.name || "Anonymous";
-  const title = dm ? conversation.name : item.kind === "invite" ? `Invite from ${authorName}` : authorName;
-  const Icon = dm ? MessageSquare : item.kind === "invite" ? MailPlus : AtSign;
+  const title = item.kind === "invite" ? `Invite from ${authorName}` : authorName;
+  const Icon = item.kind === "invite" ? MailPlus : AtSign;
 
   return (
     <button
@@ -205,21 +185,17 @@ function NotificationRow({ item, onOpen }: { item: CenterItem; onOpen: (item: Ce
         item.unread ? "bg-primary/[0.07] hover:bg-primary/[0.11]" : "hover:bg-foreground/5",
       )}
     >
-      {dm ? (
-        <DmAvatar peers={item.peers} selfPubkey={user?.pubkey} sizePx={40} className="size-10" />
-      ) : (
-        <Avatar className="size-10 shrink-0">
-          <AvatarImage src={metadata?.picture} alt={authorName} />
-          <AvatarFallback className="bg-primary/20 text-sm text-primary">
-            {authorName.charAt(0).toUpperCase() || "?"}
-          </AvatarFallback>
-        </Avatar>
-      )}
+      <Avatar className="size-10 shrink-0">
+        <AvatarImage src={metadata?.picture} alt={authorName} />
+        <AvatarFallback className="bg-primary/20 text-sm text-primary">
+          {authorName.charAt(0).toUpperCase() || "?"}
+        </AvatarFallback>
+      </Avatar>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <Icon className="size-3.5 shrink-0 text-muted-foreground" />
           <span className={cn("truncate text-sm", item.unread ? "font-semibold" : "font-medium")}>
-            {dm || item.kind === "invite" ? title : (
+            {item.kind === "invite" ? title : (
               <DisplayName pubkey={item.author} name={title} />
             )}
           </span>
@@ -227,9 +203,7 @@ function NotificationRow({ item, onOpen }: { item: CenterItem; onOpen: (item: Ce
             {shortTimeAgo(item.createdAt)}
           </span>
         </div>
-        {item.kind !== "dm" && (
-          <p className="mt-0.5 truncate text-xs text-muted-foreground">{item.source}</p>
-        )}
+        <p className="mt-0.5 truncate text-xs text-muted-foreground">{item.source}</p>
         <p className={cn("mt-1 line-clamp-2 break-words text-sm", !item.unread && "text-muted-foreground")}>
           {item.body}
         </p>
@@ -241,32 +215,18 @@ function NotificationRow({ item, onOpen }: { item: CenterItem; onOpen: (item: Ce
   );
 }
 
-function dmCenterItem(item: DmActivityItem): CenterItem {
-  return {
-    kind: "dm",
-    id: `dm:${item.eventId}`,
-    createdAt: item.createdAt,
-    unread: item.unread,
-    readKey: dmReadKey(item.key),
-    route: item.route,
-    author: item.author,
-    body: messagePreview(item.content, "New direct message"),
-    peers: item.peers,
-  };
-}
-
 /**
- * Account-level Notification Center: known DMs, cross-community mentions, and
- * pending Concord invites in one newest-first list. Every row reuses the
- * underlying conversation's read key, so opening or clearing it updates the
- * existing rail/channel badges rather than creating a second read system.
+ * Account-level Notification Center: cross-community mentions and pending
+ * Concord invites in one newest-first list. DMs stay in their dedicated rail
+ * queue and inbox. Every row reuses the underlying mention/invite read key, so
+ * opening or clearing it updates existing badges instead of creating a second
+ * read system.
  */
 export function NotificationsPage() {
   const navigate = useNavigate();
   const { markRead } = useReadState();
   const servers = useNip29Servers();
   const communities = useLiveCommunities();
-  const { items: dmItems, isLoading: dmsLoading } = useDmActivity({ interactive: true });
   const { items: invites } = useInviteInbox();
   const [filter, setFilter] = useState<"all" | "unread">("all");
   const [sources, setSources] = useState<Record<string, CenterItem[]>>({});
@@ -285,7 +245,6 @@ export function NotificationsPage() {
   }, []);
 
   const activity = useMemo<CenterItem[]>(() => {
-    const direct = dmItems.map(dmCenterItem);
     const pendingInvites: CenterItem[] = invites.map(({ invite, unread }) => ({
       kind: "invite",
       id: `invite:${invite.wrapId}`,
@@ -299,10 +258,10 @@ export function NotificationsPage() {
         : `Invited you to ${invite.name}`,
       source: "Concord invite",
     }));
-    return [...direct, ...pendingInvites, ...Object.values(sources).flat()]
+    return [...pendingInvites, ...Object.values(sources).flat()]
       .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id))
       .slice(0, 300);
-  }, [dmItems, invites, sources]);
+  }, [invites, sources]);
 
   const unreadCount = activity.reduce((count, item) => count + Number(item.unread), 0);
   const visible = filter === "unread" ? activity.filter((item) => item.unread) : activity;
@@ -358,18 +317,13 @@ export function NotificationsPage() {
               <div className="space-y-1 pb-4">
                 {visible.map((item) => <NotificationRow key={item.id} item={item} onOpen={openItem} />)}
               </div>
-            ) : dmsLoading && activity.length === 0 ? (
-              <div className="flex items-center justify-center gap-2 px-4 py-16 text-sm text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" />
-                Loading notifications…
-              </div>
             ) : (
               <div className="flex flex-col items-center gap-3 px-4 py-16 text-center text-muted-foreground">
                 <Bell className="size-10 opacity-40" />
                 <p className="max-w-sm text-sm">
                   {filter === "unread"
                     ? "You're all caught up."
-                    : "No notifications yet. New direct messages, mentions, and Concord invites will appear here."}
+                    : "No notifications yet. Mentions and Concord invites will appear here."}
                 </p>
               </div>
             )}

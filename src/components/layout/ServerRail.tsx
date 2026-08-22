@@ -1495,9 +1495,10 @@ function ServerRailInner({
   const servers = useNip29Servers();
 
   // The Notification Center is intentionally narrower than generic channel
-  // unread: it collects actionable DMs, mentions, and invites. These invisible
-  // probes reuse the same unread queries every visible rail button already
-  // shares, then roll only the mention bit into the account-level bell.
+  // unread: it collects mentions and invites. DMs have their own button and
+  // transient unread queue below. These invisible probes reuse the same unread
+  // queries every visible rail button already shares, then roll only the
+  // mention bit into the account-level bell.
   const [mentionBySpace, setMentionBySpace] = useState<Record<string, boolean>>({});
   const reportMention = useCallback((key: string, mention: boolean) => {
     setMentionBySpace((current) => {
@@ -1506,7 +1507,7 @@ function ServerRailInner({
     });
   }, []);
   const hasUnreadNotifications =
-    hasUnreadDMs || inviteUnread > 0 || Object.values(mentionBySpace).some(Boolean);
+    inviteUnread > 0 || Object.values(mentionBySpace).some(Boolean);
 
   // DMs the user put on the rail. Unlike every other kind these have no source
   // list to be live against — the arrangement IS the record — so they're read
@@ -1923,8 +1924,9 @@ function ServerRailInner({
           </Tooltip>
         )}
 
-        {/* Account-level Notification Center: known DMs, mentions across both
-            community transports, and pending Concord invites. */}
+        {/* Account-level Notification Center: mentions across both community
+            transports and pending Concord invites. DMs stay in their own rail
+            queue immediately below. */}
         {user && (
           <Tooltip>
             <TooltipTrigger asChild>
