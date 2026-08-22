@@ -6,7 +6,7 @@ name: Test
 # still runs .gitlab-ci.yml on its own runners; the two are independent.
 #
 # Runs on every push and on every Nostr PR (kinds 1618/1619). Tag pushes are
-# handled by release.yml / desktop.yml, so they are excluded here.
+# handled by release.yml, so they are excluded here.
 
 on:
   push:

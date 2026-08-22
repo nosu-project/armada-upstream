@@ -45,3 +45,6 @@ electron/hevc-publisher/hevc-publisher
 crates/webxdc-rt/pkg*/
 crates/webxdc-rt/target/
 src/wasm/
+
+# Release-event artifacts staged by CI (see .ngit/act/workflows/release.yml).
+.release-artifacts/

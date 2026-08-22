@@ -1,5 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
-import { AppWindow, ArrowLeft, Check, Copy, Download, Globe, Laptop, Smartphone, Terminal } from "lucide-react";
+import { AppWindow, ArrowLeft, Check, Copy, Download, Globe, Laptop, RefreshCw, Smartphone, Terminal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -7,21 +6,20 @@ import { Link, useNavigate } from "react-router-dom";
 import { ArmadaCrest, ArmadaCrestKeyframes } from "@/components/brand/ArmadaCrest";
 import { AsciiSea } from "@/components/landing/AsciiSea";
 import { Button } from "@/components/ui/button";
+import { useReleases } from "@/hooks/useReleases";
 import { toast } from "@/hooks/useToast";
 import { writeClipboardText } from "@/lib/clipboard";
 import {
   ANDROID_STORES,
-  DOWNLOAD_TARGETS,
+  DOWNLOAD_PLATFORMS,
   type DownloadOs,
-  type DownloadTarget,
-  type DownloadsManifest,
-  type ManifestName,
+  type DownloadPlatform,
   detectCurrentOs,
-  downloadUrl,
-  formatBytes,
-  manifestUrl,
+  installCommand,
 } from "@/lib/downloads";
+import { formatBytes } from "@/lib/fileBytes";
 import { APP_NAME } from "@/lib/platform";
+import type { Release, ReleaseArtifact } from "@/lib/releases";
 
 /**
  * The downloads deck: a headless page in the landing's visual language — the
@@ -29,6 +27,12 @@ import { APP_NAME } from "@/lib/platform";
  * floating on the water below. No command-bar header; the only chrome is a
  * ghost back arrow that scrolls away with the hero, the same way the landing
  * itself carries no bars.
+ *
+ * Every file offered here comes from a kind-30622 release event
+ * (`docs/releases.md`), so there is nothing to render until the relays answer.
+ * That is the trade this page makes: the links are content-addressed and
+ * verifiable, and in exchange a cold pool means a spinner rather than a stale
+ * button pointing at a file that may not exist.
  */
 
 const OS_ICON: Record<DownloadOs, LucideIcon> = {
@@ -50,25 +54,16 @@ function prefersReducedMotion() {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
-/**
- * The version label and file sizes, fetched per platform family.
- *
- * Deliberately non-blocking: the download URLs are stable constants, so a
- * failed or slow fetch costs a label and nothing else. `retry: false` because
- * the only interesting failure is "CI hasn't published this platform yet",
- * which retrying cannot fix.
- */
-function useManifest(name: ManifestName) {
-  return useQuery({
-    queryKey: ["downloads-manifest", name],
-    staleTime: 5 * 60 * 1000,
-    retry: false,
-    queryFn: async ({ signal }) => {
-      const res = await fetch(manifestUrl(name), { signal });
-      if (!res.ok) throw new Error(`manifest ${name}: ${res.status}`);
-      return (await res.json()) as DownloadsManifest;
-    },
-  });
+/** The release's artifacts, filed under the platform card each belongs on. */
+function groupByOs(release: Release | undefined): Map<DownloadOs, ReleaseArtifact[]> {
+  const grouped = new Map<DownloadOs, ReleaseArtifact[]>();
+  for (const artifact of release?.artifacts ?? []) {
+    if (!artifact.os) continue;
+    const existing = grouped.get(artifact.os);
+    if (existing) existing.push(artifact);
+    else grouped.set(artifact.os, [artifact]);
+  }
+  return grouped;
 }
 
 /**
@@ -115,13 +110,46 @@ function CommandLine({ command }: { command: string }) {
   );
 }
 
-function TargetCard({ target, manifest, featured }: {
-  target: DownloadTarget;
-  manifest?: DownloadsManifest;
+/** One artifact: the button, and the shell line it needs afterwards if any. */
+function ArtifactButton({ artifact, primary }: { artifact: ReleaseArtifact; primary?: boolean }) {
+  const command = installCommand(artifact.filename);
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Button
+        asChild
+        variant={primary ? "default" : "secondary"}
+        className="h-auto py-2.5 touch:py-3 justify-start text-left clip-corner-lg"
+      >
+        {/* Cross-origin to Blossom, so `download` is ignored by the browser and
+            the link simply opens — which for these content types means a save
+            either way. The attribute stays for the same-origin case a
+            self-hosted mirror could create. */}
+        <a href={artifact.url} download={artifact.filename}>
+          <Download className="size-4 shrink-0" />
+          <span className="flex flex-col gap-0.5 min-w-0">
+            <span className="font-medium leading-tight">
+              {artifact.label}
+              {artifact.size ? <span className="font-normal opacity-70"> · {formatBytes(artifact.size)}</span> : null}
+            </span>
+            <span className="text-xs font-normal opacity-70 leading-tight whitespace-normal break-all">
+              {artifact.filename}
+            </span>
+          </span>
+        </a>
+      </Button>
+      {command && <CommandLine command={command} />}
+    </div>
+  );
+}
+
+function TargetCard({ platform, artifacts, version, featured }: {
+  platform: DownloadPlatform;
+  artifacts: ReleaseArtifact[];
+  version?: string;
   featured?: boolean;
 }) {
-  const Icon = OS_ICON[target.os];
-  const caveat = OS_CAVEAT[target.os];
+  const Icon = OS_ICON[platform.os];
+  const caveat = OS_CAVEAT[platform.os];
 
   return (
     // A borderless translucent panel, so the swell stays faintly visible
@@ -132,48 +160,21 @@ function TargetCard({ target, manifest, featured }: {
     >
       <header className="flex items-center gap-2">
         <Icon className={`size-5 shrink-0 ${featured ? "text-primary" : "text-muted-foreground"}`} />
-        <h2 className="font-mono font-bold lowercase tracking-tight leading-tight">{target.name}</h2>
+        <h2 className="font-mono font-bold lowercase tracking-tight leading-tight">{platform.name}</h2>
         {featured && (
           <span className="font-mono text-[10px] lowercase tracking-wide text-primary/80">your platform</span>
         )}
-        {manifest?.version && (
-          <span className="ml-auto font-mono text-xs text-muted-foreground shrink-0">v{manifest.version}</span>
+        {artifacts.length > 0 && version && (
+          <span className="ml-auto font-mono text-xs text-muted-foreground shrink-0">{version}</span>
         )}
       </header>
 
-      {target.assets.length > 0 ? (
+      {artifacts.length > 0 || platform.os === "android" ? (
         <div className="grid gap-2 sm:grid-cols-2">
-          {target.assets.map((asset, i) => {
-            const size = manifest?.files?.[asset.id]?.size;
-            return (
-              // The button and, for a CLI-installed build, the command to run
-              // after it stack in one grid cell.
-              <div key={asset.id} className="flex flex-col gap-1.5">
-                <Button
-                  asChild
-                  variant={featured && i === 0 ? "default" : "secondary"}
-                  className="h-auto py-2.5 touch:py-3 justify-start text-left clip-corner-lg"
-                >
-                  {/* `download` only binds same-origin — on armada.buzz it forces a
-                      save and names the file even if the server's content type is
-                      wrong. Cross-origin (the native shells) it is ignored and the
-                      link opens normally, which is the desired behavior there. */}
-                  <a href={downloadUrl(asset.file)} download>
-                    <Download className="size-4 shrink-0" />
-                    <span className="flex flex-col gap-0.5 min-w-0">
-                      <span className="font-medium leading-tight">
-                        {asset.label}
-                        {size ? <span className="font-normal opacity-70"> · {formatBytes(size)}</span> : null}
-                      </span>
-                      <span className="text-xs font-normal opacity-70 leading-tight whitespace-normal">{asset.hint}</span>
-                    </span>
-                  </a>
-                </Button>
-                {asset.command && <CommandLine command={asset.command} />}
-              </div>
-            );
-          })}
-          {target.os === "android" &&
+          {artifacts.map((artifact, i) => (
+            <ArtifactButton key={artifact.hash || artifact.url} artifact={artifact} primary={featured && i === 0} />
+          ))}
+          {platform.os === "android" &&
             ANDROID_STORES.map((store) => (
               <Button
                 key={store.url}
@@ -194,14 +195,14 @@ function TargetCard({ target, manifest, featured }: {
             ))}
         </div>
       ) : (
-        // iOS: no App Store build is published yet, so tease it. The web app
-        // is presented as a good install in its own right, not a stopgap:
-        // Safari's Add to Home Screen gives a full-screen app on the Home
-        // Screen today.
+        // iOS: no App Store build ships through this pipeline, so tease it. The
+        // web app is presented as a good install in its own right, not a
+        // stopgap: Safari's Add to Home Screen gives a full-screen app on the
+        // Home Screen today.
         <div className="space-y-2">
-          <p className="font-mono text-xs lowercase tracking-wide text-primary/80">
-            official app coming soon
-          </p>
+          {platform.empty && (
+            <p className="font-mono text-xs lowercase tracking-wide text-primary/80">{platform.empty}</p>
+          )}
           <p className="text-sm text-muted-foreground leading-relaxed">
             {APP_NAME} already installs as a full-screen web app that lives on your Home
             Screen like any other: open it in Safari, tap Share, then{" "}
@@ -216,8 +217,46 @@ function TargetCard({ target, manifest, featured }: {
         </div>
       )}
 
-      {caveat && <p className="text-xs text-muted-foreground leading-relaxed">{caveat}</p>}
+      {caveat && artifacts.length > 0 && <p className="text-xs text-muted-foreground leading-relaxed">{caveat}</p>}
     </section>
+  );
+}
+
+/** Placeholder cards while the relays are answering. */
+function TargetSkeleton() {
+  return (
+    <section className="clip-corner-lg bg-background/40 p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <div className="size-5 shrink-0 animate-pulse rounded bg-muted-foreground/20" />
+        <div className="h-4 w-24 animate-pulse rounded bg-muted-foreground/20" />
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div className="h-14 animate-pulse clip-corner-lg bg-muted-foreground/10" />
+        <div className="h-14 animate-pulse clip-corner-lg bg-muted-foreground/10" />
+      </div>
+    </section>
+  );
+}
+
+/** One past version, collapsed. Its artifacts are already in hand. */
+function OlderRelease({ release }: { release: Release }) {
+  return (
+    <details className="clip-corner-lg bg-background/30 px-4 py-3">
+      <summary className="flex cursor-pointer items-center gap-2 font-mono text-sm text-muted-foreground marker:content-none hover:text-foreground">
+        <span className="font-bold">{release.version}</span>
+        {release.channel !== "main" && (
+          <span className="font-mono text-[10px] lowercase tracking-wide text-primary/70">{release.channel}</span>
+        )}
+        <span className="ml-auto text-xs opacity-70">
+          {new Date(release.createdAt * 1000).toLocaleDateString()}
+        </span>
+      </summary>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {release.artifacts.map((artifact) => (
+          <ArtifactButton key={artifact.hash || artifact.url} artifact={artifact} />
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -231,24 +270,24 @@ export function DownloadsPage() {
   // moved between renders would be worse than a wrong guess.
   const detected = useMemo(() => detectCurrentOs(), []);
 
-  const desktop = useManifest("desktop");
-  const android = useManifest("android");
-  const manifestFor = (target: DownloadTarget) =>
-    target.manifest === "android" ? android.data : target.manifest === "desktop" ? desktop.data : undefined;
+  const releases = useReleases();
+  const latest = releases.data?.[0];
+  const older = releases.data?.slice(1) ?? [];
+  const byOs = useMemo(() => groupByOs(latest), [latest]);
 
   // The visitor's platform first, everything else in declaration order. An
   // unrecognized agent simply gets the flat list.
-  const targets = useMemo(() => {
-    const ordered = [...DOWNLOAD_TARGETS];
+  const platforms = useMemo(() => {
+    const ordered = [...DOWNLOAD_PLATFORMS];
     ordered.sort((a, b) => Number(b.os === detected) - Number(a.os === detected));
     return ordered;
   }, [detected]);
 
-  // The hero's one-click answer: the detected platform's primary asset. On iOS
-  // (no installable build) the honest primary action is the web app itself, and
-  // with no detection at all the hero just cues the list below.
-  const featured = targets.find((t) => t.os === detected);
-  const heroAsset = featured?.assets[0];
+  // The hero's one-click answer: the detected platform's first artifact. On iOS
+  // (nothing published here) the honest primary action is the web app itself,
+  // and with no detection at all the hero just cues the list below.
+  const featured = platforms.find((platform) => platform.os === detected);
+  const heroArtifact = featured ? byOs.get(featured.os)?.[0] : undefined;
 
   const scrollToTargets = () => {
     targetsRef.current?.scrollIntoView({
@@ -288,15 +327,15 @@ export function DownloadsPage() {
             </h1>
             <p className="text-sm leading-relaxed text-muted-foreground sm:text-base">
               The same {APP_NAME} on every deck: desktop, phone, and this browser.
-              Every link points at the latest release and keeps working across versions,
-              so you can bookmark or share it.
+              Every build is published to Nostr and fetched by its hash, so what you
+              download is exactly what was released.
             </p>
           </div>
 
           <div className="w-full max-w-sm">
-            {heroAsset && featured ? (
+            {heroArtifact && featured ? (
               <Button size="lg" asChild className="h-12 w-full clip-corner-lg text-base font-medium">
-                <a href={downloadUrl(heroAsset.file)} download>
+                <a href={heroArtifact.url} download={heroArtifact.filename}>
                   <Download className="size-5" />
                   Download for {featured.name}
                 </a>
@@ -308,6 +347,8 @@ export function DownloadsPage() {
                   Open {APP_NAME} in this browser
                 </Link>
               </Button>
+            ) : releases.isPending ? (
+              <div className="h-12 w-full animate-pulse clip-corner-lg bg-muted-foreground/15" />
             ) : null}
             {/* Cue and scroll target are one control, the landing's pattern:
                 the list below IS the answer. */}
@@ -331,23 +372,67 @@ export function DownloadsPage() {
 
         {/* ── Every platform ───────────────────────────────────────────── */}
         <section ref={targetsRef} className="mx-auto max-w-2xl scroll-mt-6 space-y-4 px-6 pb-12 pt-4">
-          {targets.map((target) => (
-            <TargetCard
-              key={target.os}
-              target={target}
-              manifest={manifestFor(target)}
-              featured={target.os === detected}
-            />
-          ))}
+          {releases.isPending ? (
+            <>
+              <TargetSkeleton />
+              <TargetSkeleton />
+              <TargetSkeleton />
+            </>
+          ) : latest ? (
+            <>
+              {platforms.map((platform) => (
+                <TargetCard
+                  key={platform.os}
+                  platform={platform}
+                  artifacts={byOs.get(platform.os) ?? []}
+                  version={latest.version}
+                  featured={platform.os === detected}
+                />
+              ))}
 
-          <p className="text-xs text-muted-foreground/70 leading-relaxed">
-            Older releases stay where they were published, each under its own versioned name, like{" "}
-            <code className="text-foreground/60">Armada-v1.2.3.AppImage</code>. See{" "}
-            <Link to="/changelog" className="text-primary hover:underline">
-              the changelog
-            </Link>{" "}
-            for what shipped in each.
-          </p>
+              {older.length > 0 && (
+                <section className="space-y-2 pt-2">
+                  <h2 className="font-mono text-sm lowercase tracking-tight text-muted-foreground">
+                    earlier releases
+                  </h2>
+                  {older.map((release) => (
+                    <OlderRelease key={release.id} release={release} />
+                  ))}
+                </section>
+              )}
+
+              <p className="text-xs text-muted-foreground/70 leading-relaxed">
+                See{" "}
+                <Link to="/changelog" className="text-primary hover:underline">
+                  the changelog
+                </Link>{" "}
+                for what shipped in each version.
+              </p>
+            </>
+          ) : (
+            // No compiled-in list to fall back on, so say what happened rather
+            // than rendering an empty page that looks like there is nothing to
+            // download.
+            <section className="clip-corner-lg bg-background/50 p-6 text-center space-y-3">
+              <p className="font-mono text-sm lowercase tracking-tight text-foreground">
+                no releases found
+              </p>
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                {APP_NAME}'s builds are published to Nostr relays, and none of them
+                answered just now. This is almost always a connection problem rather
+                than a missing release.
+              </p>
+              <Button
+                variant="secondary"
+                onClick={() => releases.refetch()}
+                disabled={releases.isFetching}
+                className="clip-corner-lg"
+              >
+                <RefreshCw className={`size-4 ${releases.isFetching ? "animate-spin" : ""}`} />
+                Try again
+              </Button>
+            </section>
+          )}
         </section>
 
         {/* ── The sign-off ─────────────────────────────────────────────────

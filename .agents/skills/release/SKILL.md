@@ -182,7 +182,7 @@ git push origin main vX.Y.Z
 **CRITICAL**: Push only the specific tag being released. NEVER use `--tags` —
 that pushes ALL local tags, including stale or deleted ones.
 
-This triggers ngit-ci (`release.yml` + `desktop.yml`).
+This triggers ngit-ci (`release.yml` + `deploy-nsite.yml`).
 
 **NEVER push to the `gitlab` remote.** Push only to `origin`. Even though a
 `gitlab` mirror remote exists and its pipeline would build the macOS `.dmg` and
@@ -196,8 +196,9 @@ After pushing, tell the user:
 - A brief summary of what was released
 - That CI will build and publish the artifacts: ngit-ci results and artifacts
   appear on gitworkshop.dev against the tagged commit, the Android APK is
-  published to Zapstore, and the AAB is published to Google Play (skipped if
-  the Play service-account secret isn't provisioned)
+  published to Zapstore, the AAB is published to Google Play (skipped if the
+  Play service-account secret isn't provisioned), and every installer is named
+  by a kind-30622 release event, which is what `/downloads` reads
 - That the **macOS** `.dmg` and the GitLab Release/package links would come from
   the GitLab mirror pipeline, but we do NOT push to GitLab — the maintainer
   handles GitLab manually, if at all
@@ -209,7 +210,14 @@ After pushing, tell the user:
 Runs on the `vX.Y.Z` tag via `act` (GitHub Actions syntax), one Linux container
 per job. Results/artifacts publish to Nostr and show on gitworkshop.dev.
 
-1. **release.yml → build** — signed Android APK + AAB, then Zapstore publish
+`release.yml` is ONE workflow whose jobs are chained
+`android → desktop → publish → deploy → release`. They must stay chained: act
+binds one checkout into every job container, so unchained jobs would run in
+parallel over the same working tree, and `android` and `desktop` each build a
+web bundle with different env. `desktop` is `if: always()` so an Android
+failure doesn't cost the desktop installers.
+
+1. **android** — signed Android APK + AAB, then Zapstore publish
    and Google Play publish, all in ONE job. `setup-node`/`setup-java`/`setup-android`, decode the JKS
    from `ANDROID_KEYSTORE_BASE64`, migrate to PKCS12,
    `versionCode = major*1_000_000 + minor*1_000 + patch` (from the tag), build web assets,
@@ -224,10 +232,21 @@ per job. Results/artifacts publish to Nostr and show on gitworkshop.dev.
    Build and publish share one job on purpose: act's local artifact
    server round-trips a multi-file wildcard upload back as a 3-byte stub, so a
    separate `publish-zapstore` job used to receive an empty APK and fail.
-2. **desktop.yml → linux** — Electron AppImage + deb.
-3. **desktop.yml → windows** — Electron NSIS Setup + portable `.exe`, cross-built
-   from Linux (installs wine in-job).
-4. **deploy-nsite.yml → deploy** — publishes the web client to Blossom + relays
+2. **desktop** — Electron AppImage, deb, Flatpak bundle, NSIS Setup +
+   portable `.exe` (cross-built from Linux via wine), and ad-hoc-signed macOS
+   `.zip`s per arch.
+3. **publish** — GPG-signs the Flatpak OSTree repository in a fresh container,
+   the credential boundary for the signing key.
+4. **deploy** — rsyncs ONLY what cannot be content-addressed: electron-updater's
+   feed under `/downloads/desktop/` and the Flatpak OSTree repository under
+   `/downloads/flatpak/`. Installers are no longer published here.
+5. **release** — publishes the kind-30622 NIP-34 release event naming every
+   artifact by hash (`docs/releases.md`), uploading to Blossom only the blobs
+   ngit-ci's own artifact channel dropped. `needs: [android, deploy]`, so it is
+   the single writer of an addressable event that has no compare-and-swap, and
+   the `.flatpak` bundle can't be announced before the origin it configures is
+   live and verified.
+6. **deploy-nsite.yml → deploy** — publishes the web client to Blossom + relays
    as the nsite `armada`, plus an immutable kind-5128 manifest snapshot titled
    with the tag, so the release stays addressable after the named site moves
    on. Also runs on every push to `main`; the snapshot is the tag-only half.
@@ -266,8 +285,8 @@ secrets notes.
 | `ANDROID_KEYSTORE_BASE64` | base64 of the JKS upload keystore (single line) |
 | `KEYSTORE_PASSWORD` | keystore store password |
 | `KEY_PASSWORD` | key password (**must equal** the store password — CI migrates JKS→PKCS12, which uses one password) |
-| `ZAPSTORE_BUNKER_URL` | `bunker://` URL of the NIP-46 signer for Zapstore |
-| `ZAPSTORE_CLIENT_KEY` | persistent zsp NIP-46 client key (hex) for that bunker |
+| `ZAPSTORE_BUNKER_URL` | `bunker://` URL of the NIP-46 signer. Signs **both** the Zapstore publish and the kind-30622 release event. |
+| `ZAPSTORE_CLIENT_KEY` | the client secret key that bunker session was established with (hex or nsec). Both halves are needed: the URL's one-time `secret=` is long spent, and this is the key the bunker actually authorized. |
 
 Optional (Google Play publish on tags, ngit-ci `release.yml`):
 
@@ -275,12 +294,12 @@ Optional (Google Play publish on tags, ngit-ci `release.yml`):
 |----------|------|
 | `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | base64 (one line) of the Play Console service-account JSON key with release permission on `buzz.armada.app`. Unprovisioned → the Play publish is skipped, not failed. |
 
-Optional (publishing installers to `armada.buzz/downloads/` on tags, ngit-ci
-`release.yml` + `desktop.yml`):
+Optional (publishing the update feed and Flatpak repository to
+`armada.buzz/downloads/` on tags, ngit-ci `release.yml`):
 
 | Variable | What |
 |----------|------|
-| `DEPLOY_SSH_KEY_BASE64` | base64 (one line) of the rrsync-jailed deploy user's private key. Unprovisioned → the installers are still built and uploaded as run artifacts; only the publish to the host is skipped. |
+| `DEPLOY_SSH_KEY_BASE64` | base64 (one line) of the rrsync-jailed deploy user's private key. Unprovisioned → the release event and its Blossom artifacts still publish; only the electron-updater feed and the Flatpak remote are skipped. |
 | `DEPLOY_SSH_CONFIG_BASE64` | (optional) base64 of an ssh_config written to `~/.ssh/config` |
 | `DEPLOY_TARGET` | (optional) rsync destination; defaults to `web` |
 

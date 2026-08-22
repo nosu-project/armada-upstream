@@ -23,8 +23,12 @@ interface ImportMetaEnv {
   readonly VITE_LINK_PREVIEW_ENDPOINT?: string;
   /** Discord bridge portal origin (e.g. "https://bridge.armada.buzz"). Empty/unset = Discord import UI hidden. */
   readonly VITE_BRIDGE_PORTAL_URL?: string;
-  /** Where the release installers are served (e.g. "https://armada.buzz/downloads"). Unset = the public web origin's /downloads. */
-  readonly VITE_DOWNLOADS_BASE_URL?: string;
+  /** NIP-34 repo identifier whose releases `/downloads` offers (the 30617 `d`). Unset = "armada". */
+  readonly VITE_RELEASE_REPO_ID?: string;
+  /** Comma-separated hex pubkeys whose kind-30622 releases are trusted. Unset = Armada's release signer. */
+  readonly VITE_RELEASE_AUTHORS?: string;
+  /** Comma-separated relays `/downloads` reads releases from. Unset = the repository's own relays. */
+  readonly VITE_RELEASE_RELAYS?: string;
   /** Plausible site domain (e.g. "armada.buzz"). Empty/unset = analytics disabled. */
   readonly VITE_PLAUSIBLE_DOMAIN?: string;
   /** Plausible API endpoint (self-hosted instance or proxy). Empty/unset = Plausible Cloud default. */

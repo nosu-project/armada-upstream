@@ -3,13 +3,8 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import {
-  DOWNLOAD_TARGETS,
-  detectOs,
-  downloadUrl,
-  formatBytes,
-  manifestUrl,
-} from "@/lib/downloads";
+import { DOWNLOAD_PLATFORMS, detectOs, installCommand } from "@/lib/downloads";
+import { artifactOs } from "@/lib/releases";
 
 /** Real user-agent strings, since the ordering bugs only show up in real ones. */
 const UA = {
@@ -49,106 +44,59 @@ describe("detectOs", () => {
   });
 });
 
-describe("download targets", () => {
-  it("points every asset at an absolute URL on the downloads host", () => {
-    for (const target of DOWNLOAD_TARGETS) {
-      for (const asset of target.assets) {
-        const url = downloadUrl(asset.file);
-        expect(url).toMatch(/^https?:\/\//);
-        expect(url.endsWith(`/${asset.file}`)).toBe(true);
-      }
-    }
-  });
-
-  it("carries no version in a filename, so the links never need updating", () => {
-    for (const target of DOWNLOAD_TARGETS) {
-      for (const asset of target.assets) {
-        expect(asset.file).not.toMatch(/\d+\.\d+\.\d+/);
-      }
-    }
-  });
-
+describe("download platforms", () => {
   it("covers every detectable OS exactly once", () => {
-    const seen = DOWNLOAD_TARGETS.map((t) => t.os);
+    const seen = DOWNLOAD_PLATFORMS.map((p) => p.os);
     expect(new Set(seen).size).toBe(seen.length);
     for (const os of ["linux", "windows", "macos", "android", "ios"]) {
       expect(seen).toContain(os);
     }
   });
+});
 
-  it("names a manifest for every target that has files, and none for iOS", () => {
-    for (const target of DOWNLOAD_TARGETS) {
-      if (target.assets.length > 0) expect(target.manifest).toBeDefined();
-      else expect(target.manifest).toBeUndefined();
-    }
-    // iOS ships no installable build; the page offers the web app instead.
-    expect(DOWNLOAD_TARGETS.find((t) => t.os === "ios")?.assets).toEqual([]);
+describe("installCommand", () => {
+  it("installs the Flatpak bundle into the current user's package store", () => {
+    expect(installCommand("Armada-v1.2.3.flatpak")).toBe("flatpak install --user ./Armada-v1.2.3.flatpak");
   });
 
-  it("installs the Flatpak bundle into the current user's package store", () => {
-    const flatpak = DOWNLOAD_TARGETS
-      .find((target) => target.os === "linux")
-      ?.assets.find((asset) => asset.id === "linux-flatpak");
+  it("writes the command against the versioned name the release actually carries", () => {
+    // Filenames come off the release event now, so a command referring to some
+    // fixed `Armada.AppImage` would name a file the user does not have.
+    expect(installCommand("Armada-v1.2.3.AppImage")).toBe("chmod +x Armada-v1.2.3.AppImage && ./Armada-v1.2.3.AppImage");
+    expect(installCommand("Armada-v1.2.3.deb")).toBe("sudo apt install ./Armada-v1.2.3.deb");
+  });
 
-    expect(flatpak).toMatchObject({
-      file: "Armada.flatpak",
-      command: "flatpak install --user ./Armada.flatpak",
-    });
+  it("says nothing for the builds that are just opened", () => {
+    expect(installCommand("Armada-v1.2.3.exe")).toBeUndefined();
+    expect(installCommand("Armada-v1.2.3-mac-arm64.zip")).toBeUndefined();
+    expect(installCommand("Armada-v1.2.3.apk")).toBeUndefined();
   });
 });
 
 /**
- * The page's links are only stable because CI publishes exactly these names.
- * Reading the workflows makes that a checked contract instead of a convention:
- * renaming a file in CI without renaming it here fails the suite, rather than
- * 404ing in production on the next tag.
+ * The page can only render a build it can file under a platform. Reading the
+ * workflow makes that a checked contract rather than a convention: staging a
+ * new artifact type in CI without teaching the client about it fails the suite,
+ * instead of shipping a download the page silently drops on the floor.
  */
-describe("the CI workflows that publish these files", () => {
-  const workflows = [
-    ".ngit/act/workflows/desktop.yml",
-    ".ngit/act/workflows/release.yml",
-  ].map((path) => readFileSync(resolve(process.cwd(), path), "utf8")).join("\n");
+describe("the CI workflow that publishes these files", () => {
+  const workflow = readFileSync(resolve(process.cwd(), ".ngit/act/workflows/release.yml"), "utf8");
 
-  it("publishes every stable filename the page links", () => {
-    for (const target of DOWNLOAD_TARGETS) {
-      for (const asset of target.assets) {
-        expect(workflows, `${asset.file} is not published by any workflow`).toContain(asset.file);
-      }
+  /** Every `Armada-...` artifact name the workflow stages for the release. */
+  const staged = [...new Set(
+    [...workflow.matchAll(/\bArmada-\$(?:TAG|\{TAG\}|VERSION_NAME|\{VERSION_NAME\})[\w.$-]*\.\w+/g)]
+      .map((match) => match[0].replace(/\$\{?(?:TAG|VERSION_NAME)\}?/g, "v1.2.3")),
+  )];
+
+  it("stages artifacts the test can actually see", () => {
+    // Guards the regex above: if the workflow stops spelling names this way,
+    // every assertion below would vacuously pass.
+    expect(staged.length).toBeGreaterThanOrEqual(7);
+  });
+
+  it("produces only filenames the client can file under a platform", () => {
+    for (const filename of staged) {
+      expect(artifactOs("", filename), `${filename} lands on no platform card`).toBeDefined();
     }
-  });
-
-  it("writes every manifest key the page reads", () => {
-    for (const target of DOWNLOAD_TARGETS) {
-      for (const asset of target.assets) {
-        expect(workflows, `manifest key ${asset.id} is never written`).toContain(`"${asset.id}"`);
-      }
-    }
-  });
-
-  it("writes the manifest each target names", () => {
-    for (const name of new Set(DOWNLOAD_TARGETS.map((t) => t.manifest).filter(Boolean))) {
-      expect(workflows).toContain(`latest-${name}.json`);
-    }
-  });
-});
-
-describe("manifestUrl", () => {
-  it("names one manifest per platform family", () => {
-    expect(manifestUrl("desktop")).toMatch(/\/latest-desktop\.json$/);
-    expect(manifestUrl("android")).toMatch(/\/latest-android\.json$/);
-  });
-});
-
-describe("formatBytes", () => {
-  it("scales to the largest unit that keeps the number small", () => {
-    expect(formatBytes(512)).toBe("512 B");
-    expect(formatBytes(2048)).toBe("2.0 KB");
-    expect(formatBytes(7 * 1024 * 1024)).toBe("7.0 MB");
-    expect(formatBytes(112 * 1024 * 1024)).toBe("112 MB");
-  });
-
-  it("renders nothing for a size a manifest didn't supply", () => {
-    expect(formatBytes(0)).toBe("");
-    expect(formatBytes(Number.NaN)).toBe("");
   });
 });

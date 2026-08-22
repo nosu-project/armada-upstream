@@ -111,7 +111,7 @@ RUN set -eux; \
     fastlane --version; \
     command -v fastlane | grep -qv hostedtoolcache
 
-# ── wine (electron-builder Windows targets in desktop.yml) ───────────────────
+# ── wine (electron-builder Windows targets in release.yml) ───────────────────
 # Cross-building the NSIS installer + portable exe on Linux needs wine; baking
 # it here removes the per-run `apt-get install wine` (~1-2 min + network).
 RUN set -eux; \
@@ -222,8 +222,8 @@ RUN set -eux; \
     command -v wasm-pack | grep -qv hostedtoolcache
 
 # ── Warm dependency caches for this repo ─────────────────────────────────────
-# Mirrors release.yml's build path (npm ci + cap sync + gradle release build)
-# and desktop.yml's (electron npm ci + electron-builder --linux --win) so
+# Mirrors release.yml's android job (npm ci + cap sync + gradle release build)
+# and its desktop job (electron npm ci + electron-builder --linux --win) so
 # /root/.npm, /root/.gradle (incl. the build cache — android/gradle.properties
 # sets org.gradle.caching=true, letting job builds pull unchanged compile task
 # outputs FROM-CACHE), and /root/.cache/electron{,-builder} (electron dist

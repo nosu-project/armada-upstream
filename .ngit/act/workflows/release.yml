@@ -1,14 +1,49 @@
-name: Android release
+name: Release
 
-# Signed Android APK + AAB on version tags (vX.Y.Z), published as run
-# artifacts, to armada.buzz/downloads/, to Zapstore, and to Google Play — all
-# in ONE job. Ported from the
-# GitLab `build-apk` + `publish-zapstore` jobs (+ ditto's `publish-google-play`)
-# to ngit-ci (act / GitHub Actions syntax). We keep build+publish in a single
-# job on purpose: act's local artifact server round-trips a multi-file wildcard
-# upload back as a 3-byte stub, so handing the APK across jobs via
-# upload/download-artifact fed zsp an empty file. Results and artifacts surface
-# on gitworkshop.dev against the tagged commit.
+# Every artifact of a version tag (vX.Y.Z), and the one Nostr release event
+# that names them all.
+#
+#   android → desktop → publish → deploy → release
+#
+# ── Why one workflow file ────────────────────────────────────────────────────
+# The `release` job publishes a kind-30622 NIP-34 repository release
+# (docs/releases.md) listing all eight installers. That event is ADDRESSABLE:
+# replacement is whole-event rather than a tag union, and Nostr has no
+# compare-and-swap, so two jobs publishing the same `d` silently lose one
+# side's artifacts. Exactly one writer is therefore required, and it has to run
+# after every build.
+#
+# This used to be two files — release.yml (Android) and desktop.yml — firing on
+# the same tag and running CONCURRENTLY (the coordinator's
+# NGIT_CI_MAX_CONCURRENT_JOBS is above 1). ngit-ci has no `workflow_run`
+# trigger, and act resolves `needs:` only WITHIN one invocation, so a job that
+# waits for both builds can only exist in the same file as both builds. Hence
+# the merge; desktop.yml is gone.
+#
+# ── The jobs share one working tree ──────────────────────────────────────────
+# act binds the same checkout into every job container (`--bind`), so jobs
+# without a `needs:` edge run in parallel ON THE SAME FILES. `android` and
+# `desktop` both run a web bundle build, with different env — the APK is built
+# with analytics structurally excluded, the desktop bundle with empty platform
+# relays — so they MUST stay chained. Do not add a job here without a `needs:`
+# edge unless it touches nothing.
+#
+# What they do NOT share is RUNNER_TEMP. Anything one job hands another lives
+# in the checkout: `.release-artifacts/` (the files the release event names)
+# and `electron/release/deploy/` (the update feed and Flatpak repository the
+# deploy job publishes).
+#
+# `desktop` is `if: always()` so a Gradle failure costs the Android build and
+# nothing else — the two were independent when they were separate files, and
+# chaining them for tree safety shouldn't quietly couple their fates.
+#
+# Ported from the GitLab `build-apk` + `publish-zapstore` jobs (+ ditto's
+# `publish-google-play`) to ngit-ci (act / GitHub Actions syntax). The Android
+# build and its store publishes stay in ONE job on purpose: act's local
+# artifact server round-trips a multi-file wildcard upload back as a 3-byte
+# stub, so handing the APK across jobs via upload/download-artifact fed zsp an
+# empty file. Results and artifacts surface on gitworkshop.dev against the
+# tagged commit.
 #
 # ── Runner image ─────────────────────────────────────────────────────────────
 # Jobs run in the coordinator's armada-ci image (NGIT_CI_ACT_PLATFORMS maps
@@ -33,13 +68,29 @@ name: Android release
 #   KEYSTORE_PASSWORD        keystore store password
 #   KEY_PASSWORD             upload key password (== store password; PKCS12
 #                            uses a single password, so the two must match)
-#   ZAPSTORE_BUNKER_URL      bunker:// URL of the NIP-46 signer for Zapstore
-#   ZAPSTORE_CLIENT_KEY      persistent zsp NIP-46 client key (hex) for it
+#   ZAPSTORE_BUNKER_URL      bunker:// URL of the NIP-46 signer. Signs BOTH the
+#                            Zapstore publish and the kind-30622 release event.
+#   ZAPSTORE_CLIENT_KEY      the client secret key that bunker session was
+#                            established with (hex or nsec). Both halves are
+#                            needed: the URL's one-time `secret=` is long spent,
+#                            and what actually authorizes signing is this key,
+#                            which the bunker already approved.
+#   KLIPY_API_KEY            (optional) GIF search key baked into the bundles
+#   FLATPAK_GPG_PRIVATE_KEY_BASE64   base64 of the Flatpak repository signing
+#                            key. REQUIRED on a tag: unlike the optional ones
+#                            below, an unset value fails the release rather
+#                            than skipping, because an unsigned OSTree repo
+#                            would publish as if it were signed.
+#   FLATPAK_GPG_EXPECTED_FINGERPRINT the pinned full primary fingerprint of
+#                            that key, cross-checked three ways before deploy.
+#   WINDOWS_CSC_LINK         (optional) base64 PFX for Authenticode signing
+#   WINDOWS_CSC_KEY_PASSWORD (optional) its password
 #   DEPLOY_SSH_KEY_BASE64    (optional) base64 (one line) of the deploy user's
-#                            private key, shared with desktop.yml. Publishes
-#                            the APK to armada.buzz/downloads/. Empty
+#                            private key. Publishes the desktop update feed and
+#                            the Flatpak repository to armada.buzz. Empty
 #                            (unprovisioned) skips only that publish; the run
-#                            artifacts and the store publishes are unaffected.
+#                            artifacts, the store publishes and the release
+#                            event are unaffected.
 #   DEPLOY_SSH_CONFIG_BASE64 (optional) base64 of an ssh_config -> ~/.ssh/config
 #   DEPLOY_TARGET            (optional) rsync destination; defaults to "web"
 #   GOOGLE_PLAY_SERVICE_ACCOUNT_JSON  (optional) base64 of the Play Console
@@ -47,6 +98,11 @@ name: Android release
 #                            buzz.armada.app. Empty (unprovisioned) skips the
 #                            Google Play publish instead of failing — same
 #                            pattern as DEPLOY_SSH_KEY_BASE64 above.
+#
+# The installers themselves are no longer rsynced anywhere. They are named by
+# the release event and fetched from Blossom by hash; what still goes over SSH
+# is only what cannot be content-addressed — electron-updater's feed, which is
+# a fixed URL, and the Flatpak OSTree repository, which is a protocol.
 
 on:
   push:
@@ -57,7 +113,7 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  android:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -212,6 +268,16 @@ jobs:
           ls -lh "$out"
           echo "dir=$out" >> "$GITHUB_OUTPUT"
 
+          # A second copy, inside the CHECKOUT, for the `release` job to name in
+          # the release event. Dependent ngit-ci jobs share the working tree but
+          # not RUNNER_TEMP, so $out above is invisible from there.
+          #
+          # The APK only. An .aab is Play's upload format and cannot be
+          # installed by a user, so offering one would be a trap; the ProGuard
+          # map is a debugging aid, not a download. Both stay run artifacts.
+          mkdir -p "$PWD/.release-artifacts"
+          cp "$out/Armada-v$VERSION_NAME.apk" "$PWD/.release-artifacts/Armada-v$VERSION_NAME.apk"
+
       # The APK/AAB are signed now; remove the keystore and password file.
       - name: Remove release signing material
         if: ${{ always() }}
@@ -231,94 +297,6 @@ jobs:
             ${{ steps.artifacts.outputs.dir }}/Armada-v${{ steps.version.outputs.name }}.apk
             ${{ steps.artifacts.outputs.dir }}/Armada-v${{ steps.version.outputs.name }}.aab
             ${{ steps.artifacts.outputs.dir }}/Armada-v${{ steps.version.outputs.name }}-apk-mapping.txt
-
-      # Publish the APK to https://armada.buzz/downloads/, the way desktop.yml
-      # publishes the installers — same rrsync-jailed deploy user, same staged
-      # `downloads` directory pushed into the jail root ":/", same additive
-      # rsync (no --delete, so past releases and the desktop installers beside
-      # them survive). This is what gives /downloads a real Android button
-      # instead of only a link out to Zapstore and Play.
-      #
-      # The APK only: an .aab is Play's upload format and cannot be installed
-      # by a user, so hosting one would just be a trap.
-      #
-      # Done BEFORE the store publishes, for the same reason the artifact
-      # upload is: a Zapstore or Play failure shouldn't cost users the download.
-      - name: Deploy APK to downloads/
-        env:
-          DEPLOY_SSH_KEY_BASE64: ${{ secrets.DEPLOY_SSH_KEY_BASE64 }}
-          DEPLOY_SSH_CONFIG_BASE64: ${{ secrets.DEPLOY_SSH_CONFIG_BASE64 }}
-          DEPLOY_TARGET: ${{ secrets.DEPLOY_TARGET }}
-          VERSION_NAME: ${{ steps.version.outputs.name }}
-          ARTIFACT_DIR: ${{ steps.artifacts.outputs.dir }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -eu
-
-          # workflow_dispatch off a branch names the files after the branch;
-          # publish only real version tags.
-          case "$TAG" in
-            v*) ;;
-            *) echo "ref '$TAG' is not a version tag; skipping downloads deploy."; exit 0 ;;
-          esac
-
-          # No key provisioned (or non-maintainer trigger): artifacts only.
-          if [ -z "${DEPLOY_SSH_KEY_BASE64:-}" ]; then
-            echo "DEPLOY_SSH_KEY_BASE64 not set; skipping downloads deploy (artifacts uploaded)."
-            exit 0
-          fi
-
-          root="$RUNNER_TEMP/downloads-deploy"
-          out="$root/downloads"
-          rm -rf "$root"
-          mkdir -p "$out"
-          # Versioned archive + the stable alias /downloads links. See the same
-          # pair, and the reasoning for copies over symlinks, in desktop.yml.
-          cp "$ARTIFACT_DIR/Armada-v$VERSION_NAME.apk" "$out/Armada-v$VERSION_NAME.apk"
-          cp "$ARTIFACT_DIR/Armada-v$VERSION_NAME.apk" "$out/Armada.apk"
-
-          # Android's own manifest. Kept separate from desktop.yml's
-          # latest-desktop.json because that workflow fires on the same tag and
-          # runs concurrently — see the note there.
-          node -e '
-            const fs = require("node:fs");
-            const [dir, tag] = process.argv.slice(1);
-            const manifest = {
-              tag,
-              version: tag.replace(/^v/, ""),
-              published: new Date().toISOString(),
-              files: { "android-apk": { file: "Armada.apk", size: fs.statSync(dir + "/Armada.apk").size } },
-            };
-            fs.writeFileSync(dir + "/latest-android.json", JSON.stringify(manifest, null, 2) + "\n");
-          ' "$out" "$TAG"
-          cat "$out/latest-android.json"
-
-          # Install rsync + ssh client (act images are minimal).
-          if ! command -v rsync >/dev/null 2>&1; then
-            sudo apt-get update -qq
-            sudo apt-get install -y --no-install-recommends rsync openssh-client >/dev/null
-          fi
-
-          # Materialize the SSH environment. Key/config arrive base64 (single
-          # line) to fit masking rules; ssh reads ~/.ssh/config automatically.
-          umask 077
-          mkdir -p ~/.ssh
-          printf '%s' "$DEPLOY_SSH_KEY_BASE64" | base64 -d > ~/.ssh/id_ed25519
-          if [ -n "${DEPLOY_SSH_CONFIG_BASE64:-}" ]; then
-            printf '%s' "$DEPLOY_SSH_CONFIG_BASE64" | base64 -d > ~/.ssh/config
-          fi
-          # A CLI -o StrictHostKeyChecking is NOT inherited by the ProxyJump
-          # child connection, so put host defaults in the config so every hop
-          # (including a bastion) picks them up.
-          printf 'Host *\n\tIdentityFile ~/.ssh/id_ed25519\n\tBatchMode yes\n\tStrictHostKeyChecking accept-new\n' >> ~/.ssh/config
-
-          TARGET="${DEPLOY_TARGET:-web}"
-
-          # Additive: past releases stay downloadable at their own URLs.
-          # --chmod: the served mode is stated here rather than inherited from
-          # the ambient umask — this staging happens to precede the `umask 077`
-          # above, which is not a property worth relying on. See desktop.yml.
-          rsync -av --chmod=D755,F644 -e ssh "$root/downloads" "${TARGET}:/"
 
       # Publish to Zapstore in the SAME job. We deliberately do NOT hand the APK
       # off via upload/download-artifact: under act's local artifact server the
@@ -526,3 +504,1101 @@ jobs:
       - name: Remove Google Play service account key
         if: ${{ always() }}
         run: rm -f "$RUNNER_TEMP/play-service-account.json"
+
+  desktop:
+    # Chained behind `android` for TREE safety, not because it needs anything
+    # the Android build produces: act binds one checkout into every job
+    # container, and both jobs build a web bundle into dist/ with different env.
+    # `always()` keeps them independent in every other respect — a Gradle or
+    # Play failure must not cost users the desktop installers.
+    needs: [android]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: electron/hevc-publisher/go.mod
+          cache-dependency-path: electron/hevc-publisher/go.sum
+
+      - name: Build standalone web bundle
+        env:
+          VITE_KLIPY_API_KEY: ${{ secrets.KLIPY_API_KEY }}
+          # OFF in the published sovereign desktop build by default (see the
+          # Android release workflow). Configurable for own-branded builds via
+          # the provisioned secret; empty = tracker never initialized.
+          VITE_PLAUSIBLE_DOMAIN: ${{ secrets.VITE_PLAUSIBLE_DOMAIN }}
+          VITE_PLAUSIBLE_ENDPOINT: ${{ secrets.VITE_PLAUSIBLE_ENDPOINT }}
+        run: |
+          set -eu
+          npm ci
+          # Mini App multiplayer rides a Rust crate compiled to wasm
+          # (crates/webxdc-rt). `npx vite build` below does NOT fire the
+          # prebuild hook that `npm run build` would, so build the transport
+          # explicitly. WEBXDC_RT_REQUIRED=1 makes a missing toolchain or a
+          # failed compile fail the release rather than silently ship the
+          # desktop app with multiplayer off. The Rust toolchain and the warm
+          # iroh dependency tree are baked into the armada-ci runner image
+          # (.ngit/ci-image/Dockerfile).
+          WEBXDC_RT_REQUIRED=1 npm run build:wasm
+          # No `-l error`: act's log capture drops suppressed output, so a
+          # failing/empty build looked like a silent success and only surfaced
+          # later as "cp: cannot stat 'dist/index.html'". Keep vite's own output.
+          npx vite build
+          test -f dist/index.html || { echo "vite build produced no dist/index.html" >&2; ls -la dist || true; exit 1; }
+          cp dist/index.html dist/404.html
+          # Copy the built bundle INTO electron/dist by content. `electron/dist`
+          # may already exist (e.g. a work-dir path act keeps around), so a
+          # `rm -rf` + `cp -r` races "cannot create directory: File exists".
+          # `cp -rT` copies dist's contents into the (created) target dir
+          # regardless of whether it pre-exists.
+          mkdir -p electron/dist
+          find electron/dist -mindepth 1 -delete
+          cp -rT dist electron/dist
+          # The shell's ArmadaDB store (electron/db.cjs), built from src/lib/db.
+          # main.js requires it at startup, so a missing bundle is not a build
+          # failure — it is a shipped app that silently stores the user's data
+          # in the wrong place.
+          npx vite build -c vite.config.electron.ts
+          test -f electron/db.cjs || { echo "no electron/db.cjs" >&2; exit 1; }
+
+      # electron-builder needs wine for the Windows targets. wine is baked into
+      # the armada-ci runner image; this fallback only runs on a stock act
+      # image (e.g. someone else's coordinator without the custom image).
+      - name: Install wine (fallback for stock runner images)
+        run: |
+          set -eu
+          command -v wine >/dev/null 2>&1 && { echo "wine present: $(wine --version)"; exit 0; }
+          sudo dpkg --add-architecture i386
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends wine wine32 wine64 >/dev/null || \
+            sudo apt-get install -y --no-install-recommends wine >/dev/null
+
+      - name: Build Linux + Windows installers
+        env:
+          TAG: ${{ github.ref_name }}
+          # Optional Authenticode identity. Unsigned installed NSIS builds still
+          # self-update through the validated feed, like AppImage; production
+          # releases should nevertheless keep one stable certificate for an
+          # independent publisher identity and SmartScreen reputation.
+          CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+        run: |
+          set -eu
+          case "$TAG" in
+            v[0-9]*) VERSION="${TAG#v}" ;;
+            *) VERSION=0.0.0 ;;
+          esac
+          cd electron
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" package.json
+          npm ci --no-audit --no-fund
+          ./scripts/build-hevc-publisher.sh --arch x64
+          test -x generated/hevc/x64/armada-hevc-publisher
+          npx electron-builder --linux --win --config electron-builder.yml --publish never
+          test -x release/linux-unpacked/resources/armada-hevc-publisher
+          cmp generated/hevc/x64/armada-hevc-publisher \
+            release/linux-unpacked/resources/armada-hevc-publisher
+          asar_check=$(mktemp -d)
+          npx asar extract release/linux-unpacked/resources/app.asar "$asar_check/linux"
+          npx asar extract release/win-unpacked/resources/app.asar "$asar_check/windows"
+          diff -qr dist "$asar_check/linux/dist"
+          diff -qr dist "$asar_check/windows/dist"
+          test ! -e "$asar_check/windows/generated"
+          test ! -e "$asar_check/windows/flatpak"
+          test ! -e "$asar_check/windows/hevc-publisher"
+
+      # Flatpak is deliberately derived from the just-built AppImage, so it
+      # contains the identical application bundle. build.sh emits both a
+      # sideloadable bundle and an OSTree repository that Flatpak can track.
+      - name: Install Flatpak tooling (fallback for stock runner images)
+        run: |
+          set -eu
+          if ! command -v flatpak-builder >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends flatpak flatpak-builder >/dev/null
+          fi
+          # flatpak-builder shells out to elfutils' eu-strip to extract a
+          # module's debuginfo, and the armada-ci image has no elfutils. The
+          # manifest turns that phase off, so this is the belt to that braces:
+          # non-fatal, because if the manifest option holds these binaries are
+          # never invoked, and a transient apt failure must not cost a release.
+          # Guarded, so an image with elfutils baked in touches nothing.
+          if ! command -v eu-strip >/dev/null 2>&1; then
+            (sudo apt-get update -qq && \
+             sudo apt-get install -y --no-install-recommends elfutils >/dev/null) \
+              || echo "warning: elfutils unavailable; relying on the manifest's no-debuginfo"
+          fi
+          # The armada-ci image bakes in the flathub remote and these runtimes,
+          # so on it this step must touch the network for NOTHING: a flaky
+          # flathub.org DNS lookup here otherwise fails the whole desktop release
+          # for a no-op (observed in CI). Only a stock runner image, which lacks
+          # the BaseApp, falls through to the networked remote-add + install.
+          if ! flatpak info org.electronjs.Electron2.BaseApp >/dev/null 2>&1; then
+            flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+            flatpak install -y flathub \
+              org.freedesktop.Platform//25.08 \
+              org.freedesktop.Sdk//25.08 \
+              org.electronjs.Electron2.BaseApp//25.08
+          fi
+
+      - name: Build Flatpak bundle and repository
+        # The application build is deliberately credential-free. The finished
+        # commit is signed only after every installer build has completed, so
+        # neither flatpak-builder nor an application build script can read the
+        # release private key.
+        env:
+          FLATPAK_GPG_KEY: ""
+          FLATPAK_GPG_PUBLIC_KEY: ""
+        run: cd electron && npm run dist:flatpak
+
+      # macOS is cross-built rather than skipped: assembling a .app needs no
+      # Apple tooling (it is the prebuilt darwin Electron with our app.asar
+      # dropped in), which is what @electron/packager does — electron-builder's
+      # refusal off darwin is about SIGNING, not about the bundle. The script
+      # reuses the asar electron-builder just staged, so it has to run after the
+      # step above. See electron/scripts/package-mac.mjs.
+      #
+      # Pulls the darwin Electron release (~90 MB per arch) into ~/.cache/
+      # electron, which the runner image warms for the platforms it has already
+      # built — the first run after this landed pays the download.
+      - name: Cross-build macOS app bundles
+        run: node electron/scripts/package-mac.mjs
+
+      # An arm64 Mac refuses to exec a binary with no signature at all, so the
+      # bundles are ad-hoc signed with rcodesign (Apple's codesign reimplemented
+      # in Rust, runs off darwin). This is NOT a Developer ID signature and is
+      # not notarized: the app launches, but the first open still needs the user
+      # to approve it in System Settings → Privacy & Security → Open Anyway.
+      # Real signing would need Apple credentials (rcodesign can do both with a
+      # .p12 and an App Store Connect key, if that's ever set up).
+      #
+      # .zip, not .dmg: a disk image needs HFS+ tooling no act container has.
+      # Zip is a first-class macOS distribution format — it's what Electron's
+      # own auto-updater consumes.
+      - name: Sign and zip the macOS bundles
+        env:
+          # NOT named RCODESIGN_*: rcodesign reads every RCODESIGN_-prefixed
+          # environment variable as a config key and aborts on ones it doesn't
+          # know ("UnknownField"), so RCODESIGN_VERSION here would fail the
+          # signing command below rather than configure this step.
+          CODESIGN_TOOL_VERSION: "0.29.0"
+          CODESIGN_TOOL_SHA256: dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002
+        run: |
+          set -eu
+          if ! command -v zip >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends zip >/dev/null
+          fi
+
+          name="apple-codesign-${CODESIGN_TOOL_VERSION}-x86_64-unknown-linux-musl"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$name.tar.gz" \
+            "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F${CODESIGN_TOOL_VERSION}/${name}.tar.gz"
+          echo "${CODESIGN_TOOL_SHA256}  $RUNNER_TEMP/$name.tar.gz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/$name.tar.gz" -C "$RUNNER_TEMP"
+
+          cd electron/release/mac
+          for dir in Armada-darwin-*; do
+            arch="${dir##*-}"
+            # --config-file /dev/null: sign only from these arguments, never
+            # from an ambient user/cwd rcodesign.toml.
+            "$RUNNER_TEMP/$name/rcodesign" --config-file /dev/null \
+              sign "$dir/Armada.app" >/dev/null
+            # -y keeps symlinks as symlinks: an Electron .app is full of
+            # framework Versions/Current links, and dereferencing them inflates
+            # the archive and lands a bundle whose signature no longer verifies.
+            (cd "$dir" && zip -qry "../Armada-mac-$arch.zip" Armada.app)
+          done
+          ls -lh ./*.zip
+
+  # ngit-ci runs dependent jobs in fresh containers while bind-mounting the
+  # same checkout, so this job sees electron/release from `desktop` without an
+  # artifact round-trip. This is intentionally ngit-ci-specific: another
+  # coordinator must transfer that directory explicitly. Do not add checkout
+  # here; its clean step would delete the ignored release outputs.
+  publish:
+    needs: desktop
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Install publishing tooling (fallback for stock runner images)
+        run: |
+          set -euo pipefail
+          export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+          packages=()
+          command -v node >/dev/null 2>&1 || packages+=(nodejs)
+          case "$GITHUB_REF" in
+            refs/tags/v*)
+              command -v flatpak >/dev/null 2>&1 || packages+=(flatpak)
+              command -v gpg >/dev/null 2>&1 || packages+=(gnupg)
+              command -v ostree >/dev/null 2>&1 || packages+=(ostree)
+              # The signing step reads the committed signer out of the object
+              # database rather than the working tree, so git is as required
+              # here as the Flatpak tooling is.
+              command -v git >/dev/null 2>&1 || packages+=(git)
+              ;;
+          esac
+          if [ "${#packages[@]}" -gt 0 ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends "${packages[@]}" >/dev/null
+          fi
+
+      # Every real release tag must carry the publisher identity, even when
+      # server deployment is disabled: an unsigned run artifact would create
+      # the same untrusted remote on first install. Branch workflow_dispatch
+      # builds may still produce unsigned artifacts for review. Keep this
+      # tag-only so branch builds never receive the publisher key.
+      - name: Enforce signed Flatpak release configuration
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          FLATPAK_GPG_PRIVATE_KEY_BASE64: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY_BASE64 }}
+          FLATPAK_GPG_EXPECTED_FINGERPRINT: ${{ secrets.FLATPAK_GPG_EXPECTED_FINGERPRINT }}
+        run: |
+          set -eu
+          if { [ -n "${FLATPAK_GPG_PRIVATE_KEY_BASE64:-}" ] && \
+               [ -z "${FLATPAK_GPG_EXPECTED_FINGERPRINT:-}" ]; } || \
+             { [ -z "${FLATPAK_GPG_PRIVATE_KEY_BASE64:-}" ] && \
+               [ -n "${FLATPAK_GPG_EXPECTED_FINGERPRINT:-}" ]; }; then
+            echo "FLATPAK_GPG_PRIVATE_KEY_BASE64 and FLATPAK_GPG_EXPECTED_FINGERPRINT must be provisioned together." >&2
+            exit 1
+          fi
+          if [ -z "${FLATPAK_GPG_PRIVATE_KEY_BASE64:-}" ]; then
+            echo "FLATPAK_GPG_PRIVATE_KEY_BASE64 is required for release tags." >&2
+            exit 1
+          fi
+          if [ -z "${FLATPAK_GPG_EXPECTED_FINGERPRINT:-}" ]; then
+            echo "FLATPAK_GPG_EXPECTED_FINGERPRINT is required for release tags." >&2
+            exit 1
+          fi
+
+      # Import the release key only in this fresh post-build container. The
+      # private export is never written as a file or forwarded to sign.sh; that
+      # helper receives only the temporary GnuPG home, the selected full
+      # fingerprint, and the exported public key. The GnuPG home is destroyed
+      # before any action or deploy step runs. Branch/manual artifacts remain
+      # unsigned and this step receives no publisher credentials at all.
+      - name: Sign and verify the Flatpak repository
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          FLATPAK_GPG_PRIVATE_KEY_BASE64: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY_BASE64 }}
+          FLATPAK_GPG_EXPECTED_FINGERPRINT: ${{ secrets.FLATPAK_GPG_EXPECTED_FINGERPRINT }}
+          # Parsed into the workflow plan before the application build runs.
+          # Keep this literal synchronized with electron/flatpak/sign.sh.
+          TRUSTED_SIGN_SCRIPT_SHA256: 05cccef4bcd0404300b1d382812bab26af8d1617f97a2e2f7731954e74f7d3eb
+        run: |
+          set -euo pipefail
+          export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+          private_key_base64="${FLATPAK_GPG_PRIVATE_KEY_BASE64:-}"
+          expected_fingerprint_raw="${FLATPAK_GPG_EXPECTED_FINGERPRINT:-}"
+          unset FLATPAK_GPG_PRIVATE_KEY_BASE64
+          unset FLATPAK_GPG_EXPECTED_FINGERPRINT
+
+          if { [ -n "$private_key_base64" ] && [ -z "$expected_fingerprint_raw" ]; } || \
+             { [ -z "$private_key_base64" ] && [ -n "$expected_fingerprint_raw" ]; }; then
+            echo "Flatpak private key and expected fingerprint must be provisioned together." >&2
+            exit 1
+          fi
+          if [ -z "$private_key_base64" ]; then
+            echo "Refusing to publish an unsigned Flatpak artifact from a release tag." >&2
+            exit 1
+          fi
+          if [ -z "$expected_fingerprint_raw" ]; then
+            echo "FLATPAK_GPG_EXPECTED_FINGERPRINT is required whenever Flatpak signing is enabled." >&2
+            exit 1
+          fi
+          for required_command in git gpg flatpak ostree; do
+            command -v "$required_command" >/dev/null 2>&1 || {
+              echo "$required_command is required for Flatpak release signing." >&2
+              exit 1
+            }
+          done
+
+          # What this protects is the long-lived SIGNING KEY, not the release
+          # contents: the repository being signed was produced by the build job
+          # out of the same checkout, and this step faithfully signs whatever
+          # bytes that job left behind. A bad build is one revocable release; an
+          # exfiltrated key is permanent. So the one program that runs in the
+          # same process as the key is materialized from the object database
+          # with replacements disabled and checked against a digest that was
+          # parsed into the workflow plan before the build job started. Git does
+          # not rehash a loose object when reading it, so both halves are
+          # needed. `cat-file blob` rather than `git show`: a writable checkout
+          # also controls .gitattributes and .git/config, and `show` is the path
+          # that consults textconv and other attribute-driven filters.
+          export GIT_NO_REPLACE_OBJECTS=1
+          trusted_sign_script=$(mktemp "$RUNNER_TEMP/armada-flatpak-sign.XXXXXX")
+          git cat-file blob "${GITHUB_SHA}:electron/flatpak/sign.sh" > "$trusted_sign_script"
+          printf '%s  %s\n' "$TRUSTED_SIGN_SCRIPT_SHA256" "$trusted_sign_script" | \
+            sha256sum -c -
+          chmod 0700 "$trusted_sign_script"
+
+          signing_home=$(mktemp -d "$RUNNER_TEMP/armada-flatpak-gnupg.XXXXXX")
+          chmod 700 "$signing_home"
+          cleanup_signing_home() {
+            gpgconf --homedir "$signing_home" --kill all >/dev/null 2>&1 || true
+            rm -rf -- "$signing_home"
+          }
+          trap cleanup_signing_home EXIT HUP INT TERM
+
+          # Keep the encoded private export in the shell only long enough to
+          # stream it into GnuPG. Neither the encoded nor decoded key is logged.
+          if ! printf '%s' "$private_key_base64" | base64 -d | \
+              gpg --batch --homedir "$signing_home" --import >/dev/null 2>&1; then
+            echo "Unable to import FLATPAK_GPG_PRIVATE_KEY_BASE64." >&2
+            exit 1
+          fi
+          unset private_key_base64
+
+          secret_listing=$(gpg --batch --homedir "$signing_home" \
+            --with-colons --list-secret-keys 2>/dev/null)
+          mapfile -t secret_fingerprints < <(
+            printf '%s\n' "$secret_listing" | awk -F: '
+              $1 == "sec" { primary = 1; next }
+              primary && $1 == "fpr" { print toupper($10); primary = 0 }
+            '
+          )
+          unset secret_listing
+          if [ "${#secret_fingerprints[@]}" -ne 1 ]; then
+            echo "Flatpak signing export must contain exactly one primary secret key." >&2
+            exit 1
+          fi
+          fingerprint="${secret_fingerprints[0]}"
+          expected_fingerprint=$(printf '%s' "$expected_fingerprint_raw" | \
+            tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')
+          unset expected_fingerprint_raw
+          if [ -z "$expected_fingerprint" ] || [ "$fingerprint" != "$expected_fingerprint" ]; then
+            echo "Imported Flatpak key does not match FLATPAK_GPG_EXPECTED_FINGERPRINT." >&2
+            exit 1
+          fi
+
+          # Publishing the key is not the same as ANNOUNCING it: everything
+          # under /downloads/flatpak/ comes from one HTTPS host, so it cannot
+          # attest itself. The announcement is the committed copy at
+          # public/.well-known/armada-flatpak.fingerprint, which ships in the
+          # static build and is therefore named, by sha256, in the nsite
+          # manifest deploy-nsite.yml signs — a Nostr identity rather than a
+          # web server. Tie it to the key HERE, where the real fingerprint is
+          # in hand: a rotated secret whose announcement was not committed
+          # fails the tag instead of shipping a key nothing vouches for.
+          # Read from the object database for the same reason sign.sh is:
+          # the build job was allowed to write to this checkout.
+          announced_fingerprint=$(
+            git cat-file blob \
+              "${GITHUB_SHA}:public/.well-known/armada-flatpak.fingerprint" |
+              tr -d '[:space:]' | tr '[:lower:]' '[:upper:]'
+          )
+          if [ "$announced_fingerprint" != "$fingerprint" ]; then
+            echo "public/.well-known/armada-flatpak.fingerprint does not announce the signing key." >&2
+            echo "Commit the full fingerprint of the release key before tagging." >&2
+            exit 1
+          fi
+
+          # An actual non-interactive signature rejects a public-only export,
+          # an encryption-only key, a secret-key stub, or a passphrase-locked
+          # key before any release metadata is touched.
+          signing_scratch=$(mktemp -d "$RUNNER_TEMP/armada-flatpak-signing.XXXXXX")
+          signing_probe="$signing_scratch/probe"
+          printf 'Armada Flatpak release signing probe\n' > "$signing_probe"
+          gpg --batch --yes --pinentry-mode loopback --passphrase '' \
+            --homedir "$signing_home" --local-user "$fingerprint" \
+            --output "$signing_probe.sig" --detach-sign "$signing_probe"
+          gpg --batch --homedir "$signing_home" \
+            --verify "$signing_probe.sig" "$signing_probe" >/dev/null 2>&1
+
+          public_key="$signing_scratch/armada-flatpak.gpg"
+          gpg --batch --homedir "$signing_home" \
+            --export "$fingerprint" > "$public_key"
+          test -s "$public_key"
+          mapfile -t public_fingerprints < <(
+            gpg --batch --show-keys --with-colons "$public_key" 2>/dev/null | awk -F: '
+              $1 == "pub" { primary = 1; next }
+              primary && $1 == "fpr" { print toupper($10); primary = 0 }
+            '
+          )
+          if [ "${#public_fingerprints[@]}" -ne 1 ] || \
+             [ "${public_fingerprints[0]}" != "$fingerprint" ]; then
+            echo "Exported Flatpak public key does not match the selected signing key." >&2
+            exit 1
+          fi
+
+          GNUPGHOME="$signing_home" \
+          ARMADA_FLATPAK_RELEASE_DIR="$PWD/electron/release" \
+          FLATPAK_GPG_KEY="$fingerprint" \
+          FLATPAK_GPG_PUBLIC_KEY="$public_key" \
+            "$trusted_sign_script"
+
+          # No later verification or publication command needs the private
+          # key. Destroy it before inspecting any generated release content.
+          cleanup_signing_home
+          trap - EXIT HUP INT TERM
+          rm -f -- "$trusted_sign_script" "$signing_probe" "$signing_probe.sig"
+
+          flatpak_repo="$PWD/electron/release/flatpak-repo"
+          test -s "$flatpak_repo/summary"
+          test -s "$flatpak_repo/summary.sig"
+          test -s "$flatpak_repo/summary.idx"
+          test -s "$flatpak_repo/summary.idx.sig"
+          test -s "$flatpak_repo/armada-flatpak.gpg"
+          test -s "$flatpak_repo/armada-flatpak.fingerprint"
+          test -d "$flatpak_repo/summaries"
+          summary_index_sha=$(sha256sum "$flatpak_repo/summary.idx" | cut -d ' ' -f1)
+          summary_index_signature="$flatpak_repo/summaries/$summary_index_sha.idx.sig"
+          if [ ! -s "$summary_index_signature" ]; then
+            echo "Flatpak summary index is missing its immutable signature shard." >&2
+            exit 1
+          fi
+          cmp "$public_key" "$flatpak_repo/armada-flatpak.gpg"
+          published_fingerprint=$(tr -d '[:space:]' \
+            < "$flatpak_repo/armada-flatpak.fingerprint" | \
+            tr '[:lower:]' '[:upper:]')
+          [ "$published_fingerprint" = "$fingerprint" ] || {
+            echo "Published Flatpak fingerprint does not match the signing key." >&2
+            exit 1
+          }
+
+          # Verify through a fresh OSTree remote configured to require the
+          # summary and every release metadata commit signature. This reads
+          # only the exported public key and proves the app plus generated
+          # AppStream refs are usable before the repository reaches rsync.
+          mapfile -t verify_refs < <(
+            ostree refs --repo="$flatpak_repo"
+          )
+          if [ "${#verify_refs[@]}" -eq 0 ]; then
+            echo "Flatpak release repository contains no refs." >&2
+            exit 1
+          fi
+          mapfile -t flatpak_refs < <(
+            printf '%s\n' "${verify_refs[@]}" | \
+              awk '/^app\/buzz[.]armada[.]app\/[^/]+\/stable$/ { print }'
+          )
+          if [ "${#flatpak_refs[@]}" -ne 1 ]; then
+            echo "Expected exactly one stable Armada app ref in the Flatpak repository." >&2
+            exit 1
+          fi
+          mapfile -t appstream_refs < <(
+            printf '%s\n' "${verify_refs[@]}" | \
+              awk '/^appstream2?\/[^/]+$/ { print }'
+          )
+          if [ "${#appstream_refs[@]}" -eq 0 ]; then
+            echo "Expected Flatpak AppStream refs in the release repository." >&2
+            exit 1
+          fi
+          verify_repo=$(mktemp -d "$RUNNER_TEMP/armada-flatpak-verify.XXXXXX")
+          ostree init --repo="$verify_repo" --mode=archive-z2
+          ostree remote add --repo="$verify_repo" \
+            --set=gpg-verify=true --set=gpg-verify-summary=true \
+            --gpg-import="$public_key" armada-ci "file://$flatpak_repo"
+          for ref in "${verify_refs[@]}"; do
+            ostree pull --repo="$verify_repo" --commit-metadata-only \
+              armada-ci "$ref"
+          done
+
+          # OSTree's raw pull consumes the legacy summary. Exercise the modern
+          # summary.idx path separately through a completely isolated Flatpak
+          # installation, including an AppStream refresh.
+          staged_flatpak_home=$(mktemp -d "$RUNNER_TEMP/armada-flatpak-cli-verify.XXXXXX")
+          (
+            export HOME="$staged_flatpak_home/home"
+            export XDG_DATA_HOME="$staged_flatpak_home/data"
+            export XDG_CONFIG_HOME="$staged_flatpak_home/config"
+            export XDG_CACHE_HOME="$staged_flatpak_home/cache"
+            export XDG_RUNTIME_DIR="$staged_flatpak_home/runtime"
+            mkdir -p "$HOME" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" \
+              "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR"
+            chmod 700 "$XDG_RUNTIME_DIR"
+            flatpak remote-add --user --gpg-import="$public_key" \
+              armada-staged-flatpak "file://$flatpak_repo"
+            flatpak remote-ls --user --app --columns=application \
+              armada-staged-flatpak | grep -Fx buzz.armada.app >/dev/null
+            flatpak update --user --appstream --noninteractive -y \
+              armada-staged-flatpak
+          )
+
+          # Finally install the artifact users receive. The embedded key must
+          # validate the bundle, create a verified origin remote, and retain
+          # the exact stable update URL rather than the local staging path.
+          signed_bundle="$PWD/electron/release/Armada-flatpak-$(uname -m).flatpak"
+          test -s "$signed_bundle"
+          bundle_flatpak_home=$(mktemp -d "$RUNNER_TEMP/armada-flatpak-bundle-verify.XXXXXX")
+          (
+            export HOME="$bundle_flatpak_home/home"
+            export XDG_DATA_HOME="$bundle_flatpak_home/data"
+            export XDG_CONFIG_HOME="$bundle_flatpak_home/config"
+            export XDG_CACHE_HOME="$bundle_flatpak_home/cache"
+            export XDG_RUNTIME_DIR="$bundle_flatpak_home/runtime"
+            mkdir -p "$HOME" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" \
+              "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR"
+            chmod 700 "$XDG_RUNTIME_DIR"
+            flatpak install --user --no-deps --bundle --noninteractive -y \
+              "$signed_bundle"
+            bundle_origin=$(flatpak info --user --show-origin buzz.armada.app)
+            if [ -z "$bundle_origin" ]; then
+              echo "Installed Flatpak bundle has no update origin." >&2
+              exit 1
+            fi
+            bundle_repo="$XDG_DATA_HOME/flatpak/repo"
+            bundle_url=$(ostree config --repo="$bundle_repo" get \
+              "remote \"$bundle_origin\".url")
+            bundle_gpg_verify=$(ostree config --repo="$bundle_repo" get \
+              "remote \"$bundle_origin\".gpg-verify")
+            bundle_summary_verify=$(ostree config --repo="$bundle_repo" get \
+              "remote \"$bundle_origin\".gpg-verify-summary")
+            [ "$bundle_url" = "https://armada.buzz/downloads/flatpak/" ] || {
+              echo "Installed Flatpak bundle has the wrong update origin: $bundle_url" >&2
+              exit 1
+            }
+            [ "$bundle_gpg_verify" = true ] || {
+              echo "Installed Flatpak origin does not verify commit signatures." >&2
+              exit 1
+            }
+            [ "$bundle_summary_verify" = true ] || {
+              echo "Installed Flatpak origin does not verify summary signatures." >&2
+              exit 1
+            }
+          )
+          echo "Signed Flatpak repository verified with key $fingerprint."
+
+      # Stage everything human-facing under ONE .release-artifacts/ directory,
+      # named exactly as the release event will name it: the artifact upload and
+      # the release event then describe the same bytes under the same name. The
+      # extension identifies the platform where it can (.AppImage / .deb =
+      # Linux, .exe = Windows); the Windows portable build and the mac zips
+      # carry a suffix because theirs doesn't. `src/lib/downloads.test.ts` reads
+      # these names back and fails if the client can't file one under a
+      # platform.
+      #
+      # Machine update feeds are staged separately under desktop/ and flatpak/,
+      # because neither can be content-addressed: electron-updater fetches a
+      # fixed feed URL and Flatpak needs an OSTree remote over HTTP. Those are
+      # the only things still deployed over SSH. Updater payloads retain
+      # electron-builder's exact basename because each latest*.yml refers to
+      # that name.
+      - name: Collect installers
+        id: collect
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          # Dependent ngit-ci jobs share this checkout but not RUNNER_TEMP.
+          # Keep the deploy tree beneath ignored release output so the fresh,
+          # secret-bearing deploy job can consume it without an artifact action.
+          root="$PWD/electron/release/deploy"
+          # The installers go where the `release` job will find them, beside the
+          # APK the android job already staged there. `rm -rf "$root"` below must
+          # NOT reach this directory for that reason.
+          out="$PWD/.release-artifacts"
+          feed="$root/desktop"
+          flatpak_repo="$root/flatpak"
+          rm -rf "$root"
+          mkdir -p "$out" "$feed" "$flatpak_repo"
+          # Match electron-builder's versioned name specifically. flatpak/build.sh
+          # stages its input beside it as the unversioned Armada.AppImage, so a
+          # bare *.AppImage glob matches two files and cp then reads the last
+          # argument as a destination directory.
+          cp electron/release/Armada-*-linux-*.AppImage "$out/Armada-$TAG.AppImage"
+          cp electron/release/*.deb "$out/Armada-$TAG.deb"
+          cp electron/release/Armada-flatpak-*.flatpak "$out/Armada-$TAG.flatpak"
+          # Anchored to the trailing -Setup.exe so it can't also match the
+          # intermediate Armada-<ver>-Setup.__uninstaller.exe.
+          cp electron/release/Armada-*-Setup.exe "$out/Armada-$TAG.exe"
+          # The portable build is the non-Setup .exe.
+          cp "$(ls electron/release/*.exe | grep -iv setup | head -n1)" "$out/Armada-$TAG-portable.exe"
+          # .zip names its platform, since the extension doesn't.
+          cp electron/release/mac/Armada-mac-x64.zip "$out/Armada-$TAG-mac-x64.zip"
+          cp electron/release/mac/Armada-mac-arm64.zip "$out/Armada-$TAG-mac-arm64.zip"
+
+          # No unversioned aliases and no latest-*.json manifest are written any
+          # more. Both existed because /downloads had to name a file at build
+          # time, before it could know a version; it now reads the release event,
+          # which names every artifact by its exact filename and hash. A stable
+          # alias would be a second, uncontent-addressed way to get the same
+          # bytes, and the manifests were a lost-update hazard between two
+          # workflows that no longer exist separately.
+
+          # Windows NSIS and Linux AppImage self-update from these files. The
+          # portable exe, deb and Flatpak editions remain externally managed.
+          cp electron/release/latest.yml electron/release/latest-linux.yml "$feed/"
+          # Every .exe, not just *Setup*: electron-builder lists the portable
+          # artifact in latest.yml alongside the NSIS one, and a feed naming a
+          # payload that was never staged fails validation below.
+          # The .deb likewise: nothing self-updates from it, but electron-builder
+          # lists it in latest-linux.yml because the Linux target built it, and
+          # every reference is a hard requirement above. The AppImage is matched
+          # by its versioned name so flatpak/build.sh's staged Armada.AppImage
+          # isn't published into the feed as a second, unreferenced copy.
+          cp electron/release/Armada-*-linux-*.AppImage electron/release/*.exe \
+             electron/release/*.deb "$feed/"
+          for file in electron/release/*.blockmap; do
+            [ -e "$file" ] || continue
+            cp "$file" "$feed/"
+          done
+          # --version ties the feed to the tag being released. Without it a feed
+          # carrying the 0.0.0 fallback below, or one left over from an earlier
+          # build in a reused work dir, publishes as if it were this release.
+          case "$TAG" in
+            v[0-9]*) FEED_VERSION="${TAG#v}" ;;
+            *) FEED_VERSION=0.0.0 ;;
+          esac
+          node electron/scripts/validate-update-feed.mjs --version "$FEED_VERSION" \
+            "$feed/latest.yml" "$feed/latest-linux.yml"
+
+          # Preserve the repository layout produced by flatpak-builder. Its
+          # objects are content addressed; old objects may remain available for
+          # clients updating from older releases.
+          cp -a electron/release/flatpak-repo/. "$flatpak_repo/"
+          ls -lh "$out"
+          ls -lh "$feed"
+          echo "root=$root" >> "$GITHUB_OUTPUT"
+          echo "dir=$out" >> "$GITHUB_OUTPUT"
+          echo "feed=$feed" >> "$GITHUB_OUTPUT"
+          echo "flatpak_repo=$flatpak_repo" >> "$GITHUB_OUTPUT"
+
+      # The private signing home has already been destroyed. Upload actions
+      # remain in this job because their paths are step outputs; deployment is
+      # isolated in a third container below.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: armada-desktop-linux-${{ github.ref_name }}
+          path: |
+            ${{ steps.collect.outputs.dir }}/Armada-${{ github.ref_name }}.AppImage
+            ${{ steps.collect.outputs.dir }}/Armada-${{ github.ref_name }}.deb
+            ${{ steps.collect.outputs.dir }}/Armada-${{ github.ref_name }}.flatpak
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: armada-desktop-windows-${{ github.ref_name }}
+          path: |
+            ${{ steps.collect.outputs.dir }}/Armada-${{ github.ref_name }}.exe
+            ${{ steps.collect.outputs.dir }}/Armada-${{ github.ref_name }}-portable.exe
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: armada-desktop-mac-${{ github.ref_name }}
+          path: |
+            ${{ steps.collect.outputs.dir }}/Armada-${{ github.ref_name }}-mac-x64.zip
+            ${{ steps.collect.outputs.dir }}/Armada-${{ github.ref_name }}-mac-arm64.zip
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: armada-desktop-update-feed-${{ github.ref_name }}
+          path: ${{ steps.collect.outputs.feed }}
+          if-no-files-found: error
+
+      # Signing and its verification now run BEFORE the installers are staged,
+      # so a tag that fails there would otherwise upload nothing at all and
+      # leave the maintainer with only a log. Publish the raw build output
+      # instead: the installers are the same bytes the build job produced, and
+      # the unsigned Flatpak bundle is what the signing step was working on.
+      # `warn`, not `error`: this runs after failures anywhere in the job,
+      # including ones that happen before an installer exists.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: armada-desktop-failed-${{ github.ref_name }}
+          path: |
+            electron/release/*.AppImage
+            electron/release/*.deb
+            electron/release/*.exe
+            electron/release/*.flatpak
+            electron/release/latest*.yml
+            electron/release/mac/*.zip
+          if-no-files-found: warn
+
+  # A third fresh container is the SSH credential boundary. No executable from
+  # the shared workspace runs here: tooling installation and deployment are
+  # workflow-owned inline shell using a fixed system PATH. The publish job may
+  # run release validators from the checkout, but they cannot persist into this
+  # container and observe a later-injected deploy key.
+  deploy:
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Install deploy tooling (fallback for stock runner images)
+        run: |
+          set -euo pipefail
+          export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          packages=()
+          command -v curl >/dev/null 2>&1 || packages+=(curl)
+          command -v flatpak >/dev/null 2>&1 || packages+=(flatpak)
+          command -v gpg >/dev/null 2>&1 || packages+=(gnupg)
+          command -v ostree >/dev/null 2>&1 || packages+=(ostree)
+          command -v rsync >/dev/null 2>&1 || packages+=(rsync)
+          command -v ssh >/dev/null 2>&1 || packages+=(openssh-client)
+          if [ "${#packages[@]}" -gt 0 ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends "${packages[@]}" >/dev/null
+          fi
+
+      # Publish to https://armada.buzz/downloads/ over the rrsync-jailed deploy
+      # user. Pushing the staged `downloads` DIRECTORY (no trailing slash) into
+      # the jail root ":/" is what creates/updates the directory there. This
+      # rsync runs without `--delete`, as release.yml's does — the two publish
+      # into one jail root and would otherwise delete each other's installers,
+      # so don't add one without excluding the other's files.
+      #
+      # Secrets (operator-provisioned, maintainer-gated): DEPLOY_SSH_KEY_BASE64,
+      # DEPLOY_SSH_CONFIG_BASE64, DEPLOY_TARGET, and the pinned full primary
+      # FLATPAK_GPG_EXPECTED_FINGERPRINT. The private signing key is confined to
+      # the preceding fresh job and never enters this container. With no deploy
+      # key the signed installers remain available as run artifacts; only the
+      # server publish is skipped.
+      - name: Deploy desktop installers and update repositories
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          DEPLOY_SSH_KEY_BASE64: ${{ secrets.DEPLOY_SSH_KEY_BASE64 }}
+          DEPLOY_SSH_CONFIG_BASE64: ${{ secrets.DEPLOY_SSH_CONFIG_BASE64 }}
+          DEPLOY_TARGET: ${{ secrets.DEPLOY_TARGET }}
+          FLATPAK_GPG_EXPECTED_FINGERPRINT: ${{ secrets.FLATPAK_GPG_EXPECTED_FINGERPRINT }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+          DEPLOY_ROOT="$PWD/electron/release/deploy"
+          deploy_ssh_key_base64="${DEPLOY_SSH_KEY_BASE64:-}"
+          deploy_ssh_config_base64="${DEPLOY_SSH_CONFIG_BASE64:-}"
+          deploy_target="${DEPLOY_TARGET:-web}"
+          expected_fingerprint_raw="${FLATPAK_GPG_EXPECTED_FINGERPRINT:-}"
+          unset DEPLOY_SSH_KEY_BASE64 DEPLOY_SSH_CONFIG_BASE64 DEPLOY_TARGET
+          unset FLATPAK_GPG_EXPECTED_FINGERPRINT
+
+          # workflow_dispatch off a branch names the files after the branch;
+          # publish only real version tags.
+          case "$TAG" in
+            v*) ;;
+            *) echo "ref '$TAG' is not a version tag; skipping desktop deploy."; exit 0 ;;
+          esac
+
+          # No key provisioned (or non-maintainer trigger): artifacts only.
+          if [ -z "$deploy_ssh_key_base64" ]; then
+            echo "DEPLOY_SSH_KEY_BASE64 not set; skipping desktop deploy (artifacts uploaded)."
+            exit 0
+          fi
+
+          # Defense in depth: even if the signing step is later rearranged or
+          # bypassed, deploy only a repository whose summary, current app, and
+          # AppStream commits verify against the pinned publisher identity.
+          for name in summary summary.sig summary.idx summary.idx.sig config armada-flatpak.gpg armada-flatpak.fingerprint; do
+            if [ ! -s "$DEPLOY_ROOT/flatpak/$name" ]; then
+              echo "Signed Flatpak repository is missing $name; refusing deploy." >&2
+              exit 1
+            fi
+          done
+          if [ ! -d "$DEPLOY_ROOT/flatpak/summaries" ]; then
+            echo "Signed Flatpak repository is missing summaries/; refusing deploy." >&2
+            exit 1
+          fi
+          staged_summary_index_sha=$(sha256sum \
+            "$DEPLOY_ROOT/flatpak/summary.idx" | cut -d ' ' -f1)
+          staged_summary_index_signature="$DEPLOY_ROOT/flatpak/summaries/$staged_summary_index_sha.idx.sig"
+          if [ ! -s "$staged_summary_index_signature" ]; then
+            echo "Signed Flatpak repository is missing its summary index signature shard; refusing deploy." >&2
+            exit 1
+          fi
+          expected_fingerprint=$(printf '%s' "$expected_fingerprint_raw" | \
+            tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')
+          unset expected_fingerprint_raw
+          staged_fingerprint=$(tr -d '[:space:]' \
+            < "$DEPLOY_ROOT/flatpak/armada-flatpak.fingerprint" | \
+            tr '[:lower:]' '[:upper:]')
+          if [ -z "$expected_fingerprint" ] || \
+             [ "$staged_fingerprint" != "$expected_fingerprint" ]; then
+            echo "Staged Flatpak key does not match FLATPAK_GPG_EXPECTED_FINGERPRINT; refusing deploy." >&2
+            exit 1
+          fi
+          mapfile -t staged_key_fingerprints < <(
+            gpg --batch --show-keys --with-colons \
+              "$DEPLOY_ROOT/flatpak/armada-flatpak.gpg" 2>/dev/null | awk -F: '
+                $1 == "pub" { primary = 1; next }
+                primary && $1 == "fpr" { print toupper($10); primary = 0 }
+              '
+          )
+          if [ "${#staged_key_fingerprints[@]}" -ne 1 ] || \
+             [ "${staged_key_fingerprints[0]}" != "$expected_fingerprint" ]; then
+            echo "Published Flatpak public key does not match its pinned fingerprint; refusing deploy." >&2
+            exit 1
+          fi
+          mapfile -t staged_verify_refs < <(
+            ostree refs --repo="$DEPLOY_ROOT/flatpak"
+          )
+          if [ "${#staged_verify_refs[@]}" -eq 0 ]; then
+            echo "Flatpak repository has no refs; refusing deploy." >&2
+            exit 1
+          fi
+          mapfile -t staged_flatpak_refs < <(
+            printf '%s\n' "${staged_verify_refs[@]}" | \
+              awk '/^app\/buzz[.]armada[.]app\/[^/]+\/stable$/ { print }'
+          )
+          if [ "${#staged_flatpak_refs[@]}" -ne 1 ]; then
+            echo "Expected exactly one stable Armada app ref; refusing Flatpak deploy." >&2
+            exit 1
+          fi
+          mapfile -t staged_appstream_refs < <(
+            printf '%s\n' "${staged_verify_refs[@]}" | \
+              awk '/^appstream2?\/[^/]+$/ { print }'
+          )
+          if [ "${#staged_appstream_refs[@]}" -eq 0 ]; then
+            echo "Flatpak repository has no AppStream refs; refusing deploy." >&2
+            exit 1
+          fi
+          staged_verify_repo=$(mktemp -d "$RUNNER_TEMP/armada-flatpak-deploy-verify.XXXXXX")
+          ostree init --repo="$staged_verify_repo" --mode=archive-z2
+          ostree remote add --repo="$staged_verify_repo" \
+            --set=gpg-verify=true --set=gpg-verify-summary=true \
+            --gpg-import="$DEPLOY_ROOT/flatpak/armada-flatpak.gpg" \
+            armada-staged "file://$DEPLOY_ROOT/flatpak"
+          for ref in "${staged_verify_refs[@]}"; do
+            ostree pull --repo="$staged_verify_repo" --commit-metadata-only \
+              armada-staged "$ref"
+          done
+
+          # Exercise the summary index and AppStream path through isolated
+          # Flatpak state as well as OSTree's legacy-summary read above.
+          staged_flatpak_home=$(mktemp -d "$RUNNER_TEMP/armada-flatpak-deploy-cli.XXXXXX")
+          (
+            export HOME="$staged_flatpak_home/home"
+            export XDG_DATA_HOME="$staged_flatpak_home/data"
+            export XDG_CONFIG_HOME="$staged_flatpak_home/config"
+            export XDG_CACHE_HOME="$staged_flatpak_home/cache"
+            export XDG_RUNTIME_DIR="$staged_flatpak_home/runtime"
+            mkdir -p "$HOME" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" \
+              "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR"
+            chmod 700 "$XDG_RUNTIME_DIR"
+            flatpak remote-add --user \
+              --gpg-import="$DEPLOY_ROOT/flatpak/armada-flatpak.gpg" \
+              armada-staged-flatpak "file://$DEPLOY_ROOT/flatpak"
+            flatpak remote-ls --user --app --columns=application \
+              armada-staged-flatpak | grep -Fx buzz.armada.app >/dev/null
+            flatpak update --user --appstream --noninteractive -y \
+              armada-staged-flatpak
+          )
+
+          # Materialize SSH state in a private temporary directory. Key/config
+          # arrive base64 (single line) to fit masking rules; every rsync names
+          # this config explicitly, so ambient ~/.ssh state is never consulted.
+          umask 077
+          deploy_ssh_dir=$(mktemp -d "$RUNNER_TEMP/armada-deploy-ssh.XXXXXX")
+          deploy_ssh_key="$deploy_ssh_dir/id_ed25519"
+          deploy_ssh_config="$deploy_ssh_dir/config"
+          cleanup_deploy_ssh() {
+            rm -rf -- "$deploy_ssh_dir"
+          }
+          trap cleanup_deploy_ssh EXIT HUP INT TERM
+          printf '%s' "$deploy_ssh_key_base64" | base64 -d > "$deploy_ssh_key"
+          unset deploy_ssh_key_base64
+          if [ -n "$deploy_ssh_config_base64" ]; then
+            printf '%s' "$deploy_ssh_config_base64" | base64 -d > "$deploy_ssh_config"
+          fi
+          unset deploy_ssh_config_base64
+          # A CLI -o StrictHostKeyChecking is NOT inherited by the ProxyJump
+          # child connection, so put host defaults in the config so every hop
+          # (including a bastion) picks them up.
+          printf 'Host *\n\tIdentityFile %s\n\tUserKnownHostsFile %s\n\tBatchMode yes\n\tStrictHostKeyChecking accept-new\n' \
+            "$deploy_ssh_key" "$deploy_ssh_dir/known_hosts" >> "$deploy_ssh_config"
+
+          TARGET="$deploy_target"
+          unset deploy_target
+
+          # The public site is an nsite behind Caddy. Verify the filesystem
+          # carve-out itself, not merely that rsync accepted the bytes: a route
+          # regression can otherwise return the SPA shell with 200 (Flatpak) or
+          # a synthetic 404 (electron-updater) while the release job stays green.
+          smoke=$(mktemp -d "$RUNNER_TEMP/armada-update-smoke.XXXXXX")
+
+          # The installers themselves are NOT published here any more. They are
+          # named by the kind-30622 release event and fetched from Blossom by
+          # hash, so there is no armada.buzz copy to keep in step and no
+          # unversioned alias to keep pointing somewhere true. What remains
+          # below is only what cannot be content-addressed: electron-updater
+          # reads a fixed feed URL, and Flatpak needs a real OSTree remote over
+          # HTTP. Neither can be a hash.
+          #
+          # --chmod: the served mode is stated here rather than inherited from
+          # whatever umask the staging step ran under. A payload the web
+          # server's user can't read is a 403, which looks like a build that
+          # didn't publish.
+
+          # Publish immutable updater payloads before the mutable latest*.yml
+          # pointers. A client can therefore never observe metadata naming a
+          # file that has not reached the server yet. The legacy copy makes a
+          # /desktop Caddy carve-out sufficient to migrate existing clients.
+          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
+            --exclude='latest*.yml' \
+            "$DEPLOY_ROOT/desktop/" "${TARGET}:/downloads/desktop/"
+          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
+            --exclude='latest*.yml' \
+            "$DEPLOY_ROOT/desktop/" "${TARGET}:/desktop/"
+          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
+            --include='latest*.yml' --exclude='*' \
+            "$DEPLOY_ROOT/desktop/" "${TARGET}:/downloads/desktop/"
+          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
+            --include='latest*.yml' --exclude='*' \
+            "$DEPLOY_ROOT/desktop/" "${TARGET}:/desktop/"
+
+          for name in latest.yml latest-linux.yml; do
+            curl -fsS --retry 5 --retry-all-errors \
+              "https://armada.buzz/downloads/desktop/$name" -o "$smoke/$name"
+            cmp "$DEPLOY_ROOT/desktop/$name" "$smoke/$name"
+          done
+
+          # Flatpak's signed summary is the mutable pointer into its
+          # content-addressed object store. Publish every object, the immutable
+          # summaries/ index shards, and the public identity before the root
+          # summary, signature, summary index, and index-signature pointers so a
+          # client never sees a commit or shard that is still in flight. Keep
+          # the legacy physical tree current as well: already-installed remotes
+          # retain /flatpak forever, and production Caddy can expose it as a
+          # compatibility carve-out. Root-anchored filters matter: `summary*`
+          # would also omit the `summaries/` payload directory.
+          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
+            --include='/summaries/***' \
+            --exclude='/summary' --exclude='/summary.sig' \
+            --exclude='/summary.idx' --exclude='/summary.idx.sig' \
+            "$DEPLOY_ROOT/flatpak/" "${TARGET}:/downloads/flatpak/"
+          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
+            --include='/summaries/***' \
+            --exclude='/summary' --exclude='/summary.sig' \
+            --exclude='/summary.idx' --exclude='/summary.idx.sig' \
+            "$DEPLOY_ROOT/flatpak/" "${TARGET}:/flatpak/"
+
+          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
+            --include='/summary' --include='/summary.sig' \
+            --include='/summary.idx' --include='/summary.idx.sig' --exclude='*' \
+            "$DEPLOY_ROOT/flatpak/" "${TARGET}:/downloads/flatpak/"
+          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
+            --include='/summary' --include='/summary.sig' \
+            --include='/summary.idx' --include='/summary.idx.sig' --exclude='*' \
+            "$DEPLOY_ROOT/flatpak/" "${TARGET}:/flatpak/"
+          for name in summary summary.sig summary.idx summary.idx.sig config armada-flatpak.gpg armada-flatpak.fingerprint; do
+            curl -fsS --retry 5 --retry-all-errors \
+              "https://armada.buzz/downloads/flatpak/$name" -o "$smoke/flatpak-$name"
+            cmp "$DEPLOY_ROOT/flatpak/$name" "$smoke/flatpak-$name"
+          done
+          summary_index_signature_relative=${staged_summary_index_signature#"$DEPLOY_ROOT/flatpak/"}
+          case "$summary_index_signature_relative" in
+            summaries/*.idx.sig) ;;
+            *) echo "Invalid staged Flatpak summary index signature path." >&2; exit 1 ;;
+          esac
+          curl -fsS --retry 5 --retry-all-errors \
+            "https://armada.buzz/downloads/flatpak/$summary_index_signature_relative" \
+            -o "$smoke/flatpak-summary-index-signature"
+          cmp "$staged_summary_index_signature" \
+            "$smoke/flatpak-summary-index-signature"
+
+          # A byte-for-byte readback is necessary but not sufficient: make a
+          # fresh metadata-only pull from the public URL with summary and
+          # commit verification required. This catches invalid app or AppStream
+          # signatures and routing mistakes without downloading payloads again.
+          public_verify_repo="$smoke/public-verify"
+          ostree init --repo="$public_verify_repo" --mode=archive-z2
+          ostree remote add --repo="$public_verify_repo" \
+            --set=gpg-verify=true --set=gpg-verify-summary=true \
+            --gpg-import="$smoke/flatpak-armada-flatpak.gpg" \
+            armada-public https://armada.buzz/downloads/flatpak/
+          for ref in "${staged_verify_refs[@]}"; do
+            ostree pull --repo="$public_verify_repo" --commit-metadata-only \
+              armada-public "$ref"
+          done
+
+          public_flatpak_home=$(mktemp -d "$RUNNER_TEMP/armada-flatpak-public-cli.XXXXXX")
+          (
+            export HOME="$public_flatpak_home/home"
+            export XDG_DATA_HOME="$public_flatpak_home/data"
+            export XDG_CONFIG_HOME="$public_flatpak_home/config"
+            export XDG_CACHE_HOME="$public_flatpak_home/cache"
+            export XDG_RUNTIME_DIR="$public_flatpak_home/runtime"
+            mkdir -p "$HOME" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" \
+              "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR"
+            chmod 700 "$XDG_RUNTIME_DIR"
+            flatpak remote-add --user \
+              --gpg-import="$smoke/flatpak-armada-flatpak.gpg" \
+              armada-public-flatpak https://armada.buzz/downloads/flatpak/
+            flatpak remote-ls --user --app --columns=application \
+              armada-public-flatpak | grep -Fx buzz.armada.app >/dev/null
+            flatpak update --user --appstream --noninteractive -y \
+              armada-public-flatpak
+          )
+
+          # The .flatpak bundle used to be held back and rsynced here, last,
+          # because installing it configures a GPG-verified remote and handing
+          # a user one whose origin isn't readable yet breaks their first
+          # update. That ordering is now structural rather than manual: the
+          # bundle is named by the release event, and the `release` job
+          # `needs:` this one, so it cannot be announced until the repository
+          # it points at has been published AND verified by the checks above.
+
+          cleanup_deploy_ssh
+          trap - EXIT HUP INT TERM
+
+  # The single writer of the release event. `needs:` both build paths so it can
+  # name every artifact in one kind-30622 event (docs/releases.md) — that event
+  # is addressable, replacement is whole-event rather than a tag union, and
+  # Nostr has no compare-and-swap, so a second publisher would silently drop
+  # one side's artifacts rather than merge with them.
+  #
+  # Depending on `deploy` rather than `publish` is deliberate: it is what keeps
+  # the .flatpak bundle from being announced before the GPG-verified OSTree
+  # remote it configures on install is live and checked.
+  #
+  # `always()` so a release still goes out when one platform failed, carrying
+  # whatever was built. The script refuses to publish an empty release, so a
+  # run where nothing built fails here instead of announcing a version with no
+  # downloads.
+  release:
+    needs: [android, deploy]
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # No checkout step: dependent ngit-ci jobs bind the same working tree, so
+      # the sources, the node_modules the android job installed, and the
+      # .release-artifacts/ both build jobs staged into are all already here.
+      - name: Publish the NIP-34 release event
+        env:
+          # The same NIP-46 session that signs the Zapstore publish. Two halves,
+          # both required: the bunker URL names the remote signer and its relay,
+          # the client key is what that signer already authorized.
+          NOSTR_BUNKER_URL: ${{ secrets.ZAPSTORE_BUNKER_URL }}
+          NOSTR_CLIENT_KEY: ${{ secrets.ZAPSTORE_CLIENT_KEY }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          : "${NOSTR_BUNKER_URL:?Set the ZAPSTORE_BUNKER_URL secret.}"
+          : "${NOSTR_CLIENT_KEY:?Set the ZAPSTORE_CLIENT_KEY secret.}"
+
+          if [ ! -d .release-artifacts ]; then
+            echo "No .release-artifacts/ directory: every build job failed." >&2
+            exit 1
+          fi
+          ls -lh .release-artifacts
+
+          # Most blobs are already on Blossom — ngit-ci uploads run artifacts to
+          # the same server — so this mostly hashes files and confirms hits. It
+          # uploads only what the coordinator dropped, which is why a 413 or an
+          # exhausted upload budget upstream costs a little time here rather
+          # than a missing download.
+          #
+          # GITHUB_SHA is the tagged commit; the event records it because kind
+          # 30618 goes stale and a release that can't state its own provenance
+          # isn't self-sufficient.
+          node scripts/publish-release.mjs \
+            --version "$TAG" \
+            --commit "$GITHUB_SHA" \
+            --dir .release-artifacts

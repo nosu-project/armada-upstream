@@ -513,11 +513,17 @@ lockfile-pinned 7.x build.
 
 ## CI
 
-`.ngit/act/workflows/desktop.yml`, on version tags (`vX.Y.Z`). One job builds
-the web bundle and desktop DB bridge, then every published platform from a
-single Linux container. Human installers are copied to `/downloads`; updater
-payloads retain their electron-builder names under `/downloads/desktop`; the
-Flatpak OSTree repository is published under `/downloads/flatpak`.
+`.ngit/act/workflows/release.yml`, on version tags (`vX.Y.Z`) — the `desktop`
+job builds the web bundle and desktop DB bridge, then every published platform
+from a single Linux container.
+
+Installers are not served over HTTP any more. They are staged into
+`.release-artifacts/`, uploaded to Blossom, and named by hash in the kind-30622
+release event the `release` job publishes (`docs/releases.md`), which is what
+`/downloads` reads. Only what cannot be content-addressed is still deployed:
+updater payloads retain their electron-builder names under `/downloads/desktop`
+because each `latest*.yml` refers to them, and the Flatpak OSTree repository is
+published under `/downloads/flatpak` because Flatpak needs a real remote.
 
 | File | Built by |
 |------|----------|

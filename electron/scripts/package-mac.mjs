@@ -15,7 +15,7 @@
 //
 // The remaining Apple-only pieces are deliberately NOT faked here:
 //   - signing: an arm64 Mac refuses to exec an unsigned binary, so CI ad-hoc
-//     signs the output with rcodesign (see .ngit/act/workflows/desktop.yml).
+//     signs the output with rcodesign (see .ngit/act/workflows/release.yml).
 //   - .dmg: the disk-image format needs HFS+ tooling; CI ships .zip, which is
 //     the same format Electron's own mac autoupdater feeds on.
 //

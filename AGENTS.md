@@ -45,7 +45,7 @@ needs no Armada-specific server at all: any NIP-29 relay serves it.
 | `ios/ArmadaDB/` | ArmadaDB in Swift: the SQLite engine the iOS build runs, with SQLite vendored. A SwiftPM package so it builds on **Linux**, where its conformance suite runs without a Mac |
 | `ios/ArmadaNotify/` | The decrypt/store/present pipeline the iOS Notification Service Extension runs (NIP-44/NIP-17/Concord, libsecp256k1 vendored). A SwiftPM package for the same reason — its suite runs on **Linux** |
 | `electron/`  | Electron desktop shell (loads the bundled web build; Linux/Windows/macOS installers built in CI) |
-| `docs/`      | Design notes too long for this file — currently `settings-documents.md` (the NIP-78 settings split) |
+| `docs/`      | Design notes too long for this file — `settings-documents.md` (the NIP-78 settings split) and `releases.md` (kind 30622, the NIP-34 release event `/downloads` reads) |
 | `scripts/`   | Repo tooling, incl. two Concord-aware moderation-UX harnesses that mirror the same CORD-01/02/05 derivations: `scripts/spambot.mjs` (WRITES — chat spam with flood-fold evasion, plus kind-3313 direct-invite spam via `--invite-spam`) and `scripts/dump-community.mjs` (READS — resolves an invite and pages the decrypted Chat Plane out of the relays in `OpenedChat` shape, for feeding `floodCluster.ts`); see each file's header comment |
 
 ## Build / test
@@ -462,7 +462,7 @@ Things to know before touching it:
   `src/lib/db/electronMain.ts` is bundled to `electron/db.cjs`
   (`vite.config.electron.ts`, `npm run build:electron-db`) and `require`d by
   `main.js`, so there is no hand-written JS copy of the store to drift. Two
-  consequences: the bundle is a BUILD ARTIFACT (gitignored, and `desktop.yml`
+  consequences: the bundle is a BUILD ARTIFACT (gitignored, and `release.yml`
   must build it — a missing `db.cjs` is not a build failure, it is a shipped app
   quietly storing data in the wrong place), and it must stay free of Electron
   imports so `tsc`/eslint cover it as ordinary `src/` code. The file lives at

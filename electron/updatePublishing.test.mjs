@@ -9,8 +9,10 @@ const root = process.cwd();
 const builder = loadYaml(
   fs.readFileSync(path.resolve(root, "electron/electron-builder.yml"), "utf8"),
 );
+// desktop.yml was merged into release.yml so one job could publish the release
+// event after every build; the desktop/publish/deploy jobs kept their names.
 const workflowSource = fs.readFileSync(
-  path.resolve(root, ".ngit/act/workflows/desktop.yml"),
+  path.resolve(root, ".ngit/act/workflows/release.yml"),
   "utf8",
 );
 const workflow = loadYaml(workflowSource);
@@ -579,23 +581,39 @@ describe("desktop update publication", () => {
       Math.max(...flatpakPointers),
     );
 
-    // The installers that have nothing to do with the OSTree repository are
-    // published FIRST and unconditionally; only the .flatpak bundle waits for
-    // the origin it configures to be readable and verified. A Flatpak-side
-    // failure must not withhold the Windows, macOS, deb or AppImage builds.
-    const otherInstallersPublish = deployCommands.findIndex((command) =>
-      command.includes(
-        "--exclude='*.flatpak' \"$DEPLOY_ROOT/downloads\" \"${TARGET}:/\"",
-      ),
+    // Installers are no longer deployed at all: they are named by the
+    // kind-30622 release event and fetched from Blossom by hash. Only what
+    // cannot be content-addressed still goes over SSH — electron-updater's
+    // fixed feed URL and the Flatpak OSTree remote.
+    const installerPublish = deployCommands.filter((command) =>
+      command.includes("$DEPLOY_ROOT/downloads"),
     );
-    const bundlePublish = deployCommands.findIndex((command) =>
-      command.includes(
-        "--include='downloads/' --include='*.flatpak' --exclude='*' \"$DEPLOY_ROOT/downloads\" \"${TARGET}:/\"",
-      ),
+    expect(installerPublish).toEqual([]);
+  });
+
+  // The .flatpak bundle configures a GPG-verified update origin when it is
+  // installed, so announcing it before that origin is readable and verified
+  // would hand a user an app whose first update fails. That used to be a
+  // hand-ordered final rsync; it is now structural, and this is the assertion
+  // that keeps it so.
+  it("announces the release only after the Flatpak origin is published and verified", () => {
+    expect(workflow.jobs.release.needs).toContain("deploy");
+    expect(workflow.jobs.deploy.needs).toBe("publish");
+
+    const publishStep = workflow.jobs.release.steps.find(
+      (step) => step.name === "Publish the NIP-34 release event",
     );
-    expect(otherInstallersPublish).toBeGreaterThan(-1);
-    expect(bundlePublish).toBeGreaterThan(-1);
-    expect(otherInstallersPublish).toBeLessThan(Math.min(...flatpakPayloads));
-    expect(bundlePublish).toBeGreaterThan(publicFlatpakRefresh);
+    expect(publishStep?.run).toContain("scripts/publish-release.mjs");
+  });
+
+  // One writer, structurally. Kind 30622 is addressable and Nostr has no
+  // compare-and-swap, so a second publisher would replace the first's event
+  // rather than merge with it, silently dropping half the artifacts.
+  it("publishes the release event from exactly one job, after every build", () => {
+    const publishers = Object.entries(workflow.jobs).filter(([, job]) =>
+      job.steps.some((step) => String(step.run || "").includes("publish-release.mjs")),
+    );
+    expect(publishers.map(([name]) => name)).toEqual(["release"]);
+    expect(workflow.jobs.release.needs).toEqual(["android", "deploy"]);
   });
 });
