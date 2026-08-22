@@ -75,14 +75,18 @@ describe("desktop update publication", () => {
     expect(deployCommands).toContain(
       "rsync -av --chmod=D755,F644 -e \"ssh -F $deploy_ssh_config\" --include='/summary' --include='/summary.sig' --include='/summary.idx' --include='/summary.idx.sig' --exclude='*' \"$DEPLOY_ROOT/flatpak/\" \"${TARGET}:/downloads/flatpak/\"",
     );
+    // --max-time as well as --retry: --retry-all-errors bounds how many
+    // attempts are made, not how long one may hang, and this readback is the
+    // last thing the job does — a stalled connection here would hold a
+    // release open on bytes that are already published.
     expect(deployCommands).toContain(
-      "curl -fsS --retry 5 --retry-all-errors \"https://armada.buzz/downloads/desktop/$name\" -o \"$smoke/$name\"",
+      "curl -fsS --retry 5 --retry-all-errors --connect-timeout 30 --max-time 300 \"https://armada.buzz/downloads/desktop/$name\" -o \"$smoke/$name\"",
     );
     expect(deployCommands).toContain(
       "cmp \"$DEPLOY_ROOT/desktop/$name\" \"$smoke/$name\"",
     );
     expect(deployCommands).toContain(
-      "curl -fsS --retry 5 --retry-all-errors \"https://armada.buzz/downloads/flatpak/$name\" -o \"$smoke/flatpak-$name\"",
+      "curl -fsS --retry 5 --retry-all-errors --connect-timeout 30 --max-time 300 \"https://armada.buzz/downloads/flatpak/$name\" -o \"$smoke/flatpak-$name\"",
     );
     expect(deployCommands).toContain(
       "cmp \"$DEPLOY_ROOT/flatpak/$name\" \"$smoke/flatpak-$name\"",
@@ -93,11 +97,13 @@ describe("desktop update publication", () => {
     expect(deployCommands).toContain(
       'ostree remote add --repo="$public_verify_repo" --set=gpg-verify=true --set=gpg-verify-summary=true --gpg-import="$smoke/flatpak-armada-flatpak.gpg" armada-public https://armada.buzz/downloads/flatpak/',
     );
+    // `retry`, because unlike curl above, ostree has no retry of its own and
+    // this pull reaches armada.buzz.
     expect(deployCommands).toContain(
-      'ostree pull --repo="$public_verify_repo" --commit-metadata-only armada-public "$ref"',
+      'retry ostree pull --repo="$public_verify_repo" --commit-metadata-only armada-public "$ref"',
     );
     expect(deployCommands).toContain(
-      'curl -fsS --retry 5 --retry-all-errors "https://armada.buzz/downloads/flatpak/$summary_index_signature_relative" -o "$smoke/flatpak-summary-index-signature"',
+      'curl -fsS --retry 5 --retry-all-errors --connect-timeout 30 --max-time 300 "https://armada.buzz/downloads/flatpak/$summary_index_signature_relative" -o "$smoke/flatpak-summary-index-signature"',
     );
     expect(deployCommands).toContain(
       'cmp "$staged_summary_index_signature" "$smoke/flatpak-summary-index-signature"',

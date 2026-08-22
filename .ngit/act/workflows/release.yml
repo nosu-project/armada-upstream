@@ -917,6 +917,13 @@ jobs:
       # server publish is skipped.
       - name: Deploy desktop installers and update repositories
         if: startsWith(github.ref, 'refs/tags/v')
+        # act enforces a STEP's timeout-minutes but not a JOB's — it parses
+        # `timeout-minutes: 30` on the job above and only debug-logs it. This
+        # step holds rsync over SSH open and pulls from armada.buzz, so it is
+        # the one that can wedge; without a deadline here the whole run waits
+        # out the coordinator's timeout, which discards every finished job's
+        # results along with it.
+        timeout-minutes: 25
         env:
           DEPLOY_SSH_KEY_BASE64: ${{ secrets.DEPLOY_SSH_KEY_BASE64 }}
           DEPLOY_SSH_CONFIG_BASE64: ${{ secrets.DEPLOY_SSH_CONFIG_BASE64 }}
@@ -926,6 +933,32 @@ jobs:
         run: |
           set -euo pipefail
           export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+          # Retry a command that talks to armada.buzz.
+          #
+          # The verification below reads back what the rsyncs above just wrote,
+          # and it is the LAST thing this job does — so a transient network
+          # fault there fails a release whose every byte is already published
+          # and correct. That is not hypothetical: v0.56.2 lost this job to
+          # "Couldn't resolve host name" after all four rsyncs had succeeded.
+          # `curl` has --retry; `ostree pull` and `flatpak` have nothing, so
+          # they get this. Deliberately NOT wrapped around the rsyncs: those
+          # write, and a half-written tree should be looked at rather than
+          # retried into place.
+          retry() {
+            local attempt
+            for attempt in 1 2 3; do
+              if "$@"; then
+                return 0
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                echo "retrying in $((attempt * 10))s: $*" >&2
+                sleep "$((attempt * 10))"
+              fi
+            done
+            echo "giving up after 3 attempts: $*" >&2
+            return 1
+          }
 
           DEPLOY_ROOT="$PWD/electron/release/deploy"
           deploy_ssh_key_base64="${DEPLOY_SSH_KEY_BASE64:-}"
@@ -1072,7 +1105,13 @@ jobs:
           # A CLI -o StrictHostKeyChecking is NOT inherited by the ProxyJump
           # child connection, so put host defaults in the config so every hop
           # (including a bastion) picks them up.
-          printf 'Host *\n\tIdentityFile %s\n\tUserKnownHostsFile %s\n\tBatchMode yes\n\tStrictHostKeyChecking accept-new\n' \
+          #
+          # ConnectTimeout/ServerAlive* are the deadline rsync itself doesn't
+          # have: a connection that is accepted and then goes silent leaves
+          # rsync waiting indefinitely, which is a hung job rather than a
+          # failed one — and this job's own timeout is the only thing that
+          # would ever end it.
+          printf 'Host *\n\tIdentityFile %s\n\tUserKnownHostsFile %s\n\tBatchMode yes\n\tStrictHostKeyChecking accept-new\n\tConnectTimeout 30\n\tServerAliveInterval 30\n\tServerAliveCountMax 6\n' \
             "$deploy_ssh_key" "$deploy_ssh_dir/known_hosts" >> "$deploy_ssh_config"
 
           TARGET="$deploy_target"
@@ -1115,7 +1154,7 @@ jobs:
             "$DEPLOY_ROOT/desktop/" "${TARGET}:/desktop/"
 
           for name in latest.yml latest-linux.yml; do
-            curl -fsS --retry 5 --retry-all-errors \
+            curl -fsS --retry 5 --retry-all-errors --connect-timeout 30 --max-time 300 \
               "https://armada.buzz/downloads/desktop/$name" -o "$smoke/$name"
             cmp "$DEPLOY_ROOT/desktop/$name" "$smoke/$name"
           done
@@ -1149,7 +1188,7 @@ jobs:
             --include='/summary.idx' --include='/summary.idx.sig' --exclude='*' \
             "$DEPLOY_ROOT/flatpak/" "${TARGET}:/flatpak/"
           for name in summary summary.sig summary.idx summary.idx.sig config armada-flatpak.gpg armada-flatpak.fingerprint; do
-            curl -fsS --retry 5 --retry-all-errors \
+            curl -fsS --retry 5 --retry-all-errors --connect-timeout 30 --max-time 300 \
               "https://armada.buzz/downloads/flatpak/$name" -o "$smoke/flatpak-$name"
             cmp "$DEPLOY_ROOT/flatpak/$name" "$smoke/flatpak-$name"
           done
@@ -1158,7 +1197,7 @@ jobs:
             summaries/*.idx.sig) ;;
             *) echo "Invalid staged Flatpak summary index signature path." >&2; exit 1 ;;
           esac
-          curl -fsS --retry 5 --retry-all-errors \
+          curl -fsS --retry 5 --retry-all-errors --connect-timeout 30 --max-time 300 \
             "https://armada.buzz/downloads/flatpak/$summary_index_signature_relative" \
             -o "$smoke/flatpak-summary-index-signature"
           cmp "$staged_summary_index_signature" \
@@ -1181,7 +1220,7 @@ jobs:
             # mentions. Without this the log says which COMMIT has no
             # signature but not which ref failed to get one.
             echo "verifying signature of armada-public ref: $ref"
-            ostree pull --repo="$public_verify_repo" --commit-metadata-only \
+            retry ostree pull --repo="$public_verify_repo" --commit-metadata-only \
               armada-public "$ref"
           done
 
@@ -1198,9 +1237,17 @@ jobs:
             flatpak remote-add --user \
               --gpg-import="$smoke/flatpak-armada-flatpak.gpg" \
               armada-public-flatpak https://armada.buzz/downloads/flatpak/
-            flatpak remote-ls --user --app --columns=application \
-              armada-public-flatpak | grep -Fx buzz.armada.app >/dev/null
-            flatpak update --user --appstream --noninteractive -y \
+            # This remote is HTTPS, unlike the file:// ones verified earlier,
+            # so both calls below reach armada.buzz and neither retries on its
+            # own. `remote-add` is left alone deliberately: it writes local
+            # config, and a second attempt would fail on the remote it just
+            # created rather than on anything transient.
+            public_lists_the_app() {
+              flatpak remote-ls --user --app --columns=application \
+                armada-public-flatpak | grep -Fx buzz.armada.app >/dev/null
+            }
+            retry public_lists_the_app
+            retry flatpak update --user --appstream --noninteractive -y \
               armada-public-flatpak
           )
 
@@ -1643,6 +1690,16 @@ jobs:
       # the sources, the node_modules the android job installed, and the
       # .release-artifacts/ both build jobs staged into are all already here.
       - name: Publish the NIP-34 release event
+        # The only deadline this step actually has. act parses a JOB's
+        # `timeout-minutes` and merely debug-logs it — the `timeout-minutes: 30`
+        # above has never fired — while it does enforce a STEP's. v0.56.2
+        # published its release event and then failed to exit, and sat here for
+        # 40 minutes until the coordinator's run-level timeout fired; that
+        # timeout replaces every job result act has already reported with one
+        # synthetic entry, so the run lost the logs of four finished jobs to a
+        # step that had already done its work. Generous, because ~700 MB of
+        # first-time Blossom uploads legitimately take a while.
+        timeout-minutes: 25
         env:
           # The same NIP-46 session that signs the Zapstore publish. Two halves,
           # both required: the bunker URL names the remote signer and its relay,
