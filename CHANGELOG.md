@@ -4,6 +4,14 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.56.2] - 2026-08-22
+
+The desktop installers, the signed Flatpak bundle and the downloads page listing are published. In 0.56.1 a rejected app-store upload stopped the rest of the release before any of them went out, so the desktop downloads never appeared.
+
+### Fixed
+- The desktop installers, the signed Flatpak bundle and the downloads page listing are published. A rejected app-store upload no longer stops the rest of the release
+- A dropped transfer while uploading a large installer is retried, instead of leaving the release without its downloads
+
 ## [0.56.1] - 2026-08-22
 
 The desktop installers and the signed Flatpak bundle announced in 0.56.0 are published: that build stopped short of publishing them, so 0.56 shipped no desktop downloads at all. The downloads page now lists earlier versions alongside the current one, and every file is named after the version it installs.
