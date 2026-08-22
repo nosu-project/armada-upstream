@@ -276,12 +276,20 @@ export function useMutedPubkeysSource(): MutedPubkeysResult {
       // Legacy seeds lack a version. Accept a complete relay winner only when
       // it contains that seed; otherwise retain the union and withhold prune
       // authority until a versioned local snapshot is established.
+      //
+      // The union IS trusted config data, though, and must say so. Nothing
+      // stamps a version onto a legacy seed, so `configReady: false` here
+      // never clears: it propagates to `dmConfigReady` and drops every DM push
+      // spec for as long as the seed stays a superset — an install that
+      // silently stops receiving DM push until the user happens to mute or
+      // unmute someone. The union is at least as suppressive as either input,
+      // so only PRUNE authority has to keep waiting.
       if (!seed.version
         && seed.pubkeys.some((muted) => !decoded.pubkeys.has(muted))) {
         return {
           pubkeys: [...new Set([...seed.pubkeys, ...livePubkeys])],
           wireReady: false,
-          configReady: false,
+          configReady: true,
         };
       }
 

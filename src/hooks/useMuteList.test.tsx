@@ -173,6 +173,36 @@ describe("useMutedPubkeysSource authority", () => {
     expect(view.result.current.wireReady).toBe(false);
   });
 
+  it("does not permanently withhold config authority from a legacy superset seed", async () => {
+    // A pre-versioning folded seed that is a strict superset of the complete
+    // relay winner (e.g. the peer was unmuted in another client) takes the
+    // union as its conservative floor — correct. But nothing ever stamps a
+    // version onto that seed, so `configReady: false` is STICKY: it survives
+    // every refetch and every reload until the user happens to mute or unmute
+    // someone. It propagates as mutesConfigReady → useKnownDmPeers'
+    // `configurationReady` → `dmConfigReady` → `readyPlanePushSpecs`, which
+    // drops every `armada-dm*` spec, so the install silently stops receiving
+    // DM push. The union is at least as safe as either input, so it is
+    // trusted last-good data for sealing config; only PRUNE authority
+    // (`wireReady`) has to keep waiting.
+    h.user = { pubkey: "4".repeat(64), signer: { nip44 } };
+    h.readFolded.mockResolvedValue([EXISTING_PRIVATE]);
+    h.query.mockResolvedValue([{
+      ...muteEvent({ tags: [["p", EXISTING_PUBLIC]] }),
+      pubkey: h.user.pubkey,
+    }]);
+
+    const view = renderHook(() => useMutedPubkeysSource(), { wrapper });
+    await waitFor(() => expect(view.result.current.mutedPubkeys.has(EXISTING_PUBLIC)).toBe(true));
+    // The conservative floor is retained either way.
+    expect(view.result.current.mutedPubkeys.has(EXISTING_PRIVATE)).toBe(true);
+    // A complete cohort still cannot prune, because the extra local mute is
+    // not attributable to any relay version.
+    expect(view.result.current.wireReady).toBe(false);
+    // …but it is enough to seal a device notification config.
+    expect(view.result.current.configReady).toBe(true);
+  });
+
   it("keeps and does not overwrite last-good private mutes after decrypt failure", async () => {
     h.user = { pubkey: "7".repeat(64), signer: { nip44 } };
     h.readFolded.mockResolvedValue([EXISTING_PRIVATE]);
