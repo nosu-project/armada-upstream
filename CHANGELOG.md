@@ -4,6 +4,27 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.56.0] - 2026-08-22
+
+This release adds an account-level Notification Center that gathers your mentions across every community and server, plus your pending community invites, into one newest-first list — and surfaces your unread direct-message conversations above the community rail with exact unread counts. Mini Apps can now play multiplayer across Armada and Vector. Screen shares gain a full call-control bar while fullscreen, your community and direct-message lists sync across your devices, and cross-platform notifications are more reliable.
+
+### Added
+- A Notification Center collecting your mentions across all communities and servers, plus pending community invites, in one newest-first list
+- Your unread direct-message conversations appear above the community icons in the rail, with exact unread counts; reading a conversation clears it
+- Mini Apps can play multiplayer across Armada and Vector — the two apps share the same game session
+- The full call-control bar stays available while a screen share is fullscreen, with source selection, quality, diagnostics, reactions and menus reachable without leaving fullscreen
+- An unread cue on the browser tab's icon when Armada is in the background
+
+### Changed
+- Your community list and direct-message conversation list now sync across your devices through your relays, and synced conversations appear before their history finishes loading
+- Being removed from a community by a kick now takes its icon out of your rail and ends any live call in it, the same way a ban already did
+
+### Fixed
+- Cross-platform notification reliability: Android notification startup and service recovery, a single reliable presenter for web and iOS Home Screen notifications, and notification settings kept scoped to the account that owns them
+
+### Security
+- Desktop updates on Linux (Flatpak) are cryptographically signed and verified against a pinned release key
+
 ## [0.55.3] - 2026-08-20
 
 A security-hardening release covering three paths where something outside the app chose a value the app then trusted. Answering a ringing call from a notification now joins the call the app itself verified rather than whatever the tap's link spelled out, the accounts listed on an incoming message have to be real accounts before they name a conversation, and saving or sharing media derives its filename safely instead of letting the media address pick where the file lands.
