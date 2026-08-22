@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { useAppContext } from "@/hooks/useAppContext";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { savePushPrefs, type PushPrefs } from "@/lib/pushPrefs";
 
 /**
@@ -127,6 +128,7 @@ export interface UseForegroundNotificationSettingsReturn {
  * notifier can fire OS notifications.
  */
 export function useForegroundNotificationSettings(): UseForegroundNotificationSettingsReturn {
+  const { user } = useCurrentUser();
   const { config, updateConfig } = useAppContext();
   const apiAvailable = notificationsApiAvailable();
   const [permission, setPermission] = useState<NotificationPermission>(
@@ -171,9 +173,9 @@ export function useForegroundNotificationSettings(): UseForegroundNotificationSe
   );
 
   const setPrefs = useCallback((next: PushPrefs) => {
-    savePushPrefs(next);
+    savePushPrefs(next, user?.pubkey);
     updateConfig((current) => ({ ...current, pushPrefs: next }));
-  }, [updateConfig]);
+  }, [updateConfig, user?.pubkey]);
 
   return {
     apiAvailable,

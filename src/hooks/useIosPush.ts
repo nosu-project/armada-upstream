@@ -2,6 +2,7 @@ import { useNostr } from "@nostrify/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useAppContext } from "@/hooks/useAppContext";
 import { usePushWatchSet } from "@/hooks/usePushWatchSet";
 import {
   ArmadaPush,
@@ -19,7 +20,6 @@ import {
   nostrPushConfigured,
 } from "@/lib/platform";
 import {
-  loadPushPrefs,
   type PushPrefs,
   type UsePushNotificationsReturn,
 } from "@/lib/pushPrefs";
@@ -105,6 +105,7 @@ function pushDomain(): string {
 export function useIosPush(): UsePushNotificationsReturn {
   const { user } = useCurrentUser();
   const { nostr } = useNostr();
+  const { config, updateConfig } = useAppContext();
 
   const unavailableReason = !hasIosPush()
     ? "native-runtime" as const
@@ -120,7 +121,7 @@ export function useIosPush(): UsePushNotificationsReturn {
   const [error, setError] = useState<string>();
   /** A failed config write, reported separately from sync failures. */
   const [configError, setConfigError] = useState<string>();
-  const [prefs, setPrefsState] = useState<PushPrefs>(loadPushPrefs);
+  const prefs = config.pushPrefs;
   const [nonce, setNonce] = useState(0);
 
   const {
@@ -129,9 +130,10 @@ export function useIosPush(): UsePushNotificationsReturn {
     dmKnownPeers,
     dmKnownConversationKeys,
     dmMutedPeers,
+    dmLevels,
     dmSk,
     dmBunker,
-    dmPeersLoading,
+    configReady,
     watchSetLoading,
   } = usePushWatchSet(prefs);
 
@@ -147,7 +149,7 @@ export function useIosPush(): UsePushNotificationsReturn {
     // Wait for the full established-peer roster: writing while it loads would freeze an
     // empty known set on disk, reclassifying every known conversation as a
     // request until the next rewrite.
-    if (dmPeersLoading) return;
+    if (!configReady) return;
     let cancelled = false;
     (async () => {
       // Mirror useKnownDmPeers' `mine` dimension: a conversation the viewer has
@@ -181,6 +183,8 @@ export function useIosPush(): UsePushNotificationsReturn {
       if (cancelled) return;
       await writeIosPushConfig({
         policy: prefs.dmRequests,
+        directMessages: prefs.directMessages,
+        dmLevels,
         self: user.pubkey,
         knownPeers: dmKnownPeers,
         knownConversations: [
@@ -228,11 +232,13 @@ export function useIosPush(): UsePushNotificationsReturn {
     supported,
     user,
     enabled,
-    dmPeersLoading,
+    configReady,
     prefs.dmRequests,
+    prefs.directMessages,
     dmKnownPeers,
     dmKnownConversationKeys,
     dmMutedPeers,
+    dmLevels,
     dmSk,
     dmBunker,
     concord,
@@ -308,6 +314,8 @@ export function useIosPush(): UsePushNotificationsReturn {
     const scopedSpecs = specs.map((spec) => ({
       ...spec,
       id: scopePushSubscriptionId(spec.id, user.pubkey, domain, installation),
+      replacementIds: (spec.replaces ?? []).map((logicalId) =>
+        scopePushSubscriptionId(logicalId, user.pubkey, domain, installation)),
       notification: standaloneNotification(spec),
     }));
 
@@ -318,16 +326,46 @@ export function useIosPush(): UsePushNotificationsReturn {
     // stopped is the difference between "push is broken" and "the sixth
     // registration was refused".
     let registered = 0;
+    const trackedIds = new Set(loadRegisteredPushIds());
     try {
       for (const spec of scopedSpecs) {
-        await client.registerSubscription({
-          subscription_id: spec.id,
+        const registerAs = (id: string) => client.registerSubscription({
+          subscription_id: id,
           domain,
           filter: spec.filter,
           relays: spec.relays,
           notification: spec.notification,
           push_subscription: pushSubscription,
         });
+        const removed: string[] = [];
+        // A flat NIP-29 record can already occupy the gateway's last quota
+        // slot. On an authoritative pass release that exact predecessor before
+        // its first per-relay PUT; partial snapshots remain additive only.
+        if (!watchSetLoading) {
+          for (const oldId of spec.replacementIds) {
+            if (!trackedIds.has(oldId) || oldId === spec.id) continue;
+            await client.deleteSubscription(oldId, domain);
+            trackedIds.delete(oldId);
+            removed.push(oldId);
+            saveRegisteredPushIds([...trackedIds]);
+          }
+        }
+        try {
+          await registerAs(spec.id);
+        } catch (error) {
+          // Best-effort bounded-gap rollback. The old logical id now carries
+          // this exact relay filter, which is safer than losing the watch and
+          // is replaced again on the next retry.
+          for (const oldId of removed) {
+            await registerAs(oldId).then(() => {
+              trackedIds.add(oldId);
+              saveRegisteredPushIds([...trackedIds]);
+            }).catch(() => undefined);
+          }
+          throw error;
+        }
+        trackedIds.add(spec.id);
+        saveRegisteredPushIds([...trackedIds]);
         registered += 1;
       }
     } catch (err) {
@@ -355,7 +393,7 @@ export function useIosPush(): UsePushNotificationsReturn {
     // records and this pass produced none, the set is still filling in — not
     // a user who left every community at once — and pruning here is what
     // silently unsubscribes them from every community they are in.
-    const registeredIds = loadRegisteredPushIds();
+    const registeredIds = [...trackedIds];
     const concordStillCold = concord.length === 0
       && registeredIds.some((id) => id.startsWith("armada-c2-"));
     if (watchSetLoading || concordStillCold) {
@@ -515,12 +553,12 @@ export function useIosPush(): UsePushNotificationsReturn {
   }, [client]);
 
   const setPrefs = useCallback(async (next: PushPrefs) => {
-    setPrefsState(next);
-    savePushPrefs(next);
+    savePushPrefs(next, user?.pubkey);
+    updateConfig((current) => ({ ...current, pushPrefs: next }));
     // The specs recompute from `prefs`; force the sync effect to re-run.
     lastSynced.current = null;
     setNonce((n) => n + 1);
-  }, []);
+  }, [updateConfig, user?.pubkey]);
 
   const retrySetup = useCallback(() => {
     setError(undefined);

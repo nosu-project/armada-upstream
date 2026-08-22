@@ -27,6 +27,13 @@ export interface UseKnownDmPeersReturn {
   mutedPeers: string[];
   /** True until follows, mutes and the encrypted conversation index have resolved. */
   isLoading: boolean;
+  /**
+   * True only when every source can authorize replacing/pruning background
+   * state. Cache seeds remain useful additive values while this is false.
+   */
+  authoritativeReady: boolean;
+  /** Trusted last-good data is sufficient to replace the sealed DM policy. */
+  configurationReady: boolean;
 }
 
 /**
@@ -66,7 +73,12 @@ export function useKnownDmPeers(): UseKnownDmPeersReturn {
   const { pinned } = usePinnedDms();
   const indexed = useDmConversationIndex();
   const indexReady = useDmConversationIndexReady();
-  const { mutedPubkeys, ready: mutesReady } = useMutedPubkeys();
+  const {
+    mutedPubkeys,
+    ready: mutesReady,
+    wireReady: mutesWireReady,
+    configReady: mutesConfigReady,
+  } = useMutedPubkeys();
 
   const knownPeers = useMemo(() => {
     // Fail closed while the encrypted mute list is unresolved: this roster is
@@ -138,5 +150,11 @@ export function useKnownDmPeers(): UseKnownDmPeersReturn {
     knownConversationKeys,
     mutedPeers,
     isLoading: followsLoading || !indexReady || !mutesReady,
+    authoritativeReady: followData?.wireReady === true
+      && indexReady
+      && mutesWireReady === true,
+    configurationReady: (followData?.wireReady === true || followData?.event != null)
+      && indexReady
+      && mutesConfigReady === true,
   };
 }

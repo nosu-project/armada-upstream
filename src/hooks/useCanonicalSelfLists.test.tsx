@@ -159,6 +159,7 @@ describe("canonical service-list hooks", () => {
       expect(view.result.current.dm.relays).toEqual(["wss://local-dm.example"]);
       expect(view.result.current.blossom.servers).toEqual(["https://local-media.example/"]);
     });
+    expect(view.result.current.dm.isReady).toBe(true);
 
     await act(async () => {
       await Promise.all([
@@ -183,6 +184,7 @@ describe("canonical service-list hooks", () => {
       inheritPendingTargets: false,
     });
     expect(byKind.get(10050)?.tags).toContainEqual(["dm-extra", "kept"]);
+    expect(view.result.current.dm.isReady).toBe(true);
     expect(byKind.get(10063)).toMatchObject({
       prev: { id: "b".repeat(64) },
       relays: [RELAY],
@@ -204,5 +206,15 @@ describe("canonical service-list hooks", () => {
         .rejects.toThrow(/confirm your current DM relay list/i);
     });
     expect(h.publish).not.toHaveBeenCalled();
+  });
+
+  it("keeps stored DM relays additive-only when the wire read fails", async () => {
+    h.queryError = true;
+    const view = renderHook(() => useDmRelayList(), { wrapper });
+
+    await waitFor(() => expect(view.result.current.relays).toEqual([
+      "wss://local-dm.example",
+    ]));
+    expect(view.result.current.isReady).toBe(false);
   });
 });

@@ -373,10 +373,13 @@ final class SenderIdentityTests: XCTestCase {
         knownPeers: Set<String> = [],
         policy: DmRequestLevel = .generic,
         knownConversations: Set<String> = [],
-        mutedPeers: Set<String> = []
+        mutedPeers: Set<String> = [],
+        directMessages: Bool = true,
+        dmLevels: [String: DmNotificationLevel] = [:]
     ) -> PushConfig {
         PushConfig(
-            policy: policy, selfPubkey: self_, knownPeers: knownPeers,
+            policy: policy, directMessages: directMessages, dmLevels: dmLevels,
+            selfPubkey: self_, knownPeers: knownPeers,
             knownConversations: knownConversations, mutedPeers: mutedPeers,
             secretKey: nil, nip46: nil, concord: []
         )
@@ -407,11 +410,47 @@ final class SenderIdentityTests: XCTestCase {
     func testPushConfigCarriesMutedAuthorsSeparatelyFromKnownRooms() {
         let key = [peer, String(repeating: "c", count: 64)].sorted().joined(separator: ",")
         let parsed = PushConfig.parse(json: """
-        {"policy":"full","self":"\(self_)","knownPeers":[],
+        {"policy":"full","directMessages":false,"dmLevels":{"\(key)":"all"},
+         "self":"\(self_)","knownPeers":[],
          "knownConversations":["\(key)"],"mutedPeers":["\(peer)"]}
         """)
         XCTAssertEqual(parsed?.knownConversations, Set([key]))
         XCTAssertEqual(parsed?.mutedPeers, Set([peer]))
+        XCTAssertEqual(parsed?.directMessages, false)
+        XCTAssertEqual(parsed?.dmLevels[key], .all)
+    }
+
+    func testExactDmLevelOverridesGlobalFallbackWithoutWideningGroupKeys() {
+        let other = String(repeating: "c", count: 64)
+        let group = [peer, other].sorted()
+        let groupKey = group.joined(separator: ",")
+        let onlyGroup = config(
+            directMessages: false,
+            dmLevels: [groupKey: .mentions, peer: .nothing]
+        )
+
+        XCTAssertEqual(
+            PushProcessor.dmNotificationLevel(peers: group, config: onlyGroup),
+            .mentions,
+            "an explicitly enabled group stays enabled when the global fallback is off"
+        )
+        XCTAssertEqual(
+            PushProcessor.dmNotificationLevel(peers: [peer], config: onlyGroup),
+            .nothing,
+            "the group's level must not leak into a one-to-one room"
+        )
+        XCTAssertEqual(
+            PushProcessor.dmNotificationLevel(peers: [other], config: onlyGroup),
+            .nothing,
+            "an unrelated room inherits the disabled global fallback"
+        )
+        XCTAssertEqual(
+            PushProcessor.dmNotificationLevel(
+                peers: [other], config: config(directMessages: true)
+            ),
+            .all,
+            "rooms without an exact level inherit the enabled global fallback"
+        )
     }
 
     func testANip29MessageNamesItsSender() {

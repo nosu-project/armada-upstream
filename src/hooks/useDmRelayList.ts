@@ -51,6 +51,8 @@ export function parseDmRelays(event: { tags: string[][] } | undefined): string[]
 export interface DmRelayListQuery {
   event: NostrRumor | null;
   relays: string[];
+  /** True only when every current self-state relay completed the wire read. */
+  wireReady?: boolean;
 }
 
 type DmRelayQueryClient = Parameters<typeof queryExplicitRelays>[0];
@@ -144,10 +146,13 @@ export function useDmRelayList() {
     enabled: !!user?.pubkey,
     queryFn: async ({ signal }) => {
       const deadline = AbortSignal.any([signal, AbortSignal.timeout(6000)]);
-      const [wireEvents, stored] = await Promise.all([
-        queryExplicitRelays(
+      const selfRelays = uniqueRelayUrls(
+        selfStateRelays(config, user!.pubkey),
+      ).sort();
+      const [wireRead, stored] = await Promise.all([
+        queryExplicitRelaysWithStatus(
           nostr,
-          selfStateRelays(config, user!.pubkey),
+          selfRelays,
           [{ kinds: [KIND_DM_RELAYS], authors: [user!.pubkey], limit: 1 }],
           deadline,
         ),
@@ -161,14 +166,23 @@ export function useDmRelayList() {
       const cached = queryClient.getQueryData<DmRelayListQuery>(queryKey);
       const event = newestCanonicalSelfList(
         [
-          ...wireEvents,
+          ...wireRead.events,
           ...stored.events,
           ...(cached?.event ? [cached.event] : []),
         ],
         user!.pubkey,
         KIND_DM_RELAYS,
       ) ?? null;
-      return { event, relays: parseDmRelays(event ?? undefined) };
+      const answered = new Set(wireRead.answered);
+      return {
+        event,
+        relays: parseDmRelays(event ?? undefined),
+        // Stored/cached data remains useful for additive registration, but a
+        // missing relay may hold the newer replaceable event and therefore
+        // prevents this snapshot from authoritatively pruning anything.
+        wireReady: selfRelays.length > 0
+          && selfRelays.every((relay) => answered.has(relay)),
+      };
     },
     staleTime: 60_000,
   });
@@ -179,7 +193,7 @@ export function useDmRelayList() {
       const urls = relays
         .map((r) => normalizeRelayUrl(r))
         .filter((r): r is string => !!r);
-      const targets = selfStateRelays(config, user.pubkey);
+      const targets = uniqueRelayUrls(selfStateRelays(config, user.pubkey)).sort();
       const deadline = AbortSignal.timeout(8_000);
       const [response, stored] = await Promise.all([
         queryExplicitRelaysWithStatus(
@@ -201,6 +215,9 @@ export function useDmRelayList() {
         );
       }
       const cached = queryClient.getQueryData<DmRelayListQuery>(queryKey);
+      const answered = new Set(response.answered);
+      const wireReady = targets.length > 0
+        && targets.every((relay) => answered.has(relay));
       const prev = newestCanonicalSelfList(
         [
           ...response.events,
@@ -227,9 +244,19 @@ export function useDmRelayList() {
         relays: response.answered,
         inheritPendingTargets: false,
         onSigned: (event) => {
-          queryClient.setQueryData<DmRelayListQuery>(queryKey, { event, relays: urls });
+          queryClient.setQueryData<DmRelayListQuery>(queryKey, {
+            event,
+            relays: urls,
+            wireReady,
+          });
         },
       });
+      // A partial pre-publish read can update the additive view, but cannot
+      // remain fresh for 60 seconds as though it authorized pruning. Refetch
+      // immediately so recovered self-state relays can confirm the new LWW.
+      if (!wireReady) {
+        void queryClient.invalidateQueries({ queryKey });
+      }
       return urls;
     },
   });
@@ -239,6 +266,12 @@ export function useDmRelayList() {
     relays: query.data?.relays ?? [],
     event: query.data?.event ?? null,
     isLoading: query.isLoading,
+    /**
+     * Whether the empty/non-empty relay set is an authoritative query result.
+     * `isLoading` becomes false after an error too; background controllers
+     * must not turn that failed read into an authoritative empty watch set.
+     */
+    isReady: query.data?.wireReady === true,
     /** Whether a 10050 list with at least one relay exists. */
     hasList: (query.data?.relays.length ?? 0) > 0,
     refetch: query.refetch,

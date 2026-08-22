@@ -109,6 +109,10 @@ export interface PreparedPush {
   drop?: true;
   /** Collapse tag — one entry per conversation. */
   tag: string;
+  /** Exact active-room key shared with the foreground page, when resolvable. */
+  roomKey?: string;
+  /** Opened rumor/event id shared with the foreground page for acknowledgement. */
+  eventId?: string;
   /** Deep link for `notificationclick`. */
   url: string;
   title: string;
@@ -297,7 +301,11 @@ const DROP: PreparedPush = {
 };
 
 /** The content-blind ping for an unknown sender: nothing they control. */
-function requestPing(quiet: boolean): PreparedPush {
+function requestPing(
+  quiet: boolean,
+  eventId?: string,
+  roomKey?: string,
+): PreparedPush {
   return {
     tag: "armada-dm-requests",
     url: "/dm",
@@ -308,6 +316,8 @@ function requestPing(quiet: boolean): PreparedPush {
     timestamp: Date.now(),
     quiet,
     accumulate: false,
+    eventId,
+    roomKey,
   };
 }
 
@@ -316,7 +326,7 @@ async function present(
   msg: Omit<NotificationMessage, "authorName" | "authorAvatar" | "mentionNames">,
   author: string,
   room: { title?: string; image?: string },
-  route: { tag: string; url: string; timestamp: number },
+  route: { tag: string; url: string; timestamp: number; roomKey?: string; eventId?: string },
 ): Promise<PreparedPush> {
   const [{ name, avatar }, mentionNames] = await Promise.all([
     profileFor(author),
@@ -340,6 +350,8 @@ async function present(
     badge: presented.badge,
     timestamp: route.timestamp,
     accumulate: true,
+    roomKey: route.roomKey,
+    eventId: route.eventId,
   };
 }
 
@@ -361,8 +373,17 @@ export async function preparePush(
 
   const relays = Array.isArray(data.relays) ? (data.relays as string[]) : [];
 
-  if (data.scope === "dm") return prepareDm(wrapOrEvent, cfg);
-  if (data.scope === "c2") return prepareConcord(wrapOrEvent, cfg);
+  // A partial page snapshot must fail closed for only the encrypted plane that
+  // is not authoritative. `undefined` deliberately means ready so a config
+  // sealed by an older client keeps its pre-readiness behavior.
+  if (data.scope === "dm") {
+    if (cfg?.dmReady === false) return DROP;
+    return prepareDm(wrapOrEvent, cfg);
+  }
+  if (data.scope === "c2") {
+    if (cfg?.concordReady === false) return DROP;
+    return prepareConcord(wrapOrEvent, cfg);
+  }
   if (data.scope === "group" || data.scope === "group-mention") {
     return prepareGroup(wrapOrEvent, relays, cfg);
   }
@@ -382,6 +403,9 @@ async function prepareDm(
   // half of a conversation reaches this one at all.
   await writeDm17Rumors(cfg.self, [opened]).catch(() => undefined);
 
+  const conversation = dmConvKey(opened.peers);
+  const roomKey = `dm:${conversation}`;
+
   // Our own sent copy is addressed to us too, and is not news.
   if (opened.author === cfg.self) return DROP;
 
@@ -390,17 +414,25 @@ async function prepareDm(
   // the muted member. This wins even under the `full` request policy.
   if (opened.peers.some((peer) => cfg.mutedPeers?.includes(peer))) return DROP;
 
+  // Per-conversation notification levels are encrypted-device policy: the
+  // gateway cannot see which DM a gift wrap belongs to. An explicit level wins
+  // over the global DM fallback; DMs are intrinsically directed at recipients,
+  // so both `all` and `mentions` admit them.
+  const dmLevel = cfg.dmLevels?.[conversation];
+  if (dmLevel === "nothing" || (!dmLevel && cfg.directMessages === false)) return DROP;
+
   // Reactions/deletes/timer changes aren't messages, but the push must still
   // show something on iOS — the content-blind request ping.
-  if (opened.kind !== KIND_DM_CHAT && opened.kind !== KIND_DM_FILE) return requestPing(true);
+  if (opened.kind !== KIND_DM_CHAT && opened.kind !== KIND_DM_FILE) {
+    return requestPing(true, opened.rumorId, roomKey);
+  }
 
-  const conversation = dmConvKey(opened.peers);
   const known = cfg.knownConversations?.includes(conversation)
     || opened.peers.every((peer) => cfg.knownPeers.includes(peer));
   if (!known && cfg.policy !== "full") {
     // A stranger picks the text, the name and the avatar alike — gate all three
     // BEFORE any of it reaches the screen.
-    return requestPing(cfg.policy === "off");
+    return requestPing(cfg.policy === "off", opened.rumorId, roomKey);
   }
 
   return present(
@@ -415,6 +447,8 @@ async function prepareDm(
     {},
     {
       tag: `dm-${conversation}`,
+      roomKey,
+      eventId: opened.rumorId,
       url: `/dm/${conversation}`,
       timestamp: opened.createdAt * 1000,
     },
@@ -452,6 +486,10 @@ async function prepareConcord(
   // tag is on the encrypted rumor, so this is the first place it can be read.
   if (reaction && !mention) return DROP;
 
+  // The gateway sees only the stream wrap author, so mentions-only can be
+  // enforced only here, after the encrypted rumor's `p` tags are legible.
+  if (stream.mentionOnly && !mention) return DROP;
+
   const room = await concordRoomIdentity(stream.communityId, stream.channelId);
   const image = room.iconPointer ? await imageDataUrl(room.iconPointer) : undefined;
 
@@ -470,9 +508,11 @@ async function prepareConcord(
     { title: room.title, image },
     {
       tag: `c2:${stream.channelId}`,
+      roomKey: `c2:${stream.channelId}`,
+      eventId: opened.rumorId,
       // A reaction points at the message it reacted to — the thing the reader
       // is being told about, and the only one of the two the timeline can show.
-      url: `${base}/m/${uniqueTag(opened.tags, "e") ?? opened.rumorId}`,
+      url: `${base}/m/${encodeURIComponent(uniqueTag(opened.tags, "e") ?? opened.rumorId)}`,
       timestamp: opened.createdAt * 1000,
     },
   );
@@ -481,12 +521,10 @@ async function prepareConcord(
 /**
  * A NIP-29 group message, which arrives in the clear.
  *
- * Deliberately NOT stored. A NIP-29 group id names nothing without its relay
- * (`relayScope.ts`), and the push payload carries no source-relay attribution —
- * only the subscription's whole relay list — so filing it would mean guessing a
- * tenant. Nothing is lost by declining: the message is plaintext on a relay the
- * app re-reads on open, which is exactly the case the "NO RELAY, NO STORE" rule
- * says is refetchable.
+ * Deliberately NOT stored. New gateway specs are one-relay-per-filter, so they
+ * provide exact room identity for presentation, but a legacy multi-relay
+ * registration can still deliver during migration and remains unfit for a
+ * tenant write. Nothing is lost by declining: plaintext is refetched on open.
  */
 async function prepareGroup(
   ev: NostrEvent,
@@ -505,7 +543,8 @@ async function prepareGroup(
     relays.map(async (relay) => ({ relay, room: await nip29RoomIdentity(relay, groupId) })),
   );
   const named = identities.filter((i) => i.room.title);
-  const only = named.length === 1 ? named[0] : undefined;
+  const exact = identities.length === 1 ? identities[0] : undefined;
+  const only = exact ?? (named.length === 1 ? named[0] : undefined);
 
   const mention = Boolean(cfg?.self) && ev.tags.some(([n, v]) => n === "p" && v === cfg?.self);
   return present(
@@ -521,6 +560,11 @@ async function prepareGroup(
     { title: only?.room.title, image: only?.room.iconUrl },
     {
       tag: `h:${groupId}`,
+      // A one-relay spec is source attribution even when this fresh install
+      // has no room metadata yet. Legacy multi-relay specs remain unresolved
+      // unless exactly one tenant can identify the group.
+      roomKey: only ? `h:${only.relay}|${groupId}` : undefined,
+      eventId: ev.id,
       url: only ? groupUrl(only.relay, groupId, ev.id) : (relays[0] ? groupUrl(relays[0], groupId, ev.id) : "/"),
       timestamp: ev.created_at * 1000,
     },

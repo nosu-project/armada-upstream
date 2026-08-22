@@ -25,6 +25,8 @@ import { WalletDialog } from '@/components/dialogs/WalletDialog';
 import { clearRenderedPlaintext } from '@/hooks/dmRenderCache';
 import { purgeClientStorage } from '@/lib/purgeClientStorage';
 import { clearWalletStorage } from '@/lib/walletStorage';
+import { runBeforeAccountExit } from '@/lib/beforeAccountExit';
+import { beginCrossTabAccountExit } from '@/lib/crossTabAccountExit';
 import { useAppContext } from '@/hooks/useAppContext';
 import { cn } from '@/lib/utils';
 
@@ -102,8 +104,15 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
       clearWalletStorage(currentUser.pubkey);
       clearRenderedPlaintext();
       if (isLastAccount) {
-        removeLogin(currentUser.id);
-        void purgeClientStorage().finally(() => window.location.assign('/'));
+        // The gateway records outlive every local database, and only the
+        // outgoing signer can delete them. Give notification controllers their
+        // bounded cleanup window BEFORE purge erases the durable prune ids.
+        beginCrossTabAccountExit(currentUser.pubkey, null);
+        void runBeforeAccountExit('final-logout').finally(() => {
+          removeLogin(currentUser.id);
+          void purgeClientStorage(currentUser.pubkey)
+            .finally(() => window.location.assign('/'));
+        });
       } else {
         // Another account is about to become active, which is an account
         // SWITCH — so it takes the switch path, reload included, rather than

@@ -1,7 +1,7 @@
 import { useNostrLogin } from "@nostrify/react/login";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { nip19 } from "nostr-tools";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -13,9 +13,15 @@ import {
   savePushPrefs,
   type PushPrefs,
 } from "@/lib/pushPrefs";
-import { ArmadaNotification } from "@/lib/nativeNotifications";
+import {
+  useNotificationSettingsReady,
+} from "@/lib/notificationSettingsAuthority";
+import {
+  ArmadaNotification,
+  type NativeNotificationHealth,
+} from "@/lib/nativeNotifications";
 import { SETTINGS_DTAGS } from "@/lib/settingsDocs";
-import { useConcordSubs } from "@/concord/hooks/useConcordSubs";
+import { useConcordSubsState } from "@/concord/hooks/useConcordSubs";
 import { signStreamAuthsChunked } from "@/concord/lib/streamAuth";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { effectiveDmRelays, selfStateRelays } from "@/contexts/AppContext";
@@ -28,6 +34,11 @@ import { useWireGitTicketRoots } from "@/hooks/useWireGitTicketRoots";
 import type { GitRepositoryWireInput } from "@/wire/spec";
 import { useEventStore } from "@/hooks/useEventStore";
 import { GIT_REPOSITORY_ANNOUNCEMENT_KIND, parseGitRepositoryAnnouncement } from "@/lib/gitActivity";
+import { registerBeforeAccountExit } from "@/lib/beforeAccountExit";
+import {
+  nativeNotificationConfigAction,
+  type NativeNotificationEnablement,
+} from "@/lib/nativeNotificationConfig";
 
 /** localStorage key for the native background-notification intent (toggle). */
 const NATIVE_INTENT_KEY = "armada:native-notif-intent";
@@ -67,10 +78,14 @@ export function nativeNotificationIntent(): boolean {
 // headless mount that actually configures the service. One module-level store,
 // shared by every instance, fixes both.
 
-let enabledState = false;
+// `unknown` is load-bearing: a persisted, working native config must survive
+// the WebView's first render while the asynchronous permission check runs.
+// Treating that window as `false` used to send configure({enabled:false}) and
+// erase the only config the headless service could restart from.
+let enabledState: NativeNotificationEnablement = "unknown";
 const enabledListeners = new Set<() => void>();
 
-function setEnabledShared(next: boolean): void {
+function setEnabledShared(next: NativeNotificationEnablement): void {
   if (enabledState === next) return;
   enabledState = next;
   for (const l of enabledListeners) l();
@@ -94,14 +109,94 @@ function subscribeEnabled(listener: () => void): () => void {
 export async function enableNativeNotifications(): Promise<boolean> {
   if (!hasNativeNotificationService()) return false;
   const { granted } = await ArmadaNotification.requestPermission();
-  if (!granted) return false;
+  if (!granted) {
+    setEnabledShared("disabled");
+    return false;
+  }
   saveIntent(true);
-  setEnabledShared(true);
+  setEnabledShared("enabled");
   return true;
 }
 
 /** Module-level guard so the launch permission check runs once per app, not per hook instance. */
 let autoChecked = false;
+
+// Hook instances are deliberately duplicated (the headless controller and the
+// Settings screen). Serialize + de-duplicate native writes at module scope so a
+// second mount cannot rebuild every relay socket with the same configuration.
+let lastRequestedConfig = "";
+let configureQueue: Promise<void> = Promise.resolve();
+let lastForcedConfig = "";
+let lastForcedConfigAt = 0;
+
+function configureNative(
+  payload: Parameters<typeof ArmadaNotification.configure>[0],
+  force = false,
+): Promise<void> {
+  const key = JSON.stringify(payload);
+  if (key === lastRequestedConfig && !force) return configureQueue;
+  if (force) {
+    const now = Date.now();
+    // Headless + Settings mounts observe the same stopped snapshot. One repair
+    // attempt is enough, while later health polls may retry an OEM-refused FGS.
+    if (key === lastForcedConfig && now - lastForcedConfigAt < 5_000) {
+      return configureQueue;
+    }
+    lastForcedConfig = key;
+    lastForcedConfigAt = now;
+  }
+  lastRequestedConfig = key;
+  configureQueue = configureQueue
+    .catch(() => {})
+    .then(() => ArmadaNotification.configure(payload))
+    .catch((err) => {
+      if (lastRequestedConfig === key) lastRequestedConfig = "";
+      throw err;
+    });
+  return configureQueue;
+}
+
+/**
+ * Awaitable account-exit barrier. It clears the outgoing account's sealed
+ * signer, watches and tray entries before logout/account-switch navigation can
+ * reload (or fail to reload), while preserving the user's on/off intent for
+ * the next account.
+ */
+export async function disableNativeNotificationsForAccountExit(): Promise<void> {
+  if (!hasNativeNotificationService()) return;
+  // Close the controller gate synchronously before the async native/gateway
+  // exit cohort runs. Otherwise a readiness/health rerender can enqueue the
+  // outgoing account's full payload after this disable and resurrect it during
+  // the bounded pre-reload window. Do not change the persisted user intent:
+  // the hard reload starts the next account at `unknown` and re-checks it.
+  setEnabledShared("disabled");
+  await configureNative({ enabled: false });
+}
+
+// `useNativeNotifications` has a permanent headless mount and a temporary
+// Settings mount. Retain one module-wide account-exit subscription so the
+// token-keyed registry does not run the same native teardown twice.
+let accountExitMounts = 0;
+let unregisterAccountExit: (() => void) | undefined;
+
+function retainAccountExitHandler(): () => void {
+  accountExitMounts++;
+  if (accountExitMounts === 1) {
+    unregisterAccountExit = registerBeforeAccountExit(
+      disableNativeNotificationsForAccountExit,
+    );
+  }
+  let retained = true;
+  return () => {
+    if (!retained) return;
+    retained = false;
+    accountExitMounts--;
+    if (accountExitMounts === 0) {
+      unregisterAccountExit?.();
+      unregisterAccountExit = undefined;
+    }
+  };
+}
 
 export interface UseNativeNotificationsReturn {
   /** Whether we're in the native APK (where this path applies). */
@@ -112,6 +207,12 @@ export interface UseNativeNotificationsReturn {
   busy: boolean;
   /** Current per-type prefs. */
   prefs: PushPrefs;
+  /** Android's non-secret permission/channel/service/socket diagnostics. */
+  health?: NativeNotificationHealth;
+  /** Refresh the diagnostic snapshot immediately. */
+  refreshHealth: () => Promise<void>;
+  /** Open Android notification settings, optionally focused on one channel. */
+  openSettings: (channel?: "messages" | "calls" | "service") => Promise<void>;
   /** Request notification permission, then start the background service. */
   enable: () => Promise<void>;
   /** Stop the background service. */
@@ -137,21 +238,41 @@ export interface UseNativeNotificationsReturn {
 export function useNativeNotifications(): UseNativeNotificationsReturn {
   const supported = hasNativeNotificationService();
   const { user } = useCurrentUser();
+  const storedNotificationSettingsReady = useNotificationSettingsReady(user?.pubkey);
   const { config, updateConfig } = useAppContext();
-  const { data: groupList } = useUserGroupList();
+  // When cross-device settings sync is deliberately disabled, this device's
+  // complete per-account AppConfig is the selected policy source. Keep that
+  // authority session-local: unlike relay-backed proof it must not survive a
+  // later re-enable of automatic settings sync.
+  const notificationSettingsReady = storedNotificationSettingsReady
+    || config.automaticSettingsSync === false;
+  const groupListQuery = useUserGroupList();
+  const groupList = groupListQuery.data;
   const {
     knownPeers: dmKnownPeers,
     knownConversationKeys: dmKnownConversations,
     mutedPeers: dmMutedPeers,
-    isLoading: dmPeersLoading,
+    configurationReady: dmPeersConfigReady,
   } = useKnownDmPeers();
   const { channelLevel, concordChannelLevel } = useNotifLevels();
 
   // Start dormant; the launch check below flips this on when the OS permission
   // is already granted. Shared across every hook instance (see setEnabledShared).
-  const enabled = useSyncExternalStore(subscribeEnabled, () => enabledState, () => false);
+  const enablement = useSyncExternalStore(
+    subscribeEnabled,
+    () => enabledState,
+    () => "unknown" as const,
+  );
+  const enabled = enablement === "enabled";
   const [busy, setBusy] = useState(false);
+  const [health, setHealth] = useState<NativeNotificationHealth>();
+  const [permissionCheckAttempt, setPermissionCheckAttempt] = useState(0);
   const prefs = config.pushPrefs;
+
+  useEffect(() => {
+    if (!supported) return;
+    return retainAccountExitHandler();
+  }, [supported]);
 
   // The relays to hold open. A standalone Armada client has no host, so the
   // source of truth is the user's own kind 10009 list: the relays that host
@@ -245,7 +366,10 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   // on a default login (useOwnDmRelays off) those aren't in effectiveDmRelays
   // — without the union the service would hold its kind-1059 REQ on relays
   // the wraps never reach.
-  const { relays: publishedDmRelays } = useDmRelayList();
+  const {
+    relays: publishedDmRelays,
+    isReady: dmRelaysReady,
+  } = useDmRelayList();
   const dmRelays = useMemo(() => {
     const set = new Set<string>();
     for (const url of [...effectiveDmRelays(config), ...publishedDmRelays]) {
@@ -260,6 +384,23 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   // conversation index. NIP-17 uses it alongside exact group keys after
   // decrypting a broad inbox wrap.
   const dmFollows = dmKnownPeers;
+
+  // Only explicit DM overrides ride the bridge. Native falls back to the
+  // account-global directMessages pref when a canonical conversation key is
+  // absent, which preserves the same cascade as useNotifLevels. A group key is
+  // the exact sorted participant set (`pk,pk,…`), never one member widened into
+  // an unrelated 1:1 policy.
+  const dmLevels = useMemo(() => {
+    const entries = Object.entries(config.notifLevels)
+      .filter(([scope, level]) =>
+        scope.startsWith("dm:") &&
+        /^(?:[0-9a-f]{64})(?:,[0-9a-f]{64})*$/.test(scope.slice(3)) &&
+        (level === "all" || level === "mentions" || level === "nothing"),
+      )
+      .map(([scope, level]) => [scope.slice(3), level] as const)
+      .sort(([a], [b]) => a.localeCompare(b));
+    return Object.fromEntries(entries) as Record<string, "all" | "mentions" | "nothing">;
+  }, [config.notifLevels]);
 
   // The signer credential shared with the service (Keystore-sealed natively,
   // wiped with the config on disable/logout) so it can open ANY inbox gift
@@ -316,7 +457,10 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   // conversation keys that open their wraps (see useConcordSubs). Channels at
   // `nothing` are dropped; `mentions` are watched but flagged `mentionOnly` so
   // the service (which CAN decrypt Concord) suppresses non-mention messages.
-  const allConcordSubs = useConcordSubs();
+  const {
+    subs: allConcordSubs,
+    ready: concordSubsReady,
+  } = useConcordSubsState();
   const concordSubs = useMemo(
     () =>
       allConcordSubs
@@ -371,19 +515,30 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     ticketRoots: gitTicketRoots.filter((event) => event.tags.some(([name, value]) => name === "a" && value === repository.address)).map((event) => ({ id: event.id, author: event.pubkey, kind: event.kind as 1618 | 1621 })),
   })), [gitRepositories, gitTicketRoots, gitAnnouncements.data]);
 
-  // Push the current config to the native service whenever the relevant inputs
-  // change. Three cases:
-  //   - turned off / logged out  → tear the service down ({enabled:false}).
-  //   - on, but nothing to watch  → do nothing. The lists load async and
-  //     transiently read empty; pushing an empty config here would clobber a
-  //     working subscription and drop notifications.
-  //   - on, with relays/concord   → push the full config.
-  const lastConfig = useRef<string>("");
+  // Send readiness per watch plane. The native bridge replaces ready planes and
+  // additively merges partial unready planes for this SAME account, so one
+  // offline group-list relay cannot freeze DM roster changes or local
+  // notification prefs. A fresh account may bootstrap from useful cached
+  // subsets and is enriched plane by
+  // plane as each source becomes authoritative.
   useEffect(() => {
     if (!supported) return;
 
     const loggedOut = !user;
-    const turnedOff = !enabled;
+    // A plaintext boot-fold seed is useful for rendering/bootstrap, but it is
+    // not authoritative enough to REPLACE native config until the account's
+    // kind-10009 relay read has completed for this query.
+    const groupListReady = groupList !== undefined && !groupList.decryptFailed &&
+      groupList.wireReady === true;
+    // Room inclusion/mention flags and Git inclusion are policy-derived, so
+    // those planes cannot consume fresh-account defaults before the account's
+    // NIP-78 notification document (or proven local last-good) is authoritative.
+    const groupPlaneReady = groupListReady && notificationSettingsReady;
+    const concordPlaneReady = concordSubsReady && notificationSettingsReady;
+    const gitReady = concordPlaneReady &&
+      (gitRepositories.length === 0 || gitAnnouncements.data !== undefined);
+    const allReady = notificationSettingsReady && groupListReady && dmPeersConfigReady &&
+      dmRelaysReady && concordSubsReady && gitReady;
     const nothingToWatch =
       relayUrls.length === 0 &&
       concordSubs.length === 0 &&
@@ -396,49 +551,61 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
       // ran, however many relays the user had.
       selfRelays.length === 0;
 
+    const action = nativeNotificationConfigAction({
+      loggedOut,
+      enablement,
+      allReady,
+      nothingToWatch,
+      persistedConfigEnabled: health?.configEnabled,
+      policyReady: notificationSettingsReady,
+    });
+
     let payload: Parameters<typeof ArmadaNotification.configure>[0];
-    if (turnedOff || loggedOut) {
+    if (action === "disable") {
       payload = { enabled: false };
-    } else if (dmPeersLoading) {
-      // Keep the existing native configuration while local/follow state warms.
-      // Writing a partial set here would reclassify restored conversations as
-      // requests until another unrelated configuration change happened.
-      return;
-    } else if (nothingToWatch) {
-      // Still loading the user's groups/communities — keep whatever's running.
+    } else if (action === "preserve") {
       return;
     } else {
       payload = {
         enabled: true,
         userPubkey: user!.pubkey,
-        relayUrls,
-        groupIds,
-        groupSubs,
-        mentionOnlyGroupIds,
-        prefs: prefsRecord,
-        concordSubs,
+        groupPlaneReady,
+        dmRelayPlaneReady: dmRelaysReady,
+        dmRosterPlaneReady: dmPeersConfigReady,
+        concordPlaneReady,
+        gitPlaneReady: gitReady,
+        policyPlaneReady: notificationSettingsReady,
         dmRelays,
         dmFollows,
         dmKnownPeers,
         dmKnownConversations,
         dmMutedPeers,
-        dmRequests: prefs.dmRequests,
         selfRelays,
         selfDTags: SETTINGS_DTAGS,
         signer: signerCfg,
-        gitSubs,
+        ...(notificationSettingsReady ? {
+          relayUrls,
+          groupIds,
+          groupSubs,
+          mentionOnlyGroupIds,
+          prefs: prefsRecord,
+          concordSubs,
+          dmLevels,
+          dmRequests: prefs.dmRequests,
+          gitSubs,
+        } : {}),
       };
     }
 
-    // Avoid redundant native round-trips.
-    const key = JSON.stringify(payload);
-    if (key === lastConfig.current) return;
-    lastConfig.current = key;
-
-    ArmadaNotification.configure(payload).catch((err) => {
+    const nativeNeedsRepair = action === "configure" && health !== undefined && (
+      !health.configEnabled ||
+      !health.serviceRunning ||
+      health.loadedConfigRevision !== health.configRevision
+    );
+    configureNative(payload, nativeNeedsRepair).catch((err) => {
       console.warn("[native-notif] configure failed:", err);
     });
-  }, [supported, enabled, user, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, dmRelays, dmFollows, dmKnownPeers, dmKnownConversations, dmMutedPeers, dmPeersLoading, prefs.dmRequests, selfRelays, signerCfg, gitSubs]);
+  }, [supported, enablement, user, notificationSettingsReady, relayUrls, groupIds, groupSubs, mentionOnlyGroupIds, prefsRecord, concordSubs, concordSubsReady, dmRelays, dmRelaysReady, dmFollows, dmKnownPeers, dmKnownConversations, dmLevels, dmMutedPeers, dmPeersConfigReady, prefs.dmRequests, selfRelays, signerCfg, gitSubs, groupList, gitRepositories.length, gitAnnouncements.data, health]);
 
   // Auto-enable on launch (opt-out, like Ditto): if the user hasn't turned it
   // off AND the OS permission is already granted, start the background service
@@ -449,18 +616,69 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
   // calls enableNativeNotifications() from a real tap; the Settings toggle is
   // the other way in.
   useEffect(() => {
-    if (!supported || enabled || busy || autoChecked) return;
-    if (!loadIntent()) return;
+    if (!supported || enablement !== "unknown" || busy || autoChecked) return;
+    let cancelled = false;
+    let retryTimer: number | undefined;
     autoChecked = true;
+    if (!loadIntent()) {
+      setEnabledShared("disabled");
+      return;
+    }
     (async () => {
       try {
         const { granted } = await ArmadaNotification.checkPermission();
-        if (granted) setEnabledShared(true);
+        setEnabledShared(granted ? "enabled" : "disabled");
       } catch {
-        // Permission check failed — leave dormant.
+        // An unavailable bridge is not an authoritative "off". Leave the
+        // persisted native config intact and retry in this permanent headless
+        // mount; relying on another Settings mount left fresh installs dormant
+        // for the rest of the session after one transient bridge failure.
+        autoChecked = false;
+        if (!cancelled) {
+          retryTimer = window.setTimeout(() => {
+            setPermissionCheckAttempt((attempt) => attempt + 1);
+          }, 5_000);
+        }
       }
     })();
-  }, [supported, enabled, busy]);
+    return () => {
+      cancelled = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+    };
+  }, [supported, enablement, busy, permissionCheckAttempt]);
+
+  const refreshHealth = useCallback(async () => {
+    if (!supported) return;
+    try {
+      setHealth(await ArmadaNotification.getHealth());
+    } catch {
+      // Older APK paired with a newer WebView: diagnostics are optional and the
+      // notification path itself must continue to work.
+    }
+  }, [supported]);
+
+  useEffect(() => {
+    if (!supported) return;
+    void refreshHealth();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refreshHealth();
+    };
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refreshHealth();
+    }, 15_000);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [supported, refreshHealth]);
+
+  const openSettings = useCallback(async (
+    channel?: "messages" | "calls" | "service",
+  ) => {
+    if (!supported) return;
+    await ArmadaNotification.openNotificationSettings({ channel });
+  }, [supported]);
 
   // The complete set of relays we actually told the native service to watch.
   // Used to validate AUTH challenges before signing: we only sign a kind-22242
@@ -548,17 +766,28 @@ export function useNativeNotifications(): UseNativeNotificationsReturn {
     setBusy(true);
     try {
       saveIntent(false);
-      setEnabledShared(false);
-      await ArmadaNotification.configure({ enabled: false });
+      setEnabledShared("disabled");
+      await configureNative({ enabled: false });
     } finally {
       setBusy(false);
     }
   }, [supported]);
 
   const setPrefs = useCallback(async (next: PushPrefs) => {
-    savePushPrefs(next);
+    savePushPrefs(next, user?.pubkey);
     updateConfig((current) => ({ ...current, pushPrefs: next }));
-  }, [updateConfig]);
+  }, [updateConfig, user?.pubkey]);
 
-  return { supported, enabled, busy, prefs, enable, disable, setPrefs };
+  return {
+    supported,
+    enabled,
+    busy,
+    prefs,
+    health,
+    refreshHealth,
+    openSettings,
+    enable,
+    disable,
+    setPrefs,
+  };
 }

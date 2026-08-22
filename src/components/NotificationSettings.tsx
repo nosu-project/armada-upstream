@@ -3,7 +3,10 @@ import { AlertTriangle, Play } from "lucide-react";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useForegroundNotificationSettings } from "@/hooks/useForegroundNotificationSettings";
-import { useNativeNotifications } from "@/hooks/useNativeNotifications";
+import {
+  useNativeNotifications,
+  type UseNativeNotificationsReturn,
+} from "@/hooks/useNativeNotifications";
 import { useWebPushNotifications } from "@/contexts/WebPushContext";
 import {
   loadNotificationSoundSettings,
@@ -68,6 +71,7 @@ export function NotificationSettings() {
           onToggle={(v) => (v ? native.enable() : native.disable())}
           onSetPrefs={(p) => native.setPrefs(p).catch(() => {})}
         />
+        <NativeNotificationHealthPanel native={native} />
         {native.enabled && <BatteryOptimizationWarning />}
       </div>
     );
@@ -79,6 +83,166 @@ export function NotificationSettings() {
       {!isNativeRuntime() && <NotificationSoundSettings />}
     </div>
   );
+}
+
+/** Permission/channel blocks and a compact, non-secret service diagnostic. */
+function NativeNotificationHealthPanel({
+  native,
+}: {
+  native: UseNativeNotificationsReturn;
+}) {
+  const health = native.health;
+  if (!health) return null;
+
+  const appBlocked = !health.postNotificationsGranted || !health.notificationsEnabled;
+  const messagesBlocked = health.messageChannelImportance === 0;
+  const messagesQuiet = health.messageChannelImportance > 0 &&
+    health.messageChannelImportance < 4;
+  const callsBlocked = health.callChannelImportance === 0;
+  const callsQuiet = health.callChannelImportance > 0 && health.callChannelImportance < 4;
+  const serviceBlocked = health.serviceChannelImportance === 0;
+  const stopped = native.enabled && (!health.configEnabled || !health.serviceRunning);
+  const staleConfig = native.enabled && health.serviceRunning &&
+    health.loadedConfigRevision !== health.configRevision;
+  const disconnected = native.enabled && health.socketTotalCount > 0 &&
+    health.socketOpenCount === 0;
+  const signerUnavailable = native.enabled && health.signerStatus === "unavailable";
+  const blocked = appBlocked || messagesBlocked;
+  const degraded = messagesQuiet || callsQuiet || stopped || staleConfig || disconnected ||
+    serviceBlocked || signerUnavailable ||
+    health.authStatus === "rejected" || health.authStatus === "failed";
+
+  const open = (channel?: "messages" | "calls" | "service") => {
+    void native.openSettings(channel).catch(() => {});
+  };
+
+  return (
+    <div className="space-y-3">
+      {(blocked || degraded || callsBlocked) && (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <p className="text-xs">
+                {appBlocked
+                  ? "Android is blocking Armada notifications at the app level."
+                  : messagesBlocked
+                    ? "Android's Armada message channel is turned off."
+                    : messagesQuiet
+                      ? "Android's Armada message channel is below high priority, so alerts may be silent or have no banner."
+                    : stopped
+                      ? "The background notification service is not running with a complete configuration."
+                      : staleConfig
+                        ? "The background service has not loaded the latest notification configuration."
+                      : disconnected
+                        ? "The service is running, but none of its relay connections are open."
+                        : serviceBlocked
+                          ? "The background-service notification channel is turned off. Android may stop the connection."
+                          : signerUnavailable
+                            ? "The background signer is unavailable, so encrypted DMs and relay authentication can fail while Armada is closed."
+                            : callsBlocked
+                              ? "Android's incoming-call notification channel is turned off."
+                              : "Android's incoming-call channel is below high priority, so calls may not ring."}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {(appBlocked || messagesBlocked || messagesQuiet) && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 text-xs"
+                    onClick={() => open(appBlocked ? undefined : "messages")}
+                  >
+                    Open notification settings
+                  </Button>
+                )}
+                {(callsBlocked || callsQuiet) && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 text-xs"
+                    onClick={() => open("calls")}
+                  >
+                    Open call settings
+                  </Button>
+                )}
+                {serviceBlocked && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 text-xs"
+                    onClick={() => open("service")}
+                  >
+                    Open service settings
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <details className="rounded-lg border border-border px-3 py-2 text-xs">
+        <summary className="cursor-pointer font-medium">Notification diagnostics</summary>
+        <dl className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1 text-muted-foreground">
+          <dt>Service / config</dt>
+          <dd className="text-right text-foreground">
+            {health.serviceRunning ? "running" : "stopped"} / {health.configEnabled
+              ? health.loadedConfigRevision === health.configRevision ? "loaded" : "stale"
+              : "off"}
+          </dd>
+          <dt>Watches</dt>
+          <dd className="text-right text-foreground">
+            {health.relayWatchCount} relays · {health.groupWatchCount} groups · {health.dmPeerWatchCount} DMs · {health.concordStreamWatchCount} streams
+          </dd>
+          <dt>Relay sockets</dt>
+          <dd className="text-right text-foreground">
+            {health.socketOpenCount}/{health.socketTotalCount} open
+          </dd>
+          <dt>Message / call / service channels</dt>
+          <dd className="text-right text-foreground">
+            {formatImportance(health.messageChannelImportance)} / {formatImportance(health.callChannelImportance)} / {formatImportance(health.serviceChannelImportance)}
+          </dd>
+          <dt>Signer / relay auth</dt>
+          <dd className="text-right text-foreground">
+            {health.signerStatus} / {health.authStatus}
+          </dd>
+          <dt>Last config / sign / auth</dt>
+          <dd className="text-right text-foreground">
+            {formatHealthTime(health.lastConfigAt)} / {formatHealthTime(health.lastSignAt)} / {formatHealthTime(health.lastAuthAt)}
+          </dd>
+          <dt>Last relay event</dt>
+          <dd className="text-right text-foreground">{formatHealthTime(health.lastEventAt)}</dd>
+          <dt>Last notification post</dt>
+          <dd className="text-right text-foreground">{formatHealthTime(health.lastPresentedAt)}</dd>
+          <dt>Active notifications</dt>
+          <dd className="text-right text-foreground">{health.activeNotificationCount}</dd>
+          <dt>Last error</dt>
+          <dd className="text-right text-foreground">
+            {health.lastError
+              ? `${health.lastError} · ${formatHealthTime(health.lastErrorAt)}`
+              : "none"}
+          </dd>
+        </dl>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="mt-2 h-8 px-2 text-xs"
+          onClick={() => void native.refreshHealth()}
+        >
+          Refresh
+        </Button>
+      </details>
+    </div>
+  );
+}
+
+function formatHealthTime(timestamp: number): string {
+  if (!timestamp) return "never";
+  return new Date(timestamp).toLocaleString();
+}
+
+function formatImportance(importance: number): string {
+  return ["blocked", "min", "low", "default", "high", "max"][importance] ?? "n/a";
 }
 
 /** Sound played by the open web/desktop client; native platforms own audio. */

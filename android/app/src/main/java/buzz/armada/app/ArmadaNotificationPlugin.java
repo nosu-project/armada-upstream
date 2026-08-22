@@ -1,6 +1,7 @@
 package buzz.armada.app;
 
-import android.app.ForegroundServiceStartNotAllowedException;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -25,6 +26,7 @@ import com.getcapacitor.annotation.PermissionCallback;
 import buzz.armada.app.db.ServiceStore;
 
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 /**
@@ -50,6 +52,25 @@ public class ArmadaNotificationPlugin extends Plugin {
 
     private static final String TAG = "ArmadaNotifPlugin";
     static final String PREFS_NAME = "armada_notification_config";
+    private static long lastConfigRevision;
+
+    /**
+     * Return a process-wide unique commit marker for notification config.
+     * Both the WebView bridge and the background service write the same
+     * SharedPreferences file. Reading {@code rev + 1} independently lets two
+     * concurrent editors choose the same value, after which the rev-only
+     * listener can miss the second update forever.
+     */
+    static synchronized long nextConfigRevision(SharedPreferences prefs) {
+        long next = nextConfigRevisionValue(
+                prefs.getLong("rev", 0L), lastConfigRevision, System.currentTimeMillis());
+        lastConfigRevision = next;
+        return next;
+    }
+
+    static long nextConfigRevisionValue(long stored, long previousProcessValue, long now) {
+        return Math.max(now, Math.max(stored + 1L, previousProcessValue + 1L));
+    }
 
     /**
      * Live plugin instance, so the background service can reach back into the
@@ -468,10 +489,95 @@ public class ArmadaNotificationPlugin extends Plugin {
 
     private boolean hasNotificationPermission() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            return NotificationManagerCompat.from(getContext()).areNotificationsEnabled();
+            return true;
         }
         return getContext().checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
                 == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /** Non-secret diagnostics for permission, channels and the live relay service. */
+    @PluginMethod
+    public void getHealth(PluginCall call) {
+        Context ctx = getContext();
+        JSONObject snapshot = NotificationRelayService.healthSnapshot(ctx);
+        JSObject ret = new JSObject();
+        java.util.Iterator<String> keys = snapshot.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            ret.put(key, snapshot.opt(key));
+        }
+        ret.put("postNotificationsGranted", hasNotificationPermission());
+        ret.put("notificationsEnabled",
+                NotificationManagerCompat.from(ctx).areNotificationsEnabled());
+
+        NotificationManager manager =
+                (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+        ret.put("messageChannelImportance", channelImportance(
+                manager, NotificationRelayService.MSG_CHANNEL_ID));
+        ret.put("callChannelImportance", channelImportance(
+                manager, NotificationRelayService.CALL_CHANNEL_ID));
+        ret.put("serviceChannelImportance", channelImportance(
+                manager, NotificationRelayService.SVC_CHANNEL_ID));
+        ret.put("activeNotificationCount", activeNotificationCount(manager));
+        call.resolve(ret);
+    }
+
+    /** Open app notification settings, focused on a channel where supported. */
+    @PluginMethod
+    public void openNotificationSettings(PluginCall call) {
+        String requested = call.getString("channel");
+        String channelId = null;
+        if ("messages".equals(requested)) channelId = NotificationRelayService.MSG_CHANNEL_ID;
+        else if ("calls".equals(requested)) channelId = NotificationRelayService.CALL_CHANNEL_ID;
+        else if ("service".equals(requested)) channelId = NotificationRelayService.SVC_CHANNEL_ID;
+
+        try {
+            Intent intent;
+            if (channelId != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                intent = new Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, getContext().getPackageName())
+                        .putExtra(Settings.EXTRA_CHANNEL_ID, channelId);
+            } else {
+                intent = appNotificationSettingsIntent();
+            }
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+            call.resolve();
+        } catch (Exception channelFailure) {
+            try {
+                Intent fallback = appNotificationSettingsIntent();
+                fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                getContext().startActivity(fallback);
+                call.resolve();
+            } catch (Exception appFailure) {
+                call.reject("Unable to open notification settings", appFailure);
+            }
+        }
+    }
+
+    private Intent appNotificationSettingsIntent() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            return new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, getContext().getPackageName());
+        }
+        return new Intent("android.settings.APP_NOTIFICATION_SETTINGS")
+                .putExtra("app_package", getContext().getPackageName())
+                .putExtra("app_uid", getContext().getApplicationInfo().uid);
+    }
+
+    private static int channelImportance(NotificationManager manager, String channelId) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || manager == null) return -1;
+        NotificationChannel channel = manager.getNotificationChannel(channelId);
+        return channel != null ? channel.getImportance() : -1;
+    }
+
+    private static int activeNotificationCount(NotificationManager manager) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || manager == null) return -1;
+        try {
+            return manager.getActiveNotifications().length;
+        } catch (Exception ignored) {
+            return -1;
+        }
     }
 
     /**
@@ -524,8 +630,8 @@ public class ArmadaNotificationPlugin extends Plugin {
      * showing (so it can suppress redundant notifications for those rooms — the
      * live timeline already paints the message). Pass an empty array / omit
      * when the app is backgrounded or on a non-chat screen. The value is
-     * volatile: it lives only on the running service instance, so killing the
-     * app or the service immediately resumes notifications.
+     * volatile and heartbeat-bound: it lives only in process and expires if a
+     * dead WebView cannot clear it.
      *
      * Room-key shapes (must match the service's enqueueRoomMessage keys):
      *   - NIP-29 group: {@code "h:<relayUrl>|<groupId>"}
@@ -587,6 +693,15 @@ public class ArmadaNotificationPlugin extends Plugin {
     public void configure(PluginCall call) {
         boolean enabled = Boolean.TRUE.equals(call.getBoolean("enabled", false));
         String userPubkey = call.getString("userPubkey");
+        // Missing flags mean "replace", preserving the all-at-once contract of
+        // older web bundles. Current bundles send one authority bit per async
+        // plane so a failed relay read cannot erase (or freeze) unrelated state.
+        boolean groupPlaneReady = Boolean.TRUE.equals(call.getBoolean("groupPlaneReady", true));
+        boolean dmRelayPlaneReady = Boolean.TRUE.equals(call.getBoolean("dmRelayPlaneReady", true));
+        boolean dmRosterPlaneReady = Boolean.TRUE.equals(call.getBoolean("dmRosterPlaneReady", true));
+        boolean concordPlaneReady = Boolean.TRUE.equals(call.getBoolean("concordPlaneReady", true));
+        boolean gitPlaneReady = Boolean.TRUE.equals(call.getBoolean("gitPlaneReady", true));
+        boolean policyPlaneReady = Boolean.TRUE.equals(call.getBoolean("policyPlaneReady", true));
 
         String relayUrlsRaw = arrayToString(call.getArray("relayUrls"));
         String groupIdsRaw = arrayToString(call.getArray("groupIds"));
@@ -598,6 +713,14 @@ public class ArmadaNotificationPlugin extends Plugin {
         String dmFollowsRaw = arrayToString(call.getArray("dmFollows"));
         String dmKnownPeersRaw = arrayToString(call.getArray("dmKnownPeers"));
         String dmKnownConversationsRaw = arrayToString(call.getArray("dmKnownConversations"));
+        String dmLevelsRaw = null;
+        try {
+            if (call.getObject("dmLevels") != null) {
+                dmLevelsRaw = call.getObject("dmLevels").toString();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to read DM notification levels", e);
+        }
         String dmMutedPeersRaw = arrayToString(call.getArray("dmMutedPeers"));
         String dmRequestsRaw = call.getString("dmRequests");
         String selfRelaysRaw = arrayToString(call.getArray("selfRelays"));
@@ -628,58 +751,148 @@ public class ArmadaNotificationPlugin extends Plugin {
         }
 
         SharedPreferences prefs = getContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        boolean hasWatch = relayUrlsRaw != null || concordSubsRaw != null
-                || dmRelaysRaw != null;
-        boolean hasConfig = enabled && userPubkey != null && hasWatch;
+        boolean sameAccountConfig = prefs.getBoolean("enabled", false)
+                && userPubkey != null
+                && userPubkey.equals(prefs.getString("userPubkey", null));
+        boolean incomingHasWatch = hasArrayItems(relayUrlsRaw)
+                || hasArrayItems(groupSubsRaw)
+                || hasArrayItems(dmRelaysRaw)
+                || hasArrayItems(selfRelaysRaw)
+                || hasArrayItems(concordSubsRaw)
+                || hasArrayItems(gitSubsRaw);
+        // A partial same-account refresh may contain no currently-ready watch
+        // at all (for example, the group-list relay is offline while only a
+        // local preference changed). Keep the service alive from its last-good
+        // watch set; a complete authoritative empty view is sent as
+        // {enabled:false} by the WebView and still clears everything below.
+        boolean hasConfig = enabled && userPubkey != null
+                && NotificationRelayService.hasUsableNotificationPolicy(
+                        sameAccountConfig, policyPlaneReady)
+                && (incomingHasWatch || (sameAccountConfig && hasPersistedWatch(prefs)));
 
         if (hasConfig) {
-            SharedPreferences.Editor editor = prefs.edit()
+            boolean replaceGroup = NotificationRelayService.shouldReplaceConfigPlane(
+                    sameAccountConfig, groupPlaneReady);
+            boolean replaceDmRelays = NotificationRelayService.shouldReplaceConfigPlane(
+                    sameAccountConfig, dmRelayPlaneReady);
+            boolean replaceDmRoster = NotificationRelayService.shouldReplaceConfigPlane(
+                    sameAccountConfig, dmRosterPlaneReady);
+            boolean replaceConcord = NotificationRelayService.shouldReplaceConfigPlane(
+                    sameAccountConfig, concordPlaneReady);
+            boolean replaceGit = NotificationRelayService.shouldReplaceConfigPlane(
+                    sameAccountConfig, gitPlaneReady);
+
+            SharedPreferences.Editor editor = prefs.edit();
+            // Never merge the outgoing account into a new one. Even a useful
+            // partial fresh bootstrap starts from a blank slate; unready-plane
+            // preservation is strictly a same-pubkey operation.
+            if (!sameAccountConfig) {
+                editor.clear();
+                // Account-scoped state outside the config must cross the same
+                // boundary: a missed/failed JS exit barrier cannot leave the
+                // outgoing account's tray, read actions or call ticket behind.
+                clearReadMarkers(getContext());
+                clearCallAnswer(getContext(), null);
+                NotificationRelayService.clearAccountNotifications(getContext());
+            }
+            editor
                     .putBoolean("enabled", true)
-                    .putString("userPubkey", userPubkey)
-                    .putString("relayUrls", relayUrlsRaw != null ? relayUrlsRaw : "[]");
-            if (groupIdsRaw != null) editor.putString("groupIds", groupIdsRaw);
-            else editor.remove("groupIds");
-            if (groupSubsRaw != null) editor.putString("groupSubs", groupSubsRaw);
-            else editor.remove("groupSubs");
-            if (mentionOnlyGroupIdsRaw != null) editor.putString("mentionOnlyGroupIds", mentionOnlyGroupIdsRaw);
-            else editor.remove("mentionOnlyGroupIds");
-            if (dmRelaysRaw != null) editor.putString("dmRelays", dmRelaysRaw);
-            else editor.remove("dmRelays");
-            if (dmFollowsRaw != null) editor.putString("dmFollows", dmFollowsRaw);
-            else editor.remove("dmFollows");
-            if (dmKnownPeersRaw != null) editor.putString("dmKnownPeers", dmKnownPeersRaw);
-            else editor.remove("dmKnownPeers");
-            if (dmKnownConversationsRaw != null) editor.putString("dmKnownConversations", dmKnownConversationsRaw);
-            else editor.remove("dmKnownConversations");
-            if (dmMutedPeersRaw != null) editor.putString("dmMutedPeers", dmMutedPeersRaw);
-            else editor.remove("dmMutedPeers");
-            if (dmRequestsRaw != null) editor.putString("dmRequests", dmRequestsRaw);
-            else editor.remove("dmRequests");
-            if (selfRelaysRaw != null) editor.putString("selfRelays", selfRelaysRaw);
-            else editor.remove("selfRelays");
+                    .putString("userPubkey", userPubkey);
+            if (replaceGroup) {
+                putOrRemove(editor, "relayUrls", relayUrlsRaw);
+                putOrRemove(editor, "groupIds", groupIdsRaw);
+                putOrRemove(editor, "groupSubs", groupSubsRaw);
+                putOrRemove(editor, "mentionOnlyGroupIds", mentionOnlyGroupIdsRaw);
+            } else {
+                putOrRemove(editor, "relayUrls", mergeStringArrays(
+                        prefs.getString("relayUrls", null), relayUrlsRaw));
+                putOrRemove(editor, "groupIds", mergeStringArrays(
+                        prefs.getString("groupIds", null), groupIdsRaw));
+                String oldGroupSubs = prefs.getString("groupSubs", null);
+                // Keep the key absent for a legacy last-good config when the
+                // partial current snapshot is empty. Presence of groupSubs=[]
+                // deliberately disables the relayUrls/groupIds fallback.
+                String mergedGroupSubs = oldGroupSubs == null
+                        && !hasArrayItems(groupSubsRaw)
+                        ? null
+                        : mergeObjectArrays(oldGroupSubs, groupSubsRaw,
+                                "relay", "id");
+                putOrRemove(editor, "groupSubs", mergedGroupSubs);
+                putOrRemove(editor, "mentionOnlyGroupIds", mergeFlagsForKnownIds(
+                        prefs.getString("mentionOnlyGroupIds", null),
+                        mentionOnlyGroupIdsRaw, groupIdsRaw));
+            }
+            if (replaceDmRelays) {
+                putOrRemove(editor, "dmRelays", dmRelaysRaw);
+            } else {
+                putOrRemove(editor, "dmRelays", mergeStringArrays(
+                        prefs.getString("dmRelays", null), dmRelaysRaw));
+            }
+            if (replaceDmRoster) {
+                putOrRemove(editor, "dmFollows", dmFollowsRaw);
+                putOrRemove(editor, "dmKnownPeers", dmKnownPeersRaw);
+                putOrRemove(editor, "dmKnownConversations", dmKnownConversationsRaw);
+                putOrRemove(editor, "dmMutedPeers", dmMutedPeersRaw);
+            } else {
+                putOrRemove(editor, "dmFollows", mergeStringArrays(
+                        prefs.getString("dmFollows", null), dmFollowsRaw));
+                putOrRemove(editor, "dmKnownPeers", mergeStringArrays(
+                        prefs.getString("dmKnownPeers", null), dmKnownPeersRaw));
+                putOrRemove(editor, "dmKnownConversations", mergeStringArrays(
+                        prefs.getString("dmKnownConversations", null),
+                        dmKnownConversationsRaw));
+                putOrRemove(editor, "dmMutedPeers", mergeStringArrays(
+                        prefs.getString("dmMutedPeers", null), dmMutedPeersRaw));
+            }
+            // These values are local once the account's NIP-78 settings have
+            // either synchronized or proven a durable account-scoped
+            // last-good. Unrelated relay planes never gate them, but startup
+            // defaults must not replace an existing policy (or bootstrap a
+            // fresh account) before that authority exists.
+            if (policyPlaneReady) {
+                putOrRemove(editor, "dmLevels", dmLevelsRaw);
+                putOrRemove(editor, "dmRequests", dmRequestsRaw);
+                putOrRemove(editor, "prefs", prefsRaw);
+            }
+            putOrRemove(editor, "selfRelays", selfRelaysRaw);
             // Absent leaves the pref absent, which the service reads as
             // SelfState.DEFAULT_D_TAGS — never as an empty set, which would
             // drop the kind-30078 subscription entirely. That is also what an
             // older WebView (which doesn't send this) gets.
-            if (selfDTagsRaw != null) editor.putString("selfDTags", selfDTagsRaw);
-            else editor.remove("selfDTags");
+            putOrRemove(editor, "selfDTags", selfDTagsRaw);
             // The "concord2Subs" PREF key keeps its old spelling on purpose:
             // the service reads it on boot, before the WebView can re-register.
             // Respelling it would leave an upgraded device with no Concord
             // notifications until the user next opens the app.
-            if (concordSubsRaw != null) editor.putString("concord2Subs", concordSubsRaw);
-            else editor.remove("concord2Subs");
+            if (replaceConcord) {
+                putOrRemove(editor, "concord2Subs", concordSubsRaw);
+            } else {
+                putOrRemove(editor, "concord2Subs", mergeConcordSubscriptions(
+                        prefs.getString("concord2Subs", null), concordSubsRaw));
+            }
             if (signerSealed != null) editor.putString("signerSealed", signerSealed);
-            else editor.remove("signerSealed");
-            if (gitSubsRaw != null) editor.putString("gitSubs", mergeGitRoots(prefs.getString("gitSubs", null), gitSubsRaw));
-            else editor.remove("gitSubs");
+            else if (!sameAccountConfig) editor.remove("signerSealed");
+            // Missing login material and a transient sealing failure both keep
+            // the same account's last-good signer. Logout/account replacement
+            // clears first, so another identity can never inherit it.
+            if (replaceGit) {
+                if (gitSubsRaw != null) {
+                    editor.putString("gitSubs", mergeGitRoots(
+                            sameAccountConfig ? prefs.getString("gitSubs", null) : null,
+                            gitSubsRaw));
+                } else {
+                    editor.remove("gitSubs");
+                }
+            } else if (gitSubsRaw != null) {
+                putOrRemove(editor, "gitSubs", mergeGitSubscriptions(
+                        prefs.getString("gitSubs", null), gitSubsRaw));
+            }
             // Versioned only for the additive Git plane. Existing installations
             // without this key retain their message/DM configuration unchanged.
             editor.putInt("schemaVersion", 2);
-            if (prefsRaw != null) editor.putString("prefs", prefsRaw);
             // Bump a revision so the running service's SharedPreferences
             // listener always fires even if the values look unchanged.
-            editor.putLong("rev", System.currentTimeMillis());
+            editor.putLong("rev", nextConfigRevision(prefs));
             editor.apply();
             if (BuildConfig.DEBUG) Log.d(TAG, "Configured: relays=" + relayUrlsRaw + " groups=" + groupIdsRaw
                     + " dmRelays=" + dmRelaysRaw
@@ -692,6 +905,7 @@ public class ArmadaNotificationPlugin extends Plugin {
             // And any ring's parameters, which name a peer of the account that
             // just went away.
             clearCallAnswer(getContext(), null);
+            NotificationRelayService.clearAccountNotifications(getContext());
             Log.d(TAG, "Config cleared (disabled or logged out)");
         }
 
@@ -703,33 +917,10 @@ public class ArmadaNotificationPlugin extends Plugin {
         Context ctx = getContext();
         Intent serviceIntent = new Intent(ctx, NotificationRelayService.class);
         if (start) {
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    try {
-                        // startService() creates no startForeground() deadline
-                        // but is refused (IllegalStateException) from a
-                        // background state on API 26+. configure() normally
-                        // arrives from a visible WebView, so this path carries
-                        // no 10-second deadline; a background config refresh
-                        // falls back to startForegroundService(). A start
-                        // delivered to the already-running service still runs
-                        // onStartCommand → loadConfigAndReconnect either way.
-                        ctx.startService(serviceIntent);
-                    } catch (IllegalStateException notForeground) {
-                        ctx.startForegroundService(serviceIntent);
-                    }
-                } else {
-                    ctx.startService(serviceIntent);
-                }
-                Log.d(TAG, "Started NotificationRelayService");
-            } catch (Exception e) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-                        && e instanceof ForegroundServiceStartNotAllowedException) {
-                    Log.w(TAG, "Could not start foreground service: " + e.getMessage());
-                } else {
-                    Log.w(TAG, "Failed to start service", e);
-                }
-            }
+            // If already live, the single `rev` preference callback below
+            // reloads it. Delivering another start would run onStartCommand too
+            // and rebuild every socket twice for one logical configuration.
+            NotificationRelayService.startIfConfigured(ctx);
         } else {
             BootReceiver.cancelWatchdog(ctx);
             ctx.stopService(serviceIntent);
@@ -739,6 +930,220 @@ public class ArmadaNotificationPlugin extends Plugin {
 
     private static String arrayToString(JSONArray arr) {
         return arr != null ? arr.toString() : null;
+    }
+
+    private static void putOrRemove(
+            SharedPreferences.Editor editor, String key, String value) {
+        if (value != null) editor.putString(key, value);
+        else editor.remove(key);
+    }
+
+    private static boolean hasArrayItems(String raw) {
+        if (raw == null) return false;
+        try {
+            return new JSONArray(raw).length() > 0;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private static boolean hasPersistedWatch(SharedPreferences prefs) {
+        return hasArrayItems(prefs.getString("relayUrls", null))
+                || hasArrayItems(prefs.getString("groupSubs", null))
+                || hasArrayItems(prefs.getString("dmRelays", null))
+                || hasArrayItems(prefs.getString("selfRelays", null))
+                || hasArrayItems(prefs.getString("concord2Subs", null))
+                || hasArrayItems(prefs.getString("gitSubs", null));
+    }
+
+    /** Additive merge used while a relay-backed plane is not authoritative. */
+    static String mergeStringArrays(String oldJson, String nextJson) {
+        if (nextJson == null) return oldJson;
+        if (oldJson == null) return nextJson;
+        try {
+            java.util.LinkedHashSet<String> values = new java.util.LinkedHashSet<>();
+            JSONArray oldValues = new JSONArray(oldJson);
+            JSONArray nextValues = new JSONArray(nextJson);
+            for (int i = 0; i < oldValues.length(); i++) {
+                String value = oldValues.optString(i, null);
+                if (value != null) values.add(value);
+            }
+            for (int i = 0; i < nextValues.length(); i++) {
+                String value = nextValues.optString(i, null);
+                if (value != null) values.add(value);
+            }
+            return new JSONArray(values).toString();
+        } catch (Exception ignored) {
+            return nextJson;
+        }
+    }
+
+    /**
+     * Merge object arrays by a stable composite identity. Incoming objects win
+     * for matching records, so policy flags such as {@code mentionOnly} can
+     * advance even before the source is complete; unmatched old records stay
+     * until a ready-plane replacement prunes them.
+     */
+    static String mergeObjectArrays(
+            String oldJson, String nextJson, String... identityKeys) {
+        if (nextJson == null) return oldJson;
+        if (oldJson == null) return nextJson;
+        try {
+            java.util.LinkedHashMap<String, JSONObject> values =
+                    new java.util.LinkedHashMap<>();
+            addObjectsByIdentity(values, new JSONArray(oldJson), identityKeys);
+            addObjectsByIdentity(values, new JSONArray(nextJson), identityKeys);
+            JSONArray merged = new JSONArray();
+            for (JSONObject value : values.values()) merged.put(value);
+            return merged.toString();
+        } catch (Exception ignored) {
+            return nextJson;
+        }
+    }
+
+    /** Additive same-account Concord merge, including nested relay/key sets. */
+    static String mergeConcordSubscriptions(String oldJson, String nextJson) {
+        if (nextJson == null) return oldJson;
+        if (oldJson == null) return nextJson;
+        try {
+            java.util.LinkedHashMap<String, JSONObject> values =
+                    objectMap(new JSONArray(oldJson), "communityId", "channelId");
+            JSONArray incoming = new JSONArray(nextJson);
+            for (int i = 0; i < incoming.length(); i++) {
+                JSONObject next = incoming.optJSONObject(i);
+                String identity = objectIdentity(next, "communityId", "channelId");
+                if (next == null || identity == null) continue;
+                JSONObject old = values.get(identity);
+                JSONObject merged = new JSONObject(next.toString());
+                if (old != null) {
+                    putMergedArray(merged, "relays", mergeStringArrays(
+                            arrayString(old, "relays"), arrayString(next, "relays")));
+                    putMergedArray(merged, "streams", mergeObjectArrays(
+                            arrayString(old, "streams"), arrayString(next, "streams"), "pk"));
+                    putMergedArray(merged, "banned", mergeStringArrays(
+                            arrayString(old, "banned"), arrayString(next, "banned")));
+                }
+                values.put(identity, merged);
+            }
+            return objectValues(values).toString();
+        } catch (Exception ignored) {
+            return nextJson;
+        }
+    }
+
+    /** Additive same-account Git merge; ready replacement still prunes. */
+    static String mergeGitSubscriptions(String oldJson, String nextJson) {
+        if (nextJson == null) return oldJson;
+        if (oldJson == null) return nextJson;
+        try {
+            java.util.LinkedHashMap<String, JSONObject> values =
+                    objectMap(new JSONArray(oldJson), "address");
+            JSONArray incoming = new JSONArray(nextJson);
+            for (int i = 0; i < incoming.length(); i++) {
+                JSONObject next = incoming.optJSONObject(i);
+                String identity = objectIdentity(next, "address");
+                if (next == null || identity == null) continue;
+                JSONObject old = values.get(identity);
+                JSONObject merged = new JSONObject(next.toString());
+                if (old != null) {
+                    putMergedArray(merged, "relays", mergeStringArrays(
+                            arrayString(old, "relays"), arrayString(next, "relays")));
+                    putMergedArray(merged, "maintainers", mergeStringArrays(
+                            arrayString(old, "maintainers"), arrayString(next, "maintainers")));
+                    putMergedArray(merged, "attachments", mergeObjectArrays(
+                            arrayString(old, "attachments"), arrayString(next, "attachments"),
+                            "channelId", "attachedAt"));
+                    putMergedArray(merged, "ticketRoots", mergeObjectArrays(
+                            arrayString(old, "ticketRoots"), arrayString(next, "ticketRoots"),
+                            "id"));
+                }
+                values.put(identity, merged);
+            }
+            return objectValues(values).toString();
+        } catch (Exception ignored) {
+            return nextJson;
+        }
+    }
+
+    private static java.util.LinkedHashMap<String, JSONObject> objectMap(
+            JSONArray input, String... identityKeys) {
+        java.util.LinkedHashMap<String, JSONObject> values =
+                new java.util.LinkedHashMap<>();
+        for (int i = 0; i < input.length(); i++) {
+            JSONObject value = input.optJSONObject(i);
+            String identity = objectIdentity(value, identityKeys);
+            if (identity != null) values.put(identity, value);
+        }
+        return values;
+    }
+
+    private static String objectIdentity(JSONObject value, String... identityKeys) {
+        if (value == null) return null;
+        StringBuilder identity = new StringBuilder();
+        for (String key : identityKeys) {
+            String part = value.optString(key, "");
+            if (part.isEmpty()) return null;
+            identity.append(part.length()).append(':').append(part);
+        }
+        return identity.toString();
+    }
+
+    private static JSONArray objectValues(
+            java.util.LinkedHashMap<String, JSONObject> values) {
+        JSONArray result = new JSONArray();
+        for (JSONObject value : values.values()) result.put(value);
+        return result;
+    }
+
+    private static String arrayString(JSONObject value, String key) {
+        JSONArray array = value != null ? value.optJSONArray(key) : null;
+        return array != null ? array.toString() : null;
+    }
+
+    private static void putMergedArray(
+            JSONObject target, String key, String mergedJson) throws JSONException {
+        if (mergedJson != null) target.put(key, new JSONArray(mergedJson));
+    }
+
+    private static void addObjectsByIdentity(
+            java.util.LinkedHashMap<String, JSONObject> values,
+            JSONArray input,
+            String... identityKeys) {
+        for (int i = 0; i < input.length(); i++) {
+            JSONObject value = input.optJSONObject(i);
+            if (value == null) continue;
+            String identity = objectIdentity(value, identityKeys);
+            if (identity != null) values.put(identity, value);
+        }
+    }
+
+    /** Update flags for records present in a partial snapshot without pruning. */
+    static String mergeFlagsForKnownIds(
+            String oldFlagsJson, String nextFlagsJson, String knownIdsJson) {
+        if (knownIdsJson == null) return oldFlagsJson;
+        try {
+            java.util.LinkedHashSet<String> flags = new java.util.LinkedHashSet<>();
+            JSONArray oldFlags = oldFlagsJson != null
+                    ? new JSONArray(oldFlagsJson) : new JSONArray();
+            JSONArray nextFlags = nextFlagsJson != null
+                    ? new JSONArray(nextFlagsJson) : new JSONArray();
+            JSONArray knownIds = new JSONArray(knownIdsJson);
+            for (int i = 0; i < oldFlags.length(); i++) {
+                String value = oldFlags.optString(i, null);
+                if (value != null) flags.add(value);
+            }
+            for (int i = 0; i < knownIds.length(); i++) {
+                String value = knownIds.optString(i, null);
+                if (value != null) flags.remove(value);
+            }
+            for (int i = 0; i < nextFlags.length(); i++) {
+                String value = nextFlags.optString(i, null);
+                if (value != null) flags.add(value);
+            }
+            return new JSONArray(flags).toString();
+        } catch (Exception ignored) {
+            return nextFlagsJson != null ? nextFlagsJson : oldFlagsJson;
+        }
     }
 
     /** Keep roots dynamically learned by the service if a WebView config refresh

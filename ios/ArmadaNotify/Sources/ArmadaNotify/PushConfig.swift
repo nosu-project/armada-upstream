@@ -62,6 +62,14 @@ enum DmRequestLevel: String {
     case full
 }
 
+/// Notification policy for one exact NIP-17 conversation. `mentions` is the
+/// same as `all` for DMs because every direct message addresses the viewer.
+enum DmNotificationLevel: String {
+    case all
+    case mentions
+    case nothing
+}
+
 /// What the extension needs to OPEN an event the push payload inlined.
 ///
 /// The iOS counterpart of `SwPushConfig` (`src/lib/swPushConfig.ts`), and it
@@ -98,6 +106,11 @@ enum DmRequestLevel: String {
 /// goes stale by itself at the next rekey.
 struct PushConfig {
     let policy: DmRequestLevel
+    /// Account-global DM fallback. An exact `dmLevels` entry overrides it.
+    let directMessages: Bool
+    /// Exact canonical participant-set room keys; group membership never
+    /// widens a level into unrelated one-to-one conversations.
+    let dmLevels: [String: DmNotificationLevel]
     /// The viewer's own pubkey (hex) — to drop self-sent copies.
     let selfPubkey: String
     /// follows ∪ accepted ∪ pinned (hex) — the "known" senders.
@@ -116,6 +129,8 @@ struct PushConfig {
 
     init(
         policy: DmRequestLevel,
+        directMessages: Bool = true,
+        dmLevels: [String: DmNotificationLevel] = [:],
         selfPubkey: String,
         knownPeers: Set<String>,
         knownConversations: Set<String> = [],
@@ -125,6 +140,8 @@ struct PushConfig {
         concord: [ConcordStream]
     ) {
         self.policy = policy
+        self.directMessages = directMessages
+        self.dmLevels = dmLevels
         self.selfPubkey = selfPubkey
         self.knownPeers = knownPeers
         self.knownConversations = knownConversations
@@ -141,6 +158,16 @@ struct PushConfig {
         else { return nil }
 
         let policy = DmRequestLevel(rawValue: object["policy"] as? String ?? "") ?? .generic
+        // Older configs predate exact DM levels. A config existed only while
+        // the global DM subscription was enabled, so `true` preserves their
+        // historical behavior during an app/extension upgrade race.
+        let directMessages = (object["directMessages"] as? Bool) ?? true
+        var dmLevels = [String: DmNotificationLevel]()
+        for (key, raw) in (object["dmLevels"] as? [String: String]) ?? [:] {
+            if let level = DmNotificationLevel(rawValue: raw) {
+                dmLevels[key] = level
+            }
+        }
         let knownPeers = Set((object["knownPeers"] as? [String]) ?? [])
         let knownConversations = Set((object["knownConversations"] as? [String]) ?? [])
         let mutedPeers = Set((object["mutedPeers"] as? [String]) ?? [])
@@ -183,6 +210,8 @@ struct PushConfig {
 
         return PushConfig(
             policy: policy,
+            directMessages: directMessages,
+            dmLevels: dmLevels,
             selfPubkey: selfPubkey,
             knownPeers: knownPeers,
             knownConversations: knownConversations,

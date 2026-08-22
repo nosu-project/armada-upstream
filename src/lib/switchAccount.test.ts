@@ -23,8 +23,17 @@ vi.mock("@/lib/secureStorage", () => ({
 
 const assign = vi.fn<(url: string) => void>();
 
-import { getActivePubkey, _resetActiveAccountForTests } from "./activeAccount";
 import {
+  getActivePubkey,
+  setActivePubkey,
+  _resetActiveAccountForTests,
+} from "./activeAccount";
+import {
+  _resetBeforeAccountExitForTests,
+  registerBeforeAccountExit,
+} from "./beforeAccountExit";
+import {
+  addAndSwitchAccount,
   LOGIN_STORAGE_KEY,
   reorderLogins,
   signOutAccount,
@@ -43,6 +52,8 @@ const LOGINS = [login("id-a", A), login("id-b", B), login("id-c", C)];
 beforeEach(() => {
   localStorage.clear();
   _resetActiveAccountForTests();
+  setActivePubkey(A);
+  _resetBeforeAccountExitForTests();
   setItem.mockReset();
   setItem.mockResolvedValue(undefined);
   assign.mockReset();
@@ -53,6 +64,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   localStorage.clear();
   _resetActiveAccountForTests();
+  _resetBeforeAccountExitForTests();
 });
 
 /** The login list as it was persisted by the last `setItem` call. */
@@ -117,11 +129,38 @@ describe("switchAccount", () => {
     expect(assign).toHaveBeenCalledWith("/");
   });
 
+  it("awaits outgoing-account cleanup before changing persistent identity", async () => {
+    let release!: () => void;
+    registerBeforeAccountExit(() => new Promise<void>((resolve) => { release = resolve; }));
+
+    const pending = switchAccount(LOGINS, "id-b");
+    await Promise.resolve();
+    expect(setItem).not.toHaveBeenCalled();
+    expect(assign).not.toHaveBeenCalled();
+
+    release();
+    await pending;
+    expect(setItem).toHaveBeenCalledTimes(1);
+    expect(assign).toHaveBeenCalledWith("/");
+  });
+
+  it("broadcasts the cross-tab fence before invoking shared teardown", async () => {
+    let epochAtCleanup: unknown;
+    registerBeforeAccountExit(async () => {
+      epochAtCleanup = JSON.parse(localStorage.getItem("armada:account-exit-epoch:v1") ?? "null");
+    });
+
+    await switchAccount(LOGINS, "id-b");
+
+    expect(epochAtCleanup).toMatchObject({ fromPubkey: A, toPubkey: B });
+  });
+
   it("still reloads when the write fails, so the app matches storage", async () => {
     setItem.mockRejectedValue(new Error("keychain unavailable"));
 
     await switchAccount(LOGINS, "id-b");
 
+    expect(getActivePubkey()).toBe(A);
     expect(assign).toHaveBeenCalledWith("/");
   });
 
@@ -130,6 +169,30 @@ describe("switchAccount", () => {
 
     expect(setItem).not.toHaveBeenCalled();
     expect(assign).not.toHaveBeenCalled();
+  });
+});
+
+describe("addAndSwitchAccount", () => {
+  it("cleans up before persisting and reloading into the added account", async () => {
+    const added = login("id-new", "d".repeat(64));
+    let release!: () => void;
+    registerBeforeAccountExit(() => new Promise<void>((resolve) => { release = resolve; }));
+
+    const pending = addAndSwitchAccount(LOGINS, added);
+    await Promise.resolve();
+    expect(setItem).not.toHaveBeenCalled();
+    expect(assign).not.toHaveBeenCalled();
+
+    release();
+    await pending;
+    expect(persistedLogins().map((item) => item.id)).toEqual([
+      "id-new",
+      "id-a",
+      "id-b",
+      "id-c",
+    ]);
+    expect(getActivePubkey()).toBe(added.pubkey);
+    expect(assign).toHaveBeenCalledWith("/");
   });
 });
 

@@ -395,8 +395,8 @@ function NostrSyncInner() {
   // settings document. Keep their localStorage mirror current when this device
   // edits the categories and when another client changes them.
   useEffect(() => {
-    savePushPrefs(config.pushPrefs);
-  }, [config.pushPrefs]);
+    if (user?.pubkey) savePushPrefs(config.pushPrefs, user.pubkey);
+  }, [config.pushPrefs, user?.pubkey]);
 
   // (Read-state hydration lives in ReadStateProvider, which owns the local map
   // and so can order it against its own debounced flush.)

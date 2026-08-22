@@ -192,6 +192,36 @@ describe("openConcord", () => {
     expect(result?.stream).toBe(stream);
   });
 
+  it("drops only the Concord plane while its config snapshot is explicitly unready", async () => {
+    const prepared = await preparePush({
+      scope: "c2",
+      event: streamWrap(chatRumor()),
+    }, {
+      policy: "generic",
+      self: getPublicKey(generateSecretKey()),
+      knownPeers: [],
+      dmReady: true,
+      concordReady: false,
+      concord: [stream],
+    });
+    expect(prepared?.drop).toBe(true);
+  });
+
+  it("treats an undefined Concord readiness flag as legacy-ready", async () => {
+    const prepared = await preparePush({
+      scope: "c2",
+      event: streamWrap(chatRumor()),
+    }, {
+      policy: "generic",
+      self: getPublicKey(generateSecretKey()),
+      knownPeers: [],
+      concordReady: undefined,
+      concord: [stream],
+    });
+    expect(prepared?.drop).not.toBe(true);
+    expect(prepared?.line).toContain("shipped it");
+  });
+
   it("returns undefined when no configured stream authored the wrap", () => {
     expect(openConcord(streamWrap(chatRumor()), [{ ...stream, pk: "cc".repeat(32) }]))
       .toBeUndefined();
@@ -229,6 +259,26 @@ describe("openConcord", () => {
   });
 });
 
+describe("preparePush — relay-scoped NIP-29 identity", () => {
+  it("uses a one-relay gateway spec as exact room authority without cached metadata", async () => {
+    const event = finalizeEvent({
+      kind: 9,
+      content: "hello",
+      tags: [["h", "general"]],
+      created_at: now(),
+    }, generateSecretKey());
+
+    const prepared = await preparePush({
+      scope: "group",
+      relays: ["wss://relay-a.example"],
+      event,
+    }, null);
+
+    expect(prepared?.roomKey).toBe("h:wss://relay-a.example|general");
+    expect(prepared?.url).toContain("relay-a.example");
+  });
+});
+
 describe("preparePush — DM request gating", () => {
   const senderSk = generateSecretKey();
   const recipientSk = generateSecretKey();
@@ -263,8 +313,69 @@ describe("preparePush — DM request gating", () => {
     const p = await push(dmWrap(), cfg({ knownPeers: [senderPk] }));
     expect(p?.line).toContain("meet at 8");
     expect(p?.tag).toBe(`dm-${senderPk}`);
+    expect(p?.roomKey).toBe(`dm:${senderPk}`);
+    expect(p?.eventId).toMatch(/^[0-9a-f]{64}$/);
     expect(p?.url).toBe(`/dm/${senderPk}`);
     expect(p?.accumulate).toBe(true);
+  });
+
+  it("drops only the DM plane while its config snapshot is explicitly unready", async () => {
+    const p = await push(dmWrap(), cfg({
+      dmReady: false,
+      concordReady: true,
+      policy: "full",
+      knownPeers: [senderPk],
+    }));
+    expect(p?.drop).toBe(true);
+  });
+
+  it("treats an undefined DM readiness flag as legacy-ready", async () => {
+    const p = await push(dmWrap(), cfg({
+      dmReady: undefined,
+      policy: "full",
+      knownPeers: [senderPk],
+    }));
+    expect(p?.drop).not.toBe(true);
+    expect(p?.line).toContain("meet at 8");
+  });
+
+  it("enforces the exact DM conversation's Nothing level after decrypting", async () => {
+    const p = await push(dmWrap(), cfg({
+      policy: "full",
+      knownPeers: [senderPk],
+      dmLevels: { [senderPk]: "nothing" },
+    }));
+    expect(p?.drop).toBe(true);
+  });
+
+  it("uses the global DM fallback when the conversation has no explicit level", async () => {
+    const p = await push(dmWrap(), cfg({
+      policy: "full",
+      knownPeers: [senderPk],
+      directMessages: false,
+    }));
+    expect(p?.drop).toBe(true);
+  });
+
+  it("lets an exact All level override the disabled global DM fallback", async () => {
+    const p = await push(dmWrap(), cfg({
+      policy: "full",
+      knownPeers: [senderPk],
+      directMessages: false,
+      dmLevels: { [senderPk]: "all" },
+    }));
+    expect(p?.drop).not.toBe(true);
+    expect(p?.line).toContain("meet at 8");
+  });
+
+  it("treats a DM as directed under an exact Mentions level", async () => {
+    const p = await push(dmWrap(), cfg({
+      policy: "full",
+      knownPeers: [senderPk],
+      dmLevels: { [senderPk]: "mentions" },
+    }));
+    expect(p?.drop).not.toBe(true);
+    expect(p?.line).toContain("meet at 8");
   });
 
   it("routes an authored group by its exact conversation without trusting its members 1:1", async () => {
@@ -491,6 +602,71 @@ describe("preparePush — showing nothing on purpose", () => {
       }],
     });
     expect(p?.drop).toBe(true);
+  });
+
+  it("enforces a Concord stream's Mentions level after decrypting", async () => {
+    const CHANNEL = "91".repeat(32);
+    const streamSk = generateSecretKey();
+    const streamPk = getPublicKey(streamSk);
+    const convKey = getConversationKey(streamSk, streamPk);
+    const authorSk = generateSecretKey();
+    const selfPk = getPublicKey(generateSecretKey());
+
+    const streamed = (mentionsSelf: boolean) => {
+      const rumor = {
+        pubkey: getPublicKey(authorSk),
+        kind: 9,
+        content: mentionsSelf ? "hey, you" : "general chatter",
+        tags: [
+          ["channel", CHANNEL],
+          ["epoch", "1"],
+          ...(mentionsSelf ? [["p", selfPk]] : []),
+        ],
+        created_at: now(),
+      };
+      const withId = {
+        ...rumor,
+        id: getEventHash(rumor as Parameters<typeof getEventHash>[0]),
+      };
+      const sealed = finalizeEvent(
+        {
+          kind: 20013,
+          content: nip44Encrypt(JSON.stringify(withId), convKey),
+          tags: [],
+          created_at: rumor.created_at,
+        },
+        authorSk,
+      );
+      return finalizeEvent(
+        {
+          kind: 1059,
+          content: nip44Encrypt(JSON.stringify(sealed), convKey),
+          tags: [["p", getPublicKey(generateSecretKey())]],
+          created_at: now(),
+        },
+        streamSk,
+      );
+    };
+
+    const config: SwPushConfig = {
+      policy: "generic",
+      self: selfPk,
+      knownPeers: [],
+      concord: [{
+        pk: streamPk,
+        convKey: bytesToHex(convKey),
+        epoch: "1",
+        communityId: "92".repeat(32),
+        channelId: CHANNEL,
+        mentionOnly: true,
+      }],
+    };
+
+    expect((await preparePush({ scope: "c2", event: streamed(false) as never }, config))?.drop)
+      .toBe(true);
+    const mention = await preparePush({ scope: "c2", event: streamed(true) as never }, config);
+    expect(mention?.drop).not.toBe(true);
+    expect(mention?.roomKey).toBe(`c2:${CHANNEL}`);
   });
 
   it("drops a banned member's Concord message but still stores it", async () => {

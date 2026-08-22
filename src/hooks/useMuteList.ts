@@ -3,11 +3,18 @@ import { useMutation, useQuery, useQueryClient, type UseMutationResult } from "@
 import { useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 import { MutedPubkeysContext, type MutedPubkeysResult } from "@/contexts/MutedPubkeysContext";
+import { selfStateRelays } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { toast } from "@/hooks/useToast";
+import {
+  newestCanonicalSelfList,
+  replaceableVersionIsNewer,
+  type ReplaceableVersion,
+} from "@/lib/canonicalSelfList";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
+import { queryExplicitRelaysWithStatus, uniqueRelayUrls } from "@/lib/nip65";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { NUser } from "@nostrify/react/login";
@@ -32,7 +39,29 @@ export const KIND_MUTE_LIST = 10000;
  * round-trip each time, so a single in-flight decrypt is shared per event id
  * (mirrors the kind-10009 memo in useUserGroupList).
  */
-const muteListDecryptMemo = new Map<string, Promise<Set<string>>>();
+interface MutedPubkeyRead {
+  pubkeys: Set<string>;
+  decryptFailed: boolean;
+}
+
+interface MuteListQueryData {
+  pubkeys: string[];
+  wireReady: boolean;
+  /** A trusted versioned local snapshot is sufficient for sealed config. */
+  configReady: boolean;
+}
+
+/**
+ * The old folded value was a bare string array. New writes also retain the
+ * replaceable-event version so a complete-but-stale relay cohort cannot roll
+ * a last-good private mute list backwards.
+ */
+interface MuteListSeed {
+  pubkeys: string[];
+  version?: ReplaceableVersion;
+}
+
+const muteListDecryptMemo = new Map<string, Promise<MutedPubkeyRead>>();
 
 /** Collect the pubkeys from a tag array's `p` tags into `out`. */
 function collectMutedPubkeys(tags: string[][], out: Set<string>): void {
@@ -50,20 +79,22 @@ function collectMutedPubkeys(tags: string[][], out: Set<string>): void {
 async function readMutedPubkeys(
   event: NostrEvent | null,
   signer: NUser["signer"] | undefined,
-): Promise<Set<string>> {
-  if (!event) return new Set();
+): Promise<MutedPubkeyRead> {
+  if (!event) return { pubkeys: new Set(), decryptFailed: false };
 
   const publicPubkeys = new Set<string>();
   collectMutedPubkeys(event.tags, publicPubkeys);
 
-  // No encrypted content, or no signer to read it → public tags only.
-  if (!event.content || !signer?.nip44) return publicPubkeys;
+  if (!event.content) return { pubkeys: publicPubkeys, decryptFailed: false };
+  // Public tags remain additive data, but missing the private half can never
+  // authorize a persisted/background replacement.
+  if (!signer?.nip44) return { pubkeys: publicPubkeys, decryptFailed: true };
 
   const cached = muteListDecryptMemo.get(event.id);
   if (cached) return cached;
 
   const nip44 = signer.nip44;
-  const work = (async (): Promise<Set<string>> => {
+  const work = (async (): Promise<MutedPubkeyRead> => {
     const result = new Set(publicPubkeys);
     try {
       const decrypted = await nip44.decrypt(event.pubkey, event.content);
@@ -74,11 +105,12 @@ async function readMutedPubkeys(
           result,
         );
       }
+      return { pubkeys: result, decryptFailed: false };
     } catch (err) {
       console.warn("Failed to decrypt mute list private items:", err);
       muteListDecryptMemo.delete(event.id); // don't memoize a transient failure
+      return { pubkeys: result, decryptFailed: true };
     }
-    return result;
   })();
   muteListDecryptMemo.set(event.id, work);
   return work;
@@ -100,25 +132,51 @@ function muteFoldKey(pubkey: string): string {
  * the mutations below rather than invalidated, since they know the exact list
  * they just wrote.
  */
-const muteSeedMemo = new Map<string, Promise<string[]>>();
+const muteSeedMemo = new Map<string, Promise<MuteListSeed>>();
 
-function readMuteSeed(pubkey: string): Promise<string[]> {
+function parseMuteSeed(stored: unknown): MuteListSeed {
+  if (Array.isArray(stored)) {
+    return { pubkeys: stored.filter((value): value is string => typeof value === "string") };
+  }
+  if (!stored || typeof stored !== "object") return { pubkeys: [] };
+  const candidate = stored as { pubkeys?: unknown; version?: Partial<ReplaceableVersion> };
+  const pubkeys = Array.isArray(candidate.pubkeys)
+    ? candidate.pubkeys.filter((value): value is string => typeof value === "string")
+    : [];
+  const version = candidate.version;
+  return {
+    pubkeys,
+    ...(typeof version?.id === "string" && typeof version.created_at === "number"
+      ? { version: { id: version.id, created_at: version.created_at } }
+      : {}),
+  };
+}
+
+function readMuteSeed(pubkey: string): Promise<MuteListSeed> {
   const cached = muteSeedMemo.get(pubkey);
   if (cached) return cached;
-  const work = readFolded<string[]>(muteFoldKey(pubkey))
-    .then((stored) => stored ?? [])
+  const work = readFolded<unknown>(muteFoldKey(pubkey))
+    .then(parseMuteSeed)
     .catch(() => {
       muteSeedMemo.delete(pubkey); // a transient read failure shouldn't stick
-      return [];
+      return { pubkeys: [] };
     });
   muteSeedMemo.set(pubkey, work);
   return work;
 }
 
 /** Persist a freshly-written list and keep the shared seed in step with it. */
-async function persistMuteList(pubkey: string, pubkeys: string[]): Promise<void> {
-  muteSeedMemo.set(pubkey, Promise.resolve([...pubkeys]));
-  await writeFolded(muteFoldKey(pubkey), pubkeys).catch(() => undefined);
+async function persistMuteList(
+  pubkey: string,
+  pubkeys: string[],
+  event?: Pick<NostrEvent, "id" | "created_at">,
+): Promise<void> {
+  const seed: MuteListSeed = {
+    pubkeys: [...pubkeys],
+    ...(event ? { version: { id: event.id, created_at: event.created_at } } : {}),
+  };
+  muteSeedMemo.set(pubkey, Promise.resolve(seed));
+  await writeFolded(muteFoldKey(pubkey), seed).catch(() => undefined);
 }
 
 /**
@@ -138,7 +196,11 @@ export function useMutedPubkeysSource(): MutedPubkeysResult {
   const { user } = useCurrentUser();
   const { config } = useAppContext();
   const queryClient = useQueryClient();
-  const relayKey = config.appRelays.join(",");
+  const relays = useMemo(
+    () => uniqueRelayUrls(selfStateRelays(config, user?.pubkey)).sort(),
+    [config, user?.pubkey],
+  );
+  const relayKey = relays.join(",");
   const queryKey = useMemo(
     () => ["mute-list", user?.pubkey, relayKey],
     [user?.pubkey, relayKey],
@@ -147,58 +209,114 @@ export function useMutedPubkeysSource(): MutedPubkeysResult {
   // Locally-cached muted pubkeys, read once on mount so a returning user has the
   // set before the conversation list paints. `null` = not loaded yet, `[]` = no
   // cache existed (distinguishes "still reading the cache" from "cache empty").
-  const [cachedPubkeys, setCachedPubkeys] = useState<string[] | null>(null);
+  const [cachedSeed, setCachedSeed] = useState<MuteListSeed | null>(null);
   useEffect(() => {
     if (!user?.pubkey) {
-      setCachedPubkeys(null);
+      setCachedSeed(null);
       return;
     }
     let cancelled = false;
     void (async () => {
       const stored = await readMuteSeed(user.pubkey);
       if (cancelled) return;
-      setCachedPubkeys(stored);
+      setCachedSeed(stored);
     })();
     return () => {
       cancelled = true;
     };
   }, [user?.pubkey]);
 
-  const query = useQuery<string[]>({
+  const query = useQuery<MuteListQueryData>({
     queryKey,
     enabled: !!user?.pubkey,
     staleTime: 5 * 60 * 1000,
     queryFn: async ({ signal }) => {
       const pubkey = user!.pubkey;
-      const events = await nostr.group(config.appRelays).query(
-        [{ kinds: [KIND_MUTE_LIST], authors: [pubkey], limit: 1 }],
-        { signal: AbortSignal.any([signal, AbortSignal.timeout(6000)]) },
-      );
-      const event = events.sort((a, b) => b.created_at - a.created_at)[0] ?? null;
-      const pubkeys = [...(await readMutedPubkeys(event, user!.signer))];
-      // Persist for an instant, flash-free seed next mount.
-      void persistMuteList(pubkey, pubkeys);
-      return pubkeys;
+      const [wire, seed] = await Promise.all([
+        queryExplicitRelaysWithStatus(
+          nostr,
+          relays,
+          [{ kinds: [KIND_MUTE_LIST], authors: [pubkey], limit: 1 }],
+          AbortSignal.any([signal, AbortSignal.timeout(6000)]),
+        ),
+        readMuteSeed(pubkey),
+      ]);
+      const event = newestCanonicalSelfList(
+        wire.events,
+        pubkey,
+        KIND_MUTE_LIST,
+      ) as NostrEvent | undefined;
+      const decoded = await readMutedPubkeys(event ?? null, user!.signer);
+      const livePubkeys = [...decoded.pubkeys];
+      const answered = new Set(wire.answered);
+      const allAnswered = relays.length > 0
+        && relays.every((relay) => answered.has(relay));
+
+      // A partial cohort, or a ciphertext we could not open, is additive only.
+      // In particular it must not overwrite a last-good private list on disk.
+      if (!allAnswered || decoded.decryptFailed) {
+        return {
+          pubkeys: [...new Set([...seed.pubkeys, ...livePubkeys])],
+          wireReady: false,
+          configReady: seed.version !== undefined,
+        };
+      }
+
+      // An all-relay miss is an explicit empty wire snapshot, but an existing
+      // last-good list remains the conservative policy floor. Keeping extra
+      // mutes only suppresses notifications; it never exposes a muted sender.
+      if (!event) return { pubkeys: seed.pubkeys, wireReady: true, configReady: true };
+
+      // A signed local publish can be newer than every relay's answer while it
+      // propagates. Never roll that known version backwards.
+      if (seed.version && replaceableVersionIsNewer(seed.version, event)) {
+        return { pubkeys: seed.pubkeys, wireReady: true, configReady: true };
+      }
+
+      // Legacy seeds lack a version. Accept a complete relay winner only when
+      // it contains that seed; otherwise retain the union and withhold prune
+      // authority until a versioned local snapshot is established.
+      if (!seed.version
+        && seed.pubkeys.some((muted) => !decoded.pubkeys.has(muted))) {
+        return {
+          pubkeys: [...new Set([...seed.pubkeys, ...livePubkeys])],
+          wireReady: false,
+          configReady: false,
+        };
+      }
+
+      void persistMuteList(pubkey, livePubkeys, event);
+      return { pubkeys: livePubkeys, wireReady: true, configReady: true };
     },
   });
 
-  // Network result is authoritative; otherwise fall back to the cached seed.
+  // A complete network result replaces the seed. A public-only/decrypt-failed
+  // result is additive so a last-good private mute never disappears.
   const mutedPubkeys = useMemo(
-    () => new Set(query.data ?? cachedPubkeys ?? []),
-    [query.data, cachedPubkeys],
+    () => new Set(query.data?.wireReady
+      ? query.data.pubkeys
+      : [...new Set([...(cachedSeed?.pubkeys ?? []), ...(query.data?.pubkeys ?? [])])]),
+    [query.data, cachedSeed],
   );
 
   // Ready once we have a network result OR the local cache read finished (even
   // if it was empty). Not ready only on a true cold start with the network
   // still in flight — when there is genuinely nothing to filter with yet.
-  const ready = !user?.pubkey || query.data !== undefined || cachedPubkeys !== null;
+  const ready = !user?.pubkey || query.data !== undefined || cachedSeed !== null;
+  const wireReady = !user?.pubkey || query.data?.wireReady === true;
+  const configReady = !user?.pubkey
+    || query.data?.configReady === true
+    || cachedSeed?.version !== undefined;
 
   // Keep the query cache reusable across re-mounts without a refetch flash.
   useEffect(() => {
     if (query.data) queryClient.setQueryData(queryKey, query.data);
   }, [query.data, queryClient, queryKey]);
 
-  return useMemo(() => ({ mutedPubkeys, ready }), [mutedPubkeys, ready]);
+  return useMemo(
+    () => ({ mutedPubkeys, ready, wireReady, configReady }),
+    [mutedPubkeys, ready, wireReady, configReady],
+  );
 }
 
 /**
@@ -301,10 +419,13 @@ async function editMuteList(
   edit: (tags: { publicTags: string[][]; privateTags: string[][] }) =>
     | { publicTags: string[][]; privateTags: string[][] }
     | null,
-): Promise<string[] | null> {
+): Promise<{ pubkeys: string[]; event: NostrEvent } | null> {
   const { user, nostr, relays, publish } = ctx;
 
-  // Read the freshest list from the network so we edit rather than overwrite.
+  // Keep explicit user actions available through the established pooled RMW
+  // path. Notification prune authority is stricter (the read hook above), but
+  // making a mute click wait for every best-effort self-state relay would brick
+  // ordinary moderation whenever any one app relay is down.
   const events = await nostr.group(relays).query(
     [{ kinds: [KIND_MUTE_LIST], authors: [user.pubkey], limit: 1 }],
     { signal: AbortSignal.timeout(6000) },
@@ -319,8 +440,8 @@ async function editMuteList(
     // Read the persisted list directly rather than through `readMuteSeed`: the
     // memo is a first-paint seed that another tab's write can leave stale, and
     // this is the check that decides whether we are allowed to publish at all.
-    const cached = await readFolded<string[]>(muteFoldKey(user.pubkey));
-    if (cached && cached.length > 0) {
+    const cached = parseMuteSeed(await readFolded<unknown>(muteFoldKey(user.pubkey)));
+    if (cached.pubkeys.length > 0) {
       throw new Error("Couldn't load your existing mute list — not saving to avoid losing it.");
     }
   }
@@ -347,7 +468,7 @@ async function editMuteList(
     );
   }
 
-  await publish({
+  const published = await publish({
     kind: KIND_MUTE_LIST,
     content,
     tags: next.publicTags,
@@ -357,7 +478,7 @@ async function editMuteList(
 
   const muted = new Set<string>();
   collectMutedPubkeys([...next.publicTags, ...next.privateTags], muted);
-  return [...muted];
+  return { pubkeys: [...muted], event: published };
 }
 
 /**
@@ -374,7 +495,8 @@ export function useMuteUser(): UseMutationResult<void, Error, string> {
   const { config } = useAppContext();
   const queryClient = useQueryClient();
   const publish = useNostrPublish();
-  const relayKey = config.appRelays.join(",");
+  const sourceRelays = uniqueRelayUrls(selfStateRelays(config, user?.pubkey)).sort();
+  const relayKey = sourceRelays.join(",");
   const queryKey = ["mute-list", user?.pubkey, relayKey] as const;
 
   return useMutation({
@@ -385,10 +507,17 @@ export function useMuteUser(): UseMutationResult<void, Error, string> {
       // relay's pre-publish list, then hide the peer before any network or
       // signer round-trips begin.
       await queryClient.cancelQueries({ queryKey });
-      const previous = queryClient.getQueryData<string[]>(queryKey);
-      queryClient.setQueryData<string[]>(queryKey, (current = []) =>
-        current.includes(pubkey) ? current : [...current, pubkey],
-      );
+      const previous = queryClient.getQueryData<MuteListQueryData>(queryKey);
+      queryClient.setQueryData<MuteListQueryData>(queryKey, (current = {
+        pubkeys: [],
+        wireReady: false,
+        configReady: false,
+      }) => ({
+        ...current,
+        pubkeys: current.pubkeys.includes(pubkey)
+          ? current.pubkeys
+          : [...current.pubkeys, pubkey],
+      }));
       return { previous };
     },
     mutationFn: (pubkey: string) => serializeMuteListWrite(async () => {
@@ -413,8 +542,12 @@ export function useMuteUser(): UseMutationResult<void, Error, string> {
       // relay may still echo the superseded replaceable event and undo the
       // successful mute in the UI.
       if (next) {
-        queryClient.setQueryData(queryKey, next);
-        await persistMuteList(user.pubkey, next);
+        queryClient.setQueryData<MuteListQueryData>(queryKey, {
+          pubkeys: next.pubkeys,
+          wireReady: false,
+          configReady: true,
+        });
+        await persistMuteList(user.pubkey, next.pubkeys, next.event);
       }
     }),
     onError: (_error, _pubkey, context) => {
@@ -443,17 +576,23 @@ export function useUnmuteUser(): UseMutationResult<void, Error, string> {
   const { config } = useAppContext();
   const queryClient = useQueryClient();
   const publish = useNostrPublish();
-  const relayKey = config.appRelays.join(",");
+  const sourceRelays = uniqueRelayUrls(selfStateRelays(config, user?.pubkey)).sort();
+  const relayKey = sourceRelays.join(",");
   const queryKey = ["mute-list", user?.pubkey, relayKey] as const;
 
   return useMutation({
     onMutate: async (pubkey: string) => {
       if (!user) return;
       await queryClient.cancelQueries({ queryKey });
-      const previous = queryClient.getQueryData<string[]>(queryKey);
-      queryClient.setQueryData<string[]>(queryKey, (current = []) =>
-        current.filter((p) => p !== pubkey),
-      );
+      const previous = queryClient.getQueryData<MuteListQueryData>(queryKey);
+      queryClient.setQueryData<MuteListQueryData>(queryKey, (current = {
+        pubkeys: [],
+        wireReady: false,
+        configReady: false,
+      }) => ({
+        ...current,
+        pubkeys: current.pubkeys.filter((p) => p !== pubkey),
+      }));
       return { previous };
     },
     mutationFn: (pubkey: string) => serializeMuteListWrite(async () => {
@@ -472,8 +611,12 @@ export function useUnmuteUser(): UseMutationResult<void, Error, string> {
       );
 
       if (next) {
-        queryClient.setQueryData(queryKey, next);
-        await persistMuteList(user.pubkey, next);
+        queryClient.setQueryData<MuteListQueryData>(queryKey, {
+          pubkeys: next.pubkeys,
+          wireReady: false,
+          configReady: true,
+        });
+        await persistMuteList(user.pubkey, next.pubkeys, next.event);
       }
     }),
     onError: (_error, _pubkey, context) => {

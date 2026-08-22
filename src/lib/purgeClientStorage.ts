@@ -3,6 +3,13 @@ import { ARMADA_DB_NAME, purgeArmadaDB } from "@/lib/db/armadaDB";
 import { resetKvCaches } from "@/lib/db/kvCache";
 import { legacyDatabaseNames } from "@/lib/db/migrations";
 import { resetDecryptConsent } from "@/lib/decryptConsent";
+import {
+  PUSH_CLEANUP_KEY,
+  PUSH_INSTALLATION_KEY,
+  stagePushCleanupForPurge,
+} from "@/lib/pushRegistry";
+import { writePushDisabledFlag } from "@/lib/swPushDisabled";
+import { WEB_PUSH_RETIREMENT_KEY } from "@/lib/webPushEndpoint";
 
 /**
  * localStorage keys that must survive a purge. `armada:login` is the nostrify
@@ -10,7 +17,12 @@ import { resetDecryptConsent } from "@/lib/decryptConsent";
  * blowing it away here would race that update and resurrect a stale session.
  * We clear it (and everything else) only as the final account logs out.
  */
-const PRESERVE_LOCAL_STORAGE_KEYS = new Set<string>(["armada:login"]);
+const PRESERVE_LOCAL_STORAGE_KEYS = new Set<string>([
+  "armada:login",
+  // The next account must still know whether the outgoing browser endpoint
+  // was actually retired after final logout's broad storage purge.
+  WEB_PUSH_RETIREMENT_KEY,
+]);
 
 /**
  * Remove the OPFS directory the retired SQLite-WASM event store used. Nothing
@@ -73,13 +85,16 @@ async function purgeCacheStorage(): Promise<void> {
 }
 
 /** Wipe all Armada localStorage (everything except the preserved keys). */
-function purgeLocalStorage(): void {
+function purgeLocalStorage(preservePushCleanup: boolean): void {
   if (typeof localStorage === "undefined") return;
   try {
+    const preserve = preservePushCleanup
+      ? new Set([...PRESERVE_LOCAL_STORAGE_KEYS, PUSH_CLEANUP_KEY, PUSH_INSTALLATION_KEY])
+      : PRESERVE_LOCAL_STORAGE_KEYS;
     const toRemove: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key && !PRESERVE_LOCAL_STORAGE_KEYS.has(key)) toRemove.push(key);
+      if (key && !preserve.has(key)) toRemove.push(key);
     }
     for (const key of toRemove) localStorage.removeItem(key);
   } catch {
@@ -95,21 +110,32 @@ function purgeLocalStorage(): void {
  * dropped too.
  *
  * `armada:login` is intentionally left for the caller's `removeLogin` to manage
- * in the same tick; everything else (including `armada:app-config`) is wiped so
- * the next session starts truly clean.
+ * in the same tick. A hash-only failed-push cleanup tombstone and its opaque
+ * installation id also survive only while a gateway delete remains pending;
+ * everything else (including `armada:app-config`) is wiped so the next session
+ * starts truly clean.
  */
-export async function purgeClientStorage(): Promise<void> {
+export async function purgeClientStorage(outgoingPubkey?: string | null): Promise<void> {
+  // The bounded gateway teardown can time out. Before its ordinary scoped
+  // registry is wiped, retain only this account/current installation's opaque
+  // ids under a hash-only tombstone so the same signer can retry after login.
+  const preservePushCleanup = stagePushCleanupForPurge(outgoingPubkey);
   clearRenderedPlaintext();
   resetDecryptConsent();
   // The KV-backed caches (drafts, relay info, emoji palettes, GIF shards) keep
   // their own copy in memory. Deleting the database underneath them would
   // leave the next account reading the previous one's data straight out of it.
   resetKvCaches();
-  purgeLocalStorage();
+  purgeLocalStorage(preservePushCleanup);
   // ArmadaDB first: `deleteDatabase` against an open connection is blocked,
   // not applied, so its databases have to be closed before the sweep runs.
   await purgeArmadaDB();
   await Promise.all([purgeIndexedDB(), purgeCacheStorage(), purgeOrphanedOpfs()]);
+  // Gateway records and a browser endpoint can outlive the bounded pre-logout
+  // cleanup. Recreate ONLY the worker's kill switch after Cache Storage was
+  // swept, so any late/stale push tears its endpoint down instead of notifying
+  // a logged-out browser. A later explicit enable clears this flag first.
+  await writePushDisabledFlag();
   // Again, afterwards. A cache warm already in flight when the first reset ran
   // resolves against the OLD database and refills the map behind us; the reset
   // is idempotent and costs nothing, and this is the last word.

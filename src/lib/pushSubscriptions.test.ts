@@ -10,17 +10,34 @@ import { DEFAULT_PUSH_PREFS } from "@/lib/pushPrefs";
 
 const ME = "me".padEnd(64, "0");
 
-function baseInput(overrides: Partial<PushSubscriptionInput> = {}): PushSubscriptionInput {
+type InputOverrides = Partial<PushSubscriptionInput> & {
+  /** Concise compatibility spelling used by the pre-relay-scope test cases. */
+  relayUrls?: string[];
+  groupIds?: string[];
+  mentionOnlyGroupIds?: string[];
+};
+
+function baseInput(overrides: InputOverrides = {}): PushSubscriptionInput {
+  const {
+    relayUrls = [],
+    groupIds = [],
+    mentionOnlyGroupIds = [],
+    ...current
+  } = overrides;
+  const mentions = new Set(mentionOnlyGroupIds);
   return {
     pubkey: ME,
-    relayUrls: [],
-    groupIds: [],
-    mentionOnlyGroupIds: [],
+    nip29Groups: relayUrls.flatMap((relay) => groupIds.map((groupId) => ({
+      relay,
+      groupId,
+      level: mentions.has(groupId) ? "mentions" as const : "all" as const,
+    }))),
     prefs: { ...DEFAULT_PUSH_PREFS },
     dmRelays: [],
     dmFollows: [],
+    dmLevels: {},
     concord: [],
-    ...overrides,
+    ...current,
   };
 }
 
@@ -28,27 +45,35 @@ function byId(specs: ReturnType<typeof buildPushSubscriptions>) {
   return new Map(specs.map((s) => [s.id, s]));
 }
 
+function replacing(
+  specs: ReturnType<typeof buildPushSubscriptions>,
+  base: string,
+) {
+  return specs.find((spec) => spec.replaces?.includes(base));
+}
+
 describe("buildPushSubscriptions", () => {
   it("returns nothing when there is nothing to watch", () => {
     expect(buildPushSubscriptions(baseInput())).toEqual([]);
   });
 
-  it("splits group all-messages from directed messages", () => {
+  it("keeps kind-9 all-message and mention filters disjoint", () => {
     const specs = byId(
       buildPushSubscriptions(
         baseInput({ relayUrls: ["wss://r"], groupIds: ["g1", "g2"] }),
       ),
     );
-    const all = specs.get("armada-groups")!;
+    const all = replacing([...specs.values()], "armada-groups")!;
     expect(all.filter.kinds).toEqual([9]);
     expect(all.filter["#h"]).toEqual(["g1", "g2"]);
     expect(all.filter["#p"]).toBeUndefined();
     expect(all.notification.data.scope).toBe("group");
 
-    const directed = specs.get("armada-groups-mention")!;
+    const directed = replacing([...specs.values()], "armada-groups-directed")!;
     expect(directed.filter["#p"]).toEqual([ME]);
     expect(directed.filter["#h"]).toEqual(["g1", "g2"]);
-    expect(directed.filter.kinds).toEqual([9, 1111, 7]);
+    expect(directed.filter.kinds).toEqual([1111, 7]);
+    expect(replacing([...specs.values()], "armada-groups-mention")).toBeUndefined();
   });
 
   it("excludes a mentions-only group from the all-messages filter", () => {
@@ -61,12 +86,79 @@ describe("buildPushSubscriptions", () => {
         }),
       ),
     );
-    expect(specs.get("armada-groups")!.filter["#h"]).toEqual(["g1"]);
-    // The directed filter still covers both (a mention in g2 must wake).
-    expect(specs.get("armada-groups-mention")!.filter["#h"]).toEqual(["g1", "g2"]);
+    expect(replacing([...specs.values()], "armada-groups")!.filter["#h"]).toEqual(["g1"]);
+    // Kind 9 is split over disjoint h sets, so one event can match only one.
+    expect(replacing([...specs.values()], "armada-groups-mention")!.filter["#h"]).toEqual(["g2"]);
+    expect(replacing([...specs.values()], "armada-groups-directed")!.filter["#h"])
+      .toEqual(["g1", "g2"]);
   });
 
-  it("drops the all-messages filter when allGroupMessages is off", () => {
+  it("does not cross-product the same group id across relays or collapse its exact levels", () => {
+    const specs = buildPushSubscriptions(baseInput({
+      nip29Groups: [
+        { relay: "wss://all.example", groupId: "general", level: "all" },
+        { relay: "wss://mentions.example", groupId: "general", level: "mentions" },
+      ],
+    }));
+    const all = specs.find((spec) =>
+      spec.filter.kinds?.includes(9) && spec.filter["#p"] === undefined)!;
+    const mention = specs.find((spec) =>
+      spec.filter.kinds?.includes(9) && spec.filter["#p"]?.includes(ME))!;
+
+    expect(all.relays).toEqual(["wss://all.example"]);
+    expect(all.filter["#h"]).toEqual(["general"]);
+    expect(mention.relays).toEqual(["wss://mentions.example"]);
+    expect(mention.filter["#h"]).toEqual(["general"]);
+    expect(all.replaces).toContain("armada-groups");
+    expect(mention.replaces).toContain("armada-groups-mention");
+    expect(new Set(specs.flatMap((spec) => spec.relays))).toEqual(new Set([
+      "wss://all.example",
+      "wss://mentions.example",
+    ]));
+  });
+
+  it("keeps the surviving relay id stable when a two-relay watch becomes one", () => {
+    const two = buildPushSubscriptions(baseInput({
+      nip29Groups: [
+        { relay: "wss://a.example", groupId: "general", level: "all" },
+        { relay: "wss://b.example", groupId: "general", level: "all" },
+      ],
+    }));
+    const one = buildPushSubscriptions(baseInput({
+      nip29Groups: [
+        { relay: "wss://a.example", groupId: "general", level: "all" },
+      ],
+    }));
+    const twoA = two.find((spec) =>
+      spec.replaces?.includes("armada-groups")
+      && spec.relays[0] === "wss://a.example")!;
+    const oneA = replacing(one, "armada-groups")!;
+
+    expect(oneA.id).toBe(twoA.id);
+    expect(oneA.id).not.toBe("armada-groups");
+    expect(oneA.replaces).toEqual(["armada-groups"]);
+  });
+
+  it("uses relay-scoped ids for both sides of a one-relay level transition", () => {
+    const all = replacing(buildPushSubscriptions(baseInput({
+      nip29Groups: [
+        { relay: "wss://a.example", groupId: "general", level: "all" },
+      ],
+    })), "armada-groups")!;
+    const mentions = replacing(buildPushSubscriptions(baseInput({
+      nip29Groups: [
+        { relay: "wss://a.example", groupId: "general", level: "mentions" },
+      ],
+    })), "armada-groups-mention")!;
+
+    expect(all.id).not.toBe("armada-groups");
+    expect(mentions.id).not.toBe("armada-groups-mention");
+    expect(all.id).not.toBe(mentions.id);
+    expect(all.replaces).toEqual(["armada-groups"]);
+    expect(mentions.replaces).toEqual(["armada-groups-mention"]);
+  });
+
+  it("retains an explicit all-level group when the global all switch is off", () => {
     const specs = byId(
       buildPushSubscriptions(
         baseInput({
@@ -76,8 +168,8 @@ describe("buildPushSubscriptions", () => {
         }),
       ),
     );
-    expect(specs.has("armada-groups")).toBe(false);
-    expect(specs.has("armada-groups-mention")).toBe(true);
+    expect(replacing([...specs.values()], "armada-groups")).toBeDefined();
+    expect(replacing([...specs.values()], "armada-groups-mention")).toBeUndefined();
   });
 
   it("gates directed kinds by per-type prefs", () => {
@@ -90,7 +182,8 @@ describe("buildPushSubscriptions", () => {
         }),
       ),
     );
-    expect(specs.get("armada-groups-mention")!.filter.kinds).toEqual([9]);
+    expect(replacing([...specs.values()], "armada-groups-directed")).toBeUndefined();
+    expect(replacing([...specs.values()], "armada-groups")!.filter.kinds).toEqual([9]);
   });
 
   it("omits the directed filter entirely when all its kinds are off", () => {
@@ -108,7 +201,7 @@ describe("buildPushSubscriptions", () => {
         }),
       ),
     );
-    expect(specs.has("armada-groups-mention")).toBe(false);
+    expect(replacing([...specs.values()], "armada-groups-directed")).toBeUndefined();
   });
 
   it("watches every addressed NIP-17 wrap, including unknown senders", () => {
@@ -151,6 +244,54 @@ describe("buildPushSubscriptions", () => {
       }),
     );
     expect(specs.some((s) => s.id.startsWith("armada-dm"))).toBe(false);
+  });
+
+  it("keeps NIP-17 awake for an explicit DM override when global DMs are off", () => {
+    const conversation = ["b".repeat(64), "a".repeat(64)].sort().join(",");
+    const specs = byId(buildPushSubscriptions(baseInput({
+      dmRelays: ["wss://dm"],
+      dmLevels: { [conversation]: "all", ["c".repeat(64)]: "nothing" },
+      prefs: { ...DEFAULT_PUSH_PREFS, directMessages: false },
+    })));
+
+    expect(specs.get("armada-dm17")?.filter).toEqual({ kinds: [1059], "#p": [ME] });
+    // A group-DM participant set must not widen legacy author trust.
+    expect(specs.has("armada-dm")).toBe(false);
+  });
+
+  it("adds an exact 1:1 NIP-04 author while global DMs are off", () => {
+    const exact = "d".repeat(64);
+    const specs = byId(buildPushSubscriptions(baseInput({
+      dmRelays: ["wss://dm"],
+      dmLevels: {
+        [exact]: "all",
+        [["a".repeat(64), "b".repeat(64)].join(",")]: "all",
+      },
+      prefs: { ...DEFAULT_PUSH_PREFS, directMessages: false },
+    })));
+
+    expect(specs.get("armada-dm")?.filter.authors).toEqual([exact]);
+  });
+
+  it("removes an exact nothing-level author while global DMs are on", () => {
+    const off = "d".repeat(64);
+    const on = "e".repeat(64);
+    const specs = byId(buildPushSubscriptions(baseInput({
+      dmRelays: ["wss://dm"],
+      dmFollows: [off, on],
+      dmLevels: { [off]: "nothing" },
+    })));
+
+    expect(specs.get("armada-dm")?.filter.authors).toEqual([on]);
+  });
+
+  it("does not wake NIP-17 when every explicit DM is nothing and global DMs are off", () => {
+    const specs = buildPushSubscriptions(baseInput({
+      dmRelays: ["wss://dm"],
+      dmLevels: { ["a".repeat(64)]: "nothing" },
+      prefs: { ...DEFAULT_PUSH_PREFS, directMessages: false },
+    }));
+    expect(specs.some((spec) => spec.id === "armada-dm17")).toBe(false);
   });
 
   it("maps Concord streams to a kind-1059 authors filter", () => {
@@ -328,8 +469,8 @@ describe("standaloneNotification", () => {
   });
 
   it("distinguishes a mention from an ordinary channel message", () => {
-    const groups = specs.find((s) => s.id === "armada-groups")!;
-    const mention = specs.find((s) => s.id === "armada-groups-mention")!;
+    const groups = replacing(specs, "armada-groups")!;
+    const mention = replacing(specs, "armada-groups-mention")!;
     expect(standaloneNotification(groups).body).toBe("New message in a channel");
     expect(standaloneNotification(mention).body).toBe("Someone mentioned you");
   });

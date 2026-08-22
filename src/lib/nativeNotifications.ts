@@ -28,11 +28,49 @@ export interface CommunityNotifImage {
   hash?: string;
 }
 
+/** Android's non-secret diagnostic snapshot for the local notification path. */
+export interface NativeNotificationHealth {
+  postNotificationsGranted: boolean;
+  notificationsEnabled: boolean;
+  /** Android NotificationManager importance, or -1 where channels do not apply. */
+  messageChannelImportance: number;
+  callChannelImportance: number;
+  serviceChannelImportance: number;
+  /** All currently posted Armada notifications, including the foreground-service row. */
+  activeNotificationCount: number;
+  serviceRunning: boolean;
+  configEnabled: boolean;
+  configRevision: number;
+  loadedConfigRevision: number;
+  lastConfigAt: number;
+  relayWatchCount: number;
+  groupWatchCount: number;
+  dmPeerWatchCount: number;
+  concordStreamWatchCount: number;
+  socketOpenCount: number;
+  socketTotalCount: number;
+  signerStatus: "ready" | "missing" | "unavailable";
+  authStatus: "idle" | "challenged" | "signed" | "accepted" | "rejected" | "failed";
+  lastAuthAt: number;
+  lastSignAt: number;
+  lastEventAt: number;
+  lastPresentedAt: number;
+  lastErrorAt: number;
+  /** Stable error category only; never relay URLs, event bodies, or credentials. */
+  lastError?: string;
+}
+
 export interface ArmadaNotificationPlugin {
   /** Whether POST_NOTIFICATIONS is granted (always true below Android 13). */
   checkPermission(): Promise<{ granted: boolean }>;
   /** Prompt for POST_NOTIFICATIONS (Android 13+). */
   requestPermission(): Promise<{ granted: boolean }>;
+  /** Read Android permission/channel/service/socket health without exposing config secrets. */
+  getHealth(): Promise<NativeNotificationHealth>;
+  /** Open Android's app-level or one-channel notification settings screen. */
+  openNotificationSettings(options: {
+    channel?: "messages" | "calls" | "service";
+  }): Promise<void>;
   /**
    * Android: whether the app is exempt from battery optimizations (Doze).
    * Battery optimization tears down the persistent relay websockets while the
@@ -170,6 +208,21 @@ export interface ArmadaNotificationPlugin {
   configure(options: {
     enabled: boolean;
     userPubkey?: string;
+    /**
+     * Per-plane replacement authority. A `false` plane additively merges the
+     * current partial records into that plane's last-good same-account fields;
+     * `true` replaces them, including with an authoritative empty array. A
+     * fresh/different account never inherits fields, regardless of these flags.
+     *
+     * Omitted flags default to `true` for compatibility with older web bundles.
+     */
+    groupPlaneReady?: boolean;
+    dmRelayPlaneReady?: boolean;
+    dmRosterPlaneReady?: boolean;
+    concordPlaneReady?: boolean;
+    gitPlaneReady?: boolean;
+    /** The account's synced or proven local-last-good notification settings. */
+    policyPlaneReady?: boolean;
     /** Relay websocket URLs to hold open. */
     relayUrls?: string[];
     /** Joined group ids (the `h` tag values) for the kind-9 filter. */
@@ -216,6 +269,8 @@ export interface ArmadaNotificationPlugin {
      * 1:1 conversations. Older native binaries safely ignore this field.
      */
     dmKnownConversations?: string[];
+    /** Exact canonical DM conversation key -> notification level overrides. */
+    dmLevels?: Record<string, "all" | "mentions" | "nothing">;
     /**
      * Muted pubkeys. A NIP-17 notification is suppressed when any participant
      * is present here, matching the WebView's whole-conversation mute rule.

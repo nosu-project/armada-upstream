@@ -267,9 +267,9 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ isOpen, onClose, onLogin, onS
     setLoginError('');
 
     // Use a timeout to allow the UI to update before the synchronous login call
-    setTimeout(() => {
+    setTimeout(async () => {
       try {
-        login.nsec(key);
+        await login.nsec(key);
         onLogin();
         onClose();
       } catch {

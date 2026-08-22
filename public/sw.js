@@ -78,14 +78,11 @@ self.addEventListener("activate", (event) => {
 // image, the message text. The gateway's static `title`/`body` are only the
 // FALLBACK, for a payload too big to carry its event (nostr-push drops it past
 // ~3800 bytes), a scope whose keys this worker doesn't hold, or a build with no
-// bundle. That fallback then keeps the old behavior: show the static wake-up
-// immediately — synchronously, so the userVisibleOnly contract is never broken,
-// since iOS revokes the subscription after a few silent pushes — then fetch the
-// event from a relay by id and finish the job late: a plaintext group message
-// replaces the wake-up in place with its preview, and an encrypted DM/Concord
-// wrap goes through the same open/store/compose as the inline path, replacing
-// the wake-up with the real notification or WITHDRAWING it when the decrypted
-// event turns out to be the user's own self-copy.
+// bundle. That path shows the static wake-up first to satisfy userVisibleOnly,
+// then fetches by id and updates the SAME stable tag silently: plaintext and
+// decryptable messages gain their preview without a second alert; a decrypted
+// drop becomes a fixed, non-leaking sync entry on Apple (and is withdrawn on
+// push services that allow true silence).
 
 const PLAINTEXT_SCOPES = new Set(["group", "group-mention"]);
 const PUSH_STATE_CACHE = "armada-push-state-v1";
@@ -109,14 +106,28 @@ const PUSH_DISABLED_URL = new URL(`${PUSH_STATE_PREFIX}disabled`, self.location.
 // re-alert for a message the user has seen. Bounded like the own-event set.
 const SEEN_EVENT_PREFIX = `${PUSH_STATE_PREFIX}seen/`;
 const MAX_SEEN_EVENTS = 256;
-// Consecutive pushes that displayed nothing, for the Apple keep-alive below.
-const QUIET_STATE_URL = new URL(`${PUSH_STATE_PREFIX}quiet`, self.location.origin).href;
-// How many pushes may pass without displaying anything before an Apple
-// endpoint gets a visible keep-alive. iOS tolerates a few silent pushes and
-// revokes the subscription past that, so the budget is spent periodically —
-// NOT on every suppressed push, which put a "Messages synced" banner on screen
-// for every message the user sent (their own NIP-17 self-copy is a push).
-const APPLE_SILENT_BUDGET = 3;
+// One worker global handles concurrent PushEvents. Claim an event id before the
+// first await so overlapping gateway filters cannot both race through the
+// persistent Cache check and alert for the same event.
+const IN_FLIGHT_EVENTS = new Map();
+
+/**
+ * Persistent/in-flight identity for one push match. NIP-29 event ids are not
+ * globally one conversation: the same signed event can be stored on two
+ * relays, and `h` is relay-local. Per-relay gateway specs make `relays[0]` the
+ * exact source; include the inline event's `h` when available. Other planes
+ * keep their ordinary event-id identity.
+ */
+function pushEventKey(data) {
+  const eventId = typeof data?.event_id === "string" ? data.event_id : "";
+  if (!eventId) return "";
+  if (!PLAINTEXT_SCOPES.has(data.scope)) return eventId;
+  const relays = Array.isArray(data.relays) ? data.relays : [];
+  const relay = relays.length === 1 && typeof relays[0] === "string" ? relays[0] : "";
+  if (!relay) return eventId;
+  const h = data.event && typeof data.event === "object" ? tagValue(data.event, "h") : "";
+  return `nip29|${relay}|${h || "?"}|${eventId}`;
+}
 
 // Per-room interruption ceiling, the web-push mirror of the native service's
 // ALERT_BURST_MAX (NotificationRelayService.java). A public channel is writable
@@ -166,32 +177,6 @@ async function clearAppBadge() {
   }
 }
 
-/** Ask a live page whether it is focused with a specific DM thread open. */
-function clientHasActiveDm(client) {
-  if (typeof MessageChannel === "undefined" || typeof client.postMessage !== "function") {
-    return Promise.resolve(false);
-  }
-
-  return new Promise((resolve) => {
-    const channel = new MessageChannel();
-    let settled = false;
-    const finish = (active) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      channel.port1.close();
-      resolve(active);
-    };
-    const timer = setTimeout(() => finish(false), 250);
-    channel.port1.onmessage = (event) => finish(event.data?.active === true);
-    try {
-      client.postMessage({ type: "armada-active-dm-query" }, [channel.port2]);
-    } catch {
-      finish(false);
-    }
-  });
-}
-
 /** Whether this push references an event created by this browser install. */
 async function isOwnPush(data) {
   if (!data.event_id) return false;
@@ -207,27 +192,47 @@ async function isOwnPush(data) {
   }
 }
 
-/**
- * Whether this push's event has already been presented by this install,
- * recording it when it hasn't.
- *
- * The gateway watches relays on our behalf; whenever it restarts a REQ — a
- * relay reconnect, or the client re-registering the same subscription — the
- * relay replays its stored matches and each one arrives as a fresh push. With
- * `renotify: true` that re-alerts for messages the user already read, at
- * whatever period the restart happens on. Presentation is therefore idempotent
- * per event id; a replay falls through to the quiet keep-alive.
- */
+/** Metadata for an event successfully handled by an earlier PushEvent. */
 async function seenBefore(data) {
-  if (!data.event_id) return false;
+  const eventKey = pushEventKey(data);
+  if (!eventKey) return undefined;
   try {
     const cache = await caches.open(PUSH_STATE_CACHE);
     const url = new URL(
-      `${SEEN_EVENT_PREFIX}${encodeURIComponent(data.event_id)}`,
+      `${SEEN_EVENT_PREFIX}${encodeURIComponent(eventKey)}`,
       self.location.origin,
     ).href;
-    if (await cache.match(url)) return true;
-    await cache.put(url, new Response("1"));
+    const stored = await cache.match(url);
+    if (!stored) return undefined;
+    try {
+      const parsed = JSON.parse(await stored.text());
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {
+      // Legacy entries contained the literal "1".
+    }
+    return { outcome: "handled" };
+  } catch {
+    // Never trade a real notification for a bookkeeping failure.
+    return undefined;
+  }
+}
+
+/**
+ * Commit an event only AFTER presentation or an exact page acknowledgement.
+ * A worker killed between the old pre-show write and showNotification made the
+ * event disappear forever on replay; the ledger must describe success, not an
+ * attempt.
+ */
+async function markSeen(data, details = { outcome: "worker" }) {
+  const eventKey = pushEventKey(data);
+  if (!eventKey) return;
+  try {
+    const cache = await caches.open(PUSH_STATE_CACHE);
+    const url = new URL(
+      `${SEEN_EVENT_PREFIX}${encodeURIComponent(eventKey)}`,
+      self.location.origin,
+    ).href;
+    await cache.put(url, new Response(JSON.stringify(details)));
     try {
       // Cache.keys() preserves insertion order, so the oldest go first.
       const prefix = new URL(SEEN_EVENT_PREFIX, self.location.origin).href;
@@ -241,122 +246,128 @@ async function seenBefore(data) {
       // No enumeration — the ledger just grows slowly.
     }
   } catch {
-    // Never trade a real notification for a bookkeeping failure.
-  }
-  return false;
-}
-
-/** Forget the silent-push budget: a visible notification replenishes it. */
-async function resetQuietBudget() {
-  try {
-    const cache = await caches.open(PUSH_STATE_CACHE);
-    await cache.delete(QUIET_STATE_URL);
-  } catch {
-    // Ignore — the counter self-corrects on the next suppressed push.
+    // A bookkeeping failure may replay later; it must never hide this delivery.
   }
 }
 
 /**
- * Nothing to present for this push (locally authored, owned by a live page, or
- * an event already shown). Display the quiet keep-alive only when this
- * install's endpoint is Apple's AND the silent-push budget is nearly spent.
+ * Apple requires every PushEvent to produce a visible notification. A locally
+ * authored event, replay, policy drop, or exact foreground-page acknowledgement
+ * therefore updates one silent collapsed sync entry instead of going dark.
+ * Returns whether it displayed one; other push services retain true silence.
  */
-async function quietSync(base, data) {
+async function quietSync(tag = "armada-quiet-sync") {
   if (!(await isApplePushEndpoint())) return;
-  let due = true;
-  try {
-    const cache = await caches.open(PUSH_STATE_CACHE);
-    const stored = await cache.match(QUIET_STATE_URL);
-    const count = (stored ? Number.parseInt(await stored.text(), 10) || 0 : 0) + 1;
-    due = count >= APPLE_SILENT_BUDGET;
-    await cache.put(QUIET_STATE_URL, new Response(String(due ? 0 : count)));
-  } catch {
-    // Can't count — err toward keeping the subscription alive.
-  }
-  if (!due) return;
   await self.registration.showNotification("Armada", {
-    ...base,
+    // Deliberately fixed, not inherited from the gateway payload: suppression
+    // covers own/replayed/policy-hidden events, so no sender-controlled title,
+    // body, icon, route, or other message metadata may survive this fallback.
+    icon: "/favicon.png",
+    badge: "/badge-96.png",
     body: "Messages synced",
-    tag: "armada-quiet-sync",
+    tag,
     renotify: false,
     silent: true,
-    data: { url: data.url || "/" },
+    data: { url: "/" },
   });
+  return true;
 }
 
-/** Ask a live page whether its foreground notifier owns open-app alerts. */
-function clientOwnsNotification(client) {
+const PAGE_PRESENTATION_OUTCOMES = new Set([
+  "presenting",
+  "presented",
+  "suppressed",
+  "unhandled",
+  "worker",
+]);
+
+/** Ask or claim one exact opened event in a live page (room may be unresolved). */
+function clientPresentationState(client, prepared, type, timeoutMs) {
   if (typeof MessageChannel === "undefined" || typeof client.postMessage !== "function") {
-    return Promise.resolve(false);
+    return Promise.resolve({ outcome: "unhandled", roomKey: prepared.roomKey });
   }
 
   return new Promise((resolve) => {
     const channel = new MessageChannel();
     let settled = false;
-    const finish = (owns) => {
+    const finish = (outcome) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       channel.port1.close();
-      resolve(owns);
+      resolve(outcome);
     };
-    const timer = setTimeout(() => finish(false), 250);
-    channel.port1.onmessage = (event) => finish(event.data?.owns === true);
+    const timer = setTimeout(
+      () => finish({ outcome: "unhandled", roomKey: prepared.roomKey }),
+      timeoutMs,
+    );
+    channel.port1.onmessage = (event) => {
+      const reply = event.data;
+      const replyRoom = typeof reply?.roomKey === "string" ? reply.roomKey : "";
+      const roomMatches = prepared.roomKey
+        ? replyRoom === prepared.roomKey
+        : replyRoom !== "" || reply?.outcome === "worker" || reply?.outcome === "unhandled";
+      finish(
+        reply?.eventId === prepared.eventId
+          && roomMatches
+          && PAGE_PRESENTATION_OUTCOMES.has(reply?.outcome)
+          ? { outcome: reply.outcome, roomKey: replyRoom || prepared.roomKey }
+          : { outcome: "unhandled", roomKey: prepared.roomKey },
+      );
+    };
     try {
-      client.postMessage({ type: "armada-notification-owner-query" }, [channel.port2]);
+      client.postMessage({
+        type,
+        eventId: prepared.eventId,
+        roomKey: prepared.roomKey,
+      }, [channel.port2]);
     } catch {
-      finish(false);
+      finish({ outcome: "unhandled", roomKey: prepared.roomKey });
     }
   });
 }
 
-/** Whether this push is locally authored or owned by a live page. */
-async function suppressPush(data) {
-  if (await isOwnPush(data)) return true;
-  if (!data.scope || !["dm", "group", "group-mention", "c2"].includes(data.scope)) {
-    return false;
+function strongestPageOutcome(outcomes) {
+  for (const outcome of ["presented", "presenting", "suppressed"]) {
+    const match = outcomes.find((candidate) => candidate?.outcome === outcome);
+    if (match) return match;
   }
+  return undefined;
+}
 
+/**
+ * Read a completed page outcome, then explicitly claim every unresolved page
+ * before worker presentation. The claim response closes the query/claim race:
+ * a page that presented in between reports that outcome; otherwise it records
+ * worker ownership before acknowledging.
+ */
+async function pagePresentationOutcome(prepared) {
+  if (!prepared?.eventId) return undefined;
   try {
     const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    if (windows.length === 0) return undefined;
+    const queried = await Promise.all(
+      windows.map((client) => clientPresentationState(
+        client,
+        prepared,
+        "armada-push-presentation-query",
+        500,
+      )),
+    );
+    const completed = strongestPageOutcome(queried);
+    if (completed) return completed;
 
-    if (data.scope === "dm") {
-      // An encrypted wrap hides its peer, so while any specific DM thread is in
-      // the focused Armada window the page owns notification decisions. Ask the
-      // page for its live React Router state: WindowClient.url is only the
-      // document's creation URL and can still say `/dm` after pushState opened a
-      // peer. The URL check remains as a fallback for directly-loaded threads or
-      // browsers that cannot transfer a MessagePort.
-      const liveStates = await Promise.all(windows.map((client) => clientHasActiveDm(client)));
-      if (liveStates.some(Boolean)) return true;
-      if (windows.some((client) => {
-        try {
-          const url = new URL(client.url);
-          const parts = url.pathname.split("/").filter(Boolean);
-          // `dms` is the pre-rename spelling: a window opened before this
-          // worker updated still carries it in its creation URL, and missing
-          // that is a duplicate notification for a thread being read.
-          const dm = Math.max(parts.lastIndexOf("dm"), parts.lastIndexOf("dms"));
-          return url.origin === self.location.origin
-            && client.visibilityState === "visible"
-            && client.focused
-            && dm >= 0
-            && parts.length > dm + 1;
-        } catch {
-          return false;
-        }
-      })) return true;
-    }
-
-    // A live page receives and resolves every watched plane through the wire.
-    // Let its foreground notifier make the room-aware decision: it suppresses
-    // the exact focused channel, but still shows an OS notification for another
-    // channel or while Armada is hidden/unfocused. The worker remains the
-    // fallback when no capable page is open.
-    const owners = await Promise.all(windows.map((client) => clientOwnsNotification(client)));
-    return owners.some(Boolean);
+    const claimed = await Promise.all(
+      windows.map((client) => clientPresentationState(
+        client,
+        prepared,
+        "armada-push-worker-claim",
+        650,
+      )),
+    );
+    return strongestPageOutcome(claimed);
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -380,72 +391,53 @@ async function readSealedConfig() {
 }
 
 /**
- * Show the notification for a push whose event the gateway inlined, deciding
- * everything UP FRONT so we call showNotification exactly once — within the
- * mobile push window and with no relay fetch.
- *
- * Returns "shown" when it presented one, "dropped" when the opened event turned
- * out to be one the user must not be told about, and false to fall back to the
- * generic wake-up (no inlined event, no bundle, a scope whose keys this worker
- * doesn't hold, or an undecryptable / foreign / expired envelope).
- *
- * The bundle also STORES what it opened before returning, so a message received
- * while no tab was open is simply there on the next open.
- *
- * iOS revokes the whole push subscription after a few pushes that show nothing,
- * so every branch shows SOMETHING: `quiet` (an unknown sender under the `off`
- * request policy) is the quietest we can be — one collapsing entry, no sound,
- * no re-alert — never true silence.
+ * Fail closed before the gateway's static fallback for an encrypted plane
+ * whose page snapshot is explicitly incomplete. This check cannot wait for an
+ * inlined/fetched event: legacy NIP-04 and oversized wraps reach the static
+ * path first, where even a fixed "New message" would violate the plane gate.
+ * Missing flags retain the behavior of configs written by older clients.
  */
-async function showInlineNotification(base, data, silent, opts) {
+async function pushPlaneUnready(data) {
+  if (data.scope !== "dm" && data.scope !== "c2") return false;
   const runtime = self.ArmadaDmCrypto;
-  if (!data.event || !runtime || typeof runtime.preparePush !== "function") return false;
-
-  // Set when the event was FETCHED after the static wake-up was already
-  // shown (the gateway didn't inline it): the tag that wake-up is under, so a
-  // "drop" withdraws it and a real notification replaces it.
-  const staticTag = opts && opts.staticTag;
-
-  let prepared;
+  if (!runtime || typeof runtime.openConfig !== "function") return false;
   try {
     const cfg = await runtime.openConfig(await readSealedConfig());
-    prepared = await runtime.preparePush(data, cfg);
+    return data.scope === "dm"
+      ? cfg?.dmReady === false
+      : cfg?.concordReady === false;
   } catch {
-    return false; // never trade the notification for a bundle failure
+    return false;
   }
-  if (!prepared) return false;
+}
 
-  // The bundle opened it and says it shouldn't be seen at all — the user's own
-  // message sent from another device, or a reaction to someone else's. Only
-  // the decrypted rumor could have told us that, so the decision arrives here
-  // rather than in suppressPush. On the inline path nothing has been shown, so
-  // the Apple keep-alive still ticks; on the fetched path the static wake-up
-  // is already on screen — the userVisibleOnly promise is kept — so it is
-  // withdrawn instead.
-  if (prepared.drop) {
-    if (staticTag) {
-      await withdrawNotifications(staticTag);
-    } else {
-      await quietSync(base, data);
-    }
-    return "dropped";
+/** Open/store/resolve an inlined (or just-fetched) event without presenting it. */
+async function prepareNotification(data) {
+  const runtime = self.ArmadaDmCrypto;
+  if (!data.event || !runtime || typeof runtime.preparePush !== "function") return undefined;
+  try {
+    const cfg = await runtime.openConfig(await readSealedConfig());
+    return await runtime.preparePush(data, cfg);
+  } catch {
+    return undefined; // never trade the notification for a bundle failure
   }
+}
 
+/** Present one already-resolved notification. */
+async function showPreparedNotification(base, data, prepared, options = {}) {
   // Drop the (large) inlined event from the data we attach to the notification.
   const routeData = { ...data };
   delete routeData.event;
 
+  const displayTag = options.tag || prepared.tag;
   // A content-blind request ping must not accumulate the room's lines — the
   // whole point is that it reveals nothing the sender chose.
   const lines = prepared.accumulate
-    ? await appendRoomLine(prepared.tag, prepared.line)
+    ? options.reuseExisting
+      ? (await existingRoomLines(displayTag)) ?? [prepared.line]
+      : await appendRoomLine(displayTag, prepared.line)
     : [prepared.line];
-  const quiet = silent || prepared.quiet === true;
-
-  // Replacing a fetched push's static wake-up: it collapses under the
-  // subscription-level tag, the real notification under its room tag, so the
-  // wake-up must be withdrawn explicitly (same tag replaces in place).
-  if (staticTag && staticTag !== prepared.tag) await withdrawNotifications(staticTag);
+  const quiet = options.silent === true || prepared.quiet === true;
 
   await self.registration.showNotification(prepared.title, {
     ...base,
@@ -453,15 +445,12 @@ async function showInlineNotification(base, data, silent, opts) {
     icon: prepared.icon,
     badge: prepared.badge,
     body: lines.join("\n"),
-    // Per-room tag: a conversation collapses into one entry, distinct
-    // conversations stay distinct.
-    tag: prepared.tag,
+    tag: displayTag,
     ...(Number.isFinite(prepared.timestamp) && prepared.timestamp > 0
       ? { timestamp: prepared.timestamp }
       : {}),
     data: { ...routeData, url: prepared.url, lines: prepared.accumulate ? lines : undefined },
   });
-  return "shown";
 }
 
 /** Close every notification currently shown under `tag`. Best-effort. */
@@ -484,26 +473,29 @@ async function withdrawNotifications(tag) {
  * the single line.
  */
 async function appendRoomLine(tag, line) {
-  let lines = [];
-  try {
-    if (typeof self.registration.getNotifications === "function") {
-      const [prior] = await self.registration.getNotifications({ tag });
-      const held = prior && prior.data && Array.isArray(prior.data.lines) ? prior.data.lines : [];
-      lines = held.slice(-4);
-    }
-  } catch {
-    // No introspection — single-line body.
-  }
+  const lines = (await existingRoomLines(tag) ?? []).slice(-4);
   lines.push(line);
   return lines;
 }
 
+/** Lines already carried by the notification under this exact room tag. */
+async function existingRoomLines(tag) {
+  try {
+    if (typeof self.registration.getNotifications === "function") {
+      const [prior] = await self.registration.getNotifications({ tag });
+      const held = prior && prior.data && Array.isArray(prior.data.lines) ? prior.data.lines : [];
+      return held;
+    }
+  } catch {
+    // No introspection — caller uses a single-line body.
+  }
+  return undefined;
+}
+
 /**
- * Whether this install's push endpoint is Apple's. iOS revokes a site's web
- * push after a few pushes that display nothing, so on Apple endpoints a
- * suppressed push must still show SOMETHING. Other push services don't
- * penalize silent handling, and a suppressed push (own sent message, focused
- * thread) staying invisible is the better UX there.
+ * Whether this install's push endpoint is Apple's. WebKit requires every
+ * PushEvent to display something, so a suppressed Apple push becomes a silent
+ * collapsed sync entry. Other push services retain true suppression.
  */
 async function isApplePushEndpoint() {
   try {
@@ -577,130 +569,212 @@ async function dropOwnSubscription() {
   }
 }
 
-self.addEventListener("push", (event) => {
-  if (!event.data) return;
-
-  let payload;
-  try {
-    payload = event.data.json();
-  } catch {
-    payload = { title: "Armada", body: event.data.text() };
+/** Handle one unique PushEvent. The caller serializes equal event ids. */
+async function handlePush(payload, data, base) {
+  // The user turned push off. Showing nothing is intentional here: dropping
+  // the endpoint is the requested outcome, even if WebKit also revokes it.
+  if (await pushDisabled()) {
+    await dropOwnSubscription();
+    return;
   }
 
-  const data = payload.data ?? {};
-  const tag = data.tag || data.subscription_id || data.event_id || "armada-notification";
-  const title = payload.title ?? "Armada";
+  if (await pushPlaneUnready(data)) {
+    await quietSync();
+    await markSeen(data, { outcome: "suppressed" });
+    return;
+  }
+
+  if (await isOwnPush(data)) {
+    await quietSync();
+    await markSeen(data, { outcome: "suppressed" });
+    return;
+  }
+  const seen = await seenBefore(data);
+  if (seen) {
+    if (
+      seen.outcome === "page-presented"
+      && typeof seen.roomKey === "string"
+      && await isApplePushEndpoint()
+    ) {
+      const replay = await prepareNotification(data);
+      if (replay && !replay.drop && replay.roomKey === seen.roomKey) {
+        await showPreparedNotification(base, data, replay, {
+          tag: seen.roomKey,
+          silent: true,
+          reuseExisting: true,
+        });
+        return;
+      }
+    }
+    await quietSync();
+    return;
+  }
+
+  // Open/store first. Only a resolved event has an exact room/event identity a
+  // page may acknowledge; generic capability or stale WindowClient URLs never
+  // suppress a push again.
+  const prepared = await prepareNotification(data);
+  if (prepared) {
+    if (prepared.drop) {
+      await quietSync();
+      await markSeen(data, { outcome: "suppressed" });
+      return;
+    }
+
+    const pageOutcome = await pagePresentationOutcome(prepared);
+    if (pageOutcome?.outcome === "presented" || pageOutcome?.outcome === "presenting") {
+      const pageRoomKey = pageOutcome.roomKey || prepared.roomKey || prepared.tag;
+      // A visible page already used this exact room tag. Apple still requires
+      // a showNotification call for its PushEvent, so silently update that same
+      // real entry (never add a generic banner or re-alert). A still-pending
+      // page call gets the same update on every endpoint as a delivery fallback.
+      if (pageOutcome.outcome === "presenting" || await isApplePushEndpoint()) {
+        await showPreparedNotification(base, data, prepared, {
+          tag: pageRoomKey,
+          silent: true,
+          reuseExisting: true,
+        });
+      }
+      await markSeen(data, {
+        outcome: "page-presented",
+        roomKey: pageRoomKey,
+      });
+      return;
+    }
+    if (pageOutcome?.outcome === "suppressed") {
+      // Active-room/read/policy suppression uses only the fixed non-leaking
+      // Apple sync entry. Other push services may remain truly silent.
+      await quietSync();
+      await markSeen(data, { outcome: "suppressed" });
+      return;
+    }
+
+    const silent = await roomAlertSilent(prepared.roomKey || prepared.tag);
+    await showPreparedNotification(base, data, prepared, {
+      tag: prepared.roomKey || prepared.tag,
+      silent,
+    });
+    await Promise.all([incrementAppBadge(), markSeen(data)]);
+    return;
+  }
+
+  // No key/event/runtime: show the gateway wake-up exactly once. Prefer an
+  // event-stable tag so later enrichment can update this same entry without a
+  // second alert; fall back to the subscription tag only when no event exists.
+  const tag = pushEventKey(data) || data.tag || data.subscription_id || "armada-notification";
+  const rateKey = data.tag || data.subscription_id || tag;
+  const silent = await roomAlertSilent(rateKey);
+  const alertBase = silent ? { ...base, silent: true, renotify: false } : base;
+  const routeData = { ...data };
+  delete routeData.event;
+  await self.registration.showNotification(payload.title ?? "Armada", {
+    ...alertBase,
+    body: payload.body ?? "",
+    data: routeData,
+    tag,
+  });
+  await Promise.all([incrementAppBadge(), markSeen(data)]);
+
+  // Best-effort enrichment is an UPDATE, never a second alert: keep the exact
+  // static tag and force silent/non-renotify. This matters most for oversized
+  // encrypted wraps, where the old room-tag replacement produced two banners.
+  if (!data.event_id) return;
+  const relays = Array.isArray(data.relays) ? data.relays : [];
+  if (relays.length === 0) return;
+  const canOpenEncrypted = (data.scope === "dm" || data.scope === "c2")
+    && self.ArmadaDmCrypto
+    && typeof self.ArmadaDmCrypto.preparePush === "function";
+  if (!PLAINTEXT_SCOPES.has(data.scope) && !canOpenEncrypted) return;
+
+  let ev;
+  try {
+    ev = await fetchEventFromRelays(relays, data.event_id, 4000);
+  } catch {
+    return; // leave the static notification in place
+  }
+  if (!ev) return;
+
+  if (canOpenEncrypted) {
+    const enriched = await prepareNotification({ ...data, event: ev });
+    if (!enriched) return;
+    if (enriched.drop) {
+      if (await isApplePushEndpoint()) {
+        await quietSync(tag);
+      } else {
+        await withdrawNotifications(tag);
+      }
+      return;
+    }
+    await showPreparedNotification(base, data, enriched, { tag, silent: true });
+    return;
+  }
+
+  const h = tagValue(ev, "h");
+  await self.registration.showNotification(payload.title ?? "Armada", {
+    ...base,
+    body: truncate(ev.content, 140) || payload.body || "",
+    tag,
+    silent: true,
+    renotify: false,
+    data: {
+      ...routeData,
+      url: h && relays[0] ? groupUrl(relays[0], h, ev.id) : data.url,
+    },
+  });
+}
+
+/** Serialize duplicate gateway matches without pre-committing the seen key. */
+function runPush(payload, data, base) {
+  const eventKey = pushEventKey(data);
+  if (!eventKey) return handlePush(payload, data, base);
+
+  const existing = IN_FLIGHT_EVENTS.get(eventKey);
+  if (existing) {
+    return (async () => {
+      try {
+        await existing;
+      } catch {
+        // The first show failed and therefore did not commit `seen`; this push
+        // is the retry, not a duplicate to suppress.
+        return handlePush(payload, data, base);
+      }
+      // Re-enter through the committed seen metadata. In particular, an Apple
+      // event first presented by the page must silently update that same room
+      // entry, not create a second generic sync notification.
+      return handlePush(payload, data, base);
+    })();
+  }
+
+  const current = handlePush(payload, data, base);
+  const tracked = current.finally(() => {
+    if (IN_FLIGHT_EVENTS.get(eventKey) === tracked) IN_FLIGHT_EVENTS.delete(eventKey);
+  });
+  IN_FLIGHT_EVENTS.set(eventKey, tracked);
+  return tracked;
+}
+
+self.addEventListener("push", (event) => {
+  let payload;
+  if (!event.data) {
+    payload = { title: "Armada", body: "Messages synced", data: {} };
+  } else {
+    try {
+      payload = event.data.json();
+    } catch {
+      payload = { title: "Armada", body: event.data.text(), data: {} };
+    }
+  }
+
+  const data = payload?.data ?? {};
   const base = {
-    icon: payload.icon || "/favicon.png",
+    icon: payload?.icon || "/favicon.png",
     // Single-colour on transparency: the platform keeps only this image's alpha
     // channel, so the full-colour favicon that used to sit here rendered as a
     // solid blob in the status bar.
-    badge: payload.badge || "/badge-96.png",
+    badge: payload?.badge || "/badge-96.png",
     renotify: true,
   };
-
-  event.waitUntil(
-    (async () => {
-      // The user turned push off. Show NOTHING — deliberately breaking the
-      // userVisibleOnly contract, because its penalty (the browser revoking
-      // the subscription) is the outcome wanted here — and re-attempt the
-      // teardown, since this push arriving proves the subscription is still
-      // alive.
-      if (await pushDisabled()) {
-        await dropOwnSubscription();
-        return;
-      }
-
-      // A suppressed push, or one replaying an event already presented here,
-      // displays nothing — which iOS counts toward revoking the subscription.
-      // quietSync() spends the keep-alive only once the budget is nearly out.
-      if (await suppressPush(data)) {
-        await quietSync(base, data);
-        return;
-      }
-      if (await seenBefore(data)) {
-        await quietSync(base, data);
-        return;
-      }
-
-      // Past this room's interruption ceiling the notification is still shown
-      // (and still updates its count), it just stops making noise — the web
-      // mirror of the native ALERT_BURST_MAX. Decided once and applied to both
-      // the wake-up and its enriched replacement so a flood past the budget
-      // never re-alerts on the same event's second show either.
-      //
-      // Keyed on the SUBSCRIPTION-level tag rather than the room, because the
-      // room is only known once the event is open, and a rate limit that a
-      // sender can dodge by opening a new room isn't one. The inline path
-      // re-tags the notification per room afterwards.
-      const silent = await roomAlertSilent(tag);
-      const alertBase = silent ? { ...base, silent: true, renotify: false } : base;
-
-      // Decide from the event the gateway inlined and show exactly once (see
-      // showInlineNotification): the real sender, the real room, the real
-      // message — and stored on the way through. An unknown DM sender is gated
-      // BEFORE anything they control reaches the screen. Falls through to the
-      // static wake-up below when the event isn't there or can't be opened.
-      const inline = await showInlineNotification(base, data, silent);
-      if (inline === "shown") {
-        await Promise.all([incrementAppBadge(), resetQuietBudget()]);
-        return;
-      }
-      // A dropped push displayed nothing, so it neither counts against the
-      // badge nor replenishes the silent-push budget quietSync just spent.
-      if (inline === "dropped") return;
-
-      // 1. Guaranteed visible notification, immediately.
-      await self.registration.showNotification(title, {
-        ...alertBase,
-        body: payload.body ?? "",
-        data,
-        tag,
-      });
-      await Promise.all([incrementAppBadge(), resetQuietBudget()]);
-
-      // 2. Best-effort enrichment when the gateway didn't inline the event.
-      // Plaintext groups replace the wake-up with the message text; encrypted
-      // scopes (DM / Concord) fetch the wrap and run it through the SAME
-      // open/store/compose the inline path uses — which is also the only way
-      // a non-inlined self-copy can be recognized and withdrawn at all.
-      if (!data.event_id) return;
-      const relays = Array.isArray(data.relays) ? data.relays : [];
-      if (relays.length === 0) return;
-      const canOpenEncrypted = (data.scope === "dm" || data.scope === "c2")
-        && self.ArmadaDmCrypto
-        && typeof self.ArmadaDmCrypto.preparePush === "function";
-      if (!PLAINTEXT_SCOPES.has(data.scope) && !canOpenEncrypted) return;
-
-      let ev;
-      try {
-        ev = await fetchEventFromRelays(relays, data.event_id, 4000);
-      } catch {
-        return; // leave the static notification in place
-      }
-      if (!ev) return;
-
-      if (canOpenEncrypted) {
-        // The wake-up above is already on screen, so the userVisibleOnly
-        // promise is kept whatever happens here: a decrypted message replaces
-        // it, the user's own self-copy withdraws it, and an unopenable wrap
-        // leaves it as it is.
-        await showInlineNotification(base, { ...data, event: ev }, silent, { staticTag: tag });
-        return;
-      }
-
-      const h = tagValue(ev, "h");
-      await self.registration.showNotification(title, {
-        ...alertBase,
-        body: truncate(ev.content, 140) || payload.body || "",
-        tag,
-        data: {
-          ...data,
-          url: h && relays[0] ? groupUrl(relays[0], h, ev.id) : data.url,
-        },
-      });
-    })(),
-  );
+  event.waitUntil(runPush(payload ?? {}, data, base));
 });
 
 /** First value of the first `name` tag on an event, or undefined. */
@@ -842,25 +916,70 @@ self.addEventListener("message", (event) => {
   }
 });
 
+/** Keep notification routes inside this installed app's origin. */
+function notificationTarget(raw) {
+  try {
+    const url = new URL(typeof raw === "string" ? raw : "/", self.location.origin);
+    if (url.origin !== self.location.origin) return "/";
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return "/";
+  }
+}
+
+/** Navigate before focusing; if either step fails, open the route explicitly. */
+async function openNotificationTarget(target) {
+  let fallbackClient;
+  try {
+    const clientList = await self.clients.matchAll({
+      type: "window",
+      includeUncontrolled: true,
+    });
+    fallbackClient = clientList.find((client) => {
+      try {
+        return new URL(client.url).origin === self.location.origin;
+      } catch {
+        return false;
+      }
+    });
+
+    if (fallbackClient) {
+      try {
+        // `navigate()` is asynchronous. Focusing the old document before it
+        // settles races the SPA's startup redirect and sometimes loses the
+        // message route on iOS; await the returned WindowClient instead.
+        const navigated = await fallbackClient.navigate(target);
+        if (navigated && typeof navigated.focus === "function") {
+          return await navigated.focus();
+        }
+      } catch {
+        // A frozen/discarded client can reject navigation. Opening a new app
+        // window is the reliable route-preserving fallback.
+      }
+    }
+  } catch {
+    // Client enumeration is best-effort; openWindow remains available.
+  }
+
+  try {
+    const opened = await self.clients.openWindow(target);
+    if (opened) return opened;
+  } catch {
+    // Last resort below: bring the existing client forward even if routing
+    // could not be changed, rather than making the tap appear to do nothing.
+  }
+  if (fallbackClient && typeof fallbackClient.focus === "function") {
+    return fallbackClient.focus();
+  }
+}
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
-  const target = event.notification.data?.url || "/";
+  const target = notificationTarget(event.notification.data?.url);
 
   event.waitUntil(Promise.all([
     clearAppBadge(),
-    self.clients
-      .matchAll({ type: "window", includeUncontrolled: true })
-      .then((clientList) => {
-        // Focus an existing Armada tab and route it to the conversation.
-        for (const client of clientList) {
-          if (new URL(client.url).origin === self.location.origin) {
-            client.navigate(target);
-            return client.focus();
-          }
-        }
-        // Otherwise open a fresh window at the target.
-        return self.clients.openWindow(target);
-      }),
+    openNotificationTarget(target),
   ]));
 });

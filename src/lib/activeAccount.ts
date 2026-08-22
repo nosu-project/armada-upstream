@@ -18,7 +18,7 @@
  */
 
 /** Where the active account's pubkey is mirrored for synchronous reads. */
-const ACTIVE_PUBKEY_KEY = "armada:active-pubkey";
+export const ACTIVE_PUBKEY_KEY = "armada:active-pubkey";
 
 /**
  * Which account claimed the pre-scoping `armada:app-config` blob.

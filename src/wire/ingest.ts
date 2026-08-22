@@ -412,7 +412,7 @@ export async function ingestWireEvents(
         const peer = ev.pubkey === self ? tagValue(ev, "p") : ev.pubkey;
         if (peer) scopes.add(dmThreadScope(peer));
       }
-      candidates.push(...plaintextCandidates(ev, spec, self));
+      candidates.push(...plaintextCandidates(ev, spec, self, opts?.relay));
     }
     // Await the shared flush so the bus only rings once the events are
     // durably readable — a doorbell before the commit would send hooks
@@ -502,6 +502,7 @@ function plaintextCandidates(
   ev: NostrEvent,
   spec: WireSpec | undefined,
   self: string | undefined,
+  relay: string | undefined,
 ): NotifyCandidate[] {
   if (self && ev.pubkey === self) return []; // never notify on our own message
 
@@ -513,8 +514,9 @@ function plaintextCandidates(
   const h = tagValue(ev, "h");
   if (h) {
     if (ev.kind !== KIND_GROUP_CHAT && ev.kind !== KIND_POLL && ev.kind !== KIND_STREAM_MESSAGE_V2) return [];
-    // The relay URL isn't on the event; the notifier hook maps groupId → relay
-    // (+ route + name) from the user's group list. Leave relayUrl unset here.
+    // The event itself carries no relay, but ingest does. Preserve that source
+    // coordinate: `h` ids are relay-local and the same signed event can be
+    // stored under more than one relay tenant.
     return [{
       plane: "nip29",
       author: ev.pubkey,
@@ -529,6 +531,7 @@ function plaintextCandidates(
       readKey: "", // filled by the hook (needs the relay URL)
       path: "", // ditto — the route names the relay
       eventId: ev.id,
+      relayUrl: relay,
       groupId: h,
     }];
   }

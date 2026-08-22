@@ -3,4 +3,7 @@
     <!-- These files are encrypted with a device-bound Android Keystore key. -->
     <exclude domain="sharedpref" path="bitchat_crypto_secure.xml" />
     <exclude domain="sharedpref" path="bitchat_identity.xml" />
+    <!-- Contains SealedStore ciphertext bound to this device's Keystore. The
+         WebView regenerates the relay notification config after a restore. -->
+    <exclude domain="sharedpref" path="armada_notification_config.xml" />
 </full-backup-content>

@@ -7,10 +7,10 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useDmRelayList } from "@/hooks/useDmRelayList";
 import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
-import { useNotifLevels } from "@/hooks/useNotifLevels";
+import { useNotifLevels, type NotifLevel } from "@/hooks/useNotifLevels";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { effectiveDmRelays } from "@/contexts/AppContext";
-import { useConcordSubs } from "@/concord/hooks/useConcordSubs";
+import { useConcordSubsState } from "@/concord/hooks/useConcordSubs";
 import { normalizeRelayUrl } from "@/lib/platform";
 import type { PushPrefs } from "@/lib/pushPrefs";
 import {
@@ -18,6 +18,10 @@ import {
   type PushSubscriptionSpec,
 } from "@/lib/pushSubscriptions";
 import type { ConcordSub } from "@/concord/lib/concordNotifications";
+import {
+  notificationPolicyIsAuthoritative,
+  useNotificationSettingsReady,
+} from "@/lib/notificationSettingsAuthority";
 
 /**
  * What a content-blind push controller watches — the same set the Android
@@ -53,6 +57,12 @@ export interface PushWatchSet {
   /** Peers whose presence suppresses their whole DM conversation. */
   dmMutedPeers: string[];
   /**
+   * Exact explicit DM notification levels, keyed by the canonical NIP-17
+   * conversation key (a sorted participant set). Group-DM keys stay intact;
+   * they are never widened into per-participant trust or policy.
+   */
+  dmLevels: Record<string, NotifLevel>;
+  /**
    * The account's secret key, for nsec logins ONLY. Bunker (NIP-46) and
    * extension (NIP-07) keys stay off-device, so those logins yield nothing
    * here.
@@ -71,11 +81,40 @@ export interface PushWatchSet {
    */
   dmBunker?: { clientSk: string; bunkerPubkey: string; relays: string[] };
   /**
-   * Whether the established-peer roster is still loading. Callers that persist anything
-   * derived from `dmKnownPeers` must wait: writing it mid-load freezes an empty
-   * known set on disk, reclassifying every known conversation as a request.
+   * Whether the established-peer roster is still loading for render purposes.
+   * Background replacement must use `dmPeersReady`, because a failed wire read
+   * can stop loading without making a cache seed authoritative.
    */
   dmPeersLoading: boolean;
+  /** Whether follows, mutes, and the encrypted conversation index are authoritative. */
+  dmPeersReady: boolean;
+  /** Whether Concord membership and every current control-fold derivation settled. */
+  concordReady: boolean;
+  /** Whether AppConfig's notification slice is an authoritative chosen policy. */
+  notificationSettingsReady: boolean;
+  /** Whether the DM roster/mute fields in the sealed device config are trusted. */
+  dmConfigReady: boolean;
+  /** Whether the Concord stream-key fields in the sealed device config are trusted. */
+  concordConfigReady: boolean;
+  /** Whether NIP-29 records may be removed/replaced from this snapshot. */
+  groupPlaneReady: boolean;
+  /** Whether DM records may be removed/replaced from this snapshot. */
+  dmPlaneReady: boolean;
+  /** Whether Concord records may be removed/replaced from this snapshot. */
+  concordPlaneReady: boolean;
+  /**
+   * Whether every field written into the web/iOS decrypt configuration is an
+   * authoritative snapshot. NIP-29 membership and the DM relay list affect
+   * gateway filters, not that sealed file, so an outage there must not keep
+   * otherwise-current decrypt keys/policy stale.
+   */
+  configReady: boolean;
+  /**
+   * Whether every input is an authoritative last-good snapshot. A controller
+   * may only replace durable/native config or mutate gateway registrations
+   * when this is true.
+   */
+  watchSetReady: boolean;
   /**
    * Whether the watch set is still filling in.
    *
@@ -91,57 +130,101 @@ export interface PushWatchSet {
   watchSetLoading: boolean;
 }
 
+/** Extract only canonical participant-set DM keys from the synced level map. */
+export function explicitDmNotificationLevels(
+  levels: Record<string, NotifLevel>,
+): Record<string, NotifLevel> {
+  return Object.fromEntries(
+    Object.entries(levels)
+      .flatMap(([scope, level]) => {
+        if (!scope.startsWith("dm:")) return [];
+        const key = scope.slice(3);
+        const peers = key.split(",");
+        if (peers.length === 0
+          || peers.some((peer) => !/^[0-9a-f]{64}$/.test(peer))
+          || [...new Set(peers)].sort().join(",") !== key) return [];
+        return [[key, level] as const];
+      })
+      .sort(([a], [b]) => a.localeCompare(b)),
+  );
+}
+
+/** Never expose specs derived from a fresh account's unauthoritative defaults. */
+export function policyAuthorizedPushSpecs(
+  ready: boolean,
+  specs: PushSubscriptionSpec[],
+): PushSubscriptionSpec[] {
+  return ready ? specs : [];
+}
+
+/**
+ * Fail closed per encrypted plane without withholding independent NIP-29
+ * watches. The worker receives matching readiness flags, so a partial sealed
+ * config cannot render a DM/Concord event from incomplete policy or key data.
+ */
+export function readyPlanePushSpecs(
+  specs: PushSubscriptionSpec[],
+  dmReady: boolean,
+  concordReady: boolean,
+): PushSubscriptionSpec[] {
+  return specs.filter((spec) => {
+    if (spec.id.startsWith("armada-dm")) return dmReady;
+    if (spec.id.startsWith("armada-c2-")) return concordReady;
+    return true;
+  });
+}
+
 export function usePushWatchSet(prefs: PushPrefs): PushWatchSet {
   const { user } = useCurrentUser();
   const { config } = useAppContext();
-  const { data: groupList } = useUserGroupList();
+  const groupListQuery = useUserGroupList();
+  const { data: groupList } = groupListQuery;
   const {
     knownPeers: dmKnownPeers,
     knownConversationKeys: dmKnownConversationKeys,
     mutedPeers: dmMutedPeers,
     isLoading: dmPeersLoading,
+    authoritativeReady: dmPeersReady,
+    configurationReady: dmPeersConfigReady,
   } = useKnownDmPeers();
   const { logins } = useNostrLogin();
   const { channelLevel, concordChannelLevel } = useNotifLevels();
-  const { relays: publishedDmRelays } = useDmRelayList();
-  const allConcordSubs = useConcordSubs();
+  const {
+    relays: publishedDmRelays,
+    isReady: dmRelayListReady,
+  } = useDmRelayList();
+  const {
+    subs: allConcordSubs,
+    ready: concordReady,
+    configReady: concordConfigReady,
+  } = useConcordSubsState();
+  const durableNotificationSettingsReady = useNotificationSettingsReady(user?.pubkey);
+  const notificationSettingsReady = notificationPolicyIsAuthoritative(
+    durableNotificationSettingsReady,
+    config.automaticSettingsSync,
+  );
 
-  const relayUrls = useMemo(() => {
-    const set = new Set<string>();
+  const dmLevels = useMemo<Record<string, NotifLevel>>(
+    () => explicitDmNotificationLevels(config.notifLevels),
+    [config.notifLevels],
+  );
+
+  const nip29Groups = useMemo(() => {
+    const byRoom = new Map<string, {
+      relay: string;
+      groupId: string;
+      level: "all" | "mentions";
+    }>();
     for (const g of groupList?.groups ?? []) {
-      const n = normalizeRelayUrl(g.relay);
-      if (n) set.add(n);
+      const relay = normalizeRelayUrl(g.relay);
+      if (!relay || !g.id) continue;
+      const level = channelLevel(relay, g.id);
+      if (level === "nothing") continue;
+      byRoom.set(`${relay}\0${g.id}`, { relay, groupId: g.id, level });
     }
-    for (const url of groupList?.servers ?? []) {
-      const n = normalizeRelayUrl(url);
-      if (n) set.add(n);
-    }
-    return [...set].sort();
-  }, [groupList]);
-
-  const groupIds = useMemo(
-    () =>
-      [
-        ...new Set(
-          (groupList?.groups ?? [])
-            .filter((g) => channelLevel(g.relay, g.id) !== "nothing")
-            .map((g) => g.id),
-        ),
-      ].sort(),
-    [groupList, channelLevel],
-  );
-
-  const mentionOnlyGroupIds = useMemo(
-    () =>
-      [
-        ...new Set(
-          (groupList?.groups ?? [])
-            .filter((g) => channelLevel(g.relay, g.id) === "mentions")
-            .map((g) => g.id),
-        ),
-      ].sort(),
-    [groupList, channelLevel],
-  );
+    return [...byRoom.values()].sort((a, b) =>
+      a.relay.localeCompare(b.relay) || a.groupId.localeCompare(b.groupId));
+  }, [groupList, channelLevel]);
 
   const dmRelays = useMemo(() => {
     const set = new Set<string>();
@@ -206,34 +289,51 @@ export function usePushWatchSet(prefs: PushPrefs): PushWatchSet {
     [allConcordSubs, concordChannelLevel],
   );
 
+  const dmConfigReady = dmPeersConfigReady;
   const specs = useMemo(() => {
     if (!user) return [];
-    return buildPushSubscriptions({
-      pubkey: user.pubkey,
-      relayUrls,
-      groupIds,
-      mentionOnlyGroupIds,
-      prefs,
-      dmRelays,
-      dmFollows,
-      concord,
-    });
+    return policyAuthorizedPushSpecs(
+      notificationSettingsReady,
+      readyPlanePushSpecs(buildPushSubscriptions({
+        pubkey: user.pubkey,
+        nip29Groups,
+        prefs,
+        dmRelays,
+        dmFollows,
+        dmLevels,
+        concord,
+      }), dmConfigReady, concordConfigReady),
+    );
   }, [
     user,
-    relayUrls,
-    groupIds,
-    mentionOnlyGroupIds,
+    notificationSettingsReady,
+    nip29Groups,
     prefs,
     dmRelays,
     dmFollows,
+    dmLevels,
     concord,
+    dmConfigReady,
+    concordConfigReady,
   ]);
 
-  // `groupList === undefined` and a still-loading DM roster both mean the
-  // set can still grow. Concord has no loading flag of its own: its subs
-  // derive from folds that are themselves read behind these, so the two
-  // above are the honest proxy for "not settled yet".
-  const watchSetLoading = dmPeersLoading || groupList === undefined;
+  // Data presence, rather than `isLoading`, distinguishes an authoritative
+  // empty result from a query that failed before producing any snapshot.
+  // A decrypt-failed NIP-29 list is public-only and must likewise never prune
+  // registrations derived from the last complete private list.
+  const groupListReady = groupList !== undefined
+    && !groupList.decryptFailed
+    && groupList.wireReady === true;
+  const configReady = notificationSettingsReady
+    && dmConfigReady
+    && concordConfigReady;
+  const groupPlaneReady = notificationSettingsReady && groupListReady;
+  const dmPlaneReady = notificationSettingsReady
+    && dmConfigReady
+    && dmRelayListReady;
+  const concordPlaneReady = notificationSettingsReady && concordReady;
+  const watchSetReady = groupPlaneReady && dmPlaneReady && concordPlaneReady;
+  const watchSetLoading = !watchSetReady;
 
   return {
     specs,
@@ -241,9 +341,20 @@ export function usePushWatchSet(prefs: PushPrefs): PushWatchSet {
     dmKnownPeers,
     dmKnownConversationKeys,
     dmMutedPeers,
+    dmLevels,
     dmSk,
     dmBunker,
     dmPeersLoading,
+    dmPeersReady,
+    concordReady,
+    notificationSettingsReady,
+    dmConfigReady,
+    concordConfigReady,
+    groupPlaneReady,
+    dmPlaneReady,
+    concordPlaneReady,
+    configReady,
+    watchSetReady,
     watchSetLoading,
   };
 }
