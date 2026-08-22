@@ -4,6 +4,7 @@ import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useSettingsDoc } from "@/hooks/useSettingsDoc";
 import { resolveLegacy } from "@/lib/settingsDocs";
+import { markNotificationSettingsReady } from "@/lib/notificationSettingsAuthority";
 import { configSnapshot, docToConfigPatch, type ConfigDocName } from "@/lib/syncedConfig";
 
 import type { AppConfig } from "@/contexts/AppContext";
@@ -107,6 +108,11 @@ export function useConfigDocSync(name: ConfigDocName): void {
   // settles after the switch — stale completions are instead ignored via
   // `accountGeneration`.
   const publishesInFlight = useRef(0);
+  // The notification document must be folded into AppConfig before its
+  // persisted event becomes authority for background delivery. Holding the
+  // event id until the next config render closes the "document found, defaults
+  // still visible" activation window.
+  const notificationApplyPending = useRef<string | undefined>(undefined);
   const accountGeneration = useRef(0);
   // Consecutive failed attempts, for exponential retry backoff. Reset only on
   // a success (or a fresh account/toggle state): a config-churn effect re-run
@@ -124,6 +130,7 @@ export function useConfigDocSync(name: ConfigDocName): void {
     appliedId.current = undefined;
     appliedCreatedAt.current = undefined;
     lastPublished.current = undefined;
+    notificationApplyPending.current = undefined;
     // A debounced publish belongs to the account that made the edit; letting
     // one fire after a switch would write that config into the new account's
     // settings document. An already-signed request in flight cannot be
@@ -183,6 +190,9 @@ export function useConfigDocSync(name: ConfigDocName): void {
 
     appliedId.current = resolved.event.id;
     appliedCreatedAt.current = resolved.event.created_at;
+    if (name === "notifications") {
+      notificationApplyPending.current = resolved.event.id;
+    }
 
     updateConfig((current: AppConfig) => {
       // Compute the patch INSIDE the updater: the `dms` merge unions the
@@ -196,6 +206,17 @@ export function useConfigDocSync(name: ConfigDocName): void {
       return next;
     });
   }, [automaticSettingsSync, user?.pubkey, name, resolved, updateConfig]);
+
+  useEffect(() => {
+    if (name !== "notifications" || !user?.pubkey || !resolved) return;
+    if (notificationApplyPending.current !== resolved.event.id) return;
+    // `lastPublished` is stamped from the exact post-apply config inside the
+    // updater above. Only publish authority once React exposes that same
+    // snapshot to consumers such as the push controllers.
+    if (lastPublished.current !== JSON.stringify(configSnapshot(config, name))) return;
+    notificationApplyPending.current = undefined;
+    markNotificationSettingsReady(user.pubkey);
+  }, [config, name, resolved, user?.pubkey]);
 
   // ─── Config → document ────────────────────────────────────────────────
   //

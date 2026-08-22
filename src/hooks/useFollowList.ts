@@ -1,10 +1,14 @@
 import { useNostr } from "@nostrify/react";
 import { useQuery } from "@tanstack/react-query";
 
+import { selfStateRelays } from "@/contexts/AppContext";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useCacheFirstSeed } from "@/hooks/useCacheFirstSeed";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useEventStore } from "@/hooks/useEventStore";
-import { contactListPubkeys, fetchContactList } from "@/lib/contactList";
+import { newestCanonicalSelfList } from "@/lib/canonicalSelfList";
+import { contactListPubkeys, readCachedContactList } from "@/lib/contactList";
+import { queryExplicitRelaysWithStatus, uniqueRelayUrls } from "@/lib/nip65";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
 
@@ -13,6 +17,8 @@ export interface FollowListData {
   event: NostrRumor | null;
   /** All pubkeys from `p` tags. */
   pubkeys: string[];
+  /** Cache-first seeds omit this; only a completed live read sets it true. */
+  wireReady?: boolean;
 }
 
 /**
@@ -28,6 +34,7 @@ export interface FollowListData {
 export function useFollowList() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
   const eventStore = useEventStore();
 
   useCacheFirstSeed<FollowListData>({
@@ -42,8 +49,32 @@ export function useFollowList() {
     queryFn: async ({ signal }) => {
       if (!user) return { event: null, pubkeys: [] };
       const store = await eventStore;
-      const event = await fetchContactList(nostr, store, user.pubkey, { signal, timeout: 5000 });
-      return { event, pubkeys: contactListPubkeys(event) };
+      const relays = uniqueRelayUrls(selfStateRelays(config, user.pubkey)).sort();
+      const deadline = AbortSignal.any([signal, AbortSignal.timeout(5000)]);
+      const [wire, cached] = await Promise.all([
+        queryExplicitRelaysWithStatus(
+          nostr,
+          relays,
+          [{ kinds: [3], authors: [user.pubkey], limit: 1 }],
+          deadline,
+        ),
+        readCachedContactList(store, user.pubkey).catch(() => null),
+      ]);
+      for (const event of wire.events) void store.event(event);
+      const event = newestCanonicalSelfList(
+        [...wire.events, ...(cached ? [cached] : [])],
+        user.pubkey,
+        3,
+      ) ?? null;
+      const answered = new Set(wire.answered);
+      return {
+        event,
+        pubkeys: contactListPubkeys(event),
+        // Cached fallback and partial relay success remain additive only. A
+        // missing self-state relay can hold the newer replaceable list.
+        wireReady: relays.length > 0
+          && relays.every((relay) => answered.has(relay)),
+      };
     },
     enabled: !!user,
     staleTime: 5 * 60 * 1000,

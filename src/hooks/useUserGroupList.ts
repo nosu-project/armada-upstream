@@ -18,7 +18,7 @@ import {
 import { normalizeRelayUrl } from "@/lib/platform";
 import { readFolded, writeFolded } from "@/lib/foldedCache";
 import { groupListFoldKey, type PersistedGroupList } from "@/lib/nip29ServerCache";
-import { queryExplicitRelays, queryExplicitRelaysWithStatus } from "@/lib/nip65";
+import { queryExplicitRelaysWithStatus } from "@/lib/nip65";
 
 import type { NUser } from "@nostrify/react/login";
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -39,6 +39,8 @@ export interface ReadGroupListResult extends UserGroupList {
 
 export interface UserGroupListQuery extends ReadGroupListResult {
   event: NostrRumor | null;
+  /** True only when every current self-state relay completed the wire read. */
+  wireReady?: boolean;
 }
 
 function eventWins(candidate: NostrRumor, held: NostrRumor): boolean {
@@ -213,10 +215,15 @@ export function useUserGroupList() {
     queryKey,
     queryFn: async ({ signal }) => {
       const deadline = AbortSignal.any([signal, AbortSignal.timeout(8000)]);
-      const [wireEvents, storedEvents] = await Promise.all([
-        queryExplicitRelays(
+      const selfRelays = [
+        ...new Set(selfStateRelays(config, user!.pubkey)
+          .map(normalizeRelayUrl)
+          .filter((url): url is string => Boolean(url))),
+      ].sort();
+      const [wireRead, storedEvents] = await Promise.all([
+        queryExplicitRelaysWithStatus(
           nostr,
-          selfStateRelays(config, user!.pubkey),
+          selfRelays,
           [{ kinds: [KIND_USER_GROUPS], authors: [user!.pubkey], limit: 1 }],
           deadline,
         ),
@@ -231,8 +238,14 @@ export function useUserGroupList() {
       const persisted = foldKey
         ? await readFolded<PersistedGroupList>(foldKey)
         : undefined;
+      const newestWire = newestGroupListEvent(
+        wireRead.events.filter((event) => event.pubkey === user!.pubkey),
+      );
+      const wireDecryptReady = newestWire
+        ? !(await readGroupListEvent(newestWire, user!.signer)).decryptFailed
+        : true;
       const result = await resolveGroupListRead(
-        [...wireEvents, ...storedEvents].filter((event) => event.pubkey === user!.pubkey),
+        [...wireRead.events, ...storedEvents].filter((event) => event.pubkey === user!.pubkey),
         user!.signer,
         prev,
         persisted,
@@ -245,7 +258,15 @@ export function useUserGroupList() {
           servers: result.servers,
         } satisfies PersistedGroupList);
       }
-      return result;
+      const answered = new Set(wireRead.answered);
+      return {
+        ...result,
+        // With no explicit authority, the pool-wide fallback cannot prove
+        // which source failed; it is useful additive data, never prune proof.
+        wireReady: selfRelays.length > 0
+          && selfRelays.every((relay) => answered.has(relay))
+          && wireDecryptReady,
+      };
     },
     enabled: Boolean(user),
     staleTime: 30_000,

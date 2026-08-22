@@ -388,12 +388,35 @@ describe("ingestWireEvents — foreground notify candidates", () => {
     const ev = plainEvent(9, [["h", "g1"], ["p", SELF]]);
     ev.pubkey = PEER;
     try {
-      await ingestWireEvents(sinks, [ev]);
+      await ingestWireEvents(sinks, [ev], { relay: "wss://relay-a.example" });
     } finally {
       off();
     }
     expect(captured).toHaveLength(1);
-    expect(captured[0]).toMatchObject({ plane: "nip29", groupId: "g1", mention: true, body: "x" });
+    expect(captured[0]).toMatchObject({
+      plane: "nip29",
+      relayUrl: "wss://relay-a.example",
+      groupId: "g1",
+      mention: true,
+      body: "x",
+    });
+  });
+
+  it("keeps the same signed NIP-29 event distinct on two source relays", async () => {
+    const { captured, off, sinks } = withSink({});
+    const ev = plainEvent(9, [["h", "general"]]);
+    ev.pubkey = PEER;
+    try {
+      await ingestWireEvents(sinks, [ev], { relay: "wss://relay-a.example" });
+      await ingestWireEvents(sinks, [ev], { relay: "wss://relay-b.example" });
+    } finally {
+      off();
+    }
+    expect(captured.map(({ relayUrl, groupId, eventId }) => ({ relayUrl, groupId, eventId })))
+      .toEqual([
+        { relayUrl: "wss://relay-a.example", groupId: "general", eventId: ev.id },
+        { relayUrl: "wss://relay-b.example", groupId: "general", eventId: ev.id },
+      ]);
   });
 
   it("never emits a candidate for the user's own message", async () => {

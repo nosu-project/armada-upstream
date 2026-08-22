@@ -2,7 +2,7 @@ import { useCallback, useMemo } from "react";
 
 import { channelReadKey } from "@/contexts/ReadStateContext";
 import { useAppContext } from "@/hooks/useAppContext";
-import { loadPushPrefs, type PushPrefs } from "@/lib/pushPrefs";
+import { DEFAULT_PUSH_PREFS, type PushPrefs } from "@/lib/pushPrefs";
 import { normalizeRelayUrl } from "@/lib/platform";
 
 /**
@@ -113,10 +113,9 @@ function effectiveMap(
 
 export function useNotifLevels(): UseNotifLevelsReturn {
   const { config, updateConfig } = useAppContext();
-  // AppConfigSchema fills this on real persisted configs. Keep the legacy
-  // localStorage mirror as an upgrade boundary for pre-field configs and
-  // partial embedders that have not supplied the new account-global value.
-  const pushPrefs = config.pushPrefs ?? loadPushPrefs();
+  // AppConfig is account-scoped and is the only foreground policy authority;
+  // never fall back to another account's legacy localStorage mirror.
+  const pushPrefs = config.pushPrefs ?? DEFAULT_PUSH_PREFS;
 
   const map = useMemo(
     () => effectiveMap(config.notifLevels, config.mutedCommunities, config.mutedChannels),

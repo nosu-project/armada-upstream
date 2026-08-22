@@ -155,6 +155,13 @@ struct PushProcessor {
         peers.contains(where: { config.mutedPeers.contains($0) })
     }
 
+    static func dmNotificationLevel(
+        peers: [String], config: PushConfig
+    ) -> DmNotificationLevel {
+        let key = dmConversationKey(peers: peers)
+        return config.dmLevels[key] ?? (config.directMessages ? .all : .nothing)
+    }
+
     static func dmPath(peers: [String]) -> String {
         "/dm/\(dmConversationKey(peers: peers))"
     }
@@ -189,6 +196,14 @@ struct PushProcessor {
         // Match the DM list: a group containing any muted participant is
         // hidden as a whole, even if this message's author is unmuted.
         if Self.isMutedDm(peers: opened.peers, config: config) {
+            return .dropped
+        }
+
+        // The gateway has to watch every addressed gift wrap when either the
+        // global switch OR one exact room is enabled. Enforce the actual
+        // fallback after decrypt so that broad subscription cannot wake an
+        // unrelated room. For a DM, `mentions` is equivalent to `all`.
+        if Self.dmNotificationLevel(peers: opened.peers, config: config) == .nothing {
             return .dropped
         }
 

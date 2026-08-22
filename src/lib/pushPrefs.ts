@@ -13,6 +13,13 @@
  */
 
 import type { WebPushUnavailableReason } from "@/lib/webPushSupport";
+import { accountScopedKey, getActivePubkey } from "@/lib/activeAccount";
+
+const PUSH_PREFS_KEY = "armada:push-prefs";
+
+function pushPrefsKey(pubkey?: string | null): string {
+  return accountScopedKey(PUSH_PREFS_KEY, pubkey === undefined ? getActivePubkey() : pubkey);
+}
 
 /**
  * How to notify for a DM from someone the user doesn't know — not followed,
@@ -58,9 +65,9 @@ export const DEFAULT_PUSH_PREFS: PushPrefs = {
 };
 
 /** Read the account-global per-type prefs from localStorage, defaults merged. */
-export function loadPushPrefs(): PushPrefs {
+export function loadPushPrefs(pubkey?: string | null): PushPrefs {
   try {
-    const raw = localStorage.getItem("armada:push-prefs");
+    const raw = localStorage.getItem(pushPrefsKey(pubkey));
     if (raw) return { ...DEFAULT_PUSH_PREFS, ...JSON.parse(raw) };
   } catch {
     // ignore — fall through to defaults
@@ -69,9 +76,9 @@ export function loadPushPrefs(): PushPrefs {
 }
 
 /** Persist the local mirror consumed by background notification runtimes. */
-export function savePushPrefs(next: PushPrefs): void {
+export function savePushPrefs(next: PushPrefs, pubkey?: string | null): void {
   try {
-    localStorage.setItem("armada:push-prefs", JSON.stringify(next));
+    localStorage.setItem(pushPrefsKey(pubkey), JSON.stringify(next));
   } catch {
     // localStorage unavailable — the in-memory AppConfig value still applies.
   }

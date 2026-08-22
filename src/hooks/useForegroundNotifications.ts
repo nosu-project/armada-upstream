@@ -4,11 +4,11 @@ import { useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useAppContext } from "@/hooks/useAppContext";
 import { useEventStore } from "@/hooks/useEventStore";
 import { useKnownDmPeers } from "@/hooks/useKnownDmPeers";
 import { useMutedPubkeys } from "@/hooks/useMuteList";
 import { useNotifLevels, type NotifLevel } from "@/hooks/useNotifLevels";
-import { loadPushPrefs } from "@/lib/pushPrefs";
 import { channelReadKey, useReadState } from "@/hooks/useReadState";
 import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { parseAuthorEvent, seedAuthorCache, type AuthorResult } from "@/hooks/useAuthor";
@@ -33,6 +33,10 @@ import {
   playNotificationSound,
 } from "@/lib/notificationSounds";
 import { isNativeRuntime, normalizeRelayUrl } from "@/lib/platform";
+import {
+  notificationPolicyIsAuthoritative,
+  useNotificationSettingsReady,
+} from "@/lib/notificationSettingsAuthority";
 import { chatRoute, parseChatRoute } from "@/lib/routes";
 import {
   installTabAttentionClearHandlers,
@@ -93,8 +97,118 @@ function levelAdmits(level: NotifLevel, mention: boolean): boolean {
   return true; // "all"
 }
 
+/**
+ * The page may construct an OS notification only after proving this install
+ * has no Web Push subscription. Fail closed: an indeterminate registration is
+ * preferable to two banners/sounds for one event when its PushEvent arrives.
+ */
+export async function pageMayShowOsNotification(): Promise<boolean> {
+  if (!("serviceWorker" in navigator)) return true;
+  try {
+    const registration = await navigator.serviceWorker.getRegistration();
+    if (!registration) return true;
+    return !(await registration.pushManager.getSubscription());
+  } catch {
+    return false;
+  }
+}
+
+export interface PageNotificationCoordination {
+  /** A visible exact-event page may race an active PushSubscription. */
+  allowActivePush?: boolean;
+  /** Checked at the final synchronous presentation boundary. */
+  shouldAbort?: () => boolean;
+  /** Records the page claim immediately before the browser API is called. */
+  onPresenting?: () => void;
+}
+
+/**
+ * Present from the registration when possible. Mobile WebKit allows that API
+ * for an installed app but rejects the page-level Notification constructor.
+ * The returned object exists only for the constructor fallback's click hook;
+ * registration notifications route through `notificationclick` in sw.js.
+ */
+export async function showPageOsNotification(
+  title: string,
+  options: NotificationOptions,
+  coordination: PageNotificationCoordination = {},
+): Promise<Notification | null | undefined> {
+  const abort = () => coordination.shouldAbort?.() === true;
+  let presenting = false;
+  const beginPresentation = () => {
+    if (presenting) return;
+    presenting = true;
+    coordination.onPresenting?.();
+  };
+
+  if (abort()) return null;
+  if ("serviceWorker" in navigator) {
+    try {
+      const current = await navigator.serviceWorker.getRegistration();
+      if (current) {
+        // Re-check at the final presentation boundary. A subscription can be
+        // enabled while profile/room enrichment is awaiting; `null` hands the
+        // event back to the PushEvent without constructing a second banner.
+        if (!coordination.allowActivePush && await current.pushManager.getSubscription()) {
+          return null;
+        }
+        const registration = await navigator.serviceWorker.ready;
+        if (abort()) return null;
+        if (!coordination.allowActivePush && await registration.pushManager.getSubscription()) {
+          return null;
+        }
+        if (abort()) return null;
+        beginPresentation();
+        await registration.showNotification(title, options);
+        return undefined;
+      }
+    } catch {
+      // Desktop engines that reject registration presentation can still allow
+      // the page constructor, but only after one last no-subscription proof.
+      try {
+        const current = await navigator.serviceWorker.getRegistration();
+        if (
+          !coordination.allowActivePush
+          && current
+          && await current.pushManager.getSubscription()
+        ) return null;
+      } catch {
+        return null; // indeterminate ownership: fail closed against duplicates
+      }
+    }
+  }
+  if (abort()) return null;
+  beginPresentation();
+  return new Notification(title, options);
+}
+
+export type PagePushOutcome = "presenting" | "presented" | "suppressed";
+
+interface PagePushState {
+  roomKey: string;
+  outcome: PagePushOutcome;
+}
+
+/** Resolve NIP-29's relay-scoped key before common self/mute/session gates. */
+export function foregroundPushRoomKey(
+  candidate: Pick<NotifyCandidate, "plane" | "roomKey" | "relayUrl" | "groupId">,
+  relayByGroup: ReadonlyMap<string, string>,
+): string {
+  if (candidate.plane !== "nip29" || !candidate.groupId) return candidate.roomKey;
+  const relay = candidate.relayUrl
+    ? normalizeRelayUrl(candidate.relayUrl) ?? candidate.relayUrl
+    : relayByGroup.get(candidate.groupId);
+  return relay ? `h:${relay}|${candidate.groupId}` : candidate.roomKey;
+}
+
 export function useForegroundNotifications(): void {
   const { user } = useCurrentUser();
+  const { config } = useAppContext();
+  const durableNotificationSettingsReady = useNotificationSettingsReady(user?.pubkey);
+  const notificationSettingsReady = notificationPolicyIsAuthoritative(
+    durableNotificationSettingsReady,
+    config.automaticSettingsSync,
+  );
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const eventStore = useEventStore();
@@ -116,19 +230,29 @@ export function useForegroundNotifications(): void {
   const mutedRef = useRef(mutedPubkeys);
   mutedRef.current = mutedPubkeys;
 
-  // groupId → host relay URL (NIP-29 events don't carry their relay). The
-  // kind-10009 list covers explicit joins; the wire's per-server directory
-  // discovery covers the rest (channels the user never 10009-listed — e.g.
-  // Buzz channels an admin added them to).
+  // Fallback groupId → host relay URL for legacy candidate sources that don't
+  // yet carry ingest's exact source relay. A duplicate id on two relays is
+  // deliberately removed from this map rather than guessed.
   const wireGroups = useWireNip29Groups();
   const relayByGroup = useMemo(() => {
     const m = new Map<string, string>();
+    const ambiguous = new Set<string>();
+    const add = (id: string, rawRelay: string) => {
+      const relay = normalizeRelayUrl(rawRelay);
+      if (!relay || !id || ambiguous.has(id)) return;
+      const held = m.get(id);
+      if (held && held !== relay) {
+        m.delete(id);
+        ambiguous.add(id);
+      } else if (!held) {
+        m.set(id, relay);
+      }
+    };
     for (const g of groupList?.groups ?? []) {
-      const relay = normalizeRelayUrl(g.relay);
-      if (relay && g.id) m.set(g.id, relay);
+      add(g.id, g.relay);
     }
     for (const g of wireGroups) {
-      if (g.id && g.relay && !m.has(g.id)) m.set(g.id, g.relay);
+      if (g.id && g.relay) add(g.id, g.relay);
     }
     return m;
   }, [groupList, wireGroups]);
@@ -146,6 +270,7 @@ export function useForegroundNotifications(): void {
     navigate,
     queryClient,
     eventStore,
+    dmRequestPolicy: config.pushPrefs.dmRequests,
   });
   ctx.current = {
     readState,
@@ -158,6 +283,7 @@ export function useForegroundNotifications(): void {
     navigate,
     queryClient,
     eventStore,
+    dmRequestPolicy: config.pushPrefs.dmRequests,
   };
 
   // Session floor: never notify for anything older than the moment the notifier
@@ -167,6 +293,10 @@ export function useForegroundNotifications(): void {
   // transports / re-ingests don't double-alert.
   const lastNotified = useRef(new Map<string, number>());
   const notifiedEvents = useRef(new Set<string>());
+  // Exact per-event outcomes and worker claims arbitrate the live page against
+  // its PushEvent. Both are session-only and bounded below.
+  const pagePushStates = useRef(new Map<string, PagePushState>());
+  const workerOwnedPushes = useRef(new Map<string, string>());
   // Per-room alert timestamps (the interruption ceiling) and the recent lines
   // a room's notification body accumulates, both keyed by room key.
   const alertTimes = useRef(new Map<string, number[]>());
@@ -181,9 +311,119 @@ export function useForegroundNotifications(): void {
 
   useEffect(() => {
     if (!user) return;
+    // The foreground path mounts outside SyncGate. Do not let a fresh
+    // account's broad in-memory defaults make sound, badge the tab, or show an
+    // OS notification before its encrypted notification policy (or a complete
+    // relay-backed absence proof) has been applied.
+    if (!notificationSettingsReady) return;
     if (isNativeRuntime()) return; // native has its own background service
 
     const removeTabAttentionHandlers = installTabAttentionClearHandlers();
+    let mounted = true;
+
+    const trimExactMap = <T,>(map: Map<string, T>) => {
+      if (map.size <= 512) return;
+      const oldest = map.keys().next().value;
+      if (oldest !== undefined) map.delete(oldest);
+    };
+    const exactState = (eventId: string, roomKey: string) => {
+      const state = pagePushStates.current.get(eventId);
+      return state?.roomKey === roomKey ? state : undefined;
+    };
+    const stateForWorkerRequest = (eventId: string, roomKey: string) => {
+      const state = pagePushStates.current.get(eventId);
+      return !roomKey || state?.roomKey === roomKey ? state : undefined;
+    };
+    const workerOwns = (eventId: string | undefined, roomKey: string) => (
+      Boolean(eventId && roomKey && (
+        workerOwnedPushes.current.get(eventId) === roomKey
+        || workerOwnedPushes.current.get(eventId) === "*"
+      ))
+    );
+    const recordPushState = (
+      eventId: string | undefined,
+      roomKey: string,
+      outcome: PagePushOutcome,
+    ) => {
+      if (!eventId || !roomKey) return;
+      const prior = exactState(eventId, roomKey);
+      // A completed real presentation must never be downgraded by a later
+      // duplicate candidate taking a suppression/dedupe branch.
+      if (prior?.outcome === "presented" && outcome !== "presented") return;
+      pagePushStates.current.set(eventId, { roomKey, outcome });
+      trimExactMap(pagePushStates.current);
+    };
+    const clearPresenting = (eventId: string | undefined, roomKey: string) => {
+      if (!eventId) return;
+      if (exactState(eventId, roomKey)?.outcome === "presenting") {
+        pagePushStates.current.delete(eventId);
+      }
+    };
+    const claimForWorker = (eventId: string, roomKey: string) => {
+      workerOwnedPushes.current.set(eventId, roomKey);
+      trimExactMap(workerOwnedPushes.current);
+    };
+
+    const answerPushPresentationQuery = (event: MessageEvent) => {
+      if (event.data?.type !== "armada-push-presentation-query") return;
+      const port = event.ports[0];
+      const eventId = typeof event.data.eventId === "string" ? event.data.eventId : "";
+      const roomKey = typeof event.data.roomKey === "string" ? event.data.roomKey : "";
+      if (!port || !eventId) return;
+
+      void (async () => {
+        // Give an already-running live candidate time to finish its exact
+        // policy/presentation decision. The worker follows with an explicit
+        // claim when this returns unhandled.
+        for (let i = 0; i < 8; i++) {
+          const state = stateForWorkerRequest(eventId, roomKey);
+          if (state && state.outcome !== "presenting") {
+            port.postMessage({ eventId, roomKey: state.roomKey, outcome: state.outcome });
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          if (!mounted) return;
+        }
+        const pending = stateForWorkerRequest(eventId, roomKey);
+        port.postMessage({
+          eventId,
+          roomKey: pending?.roomKey ?? roomKey,
+          outcome: pending?.outcome ?? "unhandled",
+        });
+      })();
+    };
+    navigator.serviceWorker?.addEventListener("message", answerPushPresentationQuery);
+
+    const answerWorkerClaim = (event: MessageEvent) => {
+      if (event.data?.type !== "armada-push-worker-claim") return;
+      const port = event.ports[0];
+      const eventId = typeof event.data.eventId === "string" ? event.data.eventId : "";
+      const roomKey = typeof event.data.roomKey === "string" ? event.data.roomKey : "";
+      if (!port || !eventId) return;
+
+      void (async () => {
+        // A page presentation can cross the query/claim boundary. Let its
+        // already-issued browser call settle; otherwise the claim wins now,
+        // before any late page work reaches its final shouldAbort check.
+        for (let i = 0; i < 12; i++) {
+          const state = stateForWorkerRequest(eventId, roomKey);
+          if (!state || state.outcome !== "presenting") break;
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          if (!mounted) return;
+        }
+        const state = stateForWorkerRequest(eventId, roomKey);
+        if (state) {
+          port.postMessage({ eventId, roomKey: state.roomKey, outcome: state.outcome });
+          return;
+        }
+        // When the worker could not resolve a NIP-29 relay-scoped room, the
+        // event id is still exact. A wildcard claim closes the race for that
+        // event; a later page candidate resolves its room and aborts normally.
+        claimForWorker(eventId, roomKey || "*");
+        port.postMessage({ eventId, roomKey, outcome: "worker" });
+      })();
+    };
+    navigator.serviceWorker?.addEventListener("message", answerWorkerClaim);
 
     // Resolve a display name for an author. Tries, in order: the react-query
     // author cache (populated when a profile has been viewed this session) and
@@ -338,23 +578,51 @@ export function useForegroundNotifications(): void {
       const canShowOsNotification = isForegroundNotifyReady();
       const soundSettings = loadNotificationSoundSettings();
       let playedSound = false;
+      // One fresh ownership proof per ingest batch. This reacts immediately to
+      // enable/disable/rotation instead of pinning a mount-time subscription
+      // state, and every page cue shares the same no-subscription decision.
+      let pageOwnership: Promise<boolean> | undefined;
+      const pageOwnsPresentation = () => (
+        pageOwnership ??= pageMayShowOsNotification()
+      );
+      const playPageSound = async (silent: boolean) => {
+        if (!soundSettings.enabled || playedSound || silent) return;
+        if (!(await pageOwnsPresentation()) || playedSound) return;
+        playNotificationSound({ settings: soundSettings });
+        playedSound = true;
+      };
 
       const c = ctx.current;
 
       for (const cand of candidates) {
-        if (cand.createdAt <= sessionFloor.current) continue;
+        const initialRoomKey = foregroundPushRoomKey(cand, c.relayByGroup);
+        const suppress = (key: string) => recordPushState(
+          cand.eventId,
+          key,
+          "suppressed",
+        );
+        if (cand.createdAt <= sessionFloor.current) {
+          suppress(initialRoomKey);
+          continue;
+        }
         // Ingest normally removes self-authored events, but keep the final
         // presentation boundary safe when identity hydration races a live
         // event or another candidate source is added.
-        if (cand.author && cand.author === user.pubkey) continue;
+        if (cand.author && cand.author === user.pubkey) {
+          suppress(initialRoomKey);
+          continue;
+        }
         // A muted person must not be able to raise a toast, a sound, or an OS
         // notification — the one place where hiding them from the UI isn't
         // enough, because the notification is the UI coming to find you.
-        if (cand.author && mutedRef.current.has(cand.author)) continue;
+        if (cand.author && mutedRef.current.has(cand.author)) {
+          suppress(initialRoomKey);
+          continue;
+        }
 
         // Resolve the fields ingest left for the hook (relay-dependent
         // routing) and the conversation's notification level.
-        let roomKey = cand.roomKey;
+        let roomKey = initialRoomKey;
         let readKey = cand.readKey;
         let path = cand.path;
         let level: NotifLevel;
@@ -366,8 +634,13 @@ export function useForegroundNotifications(): void {
         let communityId: string | undefined;
 
         if (cand.plane === "nip29") {
-          const relay = cand.groupId ? c.relayByGroup.get(cand.groupId) : undefined;
-          if (!relay || !cand.groupId) continue; // not a group we're in
+          const relay = cand.relayUrl
+            ? normalizeRelayUrl(cand.relayUrl) ?? cand.relayUrl
+            : cand.groupId ? c.relayByGroup.get(cand.groupId) : undefined;
+          if (!relay || !cand.groupId) {
+            suppress(initialRoomKey);
+            continue; // not a group we're in
+          }
           relayUrl = relay;
           roomKey = `h:${relay}|${cand.groupId}`;
           readKey = channelReadKey(relay, cand.groupId);
@@ -382,6 +655,7 @@ export function useForegroundNotifications(): void {
           // Match the DM list: a group containing any muted participant is
           // absent as a whole, even when this particular author is unmuted.
           if (cand.peer && dmConvPeers(cand.peer).some((peer) => mutedRef.current.has(peer))) {
+            suppress(roomKey);
             continue;
           }
           level = cand.peer ? c.dmLevel(cand.peer) : "all";
@@ -397,12 +671,18 @@ export function useForegroundNotifications(): void {
           if (cand.peer && !conversationKnown) {
             // The viewer may have written to them since the set was loaded.
             refreshMineConversationKeys();
-            const policy = loadPushPrefs().dmRequests;
-            if (policy === "off") continue;
+            const policy = c.dmRequestPolicy;
+            if (policy === "off") {
+              suppress(roomKey);
+              continue;
+            }
             if (policy !== "full") dmGeneric = true;
           }
         } else {
-          if (!path) continue; // couldn't resolve the community route
+          if (!path) {
+            suppress(roomKey);
+            continue; // couldn't resolve the community route
+          }
           // Recover the community id from the route, to resolve the
           // per-channel level. Parsed rather than split on "/": the route may
           // carry a `/m/<id>` focus, and the parser is the same one the app
@@ -418,24 +698,39 @@ export function useForegroundNotifications(): void {
         }
 
         // Notification-level gate (Discord-style all/mentions/nothing).
-        if (!levelAdmits(level, cand.mention)) continue;
+        if (!levelAdmits(level, cand.mention)) {
+          suppress(roomKey);
+          continue;
+        }
 
         // Read-state gate (NIP-29 / DM have a useReadState entry). If the user
         // already read past this message, don't notify.
-        if (readKey && (c.readState[readKey] ?? 0) >= cand.createdAt) continue;
+        if (readKey && (c.readState[readKey] ?? 0) >= cand.createdAt) {
+          suppress(roomKey);
+          continue;
+        }
 
         // On-screen suppression: only while the Armada window is focused and
         // the user is actually looking at this room.
-        if (isRoomActive(roomKey)) continue;
+        if (isRoomActive(roomKey)) {
+          suppress(roomKey);
+          continue;
+        }
 
         // Dedupe against what we've already surfaced for this room.
         const eventKey = cand.eventId ? `${roomKey}:${cand.eventId}` : "";
-        if (eventKey && notifiedEvents.current.has(eventKey)) continue;
+        if (eventKey && notifiedEvents.current.has(eventKey)) {
+          suppress(roomKey);
+          continue;
+        }
         const mark = lastNotified.current.get(roomKey) ?? 0;
         // Legacy candidates lack an event id, so retain their timestamp-based
         // protection. Git events use source ids: multiple accepted actions in
         // the same second are distinct notification candidates.
-        if (!eventKey && cand.createdAt <= mark) continue;
+        if (!eventKey && cand.createdAt <= mark) {
+          suppress(roomKey);
+          continue;
+        }
         lastNotified.current.set(roomKey, cand.createdAt);
         if (eventKey) notifiedEvents.current.add(eventKey);
 
@@ -451,30 +746,28 @@ export function useForegroundNotifications(): void {
         // not a stack of overlapping clips. The favicon badge itself is
         // idempotent and only appears while the tab is hidden or unfocused.
         markTabAttention();
-        if (soundSettings.enabled && !playedSound && !silent) {
-          playNotificationSound({ settings: soundSettings });
-          playedSound = true;
-        }
 
-        if (!canShowOsNotification) continue;
+        const canCoordinateExactEvent = () => Boolean(
+          cand.eventId
+          && roomKey
+          && document.visibilityState === "visible"
+          && document.hasFocus(),
+        );
+
+        if (!canShowOsNotification) {
+          void playPageSound(silent);
+          continue;
+        }
 
         // Resolve the title (async — needs the author's profile) then fire the
         // OS notification. Errors are swallowed so one bad event never breaks
         // the sink for the rest of the batch.
         void (async () => {
-          // A hidden page no longer claims notification ownership (see
-          // answerNotificationOwnerQuery), so when Web Push is active the
-          // service worker presents this event — showing here too would
-          // duplicate it. Without a push subscription the page remains the
-          // only notifier for hidden tabs.
-          if (document.visibilityState !== "visible" && navigator.serviceWorker?.controller) {
-            try {
-              const reg = await navigator.serviceWorker.ready;
-              if (await reg.pushManager.getSubscription()) return;
-            } catch {
-              // No subscription info — fall through and show from the page.
-            }
-          }
+          // A visible page may cover a delayed/missing PushEvent, but only for
+          // an exact event+room the worker can arbitrate. Hidden pages and
+          // legacy candidates retain the no-subscription requirement.
+          if (!canCoordinateExactEvent() && !(await pageOwnsPresentation())) return;
+          if (workerOwns(cand.eventId, roomKey)) return;
           // Either a fixed presentation (the two shapes that aren't chat
           // messages) or the message the presenter composes below. Composing is
           // deferred past the last active-room check so a notification that
@@ -482,6 +775,7 @@ export function useForegroundNotifications(): void {
           // accumulated body.
           let presented: PresentedNotification | undefined;
           let message: NotificationMessage | undefined;
+          let notificationLines: string[] | undefined;
 
           if (cand.plane === "dm" && dmGeneric) {
             // Content-blind: nothing the sender controls (name/avatar/text).
@@ -530,18 +824,23 @@ export function useForegroundNotifications(): void {
             // Profile resolution can outlive a focus or route change. Re-check
             // at presentation time so a notification queued in the background
             // is not shown after the user has focused that conversation.
-            if (cand.author === user.pubkey || isRoomActive(roomKey)) return;
+            if (cand.author === user.pubkey || isRoomActive(roomKey)) {
+              suppress(roomKey);
+              return;
+            }
             // Accumulate the room's recent lines so a busy conversation reads
             // as a thread — the closest a Web Notification gets to the native
             // MessagingStyle expansion.
             if (message) {
+              notificationLines = appendRoomLine(roomKey, attributedLine(message));
               presented = presentNotification(
                 message,
-                appendRoomLine(roomKey, attributedLine(message)),
+                notificationLines,
               );
             }
             if (!presented) return;
-            const n = new Notification(presented.title, {
+            const allowActivePush = canCoordinateExactEvent();
+            const n = await showPageOsNotification(presented.title, {
               body: presented.body,
               icon: presented.icon,
               badge: presented.badge,
@@ -551,46 +850,47 @@ export function useForegroundNotifications(): void {
               // Tag by room so repeated messages in the same conversation
               // collapse into one entry.
               tag: roomKey || "armada",
+              // Registration notifications are clicked in sw.js, so carry the
+              // exact SPA route instead of relying on a page-only callback.
+              data: { url: path || "/", lines: notificationLines },
+            }, {
+              allowActivePush,
+              shouldAbort: () => (
+                workerOwns(cand.eventId, roomKey)
+                || (allowActivePush && !canCoordinateExactEvent())
+              ),
+              onPresenting: () => recordPushState(cand.eventId, roomKey, "presenting"),
             });
-            n.onclick = () => {
-              window.focus();
-              if (path) c.navigate(path);
-              n.close();
-            };
+            if (n === null) {
+              clearPresenting(cand.eventId, roomKey);
+              return;
+            }
+            if (soundSettings.enabled && !playedSound && !silent) {
+              playNotificationSound({ settings: soundSettings });
+              playedSound = true;
+            }
+            recordPushState(cand.eventId, roomKey, "presented");
+            if (n) {
+              n.onclick = () => {
+                window.focus();
+                if (path) c.navigate(path);
+                n.close();
+              };
+            }
           } catch {
-            // Some browsers require the service worker to show notifications;
-            // there's nothing more to do here (Web Push covers those).
+            clearPresenting(cand.eventId, roomKey);
+            // Permission may have changed after the initial gate.
           }
         })();
       }
     });
 
-    // The service worker cannot make the page's exact room-aware decision for
-    // encrypted community streams or DMs. Let it hand open-app presentation to
-    // this notifier, which suppresses only the focused room and still alerts for
-    // other rooms or while Armada is hidden/unfocused. Keep answering the old
-    // DM-only query during service-worker/page version transitions.
-    const answerNotificationOwnerQuery = (event: MessageEvent) => {
-      if (
-        event.data?.type !== "armada-notification-owner-query"
-        && event.data?.type !== "armada-dm-notification-owner-query"
-      ) return;
-      const port = event.ports[0];
-      if (!port) return;
-      // Only while visible: a hidden page may already be frozen by the
-      // platform (mobile PWAs especially), unable to receive from the wire or
-      // to display (`new Notification` throws on mobile) — claiming ownership
-      // there swallows the push entirely. Hidden pages hand presentation back
-      // to the service worker.
-      const owns = isForegroundNotifyReady() && document.visibilityState === "visible";
-      port.postMessage({ owns });
-    };
-    navigator.serviceWorker?.addEventListener("message", answerNotificationOwnerQuery);
-
     return () => {
+      mounted = false;
       unregister();
       removeTabAttentionHandlers();
-      navigator.serviceWorker?.removeEventListener("message", answerNotificationOwnerQuery);
+      navigator.serviceWorker?.removeEventListener("message", answerPushPresentationQuery);
+      navigator.serviceWorker?.removeEventListener("message", answerWorkerClaim);
     };
-  }, [user]);
+  }, [user, notificationSettingsReady]);
 }

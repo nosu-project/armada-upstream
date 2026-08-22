@@ -34,6 +34,7 @@ import { MetadataDocSchema } from "@/lib/schemas";
 import {
   SETTINGS_DTAGS,
   SETTINGS_KIND,
+  hasMigratedKeys,
   settingsDTag,
   settingsDocForDTag,
 } from "@/lib/settingsDocs";
@@ -62,9 +63,11 @@ import {
   KIND_RELAY_LIST,
   parseRelayList,
   queryExplicitRelays,
+  queryExplicitRelaysWithStatus,
   relayListIsNewerThanMetadata,
   uniqueRelayUrls,
 } from "@/lib/nip65";
+import { markNotificationSettingsReady } from "@/lib/notificationSettingsAuthority";
 import { RELAY_LIST_DISCOVERY_RELAYS } from "@/lib/platform";
 
 import type { NostrEvent } from "@nostrify/nostrify";
@@ -481,7 +484,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
             authors: [pubkey],
             "#d": SETTINGS_DTAGS,
           };
-          const events = await queryExplicitRelays(
+          const settingsRead = await queryExplicitRelaysWithStatus(
             nostr,
             accountRelays,
             [
@@ -494,6 +497,11 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
             ],
             stepSignal(),
           );
+          const events = settingsRead.events;
+          const expectedSettingsRelays = uniqueRelayUrls(accountRelays);
+          const settingsAbsenceAuthoritative = expectedSettingsRelays.length > 0
+            && settingsRead.failed.length === 0
+            && settingsRead.answered.length === expectedSettingsRelays.length;
 
           // Hydrate before SyncGate opens so a fresh device can draw restored
           // rows immediately. The helper caches successful decryptions, so the
@@ -528,11 +536,13 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
             }
           }
 
+          let legacyNotificationsPresent = false;
           const event = newestByDTag.get(settingsDTag("metadata"));
           if (event?.content) {
             const decrypted = await user.signer.nip44.decrypt(pubkey, event.content);
             const parsed = MetadataDocSchema.safeParse(JSON.parse(decrypted));
             if (parsed.success && !cancelled) {
+              legacyNotificationsPresent = hasMigratedKeys(parsed.data, "notifications");
               // Fold this run's canonical relay reads (NIP-65 bootstrap, and
               // the standard 10007/10050/10063 lists) over the NIP-78 blob so
               // the seeded config already reflects them.
@@ -588,6 +598,19 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
                 }));
               }
             }
+          }
+
+          // An empty notifications document is authoritative only after every
+          // declared self-state relay reached EOSE. If a split or legacy
+          // document exists, useConfigDocSync marks readiness only after that
+          // exact version has actually been folded into AppConfig.
+          if (
+            !cancelled
+            && settingsAbsenceAuthoritative
+            && !newestByDTag.has(settingsDTag("notifications"))
+            && !legacyNotificationsPresent
+          ) {
+            markNotificationSettingsReady(pubkey);
           }
         }
       } catch {

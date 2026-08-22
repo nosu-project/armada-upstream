@@ -67,6 +67,8 @@ export interface SwConcordStream {
    * carried per stream because that is the flat shape the config already uses.
    */
   banned?: string[];
+  /** Drop non-mention messages after decrypting this encrypted stream. */
+  mentionOnly?: boolean;
 }
 
 export interface SwPushConfig {
@@ -80,6 +82,22 @@ export interface SwPushConfig {
   knownConversations?: string[];
   /** Peers whose presence suppresses their whole DM conversation. */
   mutedPeers?: string[];
+  /** Global DM fallback when a conversation has no explicit level. */
+  directMessages?: boolean;
+  /** Explicit per-conversation notification levels, keyed by canonical DM key. */
+  dmLevels?: Record<string, "all" | "mentions" | "nothing">;
+  /**
+   * Whether the DM policy, peer roster and decrypt key in this snapshot were
+   * authoritative. Explicit `false` suppresses that plane; omission keeps
+   * configs sealed by older clients backward-compatible.
+   */
+  dmReady?: boolean;
+  /**
+   * Whether the Concord stream set in this snapshot was authoritative.
+   * Explicit `false` suppresses that plane; omission means ready for legacy
+   * configs written before per-plane readiness existed.
+   */
+  concordReady?: boolean;
   /** Decrypt key (hex). Present for nsec logins only. */
   sk?: string;
   /**
@@ -93,18 +111,23 @@ function pushConfigUrl(): string {
   return new URL(PUSH_CONFIG_PATH, location.origin).href;
 }
 
-/** Write (replace) the worker's push config, sealed at rest. No-op where
- * Cache/crypto is absent. */
-export async function writeSwPushConfig(config: SwPushConfig): Promise<void> {
-  if (typeof caches === "undefined" || typeof location === "undefined") return;
+/**
+ * Write (replace) the worker's push config, sealed at rest.
+ *
+ * The boolean is load-bearing for endpoint activation: the page must not lift
+ * its worker kill switch after a Cache/WebCrypto failure left no enforceable
+ * current-account policy behind.
+ */
+export async function writeSwPushConfig(config: SwPushConfig): Promise<boolean> {
+  if (typeof caches === "undefined" || typeof location === "undefined") return false;
   try {
     const sealed = await sealConfig(config);
     const cache = await caches.open(PUSH_STATE_CACHE);
     // Store the raw ciphertext bytes; the worker reads them back via arrayBuffer.
     await cache.put(pushConfigUrl(), new Response(sealed));
+    return true;
   } catch {
-    // Cache/WebCrypto unavailable (private mode / unsupported) — the worker
-    // falls back to the generic wake-up.
+    return false;
   }
 }
 

@@ -4,19 +4,38 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { usePushWatchSet } from "@/hooks/usePushWatchSet";
+import { registerBeforeAccountExit } from "@/lib/beforeAccountExit";
+import { installCrossTabAccountExit } from "@/lib/crossTabAccountExit";
 import { clearSwPushConfig, writeSwPushConfig } from "@/lib/swPushConfig";
-import { clearPushDisabledFlag, writePushDisabledFlag } from "@/lib/swPushDisabled";
+import {
+  activateRegisteredWebPush,
+  acquireWebPushSubscription,
+  finishWebPushAccountExit,
+  matchesWebPushServerKey,
+  retireWebPushEndpoint,
+} from "@/lib/webPushEndpoint";
 import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
 import type { PushPrefs, UsePushNotificationsReturn } from "@/lib/pushPrefs";
 import {
+  completePushIdMigration,
   loadPushIntent,
-  loadRegisteredPushIds,
+  loadPushRegistrationState,
+  pushInstallationId,
   savePushIntent,
   savePushPrefs,
-  saveRegisteredPushIds,
+  savePushRegistrationState,
+  type PushRegistryScope,
 } from "@/lib/pushRegistry";
+import {
+  LatestSerialRunner,
+  mergePushReplacementSpec,
+  reconcilePushRegistrations,
+} from "@/lib/pushRegistration";
 import { NostrPushClient, type PushRelayPool, type PushSigner } from "@/lib/nostrPush";
-import { scopePushSubscriptionId } from "@/lib/pushSubscriptions";
+import {
+  scopePushSubscriptionId,
+  type PushSubscriptionSpec,
+} from "@/lib/pushSubscriptions";
 import {
   NOSTR_PUSH_PUBKEY,
   NOSTR_PUSH_RELAYS,
@@ -66,16 +85,6 @@ function urlBase64ToBuffer(base64String: string): ArrayBuffer {
   return buffer;
 }
 
-/** Whether an existing subscription was made against `vapidKey`. */
-function matchesServerKey(sub: PushSubscription, vapidKey: ArrayBuffer): boolean {
-  const current = sub.options?.applicationServerKey;
-  if (!current) return true;
-  const a = new Uint8Array(current);
-  const b = new Uint8Array(vapidKey);
-  if (a.length !== b.length) return false;
-  return a.every((byte, i) => byte === b[i]);
-}
-
 function pushDomain(): string {
   return typeof location !== "undefined" ? location.hostname : "";
 }
@@ -84,6 +93,273 @@ interface PreparedPush {
   registration: ServiceWorkerRegistration;
   key: ArrayBuffer;
   options: PushSubscriptionOptionsInit;
+}
+
+export interface WebPushSyncJob {
+  kind: "sync";
+  client: NostrPushClient;
+  pubkey: string;
+  domain: string;
+  installation: string;
+  prepared: PreparedPush;
+  specs: PushSubscriptionSpec[];
+  /** False for an additive cold-load snapshot that must never prune. */
+  authoritative: boolean;
+  /** Whether the account's notification policy (NIP-78/local opt-out) is trusted. */
+  notificationSettingsReady: boolean;
+  groupPlaneReady: boolean;
+  dmPlaneReady: boolean;
+  concordPlaneReady: boolean;
+  /** Seal this account's policy/keys before its endpoint may be exposed. */
+  prepareConfig: (isCurrent: () => boolean) => Promise<void>;
+  gestureSubscription?: PushSubscription;
+}
+
+interface WebPushDeleteJob {
+  kind: "delete";
+  client: NostrPushClient;
+  pubkey: string;
+  domain: string;
+  installation: string;
+  /** Legacy logical ids known by the outgoing snapshot. */
+  legacyIds: string[];
+}
+
+type WebPushMutationJob = WebPushSyncJob | WebPushDeleteJob;
+
+export interface WebPushMutationResult {
+  /** False when a newer generation superseded this mutation. */
+  completed: boolean;
+  /** The worker kill switch was safely lifted for this endpoint. */
+  activated: boolean;
+  /** Additive records that did not fit/reach the gateway and need a retry. */
+  deferredRegistrations: string[];
+}
+
+function registryScopeOf(job: WebPushMutationJob): PushRegistryScope {
+  return {
+    pubkey: job.pubkey,
+    domain: job.domain,
+    installation: job.installation,
+  };
+}
+
+/** One serialized, generation-aware gateway reconciliation. */
+export async function mutateWebPushRegistrations(
+  job: WebPushMutationJob,
+  isCurrent: () => boolean,
+): Promise<WebPushMutationResult> {
+  // A partial watch set may be additive, but its policy is not. Until the
+  // NIP-78/settings authorities represented in the sealed worker config are
+  // trusted, registering default-derived filters and lifting the account-exit
+  // kill switch could expose notifications the account explicitly disabled.
+  if (job.kind === "sync" && !job.notificationSettingsReady) {
+    return { completed: false, activated: false, deferredRegistrations: [] };
+  }
+  const scope = registryScopeOf(job);
+  const specs = job.kind === "sync" ? job.specs : [];
+  const legacyIds = job.kind === "sync"
+    ? [...new Set(specs.flatMap((spec) => [spec.id, ...(spec.replaces ?? [])]))]
+      .map((logicalId) => scopePushSubscriptionId(logicalId, job.pubkey, job.domain))
+    : job.legacyIds;
+  const state = loadPushRegistrationState(scope, legacyIds);
+
+  let pushSubscription:
+    | {
+      type: "web";
+      endpoint: string;
+      p256dh_key: string;
+      auth_key: string;
+    }
+    | undefined;
+  let browserSubscription: PushSubscription | undefined;
+
+  if (job.kind === "sync") {
+    const { registration, key, options } = job.prepared;
+    const sub = await acquireWebPushSubscription(
+      registration,
+      key,
+      options,
+      job.gestureSubscription,
+      isCurrent,
+    );
+    if (!sub || !isCurrent()) {
+      return { completed: false, activated: false, deferredRegistrations: [] };
+    }
+    browserSubscription = sub;
+
+    const json = sub.toJSON();
+    pushSubscription = {
+      type: "web",
+      endpoint: sub.endpoint,
+      p256dh_key: json.keys?.p256dh ?? "",
+      auth_key: json.keys?.auth ?? "",
+    };
+  }
+
+  const scopedSpecs = specs.map((spec) => ({
+    ...spec,
+    id: scopePushSubscriptionId(
+      spec.id,
+      job.pubkey,
+      job.domain,
+      job.installation,
+    ),
+  }));
+  const replacementSpecs = new Map<string, PushSubscriptionSpec>();
+  for (const logicalId of new Set(specs.flatMap((spec) => spec.replaces ?? []))) {
+    replacementSpecs.set(
+      logicalId,
+      mergePushReplacementSpec(
+        logicalId,
+        specs.filter((spec) => spec.replaces?.includes(logicalId)),
+      ),
+    );
+  }
+
+  const result = await reconcilePushRegistrations({
+    desired: scopedSpecs.map((spec, index) => {
+      const registerSpecAs = async (source: PushSubscriptionSpec, id: string) => {
+        if (!pushSubscription) throw new Error("Missing Web Push subscription");
+        await job.client.registerSubscription({
+          subscription_id: id,
+          domain: job.domain,
+          filter: source.filter,
+          relays: source.relays,
+          notification: source.notification,
+          push_subscription: pushSubscription,
+        });
+      };
+      const registerAs = (id: string) => registerSpecAs(spec, id);
+      const fallbackLogicalId = spec.replaces?.[0];
+      const fallbackSpec = fallbackLogicalId
+        ? replacementSpecs.get(fallbackLogicalId)
+        : undefined;
+      const fallbackId = fallbackLogicalId
+        ? scopePushSubscriptionId(
+          fallbackLogicalId,
+          job.pubkey,
+          job.domain,
+          job.installation,
+        )
+        : undefined;
+      return {
+        id: spec.id,
+        replaces: [
+          // Logical filter migrations (notably flat NIP-29 ids → exact
+          // per-relay ids) happen even after the web-install migration latch.
+          ...(spec.replaces ?? []).map((logicalId) => scopePushSubscriptionId(
+            logicalId,
+            job.pubkey,
+            job.domain,
+            job.installation,
+          )),
+          ...(!state.legacyMigrationComplete
+            ? [specs[index]!.id, ...(spec.replaces ?? [])].map((logicalId) =>
+              scopePushSubscriptionId(logicalId, job.pubkey, job.domain))
+            : []),
+        ],
+        register: () => registerAs(spec.id),
+        restoreReplaced: registerAs,
+        ...(fallbackSpec && fallbackId ? {
+          replacementGroup: {
+            key: fallbackId,
+            fallbackId,
+            fallbackIds: [
+              fallbackId,
+              ...specs
+                .filter((candidate) => candidate.replaces?.includes(fallbackSpec.id))
+                .map((candidate) => scopePushSubscriptionId(
+                  candidate.id,
+                  job.pubkey,
+                  job.domain,
+                  job.installation,
+                )),
+              ...(!state.legacyMigrationComplete ? [scopePushSubscriptionId(
+                fallbackSpec.id,
+                job.pubkey,
+                job.domain,
+              )] : []),
+            ],
+            restoreFallback: (id: string) => registerSpecAs(fallbackSpec, id),
+          },
+        } : {}),
+      };
+    }),
+    trackedIds: state.ids,
+    deleteRegistration: (id) => job.client.deleteSubscription(id, job.domain),
+    persistTrackedIds: (ids) => savePushRegistrationState(scope, {
+      ids,
+      legacyMigrationComplete: state.legacyMigrationComplete,
+    }),
+    isCurrent,
+    allowPrune: job.kind === "delete" || job.authoritative,
+    ...(job.kind === "sync" ? {
+      canPruneId: (id: string) => {
+        if (id.startsWith("armada-groups")) return job.groupPlaneReady;
+        if (id.startsWith("armada-dm")) return job.dmPlaneReady;
+        if (id.startsWith("armada-c2")) return job.concordPlaneReady;
+        return false;
+      },
+    } : {}),
+  });
+
+  if (!result.completed) {
+    return { completed: false, activated: false, deferredRegistrations: [] };
+  }
+  if (result.failedDeletions.length > 0) {
+    throw new Error(
+      `Failed to remove ${result.failedDeletions.length} stale push subscription(s)`,
+    );
+  }
+
+  // An incomplete cold-load pass may add installation-scoped records, but it
+  // cannot prove that the legacy/shared or previously tracked records are
+  // stale. Completing migration would forget the very ids a later full pass
+  // needs to delete.
+  if (job.kind === "sync" && !job.authoritative) {
+    savePushRegistrationState(scope, {
+      ids: result.trackedIds,
+      legacyMigrationComplete: state.legacyMigrationComplete,
+    });
+  } else if (!state.legacyMigrationComplete) {
+    completePushIdMigration(scope, result.trackedIds);
+  } else {
+    savePushRegistrationState(scope, {
+      ids: result.trackedIds,
+      legacyMigrationComplete: true,
+    });
+  }
+
+  // Account exit leaves a durable deny-by-default flag behind. A successful
+  // partial registration may activate useful current-account watches, but only
+  // after endpoint retirement is proven and this account's sealed config has
+  // landed. Full watch authority remains solely the prune decision above.
+  let activated = false;
+  if (job.kind === "sync" && browserSubscription && result.registeredAny) {
+    const activationAllowed = await activateRegisteredWebPush({
+      subscription: browserSubscription,
+      registered: true,
+      prepareConfig: () => job.prepareConfig(isCurrent),
+      isCurrent,
+    });
+    if (!activationAllowed) {
+      if (isCurrent()) {
+        throw new Error(
+          "The previous account's push endpoint could not be retired safely. Disable and re-enable notifications to retry.",
+        );
+      }
+      return { completed: false, activated: false, deferredRegistrations: [] };
+    }
+    // Avoid claiming activation merely because no registration was attempted:
+    // a prior account-exit kill switch remains intentional in that case.
+    activated = true;
+  }
+  return {
+    completed: true,
+    activated,
+    deferredRegistrations: result.deferredRegistrations ?? [],
+  };
 }
 
 async function pushPermission(prepared: PreparedPush): Promise<NotificationPermission> {
@@ -117,6 +393,15 @@ export function useNostrPush(): UsePushNotificationsReturn {
   const [prepareNonce, setPrepareNonce] = useState(0);
   const prefs = config.pushPrefs;
   const preparedRef = useRef<PreparedPush | undefined>(undefined);
+  /** Once account exit starts, this mounted instance may never write again. */
+  const exitingRef = useRef(false);
+  /** Serialize and expose config writes so exit can clear strictly after them. */
+  const swConfigTailRef = useRef<Promise<void>>(Promise.resolve());
+  const queueSwConfig = useCallback((operation: () => Promise<void>) => {
+    const work = swConfigTailRef.current.then(operation, operation);
+    swConfigTailRef.current = work.catch(() => undefined);
+    return work;
+  }, []);
 
   // The watch set — the same one the Android background service uses, and the
   // one the APNs controller registers (`usePushWatchSet`).
@@ -126,9 +411,103 @@ export function useNostrPush(): UsePushNotificationsReturn {
     dmKnownPeers,
     dmKnownConversationKeys,
     dmMutedPeers,
+    dmLevels,
     dmSk,
-    dmPeersLoading,
+    notificationSettingsReady,
+    dmConfigReady,
+    concordConfigReady,
+    groupPlaneReady,
+    dmPlaneReady,
+    concordPlaneReady,
+    watchSetReady,
   } = usePushWatchSet(prefs);
+  const notificationSettingsReadyRef = useRef(notificationSettingsReady);
+  notificationSettingsReadyRef.current = notificationSettingsReady;
+
+  /**
+   * Seal one current-account config snapshot. The generation check is repeated
+   * before and inside the serialized write so neither a newer watch snapshot
+   * nor account exit can let stale keys land last.
+   */
+  const writeCurrentSwConfig = useCallback(async (
+    isCurrent: () => boolean = () => true,
+  ) => {
+    if (!user
+      || !notificationSettingsReadyRef.current
+      || exitingRef.current
+      || !isCurrent()) {
+      throw new Error("Push session changed before its config could be written");
+    }
+
+    // Mirror useKnownDmPeers' `mine` dimension. This local-store enhancement
+    // is bounded: a wedged IndexedDB must not indefinitely hold the endpoint's
+    // kill switch or prevent otherwise-valid current-account registrations.
+    let mineConversationKeys: string[] = [];
+    try {
+      const rows = await Promise.race([
+        queryDm17Conversations(user.pubkey),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 3_000)),
+      ]);
+      if (rows) {
+        const muted = new Set(dmMutedPeers);
+        mineConversationKeys = rows
+          .filter((row) => row.mine && row.peers.every((peer) => !muted.has(peer)))
+          .map((row) => row.key);
+      }
+    } catch {
+      // Store unavailable — the durable synced/pinned roster still applies.
+    }
+    if (!notificationSettingsReadyRef.current || exitingRef.current || !isCurrent()) {
+      throw new Error("Push session changed before its config could be written");
+    }
+
+    await queueSwConfig(async () => {
+      if (!notificationSettingsReadyRef.current || exitingRef.current || !isCurrent()) {
+        throw new Error("Push session changed before its config could be written");
+      }
+      const written = await writeSwPushConfig({
+        policy: prefs.dmRequests,
+        self: user.pubkey,
+        knownPeers: dmKnownPeers,
+        knownConversations: [
+          ...new Set([...dmKnownConversationKeys, ...mineConversationKeys]),
+        ].sort(),
+        mutedPeers: dmMutedPeers,
+        dmReady: dmConfigReady,
+        directMessages: prefs.directMessages,
+        dmLevels,
+        concordReady: concordConfigReady,
+        concord: concord.flatMap((sub) =>
+          sub.streams.map((s) => ({
+            pk: s.pk,
+            convKey: s.convKey,
+            epoch: s.epoch,
+            communityId: sub.communityId,
+            channelId: sub.channelId,
+            banned: sub.banned,
+            mentionOnly: sub.mentionOnly,
+          }))
+        ),
+        ...(dmSk ? { sk: dmSk } : {}),
+      });
+      if (!written) {
+        throw new Error("The service worker notification policy could not be stored");
+      }
+    });
+  }, [
+    user,
+    prefs.dmRequests,
+    prefs.directMessages,
+    dmKnownPeers,
+    dmKnownConversationKeys,
+    dmMutedPeers,
+    dmConfigReady,
+    dmLevels,
+    concord,
+    concordConfigReady,
+    dmSk,
+    queueSwConfig,
+  ]);
 
   // Keep the service worker's push config current — the DM policy + known set
   // for every enabled web-push session, the decrypt key for nsec logins, and
@@ -151,61 +530,22 @@ export function useNostrPush(): UsePushNotificationsReturn {
     // every later push degraded to the generic wake-up until a fully
     // successful load happened to rewrite it.
     if (!supported || !user || !loadPushIntent()) {
-      void clearSwPushConfig();
+      void queueSwConfig(clearSwPushConfig).catch(() => undefined);
       return;
     }
+    if (exitingRef.current) return;
     // Still preparing: leave the existing config for the worker to use.
     if (!enabled) return;
-    // Wait for the full established-peer roster: sealing while it loads would freeze
-    // an empty known set on disk, reclassifying every known conversation as a
-    // request until the next rewrite.
-    if (dmPeersLoading) return;
+    // Only the authorities represented in this file matter. A NIP-29 group
+    // list or DM-relay outage may block gateway pruning, but must not pin old
+    // decrypt keys/policy when the DM roster and Concord folds are complete.
+    if (!notificationSettingsReady) return;
     let cancelled = false;
-    (async () => {
-      // Mirror useKnownDmPeers' `mine` dimension: a conversation the viewer
-      // has authored a message in is known even where `acceptedDms` can't say
-      // so (it is device-local, so a fresh install starts it empty while the
-      // synced history still shows the viewer's own messages).
-      let mineConversationKeys: string[] = [];
-      try {
-        const rows = await queryDm17Conversations(user.pubkey);
-        // Preserve exact group identity. Flattening this to participants would
-        // make a person trusted in unrelated 1:1 DMs merely because the viewer
-        // once wrote in a group they shared.
-        const muted = new Set(dmMutedPeers);
-        mineConversationKeys = rows
-          .filter((row) => row.mine && row.peers.every((peer) => !muted.has(peer)))
-          .map((row) => row.key);
-      } catch {
-        // Store unavailable — the durable synced/pinned roster still applies.
+    writeCurrentSwConfig(() => !cancelled).catch((err) => {
+      if (!cancelled && !exitingRef.current) {
+        console.warn("[nostr-push] writing worker config failed:", err);
       }
-      if (cancelled) return;
-      await writeSwPushConfig({
-        policy: prefs.dmRequests,
-        self: user.pubkey,
-        knownPeers: dmKnownPeers,
-        knownConversations: [
-          ...new Set([...dmKnownConversationKeys, ...mineConversationKeys]),
-        ].sort(),
-        mutedPeers: dmMutedPeers,
-        // One entry per watched channel's CURRENT epoch. The conversation key
-        // reads that channel at that epoch and nothing else — the wrap-signing
-        // secret stays in the page (see concordNotifications.ts) — and the set
-        // goes stale by itself at the next rekey, which `concord` changing
-        // rewrites.
-        concord: concord.flatMap((sub) =>
-          sub.streams.map((s) => ({
-            pk: s.pk,
-            convKey: s.convKey,
-            epoch: s.epoch,
-            communityId: sub.communityId,
-            channelId: sub.channelId,
-            banned: sub.banned,
-          }))
-        ),
-        ...(dmSk ? { sk: dmSk } : {}),
-      });
-    })();
+    });
     return () => {
       cancelled = true;
     };
@@ -213,13 +553,9 @@ export function useNostrPush(): UsePushNotificationsReturn {
     supported,
     user,
     enabled,
-    dmPeersLoading,
-    prefs.dmRequests,
-    dmKnownPeers,
-    dmKnownConversationKeys,
-    dmMutedPeers,
-    dmSk,
-    concord,
+    notificationSettingsReady,
+    queueSwConfig,
+    writeCurrentSwConfig,
   ]);
 
   // ── Sync ───────────────────────────────────────────────────────────────────
@@ -234,11 +570,27 @@ export function useNostrPush(): UsePushNotificationsReturn {
     });
   }, [supported, user, nostr]);
 
+  const installation = useMemo(() => pushInstallationId(), []);
+  const mutationRunnerRef = useRef<
+    LatestSerialRunner<WebPushMutationJob, WebPushMutationResult> | null
+  >(null);
+  if (!mutationRunnerRef.current) {
+    mutationRunnerRef.current = new LatestSerialRunner(mutateWebPushRegistrations);
+  }
+  const mutationRunner = mutationRunnerRef.current;
+
+  // Supersede a registration/config transaction as soon as policy authority
+  // is lost. `writeCurrentSwConfig` also reads the ref immediately
+  // before its serialized write, closing the async gap before this effect.
+  useEffect(() => {
+    if (!notificationSettingsReady) mutationRunner.invalidate();
+  }, [notificationSettingsReady, mutationRunner]);
+
   // Prepare the service worker and public VAPID key before showing an enable
   // action. PushManager.subscribe() has to run directly from the user's tap on
   // iOS; doing this RPC first would consume that transient activation.
   useEffect(() => {
-    if (!supported || !client || !user) {
+    if (!supported || !client || !user || exitingRef.current) {
       preparedRef.current = undefined;
       setReady(false);
       return;
@@ -288,14 +640,14 @@ export function useNostrPush(): UsePushNotificationsReturn {
       // Remove it during preparation so the next user tap can subscribe as its
       // first permission-sensitive operation.
       const existing = await registration.pushManager.getSubscription();
-      if (existing && !matchesServerKey(existing, key)) {
+      if (existing && !matchesWebPushServerKey(existing, key)) {
         await existing.unsubscribe().catch(() => false);
       }
 
       const prepared = { registration, key, options };
       const nextPermission = await pushPermission(prepared);
       const current = await registration.pushManager.getSubscription();
-      if (cancelled) return;
+      if (cancelled || exitingRef.current) return;
       preparedRef.current = prepared;
       setPermission(nextPermission);
       setEnabled(Boolean(current && nextPermission === "granted" && loadPushIntent()));
@@ -313,67 +665,102 @@ export function useNostrPush(): UsePushNotificationsReturn {
     };
   }, [supported, client, user, prepareNonce]);
 
-  /** Ensure a current browser subscription, register the specs, prune stale. */
+  /** Queue one snapshot; incomplete snapshots are strictly additive. */
   const sync = useCallback(async (gestureSubscription?: PushSubscription) => {
     const prepared = preparedRef.current;
     if (!client || !user || !prepared) throw new Error("Push not ready");
-    const domain = pushDomain();
-    const { registration, key, options } = prepared;
+    if (exitingRef.current || !notificationSettingsReady) return undefined;
+    // Empty while false is "not loaded", never an instruction to replace or
+    // prune. A non-empty partial set is still useful: register those records
+    // now, and retain every prior id until readiness makes deletion safe.
+    if (!watchSetReady
+      && specs.length === 0
+      && !groupPlaneReady
+      && !dmPlaneReady
+      && !concordPlaneReady) return undefined;
+    if (exitingRef.current || !notificationSettingsReady) return undefined;
+    return mutationRunner.run({
+      kind: "sync",
+      client,
+      pubkey: user.pubkey,
+      domain: pushDomain(),
+      installation,
+      prepared,
+      specs,
+      authoritative: watchSetReady,
+      notificationSettingsReady,
+      groupPlaneReady,
+      dmPlaneReady,
+      concordPlaneReady,
+      prepareConfig: writeCurrentSwConfig,
+      ...(gestureSubscription ? { gestureSubscription } : {}),
+    });
+  }, [
+    client,
+    user,
+    notificationSettingsReady,
+    groupPlaneReady,
+    dmPlaneReady,
+    concordPlaneReady,
+    watchSetReady,
+    mutationRunner,
+    installation,
+    specs,
+    writeCurrentSwConfig,
+  ]);
 
-    let sub = gestureSubscription ?? await registration.pushManager.getSubscription();
-    if (sub && !matchesServerKey(sub, key)) {
-      try {
-        await sub.unsubscribe();
-      } catch {
-        // ignore
-      }
-      sub = null;
-    }
-    if (!sub) {
-      sub = await registration.pushManager.subscribe(options);
-    }
+  /** Remove this account/install's known records in the same serial lane. */
+  const deleteGatewayRecords = useCallback(async () => {
+    if (!client || !user) return;
+    await mutationRunner.runExclusive({
+      kind: "delete",
+      client,
+      pubkey: user.pubkey,
+      domain: pushDomain(),
+      installation,
+      legacyIds: specs.map((spec) =>
+        scopePushSubscriptionId(spec.id, user.pubkey, pushDomain())),
+    });
+  }, [client, user, mutationRunner, installation, specs]);
 
-    // Registering below is the moment pushes can resume; lift the worker's
-    // kill switch from any previous disable first, or it would tear this
-    // fresh subscription down on the first push.
-    await clearPushDisabledFlag();
-
-    const json = sub.toJSON();
-    const pushSubscription = {
-      type: "web" as const,
-      endpoint: sub.endpoint,
-      p256dh_key: json.keys?.p256dh ?? "",
-      auth_key: json.keys?.auth ?? "",
-    };
-
-    // nostr-push indexes subscription_id globally, not by owner or domain.
-    // Scope Armada's readable logical ids so one user/origin cannot occupy the
-    // id another user/origin needs.
-    const scopedSpecs = specs.map((spec) => ({
-      ...spec,
-      id: scopePushSubscriptionId(spec.id, user.pubkey, domain),
-    }));
-
-    for (const spec of scopedSpecs) {
-      await client.registerSubscription({
-        subscription_id: spec.id,
-        domain,
-        filter: spec.filter,
-        relays: spec.relays,
-        notification: spec.notification,
-        push_subscription: pushSubscription,
+  // Account switching hard-reloads, and final logout purges the registry. Both
+  // happen too quickly for a render-driven cleanup, so register the outgoing
+  // signer/session with the shared pre-exit choke point.
+  useEffect(() => {
+    if (!user) return;
+    return registerBeforeAccountExit(async () => {
+      // This hook remains mounted while the account switcher waits for its
+      // bounded cleanup. Stop every render-driven writer synchronously before
+      // the first await, and supersede a queued/running registration snapshot.
+      exitingRef.current = true;
+      mutationRunner.invalidate();
+      // Local safety comes before the bounded network cleanup on EVERY exit.
+      // A failed old-account DELETE can then target only a retired endpoint,
+      // and the worker stays deny-by-default until the next account finishes
+      // an authoritative registration.
+      await finishWebPushAccountExit({
+        registration: preparedRef.current?.registration,
+        clearConfig: () => queueSwConfig(clearSwPushConfig),
+        deleteGatewayRecords,
       });
-    }
+    });
+  }, [user, mutationRunner, queueSwConfig, deleteGatewayRecords]);
 
-    // Prune server records we no longer want (left group, muted, logged-out DM).
-    const currentIds = new Set(scopedSpecs.map((s) => s.id));
-    for (const id of loadRegisteredPushIds()) {
-      if (!currentIds.has(id)) {
-        await client.deleteSubscription(id, domain).catch(() => {});
-      }
-    }
-    saveRegisteredPushIds([...currentIds]);
-  }, [client, user, specs]);
+  // The active-account marker is origin-global. A switch in another tab does
+  // not reload this document, so without this fence its old signer can rewrite
+  // the shared worker config and clear the shared kill switch behind the new
+  // account. The initiating tab is the sole cleanup leader; followers only
+  // fence and reload, never tear down the incoming account's shared endpoint.
+  useEffect(() => {
+    if (!user) return;
+    return installCrossTabAccountExit({
+      pubkey: user.pubkey,
+      fence: () => {
+        exitingRef.current = true;
+        mutationRunner.invalidate();
+      },
+    });
+  }, [user, mutationRunner]);
 
   // Auto-(re)sync on every load and whenever the watch set changes: opt-out, so
   // as long as the user intends push, permission is granted, and there is
@@ -381,40 +768,63 @@ export function useNostrPush(): UsePushNotificationsReturn {
   // signature so an unrelated re-render doesn't re-PUT. Transient failures retry
   // with backoff.
   const syncSig = useMemo(
-    () => JSON.stringify({ domain: pushDomain(), pubkey: user?.pubkey, specs }),
-    [user?.pubkey, specs],
+    () => JSON.stringify({
+      domain: pushDomain(),
+      pubkey: user?.pubkey,
+      notificationSettingsReady,
+      dmConfigReady,
+      concordConfigReady,
+      groupPlaneReady,
+      dmPlaneReady,
+      concordPlaneReady,
+      authoritative: watchSetReady,
+      specs,
+    }),
+    [
+      user?.pubkey,
+      notificationSettingsReady,
+      dmConfigReady,
+      concordConfigReady,
+      groupPlaneReady,
+      dmPlaneReady,
+      concordPlaneReady,
+      watchSetReady,
+      specs,
+    ],
   );
   const lastSynced = useRef<string | null>(null);
   const retry = useRef(0);
-  // Whether this SESSION has registered a non-empty set. Only half the signal:
-  // see the effect below, which also consults the persisted registration list.
-  const hadSpecs = useRef(false);
   const [nonce, setNonce] = useState(0);
   useEffect(() => {
     if (!supported || !ready || !client || !user) return;
+    if (exitingRef.current) return;
     if (permission !== "granted") return;
     if (!loadPushIntent()) return;
-    // Empty specs is ambiguous: it means "still loading" on a cold start, and
-    // "was watching, now nothing" once something has been registered — and only
-    // the second must run, so `sync` prunes the stale server records instead of
-    // leaving the gateway pushing for a community that is (say) now paused.
-    //
-    // The session ref alone can't tell them apart across a RESTART, which is
-    // exactly when it matters: registrations are server-side and outlive the
-    // tab, so a reload into a still-empty spec set would skip the prune forever
-    // and the gateway would keep pushing. The persisted registration list is
-    // the durable half of the answer — if it holds ids, something is registered
-    // and the prune is owed regardless of what this session has seen.
-    if (specs.length === 0 && !hadSpecs.current && loadRegisteredPushIds().length === 0) return;
-    if (specs.length > 0) hadSpecs.current = true;
+    if (!notificationSettingsReady) return;
+    if (!watchSetReady
+      && specs.length === 0
+      && !groupPlaneReady
+      && !dmPlaneReady
+      && !concordPlaneReady) return;
     if (lastSynced.current === syncSig) return;
 
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     (async () => {
       try {
-        await sync();
-        if (cancelled) return;
+        const outcome = await sync();
+        if (cancelled || !outcome?.completed) return;
+        if (outcome.activated) setEnabled(true);
+        if (outcome.deferredRegistrations.length > 0) {
+          if (retry.current < 3) {
+            const delay = 10_000 * 2 ** retry.current;
+            retry.current += 1;
+            timer = setTimeout(() => setNonce((n) => n + 1), delay);
+          } else {
+            setError("Some background notification watches could not be refreshed. Check your connection and retry.");
+          }
+          return;
+        }
         lastSynced.current = syncSig;
         retry.current = 0;
         setError(undefined);
@@ -435,13 +845,29 @@ export function useNostrPush(): UsePushNotificationsReturn {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [supported, ready, permission, client, user, specs.length, syncSig, sync, nonce]);
+  }, [
+    supported,
+    ready,
+    permission,
+    client,
+    user,
+    notificationSettingsReady,
+    groupPlaneReady,
+    dmPlaneReady,
+    concordPlaneReady,
+    watchSetReady,
+    specs.length,
+    syncSig,
+    sync,
+    nonce,
+  ]);
 
   // A rotated browser subscription (SW pushsubscriptionchange → message) must
   // be re-registered with the server.
   useEffect(() => {
     if (!supported || !ready) return;
     const onMessage = (event: MessageEvent) => {
+      if (exitingRef.current) return;
       if (event.data?.type !== "armada-push-changed") return;
       lastSynced.current = null;
       retry.current = 0;
@@ -458,6 +884,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
     if (!supported || !ready) return;
     let cancelled = false;
     const recheck = async () => {
+      if (exitingRef.current) return;
       if (document.visibilityState !== "visible") return;
       const prepared = preparedRef.current;
       if (!prepared) return;
@@ -466,7 +893,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
           pushPermission(prepared),
           prepared.registration.pushManager.getSubscription(),
         ]);
-        if (cancelled) return;
+        if (cancelled || exitingRef.current) return;
         setPermission(nextPermission);
         setEnabled(Boolean(existing && nextPermission === "granted" && loadPushIntent()));
         if (!existing && nextPermission === "granted" && loadPushIntent()) {
@@ -491,7 +918,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
 
   const enable = useCallback(async () => {
     const prepared = preparedRef.current;
-    if (!supported || !ready || !user || !prepared) return;
+    if (!supported || !ready || !user || !prepared || exitingRef.current) return;
     setBusy(true);
     setError(undefined);
 
@@ -505,9 +932,27 @@ export function useNostrPush(): UsePushNotificationsReturn {
       setPermission("granted");
       savePushIntent(true);
       lastSynced.current = null;
-      await sync(subscription);
-      lastSynced.current = syncSig;
-      setEnabled(true);
+      const outcome = await sync(subscription);
+      if (outcome?.completed) {
+        if (outcome.deferredRegistrations.length > 0) {
+          // Stable existing records may already be active even though a new
+          // additive id hit quota. Keep that useful endpoint live and schedule
+          // the same bounded retry path without claiming the snapshot synced.
+          if (outcome.activated) setEnabled(true);
+          setError("Background notifications are enabled, but some watches still need to be refreshed.");
+          setNonce((n) => n + 1);
+          return;
+        }
+        lastSynced.current = syncSig;
+        setEnabled(true);
+      } else {
+        // The endpoint exists (the gesture cannot be replayed automatically on
+        // iOS), but no default-derived gateway watch was exposed. Once the
+        // notification document becomes authoritative, the standing sync
+        // effect registers it and activates this endpoint.
+        setEnabled(false);
+        setError("Armada is still restoring your notification settings. Background notifications will finish enabling automatically.");
+      }
     } catch (err) {
       const nextPermission = await pushPermission(prepared).catch(() => permission);
       setPermission(nextPermission);
@@ -524,43 +969,34 @@ export function useNostrPush(): UsePushNotificationsReturn {
     setBusy(true);
     try {
       savePushIntent(false);
-      // Local truth first, where the worker can read it: everything after
-      // this line goes over the network and can fail (or the page can die
-      // mid-teardown), and the worker refuses — and tears down — pushes on
-      // its own while this flag stands. "Off" must not depend on a flaky
-      // gateway honoring the deletes below.
-      await writePushDisabledFlag();
-      const domain = pushDomain();
-      // Delete every server record we registered.
-      if (client) {
-        for (const id of loadRegisteredPushIds()) {
-          await client.deleteSubscription(id, domain).catch(() => {});
-        }
-      }
-      saveRegisteredPushIds([]);
-      try {
-        const reg = preparedRef.current?.registration ?? await navigator.serviceWorker.ready;
-        const sub = await reg.pushManager.getSubscription();
-        if (sub) await sub.unsubscribe();
-      } catch {
-        // ignore
-      }
+      mutationRunner.invalidate();
+      // Retry endpoint retirement even when an earlier account-exit attempt
+      // persisted only `{ success:false }` before timing out. A successful
+      // explicit disable upgrades that durable proof, so the next enable can
+      // recover instead of remaining permanently deny-by-default.
+      await retireWebPushEndpoint(preparedRef.current?.registration);
+      // Serialize after any in-flight sync and keep failed deletes in the
+      // scoped registry for a later retry.
+      await deleteGatewayRecords().catch((err) => {
+        console.warn("[nostr-push] gateway cleanup failed:", err);
+      });
+      await queueSwConfig(clearSwPushConfig).catch(() => undefined);
       lastSynced.current = null;
       setEnabled(false);
     } finally {
       setBusy(false);
     }
-  }, [client]);
+  }, [deleteGatewayRecords, mutationRunner, queueSwConfig]);
 
   const setPrefs = useCallback(
     async (next: PushPrefs) => {
-      savePushPrefs(next);
+      savePushPrefs(next, user?.pubkey);
       updateConfig((current) => ({ ...current, pushPrefs: next }));
       // The specs recompute from `prefs`; force the sync effect to re-run.
       lastSynced.current = null;
       setNonce((n) => n + 1);
     },
-    [updateConfig],
+    [updateConfig, user?.pubkey],
   );
 
   const retrySetup = useCallback(() => {

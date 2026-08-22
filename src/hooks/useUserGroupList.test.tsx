@@ -13,11 +13,12 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   resolveGroupListRead,
+  useUserGroupList,
   useUpdateUserGroupList,
   type UserGroupListQuery,
 } from "@/hooks/useUserGroupList";
@@ -195,6 +196,25 @@ describe("kind 10009 refresh last-good guards", () => {
     const unreadable = listEvent({ createdAt: 201, content: "not-our-ciphertext" });
 
     expect(await resolveGroupListRead([unreadable], { nip44 } as never, held)).toBe(held);
+  });
+
+  it("does not treat a boot-fold seed as wire-authoritative", async () => {
+    let finishWire!: (events: NostrEvent[]) => void;
+    h.query.mockImplementation(() => new Promise<NostrEvent[]>((resolve) => {
+      finishWire = resolve;
+    }));
+    h.readFolded.mockResolvedValue({
+      event: listEvent({ createdAt: 100 }),
+      groups: [],
+      servers: [S1],
+    });
+
+    const view = renderHook(() => useUserGroupList(), { wrapper });
+    await waitFor(() => expect(view.result.current.data?.servers).toEqual([S1]));
+    expect(view.result.current.data?.wireReady).not.toBe(true);
+
+    await act(async () => { finishWire([]); });
+    await waitFor(() => expect(view.result.current.data?.wireReady).toBe(true));
   });
 });
 

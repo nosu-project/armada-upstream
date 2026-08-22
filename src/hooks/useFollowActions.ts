@@ -134,6 +134,10 @@ export function useFollowActions(): UseFollowActionsReturn {
           queryClient.setQueryData<FollowListData>(["follow-list", user.pubkey], {
             event: published,
             pubkeys: contactListPubkeys(published),
+            // A signed local winner is trusted last-good config data, but the
+            // invalidated all-relay read below must settle before it can grant
+            // gateway prune authority.
+            wireReady: false,
           });
 
           // ⑦ Invalidate so the relay copy stays authoritative once it propagates.

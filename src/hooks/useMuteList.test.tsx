@@ -11,10 +11,14 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useMuteUser, useUnmuteUser } from "@/hooks/useMuteList";
+import {
+  useMutedPubkeysSource,
+  useMuteUser,
+  useUnmuteUser,
+} from "@/hooks/useMuteList";
 
 import type { NostrEvent } from "@nostrify/nostrify";
 import type { ReactNode } from "react";
@@ -29,17 +33,29 @@ const h = vi.hoisted(() => ({
   publish: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   readFolded: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   writeFolded: vi.fn<(...args: unknown[]) => Promise<void>>(),
-  user: undefined as unknown,
+  user: undefined as { pubkey: string; signer: { nip44: typeof nip44 } } | undefined,
 }));
 
 vi.mock("@nostrify/react", () => ({
-  useNostr: () => ({ nostr: { group: () => ({ query: h.query }) } }),
+  useNostr: () => ({
+    nostr: {
+      group: () => ({ query: h.query }),
+      relay: () => ({ query: h.query }),
+    },
+  }),
 }));
 vi.mock("@/hooks/useCurrentUser", () => ({
   useCurrentUser: () => ({ user: h.user }),
 }));
 vi.mock("@/hooks/useAppContext", () => ({
-  useAppContext: () => ({ config: { appRelays: ["wss://app.example/"] } }),
+  useAppContext: () => ({
+    config: {
+      useAppRelays: true,
+      appRelays: ["wss://app.example/"],
+      useUserRelays: false,
+      relayMetadata: { relays: [], updatedAt: 0 },
+    },
+  }),
 }));
 vi.mock("@/hooks/useNostrPublish", () => ({
   useNostrPublish: () => ({ mutateAsync: h.publish }),
@@ -47,6 +63,19 @@ vi.mock("@/hooks/useNostrPublish", () => ({
 vi.mock("@/lib/foldedCache", () => ({
   readFolded: (...args: unknown[]) => h.readFolded(...args),
   writeFolded: (...args: unknown[]) => h.writeFolded(...args),
+}));
+vi.mock("@/lib/nip65", () => ({
+  uniqueRelayUrls: (values: Iterable<string>) => [...new Set(values)],
+  queryExplicitRelaysWithStatus: async (
+    _nostr: unknown,
+    relays: string[],
+  ) => {
+    try {
+      return { events: await h.query(), answered: [...relays], failed: [] };
+    } catch {
+      return { events: [], answered: [], failed: [...relays] };
+    }
+  },
 }));
 
 /** Reversible fake NIP-44: ciphertext is `enc:` + plaintext. */
@@ -80,10 +109,86 @@ function wrapper({ children }: { children: ReactNode }) {
 
 beforeEach(() => {
   h.query.mockReset();
-  h.publish.mockReset().mockResolvedValue(undefined);
+  h.publish.mockReset().mockImplementation(async (value: unknown) => ({
+    ...(value as NostrEvent),
+    id: `published${++evCounter}`.padEnd(64, "0").slice(0, 64),
+    pubkey: SELF,
+    sig: "e".repeat(128),
+  }));
   h.readFolded.mockReset().mockResolvedValue(undefined);
   h.writeFolded.mockReset().mockResolvedValue(undefined);
   h.user = { pubkey: SELF, signer: { nip44 } };
+});
+
+describe("useMutedPubkeysSource authority", () => {
+  it("keeps an absent cache additive-only until an explicit empty wire result succeeds", async () => {
+    h.user = { pubkey: "9".repeat(64), signer: { nip44 } };
+    let finish!: (events: NostrEvent[]) => void;
+    h.query.mockImplementation(() => new Promise<NostrEvent[]>((resolve) => { finish = resolve; }));
+
+    const view = renderHook(() => useMutedPubkeysSource(), { wrapper });
+    await waitFor(() => expect(view.result.current.ready).toBe(true));
+    expect(view.result.current.wireReady).toBe(false);
+    expect(view.result.current.configReady).toBe(false);
+
+    await act(async () => { finish([]); });
+    await waitFor(() => expect(view.result.current.wireReady).toBe(true));
+    expect([...view.result.current.mutedPubkeys]).toEqual([]);
+    expect(view.result.current.configReady).toBe(true);
+  });
+
+  it("does not turn a failed cold wire read into prune authority", async () => {
+    h.user = { pubkey: "8".repeat(64), signer: { nip44 } };
+    h.query.mockRejectedValue(new Error("offline"));
+
+    const view = renderHook(() => useMutedPubkeysSource(), { wrapper });
+    await waitFor(() => expect(h.query).toHaveBeenCalled());
+    await waitFor(() => expect(view.result.current.ready).toBe(true));
+    expect(view.result.current.wireReady).toBe(false);
+  });
+
+  it("keeps a local mute seed additive when every wire relay fails", async () => {
+    h.user = { pubkey: "6".repeat(64), signer: { nip44 } };
+    h.readFolded.mockResolvedValue([EXISTING_PRIVATE]);
+    h.query.mockRejectedValue(new Error("offline"));
+
+    const view = renderHook(() => useMutedPubkeysSource(), { wrapper });
+    await waitFor(() => expect(view.result.current.ready).toBe(true));
+    expect(view.result.current.mutedPubkeys.has(EXISTING_PRIVATE)).toBe(true);
+    expect(view.result.current.wireReady).toBe(false);
+    expect(h.writeFolded).not.toHaveBeenCalled();
+  });
+
+  it("trusts a versioned last-good mute seed for config but not pruning", async () => {
+    h.user = { pubkey: "5".repeat(64), signer: { nip44 } };
+    h.readFolded.mockResolvedValue({
+      pubkeys: [EXISTING_PRIVATE],
+      version: { id: "1".repeat(64), created_at: 10 },
+    });
+    h.query.mockRejectedValue(new Error("offline"));
+
+    const view = renderHook(() => useMutedPubkeysSource(), { wrapper });
+    await waitFor(() => expect(view.result.current.ready).toBe(true));
+    expect(view.result.current.configReady).toBe(true);
+    expect(view.result.current.wireReady).toBe(false);
+  });
+
+  it("keeps and does not overwrite last-good private mutes after decrypt failure", async () => {
+    h.user = { pubkey: "7".repeat(64), signer: { nip44 } };
+    h.readFolded.mockResolvedValue([EXISTING_PRIVATE]);
+    h.query.mockResolvedValue([{
+      ...muteEvent({ tags: [["p", EXISTING_PUBLIC]] }),
+      pubkey: h.user.pubkey,
+      content: "not-decryptable",
+    }]);
+
+    const view = renderHook(() => useMutedPubkeysSource(), { wrapper });
+    await waitFor(() => expect(view.result.current.ready).toBe(true));
+    await waitFor(() => expect(view.result.current.mutedPubkeys.has(EXISTING_PUBLIC)).toBe(true));
+    expect(view.result.current.mutedPubkeys.has(EXISTING_PRIVATE)).toBe(true);
+    expect(view.result.current.wireReady).toBe(false);
+    expect(h.writeFolded).not.toHaveBeenCalled();
+  });
 });
 
 describe("useMuteUser (kind 10000 read-modify-write)", () => {
@@ -96,8 +201,12 @@ describe("useMuteUser (kind 10000 read-modify-write)", () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
-    const queryKey = ["mute-list", SELF, "wss://app.example/"];
-    client.setQueryData(queryKey, [EXISTING_PUBLIC]);
+    const queryKey = ["mute-list", SELF, "wss://app.example"];
+    client.setQueryData(queryKey, {
+      pubkeys: [EXISTING_PUBLIC],
+      wireReady: true,
+      configReady: true,
+    });
     const testWrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={client}>{children}</QueryClientProvider>
     );
@@ -109,19 +218,34 @@ describe("useMuteUser (kind 10000 read-modify-write)", () => {
       await vi.waitFor(() => expect(h.query).toHaveBeenCalledTimes(1));
     });
 
-    expect(client.getQueryData(queryKey)).toEqual([EXISTING_PUBLIC, TARGET]);
+    const optimistic = client.getQueryData(queryKey);
 
+    // Release the global write queue before asserting so a regression here
+    // cannot leave every subsequent mutation test waiting on this promise.
     resolveQuery([
       muteEvent({ tags: [["p", EXISTING_PUBLIC]], privateTags: [] }),
     ]);
+
+    expect(optimistic).toEqual({
+      pubkeys: [EXISTING_PUBLIC, TARGET],
+      wireReady: true,
+      configReady: true,
+    });
     await act(async () => {
       await pending!;
     });
 
-    expect(client.getQueryData(queryKey)).toEqual([EXISTING_PUBLIC, TARGET]);
+    expect(client.getQueryData(queryKey)).toEqual({
+      pubkeys: [EXISTING_PUBLIC, TARGET],
+      wireReady: false,
+      configReady: true,
+    });
     expect(h.writeFolded).toHaveBeenCalledWith(
       `mute-pubkeys:${SELF}`,
-      [EXISTING_PUBLIC, TARGET],
+      {
+        pubkeys: [EXISTING_PUBLIC, TARGET],
+        version: expect.objectContaining({ id: expect.any(String) }),
+      },
     );
   });
 
@@ -131,8 +255,12 @@ describe("useMuteUser (kind 10000 read-modify-write)", () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
-    const queryKey = ["mute-list", SELF, "wss://app.example/"];
-    client.setQueryData(queryKey, [EXISTING_PUBLIC]);
+    const queryKey = ["mute-list", SELF, "wss://app.example"];
+    client.setQueryData(queryKey, {
+      pubkeys: [EXISTING_PUBLIC],
+      wireReady: true,
+      configReady: true,
+    });
     const testWrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={client}>{children}</QueryClientProvider>
     );
@@ -142,7 +270,11 @@ describe("useMuteUser (kind 10000 read-modify-write)", () => {
       await expect(result.current.mutateAsync(TARGET)).rejects.toThrow("relay unavailable");
     });
 
-    expect(client.getQueryData(queryKey)).toEqual([EXISTING_PUBLIC]);
+    expect(client.getQueryData(queryKey)).toEqual({
+      pubkeys: [EXISTING_PUBLIC],
+      wireReady: true,
+      configReady: true,
+    });
   });
 
   it("REFUSES to mute on an empty read when a cached mute list exists (the wipe)", async () => {

@@ -3,7 +3,7 @@ import { createContext } from "react";
 import { STOCK_RELAYS } from "@/concord/lib/stockRelays";
 import { APP_BLOSSOM_SERVERS } from "@/lib/blossom";
 import { APP_RELAYS, BROADCAST_RELAYS, DM_RELAYS, normalizeRelayUrl, SEARCH_RELAYS } from "@/lib/platform";
-import { loadPushPrefs, type PushPrefs } from "@/lib/pushPrefs";
+import { DEFAULT_PUSH_PREFS, type PushPrefs } from "@/lib/pushPrefs";
 import { getPreferredVoiceServer } from "@/lib/voiceDevices";
 
 import type { BlossomServerMetadata } from "@/lib/blossom";
@@ -553,7 +553,9 @@ export const defaultConfig: AppConfig = {
   mutedCommunities: [],
   mutedChannels: [],
   notifLevels: {},
-  pushPrefs: loadPushPrefs(),
+  // Account defaults must be pure. The old origin-global mirror belonged to
+  // whichever account wrote it last and leaked those choices into a fresh one.
+  pushPrefs: { ...DEFAULT_PUSH_PREFS },
   dmProtocol: {},
   dmTypingIndicators: true,
   pinnedDms: [],

@@ -20,8 +20,10 @@ import { ArmadaNotification } from "@/lib/nativeNotifications";
  * Thread-level keys (`<roomKey>:t:<rootId>`) suppress notifications for a
  * specific open thread panel. Mentions still notify even on an active room.
  *
- * The service holds the keys only on its live instance, so killing the app or
- * the service immediately resumes notifications — no persistence, no TTL.
+ * The service holds the keys only on its live instance and expires them unless
+ * this visible, focused WebView refreshes a short heartbeat. That covers the
+ * Android case where the Activity dies without getting a blur/unmount callback
+ * while the foreground relay service survives.
  *
  * Re-publishes on visibility and window-focus changes so backgrounding the app
  * or moving to another window clears the active set, while foregrounding
@@ -71,32 +73,19 @@ export function useActiveRoom(...roomKeys: Array<string | string[] | undefined>)
     };
 
     publish();
+    // Browser timers pause in the background, which is useful here: if Android
+    // kills the WebView without delivering blur/unmount, native lets the last
+    // active-room set expire instead of suppressing that room indefinitely.
+    const heartbeat = window.setInterval(publish, 10_000);
     document.addEventListener("visibilitychange", publish);
     window.addEventListener("focus", publish);
     window.addEventListener("blur", publish);
     return () => {
+      window.clearInterval(heartbeat);
       document.removeEventListener("visibilitychange", publish);
       window.removeEventListener("focus", publish);
       window.removeEventListener("blur", publish);
     };
   }, [sig]);
 
-  // WindowClient.url is the document's creation URL, so a service worker
-  // cannot reliably infer the current React Router route after pushState.
-  // Answer its push-time query with the live room registry instead.
-  useEffect(() => {
-    if (!("serviceWorker" in navigator)) return;
-
-    const answerActiveDmQuery = (event: MessageEvent) => {
-      if (event.data?.type !== "armada-active-dm-query") return;
-      const port = event.ports[0];
-      if (!port) return;
-      const focused = document.visibilityState === "visible" && document.hasFocus();
-      const hasActiveDm = sig.split("\u0001").some((key) => key.startsWith("dm:"));
-      port.postMessage({ active: focused && hasActiveDm });
-    };
-
-    navigator.serviceWorker.addEventListener("message", answerActiveDmQuery);
-    return () => navigator.serviceWorker.removeEventListener("message", answerActiveDmQuery);
-  }, [sig]);
 }

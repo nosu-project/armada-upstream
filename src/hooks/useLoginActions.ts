@@ -16,10 +16,12 @@ import { Nip46Signer } from "@/lib/nip46Signer";
 import { Nip46Transport } from "@/lib/nip46Transport";
 import { normalizeRelayUrl } from "@/lib/platform";
 import { purgeClientStorage } from "@/lib/purgeClientStorage";
-import { signOutAccount } from "@/lib/switchAccount";
+import { addAndSwitchAccount, signOutAccount } from "@/lib/switchAccount";
 import { clearWalletStorage } from "@/lib/walletStorage";
 import { clearEsploraStorage } from "@/lib/esploraStorage";
 import { logSync } from "@/lib/syncLog";
+import { runBeforeAccountExit } from "@/lib/beforeAccountExit";
+import { beginCrossTabAccountExit } from "@/lib/crossTabAccountExit";
 
 export type { NostrConnectParams, NostrConnectStatus };
 export { generateNostrConnectParams, generateNostrConnectURI } from "@nostrify/react/login";
@@ -92,16 +94,23 @@ export function useLoginActions() {
   const { config } = useAppContext();
 
   // Add a login and promote it to be the current user.
-  const addAndActivate = (login: NLoginType) => {
-    addLogin(login);
-    setLogin(login.id);
+  const addAndActivate = async (login: NLoginType): Promise<void> => {
+    // Initial login/onboarding has no outgoing session and may continue
+    // in-place. Adding an account while one is active is an account switch:
+    // cleanup and a hard reload must happen before the new signer is exposed.
+    if (logins.length === 0) {
+      addLogin(login);
+      setLogin(login.id);
+      return;
+    }
+    await addAndSwitchAccount(logins, login);
   };
 
   return {
     // Login with a Nostr secret key
-    nsec(nsec: string): void {
+    async nsec(nsec: string): Promise<void> {
       const login = NLogin.fromNsec(nsec);
-      addAndActivate(login);
+      await addAndActivate(login);
     },
     // Login with a NIP-46 "bunker://" URI.
     //
@@ -127,7 +136,7 @@ export function useLoginActions() {
         await signer.connect(secret);
         const pubkey = await signer.getPublicKey();
         const sessionRelays = await adoptBunkerRelays(signer, relays);
-        addAndActivate(
+        await addAndActivate(
           new NLogin("bunker", pubkey, {
             bunkerPubkey,
             clientNsec: nip19.nsecEncode(clientSk),
@@ -141,7 +150,7 @@ export function useLoginActions() {
     // Login with a NIP-07 browser extension
     async extension(): Promise<void> {
       const login = await NLogin.fromExtension();
-      addAndActivate(login);
+      await addAndActivate(login);
     },
     // Login with a native Android signer app (Amber, etc.) via NIP-55.
     // The plugin round-trips to the signer app to fetch the user's pubkey; we
@@ -150,7 +159,7 @@ export function useLoginActions() {
       const signer = new AndroidNativeSigner(packageName);
       const pubkey = await signer.getPublicKey();
       const login = new NLogin("x-android-signer", pubkey, { packageName });
-      addAndActivate(login);
+      await addAndActivate(login);
     },
     // Login via nostrconnect:// (client-initiated NIP-46).
     //
@@ -202,7 +211,7 @@ export function useLoginActions() {
           });
           const userPubkey = await signer.getPublicKey();
           const sessionRelays = await adoptBunkerRelays(signer, params.relays);
-          addAndActivate(
+          await addAndActivate(
             new NLogin("bunker", userPubkey, {
               bunkerPubkey: event.pubkey,
               clientNsec: nip19.nsecEncode(params.clientSecretKey),
@@ -262,8 +271,13 @@ export function useLoginActions() {
       // images…) and hard-redirect to the landing page so nothing is held onto
       // and the next session boots from clean storage.
       if (logins.length <= 1) {
+        // Push/native registrations outlive local storage and need the outgoing
+        // signer/config to remove them. This is bounded and best-effort, so a
+        // broken gateway can never trap logout.
+        beginCrossTabAccountExit(login?.pubkey, null);
+        await runBeforeAccountExit("final-logout");
         if (login) removeLogin(login.id);
-        await purgeClientStorage();
+        await purgeClientStorage(login?.pubkey);
         window.location.assign("/");
         return;
       }

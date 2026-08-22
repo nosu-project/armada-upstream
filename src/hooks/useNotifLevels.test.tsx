@@ -8,7 +8,7 @@
  */
 
 import { renderHook, act } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useNotifLevels } from "./useNotifLevels";
 
@@ -22,6 +22,10 @@ const h = vi.hoisted(() => ({
   updateConfig: (u: (c: AppConfig) => AppConfig) => {
     h.config = u(h.config);
   },
+}));
+
+vi.mock("@/hooks/useCurrentUser", () => ({
+  useCurrentUser: () => ({ user: { pubkey: "a".repeat(64) } }),
 }));
 
 vi.mock("@/hooks/useAppContext", () => ({
@@ -38,27 +42,21 @@ function baseConfig(over: Partial<AppConfig> = {}): AppConfig {
     notifLevels: {},
     mutedCommunities: [],
     mutedChannels: [],
+    pushPrefs: {
+      mentions: true,
+      reactions: true,
+      replies: true,
+      directMessages: true,
+      allGroupMessages: true,
+      dmRequests: "generic",
+    },
     ...over,
   } as AppConfig;
 }
 
 beforeEach(() => {
   h.config = baseConfig();
-  localStorage.clear();
-  // Global default: all channel messages on, DMs on.
-  localStorage.setItem(
-    "armada:push-prefs",
-    JSON.stringify({
-      mentions: true,
-      reactions: true,
-      replies: true,
-      directMessages: true,
-      allGroupMessages: true,
-    }),
-  );
 });
-
-afterEach(() => localStorage.clear());
 
 describe("useNotifLevels cascade", () => {
   it("falls back to the global level (all) when nothing is set", () => {
@@ -67,10 +65,9 @@ describe("useNotifLevels cascade", () => {
   });
 
   it("falls back to global 'mentions' when allGroupMessages is off", () => {
-    localStorage.setItem(
-      "armada:push-prefs",
-      JSON.stringify({ mentions: true, allGroupMessages: false, directMessages: true }),
-    );
+    h.config = baseConfig({
+      pushPrefs: { ...baseConfig().pushPrefs, allGroupMessages: false },
+    });
     const { result } = renderHook(() => useNotifLevels());
     expect(result.current.channelLevel(RELAY, GROUP)).toBe("mentions");
   });
@@ -106,7 +103,9 @@ describe("useNotifLevels cascade", () => {
   it("dmLevel follows the directMessages global by default", () => {
     const { result } = renderHook(() => useNotifLevels());
     expect(result.current.dmLevel("a".repeat(64))).toBe("all");
-    localStorage.setItem("armada:push-prefs", JSON.stringify({ directMessages: false }));
+    h.config = baseConfig({
+      pushPrefs: { ...baseConfig().pushPrefs, directMessages: false },
+    });
     const { result: r2 } = renderHook(() => useNotifLevels());
     expect(r2.current.dmLevel("a".repeat(64))).toBe("nothing");
   });

@@ -24,6 +24,8 @@ const GROUP_PEER = "1".repeat(64);
 const h = vi.hoisted(() => ({
   follows: [] as string[],
   followsLoading: false,
+  followsWireReady: true,
+  followsCached: true,
   accepted: [] as string[],
   pinned: [] as string[],
   indexed: [] as Array<{
@@ -34,11 +36,17 @@ const h = vi.hoisted(() => ({
   indexReady: true,
   muted: new Set<string>(),
   mutesReady: true,
+  mutesWireReady: true,
+  mutesConfigReady: true,
 }));
 
 vi.mock("@/hooks/useFollowList", () => ({
   useFollowList: () => ({
-    data: { pubkeys: h.follows },
+    data: {
+      pubkeys: h.follows,
+      wireReady: h.followsWireReady,
+      event: h.followsCached ? { id: "follow-cache" } : null,
+    },
     isLoading: h.followsLoading,
   }),
 }));
@@ -63,19 +71,28 @@ vi.mock("@/hooks/useDmConversationIndex", () => ({
   useDmConversationIndexReady: () => h.indexReady,
 }));
 vi.mock("@/hooks/useMuteList", () => ({
-  useMutedPubkeys: () => ({ mutedPubkeys: h.muted, ready: h.mutesReady }),
+  useMutedPubkeys: () => ({
+    mutedPubkeys: h.muted,
+    ready: h.mutesReady,
+    wireReady: h.mutesWireReady,
+    configReady: h.mutesConfigReady,
+  }),
 }));
 
 describe("useKnownDmPeers", () => {
   beforeEach(() => {
     h.follows = [FOLLOWED];
     h.followsLoading = false;
+    h.followsWireReady = true;
+    h.followsCached = true;
     h.accepted = [ACCEPTED];
     h.pinned = [PINNED];
     h.indexed = [];
     h.indexReady = true;
     h.muted = new Set();
     h.mutesReady = true;
+    h.mutesWireReady = true;
+    h.mutesConfigReady = true;
   });
 
   it("admits followed, accepted and pinned peers", () => {
@@ -103,6 +120,44 @@ describe("useKnownDmPeers", () => {
     const { result } = renderHook(() => useKnownDmPeers());
     expect(result.current.isLoading).toBe(true);
     expect(result.current.isKnown(FOLLOWED, false)).toBe(false);
+  });
+
+  it("keeps cache-seeded follows and mutes additive until both wire reads succeed", () => {
+    h.followsWireReady = false;
+    h.mutesWireReady = false;
+    const { result, rerender } = renderHook(() => useKnownDmPeers());
+    expect(result.current.knownPeers).toContain(FOLLOWED);
+    expect(result.current.authoritativeReady).toBe(false);
+
+    h.followsWireReady = true;
+    rerender();
+    expect(result.current.authoritativeReady).toBe(false);
+
+    h.mutesWireReady = true;
+    rerender();
+    expect(result.current.authoritativeReady).toBe(true);
+  });
+
+  it("uses distinguishable last-good follow and mute snapshots for config only", () => {
+    h.followsWireReady = false;
+    h.followsCached = true;
+    h.mutesWireReady = false;
+    h.mutesConfigReady = true;
+    const { result } = renderHook(() => useKnownDmPeers());
+
+    expect(result.current.configurationReady).toBe(true);
+    expect(result.current.authoritativeReady).toBe(false);
+  });
+
+  it("does not treat failed empty follow/mute sources as config authority", () => {
+    h.follows = [];
+    h.followsWireReady = false;
+    h.followsCached = false;
+    h.mutesWireReady = false;
+    h.mutesConfigReady = false;
+    const { result } = renderHook(() => useKnownDmPeers());
+
+    expect(result.current.configurationReady).toBe(false);
   });
 
   it("keeps a replied-to peer known after they are unfollowed", () => {

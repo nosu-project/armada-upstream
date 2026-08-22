@@ -11,6 +11,10 @@ import {
   dmConversationIndexBucket,
   dmConversationIndexDTag,
 } from "@/lib/dmConversationIndex";
+import {
+  _resetNotificationSettingsAuthorityForTests,
+  notificationSettingsReady,
+} from "@/lib/notificationSettingsAuthority";
 
 const PUBKEY = "a".repeat(64);
 const RELAY = "wss://relay.example.com";
@@ -28,6 +32,7 @@ const h = vi.hoisted(() => ({
   updateConfig: vi.fn(),
   discoverRelayList: vi.fn(),
   queryExplicitRelays: vi.fn(),
+  queryExplicitRelaysWithStatus: vi.fn(),
   resolveDmQuery: undefined as ((events: never[]) => void) | undefined,
   nostr: {},
   queryClient: {
@@ -90,6 +95,7 @@ vi.mock("@/lib/nip65", () => ({
       write: marker !== "read",
     })),
   queryExplicitRelays: (...args: unknown[]) => h.queryExplicitRelays(...args),
+  queryExplicitRelaysWithStatus: (...args: unknown[]) => h.queryExplicitRelaysWithStatus(...args),
   relayListIsNewerThanMetadata: (
     candidate: { created_at: number; id: string },
     current: { updatedAt: number; eventId?: string },
@@ -101,6 +107,8 @@ vi.mock("@/lib/nip65", () => ({
 
 describe("useInitialSync", () => {
   beforeEach(async () => {
+    localStorage.clear();
+    _resetNotificationSettingsAuthorityForTests();
     await resetDmConversationIndexCache();
     h.config = {
       appRelays: [],
@@ -126,6 +134,11 @@ describe("useInitialSync", () => {
         }),
       )
       .mockResolvedValue([]);
+    h.queryExplicitRelaysWithStatus.mockReset().mockImplementation(async (...args: unknown[]) => ({
+      events: await h.queryExplicitRelays(...args),
+      answered: [RELAY],
+      failed: [],
+    }));
     h.resolveDmQuery = undefined;
     h.queryClient.setQueryData.mockClear();
     h.queryClient.getQueryData.mockReset().mockReturnValue(undefined);
@@ -357,6 +370,31 @@ describe("useInitialSync", () => {
       ["settings-doc", "metadata", PUBKEY],
       expect.objectContaining({ event: expect.objectContaining({ id: "0".repeat(64) }) }),
     );
+  });
+
+  it("marks explicit empty notification settings authoritative only after every self relay answers", async () => {
+    h.user.signer = { nip44: { decrypt: vi.fn() } };
+    h.queryExplicitRelays.mockReset().mockResolvedValue([]);
+
+    const view = renderHook(() => useInitialSync(PUBKEY));
+    await waitFor(() => expect(view.result.current.done).toBe(true));
+
+    expect(notificationSettingsReady(PUBKEY)).toBe(true);
+  });
+
+  it("does not authorize defaults when a declared self relay fails", async () => {
+    h.user.signer = { nip44: { decrypt: vi.fn() } };
+    h.queryExplicitRelays.mockReset().mockResolvedValue([]);
+    h.queryExplicitRelaysWithStatus.mockImplementationOnce(async (...args: unknown[]) => ({
+      events: await h.queryExplicitRelays(...args),
+      answered: [],
+      failed: [RELAY],
+    }));
+
+    const view = renderHook(() => useInitialSync(PUBKEY));
+    await waitFor(() => expect(view.result.current.done).toBe(true));
+
+    expect(notificationSettingsReady(PUBKEY)).toBe(false);
   });
 
   it("hydrates the encrypted DM index before the login gate completes", async () => {

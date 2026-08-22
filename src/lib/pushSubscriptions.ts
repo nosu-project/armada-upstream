@@ -71,25 +71,32 @@ export interface PushNotifData {
  */
 export interface PushSubscriptionSpec {
   id: string;
+  /** Older logical ids this exact watch supersedes (quota-safe migration). */
+  replaces?: string[];
   relays: string[];
   filter: NostrFilter;
   notification: { title: string; body: string; data: PushNotifData };
 }
 
+/** One relay-scoped NIP-29 conversation and its already-resolved level. */
+export interface Nip29PushGroup {
+  relay: string;
+  groupId: string;
+  level: "all" | "mentions";
+}
+
 /** Everything needed to compute the subscription set (mirrors native inputs). */
 export interface PushSubscriptionInput {
   pubkey: string;
-  /** NIP-29 group/server relays. */
-  relayUrls: string[];
-  /** Watched group ids (`h` tags); excludes groups muted to `nothing`. */
-  groupIds: string[];
-  /** Subset of `groupIds` at the `mentions` level. */
-  mentionOnlyGroupIds: string[];
+  /** Relay-scoped NIP-29 groups; a bare `h` id is never globally unique. */
+  nip29Groups: Nip29PushGroup[];
   prefs: PushPrefs;
   /** Relays DMs are read from. */
   dmRelays: string[];
   /** Follows — friends-only kind-4 DM authors. */
   dmFollows: string[];
+  /** Explicit per-conversation DM levels, keyed by canonical conversation key. */
+  dmLevels: Record<string, "all" | "mentions" | "nothing">;
   concord: ConcordSub[];
 }
 
@@ -108,10 +115,9 @@ export interface PushSubscriptionInput {
  * on the iPhone would silently overwrite the same account's browser
  * registrations, and the browser's next sync would overwrite the iPhone's back.
  *
- * The web path deliberately passes nothing, leaving its ids as they are: two
- * BROWSERS on one origin still collide the same way, but changing their ids
- * would make every existing install prune and re-register on next load, which
- * is a migration this doesn't need to carry.
+ * Web and native callers both pass a stable installation id. Older web builds
+ * omitted it, so their callers must register the new id before pruning the
+ * legacy id; `pushRegistry.ts` carries that migration state.
  *
  * Keep the readable logical id for server logs and append a 128-bit digest;
  * nostr-push caps subscription ids at 64 characters.
@@ -183,44 +189,91 @@ export function buildPushSubscriptions(input: PushSubscriptionInput): PushSubscr
   const { pubkey, prefs } = input;
   const specs: PushSubscriptionSpec[] = [];
 
-  const relayUrls = uniqSorted(input.relayUrls);
-  const watchedGroups = uniqSorted(input.groupIds);
-  const mentionOnly = new Set(input.mentionOnlyGroupIds);
-  const allGroups = watchedGroups.filter((id) => !mentionOnly.has(id));
-
-  // Groups — every message (kind 9), for groups NOT restricted to mentions.
-  if (prefs.allGroupMessages && allGroups.length > 0 && relayUrls.length > 0) {
-    specs.push({
-      id: "armada-groups",
-      relays: relayUrls,
-      filter: { kinds: [KIND_GROUP_MESSAGE], "#h": allGroups },
-      notification: {
-        title: "New message",
-        body: "",
-        data: { scope: "group", relays: relayUrls, inline_event: true },
-      },
-    });
+  // A group id is meaningful only at its relay. The former parallel arrays
+  // (`relayUrls` + `groupIds`) made the gateway watch their Cartesian product:
+  // joining `general` on relay A also subscribed to `general` on relay B, and
+  // two same-named rooms with different exact levels collapsed into one. Keep
+  // each filter on exactly one relay; the relay digest keeps logical ids stable
+  // and distinct while the old flat ids are listed for quota-safe migration.
+  const nip29ByRelay = new Map<
+    string,
+    { all: Set<string>; mentions: Set<string> }
+  >();
+  for (const item of input.nip29Groups) {
+    if (!item.relay || !item.groupId) continue;
+    const bucket = nip29ByRelay.get(item.relay) ?? {
+      all: new Set<string>(),
+      mentions: new Set<string>(),
+    };
+    bucket[item.level].add(item.groupId);
+    nip29ByRelay.set(item.relay, bucket);
   }
 
-  // Groups — messages directed at the user (mentions/replies/reactions that
-  // `#p`-tag them). Covers mentions-only groups AND is the only group path when
-  // `allGroupMessages` is off. Kinds gated by the per-type prefs.
+  // Replies and reactions have different kinds, so they cannot overlap either
+  // kind-9 filter. They apply to every non-muted channel on its exact relay.
   const directedKinds = [
-    ...(prefs.mentions ? [KIND_GROUP_MESSAGE] : []),
     ...(prefs.replies ? [KIND_GROUP_REPLY] : []),
     ...(prefs.reactions ? [KIND_REACTION] : []),
   ];
-  if (directedKinds.length > 0 && watchedGroups.length > 0 && relayUrls.length > 0) {
-    specs.push({
-      id: "armada-groups-mention",
-      relays: relayUrls,
-      filter: { kinds: directedKinds, "#h": watchedGroups, "#p": [pubkey] },
-      notification: {
-        title: "New message",
-        body: "",
-        data: { scope: "group-mention", relays: relayUrls, inline_event: true },
-      },
-    });
+  for (const [relay, bucket] of [...nip29ByRelay.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const relays = [relay];
+    const tag = relaySetTag(relays);
+    const allGroups = [...bucket.all].sort();
+    const mentionOnly = [...bucket.mentions].filter((id) => !bucket.all.has(id)).sort();
+    const watchedGroups = uniqSorted([...allGroups, ...mentionOnly]);
+    // IDs remain relay-scoped even when this snapshot currently has only one
+    // relay. Switching 2→1 must keep the surviving child's id, and a one-relay
+    // level change must expose the old category as authoritative stale state
+    // before its replacement PUT. Reverting to the flat base in either case
+    // creates a new id at exact quota and aborts every later DM/Concord refresh.
+    const logicalId = (base: string) => `${base}-${tag}`;
+    const replaces = (base: string) => [base];
+
+    if (allGroups.length > 0) {
+      specs.push({
+        id: logicalId("armada-groups"),
+        replaces: replaces("armada-groups"),
+        relays,
+        filter: { kinds: [KIND_GROUP_MESSAGE], "#h": allGroups },
+        notification: {
+          title: "New message",
+          body: "",
+          data: { scope: "group", relays, inline_event: true },
+        },
+      });
+    }
+
+    if (mentionOnly.length > 0) {
+      specs.push({
+        id: logicalId("armada-groups-mention"),
+        replaces: replaces("armada-groups-mention"),
+        relays,
+        filter: {
+          kinds: [KIND_GROUP_MESSAGE],
+          "#h": mentionOnly,
+          "#p": [pubkey],
+        },
+        notification: {
+          title: "New message",
+          body: "",
+          data: { scope: "group-mention", relays, inline_event: true },
+        },
+      });
+    }
+
+    if (directedKinds.length > 0 && watchedGroups.length > 0) {
+      specs.push({
+        id: logicalId("armada-groups-directed"),
+        replaces: replaces("armada-groups-directed"),
+        relays,
+        filter: { kinds: directedKinds, "#h": watchedGroups, "#p": [pubkey] },
+        notification: {
+          title: "New message",
+          body: "",
+          data: { scope: "group-mention", relays, inline_event: true },
+        },
+      });
+    }
   }
 
   // Direct messages — modern NIP-17 plus legacy NIP-04.
@@ -231,7 +284,9 @@ export function buildPushSubscriptions(input: PushSubscriptionInput): PushSubscr
   // filtering is impossible until the client decrypts the wrap. Watch every
   // gift wrap addressed to the user, matching the wire and native notification
   // service. This is also what lets message requests wake web push.
-  if (prefs.directMessages && dmRelays.length > 0) {
+  const hasExplicitDmWatch = Object.values(input.dmLevels)
+    .some((level) => level !== "nothing");
+  if ((prefs.directMessages || hasExplicitDmWatch) && dmRelays.length > 0) {
     specs.push({
       id: "armada-dm17",
       relays: dmRelays,
@@ -246,17 +301,28 @@ export function buildPushSubscriptions(input: PushSubscriptionInput): PushSubscr
 
   // Legacy NIP-04 remains friends-only because its public author is available
   // to the content-blind push server and unknown senders would be a spam path.
+  // Exact 1:1 overrides still win over that global fallback: an explicit
+  // `all`/`mentions` adds the peer while global DMs are off, and `nothing`
+  // removes them while global DMs are on. Canonical group-DM participant sets
+  // contain a comma and must never be flattened into unrelated author trust.
   //
   // The ONE subscription that does not ask for `inline_event`: the worker
   // opens NIP-17 envelopes and Concord stream wraps, and a kind-4 ciphertext is
   // neither — it would arrive, fail to open, and fall back to this same static
   // wake-up, having spent payload budget to do it. Inline it if and when the
   // worker learns NIP-04.
-  if (prefs.directMessages && dmFollows.length > 0 && dmRelays.length > 0) {
+  const legacyDmAuthors = new Set(prefs.directMessages ? dmFollows : []);
+  for (const [conversation, level] of Object.entries(input.dmLevels)) {
+    if (!/^[0-9a-f]{64}$/.test(conversation)) continue;
+    if (level === "nothing") legacyDmAuthors.delete(conversation);
+    else legacyDmAuthors.add(conversation);
+  }
+  const legacyAuthors = [...legacyDmAuthors].sort();
+  if (legacyAuthors.length > 0 && dmRelays.length > 0) {
     specs.push({
       id: "armada-dm",
       relays: dmRelays,
-      filter: { kinds: [KIND_DM_NIP04], "#p": [pubkey], authors: dmFollows },
+      filter: { kinds: [KIND_DM_NIP04], "#p": [pubkey], authors: legacyAuthors },
       notification: {
         title: "New message",
         body: "New direct message",

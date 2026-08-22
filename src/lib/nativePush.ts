@@ -2,6 +2,10 @@ import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor
 
 import { isRouterPath } from "@/lib/deepLinkUrl";
 
+// Compatibility export: installation identity is transport-agnostic now that
+// web browsers also need per-install gateway ids.
+export { pushInstallationId } from "@/lib/pushRegistry";
+
 /**
  * Native bridge to `ArmadaPushPlugin.swift` — the iOS app's APNs registration.
  *
@@ -113,6 +117,10 @@ export const ArmadaPush = registerPlugin<ArmadaPushPlugin>("ArmadaPush");
  */
 export interface IosPushConfig {
   policy: string;
+  /** Global DM fallback; exact `dmLevels` entries override it. */
+  directMessages: boolean;
+  /** Exact canonical NIP-17 conversation levels (group keys stay intact). */
+  dmLevels?: Record<string, "all" | "mentions" | "nothing">;
   self: string;
   knownPeers: string[];
   /** Exact authored/pinned NIP-17 conversation keys (groups stay exact). */
@@ -192,40 +200,4 @@ export async function takePendingPushOpen(): Promise<string | null> {
   if (!hasIosPush()) return null;
   const { path } = await ArmadaPush.takePendingOpen();
   return path && isRouterPath(path) ? path : null;
-}
-
-/** Per-install id, so two devices don't take turns owning one gateway record. */
-const INSTALL_KEY = "armada:push-install";
-
-/**
- * A stable id for THIS install of the app.
- *
- * nostr-push indexes `subscription_id` globally and registering is replace, so
- * the id has to name the install as well as the account
- * (`scopePushSubscriptionId`). The native builds share `armada.buzz` as their
- * `domain` with the hosted web client — they have no origin of their own worth
- * naming — so without this an iPhone and a browser signed into one account
- * would overwrite each other's registrations on every sync.
- *
- * Random and local: it identifies a subscription record, and is never sent
- * anywhere but inside the NIP-44 encrypted RPC. If storage is unavailable the
- * fallback is a fresh id per session, which merely leaks stale gateway records
- * rather than breaking delivery — better than silently sharing one.
- */
-export function pushInstallationId(): string {
-  try {
-    const existing = localStorage.getItem(INSTALL_KEY);
-    if (existing) return existing;
-  } catch {
-    // Private mode / storage disabled — fall through to a fresh id.
-  }
-  const id = typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-  try {
-    localStorage.setItem(INSTALL_KEY, id);
-  } catch {
-    // ignore
-  }
-  return id;
 }

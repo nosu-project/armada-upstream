@@ -15,11 +15,9 @@ interface UseSwitchAccountReturn {
  *
  * Every path that moves a different login into `logins[0]` must go through
  * this rather than `setLogin`/`removeLogin`, so that the reload in
- * `switchAccount` is not something a new call site can forget. The one path
- * that must NOT use it is signup/add-account (`addAndActivate`), which
- * activates a key mid-wizard and has to keep running afterwards — a reload
- * there would abandon the wizard's remaining steps, so the storage scoping has
- * to stand on its own regardless.
+ * `switchAccount` is not something a new call site can forget. Initial signup
+ * may stay in-place only while there is no outgoing account; adding an
+ * identity while one is active uses the same cleanup + reload fence.
  */
 export function useSwitchAccount(): UseSwitchAccountReturn {
   const { logins } = useNostrLogin();
