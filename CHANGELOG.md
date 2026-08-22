@@ -4,6 +4,20 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.56.1] - 2026-08-22
+
+The desktop installers and the signed Flatpak bundle announced in 0.56.0 are published: that build stopped short of publishing them, so 0.56 shipped no desktop downloads at all. The downloads page now lists earlier versions alongside the current one, and every file is named after the version it installs.
+
+### Added
+- The downloads page lists earlier releases alongside the current one, each with its own files
+
+### Changed
+- Downloads are named after the version they install. The older unversioned links (`Armada.AppImage`, `Armada.apk` and the rest) are no longer updated, so use the ones on the downloads page
+
+### Fixed
+- The desktop installers and the signed Flatpak bundle are published again
+- Flatpak's debug-symbol package is signed along with the rest of the update repository, so Flatpak accepts the update instead of refusing it as unsigned
+
 ## [0.56.0] - 2026-08-22
 
 This release adds an account-level Notification Center that gathers your mentions across every community and server, plus your pending community invites, into one newest-first list — and surfaces your unread direct-message conversations above the community rail with exact unread counts. Mini Apps can now play multiplayer across Armada and Vector. Screen shares gain a full call-control bar while fullscreen, your community and direct-message lists sync across your devices, and cross-platform notifications are more reliable.
