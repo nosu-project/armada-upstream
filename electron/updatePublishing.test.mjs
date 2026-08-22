@@ -458,6 +458,27 @@ describe("desktop update publication", () => {
     expect(publishScript).not.toContain("config.title");
   });
 
+  // ngit-ci's ref matcher special-cases a bare `*` to true and handles a
+  // `<prefix>/**` suffix, but reduces a bare `**` to `starts_with("*")` —
+  // which matches no ref that exists. `branches: ["**"]` therefore ran the
+  // suite on Nostr PRs and on no push at all. GitHub splits the same space
+  // (`*` without a `/`, `**` with), so both patterns are needed either way.
+  it("runs the test suite on pushes to every branch", () => {
+    const testWorkflow = loadYaml(
+      fs.readFileSync(
+        path.resolve(root, ".ngit/act/workflows/test.yml"),
+        "utf8",
+      ),
+    );
+    const branches = testWorkflow.on.push.branches;
+    expect(branches).toContain("*");
+    expect(branches).toContain("**");
+    // A tag is release.yml's; leaving `tags` unset is what excludes it, since
+    // naming `branches` alone already fails a tag ref.
+    expect(testWorkflow.on.push.tags).toBeUndefined();
+    expect(Object.hasOwn(testWorkflow.on, "pull_request")).toBe(true);
+  });
+
   it("stages and verifies the pinned public Flatpak identity", () => {
     const signingScript = String(flatpakSigningStep?.run || "");
     expect(signingScript).toContain(

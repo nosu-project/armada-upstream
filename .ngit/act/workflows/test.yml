@@ -7,10 +7,20 @@ name: Test
 #
 # Runs on every push and on every Nostr PR (kinds 1618/1619). Tag pushes are
 # handled by release.yml, so they are excluded here.
+#
+# `["*", "**"]`, not `["**"]`. On GitHub the two patterns split the space —
+# `*` matches a branch with no `/`, `**` matches one with — so naming only
+# `**` already excludes `main`. ngit-ci is stricter still: its matcher
+# (`ref_matches_pattern`) special-cases a bare `*` to true, handles a
+# `<prefix>/**` suffix, and otherwise treats a trailing `*` as a literal
+# prefix — so a bare `**` reduces to `starts_with("*")` and matches NO ref at
+# all. This file therefore ran on Nostr PRs and on nothing else; the suite has
+# never run on a push. Keep both patterns: the pair is correct on GitHub, and
+# the `*` is what actually matches here.
 
 on:
   push:
-    branches: ["**"]
+    branches: ["*", "**"]
   pull_request:
 
 jobs:
