@@ -6,13 +6,34 @@ name: Deploy nsite
 # (nsite.lol, nosto.re, …) glues the two together. Same tool and the same
 # NSYTE_BUNKER secret name as soapbox-pub/yourspace.
 #
-# Two triggers doing different amounts of work:
-#   push to main   deploy — republishes the named site manifest, which IS the
-#                  live site.
-#   push of a v*   deploy AND publish an immutable manifest snapshot (kind
-#                  5128) titled with the tag, so a release stays addressable
-#                  at v<snapshotIdB36>.<gateway> after the named site has
-#                  moved on to the next build.
+# ONE trigger: a push to main republishes the named site manifest, which IS
+# the live site. A release tag is pushed with main at the same commit, so the
+# tagged bundle reaches the nsite through that run; the tag itself does not
+# need its own.
+#
+# ── Why a tag no longer publishes a snapshot ────────────────────────────────
+# It used to also publish an immutable manifest snapshot (kind 5128) titled
+# with the tag, so a release stayed addressable at v<snapshotIdB36>.<gateway>
+# after the named site moved on. That is worth having, and this file will get
+# it back — but not the way it was doing it.
+#
+# `nsyte snapshot` builds its event ENTIRELY from the manifest it fetches off
+# the relays (`createSnapshotTemplate(sourceManifest, …)`) and has no title of
+# its own, so the only way to title a snapshot with a version was to retitle
+# the LIVE site to "vX.Y.Z", deploy, snapshot, retitle back and deploy again.
+# Two costs, and the second is the one that ended it: a live manifest left
+# titled with a version is the one piece of state this job could strand, in an
+# event that by design is never replaced; and running on a tag meant the same
+# commit planned this workflow TWICE (once for refs/heads/main, once for
+# refs/tags/vX.Y.Z). act derives a job's container name from the workflow and
+# job names alone — no run id, ref or commit — so the two runs collided on one
+# container and each destroyed the other's ("No such container: …").
+#
+# Revisit when nsyte can title a snapshot directly (a `--title` on `snapshot`,
+# or a snapshot taken from a directory rather than from the live manifest).
+# Then a tag can publish a snapshot and NOTHING else, in its own workflow file
+# so the container names differ. Snapshots already published stay published —
+# nothing here retracts them.
 #
 # ── Secrets (provisioned by the ngit-ci operator for this repo's alias) ──────
 # ngit-ci injects ${{ secrets.* }} ONLY on maintainer-authored triggers — a
@@ -40,7 +61,6 @@ name: Deploy nsite
 on:
   push:
     branches: [main]
-    tags: ["v*"]
 
 jobs:
   deploy:
@@ -137,123 +157,46 @@ jobs:
           echo "Announcing Flatpak signing key $value."
 
       - name: Publish to Blossom + relays
+        # act does NOT enforce a job's `timeout-minutes` (it parses the field
+        # and only debug-logs it); the step-level one below is the only
+        # deadline this workflow actually has. Without it a wedged nsyte waits
+        # for the coordinator's run-level timeout, which replaces every job
+        # result act has already produced with a single synthetic one — so the
+        # logs that would explain the hang are the first thing lost.
+        # `nsyte deploy` has no internal deadline of its own.
+        timeout-minutes: 15
         env:
           NSYTE_BUNKER: ${{ secrets.NSYTE_BUNKER }}
         run: |
           set -eu
 
-          TAG=""
-          case "${GITHUB_REF:-}" in
-            refs/tags/v*) TAG="${GITHUB_REF#refs/tags/}" ;;
-          esac
-
-          # The site's own title, as committed. Restored after a tag run.
-          SITE_TITLE="$(node -p 'JSON.parse(require("fs").readFileSync(".nsite/config.json","utf8")).title')"
-
-          set_title() {
-            node -e '
-              const fs = require("fs");
-              const path = ".nsite/config.json";
-              const config = JSON.parse(fs.readFileSync(path, "utf8"));
-              config.title = process.argv[1];
-              fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\n");
-            ' "$1"
-          }
-
-          # Relays/servers/site id all come from .nsite/config.json, so they
-          # are versioned with the client rather than split across this file.
+          # Relays/servers/site id/title all come from .nsite/config.json, so
+          # they are versioned with the client rather than split across this
+          # file — and this job never writes to it, so there is no site state
+          # a failed run can leave behind.
+          #
           # The secrets scan is skipped because it prompts on false positives
           # in our own bundle (pubkeys, bunker:// parsing code), and a prompt
           # is unanswerable here — with -i it defaults to N and aborts.
-          deploy() {
-            set +e
-            nsyte deploy dist \
-              --sec "$NSYTE_BUNKER" \
-              --concurrency 2 \
-              --non-interactive \
-              --skip-secrets-scan \
-              "$@" 2>&1 | tee /tmp/nsyte-deploy.log
-            status="${PIPESTATUS[0]}"
-            set -e
-            # A deploy that changes no file exits NON-ZERO with "No new files
-            # to upload". That is success: the manifest already on the relays
-            # describes exactly this build.
-            if [ "$status" -ne 0 ] && ! grep -q "No new files to upload" /tmp/nsyte-deploy.log; then
-              exit "$status"
-            fi
-          }
-
-          if [ -z "$TAG" ]; then
-            deploy
-            exit 0
-          fi
-
-          # ── Tag: deploy, then snapshot it under the tag name ───────────────
           #
-          # `nsyte snapshot` copies its tags from the manifest it FETCHES off
-          # the relays and has no --title of its own, so the only way the tag
-          # name reaches the snapshot is to be the title of the manifest the
-          # snapshot is taken from. Hence retitle -> deploy -> snapshot ->
-          # retitle -> deploy, which leaves the live site titled "Armada" and
-          # the immutable snapshot titled "v1.2.3".
-          #
-          # --sync is load-bearing here: a tag usually points at the commit
-          # main just deployed, so every blob is already on the servers and a
-          # plain deploy would exit before publishing any manifest at all —
-          # taking the retitle with it. --sync keeps the upload path alive
-          # while the per-server HEAD preflight still skips blobs that exist.
-          echo "Tag $TAG: deploying and snapshotting."
-          set_title "$TAG"
-          deploy --sync
-
-          # Confirm the relays are actually serving the retitled manifest
-          # before snapshotting it. The snapshot captures whatever it can
-          # fetch, so a slow relay — or this workflow's own main-push run
-          # racing this one — would otherwise be recorded under the wrong
-          # title, in an event that by design is never replaced. --dry-run
-          # builds the same event without signing or publishing it.
-          snapshot_titled() {
-            rm -rf /tmp/nsyte-snapshot-preview
-            nsyte snapshot \
-              --sec "$NSYTE_BUNKER" \
-              --dry-run \
-              --dry-run-output /tmp/nsyte-snapshot-preview >/dev/null 2>&1 || return 1
-            node -e '
-              const fs = require("fs");
-              const [dir, want] = process.argv.slice(1);
-              const ok = fs.readdirSync(dir)
-                .filter((f) => f.endsWith(".json"))
-                .some((f) => {
-                  const event = JSON.parse(fs.readFileSync(`${dir}/${f}`, "utf8"));
-                  return event.kind === 5128 &&
-                    (event.tags || []).some((t) => t[0] === "title" && t[1] === want);
-                });
-              process.exit(ok ? 0 : 1);
-            ' /tmp/nsyte-snapshot-preview "$TAG"
-          }
-
-          ready=0
-          for _ in 1 2 3 4 5; do
-            if snapshot_titled; then ready=1; break; fi
-            sleep 6
-          done
-
-          snapshot_status=0
-          if [ "$ready" -eq 1 ]; then
-            set +e
-            nsyte snapshot --sec "$NSYTE_BUNKER" 2>&1 | tee /tmp/nsyte-snapshot.log
-            snapshot_status="${PIPESTATUS[0]}"
-            set -e
-          else
-            echo "Relays are not serving a manifest titled $TAG; refusing to publish a mistitled snapshot." >&2
-            snapshot_status=1
+          # The session goes on the command line because that is the only
+          # non-interactive way in: nsyte's `--prompt-sec` is a Cliffy
+          # `Secret.prompt`, a hidden TTY input that cannot be piped. So the
+          # nbunksec is visible in the runner's process list, to host root —
+          # which already holds it, since the coordinator passes it in from
+          # its own environment. Job containers get no docker socket and their
+          # own PID namespace, so a concurrent job cannot read it.
+          set +e
+          nsyte deploy dist \
+            --sec "$NSYTE_BUNKER" \
+            --concurrency 2 \
+            --non-interactive \
+            --skip-secrets-scan 2>&1 | tee /tmp/nsyte-deploy.log
+          status="${PIPESTATUS[0]}"
+          set -e
+          # A deploy that changes no file exits NON-ZERO with "No new files
+          # to upload". That is success: the manifest already on the relays
+          # describes exactly this build.
+          if [ "$status" -ne 0 ] && ! grep -q "No new files to upload" /tmp/nsyte-deploy.log; then
+            exit "$status"
           fi
-
-          # Put the site's own title back whatever happened above — including
-          # the give-up branch, which has published a retitled manifest and not
-          # snapshotted it. A live manifest left titled with a version is the
-          # one piece of state this job can strand.
-          set_title "$SITE_TITLE"
-          deploy --sync
-
-          exit "$snapshot_status"

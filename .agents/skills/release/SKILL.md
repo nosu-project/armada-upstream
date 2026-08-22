@@ -182,7 +182,8 @@ git push origin main vX.Y.Z
 **CRITICAL**: Push only the specific tag being released. NEVER use `--tags` —
 that pushes ALL local tags, including stale or deleted ones.
 
-This triggers ngit-ci (`release.yml` + `deploy-nsite.yml`).
+This triggers ngit-ci's `release.yml` (on the tag) and `deploy-nsite.yml` (on
+the `main` push that carries the same commit).
 
 **NEVER push to the `gitlab` remote.** Push only to `origin`. Even though a
 `gitlab` mirror remote exists and its pipeline would build the macOS `.dmg` and
@@ -211,13 +212,24 @@ Runs on the `vX.Y.Z` tag via `act` (GitHub Actions syntax), one Linux container
 per job. Results/artifacts publish to Nostr and show on gitworkshop.dev.
 
 `release.yml` is ONE workflow whose jobs are chained
-`android → desktop → publish → deploy → release`. They must stay chained: act
+`desktop → publish → deploy → android → release`. They must stay chained: act
 binds one checkout into every job container, so unchained jobs would run in
 parallel over the same working tree, and `android` and `desktop` each build a
-web bundle with different env. `desktop` is `if: always()` so an Android
-failure doesn't cost the desktop installers.
+web bundle with different env. `android` goes LAST and is `if: always()`: it
+publishes to Zapstore and Google Play, which can reject for reasons unrelated
+to the artifacts, and `if: always()` rescues only the job carrying it — not
+the jobs downstream — so when it ran first a Play rejection skipped `publish`
+and `deploy` and shipped a release with no signed Flatpak and no updater feed.
 
-1. **android** — signed Android APK + AAB, then Zapstore publish
+1. **desktop** — Electron AppImage, deb, Flatpak bundle, NSIS Setup +
+   portable `.exe` (cross-built from Linux via wine), and ad-hoc-signed macOS
+   `.zip`s per arch.
+2. **publish** — GPG-signs the Flatpak OSTree repository in a fresh container,
+   the credential boundary for the signing key.
+3. **deploy** — rsyncs ONLY what cannot be content-addressed: electron-updater's
+   feed under `/downloads/desktop/` and the Flatpak OSTree repository under
+   `/downloads/flatpak/`. Installers are no longer published here.
+4. **android** — signed Android APK + AAB, then Zapstore publish
    and Google Play publish, all in ONE job. `setup-node`/`setup-java`/`setup-android`, decode the JKS
    from `ANDROID_KEYSTORE_BASE64`, migrate to PKCS12,
    `versionCode = major*1_000_000 + minor*1_000 + patch` (from the tag), build web assets,
@@ -232,24 +244,20 @@ failure doesn't cost the desktop installers.
    Build and publish share one job on purpose: act's local artifact
    server round-trips a multi-file wildcard upload back as a 3-byte stub, so a
    separate `publish-zapstore` job used to receive an empty APK and fail.
-2. **desktop** — Electron AppImage, deb, Flatpak bundle, NSIS Setup +
-   portable `.exe` (cross-built from Linux via wine), and ad-hoc-signed macOS
-   `.zip`s per arch.
-3. **publish** — GPG-signs the Flatpak OSTree repository in a fresh container,
-   the credential boundary for the signing key.
-4. **deploy** — rsyncs ONLY what cannot be content-addressed: electron-updater's
-   feed under `/downloads/desktop/` and the Flatpak OSTree repository under
-   `/downloads/flatpak/`. Installers are no longer published here.
 5. **release** — publishes the kind-30622 NIP-34 release event naming every
    artifact by hash (`docs/releases.md`), uploading to Blossom only the blobs
    ngit-ci's own artifact channel dropped. `needs: [android, deploy]`, so it is
    the single writer of an addressable event that has no compare-and-swap, and
    the `.flatpak` bundle can't be announced before the origin it configures is
    live and verified.
-6. **deploy-nsite.yml → deploy** — publishes the web client to Blossom + relays
-   as the nsite `armada`, plus an immutable kind-5128 manifest snapshot titled
-   with the tag, so the release stays addressable after the named site moves
-   on. Also runs on every push to `main`; the snapshot is the tag-only half.
+
+`deploy-nsite.yml` is a separate workflow on a separate trigger: it publishes
+the web client to Blossom + relays as the nsite `armada` on **pushes to `main`
+only**. A release tag carries the same commit as the `main` push beside it, so
+the tagged bundle reaches the nsite through that run. It no longer publishes a
+kind-5128 snapshot per tag — `nsyte snapshot` can only take its title from the
+live manifest, so titling one meant retitling the live site and back; see the
+comment at the top of the workflow.
 
 macOS is not built on ngit-ci (act runs Linux containers only).
 
@@ -303,8 +311,7 @@ Optional (publishing the update feed and Flatpak repository to
 | `DEPLOY_SSH_CONFIG_BASE64` | (optional) base64 of an ssh_config written to `~/.ssh/config` |
 | `DEPLOY_TARGET` | (optional) rsync destination; defaults to `web` |
 
-Required (nsite deploy on push to `main` and on tags, ngit-ci
-`deploy-nsite.yml`):
+Required (nsite deploy on push to `main`, ngit-ci `deploy-nsite.yml`):
 
 | Variable | What |
 |----------|------|

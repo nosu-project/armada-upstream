@@ -422,6 +422,36 @@ describe("desktop update publication", () => {
     );
   });
 
+  // The nsite deploys from `main` and from nothing else. A tag push carries
+  // the same commit as the `main` push beside it, so adding a tag trigger back
+  // buys no bundle that isn't already published — and costs two things. act
+  // derives a container name from the workflow and job names alone (no run id,
+  // ref or commit), so one commit planning this workflow twice put both runs
+  // on one container and each destroyed the other's. And the only reason a tag
+  // ran it at all was the kind-5128 snapshot, which `nsyte snapshot` can title
+  // only by retitling the LIVE site and back — the one piece of state this job
+  // could strand. Restore the tag path when nsyte can title a snapshot
+  // directly, in its OWN workflow file so the container names differ.
+  it("deploys the nsite from main only", () => {
+    const nsite = loadYaml(
+      fs.readFileSync(
+        path.resolve(root, ".ngit/act/workflows/deploy-nsite.yml"),
+        "utf8",
+      ),
+    );
+    expect(nsite.on.push.branches).toEqual(["main"]);
+    expect(nsite.on.push.tags).toBeUndefined();
+    const publishStep = nsite.jobs.deploy.steps.find(
+      (step) => step.name === "Publish to Blossom + relays",
+    );
+    const publishScript = String(publishStep?.run || "");
+    expect(publishScript).toContain("nsyte deploy dist");
+    expect(publishScript).not.toContain("nsyte snapshot");
+    // Nothing here writes the config, so no run can leave the live site
+    // titled with a version.
+    expect(publishScript).not.toContain("config.title");
+  });
+
   it("stages and verifies the pinned public Flatpak identity", () => {
     const signingScript = String(flatpakSigningStep?.run || "");
     expect(signingScript).toContain(
