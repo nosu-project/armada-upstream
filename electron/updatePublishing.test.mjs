@@ -606,6 +606,20 @@ describe("desktop update publication", () => {
     expect(publishStep?.run).toContain("scripts/publish-release.mjs");
   });
 
+  // `if: always()` runs the job that carries it past an ancestor's failure, but
+  // does not rescue the jobs downstream of it. With the Android build first, a
+  // Google Play policy rejection ran `desktop` and then skipped `publish` and
+  // `deploy` — so a complete set of installers went unsigned and undeployed.
+  // The build that can be rejected for reasons unrelated to its artifacts goes
+  // last, where nothing depends on it.
+  it("keeps the Android publish from gating the desktop release", () => {
+    expect(workflow.jobs.desktop.needs).toBeUndefined();
+    expect(workflow.jobs.publish.needs).toBe("desktop");
+    expect(workflow.jobs.deploy.needs).toBe("publish");
+    expect(workflow.jobs.android.needs).toEqual(["deploy"]);
+    expect(workflow.jobs.android.if).toContain("always()");
+  });
+
   // One writer, structurally. Kind 30622 is addressable and Nostr has no
   // compare-and-swap, so a second publisher would replace the first's event
   // rather than merge with it, silently dropping half the artifacts.

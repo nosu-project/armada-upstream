@@ -57,6 +57,8 @@ import { hexToBytes } from '@noble/hashes/utils';
 const RELEASE_KIND = 30622;
 /** BUD-02 upload authorization. */
 const BLOSSOM_AUTH_KIND = 24242;
+/** Attempts per blob per server, before the release is refused. */
+const UPLOAD_ATTEMPTS = 3;
 
 const DEFAULT_BLOSSOM = 'https://blossom.ditto.pub';
 /**
@@ -169,7 +171,7 @@ async function hasBlob(server, hash) {
 }
 
 /** BUD-02 upload, authorized by a kind-24242 event the signer produces. */
-async function uploadBlob(server, path, hash, mime, sign) {
+async function uploadOnce(server, path, hash, mime, sign) {
   const now = Math.floor(Date.now() / 1000);
   const auth = await sign({
     kind: BLOSSOM_AUTH_KIND,
@@ -195,6 +197,34 @@ async function uploadBlob(server, path, hash, mime, sign) {
   if (!res.ok) {
     throw new Error(`${server} rejected ${basename(path)}: ${res.status} ${await res.text().catch(() => '')}`.trim());
   }
+}
+
+/**
+ * Upload with retries.
+ *
+ * These are ~100 MB bodies over a connection held open for minutes, and a
+ * single dropped one used to end the release: the whole event is refused if any
+ * artifact cannot be stored, so one transient `fetch failed` two thirds of the
+ * way through a set cost a version its downloads. Between attempts the blob is
+ * re-checked, because the coordinator uploads its own copy of the same bytes
+ * around the same time and a hit there is as good as our own success.
+ */
+async function uploadBlob(server, path, hash, mime, sign) {
+  let lastError;
+  for (let attempt = 1; attempt <= UPLOAD_ATTEMPTS; attempt++) {
+    try {
+      await uploadOnce(server, path, hash, mime, sign);
+      return;
+    } catch (err) {
+      lastError = err;
+      if (attempt === UPLOAD_ATTEMPTS) break;
+      if (await hasBlob(server, hash)) return;
+      const backoff = 5_000 * attempt;
+      stderr.write(`  retry ${basename(path)} in ${backoff / 1000}s (${attempt}/${UPLOAD_ATTEMPTS}): ${err.message}\n`);
+      await new Promise((resolve) => setTimeout(resolve, backoff));
+    }
+  }
+  throw lastError;
 }
 
 /**
