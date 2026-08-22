@@ -1645,6 +1645,13 @@ jobs:
           # Bounded for the same reason as the zsp publish above: fastlane
           # supply talks to the Play Developer API and will sit on a stalled
           # connection indefinitely. 1800s is generous for a 14 MB AAB upload.
+          #
+          # `tee`d to a file the next step ALWAYS uploads, for the same reason
+          # the zsp trace is: act truncates a failing step's console log, and
+          # this step's whole failure mode is one line near the end. Streamed
+          # rather than buffered so a hang still leaves a trace.
+          out="${RUNNER_TEMP:-/tmp}/fastlane-supply-output.txt"
+          set +e
           timeout --signal=TERM --kill-after=30 1800 \
           fastlane supply \
             --aab "$aab_path" \
@@ -1655,7 +1662,42 @@ jobs:
             --skip_upload_metadata \
             --skip_upload_images \
             --skip_upload_screenshots \
-            --skip_upload_apk
+            --skip_upload_apk 2>&1 | tee "$out"
+          supply_rc=${PIPESTATUS[0]}
+          set -e
+          echo "=== fastlane supply finished (rc=$supply_rc) ==="
+
+          # An app-content answer that Google is still waiting for fails
+          # `edits.commit`, NOT the upload: supply uploads the AAB, updates the
+          # track, and only then gets "Invalid request - You must let us know
+          # whether your app uses any full-screen intent permissions". A failed
+          # commit discards the whole edit, so the bundle never enters the
+          # library and the Play listing simply does not move — while every
+          # other artifact of the release publishes normally. That is what
+          # stalled Play at 0.51.2 from 2026-08-11 while eight releases shipped
+          # everywhere else. It is a Play Console action (App content), not
+          # anything this workflow can send, so say so rather than leaving the
+          # next reader to diff this job against a working one.
+          if [ "$supply_rc" -ne 0 ] && grep -qi "you must let us know\|declaration\|app content" "$out"; then
+            echo "Google rejected the COMMIT, not the upload: the Play Console is" >&2
+            echo "waiting on an App content declaration. Answer it at" >&2
+            echo "Play Console > buzz.armada.app > Policy > App content, then" >&2
+            echo "re-run this job — no code change here will help." >&2
+          fi
+          if [ "$supply_rc" -eq 124 ] || [ "$supply_rc" -eq 137 ]; then
+            echo "fastlane supply exceeded the 1800s deadline and was killed." >&2
+          fi
+          exit "$supply_rc"
+
+      # Always, and for the same reason as the zsp trace: the run this exists
+      # for is the one where the step failed and act cut the console log short.
+      - name: Upload fastlane supply output
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fastlane-supply-output-${{ steps.version.outputs.name }}
+          path: ${{ runner.temp }}/fastlane-supply-output.txt
+          if-no-files-found: warn
 
       - name: Remove Google Play service account key
         if: ${{ always() }}
