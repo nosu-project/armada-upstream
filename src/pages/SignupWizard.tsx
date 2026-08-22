@@ -112,6 +112,10 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
   // demonstrably left this screen — copied to the clipboard, stored in the OS
   // keyring, or written to a file. A dismissed keyring sheet is not a backup.
   const [backedUp, setBackedUp] = useState(false);
+  // True while `login.nsec` is persisting the new login. The save step stays
+  // rendered throughout: leaving it before the login is durable renders
+  // nothing at all (neither the `!user` nor the `user` branch matches).
+  const [loggingIn, setLoggingIn] = useState(false);
 
   // Whatever exit the wizard takes (finish, skip, or navigating onto a
   // community), it unmounts — so clear the onboarding flag here. Setting it is
@@ -222,7 +226,8 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
 
   // Leave the save step: log in as the new account and move to profile setup.
   // Only reachable once `backedUp` is set.
-  const handleContinue = () => {
+  const handleContinue = async () => {
+    if (loggingIn) return;
     // Brand-new account: nothing to catch up on, so skip the post-login sync
     // gate. Otherwise its full-screen overlay paints over the profile/add
     // wizard steps (SyncGate is z-100, the wizard z-50) while a network-bound
@@ -290,7 +295,26 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
     // opt-in (and the native notification step) would enqueue and paint over
     // the profile step. Cleared when this wizard unmounts.
     setOnboardingActive(true);
-    login.nsec(nsec);
+    setLoggingIn(true);
+    try {
+      // Awaited: `login.nsec` persists the login asynchronously (and, with an
+      // account already active, performs the whole switch). Advancing before
+      // it resolves moves to a step that renders on `user` — so the wizard
+      // blanks until the login commits — and leaves a rejected persist with no
+      // handler at all, for a key whose only copy the user was just told to
+      // back up.
+      await login.nsec(nsec);
+    } catch {
+      setLoggingIn(false);
+      setOnboardingActive(false);
+      toast({
+        title: "Couldn't sign in",
+        description:
+          "Your key was created but could not be saved to this device. Keep your backup and try again.",
+        variant: "destructive",
+      });
+      return;
+    }
     setStep("profile");
   };
 
@@ -408,7 +432,7 @@ export function SignupWizard({ onExit }: SignupWizardProps) {
               size="lg"
               className="h-12 w-full clip-corner-lg text-base font-medium"
               onClick={handleContinue}
-              disabled={!backedUp || saving}
+              disabled={!backedUp || saving || loggingIn}
             >
               Continue
             </Button>

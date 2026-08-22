@@ -47,6 +47,9 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose, onComplete
   // demonstrably left this screen — copied, stored in the OS keyring, or
   // written to a file. A dismissed keyring sheet is not a backup.
   const [backedUp, setBackedUp] = useState(false);
+  // True while the login is being persisted. Continue is asynchronous now, so
+  // without this a second tap starts a second login for the same key.
+  const [loggingIn, setLoggingIn] = useState(false);
 
   // Reset to a clean generate step each time the flow opens.
   useEffect(() => {
@@ -57,6 +60,7 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose, onComplete
     setCopied(false);
     setSaving(false);
     setBackedUp(false);
+    setLoggingIn(false);
   }, [isOpen]);
 
   /** The generated key's identity, or null while there's no valid key in hand. */
@@ -140,8 +144,26 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose, onComplete
   };
 
   // Log in as the new account and dismiss. Only reachable once `backedUp`.
-  const handleContinue = () => {
-    login.nsec(nsec);
+  //
+  // Awaited: `login.nsec` persists the login (and, with an account already
+  // active, performs the whole switch) asynchronously. Dismissing before it
+  // resolves would report an account that isn't durable yet, and a rejected
+  // persist would have no handler at all — for a key whose only copy the user
+  // was just told to back up.
+  const handleContinue = async () => {
+    if (loggingIn) return;
+    setLoggingIn(true);
+    try {
+      await login.nsec(nsec);
+    } catch {
+      setLoggingIn(false);
+      toast({
+        title: 'Couldn\'t sign in',
+        description: 'Your key was created but could not be saved to this device. Keep your backup and try again.',
+        variant: 'destructive',
+      });
+      return;
+    }
     onComplete?.();
     onClose();
   };
@@ -264,7 +286,7 @@ const SignupDialog: React.FC<SignupDialogProps> = ({ isOpen, onClose, onComplete
             size="lg"
             className="h-12 w-full clip-corner-lg text-base font-medium"
             onClick={handleContinue}
-            disabled={!backedUp || saving}
+            disabled={!backedUp || saving || loggingIn}
           >
             Continue
           </Button>
