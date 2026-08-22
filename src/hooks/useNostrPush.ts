@@ -307,17 +307,22 @@ export async function mutateWebPushRegistrations(
   if (!result.completed) {
     return { completed: false, activated: false, deferredRegistrations: [] };
   }
-  if (result.failedDeletions.length > 0) {
-    throw new Error(
-      `Failed to remove ${result.failedDeletions.length} stale push subscription(s)`,
-    );
-  }
+
+  // A stale record the gateway refused to release is a RETRY, not a reason to
+  // withhold activation. Everything this pass registered is correct, and
+  // endpoint safety is proven separately (`activateRegisteredWebPush`), so
+  // returning here would leave a correct endpoint behind the durable
+  // account-exit kill switch with no sealed policy — silently no
+  // notifications at all until that one record becomes deletable. The error
+  // is still raised below, after the useful work has landed.
+  const staleDeletionsRemain = result.failedDeletions.length > 0;
 
   // An incomplete cold-load pass may add installation-scoped records, but it
   // cannot prove that the legacy/shared or previously tracked records are
   // stale. Completing migration would forget the very ids a later full pass
-  // needs to delete.
-  if (job.kind === "sync" && !job.authoritative) {
+  // needs to delete — and so would latching it while a delete this pass
+  // attempted is still outstanding.
+  if ((job.kind === "sync" && !job.authoritative) || staleDeletionsRemain) {
     savePushRegistrationState(scope, {
       ids: result.trackedIds,
       legacyMigrationComplete: state.legacyMigrationComplete,
@@ -354,6 +359,15 @@ export async function mutateWebPushRegistrations(
     // Avoid claiming activation merely because no registration was attempted:
     // a prior account-exit kill switch remains intentional in that case.
     activated = true;
+  }
+
+  // Report the orphan last, so the caller's bounded retry keeps trying to
+  // release it without that retry being the thing standing between a correct
+  // endpoint and any notification at all.
+  if (staleDeletionsRemain) {
+    throw new Error(
+      `Failed to remove ${result.failedDeletions.length} stale push subscription(s)`,
+    );
   }
   return {
     completed: true,

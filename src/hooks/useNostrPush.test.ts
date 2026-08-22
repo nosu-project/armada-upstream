@@ -265,4 +265,82 @@ describe("mutateWebPushRegistrations", () => {
     expect(live).toEqual(new Set([newId]));
     expect(prepareConfig).toHaveBeenCalledTimes(1);
   });
+
+  it("still seals config and lifts the kill switch when a stale DELETE fails", async () => {
+    // Endpoint safety and gateway prune completeness are deliberately
+    // unrelated (see `activateRegisteredWebPush`). A transient 5xx on one
+    // orphaned record must not leave an install whose PUTs all succeeded
+    // sitting behind the durable account-exit kill switch with no sealed
+    // policy — that is silently "no notifications at all" until the record
+    // becomes deletable, while the endpoint and registrations are correct.
+    const pubkey = "f".repeat(64);
+    const domain = "stale-delete.example";
+    const installation = "install";
+    const scoped = (id: string) => scopePushSubscriptionId(
+      id,
+      pubkey,
+      domain,
+      installation,
+    );
+    const orphanId = scoped("armada-c2-orphan");
+    savePushRegistrationState({ pubkey, domain, installation }, {
+      ids: [orphanId],
+      legacyMigrationComplete: true,
+    });
+    const subscription = {
+      endpoint: "https://push.example/stale-delete",
+      options: {},
+      toJSON: () => ({ keys: { p256dh: "p256", auth: "auth" } }),
+    } as unknown as PushSubscription;
+    const registerSubscription = vi.fn(
+      async (_input: { subscription_id: string }) => {},
+    );
+    const deleteSubscription = vi.fn(async () => {
+      throw new Error("gateway unavailable");
+    });
+    const prepareConfig = vi.fn(async () => {});
+    const job = {
+      kind: "sync",
+      client: { registerSubscription, deleteSubscription },
+      pubkey,
+      domain,
+      installation,
+      prepared: {
+        registration: {
+          pushManager: { getSubscription: vi.fn(async () => subscription) },
+        },
+        key: new ArrayBuffer(0),
+        options: { userVisibleOnly: true },
+      },
+      specs: [{
+        id: "armada-dm17",
+        relays: ["wss://relay.example"],
+        filter: { kinds: [1059], "#p": [pubkey] },
+        notification: {
+          title: "New message",
+          body: "New direct message",
+          data: { scope: "dm", relays: ["wss://relay.example"] },
+        },
+      }],
+      authoritative: true,
+      notificationSettingsReady: true,
+      groupPlaneReady: true,
+      dmPlaneReady: true,
+      concordPlaneReady: true,
+      prepareConfig,
+    } as unknown as WebPushSyncJob;
+
+    // The failed deletion is still reported to the caller, so its bounded
+    // retry keeps trying to release the orphan.
+    await expect(mutateWebPushRegistrations(job, () => true))
+      .rejects.toThrow(/stale push subscription/);
+
+    expect(registerSubscription).toHaveBeenCalledTimes(1);
+    expect(registerSubscription.mock.calls[0]?.[0]).toMatchObject({
+      subscription_id: scoped("armada-dm17"),
+    });
+    expect(deleteSubscription).toHaveBeenCalledWith(orphanId, domain);
+    // The point of the test: the successful registration was activated.
+    expect(prepareConfig).toHaveBeenCalledTimes(1);
+  });
 });
