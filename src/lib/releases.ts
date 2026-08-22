@@ -241,6 +241,22 @@ export function compareVersions(a: string, b: string): number {
 }
 
 /**
+ * The release `/downloads` should offer by default.
+ *
+ * The newest STABLE one, not simply the newest: a prerelease sorts above the
+ * stable version it precedes (v1.2.3-rc.1 is newer than v1.2.2), so featuring
+ * the head of the list would hand every visitor a release candidate the moment
+ * one is tagged. Prereleases stay visible in the earlier-releases list, where
+ * their channel is labelled.
+ *
+ * Falls back to the newest of any channel, so a repository that has only ever
+ * tagged prereleases still offers something rather than looking empty.
+ */
+export function featuredRelease(releases: readonly Release[]): Release | undefined {
+  return releases.find((release) => release.channel === "main") ?? releases[0];
+}
+
+/**
  * Newest first, keeping one release per version.
  *
  * A version can legitimately arrive more than once — the same maintainer

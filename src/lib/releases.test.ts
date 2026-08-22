@@ -4,6 +4,7 @@ import {
   RELEASE_KIND,
   artifactOs,
   compareVersions,
+  featuredRelease,
   foldReleases,
   parseRelease,
   type Release,
@@ -140,6 +141,41 @@ describe("compareVersions", () => {
   it("ranks a release above its own prereleases", () => {
     expect(compareVersions("v1.2.3", "v1.2.3-rc.1")).toBeLessThan(0);
     expect(compareVersions("v1.2.3-rc.2", "v1.2.3-rc.1")).toBeLessThan(0);
+  });
+});
+
+describe("featuredRelease", () => {
+  const rel = (version: string, channel: string): Release => ({
+    id: version,
+    pubkey: "p",
+    createdAt: 1,
+    repoId: "armada",
+    version,
+    title: version,
+    channel,
+    commit: undefined,
+    notes: "",
+    artifacts: [],
+  });
+
+  it("skips a prerelease that sorts above the newest stable", () => {
+    // v1.3.0-rc.1 is genuinely newer than v1.2.0, so the head of the list is a
+    // release candidate. Featuring it would hand every visitor an rc build.
+    const featured = featuredRelease([rel("v1.3.0-rc.1", "rc"), rel("v1.2.0", "main")]);
+    expect(featured?.version).toBe("v1.2.0");
+  });
+
+  it("takes the newest stable when the list leads with one", () => {
+    expect(featuredRelease([rel("v1.2.0", "main"), rel("v1.1.0", "main")])?.version).toBe("v1.2.0");
+  });
+
+  it("falls back to a prerelease when nothing stable was ever tagged", () => {
+    expect(featuredRelease([rel("v0.1.0-rc.2", "rc"), rel("v0.1.0-rc.1", "rc")])?.version)
+      .toBe("v0.1.0-rc.2");
+  });
+
+  it("has nothing to offer for an empty list", () => {
+    expect(featuredRelease([])).toBeUndefined();
   });
 });
 

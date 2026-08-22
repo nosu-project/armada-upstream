@@ -716,6 +716,40 @@ jobs:
           done
           ls -lh ./*.zip
 
+      # Stage everything Flatpak signing has NO bearing on, here in the job that
+      # built it — beside the APK the android job already staged. The .flatpak
+      # bundle is deliberately absent: it is staged by `publish`, and only after
+      # its repository signature verifies, because installing it configures a
+      # GPG-verified remote.
+      #
+      # The split is the point. These installers have nothing to do with the
+      # OSTree repository, so a Flatpak signing failure must cost the release
+      # its Flatpak bundle and nothing else. Staging them in `publish` after the
+      # signing step — which is where this used to live — meant one unsigned
+      # commit turned an otherwise perfect build into an Android-only release.
+      - name: Stage installers for the release event
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          out="$PWD/.release-artifacts"
+          mkdir -p "$out"
+          # Match electron-builder's versioned name specifically. flatpak/build.sh
+          # stages its input beside it as the unversioned Armada.AppImage, so a
+          # bare *.AppImage glob matches two files and cp then reads the last
+          # argument as a destination directory.
+          cp electron/release/Armada-*-linux-*.AppImage "$out/Armada-$TAG.AppImage"
+          cp electron/release/*.deb "$out/Armada-$TAG.deb"
+          # Anchored to the trailing -Setup.exe so it can't also match the
+          # intermediate Armada-<ver>-Setup.__uninstaller.exe.
+          cp electron/release/Armada-*-Setup.exe "$out/Armada-$TAG.exe"
+          # The portable build is the non-Setup .exe.
+          cp "$(ls electron/release/*.exe | grep -iv setup | head -n1)" "$out/Armada-$TAG-portable.exe"
+          # .zip names its platform, since the extension doesn't.
+          cp electron/release/mac/Armada-mac-x64.zip "$out/Armada-$TAG-mac-x64.zip"
+          cp electron/release/mac/Armada-mac-arm64.zip "$out/Armada-$TAG-mac-arm64.zip"
+          ls -lh "$out"
+
   # ngit-ci runs dependent jobs in fresh containers while bind-mounting the
   # same checkout, so this job sees electron/release from `desktop` without an
   # artifact round-trip. This is intentionally ngit-ci-specific: another
@@ -790,7 +824,7 @@ jobs:
           FLATPAK_GPG_EXPECTED_FINGERPRINT: ${{ secrets.FLATPAK_GPG_EXPECTED_FINGERPRINT }}
           # Parsed into the workflow plan before the application build runs.
           # Keep this literal synchronized with electron/flatpak/sign.sh.
-          TRUSTED_SIGN_SCRIPT_SHA256: 05cccef4bcd0404300b1d382812bab26af8d1617f97a2e2f7731954e74f7d3eb
+          TRUSTED_SIGN_SCRIPT_SHA256: 1955791dcbad54b30d5e3c65f6ea763911539bfc0d0d9b3c3c264eb1ca484d28
         run: |
           set -euo pipefail
           export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -965,8 +999,14 @@ jobs:
 
           # Verify through a fresh OSTree remote configured to require the
           # summary and every release metadata commit signature. This reads
-          # only the exported public key and proves the app plus generated
-          # AppStream refs are usable before the repository reaches rsync.
+          # only the exported public key and proves the repository is usable
+          # before it reaches rsync.
+          #
+          # Note this walks EVERY ref `ostree refs` reports, not just the app
+          # and appstream ones checked for below — including `ostree-metadata`,
+          # which flatpak generates for the summary index and which the build
+          # phase creates without credentials. `sign.sh` has to sign each of
+          # them; one unsigned commit fails the whole pull.
           mapfile -t verify_refs < <(
             ostree refs --repo="$flatpak_repo"
           )
@@ -996,6 +1036,12 @@ jobs:
             --set=gpg-verify=true --set=gpg-verify-summary=true \
             --gpg-import="$public_key" armada-ci "file://$flatpak_repo"
           for ref in "${verify_refs[@]}"; do
+            # Named, because the pull reports only a commit id on
+            # failure and every ref in the repository is verified —
+            # including metadata refs nothing else in this file
+            # mentions. Without this the log says which COMMIT has no
+            # signature but not which ref failed to get one.
+            echo "verifying signature of armada-ci ref: $ref"
             ostree pull --repo="$verify_repo" --commit-metadata-only \
               armada-ci "$ref"
           done
@@ -1065,14 +1111,12 @@ jobs:
           )
           echo "Signed Flatpak repository verified with key $fingerprint."
 
-      # Stage everything human-facing under ONE .release-artifacts/ directory,
-      # named exactly as the release event will name it: the artifact upload and
-      # the release event then describe the same bytes under the same name. The
-      # extension identifies the platform where it can (.AppImage / .deb =
-      # Linux, .exe = Windows); the Windows portable build and the mac zips
-      # carry a suffix because theirs doesn't. `src/lib/downloads.test.ts` reads
-      # these names back and fails if the client can't file one under a
-      # platform.
+      # Add the signed Flatpak bundle to .release-artifacts/, and stage the
+      # machine update feeds. Every human-facing file lands in that one
+      # directory named exactly as the release event will name it, so the
+      # artifact upload and the event describe the same bytes under the same
+      # name. `src/lib/downloads.test.ts` reads those names back and fails if
+      # the client can't file one under a platform.
       #
       # Machine update feeds are staged separately under desktop/ and flatpak/,
       # because neither can be content-addressed: electron-updater fetches a
@@ -1099,21 +1143,13 @@ jobs:
           flatpak_repo="$root/flatpak"
           rm -rf "$root"
           mkdir -p "$out" "$feed" "$flatpak_repo"
-          # Match electron-builder's versioned name specifically. flatpak/build.sh
-          # stages its input beside it as the unversioned Armada.AppImage, so a
-          # bare *.AppImage glob matches two files and cp then reads the last
-          # argument as a destination directory.
-          cp electron/release/Armada-*-linux-*.AppImage "$out/Armada-$TAG.AppImage"
-          cp electron/release/*.deb "$out/Armada-$TAG.deb"
+          # ONLY the Flatpak bundle is staged here. The other six installers were
+          # staged by the `desktop` job, which is what keeps them in the release
+          # when this job fails — see the note on that step. This one is gated on
+          # the signature check above having passed, because installing the
+          # bundle configures a GPG-verified remote and announcing it before its
+          # repository verifies hands the user an app whose first update fails.
           cp electron/release/Armada-flatpak-*.flatpak "$out/Armada-$TAG.flatpak"
-          # Anchored to the trailing -Setup.exe so it can't also match the
-          # intermediate Armada-<ver>-Setup.__uninstaller.exe.
-          cp electron/release/Armada-*-Setup.exe "$out/Armada-$TAG.exe"
-          # The portable build is the non-Setup .exe.
-          cp "$(ls electron/release/*.exe | grep -iv setup | head -n1)" "$out/Armada-$TAG-portable.exe"
-          # .zip names its platform, since the extension doesn't.
-          cp electron/release/mac/Armada-mac-x64.zip "$out/Armada-$TAG-mac-x64.zip"
-          cp electron/release/mac/Armada-mac-arm64.zip "$out/Armada-$TAG-mac-arm64.zip"
 
           # No unversioned aliases and no latest-*.json manifest are written any
           # more. Both existed because /downloads had to name a file at build
@@ -1361,6 +1397,12 @@ jobs:
             --gpg-import="$DEPLOY_ROOT/flatpak/armada-flatpak.gpg" \
             armada-staged "file://$DEPLOY_ROOT/flatpak"
           for ref in "${staged_verify_refs[@]}"; do
+            # Named, because the pull reports only a commit id on
+            # failure and every ref in the repository is verified —
+            # including metadata refs nothing else in this file
+            # mentions. Without this the log says which COMMIT has no
+            # signature but not which ref failed to get one.
+            echo "verifying signature of armada-staged ref: $ref"
             ostree pull --repo="$staged_verify_repo" --commit-metadata-only \
               armada-staged "$ref"
           done
@@ -1509,6 +1551,12 @@ jobs:
             --gpg-import="$smoke/flatpak-armada-flatpak.gpg" \
             armada-public https://armada.buzz/downloads/flatpak/
           for ref in "${staged_verify_refs[@]}"; do
+            # Named, because the pull reports only a commit id on
+            # failure and every ref in the repository is verified —
+            # including metadata refs nothing else in this file
+            # mentions. Without this the log says which COMMIT has no
+            # signature but not which ref failed to get one.
+            echo "verifying signature of armada-public ref: $ref"
             ostree pull --repo="$public_verify_repo" --commit-metadata-only \
               armada-public "$ref"
           done

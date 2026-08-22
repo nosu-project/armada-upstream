@@ -19,7 +19,7 @@ import {
 } from "@/lib/downloads";
 import { formatBytes } from "@/lib/fileBytes";
 import { APP_NAME } from "@/lib/platform";
-import type { Release, ReleaseArtifact } from "@/lib/releases";
+import { featuredRelease, type Release, type ReleaseArtifact } from "@/lib/releases";
 
 /**
  * The downloads deck: a headless page in the landing's visual language — the
@@ -142,10 +142,11 @@ function ArtifactButton({ artifact, primary }: { artifact: ReleaseArtifact; prim
   );
 }
 
-function TargetCard({ platform, artifacts, version, featured }: {
+function TargetCard({ platform, artifacts, version, channel, featured }: {
   platform: DownloadPlatform;
   artifacts: ReleaseArtifact[];
   version?: string;
+  channel?: string;
   featured?: boolean;
 }) {
   const Icon = OS_ICON[platform.os];
@@ -165,7 +166,15 @@ function TargetCard({ platform, artifacts, version, featured }: {
           <span className="font-mono text-[10px] lowercase tracking-wide text-primary/80">your platform</span>
         )}
         {artifacts.length > 0 && version && (
-          <span className="ml-auto font-mono text-xs text-muted-foreground shrink-0">{version}</span>
+          <span className="ml-auto flex items-center gap-1.5 shrink-0">
+            {/* Only reachable when nothing stable has ever been tagged, since
+                `featuredRelease` prefers the stable channel. Say so rather than
+                presenting a candidate as the release. */}
+            {channel && channel !== "main" && (
+              <span className="font-mono text-[10px] lowercase tracking-wide text-primary/80">{channel}</span>
+            )}
+            <span className="font-mono text-xs text-muted-foreground">{version}</span>
+          </span>
         )}
       </header>
 
@@ -271,8 +280,11 @@ export function DownloadsPage() {
   const detected = useMemo(() => detectCurrentOs(), []);
 
   const releases = useReleases();
-  const latest = releases.data?.[0];
-  const older = releases.data?.slice(1) ?? [];
+  // The newest STABLE release leads, not the newest outright — a tagged
+  // release candidate sorts above the stable version it precedes, and would
+  // otherwise become everyone's download. It still appears below, labelled.
+  const latest = useMemo(() => featuredRelease(releases.data ?? []), [releases.data]);
+  const older = (releases.data ?? []).filter((release) => release !== latest);
   const byOs = useMemo(() => groupByOs(latest), [latest]);
 
   // The visitor's platform first, everything else in declaration order. An
@@ -386,6 +398,7 @@ export function DownloadsPage() {
                   platform={platform}
                   artifacts={byOs.get(platform.os) ?? []}
                   version={latest.version}
+                  channel={latest.channel}
                   featured={platform.os === detected}
                 />
               ))}

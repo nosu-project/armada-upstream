@@ -150,17 +150,30 @@ if [ -z "$appstream_refs" ]; then
   exit 1
 fi
 
-for appstream_ref in $appstream_refs; do
-  if ! appstream_commit=$(ostree rev-parse --repo="$repo_dir" "$appstream_ref"); then
-    echo "Unable to resolve Flatpak appstream ref: $appstream_ref" >&2
+# `ostree-metadata` backs the summary index on flatpak 1.14+, and the build
+# phase generated it in its own credential-free `build-update-repo` pass. The
+# later signed pass below runs `--no-update-appstream` and will not regenerate
+# it, so without this it stays unsigned — while consumers verify EVERY ref the
+# repository advertises, not just the app and its appstream. One unsigned
+# metadata commit therefore fails the whole pull with
+# "GPG verification enabled, but no signatures found".
+metadata_refs=$(
+  printf '%s\n' "$repo_refs" | awk -F/ '
+    NF == 1 && $1 == "ostree-metadata" { print }
+  '
+)
+
+for unsigned_ref in $appstream_refs $metadata_refs; do
+  if ! unsigned_commit=$(ostree rev-parse --repo="$repo_dir" "$unsigned_ref"); then
+    echo "Unable to resolve Flatpak metadata ref: $unsigned_ref" >&2
     exit 1
   fi
   if [ -n "${GNUPGHOME:-}" ]; then
     ostree gpg-sign --repo="$repo_dir" --gpg-homedir="$GNUPGHOME" \
-      "$appstream_commit" "$FLATPAK_GPG_KEY"
+      "$unsigned_commit" "$FLATPAK_GPG_KEY"
   else
     ostree gpg-sign --repo="$repo_dir" \
-      "$appstream_commit" "$FLATPAK_GPG_KEY"
+      "$unsigned_commit" "$FLATPAK_GPG_KEY"
   fi
 done
 
