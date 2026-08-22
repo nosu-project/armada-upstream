@@ -10,7 +10,8 @@ import type { ImetaEncryption } from "@/lib/imeta";
  */
 export type AppScope =
   | { kind: "nip29"; relayUrl: string; groupId: string }
-  | { kind: "concord"; community: Community; channel: Channel };
+  | { kind: "concord"; community: Community; channel: Channel }
+  | { kind: "dm"; peer: string };
 
 /**
  * A stable string identifying a chat scope. MUST be deterministic and identical
@@ -28,6 +29,9 @@ export function appScopeKey(scope: AppScope): string {
       // cross-client, so respelling it would put this build in a different
       // coordination session from every other client in the same channel.
       return `concord2|${scope.channel.idHex}`;
+    case "dm":
+      // DM scope is identified by the peer's pubkey
+      return `dm|${scope.peer}`;
   }
 }
 

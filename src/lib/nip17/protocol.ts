@@ -129,6 +129,18 @@ export const DM_RUMOR_KINDS = [
   KIND_DM_TIMER,
 ];
 
+/**
+ * WebXDC peer signal kind (Vector's custom kind for Mini App realtime).
+ * Not stored in the DM rumor store — processed live for gossip channel coordination.
+ */
+export const KIND_DM_PEER_SIGNAL = 30078;
+
+/** The `d` tag Vector scopes its DM peer signals under. */
+export const DM_PEER_SIGNAL_D = "vector-webxdc-peer";
+
+/** Peer signal kinds that should be processed live (not stored). */
+export const DM_PEER_SIGNAL_KINDS = [KIND_DM_PEER_SIGNAL];
+
 /** NIP-59: outer (seal + wrap) timestamps are tweaked into the past, ≤ 2 days. */
 export const MAX_WRAP_BACKDATE_SECS = 2 * 24 * 60 * 60;
 
@@ -256,6 +268,31 @@ export function dmDeleteTags(
   return [...peers.map((peer) => ["p", peer]), ["e", targetId], ["k", String(targetKind)]];
 }
 
+/**
+ * Tags for a kind-15 file message rumor. The `p` set leads (conversation
+ * attribution — NIP-17 receivers), followed by NIP-94 file metadata tags
+ * (file-type, size, dim, blurhash, thumb, encryption params, etc.).
+ *
+ * For `.xdc` Mini App files, optionally includes a `webxdc-topic` tag that
+ * identifies the realtime gossip session. The topic is minted by the sender
+ * (see `mintTopicId` in `webxdcRealtime.ts`) and must be 52 uppercase base32
+ * characters to match Vector's validation.
+ */
+export function dmFileTags(
+  peers: readonly string[],
+  fileTags: string[][],
+  opts?: { webxdcTopic?: string; expiresAt?: number },
+): string[][] {
+  const tags: string[][] = [...peers.map((peer) => ["p", peer])];
+  // Add webxdc-topic for Mini Apps (Vector's interop field)
+  if (opts?.webxdcTopic) {
+    tags.push(["webxdc-topic", opts.webxdcTopic]);
+  }
+  // Add NIP-94 file metadata tags (file-type, size, dim, etc.)
+  for (const t of fileTags) tags.push(t);
+  return withExpiration(tags, opts?.expiresAt);
+}
+
 /** The two rumors that make one optional NIP-17 edit operation. */
 export interface DmEditRumors {
   /** New kind-14 message carrying the edited content at the original timestamp. */
@@ -300,6 +337,58 @@ export function buildDmEditRumors(
   });
 
   return { replacement, deletion };
+}
+
+/**
+ * Build a Kind 15 file message rumor for NIP-17 DMs.
+ *
+ * For `.xdc` Mini App files, mints a webxdc-topic and adds it to the tags.
+ * The topic is derived from the file hash and sender pubkey, matching Vector's
+ * approach for cross-client compatibility.
+ */
+export function buildDmFileRumor(opts: {
+  fileUrl: string;
+  fileHash: string;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  peers: readonly string[];
+  pubkey: string;
+  createdAt?: number;
+  /** Optional thumbnail URL */
+  thumbnail?: string;
+  /** Optional image dimensions (e.g., "1280x720") */
+  dim?: string;
+  /** Optional blurhash placeholder */
+  blurhash?: string;
+}): NostrRumor {
+  const { fileUrl, fileHash, fileName, mimeType, fileSize, peers, pubkey, createdAt } = opts;
+  
+  // Build NIP-94 file metadata tags
+  const fileTags: string[][] = [
+    ["file-type", mimeType],
+    ["size", String(fileSize)],
+    ["name", fileName],
+  ];
+  
+  // Add optional metadata
+  if (opts.thumbnail) fileTags.push(["thumb", opts.thumbnail]);
+  if (opts.dim) fileTags.push(["dim", opts.dim]);
+  if (opts.blurhash) fileTags.push(["blurhash", opts.blurhash]);
+  
+  // The content is the file URL (NIP-17 file messages use content as the blob URL)
+  const rumor = buildDmRumor({
+    kind: KIND_DM_FILE,
+    content: fileUrl,
+    tags: dmFileTags(peers, fileTags, {
+      // webxdc-topic will be added by the caller if this is a .xdc file
+      // (they have access to mintTopicId from webxdcRealtime.ts)
+    }),
+    pubkey,
+    createdAt,
+  });
+  
+  return rumor;
 }
 
 /** Tags for a kind-1740 timer-change rumor. `seconds` of 0 turns it off. */
