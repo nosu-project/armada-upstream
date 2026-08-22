@@ -1,4 +1,4 @@
-import { Bluetooth, CheckCheck, Compass, FolderOpen, Headphones, Lock, LogOut, MailPlus, MessageSquare, PanelLeftDashed, Plus, Settings, Trash2 } from "lucide-react";
+import { Bell, Bluetooth, CheckCheck, Compass, FolderOpen, Headphones, Lock, LogOut, MailPlus, MessageSquare, PanelLeftDashed, Plus, Settings, Trash2 } from "lucide-react";
 import { nip19 } from "nostr-tools";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -7,6 +7,7 @@ import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import type React from "react";
 
 import { AddDialog } from "@/components/dialogs/AddDialog";
+import { DmAvatar } from "@/components/DmAvatar";
 import { NoteToSelfAvatar, NOTE_TO_SELF_NAME } from "@/components/NoteToSelfAvatar";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -32,10 +33,13 @@ import { useCall } from "@/hooks/useCall";
 import { useCommunityManagement } from "@/concord/hooks/useCommunityActions";
 import { useCommunity, useIsExcluded, useLiveCommunities } from "@/concord/hooks/useCommunityList";
 import { useChannels, useControlFold } from "@/concord/hooks/useControlPlane";
+import { useConcordMentions } from "@/concord/hooks/useConcordMentions";
 import { useConcordUnread } from "@/concord/hooks/useConcordUnread";
 import { useInviteInbox } from "@/concord/hooks/useDirectInvites";
 import { useDecryptedImage } from "@/concord/hooks/useDecryptedImage";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useDmActivity, type DmActivityItem } from "@/hooks/useDmActivity";
+import { useDmConversationName } from "@/hooks/useDmConversationName";
 import { useDmPeerUnread, useHasUnreadDMs } from "@/hooks/useDirectMessages";
 import { useMeshTransport } from "@/hooks/useMeshTransport";
 import { useIsTouch } from "@/hooks/useIsMobile";
@@ -314,6 +318,44 @@ function RailItemUnreadProbe({
   if (item.kind === "server") return <ServerUnreadProbe url={item.url} onChange={onChange} />;
   if (item.kind === "dm") return <DmUnreadProbe pubkey={item.pubkey} onChange={onChange} />;
   return <Concord2UnreadProbe communityId={item.communityId} onChange={onChange} />;
+}
+
+/** Feed the account-level bell from a server's already-shared unread query. */
+function ServerMentionProbe({
+  url,
+  onChange,
+}: {
+  url: string;
+  onChange: (key: string, mention: boolean) => void;
+}) {
+  const { user } = useCurrentUser();
+  const { data: groups } = useRelayGroups(user ? url : undefined);
+  const groupIds = useMemo(() => (groups ?? []).map((group) => group.id), [groups]);
+  const { anyMention } = useRelayUnread(user ? url : undefined, groupIds);
+  useEffect(() => onChange(url, anyMention), [url, anyMention, onChange]);
+  useEffect(() => () => onChange(url, false), [url, onChange]);
+  return null;
+}
+
+/** Feed the account-level bell from a Concord community's shared unread fold. */
+function ConcordMentionProbe({
+  communityId,
+  onChange,
+}: {
+  communityId: string;
+  onChange: (key: string, mention: boolean) => void;
+}) {
+  const community = useCommunity(communityId);
+  const channels = useChannels(community, false);
+  // The account center follows the community's dedicated Mentions read stamp,
+  // not every channel's unread stamp. This is the same independence the
+  // in-community Mentions pane already has: clearing the aggregate must clear
+  // the Bell without pretending every mentioned channel was fully read.
+  const { hasNew: mention } = useConcordMentions(channels, community?.idHex);
+  const key = concordKey(communityId);
+  useEffect(() => onChange(key, mention), [key, mention, onChange]);
+  useEffect(() => () => onChange(key, false), [key, onChange]);
+  return null;
 }
 
 /**
@@ -996,6 +1038,100 @@ const DmButton = memo(function DmButton({
 });
 
 /**
+ * One automatic recent-conversation avatar. Unlike a pinned DM it is not part
+ * of `railLayout` and cannot be dragged: recency owns this three-item strip,
+ * while manual pins keep their existing arranged/foldered behavior below it.
+ */
+const RecentDmButton = memo(function RecentDmButton({
+  item,
+  onNavigate,
+  inCall,
+  pending,
+  onPressed,
+}: {
+  item: DmActivityItem;
+  onNavigate?: () => void;
+  inCall?: boolean;
+  pending?: boolean;
+  onPressed?: () => void;
+}) {
+  const { user } = useCurrentUser();
+  const { name } = useDmConversationName(item.peers, user?.pubkey);
+  const { dmLevel, setLevel: setNotifLevel } = useNotifLevels();
+
+  return (
+    <ContextMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <ContextMenuTrigger asChild>
+            <NavLink
+              to={item.route}
+              data-recent-dm={item.key}
+              aria-label={name}
+              onClick={() => {
+                onPressed?.();
+                onNavigate?.();
+              }}
+              className="group relative flex items-center justify-center shrink-0"
+            >
+              {({ isActive: routeActive }) => {
+                const isActive = routeActive || Boolean(pending);
+                return (
+                  <>
+                    <span
+                      className={cn(
+                        "absolute -left-2 w-[3px] bg-primary transition-all",
+                        isActive
+                          ? "h-12 opacity-100"
+                          : "h-2 opacity-0 group-hover:h-6 group-hover:opacity-60",
+                      )}
+                    />
+                    <span className={cn(
+                      "relative block size-12 transition-all duration-150",
+                      isActive && "[filter:drop-shadow(0_0_3px_hsl(var(--primary)/0.6))]",
+                    )}>
+                      <DmAvatar
+                        peers={item.peers}
+                        selfPubkey={user?.pubkey}
+                        sizePx={48}
+                        className={cn(
+                          "size-12 transition-all duration-150 opacity-60 saturate-50",
+                          "group-hover:opacity-100 group-hover:saturate-100",
+                          isActive && "opacity-100 saturate-100 is-active",
+                        )}
+                      />
+                      {inCall && (
+                        <span className="absolute -bottom-1 -right-1 z-10 flex size-4 items-center justify-center rounded-full bg-success text-success-foreground ring-2 ring-background">
+                          <Headphones className="size-2.5" />
+                        </span>
+                      )}
+                      {!isActive && item.unread && (
+                        <span
+                          className="absolute -top-0.5 -right-0.5 z-10 size-3 rounded-full bg-foreground ring-2 ring-background"
+                          aria-label="Unread messages"
+                        />
+                      )}
+                    </span>
+                  </>
+                );
+              }}
+            </NavLink>
+          </ContextMenuTrigger>
+        </TooltipTrigger>
+        <RailTooltipContent side="right" className="font-medium">{name}</RailTooltipContent>
+      </Tooltip>
+      <ContextMenuContent>
+        <NotifLevelMenu
+          label="Message notifications"
+          level={dmLevel(item.key)}
+          onChange={(level) => setNotifLevel(dmScopeKey(item.key), level)}
+        />
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+});
+
+/**
  * A Discord-style server folder in the rail. Collapsed it shows a 2×2 grid of
  * its members' icons; clicking expands it in place, listing the members
  * inside a tinted container. Right-click to rename or remove (dissolve) it.
@@ -1309,6 +1445,7 @@ function ServerRailInner({
   const { user } = useCurrentUser();
   const { mesh } = useMeshTransport();
   const hasUnreadDMs = useHasUnreadDMs();
+  const { items: dmActivity } = useDmActivity();
   // Received Concord invites (CORD-05 §6). The rail entry appears only while
   // some are pending — there's no history to browse once they're all
   // accepted/declined — and badges the count not yet seen in the inbox.
@@ -1350,6 +1487,20 @@ function ServerRailInner({
   // Order/grouping is applied by the layout below.
   const servers = useNip29Servers();
 
+  // The Notification Center is intentionally narrower than generic channel
+  // unread: it collects actionable DMs, mentions, and invites. These invisible
+  // probes reuse the same unread queries every visible rail button already
+  // shares, then roll only the mention bit into the account-level bell.
+  const [mentionBySpace, setMentionBySpace] = useState<Record<string, boolean>>({});
+  const reportMention = useCallback((key: string, mention: boolean) => {
+    setMentionBySpace((current) => {
+      if (current[key] === mention) return current;
+      return { ...current, [key]: mention };
+    });
+  }, []);
+  const hasUnreadNotifications =
+    hasUnreadDMs || inviteUnread > 0 || Object.values(mentionBySpace).some(Boolean);
+
   // DMs the user put on the rail. Unlike every other kind these have no source
   // list to be live against — the arrangement IS the record — so they're read
   // back out of it, which also means they can never be "not live yet" and get
@@ -1358,6 +1509,10 @@ function ServerRailInner({
     () => railDmPubkeys(config.railLayout),
     [config.railLayout],
   );
+  const recentDms = useMemo(() => {
+    const manuallyArranged = new Set(railDms);
+    return dmActivity.filter((item) => !manuallyArranged.has(item.key)).slice(0, 3);
+  }, [dmActivity, railDms]);
 
   // Every live rail item (NIP-29 servers, Concord communities and pinned
   // DMs) in discovery order. The persisted layout arranges these into the
@@ -1553,7 +1708,7 @@ function ServerRailInner({
       nav.removeEventListener("scroll", measure);
       ro.disconnect();
     };
-  }, [renderNodes, user, mesh.available, inviteItems.length]);
+  }, [renderNodes, user, mesh.available, inviteItems.length, recentDms.length]);
 
   // What the floating ghost carries.
   const draggedItem =
@@ -1689,6 +1844,17 @@ function ServerRailInner({
           reordering && "overflow-hidden",
         )}
       >
+        {user && servers.map((url) => (
+          <ServerMentionProbe key={`mention:${url}`} url={url} onChange={reportMention} />
+        ))}
+        {user && concord.map((entry) => (
+          <ConcordMentionProbe
+            key={`mention:c2:${entry.community_id}`}
+            communityId={entry.community_id}
+            onChange={reportMention}
+          />
+        ))}
+
         {/* Nearby Bluetooth mesh chat — peer-to-peer, above DMs. Only shown when
             the platform can actually run it (Android with BLE hardware): a rail
             entry that leads to a permanent "unavailable here" page on web/desktop
@@ -1739,6 +1905,55 @@ function ServerRailInner({
             </TooltipTrigger>
             <RailTooltipContent side="right" className="font-medium">
               Nearby mesh
+            </RailTooltipContent>
+          </Tooltip>
+        )}
+
+        {/* Account-level Notification Center: known DMs, mentions across both
+            community transports, and pending Concord invites. */}
+        {user && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <NavLink
+                to="/notifications"
+                aria-label="Notifications"
+                onClick={() => {
+                  onPressedFor("nav:notifications")();
+                  onNavigate?.();
+                }}
+                className="group relative flex items-center justify-center shrink-0"
+              >
+                <span
+                  className={cn(
+                    "absolute -left-2 w-[3px] bg-primary transition-all",
+                    "h-2 opacity-0 group-hover:h-6 group-hover:opacity-60",
+                    "group-aria-[current=page]:h-12 group-aria-[current=page]:opacity-100",
+                    pendingNav === "nav:notifications" && "h-12 opacity-100",
+                  )}
+                />
+                <span className={cn(
+                  "relative block size-12 transition-all duration-150",
+                  "group-aria-[current=page]:[filter:drop-shadow(0_0_3px_hsl(var(--primary)/0.6))]",
+                )}>
+                  <span className={cn(
+                    "flex size-12 items-center justify-center clip-corner-lg bg-muted text-primary opacity-50 saturate-50 transition-all duration-150",
+                    "group-hover:opacity-100 group-hover:saturate-100",
+                    "group-aria-[current=page]:opacity-100 group-aria-[current=page]:saturate-100",
+                    pendingNav === "nav:notifications" && "opacity-100 saturate-100",
+                  )}>
+                    <Bell className="size-5" />
+                  </span>
+                  {hasUnreadNotifications && (
+                    <span
+                      className="absolute -top-0.5 -right-0.5 z-10 size-3 rounded-full bg-primary ring-2 ring-background group-aria-[current=page]:hidden"
+                      aria-label="Unread notifications"
+                    />
+                  )}
+                </span>
+              </NavLink>
+            </TooltipTrigger>
+            <RailTooltipContent side="right" className="font-medium">
+              Notifications
             </RailTooltipContent>
           </Tooltip>
         )}
@@ -1863,6 +2078,29 @@ function ServerRailInner({
               Invites
             </RailTooltipContent>
           </Tooltip>
+        )}
+
+        {/* Three newest known conversations, automatic and recency-ordered.
+            Manually arranged 1:1 pins are omitted here to avoid showing the
+            same person twice; their saved rail/folder position remains below. */}
+        {user && recentDms.map((item) => (
+          <RecentDmButton
+            key={`recent:${item.key}`}
+            item={item}
+            onNavigate={onNavigate}
+            inCall={activeCall?.dmPeer === item.key}
+            pending={pendingNav === `recent:${item.key}`}
+            onPressed={onPressedFor(`recent:${item.key}`)}
+          />
+        ))}
+
+        {/* Account activity above; arranged communities and manual pins below. */}
+        {user && renderNodes.length > 0 && (
+          <div
+            className="h-px w-7 shrink-0 bg-chrome-divider"
+            data-rail-account-separator
+            aria-hidden
+          />
         )}
 
         {/* One unified, user-arranged community list: NIP-29 servers and Concord

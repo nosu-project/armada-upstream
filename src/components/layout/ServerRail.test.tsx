@@ -25,6 +25,25 @@ vi.mock("@/hooks/useDirectMessages", () => ({
   useHasUnreadDMs: () => false,
   useDmPeerUnread: (peer?: string) => Boolean(peer && dmUnread[peer]),
 }));
+const recentDmActivity = vi.hoisted(() => ({ items: [] as Array<{
+  key: string;
+  peers: string[];
+  route: string;
+  createdAt: number;
+  eventId: string;
+  author: string;
+  unread: boolean;
+}> }));
+vi.mock("@/hooks/useDmActivity", () => ({
+  useDmActivity: () => ({ items: recentDmActivity.items, isLoading: false }),
+}));
+vi.mock("@/hooks/useDmConversationName", () => ({
+  useDmConversationName: (peers: string[]) => ({
+    name: peers.map((peer) => authorNames[peer] ?? peer.slice(0, 8)).join(", "),
+    names: [],
+    searchText: "",
+  }),
+}));
 // Profile metadata for DMs on the rail, settable per test.
 const authorNames = vi.hoisted(() => ({}) as Record<string, string>);
 vi.mock("@/hooks/useAuthor", () => ({
@@ -103,6 +122,10 @@ vi.mock("@/concord/hooks/useDecryptedImage", () => ({
   useDecryptedImage: () => undefined,
 }));
 vi.mock("@/lib/haptics", () => ({ impact: vi.fn() }));
+
+beforeEach(() => {
+  recentDmActivity.items = [];
+});
 
 const RELAY_A = "wss://a.example/";
 const RELAY_B = "wss://b.example/";
@@ -598,5 +621,39 @@ describe("ServerRail DMs", () => {
       type: "reorder-servers",
       urls: [RELAY_A, RELAY_B, RELAY_C],
     });
+  });
+});
+
+describe("ServerRail recent DMs", () => {
+  let restoreGeometry: () => void;
+
+  beforeEach(() => {
+    extraServers = [];
+    config = { ...defaultConfig, railLayout: [], railOpenFolders: [] };
+    restoreGeometry = installGeometry();
+    return () => restoreGeometry();
+  });
+
+  it("shows only the three newest conversations above the account/community separator", () => {
+    recentDmActivity.items = ["a", "b", "c", "d"].map((key, index) => ({
+      key,
+      peers: [key.repeat(64)],
+      route: `/dm/${key}`,
+      createdAt: 40 - index,
+      eventId: `event-${key}`,
+      author: key.repeat(64),
+      unread: key === "a",
+    }));
+
+    renderRail();
+
+    const recent = Array.from(document.querySelectorAll<HTMLElement>("[data-recent-dm]"));
+    expect(recent.map((item) => item.dataset.recentDm)).toEqual(["a", "b", "c"]);
+    expect(recent.map((item) => item.getAttribute("href"))).toEqual(["/dm/a", "/dm/b", "/dm/c"]);
+    expect(recent[0].querySelector('[aria-label="Unread messages"]')).toBeTruthy();
+    const separator = document.querySelector("[data-rail-account-separator]");
+    expect(separator).toBeTruthy();
+    expect(separator!.compareDocumentPosition(document.querySelector(`[data-rail-anchor="item:${RELAY_A}"]`)!))
+      .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 });
