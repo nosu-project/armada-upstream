@@ -824,7 +824,7 @@ jobs:
           FLATPAK_GPG_EXPECTED_FINGERPRINT: ${{ secrets.FLATPAK_GPG_EXPECTED_FINGERPRINT }}
           # Parsed into the workflow plan before the application build runs.
           # Keep this literal synchronized with electron/flatpak/sign.sh.
-          TRUSTED_SIGN_SCRIPT_SHA256: 1955791dcbad54b30d5e3c65f6ea763911539bfc0d0d9b3c3c264eb1ca484d28
+          TRUSTED_SIGN_SCRIPT_SHA256: d645daf279aadaa1e9fa8edc641fc1a5f99577eda28f3dc83199416a9dc93f2a
         run: |
           set -euo pipefail
           export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -1003,10 +1003,10 @@ jobs:
           # before it reaches rsync.
           #
           # Note this walks EVERY ref `ostree refs` reports, not just the app
-          # and appstream ones checked for below — including `ostree-metadata`,
-          # which flatpak generates for the summary index and which the build
-          # phase creates without credentials. `sign.sh` has to sign each of
-          # them; one unsigned commit fails the whole pull.
+          # and appstream ones checked for below — flatpak-builder also emits a
+          # `runtime/buzz.armada.app.Debug/<arch>/stable` extension carrying the
+          # separated debug symbols. `sign.sh` signs each ref it finds and
+          # asserts none are left over; one unsigned commit fails the whole pull.
           mapfile -t verify_refs < <(
             ostree refs --repo="$flatpak_repo"
           )

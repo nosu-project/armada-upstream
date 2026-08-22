@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// Each signing case spawns a real /bin/sh plus ~20 node-based stub binaries,
+// which runs comfortably under a second alone but not against the 5s default
+// when the whole suite is competing for cores.
+vi.setConfig({ testTimeout: 30_000 });
 
 const buildScript = fs.readFileSync(
   path.resolve(process.cwd(), "electron/flatpak/build.sh"),
@@ -28,6 +33,11 @@ function makeSigningFixture() {
   fs.mkdirSync(fakeBin);
   fs.writeFileSync(script, signScript, { mode: 0o755 });
   fs.writeFileSync(commandLog, "");
+  // Signature state has to be modelled, not just recorded: sign.sh skips a
+  // commit that is already signed (ostree gpg-sign APPENDS, so signing twice
+  // leaves duplicates) and then asserts every ref ended up signed.
+  const signedLog = path.join(root, "flatpak-signed.txt");
+  fs.writeFileSync(signedLog, "");
 
   const fakeFlatpak = `#!${process.execPath}
 const crypto = require("node:crypto");
@@ -66,6 +76,11 @@ if (args[0] === "build-update-repo") {
     fs.writeFileSync(path.join(repo, "summaries", sha + ".idx.sig"), "shard");
   }
 }
+if (args[0] === "build-sign") {
+  // Signs the application ref, and only that one — the .Debug extension and
+  // the appstream refs are left for sign.sh's own loop to pick up.
+  fs.appendFileSync(process.env.MOCK_SIGNED_LOG, "C".repeat(64) + "\\n");
+}
 if (args[0] === "build-bundle") {
   fs.writeFileSync(args.at(-3), "signed bundle");
 }
@@ -87,16 +102,40 @@ for (const fingerprint of fingerprints) {
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.MOCK_COMMAND_LOG, JSON.stringify(args) + "\\n");
+// One distinct commit per ref, so "already signed" can't be confused between
+// two refs the way a shared id would.
+const commits = {
+  "app/buzz.armada.app/x86_64/stable": "C",
+  "appstream/x86_64": "A",
+  "appstream2/x86_64": "B",
+  "runtime/buzz.armada.app.Debug/x86_64/stable": "D",
+  "appstream/x86_64/ignored": "E",
+};
 if (args[0] === "refs") {
   if (process.env.MOCK_NO_APPSTREAM !== "1") {
     process.stdout.write("app/buzz.armada.app/x86_64/stable\\n");
     process.stdout.write("appstream/x86_64\\n");
     process.stdout.write("appstream2/x86_64\\n");
+    // flatpak-builder emits a .Debug runtime extension holding the separated
+    // debug symbols. Nothing signed it before, and consumers verify every ref.
+    process.stdout.write("runtime/buzz.armada.app.Debug/x86_64/stable\\n");
     process.stdout.write("appstream/x86_64/ignored\\n");
   }
 } else if (args[0] === "rev-parse") {
   const ref = args.at(-1);
-  process.stdout.write((ref.startsWith("appstream2/") ? "B" : "A").repeat(64) + "\\n");
+  process.stdout.write((commits[ref] || "F").repeat(64) + "\\n");
+} else if (args[0] === "show") {
+  const signed = fs.readFileSync(process.env.MOCK_SIGNED_LOG, "utf8").split("\\n");
+  if (signed.includes(args.at(-1))) {
+    process.stdout.write("Found 1 signature:\\n");
+    process.stdout.write("  Signature made using RSA key ID DEADBEEF\\n");
+  }
+} else if (args[0] === "gpg-sign") {
+  // MOCK_UNSIGNABLE_COMMIT models a signature that silently does not take, so
+  // the assertion pass in sign.sh can be tested rather than assumed.
+  if (args.at(-2) !== process.env.MOCK_UNSIGNABLE_COMMIT) {
+    fs.appendFileSync(process.env.MOCK_SIGNED_LOG, args.at(-2) + "\\n");
+  }
 }
 `;
   fs.writeFileSync(path.join(fakeBin, "ostree"), fakeOstree, {
@@ -110,6 +149,7 @@ if (args[0] === "refs") {
     ),
     commandLog,
     fakeBin,
+    signedLog,
     root,
     script,
   };
@@ -120,6 +160,7 @@ function runSigningScript(fixture, overrides) {
     ...process.env,
     PATH: `${fixture.fakeBin}:${process.env.PATH}`,
     MOCK_COMMAND_LOG: fixture.commandLog,
+    MOCK_SIGNED_LOG: fixture.signedLog,
     ...overrides,
   };
   for (const name of [
@@ -290,8 +331,13 @@ describe("Flatpak post-build signing", () => {
           "utf8",
         ),
       ).toBe(`${fingerprint}\n`);
-      expect(commands).toHaveLength(8);
-      const stagedPublicKey = commands[6]
+      const firstIndexOf = (name) =>
+        commands.findIndex(([command]) => command === name);
+      const signingCalls = commands.filter(([command]) => command === "gpg-sign");
+      const updateRepo = commands.find(
+        ([command]) => command === "build-update-repo",
+      );
+      const stagedPublicKey = updateRepo
         .find((argument) => argument.startsWith("--gpg-import="))
         ?.slice("--gpg-import=".length);
       expect(stagedPublicKey).toContain("/.flatpak-key.");
@@ -307,38 +353,45 @@ describe("Flatpak post-build signing", () => {
         "refs",
         `--repo=${repoDir}`,
       ]);
-      expect(commands[2]).toEqual([
-        "rev-parse",
-        `--repo=${repoDir}`,
-        "appstream/x86_64",
-      ]);
-      expect(commands[3]).toEqual([
-        "gpg-sign",
-        `--repo=${repoDir}`,
-        `--gpg-homedir=${fs.realpathSync(gpgHome)}`,
-        "A".repeat(64),
-        fingerprint,
-      ]);
-      expect(commands[4]).toEqual([
-        "rev-parse",
-        `--repo=${repoDir}`,
-        "appstream2/x86_64",
-      ]);
-      expect(commands[5]).toEqual([
-        "gpg-sign",
-        `--repo=${repoDir}`,
-        `--gpg-homedir=${fs.realpathSync(gpgHome)}`,
-        "B".repeat(64),
-        fingerprint,
-      ]);
-      expect(commands[6]).toEqual([
+
+      // EVERY ref the repository advertises ends up signed, exactly once.
+      // `build-sign` above covers the application (commit C); the loop signs
+      // the rest, including the `.Debug` runtime extension flatpak-builder
+      // emits — consumers verify each ref, so one unsigned commit fails the
+      // whole pull. Signing twice would leave duplicate signatures, since
+      // `ostree gpg-sign` appends.
+      expect(signingCalls.map((command) => command.at(-2))).toEqual(
+        ["A", "B", "D", "E"].map((letter) => letter.repeat(64)),
+      );
+      for (const command of signingCalls) {
+        expect(command).toEqual([
+          "gpg-sign",
+          `--repo=${repoDir}`,
+          `--gpg-homedir=${fs.realpathSync(gpgHome)}`,
+          expect.any(String),
+          fingerprint,
+        ]);
+      }
+
+      // Order that matters: sign, then the metadata pass, then the bundle.
+      expect(
+        Math.max(
+          ...commands.flatMap(([command], index) =>
+            command === "gpg-sign" ? [index] : [],
+          ),
+        ),
+      ).toBeLessThan(firstIndexOf("build-update-repo"));
+      expect(firstIndexOf("build-update-repo")).toBeLessThan(
+        firstIndexOf("build-bundle"),
+      );
+      expect(updateRepo).toEqual([
         "build-update-repo",
         "--no-update-appstream",
         ...signingOptions,
         `--gpg-import=${stagedPublicKey}`,
         repoDir,
       ]);
-      expect(commands[7]).toEqual([
+      expect(commands.find(([command]) => command === "build-bundle")).toEqual([
         "build-bundle",
         "--repo-url=https://updates.example.test/flatpak/",
         `--gpg-keys=${stagedPublicKey}`,
@@ -348,6 +401,49 @@ describe("Flatpak post-build signing", () => {
         "stable",
       ]);
       expect(commands[7].at(-3)).not.toBe(fixture.bundle);
+    } finally {
+      fs.rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("refuses to publish when any ref is left unsigned", () => {
+    const fixture = makeSigningFixture();
+    try {
+      const fingerprint = "0123456789ABCDEF0123456789ABCDEF01234567";
+      const publicKey = path.join(fixture.root, "armada-flatpak.gpg");
+      const repoDir = path.join(
+        fixture.root,
+        "electron",
+        "release",
+        "flatpak-repo",
+      );
+      fs.writeFileSync(publicKey, "public key");
+      fs.writeFileSync(fixture.bundle, "unsigned bundle");
+
+      // "D" is the .Debug runtime extension — the ref that shipped unsigned
+      // because the signing loop only covered appstream, and which a consumer
+      // then refused with "GPG verification enabled, but no signatures found".
+      const result = runSigningScript(fixture, {
+        FLATPAK_GPG_KEY: fingerprint,
+        FLATPAK_GPG_PUBLIC_KEY: publicKey,
+        MOCK_PUBLIC_FINGERPRINTS: fingerprint,
+        MOCK_UNSIGNABLE_COMMIT: "D".repeat(64),
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        "runtime/buzz.armada.app.Debug/x86_64/stable",
+      );
+      expect(result.stderr).toContain("is unsigned");
+      // Nothing is published on the way out: the previous bundle stands and
+      // the publisher identity never appears beside the repository.
+      expect(fs.readFileSync(fixture.bundle, "utf8")).toBe("unsigned bundle");
+      expect(fs.existsSync(path.join(repoDir, "armada-flatpak.gpg"))).toBe(
+        false,
+      );
+      expect(
+        readCommandLog(fixture).map(([command]) => command),
+      ).not.toContain("build-bundle");
     } finally {
       fs.rmSync(fixture.root, { force: true, recursive: true });
     }
@@ -448,16 +544,12 @@ describe("Flatpak post-build signing", () => {
           .readdirSync(repoDir)
           .some((name) => name.startsWith(".flatpak-key.")),
       ).toBe(false);
-      expect(readCommandLog(fixture).map(([command]) => command)).toEqual([
-        "build-sign",
-        "refs",
-        "rev-parse",
-        "gpg-sign",
-        "rev-parse",
-        "gpg-sign",
-        "build-update-repo",
-        "build-bundle",
-      ]);
+      // Reached the bundle build and stopped there: signing ran to completion,
+      // the metadata pass ran, and nothing after build-bundle happened.
+      const attempted = readCommandLog(fixture).map(([command]) => command);
+      expect(attempted.at(-1)).toBe("build-bundle");
+      expect(attempted.filter((command) => command === "build-bundle")).toHaveLength(1);
+      expect(attempted).toContain("build-update-repo");
     } finally {
       fs.rmSync(fixture.root, { force: true, recursive: true });
     }
@@ -552,15 +644,11 @@ describe("Flatpak post-build signing", () => {
       expect(fs.existsSync(path.join(repoDir, "armada-flatpak.gpg"))).toBe(
         false,
       );
-      expect(readCommandLog(fixture).map(([command]) => command)).toEqual([
-        "build-sign",
-        "refs",
-        "rev-parse",
-        "gpg-sign",
-        "rev-parse",
-        "gpg-sign",
-        "build-update-repo",
-      ]);
+      // Stopped at the metadata pass: the missing shard is caught before any
+      // bundle is built, so the previous release keeps serving.
+      const attempted = readCommandLog(fixture).map(([command]) => command);
+      expect(attempted.at(-1)).toBe("build-update-repo");
+      expect(attempted).not.toContain("build-bundle");
     } finally {
       fs.rmSync(fixture.root, { force: true, recursive: true });
     }
