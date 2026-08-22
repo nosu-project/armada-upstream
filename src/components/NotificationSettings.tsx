@@ -149,7 +149,7 @@ function NativeNotificationHealthPanel({
                   <Button
                     size="sm"
                     variant="outline"
-                    className="h-8 text-xs"
+                    className="h-8 text-xs touch:h-11"
                     onClick={() => open(appBlocked ? undefined : "messages")}
                   >
                     Open notification settings
@@ -159,7 +159,7 @@ function NativeNotificationHealthPanel({
                   <Button
                     size="sm"
                     variant="outline"
-                    className="h-8 text-xs"
+                    className="h-8 text-xs touch:h-11"
                     onClick={() => open("calls")}
                   >
                     Open call settings
@@ -169,7 +169,7 @@ function NativeNotificationHealthPanel({
                   <Button
                     size="sm"
                     variant="outline"
-                    className="h-8 text-xs"
+                    className="h-8 text-xs touch:h-11"
                     onClick={() => open("service")}
                   >
                     Open service settings
@@ -226,7 +226,7 @@ function NativeNotificationHealthPanel({
         <Button
           size="sm"
           variant="ghost"
-          className="mt-2 h-8 px-2 text-xs"
+          className="mt-2 h-8 px-2 text-xs touch:h-11"
           onClick={() => void native.refreshHealth()}
         >
           Refresh
