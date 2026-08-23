@@ -488,11 +488,13 @@ flatpak install --user armada-local buzz.armada.app
 flatpak update --user buzz.armada.app
 ```
 
-Tagged releases publish that OSTree repository at
-`https://armada.buzz/downloads/flatpak/`. Release bundles embed that URL, so
-bundle installs also configure Armada's repository as the app's origin. Signed
-release bundles additionally embed `armada-flatpak.gpg`, which makes that
-automatically configured origin GPG-verified.
+Release bundles embed `https://armada.buzz/downloads/flatpak/` as the app's
+origin, and signed bundles additionally embed `armada-flatpak.gpg`, which makes
+that automatically configured origin GPG-verified. **CI no longer publishes
+that OSTree repository** — nothing in `release.yml` deploys over SSH any more.
+The repository left there by earlier releases is whatever is still served;
+updating it is a manual step (`electron/release/flatpak-repo/` is what a tagged
+build produces, after the `publish` job has signed and verified it).
 
 Installs made from an older bundle with a blank origin or the legacy
 `https://armada.buzz/flatpak/` origin must use the one-time trust migration
@@ -553,13 +555,11 @@ lockfile-pinned 7.x build.
 job builds the web bundle and desktop DB bridge, then every published platform
 from a single Linux container.
 
-Installers are not served over HTTP any more. They are staged into
+Nothing is served over HTTP by CI any more, and nothing is deployed over SSH.
+Every installer — including the signed `.flatpak` bundle — is staged into
 `.release-artifacts/`, uploaded to Blossom, and named by hash in the kind-30622
 release event the `release` job publishes (`docs/releases.md`), which is what
-`/downloads` reads. Only what cannot be content-addressed is still deployed:
-updater payloads retain their electron-builder names under `/downloads/desktop`
-because each `latest*.yml` refers to them, and the Flatpak OSTree repository is
-published under `/downloads/flatpak` because Flatpak needs a real remote.
+`/downloads` reads and what the desktop app self-updates from.
 
 | File | Built by |
 |------|----------|

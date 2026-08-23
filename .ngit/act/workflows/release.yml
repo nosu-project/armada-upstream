@@ -3,7 +3,7 @@ name: Release
 # Every artifact of a version tag (vX.Y.Z), and the one Nostr release event
 # that names them all.
 #
-#   desktop → publish → flatpak → android → release
+#   desktop → publish → android → release
 #
 # ── Why one workflow file ────────────────────────────────────────────────────
 # The `release` job publishes a kind-30622 NIP-34 repository release
@@ -33,13 +33,11 @@ name: Release
 # downstream of that job. So the build whose failure must not block anything
 # goes LAST. `android` publishes to Zapstore and Google Play, both of which can
 # reject for reasons that have nothing to do with the artifacts; when it ran
-# first, a Play policy rejection skipped `publish` and `flatpak` and shipped a
+# first, a Play policy rejection skipped `publish` and shipped a
 # release with no signed Flatpak.
 #
 # What they do NOT share is RUNNER_TEMP. Anything one job hands another lives
-# in the checkout: `.release-artifacts/` (the files the release event names)
-# and `electron/release/deploy/` (the Flatpak repository the `flatpak` job
-# publishes).
+# in the checkout: `.release-artifacts/`, the files the release event names.
 #
 # `desktop` is `if: always()` so a Gradle failure costs the Android build and
 # nothing else — the two were independent when they were separate files, and
@@ -90,28 +88,17 @@ name: Release
 #                            than skipping, because an unsigned OSTree repo
 #                            would publish as if it were signed.
 #   FLATPAK_GPG_EXPECTED_FINGERPRINT the pinned full primary fingerprint of
-#                            that key, cross-checked three ways before deploy.
+#                            that key, cross-checked three ways.
 #   WINDOWS_CSC_LINK         (optional) base64 PFX for Authenticode signing
 #   WINDOWS_CSC_KEY_PASSWORD (optional) its password
-#   DEPLOY_SSH_KEY_BASE64    (optional) base64 (one line) of the deploy user's
-#                            private key. Publishes the Flatpak repository to
-#                            armada.buzz. Empty
-#                            (unprovisioned) skips only that publish; the run
-#                            artifacts, the store publishes and the release
-#                            event are unaffected.
-#   DEPLOY_SSH_CONFIG_BASE64 (optional) base64 of an ssh_config -> ~/.ssh/config
-#   DEPLOY_TARGET            (optional) rsync destination; defaults to "web"
 #   GOOGLE_PLAY_SERVICE_ACCOUNT_JSON  (optional) base64 of the Play Console
 #                            service-account JSON key with release permission on
 #                            buzz.armada.app. Empty (unprovisioned) skips the
-#                            Google Play publish instead of failing — same
-#                            pattern as DEPLOY_SSH_KEY_BASE64 above.
+#                            Google Play publish instead of failing.
 #
-# The installers themselves are no longer rsynced anywhere, and neither is an
-# update feed. They are named by the release event and fetched from Blossom by
-# hash, and the desktop app self-updates from that same event. The only thing
-# that still goes over SSH is the one thing that cannot be content-addressed:
-# the Flatpak OSTree repository, which is a protocol rather than a file.
+# NOTHING here is published over SSH. Every artifact — installers, the APK, the
+# .flatpak bundle — is named by the release event and fetched from Blossom by
+# hash, and the desktop app self-updates from that same event.
 
 on:
   push:
@@ -132,7 +119,7 @@ jobs:
     #
     # `if: always()` on a job makes THAT job run past an ancestor's failure; it
     # does not rescue the jobs downstream of it. With `android` first, a failed
-    # Play upload ran `desktop` and then skipped `publish` and `flatpak`, so a
+    # Play upload ran `desktop` and then skipped `publish`, so a
     # perfectly good set of installers was never signed or deployed. Putting
     # the Android build last means nothing it does can gate the desktop
     # release, without relying on `needs.<job>.result` support in act.
@@ -629,8 +616,8 @@ jobs:
 
           # Verify through a fresh OSTree remote configured to require the
           # summary and every release metadata commit signature. This reads
-          # only the exported public key and proves the repository is usable
-          # before it reaches rsync.
+          # only the exported public key and proves the repository the bundle
+          # was exported from is signed and usable.
           #
           # Note this walks EVERY ref `ostree refs` reports, not just the app
           # and appstream ones checked for below — flatpak-builder also emits a
@@ -747,11 +734,10 @@ jobs:
       # under the same name. `src/lib/downloads.test.ts` reads those names back
       # and fails if the client can't file one under a platform.
       #
-      # The Flatpak OSTree repository is staged separately under flatpak/,
-      # because it is the one thing here that cannot be content-addressed:
-      # Flatpak needs a mutable remote over HTTP. It is now the ONLY thing
-      # deployed over SSH — the desktop editions self-update from the release
-      # event, which every artifact above is already published to.
+      # The OSTree repository flatpak-builder produced is NOT staged. Nothing
+      # is published over SSH any more, so the bundle in this directory — named
+      # by the release event and fetched from Blossom by hash, like every other
+      # installer — is the only thing that leaves this job.
       - name: Collect installers
         id: collect
         env:
@@ -759,17 +745,11 @@ jobs:
         run: |
           set -eu
           export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-          # Dependent ngit-ci jobs share this checkout but not RUNNER_TEMP.
-          # Keep the deploy tree beneath ignored release output so the fresh,
-          # secret-bearing `flatpak` job can consume it without an artifact action.
-          root="$PWD/electron/release/deploy"
           # The installers go where the `release` job will find them, beside the
-          # APK the android job already staged there. `rm -rf "$root"` below must
-          # NOT reach this directory for that reason.
+          # APK the android job already staged there. Dependent ngit-ci jobs
+          # share this checkout, so no artifact action is involved.
           out="$PWD/.release-artifacts"
-          flatpak_repo="$root/flatpak"
-          rm -rf "$root"
-          mkdir -p "$out" "$flatpak_repo"
+          mkdir -p "$out"
           # ONLY the Flatpak bundle is staged here. The other six installers were
           # staged by the `desktop` job, which is what keeps them in the release
           # when this job fails — see the note on that step. This one is gated on
@@ -786,18 +766,11 @@ jobs:
           # and hash. A stable alias would be a second, uncontent-addressed way
           # to get the same bytes.
 
-          # Preserve the repository layout produced by flatpak-builder. Its
-          # objects are content addressed; old objects may remain available for
-          # clients updating from older releases.
-          cp -a electron/release/flatpak-repo/. "$flatpak_repo/"
           ls -lh "$out"
-          echo "root=$root" >> "$GITHUB_OUTPUT"
           echo "dir=$out" >> "$GITHUB_OUTPUT"
-          echo "flatpak_repo=$flatpak_repo" >> "$GITHUB_OUTPUT"
 
       # The private signing home has already been destroyed. Upload actions
-      # remain in this job because their paths are step outputs; deployment is
-      # isolated in a third container below.
+      # remain in this job because their paths are step outputs.
       - uses: actions/upload-artifact@v4
         with:
           name: armada-desktop-linux-${{ github.ref_name }}
@@ -843,416 +816,12 @@ jobs:
           if-no-files-found: warn
 
 
-  # A third fresh container is the SSH credential boundary. No executable from
-  # the shared workspace runs here: tooling installation and deployment are
-  # workflow-owned inline shell using a fixed system PATH. The publish job may
-  # run release validators from the checkout, but they cannot persist into this
-  # container and observe a later-injected deploy key.
-  flatpak:
-    needs: publish
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Install deploy tooling (fallback for stock runner images)
-        run: |
-          set -euo pipefail
-          export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-          packages=()
-          command -v curl >/dev/null 2>&1 || packages+=(curl)
-          command -v flatpak >/dev/null 2>&1 || packages+=(flatpak)
-          command -v gpg >/dev/null 2>&1 || packages+=(gnupg)
-          command -v ostree >/dev/null 2>&1 || packages+=(ostree)
-          command -v rsync >/dev/null 2>&1 || packages+=(rsync)
-          command -v ssh >/dev/null 2>&1 || packages+=(openssh-client)
-          if [ "${#packages[@]}" -gt 0 ]; then
-            sudo apt-get update -qq
-            sudo apt-get install -y --no-install-recommends "${packages[@]}" >/dev/null
-          fi
-
-      # Publish the Flatpak OSTree repository to https://armada.buzz/downloads/
-      # over the rrsync-jailed deploy user. This rsync runs without `--delete`,
-      # as deploy-nsite.yml's does — the two publish into one jail root and
-      # would otherwise delete each other's files, so don't add one without
-      # excluding the other's. (One consequence to know: the retired
-      # /downloads/desktop and /desktop update feeds are therefore still on the
-      # server. Nothing writes or reads them; remove them by hand when you want
-      # them gone.)
-      #
-      # Secrets (operator-provisioned, maintainer-gated): DEPLOY_SSH_KEY_BASE64,
-      # DEPLOY_SSH_CONFIG_BASE64, DEPLOY_TARGET, and the pinned full primary
-      # FLATPAK_GPG_EXPECTED_FINGERPRINT. The private signing key is confined to
-      # the preceding fresh job and never enters this container. With no deploy
-      # key the signed installers remain available as run artifacts; only the
-      # server publish is skipped.
-      - name: Deploy desktop installers and update repositories
-        if: startsWith(github.ref, 'refs/tags/v')
-        # act enforces a STEP's timeout-minutes but not a JOB's — it parses
-        # `timeout-minutes: 30` on the job above and only debug-logs it. This
-        # step holds rsync over SSH open and pulls from armada.buzz, so it is
-        # the one that can wedge; without a deadline here the whole run waits
-        # out the coordinator's timeout, which discards every finished job's
-        # results along with it.
-        timeout-minutes: 25
-        env:
-          DEPLOY_SSH_KEY_BASE64: ${{ secrets.DEPLOY_SSH_KEY_BASE64 }}
-          DEPLOY_SSH_CONFIG_BASE64: ${{ secrets.DEPLOY_SSH_CONFIG_BASE64 }}
-          DEPLOY_TARGET: ${{ secrets.DEPLOY_TARGET }}
-          FLATPAK_GPG_EXPECTED_FINGERPRINT: ${{ secrets.FLATPAK_GPG_EXPECTED_FINGERPRINT }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-
-          # Retry a command that talks to armada.buzz.
-          #
-          # The verification below reads back what the rsyncs above just wrote,
-          # and it is the LAST thing this job does — so a transient network
-          # fault there fails a release whose every byte is already published
-          # and correct. That is not hypothetical: v0.56.2 lost this job to
-          # "Couldn't resolve host name" after all four rsyncs had succeeded.
-          # `curl` has --retry; `ostree pull` and `flatpak` have nothing, so
-          # they get this. Deliberately NOT wrapped around the rsyncs: those
-          # write, and a half-written tree should be looked at rather than
-          # retried into place.
-          retry() {
-            local attempt
-            for attempt in 1 2 3; do
-              if "$@"; then
-                return 0
-              fi
-              if [ "$attempt" -lt 3 ]; then
-                echo "retrying in $((attempt * 10))s: $*" >&2
-                sleep "$((attempt * 10))"
-              fi
-            done
-            echo "giving up after 3 attempts: $*" >&2
-            return 1
-          }
-
-          DEPLOY_ROOT="$PWD/electron/release/deploy"
-          deploy_ssh_key_base64="${DEPLOY_SSH_KEY_BASE64:-}"
-          deploy_ssh_config_base64="${DEPLOY_SSH_CONFIG_BASE64:-}"
-          deploy_target="${DEPLOY_TARGET:-web}"
-          expected_fingerprint_raw="${FLATPAK_GPG_EXPECTED_FINGERPRINT:-}"
-          unset DEPLOY_SSH_KEY_BASE64 DEPLOY_SSH_CONFIG_BASE64 DEPLOY_TARGET
-          unset FLATPAK_GPG_EXPECTED_FINGERPRINT
-
-          # workflow_dispatch off a branch names the files after the branch;
-          # publish only real version tags.
-          case "$TAG" in
-            v*) ;;
-            *) echo "ref '$TAG' is not a version tag; skipping desktop deploy."; exit 0 ;;
-          esac
-
-          # No key provisioned (or non-maintainer trigger): artifacts only.
-          if [ -z "$deploy_ssh_key_base64" ]; then
-            echo "DEPLOY_SSH_KEY_BASE64 not set; skipping desktop deploy (artifacts uploaded)."
-            exit 0
-          fi
-
-          # Defense in depth: even if the signing step is later rearranged or
-          # bypassed, deploy only a repository whose summary, current app, and
-          # AppStream commits verify against the pinned publisher identity.
-          for name in summary summary.sig summary.idx summary.idx.sig config armada-flatpak.gpg armada-flatpak.fingerprint; do
-            if [ ! -s "$DEPLOY_ROOT/flatpak/$name" ]; then
-              echo "Signed Flatpak repository is missing $name; refusing deploy." >&2
-              exit 1
-            fi
-          done
-          if [ ! -d "$DEPLOY_ROOT/flatpak/summaries" ]; then
-            echo "Signed Flatpak repository is missing summaries/; refusing deploy." >&2
-            exit 1
-          fi
-          staged_summary_index_sha=$(sha256sum \
-            "$DEPLOY_ROOT/flatpak/summary.idx" | cut -d ' ' -f1)
-          staged_summary_index_signature="$DEPLOY_ROOT/flatpak/summaries/$staged_summary_index_sha.idx.sig"
-          if [ ! -s "$staged_summary_index_signature" ]; then
-            echo "Signed Flatpak repository is missing its summary index signature shard; refusing deploy." >&2
-            exit 1
-          fi
-          expected_fingerprint=$(printf '%s' "$expected_fingerprint_raw" | \
-            tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')
-          unset expected_fingerprint_raw
-          staged_fingerprint=$(tr -d '[:space:]' \
-            < "$DEPLOY_ROOT/flatpak/armada-flatpak.fingerprint" | \
-            tr '[:lower:]' '[:upper:]')
-          if [ -z "$expected_fingerprint" ] || \
-             [ "$staged_fingerprint" != "$expected_fingerprint" ]; then
-            echo "Staged Flatpak key does not match FLATPAK_GPG_EXPECTED_FINGERPRINT; refusing deploy." >&2
-            exit 1
-          fi
-          mapfile -t staged_key_fingerprints < <(
-            gpg --batch --show-keys --with-colons \
-              "$DEPLOY_ROOT/flatpak/armada-flatpak.gpg" 2>/dev/null | awk -F: '
-                $1 == "pub" { primary = 1; next }
-                primary && $1 == "fpr" { print toupper($10); primary = 0 }
-              '
-          )
-          if [ "${#staged_key_fingerprints[@]}" -ne 1 ] || \
-             [ "${staged_key_fingerprints[0]}" != "$expected_fingerprint" ]; then
-            echo "Published Flatpak public key does not match its pinned fingerprint; refusing deploy." >&2
-            exit 1
-          fi
-          mapfile -t staged_verify_refs < <(
-            ostree refs --repo="$DEPLOY_ROOT/flatpak"
-          )
-          if [ "${#staged_verify_refs[@]}" -eq 0 ]; then
-            echo "Flatpak repository has no refs; refusing deploy." >&2
-            exit 1
-          fi
-          mapfile -t staged_flatpak_refs < <(
-            printf '%s\n' "${staged_verify_refs[@]}" | \
-              awk '/^app\/buzz[.]armada[.]app\/[^/]+\/stable$/ { print }'
-          )
-          if [ "${#staged_flatpak_refs[@]}" -ne 1 ]; then
-            echo "Expected exactly one stable Armada app ref; refusing Flatpak deploy." >&2
-            exit 1
-          fi
-          mapfile -t staged_appstream_refs < <(
-            printf '%s\n' "${staged_verify_refs[@]}" | \
-              awk '/^appstream2?\/[^/]+$/ { print }'
-          )
-          if [ "${#staged_appstream_refs[@]}" -eq 0 ]; then
-            echo "Flatpak repository has no AppStream refs; refusing deploy." >&2
-            exit 1
-          fi
-          staged_verify_repo=$(mktemp -d "$RUNNER_TEMP/armada-flatpak-deploy-verify.XXXXXX")
-          ostree init --repo="$staged_verify_repo" --mode=archive-z2
-          ostree remote add --repo="$staged_verify_repo" \
-            --set=gpg-verify=true --set=gpg-verify-summary=true \
-            --gpg-import="$DEPLOY_ROOT/flatpak/armada-flatpak.gpg" \
-            armada-staged "file://$DEPLOY_ROOT/flatpak"
-          for ref in "${staged_verify_refs[@]}"; do
-            # Named, because the pull reports only a commit id on
-            # failure and every ref in the repository is verified —
-            # including metadata refs nothing else in this file
-            # mentions. Without this the log says which COMMIT has no
-            # signature but not which ref failed to get one.
-            echo "verifying signature of armada-staged ref: $ref"
-            ostree pull --repo="$staged_verify_repo" --commit-metadata-only \
-              armada-staged "$ref"
-          done
-
-          # Exercise the summary index and AppStream path through isolated
-          # Flatpak state as well as OSTree's legacy-summary read above.
-          staged_flatpak_home=$(mktemp -d "$RUNNER_TEMP/armada-flatpak-deploy-cli.XXXXXX")
-          (
-            export HOME="$staged_flatpak_home/home"
-            export XDG_DATA_HOME="$staged_flatpak_home/data"
-            export XDG_CONFIG_HOME="$staged_flatpak_home/config"
-            export XDG_CACHE_HOME="$staged_flatpak_home/cache"
-            export XDG_RUNTIME_DIR="$staged_flatpak_home/runtime"
-            mkdir -p "$HOME" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" \
-              "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR"
-            chmod 700 "$XDG_RUNTIME_DIR"
-            flatpak remote-add --user \
-              --gpg-import="$DEPLOY_ROOT/flatpak/armada-flatpak.gpg" \
-              armada-staged-flatpak "file://$DEPLOY_ROOT/flatpak"
-            flatpak remote-ls --user --app --columns=application \
-              armada-staged-flatpak | grep -Fx buzz.armada.app >/dev/null
-            flatpak update --user --appstream --noninteractive -y \
-              armada-staged-flatpak
-          )
-
-          # Materialize SSH state in a private temporary directory. Key/config
-          # arrive base64 (single line) to fit masking rules; every rsync names
-          # this config explicitly, so ambient ~/.ssh state is never consulted.
-          umask 077
-          deploy_ssh_dir=$(mktemp -d "$RUNNER_TEMP/armada-deploy-ssh.XXXXXX")
-          deploy_ssh_key="$deploy_ssh_dir/id_ed25519"
-          deploy_ssh_config="$deploy_ssh_dir/config"
-          cleanup_deploy_ssh() {
-            rm -rf -- "$deploy_ssh_dir"
-          }
-          trap cleanup_deploy_ssh EXIT HUP INT TERM
-          printf '%s' "$deploy_ssh_key_base64" | base64 -d > "$deploy_ssh_key"
-          unset deploy_ssh_key_base64
-          if [ -n "$deploy_ssh_config_base64" ]; then
-            printf '%s' "$deploy_ssh_config_base64" | base64 -d > "$deploy_ssh_config"
-          fi
-          unset deploy_ssh_config_base64
-          # A CLI -o StrictHostKeyChecking is NOT inherited by the ProxyJump
-          # child connection, so put host defaults in the config so every hop
-          # (including a bastion) picks them up.
-          #
-          # ConnectTimeout/ServerAlive* are the deadline rsync itself doesn't
-          # have: a connection that is accepted and then goes silent leaves
-          # rsync waiting indefinitely, which is a hung job rather than a
-          # failed one — and this job's own timeout is the only thing that
-          # would ever end it.
-          printf 'Host *\n\tIdentityFile %s\n\tUserKnownHostsFile %s\n\tBatchMode yes\n\tStrictHostKeyChecking accept-new\n\tConnectTimeout 30\n\tServerAliveInterval 30\n\tServerAliveCountMax 6\n' \
-            "$deploy_ssh_key" "$deploy_ssh_dir/known_hosts" >> "$deploy_ssh_config"
-
-          TARGET="$deploy_target"
-          unset deploy_target
-
-          # The public site is an nsite behind Caddy. Verify the filesystem
-          # carve-out itself, not merely that rsync accepted the bytes: a route
-          # regression can otherwise return the SPA shell with 200 while the
-          # release job stays green.
-          smoke=$(mktemp -d "$RUNNER_TEMP/armada-update-smoke.XXXXXX")
-
-          # Nothing for the desktop editions is published here any more. Every
-          # installer is named by the kind-30622 release event and fetched from
-          # Blossom by hash, and the app self-updates from that same event, so
-          # there is no armada.buzz copy to keep in step, no unversioned alias
-          # to keep pointing somewhere true, and no latest*.yml feed. The
-          # Flatpak OSTree repository below is all that is left: it is the one
-          # thing here that cannot be a hash, because Flatpak needs a real
-          # mutable remote over HTTP.
-          #
-          # --chmod: the served mode is stated here rather than inherited from
-          # whatever umask the staging step ran under. A payload the web
-          # server's user can't read is a 403, which looks like a build that
-          # didn't publish.
-
-          # Flatpak's signed summary is the mutable pointer into its
-          # content-addressed object store. Publish every object, the immutable
-          # summaries/ index shards, and the public identity before the root
-          # summary, signature, summary index, and index-signature pointers so a
-          # client never sees a commit or shard that is still in flight. Keep
-          # the legacy physical tree current as well: already-installed remotes
-          # retain /flatpak forever, and production Caddy can expose it as a
-          # compatibility carve-out. Root-anchored filters matter: `summary*`
-          # would also omit the `summaries/` payload directory.
-          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
-            --include='/summaries/***' \
-            --exclude='/summary' --exclude='/summary.sig' \
-            --exclude='/summary.idx' --exclude='/summary.idx.sig' \
-            "$DEPLOY_ROOT/flatpak/" "${TARGET}:/downloads/flatpak/"
-          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
-            --include='/summaries/***' \
-            --exclude='/summary' --exclude='/summary.sig' \
-            --exclude='/summary.idx' --exclude='/summary.idx.sig' \
-            "$DEPLOY_ROOT/flatpak/" "${TARGET}:/flatpak/"
-
-          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
-            --include='/summary' --include='/summary.sig' \
-            --include='/summary.idx' --include='/summary.idx.sig' --exclude='*' \
-            "$DEPLOY_ROOT/flatpak/" "${TARGET}:/downloads/flatpak/"
-          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
-            --include='/summary' --include='/summary.sig' \
-            --include='/summary.idx' --include='/summary.idx.sig' --exclude='*' \
-            "$DEPLOY_ROOT/flatpak/" "${TARGET}:/flatpak/"
-          for name in summary summary.sig summary.idx summary.idx.sig config armada-flatpak.gpg armada-flatpak.fingerprint; do
-            curl -fsS --retry 5 --retry-all-errors --connect-timeout 30 --max-time 300 \
-              "https://armada.buzz/downloads/flatpak/$name" -o "$smoke/flatpak-$name"
-            cmp "$DEPLOY_ROOT/flatpak/$name" "$smoke/flatpak-$name"
-          done
-          summary_index_signature_relative=${staged_summary_index_signature#"$DEPLOY_ROOT/flatpak/"}
-          case "$summary_index_signature_relative" in
-            summaries/*.idx.sig) ;;
-            *) echo "Invalid staged Flatpak summary index signature path." >&2; exit 1 ;;
-          esac
-          curl -fsS --retry 5 --retry-all-errors --connect-timeout 30 --max-time 300 \
-            "https://armada.buzz/downloads/flatpak/$summary_index_signature_relative" \
-            -o "$smoke/flatpak-summary-index-signature"
-          cmp "$staged_summary_index_signature" \
-            "$smoke/flatpak-summary-index-signature"
-
-          # A byte-for-byte readback is necessary but not sufficient: make a
-          # fresh metadata-only pull from the public URL with summary and
-          # commit verification required. This catches invalid app or AppStream
-          # signatures and routing mistakes without downloading payloads again.
-          public_verify_repo="$smoke/public-verify"
-          ostree init --repo="$public_verify_repo" --mode=archive-z2
-          ostree remote add --repo="$public_verify_repo" \
-            --set=gpg-verify=true --set=gpg-verify-summary=true \
-            --gpg-import="$smoke/flatpak-armada-flatpak.gpg" \
-            armada-public https://armada.buzz/downloads/flatpak/
-          for ref in "${staged_verify_refs[@]}"; do
-            # Named, because the pull reports only a commit id on
-            # failure and every ref in the repository is verified —
-            # including metadata refs nothing else in this file
-            # mentions. Without this the log says which COMMIT has no
-            # signature but not which ref failed to get one.
-            echo "verifying signature of armada-public ref: $ref"
-            retry ostree pull --repo="$public_verify_repo" --commit-metadata-only \
-              armada-public "$ref"
-          done
-
-          public_flatpak_home=$(mktemp -d "$RUNNER_TEMP/armada-flatpak-public-cli.XXXXXX")
-          (
-            export HOME="$public_flatpak_home/home"
-            export XDG_DATA_HOME="$public_flatpak_home/data"
-            export XDG_CONFIG_HOME="$public_flatpak_home/config"
-            export XDG_CACHE_HOME="$public_flatpak_home/cache"
-            export XDG_RUNTIME_DIR="$public_flatpak_home/runtime"
-            mkdir -p "$HOME" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" \
-              "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR"
-            chmod 700 "$XDG_RUNTIME_DIR"
-            flatpak remote-add --user \
-              --gpg-import="$smoke/flatpak-armada-flatpak.gpg" \
-              armada-public-flatpak https://armada.buzz/downloads/flatpak/
-            # This remote is HTTPS, unlike the file:// ones verified earlier,
-            # so both calls below reach armada.buzz and neither retries on its
-            # own. `remote-add` is left alone deliberately: it writes local
-            # config, and a second attempt would fail on the remote it just
-            # created rather than on anything transient.
-            public_lists_the_app() {
-              flatpak remote-ls --user --app --columns=application \
-                armada-public-flatpak | grep -Fx buzz.armada.app >/dev/null
-            }
-
-            # flatpak's fetcher — alone among the tools here — cannot resolve
-            # ANY host when the job container runs with AppArmor unconfined,
-            # which is what act is given (NGIT_CI_ACT_CONTAINER_OPTIONS on the
-            # coordinator carries `--security-opt apparmor=unconfined`). An
-            # unconfined container isn't covered by docker-default and falls
-            # under the host's path-based profiles instead. Reproduced in this
-            # same image, 3/3 runs failing with that flag and 0/3 without,
-            # while `getent`, `curl` and `ostree pull` reach the same URL in
-            # both. A resolver failure here is therefore a fact about the
-            # runner, not about what armada.buzz is serving, and must not fail
-            # a release. Every OTHER flatpak failure still does.
-            #
-            # Little is given up. The served bytes were already compared
-            # byte-for-byte against the staged ones above, `ostree pull`
-            # re-verified every ref's signature from this same public URL with
-            # gpg-verify and gpg-verify-summary on, and the flatpak client
-            # itself already enumerated the app from the staged repo over
-            # file://. What these two calls add is only that flatpak's own
-            # fetcher can read the public URL too.
-            tolerate_unconfined_resolver() {
-              local out status=0
-              out=$("$@" 2>&1) || status=$?
-              printf '%s\n' "$out"
-              [ "$status" -eq 0 ] && return 0
-              case "$out" in
-                *"resolve host name"*)
-                  echo "warning: flatpak's resolver is broken by this container's" >&2
-                  echo "AppArmor mode; curl and ostree reached the same URL, so the" >&2
-                  echo "published repository is verified and this check is skipped." >&2
-                  return 0
-                  ;;
-              esac
-              return "$status"
-            }
-            tolerate_unconfined_resolver retry public_lists_the_app
-            tolerate_unconfined_resolver retry \
-              flatpak update --user --appstream --noninteractive -y \
-              armada-public-flatpak
-          )
-
-          # The .flatpak bundle used to be held back and rsynced here, last,
-          # because installing it configures a GPG-verified remote and handing
-          # a user one whose origin isn't readable yet breaks their first
-          # update. That ordering is now structural rather than manual: the
-          # bundle is named by the release event, and the `release` job
-          # `needs:` this one, so it cannot be announced until the repository
-          # it points at has been published AND verified by the checks above.
-
-          cleanup_deploy_ssh
-          trap - EXIT HUP INT TERM
-
   android:
     # Last, and `always()`, so its outcome is nobody else's problem. It shares
     # the working tree with `desktop` (see there), so it cannot run beside it;
     # running it after the desktop chain means a Play Console rejection or a
-    # Zapstore hiccup costs the Android publish alone. `flatpak` is skipped on a
-    # non-tag ref, which `always()` also covers.
-    needs: [flatpak]
+    # Zapstore hiccup costs the Android publish alone.
+    needs: [publish]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -1694,16 +1263,16 @@ jobs:
   # Nostr has no compare-and-swap, so a second publisher would silently drop
   # one side's artifacts rather than merge with them.
   #
-  # Depending on `deploy` rather than `publish` is deliberate: it is what keeps
-  # the .flatpak bundle from being announced before the GPG-verified OSTree
-  # remote it configures on install is live and checked.
+  # Depending on `publish` is what keeps the .flatpak bundle from being
+  # announced before its signature has been verified — `publish` stages the
+  # bundle only after that check passes.
   #
   # `always()` so a release still goes out when one platform failed, carrying
   # whatever was built. The script refuses to publish an empty release, so a
   # run where nothing built fails here instead of announcing a version with no
   # downloads.
   release:
-    needs: [android, flatpak]
+    needs: [android, publish]
     if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
