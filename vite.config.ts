@@ -178,10 +178,12 @@ export default defineConfig({
   test: {
     projects: [
       // Splitting by environment is the single biggest lever on suite cost. A
-      // jsdom instance is built per test FILE, and at ~2.5s each that was 906s
-      // of the baseline's CPU — more than actually running the tests (567s).
-      // The great majority of files never touch a DOM, so they get `node` and
-      // skip that construction entirely (measured: 906s -> 0.3s across them).
+      // jsdom instance is built per test FILE, and at ~1.8s each that was
+      // ~615s of the run's worker-time — more than actually running the tests
+      // (~495s). The great majority of files never touch a DOM, so they get
+      // `node` and skip that construction entirely (measured over a paired
+      // run: ~615s -> ~222s of environment time, ~19% off the wall clock and
+      // ~24% off the CPU consumed, using two fewer cores).
       //
       // The split is by EXTENSION rather than a list of paths, so there is no
       // roster in here to rot as files move: `.tsx` is a component/render test

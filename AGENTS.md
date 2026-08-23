@@ -58,8 +58,8 @@ run this before committing changes.
 ### The vitest environment split
 
 Vitest runs as two projects (`vite.config.ts`), because building a jsdom
-instance costs ~2.5s per test FILE and used to be the single largest line in
-the suite — 906s of the run's worker-time, more than executing the tests. The
+instance costs ~1.8s per test FILE and used to be the single largest line in
+the suite — ~615s of the run's worker-time, more than executing the tests. The
 split is by EXTENSION so there is no roster to rot: `**/*.test.tsx` is a
 component test and gets `jsdom`, `**/*.test.ts` gets `node`. Roughly nine in
 ten `.ts` suites never touch a DOM, so they now skip that construction.
