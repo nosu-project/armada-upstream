@@ -4,6 +4,22 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.56.4] - 2026-08-22
+
+Desktop updates now come from the same signed release listing the downloads page
+reads, and every download is checked against the hash published with it. The
+older update feed and the Flatpak update repository are no longer refreshed with
+each release, so a desktop or Flatpak install from 0.56.3 or earlier will keep
+reporting itself up to date — install this version once by hand from the
+downloads page to pick up later ones automatically.
+
+### Changed
+- The desktop app looks for updates in the same signed release listing the downloads page shows, and verifies each download against the hash published with it
+- The Flatpak update repository is no longer refreshed with each release. The signed `.flatpak` bundle on the downloads page is how to install and update
+
+### Fixed
+- The web app is published with each release again
+
 ## [0.56.3] - 2026-08-22
 
 The Android app is published to Google Play again. Since 0.51.2 every upload was
