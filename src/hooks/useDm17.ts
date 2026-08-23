@@ -99,7 +99,7 @@ import {
 } from "@/lib/nip17/dm17Store";
 import { persistDm17ThreadSnapshot, prewarmDm17ThreadSnapshot } from "@/lib/nip17/threadSnapshot";
 import { useWireScopes } from "@/wire/useWireScopes";
-import { dmThreadScope } from "@/wire/bus";
+import { dmThreadScope, emitWireScopes } from "@/wire/bus";
 import { dm17NotifyCandidates, feedNotifyCandidates } from "@/wire/notify";
 
 import type { SendStatus } from "@/hooks/useGroupMessages";
@@ -278,15 +278,31 @@ function persistSeenWraps(self: string): void {
   }).catch(() => undefined);
 }
 
+/** Wire scope for DM WebXDC peer signals (gossip channel coordination). */
+export function dmWebxdcPeerScope(topic: string): string {
+  return `dm:webxdc-peer:${topic}`;
+}
+
+/** A parsed DM WebXDC peer signal. */
+export interface DmPeerSignal {
+  topic: string;
+  op: "ad" | "left";
+  addr?: string;
+  author: string;
+  ms: number;
+}
+
 /**
- * Parse a WebXDC peer signal event.
+ * Parse a WebXDC peer signal from an opened DM rumor.
+ * Vector sends these as kind 30078 rumors with content "peer-advertisement"
+ * or "peer-left", gift-wrapped inside kind 1059.
  * Returns the signal data or undefined if not a valid peer signal.
  */
-function parsePeerSignal(event: NostrEvent): { topic: string; op: "ad" | "left"; addr?: string } | undefined {
-  if (event.kind !== KIND_DM_PEER_SIGNAL) return undefined;
+function parsePeerSignalFromRumor(rumor: { kind: number; content: string; tags: string[][]; author: string; createdAt: number }): DmPeerSignal | undefined {
+  if (rumor.kind !== KIND_DM_PEER_SIGNAL) return undefined;
   
   // Find the webxdc-topic tag
-  const topicTag = event.tags.find(([name]) => name === "webxdc-topic");
+  const topicTag = rumor.tags.find(([name]) => name === "webxdc-topic");
   if (!topicTag || topicTag.length < 2) return undefined;
   const topic = topicTag[1];
   
@@ -294,16 +310,53 @@ function parsePeerSignal(event: NostrEvent): { topic: string; op: "ad" | "left";
   if (topic.length !== 52 || !/^[A-Z2-7]+$/.test(topic)) return undefined;
   
   // Determine operation from content
-  if (event.content === "peer-left") {
-    return { topic, op: "left" };
-  } else if (event.content === "peer-advertisement") {
+  if (rumor.content === "peer-left") {
+    return { topic, op: "left", author: rumor.author, ms: rumor.createdAt * 1000 };
+  } else if (rumor.content === "peer-advertisement") {
     // Find the webxdc-node-addr tag
-    const addrTag = event.tags.find(([name]) => name === "webxdc-node-addr");
+    const addrTag = rumor.tags.find(([name]) => name === "webxdc-node-addr");
     if (!addrTag || addrTag.length < 2) return undefined;
-    return { topic, op: "ad", addr: addrTag[1] };
+    return { topic, op: "ad", addr: addrTag[1], author: rumor.author, ms: rumor.createdAt * 1000 };
   }
   
   return undefined;
+}
+
+/**
+ * Parse a WebXDC peer signal event (for direct kind 30078 events, not gift-wrapped).
+ * Returns the signal data or undefined if not a valid peer signal.
+ */
+function parsePeerSignal(event: NostrEvent): DmPeerSignal | undefined {
+  return parsePeerSignalFromRumor({
+    kind: event.kind,
+    content: event.content,
+    tags: event.tags,
+    author: event.pubkey,
+    createdAt: event.created_at,
+  });
+}
+
+/** In-memory store of recent DM peer signals for WebXDC realtime channels. */
+const dmPeerSignalStore = new Map<string, DmPeerSignal[]>();
+const DM_PEER_SIGNAL_MAX = 100;
+
+/** Get recent peer signals for a topic. */
+export function getDmPeerSignals(topic: string): DmPeerSignal[] {
+  return dmPeerSignalStore.get(topic) ?? [];
+}
+
+/** Store and dispatch a DM peer signal. */
+function dispatchDmPeerSignal(signal: DmPeerSignal): void {
+  const existing = dmPeerSignalStore.get(signal.topic) ?? [];
+  existing.push(signal);
+  // Keep bounded
+  if (existing.length > DM_PEER_SIGNAL_MAX) {
+    existing.splice(0, existing.length - DM_PEER_SIGNAL_MAX);
+  }
+  dmPeerSignalStore.set(signal.topic, existing);
+  
+  // Notify listeners via wire bus
+  emitWireScopes([dmWebxdcPeerScope(signal.topic), "dm:webxdc-peer"]);
 }
 
 /**
@@ -332,7 +385,7 @@ async function openAndStore(ctx: SyncCtx, wraps: NostrEvent[], interactive: bool
 
   const seen = seenSetFor(ctx.self);
   const opened: OpenedDm[] = [];
-  const peerSignals: Array<{ topic: string; op: "ad" | "left"; addr?: string; author: string }> = [];
+  const peerSignals: DmPeerSignal[] = [];
   
   // Bounded waves, never one unthrottled Promise.all: each wrap costs two
   // NIP-44 opens (synchronous noble crypto for local signers), so a full
@@ -344,20 +397,31 @@ async function openAndStore(ctx: SyncCtx, wraps: NostrEvent[], interactive: bool
       wraps.slice(i, i + DECRYPT_WAVE).map(async (wrap) => {
         seen.add(wrap.id);
         
-        // Handle peer signals (Kind 30078) - not gift-wrapped, process directly
+        // Handle direct peer signals (Kind 30078) - sent without gift wrap
+        // (for forward compatibility; Vector normally gift-wraps these)
         if (wrap.kind === KIND_DM_PEER_SIGNAL) {
           const signal = parsePeerSignal(wrap);
           if (signal) {
-            peerSignals.push({ ...signal, author: wrap.pubkey });
+            peerSignals.push(signal);
           }
           return;
         }
         
         // Handle gift-wrapped DMs (Kind 1059)
         const dm = await openDmWrap(wrap, ctx.signer as Dm17Signer, ctx.self);
+        if (!dm) return;
+        
+        // Check if this is a gift-wrapped peer signal (Vector's format:
+        // kind 30078 rumor inside kind 1059 wrap)
+        const peerSignal = parsePeerSignalFromRumor(dm);
+        if (peerSignal) {
+          peerSignals.push(peerSignal);
+          return;
+        }
+        
         // Foreign rumor kinds (e.g. Concord direct invites, kind 3313) are not
         // ours to store — their own scan paths handle them.
-        if (dm && DM_RUMOR_KINDS.includes(dm.kind)) opened.push(dm);
+        if (DM_RUMOR_KINDS.includes(dm.kind)) opened.push(dm);
       }),
     );
     if (i + DECRYPT_WAVE < wraps.length) await new Promise((r) => setTimeout(r, 0));
@@ -367,11 +431,9 @@ async function openAndStore(ctx: SyncCtx, wraps: NostrEvent[], interactive: bool
   feedNotifyCandidates(dm17NotifyCandidates(opened, ctx.self));
   persistSeenWraps(ctx.self);
   
-  // Process peer signals - emit them for WebXDC runtime to consume
-  if (peerSignals.length > 0) {
-    // Log peer signals for debugging
-    console.log("[NIP-17 WebXDC] Received peer signals:", peerSignals);
-    // TODO: Dispatch peer signals to WebXDC runtime via wire bus
+  // Dispatch peer signals to the WebXDC runtime via wire bus
+  for (const signal of peerSignals) {
+    dispatchDmPeerSignal(signal);
   }
   
   return true;
@@ -528,17 +590,18 @@ export interface Dm17RelayQueryResult {
 export async function queryWrapsPerRelay(
   nostr: NostrPool,
   relays: string[],
-  filter: NostrFilter | ((url: string) => NostrFilter),
+  filter: NostrFilter | NostrFilter[] | ((url: string) => NostrFilter | NostrFilter[]),
   signal: AbortSignal,
 ): Promise<Dm17RelayQueryResult> {
   const settled = await Promise.allSettled(
-    relays.map(async (url): Promise<Dm17RelayPage> => ({
-      url,
-      events: await nostr.relay(url).query(
-        [typeof filter === "function" ? filter(url) : filter],
-        { signal },
-      ),
-    })),
+    relays.map(async (url): Promise<Dm17RelayPage> => {
+      const resolved = typeof filter === "function" ? filter(url) : filter;
+      const filters = Array.isArray(resolved) ? resolved : [resolved];
+      return {
+        url,
+        events: await nostr.relay(url).query(filters, { signal }),
+      };
+    }),
   );
   const pages: Dm17RelayPage[] = [];
   const failed: string[] = [];
@@ -576,27 +639,43 @@ export function relayScanWatermarks(pages: Dm17RelayPage[], nowSecs: number): Re
   return out;
 }
 
-/** Build one relay's top-up filter from that relay's own successful progress. */
+/** Build one relay's top-up filters from that relay's own successful progress.
+ * Returns an ARRAY of filters: one for DM gift wraps (kind 1059), one for
+ * WebXDC peer signals (kind 30078). They must be separate because Nostr ANDs
+ * all conditions within a single filter — a `#d` condition would exclude
+ * kind-1059 wraps (which have no `d` tag) entirely.
+ */
 export function dm17InboxFilter(
   self: string,
   cursor: Dm17Cursor | undefined,
   relay: string,
   full: boolean,
-): NostrFilter {
+): NostrFilter[] {
   const newest = cursor?.relayNewest?.[relay];
-  // Include Kind 1059 (gift wraps) and Kind 30078 (WebXDC peer signals)
-  const filter: NostrFilter = {
-    kinds: [1059, KIND_DM_PEER_SIGNAL],
+  const since = newest !== undefined
+    ? Math.max(0, newest - (full ? RESYNC_SLACK_SECS : NARROW_RESYNC_SLACK_SECS))
+    : undefined;
+
+  // DM gift wraps (kind 1059) — no `d` tag filter
+  const wrapFilter: NostrFilter = {
+    kinds: [1059],
     "#p": [self],
-    limit: INBOX_PAGE
+    limit: INBOX_PAGE,
   };
-  // Also filter for peer signals with the correct d tag
-  filter["#d"] = [DM_PEER_SIGNAL_D];
-  if (newest !== undefined) {
-    const slack = full ? RESYNC_SLACK_SECS : NARROW_RESYNC_SLACK_SECS;
-    filter.since = Math.max(0, newest - slack);
-  }
-  return filter;
+  if (since !== undefined) wrapFilter.since = since;
+
+  // WebXDC peer signals (kind 30078) — with `d` tag filter
+  // Note: Vector gift-wraps these, so they normally arrive as kind 1059.
+  // This filter catches any sent directly (for forward compatibility).
+  const peerSignalFilter: NostrFilter = {
+    kinds: [KIND_DM_PEER_SIGNAL],
+    "#p": [self],
+    "#d": [DM_PEER_SIGNAL_D],
+    limit: INBOX_PAGE,
+  };
+  if (since !== undefined) peerSignalFilter.since = since;
+
+  return [wrapFilter, peerSignalFilter];
 }
 
 /**
@@ -700,16 +779,16 @@ async function pageOlderDmWraps(
   until: number,
   interactive: boolean,
 ): Promise<{ oldest?: number; exhausted: boolean; scanned: number }> {
+  // Separate filters: kind 1059 (gift wraps) and kind 30078 (peer signals).
+  // They must be separate because Nostr ANDs all conditions within a single
+  // filter — a `#d` condition would exclude kind-1059 wraps entirely.
   const result = await queryWrapsPerRelay(
     ctx.nostr,
     ctx.relays,
-    {
-      kinds: [1059, KIND_DM_PEER_SIGNAL],
-      "#p": [ctx.self],
-      "#d": [DM_PEER_SIGNAL_D],
-      until,
-      limit: INBOX_PAGE
-    },
+    [
+      { kinds: [1059], "#p": [ctx.self], until, limit: INBOX_PAGE },
+      { kinds: [KIND_DM_PEER_SIGNAL], "#p": [ctx.self], "#d": [DM_PEER_SIGNAL_D], until, limit: INBOX_PAGE },
+    ],
     AbortSignal.timeout(8000),
   );
   // No successful relay is not an empty page. Throw so callers leave their

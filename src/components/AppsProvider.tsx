@@ -6,6 +6,7 @@ import { WebxdcApp } from "@/components/apps/WebxdcApp";
 import { YouTubeWatchalong } from "@/components/apps/YouTubeWatchalong";
 import { Button } from "@/components/ui/button";
 import { useConcordAppSync } from "@/concord/hooks/useConcordAppSync";
+import { useDmAppSync } from "@/hooks/useDmAppSync";
 import { useGroupAppSync } from "@/hooks/useGroupAppSync";
 import {
   AppsContext,
@@ -59,6 +60,18 @@ function Concord2RunningApp({
   children: (sync: AppSync) => React.ReactNode;
 }) {
   const sync = useConcordAppSync(active.scope.community, active.scope.channel, active.sessionId);
+  return <>{children(sync)}</>;
+}
+
+/** Render a running DM-scoped app (resolves the NIP-17 DM sync backend). */
+function DmRunningApp({
+  active,
+  children,
+}: {
+  active: ActiveApp & { scope: Extract<AppScope, { kind: "dm" }> };
+  children: (sync: AppSync) => React.ReactNode;
+}) {
+  const sync = useDmAppSync(active.scope.peer, active.sessionId);
   return <>{children(sync)}</>;
 }
 
@@ -132,6 +145,13 @@ function RunningApp({
       <Nip29RunningApp active={active} relayUrl={active.scope.relayUrl} groupId={active.scope.groupId}>
         {renderStage}
       </Nip29RunningApp>
+    );
+  }
+  if (active.scope.kind === "dm") {
+    return (
+      <DmRunningApp active={active as ActiveApp & { scope: Extract<AppScope, { kind: "dm" }> }}>
+        {renderStage}
+      </DmRunningApp>
     );
   }
   return (

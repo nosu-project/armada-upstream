@@ -90,7 +90,8 @@ describe("NIP-17 per-relay inbox filters", () => {
       false,
     );
 
-    expect(filter.since).toBeUndefined();
+    // Returns an array: [wrapFilter, peerSignalFilter] — check the wrap filter
+    expect(filter[0].since).toBeUndefined();
   });
 
   it("uses each relay's own cursor for narrow and full recovery windows", () => {
@@ -104,9 +105,9 @@ describe("NIP-17 per-relay inbox filters", () => {
       },
     };
 
-    expect(dm17InboxFilter(self, cursor, "wss://fast.example", false).since).toBe(49_400);
-    expect(dm17InboxFilter(self, cursor, "wss://slow.example", false).since).toBe(39_400);
-    expect(dm17InboxFilter(self, cursor, "wss://fast.example", true).since).toBe(0);
+    expect(dm17InboxFilter(self, cursor, "wss://fast.example", false)[0].since).toBe(49_400);
+    expect(dm17InboxFilter(self, cursor, "wss://slow.example", false)[0].since).toBe(39_400);
+    expect(dm17InboxFilter(self, cursor, "wss://fast.example", true)[0].since).toBe(0);
   });
 });
 
@@ -184,7 +185,7 @@ describe("syncDm17Inbox", () => {
     expect(watermark).toBeLessThanOrEqual(after - MAX_WRAP_BACKDATE_SECS);
     // A wrap published a moment later, backdated the full two days, is inside
     // the next narrow poll's window.
-    const since = dm17InboxFilter(self, cursor, url, false).since;
+    const since = dm17InboxFilter(self, cursor, url, false)[0].since;
     expect(since).toBeLessThanOrEqual(after - MAX_WRAP_BACKDATE_SECS);
   });
 
