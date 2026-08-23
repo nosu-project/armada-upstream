@@ -4,6 +4,22 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.57.1] - 2026-08-23
+
+Invite links now ask before they join. Opening one shows the community first —
+its name, artwork, channels, relays and who is already inside — and you join
+only when you accept it. Being removed from a community also takes effect right
+away instead of waiting on a background refresh, and on Android incoming
+messages are handled off the app's main thread, so receiving them no longer
+slows the interface.
+
+### Changed
+- Opening an invite link shows the community and asks before joining, instead of joining the moment the link opens. Signed out, the same preview offers a sign-in button, so you can see what you are accepting before making an account
+
+### Fixed
+- Being removed from a community applies right away, and the community drops off the sidebar without waiting on a background refresh
+- On Android, messages arriving in the background are handled off the app's main thread, so receiving them no longer slows the interface
+
 ## [0.57.0] - 2026-08-23
 
 Chat messages now render richer formatting: fenced code blocks are
