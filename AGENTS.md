@@ -55,6 +55,35 @@ run this before committing changes.
 
 `npm run dev` serves at http://localhost:8080.
 
+### The vitest environment split
+
+Vitest runs as two projects (`vite.config.ts`), because building a jsdom
+instance costs ~2.5s per test FILE and used to be the single largest line in
+the suite — 906s of the run's worker-time, more than executing the tests. The
+split is by EXTENSION so there is no roster to rot: `**/*.test.tsx` is a
+component test and gets `jsdom`, `**/*.test.ts` gets `node`. Roughly nine in
+ten `.ts` suites never touch a DOM, so they now skip that construction.
+
+A `.ts` suite that DOES need a DOM — one driving `renderHook`, or a browser
+shim — carries `// @vitest-environment jsdom` as its first line, which
+overrides its project's environment and travels with the file if it moves. A
+new one announces itself as `document is not defined`, and that line is the
+fix. `src/test/setup.ts` gates on the ENVIRONMENT rather than the project for
+the same reason: those files are still in the `node` project and need the DOM
+mocks and jest-dom matchers just the same.
+
+Two things that are easy to get wrong here:
+
+- **`maxWorkers` must be set per project.** With `projects` configured, a root
+  `test.maxWorkers` is silently ignored and the suite goes back to one worker
+  per core with nothing to say it didn't take. Per-project is still a global
+  ceiling, not one pool each — the projects do not run concurrently.
+- **Wall time is almost exactly `worker-seconds / workers`**, so tightening the
+  worker ceiling is paid back directly in duration. Cutting the work by a
+  quarter and the workers by a quarter is a wash. `ARMADA_TEST_WORKERS`
+  overrides the default (all cores but two) for a machine that wants all of
+  itself, or less of it.
+
 ### The one Rust dependency
 
 Mini App multiplayer (`joinRealtimeChannel`) rides iroh-gossip, which lives in

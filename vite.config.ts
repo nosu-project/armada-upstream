@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
 import fs from "node:fs";
+import { availableParallelism } from "node:os";
 import path from "node:path";
 
 import react from "@vitejs/plugin-react";
@@ -122,6 +123,41 @@ function buildStamp(): Plugin {
   };
 }
 
+/**
+ * Worker ceiling for the suite. Vitest defaults to one worker per core and
+ * then adds its own process on top, so the whole machine stalls for the length
+ * of a run. Two cores held back is enough to keep it usable.
+ *
+ * Don't tighten this much further without cutting the work to match. Wall time
+ * here is almost exactly `worker-seconds / workers` (measured within ~17% over
+ * several runs), so the ceiling is paid back directly in duration — dropping
+ * to 12 of 16 cores cancelled out the whole saving from the environment split
+ * below. `ARMADA_TEST_WORKERS` overrides it for a box that wants all of itself
+ * (CI) or less of it.
+ */
+const TEST_WORKERS = Number(process.env.ARMADA_TEST_WORKERS) ||
+  Math.max(1, availableParallelism() - 2);
+
+/**
+ * Test options that are the same in both projects below. Only `name`,
+ * `environment` and `include` differ.
+ *
+ * `maxWorkers` has to live HERE, on each project, not on the root `test`
+ * config: with `projects` set, the root value is silently ignored, and the
+ * suite goes back to a worker per core with nothing to say it didn't take.
+ * Per-project is nonetheless a global ceiling and not one pool each — the
+ * projects do not run concurrently (measured: 2 workers per project across
+ * both is ~200% CPU, not ~400%).
+ */
+const SHARED_TEST_CONFIG = {
+  globals: true,
+  maxWorkers: TEST_WORKERS,
+  setupFiles: "./src/test/setup.ts",
+  onConsoleLog(log: string) {
+    return !log.includes("React Router Future Flag Warning");
+  },
+} as const;
+
 // https://vitejs.dev/config/
 export default defineConfig({
   server: {
@@ -140,12 +176,39 @@ export default defineConfig({
     "import.meta.env.COMMIT_TAG": JSON.stringify(getCommitTag()),
   },
   test: {
-    globals: true,
-    environment: "jsdom",
-    setupFiles: "./src/test/setup.ts",
-    onConsoleLog(log: string) {
-      return !log.includes("React Router Future Flag Warning");
-    },
+    projects: [
+      // Splitting by environment is the single biggest lever on suite cost. A
+      // jsdom instance is built per test FILE, and at ~2.5s each that was 906s
+      // of the baseline's CPU — more than actually running the tests (567s).
+      // The great majority of files never touch a DOM, so they get `node` and
+      // skip that construction entirely (measured: 906s -> 0.3s across them).
+      //
+      // The split is by EXTENSION rather than a list of paths, so there is no
+      // roster in here to rot as files move: `.tsx` is a component/render test
+      // and needs a DOM, `.ts` is assumed not to. The exceptions — a `.ts`
+      // suite that drives `renderHook` or a browser shim — carry a
+      // `// @vitest-environment jsdom` docblock, which overrides the project's
+      // environment and travels with the file. A new one announces itself as
+      // `document is not defined`, and the fix is that one line.
+      {
+        extends: true,
+        test: {
+          ...SHARED_TEST_CONFIG,
+          name: "node",
+          environment: "node",
+          include: ["{src,electron}/**/*.test.{js,mjs,cjs,ts,mts,cts}"],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          ...SHARED_TEST_CONFIG,
+          name: "dom",
+          environment: "jsdom",
+          include: ["{src,electron}/**/*.test.{jsx,tsx}"],
+        },
+      },
+    ],
   },
   build: {
     target: "esnext",

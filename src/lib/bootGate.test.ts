@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * The boot gate's contract: open-by-default under vitest (so suites mounting
  * the gated ingest components see them immediately), reactive when it opens,

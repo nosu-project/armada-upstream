@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * Tests for the quick-reaction frequency table.
  *
