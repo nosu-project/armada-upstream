@@ -5,6 +5,7 @@ import path from "node:path";
 
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
+import { configDefaults } from "vitest/config";
 
 /**
  * Short commit SHA — prefer CI env var, fall back to git. Empty string if
@@ -158,6 +159,29 @@ const SHARED_TEST_CONFIG = {
   },
 } as const;
 
+/**
+ * `*.perf.test.*` files are BENCHMARKS: they assert on how long something takes
+ * or how many times it re-renders, not on whether it is correct. They don't
+ * belong in a correctness gate — a loaded machine makes them fail while nothing
+ * is wrong, and they were ~13% of the suite's test time — so `npm run test`
+ * skips them and `npm run test:perf` runs them alone.
+ *
+ * Two modes rather than a plain exclude, so the benchmarks stay reachable by
+ * the same config that hides them. They are still typechecked and linted
+ * either way; only the runner ignores them.
+ */
+const RUN_PERF = !!process.env.ARMADA_TEST_PERF;
+
+/** `include`/`exclude` for one project, given the extensions it owns. */
+function testFilesFor(extensions: string) {
+  return RUN_PERF
+    ? { include: [`{src,electron}/**/*.perf.test.${extensions}`] }
+    : {
+        include: [`{src,electron}/**/*.test.${extensions}`],
+        exclude: [...configDefaults.exclude, "**/*.perf.test.*"],
+      };
+}
+
 // https://vitejs.dev/config/
 export default defineConfig({
   server: {
@@ -196,18 +220,18 @@ export default defineConfig({
         extends: true,
         test: {
           ...SHARED_TEST_CONFIG,
+          ...testFilesFor("{js,mjs,cjs,ts,mts,cts}"),
           name: "node",
           environment: "node",
-          include: ["{src,electron}/**/*.test.{js,mjs,cjs,ts,mts,cts}"],
         },
       },
       {
         extends: true,
         test: {
           ...SHARED_TEST_CONFIG,
+          ...testFilesFor("{jsx,tsx}"),
           name: "dom",
           environment: "jsdom",
-          include: ["{src,electron}/**/*.test.{jsx,tsx}"],
         },
       },
     ],

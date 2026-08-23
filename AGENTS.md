@@ -72,6 +72,20 @@ fix. `src/test/setup.ts` gates on the ENVIRONMENT rather than the project for
 the same reason: those files are still in the `node` project and need the DOM
 mocks and jest-dom matchers just the same.
 
+### Benchmarks are not part of `npm run test`
+
+`*.perf.test.*` files assert on how long something takes or how many times it
+re-renders. That is not a correctness property: a loaded machine fails them
+while nothing is wrong, and they were ~13% of the suite's test time. The
+default run excludes them; `npm run test:perf` runs those seven files and
+nothing else (~19s). Both modes come out of one `testFilesFor()` in
+`vite.config.ts`, so the benchmarks stay reachable from the same config that
+hides them, and they are typechecked and linted either way — only the runner
+ignores them.
+
+Note the glob needs a `.perf.` SEGMENT: `src/lib/perf.test.ts` is the
+profiler module's own correctness suite and stays in the default run.
+
 Two things that are easy to get wrong here:
 
 - **`maxWorkers` must be set per project.** With `projects` configured, a root
