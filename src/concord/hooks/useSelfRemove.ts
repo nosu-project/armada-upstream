@@ -3,7 +3,8 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { useControlFold } from "@/concord/hooks/useControlPlane";
 import { useGuestbook } from "@/concord/hooks/useGuestbook";
-import { useCommunityEntry, useUpdateCommunityList } from "@/concord/hooks/useCommunityList";
+import { listQueryKey, useCommunityEntry, useUpdateCommunityList, type ListData } from "@/concord/hooks/useCommunityList";
+import { removeFromList } from "@/concord/lib/communityList";
 import { banlistLocator, bytesToHex } from "@/concord/lib/derive";
 import { selfRemovalVerdict, type SelfRemovalVerdict } from "@/concord/lib/selfRemoval";
 import type { Community } from "@/concord/lib/types";
@@ -92,16 +93,32 @@ export function useSelfRemove(community: Community | undefined, onRemoved?: () =
 
     handled.current.add(key);
     logSync("control", `${key.slice(0, 8)} ${verdict} names ME — silent self-removal`);
-    updateList({ type: "remove", communityId: community.idHex })
-      .then(() => {
-        queryClient.removeQueries({ queryKey: ["concord", key] });
-        toast(REMOVAL_TOAST[verdict]);
-        onRemoved?.();
-      })
-      .catch(() => {
-        // The vault write failed (offline?) — retry on the next fold change.
-        handled.current.delete(key);
-      });
+    // Tear the LOCAL view down immediately — remove the queries, notify, route
+    // away — and let the vault write run in the BACKGROUND. The vault write is
+    // durability for the user's OTHER devices ("so they don't resurrect the
+    // entry"), not a precondition for this screen leaving the community, and it
+    // is a full read-modify-write over the network: a fragment read that waits
+    // on a (possibly NIP-42-gated) account-state relay plus a publish. Gating
+    // the route-away on it left the kickee sitting in a room they'd already been
+    // removed from for seconds after the kick had been decided locally.
+    // Tombstone the rail entry NOW. The list query is otherwise only refreshed
+    // by updateCommunityList's own setQueryData at the END of its network RMW,
+    // so the community icon lingered in the rail for the RMW's duration after
+    // the room had already been torn down. This optimistic removal mirrors the
+    // same tombstone the vault write will record durably (removeFromList), and
+    // the background write reconciles it against the relays.
+    queryClient.setQueryData<ListData>(listQueryKey(user.pubkey), (prev) =>
+      prev ? { ...prev, list: removeFromList(prev.list, community.idHex, Date.now()) } : prev,
+    );
+    queryClient.removeQueries({ queryKey: ["concord", key] });
+    toast(REMOVAL_TOAST[verdict]);
+    onRemoved?.();
+    updateList({ type: "remove", communityId: community.idHex }).catch(() => {
+      // The vault write failed (offline / no relay confirmed). The verdict is
+      // still standing in the store, so clear `handled` and let the next mount
+      // (a later visit, or app relaunch) re-derive it and retry the write.
+      handled.current.delete(key);
+    });
     // `control`/`guestbook` are fresh objects each render; depend on their
     // stable fields, not on them.
     // eslint-disable-next-line react-hooks/exhaustive-deps

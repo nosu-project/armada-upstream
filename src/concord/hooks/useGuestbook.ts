@@ -16,13 +16,13 @@ import {
   snapshotAuthorities,
   type CoalescedMember,
 } from "@/concord/lib/guestbook";
-import { mergeOpened, sweepGuestbook } from "@/concord/lib/planeSync";
-import { queryPlane } from "@/concord/lib/rumorStore";
+import { mergeOpened, openPlaneWraps, sweepGuestbook } from "@/concord/lib/planeSync";
+import { queryPlane, writeOpened } from "@/concord/lib/rumorStore";
 import type { OpenedEvent } from "@/concord/lib/stream";
 import { citationSatisfied } from "@/concord/lib/control";
 import { canActOnMember, Permissions } from "@/concord/lib/roles";
 import type { Community } from "@/concord/lib/types";
-import { onWireScopes } from "@/wire/bus";
+import { emitWireScopes, onWireScopes } from "@/wire/bus";
 
 /**
  * The Guestbook Plane (CORD-02 §5): membership motion, coalesced flat.
@@ -43,31 +43,60 @@ export function useGuestbook(community: Community | undefined) {
   const { data: folded } = useControlFold(community);
   const { data: dissolvedAtMs } = useDissolved(community);
 
+  const queryKey = useMemo(
+    () => ["concord", "guestbook", community?.idHex ?? null, community?.rootEpoch.toString() ?? ""] as const,
+    [community?.idHex, community?.rootEpoch],
+  );
+
   const query = useQuery<OpenedEvent[]>({
-    queryKey: ["concord", "guestbook", community?.idHex ?? null, community?.rootEpoch.toString() ?? ""],
+    queryKey,
     enabled: Boolean(community),
     staleTime: 30_000,
     refetchInterval: 60_000,
     queryFn: async () => {
-      const fresh = await sweepGuestbook(nostr, community!);
+      // Read the STORE and return it; run the network sweep in the BACKGROUND,
+      // merging its fresh events into the cache via onFresh — exactly as
+      // useControlEvents keeps its query a pure store read with the sweep on a
+      // separate effect. Awaiting the sweep here stranded every read (including
+      // useSelfRemove's confirming refetch) behind a relay round-trip — up to
+      // the auth gate (8s) plus the query timeout (25s) — which is the ~20s a
+      // KICK took to actually remove the kickee AFTER their member list had
+      // already flipped. The live c2gb sub (and, for our own actions, the
+      // publisher's local seed) feed the store, so a background sweep loses no
+      // freshness a blocking one had.
       const stored = await queryPlane(community!.idHex, "guestbook");
-      return mergeOpened(stored, fresh);
+      const merged = mergeOpened(queryClient.getQueryData<OpenedEvent[]>(queryKey) ?? [], stored);
+      void sweepGuestbook(nostr, community!, {
+        onFresh: (fresh) => {
+          if (fresh.length === 0) return;
+          queryClient.setQueryData<OpenedEvent[]>(queryKey, (old) => mergeOpened(old ?? [], fresh));
+        },
+      }).catch(() => {
+        // Best-effort: the live sub and the 5-minute background sweep cover a miss.
+      });
+      return merged;
     },
   });
 
-  // The wire wrote fresh guestbook rumors into the store — re-read. Several
-  // components mount this hook for one community, but they share the one query
-  // key, so react-query collapses their invalidations into a single refetch.
+  // The wire (or this client's own publish) wrote fresh guestbook rumors into
+  // the store and rang `c2gb:<idHex>` — re-read them. This is a STORE-ONLY read
+  // merged straight into the query cache, exactly like useControlEvents' c2ctl
+  // wake: NOT an invalidate, because the query's queryFn awaits a network
+  // sweepGuestbook FIRST, which would strand the already-stored kick behind a
+  // live round-trip (NIP-42 auth + the sweep's 25s timeout + single-flight).
+  // That is what made a kick take until the 60s poll to land on both sides.
   const idHex = community?.idHex;
   useEffect(() => {
     if (!idHex) return;
     const scope = `c2gb:${idHex}`;
     return onWireScopes((scopes) => {
-      if (scopes.has(scope)) {
-        void queryClient.invalidateQueries({ queryKey: ["concord", "guestbook", idHex] });
-      }
+      if (!scopes.has(scope)) return;
+      void queryPlane(idHex, "guestbook").then((stored) => {
+        if (stored.length === 0) return;
+        queryClient.setQueryData<OpenedEvent[]>(queryKey, (old) => mergeOpened(old ?? [], stored));
+      });
     });
-  }, [idHex, queryClient]);
+  }, [idHex, queryKey, queryClient]);
 
   const coalesced = useMemo(() => {
     if (!community || !query.data) return new Map<string, CoalescedMember>();
@@ -125,7 +154,6 @@ export function useMembers(
 export function useGuestbookPublisher(community: Community | undefined) {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
-  const queryClient = useQueryClient();
   const { data: dissolvedNow } = useDissolved(community);
 
   return useMutation({
@@ -157,11 +185,18 @@ export function useGuestbookPublisher(community: Community | undefined) {
       if (!results.some((r) => r.status === "fulfilled")) {
         throw new Error("No relay accepted the update.");
       }
+      // Seed the store with our OWN just-published rumor, exactly as the wire's
+      // ingest does for a received one, then ring `c2gb`. Otherwise the actor's
+      // view only reflects the action once a network sweep reads it back off a
+      // relay — the kicker-side half of the "kick takes a minute" bug, since
+      // the publisher holds no standing echo of its own wrap.
+      const opened = openPlaneWraps([wrap], [group]);
+      if (opened.length > 0) await writeOpened(community.idHex, opened, "guestbook");
     },
     onSuccess: () => {
-      if (community) {
-        queryClient.invalidateQueries({ queryKey: ["concord", "guestbook", community.idHex] });
-      }
+      // Store-only re-read on every mounted useGuestbook (see its c2gb wake),
+      // NOT an invalidate — an invalidate awaits the network sweep first.
+      if (community) emitWireScopes([`c2gb:${community.idHex}`]);
     },
   });
 }
