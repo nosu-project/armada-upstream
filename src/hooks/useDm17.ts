@@ -52,10 +52,8 @@ import { logSync } from "@/lib/syncLog";
 import { markOwnWebPushEvent } from "@/lib/webPushState";
 import {
   buildDmEditRumors,
-  buildDmFileRumor,
   buildDmRumor,
   DM_PEER_SIGNAL_D,
-  DM_PEER_SIGNAL_KINDS,
   DM_RUMOR_KINDS,
   dmChatTags,
   dmConvPeers,

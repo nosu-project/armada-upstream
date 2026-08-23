@@ -362,7 +362,7 @@ export function buildDmFileRumor(opts: {
   /** Optional blurhash placeholder */
   blurhash?: string;
 }): NostrRumor {
-  const { fileUrl, fileHash, fileName, mimeType, fileSize, peers, pubkey, createdAt } = opts;
+  const { fileUrl, fileHash: _fileHash, fileName, mimeType, fileSize, peers, pubkey, createdAt } = opts;
   
   // Build NIP-94 file metadata tags
   const fileTags: string[][] = [
