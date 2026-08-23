@@ -35,6 +35,7 @@ import { InviteTide } from "@/concord/components/InviteTide";
 import { useGuestbook } from "@/concord/hooks/useGuestbook";
 import { rehydrateCommunity } from "@/concord/lib/communityList";
 import { directInviteExpired } from "@/concord/lib/directInvite";
+import type { InviteBundle } from "@/concord/lib/invite";
 import type { Community, ImagePointer } from "@/concord/lib/types";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useFollowList } from "@/hooks/useFollowList";
@@ -459,39 +460,57 @@ function InviteRow({
 }
 
 /**
- * The detail pane for the selected invite — the consent surface, carrying the
- * same copy and Accept/Decline semantics the blocking modal used to. Accepting
- * keeps the keys (records the entry in the Community List vault) and announces
- * a Guestbook Join; declining tombstones it so it stops re-appearing. A
- * catch-up (a key update for a community you're already in) declines by local
- * dismissal only — never a tombstone, which would leave the community.
+ * The invite preview / consent surface — everything a decrypted bundle knows,
+ * with an explicit Accept/Decline. PRESENTATIONAL: the caller owns the accept
+ * and decline actions and their pending state, so the SAME surface serves both
+ * a gift-wrapped Direct Invite (`InboxInviteDetail`, whose Accept keeps the
+ * keys and whose Decline tombstones) and a shared invite LINK (`InvitePage`,
+ * which used to auto-join on sight and now asks first).
  *
  * Everything the bundle knows is on screen before the decision: the decrypted
  * banner and icon, the name and description, what the keys actually grant, and
- * the sender's resolved profile beside the pubkey that signed the seal. The
- * one thing that costs a relay read — who's already inside — is behind the
- * Members menu.
+ * — for a Direct Invite only — the sender's resolved profile beside the pubkey
+ * that signed the seal. A shared link is sealed by no one, so it names no
+ * sender (a `creator_npub` in the bundle is an unverified claim and stays off
+ * this screen). The one thing that costs a relay read — who's already inside —
+ * is behind the Members menu.
  */
-function InviteDetail({
-  invite,
-  onDone,
+export function InviteDetail({
+  bundle,
+  communityId,
+  name,
+  sender,
+  receivedAt,
+  isCatchUp = false,
+  accepting,
+  declining,
+  onAccept,
+  onDecline,
   onBack,
+  signInSlot,
 }: {
-  invite: ParkedInvite;
-  /** The invite left the inbox (accepted or declined) — drop the selection. */
-  onDone: () => void;
-  /** Mobile back to the list. */
-  onBack: () => void;
+  bundle: InviteBundle;
+  communityId: string;
+  name: string;
+  /** The seal-verified sender, when the invite arrived as a Direct Invite. */
+  sender?: string;
+  /** When it arrived (unix seconds) — a Direct Invite only; a link has none. */
+  receivedAt?: number;
+  /** A key update for a community already joined (Direct Invite catch-up). */
+  isCatchUp?: boolean;
+  accepting: boolean;
+  declining: boolean;
+  onAccept: () => void;
+  onDecline: () => void;
+  /** The mobile master→list back arrow; omitted where there is no list. */
+  onBack?: () => void;
+  /** Replaces the Accept button when signed out (a sign-in call to action). */
+  signInSlot?: React.ReactNode;
 }) {
-  const { mutateAsync: accept, isPending: accepting } = useAcceptDirectInvite();
-  const { mutateAsync: decline, isPending: declining } = useDeclineDirectInvite();
-  const navigate = useNavigate();
   const busy = accepting || declining;
-  const isCatchUp = Boolean(invite.catchUp);
 
-  const { bundle } = invite;
-  const hue = communityHue(invite.communityId);
-  const channels = channelCount(invite);
+  const hue = communityHue(communityId);
+  const channels = Array.isArray(bundle.channels) ? bundle.channels.length : 0;
   const relayUrls = Array.isArray(bundle.relays) ? bundle.relays : [];
   const relays = relayUrls.length;
   const description = bundle.description?.trim();
@@ -499,13 +518,13 @@ function InviteDetail({
   const bannerUrl = useDecryptedImage(bundle.banner);
   const iconUrl = useDecryptedImage(bundle.icon);
 
-  const sender = useAuthor(invite.sender);
-  const senderMeta = sender.data?.metadata;
-  const senderName = getDisplayName(senderMeta, invite.sender);
+  const senderAuthor = useAuthor(sender);
+  const senderMeta = senderAuthor.data?.metadata;
+  const senderName = getDisplayName(senderMeta, sender);
 
   // The community the bundle describes, assembled without joining it — the
-  // same conversion `useAcceptDirectInvite` runs, so the Members menu reads
-  // the plane the keys actually open.
+  // same conversion the accept paths run, so the Members menu reads the plane
+  // the keys actually open.
   const previewCommunity = useMemo(() => {
     try {
       return rehydrateCommunity(bundleToEntry(bundle));
@@ -520,7 +539,7 @@ function InviteDetail({
   // signal on this whole screen: a name and picture are anyone's to choose,
   // but a pubkey on your own follow list is a person you decided to trust.
   const { data: followList } = useFollowList();
-  const followsSender = Boolean(followList?.pubkeys.includes(invite.sender));
+  const followsSender = Boolean(sender && followList?.pubkeys.includes(sender));
   // The subset of the room you already follow, for the stack beside the count.
   const followedMembers = useMemo(() => {
     const following = new Set(followList?.pubkeys ?? []);
@@ -535,43 +554,39 @@ function InviteDetail({
     ? "Members"
     : `${members.length} member${members.length === 1 ? "" : "s"}`;
 
-  const handleDecline = async () => {
-    // A CATCH-UP is a key update for a community I'm already in — declining must
-    // NOT tombstone (that would leave the community). The parked copy is simply
-    // dismissed by the accept/decline round below re-scanning; here we just drop
-    // it from view. A fresh invite tombstones so it stops re-appearing.
-    if (!isCatchUp) {
-      try {
-        await decline({ communityId: invite.communityId });
-      } catch {
-        // Best-effort; drop it from view regardless.
-      }
-    }
-    onDone();
-  };
-
-  const handleAccept = async () => {
-    try {
-      const { communityId, name } = await accept({ invite });
-      toast({ title: "Joined encrypted community", description: name });
-      navigate(`/c/${encodeURIComponent(communityId)}`);
-    } catch (e) {
-      if (e instanceof BannedFromCommunityError) {
-        toast({
-          title: "You're banned",
-          description: "You can't join this community.",
-          variant: "destructive",
-        });
-        await handleDecline();
-        return;
-      }
-      toast({
-        title: "Couldn't join",
-        description: e instanceof Error ? e.message : "Unknown error",
-        variant: "destructive",
-      });
-    }
-  };
+  // The stats line as a list of facts joined by middots, so a link (which
+  // carries no "Sent" time) doesn't strand a separator with nothing after it.
+  const facts: React.ReactNode[] = [];
+  if (channels > 0) {
+    facts.push(
+      <span key="channels" title="Channels this invite gets you into. There may be more inside.">
+        {channels} channel{channels === 1 ? "" : "s"}
+      </span>,
+    );
+  }
+  if (relays > 0) {
+    facts.push(
+      <StatPopover
+        key="relays"
+        icon={Radio}
+        label={`${relays} relay${relays === 1 ? "" : "s"}`}
+        hint="Servers that carry this community's messages."
+        width="w-80"
+      >
+        <RelayList relays={relayUrls} />
+      </StatPopover>,
+    );
+  }
+  if (receivedAt !== undefined) {
+    facts.push(<span key="sent">Sent {relativeTime(receivedAt)}</span>);
+  }
+  if (expired) {
+    facts.push(
+      <span key="expired" title="This invite can no longer be accepted." className="text-destructive">
+        Expired
+      </span>,
+    );
+  }
 
   return (
     <div className="relative flex flex-1 flex-col min-h-0 safe-area-top h-full overflow-hidden">
@@ -640,53 +655,30 @@ function InviteDetail({
         <div className="mx-auto w-full max-w-2xl px-4 pb-8 sm:px-6">
           <div className="-mt-12 sm:-mt-14">
             <CommunityAvatar
-              name={invite.name}
-              communityId={invite.communityId}
+              name={name}
+              communityId={communityId}
               icon={bundle.icon}
               className="size-20 text-3xl sm:size-24 sm:text-4xl"
             />
           </div>
 
           <h2 className="mt-3 break-words text-2xl font-bold leading-tight sm:text-3xl">
-            {invite.name}
+            {name}
           </h2>
 
-          {/* What the keys grant, then where it runs and when it arrived. */}
-          <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-            {channels > 0 && (
-              <>
-                <span title="Channels this invite gets you into. There may be more inside.">
-                  {channels} channel{channels === 1 ? "" : "s"}
-                </span>
-                <span aria-hidden>·</span>
-              </>
-            )}
-            {relays > 0 && (
-              <>
-                <StatPopover
-                  icon={Radio}
-                  label={`${relays} relay${relays === 1 ? "" : "s"}`}
-                  hint="Servers that carry this community's messages."
-                  width="w-80"
-                >
-                  <RelayList relays={relayUrls} />
-                </StatPopover>
-                <span aria-hidden>·</span>
-              </>
-            )}
-            <span>Sent {relativeTime(invite.receivedAt)}</span>
-            {expired && (
-              <>
-                <span aria-hidden>·</span>
-                <span
-                  title="This invite can no longer be accepted."
-                  className="text-destructive"
-                >
-                  Expired
-                </span>
-              </>
-            )}
-          </p>
+          {/* What the keys grant, where it runs, and — for a Direct Invite —
+              when it arrived. Assembled as a middot-joined list so a link,
+              which carries no "Sent" time, never strands a separator. */}
+          {facts.length > 0 && (
+            <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+              {facts.map((fact, i) => (
+                <Fragment key={i}>
+                  {i > 0 && <span aria-hidden>·</span>}
+                  {fact}
+                </Fragment>
+              ))}
+            </p>
+          )}
 
           {/* Who's inside, with the people you already follow named beside the
               count — the count sizes the room, the faces say whether it's one
@@ -717,59 +709,64 @@ function InviteDetail({
             </p>
           )}
 
-          {/* Who sent it. The profile is resolved like anywhere else in the
-              app; the npub under it is the key that signed the seal, which
-              is the part no one can choose for themselves. */}
-          <div className="mt-4 clip-corner-lg bg-secondary/40 p-3.5">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-              {isCatchUp ? "Keys sent by" : "Invited by"}
-            </p>
-            <ProfilePreviewCard pubkey={invite.sender}>
-              <button
-                type="button"
-                className="mt-2 flex w-full min-w-0 items-center gap-3 text-left"
-              >
-                <div className="relative shrink-0">
-                  <Avatar shape={getAvatarShape(senderMeta)} className="size-11">
-                    <AvatarImage src={senderMeta?.picture} alt={senderName} />
-                    <AvatarFallback className="bg-primary/20 font-semibold text-primary">
-                      {senderName[0]?.toUpperCase()}
-                    </AvatarFallback>
-                  </Avatar>
-                  {followsSender && (
-                    <span
-                      title="Following"
-                      className="absolute -bottom-0.5 -right-0.5 grid size-4 place-items-center rounded-full bg-success text-success-foreground ring-2 ring-background"
-                    >
-                      <UserRoundCheck className="size-2.5" />
-                    </span>
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-medium leading-tight">
-                    <DisplayName pubkey={invite.sender} name={senderName} />
+          {/* Who sent it — a Direct Invite only. A shared link is sealed by no
+              one, so there is no verified sender to name (the bundle's
+              `creator_npub` is an unverified claim and stays off this screen).
+              The profile is resolved like anywhere else in the app; the npub
+              under it is the key that signed the seal, which is the part no one
+              can choose for themselves. */}
+          {sender && (
+            <div className="mt-4 clip-corner-lg bg-secondary/40 p-3.5">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                {isCatchUp ? "Keys sent by" : "Invited by"}
+              </p>
+              <ProfilePreviewCard pubkey={sender}>
+                <button
+                  type="button"
+                  className="mt-2 flex w-full min-w-0 items-center gap-3 text-left"
+                >
+                  <div className="relative shrink-0">
+                    <Avatar shape={getAvatarShape(senderMeta)} className="size-11">
+                      <AvatarImage src={senderMeta?.picture} alt={senderName} />
+                      <AvatarFallback className="bg-primary/20 font-semibold text-primary">
+                        {senderName[0]?.toUpperCase()}
+                      </AvatarFallback>
+                    </Avatar>
+                    {followsSender && (
+                      <span
+                        title="Following"
+                        className="absolute -bottom-0.5 -right-0.5 grid size-4 place-items-center rounded-full bg-success text-success-foreground ring-2 ring-background"
+                      >
+                        <UserRoundCheck className="size-2.5" />
+                      </span>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium leading-tight">
+                      <DisplayName pubkey={sender} name={senderName} />
+                    </p>
+                    <p className="truncate font-mono text-[11px] leading-snug text-muted-foreground">
+                      {senderLabel(sender)}
+                    </p>
+                  </div>
+                </button>
+              </ProfilePreviewCard>
+              {/* The sender's own bio, on wide screens only. It is the least
+                  load-bearing thing in this panel — self-written prose, where
+                  the name and the npub beside it are what the decision rests
+                  on — and on a phone it pushes the buttons off the screen. */}
+              {senderMeta?.about?.trim() && (
+                // The wrapper carries the hiding, not the paragraph: `line-clamp`
+                // is itself a `display` (`-webkit-box`), so putting `hidden` on
+                // the same element makes two utilities fight over one property.
+                <div className="hidden sm:block">
+                  <p className="mt-2 line-clamp-2 break-words text-xs text-muted-foreground">
+                    {senderMeta.about.trim()}
                   </p>
-                  <p className="truncate font-mono text-[11px] leading-snug text-muted-foreground">
-                    {senderLabel(invite.sender)}
-                  </p>
                 </div>
-              </button>
-            </ProfilePreviewCard>
-            {/* The sender's own bio, on wide screens only. It is the least
-                load-bearing thing in this panel — self-written prose, where
-                the name and the npub beside it are what the decision rests
-                on — and on a phone it pushes the buttons off the screen. */}
-            {senderMeta?.about?.trim() && (
-              // The wrapper carries the hiding, not the paragraph: `line-clamp`
-              // is itself a `display` (`-webkit-box`), so putting `hidden` on
-              // the same element makes two utilities fight over one property.
-              <div className="hidden sm:block">
-                <p className="mt-2 line-clamp-2 break-words text-xs text-muted-foreground">
-                  {senderMeta.about.trim()}
-                </p>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          )}
 
           {/* `text-pretty` so the browser reflows the last line rather than
               stranding two or three words under a full-width paragraph. */}
@@ -795,33 +792,113 @@ function InviteDetail({
             <Button
               variant="ghost"
               className="h-12 min-w-0 flex-1 clip-corner-lg text-base"
-              onClick={handleDecline}
+              onClick={onDecline}
               disabled={busy}
             >
               {declining ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />}
               {isCatchUp ? "Not now" : "Decline"}
             </Button>
-            <Button
-              className="h-12 min-w-0 flex-1 clip-corner-lg text-base font-medium"
-              onClick={handleAccept}
-              disabled={busy || expired}
-            >
-              {accepting ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
-              {expired
-                ? "Invite expired"
-                : accepting
-                  ? isCatchUp
-                    ? "Adding…"
-                    : "Joining…"
-                  : isCatchUp
-                    ? "Add channels"
-                    : "Accept invite"}
-            </Button>
+            {signInSlot ?? (
+              <Button
+                className="h-12 min-w-0 flex-1 clip-corner-lg text-base font-medium"
+                onClick={onAccept}
+                disabled={busy || expired}
+              >
+                {accepting ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+                {expired
+                  ? "Invite expired"
+                  : accepting
+                    ? isCatchUp
+                      ? "Adding…"
+                      : "Joining…"
+                    : isCatchUp
+                      ? "Add channels"
+                      : "Accept invite"}
+              </Button>
+            )}
           </div>
         </div>
       </div>
       <ArmadaCrestKeyframes />
     </div>
+  );
+}
+
+/**
+ * The inbox's binding of {@link InviteDetail} to a gift-wrapped Direct Invite:
+ * it owns the accept/decline mutations, so accepting keeps the keys (records
+ * the entry in the Community List vault) and announces a Guestbook Join, while
+ * declining tombstones the community so it stops re-appearing. A catch-up (a
+ * key update for a community you're already in) declines by local dismissal
+ * only — never a tombstone, which would leave the community.
+ */
+function InboxInviteDetail({
+  invite,
+  onDone,
+  onBack,
+}: {
+  invite: ParkedInvite;
+  /** The invite left the inbox (accepted or declined) — drop the selection. */
+  onDone: () => void;
+  /** Mobile back to the list. */
+  onBack: () => void;
+}) {
+  const { mutateAsync: accept, isPending: accepting } = useAcceptDirectInvite();
+  const { mutateAsync: decline, isPending: declining } = useDeclineDirectInvite();
+  const navigate = useNavigate();
+  const isCatchUp = Boolean(invite.catchUp);
+
+  const handleDecline = async () => {
+    // A CATCH-UP is a key update for a community I'm already in — declining must
+    // NOT tombstone (that would leave the community). A fresh invite tombstones
+    // so it stops re-appearing.
+    if (!isCatchUp) {
+      try {
+        await decline({ communityId: invite.communityId });
+      } catch {
+        // Best-effort; drop it from view regardless.
+      }
+    }
+    onDone();
+  };
+
+  const handleAccept = async () => {
+    try {
+      const { communityId, name } = await accept({ invite });
+      toast({ title: "Joined encrypted community", description: name });
+      navigate(`/c/${encodeURIComponent(communityId)}`);
+    } catch (e) {
+      if (e instanceof BannedFromCommunityError) {
+        toast({
+          title: "You're banned",
+          description: "You can't join this community.",
+          variant: "destructive",
+        });
+        await handleDecline();
+        return;
+      }
+      toast({
+        title: "Couldn't join",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    }
+  };
+
+  return (
+    <InviteDetail
+      bundle={invite.bundle}
+      communityId={invite.communityId}
+      name={invite.name}
+      sender={invite.sender}
+      receivedAt={invite.receivedAt}
+      isCatchUp={isCatchUp}
+      accepting={accepting}
+      declining={declining}
+      onAccept={handleAccept}
+      onDecline={handleDecline}
+      onBack={onBack}
+    />
   );
 }
 
@@ -905,7 +982,7 @@ export function InvitesPage() {
     >
       <main className="flex flex-1 min-w-0 flex-col bg-background h-full">
         {selected ? (
-          <InviteDetail
+          <InboxInviteDetail
             key={selected.wrapId}
             invite={selected}
             onDone={() => setSelectedWrapId(undefined)}
