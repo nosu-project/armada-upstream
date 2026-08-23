@@ -44,6 +44,26 @@ function readMarker(): string | null {
 
 let active: string | null = readMarker();
 
+/**
+ * The active-account marker as it stood at module load — i.e. who was signed in
+ * when the app booted, before any in-session login/switch mutated {@link active}.
+ *
+ * This module is imported eagerly from `App.tsx`, so this snapshot is taken at
+ * boot, before the login provider resolves and long before the lazy
+ * per-account services (the sync gate among them) mount. It is the "was this a
+ * restored session?" signal `useFreshLogin` needs: a session restored from
+ * storage has its account here, whereas a fresh login activates a pubkey that
+ * was not signed in at boot. (Account switches hard-reload, so the switched-to
+ * account is a boot account on the next load — never a fresh login.) Frozen for
+ * the process lifetime; `setActivePubkey` never touches it.
+ */
+let bootPubkey: string | null = active;
+
+/** Who was signed in at app boot (module load), or null. Never changes in-session. */
+export function getBootPubkey(): string | null {
+  return bootPubkey;
+}
+
 const listeners = new Set<() => void>();
 
 /** The active account's pubkey, or null when logged out. */
@@ -145,8 +165,13 @@ export function seedAccountConfig(
   }
 }
 
-/** Test seam: forget the in-memory marker so a suite can start from storage. */
+/**
+ * Test seam: forget the in-memory marker so a suite can start from storage.
+ * Re-reads the boot snapshot too, since a real module load would take it from
+ * whatever the marker says at that moment.
+ */
 export function _resetActiveAccountForTests(): void {
   active = readMarker();
+  bootPubkey = active;
   listeners.clear();
 }
