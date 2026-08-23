@@ -101,17 +101,27 @@ export function useDmAppSync(
 
   // ── Durable state plane ────────────────────────────────────────────────────
 
-  // State updates are kind 14 or 15 messages with an `i` tag matching our uuid.
-  // Kind 14 is for lightweight updates (like scores), kind 15 for files.
-  // We read them from the DM thread's messages.
+  // State updates are kind 14 or 15 messages with an `i` tag matching our uuid
+  // AND an `alt: "Webxdc update"` tag. Kind 14 is for lightweight updates
+  // (like scores), kind 15 for files. We read from the raw query data because
+  // webxdc updates (kind 14 with alt: "Webxdc update") are filtered out of
+  // dmThread.messages.
   const stateUpdates = useMemo((): AppStateUpdate[] => {
-    if (!dmThread.messages.length) return [];
+    const rawMessages = dmThread.query.data ?? [];
+    if (!rawMessages.length) return [];
     const updates: AppStateUpdate[] = [];
-    for (const msg of dmThread.messages) {
-      // Accept both kind 14 (chat/webxdc updates) and kind 15 (file)
+    for (const msg of rawMessages) {
+      // Accept kind 14 (webxdc updates) and kind 15 (files)
       if (msg.kind !== KIND_DM_FILE && msg.kind !== 14) continue;
+      // Filter by session uuid (`i` tag)
       const sessionTag = tagValue(msg.tags, "i");
       if (sessionTag !== uuid) continue;
+      // For kind 14, also require the `alt: "Webxdc update"` tag to distinguish
+      // webxdc updates from regular chat messages
+      if (msg.kind === 14) {
+        const altTag = tagValue(msg.tags, "alt");
+        if (altTag !== "Webxdc update") continue;
+      }
       // The content is the JSON payload
       let payload: unknown;
       try {
@@ -127,7 +137,7 @@ export function useDmAppSync(
       });
     }
     return updates;
-  }, [dmThread.messages, uuid]);
+  }, [dmThread.query.data, uuid]);
 
   // ── Publish (state plane) ──────────────────────────────────────────────────
 

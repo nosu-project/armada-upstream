@@ -912,6 +912,8 @@ interface PendingPublish {
 export interface Dm17Thread {
   /** Chat/file rumors, deletes applied, ascending (oldest first). */
   messages: OpenedDm[];
+  /** Raw query data including webxdc updates (for useDmAppSync). */
+  query: { data: OpenedDm[] | undefined };
   /** Reaction rumors grouped by their `e` target id (deletes applied). */
   reactionsByTarget: Map<string, OpenedDm[]>;
   /**
@@ -1751,6 +1753,7 @@ export function useDm17Thread(
 
   return {
     messages,
+    query: { data: query.data },
     reactionsByTarget,
     timerChanges,
     timer,
