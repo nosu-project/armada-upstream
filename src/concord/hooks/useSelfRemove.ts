@@ -80,9 +80,20 @@ export function useSelfRemove(community: Community | undefined, onRemoved?: () =
     // (kick), so a lone sighting is not enough: an unbanned member returning
     // through a relay that withholds the unban head — or a rejoiner whose own
     // Join hasn't come back around the Guestbook yet — would tear down during
-    // the propagation gap. Force one fresh fetch of the plane that convicted
-    // (the live stream keeps feeding the store) and act only on a verdict that
-    // SURVIVES it.
+    // the propagation gap. Require the verdict to be seen TWICE, a render apart,
+    // and act only on the second sighting.
+    //
+    // Both planes' `refetch()` is now a pure STORE read (the network sweep runs
+    // un-awaited in the background — see useGuestbook/useControlEvents), so this
+    // is a debounce against a transient verdict, not a synchronous network
+    // re-confirmation: the lifting event has to reach the store (via the live
+    // c2ctl/c2gb sub, this device's own publisher seed, or a background sweep's
+    // onFresh merge) in the window before the second pass for the verdict to
+    // clear. The refetch still matters — it kicks that background sweep and
+    // resettles `isFetching` — but the guard is the two-sighting gate, not a
+    // blocking fetch. Same-device rejoin is covered synchronously by the
+    // publisher seed; a cross-device rejoin during the propagation gap rides
+    // the live sub, as the ban path always has.
     const plane = verdict === "ban" ? control : guestbook;
     if (!confirming.current.has(`${key}:${verdict}`)) {
       confirming.current.add(`${key}:${verdict}`);

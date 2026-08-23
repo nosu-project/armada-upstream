@@ -1,5 +1,5 @@
 import { useNostr } from "@nostrify/react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 
 import { useControlFold, useDissolved } from "@/concord/hooks/useControlPlane";
@@ -37,6 +37,69 @@ import { emitWireScopes, onWireScopes } from "@/wire/bus";
  * live sub existed, the earliest a kicked member could learn of their own
  * removal was this query's 60s tick.
  */
+interface GuestbookWakeEntry {
+  refs: number;
+  teardown: () => void;
+}
+
+/**
+ * One `c2gb` bus listener per (queryClient, guestbook query key), refcounted
+ * exactly like {@link useControlEvents}' store seed. Several components mount
+ * useGuestbook for one community and share the one query key, so a ring must
+ * do the store re-read + setQueryData ONCE, not once per mounted copy — the
+ * consolidation the pre-fix `invalidateQueries` got for free from react-query
+ * and this store-only wake would otherwise lose. WeakMap-keyed by the
+ * QueryClient so a test's throwaway client can never share (or leak) a real
+ * one's listeners.
+ *
+ * The wake is a STORE-ONLY read merged straight into the query cache, exactly
+ * like useControlEvents' c2ctl wake: NOT an invalidate, because the query's
+ * queryFn kicks off a network sweepGuestbook, and an invalidate that awaited it
+ * would strand the already-stored kick behind a live round-trip (NIP-42 auth +
+ * the sweep's 25s timeout + single-flight). That is what made a kick take until
+ * the 60s poll to land on both sides.
+ */
+const guestbookWakeRegistries = new WeakMap<QueryClient, Map<string, GuestbookWakeEntry>>();
+
+function acquireGuestbookWake(
+  queryClient: QueryClient,
+  idHex: string,
+  queryKey: readonly unknown[],
+): () => void {
+  let registry = guestbookWakeRegistries.get(queryClient);
+  if (!registry) {
+    registry = new Map();
+    guestbookWakeRegistries.set(queryClient, registry);
+  }
+  const key = JSON.stringify(queryKey);
+  const existing = registry.get(key);
+  if (existing) {
+    existing.refs++;
+    return () => releaseGuestbookWake(registry, key);
+  }
+
+  const scope = `c2gb:${idHex}`;
+  const unsubscribe = onWireScopes((scopes) => {
+    if (!scopes.has(scope)) return;
+    void queryPlane(idHex, "guestbook").then((stored) => {
+      if (stored.length === 0) return;
+      queryClient.setQueryData<OpenedEvent[]>(queryKey, (old) => mergeOpened(old ?? [], stored));
+    });
+  });
+  registry.set(key, { refs: 1, teardown: unsubscribe });
+  return () => releaseGuestbookWake(registry, key);
+}
+
+function releaseGuestbookWake(registry: Map<string, GuestbookWakeEntry>, key: string): void {
+  const entry = registry.get(key);
+  if (!entry) return;
+  entry.refs--;
+  if (entry.refs <= 0) {
+    entry.teardown();
+    registry.delete(key);
+  }
+}
+
 export function useGuestbook(community: Community | undefined) {
   const { nostr } = useNostr();
   const queryClient = useQueryClient();
@@ -79,23 +142,14 @@ export function useGuestbook(community: Community | undefined) {
   });
 
   // The wire (or this client's own publish) wrote fresh guestbook rumors into
-  // the store and rang `c2gb:<idHex>` — re-read them. This is a STORE-ONLY read
-  // merged straight into the query cache, exactly like useControlEvents' c2ctl
-  // wake: NOT an invalidate, because the query's queryFn awaits a network
-  // sweepGuestbook FIRST, which would strand the already-stored kick behind a
-  // live round-trip (NIP-42 auth + the sweep's 25s timeout + single-flight).
-  // That is what made a kick take until the 60s poll to land on both sides.
+  // the store and rang `c2gb:<idHex>` — re-read them. Refcounted so N mounts of
+  // this hook for one community share ONE listener and ONE store re-read per
+  // ring (see acquireGuestbookWake for why it is a store read, not an
+  // invalidate).
   const idHex = community?.idHex;
   useEffect(() => {
     if (!idHex) return;
-    const scope = `c2gb:${idHex}`;
-    return onWireScopes((scopes) => {
-      if (!scopes.has(scope)) return;
-      void queryPlane(idHex, "guestbook").then((stored) => {
-        if (stored.length === 0) return;
-        queryClient.setQueryData<OpenedEvent[]>(queryKey, (old) => mergeOpened(old ?? [], stored));
-      });
-    });
+    return acquireGuestbookWake(queryClient, idHex, queryKey);
   }, [idHex, queryKey, queryClient]);
 
   const coalesced = useMemo(() => {

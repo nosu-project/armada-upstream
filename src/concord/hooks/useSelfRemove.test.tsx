@@ -183,4 +183,37 @@ describe("useSelfRemove", () => {
 
     releaseWrite?.();
   });
+
+  it("retries the vault write on a later pass after a failed one", async () => {
+    // The vault write is durability for the user's OTHER devices, so a failure
+    // (offline / no relay confirmed) must not be terminal: the `.catch` clears
+    // `handled`, and since the verdict is still standing in the store, a later
+    // re-derivation re-runs and retries the write. Here the first write REJECTS
+    // and the second SUCCEEDS; the retry is what pins the offline path.
+    h.updateList
+      .mockRejectedValueOnce(new Error("no relay confirmed"))
+      .mockResolvedValueOnce(undefined);
+
+    const client = makeClient();
+    const onRemoved = vi.fn();
+    const { rerender } = renderHook(() => useSelfRemove(community(), onRemoved), {
+      wrapper: wrapperFor(client),
+    });
+
+    // First pass forces the confirming refetch and returns.
+    await waitFor(() => expect(h.guestbookRefetch).toHaveBeenCalledTimes(1));
+
+    // Second pass (confirming fetch settled, fresh refetch identity so the
+    // effect re-runs): the verdict survives and teardown fires the first vault
+    // write, which rejects. The `.catch` then clears `handled`.
+    h.guestbookRefetch = vi.fn(async () => {});
+    rerender();
+    await waitFor(() => expect(h.updateList).toHaveBeenCalledTimes(1));
+
+    // A later pass re-derives the same standing verdict (handled was cleared)
+    // and retries the write — this time it lands.
+    h.guestbookRefetch = vi.fn(async () => {});
+    rerender();
+    await waitFor(() => expect(h.updateList).toHaveBeenCalledTimes(2));
+  });
 });
