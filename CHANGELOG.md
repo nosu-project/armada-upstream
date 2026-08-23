@@ -4,6 +4,20 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.57.0] - 2026-08-23
+
+Chat messages now render richer formatting: fenced code blocks are
+syntax-highlighted and carry a one-tap copy button, and headings and simple
+lists lay out the way they read. The full-screen sync screen shown right after
+signing in is back — it had stopped appearing on a fresh login.
+
+### Added
+- Fenced code blocks in chat are syntax-highlighted and have a button to copy their contents
+- Headings and bulleted or numbered lists in chat messages render as formatted text
+
+### Fixed
+- The post-login sync screen appears again when you sign in
+
 ## [0.56.4] - 2026-08-22
 
 Desktop updates now come from the same signed release listing the downloads page
