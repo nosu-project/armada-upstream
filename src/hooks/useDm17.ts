@@ -1200,7 +1200,13 @@ export function useDm17Thread(
       const at = expirationOf(r.tags);
       if (at !== undefined && (nextExpiry === undefined || at < nextExpiry)) nextExpiry = at;
       if (r.kind === KIND_DM_CHAT || r.kind === KIND_DM_FILE) {
-        messages.push(r);
+        // Filter out kind 14 webxdc updates (those with `alt: "Webxdc update"`)
+        // so they don't appear in the chat but are still visible to the webxdc app.
+        const altTag = r.tags.find(([n]) => n === "alt")?.[1];
+        const isWebxdcUpdate = r.kind === KIND_DM_CHAT && altTag === "Webxdc update";
+        if (!isWebxdcUpdate) {
+          messages.push(r);
+        }
       } else if (r.kind === KIND_DM_REACTION) {
         const target = r.tags.find(([n, v]) => n === "e" && v)?.[1];
         if (!target) continue;

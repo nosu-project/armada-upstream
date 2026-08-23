@@ -101,13 +101,15 @@ export function useDmAppSync(
 
   // ── Durable state plane ────────────────────────────────────────────────────
 
-  // State updates are kind 15 file messages with an `i` tag matching our uuid.
+  // State updates are kind 14 or 15 messages with an `i` tag matching our uuid.
+  // Kind 14 is for lightweight updates (like scores), kind 15 for files.
   // We read them from the DM thread's messages.
   const stateUpdates = useMemo((): AppStateUpdate[] => {
     if (!dmThread.messages.length) return [];
     const updates: AppStateUpdate[] = [];
     for (const msg of dmThread.messages) {
-      if (msg.kind !== KIND_DM_FILE) continue;
+      // Accept both kind 14 (chat/webxdc updates) and kind 15 (file)
+      if (msg.kind !== KIND_DM_FILE && msg.kind !== 14) continue;
       const sessionTag = tagValue(msg.tags, "i");
       if (sessionTag !== uuid) continue;
       // The content is the JSON payload
