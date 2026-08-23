@@ -177,6 +177,16 @@ export function dmConvTerm(peers: readonly string[], namespace = DM_CONV_TERM): 
 }
 
 /**
+ * Whether a kind-14 rumor is a WebXDC update (alt tag = "Webxdc update").
+ * These are filtered from the conversation list and notifications.
+ */
+function isWebxdcUpdate(rumor: NostrRumor): boolean {
+  if (rumor.kind !== 14) return false;
+  const altTag = rumor.tags.find(([name]) => name === "alt")?.[1];
+  return altTag === "Webxdc update";
+}
+
+/**
  * The `TermPolicy` for a `dm17:<self>` tenant: each stored rumor filed under
  * the one conversation it belongs to, in every namespace it qualifies for.
  *
@@ -199,7 +209,7 @@ export function dmTermPolicy(rumor: NostrRumor, tenantId: string): string[] {
   if (!peers) return [];
 
   const terms = [dmConvTerm(peers)];
-  if (DM_MESSAGE_KINDS.includes(rumor.kind)) {
+  if (DM_MESSAGE_KINDS.includes(rumor.kind) && !isWebxdcUpdate(rumor)) {
     terms.push(dmConvTerm(peers, DM_MSG_TERM));
     if (rumor.pubkey === self) terms.push(dmConvTerm(peers, DM_MINE_TERM));
   }

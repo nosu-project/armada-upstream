@@ -102,6 +102,11 @@ export type NotifySink = (candidates: NotifyCandidate[]) => void;
 export function dm17NotifyCandidates(opened: OpenedDm[], self: string): NotifyCandidate[] {
   return opened.flatMap((dm) => {
     if (dm.author === self || (dm.kind !== KIND_DM_CHAT && dm.kind !== KIND_DM_FILE)) return [];
+    // Filter out WebXDC updates (kind-14 with alt tag = "Webxdc update")
+    if (dm.kind === KIND_DM_CHAT) {
+      const altTag = dm.tags.find(([name]) => name === "alt")?.[1];
+      if (altTag === "Webxdc update") return [];
+    }
     // Keyed by the CONVERSATION, not the sender: a group message must suppress
     // against the group being on screen and mark the group read, and two
     // members writing at once are one conversation's worth of notification.

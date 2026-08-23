@@ -530,6 +530,11 @@ export async function queryDm17Conversations(
     const opened = storedToDm17(ev, self);
     if (opened.peers.length === 0) return;
     if (!DM_MESSAGE_KINDS.includes(ev.kind)) return;
+    // Filter out WebXDC updates (kind-14 with alt tag = "Webxdc update")
+    if (ev.kind === KIND_DM_CHAT) {
+      const altTag = ev.tags.find(([name]) => name === "alt")?.[1];
+      if (altTag === "Webxdc update") return;
+    }
     const key = dmConvKey(opened.peers);
     // BEFORE the expiry check, and that ordering is the whole point: expiry
     // decides what is DISPLAYED, not whether the viewer ever wrote here. The
