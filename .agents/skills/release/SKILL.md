@@ -212,23 +212,24 @@ Runs on the `vX.Y.Z` tag via `act` (GitHub Actions syntax), one Linux container
 per job. Results/artifacts publish to Nostr and show on gitworkshop.dev.
 
 `release.yml` is ONE workflow whose jobs are chained
-`desktop → publish → deploy → android → release`. They must stay chained: act
+`desktop → publish → flatpak → android → release`. They must stay chained: act
 binds one checkout into every job container, so unchained jobs would run in
 parallel over the same working tree, and `android` and `desktop` each build a
 web bundle with different env. `android` goes LAST and is `if: always()`: it
 publishes to Zapstore and Google Play, which can reject for reasons unrelated
 to the artifacts, and `if: always()` rescues only the job carrying it — not
 the jobs downstream — so when it ran first a Play rejection skipped `publish`
-and `deploy` and shipped a release with no signed Flatpak and no updater feed.
+and `flatpak` and shipped a release with no signed Flatpak.
 
 1. **desktop** — Electron AppImage, deb, Flatpak bundle, NSIS Setup +
    portable `.exe` (cross-built from Linux via wine), and ad-hoc-signed macOS
    `.zip`s per arch.
 2. **publish** — GPG-signs the Flatpak OSTree repository in a fresh container,
    the credential boundary for the signing key.
-3. **deploy** — rsyncs ONLY what cannot be content-addressed: electron-updater's
-   feed under `/downloads/desktop/` and the Flatpak OSTree repository under
-   `/downloads/flatpak/`. Installers are no longer published here.
+3. **flatpak** — rsyncs ONLY what cannot be content-addressed: the Flatpak OSTree
+   repository under `/downloads/flatpak/`. Installers are not published here,
+   and neither is a desktop update feed — the app self-updates from the
+   kind-30622 release event.
 4. **android** — signed Android APK + AAB, then Zapstore publish
    and Google Play publish, all in ONE job. `setup-node`/`setup-java`/`setup-android`, decode the JKS
    from `ANDROID_KEYSTORE_BASE64`, migrate to PKCS12,
@@ -246,7 +247,7 @@ and `deploy` and shipped a release with no signed Flatpak and no updater feed.
    separate `publish-zapstore` job used to receive an empty APK and fail.
 5. **release** — publishes the kind-30622 NIP-34 release event naming every
    artifact by hash (`docs/releases.md`), uploading to Blossom only the blobs
-   ngit-ci's own artifact channel dropped. `needs: [android, deploy]`, so it is
+   ngit-ci's own artifact channel dropped. `needs: [android, flatpak]`, so it is
    the single writer of an addressable event that has no compare-and-swap, and
    the `.flatpak` bundle can't be announced before the origin it configures is
    live and verified.
@@ -307,7 +308,7 @@ Optional (publishing the update feed and Flatpak repository to
 
 | Variable | What |
 |----------|------|
-| `DEPLOY_SSH_KEY_BASE64` | base64 (one line) of the rrsync-jailed deploy user's private key. Unprovisioned → the release event and its Blossom artifacts still publish; only the electron-updater feed and the Flatpak remote are skipped. |
+| `DEPLOY_SSH_KEY_BASE64` | base64 (one line) of the rrsync-jailed deploy user's private key. Unprovisioned → the release event and its Blossom artifacts still publish; only the Flatpak remote is skipped. |
 | `DEPLOY_SSH_CONFIG_BASE64` | (optional) base64 of an ssh_config written to `~/.ssh/config` |
 | `DEPLOY_TARGET` | (optional) rsync destination; defaults to `web` |
 

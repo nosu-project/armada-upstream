@@ -10,7 +10,8 @@ const builder = loadYaml(
   fs.readFileSync(path.resolve(root, "electron/electron-builder.yml"), "utf8"),
 );
 // desktop.yml was merged into release.yml so one job could publish the release
-// event after every build; the desktop/publish/deploy jobs kept their names.
+// event after every build. The job that publishes over SSH is `flatpak`: the
+// Flatpak OSTree repository is the only thing it still deploys.
 const workflowSource = fs.readFileSync(
   path.resolve(root, ".ngit/act/workflows/release.yml"),
   "utf8",
@@ -18,7 +19,7 @@ const workflowSource = fs.readFileSync(
 const workflow = loadYaml(workflowSource);
 const buildSteps = workflow.jobs.desktop.steps;
 const publishSteps = workflow.jobs.publish.steps;
-const deploySteps = workflow.jobs.deploy.steps;
+const deploySteps = workflow.jobs.flatpak.steps;
 const desktopSteps = [...buildSteps, ...publishSteps, ...deploySteps];
 const namedStep = (name) => desktopSteps.find((step) => step.name === name);
 const preflightStep = namedStep("Enforce signed Flatpak release configuration");
@@ -55,20 +56,17 @@ function commandIndexes(fragment) {
 }
 
 describe("desktop update publication", () => {
-  it("embeds the filesystem-backed downloads feed in Electron packages", () => {
+  // Kept only so app-update.yml is packaged; the url is never fetched.
+  // publishAutoUpdate: false stops latest*.yml being generated.
+  it("embeds a publish config in Electron packages but generates no feed", () => {
     expect(builder.publish).toEqual({
       provider: "generic",
+      publishAutoUpdate: false,
       url: "https://armada.buzz/downloads/desktop",
     });
   });
 
-  it("deploys both machine repositories beneath downloads and verifies them publicly", () => {
-    expect(deployCommands).toContain(
-      "rsync -av --chmod=D755,F644 -e \"ssh -F $deploy_ssh_config\" --exclude='latest*.yml' \"$DEPLOY_ROOT/desktop/\" \"${TARGET}:/downloads/desktop/\"",
-    );
-    expect(deployCommands).toContain(
-      "rsync -av --chmod=D755,F644 -e \"ssh -F $deploy_ssh_config\" --include='latest*.yml' --exclude='*' \"$DEPLOY_ROOT/desktop/\" \"${TARGET}:/downloads/desktop/\"",
-    );
+  it("deploys the Flatpak repository beneath downloads and verifies it publicly", () => {
     expect(deployCommands).toContain(
       "rsync -av --chmod=D755,F644 -e \"ssh -F $deploy_ssh_config\" --include='/summaries/***' --exclude='/summary' --exclude='/summary.sig' --exclude='/summary.idx' --exclude='/summary.idx.sig' \"$DEPLOY_ROOT/flatpak/\" \"${TARGET}:/downloads/flatpak/\"",
     );
@@ -79,12 +77,6 @@ describe("desktop update publication", () => {
     // attempts are made, not how long one may hang, and this readback is the
     // last thing the job does — a stalled connection here would hold a
     // release open on bytes that are already published.
-    expect(deployCommands).toContain(
-      "curl -fsS --retry 5 --retry-all-errors --connect-timeout 30 --max-time 300 \"https://armada.buzz/downloads/desktop/$name\" -o \"$smoke/$name\"",
-    );
-    expect(deployCommands).toContain(
-      "cmp \"$DEPLOY_ROOT/desktop/$name\" \"$smoke/$name\"",
-    );
     expect(deployCommands).toContain(
       "curl -fsS --retry 5 --retry-all-errors --connect-timeout 30 --max-time 300 \"https://armada.buzz/downloads/flatpak/$name\" -o \"$smoke/flatpak-$name\"",
     );
@@ -190,11 +182,11 @@ describe("desktop update publication", () => {
     expect(JSON.stringify(workflow.jobs.publish)).not.toContain(
       "secrets.DEPLOY_SSH",
     );
-    expect(JSON.stringify(workflow.jobs.deploy)).not.toContain(
+    expect(JSON.stringify(workflow.jobs.flatpak)).not.toContain(
       "FLATPAK_GPG_PRIVATE_KEY_BASE64",
     );
-    expect(workflow.jobs.deploy.needs).toBe("publish");
-    expect(workflow.jobs.deploy.if).toBe(
+    expect(workflow.jobs.flatpak.needs).toBe("publish");
+    expect(workflow.jobs.flatpak.if).toBe(
       "startsWith(github.ref, 'refs/tags/v')",
     );
     expect(preflightStep?.if).toBe("startsWith(github.ref, 'refs/tags/v')");
@@ -274,7 +266,7 @@ describe("desktop update publication", () => {
       JSON.stringify(workflow.jobs.publish).includes("secrets.DEPLOY_SSH"),
     ).toBe(false);
     expect(
-      JSON.stringify(workflow.jobs.deploy).includes(
+      JSON.stringify(workflow.jobs.flatpak).includes(
         "secrets.FLATPAK_GPG_PRIVATE_KEY_BASE64",
       ),
     ).toBe(false);
@@ -592,13 +584,7 @@ describe("desktop update publication", () => {
     expect(failureUpload?.with?.path).toContain("electron/release/");
   });
 
-  it("keeps legacy clients current and publishes mutable pointers last", () => {
-    expect(deployCommands).toContain(
-      "rsync -av --chmod=D755,F644 -e \"ssh -F $deploy_ssh_config\" --exclude='latest*.yml' \"$DEPLOY_ROOT/desktop/\" \"${TARGET}:/desktop/\"",
-    );
-    expect(deployCommands).toContain(
-      "rsync -av --chmod=D755,F644 -e \"ssh -F $deploy_ssh_config\" --include='latest*.yml' --exclude='*' \"$DEPLOY_ROOT/desktop/\" \"${TARGET}:/desktop/\"",
-    );
+  it("keeps legacy Flatpak remotes current and publishes mutable pointers last", () => {
     expect(deployCommands).toContain(
       "rsync -av --chmod=D755,F644 -e \"ssh -F $deploy_ssh_config\" --include='/summaries/***' --exclude='/summary' --exclude='/summary.sig' --exclude='/summary.idx' --exclude='/summary.idx.sig' \"$DEPLOY_ROOT/flatpak/\" \"${TARGET}:/flatpak/\"",
     );
@@ -612,21 +598,14 @@ describe("desktop update publication", () => {
     const flatpakPointers = commandIndexes(
       "--include='/summary' --include='/summary.sig' --include='/summary.idx' --include='/summary.idx.sig'",
     );
-    const electronPayloads = commandIndexes("--exclude='latest*.yml'");
-    const electronPointers = commandIndexes("--include='latest*.yml'");
     expect(flatpakPayloads).toHaveLength(2);
     expect(flatpakPointers).toHaveLength(2);
     for (const index of flatpakPayloads) {
       expect(deployCommands[index]).not.toContain("--exclude='/summaries'");
       expect(deployCommands[index]).not.toContain("--exclude='summary*'");
     }
-    expect(electronPayloads).toHaveLength(2);
-    expect(electronPointers).toHaveLength(2);
     expect(Math.max(...flatpakPayloads)).toBeLessThan(
       Math.min(...flatpakPointers),
-    );
-    expect(Math.max(...electronPayloads)).toBeLessThan(
-      Math.min(...electronPointers),
     );
 
     const publicFlatpakRefresh = deployCommands.findIndex((command) =>
@@ -639,9 +618,9 @@ describe("desktop update publication", () => {
     );
 
     // Installers are no longer deployed at all: they are named by the
-    // kind-30622 release event and fetched from Blossom by hash. Only what
-    // cannot be content-addressed still goes over SSH — electron-updater's
-    // fixed feed URL and the Flatpak OSTree remote.
+    // kind-30622 release event and fetched from Blossom by hash, and the app
+    // self-updates from that same event. The Flatpak OSTree remote is the only
+    // thing left that cannot be content-addressed.
     const installerPublish = deployCommands.filter((command) =>
       command.includes("$DEPLOY_ROOT/downloads"),
     );
@@ -654,8 +633,8 @@ describe("desktop update publication", () => {
   // hand-ordered final rsync; it is now structural, and this is the assertion
   // that keeps it so.
   it("announces the release only after the Flatpak origin is published and verified", () => {
-    expect(workflow.jobs.release.needs).toContain("deploy");
-    expect(workflow.jobs.deploy.needs).toBe("publish");
+    expect(workflow.jobs.release.needs).toContain("flatpak");
+    expect(workflow.jobs.flatpak.needs).toBe("publish");
 
     const publishStep = workflow.jobs.release.steps.find(
       (step) => step.name === "Publish the NIP-34 release event",
@@ -672,8 +651,8 @@ describe("desktop update publication", () => {
   it("keeps the Android publish from gating the desktop release", () => {
     expect(workflow.jobs.desktop.needs).toBeUndefined();
     expect(workflow.jobs.publish.needs).toBe("desktop");
-    expect(workflow.jobs.deploy.needs).toBe("publish");
-    expect(workflow.jobs.android.needs).toEqual(["deploy"]);
+    expect(workflow.jobs.flatpak.needs).toBe("publish");
+    expect(workflow.jobs.android.needs).toEqual(["flatpak"]);
     expect(workflow.jobs.android.if).toContain("always()");
   });
 
@@ -685,6 +664,6 @@ describe("desktop update publication", () => {
       job.steps.some((step) => String(step.run || "").includes("publish-release.mjs")),
     );
     expect(publishers.map(([name]) => name)).toEqual(["release"]);
-    expect(workflow.jobs.release.needs).toEqual(["android", "deploy"]);
+    expect(workflow.jobs.release.needs).toEqual(["android", "flatpak"]);
   });
 });

@@ -84,15 +84,15 @@ asarUnpack:
   - node_modules/@vencord/venmic/prebuilds/**/*
   - node_modules/uiohook-napi/prebuilds/**/*
 
-# The release workflow uploads these installers plus electron-builder's
-# latest*.yml metadata to this static directory. electron-updater reads it on
-# Windows NSIS, signed macOS builds, and Linux AppImage only; package-managed
-# deb/Flatpak installs disable the in-app updater in main.js.
+# Not a feed: main.js overrides it with setFeedURL and the release-event
+# provider, and the url is never fetched. It has to stay because electron-builder
+# only packages app-update.yml when a publish config exists, and electron-updater
+# reads that file on every download (updaterCacheDirName). Deleting it leaves the
+# update check passing and the download throwing ENOENT.
+# publishAutoUpdate: false stops latest*.yml being generated.
 publish:
   provider: generic
-  # Keep machine payloads under the same filesystem-backed namespace as the
-  # human installers. armada.buzz serves /downloads directly even while the SPA
-  # itself comes from nsite, so this path cannot fall through to its HTML shell.
+  publishAutoUpdate: false
   url: https://armada.buzz/downloads/desktop
 
 # ── Linux ─────────────────────────────────────────────────────────────────────

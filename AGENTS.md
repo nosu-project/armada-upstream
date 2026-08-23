@@ -480,10 +480,13 @@ Things to know before touching it:
   than a second entry beside `db.cjs`: a multi-entry lib build hoists shared code
   into a content-hashed chunk, and a filename that changes with the dependency
   tree cannot be listed in `electron-builder.yml`'s `files:`. The static
-  `latest*.yml` feed under `armada.buzz/downloads/desktop` is still deployed and
-  is now MIGRATION ONLY — an install predating the switch has that URL baked into
-  its `app-update.yml` and can reach a version that knows better no other way.
-  Don't remove it because nothing current reads it.
+  `latest*.yml` feed is GONE — not generated (`publishAutoUpdate: false`) and not
+  deployed; the Flatpak OSTree repository is now the only thing `release.yml`
+  sends over SSH. **The `publish:` block still has to exist**: electron-builder
+  writes the packaged `app-update.yml` only when one does, and electron-updater
+  reads that file on every DOWNLOAD (`updaterCacheDirName`, plus `publisherName`
+  on Windows), so deleting it leaves the update check succeeding and the download
+  throwing ENOENT — visible only on a manual check. Its `url:` is never fetched.
 - **The adapter is chosen before anything reads.** The legacy drains in
   `migrations.ts` write through `getArmadaDB()`, so on Android and desktop they
   land in the native store directly — there is no IndexedDB ArmadaDB to move

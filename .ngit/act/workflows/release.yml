@@ -3,7 +3,7 @@ name: Release
 # Every artifact of a version tag (vX.Y.Z), and the one Nostr release event
 # that names them all.
 #
-#   desktop → publish → deploy → android → release
+#   desktop → publish → flatpak → android → release
 #
 # ── Why one workflow file ────────────────────────────────────────────────────
 # The `release` job publishes a kind-30622 NIP-34 repository release
@@ -33,13 +33,13 @@ name: Release
 # downstream of that job. So the build whose failure must not block anything
 # goes LAST. `android` publishes to Zapstore and Google Play, both of which can
 # reject for reasons that have nothing to do with the artifacts; when it ran
-# first, a Play policy rejection skipped `publish` and `deploy` and shipped a
-# release with no signed Flatpak and no updater feed.
+# first, a Play policy rejection skipped `publish` and `flatpak` and shipped a
+# release with no signed Flatpak.
 #
 # What they do NOT share is RUNNER_TEMP. Anything one job hands another lives
 # in the checkout: `.release-artifacts/` (the files the release event names)
-# and `electron/release/deploy/` (the update feed and Flatpak repository the
-# deploy job publishes).
+# and `electron/release/deploy/` (the Flatpak repository the `flatpak` job
+# publishes).
 #
 # `desktop` is `if: always()` so a Gradle failure costs the Android build and
 # nothing else — the two were independent when they were separate files, and
@@ -94,8 +94,8 @@ name: Release
 #   WINDOWS_CSC_LINK         (optional) base64 PFX for Authenticode signing
 #   WINDOWS_CSC_KEY_PASSWORD (optional) its password
 #   DEPLOY_SSH_KEY_BASE64    (optional) base64 (one line) of the deploy user's
-#                            private key. Publishes the desktop update feed and
-#                            the Flatpak repository to armada.buzz. Empty
+#                            private key. Publishes the Flatpak repository to
+#                            armada.buzz. Empty
 #                            (unprovisioned) skips only that publish; the run
 #                            artifacts, the store publishes and the release
 #                            event are unaffected.
@@ -107,10 +107,11 @@ name: Release
 #                            Google Play publish instead of failing — same
 #                            pattern as DEPLOY_SSH_KEY_BASE64 above.
 #
-# The installers themselves are no longer rsynced anywhere. They are named by
-# the release event and fetched from Blossom by hash; what still goes over SSH
-# is only what cannot be content-addressed — electron-updater's feed, which is
-# a fixed URL, and the Flatpak OSTree repository, which is a protocol.
+# The installers themselves are no longer rsynced anywhere, and neither is an
+# update feed. They are named by the release event and fetched from Blossom by
+# hash, and the desktop app self-updates from that same event. The only thing
+# that still goes over SSH is the one thing that cannot be content-addressed:
+# the Flatpak OSTree repository, which is a protocol rather than a file.
 
 on:
   push:
@@ -131,7 +132,7 @@ jobs:
     #
     # `if: always()` on a job makes THAT job run past an ancestor's failure; it
     # does not rescue the jobs downstream of it. With `android` first, a failed
-    # Play upload ran `desktop` and then skipped `publish` and `deploy`, so a
+    # Play upload ran `desktop` and then skipped `publish` and `flatpak`, so a
     # perfectly good set of installers was never signed or deployed. Putting
     # the Android build last means nothing it does can gate the desktop
     # release, without relying on `needs.<job>.result` support in act.
@@ -740,19 +741,17 @@ jobs:
           )
           echo "Signed Flatpak repository verified with key $fingerprint."
 
-      # Add the signed Flatpak bundle to .release-artifacts/, and stage the
-      # machine update feeds. Every human-facing file lands in that one
-      # directory named exactly as the release event will name it, so the
-      # artifact upload and the event describe the same bytes under the same
-      # name. `src/lib/downloads.test.ts` reads those names back and fails if
-      # the client can't file one under a platform.
+      # Add the signed Flatpak bundle to .release-artifacts/. Every human-facing
+      # file lands in that one directory named exactly as the release event will
+      # name it, so the artifact upload and the event describe the same bytes
+      # under the same name. `src/lib/downloads.test.ts` reads those names back
+      # and fails if the client can't file one under a platform.
       #
-      # Machine update feeds are staged separately under desktop/ and flatpak/,
-      # because neither can be content-addressed: electron-updater fetches a
-      # fixed feed URL and Flatpak needs an OSTree remote over HTTP. Those are
-      # the only things still deployed over SSH. Updater payloads retain
-      # electron-builder's exact basename because each latest*.yml refers to
-      # that name.
+      # The Flatpak OSTree repository is staged separately under flatpak/,
+      # because it is the one thing here that cannot be content-addressed:
+      # Flatpak needs a mutable remote over HTTP. It is now the ONLY thing
+      # deployed over SSH — the desktop editions self-update from the release
+      # event, which every artifact above is already published to.
       - name: Collect installers
         id: collect
         env:
@@ -762,16 +761,15 @@ jobs:
           export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
           # Dependent ngit-ci jobs share this checkout but not RUNNER_TEMP.
           # Keep the deploy tree beneath ignored release output so the fresh,
-          # secret-bearing deploy job can consume it without an artifact action.
+          # secret-bearing `flatpak` job can consume it without an artifact action.
           root="$PWD/electron/release/deploy"
           # The installers go where the `release` job will find them, beside the
           # APK the android job already staged there. `rm -rf "$root"` below must
           # NOT reach this directory for that reason.
           out="$PWD/.release-artifacts"
-          feed="$root/desktop"
           flatpak_repo="$root/flatpak"
           rm -rf "$root"
-          mkdir -p "$out" "$feed" "$flatpak_repo"
+          mkdir -p "$out" "$flatpak_repo"
           # ONLY the Flatpak bundle is staged here. The other six installers were
           # staged by the `desktop` job, which is what keeps them in the release
           # when this job fails — see the note on that step. This one is gated on
@@ -780,50 +778,21 @@ jobs:
           # repository verifies hands the user an app whose first update fails.
           cp electron/release/Armada-flatpak-*.flatpak "$out/Armada-$TAG.flatpak"
 
-          # No unversioned aliases and no latest-*.json manifest are written any
-          # more. Both existed because /downloads had to name a file at build
-          # time, before it could know a version; it now reads the release event,
-          # which names every artifact by its exact filename and hash. A stable
-          # alias would be a second, uncontent-addressed way to get the same
-          # bytes, and the manifests were a lost-update hazard between two
-          # workflows that no longer exist separately.
-
-          # Windows NSIS and Linux AppImage self-update from these files. The
-          # portable exe, deb and Flatpak editions remain externally managed.
-          cp electron/release/latest.yml electron/release/latest-linux.yml "$feed/"
-          # Every .exe, not just *Setup*: electron-builder lists the portable
-          # artifact in latest.yml alongside the NSIS one, and a feed naming a
-          # payload that was never staged fails validation below.
-          # The .deb likewise: nothing self-updates from it, but electron-builder
-          # lists it in latest-linux.yml because the Linux target built it, and
-          # every reference is a hard requirement above. The AppImage is matched
-          # by its versioned name so flatpak/build.sh's staged Armada.AppImage
-          # isn't published into the feed as a second, unreferenced copy.
-          cp electron/release/Armada-*-linux-*.AppImage electron/release/*.exe \
-             electron/release/*.deb "$feed/"
-          for file in electron/release/*.blockmap; do
-            [ -e "$file" ] || continue
-            cp "$file" "$feed/"
-          done
-          # --version ties the feed to the tag being released. Without it a feed
-          # carrying the 0.0.0 fallback below, or one left over from an earlier
-          # build in a reused work dir, publishes as if it were this release.
-          case "$TAG" in
-            v[0-9]*) FEED_VERSION="${TAG#v}" ;;
-            *) FEED_VERSION=0.0.0 ;;
-          esac
-          node electron/scripts/validate-update-feed.mjs --version "$FEED_VERSION" \
-            "$feed/latest.yml" "$feed/latest-linux.yml"
+          # No unversioned aliases, no latest-*.json manifest and no
+          # latest*.yml update feed are written any more. All of them existed
+          # because something had to name a file at build time, before it could
+          # know a version; /downloads and the desktop updater both read the
+          # release event now, which names every artifact by its exact filename
+          # and hash. A stable alias would be a second, uncontent-addressed way
+          # to get the same bytes.
 
           # Preserve the repository layout produced by flatpak-builder. Its
           # objects are content addressed; old objects may remain available for
           # clients updating from older releases.
           cp -a electron/release/flatpak-repo/. "$flatpak_repo/"
           ls -lh "$out"
-          ls -lh "$feed"
           echo "root=$root" >> "$GITHUB_OUTPUT"
           echo "dir=$out" >> "$GITHUB_OUTPUT"
-          echo "feed=$feed" >> "$GITHUB_OUTPUT"
           echo "flatpak_repo=$flatpak_repo" >> "$GITHUB_OUTPUT"
 
       # The private signing home has already been destroyed. Upload actions
@@ -854,12 +823,6 @@ jobs:
             ${{ steps.collect.outputs.dir }}/Armada-${{ github.ref_name }}-mac-arm64.zip
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: armada-desktop-update-feed-${{ github.ref_name }}
-          path: ${{ steps.collect.outputs.feed }}
-          if-no-files-found: error
-
       # Signing and its verification now run BEFORE the installers are staged,
       # so a tag that fails there would otherwise upload nothing at all and
       # leave the maintainer with only a log. Publish the raw build output
@@ -876,7 +839,6 @@ jobs:
             electron/release/*.deb
             electron/release/*.exe
             electron/release/*.flatpak
-            electron/release/latest*.yml
             electron/release/mac/*.zip
           if-no-files-found: warn
 
@@ -886,7 +848,7 @@ jobs:
   # workflow-owned inline shell using a fixed system PATH. The publish job may
   # run release validators from the checkout, but they cannot persist into this
   # container and observe a later-injected deploy key.
-  deploy:
+  flatpak:
     needs: publish
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
@@ -908,12 +870,14 @@ jobs:
             sudo apt-get install -y --no-install-recommends "${packages[@]}" >/dev/null
           fi
 
-      # Publish to https://armada.buzz/downloads/ over the rrsync-jailed deploy
-      # user. Pushing the staged `downloads` DIRECTORY (no trailing slash) into
-      # the jail root ":/" is what creates/updates the directory there. This
-      # rsync runs without `--delete`, as release.yml's does — the two publish
-      # into one jail root and would otherwise delete each other's installers,
-      # so don't add one without excluding the other's files.
+      # Publish the Flatpak OSTree repository to https://armada.buzz/downloads/
+      # over the rrsync-jailed deploy user. This rsync runs without `--delete`,
+      # as deploy-nsite.yml's does — the two publish into one jail root and
+      # would otherwise delete each other's files, so don't add one without
+      # excluding the other's. (One consequence to know: the retired
+      # /downloads/desktop and /desktop update feeds are therefore still on the
+      # server. Nothing writes or reads them; remove them by hand when you want
+      # them gone.)
       #
       # Secrets (operator-provisioned, maintainer-gated): DEPLOY_SSH_KEY_BASE64,
       # DEPLOY_SSH_CONFIG_BASE64, DEPLOY_TARGET, and the pinned full primary
@@ -1125,45 +1089,23 @@ jobs:
 
           # The public site is an nsite behind Caddy. Verify the filesystem
           # carve-out itself, not merely that rsync accepted the bytes: a route
-          # regression can otherwise return the SPA shell with 200 (Flatpak) or
-          # a synthetic 404 (electron-updater) while the release job stays green.
+          # regression can otherwise return the SPA shell with 200 while the
+          # release job stays green.
           smoke=$(mktemp -d "$RUNNER_TEMP/armada-update-smoke.XXXXXX")
 
-          # The installers themselves are NOT published here any more. They are
-          # named by the kind-30622 release event and fetched from Blossom by
-          # hash, so there is no armada.buzz copy to keep in step and no
-          # unversioned alias to keep pointing somewhere true. What remains
-          # below is only what cannot be content-addressed: electron-updater
-          # reads a fixed feed URL, and Flatpak needs a real OSTree remote over
-          # HTTP. Neither can be a hash.
+          # Nothing for the desktop editions is published here any more. Every
+          # installer is named by the kind-30622 release event and fetched from
+          # Blossom by hash, and the app self-updates from that same event, so
+          # there is no armada.buzz copy to keep in step, no unversioned alias
+          # to keep pointing somewhere true, and no latest*.yml feed. The
+          # Flatpak OSTree repository below is all that is left: it is the one
+          # thing here that cannot be a hash, because Flatpak needs a real
+          # mutable remote over HTTP.
           #
           # --chmod: the served mode is stated here rather than inherited from
           # whatever umask the staging step ran under. A payload the web
           # server's user can't read is a 403, which looks like a build that
           # didn't publish.
-
-          # Publish immutable updater payloads before the mutable latest*.yml
-          # pointers. A client can therefore never observe metadata naming a
-          # file that has not reached the server yet. The legacy copy makes a
-          # /desktop Caddy carve-out sufficient to migrate existing clients.
-          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
-            --exclude='latest*.yml' \
-            "$DEPLOY_ROOT/desktop/" "${TARGET}:/downloads/desktop/"
-          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
-            --exclude='latest*.yml' \
-            "$DEPLOY_ROOT/desktop/" "${TARGET}:/desktop/"
-          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
-            --include='latest*.yml' --exclude='*' \
-            "$DEPLOY_ROOT/desktop/" "${TARGET}:/downloads/desktop/"
-          rsync -av --chmod=D755,F644 -e "ssh -F $deploy_ssh_config" \
-            --include='latest*.yml' --exclude='*' \
-            "$DEPLOY_ROOT/desktop/" "${TARGET}:/desktop/"
-
-          for name in latest.yml latest-linux.yml; do
-            curl -fsS --retry 5 --retry-all-errors --connect-timeout 30 --max-time 300 \
-              "https://armada.buzz/downloads/desktop/$name" -o "$smoke/$name"
-            cmp "$DEPLOY_ROOT/desktop/$name" "$smoke/$name"
-          done
 
           # Flatpak's signed summary is the mutable pointer into its
           # content-addressed object store. Publish every object, the immutable
@@ -1308,9 +1250,9 @@ jobs:
     # Last, and `always()`, so its outcome is nobody else's problem. It shares
     # the working tree with `desktop` (see there), so it cannot run beside it;
     # running it after the desktop chain means a Play Console rejection or a
-    # Zapstore hiccup costs the Android publish alone. `deploy` is skipped on a
+    # Zapstore hiccup costs the Android publish alone. `flatpak` is skipped on a
     # non-tag ref, which `always()` also covers.
-    needs: [deploy]
+    needs: [flatpak]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -1761,7 +1703,7 @@ jobs:
   # run where nothing built fails here instead of announcing a version with no
   # downloads.
   release:
-    needs: [android, deploy]
+    needs: [android, flatpak]
     if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30

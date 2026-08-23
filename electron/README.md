@@ -258,21 +258,19 @@ different binary — the previous arrangement's weakest point, and it was the ha
 that executes what it downloads. Signature, author and repository are all
 checked before a URL is used; a relay is untrusted transport.
 
-### The static feed is still deployed, for old installs only
+### The static feed is gone
 
-`electron-builder.yml` still declares `publish: { provider: generic, url:
-https://armada.buzz/downloads/desktop }`, and CI still deploys `latest.yml`,
-`latest-linux.yml` and their payloads there. New builds ignore all of it —
-`setFeedURL` overrides the baked-in `app-update.yml` at runtime.
+No `latest*.yml` is generated (`publishAutoUpdate: false`) and nothing for the
+desktop is published over SSH. The `publish:` block in `electron-builder.yml`
+stays only because electron-builder packages `app-update.yml` only when one
+exists, and electron-updater reads that file on every download; its `url:` is
+never fetched.
 
-It exists because a build installed *before* this change has the generic feed
-URL compiled into it and knows nothing about the release event. That static feed
-is the only route by which such an install can ever reach a version that does.
-**Do not remove it in the same release that introduces the event feed**, and
-expect to keep it for as long as those installs are worth reaching; the audience
-only shrinks. Releases through v0.53.1 embedded a still older
-`https://armada.buzz/desktop` path, which the server maps to the same directory
-for the same reason.
+**Installs from v0.56.3 and earlier cannot auto-update.** They have the old feed
+URL compiled in, and it is no longer refreshed, so they report "Armada is up to
+date" indefinitely. Recovery is a manual download from `/downloads`. The retired
+feed files are still on the server — nothing deletes them; remove them by hand
+whenever you like.
 
 Windows signing remains recommended: provisioning `WINDOWS_CSC_LINK` and
 `WINDOWS_CSC_KEY_PASSWORD` gives the installer and subsequent updates one

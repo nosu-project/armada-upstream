@@ -739,13 +739,12 @@ function hideWindowToTray() {
 // manager, so those formats intentionally never contact the update feed.
 //
 // The feed is the kind-30622 release event — the same one /downloads reads —
-// resolved by ./nostrUpdateProvider.js, NOT the latest*.yml the `publish` block
-// in electron-builder.yml points at. That block still stands, and CI still
-// deploys those files, for exactly one reason: a build installed before this
-// change bakes the generic feed URL into its own app-update.yml and knows
-// nothing about any of this, so the static feed is the only route by which it
-// can ever reach a version that does. It is a migration path with an audience
-// that only shrinks; see electron/README.md before removing it.
+// resolved by ./nostrUpdateProvider.js. No latest*.yml is generated or deployed
+// any more. The `publish` block in electron-builder.yml still exists, but not as
+// a feed: it is the only thing that makes electron-builder package an
+// app-update.yml, which electron-updater reads on every DOWNLOAD for its cache
+// directory name. Its url is never fetched — setFeedURL below replaces the
+// provider outright. See electron/README.md.
 
 function autoUpdatesSupported() {
   if (!app.isPackaged) return false;
