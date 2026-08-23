@@ -22,7 +22,7 @@ import { getConversationKey } from "nostr-tools/nip44";
 import { decrypt as nip44Decrypt, encrypt as nip44Encrypt } from "nostr-tools/nip44";
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools/pure";
 import type { EventTemplate, NostrEvent } from "nostr-tools/pure";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { ReactNode } from "react";
 
@@ -58,6 +58,7 @@ import {
   parseRekey,
   type RekeyBlob,
 } from "@/concord/lib/rekey";
+import { _configureAuthWaitForTests } from "@/concord/lib/planeSync";
 import { openWrap, sealRumor, wrapSeal } from "@/concord/lib/stream";
 import type { CommunityListEntry, JoinMaterial } from "@/concord/lib/communityList";
 import type { Community, PrivateChannelKey } from "@/concord/lib/types";
@@ -105,6 +106,13 @@ interface Filter {
   until?: number;
   limit?: number;
 }
+
+// FakeRelay never challenges NIP-42, so the sweep's auth gate can only ever
+// poll out its 8s cap — once per Refounding. Same seam the other plane-sync
+// suites use.
+beforeAll(() => {
+  _configureAuthWaitForTests({ maxWaitMs: 0 });
+});
 
 class FakeRelay {
   events: NostrEvent[] = [];

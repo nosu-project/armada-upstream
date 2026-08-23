@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * The account-switch choke point.
  *

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * The Invite List read (CORD-05 §4). The spec's merge law — entries immutable,
  * tombstones union, a tombstone beats an entry TERMINALLY — is what makes a

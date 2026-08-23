@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const renderBadgedFavicon = vi.hoisted(() => vi.fn<(href: string) => Promise<string | null>>());

@@ -29,11 +29,12 @@ USER_DATA="${ARMADA_DEV_USER_DATA:-${ROOT_DIR}/electron/.dev-profile}"
 
 [ -d node_modules ] || npm install --silent
 
-# main.js `require`s ./db.cjs at startup, and it is a gitignored build artifact
-# (vite.config.electron.ts). Rebuild every launch: it is bundled from src/lib/db
-# and the main process has no HMR, so this is the only thing that picks up a
-# store change.
-npm run build:electron-db
+# main.js `require`s ./db.cjs and (through nostrUpdateProvider.js)
+# ./updateFeed.cjs at startup, and both are gitignored build artifacts
+# (vite.config.electron.ts, vite.config.electron-update.ts). Rebuild every
+# launch: they are bundled from src/ and the main process has no HMR, so this is
+# the only thing that picks up a store or release-feed change.
+npm run build:electron
 
 # The Electron dep tree is electron/'s own (electron/package.json), not the web
 # app's.

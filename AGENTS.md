@@ -55,6 +55,49 @@ run this before committing changes.
 
 `npm run dev` serves at http://localhost:8080.
 
+### The vitest environment split
+
+Vitest runs as two projects (`vite.config.ts`), because building a jsdom
+instance costs ~1.8s per test FILE and used to be the single largest line in
+the suite — ~615s of the run's worker-time, more than executing the tests. The
+split is by EXTENSION so there is no roster to rot: `**/*.test.tsx` is a
+component test and gets `jsdom`, `**/*.test.ts` gets `node`. Roughly nine in
+ten `.ts` suites never touch a DOM, so they now skip that construction.
+
+A `.ts` suite that DOES need a DOM — one driving `renderHook`, or a browser
+shim — carries `// @vitest-environment jsdom` as its first line, which
+overrides its project's environment and travels with the file if it moves. A
+new one announces itself as `document is not defined`, and that line is the
+fix. `src/test/setup.ts` gates on the ENVIRONMENT rather than the project for
+the same reason: those files are still in the `node` project and need the DOM
+mocks and jest-dom matchers just the same.
+
+### Benchmarks are not part of `npm run test`
+
+`*.perf.test.*` files assert on how long something takes or how many times it
+re-renders. That is not a correctness property: a loaded machine fails them
+while nothing is wrong, and they were ~13% of the suite's test time. The
+default run excludes them; `npm run test:perf` runs those seven files and
+nothing else (~19s). Both modes come out of one `testFilesFor()` in
+`vite.config.ts`, so the benchmarks stay reachable from the same config that
+hides them, and they are typechecked and linted either way — only the runner
+ignores them.
+
+Note the glob needs a `.perf.` SEGMENT: `src/lib/perf.test.ts` is the
+profiler module's own correctness suite and stays in the default run.
+
+Two things that are easy to get wrong here:
+
+- **`maxWorkers` must be set per project.** With `projects` configured, a root
+  `test.maxWorkers` is silently ignored and the suite goes back to one worker
+  per core with nothing to say it didn't take. Per-project is still a global
+  ceiling, not one pool each — the projects do not run concurrently.
+- **Wall time is almost exactly `worker-seconds / workers`**, so tightening the
+  worker ceiling is paid back directly in duration. Cutting the work by a
+  quarter and the workers by a quarter is a wash. `ARMADA_TEST_WORKERS`
+  overrides the default (all cores but two) for a machine that wants all of
+  itself, or less of it.
+
 ### The one Rust dependency
 
 Mini App multiplayer (`joinRealtimeChannel`) rides iroh-gossip, which lives in
@@ -469,6 +512,24 @@ Things to know before touching it:
   `app.getPath("userData")/armada.db`, and `preload.js` answers
   `armada:db-available` SYNCHRONOUSLY because the renderer picks its adapter
   before anything reads.
+- **The desktop updater reads the release event, by the same arrangement.**
+  `src/lib/desktopUpdate.ts` → `electron/updateFeed.cjs`
+  (`vite.config.electron-update.ts`, `npm run build:electron-update`), wrapped
+  as an electron-updater `custom` provider by `electron/nostrUpdateProvider.js`
+  and armed with `setFeedURL` in `main.js`. It resolves the SAME kind-30622
+  event `/downloads` renders (`docs/releases.md`) down to the one installer this
+  machine can replace itself with, so `parseRelease()` is not reimplemented in
+  `electron/` — a second parser is a second contract. Its OWN vite config rather
+  than a second entry beside `db.cjs`: a multi-entry lib build hoists shared code
+  into a content-hashed chunk, and a filename that changes with the dependency
+  tree cannot be listed in `electron-builder.yml`'s `files:`. The static
+  `latest*.yml` feed is GONE — not generated (`publishAutoUpdate: false`) and not
+  deployed; the Flatpak OSTree repository is now the only thing `release.yml`
+  sends over SSH. **The `publish:` block still has to exist**: electron-builder
+  writes the packaged `app-update.yml` only when one does, and electron-updater
+  reads that file on every DOWNLOAD (`updaterCacheDirName`, plus `publisherName`
+  on Windows), so deleting it leaves the update check succeeding and the download
+  throwing ENOENT — visible only on a manual check. Its `url:` is never fetched.
 - **The adapter is chosen before anything reads.** The legacy drains in
   `migrations.ts` write through `getArmadaDB()`, so on Android and desktop they
   land in the native store directly — there is no IndexedDB ArmadaDB to move

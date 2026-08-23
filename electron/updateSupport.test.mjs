@@ -79,6 +79,10 @@ describe("automatic update policy", () => {
       autoDownload: true,
       autoInstallOnAppQuit: true,
       allowDowngrade: false,
+      // The feed is a content-addressed release event, which names no blockmap
+      // and no web installer. Both would be requests that can only 404.
+      disableDifferentialDownload: true,
+      disableWebInstaller: true,
     });
   });
 });

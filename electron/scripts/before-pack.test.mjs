@@ -17,11 +17,14 @@ afterEach(() => {
   temporaryDirectories = [];
 });
 
-function appDirectory({ db = true, web = true, helper = false } = {}) {
+function appDirectory({ db = true, updateFeed = true, web = true, helper = false } = {}) {
   const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "armada-pack-inputs-"));
   temporaryDirectories.push(temporaryDirectory);
   fs.mkdirSync(path.join(temporaryDirectory, "dist"));
   if (db) fs.writeFileSync(path.join(temporaryDirectory, "db.cjs"), "module.exports = {};");
+  if (updateFeed) {
+    fs.writeFileSync(path.join(temporaryDirectory, "updateFeed.cjs"), "module.exports = {};");
+  }
   if (web) fs.writeFileSync(path.join(temporaryDirectory, "dist", "index.html"), "<html></html>");
   if (helper) {
     const helperPath = path.join(
@@ -45,6 +48,11 @@ describe("desktop package staging guard", () => {
   it("names missing release inputs before packaging starts", () => {
     expect(() => assertPackInputs(appDirectory({ db: false }))).toThrow(/db\.cjs/);
     expect(() => assertPackInputs(appDirectory({ web: false }))).toThrow(/dist.index\.html/);
+    // A build staged without the update feed still runs, and can never update
+    // itself again — the failure this guard exists to catch before packaging.
+    expect(() => assertPackInputs(appDirectory({ updateFeed: false }))).toThrow(
+      /updateFeed\.cjs/,
+    );
   });
 
   it("requires an executable publisher only for Linux packages", () => {

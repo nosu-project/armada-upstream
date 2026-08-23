@@ -63,6 +63,7 @@ const {
   hasDeveloperIdUpdateSignature,
   supportsSelfUpdate,
 } = require("./updateSupport");
+const { NostrReleaseProvider } = require("./nostrUpdateProvider");
 const { integrateAppImage } = require("./desktopIntegration");
 const { listLinuxAudioApplications } = require("./linuxAudioSources");
 const {
@@ -736,6 +737,14 @@ function hideWindowToTray() {
 // builds, and AppImage on Linux. A portable .exe has nowhere stable to install
 // an update, while deb and Flatpak packages must remain owned by their package
 // manager, so those formats intentionally never contact the update feed.
+//
+// The feed is the kind-30622 release event — the same one /downloads reads —
+// resolved by ./nostrUpdateProvider.js. No latest*.yml is generated or deployed
+// any more. The `publish` block in electron-builder.yml still exists, but not as
+// a feed: it is the only thing that makes electron-builder package an
+// app-update.yml, which electron-updater reads on every DOWNLOAD for its cache
+// directory name. Its url is never fetched — setFeedURL below replaces the
+// provider outright. See electron/README.md.
 
 function autoUpdatesSupported() {
   if (!app.isPackaged) return false;
@@ -816,6 +825,10 @@ function installAutoUpdater() {
   // but is not required: a user who installed Armada's unsigned NSIS build has
   // opted into the same HTTPS + feed-SHA-512 trust model the AppImage uses.
   configureAutoUpdater(autoUpdater);
+  // Overrides the `provider: generic` feed baked into app-update.yml at package
+  // time. Passing the class rather than a URL is electron-updater's documented
+  // `custom` provider contract.
+  autoUpdater.setFeedURL({ provider: "custom", updateProvider: NostrReleaseProvider });
   autoUpdater.logger = console;
 
   autoUpdater.on("update-not-available", async () => {

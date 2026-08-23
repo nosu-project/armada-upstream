@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * The hook side of the scheduler: mounting declares the want, unmounting
  * releases it (aborting an in-flight run), and state flows reactively.

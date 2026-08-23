@@ -4,6 +4,52 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.57.1] - 2026-08-23
+
+Invite links now ask before they join. Opening one shows the community first —
+its name, artwork, channels, relays and who is already inside — and you join
+only when you accept it. Being removed from a community also takes effect right
+away instead of waiting on a background refresh, and on Android incoming
+messages are handled off the app's main thread, so receiving them no longer
+slows the interface.
+
+### Changed
+- Opening an invite link shows the community and asks before joining, instead of joining the moment the link opens. Signed out, the same preview offers a sign-in button, so you can see what you are accepting before making an account
+
+### Fixed
+- Being removed from a community applies right away, and the community drops off the sidebar without waiting on a background refresh
+- On Android, messages arriving in the background are handled off the app's main thread, so receiving them no longer slows the interface
+
+## [0.57.0] - 2026-08-23
+
+Chat messages now render richer formatting: fenced code blocks are
+syntax-highlighted and carry a one-tap copy button, and headings and simple
+lists lay out the way they read. The full-screen sync screen shown right after
+signing in is back — it had stopped appearing on a fresh login.
+
+### Added
+- Fenced code blocks in chat are syntax-highlighted and have a button to copy their contents
+- Headings and bulleted or numbered lists in chat messages render as formatted text
+
+### Fixed
+- The post-login sync screen appears again when you sign in
+
+## [0.56.4] - 2026-08-22
+
+Desktop updates now come from the same signed release listing the downloads page
+reads, and every download is checked against the hash published with it. The
+older update feed and the Flatpak update repository are no longer refreshed with
+each release, so a desktop or Flatpak install from 0.56.3 or earlier will keep
+reporting itself up to date — install this version once by hand from the
+downloads page to pick up later ones automatically.
+
+### Changed
+- The desktop app looks for updates in the same signed release listing the downloads page shows, and verifies each download against the hash published with it
+- The Flatpak update repository is no longer refreshed with each release. The signed `.flatpak` bundle on the downloads page is how to install and update
+
+### Fixed
+- The web app is published with each release again
+
 ## [0.56.3] - 2026-08-22
 
 The Android app is published to Google Play again. Since 0.51.2 every upload was

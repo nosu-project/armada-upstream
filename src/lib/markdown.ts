@@ -5,9 +5,14 @@
  * `components/chat/Markdown.tsx`. The dialect is the chat-safe subset Discord
  * uses:
  *
- * - Blocks: fenced code (```lang … ```), quotes (lines starting with `> `).
+ * - Blocks: fenced code (```lang … ```), quotes (lines starting with `> `),
+ *   headings (`# `, `## `, `### ` — three levels, as in Discord), and flat
+ *   ordered/unordered lists (`- item`, `1. item`).
  * - Inline: `**bold**`, `*italic*` / `_italic_`, `__underline__`,
  *   `~~strikethrough~~`, `||spoiler||`, and `` `inline code` ``.
+ *
+ * Document mode (long-form git content) widens this to GitHub's dialect:
+ * heading levels 4–6 and `[text](url)` links.
  *
  * Block splitting runs BEFORE the URL/nostr tokenizer so nothing inside code
  * is linkified; inline formatting is applied at render time to plain-text
@@ -38,10 +43,10 @@ const QUOTE_LINE_RE = /^>\s?/;
 
 /**
  * Split message text into top-level blocks: fenced code, quote runs
- * (consecutive `> ` lines merged into one block, markers stripped), and plain
- * text (newlines preserved). With `document` set, plain text further splits
- * into ATX headings and flat ordered/unordered lists — the GitHub-flavored
- * additions long-form git content uses, kept out of chat's dialect.
+ * (consecutive `> ` lines merged into one block, markers stripped), ATX
+ * headings, flat ordered/unordered list runs, and plain text (newlines
+ * preserved). Chat recognizes heading levels 1–3 like Discord; with `document`
+ * set, levels 4–6 also split out for long-form GitHub-flavored git content.
  */
 export function splitMarkdownBlocks(src: string, document = false): MdBlock[] {
   const blocks: MdBlock[] = [];
@@ -73,10 +78,7 @@ function splitQuoteBlocks(src: string, document = false): MdBlock[] {
   const flushText = () => {
     if (textLines.length > 0) {
       const text = textLines.join("\n");
-      if (text !== "") {
-        if (document) blocks.push(...splitDocumentBlocks(text));
-        else blocks.push({ type: "text", text });
-      }
+      if (text !== "") blocks.push(...splitHeadingListBlocks(text, document));
       textLines = [];
     }
   };
@@ -103,14 +105,24 @@ function splitQuoteBlocks(src: string, document = false): MdBlock[] {
 
 /** ATX heading: `## text` (1-6 hashes, space required so `#hashtag` stays literal). */
 const HEADING_RE = /^(#{1,6})\s+(.+)$/;
+/** Deepest heading level chat recognizes (`# `, `## `, `### `, as in Discord). */
+const CHAT_HEADING_MAX_LEVEL = 3;
 /** Unordered list item: `- text` (space required so `*italic*` stays literal). */
 const UNORDERED_ITEM_RE = /^\s{0,3}[-*+]\s+(.+)$/;
 /** Ordered list item: `1. text` / `1) text`. */
 const ORDERED_ITEM_RE = /^\s{0,3}(\d{1,9})[.)]\s+(.+)$/;
 
-/** Split a text chunk into headings, flat list runs and remaining text. */
-function splitDocumentBlocks(src: string): MdBlock[] {
+/**
+ * Split a text chunk into headings, flat list runs and remaining text.
+ *
+ * Chat stops at heading level 3 (`####` stays literal, as in Discord); document
+ * mode takes all six. Boundary newlines next to an extracted block fold into
+ * that block's margin — in chat only when something was actually extracted, so
+ * a chunk without headings or lists passes through byte-for-byte as before.
+ */
+function splitHeadingListBlocks(src: string, document: boolean): MdBlock[] {
   const blocks: MdBlock[] = [];
+  const maxHeading = document ? 6 : CHAT_HEADING_MAX_LEVEL;
   let textLines: string[] = [];
   let list: { ordered: boolean; start: number; items: string[] } | null = null;
 
@@ -131,7 +143,7 @@ function splitDocumentBlocks(src: string): MdBlock[] {
 
   for (const line of src.split("\n")) {
     const heading = HEADING_RE.exec(line);
-    if (heading) {
+    if (heading && heading[1].length <= maxHeading) {
       flushText();
       flushList();
       blocks.push({ type: "heading", level: heading[1].length, text: heading[2].trim() });
@@ -152,6 +164,9 @@ function splitDocumentBlocks(src: string): MdBlock[] {
   }
   flushText();
   flushList();
+  if (!document && blocks.every((b) => b.type === "text")) {
+    return [{ type: "text", text: src }];
+  }
   return blocks;
 }
 

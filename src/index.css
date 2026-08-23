@@ -532,3 +532,100 @@
     animation: terminal-expand 0.16s ease-out;
   }
 }
+
+/*
+ * Syntax highlighting for fenced code blocks — highlight.js scope classes,
+ * emitted by lowlight in src/lib/highlighter.ts and rendered as spans by
+ * CodeBlock. Scopes with a natural counterpart in the theme take it (keywords
+ * → primary, strings → success, comments → muted, deletions → destructive) so
+ * every user theme stays coherent; the remaining hues are fixed and carry a
+ * `.dark` variant, tuned against the muted code-block surface.
+ */
+@layer components {
+  .hljs-comment,
+  .hljs-quote,
+  .hljs-meta {
+    color: hsl(var(--muted-foreground));
+  }
+  .hljs-comment,
+  .hljs-quote,
+  .hljs-emphasis {
+    font-style: italic;
+  }
+  .hljs-strong {
+    font-weight: 600;
+  }
+  .hljs-keyword,
+  .hljs-selector-tag,
+  .hljs-literal,
+  .hljs-doctag,
+  .hljs-template-tag,
+  .hljs-meta .hljs-keyword,
+  .hljs-variable.language_ {
+    color: hsl(var(--primary));
+  }
+  .hljs-string,
+  .hljs-regexp,
+  .hljs-addition,
+  .hljs-link,
+  .hljs-meta .hljs-string,
+  .hljs-char.escape_ {
+    color: hsl(var(--success));
+  }
+  .hljs-deletion {
+    color: hsl(var(--destructive));
+  }
+  .hljs-number,
+  .hljs-symbol,
+  .hljs-bullet,
+  .hljs-selector-attr,
+  .hljs-selector-pseudo,
+  .hljs-template-variable {
+    color: hsl(30 85% 36%);
+  }
+  .hljs-title,
+  .hljs-section,
+  .hljs-name,
+  .hljs-selector-id,
+  .hljs-selector-class {
+    color: hsl(265 60% 46%);
+  }
+  .hljs-attr,
+  .hljs-attribute,
+  .hljs-property,
+  .hljs-variable {
+    color: hsl(200 85% 30%);
+  }
+  .hljs-built_in,
+  .hljs-type,
+  .hljs-class {
+    color: hsl(175 70% 28%);
+  }
+
+  .dark .hljs-number,
+  .dark .hljs-symbol,
+  .dark .hljs-bullet,
+  .dark .hljs-selector-attr,
+  .dark .hljs-selector-pseudo,
+  .dark .hljs-template-variable {
+    color: hsl(35 90% 68%);
+  }
+  .dark .hljs-title,
+  .dark .hljs-section,
+  .dark .hljs-name,
+  .dark .hljs-selector-id,
+  .dark .hljs-selector-class {
+    color: hsl(265 85% 80%);
+  }
+  .dark .hljs-attr,
+  .dark .hljs-attribute,
+  .dark .hljs-property,
+  .dark .hljs-variable {
+    color: hsl(195 80% 72%);
+  }
+  .dark .hljs-built_in,
+  .dark .hljs-type,
+  .dark .hljs-class {
+    color: hsl(172 60% 62%);
+  }
+}

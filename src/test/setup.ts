@@ -1,6 +1,19 @@
-import '@testing-library/jest-dom';
 import 'fake-indexeddb/auto';
 import { vi } from 'vitest';
+
+// `@testing-library/jest-dom` registers DOM matchers and nothing else, so the
+// node-environment suites (most of them — see the project split in
+// vite.config.ts) have no use for it and shouldn't each pay to import it. It
+// has to land before any test runs, which a setup file's top-level await does.
+//
+// The gate is on the ENVIRONMENT rather than on which project the file is in:
+// a `.test.ts` that opts into jsdom with a docblock still runs in the `node`
+// project, and it needs the matchers and the mocks below just the same.
+// Imported by the `/vitest` subpath because the bare entry's types are a
+// global `/// <reference>` rather than a module, which `import()` can't name.
+if (typeof window !== 'undefined') {
+  await import('@testing-library/jest-dom/vitest');
+}
 
 // Node.js 22 has a built-in `localStorage` that lacks standard Web Storage API
 // methods (getItem, setItem, etc.) unless `--localstorage-file` is provided.

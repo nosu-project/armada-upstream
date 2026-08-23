@@ -1,9 +1,11 @@
 import { execSync } from "node:child_process";
 import fs from "node:fs";
+import { availableParallelism } from "node:os";
 import path from "node:path";
 
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
+import { configDefaults } from "vitest/config";
 
 /**
  * Short commit SHA — prefer CI env var, fall back to git. Empty string if
@@ -122,6 +124,64 @@ function buildStamp(): Plugin {
   };
 }
 
+/**
+ * Worker ceiling for the suite. Vitest defaults to one worker per core and
+ * then adds its own process on top, so the whole machine stalls for the length
+ * of a run. Two cores held back is enough to keep it usable.
+ *
+ * Don't tighten this much further without cutting the work to match. Wall time
+ * here is almost exactly `worker-seconds / workers` (measured within ~17% over
+ * several runs), so the ceiling is paid back directly in duration — dropping
+ * to 12 of 16 cores cancelled out the whole saving from the environment split
+ * below. `ARMADA_TEST_WORKERS` overrides it for a box that wants all of itself
+ * (CI) or less of it.
+ */
+const TEST_WORKERS = Number(process.env.ARMADA_TEST_WORKERS) ||
+  Math.max(1, availableParallelism() - 2);
+
+/**
+ * Test options that are the same in both projects below. Only `name`,
+ * `environment` and `include` differ.
+ *
+ * `maxWorkers` has to live HERE, on each project, not on the root `test`
+ * config: with `projects` set, the root value is silently ignored, and the
+ * suite goes back to a worker per core with nothing to say it didn't take.
+ * Per-project is nonetheless a global ceiling and not one pool each — the
+ * projects do not run concurrently (measured: 2 workers per project across
+ * both is ~200% CPU, not ~400%).
+ */
+const SHARED_TEST_CONFIG = {
+  globals: true,
+  maxWorkers: TEST_WORKERS,
+  setupFiles: "./src/test/setup.ts",
+  onConsoleLog(log: string) {
+    return !log.includes("React Router Future Flag Warning");
+  },
+} as const;
+
+/**
+ * `*.perf.test.*` files are BENCHMARKS: they assert on how long something takes
+ * or how many times it re-renders, not on whether it is correct. They don't
+ * belong in a correctness gate — a loaded machine makes them fail while nothing
+ * is wrong, and they were ~13% of the suite's test time — so `npm run test`
+ * skips them and `npm run test:perf` runs them alone.
+ *
+ * Two modes rather than a plain exclude, so the benchmarks stay reachable by
+ * the same config that hides them. They are still typechecked and linted
+ * either way; only the runner ignores them.
+ */
+const RUN_PERF = !!process.env.ARMADA_TEST_PERF;
+
+/** `include`/`exclude` for one project, given the extensions it owns. */
+function testFilesFor(extensions: string) {
+  return RUN_PERF
+    ? { include: [`{src,electron}/**/*.perf.test.${extensions}`] }
+    : {
+        include: [`{src,electron}/**/*.test.${extensions}`],
+        exclude: [...configDefaults.exclude, "**/*.perf.test.*"],
+      };
+}
+
 // https://vitejs.dev/config/
 export default defineConfig({
   server: {
@@ -140,12 +200,41 @@ export default defineConfig({
     "import.meta.env.COMMIT_TAG": JSON.stringify(getCommitTag()),
   },
   test: {
-    globals: true,
-    environment: "jsdom",
-    setupFiles: "./src/test/setup.ts",
-    onConsoleLog(log: string) {
-      return !log.includes("React Router Future Flag Warning");
-    },
+    projects: [
+      // Splitting by environment is the single biggest lever on suite cost. A
+      // jsdom instance is built per test FILE, and at ~1.8s each that was
+      // ~615s of the run's worker-time — more than actually running the tests
+      // (~495s). The great majority of files never touch a DOM, so they get
+      // `node` and skip that construction entirely (measured over a paired
+      // run: ~615s -> ~222s of environment time, ~19% off the wall clock and
+      // ~24% off the CPU consumed, using two fewer cores).
+      //
+      // The split is by EXTENSION rather than a list of paths, so there is no
+      // roster in here to rot as files move: `.tsx` is a component/render test
+      // and needs a DOM, `.ts` is assumed not to. The exceptions — a `.ts`
+      // suite that drives `renderHook` or a browser shim — carry a
+      // `// @vitest-environment jsdom` docblock, which overrides the project's
+      // environment and travels with the file. A new one announces itself as
+      // `document is not defined`, and the fix is that one line.
+      {
+        extends: true,
+        test: {
+          ...SHARED_TEST_CONFIG,
+          ...testFilesFor("{js,mjs,cjs,ts,mts,cts}"),
+          name: "node",
+          environment: "node",
+        },
+      },
+      {
+        extends: true,
+        test: {
+          ...SHARED_TEST_CONFIG,
+          ...testFilesFor("{jsx,tsx}"),
+          name: "dom",
+          environment: "jsdom",
+        },
+      },
+    ],
   },
   build: {
     target: "esnext",
@@ -158,6 +247,11 @@ export default defineConfig({
           if (id.includes("node_modules")) {
             if (/[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)[\\/]/.test(id)) {
               return "vendor-react";
+            }
+            // Code-block grammars: only ever reached through the dynamic import
+            // in src/lib/codeHighlight.ts, so this chunk loads on demand.
+            if (id.includes("node_modules/highlight.js") || id.includes("node_modules/lowlight")) {
+              return "vendor-highlight";
             }
             if (id.includes("node_modules/@nostrify") || id.includes("node_modules/nostr-tools") || id.includes("node_modules/@noble") || id.includes("node_modules/@scure")) {
               return "vendor-nostr";

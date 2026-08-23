@@ -26,8 +26,8 @@ import android.graphics.PorterDuffXfermode;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.IBinder;
-import android.os.Looper;
 import android.util.Log;
 
 import androidx.core.app.NotificationCompat;
@@ -86,6 +86,11 @@ import okhttp3.WebSocketListener;
  * On each EVENT we apply the user's prefs (mention vs all-group, per-type
  * toggles), dedupe by id, skip self, and post it into its room's conversation
  * notification (see {@code enqueueRoomMessage}).
+ *
+ * All of that state is single-threaded on one dedicated looper — see
+ * {@code handler}, which is emphatically NOT the main one: the service shares
+ * a process with the WebView, and this work is far too heavy for the thread
+ * that draws frames.
  *
  * Resilience:
  *   - Exponential reconnect backoff per relay (1s → 5min cap), reset only
@@ -226,7 +231,7 @@ public class NotificationRelayService extends Service {
     static final String ACTION_DECLINE_CALL = "buzz.armada.app.action.DECLINE_CALL";
     static final String EXTRA_CALL_ID = "armada_call_id";
     static final String EXTRA_CALL_PEER = "armada_call_peer";
-    // The call currently ringing in the tray (main-thread confined, like
+    // The call currently ringing in the tray (handler-thread confined, like
     // roomNotifs). Null when none.
     private String ringingCallId;
     private String ringingPeer;
@@ -241,7 +246,38 @@ public class NotificationRelayService extends Service {
     private static final long STABLE_CONNECTION_MS = 60_000;
 
     private OkHttpClient httpClient;
-    private final Handler handler = new Handler(Looper.getMainLooper());
+
+    /**
+     * The confinement thread, and deliberately NOT the main one.
+     *
+     * Everything {@code handler} guards — {@link #connections}, the config
+     * snapshot, {@link #roomNotifs}, the profile cache — is single-threaded on
+     * this looper, which is what lets it all be plain fields. That model is
+     * unchanged; what changed is which thread runs it.
+     *
+     * The service shares a process with the Activity and the WebView (no
+     * {@code android:process} in the manifest), so a main-looper handler made
+     * every relay message UI-thread work: a Schnorr verify per event, the
+     * Concord symmetric opens, and — the expensive one — {@link ServiceStore}
+     * writes, which take the same {@code SqliteArmadaDb} lock the WebView's
+     * reads hold from Capacitor's background thread. A catch-up burst on
+     * resume therefore blocked frames behind database contention: skipped
+     * frames, then a SIGQUIT ANR trace, then the process going away.
+     *
+     * Callbacks already arrive from elsewhere ({@link NativeSigner} runs on its
+     * own executor, okhttp on its dispatcher) and hop back with
+     * {@code handler.post}, so nothing outside this file assumed the looper was
+     * the main one. The service lifecycle callbacks below are the exception —
+     * the framework delivers those on the main thread, so they post.
+     */
+    private final HandlerThread handlerThread = startHandlerThread();
+    private final Handler handler = new Handler(handlerThread.getLooper());
+
+    private static HandlerThread startHandlerThread() {
+        HandlerThread thread = new HandlerThread("ArmadaNotifSvc");
+        thread.start();
+        return thread;
+    }
 
     private ConnectivityManager.NetworkCallback networkCallback;
     private SharedPreferences.OnSharedPreferenceChangeListener configListener;
@@ -844,7 +880,7 @@ public class NotificationRelayService extends Service {
     static void dismissRead(java.util.Map<String, Long> readByKey) {
         NotificationRelayService svc = instance;
         if (svc == null || readByKey == null || readByKey.isEmpty()) return;
-        // roomNotifs is confined to the main handler thread (onRelayMessage
+        // roomNotifs is confined to the handler thread (onRelayMessage
         // posts there), so mutate it there too — never from the bridge thread.
         svc.handler.post(() -> svc.applyDismissRead(readByKey));
     }
@@ -1098,51 +1134,63 @@ public class NotificationRelayService extends Service {
                 .cache(new Cache(new File(getCacheDir(), "avatar-http"), AVATAR_HTTP_CACHE_BYTES))
                 .build();
 
-        profileStore = ProfileStore.deserialize(
-                getSharedPreferences(PROFILES_PREFS, Context.MODE_PRIVATE)
-                        .getString(PROFILES_KEY, null));
+        // Both registrations only arm listeners that post, so they stay here
+        // and are live before onStartCommand can run. The rest is confined
+        // state (profileStore) or a getActiveNotifications() round trip, and
+        // goes to the handler thread — where it is also ordered ahead of the
+        // config load onStartCommand posts next.
         registerNetworkCallback();
         registerConfigListener();
-        cancelStaleSummaries();
-        reconcileActiveRoomNotifications();
+        handler.post(() -> {
+            profileStore = ProfileStore.deserialize(
+                    getSharedPreferences(PROFILES_PREFS, Context.MODE_PRIVATE)
+                            .getString(PROFILES_KEY, null));
+            cancelStaleSummaries();
+            reconcileActiveRoomNotifications();
+        });
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        // A "Mark read" action tap arrives as a start intent. Handle it WITHOUT
-        // running loadConfigAndReconnect (which tears down + rebuilds every relay
-        // socket) so acknowledging a notification doesn't churn live connections.
-        if (intent != null && ACTION_MARK_READ.equals(intent.getAction())) {
-            BootReceiver.scheduleWatchdog(this);
-            // Cold-started just for this action (process was dead): load the
-            // config first so the relay subscriptions come up AND the z→channel
-            // map the read-marker needs is populated before handleMarkRead reads it.
-            if (connections.isEmpty()) loadConfigAndReconnect();
-            handleMarkRead(intent);
-            return START_STICKY;
-        }
-        // A "Reply" action tap arrives the same way, and likewise must not
-        // rebuild the relay sockets — the publish rides the live ones (or the
-        // per-connection outbox, when cold-started and still connecting).
-        if (intent != null && ACTION_REPLY.equals(intent.getAction())) {
-            BootReceiver.scheduleWatchdog(this);
-            if (connections.isEmpty()) loadConfigAndReconnect();
-            handleReply(intent);
-            return START_STICKY;
-        }
-        // The incoming-call notification's "Decline" — dismiss the ring and
-        // send the peer a gift-wrapped decline over the same live sockets.
-        if (intent != null && ACTION_DECLINE_CALL.equals(intent.getAction())) {
-            BootReceiver.scheduleWatchdog(this);
-            if (connections.isEmpty()) loadConfigAndReconnect();
-            handleDeclineCall(intent);
-            return START_STICKY;
-        }
         // Re-arm the self-healing watchdog on every start so it survives a
         // START_STICKY relaunch. It's cancelled when the user turns
-        // notifications off (loadConfigAndReconnect's disabled branch).
+        // notifications off (loadConfigAndReconnect's disabled branch). An
+        // AlarmManager call is thread-free and cheap, so it stays here rather
+        // than riding the queue behind whatever the handler thread is doing.
         BootReceiver.scheduleWatchdog(this);
-        loadConfigAndReconnect();
+        final String action = intent != null ? intent.getAction() : null;
+        // Everything below reads or rebuilds the confined state, so it runs on
+        // the handler thread. The intent is ours once delivered — nothing
+        // recycles it — so it's safe to carry across the hop.
+        handler.post(() -> {
+            // A "Mark read" action tap arrives as a start intent. Handle it WITHOUT
+            // running loadConfigAndReconnect (which tears down + rebuilds every relay
+            // socket) so acknowledging a notification doesn't churn live connections.
+            if (ACTION_MARK_READ.equals(action)) {
+                // Cold-started just for this action (process was dead): load the
+                // config first so the relay subscriptions come up AND the z→channel
+                // map the read-marker needs is populated before handleMarkRead reads it.
+                if (connections.isEmpty()) loadConfigAndReconnect();
+                handleMarkRead(intent);
+                return;
+            }
+            // A "Reply" action tap arrives the same way, and likewise must not
+            // rebuild the relay sockets — the publish rides the live ones (or the
+            // per-connection outbox, when cold-started and still connecting).
+            if (ACTION_REPLY.equals(action)) {
+                if (connections.isEmpty()) loadConfigAndReconnect();
+                handleReply(intent);
+                return;
+            }
+            // The incoming-call notification's "Decline" — dismiss the ring and
+            // send the peer a gift-wrapped decline over the same live sockets.
+            if (ACTION_DECLINE_CALL.equals(action)) {
+                if (connections.isEmpty()) loadConfigAndReconnect();
+                handleDeclineCall(intent);
+                return;
+            }
+            loadConfigAndReconnect();
+        });
         return START_STICKY;
     }
 
@@ -1173,32 +1221,43 @@ public class NotificationRelayService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        // `instance` is read by startIfConfigured on the main thread, so it is
+        // cleared here rather than on the handler thread — a teardown queued
+        // behind a burst must not leave a dying service answering "running".
         if (instance == this) instance = null;
-        NativeSigner signer = nativeSigner;
-        nativeSigner = null;
-        if (signer != null) signer.close();
-        closeAllConnections();
         unregisterNetworkCallback();
         unregisterConfigListener();
+        // Drop queued work first (from here, so the queue is cut immediately
+        // rather than after the burst it may be holding), then post the
+        // teardown itself: it touches the confined state, so it belongs on the
+        // handler thread like every other reader of it. quitSafely lets that
+        // one message run and stops the looper after it.
         handler.removeCallbacksAndMessages(null);
-        // Flush any debounced profile writes so the next service instance
-        // starts with the warm cache (apply() is async but safe here).
-        if (profilePersistScheduled) {
-            profilePersistScheduled = false;
-            persistProfiles();
-        }
-        if (avatarClient != null && avatarClient.cache() != null) {
-            try {
-                avatarClient.cache().close(); // flush the HTTP disk cache
-            } catch (Exception ignored) {
-                // Best-effort flush; the process is going away regardless.
+        handler.post(() -> {
+            NativeSigner signer = nativeSigner;
+            nativeSigner = null;
+            if (signer != null) signer.close();
+            closeAllConnections();
+            // Flush any debounced profile writes so the next service instance
+            // starts with the warm cache (apply() is async but safe here).
+            if (profilePersistScheduled) {
+                profilePersistScheduled = false;
+                persistProfiles();
             }
-        }
-        if (httpClient != null) {
-            // avatarClient shares this dispatcher (derived via newBuilder), so
-            // one shutdown drains both clients' worker threads.
-            httpClient.dispatcher().executorService().shutdownNow();
-        }
+            if (avatarClient != null && avatarClient.cache() != null) {
+                try {
+                    avatarClient.cache().close(); // flush the HTTP disk cache
+                } catch (Exception ignored) {
+                    // Best-effort flush; the process is going away regardless.
+                }
+            }
+            if (httpClient != null) {
+                // avatarClient shares this dispatcher (derived via newBuilder), so
+                // one shutdown drains both clients' worker threads.
+                httpClient.dispatcher().executorService().shutdownNow();
+            }
+        });
+        handlerThread.quitSafely();
     }
 
     @Override
@@ -1594,7 +1653,7 @@ public class NotificationRelayService extends Service {
         boolean closed = false;
         boolean socketOpen = false;
 
-        // When the current connection attempt started (main thread only).
+        // When the current connection attempt started (handler thread only).
         // Used by scheduleReconnect to distinguish "stable connection finally
         // died" (reset backoff) from "relay drops us right away" (keep growing).
         long connectAttemptAt = 0;
@@ -1631,7 +1690,7 @@ public class NotificationRelayService extends Service {
         // In-flight reply publishes (event id → waiter) awaiting this relay's
         // OK, and frames queued while the socket is down (flushed on the next
         // open) — how a reply typed on a cold-started service survives the
-        // connect. Main-thread confined, like everything else here.
+        // connect. Handler-thread confined, like everything else here.
         final Map<String, PendingPublish> pendingPublishes = new HashMap<>();
         final List<PendingPublish> outbox = new ArrayList<>();
         // ids of the kind-22242s we sent and haven't seen an OK for. NIP-42
@@ -1914,7 +1973,7 @@ public class NotificationRelayService extends Service {
             }
         }
 
-        /** Flush publishes queued while the socket was down (main thread). */
+        /** Flush publishes queued while the socket was down (handler thread). */
         void flushOutbox(WebSocket webSocket) {
             if (closed || outbox.isEmpty()) return;
             for (PendingPublish p : outbox) {
@@ -2160,7 +2219,12 @@ public class NotificationRelayService extends Service {
                             .put(new JSONArray().put("challenge").put(challenge));
                     signer.signEvent(22242, "", authTags, System.currentTimeMillis() / 1000, ev -> {
                         if (ev != null) {
-                            deliverAuth(relayUrl, ev.toString());
+                            // The callback lands on the signer's own executor
+                            // (Amber/bunker are RPC), so the walk over
+                            // `connections` hops back to the handler thread
+                            // rather than reading it from there.
+                            String signed = ev.toString();
+                            handler.post(() -> deliverAuth(relayUrl, signed));
                         } else {
                             healthAuthStatus = "failed";
                             recordHealthError("signer_sign");
@@ -2416,7 +2480,7 @@ public class NotificationRelayService extends Service {
 
     /**
      * Resolve {@code pubkey} to a profile, then invoke {@code cb} (always on the
-     * main handler). Serves from the DURABLE store when present (refreshing in
+     * handler thread). Serves from the DURABLE store when present (refreshing in
      * the background once stale), and serves a recent NEGATIVE entry without
      * touching the network. On a genuine miss, issues a kind-0 REQ on EVERY
      * open relay (a user's kind-0 usually lives on their general / outbox
@@ -2747,7 +2811,7 @@ public class NotificationRelayService extends Service {
 
     /**
      * Resolve {@code groupId} to a display name, then invoke {@code cb} (always
-     * on the main handler). Serves from cache, else issues a kind-39000 REQ on
+     * on the handler thread). Serves from cache, else issues a kind-39000 REQ on
      * {@code relayUrl} and waits up to {@link #PROFILE_TIMEOUT_MS}.
      */
     private void resolveGroupName(String groupId, String relayUrl, GroupNameCallback cb) {
@@ -3119,7 +3183,7 @@ public class NotificationRelayService extends Service {
 
     /**
      * Fold one opened voice-call rumor (kind 23314, from the peer) into the
-     * ring state. Main thread only (callers post here).
+     * ring state. Handler thread only (callers post here).
      *
      * An "offer" RINGS — full-screen CallStyle notification with the device
      * ringtone — but only when it is FRESH (its real created_at inside
@@ -5282,7 +5346,7 @@ public class NotificationRelayService extends Service {
             // EVERY recipient's copy must land, matching `publishRumor`'s
             // Promise.all: a group message that reached three of four members
             // is one somebody never got, and reporting it as sent is what would
-            // hide that. Tallied on the main handler so the counter is touched
+            // hide that. Tallied on the handler thread so the counter is touched
             // from one thread whether a publish resolved from a relay socket or
             // from its timeout.
             final int[] remaining = { recipients.size() };
@@ -5782,11 +5846,11 @@ public class NotificationRelayService extends Service {
 
     /**
      * Fetch an avatar URL, downscale + circle-crop it to {@link #AVATAR_PX}, and
-     * deliver the bitmap on the main handler. Best-effort: null on any failure.
+     * deliver the bitmap on the handler thread. Best-effort: null on any failure.
      * Results are cached by URL for the service lifetime.
      */
     private void fetchAvatar(String url, BitmapCallback cb) {
-        // Disk read + decode off the main thread (the dispatcher is shared with
+        // Disk read + decode off the handler thread (the dispatcher is shared with
         // httpClient; a quick task here is fine). A warm disk hit skips both the
         // network AND the decode, so the "same user messages again" case resolves
         // instantly — the whole point of persisting across restarts.

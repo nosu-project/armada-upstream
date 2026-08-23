@@ -4,8 +4,8 @@
 # Everything .ngit/act/workflows otherwise downloads on EVERY run is baked in
 # as layers: JDK 21 / Node 22 / Go toolcaches (so setup-* actions no-op), the
 # Android SDK, system ruby + fastlane (Google Play publish), the zsp binary
-# (Zapstore publish), wine (Windows electron-builder targets), Flatpak tooling,
-# and warm
+# (Zapstore publish), the nsyte binary (nsite deploys), wine (Windows
+# electron-builder targets), Flatpak tooling, and warm
 # ~/.gradle / ~/.npm / ~/.cache/electron{,-builder} dependency caches for this
 # repo.
 #
@@ -282,6 +282,38 @@ RUN set -eux; \
     cd /; \
     rm -rf /warm
 
+# ── nsyte binary (nsite deploys in deploy-nsite.yml) ─────────────────────────
+# deploy-nsite.yml downloads this itself when it is absent, and that download is
+# the single most failure-prone step in the workflow: the release asset is
+# ~129 MB and has repeatedly died mid-transfer with "SSL_read: decryption failed
+# or bad record mac", identically on every retry within a run, taking the deploy
+# down across every repo that has this workflow. Baking it removes the download
+# from the happy path entirely.
+#
+# /usr/local/bin, NOT /opt/hostedtoolcache: the act-toolcache volume shadows
+# that path at job time (see the header) and there is no setup-* action to heal
+# a stale copy — same reasoning as zsp, Swift and the Rust toolchain.
+#
+# Placed LAST, after the warm caches, on purpose. A version bump here then only
+# rebuilds this ~129 MB layer instead of invalidating the gradle/electron/wasm
+# warm builds above, which cost hours.
+#
+# The workflows treat their own pin as a MINIMUM and accept whatever is baked
+# here when it is at least that version, so bumping this alone is enough to move
+# every repo forward. 0.28.0 is the floor they currently ask for: it is the
+# first release carrying the nostr-tools update that lets NIP-44 encrypt
+# payloads over 64 KiB, without which signing a large site manifest through a
+# NIP-46 bunker fails outright.
+ARG NSYTE_VERSION=0.28.0
+RUN set -eux; \
+    curl -fsSL --http1.1 --retry 5 --retry-delay 5 --retry-all-errors \
+      --connect-timeout 20 --max-time 900 \
+      "https://github.com/sandwichfarm/nsyte/releases/download/v${NSYTE_VERSION}/nsyte-linux-${NSYTE_VERSION}" \
+      -o /usr/local/bin/nsyte; \
+    chmod +x /usr/local/bin/nsyte; \
+    nsyte --version; \
+    command -v nsyte | grep -qv hostedtoolcache
+
 # Sanity: every baked tool the workflows call directly must be on PATH.
 RUN set -eux; \
     node --version; \
@@ -294,4 +326,5 @@ RUN set -eux; \
     flatpak-builder --version; \
     sdkmanager --version; \
     cargo --version; \
-    wasm-pack --version
+    wasm-pack --version; \
+    nsyte --version
