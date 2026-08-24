@@ -18,6 +18,7 @@ import { bytesToHex, channelGroupKey, controlGroupKey, guestbookGroupKey, voiceG
 import { KIND_CONTROL, KIND_KICK, KIND_MESSAGE, KIND_SEAL_ENCRYPTED, KIND_SEAL_PLAINTEXT } from "@/concord/lib/kinds";
 import { peekPendingWraps, queryPlane, queryChannelRumors } from "@/concord/lib/rumorStore";
 import { drainLiveDmWraps, resetLiveDmWraps } from "@/lib/nip17/dm17Store";
+import { drainLiveInviteWraps, resetLiveInviteWraps } from "@/concord/lib/inviteInbox";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal } from "@/concord/lib/stream";
 import type { Channel } from "@/concord/lib/types";
 
@@ -29,6 +30,7 @@ import type { WireSpec } from "./spec";
 afterEach(() => {
   resetWireBus();
   resetLiveDmWraps();
+  resetLiveInviteWraps();
 });
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -355,6 +357,46 @@ describe("ingestWireEvents", () => {
     expect(scopes.has(`c2park:${wrap.pubkey}`)).toBe(false);
     expect(store.events).toHaveLength(0);
     expect((await peekPendingWraps([wrap.pubkey]))).toHaveLength(0);
+  });
+
+  it("buffers a live direct-invite wrap (kind-1059 #k=3313) and rings c2inv:wrap (not dm:wrap, not parked, not stored)", async () => {
+    const self = "9".repeat(64);
+    const { store, sinks } = makeSinks({});
+    const withSelf = { ...sinks, getSelfPubkey: () => self };
+    // A direct-invite gift wrap: same envelope as a DM wrap (kind-1059,
+    // #p-tagged to the viewer, ephemeral author) but carrying the outer
+    // #k=3313 index hint that separates an invite from a message.
+    const wrap = plainEvent(1059, [["p", self], ["k", "3313"]]);
+    wrap.pubkey = "a".repeat(64);
+
+    const scopes = await collectScopes(() => ingestWireEvents(withSelf, [wrap]));
+
+    expect(scopes.has("c2inv:wrap"), "a live invite wrap must wake useDirectInvites").toBe(true);
+    // It rides the invite buffer, NOT the DM one.
+    expect(scopes.has("dm:wrap")).toBe(false);
+    expect(drainLiveDmWraps()).toHaveLength(0);
+    const buffered = drainLiveInviteWraps();
+    expect(buffered.map((w) => w.id)).toEqual([wrap.id]);
+    // Never parked as a dead Concord pending wrap, never stored.
+    expect(scopes.has(`c2park:${wrap.pubkey}`)).toBe(false);
+    expect(store.events).toHaveLength(0);
+    expect((await peekPendingWraps([wrap.pubkey]))).toHaveLength(0);
+  });
+
+  it("ignores a REPLAYED invite wrap: no re-buffer, no c2inv:wrap re-ring", async () => {
+    const self = "9".repeat(64);
+    const { sinks } = makeSinks({});
+    const withSelf = { ...sinks, getSelfPubkey: () => self };
+    const wrap = plainEvent(1059, [["p", self], ["k", "3313"]]);
+    wrap.pubkey = "a".repeat(64);
+
+    const first = await collectScopes(() => ingestWireEvents(withSelf, [wrap]));
+    expect(first.has("c2inv:wrap")).toBe(true);
+    expect(drainLiveInviteWraps().map((w) => w.id)).toEqual([wrap.id]);
+
+    const replay = await collectScopes(() => ingestWireEvents(withSelf, [wrap]));
+    expect(replay.has("c2inv:wrap")).toBe(false);
+    expect(drainLiveInviteWraps()).toHaveLength(0);
   });
 
   it("ignores a REPLAYED DM wrap: no re-buffer, no dm:wrap re-ring (the wrap filter's since rewind replays every round)", async () => {
