@@ -169,7 +169,7 @@ export function useDmAppSync(
     void g.node
       .send(g.topic, frame(data, seq.current, g.key))
       .catch(() => undefined);
-  }, [gossip]);
+  }, []);
 
   const listenersRef = useRef(new Set<(data: Uint8Array) => void>());
   const selfPubkey = user?.pubkey;
