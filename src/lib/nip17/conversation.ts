@@ -177,13 +177,11 @@ export function dmConvTerm(peers: readonly string[], namespace = DM_CONV_TERM): 
 }
 
 /**
- * Whether a kind-14 rumor is a WebXDC update (alt tag = "Webxdc update").
+ * Whether a kind-3310 rumor is a WebXDC update (CORD-02 Appendix B).
  * These are filtered from the conversation list and notifications.
  */
 function isWebxdcUpdate(rumor: NostrRumor): boolean {
-  if (rumor.kind !== 14) return false;
-  const altTag = rumor.tags.find(([name]) => name === "alt")?.[1];
-  return altTag === "Webxdc update";
+  return rumor.kind === 3310;
 }
 
 /**
