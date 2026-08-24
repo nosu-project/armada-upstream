@@ -25,7 +25,6 @@ import { useWireScopes } from "@/wire/useWireScopes";
 import {
   buildDmRumor,
   dmWebxdcTags,
-  KIND_DM_FILE,
   KIND_DM_PEER_SIGNAL,
   KIND_DM_WEBXDC,
   sealDmRumor,
