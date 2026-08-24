@@ -61,6 +61,7 @@ import {
   dmFileTags,
   dmReactionTags,
   dmTimerTags,
+  dmWebxdcTags,
   expirationOf,
   isExpired,
   KIND_DM_CHAT,
@@ -69,6 +70,7 @@ import {
   KIND_DM_PEER_SIGNAL,
   KIND_DM_REACTION,
   KIND_DM_TIMER,
+  KIND_DM_WEBXDC,
   MAX_WRAP_BACKDATE_SECS,
   openDmWrap,
   sealDmRumor,
@@ -943,6 +945,11 @@ export interface Dm17Thread {
   /** Send a chat message (kind 14). Resolves once optimistically rendered. */
   send: (content: string, extraTags?: string[][]) => Promise<void>;
   /**
+   * Send a kind-3310 WebXDC update (CORD-02 Appendix B). Used for in-chat app
+   * state coordination. The content is JSON, and tags include the session uuid.
+   */
+  sendWebxdc: (content: string, tags: string[][]) => Promise<void>;
+  /**
    * Send a file message (kind 15). For `.xdc` Mini Apps, automatically mints
    * a webxdc-topic for realtime gossip session identification.
    */
@@ -1200,13 +1207,10 @@ export function useDm17Thread(
       const at = expirationOf(r.tags);
       if (at !== undefined && (nextExpiry === undefined || at < nextExpiry)) nextExpiry = at;
       if (r.kind === KIND_DM_CHAT || r.kind === KIND_DM_FILE) {
-        // Filter out kind 14 webxdc updates (those with `alt: "Webxdc update"`)
-        // so they don't appear in the chat but are still visible to the webxdc app.
-        const altTag = r.tags.find(([n]) => n === "alt")?.[1];
-        const isWebxdcUpdate = r.kind === KIND_DM_CHAT && altTag === "Webxdc update";
-        if (!isWebxdcUpdate) {
-          messages.push(r);
-        }
+        messages.push(r);
+      } else if (r.kind === KIND_DM_WEBXDC) {
+        // Filter out kind 3310 webxdc updates so they don't appear in the chat
+        // but are still visible to the webxdc app (read by useDmAppSync).
       } else if (r.kind === KIND_DM_REACTION) {
         const target = r.tags.find(([n, v]) => n === "e" && v)?.[1];
         if (!target) continue;
@@ -1693,6 +1697,27 @@ export function useDm17Thread(
     [canSend, self, peers, resolveExpiry, dispatchRumor, openedOf, messages.length],
   );
 
+  /**
+   * Send a kind-3310 WebXDC update (CORD-02 Appendix B). Used for in-chat app
+   * state coordination. The content is JSON, and tags include the session uuid.
+   */
+  const sendWebxdc = useCallback(
+    async (content: string, tags: string[][]) => {
+      if (!canSend || !self || peers.length === 0) {
+        throw new Error("This conversation isn't reachable over private DMs yet.");
+      }
+      const expiresAt = await resolveExpiry();
+      const rumor = buildDmRumor({
+        kind: KIND_DM_WEBXDC,
+        content,
+        tags: dmWebxdcTags(peers, tags.find(([n]) => n === "i")?.[1] ?? "", { expiresAt }),
+        pubkey: self,
+      });
+      dispatchRumor(rumor, openedOf(rumor), { firstContact: messages.length === 0 });
+    },
+    [canSend, self, peers, resolveExpiry, dispatchRumor, openedOf, messages.length],
+  );
+
   // ── Older-history backfill ──────────────────────────────────────────────
   // Pages the global `#p` gift-wrap stream with `until`, decrypting each wrap
   // to sort it into its conversation.
@@ -1763,6 +1788,7 @@ export function useDm17Thread(
     canSend,
     send,
     sendFile,
+    sendWebxdc,
     react,
     removeReaction,
     deleteMessage: sendDelete,

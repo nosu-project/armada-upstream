@@ -120,15 +120,12 @@ export const KIND_DM_WRAP_EPHEMERAL = 21059;
 /** How long a typing signal stays live before it ages out. */
 export const TYPING_WINDOW_SECS = 8;
 
-/** Every rumor kind the DM plane stores and folds. */
-export const DM_RUMOR_KINDS = [
-  KIND_DM_DELETE,
-  KIND_DM_REACTION,
-  KIND_DM_CHAT,
-  KIND_DM_FILE,
-  KIND_DM_TIMER,
-];
-
+/**
+ * WebXDC update (CORD-02 Appendix B). Used for in-chat app state coordination
+ * in DMs, matching Concord's kind 3310. Not stored in the DM rumor store —
+ * read by useDmAppSync for webxdc state synchronization.
+ */
+export const KIND_DM_WEBXDC = 3310;
 /**
  * WebXDC peer signal kind (Vector's custom kind for Mini App realtime).
  * Not stored in the DM rumor store — processed live for gossip channel coordination.
@@ -140,6 +137,16 @@ export const DM_PEER_SIGNAL_D = "vector-webxdc-peer";
 
 /** Peer signal kinds that should be processed live (not stored). */
 export const DM_PEER_SIGNAL_KINDS = [KIND_DM_PEER_SIGNAL];
+
+/** Every rumor kind the DM plane stores and folds. */
+export const DM_RUMOR_KINDS = [
+  KIND_DM_DELETE,
+  KIND_DM_REACTION,
+  KIND_DM_CHAT,
+  KIND_DM_FILE,
+  KIND_DM_TIMER,
+  KIND_DM_WEBXDC,
+];
 
 /** NIP-59: outer (seal + wrap) timestamps are tweaked into the past, ≤ 2 days. */
 export const MAX_WRAP_BACKDATE_SECS = 2 * 24 * 60 * 60;
@@ -290,6 +297,23 @@ export function dmFileTags(
   }
   // Add NIP-94 file metadata tags (file-type, size, dim, etc.)
   for (const t of fileTags) tags.push(t);
+  return withExpiration(tags, opts?.expiresAt);
+}
+
+/**
+ * Tags for a kind-3310 WebXDC update rumor (CORD-02 Appendix B). The `p` set
+ * leads (conversation attribution — NIP-17 receivers), followed by the `i` tag
+ * (webxdc session uuid), and optional metadata tags (info, document, summary).
+ */
+export function dmWebxdcTags(
+  peers: readonly string[],
+  uuid: string,
+  opts?: { info?: string; document?: string; summary?: string; expiresAt?: number },
+): string[][] {
+  const tags: string[][] = [...peers.map((peer) => ["p", peer]), ["i", uuid]];
+  if (opts?.info) tags.push(["info", opts.info]);
+  if (opts?.document) tags.push(["document", opts.document]);
+  if (opts?.summary) tags.push(["summary", opts.summary]);
   return withExpiration(tags, opts?.expiresAt);
 }
 

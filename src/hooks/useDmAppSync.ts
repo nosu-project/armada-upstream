@@ -2,9 +2,9 @@
  * In-chat app coordination plane for NIP-17 DMs, scoped to one app session
  * (`uuid`). This is the DM twin of `useConcordAppSync`:
  *
- *  - **state** (`sendUpdate`) rides kind 15 file messages with an `i` tag
- *    (the webxdc uuid). Durable state is read from the DM thread's file
- *    messages filtered by the session id.
+ *  - **state** (`sendUpdate`) rides kind 3310 (CORD-02 Appendix B) with an `i`
+ *    tag (the webxdc uuid). Durable state is read from the DM thread's
+ *    kind-3310 rumors filtered by the session id.
  *  - **realtime** (`joinRealtimeChannel`) does NOT ride Nostr at all. Frames
  *    go peer to peer over iroh gossip, the transport Vector uses, so the two
  *    clients share one game rather than two that cannot see each other. The
@@ -24,8 +24,10 @@ import { useDm17Thread, getDmPeerSignals, dmWebxdcPeerScope } from "@/hooks/useD
 import { useWireScopes } from "@/wire/useWireScopes";
 import {
   buildDmRumor,
+  dmWebxdcTags,
   KIND_DM_FILE,
   KIND_DM_PEER_SIGNAL,
+  KIND_DM_WEBXDC,
   sealDmRumor,
   wrapDmSeal,
   type Dm17Signer,
@@ -67,8 +69,8 @@ function tagValue(tags: string[][], name: string): string | undefined {
  * In-chat app coordination plane for a NIP-17 DM, scoped to one app session
  * (`uuid`). Both planes ride the DM's gift-wrap envelope:
  *
- *  - **state** (`sendUpdate`) is a DURABLE kind 15 file message with an `i`
- *    tag = the session uuid. Read back from the DM thread, refreshed live
+ *  - **state** (`sendUpdate`) is a DURABLE kind 3310 (CORD-02 Appendix B) with
+ *    an `i` tag = the session uuid. Read back from the DM thread, refreshed live
  *    off the wire bus plus a slow poll.
  *  - **realtime** (`joinRealtimeChannel`) does NOT ride Nostr at all. Frames
  *    go peer to peer over iroh gossip, the transport Vector uses, so the two
@@ -101,27 +103,19 @@ export function useDmAppSync(
 
   // ── Durable state plane ────────────────────────────────────────────────────
 
-  // State updates are kind 14 or 15 messages with an `i` tag matching our uuid
-  // AND an `alt: "Webxdc update"` tag. Kind 14 is for lightweight updates
-  // (like scores), kind 15 for files. We read from the raw query data because
-  // webxdc updates (kind 14 with alt: "Webxdc update") are filtered out of
-  // dmThread.messages.
+  // State updates are kind 3310 (CORD-02 Appendix B) messages with an `i` tag
+  // matching our uuid. We read from the raw query data because webxdc updates
+  // (kind 3310) are filtered out of dmThread.messages.
   const stateUpdates = useMemo((): AppStateUpdate[] => {
     const rawMessages = dmThread.query.data ?? [];
     if (!rawMessages.length) return [];
     const updates: AppStateUpdate[] = [];
     for (const msg of rawMessages) {
-      // Accept kind 14 (webxdc updates) and kind 15 (files)
-      if (msg.kind !== KIND_DM_FILE && msg.kind !== 14) continue;
+      // Accept kind 3310 (webxdc updates)
+      if (msg.kind !== KIND_DM_WEBXDC) continue;
       // Filter by session uuid (`i` tag)
       const sessionTag = tagValue(msg.tags, "i");
       if (sessionTag !== uuid) continue;
-      // For kind 14, also require the `alt: "Webxdc update"` tag to distinguish
-      // webxdc updates from regular chat messages
-      if (msg.kind === 14) {
-        const altTag = tagValue(msg.tags, "alt");
-        if (altTag !== "Webxdc update") continue;
-      }
       // The content is the JSON payload
       let payload: unknown;
       try {
@@ -144,18 +138,10 @@ export function useDmAppSync(
   const sendState = useCallback(
     (payload: unknown, opts?: AppStateMeta) => {
       if (!peer || !self || !user?.signer.nip44) return;
-      // Send as a kind 15 file message with the session uuid in the `i` tag.
+      // Send as a kind 3310 (CORD-02 Appendix B) with the session uuid in the `i` tag.
       // The content is the JSON payload.
-      const tags: string[][] = [
-        ["i", uuid],
-        ["alt", "Webxdc update"],
-      ];
-      if (opts?.info) tags.push(["info", opts.info]);
-      if (opts?.document) tags.push(["document", opts.document]);
-      if (opts?.summary) tags.push(["summary", opts.summary]);
-      // Use the DM thread's sendFile-like mechanism via send
-      // For now, we use the thread's send with the content as JSON
-      void dmThread.send(JSON.stringify(payload), tags).catch(() => {});
+      const tags = dmWebxdcTags([peer], uuid, opts);
+      void dmThread.sendWebxdc(JSON.stringify(payload), tags).catch(() => {});
     },
     [peer, self, user, uuid, dmThread],
   );
