@@ -234,8 +234,11 @@ export function EmojiShortcodeAutocomplete({
   }, [content, detectShortcode, textareaRef]);
 
   const selectEmoji = useCallback((emoji: EmojiResult) => {
-    const textarea = textareaRef.current;
-    const cursor = textarea?.selectionStart ?? colonStart + query.length + 1;
+    // End of the query span is derived from the tracked colon + query rather
+    // than the live selectionStart: tapping the dropdown (a portal element) can
+    // blur/collapse the textarea selection on touch, which would otherwise
+    // replace the wrong range and leave the `:shortcode` trigger text behind.
+    const cursor = colonStart + query.length + 1;
 
     if (emoji.customUrl) {
       // Custom emoji: replace with `:shortcode: ` and track the emoji tag
@@ -260,7 +263,7 @@ export function EmojiShortcodeAutocomplete({
     setIsOpen(false);
     setQuery("");
     setColonStart(-1);
-  }, [colonStart, query, textareaRef, onInsertEmoji, onCustomEmojiInsert, customEmojis]);
+  }, [colonStart, query, onInsertEmoji, onCustomEmojiInsert, customEmojis]);
 
   // Handle keyboard navigation within the dropdown
   useEffect(() => {
