@@ -211,10 +211,41 @@ interface ParkFilter {
 }
 
 /**
+ * Collapse the parked set to one invite per community: a re-invite, or a second
+ * admin inviting you to the same community, is not a second inbox row. Within a
+ * group the NEWEST wrap wins (ties broken by wrap id, for a stable order).
+ *
+ * A catch-up is keyed by its channel set as well as its community, never by the
+ * community alone: distinct catch-ups each vend a private-channel key the member
+ * still lacks ({@link isCatchUpBundle} only parks those), so collapsing them by
+ * community would hide a key that exists in no other wrap. Two catch-ups
+ * carrying the same channels are still redundant and do collapse.
+ */
+export function dedupeParkedInvites(invites: ParkedInvite[]): ParkedInvite[] {
+  const byKey = new Map<string, ParkedInvite>();
+  for (const inv of invites) {
+    const key = inv.catchUp
+      ? `${inv.communityId}|${(inv.bundle.channels ?? []).map((c) => c.id.toLowerCase()).sort().join(",")}`
+      : inv.communityId;
+    const existing = byKey.get(key);
+    if (
+      !existing ||
+      inv.receivedAt > existing.receivedAt ||
+      (inv.receivedAt === existing.receivedAt && inv.wrapId < existing.wrapId)
+    ) {
+      byKey.set(key, inv);
+    }
+  }
+  return [...byKey.values()];
+}
+
+/**
  * Read the parked invite set back from the store (no re-decrypt) and apply the
  * consent filters against the current membership list. The PURE store read the
  * hook's query, its background sweep and its live wire wake all resolve to —
  * the one place a stored record becomes a rendered {@link ParkedInvite}.
+ * Deduplicated by community ({@link dedupeParkedInvites}), so the same community
+ * invited more than once is one row.
  */
 async function readParkedInvites(
   pubkey: string,
@@ -249,7 +280,7 @@ async function readParkedInvites(
       catchUp,
     });
   }
-  return [...parked.values()];
+  return dedupeParkedInvites([...parked.values()]);
 }
 
 /**
