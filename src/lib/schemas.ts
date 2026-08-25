@@ -118,6 +118,7 @@ export const AppConfigSchema = z.object({
   acceptedDms: z.array(z.string()).catch([]),
   startedDms: z.array(z.string()).catch([]),
   showDmRequests: z.boolean().catch(defaultConfig.showDmRequests),
+  showRecentRailDms: z.boolean().catch(defaultConfig.showRecentRailDms),
   discoverAllContent: z.boolean().catch(defaultConfig.discoverAllContent),
   stripTrackingParams: z.boolean().catch(defaultConfig.stripTrackingParams),
   defaultZapAmount: z.number().catch(defaultConfig.defaultZapAmount),
@@ -179,6 +180,8 @@ export const MetadataDocSchema = z.looseObject({
   dmTypingIndicators: z.boolean().optional(),
   /** Whether unknown-sender DMs are surfaced in the request tier — see AppConfig. */
   showDmRequests: z.boolean().optional(),
+  /** Whether the rail shows the automatic recent-unread DM strip (see AppConfig). */
+  showRecentRailDms: z.boolean().optional(),
   /** Whether Discover shows the unfiltered firehose vs the allow-list (see AppConfig). */
   discoverAllContent: z.boolean().optional(),
   /** Whether tracking parameters are stripped from links, sent and shown (see AppConfig). */

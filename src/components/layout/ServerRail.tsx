@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { MAX_RAIL_RECENT_DMS } from "@/contexts/AppContext";
 import { useAppContext } from "@/hooks/useAppContext";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useCall } from "@/hooks/useCall";
@@ -1522,11 +1523,12 @@ function ServerRailInner({
     [dmActivity],
   );
   const recentDms = useMemo(() => {
+    if (!config.showRecentRailDms) return [];
     const manuallyArranged = new Set(railDms);
     return dmActivity
       .filter((item) => item.unreadCount > 0 && !manuallyArranged.has(item.key))
-      .slice(0, 3);
-  }, [dmActivity, railDms]);
+      .slice(0, MAX_RAIL_RECENT_DMS);
+  }, [dmActivity, railDms, config.showRecentRailDms]);
 
   // Every live rail item (NIP-29 servers, Concord communities and pinned
   // DMs) in discovery order. The persisted layout arranges these into the
@@ -2096,7 +2098,8 @@ function ServerRailInner({
           </Tooltip>
         )}
 
-        {/* Three newest unread conversations, automatic and recency-ordered.
+        {/* Newest unread conversations, automatic and recency-ordered, capped
+            at MAX_RAIL_RECENT_DMS and gated by the showRecentRailDms setting.
             Reading one advances its shared read stamp and removes it from this
             transient strip. Manually arranged 1:1 pins remain only at their
             saved rail/folder position below, where they carry the same count. */}

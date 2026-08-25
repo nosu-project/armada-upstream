@@ -361,6 +361,15 @@ export interface AppConfig {
    */
   showDmRequests: boolean;
   /**
+   * Whether the rail shows the automatic strip of recent unread DMs — the
+   * newest unread conversations the user has NOT manually pinned to the rail,
+   * capped at {@link MAX_RAIL_RECENT_DMS}. ON by default. Purely a display
+   * preference for that transient strip: turning it off leaves manually
+   * arranged rail DMs untouched, drops no messages, and the conversations
+   * remain in the DM list. Synced across devices.
+   */
+  showRecentRailDms: boolean;
+  /**
    * Whether Discover shows the unfiltered public firehose instead of the
    * curated author allow-list (the team follow pack, plus your own follows when
    * logged in). OFF by default. Turning it on surfaces communities, emoji packs
@@ -428,6 +437,16 @@ export interface AppConfig {
  */
 export const MAX_STARTED_DMS = 50;
 
+/**
+ * How many automatic recent-unread DMs the {@link ServerRail} shows above the
+ * arranged list — the transient strip of newest unread conversations the user
+ * did NOT manually pin to the rail. The strip is recency-ordered and clears
+ * itself as conversations are read, so it needs a ceiling to keep an active
+ * inbox from crowding out the arranged communities below it. Gated entirely by
+ * {@link AppConfig.showRecentRailDms}.
+ */
+export const MAX_RAIL_RECENT_DMS = 3;
+
 export interface AppContextType {
   config: AppConfig;
   /** Merge a partial config and persist. */
@@ -468,6 +487,7 @@ export const METADATA_CONFIG_KEYS = [
   "appBlossomServers",
   "dmTypingIndicators",
   "showDmRequests",
+  "showRecentRailDms",
   "discoverAllContent",
   "stripTrackingParams",
   "defaultZapAmount",
@@ -563,6 +583,7 @@ export const defaultConfig: AppConfig = {
   acceptedDms: [],
   startedDms: [],
   showDmRequests: true,
+  showRecentRailDms: true,
   discoverAllContent: false,
   stripTrackingParams: true,
   meshIncognito: true,
