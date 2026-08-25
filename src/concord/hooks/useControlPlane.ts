@@ -472,6 +472,22 @@ export function _forgetDissolvedMemoForTests(): void {
   dissolvedMemo.clear();
 }
 
+/**
+ * Seal a community dissolved locally, right now — for the client that just
+ * PUBLISHED the tombstone, so its own page flips read-only at once instead of
+ * waiting for the next poll to rediscover its own act. Persists the verdict
+ * (via {@link rememberDissolved}) and updates the live `useDissolved` query.
+ * Terminal and one-way, like every other path to the marker (CORD-02 §9).
+ */
+export async function markDissolvedLocally(
+  queryClient: QueryClient,
+  idHex: string,
+  atMs: number,
+): Promise<void> {
+  await rememberDissolved(idHex, atMs);
+  queryClient.setQueryData<number | null>(["concord", "dissolved", idHex], atMs);
+}
+
 /** What the dissolved probe needs of the Nostr client. */
 interface ProbeNostr {
   relay(url: string): {

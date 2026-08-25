@@ -2679,8 +2679,10 @@ export function ConcordPage() {
     if (!confirm("Permanently dissolve this community for everyone? This cannot be undone.")) return;
     try {
       await dissolve();
+      // Stay put: the page flips to its read-only dissolved state in place (the
+      // banner + "Remove" button below), rather than redirecting home — which
+      // remounted the whole subtree and read as a forced refresh.
       toast({ title: "Community dissolved" });
-      navigateTo("/");
     } catch (e) {
       toast({ title: "Couldn't dissolve", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
     }

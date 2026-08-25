@@ -4,7 +4,7 @@ import { verifyEvent } from "nostr-tools/pure";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCommunityEntry, useUpdateCommunityList } from "@/concord/hooks/useCommunityList";
-import { useControlFold, citationFor, invalidateControl, publishEdition } from "@/concord/hooks/useControlPlane";
+import { useControlFold, citationFor, invalidateControl, markDissolvedLocally, publishEdition } from "@/concord/hooks/useControlPlane";
 import { useGuestbookPublisher } from "@/concord/hooks/useGuestbook";
 import { buildJoinRumor, currentGuestbookGroup, sealGuestbook } from "@/concord/lib/guestbook";
 import { useAppContext } from "@/hooks/useAppContext";
@@ -690,7 +690,14 @@ export function useCommunityManagement(community: Community | undefined) {
       if (!results.some((r) => r.status === "fulfilled")) {
         throw new Error("No relay accepted the dissolution.");
       }
-      await updateList({ type: "remove", communityId: community.idHex });
+      // Seal the community read-only in place rather than removing the owner's
+      // own list entry: a dissolved community stays viewable (CORD-02 §9), and
+      // each member — the owner included — reaps their own self-encrypted entry
+      // with the explicit "Remove" button when ready. Removing it here made the
+      // entry unresolvable mid-render, blanking `community` and forcing the page
+      // to remount elsewhere, which read as a full refresh. This flips
+      // `useDissolved` locally so the owner's page freezes read-only at once.
+      await markDissolvedLocally(queryClient, community.idHex, Date.now());
     },
   });
 
