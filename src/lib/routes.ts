@@ -33,6 +33,7 @@ import { shareOrigin } from "@/lib/shareOrigin";
 
 /** Non-channel panes of a Concord community. */
 export const CONCORD2_PANES = [
+  "all",
   "mentions",
   "threads",
   "projects",

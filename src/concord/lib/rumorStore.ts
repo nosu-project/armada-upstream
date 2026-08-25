@@ -260,7 +260,7 @@ export function storedToOpenedChat(ev: NostrRumor, channelIdHex: string): Opened
  * The chat kinds that render as their OWN item — timeline rows (message, poll,
  * thread reply, timer notice) and events-bar entries (calendar).
  */
-const CHAT_ROW_KINDS = [9, 1068, 1111, 1740, 31922, 31923];
+export const CHAT_ROW_KINDS = [9, 1068, 1111, 1740, 31922, 31923];
 /**
  * The chat kinds that only ever DECORATE a row: delete, reaction, vote, edit,
  * zaps, RSVP. Read under their OWN budget (see {@link queryChannelRumors}),

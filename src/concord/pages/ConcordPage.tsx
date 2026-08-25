@@ -1,4 +1,4 @@
-import { AtSign, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Pause, Phone, Pin, Play, Plus, RefreshCw, Search, Settings, Shield, Timer, Trash2, UserPlus, Users, Volume2, X, type LucideIcon } from "lucide-react";
+import { AtSign, CalendarClock, CheckCheck, ChevronDown, ChevronLeft, Bell, BellOff, Folder, FolderGit2, Hash, Headphones, KeyRound, Loader2, Lock, LogOut, Megaphone, MessagesSquare, MoreVertical, Pause, Phone, Pin, Play, Plus, RefreshCw, Rss, Search, Settings, Shield, Timer, Trash2, UserPlus, Users, Volume2, X, type LucideIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
@@ -23,7 +23,7 @@ import {
   type PendingArrangement,
 } from "@/concord/lib/channelArrangement";
 import { useChannelDrag, type ChannelDrop, type ChannelDropSlot } from "@/concord/hooks/useChannelDrag";
-import { MessageTimeline } from "@/components/chat/MessageTimeline";
+import { DateSeparator, isSameDay, MessageTimeline } from "@/components/chat/MessageTimeline";
 import { ThreadPanelSlot } from "@/components/chat/ThreadPanelSlot";
 import { useThreadPanel } from "@/hooks/useThreadPanel";
 import { useTimelineFocus } from "@/hooks/useTimelineFocus";
@@ -144,6 +144,7 @@ import { useRoles, useStaffKeyWatch } from "@/concord/hooks/useRoles";
 import { useSendMessage } from "@/concord/hooks/useChannel";
 import { useTransport } from "@/concord/hooks/useTransport";
 import { useConcordUnread, type ConcordUnread } from "@/concord/hooks/useConcordUnread";
+import { useCommunityFeed } from "@/concord/hooks/useCommunityFeed";
 import { useConcordMentions } from "@/concord/hooks/useConcordMentions";
 import { useConcordSearch } from "@/concord/hooks/useConcordSearch";
 import { SearchFiltersPopover, SearchResultsView } from "@/concord/components/Search";
@@ -179,6 +180,7 @@ const PANE_HEADERS: Record<
   Exclude<Concord2Pane, ModerationPane>,
   { icon: LucideIcon; label: string }
 > = {
+  all: { icon: Rss, label: "All messages" },
   mentions: { icon: AtSign, label: "Mentions" },
   threads: { icon: MessagesSquare, label: "Threads" },
   projects: { icon: FolderGit2, label: "Projects" },
@@ -757,7 +759,7 @@ function MentionsView({
               )}
               <span className="truncate">{ch?.name ?? "unknown channel"}</span>
             </div>
-            <MentionMessage
+            <AggregateMessage
               event={msg}
               onJump={ch ? () => onJump(channelIdHex, msg) : undefined}
             />
@@ -769,12 +771,13 @@ function MentionsView({
 }
 
 /**
- * A single read-only mention row (unsigned rumor → "View event JSON" menu).
- * The row is a button that jumps to the message in its channel; the inner
- * `ChatMessage`'s own controls (context menu, links) stop propagation so they
- * still work, and text remains selectable.
+ * A single read-only row in a community-wide pane — Mentions and All messages
+ * both (unsigned rumor → "View event JSON" menu). The row is a button that
+ * jumps to the message in its channel; the inner `ChatMessage`'s own controls
+ * (context menu, links) stop propagation so they still work, and text remains
+ * selectable.
  */
-const MentionMessage = memo(function MentionMessage({
+const AggregateMessage = memo(function AggregateMessage({
   event,
   onJump,
 }: {
@@ -812,6 +815,118 @@ const MentionMessage = memo(function MentionMessage({
     </div>
   );
 });
+
+/**
+ * The community-wide "All messages" pane: every channel's messages merged into
+ * one feed, newest first, so a community can be followed without opening each
+ * channel in turn. Rows are read-only and clicking one jumps to the message
+ * where it actually lives.
+ *
+ * Newest-first, like the other aggregate panes (a catch-up surface is read
+ * from the top down), with a day divider on each calendar boundary and the
+ * channel named whenever it changes — the two things a merged list needs in
+ * order to stay legible as messages from different rooms interleave. A day
+ * divider always restates the channel under it, so a label never appears for a
+ * change the reader can't see.
+ *
+ * `hasMore` here is the completeness watermark, not a scroll cursor: see
+ * {@link useCommunityFeed} for why the feed is cut where it is.
+ */
+function AllMessagesView({
+  channels,
+  messages,
+  isLoading,
+  hasMore,
+  isLoadingOlder,
+  onLoadOlder,
+  onJump,
+}: {
+  channels: Channel[];
+  messages: ChatMsg[];
+  isLoading: boolean;
+  hasMore: boolean;
+  isLoadingOlder: boolean;
+  onLoadOlder: () => void;
+  onJump: (channelIdHex: string, message: ChatMsg) => void;
+}) {
+  const channelById = useMemo(() => {
+    const m = new Map<string, Channel>();
+    for (const c of channels) m.set(c.idHex, c);
+    return m;
+  }, [channels]);
+
+  // Where the dividers fall, decided in one pass so the render just walks a
+  // list rather than carrying state across a `.map`.
+  const rows = useMemo(() => {
+    let prevDay: number | undefined;
+    let prevChannel: string | undefined;
+    return messages.map((msg) => {
+      const channelIdHex = msg.tags.find((t) => t[0] === "channel")?.[1] ?? "";
+      const newDay = prevDay === undefined || !isSameDay(prevDay, msg.created_at);
+      const newChannel = newDay || channelIdHex !== prevChannel;
+      prevDay = msg.created_at;
+      prevChannel = channelIdHex;
+      return { msg, channelIdHex, newDay, newChannel };
+    });
+  }, [messages]);
+
+  if (messages.length === 0) {
+    return (
+      <p className="px-2 py-8 text-center text-sm text-muted-foreground">
+        {isLoading
+          ? "Loading messages…"
+          : "No messages yet. Every channel's messages will show up here together."}
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-col py-2 px-2">
+      {rows.map(({ msg, channelIdHex, newDay, newChannel }) => {
+        const ch = channelById.get(channelIdHex);
+        return (
+          <div key={msg.id} className="pb-1">
+            {newDay ? <DateSeparator ts={msg.created_at} /> : null}
+            {newChannel ? (
+              <div className="flex items-center gap-1 px-3 pt-2 pb-0.5 text-xs font-medium text-muted-foreground">
+                {ch?.isPrivate ? (
+                  <Lock className="size-3 shrink-0" />
+                ) : (
+                  <Hash className="size-3 shrink-0" />
+                )}
+                <span className="truncate">{ch?.name ?? "unknown channel"}</span>
+              </div>
+            ) : null}
+            <AggregateMessage
+              event={msg}
+              onJump={ch ? () => onJump(channelIdHex, msg) : undefined}
+            />
+          </div>
+        );
+      })}
+      {hasMore ? (
+        <div className="flex justify-center py-3">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onLoadOlder}
+            disabled={isLoadingOlder}
+            className="text-muted-foreground"
+          >
+            {isLoadingOlder ? (
+              <>
+                <Loader2 className="mr-2 size-4 animate-spin" />
+                Loading…
+              </>
+            ) : (
+              "Load older messages"
+            )}
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * The community-wide "Threads" pane: every thread the current user has
@@ -1130,6 +1245,10 @@ export function ConcordPage() {
     markRead: markMentionsRead,
     markAllRead: markAllMentionsRead,
   } = useConcordMentions(channels, community?.idHex);
+
+  // The community-wide "All messages" feed. Reads the store only while its
+  // pane is open — see `useCommunityFeed` on why it isn't ambient.
+  const feed = useCommunityFeed(community, channels, routePane === "all");
 
   // Community-wide "Threads" — threads the user participated in (authored the
   // root or a reply), newest-reply first, from the local rumor cache only.
@@ -2941,6 +3060,23 @@ export function ConcordPage() {
             <button
               type="button"
               onClick={() => {
+                selectPane("all");
+                onNavigate?.();
+              }}
+              className={cn(
+                "flex w-full items-center gap-2 pl-3 pr-2 py-1.5 touch:py-3 text-sm transition-colors text-left clip-corner-lg",
+                view === "all"
+                  ? "bg-primary text-primary-foreground font-medium"
+                  : "text-muted-foreground hover:text-foreground hover:bg-foreground/5",
+              )}
+              aria-current={view === "all"}
+            >
+              <Rss className="size-4 shrink-0" />
+              <span className="truncate flex-1 min-w-0">All messages</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
                 selectPane("mentions");
                 onNavigate?.();
               }}
@@ -3471,7 +3607,19 @@ export function ConcordPage() {
           <div className="relative flex flex-1 min-h-0">
             <ComposerBoundsProvider value={composerBoundsRef}>
             <div className={cn("flex-1 min-w-0 flex flex-col", chatColumnClass)}>
-              {view === "mentions" ? (
+              {view === "all" ? (
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
+                  <AllMessagesView
+                    channels={channels}
+                    messages={feed.messages}
+                    isLoading={feed.isLoading}
+                    hasMore={feed.hasMore}
+                    isLoadingOlder={feed.isLoadingOlder}
+                    onLoadOlder={feed.loadOlder}
+                    onJump={jumpToMention}
+                  />
+                </div>
+              ) : view === "mentions" ? (
                 <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
                   <MentionsView
                     channels={channels}
