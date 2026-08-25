@@ -64,6 +64,28 @@ contextBridge.exposeInMainWorld("armadaDesktop", {
    */
   signalWebReady: () => ipcRenderer.send("armada:web-ready"),
 
+  /**
+   * Report the App Links host (VITE_PUBLIC_WEB_ORIGIN's hostname) at boot, so
+   * the shell can recognize a link to our own public host — a copied message or
+   * invite link clicked inside the app — and route it inward instead of out to
+   * the system browser. The main process has no other way to know it: the build
+   * bakes in no origin.
+   */
+  registerDeepLinkHost: (host) =>
+    ipcRenderer.send("armada:register-deep-link-host", host),
+
+  /**
+   * Subscribe to in-app deep links the shell intercepted (an https link to our
+   * own host that would otherwise have opened the browser). The handler gets
+   * the router path; returns an unsubscribe.
+   */
+  onDeepLink: (handler) => {
+    if (typeof handler !== "function") return () => {};
+    const listener = (_event, path) => handler(path);
+    ipcRenderer.on("armada:deep-link", listener);
+    return () => ipcRenderer.removeListener("armada:deep-link", listener);
+  },
+
   /** { platform, version } of the desktop shell. */
   getInfo: () => ipcRenderer.invoke("armada:platform"),
 

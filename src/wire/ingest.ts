@@ -5,6 +5,8 @@ import { notePlaneWrapsJunk, notePlaneWrapsSeen, openPlaneWrapsChunked, unseenPl
 import { parkPendingWraps, writeOpened, writeRumors } from "@/concord/lib/rumorStore";
 import { isRelayScoped } from "@/lib/db/relayScope";
 import { bufferLiveDmWraps } from "@/lib/nip17/dm17Store";
+import { bufferLiveInviteWraps } from "@/concord/lib/inviteInbox";
+import { KIND_DIRECT_INVITE } from "@/concord/lib/kinds";
 import { KIND_GROUP_CHAT } from "@/lib/nip29";
 import { KIND_STREAM_MESSAGE_V2 } from "@/buzz/kinds";
 import { reactionContentKey } from "@/hooks/useReactions";
@@ -186,6 +188,7 @@ export async function ingestWireEvents(
   const toPark: NostrEvent[] = [];
   const plain: NostrEvent[] = [];
   const dmWraps: NostrEvent[] = [];
+  const inviteWraps: NostrEvent[] = [];
   for (const ev of events) {
     if (!ev || typeof ev.id !== "string" || typeof ev.kind !== "number") continue;
     if (WRAP_KINDS.has(ev.kind)) {
@@ -198,6 +201,23 @@ export async function ingestWireEvents(
         ctlWraps.push(ev);
       } else if (spec?.concordGbByPk.has(ev.pubkey)) {
         gbWraps.push(ev);
+      } else if (
+        self &&
+        ev.kind === KIND_DM_WRAP &&
+        ev.tags.some(([n, v]) => n === "p" && v === self) &&
+        ev.tags.some(([n, v]) => n === "k" && v === String(KIND_DIRECT_INVITE))
+      ) {
+        // A Concord DIRECT INVITE (CORD-05 §6): a kind-1059 gift wrap #p-tagged
+        // to the viewer carrying the outer `#k`=3313 index hint — the same
+        // envelope as a NIP-17 DM wrap, and the wire can't decrypt it either
+        // (the invite hook owns the NIP-44 keys + the consent gate). BUFFER the
+        // in-hand wrap and ring `c2inv:wrap` so useDirectInvites drains and
+        // decrypts it directly — no relay re-fetch (which re-pays NIP-42 auth,
+        // the ~minutes-until-poll latency this whole path removes). Checked
+        // BEFORE the DM branch because both match on (kind, `#p`); the `#k`
+        // hint is the only thing that separates an invite from a message. Not
+        // parked (parking treats it as a dead Concord stream wrap).
+        inviteWraps.push(ev);
       } else if (self && ev.kind === KIND_DM_WRAP && ev.tags.some(([n, v]) => n === "p" && v === self)) {
         // A NIP-17 gift wrap addressed to the viewer (kind-1059, `#p` = self —
         // the wire's DM filter). The wire can't decrypt it (that needs the
@@ -229,6 +249,15 @@ export async function ingestWireEvents(
     // sender here without unwrapping, so ingest never fires a DM candidate.
     const freshDmWraps = bufferLiveDmWraps(dmWraps);
     if (freshDmWraps.length > 0) scopes.add("dm:wrap");
+  }
+  if (inviteWraps.length > 0) {
+    // Same idempotent buffer as the DM path: the wrap filter's `since` rewind
+    // replays recent wraps every round, so only genuinely new arrivals ring
+    // `c2inv:wrap`. useDirectInvites drains and decrypts the in-hand wrap; a
+    // wrap can't be attributed to a sender here without unwrapping, so ingest
+    // fires no notify candidate for it.
+    const freshInviteWraps = bufferLiveInviteWraps(inviteWraps);
+    if (freshInviteWraps.length > 0) scopes.add("c2inv:wrap");
   }
 
   // Concord: decrypt with the owning channel's stream keys → the owning community's

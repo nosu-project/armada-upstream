@@ -44,4 +44,37 @@ function isExternallyOpenableUrl(value) {
   }
 }
 
-module.exports = { isArmadaAppUrl, isExternallyOpenableUrl };
+/**
+ * The in-app router path of a link to our OWN public web host, or null.
+ *
+ * A "Copy message link" produces `https://<host>/<chat-path>/m/<id>` — the same
+ * https URL Android App Links and iOS universal links already route into the
+ * app. Clicked INSIDE the desktop shell it would otherwise be treated as a
+ * foreign origin and kicked out to the system browser (there is no OS-level
+ * https handoff into a desktop app short of being the default browser). So the
+ * navigation handlers ask this whether a link is really one of ours and, if so,
+ * route it through the renderer's router instead of shell.openExternal.
+ *
+ * `host` is the renderer's build-time App Links host (`VITE_PUBLIC_WEB_ORIGIN`),
+ * registered over IPC — it is not known to the main process otherwise. This
+ * mirrors `pathFromDeepLinkUrl`'s https branch (lib/deepLinkUrl.ts) exactly:
+ * https only, exact host, a real router path (a leading `//` is a
+ * protocol-relative URL naming another origin, not a path), never bare `/`.
+ */
+function internalAppLinkPath(value, host) {
+  if (!host) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:") return null;
+    if (url.hostname.toLowerCase() !== String(host).toLowerCase()) return null;
+    const path = url.pathname + url.search + url.hash;
+    if (!path.startsWith("/") || /^\/[\\/]/.test(path)) return null;
+    // A bare domain open ("/") is not a deep link; leave it to the shell's
+    // ordinary external handling rather than a self-navigation to the app root.
+    return path === "/" ? null : path;
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { isArmadaAppUrl, isExternallyOpenableUrl, internalAppLinkPath };

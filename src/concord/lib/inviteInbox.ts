@@ -186,18 +186,23 @@ export async function queryStoredInvites(
 }
 
 /**
- * Persist decrypted invites addressed to `recipient` (fire-and-forget).
- * Failures are swallowed.
+ * Persist decrypted invites addressed to `recipient`. Failures are swallowed.
+ *
+ * Returns the settling promise so a caller that must re-read the store right
+ * after (the live wire wake) can await the write and see its own row; existing
+ * fire-and-forget callers simply don't await it.
  */
 export function writeStoredInvites(
   recipient: string,
   records: { wrap: NostrEvent; unwrapped: UnwrappedInvite }[],
-): void {
-  if (records.length === 0) return;
+): Promise<void> {
+  if (records.length === 0) return Promise.resolve();
   const s = inviteInbox(recipient);
-  void Promise.all(
+  return Promise.all(
     records.map(({ wrap, unwrapped }) => s.event(unwrappedToStored(wrap, unwrapped))),
-  ).catch(() => undefined);
+  )
+    .then(() => undefined)
+    .catch(() => undefined);
 }
 
 // ── Sync cursor ───────────────────────────────────────────────────────────────
@@ -218,4 +223,100 @@ export async function inviteInboxSince(pubkey: string): Promise<number> {
 export async function advanceInviteInboxCursor(pubkey: string, newestWrapCreatedAt: number): Promise<void> {
   const prev = (await readFolded<number>(cursorKey(pubkey))) ?? 0;
   if (newestWrapCreatedAt > prev) await writeFolded(cursorKey(pubkey), newestWrapCreatedAt);
+}
+
+// ── Live invite-wrap buffer ───────────────────────────────────────────────────
+//
+// The wire's standing DM subscription (`{kinds:[1059], "#p":[me]}`) delivers
+// direct-invite wraps too — they are the same kind, distinguished only by the
+// outer `#k`=3313 hint. The wire can't decrypt them (that needs the user's
+// NIP-44 + the consent gate, both owned by the invite hook), so it BUFFERS the
+// in-hand wrap here and rings `c2inv:wrap`, exactly as it buffers a live DM wrap
+// and rings `dm:wrap`. The invite hook drains and decrypts directly — no relay
+// re-fetch (which re-pays NIP-42 auth) — so a received invite lands ~instantly
+// instead of waiting on the 5-minute poll. Ciphertext only, never persisted.
+//
+// A session-seen id set makes buffering idempotent: the wrap filter rewinds
+// `since` by the NIP-59 backdate window, so every fresh round replays recent
+// wraps and only genuinely new arrivals ring the doorbell.
+
+/** Cap on buffered live invite wraps (a burst past this falls back to the poll). */
+const LIVE_INVITE_CAP = 256;
+/** Cap on remembered wrap ids (oldest halves are shed — the poll dedupes deeper). */
+const LIVE_INVITE_SEEN_CAP = 4096;
+const liveInviteWraps = new Map<string, NostrEvent>();
+/** Ids ever accepted into the buffer this session (replay dedupe). */
+const liveInviteSeen = new Set<string>();
+
+function rememberLiveInvite(id: string): void {
+  if (liveInviteSeen.size >= LIVE_INVITE_SEEN_CAP) {
+    let drop = LIVE_INVITE_SEEN_CAP >> 1;
+    for (const old of liveInviteSeen) {
+      liveInviteSeen.delete(old);
+      if (--drop <= 0) break;
+    }
+  }
+  liveInviteSeen.add(id);
+}
+
+/** True when a wrap's NIP-40 `expiration` tag has already passed. */
+function wrapExpired(tags: readonly string[][], nowSecs: number): boolean {
+  for (const [name, value] of tags) {
+    if (name !== "expiration") continue;
+    const at = Number(value);
+    if (Number.isFinite(at) && at <= nowSecs) return true;
+  }
+  return false;
+}
+
+/**
+ * Stash raw invite gift wraps the wire received live. Returns the wraps actually
+ * accepted — ids already seen this session (a replayed round) are skipped, so
+ * the caller can gate the `c2inv:wrap` doorbell on genuinely new arrivals.
+ */
+export function bufferLiveInviteWraps(wraps: NostrEvent[]): NostrEvent[] {
+  const fresh: NostrEvent[] = [];
+  const now = Math.floor(Date.now() / 1000);
+  for (const w of wraps) {
+    // A dead handoff is dropped on arrival — never buffered, never decrypted,
+    // never allowed to ring the doorbell for an invite that no longer exists.
+    if (wrapExpired(w.tags, now)) continue;
+    if (liveInviteSeen.has(w.id)) continue;
+    if (liveInviteWraps.size >= LIVE_INVITE_CAP) continue;
+    rememberLiveInvite(w.id);
+    liveInviteWraps.set(w.id, w);
+    fresh.push(w);
+  }
+  return fresh;
+}
+
+/**
+ * Put drained wraps BACK (a consent-gate decline deferred the decrypt). This
+ * bypasses the session-seen skip — the ids were marked seen when first
+ * buffered — so a later allow / the poll backstop can drain them again.
+ */
+export function rebufferLiveInviteWraps(wraps: NostrEvent[]): void {
+  for (const w of wraps) {
+    if (liveInviteWraps.size >= LIVE_INVITE_CAP && !liveInviteWraps.has(w.id)) continue;
+    liveInviteWraps.set(w.id, w);
+  }
+}
+
+/** Whether any live invite wraps are currently buffered awaiting a drain. */
+export function hasBufferedLiveInviteWraps(): boolean {
+  return liveInviteWraps.size > 0;
+}
+
+/** Take (and clear) the buffered live invite wraps for decryption by the hook. */
+export function drainLiveInviteWraps(): NostrEvent[] {
+  if (liveInviteWraps.size === 0) return [];
+  const out = [...liveInviteWraps.values()];
+  liveInviteWraps.clear();
+  return out;
+}
+
+/** Reset the buffer AND the session-seen ids (tests only). */
+export function resetLiveInviteWraps(): void {
+  liveInviteWraps.clear();
+  liveInviteSeen.clear();
 }

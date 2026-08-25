@@ -300,6 +300,15 @@ export function SettingsPage() {
   };
 
   /**
+   * Toggle whether the rail shows the automatic strip of recent unread DMs. On
+   * by default — see `showRecentRailDms`. Local config only (synced across
+   * devices); publishes nothing and leaves manually arranged rail DMs untouched.
+   */
+  const setShowRecentRailDms = (value: boolean) => {
+    updateConfig((current) => ({ ...current, showRecentRailDms: value }));
+  };
+
+  /**
    * Toggle whether Discover bypasses the curated author allow-list and shows
    * the unfiltered public firehose. Off by default; on is a foot-gun (see the
    * warning rendered alongside). Local config only (synced across devices);
@@ -728,6 +737,12 @@ export function SettingsPage() {
               description="Show DMs from people you don't follow and haven't written to in a separate Requests list. Turn off to hide them from your inbox entirely."
             >
               <Switch checked={config.showDmRequests} onCheckedChange={setShowDmRequests} />
+            </SettingsRow>
+            <SettingsRow
+              label="Recent DMs in the rail"
+              description="Show your newest unread conversations as a strip at the top of the far-left rail. Turn off to keep only the DMs you've pinned there. Doesn't affect your DM list."
+            >
+              <Switch checked={config.showRecentRailDms} onCheckedChange={setShowRecentRailDms} />
             </SettingsRow>
             <SettingsRow
               label="Typing indicators"
