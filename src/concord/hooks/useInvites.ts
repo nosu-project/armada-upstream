@@ -40,7 +40,7 @@ import { inviteDeliveryRelays, recipientInboxRelays } from "@/concord/lib/invite
 import { publishToAnyRelay } from "@/concord/lib/relayPublish";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { toast } from "@/hooks/useToast";
-import { shareOrigin } from "@/lib/shareOrigin";
+import { linkStoreBase, shareOrigin } from "@/lib/shareOrigin";
 import {
   publishSignedEventToRelays,
   queryExplicitRelaysWithStatus,
@@ -627,7 +627,15 @@ export function useInviteActions(community: Community | undefined) {
       // The URL is decided LOCALLY — the naddr names the freshly minted signer
       // and the fragment carries the freshly minted token, so no write below
       // feeds into it. That is what lets the writes run concurrently.
-      const url = buildInviteUrl(shareOrigin(), link.pk, token, community.relays);
+      //
+      // Store on the re-basable base (the page origin on web, a canonical
+      // sentinel on native/desktop where the runtime origin is unreachable) and
+      // hand out the same URL re-based onto today's share origin — the exact
+      // transform `myLinks` applies to a synced entry, so a fresh mint and a
+      // later read of this same entry agree. Storing a concrete origin here is
+      // what pinned every link to armada.buzz.
+      const storedUrl = buildInviteUrl(linkStoreBase(), link.pk, token, community.relays);
+      const url = shareableInviteUrl(shareOrigin(), storedUrl);
 
       // The member-facing Registry: this creator's live coordinates.
       const mine = new Set(folded?.registriesByCreator.get(user.pubkey) ?? []);
@@ -656,7 +664,11 @@ export function useInviteActions(community: Community | undefined) {
             token: bytesToHex(token),
             signer_sk: bytesToHex(link.sk),
             community_id: community.idHex,
-            url,
+            // Store the re-basable form, not `url` (the concrete-origin one
+            // handed out today): a synced entry is re-based onto each reader's
+            // own share origin, and a stored http(s) origin would short-circuit
+            // that — the pin this fix removes.
+            url: storedUrl,
             ...(label ? { label } : {}),
             created_at: Math.floor(Date.now() / 1000),
             ...(expiresAtMs ? { expires_at: Math.floor(expiresAtMs / 1000) } : {}),
