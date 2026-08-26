@@ -1,14 +1,19 @@
-import { Check, ExternalLink, FileDigit, FileQuestion } from "lucide-react";
+import {
+  Award, BarChart3, CalendarDays, Check, Clock, ExternalLink, FileDigit,
+  FileQuestion, FileText, Film, Gem, Image as ImageIcon, Layers, Mic, Music,
+  Server, Tag, User, Users, Zap,
+} from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
-import type { ReactNode } from "react";
+import type { ComponentType, ReactNode } from "react";
 
 import { DittoIcon } from "@/components/brand/DittoIcon";
 import { ChatContent } from "@/components/chat/ChatContent";
 import { CustomEmojiImg, EmojifiedText } from "@/components/chat/CustomEmoji";
 import { EmojiPackCard } from "@/components/chat/EmojiPackCard";
 import { ProfilePreviewCard } from "@/components/chat/ProfilePreviewCard";
+import { VideoPlayer } from "@/components/chat/VideoPlayer";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAddrEvent, useEvent, type AddrCoords } from "@/hooks/useEvent";
@@ -21,8 +26,9 @@ import { dittoEventUrl } from "@/lib/dittoUrl";
 import { faviconUrl } from "@/lib/faviconUrl";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { getDisplayName } from "@/lib/getDisplayName";
+import { parseImetaMap } from "@/lib/imeta";
 import { tryNaddrEncode, tryNeventEncode } from "@/lib/safeNip19";
-import { displayHost, externalUrl } from "@/lib/sanitizeUrl";
+import { displayHost, externalUrl, sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import { openUrl } from "@/lib/share";
 import { cn } from "@/lib/utils";
 
@@ -42,30 +48,55 @@ interface EmbeddedNoteProps {
   className?: string;
 }
 
-/** Human-readable label for non-text kinds rendered in a quoted card. */
-function kindLabel(kind: number): string | null {
-  switch (kind) {
-    case 0:
-      return "Profile";
-    case 3:
-      return "Follow list";
-    case 6:
-      return "Repost";
-    case 7:
-      return "Reaction";
-    case 1068:
-      return "Poll";
-    case 9735:
-      return "Zap receipt";
-    case 30023:
-      return "Article";
-    case 31922:
-    case 31923:
-      return "Calendar event";
-    default:
-      return null;
-  }
+/** Label + icon for a kind rendered as a compact preview card. */
+interface KindMeta {
+  label: string;
+  Icon?: ComponentType<{ className?: string }>;
 }
+
+/**
+ * Kinds that get a tag-based preview card (cover / title / summary) instead of
+ * running their content — JSON metadata, Markdown, or a media manifest — through
+ * the kind-1 text tokenizer. Text-note kinds (1, 11, 1111, 9, 42, 14, voice,
+ * …) are deliberately absent: those render their body through {@link ChatContent},
+ * which already handles inline media and encrypted attachments. Reactions (7),
+ * polls (1068), and emoji packs (30030) have dedicated branches.
+ */
+const KIND_META: Record<number, KindMeta> = {
+  0: { label: "Profile", Icon: User },
+  3: { label: "Follow list", Icon: Users },
+  6: { label: "Repost" },
+  8: { label: "Badge award", Icon: Award },
+  16: { label: "Repost" },
+  20: { label: "Photo", Icon: ImageIcon },
+  21: { label: "Video", Icon: Film },
+  22: { label: "Short video", Icon: Film },
+  8333: { label: "Zap", Icon: Zap },
+  9735: { label: "Zap receipt", Icon: Zap },
+  10002: { label: "Relay list", Icon: Server },
+  30000: { label: "People list", Icon: Users },
+  30009: { label: "Badge", Icon: Award },
+  30023: { label: "Article", Icon: FileText },
+  30024: { label: "Article draft", Icon: FileText },
+  30040: { label: "Publication", Icon: FileText },
+  30041: { label: "Publication section", Icon: FileText },
+  30054: { label: "Podcast", Icon: Mic },
+  30055: { label: "Podcast trailer", Icon: Mic },
+  30402: { label: "Listing", Icon: Tag },
+  31922: { label: "Calendar event", Icon: CalendarDays },
+  31923: { label: "Calendar event", Icon: CalendarDays },
+  34139: { label: "Playlist", Icon: Music },
+  34236: { label: "Short video", Icon: Film },
+  36787: { label: "Music", Icon: Music },
+  37381: { label: "Magic deck", Icon: Layers },
+  37516: { label: "Treasure", Icon: Gem },
+  39089: { label: "People list", Icon: Users },
+};
+
+/** Photo kinds whose images live in imeta tags (NIP-68). */
+const PHOTO_KINDS = new Set([20]);
+/** Video kinds whose media lives in imeta tags (NIP-71 + vines). */
+const VIDEO_KINDS = new Set([21, 22, 34236]);
 
 /**
  * NIP-21 `nostr:` URI for a resolved event, so the user can copy it and
@@ -141,7 +172,8 @@ function GenericEventCard({ event, sourceUrl, className }: { event: NostrRumor; 
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
   const displayName = getDisplayName(metadata, event.pubkey);
-  const label = kindLabel(event.kind);  // Addressable events often have a title tag worth surfacing.
+  const meta = KIND_META[event.kind];
+  const label = meta?.label ?? null;
   const title = event.tags.find(([name]) => name === "title")?.[1];
 
   // Reactions render their emoji rather than raw content.
@@ -200,7 +232,10 @@ function GenericEventCard({ event, sourceUrl, className }: { event: NostrRumor; 
           </span>
         </div>
 
-        {/* Body */}
+        {/* Body — dispatched by kind: a reaction shows its emoji; a poll its
+            question + options; a non-note kind (article, video, photo,
+            treasure, deck, …) a tag-driven preview card; everything else the
+            note text through the shared renderer. */}
         {reactionEmoji !== null ? (
           <div className="text-2xl">
             {isCustomEmoji(reactionEmoji)
@@ -212,6 +247,10 @@ function GenericEventCard({ event, sourceUrl, className }: { event: NostrRumor; 
               })()
               : isRenderableReactionKey(reactionEmoji) ? reactionEmoji : "❓"}
           </div>
+        ) : event.kind === 1068 ? (
+          <PollCard event={event} />
+        ) : meta ? (
+          <TagPreviewCard event={event} meta={meta} />
         ) : (
           <EmbedTruncatedBody>
             {title && <p className="text-sm font-semibold leading-snug mb-0.5 line-clamp-2">{title}</p>}
@@ -231,6 +270,151 @@ function GenericEventCard({ event, sourceUrl, className }: { event: NostrRumor; 
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Compact preview for a NIP-88 poll (kind 1068): the question, a poll/expiry
+ * chip, and up to four option labels. The options live in `option` tags, which
+ * the kind-1 tokenizer knows nothing about, so the generic text body would show
+ * only the question (or nothing).
+ */
+function PollCard({ event }: { event: NostrRumor }) {
+  const options = useMemo(
+    () =>
+      event.tags
+        .filter(([n]) => n === "option")
+        .map(([, , label]) => (label ?? "").trim())
+        .filter((label) => label.length > 0),
+    [event.tags],
+  );
+  const pollType = event.tags.find(([n]) => n === "polltype")?.[1] ?? "singlechoice";
+  const endsAtTag = event.tags.find(([n]) => n === "endsAt")?.[1];
+  const endsAt = endsAtTag ? Number(endsAtTag) : undefined;
+  const isEnded =
+    typeof endsAt === "number" && Number.isFinite(endsAt) && endsAt < Math.floor(Date.now() / 1000);
+
+  const MAX_OPTIONS = 4;
+  const preview = options.slice(0, MAX_OPTIONS);
+  const remaining = Math.max(0, options.length - MAX_OPTIONS);
+
+  return (
+    <div className="space-y-1.5">
+      {event.content.trim().length > 0 && (
+        <p className="text-sm font-medium leading-snug break-words line-clamp-3">{event.content.trim()}</p>
+      )}
+
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground bg-secondary/60 px-2 py-0.5 rounded-full">
+          <BarChart3 className="size-3" />
+          {pollType === "multiplechoice" ? "Multiple choice" : "Poll"}
+        </span>
+        {isEnded && (
+          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground bg-secondary/60 px-2 py-0.5 rounded-full">
+            <Clock className="size-3" />
+            Ended
+          </span>
+        )}
+      </div>
+
+      {preview.length > 0 && (
+        <div className="space-y-1">
+          {preview.map((label, i) => (
+            <div
+              key={i}
+              className="rounded-md border border-border px-2.5 py-1.5 text-xs text-foreground bg-secondary/20 break-words line-clamp-1"
+            >
+              {label}
+            </div>
+          ))}
+          {remaining > 0 && (
+            <p className="text-[11px] text-muted-foreground pl-1">
+              +{remaining} more option{remaining === 1 ? "" : "s"}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Tag-driven preview card for a non-note kind (article, video, photo,
+ * treasure, magic deck, listing, publication, calendar event, …). Reads
+ * title/summary/cover from tags rather than tokenizing content that is JSON, a
+ * media manifest, or Markdown. Photo/video kinds carry their media in imeta
+ * tags and render it inline; everything else shows a cover thumbnail when one
+ * is present.
+ */
+function TagPreviewCard({ event, meta }: { event: NostrRumor; meta: KindMeta }) {
+  const tag = (name: string) => event.tags.find(([n]) => n === name)?.[1];
+  const title = tag("title") || tag("name") || tag("subject");
+  const summary = tag("summary") || tag("description");
+  const Icon = meta.Icon;
+
+  const imeta = useMemo(() => parseImetaMap(event.tags), [event.tags]);
+  const isVideo = VIDEO_KINDS.has(event.kind);
+  const isPhoto = PHOTO_KINDS.has(event.kind);
+
+  // Ordered media URLs from imeta (NIP-68 photos / NIP-71 videos put their
+  // media there, never in the content body).
+  const media = useMemo(
+    () =>
+      [...imeta.values()]
+        .map((e) => ({ url: sanitizeImageSrc(e.url) ?? undefined, entry: e }))
+        .filter((m): m is { url: string; entry: typeof m.entry } => !!m.url),
+    [imeta],
+  );
+
+  // Cover: an explicit image/cover/thumb tag, else the first imeta poster.
+  const cover = sanitizeImageSrc(tag("image") || tag("cover") || tag("thumb"))
+    ?? (isPhoto ? media[0]?.url : undefined)
+    ?? (media[0]?.entry.thumbnail ? sanitizeImageSrc(media[0].entry.thumbnail) : undefined);
+
+  const firstVideo = isVideo ? media[0] : undefined;
+
+  return (
+    <div className="space-y-1.5 min-w-0">
+      {title && <p className="text-sm font-semibold leading-snug line-clamp-2">{title}</p>}
+
+      {firstVideo ? (
+        <div className="overflow-hidden rounded-xl" onClick={(e) => e.stopPropagation()}>
+          <VideoPlayer
+            src={firstVideo.url}
+            poster={firstVideo.entry.thumbnail}
+            dim={firstVideo.entry.dim}
+            blurhash={firstVideo.entry.blurhash}
+            mime={firstVideo.entry.mime}
+            encryption={firstVideo.entry.encryption}
+          />
+        </div>
+      ) : cover ? (
+        <div className="overflow-hidden rounded-xl">
+          <img
+            src={cover}
+            alt=""
+            className="w-full max-h-[220px] object-cover"
+            loading="lazy"
+            onError={(e) => {
+              (e.currentTarget.parentElement as HTMLElement).style.display = "none";
+            }}
+          />
+        </div>
+      ) : null}
+
+      {summary && (
+        <p className="text-xs text-muted-foreground leading-relaxed line-clamp-3">{summary}</p>
+      )}
+
+      {/* When nothing above surfaced, at least name the kind so the card isn't
+          an empty shell. */}
+      {!title && !summary && !cover && !firstVideo && (
+        <div className="flex items-center gap-2 py-1 text-muted-foreground">
+          {Icon && <Icon className="size-4 shrink-0" />}
+          <span className="text-sm font-medium">{meta.label}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -301,10 +485,14 @@ function EmbedTruncatedBody({ children }: { children: ReactNode }) {
  * a link on another host (e.g. an `njump.me/nevent1…` URL pasted into chat).
  * Clicking it opens the original source. Renders nothing when there is no
  * source URL, or when it's same-host/invalid (`externalUrl`).
+ *
+ * A ditto.pub source is suppressed on purpose: the card already carries a
+ * "View on Ditto" off-ramp footer, so a second chip pointing at the same host
+ * would be redundant.
  */
 function SourceLink({ url }: { url: string | undefined }) {
   const safe = externalUrl(url);
-  if (!safe) return null;
+  if (!safe || displayHost(safe) === "ditto.pub") return null;
   const favicon = faviconUrl(safe);
 
   return (
