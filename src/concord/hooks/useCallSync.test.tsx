@@ -30,6 +30,7 @@ const h = vi.hoisted(() => ({
   entry: undefined as CommunityListEntry | undefined,
   folded: undefined as FoldedControl | undefined,
   coalesced: new Map<string, { state: string; ms: number }>(),
+  dissolvedAtMs: undefined as number | undefined,
 }));
 
 vi.mock("@/hooks/useCall", () => ({
@@ -40,6 +41,7 @@ vi.mock("@/hooks/useCurrentUser", () => ({
 }));
 vi.mock("@/concord/hooks/useControlPlane", () => ({
   useControlFold: () => ({ data: h.folded }),
+  useDissolved: () => ({ data: h.dissolvedAtMs }),
 }));
 vi.mock("@/concord/hooks/useGuestbook", () => ({
   useGuestbook: () => ({ coalesced: h.coalesced }),
@@ -92,6 +94,7 @@ function setup(community: Community, channel: Channel, folded: FoldedControl) {
   h.entry = { community_id: community.idHex, added_at: Date.now() } as unknown as CommunityListEntry;
   h.folded = folded;
   h.coalesced = new Map();
+  h.dissolvedAtMs = undefined;
   const ctx: ConcordVoiceContext = { community, channel, broker: BROKER };
   const onLeave = vi.fn();
   const view = renderHook(() => useCallSync(ctx, onLeave));
@@ -202,6 +205,23 @@ describe("useCallSync", () => {
     view.rerender();
 
     expect(onLeave).toHaveBeenCalledTimes(1);
+    expect(h.join).not.toHaveBeenCalled();
+  });
+
+  it("stays connected when the community is dissolved and its entry drops", () => {
+    const { community, channel, folded } = fixture();
+    const { onLeave, view } = setup(community, channel, folded);
+
+    // The owner's dissolve marks the grave, then removes the vault entry so it
+    // leaves the rail — the same `community === undefined` as the removal test
+    // above, but the dissolved marker keeps the call up (the room key still
+    // derives; dissolution rolls no epoch).
+    h.dissolvedAtMs = Date.now();
+    h.community = undefined;
+    h.entry = undefined;
+    view.rerender();
+
+    expect(onLeave).not.toHaveBeenCalled();
     expect(h.join).not.toHaveBeenCalled();
   });
 

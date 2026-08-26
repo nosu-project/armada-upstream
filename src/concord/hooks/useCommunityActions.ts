@@ -690,14 +690,16 @@ export function useCommunityManagement(community: Community | undefined) {
       if (!results.some((r) => r.status === "fulfilled")) {
         throw new Error("No relay accepted the dissolution.");
       }
-      // Seal the community read-only in place rather than removing the owner's
-      // own list entry: a dissolved community stays viewable (CORD-02 §9), and
-      // each member — the owner included — reaps their own self-encrypted entry
-      // with the explicit "Remove" button when ready. Removing it here made the
-      // entry unresolvable mid-render, blanking `community` and forcing the page
-      // to remount elsewhere, which read as a full refresh. This flips
-      // `useDissolved` locally so the owner's page freezes read-only at once.
+      // Mark the community dissolved locally FIRST, then drop the owner's own
+      // vault entry (which removes it from the rail). Order is load-bearing: an
+      // active call is kept alive by `useCallSync`, which reads a gone entry as
+      // a "removed" hang-up — but a community it already knows is dissolved is a
+      // grave, not a judgment, so it stays connected (the room key still
+      // derives; dissolution rolls no epoch). Setting the dissolved flag before
+      // the entry vanishes means the call watcher sees `dissolved` on the same
+      // render the community goes undefined, and the call rides through.
       await markDissolvedLocally(queryClient, community.idHex, Date.now());
+      await updateList({ type: "remove", communityId: community.idHex });
     },
   });
 
