@@ -98,6 +98,17 @@ const MAX_CATCHUP_CHANNELS = 8;
 const SYNC_TIMEOUT_MS = 30_000;
 /** Per-step network timeout. */
 const STEP_TIMEOUT_MS = 8_000;
+/**
+ * Grace window for the fan-out reads this gate makes: once the first relay in a
+ * batch answers, wait at most this long for the stragglers before moving on
+ * with what we have. The step timeout above is the ceiling for a batch where
+ * NOBODY answers; this is the ceiling for the far more common case where the
+ * reachable relays reply in a few hundred ms and one dead relay would otherwise
+ * hold the phase's "establishing …" line spinning until the full step timeout.
+ * A relay still in flight is left neither answered nor failed, so the
+ * absence-is-non-authoritative semantics the list reads rely on are preserved.
+ */
+const STEP_GRACE_MS = 1_500;
 
 /** A phase of the post-login sync. */
 export type SyncPhase =
@@ -298,6 +309,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
               ...RELAY_LIST_DISCOVERY_RELAYS,
             ]),
             pointerSignal,
+            { graceMs: STEP_GRACE_MS },
           ),
           readStoredCanonicalSelfLists(
             eventStore,
@@ -393,6 +405,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
               authors: [pubkey],
             }],
             deadline,
+            { graceMs: STEP_GRACE_MS },
           ),
           readStoredCanonicalSelfLists(
             eventStore,
@@ -496,6 +509,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
               ...(accountRelays.length > 0 ? [dmConversationIndexFilter(pubkey)] : []),
             ],
             stepSignal(),
+            { graceMs: STEP_GRACE_MS },
           );
           const events = settingsRead.events;
           const expectedSettingsRelays = uniqueRelayUrls(accountRelays);
@@ -634,6 +648,7 @@ export function useInitialSync(pubkey: string | undefined): SyncState {
             accountRelays,
             [{ kinds: [KIND_USER_GROUPS], authors: [pubkey], limit: 1 }],
             groupSignal,
+            { graceMs: STEP_GRACE_MS },
           ),
           readStoredCanonicalSelfLists(
             eventStore,

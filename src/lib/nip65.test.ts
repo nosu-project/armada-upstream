@@ -11,6 +11,7 @@ import {
   parseRelayList,
   publishRelayListEvent,
   queryExplicitRelays,
+  queryExplicitRelaysWithStatus,
   relayListIsNewerThanMetadata,
   relayListVersionIsNewer,
 } from "@/lib/nip65";
@@ -177,6 +178,72 @@ describe("NIP-65 relay lists", () => {
     );
     expect(events).toEqual([]);
     expect(poolQuery).not.toHaveBeenCalled();
+  });
+
+  it("resolves after the grace window once one relay answers, leaving a laggard pending", async () => {
+    vi.useFakeTimers();
+    try {
+      const fast = relayList([["r", "wss://fast.example"]], 6_000);
+      const relay = (url: string) => ({
+        query: () =>
+          url === "wss://slow.example"
+            ? new Promise<NostrEvent[]>((resolve) => {
+                setTimeout(() => resolve([relayList([["r", "wss://slow.example"]], 6_001)]), 10_000);
+              })
+            : Promise.resolve([fast]),
+      });
+      const nostr = { relay };
+
+      const promise = queryExplicitRelaysWithStatus(
+        nostr,
+        ["wss://fast.example", "wss://slow.example"],
+        [{ kinds: [KIND_RELAY_LIST] }],
+        new AbortController().signal,
+        { graceMs: 1_500 },
+      );
+      // Let the fast relay settle, then run out the grace clock.
+      await vi.advanceTimersByTimeAsync(1_500);
+      const result = await promise;
+
+      expect(result.events).toEqual([fast]);
+      expect(result.answered).toEqual(["wss://fast.example"]);
+      // The still-in-flight relay is neither answered nor failed.
+      expect(result.failed).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("without a grace window waits for every relay to settle", async () => {
+    vi.useFakeTimers();
+    try {
+      const fast = relayList([["r", "wss://fast.example"]], 7_000);
+      const slow = relayList([["r", "wss://slow.example"]], 7_001);
+      const relay = (url: string) => ({
+        query: () =>
+          url === "wss://slow.example"
+            ? new Promise<NostrEvent[]>((resolve) => {
+                setTimeout(() => resolve([slow]), 10_000);
+              })
+            : Promise.resolve([fast]),
+      });
+      const nostr = { relay };
+
+      const promise = queryExplicitRelaysWithStatus(
+        nostr,
+        ["wss://fast.example", "wss://slow.example"],
+        [{ kinds: [KIND_RELAY_LIST] }],
+        new AbortController().signal,
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      const result = await promise;
+
+      expect(result.answered.sort()).toEqual(["wss://fast.example", "wss://slow.example"]);
+      expect(result.failed).toEqual([]);
+      expect(result.events).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("fans the exact signed event to each relay and reports partial acceptance", async () => {
