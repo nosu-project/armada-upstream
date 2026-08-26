@@ -819,16 +819,29 @@ function Conversation({
   // is no relay capability to probe — the call button shows for any 1:1 with
   // a NIP-44-capable login. Group threads have no pairwise call, and Note to
   // Self can't ring itself.
-  const { startCall, canCall } = useDmCall();
+  const { startCall, acceptCall, canCall, incoming } = useDmCall();
   const callable = canCall && Boolean(user) && !group && !noteToSelf;
   const inThisCall = Boolean(activeCall?.dmPeer && activeCall.dmPeer === peer);
 
-  // Who else is in this call's room, from the connected room's own roster —
-  // known only while WE are in the call (a blind-broker room has no relay-side
-  // presence; the ring itself is the "call happening" signal).
+  // This peer has a call ringing at us (a fresh offer from a FOLLOWED peer —
+  // DmCallProvider gates the ring to follows). The full-screen ring is a modal
+  // that dismisses and auto-clears after the ring window, so without surfacing
+  // it here too, a peer sitting in the room waiting for us is invisible on the
+  // conversation itself once the modal is gone.
+  const peerCalling = Boolean(incoming && incoming.author === peer && !inThisCall);
+
+  // Who else is in this call's room. While WE are in the call it comes from the
+  // connected room's own roster; before we join, a blind-broker room has no
+  // relay-side presence, so a ringing offer is the only "peer is waiting"
+  // signal there is — surface the caller so the header shows them either way.
   const dmOthersInVoice = useMemo(
-    () => (inThisCall ? voiceRoomPubkeys ?? [] : []).filter((pk) => pk !== user?.pubkey),
-    [inThisCall, voiceRoomPubkeys, user?.pubkey],
+    () =>
+      inThisCall
+        ? (voiceRoomPubkeys ?? []).filter((pk) => pk !== user?.pubkey)
+        : peerCalling
+          ? [peer]
+          : [],
+    [inThisCall, voiceRoomPubkeys, user?.pubkey, peerCalling, peer],
   );
 
   // Lazy decryption: a single IntersectionObserver decrypts placeholder rows as
@@ -982,8 +995,9 @@ function Conversation({
           </h1>
           {!noteToSelf && !group && <BotPill metadata={peerMetadata} />}
         </div>
-        {/* Who's in this DM's voice room (others, not us) — shown whether or
-            not we've joined, so the peer waiting in a call is visible. */}
+        {/* Who's in this DM's voice room (others, not us) — the connected
+            roster while we're in it, or the ringing caller waiting for us
+            before we've joined (see dmOthersInVoice). */}
         {dmOthersInVoice.length > 0 && (
           <VoicePresence participants={dmOthersInVoice} className="text-success/90" />
         )}
@@ -993,14 +1007,19 @@ function Conversation({
               <Button
                 variant="ghost"
                 size="icon"
-                aria-label="Start voice call"
-                className="relative size-8 touch:size-11 shrink-0 text-muted-foreground hover:text-success"
-                onClick={() => void startCall(peer)}
+                aria-label={peerCalling ? "Join voice call" : "Start voice call"}
+                className={cn(
+                  "relative size-8 touch:size-11 shrink-0",
+                  peerCalling
+                    ? "text-success hover:text-success animate-pulse"
+                    : "text-muted-foreground hover:text-success",
+                )}
+                onClick={peerCalling ? () => acceptCall() : () => void startCall(peer)}
               >
                 <Phone className="size-4" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Start voice call</TooltipContent>
+            <TooltipContent>{peerCalling ? "Join voice call" : "Start voice call"}</TooltipContent>
           </Tooltip>
         )}
         {/* Secondary actions overflow into a … menu to keep the bar uncluttered:
