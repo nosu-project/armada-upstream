@@ -76,6 +76,33 @@ export function parseYouTubeTarget(input: string): YouTubeTarget | null {
   return target.videoId || target.playlistId ? target : null;
 }
 
+/**
+ * Extract a tweet/post ID from a Twitter or X URL, or null if not a tweet
+ * link. Handles `twitter.com`, `x.com`, their `www.`/`mobile.` variants, and
+ * the privacy front-ends people paste in their place (nitter, fxtwitter,
+ * vxtwitter and the `fixupx`/`fixvx` domains), all of which mirror the
+ * `/{user}/status/{id}` path — so a rewritten link still renders as a tweet.
+ */
+export function extractTweetId(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, "").replace(/^mobile\./, "");
+    const isTweetHost =
+      host === "twitter.com" ||
+      host === "x.com" ||
+      host === "nitter.net" ||
+      host === "fxtwitter.com" ||
+      host === "fixupx.com" ||
+      host === "vxtwitter.com" ||
+      host === "fixvx.com";
+    if (!isTweetHost) return null;
+    const match = u.pathname.match(/^\/[^/]+\/status\/(\d+)/);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Spotify embed info extracted from an open.spotify.com URL. */
 export interface SpotifyEmbedInfo {
   /** Content type: track, album, playlist, episode, show. */

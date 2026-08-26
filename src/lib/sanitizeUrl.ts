@@ -70,6 +70,42 @@ export function isLocalNetworkUrl(raw: string | undefined | null): boolean {
 }
 
 /**
+ * A sanitized URL that points at another host, or `undefined` when it's
+ * same-host, invalid, or an unsupported scheme.
+ *
+ * Used to decide whether to offer an "open the original source" affordance on
+ * an embed resolved from a link on another host (e.g. an nevent card unfurled
+ * from a `njump.me/nevent1…` URL): a link back into our own origin should
+ * navigate in-app, not pop a new tab. Unlike Ditto's, plain `http:` is allowed
+ * (see {@link sanitizeUrl}), and there is no window.location during SSR/tests,
+ * where any absolute URL is treated as external.
+ */
+export function externalUrl(raw: string | undefined | null): string | undefined {
+  const safe = sanitizeUrl(raw);
+  if (!safe) return undefined;
+  try {
+    if (typeof window !== "undefined" && new URL(safe).host === window.location.host) {
+      return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+  return safe;
+}
+
+/**
+ * Display hostname for a URL (drops a leading `www.`). Falls back to the raw
+ * string when it can't be parsed.
+ */
+export function displayHost(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+/**
  * Validate a URL that is about to become an `<img>`/`<video>` source.
  *
  * The two checks above, in the one combination every image site wants, so the

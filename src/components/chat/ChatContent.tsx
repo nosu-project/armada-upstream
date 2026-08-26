@@ -86,20 +86,54 @@ interface ChatContentProps {
 /** Bech32 charset used by NIP-19 identifiers. */
 const BECH32_CHARS = "023456789acdefghjklmnpqrstuvwxyz";
 
-/** Regex to extract an naddr1 identifier from a URL path (e.g. habla links). */
-const NADDR_IN_URL_REGEX = new RegExp(`naddr1[${BECH32_CHARS}]{10,}`, "i");
+/**
+ * Regex to extract a NIP-19 entity embedded in a URL path — an njump.me /
+ * habla.news / snort style link whose path IS a nostr id. Matches events
+ * (`nevent`/`note`), addressable events (`naddr`), and profiles
+ * (`nprofile`/`npub`). Ordered longest-prefix-first so `nprofile1` isn't
+ * shadowed by a shorter alternative.
+ */
+const NOSTR_IN_URL_REGEX = new RegExp(
+  `(?:nevent1|nprofile1|naddr1|note1|npub1)[${BECH32_CHARS}]{10,}`,
+  "i",
+);
 
-/** Try to extract naddr coordinates from a URL containing an naddr1 identifier. */
-function extractNaddrFromUrl(url: string): AddrCoords | null {
-  const match = url.match(NADDR_IN_URL_REGEX);
+/** A NIP-19 entity found inside a plain URL (njump-style link). */
+type NostrInUrl =
+  | { kind: "event"; eventId: string; relays?: string[]; author?: string }
+  | { kind: "addr"; addr: AddrCoords }
+  | { kind: "profile"; pubkey: string };
+
+/**
+ * Try to extract a nostr entity from a URL whose path encodes one (e.g.
+ * `njump.me/nevent1…`, `habla.news/…/naddr1…`). The decoded entity is
+ * returned so the reader gets a rich card, while the ORIGINAL url is kept by
+ * the caller as a "source" back-link to where it was posted.
+ */
+function extractNostrFromUrl(url: string): NostrInUrl | null {
+  const match = url.match(NOSTR_IN_URL_REGEX);
   if (!match) return null;
   try {
     const decoded = nip19.decode(match[0]);
-    if (decoded.type === "naddr") {
-      return decoded.data as AddrCoords;
+    switch (decoded.type) {
+      case "naddr":
+        return { kind: "addr", addr: decoded.data as AddrCoords };
+      case "note":
+        return { kind: "event", eventId: decoded.data as string };
+      case "nevent":
+        return {
+          kind: "event",
+          eventId: decoded.data.id,
+          relays: decoded.data.relays,
+          author: decoded.data.author,
+        };
+      case "npub":
+        return { kind: "profile", pubkey: decoded.data };
+      case "nprofile":
+        return { kind: "profile", pubkey: decoded.data.pubkey };
     }
   } catch {
-    // invalid naddr
+    // invalid identifier — fall through to a plain link
   }
   return null;
 }
@@ -119,7 +153,7 @@ type ContentToken =
   | { type: "inline-link"; url: string }
   | { type: "mention"; pubkey: string }
   | { type: "text-mention"; pubkey: string; raw: string }
-  | { type: "nevent-embed"; eventId: string; relays?: string[]; author?: string }
+  | { type: "nevent-embed"; eventId: string; relays?: string[]; author?: string; sourceUrl?: string }
   | { type: "naddr-embed"; addr: AddrCoords; url?: string }
   | { type: "nostr-link"; id: string; raw: string }
   | { type: "hashtag"; tag: string; raw: string }
@@ -589,16 +623,30 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           const lineSuffix = nextNewline === -1 ? afterUrl : afterUrl.substring(0, nextNewline);
           const isEndOfLine = lineSuffix.trim() === "";
 
-          const naddrFromUrl = extractNaddrFromUrl(url);
           const isInvite = isInviteUrl(url);
+          // A URL whose path IS a nostr id (njump.me/nevent1…, habla.news/…
+          // /naddr1…) unfolds to the rich card for that entity, keeping the
+          // original url as a "source" back-link. Skipped for invite links,
+          // whose naddr points at encrypted content (handled above).
+          const nostrFromUrl = isInvite ? null : extractNostrFromUrl(url);
           if (isEndOfLine && isInvite) {
             out.push({ type: "invite-embed", url });
           } else if (isInvite) {
             // A mid-sentence invite link stays a plain link — never a generic
             // naddr card (the invite bundle's naddr points at encrypted content).
             out.push({ type: "inline-link", url });
-          } else if (naddrFromUrl) {
-            out.push({ type: "naddr-embed", addr: naddrFromUrl, url });
+          } else if (nostrFromUrl?.kind === "addr") {
+            out.push({ type: "naddr-embed", addr: nostrFromUrl.addr, url });
+          } else if (nostrFromUrl?.kind === "event") {
+            out.push({
+              type: "nevent-embed",
+              eventId: nostrFromUrl.eventId,
+              relays: nostrFromUrl.relays,
+              author: nostrFromUrl.author,
+              sourceUrl: url,
+            });
+          } else if (nostrFromUrl?.kind === "profile") {
+            out.push({ type: "mention", pubkey: nostrFromUrl.pubkey });
           } else if (isEndOfLine) {
             out.push({ type: "link-embed", url });
           } else {
@@ -1147,6 +1195,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
             eventId={token.eventId}
             relays={token.relays}
             authorHint={token.author}
+            sourceUrl={token.sourceUrl}
           />
         );
       }

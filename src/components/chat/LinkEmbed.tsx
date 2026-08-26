@@ -2,8 +2,9 @@ import { ExternalLink } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
+import { TweetEmbed } from "@/components/chat/TweetEmbed";
 import { useLinkPreview } from "@/hooks/useLinkPreview";
-import { extractSpotifyEmbed, extractYouTubeId } from "@/lib/linkEmbed";
+import { extractSpotifyEmbed, extractTweetId, extractYouTubeId } from "@/lib/linkEmbed";
 import { sanitizeImageSrc } from "@/lib/sanitizeUrl";
 import {
   hasNativeYouTubePlayer,
@@ -25,6 +26,7 @@ interface LinkEmbedProps {
 export function LinkEmbed({ url, className }: LinkEmbedProps) {
   const youtubeId = extractYouTubeId(url);
   const spotify = extractSpotifyEmbed(url);
+  const tweetId = extractTweetId(url);
 
   if (youtubeId) {
     return (
@@ -33,6 +35,10 @@ export function LinkEmbed({ url, className }: LinkEmbedProps) {
         <EmbedInfoBar url={url} />
       </div>
     );
+  }
+
+  if (tweetId) {
+    return <TweetEmbed tweetId={tweetId} className={className} />;
   }
 
   if (spotify) {

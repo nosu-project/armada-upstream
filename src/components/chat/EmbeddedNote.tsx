@@ -1,6 +1,8 @@
 import { Check, ExternalLink, FileDigit, FileQuestion } from "lucide-react";
 import { nip19 } from "nostr-tools";
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
+
+import type { ReactNode } from "react";
 
 import { DittoIcon } from "@/components/brand/DittoIcon";
 import { ChatContent } from "@/components/chat/ChatContent";
@@ -16,9 +18,12 @@ import { getAvatarShape } from "@/lib/avatarShape";
 import { writeClipboardText } from "@/lib/clipboard";
 import { getCustomEmojiUrl, isCustomEmoji, isRenderableReactionKey } from "@/lib/customEmoji";
 import { dittoEventUrl } from "@/lib/dittoUrl";
+import { faviconUrl } from "@/lib/faviconUrl";
 import { shortTimeAgo } from "@/lib/formatTime";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { tryNaddrEncode, tryNeventEncode } from "@/lib/safeNip19";
+import { displayHost, externalUrl } from "@/lib/sanitizeUrl";
+import { openUrl } from "@/lib/share";
 import { cn } from "@/lib/utils";
 
 import type { NostrRumor } from "@/lib/nostrRumor";
@@ -30,6 +35,10 @@ interface EmbeddedNoteProps {
   relays?: string[];
   /** Optional author pubkey hint from the nevent1 identifier. */
   authorHint?: string;
+  /** When the embed was unfolded from a link on another host (an
+   *  `njump.me/nevent1…` URL), the original URL — surfaced as a favicon+host
+   *  chip that opens the source. */
+  sourceUrl?: string;
   className?: string;
 }
 
@@ -76,7 +85,7 @@ function eventNostrUri(event: NostrRumor): string | undefined {
 }
 
 /** Inline embedded note card – like a link preview but for Nostr events. */
-export function EmbeddedNote({ eventId, relays, authorHint, className }: EmbeddedNoteProps) {
+export function EmbeddedNote({ eventId, relays, authorHint, sourceUrl, className }: EmbeddedNoteProps) {
   const { data: event, isLoading } = useEvent(eventId, relays, authorHint);
 
   if (isLoading) {
@@ -87,7 +96,7 @@ export function EmbeddedNote({ eventId, relays, authorHint, className }: Embedde
     return <EmbeddedNoteTombstone eventId={eventId} className={className} />;
   }
 
-  return <EmbeddedEventCard event={event} className={className} />;
+  return <EmbeddedEventCard event={event} sourceUrl={sourceUrl} className={className} />;
 }
 
 /** Inline embedded card for an addressable event (naddr). */
@@ -119,16 +128,16 @@ export function EmbeddedNaddr({ addr, className }: { addr: AddrCoords; className
  * `· timeAgo`), the height-capped note content, and a "View on Ditto"
  * off-ramp footer.
  */
-export function EmbeddedEventCard({ event, className }: { event: NostrRumor; className?: string }) {
+export function EmbeddedEventCard({ event, sourceUrl, className }: { event: NostrRumor; sourceUrl?: string; className?: string }) {
   // NIP-30 emoji packs get a dedicated preview + "Add" card rather than the
   // generic event body (whose content is empty — the emojis live in tags).
   if (event.kind === 30030) {
     return <EmojiPackCard event={event} className={className} />;
   }
-  return <GenericEventCard event={event} className={className} />;
+  return <GenericEventCard event={event} sourceUrl={sourceUrl} className={className} />;
 }
 
-function GenericEventCard({ event, className }: { event: NostrRumor; className?: string }) {
+function GenericEventCard({ event, sourceUrl, className }: { event: NostrRumor; sourceUrl?: string; className?: string }) {
   const author = useAuthor(event.pubkey);
   const metadata = author.data?.metadata;
   const displayName = getDisplayName(metadata, event.pubkey);
@@ -204,11 +213,15 @@ function GenericEventCard({ event, className }: { event: NostrRumor; className?:
               : isRenderableReactionKey(reactionEmoji) ? reactionEmoji : "❓"}
           </div>
         ) : (
-          <div className="min-w-0 max-h-64 overflow-hidden">
+          <EmbedTruncatedBody>
             {title && <p className="text-sm font-semibold leading-snug mb-0.5 line-clamp-2">{title}</p>}
-            <ChatContent event={event} className="text-sm leading-relaxed" clampLines={6} disableNoteEmbeds />
-          </div>
+            <ChatContent event={event} className="text-sm leading-relaxed" disableNoteEmbeds />
+          </EmbedTruncatedBody>
         )}
+
+        {/* Source back-link: when this card was unfolded from a link on
+            another host, a favicon+host chip that opens the original. */}
+        <SourceLink url={sourceUrl} />
 
         {/* Off-ramp footer: view on Ditto (left) + copy id (lower-right) */}
         {(dittoHref || nostrUri) && (
@@ -219,6 +232,99 @@ function GenericEventCard({ event, className }: { event: NostrRumor; className?:
         )}
       </div>
     </div>
+  );
+}
+
+/** Height at which an embedded event body collapses behind a "Show more". */
+const EMBED_MAX_HEIGHT = 260;
+
+/**
+ * Height-capped body for a quoted/embedded event. Measures the rendered
+ * content and, when it overflows {@link EMBED_MAX_HEIGHT}, clamps it with a
+ * fade-out and a "Show more"/"Show less" toggle — so a long quoted note gets
+ * an expander rather than the old hard `overflow-hidden` clip that silently
+ * dropped everything past 64 units of height. Short bodies render untouched
+ * with no toggle.
+ *
+ * The renderer inside can't provide its own expander (embeds always pass
+ * `disableNoteEmbeds`, which disables `ChatContent`'s own collapse), so the
+ * height governance lives here at the card level.
+ */
+function EmbedTruncatedBody({ children }: { children: ReactNode }) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const innerRef = useRef<HTMLDivElement>(null);
+
+  const measure = useCallback(() => {
+    const el = innerRef.current;
+    if (el) setOverflowing(el.scrollHeight > EMBED_MAX_HEIGHT + 1);
+  }, []);
+
+  // Re-measure after layout: media and mention names resolve asynchronously
+  // and change whether the body overflows.
+  const measureRef = useCallback((el: HTMLDivElement | null) => {
+    innerRef.current = el;
+    if (el) requestAnimationFrame(measure);
+  }, [measure]);
+
+  return (
+    <div className="min-w-0">
+      <div
+        ref={measureRef}
+        className={cn("relative min-w-0 overflow-hidden", !expanded && "transition-[max-height] duration-200")}
+        style={{ maxHeight: expanded ? undefined : EMBED_MAX_HEIGHT }}
+        onLoad={measure}
+      >
+        {children}
+        {!expanded && overflowing && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-background to-transparent" />
+        )}
+      </div>
+      {overflowing && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded((v) => !v);
+          }}
+          className="mt-0.5 text-xs touch:text-sm font-semibold text-primary hover:underline touch:py-1"
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Favicon + hostname chip shown when an embedded event card was unfolded from
+ * a link on another host (e.g. an `njump.me/nevent1…` URL pasted into chat).
+ * Clicking it opens the original source. Renders nothing when there is no
+ * source URL, or when it's same-host/invalid (`externalUrl`).
+ */
+function SourceLink({ url }: { url: string | undefined }) {
+  const safe = externalUrl(url);
+  if (!safe) return null;
+  const favicon = faviconUrl(safe);
+
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        void openUrl(safe);
+      }}
+      className={cn(
+        "mt-0.5 flex items-center gap-1 max-w-full min-w-0 px-2 py-0.5 rounded-full",
+        "text-xs text-muted-foreground hover:bg-primary/10 hover:text-primary transition-colors",
+      )}
+    >
+      {favicon
+        ? <img src={favicon} alt="" className="size-3.5 shrink-0 rounded-sm object-contain" loading="lazy" />
+        : <ExternalLink className="size-3 shrink-0" />}
+      <span className="truncate">{displayHost(safe)}</span>
+    </button>
   );
 }
 
