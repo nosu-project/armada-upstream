@@ -6,8 +6,8 @@
   "homepage": "https://armada.buzz",
   "desktopName": "buzz.armada.app.desktop",
   "author": {
-    "name": "Armada",
-    "email": "chad@chadwick.site"
+    "name": "Soapbox",
+    "email": "contact@soapbox.pub"
   },
   "license": "AGPL-3.0-only",
   "main": "main.js",
