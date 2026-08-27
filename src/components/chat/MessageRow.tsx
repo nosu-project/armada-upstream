@@ -1,4 +1,4 @@
-import { Loader2, Reply } from "lucide-react";
+import { Reply } from "lucide-react";
 import { memo, useEffect, useState } from "react";
 
 import { ExpirationTimerIcon } from "@/components/chat/ExpirationTimerIcon";
@@ -253,6 +253,9 @@ export const MessageRow = memo(function MessageRow({
       className={cn(
         "group relative flex items-start gap-3 px-2.5 rounded hover:bg-secondary/40 transition-colors hover:z-10 focus-within:z-10",
         continuation ? "py-0.5" : "py-1.5",
+        // A message still in flight pulses the whole row rather than showing a
+        // spinner/glyph — no symbol, just a soft breathe until it settles.
+        pending && "animate-pulse",
         // A held finger on selectable text starts the platform's own selection
         // / callout around the same 500ms, which fires `pointercancel` and eats
         // the long-press before it opens the sheet — intermittently, depending
@@ -396,9 +399,6 @@ export const MessageRow = memo(function MessageRow({
               <span className="text-[10px] text-muted-foreground/60 shrink-0" title="Edited">(edited)</span>
             )}
             {expiresAt !== undefined && <ExpirationClock createdAt={createdAt} expiresAt={expiresAt} />}
-            {pending && (
-              <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground/70" aria-label="Sending" />
-            )}
           </div>
         )}
         {actions && actionsArmed && (
@@ -424,20 +424,15 @@ export const MessageRow = memo(function MessageRow({
           </div>
         )}
         {children}
-        {continuation && (edited || pending) && (
-          // Continuation rows have no header to carry the (edited)/sending
-          // marker, so render it INLINE trailing the body, in normal flow.
-          // (The header rows put the same marker on the name/timestamp line.)
-          // In flow it takes its own space instead of floating over a
-          // neighbour, so it can never ride up and cover the message above the
-          // way the old absolutely-positioned pill did.
+        {continuation && edited && (
+          // Continuation rows have no header to carry the (edited) marker, so
+          // render it INLINE trailing the body, in normal flow. (The header
+          // rows put the same marker on the name/timestamp line.) In flow it
+          // takes its own space instead of floating over a neighbour, so it can
+          // never ride up and cover the message above the way the old
+          // absolutely-positioned pill did.
           <div className="mt-0.5 flex items-center gap-2 leading-none">
-            {edited && (
-              <span className="text-[10px] text-muted-foreground/60 shrink-0" title="Edited">(edited)</span>
-            )}
-            {pending && (
-              <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground/70" aria-label="Sending" />
-            )}
+            <span className="text-[10px] text-muted-foreground/60 shrink-0" title="Edited">(edited)</span>
           </div>
         )}
         {afterBody}
