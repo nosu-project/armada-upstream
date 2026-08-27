@@ -33,6 +33,27 @@ export interface OpenedChat extends OpenedEvent {
   epoch: bigint;
 }
 
+/**
+ * How far ahead of the local clock a message may be dated before the fold HOLDS
+ * it out of the rendered timeline until local time catches up (see the
+ * `nextRevealMs` handling in {@link foldTimeline}).
+ *
+ * A message's `ms` is `created_at*1000 + <ms tag>`, taken on trust from its
+ * author — a desynced sender (or a deliberately future-dated event) otherwise
+ * sorts to the bottom of the timeline into "the future", where it sits stuck,
+ * and any correctly-clocked reply to it renders ABOVE it. Holding it is a
+ * DISPLAY decision, not a drop: the rumor stays in the store and re-enters the
+ * timeline in its rightful place the moment its timestamp is no longer ahead of
+ * now (the app schedules a re-fold for it).
+ *
+ * The window is a small grace, not a skew allowance — ordinary sub-second clock
+ * jitter between two honest clients shouldn't flap a message in and out. It is
+ * far tighter than NIP-17's hour of ingest skew (`MAX_FUTURE_SKEW_SECS`) or the
+ * guestbook's hour-ahead DROP, because this hides rather than discards and
+ * corrects itself in seconds.
+ */
+export const FUTURE_HOLD_MS = 2_000;
+
 // ── Decode-once cache ────────────────────────────────────────────────────────
 
 /** `wrapId|channelIdHex` → opened (or null = remembered failure). Session-scoped.
@@ -261,6 +282,15 @@ export interface ReactionEntry {
 export interface FoldedTimeline {
   /** Surviving messages, sorted by ms ascending. */
   messages: OpenedChat[];
+  /**
+   * The earliest `ms` of a message HELD out of {@link messages} for being dated
+   * more than {@link FUTURE_HOLD_MS} ahead of the fold's clock, or undefined if
+   * none was. The app schedules a re-fold at this instant so the held message
+   * reappears the moment its timestamp is no longer in the future — without it
+   * a future-dated message stays hidden until some unrelated event re-folds the
+   * timeline, the same wake `useActivePause` arms for a bounded pause.
+   */
+  nextRevealMs?: number;
   /**
    * Rumor ids belonging to a visual flood (`floodCluster.ts`) — a DISPLAY hint
    * only, and deliberately not applied to {@link messages}.
@@ -631,7 +661,23 @@ export function foldTimeline(
     list.push(entry);
   }
 
-  const messages = [...byId.values()].sort((a, b) =>
+  // Hold messages dated ahead of the local clock out of the rendered timeline
+  // until their time passes (see FUTURE_HOLD_MS). Derived from the SAME
+  // one-clock-per-fold instant as the expiry gate above (`nowSecs`), so a
+  // message can't be both expired and future within one pass. `nextRevealMs`
+  // is the earliest held `ms`, which the app arms a re-fold for so the message
+  // reappears in its rightful place the instant it is no longer in the future.
+  const holdCeilingMs = nowSecs * 1000 + 999 + FUTURE_HOLD_MS;
+  let nextRevealMs: number | undefined;
+  const visible: OpenedChat[] = [];
+  for (const ev of byId.values()) {
+    if (ev.ms > holdCeilingMs) {
+      if (nextRevealMs === undefined || ev.ms < nextRevealMs) nextRevealMs = ev.ms;
+      continue;
+    }
+    visible.push(ev);
+  }
+  const messages = visible.sort((a, b) =>
     a.ms !== b.ms ? a.ms - b.ms : a.rumorId < b.rumorId ? -1 : 1,
   );
 
@@ -668,6 +714,7 @@ export function foldTimeline(
 
   return {
     messages,
+    ...(nextRevealMs !== undefined ? { nextRevealMs } : {}),
     quarantined,
     paused,
     reactions,
