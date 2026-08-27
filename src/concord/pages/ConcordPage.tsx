@@ -50,6 +50,7 @@ import {
 } from "@/concord/lib/moderationPanes";
 import { reportInboxSecret } from "@/concord/lib/report";
 import { SuspiciousActivityBanner } from "@/concord/components/SuspiciousActivityBanner";
+import { SuspiciousActivityView } from "@/concord/components/SuspiciousActivityView";
 import { useSelfRemove } from "@/concord/hooks/useSelfRemove";
 import { useLinkAuthorityWatch, useLinkFreshnessWatch } from "@/concord/hooks/useInvites";
 import { ChannelSidebarView } from "@/components/layout/ChannelSidebarView";
@@ -185,6 +186,7 @@ const PANE_HEADERS: Record<
   threads: { icon: MessagesSquare, label: "Threads" },
   projects: { icon: FolderGit2, label: "Projects" },
   settings: { icon: Settings, label: "Community settings" },
+  suspicious: { icon: Shield, label: "Suspicious activity" },
 };
 
 /** The community's decrypted icon for the channel-list title. Renders nothing
@@ -3060,7 +3062,7 @@ export function ConcordPage() {
       preChannels={
         user && community ? (
           <>
-            <SuspiciousActivityBanner community={community} channels={channels} folded={folded} ban={moderation.ban} />
+            <SuspiciousActivityBanner community={community} channels={channels} folded={folded} onOpen={() => selectPane("suspicious")} />
             <button
               type="button"
               onClick={() => {
@@ -3659,6 +3661,20 @@ export function ConcordPage() {
                       onPrivatiseChannel={canManageChannels ? handlePrivatiseChannel : undefined}
                       onRotateChannelKey={canRekeyChannel ? handleRotateChannelKey : undefined}
                       onMintAccessRole={canManageRoles ? handleMintAccessRole : undefined}
+                    />
+                  )}
+                </div>
+              ) : view === "suspicious" ? (
+                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-clip overscroll-contain scrollbar-stable pb-safe">
+                  {community && (
+                    <SuspiciousActivityView
+                      community={community}
+                      channels={channels}
+                      folded={folded}
+                      ban={moderation.ban}
+                      kick={(target) => moderation.kick({ target })}
+                      canBan={moderation.canBan}
+                      canKick={moderation.canKick}
                     />
                   )}
                 </div>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { describeAhead, timeTravelers, TIME_TRAVELER_THRESHOLD_MS } from "@/concord/lib/timeTravelers";
+import { describeAhead, timeTravelers, travelerRank, TIME_TRAVELER_THRESHOLD_MS } from "@/concord/lib/timeTravelers";
 import type { OpenedChat } from "@/concord/lib/chat";
 
 let seq = 0;
@@ -99,5 +99,15 @@ describe("describeAhead", () => {
     expect(describeAhead(5 * 60_000)).toBe("5 minutes");
     expect(describeAhead(3 * 60 * 60_000)).toBe("3 hours");
     expect(describeAhead(5 * 24 * 60 * 60_000)).toBe("5 days");
+  });
+});
+
+describe("travelerRank", () => {
+  it("escalates with distance into the future", () => {
+    expect(travelerRank(2 * 60_000)).toBe("Slightly ahead of schedule");
+    expect(travelerRank(30 * 60_000)).toBe("Chrono-drifter");
+    expect(travelerRank(3 * 60 * 60_000)).toBe("Temporal tourist");
+    expect(travelerRank(3 * 24 * 60 * 60_000)).toBe("Certified time traveler");
+    expect(travelerRank(30 * 24 * 60 * 60_000)).toBe("Escaped the timeline");
   });
 });

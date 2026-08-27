@@ -44,6 +44,7 @@ export const CONCORD2_PANES = [
   "reports",
   "roles",
   "settings",
+  "suspicious",
 ] as const;
 export type Concord2Pane = (typeof CONCORD2_PANES)[number];
 
