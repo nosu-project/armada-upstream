@@ -222,6 +222,35 @@ describe("openConcord", () => {
     expect(prepared?.line).toContain("shipped it");
   });
 
+  it("holds a future-dated message: stored, but not announced", async () => {
+    const prepared = await preparePush({
+      scope: "c2",
+      event: streamWrap(chatRumor({ created_at: now() + 3600 })),
+    }, {
+      policy: "generic",
+      self: getPublicKey(generateSecretKey()),
+      knownPeers: [],
+      concord: [stream],
+    });
+    // The timeline HOLDS it until its time comes (FUTURE_HOLD_MS); buzzing now
+    // would notify about a message the reader can't yet see.
+    expect(prepared?.drop).toBe(true);
+  });
+
+  it("announces a message within the future grace window", async () => {
+    const prepared = await preparePush({
+      scope: "c2",
+      event: streamWrap(chatRumor({ created_at: now() + 1 })),
+    }, {
+      policy: "generic",
+      self: getPublicKey(generateSecretKey()),
+      knownPeers: [],
+      concord: [stream],
+    });
+    expect(prepared?.drop).not.toBe(true);
+    expect(prepared?.line).toContain("shipped it");
+  });
+
   it("returns undefined when no configured stream authored the wrap", () => {
     expect(openConcord(streamWrap(chatRumor()), [{ ...stream, pk: "cc".repeat(32) }]))
       .toBeUndefined();

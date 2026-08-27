@@ -14,6 +14,7 @@ import { useUserGroupList } from "@/hooks/useUserGroupList";
 import { parseAuthorEvent, seedAuthorCache, type AuthorResult } from "@/hooks/useAuthor";
 import { isForegroundNotifyReady } from "@/hooks/useForegroundNotificationSettings";
 import { resolveDecryptedImage } from "@/concord/hooks/useDecryptedImage";
+import { FUTURE_HOLD_MS } from "@/concord/lib/stream";
 import { isRoomActive } from "@/lib/activeRooms";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { queryDm17Conversations } from "@/lib/nip17/dm17Store";
@@ -602,6 +603,16 @@ export function useForegroundNotifications(): void {
           "suppressed",
         );
         if (cand.createdAt <= sessionFloor.current) {
+          suppress(initialRoomKey);
+          continue;
+        }
+        // A candidate dated ahead of the local clock is HELD, exactly as the
+        // timeline holds it (`foldTimeline` / FUTURE_HOLD_MS): cueing now would
+        // toast/sound/notify about a message the reader can't yet see, and the
+        // OS would stamp it "in 5m" from its future timestamp. It re-arrives on
+        // its own once its time comes. The tiny grace absorbs sub-second clock
+        // jitter between honest clients (createdAt is seconds).
+        if (cand.createdAt * 1000 > Date.now() + FUTURE_HOLD_MS) {
           suppress(initialRoomKey);
           continue;
         }

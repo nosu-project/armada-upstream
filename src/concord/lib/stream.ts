@@ -216,6 +216,28 @@ export type OpenedWireEvent = OpenedEvent & {
 };
 
 /**
+ * How far ahead of the local clock a chat event may be dated before the client
+ * treats it as "in the future" — HELD out of the rendered timeline
+ * (`foldTimeline`) and never announced as a notification, until local time
+ * catches up.
+ *
+ * A rumor's `ms` (`created_at*1000 + <ms tag>`) is chosen by its author and
+ * bounded nowhere: a desynced sender (or a deliberately future-dated event)
+ * otherwise sorts to the bottom of the timeline into "the future" where it sits
+ * stuck, a correct-clocked reply renders above it, and a notification for it
+ * reads "in 5m" — the OS rendering the raw future timestamp. This is a DISPLAY
+ * grace, not the hour of ingest skew NIP-17 allows (`MAX_FUTURE_SKEW_SECS`):
+ * nothing is dropped, and it self-corrects in seconds. Kept small so ordinary
+ * sub-second clock jitter between honest clients doesn't flap.
+ *
+ * Mirrored by the native notification services (`FUTURE_HOLD_MS` in
+ * `NotificationRelayService.java`, `Concord.futureHoldSecs` in iOS
+ * `Concord.swift`), so a message the timeline holds is the same message the
+ * background writer declines to buzz.
+ */
+export const FUTURE_HOLD_MS = 2_000;
+
+/**
  * Reconstruct the ms timestamp. A missing tag means offset 0; a malformed tag
  * (outside 0..999, non-integer) throws — CORD-02 §5 treats out-of-range `ms`
  * as malformed rather than clamping it, or the excess would smuggle arbitrary

@@ -311,6 +311,13 @@ struct PushProcessor {
         // and the timeline it belongs to has no other copy.
         try? store?.writeConcord(opened, communityId: stream.communityId, now: now)
 
+        // A rumor dated ahead of the local clock is HELD: stored above like
+        // every other message (the timeline hides it until its time comes,
+        // Concord.futureHoldSecs), but never announced. Announcing it now would
+        // buzz for a message the reader can't yet see, and the OS would stamp
+        // the notification "in 5m" from its future createdAt.
+        if opened.createdAt > now + Concord.futureHoldSecs { return .dropped }
+
         // Our own message, sent from another device. The local send marks its
         // own event id, but nothing marks one made elsewhere — only the
         // decrypted author says so, and that is here.

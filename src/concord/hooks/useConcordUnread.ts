@@ -11,6 +11,7 @@ import {
   subscribeQuarantineMemory,
 } from "@/concord/lib/quarantineMemory";
 import { KIND_DELETE, KIND_MESSAGE } from "@/concord/lib/kinds";
+import { FUTURE_HOLD_MS } from "@/concord/lib/stream";
 import type { Channel, Community } from "@/concord/lib/types";
 import { useChatModeration } from "@/concord/hooks/useChannel";
 import { concordReadKey, useReadState } from "@/hooks/useReadState";
@@ -147,9 +148,17 @@ export function useConcordUnread(
       }
       let latest = 0;
       let latestMention = 0;
+      // One clock for the whole scan, so a message crossing the hold boundary
+      // mid-loop can't split it.
+      const holdCeilingMs = Date.now() + FUTURE_HOLD_MS;
       for (const r of rumors) {
         if (r.kind !== KIND_MESSAGE) continue;
         if (r.author === pubkey) continue; // never unread from self
+        // ...nor a message dated ahead of the local clock: the timeline HOLDS
+        // it (foldTimeline / FUTURE_HOLD_MS) until its time comes, and a badge
+        // counting it would mark the channel unread for a message the reader
+        // can't yet see — cleared only once its timestamp catches up.
+        if (r.ms > holdCeilingMs) continue;
         // ...nor from someone muted: the timeline won't render their message,
         // so a badge counting it would be one the channel can never clear.
         if (mutedPubkeys.has(r.author)) continue;

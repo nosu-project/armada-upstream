@@ -24,7 +24,7 @@ import type { PollVote } from "@/lib/polls";
 import { verifyOnchainZapRumor, verifyZapRumor, type ZapEntry } from "@/lib/zaps";
 import { citationFromTags, type AuthorityCitation } from "@/concord/lib/edition";
 import { floodClusters } from "@/concord/lib/floodCluster";
-import { checkChannelBinding, openWrap, type OpenedEvent } from "@/concord/lib/stream";
+import { checkChannelBinding, FUTURE_HOLD_MS, openWrap, type OpenedEvent } from "@/concord/lib/stream";
 import type { Channel } from "@/concord/lib/types";
 
 /** An opened chat event with its verified channel/epoch coordinate. */
@@ -33,26 +33,10 @@ export interface OpenedChat extends OpenedEvent {
   epoch: bigint;
 }
 
-/**
- * How far ahead of the local clock a message may be dated before the fold HOLDS
- * it out of the rendered timeline until local time catches up (see the
- * `nextRevealMs` handling in {@link foldTimeline}).
- *
- * A message's `ms` is `created_at*1000 + <ms tag>`, taken on trust from its
- * author — a desynced sender (or a deliberately future-dated event) otherwise
- * sorts to the bottom of the timeline into "the future", where it sits stuck,
- * and any correctly-clocked reply to it renders ABOVE it. Holding it is a
- * DISPLAY decision, not a drop: the rumor stays in the store and re-enters the
- * timeline in its rightful place the moment its timestamp is no longer ahead of
- * now (the app schedules a re-fold for it).
- *
- * The window is a small grace, not a skew allowance — ordinary sub-second clock
- * jitter between two honest clients shouldn't flap a message in and out. It is
- * far tighter than NIP-17's hour of ingest skew (`MAX_FUTURE_SKEW_SECS`) or the
- * guestbook's hour-ahead DROP, because this hides rather than discards and
- * corrects itself in seconds.
- */
-export const FUTURE_HOLD_MS = 2_000;
+// The future-hold grace lives with the `ms` semantics in stream.ts (a leaf the
+// service-worker bundle already carries); re-exported here where the fold and
+// the tests consume it.
+export { FUTURE_HOLD_MS };
 
 // ── Decode-once cache ────────────────────────────────────────────────────────
 
