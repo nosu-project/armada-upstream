@@ -73,12 +73,21 @@ export function decideCallSync(input: {
   selfBanned: boolean;
   /** Whether a Guestbook Kick postdating this membership names me. */
   selfKicked: boolean;
+  /** Whether this community has been dissolved (terminal, CORD-02 §9). */
+  dissolved: boolean;
 }): CallSyncDecision {
   // A removal is a judgment: hang up regardless of what else has (not) loaded.
   // A kick severs nothing cryptographically — the room key still derives — so
   // this compliance IS the removal, exactly as it is on the chat side.
   if (input.selfBanned) return { action: "leave", reason: "banned" };
   if (input.selfKicked) return { action: "leave", reason: "kicked" };
+  // A dissolved community is a grave, not a judgment against the member:
+  // dissolution rolls no epoch and severs no key, so the connected room stays
+  // derivable and the call finishes on its own terms. The owner's dissolve
+  // then DROPS its vault entry (so it leaves the rail) — which without this
+  // would read below as a "removed" hang-up and boot everyone out of a call
+  // that is still perfectly valid. Terminal, so nothing rolls to rejoin for.
+  if (input.dissolved) return { action: "stay" };
   // The vault has loaded and the community is gone — the member left, or the
   // compliant self-removal already tore the entry down.
   if (input.listLoaded && !input.community) return { action: "leave", reason: "removed" };

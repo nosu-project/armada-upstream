@@ -45,6 +45,80 @@ export interface ExplicitRelayQueryResult {
   failed: string[];
 }
 
+export interface ExplicitQueryOptions {
+  /**
+   * Once the FIRST relay settles, wait at most this long for the rest before
+   * resolving with whatever has answered. A relay still in flight when the
+   * window closes is reported as neither `answered` nor `failed` — its socket
+   * keeps running under `signal`, it simply stops holding the read open. Omit
+   * to wait for every relay (bounded only by `signal`, the pre-existing
+   * behavior).
+   *
+   * The login sync gate passes this so one dead relay in a fan-out (a
+   * `wss://…` that never upgrades) can't hold a phase's "establishing …" line
+   * spinning for the full step timeout after every reachable relay has already
+   * answered. Leaving a laggard OUT of `failed` rather than in it keeps the
+   * conservative direction for list writes: absence stays non-authoritative
+   * (we did not hear from that relay) instead of looking like a hard failure.
+   */
+  graceMs?: number;
+}
+
+type SettleState<T> =
+  | { status: "fulfilled"; value: T }
+  | { status: "rejected" }
+  | { status: "pending" };
+
+/**
+ * Like `Promise.allSettled`, but if `graceMs` is given the whole batch resolves
+ * once the first promise settles plus `graceMs` — promises still outstanding
+ * then are left `pending` (and never rejected on our behalf; their own
+ * rejection is swallowed so nothing dangles).
+ */
+async function settleWithGrace<T>(
+  promises: Promise<T>[],
+  graceMs: number | undefined,
+): Promise<SettleState<T>[]> {
+  const states: SettleState<T>[] = promises.map(() => ({ status: "pending" }));
+  const tracked = promises.map((promise, index) =>
+    promise.then(
+      (value) => {
+        states[index] = { status: "fulfilled", value };
+      },
+      () => {
+        states[index] = { status: "rejected" };
+      },
+    ),
+  );
+  if (!graceMs || tracked.length === 0) {
+    await Promise.all(tracked);
+    return states;
+  }
+  await new Promise<void>((resolve) => {
+    let settled = 0;
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      if (graceTimer !== undefined) clearTimeout(graceTimer);
+      resolve();
+    };
+    for (const track of tracked) {
+      void track.then(() => {
+        settled += 1;
+        if (settled === tracked.length) {
+          finish();
+          return;
+        }
+        // Start the grace clock on the first response, not on construction.
+        if (graceTimer === undefined) graceTimer = setTimeout(finish, graceMs);
+      });
+    }
+  });
+  return states;
+}
+
 interface RelayPublishClient {
   relay(url: string): {
     event(event: NostrEvent, opts: { signal: AbortSignal }): Promise<unknown>;
@@ -187,8 +261,9 @@ export async function queryExplicitRelays(
   relayUrls: Iterable<string>,
   filters: NostrFilter[],
   signal: AbortSignal,
+  opts?: ExplicitQueryOptions,
 ): Promise<NostrEvent[]> {
-  return (await queryExplicitRelaysWithStatus(nostr, relayUrls, filters, signal)).events;
+  return (await queryExplicitRelaysWithStatus(nostr, relayUrls, filters, signal, opts)).events;
 }
 
 /** The status-bearing form used when an empty successful read matters. */
@@ -197,6 +272,7 @@ export async function queryExplicitRelaysWithStatus(
   relayUrls: Iterable<string>,
   filters: NostrFilter[],
   signal: AbortSignal,
+  opts?: ExplicitQueryOptions,
 ): Promise<ExplicitRelayQueryResult> {
   const urls = uniqueRelayUrls(relayUrls);
   // No explicit relays to scope to — e.g. the app relays are switched off and
@@ -212,8 +288,9 @@ export async function queryExplicitRelaysWithStatus(
       return { events: [], answered: [], failed: [] };
     }
   }
-  const settled = await Promise.allSettled(
+  const settled = await settleWithGrace(
     urls.map((url) => nostr.relay(url).query(filters, { signal })),
+    opts?.graceMs,
   );
   const byId = new Map<string, NostrEvent>();
   for (const result of settled) {
@@ -235,12 +312,14 @@ export async function discoverRelayList(
   pubkey: string,
   relayUrls: Iterable<string>,
   signal: AbortSignal,
+  opts?: ExplicitQueryOptions,
 ): Promise<RelayListDiscovery | undefined> {
   return (await discoverRelayListWithStatus(
     nostr,
     pubkey,
     relayUrls,
     signal,
+    opts,
   )).discovery;
 }
 
@@ -250,12 +329,14 @@ export async function discoverRelayListWithStatus(
   pubkey: string,
   relayUrls: Iterable<string>,
   signal: AbortSignal,
+  opts?: ExplicitQueryOptions,
 ): Promise<RelayListDiscoveryRead> {
   const result = await queryExplicitRelaysWithStatus(
     nostr,
     relayUrls,
     [{ kinds: [KIND_RELAY_LIST], authors: [pubkey], limit: 1 }],
     signal,
+    opts,
   );
   const event = newestRelayList(
     result.events.filter((candidate) => candidate.pubkey === pubkey),

@@ -300,6 +300,15 @@ export function SettingsPage() {
   };
 
   /**
+   * Toggle whether the rail shows the automatic strip of recent unread DMs. On
+   * by default — see `showRecentRailDms`. Local config only (synced across
+   * devices); publishes nothing and leaves manually arranged rail DMs untouched.
+   */
+  const setShowRecentRailDms = (value: boolean) => {
+    updateConfig((current) => ({ ...current, showRecentRailDms: value }));
+  };
+
+  /**
    * Toggle whether Discover bypasses the curated author allow-list and shows
    * the unfiltered public firehose. Off by default; on is a foot-gun (see the
    * warning rendered alongside). Local config only (synced across devices);
@@ -536,6 +545,7 @@ export function SettingsPage() {
             </SettingsRow>
             {user && (
               <SettingsRow
+                stack
                 label={userRelayUrls.length > 0 ? "Edit my signed relay list" : "Find or publish my relay list"}
                 description={userRelayUrls.length > 0
                   ? "Changes replace your NIP-65 list only after you press Save and approve the signature."
@@ -557,6 +567,7 @@ export function SettingsPage() {
             )}
             {user && userWriteRelayUrls.length > 0 && (
               <SettingsRow
+                stack
                 label={portableSetup.isConfigured ? "Synchronize setup" : "Set up synchronization"}
                 description={(
                   <>
@@ -698,6 +709,7 @@ export function SettingsPage() {
               <Switch checked={config.useAppDmRelays} onCheckedChange={setUseAppDmRelays} />
             </SettingsRow>
             <SettingsRow
+              stack
               label="Additional app DM relays"
               description="The client-provided DM relays used alongside your general app relays. This synchronized list replaces Armada's built-in DM address."
             >
@@ -728,6 +740,12 @@ export function SettingsPage() {
               description="Show DMs from people you don't follow and haven't written to in a separate Requests list. Turn off to hide them from your inbox entirely."
             >
               <Switch checked={config.showDmRequests} onCheckedChange={setShowDmRequests} />
+            </SettingsRow>
+            <SettingsRow
+              label="Recent DMs in the rail"
+              description="Show your newest unread conversations as a strip at the top of the far-left rail. Turn off to keep only the DMs you've pinned there. Doesn't affect your DM list."
+            >
+              <Switch checked={config.showRecentRailDms} onCheckedChange={setShowRecentRailDms} />
             </SettingsRow>
             <SettingsRow
               label="Typing indicators"
@@ -766,6 +784,7 @@ export function SettingsPage() {
               />
             </SettingsRow>
             <SettingsRow
+              stack
               label="App media servers"
               description="This synchronized list replaces the media-server addresses shipped with the app."
             >

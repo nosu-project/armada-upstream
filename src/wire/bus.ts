@@ -17,6 +17,9 @@
  *     thread needs to re-read
  *   - `dm:wrap`              — the wire saw a live inbound NIP-17 gift wrap it
  *     can't decrypt itself; useDm17 force-syncs to fetch + decrypt + store it
+ *   - `c2inv:wrap`           — the wire buffered a live inbound Concord direct-
+ *     invite gift wrap (kind-1059 `#k`=3313) it can't decrypt; useDirectInvites
+ *     drains the in-hand wrap, decrypts it (consent-gated) and re-reads
  *   - `c2:<channelIdHex>`    — a Concord channel's rumor store changed
  *   - `c2park:<streamPk>`    — a Concord wrap for this stream address was PARKED
  *     (the wire held no key for it); a hook holding that stream's key should

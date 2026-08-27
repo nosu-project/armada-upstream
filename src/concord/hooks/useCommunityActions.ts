@@ -4,7 +4,7 @@ import { verifyEvent } from "nostr-tools/pure";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCommunityEntry, useUpdateCommunityList } from "@/concord/hooks/useCommunityList";
-import { useControlFold, citationFor, invalidateControl, publishEdition } from "@/concord/hooks/useControlPlane";
+import { useControlFold, citationFor, invalidateControl, markDissolvedLocally, publishEdition } from "@/concord/hooks/useControlPlane";
 import { useGuestbookPublisher } from "@/concord/hooks/useGuestbook";
 import { buildJoinRumor, currentGuestbookGroup, sealGuestbook } from "@/concord/lib/guestbook";
 import { useAppContext } from "@/hooks/useAppContext";
@@ -690,6 +690,15 @@ export function useCommunityManagement(community: Community | undefined) {
       if (!results.some((r) => r.status === "fulfilled")) {
         throw new Error("No relay accepted the dissolution.");
       }
+      // Mark the community dissolved locally FIRST, then drop the owner's own
+      // vault entry (which removes it from the rail). Order is load-bearing: an
+      // active call is kept alive by `useCallSync`, which reads a gone entry as
+      // a "removed" hang-up — but a community it already knows is dissolved is a
+      // grave, not a judgment, so it stays connected (the room key still
+      // derives; dissolution rolls no epoch). Setting the dissolved flag before
+      // the entry vanishes means the call watcher sees `dissolved` on the same
+      // render the community goes undefined, and the call rides through.
+      await markDissolvedLocally(queryClient, community.idHex, Date.now());
       await updateList({ type: "remove", communityId: community.idHex });
     },
   });

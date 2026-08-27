@@ -57,7 +57,11 @@ const {
   powerMonitor,
 } = require("electron");
 const { autoUpdater } = require("electron-updater");
-const { isArmadaAppUrl, isExternallyOpenableUrl } = require("./appOrigin");
+const {
+  isArmadaAppUrl,
+  isExternallyOpenableUrl,
+  internalAppLinkPath,
+} = require("./appOrigin");
 const {
   configureAutoUpdater,
   hasDeveloperIdUpdateSignature,
@@ -160,6 +164,16 @@ function installBundleIpc() {
     if (!mainWindow || event.sender !== mainWindow.webContents) return;
     bundleBooted = true;
   });
+
+  // The renderer reports its App Links host (VITE_PUBLIC_WEB_ORIGIN's hostname)
+  // at boot, so the navigation handlers can recognize a link to our own public
+  // host and route it inward instead of out to the browser. Only the main
+  // window may set it — a subframe (a WebXDC sandbox, a link embed) must not
+  // teach the shell to swallow navigations to a host it names.
+  ipcMain.on("armada:register-deep-link-host", (event, host) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents) return;
+    deepLinkHost = typeof host === "string" && host ? host.toLowerCase() : null;
+  });
 }
 
 /**
@@ -228,6 +242,29 @@ async function openExternalUrl(url) {
     console.warn("[shell] could not open external URL", error);
     return false;
   }
+}
+
+// The renderer's App Links host (VITE_PUBLIC_WEB_ORIGIN's hostname), registered
+// over IPC once the web bundle boots. The main process has no other way to know
+// it — the build compiles with empty platform relays and no baked-in origin —
+// so until the renderer reports it, an https link to our own host is treated
+// like any other external URL. A "Copy message link" click reaching the
+// navigation handlers is then recognized as ours and routed inward instead of
+// out to the system browser (there is no OS-level https handoff into a desktop
+// app short of being the default browser).
+let deepLinkHost = null;
+
+/**
+ * Ask the renderer to route an in-app path through its own router.
+ *
+ * Only ever called for a link the renderer itself just produced and clicked, so
+ * the window is up; there is no cold-start buffering to do. A soft navigation
+ * there reuses the warm store, query cache and live subscriptions rather than
+ * reloading the document.
+ */
+function dispatchInternalDeepLink(path) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send("armada:deep-link", path);
 }
 
 // Dark background matching the app theme (index.html theme-color #100b15).
@@ -1298,14 +1335,27 @@ function installNavigationHandlers() {
   app.on("web-contents-created", (_event, contents) => {
     contents.setWindowOpenHandler(({ url }) => {
       if (isAppOrigin(url)) return { action: "allow" };
+      // A link to our own public web host (a copied message/invite link) is
+      // routed through the renderer's router rather than opened in the browser
+      // — the same in-app landing Android/iOS give it, minus an OS handoff a
+      // desktop app can't have. Everything else is still handed to the OS.
+      const internalPath = internalAppLinkPath(url, deepLinkHost);
+      if (internalPath) {
+        dispatchInternalDeepLink(internalPath);
+        return { action: "deny" };
+      }
       void openExternalUrl(url);
       return { action: "deny" };
     });
     contents.on("will-navigate", (event, url) => {
-      if (!isAppOrigin(url)) {
-        event.preventDefault();
-        void openExternalUrl(url);
+      if (isAppOrigin(url)) return;
+      event.preventDefault();
+      const internalPath = internalAppLinkPath(url, deepLinkHost);
+      if (internalPath) {
+        dispatchInternalDeepLink(internalPath);
+        return;
       }
+      void openExternalUrl(url);
     });
     contents.on("will-attach-webview", (event) => {
       // `webviewTag` is off, so this cannot fire. Refuse anyway rather than

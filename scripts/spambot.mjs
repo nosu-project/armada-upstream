@@ -39,6 +39,10 @@
  *   --invite-spam <pubkey>   Send direct invites to this key instead of chat spam
  *   --resolve-only           Resolve the invite, print community + channels, exit
  *   --once                   Post a single message, verify it reads back, exit
+ *   --channel <name>         Target this channel by name for --once (default: first)
+ *   --future-skew <secs>     Stamp posted messages this many seconds in the FUTURE
+ *                            (a desynced/deliberate future-date, to exercise the
+ *                            receiver hold + the "time traveler" moderation flag)
  *
  * Stop: Ctrl-C, or `systemctl --user stop armada-spambot` when running under
  * the bundled systemd unit.
@@ -501,17 +505,26 @@ async function resolveBundle(pool, invite) {
 
 /** Fold the control plane and return public, non-deleted channels. */
 async function discoverChannels(pool, bundle) {
-  // The control plane has split read/write keys: the read key is derived from
-  // the community root, while wraps are authored by the owner's control_pk.
+  // The control plane has split read/write keys. Post-split, the wrap AUTHOR is
+  // the delivered `control_pk` (a control_root-derived signer a joiner can't
+  // derive), while the wraps are still decrypted under the community_root read
+  // key. Pre-split (LEGACY), `control_pk` is absent and its ABSENCE means the
+  // read key's own pubkey IS the address — derivable from the bundle alone.
+  // Mirrors controlViewFromBundle() in src/concord/lib/discoverControlPeek.ts.
   const readKey = controlGroupKey(bundle.community_root, bundle.community_id, bundle.root_epoch);
+  const isSplit = typeof bundle.control_pk === "string" && /^[0-9a-f]{64}$/i.test(bundle.control_pk);
+  const controlAuthor = isSplit ? bundle.control_pk.toLowerCase() : readKey.pk;
   const wraps = await pool.queryAll(
     bundle.relays,
-    { kinds: [KIND_WRAP], authors: [bundle.control_pk] },
-    20000,
+    { kinds: [KIND_WRAP], authors: [controlAuthor] },
+    45000,
   );
+  if (process.env.DEBUG_BUNDLE === "1") {
+    log(`discoverChannels: ${isSplit ? "split" : "legacy"} author=${controlAuthor.slice(0, 12)}… raw wraps from relays: ${wraps.length}`);
+  }
   const editions = new Map(); // eid -> {ev, vsk, content}
   for (const wrap of wraps) {
-    if (wrap.pubkey !== bundle.control_pk || !verifyEvent(wrap)) continue;
+    if (wrap.pubkey !== controlAuthor || !verifyEvent(wrap)) continue;
     try {
       const seal = JSON.parse(nip44Decrypt(wrap.content, readKey.convKey));
       if (seal.kind !== KIND_SEAL_PLAINTEXT) continue;
@@ -529,15 +542,25 @@ async function discoverChannels(pool, bundle) {
     }
   }
   const channels = [];
+  let privateSkipped = 0;
+  let deletedSkipped = 0;
+  // Own testing grounds sometimes have only PRIVATE channels; let a run target
+  // them explicitly. The stream key derives from community_root + channel id
+  // regardless of the private flag, so a post reads back the same way.
+  const includePrivate = process.env.INCLUDE_PRIVATE === "1";
   for (const [eid, ed] of editions) {
     if (ed.vsk !== "2") continue;
     try {
       const def = JSON.parse(ed.content);
-      if (def.deleted || def.private) continue;
-      channels.push({ id: eid, name: def.name ?? "channel" });
+      if (def.deleted) { deletedSkipped += 1; continue; }
+      if (def.private && !includePrivate) { privateSkipped += 1; continue; }
+      channels.push({ id: eid, name: def.name ?? "channel", private: Boolean(def.private) });
     } catch {
       // skip
     }
+  }
+  if (channels.length === 0) {
+    log(`discoverChannels: ${editions.size} edition(s), ${privateSkipped} private skipped, ${deletedSkipped} deleted (set INCLUDE_PRIVATE=1 to include private)`);
   }
   return channels;
 }
@@ -834,7 +857,7 @@ function decodePubkey(s) {
 }
 
 function parseArgs(argv) {
-  const opts = { intervalMs: 3000, content: "gibberish", once: false, resolveOnly: false, invite: undefined, inviteSpam: undefined };
+  const opts = { intervalMs: 3000, content: "gibberish", once: false, resolveOnly: false, invite: undefined, inviteSpam: undefined, futureSkewSecs: 0 };
   const args = [...argv];
   while (args.length) {
     const a = args.shift();
@@ -848,6 +871,17 @@ function parseArgs(argv) {
         opts.content = v;
         break;
       }
+      case "--future-skew":
+        // Stamp posted chat messages this many SECONDS ahead of the real clock
+        // (a desynced sender / deliberate future-date). Exercises the receiver
+        // hold + the "TIME TRAVELER DETECTED" moderation flag.
+        opts.futureSkewSecs = Number(args.shift());
+        if (!Number.isFinite(opts.futureSkewSecs)) throw new Error("--future-skew must be a number of seconds");
+        break;
+      case "--channel":
+        // Target a specific channel by name (case-insensitive) for --once.
+        opts.channel = args.shift();
+        break;
       case "--invite-spam":
         opts.inviteSpam = decodePubkey(args.shift());
         break;
@@ -1022,7 +1056,7 @@ async function resolveInboxRelays(pool, recipientPk) {
   return [...STOCK_RELAYS];
 }
 
-async function postChat(pool, bundle, channel, identity, content) {
+async function postChat(pool, bundle, channel, identity, content, skewSecs = 0) {
   const stream = channelGroupKey(bundle.community_root, channel.id, bundle.root_epoch);
   const rumor = buildRumor({
     kind: KIND_CHAT,
@@ -1032,7 +1066,7 @@ async function postChat(pool, bundle, channel, identity, content) {
       ["epoch", String(bundle.root_epoch)],
     ],
     pubkey: identity.pk,
-    ms: Date.now(),
+    ms: Date.now() + skewSecs * 1000,
   });
   const wrap = sealAndWrap(rumor, stream, identity.sk);
   return { wrap, rumor, result: await pool.publishToAny(bundle.relays, wrap) };
@@ -1144,11 +1178,18 @@ async function main() {
   let channels = [];
   const pool = new RelayPool(() => {
     const signers = [identity.sk];
-    if (bundle && channels.length) {
+    if (bundle) {
+      // The control READ key's sk — for a LEGACY community this pubkey is also
+      // the control stream address, so we can NIP-42 AUTH as it to read control
+      // wraps off a relay that gates kind 1059 (ditto: AUTH_KINDS=4,1059).
+      // Registered as soon as the bundle resolves, BEFORE discoverChannels
+      // queries that author — a lazy signer gated on channels.length would race
+      // the very REQ that needs it. (A SPLIT community's control_pk is
+      // address-only; we hold no sk for it and can't AUTH as it — by design.)
+      signers.push(controlGroupKey(bundle.community_root, bundle.community_id, bundle.root_epoch).sk);
       for (const ch of channels) {
         signers.push(channelGroupKey(bundle.community_root, ch.id, bundle.root_epoch).sk);
       }
-      signers.push(controlGroupKey(bundle.community_root, bundle.community_id, bundle.root_epoch).sk);
     }
     return signers;
   });
@@ -1195,16 +1236,20 @@ async function main() {
   if (channels.length === 0) throw new Error("no public channels to spam");
 
   if (opts.once) {
-    const channel = channels[0];
+    const channel = opts.channel
+      ? channels.find((c) => c.name.toLowerCase() === opts.channel.toLowerCase())
+      : channels[0];
+    if (!channel) throw new Error(`channel #${opts.channel} not found (have: ${channels.map((c) => c.name).join(", ")})`);
     const content = makeContent(opts) ?? generateMessage();
-    log(`posting test message to #${channel.name} from ${identity.pk.slice(0, 12)}…`);
+    const skew = opts.futureSkewSecs || 0;
+    log(`posting test message to #${channel.name} from ${identity.pk.slice(0, 12)}…${skew ? ` (future-skew +${skew}s)` : ""}`);
     const profRes = await publishProfile(pool, bundle.relays, identity);
     log(`kind-0 profile: ${profRes.ok ? "ok" : `FAILED (${profRes.message})`}`);
     const joinRes = await guestbookJoin(pool, bundle, identity);
     log(`guestbook join: ${joinRes.ok ? "ok" : `FAILED (${joinRes.message})`}`);
-    const { wrap, rumor, result } = await postChat(pool, bundle, channel, identity, content);
+    const { wrap, rumor, result } = await postChat(pool, bundle, channel, identity, content, skew);
     if (!result.ok) throw new Error(`publish failed: ${result.message}`);
-    log(`accepted: ${wrap.id}`);
+    log(`accepted: ${wrap.id} (rumor created_at ${rumor.created_at}, ${new Date(rumor.created_at * 1000).toISOString()})`);
     // Read it back end-to-end: fetch the wrap and decrypt both layers.
     const stream = channelGroupKey(bundle.community_root, channel.id, bundle.root_epoch);
     await sleep(1500);

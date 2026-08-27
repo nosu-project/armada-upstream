@@ -244,6 +244,10 @@ export function useChannelTimeline(
   const windowLimitRef = useRef(WINDOW_SIZE);
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+  // Bumped when a held future-dated message's time arrives, to re-run the fold
+  // (which reads Date.now()) so the message re-enters the timeline. See the
+  // `folded.nextRevealMs` effect below — the same wake `useActivePause` arms.
+  const [revealTick, setRevealTick] = useState(0);
 
   useEffect(() => {
     windowLimitRef.current = WINDOW_SIZE;
@@ -565,6 +569,7 @@ export function useChannelTimeline(
 
   const folded: FoldedTimeline = useMemo(() => {
     void memoryRev;
+    void revealTick;
     const result = foldTimeline(raw, moderation, {
       ...(readingUser?.pubkey !== undefined ? { self: readingUser.pubkey } : {}),
       ...(firstSeen ? { firstSeen } : {}),
@@ -595,7 +600,29 @@ export function useChannelTimeline(
       return { ...merged, messages: merged.messages.filter((m) => !hidden.has(m.rumorId)) };
     }
     return merged;
-  }, [raw, moderation, optimisticDeleted, readingUser?.pubkey, firstSeen, establishedSinceMs, pauseSince, community?.idHex, channelIdHex, memoryRev]);
+  }, [raw, moderation, optimisticDeleted, readingUser?.pubkey, firstSeen, establishedSinceMs, pauseSince, community?.idHex, channelIdHex, memoryRev, revealTick]);
+
+  // A future-dated message the fold HELD (`foldTimeline` / FUTURE_HOLD_MS) is
+  // hidden until its `ms` is no longer ahead of now. Nothing else re-renders
+  // this timeline on its behalf — the fold's inputs don't change and no event
+  // arrives — so schedule a wake at that instant, exactly as `useActivePause`
+  // does for a bounded pause's `until`. Bumping `revealTick` re-runs the fold,
+  // which reads Date.now() afresh and lets the message back in.
+  const nextRevealMs = folded.nextRevealMs;
+  useEffect(() => {
+    if (nextRevealMs === undefined) return;
+    // +1ms so the wake lands strictly PAST the ceiling the fold compares
+    // against, or it could re-arm on a message still a hair in the future.
+    const ms = nextRevealMs - Date.now() + 1;
+    if (ms <= 0) {
+      setRevealTick((n) => n + 1);
+      return;
+    }
+    // setTimeout's ceiling: a message dated absurdly far out (weeks) would
+    // otherwise fire immediately; clamp and re-arm via the tick.
+    const t = setTimeout(() => setRevealTick((n) => n + 1), Math.min(ms, 2_147_483_647));
+    return () => clearTimeout(t);
+  }, [nextRevealMs]);
 
   // Remember what this fold decided (merge-only), so the verdict survives the
   // session even when its evidence — history, arrival order, the wave around

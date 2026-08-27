@@ -749,3 +749,177 @@ describe("foldTimeline — community pause (CORD-04 §8)", () => {
     expect(folded.quarantined.has(m.rumorId)).toBe(false);
   });
 });
+
+describe("foldTimeline — holding future-dated messages", () => {
+  let fseq = 0;
+  const msg = (content: string, ms: number, extra: string[][] = []): OpenedChat => {
+    fseq += 1;
+    return {
+      rumorId: `f${fseq}`,
+      author: "member",
+      kind: KIND_MESSAGE,
+      content,
+      tags: extra,
+      ms,
+      createdAt: Math.floor(ms / 1000),
+      channelIdHex,
+      epoch: 0n,
+    };
+  };
+
+  it("holds a message dated ahead of the local clock and reports its ms for a re-fold", () => {
+    const now = Date.now();
+    const here = msg("here", now - 60_000);
+    const future = msg("future", now + 3_600_000);
+
+    const folded = foldTimeline([here, future]);
+
+    // The future message is HELD out of the rendered timeline, not dropped.
+    expect(folded.messages.map((m) => m.content)).toEqual(["here"]);
+    // Its ms is surfaced so the app can schedule the reveal.
+    expect(folded.nextRevealMs).toBe(future.ms);
+  });
+
+  it("reveals a message once its timestamp is no longer in the future", () => {
+    const now = Date.now();
+    // Within the grace window: not ahead enough to hold.
+    const arrived = msg("arrived", now);
+    const folded = foldTimeline([arrived]);
+    expect(folded.messages.map((m) => m.content)).toEqual(["arrived"]);
+    expect(folded.nextRevealMs).toBeUndefined();
+  });
+
+  it("keeps a correctly-clocked reply from rendering above its future-dated parent", () => {
+    // The reported bug: a parent dated in the future sorts to the bottom of the
+    // timeline, and a reply with a correct (earlier) ms renders ABOVE it.
+    // Holding the future parent removes the artifact — nothing sorts above a
+    // row that isn't there, and the parent reappears in place when its time
+    // comes.
+    const now = Date.now();
+    const parent = msg("from the future", now + 3_600_000);
+    const reply = msg("replying now", now - 1_000, [["q", parent.rumorId, "", "member"]]);
+
+    const folded = foldTimeline([parent, reply]);
+
+    // Only the reply shows; the future parent is held (would otherwise be the
+    // last row, with the reply stranded above it).
+    expect(folded.messages.map((m) => m.content)).toEqual(["replying now"]);
+    expect(folded.nextRevealMs).toBe(parent.ms);
+  });
+
+  it("reports the EARLIEST held ms when several messages are in the future", () => {
+    const now = Date.now();
+    const soon = msg("soon", now + 10_000);
+    const later = msg("later", now + 60_000);
+
+    const folded = foldTimeline([later, soon]);
+
+    expect(folded.messages).toHaveLength(0);
+    // The wake arms for the nearest reveal; the rest follow on the next fold.
+    expect(folded.nextRevealMs).toBe(soon.ms);
+  });
+
+  it("absorbs ordinary sub-second clock jitter within the grace window", () => {
+    const now = Date.now();
+    // A hair ahead — an honest clock a few hundred ms fast shouldn't flap.
+    const jitter = msg("barely ahead", now + 500);
+    const folded = foldTimeline([jitter]);
+    expect(folded.messages.map((m) => m.content)).toEqual(["barely ahead"]);
+    expect(folded.nextRevealMs).toBeUndefined();
+  });
+});
+
+describe("foldTimeline — replies never precede their parent", () => {
+  it("places an inline reply after its parent even when its clock stamped it earlier", async () => {
+    const channel = makeChannel();
+    const alice = signer();
+    const bob = signer();
+
+    // The parent is stamped LATER than the reply — bob's clock runs behind, so
+    // his reply carries the smaller ms. A raw ms sort would float it above the
+    // message it answers, which is causally impossible.
+    const parent = chatRumor(alice, KIND_MESSAGE, "the question", 2000);
+    const reply = chatRumor(bob, KIND_MESSAGE, "the answer", 1000, [["q", parent.id, "", alice.pubkey]]);
+
+    const folded = foldTimeline(
+      await openChatBatch(await Promise.all([wrapChat(parent, channel, alice), wrapChat(reply, channel, bob)]), channel),
+    );
+
+    expect(folded.messages.map((m) => m.content)).toEqual(["the question", "the answer"]);
+  });
+
+  it("keeps a reply after its parent when their timestamps are equal", async () => {
+    const channel = makeChannel();
+    const alice = signer();
+    const bob = signer();
+    const parent = chatRumor(alice, KIND_MESSAGE, "parent", 1500);
+    const reply = chatRumor(bob, KIND_MESSAGE, "reply", 1500, [["q", parent.id, "", alice.pubkey]]);
+
+    const folded = foldTimeline(
+      await openChatBatch(await Promise.all([wrapChat(parent, channel, alice), wrapChat(reply, channel, bob)]), channel),
+    );
+
+    // Equal ms would fall to the arbitrary rumorId tiebreak; the depth nudge
+    // keeps the reply below its parent regardless of which id sorts first.
+    expect(folded.messages.map((m) => m.content)).toEqual(["parent", "reply"]);
+  });
+
+  it("orders a chain of replies each after the one before it", async () => {
+    const channel = makeChannel();
+    const a = signer();
+    const b = signer();
+    const c = signer();
+    // Every reply stamped earlier than the message it answers.
+    const m1 = chatRumor(a, KIND_MESSAGE, "one", 3000);
+    const m2 = chatRumor(b, KIND_MESSAGE, "two", 2000, [["q", m1.id, "", a.pubkey]]);
+    const m3 = chatRumor(c, KIND_MESSAGE, "three", 1000, [["q", m2.id, "", b.pubkey]]);
+
+    const folded = foldTimeline(
+      await openChatBatch(
+        await Promise.all([wrapChat(m1, channel, a), wrapChat(m2, channel, b), wrapChat(m3, channel, c)]),
+        channel,
+      ),
+    );
+
+    expect(folded.messages.map((m) => m.content)).toEqual(["one", "two", "three"]);
+  });
+
+  it("leaves ordinary (in-order) replies exactly where ms puts them", async () => {
+    const channel = makeChannel();
+    const alice = signer();
+    const bob = signer();
+    const parent = chatRumor(alice, KIND_MESSAGE, "first", 1000);
+    const reply = chatRumor(bob, KIND_MESSAGE, "second", 2000, [["q", parent.id, "", alice.pubkey]]);
+    const other = chatRumor(alice, KIND_MESSAGE, "third", 3000);
+
+    const folded = foldTimeline(
+      await openChatBatch(
+        await Promise.all([
+          wrapChat(parent, channel, alice),
+          wrapChat(reply, channel, bob),
+          wrapChat(other, channel, alice),
+        ]),
+        channel,
+      ),
+    );
+
+    expect(folded.messages.map((m) => m.content)).toEqual(["first", "second", "third"]);
+  });
+
+  it("keeps its own ms when the quoted message is not in the window", async () => {
+    const channel = makeChannel();
+    const bob = signer();
+    // A reply whose parent isn't loaded (out of window / held / never fetched):
+    // nothing to sort after, so it stays at its own timestamp.
+    const orphan = chatRumor(bob, KIND_MESSAGE, "orphan reply", 1000, [["q", "ab".repeat(32), "", bob.pubkey]]);
+    const other = chatRumor(bob, KIND_MESSAGE, "later", 2000);
+
+    const folded = foldTimeline(
+      await openChatBatch(await Promise.all([wrapChat(orphan, channel, bob), wrapChat(other, channel, bob)]), channel),
+    );
+
+    expect(folded.messages.map((m) => m.content)).toEqual(["orphan reply", "later"]);
+  });
+});
+
+

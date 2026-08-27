@@ -190,6 +190,12 @@ interface ArmadaDesktopBridge {
   encryptSecret?: (plaintext: string) => Promise<string | null>;
   decryptSecret?: (base64: string) => Promise<string | null>;
   signalWebReady?: () => void;
+  // Optional for the same reason: a copied message/invite link clicked inside
+  // an OLDER shell has no interception path and simply opens in the browser as
+  // it did before. The renderer reports its App Links host at boot, and the
+  // shell hands back the router path of a link to that host it caught.
+  registerDeepLinkHost?: (host: string) => void;
+  onDeepLink?: (handler: (path: string) => void) => () => void;
   armadaDb?: ArmadaDesktopDb;
 }
 
@@ -760,6 +766,34 @@ export function signalDesktopWebReady(): void {
   } catch {
     // An older shell, or a bridge torn down mid-shutdown. The shell's grace
     // period simply expires; never let this break first paint.
+  }
+}
+
+/**
+ * Tell the desktop shell which host our shareable links are built on, so it can
+ * catch a link to that host clicked inside the app (a copied message or invite
+ * link) and route it through the router instead of the system browser. No-op on
+ * the web and in a shell older than the bridge method.
+ */
+export function registerDesktopDeepLinkHost(host: string): void {
+  try {
+    desktop()?.registerDeepLinkHost?.(host);
+  } catch {
+    // An older shell without the interception path; the link opens in the
+    // browser as before. Never let this break boot.
+  }
+}
+
+/**
+ * Subscribe to in-app deep links the desktop shell intercepted. The handler
+ * receives the router path. Returns an unsubscribe; a no-op on the web or in an
+ * older shell.
+ */
+export function onDesktopDeepLink(handler: (path: string) => void): () => void {
+  try {
+    return desktop()?.onDeepLink?.(handler) ?? (() => {});
+  } catch {
+    return () => {};
   }
 }
 

@@ -312,6 +312,42 @@ final class StorelessTests: XCTestCase {
         XCTAssertEqual(prepared?.drop, true, "a banned member's message must not notify")
     }
 
+    /// A message dated ahead of the local clock is HELD, not announced: the
+    /// timeline hides it until its time comes (`Concord.futureHoldSecs`), so
+    /// buzzing now would notify about a message the reader can't yet see, and
+    /// the OS would stamp it "in 5m" from the future createdAt. Mirrors the web
+    /// worker's `prepareConcord` and the Android service's FUTURE_HOLD_MS.
+    func testHoldsAFutureDatedConcordMessage() {
+        let concord = vectorObject("concord")
+        let stream = ConcordStream(
+            pubkey: concord["streamPk"] as! String,
+            conversationKey: concord["convKey"] as! String,
+            epoch: concord["epoch"] as! String,
+            communityId: "cc",
+            channelId: concord["channelId"] as! String,
+            banned: []
+        )
+        let config = PushConfig(
+            policy: .generic, selfPubkey: self_, knownPeers: [], secretKey: nil,
+            nip46: nil, concord: [stream]
+        )
+        let wrap = ["scope": "c2", "event": concord["wrap"] as! [String: Any]]
+        // A clock well behind the vector's rumor: it reads as future and holds.
+        XCTAssertEqual(
+            PushProcessor(store: nil, config: config, now: 1_699_000_000)
+                .prepare(userInfo: wrap)?.drop,
+            true,
+            "a future-dated message must not notify"
+        )
+        // Baseline: with the clock at/after the rumor, the same wrap notifies.
+        XCTAssertNotEqual(
+            PushProcessor(store: nil, config: config, now: 1_700_000_000)
+                .prepare(userInfo: wrap)?.drop,
+            true,
+            "a message no longer in the future must notify"
+        )
+    }
+
     /// A channel at "mentions only" wakes iOS for every message (the gateway
     /// can't read the encrypted wrap), so the extension — which decrypts — must
     /// drop a message that doesn't `#p`-tag the viewer. Mirrors the Android

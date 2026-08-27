@@ -33,12 +33,25 @@ const EMPTY_TALLIES: ReactionTally[] = [];
  * So: whatever is painted, paint it. The skeleton means "nothing to show yet
  * and a local read is still running", which is the only claim it can honestly
  * make — a plane still reading will drop its rows into the merge when it lands.
+ *
+ * One extra hold, and only one: until NIP-17's first LOCAL paint has resolved
+ * (`dm17FirstPaintReady`). The two planes seed their first frame asymmetrically
+ * — kind-4 from a SYNCHRONOUS localStorage snapshot (frame 0), NIP-17 from an
+ * async KV prewarm a hop later — so a thread living on both planes would flash
+ * its kind-4 half alone and then reflow as the NIP-17 rows dropped in beneath
+ * it. Holding the merged skeleton across that one hop lets both snapshots paint
+ * together. It is bounded by the PREWARM's single KV read (hit or miss), never
+ * the store read's first-of-session legacy drain — the flag flips the moment
+ * the prewarm settles, so this can never resurrect the stuck-skeleton the rest
+ * of this gate exists to prevent.
  */
 export function shouldShowDmTimelineLoading(
   mergedMessageCount: number,
   kind4Loading: boolean,
   dm17Loading: boolean,
+  dm17FirstPaintReady: boolean,
 ): boolean {
+  if (!dm17FirstPaintReady) return true;
   if (mergedMessageCount > 0) return false;
   return kind4Loading || dm17Loading;
 }
@@ -448,6 +461,7 @@ export function useDmTransport(
     chatMessages.length,
     isLoading,
     dm17.isLoading,
+    dm17.firstPaintReady,
   );
 
   const transport = useMemo<ChatTransport>(

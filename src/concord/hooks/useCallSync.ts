@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 
 import { useCommunity, useCommunityEntry, useCommunityList } from "@/concord/hooks/useCommunityList";
-import { useControlFold } from "@/concord/hooks/useControlPlane";
+import { useControlFold, useDissolved } from "@/concord/hooks/useControlPlane";
 import { useGuestbook } from "@/concord/hooks/useGuestbook";
 import { banVerdictPostdatesMembership, decideCallSync } from "@/concord/lib/callSync";
 import { channelsView } from "@/concord/lib/community";
@@ -40,6 +40,10 @@ export function useCallSync(ctx: ConcordVoiceContext, onLeave: () => void): void
   const entry = useCommunityEntry(ctx.community.idHex);
   const { data: folded } = useControlFold(community);
   const { coalesced } = useGuestbook(community);
+  // Keyed on the join-time snapshot, not the live `community` (which goes
+  // undefined the moment the owner's dissolve drops the vault entry) — the
+  // grave outlives the entry, and the check below must still see it.
+  const { data: dissolvedAtMs } = useDissolved(ctx.community);
   const channels = useMemo(() => (community ? channelsView(community, folded) : []), [community, folded]);
   const acted = useRef(false);
 
@@ -62,6 +66,7 @@ export function useCallSync(ctx: ConcordVoiceContext, onLeave: () => void): void
         folded?.ownerHex,
         entry?.added_at,
       ),
+      dissolved: Boolean(dissolvedAtMs),
     });
     if (decision.action === "stay") return;
     acted.current = true;
@@ -77,5 +82,5 @@ export function useCallSync(ctx: ConcordVoiceContext, onLeave: () => void): void
     // Keep the current broker; the §5 rendezvous migration effect re-runs in
     // the remounted room if presence points somewhere better.
     joinConcordCall({ community: decision.community, channel: decision.channel, broker: ctx.broker });
-  }, [ctx, listData, community, folded, coalesced, channels, entry, user, onLeave, joinConcordCall]);
+  }, [ctx, listData, community, folded, coalesced, channels, entry, user, dissolvedAtMs, onLeave, joinConcordCall]);
 }

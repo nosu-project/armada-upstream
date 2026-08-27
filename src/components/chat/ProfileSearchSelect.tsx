@@ -42,6 +42,14 @@ export function ProfileSearchSelect({
   const pastedPubkey = resolvePubkey(trimmed);
   const results = trimmed.length >= 1 ? profiles ?? [] : [];
 
+  // Clearing the query collapses the popover (its open state is derived from
+  // `trimmed`), so a pick dismisses the dropdown; the caller surfaces its own
+  // "invite sent" confirmation, and re-searching re-opens it.
+  const handleChoose = (profile: SearchProfile) => {
+    setQuery("");
+    onSelect(profile);
+  };
+
   return (
     // Results live in a portaled popover anchored to the input, so the dialog
     // keeps its resting height instead of growing (or scrolling) as you type.
@@ -84,7 +92,7 @@ export function ProfileSearchSelect({
             pubkey={pastedPubkey}
             isFollowed={followedPubkeys.has(pastedPubkey)}
             isBusy={busyPubkey === pastedPubkey}
-            onSelect={onSelect}
+            onSelect={handleChoose}
           />
         ) : results.length === 0 ? (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">
@@ -97,7 +105,7 @@ export function ProfileSearchSelect({
               profile={profile}
               isFollowed={followedPubkeys.has(profile.pubkey)}
               isBusy={busyPubkey === profile.pubkey}
-              onClick={() => onSelect(profile)}
+              onClick={() => handleChoose(profile)}
             />
           ))
         )}

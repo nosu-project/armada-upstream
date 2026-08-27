@@ -33,6 +33,17 @@ enum Concord {
     static let kindMessage = 9
     static let kindReaction = 7
 
+    /// How far ahead of the local clock a chat rumor may be dated before it is
+    /// HELD — stored, but not announced — until its time passes. Mirrors the
+    /// web/desktop fold's FUTURE_HOLD_MS (`src/concord/lib/stream.ts`) and the
+    /// Android service's FUTURE_HOLD_MS: a message the timeline hides for being
+    /// "in the future" must not buzz here either, or the reader gets a
+    /// notification (stamped "in 5m" from its future createdAt) about a message
+    /// they can't yet see. A small grace, so ordinary sub-second clock jitter
+    /// between honest clients doesn't flap — NOT the hour of ingest skew NIP-17
+    /// tolerates (`Dm17.maxFutureSkewSecs`).
+    static let futureHoldSecs = 2
+
     /// Kinds claimed by a NON-chat plane (CORD-02 §5): control, guestbook
     /// (join/leave, kick, snapshot) and rekey.
     ///

@@ -3095,6 +3095,18 @@ public class NotificationRelayService extends Service {
     private static final long MAX_FUTURE_SKEW_SECS = 3600;
 
     /**
+     * How far ahead of the local clock a chat rumor may be dated before it is
+     * HELD — stored, but not announced — until its time passes. Mirrors the
+     * web/desktop fold's FUTURE_HOLD_MS (src/concord/lib/stream.ts): a message
+     * the timeline hides for being "in the future" must not buzz here either,
+     * or the reader gets a notification (stamped "in 5m" from its future
+     * created_at) about a message they can't yet see. A small grace, so
+     * ordinary sub-second clock jitter between honest clients doesn't flap —
+     * NOT the hour of ingest skew NIP-17 tolerates (MAX_FUTURE_SKEW_SECS).
+     */
+    private static final long FUTURE_HOLD_MS = 2_000;
+
+    /**
      * Verify a decrypted rumor's NIP-01 id — filling it in when the payload
      * omitted one — and reject a rumor dated too far ahead. Mirrors the checks
      * openDmWrap makes before it hands a rumor to the store.
@@ -3773,6 +3785,17 @@ public class NotificationRelayService extends Service {
             // never notify. The author lives on the encrypted rumor, so this is
             // the first point the ban set can be applied.
             if (st.banned.contains(author2)) {
+                return;
+            }
+
+            // A rumor dated ahead of the local clock is HELD: stored above like
+            // every other message (the timeline hides it until its time comes,
+            // FUTURE_HOLD_MS), but never announced. Announcing it now would buzz
+            // for a message the reader can't yet see, and the OS would stamp the
+            // notification "in 5m" from the future created_at.
+            final long rumorCreatedAt = rumor.optLong("created_at", 0);
+            if (rumorCreatedAt > 0
+                    && rumorCreatedAt * 1000L > System.currentTimeMillis() + FUTURE_HOLD_MS) {
                 return;
             }
 

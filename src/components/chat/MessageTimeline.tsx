@@ -69,7 +69,7 @@ const JUMP_CONTEXT = 15;
 const OPENING_RAMP = [0, FIRST_PAINT_WINDOW, INITIAL_WINDOW];
 
 /** Whether two unix-second timestamps fall on the same local calendar day. */
-function isSameDay(a: number, b: number): boolean {
+export function isSameDay(a: number, b: number): boolean {
   const da = new Date(a * 1000);
   const db = new Date(b * 1000);
   return (
@@ -95,7 +95,7 @@ function formatDayLabel(ts: number): string {
 }
 
 /** Discord-style day boundary: a hairline with the date pinned in the middle. */
-function DateSeparator({ ts }: { ts: number }) {
+export function DateSeparator({ ts }: { ts: number }) {
   return (
     <div className="flex items-center gap-3 px-2 pt-3 pb-1 select-none" aria-hidden>
       <div className="h-px flex-1 bg-border/60" />

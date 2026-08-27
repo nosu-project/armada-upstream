@@ -1649,6 +1649,29 @@ function DmVoiceRoom({
   }, [e2ee, tokenData]);
   useEffect(() => () => e2ee.worker?.terminate(), [e2ee]);
 
+  // End the call when the peer leaves the SFU room. A 1:1 room with nobody else
+  // in it is over (the same reasoning the "end" signal applies in
+  // DmCallProvider), and LiveKit's ParticipantDisconnected is a RELIABLE
+  // teardown where the ephemeral "end" wrap is not: that wrap rides a 21059
+  // relays neither store nor retry, so a peer's hangup that misses this socket
+  // would otherwise leave us alone in the room with activeCall stuck non-null —
+  // permanently "busy", dropping every future incoming offer and hiding the
+  // call button, i.e. never able to rejoin. The SFU reports the peer gone
+  // (clean hangup or connection timeout) regardless, so this recovers either
+  // way. Fires only on a transition to empty, so it can't trip before the peer
+  // has joined.
+  useEffect(() => {
+    const room = e2ee.room;
+    if (!room) return;
+    const onParticipantDisconnected = () => {
+      if (room.remoteParticipants.size === 0) onLeave();
+    };
+    room.on(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
+    return () => {
+      room.off(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
+    };
+  }, [e2ee.room, onLeave]);
+
   // Identity → member resolution: our broker-assigned identity is ourselves;
   // anyone else in a 1:1 room is the peer. Only the two secret-holders can
   // sign this room's token grant, and a party without the media key (a

@@ -45,7 +45,7 @@
 import { getConversationKey, decrypt as nip44Decrypt } from "nostr-tools/nip44";
 import { hexToBytes } from "@noble/hashes/utils.js";
 
-import { checkChannelBinding, openWrap } from "@/concord/lib/stream";
+import { checkChannelBinding, FUTURE_HOLD_MS, openWrap } from "@/concord/lib/stream";
 import { KIND_MESSAGE, KIND_REACTION, KIND_SEAL_ENCRYPTED } from "@/concord/lib/kinds";
 import { decryptImageBytes } from "@/concord/lib/image";
 import { writeRumors } from "@/concord/lib/rumorStore";
@@ -468,6 +468,13 @@ async function prepareConcord(
   // Store it either way: a message we won't announce is still a message, and
   // the timeline it belongs to has no other copy.
   await writeRumors(stream.communityId, [opened]).catch(() => undefined);
+
+  // A message dated ahead of the local clock is HELD, not announced: the
+  // timeline hides it until its time passes (`foldTimeline` / FUTURE_HOLD_MS),
+  // so buzzing for it now — with the OS rendering its future `created_at` as
+  // "in 5m" — would be a notification about a message the reader can't yet see.
+  // Stored above, so it surfaces normally the moment its time comes.
+  if (opened.ms > Date.now() + FUTURE_HOLD_MS) return DROP;
 
   // Our own message, sent from another device. The local send marks its own
   // event id, but nothing marks one made elsewhere — only the decrypted author

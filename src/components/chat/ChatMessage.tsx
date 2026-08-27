@@ -1040,7 +1040,6 @@ const ChatMessageInner = memo(function ChatMessageInner({
             sheetOpen && "bg-secondary/40",
             isPinned && "bg-amber-500/5",
             mentionsMe && "bg-primary/10 hover:bg-primary/15 border-l-2 border-primary pl-2",
-            isPending && "opacity-60",
             isFailed && "bg-destructive/5",
           )}
           containerProps={{

@@ -6,6 +6,7 @@ import { isNativeRuntime } from "@/lib/platform";
 import { onLateColdLaunchDeepLink } from "@/lib/coldLaunchDeepLink";
 import { markDeepLinkNavigation } from "@/lib/deepLinkNav";
 import { isRouterPath, pathFromDeepLinkUrl } from "@/lib/deepLinkUrl";
+import { isDesktop, onDesktopDeepLink } from "@/lib/desktop";
 import { ArmadaPush, hasIosPush } from "@/lib/nativePush";
 import { signalDeepLinkNavigated } from "@/lib/webReady";
 
@@ -144,6 +145,36 @@ export function useNotificationNavigation(): void {
       offLate();
       handle?.remove();
       pushHandle?.remove();
+    };
+  }, [navigate]);
+
+  // Desktop (Electron): a link to our own public host clicked INSIDE the app —
+  // a copied message or invite link — is caught by the shell's navigation
+  // handlers (which would otherwise open it in the browser) and handed back
+  // here as an already-parsed router path. No Capacitor, no crest gate, and the
+  // window is by definition up: a plain soft navigate that reuses the warm
+  // store, query cache and subscriptions, the same landing Android/iOS give it.
+  useEffect(() => {
+    if (!isDesktop()) return;
+    let cancelled = false;
+    const off = onDesktopDeepLink((path) => {
+      // The shell already applied the same host + router-path checks
+      // internalAppLinkPath mirrors from pathFromDeepLinkUrl, but re-guard the
+      // shape here rather than trust an IPC value to name a route.
+      if (cancelled || !path || !isRouterPath(path)) return;
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+      const { pathname, search, hash } = locationRef.current;
+      if (path === pathname + search + hash) return;
+      // Mark before the navigate so the destination's SwipeReveal, mounting in
+      // this commit, skips its entrance slide.
+      markDeepLinkNavigation();
+      navigate(path);
+    });
+    return () => {
+      cancelled = true;
+      off();
     };
   }, [navigate]);
 }

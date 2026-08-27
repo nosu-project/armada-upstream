@@ -3,7 +3,12 @@ import { createRoot } from "react-dom/client";
 
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { clearChunkReloadGuard, tryChunkReload } from "@/lib/chunkReload";
-import { installDesktopDisplayMediaAudio, signalDesktopWebReady } from "@/lib/desktop";
+import {
+  installDesktopDisplayMediaAudio,
+  registerDesktopDeepLinkHost,
+  signalDesktopWebReady,
+} from "@/lib/desktop";
+import { PUBLIC_WEB_ORIGIN } from "@/lib/shareOrigin";
 import { signalWebReady } from "@/lib/webReady";
 import { perfMark, startLoopLagSampler } from "@/lib/perf";
 // Side-effect import: installs `window.__armadaDbCensus()`, the read-only store
@@ -75,6 +80,16 @@ signalWebReady();
 // The same fact for the desktop shell, which uses it to tell a bundle that
 // boots from one that does not (no-op on web and mobile).
 signalDesktopWebReady();
+// Teach the desktop shell the host our shareable links are built on, so a
+// copied message/invite link clicked inside the app lands in the router rather
+// than the system browser (no-op on web and mobile). Send the bare hostname,
+// which is what the shell compares against; a parse failure just leaves the
+// old browser behavior in place.
+try {
+  registerDesktopDeepLinkHost(new URL(PUBLIC_WEB_ORIGIN).hostname);
+} catch {
+  // An unparseable VITE_PUBLIC_WEB_ORIGIN; the link opens in the browser as before.
+}
 
 // After render() returns, so the inline boot splash in index.html has been
 // replaced. Everything between this and the first timeline paint is React,

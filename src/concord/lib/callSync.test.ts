@@ -91,6 +91,7 @@ describe("decideCallSync", () => {
       channels: [channel],
       selfBanned: false,
       selfKicked: false,
+      dissolved: false,
     });
     expect(decision).toEqual<CallSyncDecision>({ action: "stay" });
   });
@@ -117,6 +118,7 @@ describe("decideCallSync", () => {
       channels: liveChannels,
       selfBanned: false,
       selfKicked: false,
+      dissolved: false,
     });
 
     expect(decision.action).toBe("rejoin");
@@ -141,6 +143,7 @@ describe("decideCallSync", () => {
       channels: [channel],
       selfBanned: true,
       selfKicked: false,
+      dissolved: false,
     });
     expect(decision).toEqual<CallSyncDecision>({ action: "leave", reason: "banned" });
   });
@@ -155,8 +158,50 @@ describe("decideCallSync", () => {
       channels: [],
       selfBanned: false,
       selfKicked: false,
+      dissolved: false,
     });
     expect(decision).toEqual<CallSyncDecision>({ action: "leave", reason: "removed" });
+  });
+
+  it("stays connected when the community is dissolved, even as its entry vanishes", () => {
+    // Dissolution is a grave, not a judgment: it rolls no epoch and severs no
+    // key, so the connected room stays derivable and the call finishes on its
+    // own terms. The owner's dissolve drops the vault entry (so it leaves the
+    // rail) — which without the dissolved gate would read as a "removed"
+    // hang-up and boot everyone out of a still-valid call. Same `community:
+    // undefined` as the test above; only `dissolved` differs.
+    const { channel } = fixture();
+    const decision = decideCallSync({
+      snapshot: snapOf(channel),
+      listLoaded: true,
+      community: undefined,
+      folded: undefined,
+      channels: [],
+      selfBanned: false,
+      selfKicked: false,
+      dissolved: true,
+    });
+    expect(decision).toEqual<CallSyncDecision>({ action: "stay" });
+  });
+
+  it("a dissolved community still hangs up on a ban that names me", () => {
+    // Death does not shield a removed member: a ban/kick verdict is checked
+    // before the dissolved gate, so a moderator's judgment still ends the call.
+    const { community, channel } = fixture();
+    const folded = foldedWith([
+      { channelIdHex: channel.idHex, name: "general", isPrivate: false, deleted: false, metadata: { name: "general", private: false } },
+    ]);
+    const decision = decideCallSync({
+      snapshot: snapOf(channel),
+      listLoaded: true,
+      community,
+      folded,
+      channels: [channel],
+      selfBanned: true,
+      selfKicked: false,
+      dissolved: true,
+    });
+    expect(decision).toEqual<CallSyncDecision>({ action: "leave", reason: "banned" });
   });
 
   it("hangs up when the channel is gone from the live view", () => {
@@ -173,6 +218,7 @@ describe("decideCallSync", () => {
       channels: channelsView(community, folded), // empty (deleted dropped)
       selfBanned: false,
       selfKicked: false,
+      dissolved: false,
     });
     expect(decision).toEqual<CallSyncDecision>({ action: "leave", reason: "channel-gone" });
   });
@@ -189,6 +235,7 @@ describe("decideCallSync", () => {
         channels: [],
         selfBanned: false,
         selfKicked: false,
+        dissolved: false,
       }),
     ).toEqual<CallSyncDecision>({ action: "stay" });
     // Community present but fold not yet folded.
@@ -201,6 +248,7 @@ describe("decideCallSync", () => {
         channels: [],
         selfBanned: false,
         selfKicked: false,
+        dissolved: false,
       }),
     ).toEqual<CallSyncDecision>({ action: "stay" });
   });
@@ -221,6 +269,7 @@ describe("decideCallSync", () => {
       channels: [channel],
       selfBanned: false,
       selfKicked: true,
+      dissolved: false,
     });
     expect(decision).toEqual<CallSyncDecision>({ action: "leave", reason: "kicked" });
   });
@@ -238,6 +287,7 @@ describe("decideCallSync", () => {
       channels: [channel],
       selfBanned: true,
       selfKicked: true,
+      dissolved: false,
     });
     expect(decision).toEqual<CallSyncDecision>({ action: "leave", reason: "banned" });
   });
