@@ -545,6 +545,7 @@ export function SettingsPage() {
             </SettingsRow>
             {user && (
               <SettingsRow
+                stack
                 label={userRelayUrls.length > 0 ? "Edit my signed relay list" : "Find or publish my relay list"}
                 description={userRelayUrls.length > 0
                   ? "Changes replace your NIP-65 list only after you press Save and approve the signature."
@@ -566,6 +567,7 @@ export function SettingsPage() {
             )}
             {user && userWriteRelayUrls.length > 0 && (
               <SettingsRow
+                stack
                 label={portableSetup.isConfigured ? "Synchronize setup" : "Set up synchronization"}
                 description={(
                   <>
@@ -707,6 +709,7 @@ export function SettingsPage() {
               <Switch checked={config.useAppDmRelays} onCheckedChange={setUseAppDmRelays} />
             </SettingsRow>
             <SettingsRow
+              stack
               label="Additional app DM relays"
               description="The client-provided DM relays used alongside your general app relays. This synchronized list replaces Armada's built-in DM address."
             >
@@ -781,6 +784,7 @@ export function SettingsPage() {
               />
             </SettingsRow>
             <SettingsRow
+              stack
               label="App media servers"
               description="This synchronized list replaces the media-server addresses shipped with the app."
             >

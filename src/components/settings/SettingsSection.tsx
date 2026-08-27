@@ -51,6 +51,13 @@ interface SettingsRowProps {
   children?: ReactNode;
   /** Make the whole row a clickable affordance (hover + cursor). */
   onClick?: () => void;
+  /**
+   * For a wide control (a button grid, an input) that would crush the label
+   * column on a narrow screen: stack the control below the label until there
+   * is room for a side-by-side row (`sm:`). The control then fills the row
+   * width instead of sitting in the non-shrinking slot.
+   */
+  stack?: boolean;
   className?: string;
 }
 
@@ -59,8 +66,13 @@ interface SettingsRowProps {
  *   - labelled: label (+ optional description) left, `children` control right;
  *   - bare: pass only `children` to render arbitrary content full-width with
  *     the same row padding.
+ *
+ * A labelled row with a wide control (a button grid, a list editor) passes
+ * `stack` so the control drops full-width below the label on a narrow screen
+ * instead of crushing the label column in the non-shrinking slot, and rejoins
+ * it side-by-side at `sm:`.
  */
-export function SettingsRow({ label, description, children, onClick, className }: SettingsRowProps) {
+export function SettingsRow({ label, description, children, onClick, stack, className }: SettingsRowProps) {
   if (label === undefined) {
     return <div className={cn("px-4 py-3.5", className)}>{children}</div>;
   }
@@ -70,7 +82,8 @@ export function SettingsRow({ label, description, children, onClick, className }
       type={onClick ? "button" : undefined}
       onClick={onClick}
       className={cn(
-        "flex w-full items-center gap-3 px-4 py-3 text-left",
+        "flex w-full gap-3 px-4 py-3 text-left",
+        stack ? "flex-col sm:flex-row sm:items-center" : "items-center",
         onClick && "transition-colors hover:bg-accent/40",
         className,
       )}
@@ -81,7 +94,9 @@ export function SettingsRow({ label, description, children, onClick, className }
           <div className="text-xs text-muted-foreground leading-snug">{description}</div>
         )}
       </div>
-      {children !== undefined && <div className="shrink-0">{children}</div>}
+      {children !== undefined && (
+        <div className={cn(stack ? "w-full sm:w-auto sm:shrink-0" : "shrink-0")}>{children}</div>
+      )}
     </Comp>
   );
 }
