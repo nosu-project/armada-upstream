@@ -412,6 +412,8 @@ export interface ChatMessageProps {
    * received message would light up as a "mention".
    */
   mentionHighlight?: boolean;
+  /** This Concord message contains an authorized channel-wide @everyone. */
+  everyoneMention?: boolean;
   /**
    * A small badge rendered next to the author's name (after the bot pill) —
    * e.g. the DM page's "NIP-04" legacy-encryption marker.
@@ -502,6 +504,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
   onToggleActive,
   continuation = false,
   mentionHighlight = true,
+  everyoneMention = false,
   nameBadge,
   permalink,
   rumor,
@@ -526,12 +529,15 @@ const ChatMessageInner = memo(function ChatMessageInner({
   const isPending = sendStatus === "pending";
   const isFailed = sendStatus === "failed";
   const isOwn = user?.pubkey === event.pubkey;
-  // Highlight messages that mention you or reply to you: both add a `p` tag for
-  // the current user (NIP-27 mention / NIP-10 reply). Not your own messages.
+  // Highlight messages that mention you, reply to you, or carry an authorized
+  // Concord @everyone. Not your own messages.
   // Suppressed where a `p` tag is addressing, not mentioning (DMs).
   const mentionsMe = Boolean(
     mentionHighlight &&
-      user && !isOwn && event.tags.some(([name, value]) => name === "p" && value === user.pubkey),
+      user && !isOwn && (
+        everyoneMention
+        || event.tags.some(([name, value]) => name === "p" && value === user.pubkey)
+      ),
   );
   // Only plain group/NIP-17 chat messages are editable (polls, files and other
   // structured rows carry semantics an inline text field cannot preserve).
@@ -894,7 +900,7 @@ const ChatMessageInner = memo(function ChatMessageInner({
         </div>
       ) : event.kind === KIND_POLL ? (
         <>
-          <ChatContent event={event} className="text-[15px]" highlight={highlight} />
+          <ChatContent event={event} className="text-[15px]" highlight={highlight} everyoneMention={everyoneMention} />
           {pollContext ? (
             <PollCard
               event={event}
@@ -954,10 +960,11 @@ const ChatMessageInner = memo(function ChatMessageInner({
             className="inline italic"
             highlight={highlight}
             noMentionAtPrefix
+            everyoneMention={everyoneMention}
           />
         </div>
       ) : (
-        <ChatContent event={event} className="text-[15px]" highlight={highlight} />
+        <ChatContent event={event} className="text-[15px]" highlight={highlight} everyoneMention={everyoneMention} />
       )}
     </>
   );

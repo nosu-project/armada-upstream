@@ -10,7 +10,7 @@ const OWNER = bytesToHex(random32());
 
 function foldedWith(channels: FoldedChannel[], name?: string): FoldedControl {
   return {
-    roster: [],
+    roster: { roles: [], grants: [] },
     ownerHex: OWNER,
     metadata: name ? { name, relays: [] } : undefined,
     channels: new Map(channels.map((c) => [c.channelIdHex, {
@@ -46,6 +46,7 @@ describe("buildConcordSubs", () => {
     expect(sub.channelId).toBe(bytesToHex(generalId));
     expect(sub.channelName).toBe("general");
     expect(sub.relays).toEqual(["wss://relay.example"]);
+    expect(sub.mentionEveryoneAuthors).toEqual([OWNER]);
 
     // The stream matches the on-wire derivation exactly.
     const expected = channelGroupKey(community.root, generalId, 0n);

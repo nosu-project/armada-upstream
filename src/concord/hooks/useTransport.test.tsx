@@ -35,6 +35,11 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock("@/concord/hooks/useChannel", () => ({
+  useChatModeration: () => ({
+    banned: new Set(),
+    canDelete: () => false,
+    canMentionEveryone: () => false,
+  }),
   useChannelTimeline: () => ({
     folded: h.folded,
     raw: [],

@@ -33,6 +33,7 @@ import { dittoHashtagUrl, dittoNip19Url } from "@/lib/dittoUrl";
 import { getDisplayName } from "@/lib/getDisplayName";
 import { HASHTAG_PATTERN } from "@/lib/hashtag";
 import { isInviteUrl } from "@/concord/lib/invite";
+import { EVERYONE_MENTION_PATTERN } from "@/concord/lib/everyoneMention";
 import { parseFileMessageTags, parseImetaMap } from "@/lib/imeta";
 import { KIND_DM_FILE } from "@/lib/nip17/protocol";
 import { splitInlineCode, splitMarkdownBlocks, splitMarkdownLinks } from "@/lib/markdown";
@@ -81,6 +82,8 @@ interface ChatContentProps {
    *  and `[text](url)` links. Used for git issues/PRs/comments; chat keeps its
    *  Discord-flavored subset (headings to level 3, lists, fences, quotes). */
   documentMarkdown?: boolean;
+  /** Render authorized literal `@everyone` occurrences as mass-mention chips. */
+  everyoneMention?: boolean;
 }
 
 /** Bech32 charset used by NIP-19 identifiers. */
@@ -153,6 +156,7 @@ type ContentToken =
   | { type: "inline-link"; url: string }
   | { type: "mention"; pubkey: string }
   | { type: "text-mention"; pubkey: string; raw: string }
+  | { type: "everyone-mention"; raw: string }
   | { type: "nevent-embed"; eventId: string; relays?: string[]; author?: string; sourceUrl?: string }
   | { type: "naddr-embed"; addr: AddrCoords; url?: string }
   | { type: "nostr-link"; id: string; raw: string }
@@ -206,6 +210,41 @@ function applyTextMentions(tokens: ContentToken[], mentions: MentionNameMap): Co
       out.push(...splitTextToken(token.value, mentions));
     } else if (token.type === "quote") {
       out.push({ type: "quote", tokens: applyTextMentions(token.tokens, mentions) });
+    } else {
+      out.push(token);
+    }
+  }
+  return out;
+}
+
+/** Split authorized literal `@everyone` tokens out of plain-text leaves. */
+function splitEveryoneToken(value: string): ContentToken[] {
+  if (!value) return [];
+  const regex = new RegExp(EVERYONE_MENTION_PATTERN.source, "gu");
+  const out: ContentToken[] = [];
+  let last = 0;
+  for (const match of value.matchAll(regex)) {
+    const prefix = match[1] ?? "";
+    const at = (match.index ?? 0) + prefix.length;
+    if (at > last) out.push({ type: "text", value: value.slice(last, at) });
+    out.push({ type: "everyone-mention", raw: "@everyone" });
+    last = at + "@everyone".length;
+  }
+  if (last < value.length) out.push({ type: "text", value: value.slice(last) });
+  return out;
+}
+
+function applyEveryoneMentions(tokens: ContentToken[]): ContentToken[] {
+  const out: ContentToken[] = [];
+  for (const token of tokens) {
+    if (token.type === "text") {
+      out.push(...splitEveryoneToken(token.value));
+    } else if (token.type === "quote") {
+      out.push({ ...token, tokens: applyEveryoneMentions(token.tokens) });
+    } else if (token.type === "heading") {
+      out.push({ ...token, tokens: applyEveryoneMentions(token.tokens) });
+    } else if (token.type === "list") {
+      out.push({ ...token, items: token.items.map(applyEveryoneMentions) });
     } else {
       out.push(token);
     }
@@ -389,7 +428,7 @@ const SEGMENT_RE = new RegExp(
   "giu",
 );
 
-function ChatContentInner({ event, className, disableNoteEmbeds = false, highlight, contentOverride, noMentionAtPrefix = false, clampLines, documentMarkdown = false }: ChatContentProps) {
+function ChatContentInner({ event, className, disableNoteEmbeds = false, highlight, contentOverride, noMentionAtPrefix = false, clampLines, documentMarkdown = false, everyoneMention = false }: ChatContentProps) {
   // Canonicalize links on the way in as well as on the way out: a URL that
   // arrived from another client, a forward, or a message predating the setting
   // still carries its share/click ids, and rendering it hands them to whatever
@@ -871,9 +910,13 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
   // style) back to pubkeys, then split them out of the text leaves. NIP-27
   // `nostr:` mentions are already handled inline by the tokenizer above.
   const mentions = useMentionNameMap(event);
+  const everyoneTokens = useMemo(
+    () => everyoneMention ? applyEveryoneMentions(rawTokens) : rawTokens,
+    [rawTokens, everyoneMention],
+  );
   const tokens = useMemo(
-    () => applyTextMentions(rawTokens, mentions),
-    [rawTokens, mentions],
+    () => applyTextMentions(everyoneTokens, mentions),
+    [everyoneTokens, mentions],
   );
 
   // Build emoji map for NIP-30 custom emoji rendering. Merge the event's own
@@ -974,7 +1017,7 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
   // honor `clampLines` when every token is inline text-ish.
   const clampSafe = clampLines != null && !isEmojiOnly && groupedTokens.every((t) =>
     t.type === "text" || t.type === "inline-code" || t.type === "quote"
-    || t.type === "text-mention"
+    || t.type === "text-mention" || t.type === "everyone-mention"
     || t.type === "nevent-embed" || t.type === "naddr-embed"
   );
   const clampClass = clampSafe
@@ -1026,6 +1069,15 @@ function ChatContentInner({ event, className, disableNoteEmbeds = false, highlig
           </span>
         );
       }
+      case "everyone-mention":
+        return (
+          <span
+            key={key}
+            className="inline-flex rounded bg-primary/15 px-1 font-medium text-primary"
+          >
+            {token.raw}
+          </span>
+        );
       case "code-block":
         return <CodeBlock key={key} code={token.code} lang={token.lang} />;
       case "inline-code":

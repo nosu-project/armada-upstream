@@ -364,6 +364,30 @@ describe("concord rumor store", () => {
     expect(mentions[0].channelIdHex).toBe(idHex);
   });
 
+  it("returns authorized-author messages as mass-mention candidates", async () => {
+    const { channel, idHex } = makeChannel();
+    const moderator = signer();
+    const me = signer();
+    const rumors = [
+      chatRumor(idHex, moderator, KIND_MESSAGE, "Heads up @everyone", 1000),
+      chatRumor(idHex, moderator, KIND_MESSAGE, "ordinary moderator chatter", 2000),
+    ];
+    writeRumors(
+      CID,
+      await openChatBatch(await Promise.all(rumors.map((r) => wrapChat(r, channel, moderator))), channel),
+    );
+    await eventually(() => queryChannelRumors(CID, idHex, { limit: 10 }), (r) => r.length === 2);
+
+    const candidates = await queryMentionRumors(CID, [idHex], me.pubkey, {
+      limit: 200,
+      everyoneAuthors: [moderator.pubkey],
+    });
+    expect(candidates.map((r) => r.content).sort()).toEqual([
+      "Heads up @everyone",
+      "ordinary moderator chatter",
+    ]);
+  });
+
   // ── Cross-plane splice ────────────────────────────────────────────────────
   //
   // The chat decode path proves a rumor's `channel` tag matches the key that

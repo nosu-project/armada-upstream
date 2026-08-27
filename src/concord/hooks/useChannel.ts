@@ -39,7 +39,7 @@ import {
 import { citationToTag, type AuthorityCitation } from "@/concord/lib/edition";
 import { citationSatisfied } from "@/concord/lib/control";
 import { useActivePause } from "@/concord/hooks/usePause";
-import { canActOnMember, isAuthorized, isStaff, Permissions } from "@/concord/lib/roles";
+import { canActOnMember, isAuthorized, isAuthorizedIn, isStaff, Permissions } from "@/concord/lib/roles";
 import { chatExpiresAt, messageExpirationOf } from "@/concord/lib/disappearing";
 import { consumeSend, isRateLimitedKind, SendRateLimitError } from "@/concord/lib/sendRateLimit";
 import { buildRumor, channelBindingTags, sealRumor, wrapSeal } from "@/concord/lib/stream";
@@ -157,6 +157,16 @@ export function useChatModeration(
       canSetTimer: (author: string) =>
         Boolean(folded && isAuthorized(folded.roster, author, folded.ownerHex, Permissions.MANAGE_METADATA)),
       isStaff: (author: string) => Boolean(folded && isStaff(folded.roster, author, folded.ownerHex)),
+      canMentionEveryone: (author: string, channelIdHex: string) => Boolean(
+        folded
+        && isAuthorizedIn(
+          folded.roster,
+          author,
+          folded.ownerHex,
+          channelIdHex,
+          Permissions.MENTION_EVERYONE,
+        )
+      ),
     }),
     [folded, community, dissolvedAtMs],
   );

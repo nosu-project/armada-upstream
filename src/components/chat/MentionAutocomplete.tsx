@@ -1,4 +1,5 @@
 import { nip19 } from "nostr-tools";
+import { UsersRound } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { BotPill } from "@/components/BotPill";
@@ -20,6 +21,9 @@ interface MentionAutocompleteProps {
    * only suggests people in the room.
    */
   restrictToPubkeys?: string[];
+  /** Offer the Concord mass-mention token. The caller has already checked the
+   * current user's channel-scoped MENTION_EVERYONE permission. */
+  allowEveryone?: boolean;
 }
 
 /**
@@ -32,6 +36,7 @@ export function MentionAutocomplete({
   content,
   onInsertMention,
   restrictToPubkeys,
+  allowEveryone = false,
 }: MentionAutocompleteProps) {
   const [mentionQuery, setMentionQuery] = useState("");
   const [mentionStart, setMentionStart] = useState(-1);
@@ -53,6 +58,9 @@ export function MentionAutocomplete({
   const { data: searchProfiles } = useSearchProfiles(isOpen && !restricted ? mentionQuery : "");
   const memberProfiles = useMemberProfiles(restrictToPubkeys ?? [], isOpen ? mentionQuery : "");
   const profiles = restricted ? memberProfiles : searchProfiles;
+  const showEveryone = allowEveryone
+    && "everyone".startsWith(mentionQuery.trim().toLowerCase());
+  const itemCount = (profiles?.length ?? 0) + (showEveryone ? 1 : 0);
 
   // Detect @mention query at cursor.
   const detectMention = useCallback((text?: string, cursorPos?: number) => {
@@ -155,9 +163,17 @@ export function MentionAutocomplete({
     setMentionStart(-1);
   }, [mentionStart, mentionQuery, textareaRef, onInsertMention]);
 
+  const selectEveryone = useCallback(() => {
+    const cursor = textareaRef.current?.selectionStart ?? mentionStart + mentionQuery.length + 1;
+    onInsertMention({ start: mentionStart, end: cursor, replacement: "@everyone " });
+    setIsOpen(false);
+    setMentionQuery("");
+    setMentionStart(-1);
+  }, [mentionStart, mentionQuery, textareaRef, onInsertMention]);
+
   // Handle keyboard navigation within the dropdown
   useEffect(() => {
-    if (!isOpen || !profiles || profiles.length === 0) return;
+    if (!isOpen || itemCount === 0) return;
 
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -166,19 +182,18 @@ export function MentionAutocomplete({
       switch (e.key) {
         case "ArrowDown":
           e.preventDefault();
-          setSelectedIndex((prev) => (prev < (profiles?.length ?? 1) - 1 ? prev + 1 : 0));
+          setSelectedIndex((prev) => (prev < itemCount - 1 ? prev + 1 : 0));
           break;
         case "ArrowUp":
           e.preventDefault();
-          setSelectedIndex((prev) => (prev > 0 ? prev - 1 : (profiles?.length ?? 1) - 1));
+          setSelectedIndex((prev) => (prev > 0 ? prev - 1 : itemCount - 1));
           break;
         case "Enter":
         case "Tab":
-          if (profiles && profiles.length > 0) {
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            selectProfile(profiles[selectedIndex]);
-          }
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          if (profiles && selectedIndex < profiles.length) selectProfile(profiles[selectedIndex]);
+          else if (showEveryone) selectEveryone();
           break;
         case "Escape":
           e.preventDefault();
@@ -189,7 +204,7 @@ export function MentionAutocomplete({
 
     textarea.addEventListener("keydown", handleKeyDown);
     return () => textarea.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, profiles, selectedIndex, textareaRef, selectProfile]);
+  }, [isOpen, itemCount, profiles, selectedIndex, textareaRef, selectProfile, selectEveryone, showEveryone]);
 
   // Scroll selected item into view
   useEffect(() => {
@@ -199,7 +214,7 @@ export function MentionAutocomplete({
     }
   }, [selectedIndex]);
 
-  if (!isOpen || !dropdownPos || !profiles || profiles.length === 0) {
+  if (!isOpen || !dropdownPos || itemCount === 0) {
     return null;
   }
 
@@ -210,7 +225,7 @@ export function MentionAutocomplete({
       style={{ bottom: dropdownPos.bottom, left: dropdownPos.left }}
     >
       <div ref={listRef} className="max-h-[240px] overflow-y-auto py-1">
-        {profiles.map((profile, index) => (
+        {(profiles ?? []).map((profile, index) => (
           <MentionItem
             key={profile.pubkey}
             profile={profile}
@@ -218,12 +233,48 @@ export function MentionAutocomplete({
             onSelect={() => selectProfile(profile)}
           />
         ))}
+        {showEveryone && (
+          <EveryoneMentionItem
+            isSelected={selectedIndex === (profiles?.length ?? 0)}
+            onSelect={selectEveryone}
+          />
+        )}
       </div>
     </div>
   );
 
   // Portal to document.body so the dropdown escapes overflow clipping.
   return renderPortal(dropdown, document.body);
+}
+
+function EveryoneMentionItem({
+  isSelected,
+  onSelect,
+}: {
+  isSelected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      data-mention-item
+      className={cn(
+        "w-full flex items-center gap-3 px-3 py-2 text-left transition-colors cursor-pointer",
+        isSelected ? "bg-accent text-accent-foreground" : "hover:bg-secondary/60",
+      )}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        onSelect();
+      }}
+    >
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/20 text-primary">
+        <UsersRound className="size-4" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-semibold">@everyone</span>
+        <span className="block truncate text-xs text-muted-foreground">Notify everyone in this channel</span>
+      </span>
+    </button>
+  );
 }
 
 function MentionItem({

@@ -639,13 +639,14 @@ describe("preparePush — showing nothing on purpose", () => {
     const streamPk = getPublicKey(streamSk);
     const convKey = getConversationKey(streamSk, streamPk);
     const authorSk = generateSecretKey();
+    const authorPk = getPublicKey(authorSk);
     const selfPk = getPublicKey(generateSecretKey());
 
-    const streamed = (mentionsSelf: boolean) => {
+    const streamed = (mentionsSelf: boolean, content?: string) => {
       const rumor = {
-        pubkey: getPublicKey(authorSk),
+        pubkey: authorPk,
         kind: 9,
-        content: mentionsSelf ? "hey, you" : "general chatter",
+        content: content ?? (mentionsSelf ? "hey, you" : "general chatter"),
         tags: [
           ["channel", CHANNEL],
           ["epoch", "1"],
@@ -696,6 +697,23 @@ describe("preparePush — showing nothing on purpose", () => {
     const mention = await preparePush({ scope: "c2", event: streamed(true) as never }, config);
     expect(mention?.drop).not.toBe(true);
     expect(mention?.roomKey).toBe(`c2:${CHANNEL}`);
+
+    const massMention = streamed(false, "Heads up @everyone");
+    expect((await preparePush({ scope: "c2", event: massMention as never }, config))?.drop)
+      .toBe(true);
+    const authorizedConfig: SwPushConfig = {
+      ...config,
+      concord: config.concord?.map((stream) => ({
+        ...stream,
+        mentionEveryoneAuthors: [authorPk],
+      })),
+    };
+    const authorized = await preparePush(
+      { scope: "c2", event: massMention as never },
+      authorizedConfig,
+    );
+    expect(authorized?.drop).not.toBe(true);
+    expect(authorized?.roomKey).toBe(`c2:${CHANNEL}`);
   });
 
   it("drops a banned member's Concord message but still stores it", async () => {

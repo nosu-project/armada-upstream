@@ -499,6 +499,7 @@ export function useNostrPush(): UsePushNotificationsReturn {
             communityId: sub.communityId,
             channelId: sub.channelId,
             banned: sub.banned,
+            mentionEveryoneAuthors: sub.mentionEveryoneAuthors,
             mentionOnly: sub.mentionOnly,
           }))
         ),
