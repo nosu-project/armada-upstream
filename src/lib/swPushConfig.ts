@@ -67,6 +67,8 @@ export interface SwConcordStream {
    * carried per stream because that is the flat shape the config already uses.
    */
   banned?: string[];
+  /** Authors allowed to issue a literal @everyone in this channel. */
+  mentionEveryoneAuthors?: string[];
   /** Drop non-mention messages after decrypting this encrypted stream. */
   mentionOnly?: boolean;
 }

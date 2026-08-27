@@ -456,6 +456,22 @@ final class SenderIdentityTests: XCTestCase {
         XCTAssertEqual(parsed?.dmLevels[key], .all)
     }
 
+    func testPushConfigCarriesEveryoneAuthorityAndMatchesOnlyTheExactToken() {
+        let moderator = String(repeating: "d", count: 64)
+        let parsed = PushConfig.parse(json: """
+        {"policy":"generic","self":"\(self_)","knownPeers":[],
+         "concord":[{"pk":"\(peer)","convKey":"\(peer)","epoch":"1",
+         "communityId":"cc","channelId":"dd",
+         "mentionEveryoneAuthors":["\(moderator)"],"mentionOnly":true}]}
+        """)
+        XCTAssertEqual(parsed?.concord.first?.mentionEveryoneAuthors, Set([moderator]))
+        XCTAssertTrue(PushProcessor.hasEveryoneMention("Heads up @everyone!"))
+        XCTAssertFalse(PushProcessor.hasEveryoneMention("mail@everyone.example"))
+        XCTAssertFalse(PushProcessor.hasEveryoneMention("@everyone_else"))
+        XCTAssertFalse(PushProcessor.hasEveryoneMention("@everyone你"))
+        XCTAssertFalse(PushProcessor.hasEveryoneMention("@Everyone"))
+    }
+
     func testExactDmLevelOverridesGlobalFallbackWithoutWideningGroupKeys() {
         let other = String(repeating: "c", count: 64)
         let group = [peer, other].sorted()

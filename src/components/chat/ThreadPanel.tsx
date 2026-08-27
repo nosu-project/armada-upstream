@@ -90,6 +90,7 @@ function ThreadMessage({
   canModerate = false,
   isRumor = false,
   continuation = false,
+  everyoneMention = false,
   permalink,
   onDelete,
   isEditing = false,
@@ -123,6 +124,8 @@ function ThreadMessage({
    * avatar), mirroring the main timeline's continuation collapsing.
    */
   continuation?: boolean;
+  /** This Concord message carries an authorized channel-wide @everyone. */
+  everyoneMention?: boolean;
   /** Delete this message (own always; others' require moderation). Hidden when absent. */
   onDelete?: (event: ChatMsg) => void;
   /** Whether this message is currently in edit mode. */
@@ -346,7 +349,7 @@ function ThreadMessage({
                 </div>
               </div>
             ) : (
-              <ChatContent event={event} className="text-[15px]" />
+              <ChatContent event={event} className="text-[15px]" everyoneMention={everyoneMention} />
             )}
             {((zaps && zaps.tally.count > 0) || (reactions && reactions.tallies.length > 0)) && (
               <ReactionBar
@@ -700,7 +703,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
         </div>
       ) : (
         <div data-event-id={root.id} data-scroll-anchor={`root:${root.id}`}>
-        <ThreadMessage event={root} permalink={permalink} reactions={reactionsFor?.(root.id)} zaps={zapsFor?.(root.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} onDelete={onDelete} isEditing={editingId === root.id} onEdit={(e) => setEditingId(e.id)} onEditSubmit={handleEditSubmit} onEditCancel={() => setEditingId(undefined)} />
+        <ThreadMessage event={root} permalink={permalink} reactions={reactionsFor?.(root.id)} zaps={zapsFor?.(root.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} everyoneMention={transport.mentionsEveryone?.(root)} onDelete={onDelete} isEditing={editingId === root.id} onEdit={(e) => setEditingId(e.id)} onEditSubmit={handleEditSubmit} onEditCancel={() => setEditingId(undefined)} />
         </div>
       )}
       <div className="flex items-center gap-2 px-3 py-1 mt-1">
@@ -771,7 +774,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
                 reply.created_at - prev.created_at < CONTINUATION_WINDOW_SECONDS;
               return (
                 <div key={reply.id} data-event-id={reply.id} data-scroll-anchor={`reply:${reply.id}`} className="pt-1">
-                  <ThreadMessage event={reply} permalink={permalink} reactions={reactionsFor?.(reply.id)} zaps={zapsFor?.(reply.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} continuation={continuation} onDelete={onDelete} isEditing={editingId === reply.id} onEdit={(e) => setEditingId(e.id)} onEditSubmit={handleEditSubmit} onEditCancel={() => setEditingId(undefined)} />
+                  <ThreadMessage event={reply} permalink={permalink} reactions={reactionsFor?.(reply.id)} zaps={zapsFor?.(reply.id)} zapEnabled={zapEnabled} onSendZap={onSendZap} onSendOnchainZap={onSendOnchainZap} canReact={canWrite} canModerate={canModerate} isRumor={isRumor} continuation={continuation} everyoneMention={transport.mentionsEveryone?.(reply)} onDelete={onDelete} isEditing={editingId === reply.id} onEdit={(e) => setEditingId(e.id)} onEditSubmit={handleEditSubmit} onEditCancel={() => setEditingId(undefined)} />
                 </div>
               );
             })}
@@ -800,6 +803,7 @@ export function ThreadPanel({ root, transport, relayUrl, groupId, canWrite, ment
           groupId={groupId}
           messages={[]}
           mentionPubkeys={mentionPubkeys}
+          canMentionEveryone={transport.canMentionEveryone}
           placeholder="Reply in thread…"
           draftScope={`thread:${root.id}`}
           autoFocus={autoFocus}

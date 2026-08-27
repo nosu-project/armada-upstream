@@ -60,6 +60,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 import okhttp3.Cache;
 import okhttp3.Call;
@@ -556,9 +557,12 @@ public class NotificationRelayService extends Service {
         // but must never notify, so handleEvent drops it after decrypt.
         // Community-wide, so every channel's stream carries the same set.
         final Set<String> banned;
+        // Authors currently authorized to issue a literal @everyone in this
+        // channel. The WebView derives this from the channel-scoped role fold.
+        final Set<String> mentionEveryoneAuthors;
         ConcordStream(byte[] convKey, String communityId, String channelId, String epoch,
                        String name, String url, CommunityRef community, long timerSecs,
-                       boolean mentionOnly, Set<String> banned) {
+                       boolean mentionOnly, Set<String> banned, Set<String> mentionEveryoneAuthors) {
             this.convKey = convKey;
             this.communityId = communityId;
             this.channelId = channelId;
@@ -569,6 +573,7 @@ public class NotificationRelayService extends Service {
             this.timerSecs = timerSecs;
             this.mentionOnly = mentionOnly;
             this.banned = banned;
+            this.mentionEveryoneAuthors = mentionEveryoneAuthors;
         }
     }
 
@@ -1551,6 +1556,14 @@ public class NotificationRelayService extends Service {
                         if (pk != null && !pk.isEmpty()) banned.add(pk);
                     }
                 }
+                Set<String> mentionEveryoneAuthors = new HashSet<>();
+                JSONArray mentionEveryoneArr = sub.optJSONArray("mentionEveryoneAuthors");
+                if (mentionEveryoneArr != null) {
+                    for (int j = 0; j < mentionEveryoneArr.length(); j++) {
+                        String pk = mentionEveryoneArr.optString(j, null);
+                        if (pk != null && !pk.isEmpty()) mentionEveryoneAuthors.add(pk);
+                    }
+                }
 
                 // The community this channel belongs to — its image/name
                 // brand the channel's notification. The community ref
@@ -1571,7 +1584,7 @@ public class NotificationRelayService extends Service {
                     pkToStream2.put(pk, new ConcordStream(
                             convKey, communityId, channelId, s.optString("epoch", ""),
                             name, url, ref, Math.max(0, sub.optLong("timerSecs", 0)),
-                            mentionOnly, banned));
+                            mentionOnly, banned, mentionEveryoneAuthors));
                 }
                 for (int j = 0; j < relays.length(); j++) {
                     String relay = relays.optString(j);
@@ -3834,7 +3847,9 @@ public class NotificationRelayService extends Service {
             if (rumorKind != 9 && rumorKind != 1111) {
                 return;
             }
-            boolean mentionsMe2 = isMentioned(rumor, userPubkey);
+            boolean mentionsMe2 = isMentioned(rumor, userPubkey)
+                    || (st.mentionEveryoneAuthors.contains(author2)
+                        && hasEveryoneMention(rumor.optString("content", "")));
             // The WebView already resolved channel -> community -> global into
             // this subscription: omitted means nothing, mentionOnly means only
             // a real mention, and an included non-mentionOnly stream means all.
@@ -6215,6 +6230,13 @@ public class NotificationRelayService extends Service {
             }
         }
         return out;
+    }
+
+    private static final Pattern EVERYONE_MENTION = Pattern.compile(
+            "(^|[^\\p{L}\\p{N}_@])@everyone(?![\\p{L}\\p{N}_])");
+
+    static boolean hasEveryoneMention(String content) {
+        return content != null && EVERYONE_MENTION.matcher(content).find();
     }
 
     /**

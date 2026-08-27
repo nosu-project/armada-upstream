@@ -15,6 +15,13 @@ import type { ChatMsg } from "@/components/chat/transport";
 import { STORE_READ } from "@/lib/storeQuery";
 import { useWireScopes } from "@/wire/useWireScopes";
 import { concordMentionReadKey, useReadState } from "@/hooks/useReadState";
+import { useControlFold } from "@/concord/hooks/useControlPlane";
+import {
+  everyoneMentionAuthors,
+  isEveryoneMention,
+} from "@/concord/lib/everyoneMention";
+import { emptyRoles } from "@/concord/lib/roles";
+import type { Community } from "@/concord/lib/types";
 
 /** How many newest cached mentions to surface. */
 const MENTION_LIMIT = 200;
@@ -27,6 +34,7 @@ const MENTION_LIMIT = 200;
  * unbounded setState loop that froze the tab.
  */
 const NO_MENTIONS: ChatMsg[] = [];
+const NO_ROLES = emptyRoles();
 
 /**
  * The current user's mentions across a Concord community — every cached
@@ -55,37 +63,56 @@ const NO_MENTIONS: ChatMsg[] = [];
  * the badge no longer requires opening every mentioning channel. Reading a
  * channel that shows a mention also advances the stamp (see `markRead`).
  */
-export function useConcordMentions(channels: Channel[], communityIdHex: string | undefined): {
+export function useConcordMentions(community: Community | undefined, channels: Channel[]): {
   mentions: ChatMsg[];
   isLoading: boolean;
   hasNew: boolean;
   markRead: (timestamp: number) => void;
   markAllRead: () => void;
 } {
+  const communityIdHex = community?.idHex;
   const { user } = useCurrentUser();
   const pubkey = user?.pubkey;
   const queryClient = useQueryClient();
   const { readState, markRead: sharedMarkRead } = useReadState();
+  // Passive: ambient rail and Notification Center callers must never turn this
+  // local index into a per-community control-plane network sweep.
+  const { data: folded } = useControlFold(community, false);
 
   // A stable list of channel ids (recomputed only when the set changes), so
   // the query key doesn't churn on every parent re-render.
   const channelSig = channels.map((c) => c.idHex).join(",");
   const channelIds = useMemo(() => channels.map((c) => c.idHex), [channelSig]); // eslint-disable-line react-hooks/exhaustive-deps
+  const roles = folded?.roster ?? NO_ROLES;
+  const ownerHex = folded?.ownerHex ?? community?.owner;
+  const everyoneAuthors = useMemo(
+    () => everyoneMentionAuthors(roles, ownerHex, channelIds),
+    [roles, ownerHex, channelIds],
+  );
+  const everyoneAuthorSig = everyoneAuthors.join(",");
 
   const { mutedPubkeys } = useMutedPubkeys();
 
   const { data: allMentions = NO_MENTIONS, isLoading } = useQuery<ChatMsg[]>({
     ...STORE_READ,
-    queryKey: ["concord-mentions", communityIdHex ?? null, pubkey, channelSig],
+    queryKey: ["concord-mentions", communityIdHex ?? null, pubkey, channelSig, everyoneAuthorSig],
     queryFn: async ({ signal }) => {
       const rumors = await queryMentionRumors(communityIdHex!, channelIds, pubkey!, {
         limit: MENTION_LIMIT,
         signal,
+        everyoneAuthors,
       });
-      // Never surface self-mentions (e.g. quoting yourself). Newest-first.
+      // The indexed query returns exact direct mentions plus candidate messages
+      // from authorized role holders. Re-check both the literal and the exact
+      // channel scope here; the candidate author union can span channels.
       return rumors
-        .filter((r) => r.author !== pubkey)
+        .filter((r) => {
+          if (r.author === pubkey) return false;
+          if (r.tags.some(([name, value]) => name === "p" && value === pubkey)) return true;
+          return isEveryoneMention(r.content, roles, ownerHex, r.author, r.channelIdHex);
+        })
         .sort((a, b) => b.ms - a.ms)
+        .slice(0, MENTION_LIMIT)
         .map(openedToChatMsg);
     },
     enabled: !!communityIdHex && !!pubkey && channelIds.length > 0,
@@ -129,7 +156,7 @@ export function useConcordMentions(channels: Channel[], communityIdHex: string |
   useWireScopes((scopes) => {
     for (const idHex of channelIds) {
       if (scopes.has(`c2:${idHex}`)) {
-        void queryClient.invalidateQueries({ queryKey: ["concord-mentions", pubkey] });
+        void queryClient.invalidateQueries({ queryKey: ["concord-mentions", communityIdHex ?? null, pubkey] });
         return;
       }
     }

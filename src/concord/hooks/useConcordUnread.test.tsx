@@ -25,6 +25,7 @@ const h = vi.hoisted(() => ({
   rumors: [] as OpenedChat[],
   readState: {} as Record<string, number>,
   banned: new Set<string>(),
+  everyoneAuthors: new Set<string>(),
 }));
 
 vi.mock("@/hooks/useCurrentUser", () => ({ useCurrentUser: () => ({ user: { pubkey: ME } }) }));
@@ -33,7 +34,11 @@ vi.mock("@/concord/hooks/useCommunityRumors", () => ({
   useCommunityRumors: () => ({ byChannel: new Map([[CH, h.rumors]]), isLoading: false }),
 }));
 vi.mock("@/concord/hooks/useChannel", () => ({
-  useChatModeration: () => ({ banned: h.banned, canDelete: () => false }),
+  useChatModeration: () => ({
+    banned: h.banned,
+    canDelete: () => false,
+    canMentionEveryone: (author: string) => h.everyoneAuthors.has(author),
+  }),
 }));
 vi.mock("@/concord/lib/floodCluster", () => ({ quarantinedIn: () => new Set<string>() }));
 vi.mock("@/concord/lib/quarantineMemory", () => ({
@@ -60,6 +65,7 @@ function row(
   kind: number,
   createdAt: number,
   tags: string[][] = [],
+  content = "",
 ): OpenedChat {
   return {
     rumorId,
@@ -67,7 +73,7 @@ function row(
     kind,
     createdAt,
     ms: createdAt * 1000,
-    content: "",
+    content,
     tags,
     channelIdHex: CH,
   } as OpenedChat;
@@ -80,6 +86,22 @@ beforeEach(() => {
   h.rumors = [];
   h.readState = {};
   h.banned = new Set<string>();
+  h.everyoneAuthors = new Set<string>();
+});
+
+describe("useConcordUnread — @everyone", () => {
+  it("marks an authorized mass mention as a mention", () => {
+    h.everyoneAuthors = new Set([X]);
+    h.rumors = [row("B", X, KIND_MESSAGE, 200, [], "Heads up @everyone")];
+    h.readState[`c2:${CH}`] = 100;
+    expect(render().result.current.byChannel[CH]).toEqual({ latest: 200, mention: true });
+  });
+
+  it("does not let an unauthorized author forge a mass mention", () => {
+    h.rumors = [row("B", X, KIND_MESSAGE, 200, [], "Heads up @everyone")];
+    h.readState[`c2:${CH}`] = 100;
+    expect(render().result.current.byChannel[CH]).toEqual({ latest: 200, mention: false });
+  });
 });
 
 describe("useConcordUnread — deletes fold into the badge", () => {

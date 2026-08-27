@@ -206,6 +206,11 @@ export interface ChatTransport {
   /** Whether the current user may moderate (delete others' messages, pin, …). */
   canModerate: boolean;
 
+  /** Whether the current user may insert a channel-wide @everyone. */
+  canMentionEveryone?: boolean;
+  /** Whether a message carries an authorized channel-wide @everyone. */
+  mentionsEveryone?: (event: ChatMsg) => boolean;
+
   /**
    * Whether this transport's messages are unsigned rumors (Concord's sealed
    * chat events) rather than relay-addressable signed events. Drives the

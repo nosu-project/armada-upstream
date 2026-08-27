@@ -318,6 +318,8 @@ interface ChatComposerProps {
    * these pubkeys. Omit it (plain DMs) to keep mentions disabled.
    */
   mentionPubkeys?: string[];
+  /** Whether the current user may insert Concord's channel-wide @everyone. */
+  canMentionEveryone?: boolean;
   /** Placeholder text for the input (defaults to the group placeholder). */
   placeholder?: string;
   /**
@@ -437,7 +439,7 @@ interface ChatComposerProps {
  * same input/upload/picker UX, but sending is delegated to the caller and
  * group-only features (polls, NIP-29 tagging) are disabled.
  */
-export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, sendOverride, canSend, mentionPubkeys, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, replyExtraTags, messageKind = KIND_GROUP_CHAT, onEditLast }: ChatComposerProps) {
+export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelReply, replyMarker = "nip10", onSent, sendOverride, canSend, mentionPubkeys, canMentionEveryone = false, placeholder, draftScope, onOptimisticInsert, onOptimisticSent, onOptimisticFailed, canModerate = false, autoFocus = false, onTyping, onSlashAction, encryptAttachments = false, botCommands = false, botDmPeer, recentAuthors, conversationRelays, pollsEnabled = true, onPollSubmit, replyExtraTags, messageKind = KIND_GROUP_CHAT, onEditLast }: ChatComposerProps) {
   const { user } = useCurrentUser();
   const composerBoundsRef = useComposerBoundsRef();
   const { mutateAsync: createEvent, isPending: isSending } = useNostrPublish();
@@ -2250,6 +2252,7 @@ export function ChatComposer({ relayUrl, groupId, messages, replyTo, onCancelRep
                     content={content}
                     onInsertMention={insertAtCursor}
                     restrictToPubkeys={memberPubkeys}
+                    allowEveryone={canMentionEveryone}
                   />
                 )}
                 <SlashCommandAutocomplete

@@ -49,6 +49,7 @@ import { checkChannelBinding, FUTURE_HOLD_MS, openWrap } from "@/concord/lib/str
 import { KIND_MESSAGE, KIND_REACTION, KIND_SEAL_ENCRYPTED } from "@/concord/lib/kinds";
 import { decryptImageBytes } from "@/concord/lib/image";
 import { writeRumors } from "@/concord/lib/rumorStore";
+import { hasEveryoneMention } from "@/concord/lib/everyoneMention";
 import { presetIndexedDBArmadaDB } from "@/lib/db/armadaDB";
 import { appEventStore } from "@/lib/db/mainEventStore";
 import { getDisplayName } from "@/lib/getDisplayName";
@@ -486,8 +487,13 @@ async function prepareConcord(
   // the encrypted rumor, so this is the first place it can be checked.
   if (stream.banned?.includes(opened.author)) return DROP;
 
-  const mention = Boolean(cfg?.self)
-    && opened.tags.some(([n, v]) => n === "p" && v === cfg?.self);
+  const mention = Boolean(cfg?.self) && (
+    opened.tags.some(([n, v]) => n === "p" && v === cfg?.self)
+    || (
+      stream.mentionEveryoneAuthors?.includes(opened.author)
+      && hasEveryoneMention(opened.content)
+    )
+  );
   const reaction = opened.kind === KIND_REACTION;
   // A reaction notifies only when it points at one of YOUR messages; the `p`
   // tag is on the encrypted rumor, so this is the first place it can be read.

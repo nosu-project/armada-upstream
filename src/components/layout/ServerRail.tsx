@@ -352,7 +352,7 @@ function ConcordMentionProbe({
   // not every channel's unread stamp. This is the same independence the
   // in-community Mentions pane already has: clearing the aggregate must clear
   // the Bell without pretending every mentioned channel was fully read.
-  const { hasNew: mention } = useConcordMentions(channels, community?.idHex);
+  const { hasNew: mention } = useConcordMentions(community, channels);
   const key = concordKey(communityId);
   useEffect(() => onChange(key, mention), [key, mention, onChange]);
   useEffect(() => () => onChange(key, false), [key, onChange]);
