@@ -213,6 +213,76 @@ export function eTargetOf(ev: { tags: string[][] }): string | undefined {
   return ev.tags.find((t) => t[0] === "e")?.[1];
 }
 
+/**
+ * The rumor a kind-9 message *inline*-replies to via its NIP-C7 `q` tag (the
+ * Signal/Discord-style quote that renders in the timeline), or undefined. NOT
+ * `replyTargetOf`, which is the kind-1111 THREAD root (rendered in a panel, not
+ * the timeline). Only kind-9 carries a timeline-level parent; a reaction/edit's
+ * `e` tag names a target it folds INTO, not a row it must sort after.
+ */
+function inlineReplyParentOf(ev: { kind: number; tags: string[][] }): string | undefined {
+  return ev.kind === KIND_MESSAGE ? ev.tags.find((t) => t[0] === "q")?.[1] : undefined;
+}
+
+/**
+ * Reorder an already-(ms,id)-sorted timeline so a reply never precedes the
+ * message it replies to. A reply is causally after its parent — there is no
+ * other correct order — but its `ms` is the sender's clock, and a reply from a
+ * device running behind can carry an earlier stamp than the message it answers,
+ * which the raw ms sort would then place ABOVE it. (The future-hold handles the
+ * inverse — a parent stamped ahead of now — by hiding it until its time comes;
+ * this handles a reply stamped behind its visible parent.)
+ *
+ * The rule is a stable topological nudge: each message's EFFECTIVE position is
+ * its own (ms, id) unless it inline-replies (`q`) to a message present in this
+ * set, in which case it takes a position strictly after that parent's effective
+ * one. Resolved over the reply chain (a reply to a reply), memoized, and
+ * cycle-safe — a forged `q` pointing into a loop falls back to the row's own
+ * key rather than looping. In place, and a no-op for the common case (no
+ * out-of-order reply), so it costs a single pass when nothing needs moving.
+ */
+function orderRepliesAfterParents(messages: OpenedChat[]): void {
+  const byId = new Map<string, OpenedChat>();
+  for (const m of messages) byId.set(m.rumorId, m);
+
+  // Effective ordering key per rumor id: [effMs, depth, rumorId]. `depth` is
+  // the distance down the reply chain, so when a reply's own ms is at or below
+  // its parent's effective ms the two share effMs and the child still sorts
+  // after by its greater depth — the tie-break the arbitrary rumorId can't give.
+  type Key = { ms: number; depth: number; id: string };
+  const keys = new Map<string, Key>();
+
+  const keyOf = (m: OpenedChat): Key => {
+    const cached = keys.get(m.rumorId);
+    if (cached) return cached;
+    // Seed the row's OWN key before recursing. A reply chain that loops back
+    // (a forged `q` cycle) then reads this provisional key on re-entry and
+    // stops, rather than recursing forever; and a row with no in-window parent
+    // keeps it.
+    const own: Key = { ms: m.ms, depth: 0, id: m.rumorId };
+    keys.set(m.rumorId, own);
+    const parentId = inlineReplyParentOf(m);
+    const parent = parentId ? byId.get(parentId) : undefined;
+    if (!parent) return own;
+    const pk = keyOf(parent);
+    // Strictly after the parent: never earlier in ms, and one deeper so an equal
+    // ms can't let the child float above the parent on a rumorId tie-break.
+    const key: Key = { ms: Math.max(m.ms, pk.ms), depth: pk.depth + 1, id: m.rumorId };
+    keys.set(m.rumorId, key);
+    return key;
+  };
+
+  for (const m of messages) keyOf(m);
+
+  messages.sort((a, b) => {
+    const ka = keys.get(a.rumorId)!;
+    const kb = keys.get(b.rumorId)!;
+    if (ka.ms !== kb.ms) return ka.ms - kb.ms;
+    if (ka.depth !== kb.depth) return ka.depth - kb.depth;
+    return ka.id < kb.id ? -1 : ka.id > kb.id ? 1 : 0;
+  });
+}
+
 // ── Timeline fold ────────────────────────────────────────────────────────────
 
 /** Moderation context the read path applies while folding. */
@@ -695,6 +765,12 @@ export function foldTimeline(
       quarantined.add(m.rumorId);
     }
   }
+
+  // Last, so every rule above reads a strict ms order (the flood heuristic's
+  // sliding windows assume it): nudge any inline reply that its sender's clock
+  // stamped behind its parent to sit after it. A reply is causally after the
+  // message it answers — there is no other correct order.
+  orderRepliesAfterParents(messages);
 
   return {
     messages,
