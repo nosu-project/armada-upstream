@@ -787,6 +787,15 @@ export interface Dm17Thread {
   setTimer: (seconds: number) => void;
   isLoading: boolean;
   /**
+   * Whether NIP-17's first LOCAL paint has resolved — the snapshot prewarm has
+   * had its one KV read (hit or miss), or the store read landed first. The
+   * merged DM timeline holds its skeleton until this so a thread living on both
+   * planes doesn't paint its synchronously-seeded kind-4 half a frame ahead of
+   * the NIP-17 half. Bounded by the prewarm, never the store read's
+   * first-of-session legacy drain.
+   */
+  firstPaintReady: boolean;
+  /**
    * Whether NIP-17 sends to this peer are possible: the signer does NIP-44
    * and we have somewhere to publish the gift wrap — the peer's published
    * kind-10050 inbox, or (when they have none) our own app/DM relays as a
@@ -893,13 +902,30 @@ export function useDm17Thread(
     threadWindowRef.current = { self, conversation, limit: THREAD_WINDOW };
   }
 
+  // Whether NIP-17's first local paint has resolved, so the merged timeline can
+  // stop holding its skeleton (see shouldShowDmTimelineLoading). It flips when
+  // the snapshot prewarm SETTLES — one KV read, hit or miss — so the hold is
+  // never the store read's first-of-session legacy drain. A disabled query
+  // (no self/peer/support) is ready immediately: it never holds the gate.
+  const [firstPaintReady, setFirstPaintReady] = useState(false);
+
   // Paint the last window from KV while the store read runs. The read is
   // enabled on this very render, but it awaits the legacy drain and merges two
   // 300-row filters; the snapshot is one KV row, so it lands first and the real
   // data replaces it (seeded stale — see threadSnapshot).
   useEffect(() => {
-    if (!self || !conversation || !support) return;
-    void prewarmDm17ThreadSnapshot(queryClient, self, conversation, queryKey);
+    if (!self || !conversation || !support) {
+      setFirstPaintReady(true);
+      return;
+    }
+    setFirstPaintReady(false);
+    let cancelled = false;
+    void prewarmDm17ThreadSnapshot(queryClient, self, conversation, queryKey).finally(() => {
+      if (!cancelled) setFirstPaintReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [queryClient, self, conversation, support, queryKey]);
 
   const query = useQuery<OpenedDm[]>({
@@ -1536,6 +1562,7 @@ export function useDm17Thread(
     // paint. Waiting for its exact local lookup prevents the generic permalink
     // hunter from starting network backfill before that lookup can answer.
     isLoading: query.isLoading || (Boolean(focusedRumorId) && focusedQuery.isLoading),
+    firstPaintReady,
     canSend,
     send,
     react,
