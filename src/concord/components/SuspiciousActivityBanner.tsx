@@ -1,13 +1,15 @@
-import { Loader2, Shield } from "lucide-react";
+import { Clock, Loader2, Shield } from "lucide-react";
 import { useState } from "react";
 
 import { DisplayName } from "@/components/DisplayName";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useSuspiciousActivity } from "@/concord/hooks/useSuspiciousActivity";
+import { useTimeTravelers } from "@/concord/hooks/useTimeTravelers";
 import { describeAttempts, type SuspiciousActor } from "@/concord/lib/auditLog";
+import { describeAhead, type TimeTraveler } from "@/concord/lib/timeTravelers";
 import type { FoldedControl } from "@/concord/lib/control";
-import type { Community } from "@/concord/lib/types";
+import type { Channel, Community } from "@/concord/lib/types";
 import { useAuthor } from "@/hooks/useAuthor";
 import { useScopedDisplayName } from "@/hooks/useScopedDisplayName";
 import { toast } from "@/hooks/useToast";
@@ -54,6 +56,36 @@ function ActorRow({
 }
 
 /**
+ * One "time traveler": a member whose messages are dated well ahead of the
+ * local clock. Deliberately NOT an offender row — a wrong device clock is
+ * almost always innocent — so it carries no ban button, just a wink and the
+ * benign explanation.
+ */
+function TravelerRow({ traveler }: { traveler: TimeTraveler }) {
+  const author = useAuthor(traveler.author);
+  const name = useScopedDisplayName(traveler.author, author.data?.metadata);
+  return (
+    <li className="clip-corner-lg border border-primary/30 bg-primary/5 p-3">
+      <p className="text-sm">
+        <span className="font-semibold">
+          <DisplayName pubkey={traveler.author} name={name} />
+        </span>{" "}
+        is sending messages from{" "}
+        <span className="font-semibold">{describeAhead(traveler.aheadMs)} in the future</span>.{" "}
+        <span className="font-semibold text-primary">TIME TRAVELER DETECTED</span> 🕰️
+      </p>
+      {traveler.sample ? (
+        <p className="mt-1 truncate text-xs italic text-muted-foreground">“{traveler.sample}”</p>
+      ) : null}
+      <p className="mt-1 text-xs text-muted-foreground">
+        More likely their device clock is wrong. Their messages stay hidden until the time on them
+        actually arrives, so nothing here is broken — you don't need to do anything.
+      </p>
+    </li>
+  );
+}
+
+/**
  * The control-plane watchdog's alert: a member with no standing is writing
  * control editions. Sits above the community's nav rows, only for viewers who
  * can act, and only off a complete sweep (see useSuspiciousActivity).
@@ -63,18 +95,24 @@ function ActorRow({
  */
 export function SuspiciousActivityBanner({
   community,
+  channels,
   folded,
   ban,
 }: {
   community: Community | undefined;
+  channels: Channel[];
   folded: FoldedControl | undefined;
   ban: (args: { target: string; forceRotate?: boolean }) => Promise<{ rekeyed: boolean; publicBan: boolean }>;
 }) {
   const { actors, unreadable, flooded, alert, dismiss } = useSuspiciousActivity(community, folded);
+  const travelers = useTimeTravelers(community, channels);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<string | undefined>(undefined);
 
-  if (!alert) return null;
+  // The playful time-traveler flag opens the panel on its own — it is the one
+  // signal here that can be present with no control-plane abuse behind it.
+  if (!alert && travelers.length === 0) return null;
+  const count = actors.length + travelers.length;
 
   const onBan = (target: string) => {
     setBusy(target);
@@ -107,9 +145,9 @@ export function SuspiciousActivityBanner({
       >
         <Shield className="size-4 shrink-0" />
         <span className="truncate flex-1 min-w-0">Suspicious Activity</span>
-        {actors.length > 1 ? (
+        {count > 1 ? (
           <span className="shrink-0 flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold leading-none">
-            {actors.length}
+            {count}
           </span>
         ) : null}
       </button>
@@ -122,7 +160,8 @@ export function SuspiciousActivityBanner({
               Suspicious activity
             </DialogTitle>
           </DialogHeader>
-          {flooded ? (
+          {alert ? (
+            flooded ? (
             // The read stopped on our own limit with history still unread. In
             // a healthy community that never happens, so it is worth stating
             // ahead of everything else: it is the one symptom that also
@@ -161,7 +200,8 @@ export function SuspiciousActivityBanner({
               {actors.length === 1 ? "Someone is" : `${actors.length} people are`} trying to perform
               admin actions in this community without permission. What should we do about them?
             </p>
-          )}
+          )
+          ) : null}
           <ul className="space-y-2">
             {actors.map((actor) => (
               <ActorRow key={actor.author} actor={actor} onBan={onBan} busy={busy === actor.author} />
@@ -178,6 +218,19 @@ export function SuspiciousActivityBanner({
                   " These can't be traced to anyone, so banning the member above may not stop them. It is worth removing anyone else you don't trust, especially members who joined recently or have never spoken."
                 : ""}
             </p>
+          ) : null}
+          {travelers.length > 0 ? (
+            <div className="space-y-2">
+              <p className="flex items-center gap-1.5 text-sm font-semibold text-primary">
+                <Clock className="size-4" />
+                {travelers.length === 1 ? "A message from the future" : "Messages from the future"}
+              </p>
+              <ul className="space-y-2">
+                {travelers.map((t) => (
+                  <TravelerRow key={t.author} traveler={t} />
+                ))}
+              </ul>
+            </div>
           ) : null}
           <div className="flex justify-end">
             <Button

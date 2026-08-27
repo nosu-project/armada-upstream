@@ -3060,7 +3060,7 @@ export function ConcordPage() {
       preChannels={
         user && community ? (
           <>
-            <SuspiciousActivityBanner community={community} folded={folded} ban={moderation.ban} />
+            <SuspiciousActivityBanner community={community} channels={channels} folded={folded} ban={moderation.ban} />
             <button
               type="button"
               onClick={() => {
