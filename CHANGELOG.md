@@ -4,6 +4,36 @@ All notable changes to Armada are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and releases are tagged
 `vX.Y.Z`.
 
+## [0.58.0] - 2026-08-26
+
+A new All messages pane gathers every channel in a community into one feed, so
+you can catch up in one place. Chat now renders much richer previews: linked
+notes appear as proper cards, tweets and Magic card images render inline, and
+ordinary links get fuller previews. Direct-call ringing is surfaced in the
+conversation header, direct invites arrive instantly instead of on a timer, and
+suspicious-activity moderation moves into its own full pane.
+
+### Added
+- An All messages pane that merges every channel in a community into a single feed
+- Richer chat previews: linked notes render as cards with their real per-type layout, tweets and Magic: The Gathering card images appear inline, and links get fuller preview cards
+- A ringing direct call now shows the caller in the conversation header, so you can answer from the chat you're in
+- Suspicious activity has its own full moderation pane, which now also flags senders whose messages are dated in the future
+- The signup dialog inside the app now includes a profile step, matching the full welcome flow
+- A setting to cap and turn off the automatic recent-direct-message strip in the sidebar
+
+### Changed
+- Direct invites arrive the moment they're sent instead of after a delay, and the invite inbox shows one row per community
+- Messages dated in the future are held until their time actually arrives and no longer trigger a notification or unread count
+- Replies stay ordered directly after the message they answer, even when clocks disagree
+- On narrow screens, settings controls stack below their label instead of crowding it
+- A message still sending shows a gentle pulse across the whole row instead of a spinner
+
+### Fixed
+- Emoji shortcode autocomplete replaces the right text even after you move the cursor
+- The profile picker closes as soon as you choose a profile
+- Copied message and invite links open in the desktop app's own window instead of a browser
+- A community that dissolves while you're viewing it keeps its page in place instead of throwing you back home, and an active call keeps running through the dissolution and ends cleanly when the other person leaves
+
 ## [0.57.1] - 2026-08-23
 
 Invite links now ask before they join. Opening one shows the community first —
